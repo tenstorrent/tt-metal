@@ -10,7 +10,8 @@
 // W-bcast scalar
 // Tile is assumed to have 16-bit elements
 // Scalar is assumed to be a 16-bit value double packed into a u32
-FORCE_INLINE void generate_bcast_col_scalar(DataflowBuffer& dfb, uint32_t scalar) {
+template <typename DFB>
+FORCE_INLINE void generate_bcast_col_scalar(DFB& dfb, uint32_t scalar) {
     const uint16_t scalar_val = scalar >> 16;
     dfb.reserve_back(1);
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dfb.get_write_ptr());
@@ -26,7 +27,8 @@ FORCE_INLINE void generate_bcast_col_scalar(DataflowBuffer& dfb, uint32_t scalar
 // H-bcast scalar
 // Tile is assumed to have 16-bit elements
 // Scalar is assumed to be a 16-bit value double packed into a u32
-FORCE_INLINE void generate_bcast_row_scalar(DataflowBuffer& dfb, uint32_t scalar) {
+template <typename DFB>
+FORCE_INLINE void generate_bcast_row_scalar(DFB& dfb, uint32_t scalar) {
     dfb.reserve_back(1);
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());
     for (int k = 0; k < 2; ++k) {
@@ -41,7 +43,8 @@ FORCE_INLINE void generate_bcast_row_scalar(DataflowBuffer& dfb, uint32_t scalar
 // HW-bcast scalar
 // Tile is assumed to have 16-bit elements
 // Scalar is assumed to be a 16-bit value double packed into a u32
-FORCE_INLINE void generate_bcast_unary_scalar(DataflowBuffer& dfb, uint32_t scalar) {
+template <typename DFB>
+FORCE_INLINE void generate_bcast_unary_scalar(DFB& dfb, uint32_t scalar) {
     const uint32_t scalar_val = scalar >> 16;
     dfb.reserve_back(1);
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());

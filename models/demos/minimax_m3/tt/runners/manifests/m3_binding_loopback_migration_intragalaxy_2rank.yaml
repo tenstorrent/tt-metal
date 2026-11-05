@@ -18,6 +18,7 @@ mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_2x
 
 global_env:
   PREFILL_MANIFEST: "models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json"
+  M3_INDEX_CACHE_BF16: "0"        # migration needs a bf8 index_k (the decode peer's dtype), as the manifest
 
   PREFILL_FABRIC_MODE: "2d"
   PREFILL_SP: "4"
@@ -32,7 +33,8 @@ global_env:
   PREFILL_PP_D2D_FIFO_BYTES: "32768"
 
   PREFILL_ENABLE_MIGRATION: "1"
-  PREFILL_USE_TRACE: "1"
+  # TtPrefillRuntime has no capture_trace, so the runner refuses PREFILL_USE_TRACE=1.
+  PREFILL_USE_TRACE: "0"
   PREFILL_MIGRATION_WAIT_READY_MS: "120000"
   # Table on shared storage — num_ranks>1 rejects per-host paths like /tmp. Device map stays host-local.
   PREFILL_MIGRATION_TABLE_PATH: "/data/philei/tmp/m3_kv_chunk_table_pp.pb"

@@ -269,8 +269,8 @@ side is `✓*` for both directions.
   `DataFormat::UInt32` — Quasar has no uint32 device format (its 32-bit formats are `Float32`/`Int32`; the
   enum slot WH/BH use for `UInt32` is `MxFp4_2x_B` on Quasar) — and asserts if a 32-bit format would need
   the A2D unpack-to-dest path, which isn't implemented on Quasar. bf16 only for now.
-- `reconfigure_unary_bcast` (mid-program bcast-type/format switch) is `#ifndef ARCH_QUASAR`-only; Quasar
-  re-`init`s per broadcast type instead.
+- There is no mid-program bcast-type/format switch API (the WH/BH-only `reconfigure_unary_bcast` was
+  removed); Quasar re-`init`s per broadcast type, as WH/BH now do.
 - No sim/LLK bug surfaced while certifying SCALAR/ROW/COL through the op — all 130 broadcast cases in
   `test_binary_ng_bcast.py` pass on the QSR sim (0 skipped) alongside the 88-case no-bcast regression suite.
   The one race that DID surface was in the mixed `ROW_A_COL_B` composition and was a **simulator**

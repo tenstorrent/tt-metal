@@ -6,9 +6,11 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_control_plane_local_mesh_binding.cpp
     test_distributed_coordinate_translator.cpp
     test_end_to_end_eltwise.cpp
+    test_explicit_cq_id.cpp
     test_distributed_host_buffer.cpp
     test_maybe_remote.cpp
     test_mesh_buffer.cpp
+    test_mesh_buffer_page_getters.cpp
     test_mesh_coord.cpp
     test_mesh_device.cpp
     test_mesh_device_reshape.cpp
@@ -16,8 +18,10 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_mesh_workload.cpp
     test_mesh_socket.cpp
     test_hd_sockets.cpp
+    test_host_region.cpp
     test_mesh_sub_device.cpp
     test_mesh_allocator.cpp
+    test_mesh_command_list.cpp
     test_mesh_events.cpp
     test_mesh_trace.cpp
     test_thread_pool.cpp
@@ -30,3 +34,12 @@ if(ENABLE_DISTRIBUTED)
 else()
     list(APPEND DISTRIBUTED_UNIT_TEST_SOURCES test_single_host_context.cpp)
 endif()
+
+# Layer completion (host-only): ring, router, D2H ack decoder.
+list(
+    APPEND
+    DISTRIBUTED_UNIT_TEST_SOURCES
+    test_layer_completion_ring.cpp
+    test_layer_completion_router.cpp
+    test_layer_ack_decoder.cpp
+)

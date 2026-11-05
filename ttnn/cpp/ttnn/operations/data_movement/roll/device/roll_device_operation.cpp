@@ -21,7 +21,7 @@ namespace {
 void validate_roll(const RollParams& operation_attributes, const RollInputs& tensor_args) {
     const Tensor& input = tensor_args.input;
     TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to roll need to be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(input.is_sharded(), "Native sharded roll requires a sharded input");
     TT_FATAL(operation_attributes.output_mem_config.is_sharded(), "Native sharded roll requires a sharded output");
     // The program factory enumerates a single rectangular grid row-major; a multi-range grid
@@ -29,6 +29,9 @@ void validate_roll(const RollParams& operation_attributes, const RollInputs& ten
     TT_FATAL(
         input.shard_spec().value().grid.ranges().size() == 1,
         "Native sharded roll requires a single contiguous rectangular CoreRange");
+    TT_FATAL(
+        !ttnn::prim::sharded_roll_input_has_padding(input),
+        "Native sharded roll does not support tile or shard padding; ttnn::roll routes these through DRAM");
     if (input.layout() == Layout::TILE) {
         // The factory derives cell_h/cell_w/cell_size from the architectural 32x32 constants, and the
         // tile is absent from compute_program_hash, so a non-standard tile would both compile a

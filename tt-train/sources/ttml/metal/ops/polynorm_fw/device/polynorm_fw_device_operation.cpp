@@ -4,47 +4,18 @@
 
 #include "polynorm_fw_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
-
+#include "metal/common/tensor_validation.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::polynorm3_fw::device {
 
 void PolyNorm3ForwardDeviceOperation::validate_on_program_cache_miss(
     const PolyNorm3FWAttributes& args, const PolyNorm3FWTensorArgs& tensor_args) {
-    auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
-        TT_FATAL(
-            tensor.storage_type() == ttnn::StorageType::DEVICE,
-            "PolyNorm3Forward operation requires {} to be on Device. Input storage type: {}",
-            name,
-            enchantum::to_string(tensor.storage_type()));
-        TT_FATAL(
-            tensor.buffer() != nullptr,
-            "Operands to PolyNorm3Forward need to be allocated in buffers on the device. Buffer is null. Tensor name "
-            "{}",
-            name);
-        TT_FATAL(
-            tensor.layout() == tt::tt_metal::Layout::TILE,
-            "PolyNorm3Forward operation requires tensor to be in Tile layout. {} tensor layout: {}",
-            name,
-            enchantum::to_string(tensor.layout()));
-        TT_FATAL(
-            tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
-            "PolyNorm3Forward operation requires tensor to be of BFLOAT16 data type. {} tensor data type: {}",
-            name,
-            enchantum::to_string(tensor.dtype()));
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "PolyNorm3Forward operation requires Interleaved memory layout. {} memory layout: `{}`",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
-    };
-
-    check_tensor(tensor_args.input, "Input");
-    check_tensor(tensor_args.weight, "weight");
-    check_tensor(tensor_args.bias, "bias");
+    check_device_tensor(tensor_args.input, "PolyNorm3Forward", "Input");
+    check_device_tensor(tensor_args.weight, "PolyNorm3Forward", "weight");
+    check_device_tensor(tensor_args.bias, "PolyNorm3Forward", "bias");
     if (tensor_args.preallocated_output.has_value()) {
-        check_tensor(tensor_args.preallocated_output.value(), "Preallocated output");
+        check_device_tensor(tensor_args.preallocated_output.value(), "PolyNorm3Forward", "Preallocated output");
     }
 }
 

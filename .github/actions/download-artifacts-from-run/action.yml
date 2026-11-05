@@ -106,8 +106,12 @@ runs:
           BUILD_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any" | grep -v "_profiler_" | head -1 || true)
         fi
 
-        # Find wheel artifact
-        WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "^ttnn-dist" | head -1 || true)
+        # Grab the appropriate wheel artifact based on whether tracy is enabled
+        if [ "$TRACY_ENABLED" = "true" ]; then
+          WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "^ttnn-dist" | grep -E -- "-profiler-" | head -1 || true)
+        else
+          WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "^ttnn-dist" | grep -v -- "-profiler-" | head -1 || true)
+        fi
 
         # Find packages artifact (optional)
         PACKAGES_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "packages-" | head -1 || true)

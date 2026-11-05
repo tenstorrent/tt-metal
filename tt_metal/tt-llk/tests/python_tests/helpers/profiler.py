@@ -2,14 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
 import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import ClassVar
 
+import numpy as np
 import pandas as pd
+from ttexalens.tt_exalens_lib import read_words_from_device
 
-from .device_io import read_words_from_device
 from .llk_params import PerfRunType
 from .perf.schema import MARKER, MEAN, STD, stat_column, stat_prefix
 from .test_config import TestConfig
@@ -231,18 +233,19 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     if _sfpu_has_compute_zones(raw_data):
         return _stats_l1_to_l1_four_trisc(raw_data)
 
-    # Group by both marker and run_index to ensure events from the same run are paired
-    groups = raw_data.groupby([MARKER, "run_index"])
+    markers = raw_data[MARKER].to_numpy(dtype=object)
+    runs = raw_data["run_index"].to_numpy(dtype=np.int64)
+    threads = raw_data["thread"].to_numpy(dtype=object)
+    types = raw_data["type"].to_numpy(dtype=object)
+    stamps = raw_data["timestamp"].to_numpy()
+    is_start = (threads == "unpack") & (types == "ZONE_START")
+    is_end = (threads == "pack") & (types == "ZONE_END")
 
-    timings = []
-    for (marker, run_index), group in groups:
-        unpack_start = group[
-            (group["thread"] == "unpack") & (group["type"] == "ZONE_START")
-        ].reset_index(drop=True)
-
-        pack_end = group[
-            (group["thread"] == "pack") & (group["type"] == "ZONE_END")
-        ].reset_index(drop=True)
+    timing_markers, timing_values = [], []
+    for marker, run_index in sorted(set(zip(markers, runs))):
+        group = (markers == marker) & (runs == run_index)
+        unpack_start = np.flatnonzero(group & is_start)
+        pack_end = np.flatnonzero(group & is_end)
 
         if len(unpack_start) == 0 or len(pack_end) == 0:
             raise ValueError(
@@ -257,17 +260,17 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
                 f"unpack_count={len(unpack_start)}, pack_count={len(pack_end)})"
             )
 
-        durations = pack_end["timestamp"] - unpack_start["timestamp"]
+        timing_markers += [marker] * len(unpack_start)
+        timing_values.append(stamps[pack_end] - stamps[unpack_start])
 
-        marker_timings = pd.DataFrame(
+    return _stats_timings(
+        pd.DataFrame(
             {
-                MARKER: marker,
-                PerfRunType.L1_TO_L1.name: durations,
+                MARKER: timing_markers,
+                PerfRunType.L1_TO_L1.name: np.concatenate(timing_values),
             }
         )
-        timings.append(marker_timings)
-
-    return _stats_timings(pd.concat(timings, ignore_index=True))
+    )
 
 
 def _parallel_zone_entries(
@@ -327,21 +330,20 @@ def _stats_thread(stat: str, raw_thread: pd.DataFrame) -> pd.DataFrame:
     if raw_thread.empty:
         return pd.DataFrame()
 
-    start_entries = raw_thread[(raw_thread["type"] == "ZONE_START")].reset_index(
-        drop=True
-    )
-
-    end_entries = raw_thread[(raw_thread["type"] == "ZONE_END")].reset_index(drop=True)
+    types = raw_thread["type"].to_numpy(dtype=object)
+    start_entries = np.flatnonzero(types == "ZONE_START")
+    end_entries = np.flatnonzero(types == "ZONE_END")
 
     if len(start_entries) != len(end_entries):
         raise ValueError(
             f"Mismatched start/end zones: {len(start_entries)} != {len(end_entries)}"
         )
 
+    stamps = raw_thread["timestamp"].to_numpy()
     timings = pd.DataFrame(
         {
-            MARKER: start_entries[MARKER],
-            stat: end_entries["timestamp"] - start_entries["timestamp"],
+            MARKER: raw_thread[MARKER].array[start_entries],
+            stat: stamps[end_entries] - stamps[start_entries],
         }
     )
 
@@ -448,6 +450,7 @@ class Profiler:
             return None
 
     @staticmethod
+    @functools.cache
     def _get_meta(testname: str, variant_id: str) -> dict[id, ProfilerFullMarker]:
         profiler_data_dir = TestConfig.PROFILER_META / testname / variant_id
         metadata = {}
@@ -514,7 +517,8 @@ class Profiler:
     @staticmethod
     def _parse_thread(thread, words, profiler_meta) -> list[dict]:
         rows = []
-        zone_stack = []
+        # A zone writes its ZONE_START and ZONE_END together at scope exit, so a start is always closed by the next entry.
+        open_zone = None
 
         word_stream = iter(words)
         for word in word_stream:
@@ -550,29 +554,36 @@ class Profiler:
                     )
 
                 case EntryType.ZONE_START:
-                    zone_stack.append(
-                        Profiler._row(thread, "ZONE_START", marker, timestamp, pd.NA)
+                    if open_zone is not None:
+                        raise ValueError(
+                            f"ZONE_START for marker '{marker.marker}' (id={marker_id}) "
+                            f"on thread '{thread}' follows ZONE_START '{open_zone[MARKER]}' "
+                            f"(id={open_zone['marker_id']}) with no ZONE_END between them. "
+                            f"Possible buffer corruption."
+                        )
+                    open_zone = Profiler._row(
+                        thread, "ZONE_START", marker, timestamp, pd.NA
                     )
 
                 case EntryType.ZONE_END:
-                    if not zone_stack:
+                    if open_zone is None:
                         raise ValueError(
                             f"ZONE_END for marker '{marker.marker}' (id={marker_id}) "
                             f"on thread '{thread}' at timestamp {timestamp} has no "
                             f"matching ZONE_START. Possible buffer corruption."
                         )
-                    start_row = zone_stack.pop()
-                    if start_row["marker_id"] != marker.id:
+                    if open_zone["marker_id"] != marker.id:
                         raise ValueError(
                             f"ZONE_END marker '{marker.marker}' (id={marker.id}) "
                             f"does not match ZONE_START marker "
-                            f"'{start_row[MARKER]}' (id={start_row['marker_id']}) "
-                            f"on thread '{thread}'. Possible nested zone mismatch."
+                            f"'{open_zone[MARKER]}' (id={open_zone['marker_id']}) "
+                            f"on thread '{thread}'. Possible buffer corruption."
                         )
-                    rows.append(start_row)
+                    rows.append(open_zone)
                     rows.append(
                         Profiler._row(thread, "ZONE_END", marker, timestamp, pd.NA)
                     )
+                    open_zone = None
 
         return rows
 

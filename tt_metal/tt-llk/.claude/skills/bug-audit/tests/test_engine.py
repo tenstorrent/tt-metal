@@ -6,6 +6,7 @@ Each script runs in-process as __main__ (runpy), exactly as it runs from the com
 """
 
 import contextlib
+import glob
 import io
 import json
 import os
@@ -143,6 +144,48 @@ def test_arch_copies_merge_into_one_entry_at_the_worst_severity(rundir):
     assert (
         open_md.count("### ") == 1 and bh in open_md
     ), "one open entry, listing both sites"
+
+
+@pytest.mark.parametrize(
+    "fix, rendered",
+    [
+        # the line after its steps is set off by a blank line, or Markdown folds it into the last step
+        (
+            "Reject it.\n- first step\n- second step\nTest: run it",
+            "  - fix: Reject it.\n    - first step\n    - second step\n\n    Test: run it\n",
+        ),
+        # a diff's "- old" inside a code fence is not a list: nothing is added inside the fence
+        (
+            "Flip it:\n```diff\n- if (n > 0)\n+ if (n >= 0)\n  return;\n```\nThen rebuild.",
+            "  - fix: Flip it:\n    ```diff\n    - if (n > 0)\n    + if (n >= 0)\n      return;\n    ```\n"
+            "    Then rebuild.\n",
+        ),
+    ],
+)
+def test_a_multi_line_fix_stays_nested_under_its_merged_site(rundir, fix, rendered):
+    wh, bh = "a/wormhole/k.h", "a/blackhole/k.h"
+    copy = finding(bh, 12, "high", suggested_fix=fix)
+    write(
+        str(rundir / "verdicts" / "B-0000.json"),
+        {"findings": [finding(wh, 10, "medium"), copy]},
+    )
+    write(
+        str(rundir / "dedup.json"),
+        {
+            "auto": {},
+            "clusters": [
+                {
+                    "canonical": f"{wh}:10",
+                    "duplicates": [f"{bh}:12"],
+                    "relation": "arch-copy",
+                }
+            ],
+        },
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    md = open(rundir / "OPEN.md").read()
+    # every line of the merged site's fix sits under its "- fix:" item, never back at the top level of the list
+    assert rendered in md, md
 
 
 def test_a_disposition_closes_the_finding_and_survives_regeneration(rundir):
@@ -691,7 +734,230 @@ def test_recheck_queues_a_candidate_deferred_at_the_agent_limit(rundir):
     )
     assert code == 0, out + err
     rc = json.load(open(rundir / "recheck.json"))
-    assert rc["d.cpp:7"]["why"] == "deferred at the wave's agent limit", rc
+    (entry,) = [v for v in rc.values() if v["finding"]["file"] == "d.cpp"]
+    assert entry["why"] == "deferred at the wave's agent limit", rc
+
+
+def _refresh_twin(tmp_path):
+    """A refresh: P100 (a fix PR) was deep-read long ago; its issue I200 closed after the watermark and carries the
+    same fix commit. The refresh's case file holds only I200; the deep store's rows carry no fix commit.
+    """
+    fix = lambda: {  # noqa: E731
+        "oid": "a" * 40,
+        "subject": "Fix the race (#100)",
+        "files": ["src/k.cpp"],
+        "adds": 3,
+        "dels": 1,
+        "nfiles": 1,
+    }
+    write(
+        str(tmp_path / "old_cases.jsonl"),
+        [{"id": "P100", "title": "fix race", "fix": [fix()], "later": {}}],
+    )
+    write(
+        str(tmp_path / "cases.jsonl"),
+        [{"id": "I200", "title": "race in k", "fix": [fix()], "later": {}}],
+    )
+    write(
+        str(tmp_path / "triage.jsonl"),
+        [
+            {
+                "id": "I200",
+                "verdict": "code-bug",
+                "classes": ["race"],
+                "mechanism": "m",
+                "component": "c",
+                "deep_priority": 3,
+            }
+        ],
+    )
+    write(str(tmp_path / "deep.jsonl"), [{"id": "P100", "is_real_bug": "yes"}])
+
+
+def _select(tmp_path, *extra):
+    return run(
+        os.path.join(MINING, "select.py"),
+        *extra,
+        "--cases",
+        tmp_path / "cases.jsonl",
+        "--triage",
+        tmp_path / "triage.jsonl",
+        "--exclude",
+        tmp_path / "deep.jsonl",
+        "--deep",
+        tmp_path / "deep.jsonl",
+    )
+
+
+def test_a_refresh_holdout_never_shares_a_fix_with_an_old_deep_read(tmp_path):
+    _refresh_twin(tmp_path)
+    # without the case file the deep store came from, the twin cannot be recognised: refuse rather than leak it
+    code, out, err = _select(tmp_path, "holdout", "--out", tmp_path / "h.jsonl")
+    assert code != 0 and "--deep-cases" in out + err, out + err
+    code, out, err = _select(
+        tmp_path,
+        "holdout",
+        "--out",
+        tmp_path / "h.jsonl",
+        "--deep-cases",
+        tmp_path / "old_cases.jsonl",
+    )
+    assert code == 0, out + err
+    assert (
+        open(tmp_path / "h.jsonl").read() == ""
+    ), "I200 shares P100's fix, which is in the pack"
+
+
+def test_one_deep_cases_flag_takes_every_case_file_a_glob_names(tmp_path):
+    _refresh_twin(tmp_path)
+    # a second refresh: the deep store was built from both case files, and P100 is only in the dated one
+    os.rename(tmp_path / "old_cases.jsonl", tmp_path / "old_cases-2026-10-01.jsonl")
+    write(
+        str(tmp_path / "old_cases.jsonl"),
+        [{"id": "P050", "title": "t", "fix": [], "later": {}}],
+    )
+    case_files = sorted(
+        glob.glob(str(tmp_path / "old_cases*.jsonl"))
+    )  # what the shell hands one flag
+    assert len(case_files) == 2
+    code, out, err = _select(
+        tmp_path, "holdout", "--out", tmp_path / "h.jsonl", "--deep-cases", *case_files
+    )
+    assert code == 0, out + err
+    assert (
+        open(tmp_path / "h.jsonl").read() == ""
+    ), "the dated file's P100 was looked up"
+
+
+def test_a_refresh_deep_selection_skips_a_case_already_read_under_another_id(tmp_path):
+    _refresh_twin(tmp_path)
+    code, out, err = _select(
+        tmp_path,
+        "deep",
+        "--out-dir",
+        tmp_path / "deep_out",
+        "--deep-cases",
+        tmp_path / "old_cases.jsonl",
+    )
+    assert code == 0, out + err
+    batched = (
+        "".join(
+            open(os.path.join(tmp_path / "deep_out", f)).read()
+            for f in os.listdir(tmp_path / "deep_out")
+        )
+        if os.path.isdir(tmp_path / "deep_out")
+        else ""
+    )
+    assert "I200" not in batched, batched
+
+
+def test_a_refresh_deep_selection_still_reads_a_case_with_a_fix_never_read(tmp_path):
+    _refresh_twin(tmp_path)
+    cases = [json.loads(x) for x in open(tmp_path / "cases.jsonl")]
+    refix = dict(cases[0]["fix"][0], oid="b" * 40, subject="Fix the race properly")
+    cases[0]["fix"].append(refix)  # I200 also carries a later fix nobody has read
+    write(str(tmp_path / "cases.jsonl"), cases)
+    code, out, err = _select(
+        tmp_path,
+        "deep",
+        "--out-dir",
+        tmp_path / "deep_out",
+        "--deep-cases",
+        tmp_path / "old_cases.jsonl",
+    )
+    assert code == 0, out + err
+    batched = "".join(
+        open(os.path.join(tmp_path / "deep_out", f)).read()
+        for f in os.listdir(tmp_path / "deep_out")
+    )
+    assert "I200" in batched, "a fix nobody has read is a defect the pack has not seen"
+    code, out, err = _select(
+        tmp_path,
+        "holdout",
+        "--out",
+        tmp_path / "h.jsonl",
+        "--deep-cases",
+        tmp_path / "old_cases.jsonl",
+    )
+    assert (
+        code == 0 and open(tmp_path / "h.jsonl").read() == ""
+    ), "but it is never a holdout"
+
+
+def test_deep_selection_never_rereads_a_deep_read_case_or_samples_its_twin(tmp_path):
+    _refresh_twin(tmp_path)
+    # P100 itself in the case file, triaged one below --min-priority so only --sample could pick it or its twin
+    cases = [json.loads(x) for x in open(tmp_path / "cases.jsonl")]
+    old = [json.loads(x) for x in open(tmp_path / "old_cases.jsonl")]
+    write(str(tmp_path / "cases.jsonl"), cases + old)
+    tri = [json.loads(x) for x in open(tmp_path / "triage.jsonl")]
+    tri[0]["deep_priority"] = 1
+    tri.append(dict(tri[0], id="P100"))
+    write(str(tmp_path / "triage.jsonl"), tri)
+    code, out, err = run(
+        os.path.join(MINING, "select.py"),
+        "deep",
+        "--cases",
+        tmp_path / "cases.jsonl",
+        "--triage",
+        tmp_path / "triage.jsonl",
+        "--deep",
+        tmp_path / "deep.jsonl",
+        "--sample",
+        "5",
+        "--out-dir",
+        tmp_path / "deep_out",
+    )
+    assert code == 0, out + err
+    d = tmp_path / "deep_out"
+    batched = "".join(open(d / f).read() for f in os.listdir(d)) if d.is_dir() else ""
+    assert "P100" not in batched and "I200" not in batched, batched
+
+
+def _deep_ids(tmp_path, *extra):
+    code, out, err = run(
+        os.path.join(MINING, "select.py"),
+        "deep",
+        "--cases",
+        tmp_path / "cases.jsonl",
+        "--triage",
+        tmp_path / "triage.jsonl",
+        "--out-dir",
+        tmp_path / "deep_out",
+        *extra,
+    )
+    assert code == 0, out + err
+    d = tmp_path / "deep_out"
+    return "".join(open(d / f).read() for f in os.listdir(d)) if d.is_dir() else ""
+
+
+def test_deep_selection_never_rereads_a_deep_read_case_even_without_a_fix(tmp_path):
+    tri = {
+        "verdict": "code-bug",
+        "classes": ["race"],
+        "mechanism": "m",
+        "component": "c",
+        "deep_priority": 3,
+    }
+    write(
+        str(tmp_path / "cases.jsonl"),
+        [{"id": "P7", "title": "t", "fix": [], "later": {}}],
+    )
+    write(str(tmp_path / "triage.jsonl"), [dict(tri, id="P7")])
+    write(str(tmp_path / "deep.jsonl"), [{"id": "P7", "is_real_bug": "yes"}])
+    assert "P7" not in _deep_ids(tmp_path, "--deep", tmp_path / "deep.jsonl")
+
+
+def test_a_deep_store_passed_only_as_exclude_still_counts_its_fixes_as_read(tmp_path):
+    _refresh_twin(tmp_path)
+    batched = _deep_ids(
+        tmp_path,
+        "--exclude",
+        tmp_path / "deep.jsonl",
+        "--deep-cases",
+        tmp_path / "old_cases.jsonl",
+    )
+    assert "I200" not in batched, "I200's only fix is P100's, which was read"
 
 
 def test_deep_selection_excludes_a_held_out_fix_under_another_id(tmp_path):
@@ -969,6 +1235,175 @@ def _init(tmp_path, tree, *extra):
     return code, o + e, {f for b in m for f in b["files"]}
 
 
+def test_init_run_batches_hold_at_most_300_lines_and_every_file_once(tmp_path):
+    sizes = {
+        "a/f1.c": 1,
+        "a/f50.c": 50,
+        "a/f120.c": 120,
+        "a/f200.c": 200,
+        "b/f290.c": 290,
+        "b/f299.c": 299,
+        "b/f310.c": 310,
+        "c/f1200.c": 1200,
+    }
+    tree = _git_tree(
+        tmp_path, list(sizes), {f: "int x;\n" * n for f, n in sizes.items()}
+    )
+    code, out, files = _init(tmp_path, tree)
+    assert code == 0, out
+    man = json.load(open(tmp_path / "run" / "batches" / "manifest.json"))
+    listed = [f for b in man for f in b["files"]]
+    assert sorted(listed) == sorted(
+        sizes
+    ), "every in-scope file is in exactly one batch"
+    for b in man:
+        lines = sum(sizes[f] for f in b["files"])
+        # a file longer than the budget is a batch of its own; otherwise the default budget is 300 lines
+        assert lines <= 300 or len(b["files"]) == 1, (b["files"], lines)
+    assert (
+        json.load(open(tmp_path / "run" / "state.json"))["batching"]["max_lines"] == 300
+    )
+    assert [b["files"] for b in man if "c/f1200.c" in b["files"]] == [["c/f1200.c"]]
+
+
+def _git(cwd, *args):
+    """git in a test repo, through the skill's one process helper."""
+    sys.path.insert(0, ENGINE)
+    import spawn
+
+    return spawn.run(
+        "git",
+        [str(a) for a in args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _commit_all(tree, msg):
+    _git(tree, "add", "-A")
+    _git(tree, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", msg)
+    return _git(tree, "rev-parse", "HEAD").stdout.strip()
+
+
+def test_init_run_diff_mode_keeps_changed_files_with_non_ascii_names(tmp_path):
+    odd = "c/ünï cödé.c"
+    tree = _git_tree(tmp_path, ["b/g1.c", "b/same.c", odd])
+
+    base = _git(tree, "rev-parse", "HEAD").stdout.strip()
+    (tree / "b/g1.c").write_text("int y;\n")
+    (tree / odd).write_text("int y;\n")
+    _commit_all(tree, "change")
+    code, out, files = _init(tmp_path, tree, "--since", base)
+    assert code == 0, out
+    assert files == {"b/g1.c", odd}, files
+
+
+def test_init_run_diff_mode_reaches_changed_files_inside_a_submodule(tmp_path):
+    sub = tmp_path / "subrepo"
+    sub.mkdir()
+    (sub / "s.c").write_text("int s;\n")
+    (sub / "t.c").write_text("int t;\n")
+    _git(sub, "init", "-q")
+    _commit_all(sub, "sub base")
+    tree = _git_tree(tmp_path, ["top.c", "other.c"])
+    _git(
+        tree,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        str(sub),
+        "sub",
+    )
+    base = _commit_all(tree, "add sub")
+    (tree / "sub" / "s.c").write_text(
+        "int s2;\n"
+    )  # change one file inside the submodule checkout
+    _commit_all(tree / "sub", "sub change")
+    (tree / "top.c").write_text("int top2;\n")
+    _commit_all(tree, "bump sub, change top")
+    code, out, files = _init(tmp_path, tree, "--since", base, "--recurse-submodules")
+    assert code == 0, out
+    assert files == {"top.c", "sub/s.c"}, files
+
+
+def test_init_run_diff_mode_reaches_a_change_inside_a_nested_submodule(tmp_path):
+    allow = ["-c", "protocol.file.allow=always"]
+
+    def repo(path, files):
+        path.mkdir()
+        for f, body in files.items():
+            (path / f).write_text(body)
+        _git(path, "init", "-q")
+        _commit_all(path, "init")
+
+    repo(tmp_path / "inner", {"a.c": "int a;\n", "b.c": "int b;\n"})
+    repo(tmp_path / "mid", {"m.c": "int m;\n"})
+    _git(
+        tmp_path / "mid",
+        *allow,
+        "submodule",
+        "add",
+        "-q",
+        str(tmp_path / "inner"),
+        "inner",
+    )
+    _commit_all(tmp_path / "mid", "add inner")
+    tree = _git_tree(tmp_path, ["top.c"])
+    _git(tree, *allow, "submodule", "add", "-q", str(tmp_path / "mid"), "mid")
+    _git(tree, *allow, "submodule", "update", "-q", "--init", "--recursive")
+    base = _commit_all(tree, "add mid")
+    (tree / "mid" / "inner" / "a.c").write_text(
+        "int a2;\n"
+    )  # the only change, two levels down
+    _commit_all(tree / "mid" / "inner", "change a")
+    _commit_all(tree / "mid", "bump inner")
+    _commit_all(tree, "bump mid")
+    code, out, files = _init(tmp_path, tree, "--since", base, "--recurse-submodules")
+    assert code == 0, out
+    assert files == {"mid/inner/a.c"}, files
+
+
+def test_init_run_diff_mode_takes_a_whole_submodule_whose_old_pin_is_gone(tmp_path):
+    sub = tmp_path / "subrepo"
+    sub.mkdir()
+    (sub / "s.c").write_text("int s;\n")
+    (sub / "t.c").write_text("int t;\n")
+    _git(sub, "init", "-q")
+    _commit_all(sub, "sub base")
+    tree = _git_tree(tmp_path, ["top.c"])
+    _git(
+        tree,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        str(sub),
+        "sub",
+    )
+    inner = tree / "sub"
+    (inner / "s.c").write_text("int pinned;\n")
+    _commit_all(inner, "the old pin, about to vanish")
+    base = _commit_all(tree, "pin it")
+    # rewrite the submodule's history so the old pin is unreachable, then drop it from the clone
+    _git(inner, "reset", "-q", "--hard", "HEAD~1")
+    (inner / "t.c").write_text("int t2;\n")
+    _commit_all(inner, "new history")
+    for cmd in (
+        ["reflog", "expire", "--expire=now", "--all"],
+        ["gc", "-q", "--prune=now"],
+    ):
+        _git(inner, *cmd)
+    _commit_all(tree, "bump sub")
+    code, out, files = _init(tmp_path, tree, "--since", base, "--recurse-submodules")
+    assert code == 0, out
+    assert files == {"sub/s.c", "sub/t.c"} and "not fetched" in out, (files, out)
+
+
 def test_init_run_include_and_exclude_take_comma_lists_like_prio(tmp_path):
     tree = _git_tree(tmp_path, ["a/x.c", "b/y.c", "c/z.c"])
     code, out, files = _init(
@@ -1092,179 +1527,6 @@ def test_init_run_refuses_a_pack_without_hot_areas(tmp_path):
     assert code != 0 and "Hot areas" in out, out
 
 
-def _exec_run(tmp_path, test_files, batch_files, *configure):
-    """An audit run over a tiny git tree, with the execution tier configured; returns (code, output, run dir, tree).
-    test_files maps each test path to its contents."""
-    tree = _git_tree(tmp_path, [*batch_files, *test_files], test_files)
-    out = tmp_path / "run"
-    code, o, e = run(
-        os.path.join(ENGINE, "init_run.py"),
-        "--root",
-        tree,
-        "--out",
-        out,
-        "--repo",
-        "o/r",
-        "--include",
-        ",".join(batch_files),
-        "--ext",
-        ".c,.cpp,.hpp,.py",
-    )
-    assert code == 0, o + e
-    code, o, e = run(
-        os.path.join(ENGINE, "exec_tier.py"), "--run", out, "configure", *configure
-    )
-    assert code == 0, o + e
-    code, o, e = run(
-        os.path.join(ENGINE, "exec_tier.py"), "--run", out, "run", "--steps", "tests"
-    )
-    return code, o + e, out, tree
-
-
-def test_exec_tier_quotes_test_paths_for_the_shell(tmp_path):
-    odd = "tests/t e;st_widget.py"
-    code, out, _, tree = _exec_run(
-        tmp_path,
-        {odd: "import widget\n"},
-        ["src/widget.c"],
-        "--test-cmd",
-        "printf '%s\\n' {tests} > {tree}/picked.txt",
-        "--test-root",
-        "tests",
-        "--devices",
-        "0",
-    )
-    assert code == 0, out
-    picked = open(os.path.join(tree, "picked.txt")).read().splitlines()
-    assert picked == [odd], picked
-
-
-def _configure(tmp_path, *configure):
-    tree = _git_tree(tmp_path, ["src/widget.c"])
-    out = tmp_path / "run"
-    code, o, e = run(
-        os.path.join(ENGINE, "init_run.py"),
-        "--root",
-        tree,
-        "--out",
-        out,
-        "--repo",
-        "o/r",
-        "--ext",
-        ".c",
-    )
-    assert code == 0, o + e
-    code, o, e = run(
-        os.path.join(ENGINE, "exec_tier.py"), "--run", out, "configure", *configure
-    )
-    return code, o + e
-
-
-@pytest.mark.parametrize(
-    "args, why",
-    [
-        (["--test-cmd", "true {tests}"], "required"),
-        (["--build", "b=true", "--reset-cmd", "tt-smi -r {devices}"], "required"),
-        (
-            ["--test-cmd", "true", "--devices", "0", "--reset-cmd", "tt-smi -r 0"],
-            "{devices}",
-        ),
-        (["--test-cmd", "true", "--devices", "0,0000:0a:00.0"], "one kind"),
-        (["--test-cmd", "true", "--devices", "card0"], "one kind"),
-    ],
-)
-def test_exec_tier_refuses_tests_or_resets_without_confirmed_cards(tmp_path, args, why):
-    code, out = _configure(tmp_path, *args)
-    assert code != 0 and why in out, out
-
-
-def test_exec_tier_pins_tests_and_resets_to_the_confirmed_cards(tmp_path):
-    code, out, _, tree = _exec_run(
-        tmp_path,
-        {"tests/test_widget.py": "import widget\n"},
-        ["src/widget.c"],
-        "--test-cmd",
-        'echo "$TT_VISIBLE_DEVICES" > {tree}/env.txt',
-        "--test-root",
-        "tests",
-        "--devices",
-        "2,3",
-        "--reset-cmd",
-        "echo {devices} >> {tree}/reset.txt",
-    )
-    assert code == 0, out
-    assert open(os.path.join(tree, "env.txt")).read().strip() == "2,3"
-    assert open(os.path.join(tree, "reset.txt")).read().splitlines()[0] == "2 3"
-
-
-def test_exec_tier_run_refuses_an_old_config_without_cards(tmp_path):
-    code, out = _configure(tmp_path, "--build", "b=true")
-    assert code == 0, out
-    st_path = tmp_path / "run" / "state.json"
-    st = json.load(open(st_path))
-    st["execution"][
-        "reset_cmd"
-    ] = "tt-smi -r 0"  # as configured before --devices existed
-    json.dump(st, open(st_path, "w"))
-    code, o, e = run(
-        os.path.join(ENGINE, "exec_tier.py"), "--run", tmp_path / "run", "run"
-    )
-    assert code != 0 and "--devices" in o + e, o + e
-
-
-def _generic_tests(n=60):
-    return {f"tests/g/test_g{i:02d}.py": "import common\n" for i in range(n)}
-
-
-def test_exec_tier_picks_tests_that_name_the_file_before_bare_stems(tmp_path):
-    tests = {
-        **_generic_tests(),
-        "tests/test_exact.cpp": '#include "src/widget.hpp"\n',
-        "tests/test_both.cpp": '#include "src/widget.hpp"\nint common;\n',
-        "tests/test_stem.py": "widget = 1\n",
-    }
-    code, out, _, tree = _exec_run(
-        tmp_path,
-        tests,
-        ["src/widget.hpp", "src/common.c"],
-        "--test-cmd",
-        "printf '%s\\n' {tests} > {tree}/picked.txt",
-        "--test-root",
-        "tests",
-        "--max-tests",
-        "10",
-        "--devices",
-        "0",
-    )
-    assert code == 0, out
-    picked = open(os.path.join(tree, "picked.txt")).read().splitlines()
-    # named first (the one naming more batch files ahead), the bare stem next; the 60 generic-stem hits never
-    assert picked == [
-        "tests/test_both.cpp",
-        "tests/test_exact.cpp",
-        "tests/test_stem.py",
-    ], picked
-
-
-def test_exec_tier_falls_back_to_a_generic_stem_when_nothing_better_exists(tmp_path):
-    code, out, _, tree = _exec_run(
-        tmp_path,
-        _generic_tests(),
-        ["src/common.c"],
-        "--test-cmd",
-        "printf '%s\\n' {tests} > {tree}/picked.txt",
-        "--test-root",
-        "tests",
-        "--max-tests",
-        "2",
-        "--devices",
-        "0",
-    )
-    assert code == 0, out
-    picked = open(os.path.join(tree, "picked.txt")).read().splitlines()
-    assert picked == ["tests/g/test_g00.py", "tests/g/test_g01.py"], picked
-
-
 def test_headless_sessions_deny_builds_tests_devices_and_tree_changes():
     sys.path.insert(0, ENGINE)
     from common import STATIC_DENY, headless_flags
@@ -1315,41 +1577,469 @@ def test_blocked_actions_counts_refused_calls_in_workflow_agent_transcripts(tmp_
     assert blocked_actions("sid-2", str(tmp_path)) == 0
 
 
-def test_exec_tier_build_only_run_is_not_blocked_by_an_old_reset(tmp_path):
-    code, out = _configure(tmp_path, "--build", "b=true")
-    assert code == 0, out
-    st_path = tmp_path / "run" / "state.json"
-    st = json.load(open(st_path))
-    st["execution"]["reset_cmd"] = "tt-smi -r 0"  # only the tests step ever resets
-    json.dump(st, open(st_path, "w"))
-    code, o, e = run(
-        os.path.join(ENGINE, "exec_tier.py"),
+def test_severity_rerating_round_trip_overrides_the_hunters_rating(rundir, tmp_path):
+    write(
+        str(rundir / "verdicts" / "A-0000.json"),
+        {"findings": [finding("a.cpp", 3, "high"), finding("b.cpp", 5, "low")]},
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    code, out, err = run(
+        os.path.join(ENGINE, "severity.py"),
         "--run",
-        tmp_path / "run",
-        "run",
-        "--steps",
-        "build",
+        rundir,
+        "prepare",
+        "--to-dir",
+        tmp_path / "sev",
     )
-    assert code == 0, o + e
+    assert code == 0 and json.loads(out.splitlines()[0])["n"] == 1, out + err
+    items = json.load(open(tmp_path / "sev" / "b0000.json"))["items"]
+    assert sorted(i["key"] for i in items) == ["a.cpp:3", "b.cpp:5"]
+    write(
+        str(tmp_path / "out.json"),
+        {
+            "result": {
+                "ratings": [
+                    {"key": "a.cpp:3", "severity": "medium", "why": "narrow config"},
+                    {"key": "b.cpp:5", "severity": "low", "why": "diagnostic only"},
+                ],
+                "missing": [],
+            }
+        },
+    )
+    code, out, err = run(
+        os.path.join(ENGINE, "severity.py"),
+        "--run",
+        rundir,
+        "persist",
+        tmp_path / "out.json",
+    )
+    assert code == 0, out + err
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    a = next(
+        f for f in json.load(open(rundir / "CONFIRMED.json")) if f["file"] == "a.cpp"
+    )
+    assert a["severity"] == "medium" and a["severity_audit"] == "high", a
+    code, out, _ = run(
+        os.path.join(ENGINE, "severity.py"),
+        "--run",
+        rundir,
+        "prepare",
+        "--to-dir",
+        tmp_path / "sev",
+    )
+    assert (
+        json.loads(out.splitlines()[0])["n"] == 0
+    ), "rated findings are skipped unless --all"
 
 
-def test_exec_tier_matches_a_stem_literally(tmp_path):
-    code, out, _, tree = _exec_run(
-        tmp_path,
-        {"tests/test_ops.py": "op = 'axb'\n", "tests/test_real.py": "a.b\n"},
-        ["src/a.b.c"],
-        "--test-cmd",
-        "printf '%s\\n' {tests} > {tree}/picked.txt",
-        "--test-root",
-        "tests",
-        "--devices",
-        "0",
+def test_severity_rater_sees_every_merged_site_and_the_worst_one_it_must_cover(
+    rundir, tmp_path
+):
+    wh, bh = "a/wormhole/k.h", "a/blackhole/k.h"
+    write(
+        str(rundir / "verdicts" / "B-0000.json"),
+        {
+            "findings": [
+                finding(wh, 10, "medium", summary="WH copy reads a stale bank"),
+                finding(bh, 12, "high", summary="BH copy hangs every matmul"),
+            ]
+        },
     )
-    assert code == 0, out
-    # the stem "a.b" must not match "axb", as it would as a regex
-    assert open(os.path.join(tree, "picked.txt")).read().split() == [
-        "tests/test_real.py"
+    write(
+        str(rundir / "dedup.json"),
+        {
+            "auto": {},
+            "clusters": [
+                {
+                    "canonical": f"{wh}:10",
+                    "duplicates": [f"{bh}:12"],
+                    "relation": "arch-copy",
+                }
+            ],
+        },
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    code, out, err = run(
+        os.path.join(ENGINE, "severity.py"),
+        "--run",
+        rundir,
+        "prepare",
+        "--to-dir",
+        tmp_path / "sev",
+    )
+    assert code == 0, out + err
+    (item,) = json.load(open(tmp_path / "sev" / "b0000.json"))["items"]
+    # one rating replaces the merged entry's severity, so the rater must see the HIGH copy's own claim, not only
+    # its location; it is not shown any claimed severity (a sibling lead's is a placeholder), to rate from the code
+    sites = {s["site"]: s for s in item["other_sites"]}
+    assert sites[f"{bh}:12"]["claim"] == "BH copy hangs every matmul", item
+    assert "severity" not in sites[f"{bh}:12"] and "hunters_worst" not in item, item
+
+
+def _recheck_all(rundir, tmp_path, outcome_of):
+    """queue -> a fake recheck wave that answers outcome_of(summary) -> persist -> consolidate; returns queued items."""
+    code, out, err = run(os.path.join(ENGINE, "recheck.py"), "--run", rundir, "queue")
+    assert code == 0, out + err
+    items = json.loads(out.splitlines()[0])["items"]
+    write(
+        str(tmp_path / "rc_out.json"),
+        {
+            "items": [
+                {
+                    "finding": it["finding"],
+                    "why": it["why"],
+                    "outcome": outcome_of(it["finding"]["summary"]),
+                    "votes": {"confirmed": 3},
+                    "reasons": ["[x] y"],
+                }
+                for it in items
+            ]
+        },
+    )
+    code, out, err = run(
+        os.path.join(ENGINE, "recheck.py"),
+        "--run",
+        rundir,
+        "persist",
+        tmp_path / "rc_out.json",
+    )
+    assert code == 0, out + err
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    return items
+
+
+def test_severity_rater_sees_the_recheck_reasons_that_confirmed_a_finding(
+    rundir, tmp_path
+):
+    lead = finding("q.cpp", 4, status="uncertain", summary="promoted by the recheck")
+    lead["reasons"] = ["[uncertain] wave could not settle it"]
+    write(str(rundir / "verdicts" / "B-0000.json"), {"findings": [lead]})
+    code, out, err = run(os.path.join(ENGINE, "recheck.py"), "--run", rundir, "queue")
+    (it,) = json.loads(out.splitlines()[0])["items"]
+    write(
+        str(tmp_path / "o.json"),
+        {
+            "items": [
+                {
+                    "finding": it["finding"],
+                    "why": it["why"],
+                    "outcome": "confirmed",
+                    "votes": {"confirmed": 3},
+                    "reasons": ["[confirmed] the trace reaches it from matmul"],
+                }
+            ]
+        },
+    )
+    run(
+        os.path.join(ENGINE, "recheck.py"),
+        "--run",
+        rundir,
+        "persist",
+        tmp_path / "o.json",
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    code, out, err = run(
+        os.path.join(ENGINE, "severity.py"),
+        "--run",
+        rundir,
+        "prepare",
+        "--to-dir",
+        tmp_path / "sev",
+    )
+    (item,) = json.load(open(tmp_path / "sev" / "b0000.json"))["items"]
+    assert item["reasons"] == ["[confirmed] the trace reaches it from matmul"], item
+
+
+def test_severity_persist_records_only_valid_ratings_and_names_the_rest(
+    rundir, tmp_path
+):
+    files = ["a.cpp", "b.cpp", "c.cpp", "d.cpp", "e.cpp"]
+    write(
+        str(rundir / "verdicts" / "B-0000.json"),
+        {"findings": [finding(f, 1) for f in files]},
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    sev = tmp_path / "sev"
+    code, out, err = run(
+        os.path.join(ENGINE, "severity.py"), "--run", rundir, "prepare", "--to-dir", sev
+    )
+    assert code == 0, out + err
+    ratings = [
+        {"key": "a.cpp:1", "severity": "low", "why": "debug only"},  # good
+        {"key": "b.cpp:1", "severity": "High", "why": "x"},  # not a rubric value
+        {"key": "c.cpp:1", "severity": "high"},  # no reason
+        {"key": "d.cpp:1", "severity": "high", "why": "x"},  # rated twice, differently
+        {"key": "d.cpp:1", "severity": "low", "why": "y"},
+    ]  # e.cpp:1 is omitted
+    write(
+        str(tmp_path / "o.json"),
+        {"result": {"ratings": ratings, "missing": [], "input_dir": str(sev)}},
+    )
+    code, out, err = run(
+        os.path.join(ENGINE, "severity.py"),
+        "--run",
+        rundir,
+        "persist",
+        tmp_path / "o.json",
+    )
+    assert code != 0, out + err
+    for k in ("b.cpp:1", "c.cpp:1", "d.cpp:1", "e.cpp:1"):
+        assert k in out + err, (k, out + err)
+    disp = json.load(open(rundir / "dispositions.json"))
+    assert {k for k, v in disp.items() if v.get("severity_override")} == {
+        "a.cpp:1"
+    }, disp
+    # re-running prepare hands out exactly the ones still unrated
+    code, out, err = run(
+        os.path.join(ENGINE, "severity.py"), "--run", rundir, "prepare", "--to-dir", sev
+    )
+    keys = sorted(
+        i["key"]
+        for b in os.listdir(sev)
+        if b.startswith("b")
+        for i in json.load(open(sev / b))["items"]
+    )
+    assert keys == ["b.cpp:1", "c.cpp:1", "d.cpp:1", "e.cpp:1"], keys
+
+
+def test_a_recheck_verdict_applies_only_to_the_finding_it_judged(rundir, tmp_path):
+    refuted = finding(
+        "z.cpp", 9, "high", status="refuted", summary="hunt claim, refuted"
+    )
+    refuted["votes"] = {"refuted": 3}
+    lead = finding("z.cpp", 9, "low", status="uncertain", summary="sibling lead")
+    lead["votes"] = {}
+    write(str(rundir / "verdicts" / "B-0000.json"), {"findings": [refuted, lead]})
+    _recheck_all(rundir, tmp_path, lambda s: "confirmed")
+    conf = json.load(open(rundir / "CONFIRMED.json"))
+    # the confirmed entry is the lead the recheck judged, at its own severity, not the refuted HIGH claim
+    assert [(f["summary"], f["severity"]) for f in conf] == [
+        ("sibling lead", "low")
+    ], conf
+
+
+def test_two_unsettled_findings_on_one_line_are_each_rechecked(rundir, tmp_path):
+    a = finding("y.cpp", 7, status="uncertain", summary="first claim")
+    b = finding("y.cpp", 7, status="uncertain", summary="second claim")
+    write(str(rundir / "verdicts" / "B-0000.json"), {"findings": [a, b]})
+    items = _recheck_all(
+        rundir, tmp_path, lambda s: "refuted" if s == "first claim" else "confirmed"
+    )
+    assert sorted(i["finding"]["summary"] for i in items) == [
+        "first claim",
+        "second claim",
     ]
+    conf = json.load(open(rundir / "CONFIRMED.json"))
+    assert [f["summary"] for f in conf] == ["second claim"], conf
+
+
+def test_a_line_keyed_recheck_from_an_older_run_still_applies_to_its_own_finding(
+    rundir,
+):
+    a = finding("x.cpp", 4, status="uncertain", summary="judged claim")
+    b = finding("x.cpp", 4, status="uncertain", summary="other claim")
+    write(str(rundir / "verdicts" / "B-0000.json"), {"findings": [a, b]})
+    write(
+        str(rundir / "recheck.json"),
+        {
+            "x.cpp:4": {
+                "why": "no verifier could settle it",
+                "outcome": "confirmed",
+                "finding": {"file": "x.cpp", "line": 4, "summary": "judged claim"},
+                "votes": {"confirmed": 3},
+                "reasons": [],
+            }
+        },
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    conf = json.load(open(rundir / "CONFIRMED.json"))
+    assert [f["summary"] for f in conf] == ["judged claim"], conf
+    # the other claim on the line was never judged: it stays unsettled, riding on the entry
+    assert [(m["summary"], m["status"]) for m in conf[0]["same_line"]] == [
+        ("other claim", "uncertain")
+    ], conf
+
+
+def test_a_queued_recheck_outcome_keeps_the_wave_verdict_and_is_queued_again(
+    rundir, tmp_path
+):
+    ref = finding("r.cpp", 2, "high", status="refuted", summary="refuted claim")
+    ref["votes"] = {"refuted": 3}
+    write(str(rundir / "verdicts" / "B-0000.json"), {"findings": [ref]})
+    code, out, err = run(
+        os.path.join(ENGINE, "recheck.py"),
+        "--run",
+        rundir,
+        "queue",
+        "--refuted-sample",
+        "1",
+    )
+    assert code == 0, out + err
+    (it,) = json.loads(out.splitlines()[0])["items"]
+    # the persist/consolidate side of a recheck whose verifiers died (recheck-wave.js returning "queued" is tested
+    # under quickjs below)
+    died = {"confirmed": 0, "refuted": 0, "uncertain": 0, "died": 3}
+    write(
+        str(tmp_path / "o.json"),
+        {
+            "items": [
+                {
+                    "finding": it["finding"],
+                    "why": it["why"],
+                    "outcome": "queued",
+                    "votes": died,
+                    "reasons": [],
+                }
+            ]
+        },
+    )
+    run(
+        os.path.join(ENGINE, "recheck.py"),
+        "--run",
+        rundir,
+        "persist",
+        tmp_path / "o.json",
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    assert (
+        "refuted claim" in open(rundir / "REFUTED.md").read()
+    ), "the wave verdict stands"
+    code, out, _ = run(os.path.join(ENGINE, "recheck.py"), "--run", rundir, "queue")
+    assert [
+        i["finding"]["summary"] for i in json.loads(out.splitlines()[0])["items"]
+    ] == ["refuted claim"], "and the next recheck wave gets it again"
+
+
+def test_a_recheck_whose_verifiers_died_twice_is_not_handed_out_again(rundir, tmp_path):
+    lead = finding(
+        "l.cpp", 3, status="uncertain", summary="a lead that kills verifiers"
+    )
+    write(str(rundir / "verdicts" / "B-0000.json"), {"findings": [lead]})
+    died = {"confirmed": 0, "refuted": 0, "uncertain": 0, "died": 3}
+    for attempt in range(2):
+        code, out, err = run(
+            os.path.join(ENGINE, "recheck.py"), "--run", rundir, "queue"
+        )
+        (it,) = json.loads(out.splitlines()[0])["items"]
+        write(
+            str(tmp_path / "o.json"),
+            {
+                "items": [
+                    {
+                        "finding": it["finding"],
+                        "why": it["why"],
+                        "outcome": "queued",
+                        "votes": died,
+                        "reasons": [],
+                    }
+                ]
+            },
+        )
+        run(
+            os.path.join(ENGINE, "recheck.py"),
+            "--run",
+            rundir,
+            "persist",
+            tmp_path / "o.json",
+        )
+    code, out, err = run(os.path.join(ENGINE, "recheck.py"), "--run", rundir, "queue")
+    assert json.loads(out.splitlines()[0])["items"] == [], "a looping wave must end"
+    code, out, err = run(os.path.join(ENGINE, "recheck.py"), "--run", rundir, "report")
+    assert "given up" in out and "l.cpp:3" in out, out
+
+
+def test_recheck_wave_keeps_an_item_queued_when_a_verifier_dies():
+    quickjs = pytest.importorskip(
+        "quickjs"
+    )  # a JS engine, to run the Workflow script with stub agents
+    plan = {
+        "all-dead": [None, None, None],
+        "dead-two-refute": [None, "refuted", "refuted"],
+        "dead-two-confirm": [None, "confirmed", "confirmed"],
+        "split": ["confirmed", "refuted", "uncertain"],
+    }
+    items = [
+        {"finding": {"file": "a.c", "line": i, "summary": k}, "why": "x"}
+        for i, k in enumerate(plan)
+    ]
+    src = (
+        open(os.path.join(ENGINE, "recheck-wave.js"))
+        .read()
+        .replace("export const meta", "const meta", 1)
+    )
+    ctx = quickjs.Context()
+    ctx.eval(
+        f"""
+globalThis.args = {json.dumps({"run": "/r", "root": "/t", "items": items})};
+const plan = {json.dumps(plan)};
+globalThis.log = () => {{}};
+globalThis.agent = async (prompt) => {{
+  const k = Object.keys(plan).find((s) => prompt.includes("Claim: " + s + "\\n"));
+  const lens = prompt.includes("Lens: reachability") ? 0 : prompt.includes("Lens: semantics") ? 1 : 2;
+  return plan[k][lens] === null ? null : {{ verdict: plan[k][lens], reason: "r" }};
+}};
+globalThis.parallel = (ts) => Promise.all(ts.map((t) => t()));
+globalThis.pipeline = (xs, f) => Promise.all(xs.map(f));
+(async function () {{
+{src}
+}})().then((r) => {{ globalThis.out = JSON.stringify(r) }}, (e) => {{ globalThis.out = "ERR " + e }});
+"""
+    )
+    while ctx.execute_pending_job():
+        pass
+    res = ctx.eval("globalThis.out")
+    assert not res.startswith("ERR"), res
+    got = {i["finding"]["summary"]: i["outcome"] for i in json.loads(res)["items"]}
+    assert got == {
+        "all-dead": "queued",
+        "dead-two-refute": "queued",
+        "dead-two-confirm": "confirmed",
+        "split": "uncertain",
+    }, got
+
+
+def test_agents_that_read_the_tree_never_run_tests_and_hunters_never_build():
+    # tests and launches showed no benefit and made the runtime hard to bound; a verifier may compile a probe, a
+    # hunter (one per batch, so thousands per run) may not build at all
+    hunter = "Do NOT build, run tests, run the code, or touch any device or hardware"
+    others = "Do NOT run tests, run the code, or touch any device or hardware. A compile-only check"
+    wave = open(os.path.join(ENGINE, "audit-wave.js")).read()
+    assert (
+        wave.count(hunter) == 1 and wave.count(others) == 2
+    )  # verifier, trace auditor
+    for script in ("recheck-wave.js", "fix-wave.js"):
+        assert open(os.path.join(ENGINE, script)).read().count(others) == 1, script
+
+
+def test_every_program_and_helper_spawn_allows_is_used():
+    # spawn.py is the allowlist of what the skill may start; an entry nothing uses only widens it
+    import ast
+    import glob
+
+    sys.path.insert(0, ENGINE)
+    import spawn
+
+    used_programs, used_helpers = set(), set()
+    for path in glob.glob(os.path.join(SKILL, "engine", "*.py")) + glob.glob(
+        os.path.join(SKILL, "mining", "*.py")
+    ):
+        for n in ast.walk(ast.parse(open(path).read())):
+            if (
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute)
+                and isinstance(n.func.value, ast.Name)
+                and n.func.value.id == "spawn"
+            ):
+                used_helpers.add(n.func.attr)
+                if n.args and isinstance(n.args[0], ast.Constant):
+                    used_programs.add(n.args[0].value)
+    if "shell_run" in used_helpers:
+        used_programs.add("sh")
+    assert set(spawn.PROGRAMS) == used_programs, set(spawn.PROGRAMS) ^ used_programs
+    helpers = {
+        n for n in dir(spawn) if callable(getattr(spawn, n)) and not n.startswith("_")
+    }
+    assert helpers - {"subprocess"} == used_helpers, helpers ^ used_helpers
 
 
 def test_every_spawn_user_imports_it_before_first_use():

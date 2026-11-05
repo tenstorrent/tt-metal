@@ -10,6 +10,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "api/scratchpad.h"
 
 void kernel_main() {
     // X = output width
@@ -58,6 +59,8 @@ void kernel_main() {
     constexpr uint32_t rows_per_x = get_arg(args::rows_per_x);
     constexpr uint32_t misalignment = get_arg(args::misalignment);
     constexpr uint32_t read_alignment = get_arg(args::read_alignment);
+    // The bounce scratchpad is bound only when this is set (Quasar), hence get_token_if_present below.
+    constexpr bool bounce_in_scratchpad = static_cast<bool>(get_arg(args::bounce_in_scratchpad));
 
     // ------------------------------------------------------------------------
     // 2) Derived Constants (kept as constexpr)
@@ -73,6 +76,14 @@ void kernel_main() {
     constexpr uint32_t w_block_size = TILE_WIDTH;
     constexpr uint32_t FACE_H_STRIDE_BYTES = NUM_FACES_W * FACE_HW_BYTES;
     constexpr uint32_t read_alignment_minus_one = read_alignment - 1;
+    // An aligned window of read_alignment bytes plus room for one line past its end.
+    [[maybe_unused]] uint32_t bounce_window = 0;
+    if constexpr (bounce_in_scratchpad) {
+        const Scratchpad<uint32_t> bounce(*scratch::get_token_if_present<"bounce">());
+        const uint32_t bounce_base =
+            static_cast<uint32_t>(local_mem::detail::AddressAccess::address(bounce.local_mem()));
+        bounce_window = (bounce_base + read_alignment_minus_one) & ~read_alignment_minus_one;
+    }
 
     // For x-padding logic:
     constexpr uint32_t final_face_real_w = (W % FACE_WIDTH);
@@ -133,6 +144,10 @@ void kernel_main() {
         real_faces_w = NUM_FACES_W;
     }
 
+    // One DataflowBuffer for the whole loop: on Quasar a DataflowBuffer drains when it goes out of scope (#60848),
+    // so a per-block one would wait after every push for the compute to pop that block (no double buffering).
+    DataflowBuffer dfb(dfb::cb_in);
+
     // ------------------------------------------------------------------------
     // 5) Main loop over [start_block..end_block)
     // ------------------------------------------------------------------------
@@ -185,7 +200,6 @@ void kernel_main() {
         }
 
         // Reserve a slot in the circular buffer, get L1 pointer
-        DataflowBuffer dfb(dfb::cb_in);
         dfb.reserve_back(1);
         uint32_t src_buffer_l1_addr = dfb.get_write_ptr();
 
@@ -209,6 +223,12 @@ void kernel_main() {
                         uint32_t l1_base = l1_col_base + cb_w_offset;
                         if ((final_src_addr & read_alignment_minus_one) != (l1_base & read_alignment_minus_one)) {
                             uint32_t misaligned_addr = l1_base + misalignment;
+                            if constexpr (bounce_in_scratchpad) {
+                                // Land the line at the source's offset within an aligned window of the scratchpad,
+                                // as the DFB entries here hold exactly one tile and have no room for it.
+                                const uint32_t src_offset = (uint32_t)final_src_addr & read_alignment_minus_one;
+                                misaligned_addr = bounce_window + src_offset;
+                            }
                             CoreLocalMem<uint32_t> mis_dst(misaligned_addr);
                             noc.async_read(
                                 s,
@@ -217,8 +237,17 @@ void kernel_main() {
                                 {.page_id = (uint32_t)tile, .offset_bytes = total_offset},
                                 {.offset_bytes = 0});
                             noc.async_read_barrier();
+#ifdef ARCH_QUASAR
+                            // Quasar: tt_memmove's 16B-aligned path is a NoC self-copy (L1 -> same-core L1
+                            // loopback), which Gen2 can stall on or drop (quasar_porting.md section 6). Use the
+                            // shared RISC memmove fallback instead; it is the copy tt_memmove itself falls back
+                            // to, and it normalises the uncached DFB aliases on Quasar DM.
+                            tt::data_movement::common::copy_via_memmove<false>(
+                                l1_base, misaligned_addr, SUBTILE_LINE_BYTES);
+#else
                             tt::data_movement::common::tt_memmove<true, false, false, SUBTILE_LINE_BYTES>(
                                 noc, l1_base, misaligned_addr, SUBTILE_LINE_BYTES);
+#endif
                         } else {
                             CoreLocalMem<uint32_t> dst(l1_col_base + cb_w_offset);
                             noc.async_read(

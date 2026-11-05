@@ -8,19 +8,17 @@
 #include <cstdint>
 #include <cstdlib>
 #include <initializer_list>
-#include <map>
 #include <tuple>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/operation.hpp"
@@ -49,12 +47,12 @@ constexpr uint32_t CB_IN0_DOWN_FULL = tt::CBIndex::c_12;
 // partials_up (up matmul) using the SAME shared x K-block — one x read
 // per K-block feeds both matmuls instead of two.
 constexpr uint32_t CB_PARTIALS_UP = tt::CBIndex::c_13;
-// Writer-only scratch for the device-side `start` (expert_region_offsets)
-// page: the writer adds start[global_id]/TILE tile-rows to every output row.
-constexpr uint32_t CB_START_SCRATCH = tt::CBIndex::c_14;
-// Reader's own `start` scratch (x is the shared dispatched buffer, so the
-// reader offsets its x reads by start[global_id] too). Separate from the
-// writer's so the two RISCs don't share one L1 page.
+// c_14 is unused: the writer once had its own `start` scratch there.
+// The `start` (expert_region_offsets) scratch, shared by reader and writer: the
+// reader offsets its x reads by start[global_id] and the writer adds
+// start[global_id]/TILE tile-rows to every output row. The reader's counts
+// broadcast fills it once on every core, before the counts push the writer
+// waits on; neither RISC writes it afterwards.
 constexpr uint32_t CB_START_SCRATCH_READER = tt::CBIndex::c_15;
 // Row-major bf16 staging for x when x_is_row_major: the reader fills it with
 // row-major sticks and the compute kernel tilizes it to bf8_b into CB_IN0_X.
@@ -70,6 +68,10 @@ constexpr uint32_t CB_X_RM = tt::CBIndex::c_16;
 constexpr uint32_t CB_GATE_BIAS = tt::CBIndex::c_17;
 constexpr uint32_t CB_UP_BIAS = tt::CBIndex::c_18;
 constexpr uint32_t CB_DOWN_BIAS = tt::CBIndex::c_19;
+// bf8_b x staging for tilize-once (x_is_row_major only): per gate/up K-block, the M-row's
+// owner core (adaptive_chunk::x_owner_col) tilizes its cb_x_rm block into here, and its reader
+// multicasts it into every row core's CB_IN0_X. Allocated only in row-major mode.
+constexpr uint32_t CB_X_TILIZED = tt::CBIndex::c_20;
 
 // Tile columns per DRAM ND shard of a weight tensor, or 0 when it is not ND-sharded (the
 // interleaved default). The kernels take this as a compile-time arg and coalesce a shard row into
@@ -86,11 +88,75 @@ uint32_t nd_shard_n_tiles(const ttnn::Tensor& w) {
     }
     return static_cast<uint32_t>(spec->shard_shape[-1]) / TILE;
 }
+
+// create_descriptor pushes kernels in this order. override_runtime_arguments indexes them.
+constexpr uint32_t kReaderKernelIdx = 0;
+constexpr uint32_t kWriterKernelIdx = 1;
+
+template <typename Fn>
+void visit_weight_buffers(const std::vector<ttnn::Tensor>& tensors, const Fn& fn) {
+    for (const auto& tensor : tensors) {
+        auto* buffer = tensor.buffer();
+        TT_FATAL(buffer != nullptr, "weight buffer must be allocated on device");
+        fn(buffer);
+    }
+}
+
+// Reader common args: x, counts, index table, region offsets, gate/up/down weights, optional biases.
+template <typename Fn>
+void visit_reader_common_buffers(const UnifiedRoutedExpertFfnInputs& t, bool fuse_bias, const Fn& fn) {
+    auto* x_buffer = t.x.buffer();
+    auto* counts_buffer = t.counts.buffer();
+    auto* idx_buffer = t.global_expert_idx_table.buffer();
+    TT_FATAL(t.expert_region_offsets.has_value(), "expert_region_offsets is required");
+    auto* start_buffer = t.expert_region_offsets->buffer();
+    TT_FATAL(x_buffer != nullptr, "x buffer must be allocated on device");
+    TT_FATAL(counts_buffer != nullptr, "counts buffer must be allocated on device");
+    TT_FATAL(idx_buffer != nullptr, "global_expert_idx_table buffer must be allocated on device");
+    TT_FATAL(start_buffer != nullptr, "expert_region_offsets buffer must be allocated on device");
+    fn(x_buffer);
+    fn(counts_buffer);
+    fn(idx_buffer);
+    fn(start_buffer);
+    visit_weight_buffers(t.gate_projs, fn);
+    visit_weight_buffers(t.up_projs, fn);
+    visit_weight_buffers(t.down_projs, fn);
+    if (fuse_bias) {
+        visit_weight_buffers(t.gate_biases, fn);
+        visit_weight_buffers(t.up_biases, fn);
+        visit_weight_buffers(t.down_biases, fn);
+    }
+}
+
+// Writer common args: output, region offsets, up/down weights.
+template <typename Fn>
+void visit_writer_common_buffers(
+    const UnifiedRoutedExpertFfnInputs& t, tt::tt_metal::Buffer* out_buffer, const Fn& fn) {
+    TT_FATAL(out_buffer != nullptr, "output buffer must be allocated on device");
+    TT_FATAL(t.expert_region_offsets.has_value(), "expert_region_offsets is required");
+    auto* start_buffer = t.expert_region_offsets->buffer();
+    TT_FATAL(start_buffer != nullptr, "expert_region_offsets buffer must be allocated on device");
+    fn(out_buffer);
+    fn(start_buffer);
+    visit_weight_buffers(t.up_projs, fn);
+    visit_weight_buffers(t.down_projs, fn);
+}
+
+template <typename Visit>
+void patch_common_buffer_addresses(tt::tt_metal::RuntimeArgsData& args, const Visit& visit) {
+    uint32_t slot = 0;
+    visit([&](tt::tt_metal::Buffer* buffer) {
+        TT_FATAL(slot < args.size(), "common runtime arg slot {} is past the cached program", slot);
+        args[slot] = buffer->address();
+        ++slot;
+    });
+    TT_FATAL(slot == args.size(), "patched {} common runtime args, cached program has {}", slot, args.size());
+}
 }  // namespace
 
-UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
+tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_descriptor(
     const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertFfnInputs& t, Tensor& tensor_return_value) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::ProgramDescriptor desc;
 
     // All local experts share one shape/dtype (validated), so the program is
     // built once against expert 0's weights; the kernels loop over experts and
@@ -351,10 +417,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // section below; keep the two in sync.
     const auto cb_footprint_bytes = [&](uint32_t M, uint32_t w_gu) -> uint64_t {
         uint64_t total = 0;
-        total += static_cast<uint64_t>(M * w_gu * (op.x_is_row_major ? 1 : 2)) *
-                 in0_x_tile_size;  // cb_in0_x (RM: single-buf)
+        total += static_cast<uint64_t>(M * w_gu * 2) * in0_x_tile_size;  // cb_in0_x
         if (op.x_is_row_major) {
-            total += static_cast<uint64_t>(M * w_gu * 2) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
+            total += static_cast<uint64_t>(M * w_gu) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
+            total += static_cast<uint64_t>(M * w_gu) * in0_x_tile_size;        // cb_x_tilized (bf8_b)
         }
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;          // cb_in1_gate
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;            // cb_in1_up
@@ -431,7 +497,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     //         = (2*K_gate*N_gate + K_down*N_down) / (K_gate/w_wide - K_gate/w_narrow)
     //
     // Measured on a BH p150b at ISL 5120, tiles per extra block: kimi_k3 4608,
-    // kimi_k26 / dsv4_flash / glm_51 3072, gptoss_120b 2700, minimax_m3 1536,
+    // kimi_k26 / dsv4_flash / glm_53 3072, gptoss_120b 2700, minimax_m3 1536,
     // dsv4_pro 658. Only kimi_k3 clears the bar, and it is the only shape the
     // doubling measurably helps: +3-4% at ISL >= 512, -3% at ISL <= 256, against
     // 1.5-1.85x LOSSES on the shapes below it. The bar sits between 3072 and 4608;
@@ -502,12 +568,20 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     auto* counts_buffer = t.counts.buffer();
     auto* idx_buffer = t.global_expert_idx_table.buffer();
     auto* out_buffer = tensor_return_value.buffer();
+    TT_FATAL(x_buffer != nullptr, "x buffer must be allocated on device");
+    TT_FATAL(gate_buffer != nullptr, "gate weight buffer must be allocated on device");
+    TT_FATAL(up_buffer != nullptr, "up weight buffer must be allocated on device");
+    TT_FATAL(down_buffer != nullptr, "down weight buffer must be allocated on device");
+    TT_FATAL(counts_buffer != nullptr, "counts buffer must be allocated on device");
+    TT_FATAL(idx_buffer != nullptr, "global_expert_idx_table buffer must be allocated on device");
+    TT_FATAL(out_buffer != nullptr, "output buffer must be allocated on device");
 
     // expert_region_offsets is a mandatory input (validated in the device op):
     // the writer always writes an expert's output straight into the shared
     // output buffer at start[global_id]/TILE tile-rows (fusing ttnn::insert),
     // and the reader always reads x from the same region.
     auto* start_buffer = t.expert_region_offsets->buffer();
+    TT_FATAL(start_buffer != nullptr, "expert_region_offsets buffer must be allocated on device");
     // dst_M_tiles bounds destination writes: the shared output buffer's
     // tile-row count.
     const uint32_t dst_M_tiles = tensor_return_value.padded_shape()[-2] / TILE;
@@ -521,15 +595,25 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // mcast-sets `valid` to 1 on all receivers; receivers wait for valid==1.
     // Same sem pair is reused across gate/up/down phases (phases are
     // sequential, sem values reset between K-blocks).
-    const uint32_t in1_ready_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
-    const uint32_t in1_valid_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    auto add_semaphore = [&]() {
+        const uint32_t semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = semaphore_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = core_range_set,
+            .initial_value = 0,
+        });
+        return semaphore_id;
+    };
+    const uint32_t in1_ready_sem_id = add_semaphore();
+    const uint32_t in1_valid_sem_id = add_semaphore();
     // in0 (x) multicast within M-row groups: sender at (gx=0, gy) reads x
     // for that M-row, mcasts to (gx=1..GRID_X-1, gy). Used for phases 1 and
     // 2 (gate and up matmul) where every core in a row needs the same x
     // slice. Phase 4 uses cb_in0_down_full (sourced from DRAM scratch) so
     // doesn't use this pair.
-    const uint32_t in0_ready_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
-    const uint32_t in0_valid_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    const uint32_t in0_ready_sem_id = add_semaphore();
+    const uint32_t in0_valid_sem_id = add_semaphore();
     // Activated multicast sems (phase 4): replace the DRAM scratch round-trip
     // with an L1 NoC mcast. For phase-4 K-block kb, sender = core at
     // (gx=kb, my_mt). Sender's reader mcasts its cb_activated block to all
@@ -537,8 +621,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // act_valid_sem; sender waits on act_ready_sem reaching GRID_X-1 incs from
     // the 7 receivers. Sender position rotates per K-block so each core takes
     // a turn as sender exactly once per chunk.
-    const uint32_t act_ready_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
-    const uint32_t act_valid_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    const uint32_t act_ready_sem_id = add_semaphore();
+    const uint32_t act_valid_sem_id = add_semaphore();
     // Two-RISC weight read: use the writer (BRISC, idle until the down output)
     // as a second read engine for `up`, read on NoC 1 concurrent with the
     // reader's NoC-0 `gate` read. Two delivery schemes:
@@ -564,7 +648,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // Local same-core handshake sems (UP_SPLIT only): up_go (reader -> writer:
     // slot reserved) and up_done (writer -> reader: up in L1). Monotonic.
     // COUNTS_BCAST: one core reads counts/idx and multicasts them; this gates the rest.
-    const uint32_t counts_valid_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    const uint32_t counts_valid_sem_id = add_semaphore();
     // DOWN_SPLIT: share each down K-block's K-rows between the reader (NoC 0) and the
     // writer (NoC 1). The down read was the only weight read left on the reader's
     // critical path once UP_SPLIT hides gate/up.
@@ -592,8 +676,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // trusting this in production. Set DS_NO_WRITER_MCAST=1 to fall back to the reader's
     // NoC-0 multicast.
     const bool kWriterMcastsIn1 = std::getenv("DS_NO_WRITER_MCAST") == nullptr;
-    const uint32_t mcast_go_sem_id = kWriterMcastsIn1 ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
-    const uint32_t mcast_done_sem_id = kWriterMcastsIn1 ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
+    const uint32_t mcast_go_sem_id = kWriterMcastsIn1 ? add_semaphore() : 0;
+    const uint32_t mcast_done_sem_id = kWriterMcastsIn1 ? add_semaphore() : 0;
 
     const bool kEnableSplitDown = in0_block_w_d >= 2;
     // Rows the READER keeps; the writer takes [down_split_k, in0_block_w_d).
@@ -602,18 +686,23 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // off (up_seq - 1) % slots, which only holds while up_seq counts gate/up blocks
     // alone. Adding down blocks to that counter shifts the up slot by num_blocks_d per
     // chunk and silently corrupts the GATE/UP path from the second chunk on.
-    const uint32_t down_go_sem_id = kEnableSplitDown ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
-    const uint32_t down_done_sem_id = kEnableSplitDown ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
-    const uint32_t up_go_sem_id = (up_mode == 2) ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
-    const uint32_t up_done_sem_id = (up_mode == 2) ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
+    const uint32_t down_go_sem_id = kEnableSplitDown ? add_semaphore() : 0;
+    const uint32_t down_done_sem_id = kEnableSplitDown ? add_semaphore() : 0;
+    const uint32_t up_go_sem_id = (up_mode == 2) ? add_semaphore() : 0;
+    const uint32_t up_done_sem_id = (up_mode == 2) ? add_semaphore() : 0;
 
     // -------------------------- circular buffers --------------------------
     // Double-buffered DRAM-streamed inputs.
     auto make_cb = [&](uint32_t cb_idx, tt::DataFormat fmt, uint32_t num_tiles, uint32_t tile_bytes) {
-        tt::tt_metal::CircularBufferConfig cfg =
-            tt::tt_metal::CircularBufferConfig(num_tiles * tile_bytes, {{cb_idx, fmt}})
-                .set_page_size(cb_idx, tile_bytes);
-        return tt::tt_metal::CreateCircularBuffer(program, core_range_set, cfg);
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = num_tiles * tile_bytes,
+            .core_ranges = core_range_set,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_idx),
+                .data_format = fmt,
+                .page_size = tile_bytes,
+            }}},
+        });
     };
 
     // Single-buffered DRAM-streamed inputs (no double-buffer) to fit L1.
@@ -621,23 +710,23 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // while compute consumes K-block N. PM FPU util = 0 today says we're
     // memory-bound; bigger input CBs let the kernel pipeline DRAM I/O with
     // compute instead of serialising.
-    // Row-major path: cb_in0_x is compute-internal (tilize output -> matmul input,
-    // both on the compute threads sharing DST -> serial), so a second slot buys no
-    // pipelining. Single-buffer it to free L1 for a wider in0_block_w_gu. TILE path
-    // keeps double-buffering: the reader fills it and compute consumes it (cross-RISC
-    // overlap).
-    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_x_tile_size);
-    // Row-major bf16 x staging (x_is_row_major only). Double-buffered like
-    // cb_in0_x: it is a MULTICAST SOURCE, so the sender must fill K-block N+1
-    // while N's posted mcast still drains — single-buffering reuses the slot
-    // mid-mcast and deadlocks. Skipped when x is TILE so the bf8_b path's L1 is
-    // unchanged.
+    // Row-major x is tilized once per M-row and multicast as bf8_b, so the reader fills
+    // cb_in0_x in both layouts and both double-buffer it: block kb+1 lands while kb's
+    // matmul runs.
+    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * 2u, in0_x_tile_size);
+    // Row-major bf16 x staging and its bf8_b tilize output (x_is_row_major only;
+    // skipped when x is TILE so the bf8_b path's L1 is unchanged).
+    // Single slot each: only the K-block's owner uses them, and a core owns at most one
+    // block per owner-rotation period, so one block is in flight per core. cb_x_rm is no
+    // longer a multicast source; cb_x_tilized is, and its reader frees it only after the
+    // multicast has been acked.
     if (op.x_is_row_major) {
         make_cb(
             CB_X_RM,
             tt::DataFormat::Float16_b,
-            /*tiles=*/gu_in0_block_num_tiles * 2,
+            /*tiles=*/gu_in0_block_num_tiles,
             tt::tile_size(tt::DataFormat::Float16_b));
+        make_cb(CB_X_TILIZED, in0_x_df, /*tiles=*/gu_in0_block_num_tiles, in0_x_tile_size);
     }
     make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles * 2, gate_tile_size);
     make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles * 2, up_tile_size);
@@ -697,9 +786,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     };
     // x and its row-major staging move one in0_block_w_gu-wide tile-row strip at a time
     // (the tilize helper pushes per strip; the per_core_M remainder is a pointer-only pad).
-    check_ring("cb_in0_x", gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_block_w_gu);
+    check_ring("cb_in0_x", gu_in0_block_num_tiles * 2u, in0_block_w_gu);
     if (op.x_is_row_major) {
-        check_ring("cb_x_rm", gu_in0_block_num_tiles * 2, in0_block_w_gu);
+        check_ring("cb_x_rm", gu_in0_block_num_tiles, in0_block_w_gu);
+        check_ring("cb_x_tilized", gu_in0_block_num_tiles, in0_block_w_gu);
     }
     // gate/up intermediates and their accumulators move one gate/up subblock at a time.
     check_ring("cb_gate_intermed", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
@@ -743,39 +833,23 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t idx_scratch_bytes = std::max<uint32_t>(
         static_cast<uint32_t>(idx_buffer->aligned_page_size()),
         idx_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
-    tt::tt_metal::CircularBufferConfig counts_cb_cfg =
-        tt::tt_metal::CircularBufferConfig(counts_scratch_bytes, {{CB_COUNTS_SCRATCH, tt::DataFormat::UInt32}})
-            .set_page_size(CB_COUNTS_SCRATCH, counts_scratch_bytes);
-    tt::tt_metal::CreateCircularBuffer(program, core_range_set, counts_cb_cfg);
+    make_cb(CB_COUNTS_SCRATCH, tt::DataFormat::UInt32, /*tiles=*/1, counts_scratch_bytes);
     // CB_IDX_SCRATCH holds the device-side global_expert_idx_table page so
     // reader/compute/writer can resolve `global_expert_id =
     // idx_table[local_expert_id]` without re-reading DRAM. Sized the same way:
     // a single-chip deployment can place all experts locally, so the idx table
     // may itself be up to MAX_GLOBAL_EXPERTS entries.
-    tt::tt_metal::CircularBufferConfig idx_cb_cfg =
-        tt::tt_metal::CircularBufferConfig(idx_scratch_bytes, {{CB_IDX_SCRATCH, tt::DataFormat::UInt32}})
-            .set_page_size(CB_IDX_SCRATCH, idx_scratch_bytes);
-    tt::tt_metal::CreateCircularBuffer(program, core_range_set, idx_cb_cfg);
+    make_cb(CB_IDX_SCRATCH, tt::DataFormat::UInt32, /*tiles=*/1, idx_scratch_bytes);
 
-    // CB_START_SCRATCH holds the device-side `start` (expert_region_offsets)
-    // page for the writer in direct-write mode. Same sizing rationale as the
-    // counts scratch: expert_region_offsets is validated to have the same
-    // length as counts, so size it to the real per-call requirement (lands the
-    // tensor's page and holds every region-offset entry) rather than the old
-    // fixed MAX_GLOBAL_EXPERTS floor.
+    // CB_START_SCRATCH_READER holds the device-side `start` (expert_region_offsets)
+    // page for reader and writer. Same sizing rationale as the counts scratch:
+    // expert_region_offsets is validated to have the same length as counts, so
+    // size it to the real per-call requirement (lands the tensor's page and holds
+    // every region-offset entry) rather than the old fixed MAX_GLOBAL_EXPERTS floor.
     const uint32_t start_scratch_bytes = std::max<uint32_t>(
         static_cast<uint32_t>(start_buffer->aligned_page_size()),
         counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
-    tt::tt_metal::CircularBufferConfig start_cb_cfg =
-        tt::tt_metal::CircularBufferConfig(start_scratch_bytes, {{CB_START_SCRATCH, tt::DataFormat::UInt32}})
-            .set_page_size(CB_START_SCRATCH, start_scratch_bytes);
-    tt::tt_metal::CreateCircularBuffer(program, core_range_set, start_cb_cfg);
-    // Reader's `start` scratch. Same sizing; separate CB so
-    // reader (NCRISC) and writer (BRISC) never share one scratch page.
-    tt::tt_metal::CircularBufferConfig start_reader_cb_cfg =
-        tt::tt_metal::CircularBufferConfig(start_scratch_bytes, {{CB_START_SCRATCH_READER, tt::DataFormat::UInt32}})
-            .set_page_size(CB_START_SCRATCH_READER, start_scratch_bytes);
-    tt::tt_metal::CreateCircularBuffer(program, core_range_set, start_reader_cb_cfg);
+    make_cb(CB_START_SCRATCH_READER, tt::DataFormat::UInt32, /*tiles=*/1, start_scratch_bytes);
 
     // Bias CBs (FUSE_BIAS): one full per-core N-column slice each; single-buffered
     // (read once, reused across all chunks). gate/up: per_core_N_gu tiles; down:
@@ -871,7 +945,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // bias tensor accessors (gate, up, down). The reader reads them at the
     // offset after start_args.next_compile_time_args_offset(). Only present when
     // fuse_bias — a distinct program (FUSE_BIAS define is in the cache key).
-    std::map<std::string, std::string> reader_defines{};
+    tt::tt_metal::KernelDescriptor::Defines reader_defines;
     if (fuse_bias) {
         reader_ct_args.push_back(CB_GATE_BIAS);
         reader_ct_args.push_back(CB_UP_BIAS);
@@ -881,14 +955,18 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         tt::tt_metal::TensorAccessorArgs(t.gate_biases[0].buffer()).append_to(reader_ct_args);
         tt::tt_metal::TensorAccessorArgs(t.up_biases[0].buffer()).append_to(reader_ct_args);
         tt::tt_metal::TensorAccessorArgs(t.down_biases[0].buffer()).append_to(reader_ct_args);
-        reader_defines["FUSE_BIAS"] = "1";
+        reader_defines.emplace_back("FUSE_BIAS", "1");
     }
-    auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    tt::tt_metal::KernelDescriptor reader_kernel_desc;
+    reader_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
-        "unified_routed_expert_ffn_reader.cpp",
-        core_range_set,
-        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args, reader_defines));
+        "unified_routed_expert_ffn_reader.cpp";
+    reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.core_ranges = core_range_set;
+    reader_kernel_desc.compile_time_args = std::move(reader_ct_args);
+    reader_kernel_desc.defines = std::move(reader_defines);
+    reader_kernel_desc.named_compile_time_args = {{"cb_x_tilized", CB_X_TILIZED}};
+    reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
 
     // Writer compile-time args (must match writer's get_compile_time_arg_val order).
     std::vector<uint32_t> writer_ct_args = {
@@ -915,8 +993,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         M_tiles_full,  // 13
         // dst_M_tiles: tile-row count of the shared destination buffer, which
         // bounds the writer's destination rows.
-        dst_M_tiles,       // 14
-        CB_START_SCRATCH,  // 15
+        dst_M_tiles,              // 14
+        CB_START_SCRATCH_READER,  // 15: shared with the reader (counts broadcast)
         // UP_SPLIT up-weight read: CB + dims let the writer replicate the gate
         // read on NoC 1, and writer_split_up gates it (1 = UP_SPLIT).
         CB_IN1_UP,                            // 16
@@ -954,12 +1032,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // DOWN_SPLIT: down accessor follows up in the writer's compile-arg stream.
     tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(writer_ct_args);
 
-    auto writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    tt::tt_metal::KernelDescriptor writer_kernel_desc;
+    writer_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
-        "unified_routed_expert_ffn_writer.cpp",
-        core_range_set,
-        tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
+        "unified_routed_expert_ffn_writer.cpp";
+    writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel_desc.core_ranges = core_range_set;
+    writer_kernel_desc.compile_time_args = std::move(writer_ct_args);
+    writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
     // Compute kernel compile-time args: positional + named CB ids.
     std::vector<uint32_t> compute_ct_args = {
@@ -1013,9 +1093,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         op.min_active_tokens,
         op.max_active_tokens,
     };
-    std::unordered_map<std::string, uint32_t> compute_named_args = {
+    tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs compute_named_args = {
         // Row-major bf16 x staging (x_is_row_major only); tilize input CB.
         {"cb_x_rm", CB_X_RM},
+        // bf8_b tilize-once staging (x_is_row_major only); tilize output on owner cores.
+        {"cb_x_tilized", CB_X_TILIZED},
         {"cb_in0_x", CB_IN0_X},
         {"cb_in1_gate", CB_IN1_GATE},
         {"cb_in1_up", CB_IN1_UP},
@@ -1038,51 +1120,53 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         {"m_tiles_full", M_tiles_full},
     };
     if (fuse_bias) {
-        compute_named_args["cb_gate_bias"] = CB_GATE_BIAS;
-        compute_named_args["cb_up_bias"] = CB_UP_BIAS;
-        compute_named_args["cb_down_bias"] = CB_DOWN_BIAS;
+        compute_named_args.emplace_back("cb_gate_bias", CB_GATE_BIAS);
+        compute_named_args.emplace_back("cb_up_bias", CB_UP_BIAS);
+        compute_named_args.emplace_back("cb_down_bias", CB_DOWN_BIAS);
     }
 
     // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
-    std::map<std::string, std::string> compute_defines{};
-    compute_defines["PACKER_L1_ACC"] = "1";
+    tt::tt_metal::KernelDescriptor::Defines compute_defines;
+    compute_defines.emplace_back("PACKER_L1_ACC", "1");
     // Dst-accumulator mode -> compute kernel: the fused-binary-activation dst budget and
     // the SFPU fp32-dest template derive from this, staying in sync with
     // DST_CAPACITY / ComputeConfig.fp32_dest_acc_en (single source above).
-    compute_defines["FP32_DEST_ACC_EN"] = kFp32DestAccEn ? "1" : "0";
+    compute_defines.emplace_back("FP32_DEST_ACC_EN", kFp32DestAccEn ? "1" : "0");
     if (op.activation == RoutedExpertActivation::SwiGluOai) {
         // SwiGLU-OAI activation (MiniMax-M3 / gpt-oss): clamp(gate,max=L),
         // clamp(up,±L), (up+1)*gate*sigmoid(alpha*gate). Bakes alpha=1.702,
         // limit=7.0 (SwiGLUConfigGPTOSS) in the kernel.
-        compute_defines["SWIGLU_OAI"] = "1";
+        compute_defines.emplace_back("SWIGLU_OAI", "1");
     } else if (op.activation == RoutedExpertActivation::SituGlu) {
         // SiTU-GLU (Kimi K3), with beta_gate=4.0 / beta_up=25.0 baked into the kernel.
-        compute_defines["SITU_GLU"] = "1";
+        compute_defines.emplace_back("SITU_GLU", "1");
     } else if (op.activation == RoutedExpertActivation::ClampedSiluGlu) {
         // Clamped SiLU-GLU (DeepSeek V4), with limit=10.0 (ClampedSiluGluConfigDsV4) baked
         // into the kernel.
-        compute_defines["CLAMPED_SILU_GLU"] = "1";
+        compute_defines.emplace_back("CLAMPED_SILU_GLU", "1");
     }
     if (fuse_bias) {
         // FUSE_BIAS: add gate/up bias (broadcast across rows) before the fused binary
         // activation and down bias after the down matmul. Validation restricts this to
         // the activations that have that branch.
-        compute_defines["FUSE_BIAS"] = "1";
+        compute_defines.emplace_back("FUSE_BIAS", "1");
     }
 
-    auto compute_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    tt::tt_metal::KernelDescriptor compute_kernel_desc;
+    compute_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/"
-        "fused_swiglu.cpp",
-        core_range_set,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::LoFi,
-            .fp32_dest_acc_en = kFp32DestAccEn,
-            .math_approx_mode = false,
-            .compile_args = compute_ct_args,
-            .defines = compute_defines,
-            .named_compile_args = compute_named_args,
-        });
+        "fused_swiglu.cpp";
+    compute_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_desc.core_ranges = core_range_set;
+    compute_kernel_desc.compile_time_args = std::move(compute_ct_args);
+    compute_kernel_desc.named_compile_time_args = std::move(compute_named_args);
+    compute_kernel_desc.defines = std::move(compute_defines);
+    compute_kernel_desc.config = tt::tt_metal::ComputeConfigDescriptor{
+        .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
+        .fp32_dest_acc_en = kFp32DestAccEn,
+        .dst_full_sync_en = false,
+        .math_approx_mode = false,
+    };
 
     // -------------------------- per-core runtime args ---------------------
     // Cross-core synchronization is now done entirely via L1-mcast: weights
@@ -1229,7 +1313,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
+        tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
+        reader_rt_args.append(reader_args);
+        reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
 
         // Writer: 0..3 M/N indices and sender role, 4..7 up/down sems,
         // then the weight multicast rectangle and semaphores.
@@ -1248,7 +1334,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         writer_args.push_back(in1_valid_sem_id);
         writer_args.push_back(mcast_go_sem_id);
         writer_args.push_back(mcast_done_sem_id);
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
+        tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
+        writer_rt_args.append(writer_args);
+        writer_kernel_desc.emplace_runtime_args(core, writer_rt_args);
 
         // Compute: how many of this core's N subblocks hold REAL output columns.
         // per_core_N is the GRID-ceil'd width, so the highest-gx cores own phantom
@@ -1267,52 +1355,54 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         std::vector<uint32_t> compute_args = {
             (valid_n_gu + gu_out_subblock_w - 1) / gu_out_subblock_w,  // 0 gu valid N subblocks
             (valid_n_d + d_out_subblock_w - 1) / d_out_subblock_w,     // 1 down valid N subblocks
+            gx,                                                        // 2 tilize-once: own column
+            GRID_X,                                                    // 3 tilize-once: M-row width
+            gy,                                                        // 4 tilize-once: own row
         };
-        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, compute_args);
+        tt::tt_metal::KernelDescriptor::RTArgList compute_rt_args;
+        compute_rt_args.append(compute_args);
+        compute_kernel_desc.emplace_runtime_args(core, compute_rt_args);
     }
 
     // Reader: x, counts, index table, region offsets, gate/up/down weights, optional biases.
     // Writer: output, region offsets, up/down weights. Both tables are uniform across workers.
-    tt::tt_metal::SetCommonRuntimeArgs(
-        program, reader_kernel_id, std::vector<uint32_t>(4 + (fuse_bias ? 6 : 3) * experts_per_chip));
-    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, std::vector<uint32_t>(2 + 2 * experts_per_chip));
-    cached_program_t cached_program{
-        std::move(program),
-        UnifiedRoutedExpertFfnSharedVariables{
-            .reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id}};
-    override_runtime_arguments(cached_program, op, t, tensor_return_value);
-    return cached_program;
+    // visit_*_common_buffers is also what override_runtime_arguments walks, so the slot order
+    // cannot drift between the miss path and the cache-hit patch.
+    tt::tt_metal::KernelDescriptor::RTArgList reader_common_args;
+    visit_reader_common_buffers(
+        t, fuse_bias, [&](tt::tt_metal::Buffer* buffer) { reader_common_args.push_back(buffer); });
+    reader_kernel_desc.emplace_common_runtime_args(reader_common_args);
+
+    tt::tt_metal::KernelDescriptor::RTArgList writer_common_args;
+    visit_writer_common_buffers(
+        t, out_buffer, [&](tt::tt_metal::Buffer* buffer) { writer_common_args.push_back(buffer); });
+    writer_kernel_desc.emplace_common_runtime_args(writer_common_args);
+
+    // Kernel index order is pinned for override_runtime_arguments: reader, writer, compute.
+    desc.kernels.push_back(std::move(reader_kernel_desc));
+    desc.kernels.push_back(std::move(writer_kernel_desc));
+    desc.kernels.push_back(std::move(compute_kernel_desc));
+    return desc;
 }
 
 void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+    tt::tt_metal::Program& program,
     const UnifiedRoutedExpertFfnParams& op,
     const UnifiedRoutedExpertFfnInputs& t,
-    Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, cached_program.shared_variables.reader_kernel_id);
-    auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, cached_program.shared_variables.writer_kernel_id);
-    reader_args[0] = t.x.buffer()->address();
-    reader_args[1] = t.counts.buffer()->address();
-    reader_args[2] = t.global_expert_idx_table.buffer()->address();
-    reader_args[3] = t.expert_region_offsets->buffer()->address();
-    writer_args[0] = tensor_return_value.buffer()->address();
-    writer_args[1] = reader_args[3];
-    size_t reader_slot = 4;
-    for (const auto* weights : {&t.gate_projs, &t.up_projs, &t.down_projs}) {
-        for (const auto& weight : *weights) {
-            reader_args[reader_slot++] = weight.buffer()->address();
-        }
-    }
-    // Reuse the up/down addresses already collected for the reader.
-    std::copy_n(reader_args.data() + 4 + op.experts_per_chip, 2 * op.experts_per_chip, writer_args.data() + 2);
-    if (op.fuse_bias) {
-        for (const auto* biases : {&t.gate_biases, &t.up_biases, &t.down_biases}) {
-            for (const auto& bias : *biases) {
-                reader_args[reader_slot++] = bias.buffer()->address();
-            }
-        }
-    }
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>&) {
+    // TILE calls pass output == x. That buffer is then both an input and the returned tensor, so
+    // it shows up twice in the input region and resolve_bindings returns no bindings. The adapter
+    // would rebuild this factory on every hit. Per-core args depend only on hashed attributes.
+    // These common-arg addresses are the values that change between two calls of the same spec.
+    auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, kReaderKernelIdx);
+    patch_common_buffer_addresses(
+        reader_args, [&](auto&& consume) { visit_reader_common_buffers(t, op.fuse_bias, consume); });
+
+    auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, kWriterKernelIdx);
+    auto* out_buffer = tensor_return_value.buffer();
+    patch_common_buffer_addresses(
+        writer_args, [&](auto&& consume) { visit_writer_common_buffers(t, out_buffer, consume); });
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn

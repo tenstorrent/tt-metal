@@ -32,7 +32,7 @@ void kernel_main() {
     DataflowBuffer dfb_out_obj(dfb::out);
     constexpr uint32_t TILE_W = 32;
     constexpr bool do_mask_w = (origin_W % TILE_W) != 0;
-    DataflowBuffer& dfb_reduction_input_obj = do_mask_w ? dfb_masked_input_obj : dfb_input_obj;
+    auto& dfb_reduction_input_obj = do_mask_w ? dfb_masked_input_obj : dfb_input_obj;
 
     compute_kernel_hw_startup(dfb_input_id, dfb::scaler, dfb::out);
 
@@ -92,7 +92,11 @@ void kernel_main() {
                         dfb::masked_input,
                         compute_kernel_lib::ReservePolicy::PerTile,
                         compute_kernel_lib::PushPolicy::PerTile,
-                        kDataFormatReconfig)>(compute_kernel_lib::IterationShape::tiles(onetile));
+                        kDataFormatReconfig)>(
+                    compute_kernel_lib::IterationShape::tiles(onetile),
+                    dfb_input_obj,
+                    dfb_mask_w_obj,
+                    dfb_masked_input_obj);
                 dfb_input_id = dfb::masked_input;
             }
 

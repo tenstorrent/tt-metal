@@ -35,8 +35,15 @@ struct PassBarrierPlan {
     uint32_t rect_y_end = 0;
     uint32_t num_receivers = 0;
     // Two per core: both data-movement kernels arrive, so a release implies every core's writer --
-    // and therefore its compute -- finished pass A.
+    // and therefore its compute -- finished the first pass.
     uint32_t total_arrivals = 0;
+};
+
+// The per-expert weight-base table, [gate[0..E), up[0..E), down[0..E)] as uint32, when the halves read it
+// instead of runtime args. No buffer means they were built with the runtime args.
+struct WeightTablePlan {
+    tt::tt_metal::Buffer* buffer = nullptr;
+    uint32_t experts_per_chip = 0;
 };
 
 // What the merge decided. Logged by the caller on a cache miss; the arena footprint is also
@@ -64,15 +71,20 @@ struct MergeReport {
 // six kernels become three, and each half's compile-time and runtime argument lists are joined
 // behind the bases the union binaries were compiled with.
 //
-// `run_fused_pass` says whether pass A executes at all. When it is false the fused half's circular
+// `run_fused_pass` says whether the fused pass executes at all. When it is false the fused half's circular
 // buffers are dropped -- nothing will touch them -- and the union kernels are built without the
-// define that calls pass A. Both bodies are compiled in either way, so the argument bases have the
+// define that calls the fused pass. Both bodies are compiled in either way, so the argument bases have the
 // same shape in both modes.
 //
-// `l1_arena` is required only when pass A runs; it backs both halves' circular buffers. The two
+// `l1_arena` is required only when the fused pass runs; it backs both halves' circular buffers. The two
 // passes never run at once, so their CBs are laid out from the arena's base independently and the
 // program's L1 cost is the larger half, not the sum -- which is what lets both halves keep the
 // whole core grid.
+//
+// `weight_table`, when its buffer is set, is the one-page DRAM table of every expert's weight bases
+// that both halves were built to read instead of per-expert runtime args (each half's
+// weights_from_table). The merge gives it an L1 page past both halves' buffers and hands the
+// reader its address; see kernels/hybrid_weight_table.hpp.
 tt::tt_metal::ProgramDescriptor merge_halves(
     tt::tt_metal::ProgramDescriptor fused,
     tt::tt_metal::ProgramDescriptor unified,
@@ -80,6 +92,7 @@ tt::tt_metal::ProgramDescriptor merge_halves(
     bool run_fused_pass,
     tt::tt_metal::Buffer* l1_arena,
     const PassBarrierPlan& barrier,
+    const WeightTablePlan& weight_table,
     MergeReport& report);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

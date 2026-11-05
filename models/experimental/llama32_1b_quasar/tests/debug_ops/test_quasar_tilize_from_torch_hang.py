@@ -19,6 +19,15 @@ model build. Run on the sim exactly as the model does, e.g.:
 
 Bisect: the first ``shape`` id that hangs (never logs "readback complete") is the smallest width that
 trips it. 32x32 is the known-good baseline; 32x2048 crosses the 32-tile wide-row threshold.
+
+RESOLUTION (2026-10-01): the hang is the fp32 unpack-to-DEST (UNP_DEST) LLK path, which is unimplemented on
+Quasar (the lossless-fp32 tilize fix lives only on gchoudhary/quasar-tilize-default-factory-...; the merged
+in-branch tilize-factory fixes cover bf16, not fp32). Rather than hang, TilizeDeviceOperation::validate now
+raises a clear TT_FATAL for a WIDE (> 32 tiles/row) FLOAT32 input on Quasar (tilize_device_operation.cpp).
+So the wide shapes here now assert that reject (``expect_error``) instead of hanging; narrow fp32 and all
+WH/BH shapes still pass. Workaround on Quasar: cast to bf16 before tilizing, or use the Gen2-native
+ttnn.experimental.quasar.tilize (see test_quasar_experimental_tilize below, and the llama e2e's
+_install_quasar_tilize_from_torch).
 """
 
 import pytest
@@ -49,12 +58,36 @@ _SHAPES = [
 ]
 
 
+def _is_quasar():
+    try:
+        return "quasar" in ttnn.get_arch_name()
+    except Exception:
+        return False
+
+
 @pytest.mark.parametrize("shape", _SHAPES, ids=[f"{h}x{w}" for (h, w) in _SHAPES])
-def test_quasar_tilize_from_torch(mesh_device, shape):
-    """from_torch(fp32 -> bf16, TILE) — the exact weight-upload op path that deadlocked."""
+def test_quasar_tilize_from_torch(mesh_device, shape, expect_error):
+    """from_torch(fp32 -> bf16, TILE) — the exact weight-upload op path that deadlocked.
+
+    On Quasar the WIDE (> 32 tiles/row) fp32 tilize now raises a clear TT_FATAL (the fp32 UNP_DEST LLK path
+    is unimplemented; it used to hang at NTW/WFW) — so the wide shapes assert that reject instead of hanging.
+    NARROW (<= 32 tiles/row) fp32 tilize still works, and on WH/BH every shape works (no guard)."""
     h, w = shape
     torch.manual_seed(0)
     t = torch.randn(1, 1, h, w, dtype=torch.float32)
+
+    # Quasar: wide (> 32 tiles/row) fp32 tilize is rejected (used to hang). Assert the clear error.
+    if _is_quasar() and (w // 32) > 32:
+        with expect_error(RuntimeError, "not supported on Quasar"):
+            ttnn.from_torch(
+                t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            )
+        return
 
     logger.info(f"[tilize-repro] from_torch(TILE) begin shape=(1,1,{h},{w}) fp32->bf16")
     tt = ttnn.from_torch(

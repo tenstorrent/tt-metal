@@ -27,6 +27,12 @@ struct WelfordStats {
     std::uint32_t count;  // Number of elements in the subgroup.
 };
 
+// Construct already-combined statistics without converting packed BF16 values.
+template <typename T>
+constexpr WelfordStats<T> make_welford_stats(T mean, T variance, std::uint32_t count) {
+    return {.mean = mean, .variance = variance, .count = count};
+}
+
 /**
  * @brief Combine two sets of Welford stats into one.
  *        This is the core building block—use iteratively for multiple groups.

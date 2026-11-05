@@ -76,7 +76,7 @@ FORCE_INLINE void sort_noc_exchange_Wt_tiles(
         // Handshake for tile exchange (signal peer that we are ready)
         sem_self.up(noc, other_core_x, other_core_y, 1);
         noc.async_atomic_barrier();
-        sem_self.wait(sem_counter);
+        sem_self.wait_min(sem_counter);
 
         // Send local indices and values to peer
         value_tensor_this_dfb.wait_front(ONE_TILE);
@@ -108,14 +108,14 @@ FORCE_INLINE void sort_noc_exchange_Wt_tiles(
         // Indicate finish reading and wait for other core to finish
         sem_self.up(noc, other_core_x, other_core_y, 1);
         noc.async_atomic_barrier();
-        sem_self.wait(sem_counter + 1);
+        sem_self.wait_min(sem_counter + 1);
 
         // Push incoming tiles to compute buffers
         dfb_value_peer.push_back(ONE_TILE);
         dfb_index_peer.push_back(ONE_TILE);
     }  // Wt
 
-    // Reset semaphore value
+    // Reset semaphore value: a residual value would satisfy the next exchange's wait_min() immediately.
     sem_self.set(0);
 }
 

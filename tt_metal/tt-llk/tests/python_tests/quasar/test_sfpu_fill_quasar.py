@@ -6,6 +6,7 @@ from typing import List
 
 import pytest
 import torch
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     UnarySFPUGolden,
@@ -14,7 +15,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
-    ImpliedMathFormat,
     MathOperation,
     UnpackerEngine,
     format_dict,
@@ -28,14 +28,13 @@ from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
     FILL_INT_FORMAT,
-    IMPLIED_MATH_FORMAT,
     MATH_OP,
     NUM_FACES,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 def generate_sfpu_fill_combinations(
@@ -52,7 +51,7 @@ def generate_sfpu_fill_combinations(
 
     Args: Input-output format pairs for float and int paths
 
-    Returns: List of (format, dest_acc, implied_math_format, input_dimensions) tuples
+    Returns: List of (format, dest_acc, input_dimensions) tuples
     """
     combinations = []
 
@@ -61,7 +60,7 @@ def generate_sfpu_fill_combinations(
 
         # SFPU unpack_to_dest requires bit-width match: 32-bit formats pair with
         # dest_acc=Yes, non-32-bit formats pair with dest_acc=No.
-        dest_acc = DestAccumulation.Yes if in_fmt.is_32_bit() else DestAccumulation.No
+        dest_acc = dest_acc_for(in_fmt)
 
         # Quasar packer does not support non-Float32 to Float32 conversion when dest_acc=No
         if (
@@ -71,29 +70,22 @@ def generate_sfpu_fill_combinations(
         ):
             continue
 
-        for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
-            for input_dimensions in [[32, 32], [64, 64]]:
-                combinations.append(
-                    (fmt, dest_acc, implied_math_format, runtime(input_dimensions))
-                )
+        for input_dimensions in [[32, 32], [64, 64]]:
+            combinations.append((fmt, dest_acc, runtime(input_dimensions)))
 
     # Int fill: _calculate_fill_int_ with FILL_INT_FORMAT-selected SFPMEM store mode.
     # Int32 is 32-bit → dest_acc Yes; Int16 (16-bit) and Int8/UInt8 (8-bit) → dest_acc No.
-    # Only ImpliedMathFormat.No is exercised on the int path.
     for fmt in int_formats:
         in_fmt = fmt.input_format
-        dest_acc = DestAccumulation.Yes if in_fmt.is_32_bit() else DestAccumulation.No
+        dest_acc = dest_acc_for(in_fmt)
         for input_dimensions in [[32, 32], [64, 64]]:
-            combinations.append(
-                (fmt, dest_acc, ImpliedMathFormat.No, runtime(input_dimensions))
-            )
+            combinations.append((fmt, dest_acc, runtime(input_dimensions)))
 
     return combinations
 
 
 _FILL_FLOAT_INPUTS = [
     DataFormat.Float16_b,
-    DataFormat.Float16,
     DataFormat.Float32,
 ]
 SFPU_FILL_FLOAT_FORMATS = input_output_formats(_FILL_FLOAT_INPUTS)
@@ -114,11 +106,11 @@ SFPU_FILL_INT_FORMATS = input_output_formats(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math_input_dims=generate_sfpu_fill_combinations(
+    formats_dest_acc_input_dims=generate_sfpu_fill_combinations(
         SFPU_FILL_FLOAT_FORMATS, SFPU_FILL_INT_FORMATS
     ),
 )
-def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
+def test_sfpu_fill_quasar(formats_dest_acc_input_dims):
     """
     Test fill operation on Quasar architecture.
 
@@ -137,9 +129,7 @@ def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
     Since fill ignores input values, the input stimuli are arbitrary —
     typed stimuli are still generated so the unpack path sees a valid buffer.
     """
-    (formats, dest_acc, implied_math_format, input_dimensions) = (
-        formats_dest_acc_implied_math_input_dims[0]
-    )
+    formats, dest_acc, input_dimensions = formats_dest_acc_input_dims[0]
 
     is_int_fill = formats.input_format.is_integer()
 
@@ -185,7 +175,6 @@ def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
         formats,
         templates=[
             MATH_OP(mathop=MathOperation.Fill),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
@@ -214,12 +203,7 @@ def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format

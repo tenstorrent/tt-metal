@@ -83,7 +83,7 @@ export PREFILL_TRACE_DIR=/mnt/models/minimax-m3-cache/golden/longbook_full
 ```
 
 Validate the device KV cache against this golden with the producer's device-less read-back PCC: run the
-runner with `PREFILL_MOCK_MIGRATION=1` and the producer with `PREFILL_PRODUCER_CHECK_PCC=1` — see
+runner with `PREFILL_ENABLE_MIGRATION=0` (the default) and the producer with `PREFILL_PRODUCER_CHECK_PCC=1` — see
 `models/demos/common/prefill/docs/PREFILL_MIGRATION_TESTING.md` Gate 1.
 
 ## Options
@@ -186,7 +186,7 @@ tail -f generate_golden.log
 
 # 5. Use in tests — point KV-PCC validation at this trace:
 export PREFILL_TRACE_DIR=$OUT_DIR/longbook_full
-# KV PCC runs via the producer read-back: PREFILL_MOCK_MIGRATION=1 runner + PREFILL_PRODUCER_CHECK_PCC=1
+# KV PCC runs via the producer read-back: PREFILL_ENABLE_MIGRATION=0 runner + PREFILL_PRODUCER_CHECK_PCC=1
 # producer (see common/prefill/docs/PREFILL_MIGRATION_TESTING.md Gate 1).
 ```
 

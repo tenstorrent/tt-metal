@@ -32,6 +32,7 @@ const SCHEMA = {
 }
 
 const prompt = (p) => `Write concrete SUGGESTED FIXES for confirmed bugs. You do NOT edit any source code.
+Do NOT run tests, run the code, or touch any device or hardware. A compile-only check (compiling a small probe to inspect the generated code) is fine when it settles the question.
 Read ${p}: about 20 findings, each with a key, the site (file:line), the claim, the failure scenario, the evidence and
 the verifiers' write-ups, which trace the defect in the CURRENT code and are your main source. When the finding came
 from history ("history-sibling"), its scenario and evidence describe an OLD bug elsewhere that this site resembles.

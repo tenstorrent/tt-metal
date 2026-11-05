@@ -13,6 +13,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/ccl_resources.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/socket_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/parameter_dtype.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tt_profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tt_tensor_utils.cpp
@@ -49,6 +50,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/rotary_embedding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/single_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/conv3d_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/losses.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/losses.hpp
@@ -65,6 +67,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/mla_kv_assemble_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/polynorm_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/qkv_causal_conv1d_silu_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.hpp
@@ -74,6 +77,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/softmax_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_packed_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_ffn_swiglu_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_group_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_ungroup_op.cpp
@@ -92,7 +96,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_composite.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_full_precision.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
@@ -112,6 +115,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/memory_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils/training_utils.cpp
 )
 
 # Manually select only specific files from metal ops
@@ -180,6 +184,12 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_packed_fw/swiglu_packed_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_packed_fw/device/swiglu_packed_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_packed_fw/device/swiglu_packed_fw_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_packed_bw/swiglu_packed_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_packed_bw/device/swiglu_packed_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_packed_bw/device/swiglu_packed_bw_program_factory.cpp
     # SDPA Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
@@ -212,6 +222,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_bw/polynorm_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_bw/device/polynorm_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_bw/device/polynorm_bw_program_factory.cpp
+    # QKV causal conv1d + SiLU backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/qkv_causal_conv1d_silu_bw/qkv_causal_conv1d_silu_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/qkv_causal_conv1d_silu_bw/device/qkv_causal_conv1d_silu_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/qkv_causal_conv1d_silu_bw/device/qkv_causal_conv1d_silu_bw_program_factory.cpp
     # AdamW Optimizer (consolidated: supports both half and full precision)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.cpp
@@ -427,6 +441,15 @@ if(COMMAND tt_configure_ccache_for_pch)
 endif()
 
 tt_reuse_precompile_headers(ttml ttml_pch)
+
+# Descriptor cache-hit parity check (opt-in via -DENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK, see ttnn/CMakeLists.txt).
+# The #ifdef lives in ttnn's mesh device-operation adapter, which is instantiated in tt-train's own translation units,
+# and TTNN::TTNN does not forward the definition from ttnn_core. Define it on ttml and on the PCH provider: a definition
+# missing from the PCH resolves the #ifdef when the PCH is built, compiling the check out of every consumer.
+if(ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK)
+    target_compile_definitions(ttml PUBLIC TT_DESCRIPTOR_PATCHING_PARITY_CHECK)
+    target_compile_definitions(ttml_pch PUBLIC TT_DESCRIPTOR_PATCHING_PARITY_CHECK)
+endif()
 
 if(ENABLE_LIBCXX)
     target_link_libraries(

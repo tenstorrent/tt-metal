@@ -14,9 +14,10 @@
 // host from an `expected_tokens` argument now happens at runtime, so no caller
 // has to know the token count in advance.
 //
-// CBs are sized on the host to the compile-time MAX shape (per_core_M = 8,
-// chunk_M_tiles = 64; a big-model L1 guard may lower the max, passed in as
-// `max_chunk`). The picker never returns more than `max_chunk`, so the runtime
+// CBs are sized on the host to the MAX chunk, passed in as `max_chunk`
+// (= per_core_M_max * kGridY: the factory requests per_core_M 4, widens it to 8
+// only where the avoided weight traffic pays for it, and its L1 guard may lower
+// it). The picker never returns more than `max_chunk`, so the runtime
 // per_core_M always fits the allocated CBs; a smaller pick simply uses fewer of
 // the reserved tiles and shrinks every M-dimension loop.
 //
@@ -38,14 +39,49 @@ namespace adaptive_chunk {
 #endif
 constexpr uint32_t kGridY = UNIFIED_RE_GRID_Y;
 
+// Row-major x, tilized once per M-row: how many gate/up K-blocks ahead of its matmul an
+// owner core tilizes (it tilizes block kb + kXTilizeLookahead before MACing kb). The
+// reader and compute must agree on it. 2 measured slower than 1 at ISL 384/512 and no
+// better below. Must stay below the owner rotation period minus 2 so a core never
+// holds two of its own blocks in its single-slot x staging.
+constexpr uint32_t kXTilizeLookahead = 1;
+
+// Owner rotation for row-major x, tilized once per M-row. The weight (in1) sender of
+// column gx sits on row gx % kGridY; an owner on that core would run its x multicast
+// handshake ahead of the column's gate read every block it owns, stalling the column.
+// So each M-row rotates ownership only over its NON-weight-sender columns: block b is
+// owned by the (b % period)-th such column. Pure arithmetic, shared by the reader and
+// (through host-computed slots) the compute kernel; the host mirrors the rule.
+inline bool x_owner_eligible(uint32_t gx, uint32_t gy) { return (gx % kGridY) != gy; }
+inline uint32_t x_owner_period(uint32_t grid_x, uint32_t gy) {
+    uint32_t n = 0;
+    for (uint32_t c = 0; c < grid_x; ++c) {
+        n += x_owner_eligible(c, gy) ? 1u : 0u;
+    }
+    return n;
+}
+// Column of the owner of gate/up K-block b in M-row gy.
+inline uint32_t x_owner_col(uint32_t b, uint32_t grid_x, uint32_t gy, uint32_t period) {
+    uint32_t slot = b % period;
+    for (uint32_t c = 0; c < grid_x; ++c) {
+        if (x_owner_eligible(c, gy)) {
+            if (slot == 0) {
+                return c;
+            }
+            --slot;
+        }
+    }
+    return 0;
+}
+
 // Chunk layout for `count_tiles` tile-rows, given the CB-sized maximum chunk
 // `max_chunk` (= per_core_M_max * kGridY): a run of FULL chunks of max_chunk,
 // then ONE tail chunk sized down to the remainder. This minimizes the chunk
 // count (each chunk re-reads the full gate/up/down weights, the DRAM bottleneck)
 // AND minimizes phantom M-work (the tail covers only the leftover rows), so
 // per_core_M adapts to the actual token count per chunk with essentially no
-// wasted rows — e.g. 160 tiles -> 64 + 64 + 32 (per_core_M 8,8,4), 3 chunks,
-// zero phantom.
+// wasted rows — e.g. with max_chunk 64, 160 tiles -> 64 + 64 + 32
+// (per_core_M 8,8,4), 3 chunks, zero phantom.
 //
 // CRITICAL — per_core_M BOUNDS WORK, IT DOES NOT SIZE CB BLOCKS.
 //
@@ -160,6 +196,29 @@ inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t 
         need = 1;
     }
     return (need < per_core_M_max) ? need : per_core_M_max;
+}
+
+// The chunk processed i-th when the order starts at `first` and fans out from it: first, first + 1,
+// first - 1, first + 2, ... Overlapped with combine, `first` is the chunk combine's walks open on, and fanning
+// out serves its downward walk and its upward walk alike. All three kernels call this with the same arguments,
+// so their row mappings stay in lockstep; with first = 0 it is the identity.
+inline uint32_t chunk_at(uint32_t i, uint32_t n, uint32_t first) {
+    if (first >= n) {
+        first = n - 1;
+    }
+    if (i == 0) {
+        return first;
+    }
+    uint32_t seen = 0;
+    for (uint32_t d = 1; d < n; d++) {
+        if (first + d < n && ++seen == i) {
+            return first + d;
+        }
+        if (first >= d && ++seen == i) {
+            return first - d;
+        }
+    }
+    return i;
 }
 
 }  // namespace adaptive_chunk

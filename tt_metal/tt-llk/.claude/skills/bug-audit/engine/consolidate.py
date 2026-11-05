@@ -18,10 +18,20 @@ Record outcomes with disposition.py, never in these files.
 import collections
 import datetime
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import SEV_ORDER, key_of, load, manifest, run_dir, save, state  # noqa: E402
+from common import (  # noqa: E402
+    SEV_ORDER,
+    key_of,
+    load,
+    manifest,
+    recheck_entry,
+    run_dir,
+    save,
+    state,
+)
 
 ACTIVE = ("in_progress", "pr_open")
 DONE = (
@@ -44,7 +54,7 @@ for fn in sorted(os.listdir(os.path.join(out, "verdicts"))):
 # a recheck overrides the wave verdict of the candidate it re-examined
 recheck = load(os.path.join(out, "recheck.json"), {})
 for f in rows:
-    rc = recheck.get(key_of(f))
+    rc = recheck_entry(recheck, f)
     if (
         rc
         and "after_wave" in rc
@@ -217,6 +227,32 @@ def table(fh, fs):
         )
 
 
+LIST_LINE = re.compile(r"^\s*([-*+]|\d+[.)])\s")
+
+
+def nest(text):
+    """A nested list item's text: its later lines indented, so a multi-line fix stays under its item. An unindented
+    line after a list in the text gets a blank line before it, or Markdown folds it into that list's last bullet. Lines
+    inside a code fence are left as they are: a diff's "- old" is not a list.
+    """
+    out, in_list, fence = [], False, False
+    for ln in str(text or "").strip().split("\n"):
+        if ln.lstrip().startswith(("```", "~~~")):
+            fence, in_list = not fence, False
+        elif fence:
+            pass
+        elif LIST_LINE.match(ln):
+            in_list = True
+        elif not ln.strip():
+            in_list = False
+        elif in_list and not ln[:1].isspace():
+            out.append("")
+            in_list = False
+        out.append(ln)
+    first, *rest = out
+    return "\n".join([first] + [("    " + ln) if ln else "" for ln in rest])
+
+
 def detail(fh, fs):
     for i, f in enumerate(fs, 1):
         fh.write(
@@ -247,8 +283,8 @@ def detail(fh, fs):
             )
             for m in f["merged_sites"]:
                 fh.write(
-                    f"- `{m['site']}` ({m['relation']}, {m['severity']}): {m['summary']}\n"
-                    f"  - fails: {m['failure_scenario']}\n  - fix: {m['suggested_fix']}\n"
+                    f"- `{m['site']}` ({m['relation']}, {m['severity']}): {nest(m['summary'])}\n"
+                    f"  - fails: {nest(m['failure_scenario'])}\n  - fix: {nest(m['suggested_fix'])}\n"
                 )
             fh.write("\n")
         if f.get("same_line"):
@@ -257,8 +293,8 @@ def detail(fh, fs):
             )
             for m in f["same_line"]:
                 fh.write(
-                    f"- [{m['category']}, {m['severity']}, {m['status']}] {m['summary']}\n"
-                    f"  - fails: {m['failure_scenario']}\n  - fix: {m['suggested_fix']}\n"
+                    f"- [{m['category']}, {m['severity']}, {m['status']}] {nest(m['summary'])}\n"
+                    f"  - fails: {nest(m['failure_scenario'])}\n  - fix: {nest(m['suggested_fix'])}\n"
                 )
             fh.write("\n")
         if f.get("duplicate_of"):

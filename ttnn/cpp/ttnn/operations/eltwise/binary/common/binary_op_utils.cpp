@@ -4,6 +4,8 @@
 
 #include "binary_op_utils.hpp"
 
+#include <cmath>
+
 #include "binary_op_dtype_policy.hpp"
 #include <tt_stl/assert.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -34,6 +36,18 @@ bool is_typecast(tt::tt_metal::DataType input, tt::tt_metal::DataType output) {
            (input == UINT32 && output == BFLOAT16) || (input == UINT32 && output == FLOAT32) ||
            (input == UINT16 && output == INT32) || (input == INT32 && output == UINT16) ||
            (input == UINT32 && output == UINT16);
+}
+
+bool scalar_fits_integer_dtype(float value, tt::tt_metal::DataType dtype) {
+    if (!std::isfinite(value) || std::trunc(value) != value) {
+        return false;
+    }
+    // The bounds are powers of two because those are exactly representable as floats, so the comparison
+    // cannot round the limit it is testing -- INT32_MAX is not a float32, 2^31 is.
+    if (dtype == tt::tt_metal::DataType::INT32) {
+        return value >= -2147483648.0f && value < 2147483648.0f;
+    }
+    return value >= 0.0f && value < 4294967296.0f;
 }
 
 bool is_quant_op(BinaryOpType op) {

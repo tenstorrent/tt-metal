@@ -1655,6 +1655,13 @@ def get_mesh_shape() -> Optional[Tuple[int, int]]:
     return None
 
 
+def is_wormhole_t3k_1x8() -> bool:
+    """True when the job targets a Wormhole T3K 1x8 (or 8x1) mesh, per ARCH_NAME / MESH_DEVICE_SHAPE."""
+    arch = os.environ.get("ARCH_NAME", "").lower()
+    mesh_shape = os.environ.get("MESH_DEVICE_SHAPE", "").strip().lower()
+    return "wormhole" in arch and mesh_shape in ("1x8", "8x1")
+
+
 _LOGGED_MESH_SHAPE = None
 
 

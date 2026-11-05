@@ -7,6 +7,7 @@
 # whole-stack weight load. Note `head_dim` 128 != hidden_size // num_heads: q/k/v (8192) is wider
 # than the residual stream (5120), which is a property of the checkpoint.
 
+import dataclasses
 import time
 
 import pytest
@@ -272,17 +273,22 @@ def test_decoder_attention_on_device(
 ):
     """Attention alone: fused qkv, per-head QK-RMSNorm, RoPE, SDPA, o_proj (no residual or input norm)."""
     submesh, ctx = _ctx(mesh_device, submesh_shape, tp_axis, sp_axis, fsdp_axis, num_links)
-
-    attn = Qwen3VlAttention(
-        hidden_size=HIDDEN_SIZE,
-        num_heads=NUM_HEADS,
-        num_key_value_heads=NUM_KV_HEADS,
-        head_dim=HEAD_DIM,
-        rms_norm_eps=NORM_EPS,
-        ctx=ctx,
-    )
     prefix = "self_attn."
-    attn.load_torch_state_dict({k[len(prefix) :]: v for k, v in golden["state"].items() if k.startswith(prefix)})
+    attn_state = {k[len(prefix) :]: v for k, v in golden["state"].items() if k.startswith(prefix)}
+
+    def build(ctx):
+        attn = Qwen3VlAttention(
+            hidden_size=HIDDEN_SIZE,
+            num_heads=NUM_HEADS,
+            num_key_value_heads=NUM_KV_HEADS,
+            head_dim=HEAD_DIM,
+            rms_norm_eps=NORM_EPS,
+            ctx=ctx,
+        )
+        attn.load_torch_state_dict(attn_state)
+        return attn
+
+    attn = build(ctx)
     seq_pad = _sp_seq_pad(seq_len, _sp_factor(submesh, sp_axis))
 
     def prep():
@@ -305,6 +311,15 @@ def test_decoder_attention_on_device(
         else tensor.to_torch(out, mesh_axes=[None, None, None])
     )
     assert_quality(golden["attn_out"].float(), got, pcc=0.99)
+
+    if sp_axis is not None and seq_len == SEQ_LEN:
+        # An oversized K/V gather buffer, as every prompt length shares, must not change a single bit.
+        capacity_attn = build(dataclasses.replace(ctx, kv_gather_capacity=4 * seq_pad))
+        x, pos_embeds = prep()
+        capacity_got = _gather_seq(
+            capacity_attn.forward(x, attention_bias=None, pos_embeds=pos_embeds), sp_axis, seq_len
+        )
+        assert torch.equal(capacity_got, got), "kv_gather_capacity changed the attention output"
 
 
 @_PARAMS

@@ -170,7 +170,7 @@ inline ttnn::Tensor upload_replicated_rows(
         row.size(),
         length);
 
-    ttnn::Shape shape{ttnn::SmallVector<uint32_t>{B, length}};
+    ttnn::Shape shape{ttsl::SmallVector<uint32_t>{B, length}};
     TensorSpec spec(shape, TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
 
     const size_t total = static_cast<size_t>(B) * length;

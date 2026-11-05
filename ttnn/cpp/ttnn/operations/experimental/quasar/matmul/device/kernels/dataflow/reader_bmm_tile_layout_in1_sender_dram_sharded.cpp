@@ -10,6 +10,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -53,6 +54,19 @@ void kernel_main() {
     constexpr DataFormat bias_data_format = get_dataformat(cb_id_in3);
 #endif
 
+#ifdef FUSE_BIAS
+    constexpr auto in1_args = TensorAccessorArgs<12>();
+    constexpr auto bias_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
+#else
+    constexpr auto in1_args = TensorAccessorArgs<9>();
+#endif
+
+    // in1 / bias are DRAM-sharded: read by bank (this reader's dram_bank_id) at offsets into each tensor.
+    const auto in1_accessor = TensorAccessor(in1_args, in1_tensor_addr);
+#ifdef FUSE_BIAS
+    const auto bias_accessor = TensorAccessor(bias_args, in3_tensor_addr);
+#endif
+
     constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t cb_id_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t cb_id_out_reshard = get_named_compile_time_arg_val("cb_out_reshard");
@@ -74,9 +88,9 @@ void kernel_main() {
     uint32_t l1_read_addr_in1 = 0;
     constexpr DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
-    AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+    const BankView dram_bank(in1_accessor);
     noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = vc});
+        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .offset_bytes = 0}, NocOptVals{.vc = vc});
 
 #ifdef ARCH_GRAYSKULL
     for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -89,7 +103,7 @@ void kernel_main() {
                 dram_bank,
                 CoreLocalMem<uint32_t>(l1_write_addr_in1),
                 in1_page_size,
-                {.bank_id = dram_bank_id, .addr = in1_tensor_addr + l1_read_addr_in1},
+                {.bank_id = dram_bank_id, .offset_bytes = l1_read_addr_in1},
                 {},
                 NocOptVals{.vc = vc});
             l1_read_addr_in1 += in1_page_size;
@@ -121,7 +135,7 @@ void kernel_main() {
                 dram_bank,
                 CoreLocalMem<uint32_t>(l1_write_addr_in1),
                 in1_page_size,
-                {.bank_id = dram_bank_id, .addr = in1_tensor_addr + l1_read_addr_in1},
+                {.bank_id = dram_bank_id, .offset_bytes = l1_read_addr_in1},
                 {},
                 NocOptVals{.vc = vc, .trid = curr_block_trid});
             l1_read_addr_in1 += in1_page_size;
@@ -159,15 +173,16 @@ void kernel_main() {
     uint32_t l1_write_addr_in3 = cb_in3.get_write_ptr();
     uint32_t l1_read_addr_in3 = 0;
 
+    const BankView bias_bank(bias_accessor);
     noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-        dram_bank, in3_page_size, {.bank_id = dram_bank_id, .addr = in3_tensor_addr}, NocOptVals{.vc = vc});
+        bias_bank, in3_page_size, {.bank_id = dram_bank_id, .offset_bytes = 0}, NocOptVals{.vc = vc});
 
     for (uint32_t h = 0; h < in3_num_pages; ++h) {
         noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-            dram_bank,
+            bias_bank,
             CoreLocalMem<uint32_t>(l1_write_addr_in3),
             in3_page_size,
-            {.bank_id = dram_bank_id, .addr = in3_tensor_addr + l1_read_addr_in3},
+            {.bank_id = dram_bank_id, .offset_bytes = l1_read_addr_in3},
             {},
             NocOptVals{.vc = vc});
         l1_read_addr_in3 += in3_page_size;
@@ -218,12 +233,10 @@ void kernel_main() {
 
     cb_out.pop_front(out_block_num_tiles);
 
-    // Restore NCRISC_RD_CMD_BUF NOC_CTRL to the firmware default (VC=1, set in
-    // noc_init). set_async_read_state<NocOptions::CUSTOM_VC> writes a per-bank VC into NOC_CTRL
-    // and this hardware register persists across kernel launches. Kernels that
-    // follow (e.g. 1d-multicast matmul readers running in DM_DEDICATED_NOC mode)
-    // rely on NOC_CTRL being at its initialized value and do not re-set it, so
-    // they inherit the stale custom VC and suffer reduced DRAM bandwidth.
-    noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = 1});
+    // Restore only NCRISC read_cmd_buf NOC_CTRL_LO VC to firmware default (VC=1, set in noc_init); a full set_async_read_state
+    // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state fast paths read.
+    const uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED |
+                                      NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1) |
+                                      NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL_LO, noc_rd_cmd_field);
 }

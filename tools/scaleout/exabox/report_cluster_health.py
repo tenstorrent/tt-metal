@@ -43,6 +43,8 @@ STORE_ROOT_ENV = "CLUSTER_HEALTH_STORE_ROOT"
 STORE_DIR_MODE = 0o3770
 STORE_DIR_MODE_WORLD = 0o1777
 STORE_OTHER_WRITE = 0o002
+# The exporter and Alloy read records as other UIDs; a 007 umask would hide them.
+RECORD_FILE_MODE = 0o644
 
 
 def date_dir_mode_for_root(root_mode: int) -> int:
@@ -694,7 +696,7 @@ def publish_record(record: dict[str, Any], store_root: str) -> dict[str, Any]:
     stdout-only record (no record_id). The date directory mode follows the
     store root (``03770`` group-only, or sticky ``01777`` when the root is
     other-writable) so mixed UIDs can share a world-writable store; record
-    files themselves follow the caller's umask.
+    files are ``0644`` regardless of the caller's umask.
     """
     record_id = compute_record_id(
         record["test_type"],
@@ -725,6 +727,7 @@ def publish_record(record: dict[str, Any], store_root: str) -> dict[str, Any]:
                 dir_fd=date_dir_fd,
             )
             with os.fdopen(tmp_fd, "wb") as handle:
+                os.fchmod(handle.fileno(), RECORD_FILE_MODE)
                 handle.write(payload_bytes)
                 handle.flush()
                 os.fsync(handle.fileno())

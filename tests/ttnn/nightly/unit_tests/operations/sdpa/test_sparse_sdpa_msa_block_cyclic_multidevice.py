@@ -19,7 +19,7 @@ import torch
 
 import ttnn
 
-from models.common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_msa_test_utils import (
     BLK_KV,
     make_msa_inputs,
@@ -43,7 +43,10 @@ def _natural_to_block_cyclic(t, sp, n_chunks, chunk_local):
 @pytest.mark.parametrize("mesh_device", [(1, 2), (1, 4)], indirect=True)  # SP along cols; fixture skips if absent
 @pytest.mark.parametrize("n_chunks", [8])
 @pytest.mark.parametrize("causal", [False, True])  # True: diagonal-block mask must stay on the logical id
-def test_msa_native_block_cyclic_sp_gt1_matches_plain(mesh_device, n_chunks, causal):
+@pytest.mark.parametrize(
+    "enable_kv_block_cache", [False, True], ids=["stream", "kv_cache"]
+)  # block-cyclic run only; plain streams
+def test_msa_native_block_cyclic_sp_gt1_matches_plain(mesh_device, n_chunks, causal, enable_kv_block_cache):
     rows, cols = tuple(mesh_device.shape)
     sp_axis, sp = 1, cols
     if sp < 2:
@@ -83,10 +86,10 @@ def test_msa_native_block_cyclic_sp_gt1_matches_plain(mesh_device, n_chunks, cau
 
     # Both runs get the same per-device chunk_start (compute_chunk_start_local, from the mesh coord); the only
     # difference is K/V layout + the remap, so equal outputs prove the remap is correctness-transparent.
-    def run_op(k_in, v_in, bc):
+    def run_op(k_in, v_in, bc, cache=False):
         kw = dict(scale=d**-0.5, block_size=BLK_KV, chunk_start_idx=0 if causal else None)
         if bc:
-            kw.update(block_cyclic_sp_axis=sp_axis, block_cyclic_chunk_local=chunk_local)
+            kw.update(block_cyclic_sp_axis=sp_axis, block_cyclic_chunk_local=chunk_local, enable_kv_block_cache=cache)
         out = ttnn.transformer.sparse_sdpa_msa(
             dev_rm(q.to(torch.float32), ttnn.bfloat16),
             dev_tile(k_in),
@@ -97,7 +100,11 @@ def test_msa_native_block_cyclic_sp_gt1_matches_plain(mesh_device, n_chunks, cau
         return [ttnn.to_torch(s)[:, :H] for s in ttnn.get_device_tensors(out)]
 
     plain = run_op(k, v, bc=False)
-    blockc = run_op(k_bc, v_bc, bc=True)
+    blockc = run_op(k_bc, v_bc, bc=True, cache=enable_kv_block_cache)
+    if enable_kv_block_cache:
+        # The block cache only changes where bytes come from: bit-identical to the same remapped layout streamed.
+        for i, (s_out, c_out) in enumerate(zip(run_op(k_bc, v_bc, bc=True), blockc)):
+            assert torch.equal(s_out, c_out), f"sp={sp} causal={causal}: block cache != streamed on dev {i}"
     for i, (p_out, b_out) in enumerate(zip(plain, blockc)):
         p = pcc(b_out, p_out)
         assert p >= DEVICE_PCC, f"sp={sp} causal={causal}: block-cyclic != plain on dev {i} (pcc={p:.5f}, T={T})"
@@ -199,7 +206,7 @@ def test_msa_block_cyclic_mid_slab_causal(mesh_device, start_offset):
             mesh_mapper=mapper,
         )
 
-    out = ttnn.transformer.sparse_sdpa_msa(
+    args = (
         dev(torch.cat(qs, dim=2).to(torch.float32), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, seq_shard),
         dev(
             _natural_to_block_cyclic(k, sp, n_slabs, chunk_local).to(torch.bfloat16),
@@ -214,16 +221,25 @@ def test_msa_block_cyclic_mid_slab_causal(mesh_device, start_offset):
             repl,
         ),
         dev(torch.cat(idxs, dim=2), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, seq_shard),
-        scale=scale,
-        block_size=BLK_KV,
-        chunk_start_idx=chunk_start,
-        cluster_axis=sp_axis,
-        block_cyclic_sp_axis=sp_axis,
-        block_cyclic_chunk_local=chunk_local,
     )
-    for r, (dev_out, gold) in enumerate(zip(ttnn.get_device_tensors(out), golds)):
-        p = pcc(ttnn.to_torch(dev_out)[:, :H], gold)
+    # The production chunked-prefill call; the block cache must not change a byte of it.
+    outs = {}
+    for cache in (False, True):
+        out = ttnn.transformer.sparse_sdpa_msa(
+            *args,
+            scale=scale,
+            block_size=BLK_KV,
+            chunk_start_idx=chunk_start,
+            cluster_axis=sp_axis,
+            block_cyclic_sp_axis=sp_axis,
+            block_cyclic_chunk_local=chunk_local,
+            enable_kv_block_cache=cache,
+        )
+        outs[cache] = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(out)]
+    for r, (off, on, gold) in enumerate(zip(outs[False], outs[True], golds)):
+        p = pcc(off[:, :H], gold)
         assert p >= DEVICE_PCC, f"sp={sp} chunk_start={chunk_start}: rank {r} diverges from golden (pcc={p:.5f})"
+        assert torch.equal(off, on), f"sp={sp} chunk_start={chunk_start}: rank {r} cache-on differs from cache-off"
 
 
 @run_for_blackhole()
@@ -267,7 +283,7 @@ def test_msa_block_cyclic_mid_slab_causal_tp_subshard(mesh_device, start_offset)
             x, dtype=dt, layout=layout, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=mapper
         )
 
-    out = ttnn.transformer.sparse_sdpa_msa(
+    args = (
         dev(q_all.to(torch.float32), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, shard),
         dev(
             _natural_to_block_cyclic(k, sp, n_slabs, chunk_local).to(torch.bfloat16),
@@ -282,19 +298,29 @@ def test_msa_block_cyclic_mid_slab_causal_tp_subshard(mesh_device, start_offset)
             repl,
         ),
         dev(idx_all, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, shard),
-        scale=scale,
-        block_size=BLK_KV,
-        chunk_start_idx=chunk_start,
-        cluster_axis=sp_axis,
-        block_cyclic_sp_axis=sp_axis,
-        block_cyclic_chunk_local=chunk_local,
     )
-    dev_outs = ttnn.get_device_tensors(out)
+    outs = {}
+    for cache in (False, True):
+        out = ttnn.transformer.sparse_sdpa_msa(
+            *args,
+            scale=scale,
+            block_size=BLK_KV,
+            chunk_start_idx=chunk_start,
+            cluster_axis=sp_axis,
+            block_cyclic_sp_axis=sp_axis,
+            block_cyclic_chunk_local=chunk_local,
+            enable_kv_block_cache=cache,
+        )
+        outs[cache] = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(out)]
     for r in range(tp):
         for c in range(sp):
+            off, on = outs[False][r * cols + c], outs[True][r * cols + c]
             gold = sparse_attention_ref_msa(qs[r][c], k, v, idxs[r][c], scale, causal=True, q_positions=positions[r][c])
-            p = pcc(ttnn.to_torch(dev_outs[r * cols + c])[:, :H], gold)
+            p = pcc(off[:, :H], gold)
             assert p >= DEVICE_PCC, f"mesh {(rows, cols)} chunk_start={chunk_start}: device ({r},{c}) pcc={p:.5f}"
+            assert torch.equal(
+                off, on
+            ), f"mesh {(rows, cols)} chunk_start={chunk_start}: device ({r},{c}) cache differs"
 
 
 @run_for_blackhole()

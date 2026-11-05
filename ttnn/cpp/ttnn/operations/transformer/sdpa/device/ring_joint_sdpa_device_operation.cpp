@@ -12,6 +12,7 @@
 #include <variant>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
@@ -21,6 +22,7 @@
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_mla_geometry.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
@@ -123,7 +125,7 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
     const auto& input_tensors = tensor_args.input_tensor;
     TT_FATAL(
         !input_tensors.empty(), "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
-    TT_FATAL(input_tensors[0].buffer() != nullptr, "Input tensor 0 must be allocated in buffers on device");
+    TT_FATAL(input_tensors[0].is_allocated(), "Input tensor 0 must be allocated in buffers on device");
 
     const auto dtype = input_tensors[0].dtype();
     const auto page_size = input_tensors[0].buffer()->page_size();
@@ -132,7 +134,7 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
 
         TT_FATAL(input_tensor.layout() == Layout::TILE, "Input tensor {} must be tiled", i);
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor {} must be on device", i);
-        TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor {} must be allocated in buffers on device", i);
+        TT_FATAL(input_tensor.is_allocated(), "Input tensor {} must be allocated in buffers on device", i);
         TT_FATAL(
             input_tensor.dtype() == dtype,
             "All input tensors must have the same dtype. Input tensor {} has dtype {} but expected {}",
@@ -166,7 +168,7 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
 
             TT_FATAL(output_tensor.layout() == Layout::TILE, "Output tensor {} must be tiled", i);
             TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor {} must be on device", i);
-            TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor {} must be allocated in buffers on device", i);
+            TT_FATAL(output_tensor.is_allocated(), "Output tensor {} must be allocated in buffers on device", i);
             TT_FATAL(
                 output_tensor.dtype() == dtype,
                 "Output tensor {} dtype should match input tensors but has {}",
@@ -218,10 +220,15 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
     }
 }
 
-void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args) {
+void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args, uint32_t kv_stripe_split) {
     TT_FATAL(
         tensor_args.slot_id.has_value() == tensor_args.kv_actual_isl.has_value(),
         "metadata tensors slot_id and kv_actual_isl_tensor must be supplied together, or neither supplied");
+
+    TT_FATAL(
+        !tensor_args.has_kv_valid_end() || tensor_args.kv_pad_from_metadata(kv_stripe_split),
+        "kv_valid_end_tensor requires the slot_id / kv_actual_isl metadata path with chunked-shaped prefill "
+        "(Q.seq < K.seq or kv_stripe_split > 1)");
 
     if (!tensor_args.slot_id.has_value()) {
         return;
@@ -229,7 +236,7 @@ void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args) {
 
     const auto validate_metadata_tensor = [&tensor_args](const Tensor& tensor, const char* name) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} must be on device", name);
-        TT_FATAL(tensor.buffer() != nullptr, "{} must be allocated on device", name);
+        TT_FATAL(tensor.is_allocated(), "{} must be allocated on device", name);
         TT_FATAL(tensor.device() == tensor_args.input_q.device(), "{} must be on the same device as Q", name);
         TT_FATAL(tensor.dtype() == DataType::UINT32, "{} must have UINT32 dtype", name);
         TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "{} must use ROW_MAJOR layout", name);
@@ -239,6 +246,9 @@ void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args) {
 
     validate_metadata_tensor(tensor_args.slot_id.value(), "slot_id");
     validate_metadata_tensor(tensor_args.kv_actual_isl.value(), "kv_actual_isl_tensor");
+    if (tensor_args.has_kv_valid_end()) {
+        validate_metadata_tensor(tensor_args.kv_valid_end.value(), "kv_valid_end_tensor");
+    }
 }
 
 // Everything the program hash does not key, so it runs on every dispatch (miss and hit): the host scalars
@@ -282,6 +292,24 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
         }
     }
 
+    if (args.kv_stripe_split > 1) {
+        const uint64_t capacity = static_cast<uint64_t>(tensor_args.local_kv_seq_len()) * args.ring_size;
+        TT_FATAL(
+            args.logical_n <= capacity,
+            "logical_n must not exceed input KV capacity (local KV seq * ring_size). Got logical_n={}, capacity={}",
+            args.logical_n,
+            capacity);
+        if (!kv_pad_rotation_active(args, tensor_args)) {
+            const uint64_t chunk = static_cast<uint64_t>(tensor_args.input_q.logical_shape()[2]) * args.q_ring_size();
+            TT_FATAL(
+                args.logical_n >= chunk && args.logical_n % chunk == 0,
+                "Split KV without actual ISL requires logical_n to be a positive multiple of the Q chunk "
+                "(local Q seq * Q shard count). Got logical_n={}, chunk={}",
+                args.logical_n,
+                chunk);
+        }
+    }
+
     if (args.has_kv_pad_rotation()) {
         const auto N_local_q = tensor_args.input_q.logical_shape()[2];
         const auto N_local_kv = tensor_args.local_kv_seq_len();
@@ -292,7 +320,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             args.logical_n,
             kv_actual_isl);
         const auto new_actual_isl = args.logical_n - kv_actual_isl;
-        const auto chunk_capacity = N_local_q * args.ring_size;
+        const auto chunk_capacity = N_local_q * args.q_ring_size();
         const auto cache_capacity = N_local_kv * args.ring_size;
         TT_FATAL(
             kv_actual_isl % tt::constants::TILE_HEIGHT == 0 && new_actual_isl % tt::constants::TILE_HEIGHT == 0,
@@ -332,7 +360,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             chunk_capacity);
     }
 
-    if (args.has_sliding_window() && tensor_args.is_chunked() &&
+    if (args.has_sliding_window() && tensor_args.is_chunked(args.kv_stripe_split) &&
         (!kv_pad_rotation_active(args, tensor_args) || args.circular_kv_cache)) {
         const auto q_group_size = tensor_args.input_q.logical_shape()[2] * args.ring_size;
         // One complete group is enough: at logical_n == q_group_size device 0 clips its
@@ -369,6 +397,10 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
     }
 }
 
+std::optional<tt::tt_metal::TensorSpec> optional_spec(const std::optional<Tensor>& tensor) {
+    return tensor.has_value() ? std::optional<tt::tt_metal::TensorSpec>{tensor->tensor_spec()} : std::nullopt;
+}
+
 }  // namespace
 
 void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
@@ -376,7 +408,19 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
 
-    validate_metadata_tensors(tensor_args);
+    validate_metadata_tensors(tensor_args, args.kv_stripe_split);
+
+    // The sliding-window halo and the per-device slab checks below divide by the chunk sizes.
+    TT_FATAL(
+        args.get_q_chunk_size() > 0 && args.get_q_chunk_size() % tt::constants::TILE_WIDTH == 0,
+        "q_chunk_size must be a positive multiple of TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
+        args.get_q_chunk_size(),
+        tt::constants::TILE_WIDTH);
+    TT_FATAL(
+        args.get_k_chunk_size() > 0 && args.get_k_chunk_size() % tt::constants::TILE_WIDTH == 0,
+        "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
+        args.get_k_chunk_size(),
+        tt::constants::TILE_WIDTH);
 
     TT_FATAL(
         !args.sliding_window_size.has_value() || args.has_sliding_window(),
@@ -409,11 +453,18 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 ttnn::operations::ccl::common::has_row_major_mesh_coordinates(tensor_args.input_k) &&
                 ttnn::operations::ccl::common::has_row_major_mesh_coordinates(gathered_input_tensor_k),
             "Full-mesh RingJointSDPA requires row-major mesh coordinates for Q, local K/V, and gathered K/V");
+        const uint32_t q_seq_shards = ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_q, 2);
+        const uint32_t kv_seq_shards =
+            ttnn::operations::ccl::common::tensor_dim_shard_factor(tensor_args.input_k, ag.dim);
         TT_FATAL(
-            ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_q, 2) == ag.ring_size &&
-                ttnn::operations::ccl::common::tensor_dim_shard_factor(tensor_args.input_k, ag.dim) == ag.ring_size,
-            "Full-mesh RingJointSDPA requires sequence shards across all {} mesh devices",
-            ag.ring_size);
+            q_seq_shards * args.kv_stripe_split == ag.ring_size && kv_seq_shards == ag.ring_size,
+            "Full-mesh RingJointSDPA requires K/V sequence sharded across all {} mesh devices and Q sequence sharded "
+            "{} ways (KV/Q shard ratio {}). Got {} Q and {} K/V sequence shards",
+            ag.ring_size,
+            ag.ring_size / args.kv_stripe_split,
+            args.kv_stripe_split,
+            q_seq_shards,
+            kv_seq_shards);
         TT_FATAL(
             is_replicated_across_complete_mesh(gathered_input_tensor_k),
             "Full-mesh RingJointSDPA requires the persistent gathered K/V buffer replicated across the mesh");
@@ -448,7 +499,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             name,
             t.dtype());
         TT_FATAL(t.storage_type() == StorageType::DEVICE, "{} tensor must be on device", name);
-        TT_FATAL(t.buffer() != nullptr, "{} tensor must be allocated on device", name);
+        TT_FATAL(t.is_allocated(), "{} tensor must be allocated on device", name);
         TT_FATAL(
             t.logical_volume() == 1,
             "{} tensor must hold exactly one value (the kernels read page 0, element 0). Got volume {}",
@@ -464,10 +515,13 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "which derives logical_n itself");
         TT_FATAL(!args.has_sliding_window(), "logical_n as a tensor is incompatible with sliding-window attention");
         TT_FATAL(
-            !tensor_args.is_chunked(),
+            !tensor_args.is_chunked(args.kv_stripe_split),
             "logical_n as a tensor is incompatible with chunked-shaped prefill (Q.seq < K.seq); use the "
             "kv_actual_isl metadata path there");
     }
+    TT_FATAL(
+        !tensor_args.has_kv_valid_end() || !args.has_sliding_window(),
+        "kv_valid_end_tensor is incompatible with sliding-window attention");
     if (tensor_args.has_logical_l_tensor()) {
         // The placeholder is the padded ring total (per-shard L * ring_size), which selects the
         // sharded-joint path; a replicated joint pins logical_l == L by shape and has nothing to vary.
@@ -487,7 +541,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(!has_joint_tensors, "RingJointSDPA attention_sink does not support joint attention tensors");
         TT_FATAL(!has_latent_v, "RingJointSDPA attention_sink does not support latent-V / Ring-MLA attention");
         TT_FATAL(attention_sink.storage_type() == StorageType::DEVICE, "Attention sink tensor must be on device");
-        TT_FATAL(attention_sink.buffer() != nullptr, "Attention sink tensor must be allocated on device");
+        TT_FATAL(attention_sink.is_allocated(), "Attention sink tensor must be allocated on device");
         TT_FATAL(
             input_tensor_q.device() == attention_sink.device(),
             "Attention sink must be on the same mesh device as Q/K/V");
@@ -560,10 +614,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const uint32_t NVH = tensor_args.v_num_heads();
     const uint32_t VDH = tensor_args.v_head_dim(args.latent_v_head_dim);
 
-    // Chunked-prefill (`tensor_args.is_chunked()`): Q is shorter than the per-device K shard
+    // Chunked-prefill (`tensor_args.is_chunked(args.kv_stripe_split)`): Q is shorter than the per-device K shard
     // (latest slab against a growing K cache). Chunk 0 has equal shapes and uses the regular
     // is_causal=True path.
-    const bool is_chunked = tensor_args.is_chunked();
+    const bool is_chunked = tensor_args.is_chunked(args.kv_stripe_split);
 
     const auto dtype = input_tensor_q.dtype();
     if ((!args.is_causal && !is_chunked) || args.is_cross) {
@@ -579,7 +633,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate storage types and buffers
     for (const auto& tensor : sdpa_input_tensors) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
-        TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
+        TT_FATAL(tensor.is_allocated(), "Operands to Joint SDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
         TT_FATAL(
             tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B ||
@@ -594,10 +648,12 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto B = q_shape[0];
     const auto NQH = q_shape[1];
     const auto NKH = k_shape[1];
+    TT_FATAL(NQH > 0 && NKH > 0, "Q and K num_heads must be greater than 0. Got Q: {}, K: {}", NQH, NKH);
     const auto N_local_q = q_shape[2];
     const auto N_local_kv = tensor_args.local_kv_seq_len();
     const auto gathered_buffer_n = k_shape[2];
-    const auto N_global = args.has_sliding_window() ? N_local_kv * args.ring_size : gathered_buffer_n;
+    const auto N_global =
+        (args.has_sliding_window() || args.kv_stripe_split > 1) ? N_local_kv * args.ring_size : gathered_buffer_n;
     const auto L = has_joint_tensors ? joint_q_shape[2] : 0;
     const auto DH = q_shape[3];
     const uint32_t v_local_seq =
@@ -609,8 +665,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     if (ag.full_mesh) {
         TT_FATAL(
-            gathered_buffer_n == N_local_kv * args.ring_size,
-            "Full-mesh RingJointSDPA gathered sequence extent must equal local extent times ring size; got {} vs "
+            args.kv_stripe_split > 1 ? gathered_buffer_n >= N_local_kv * args.ring_size
+                                     : gathered_buffer_n == N_local_kv * args.ring_size,
+            "Full-mesh RingJointSDPA gathered sequence extent must cover local extent times ring size "
+            "(equal for the legacy layout); got {} vs "
             "{} * {}",
             gathered_buffer_n,
             N_local_kv,
@@ -622,7 +680,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         const bool supported_q_chunk = q_chunk_size == 64 || q_chunk_size == 128;
         const bool supported_k_chunk = k_chunk_size == 128;
         // These are the only ring sizes the chunked sliding halo is tested on. Extend the test matrix
-        // (and SlidingQWorkPlan::max_halo_hops) before widening this allowlist.
+        // (and sliding_max_halo_hops) before widening this allowlist.
         TT_FATAL(
             args.ring_size == 4 || args.ring_size == 8,
             "Chunked sliding attention supports the SP4 production ring or SP8 test ring, got SP{}",
@@ -696,26 +754,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         // The work plan returns an EMPTY plan past its fixed range count; reject that here instead
         // of computing no attention.
         TT_FATAL(
-            halo_hops <= ring_joint::SlidingQWorkPlan::max_halo_hops,
+            halo_hops <= ring_joint::sliding_max_halo_hops,
             "Chunked sliding halo needs {} hops; at most {} are supported",
             halo_hops,
-            ring_joint::SlidingQWorkPlan::max_halo_hops);
-        // A multi-hop halo lays out one block per hop for a single Q segment. Block-cyclic Q that wraps
-        // has two segments and needs a second halo slot, which the multi-hop layout does not support yet:
-        // reject a two-slot buffer (provisioned for wrapping Q) and a scalar request that wraps.
-        const bool scalar_q_wraps =
-            args.has_kv_pad_rotation() &&
-            ring_joint::chunked_q_wraps(args.kv_actual_isl.value(), args.logical_n, N_local_q, args.ring_size);
-        TT_FATAL(
-            halo_hops == 1 || (gathered_buffer_n < 2 * halo_tokens && !scalar_q_wraps),
-            "Chunked sliding halo {} (window {}) needs {} hops over the per-device Q slab {}; a multi-hop halo does "
-            "not support block-cyclic Q that wraps a slab (gathered rows {}, Q wraps: {})",
-            halo_tokens,
-            window_size,
-            halo_hops,
-            N_local_q,
-            gathered_buffer_n,
-            scalar_q_wraps);
+            ring_joint::sliding_max_halo_hops);
     }
 
     if (args.circular_kv_cache) {
@@ -740,11 +782,36 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         "Logical sequence length must be > 0; kernels derive last-valid-tile = logical_nt - 1 and would underflow.");
 
     TT_FATAL(
-        N_local_q <= N_local_kv,
-        "Per-device Q seq length must be <= per-device K/V seq length. Equal: full-prefill path. Less: "
-        "chunked-prefill path. Greater is undefined. Got N_local_q={}, N_local_kv={}",
+        N_local_q <= static_cast<uint64_t>(N_local_kv) * args.kv_stripe_split,
+        "Per-device Q seq length must be <= per-device K/V seq length times kv_stripe_split. Equal: full-prefill "
+        "path. Less: chunked-prefill path. Greater is undefined. Got N_local_q={}, N_local_kv={}, kv_stripe_split={}",
         N_local_q,
-        N_local_kv);
+        N_local_kv,
+        args.kv_stripe_split);
+
+    if (args.kv_stripe_split > 1) {
+        const ring_joint::RingMLAGeometry geometry{
+            args.q_ring_size(),
+            static_cast<uint32_t>(args.ring_size),
+            N_local_q / tt::constants::TILE_HEIGHT,
+            N_local_kv / tt::constants::TILE_HEIGHT};
+        TT_FATAL(geometry.valid(), "Split KV requires tile-aligned whole KV regions and non-overflowing capacity");
+        TT_FATAL(
+            args.is_causal && !args.is_balanced && !args.is_cross && !args.has_sliding_window() &&
+                !args.circular_kv_cache && !has_joint_tensors,
+            "Split KV supports only unbalanced dense causal chunked attention without joint, sliding or circular "
+            "cache. Got is_causal={}, is_balanced={}, is_cross={}, sliding_window={}, circular_kv_cache={}, "
+            "joint={}",
+            args.is_causal,
+            args.is_balanced,
+            args.is_cross,
+            args.has_sliding_window(),
+            args.circular_kv_cache,
+            has_joint_tensors);
+        TT_FATAL(
+            !get_fp32_dest_acc_en(args.compute_kernel_config),
+            "Split KV requires streaming compute; set fp32_dest_acc_en=false");
+    }
 
     TT_FATAL(
         !is_chunked || args.is_causal || args.is_cross,
@@ -794,11 +861,13 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "KV-pad-aware rotation currently supports ring attention without joint tokens. Got joint length L={}",
             L);
         TT_FATAL(
-            N_local_kv % N_local_q == 0,
-            "KV-pad-aware rotation expects K/V local sequence length to be an integer number of Q-sized slabs. "
-            "Got N_local_kv={}, N_local_q={}",
+            N_local_kv % (N_local_q / args.kv_stripe_split) == 0,
+            "KV-pad-aware rotation expects K/V local sequence length to be an integer number of KV regions (Q slab / "
+            "stripe split). "
+            "Got N_local_kv={}, N_local_q={}, kv_stripe_split={}",
             N_local_kv,
-            N_local_q);
+            N_local_q,
+            args.kv_stripe_split);
     }
 
     TT_FATAL(
@@ -814,14 +883,25 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(NKH == 1, "Latent-V mode currently supports one shared KV head. Got K/V heads: {}", NKH);
         TT_FATAL(
             NVH == NKH,
-            "Latent-V mode reads V from K's prefix, so V head count must match K head count. Got V: {}, K: {}",
+            "Latent-V mode reads V from K's rows, so V head count must match K head count. Got V: {}, K: {}",
             NVH,
             NKH);
-        TT_FATAL(
-            VDH < DH,
-            "Latent-V mode reads V from K's strict prefix, so V head dim must be < K head dim. Got V: {}, K: {}",
-            VDH,
-            DH);
+        if (tensor_args.has_packed_kv()) {
+            TT_FATAL(
+                VDH <= k_shape[3] && k_shape[3] % tt::constants::TILE_WIDTH == 0 &&
+                    tensor_args.input_k.logical_shape()[3] == k_shape[3],
+                "Packed KV (K rows wider than Q) reads V as K's last V-head-dim columns, so V must fit in the row and "
+                "the gathered K must have K's row width. Got K: {}, gathered K: {}, V: {}",
+                tensor_args.input_k.logical_shape()[3],
+                k_shape[3],
+                VDH);
+        } else {
+            TT_FATAL(
+                VDH < DH,
+                "Latent-V mode reads V from K's strict prefix, so V head dim must be < K head dim. Got V: {}, K: {}",
+                VDH,
+                DH);
+        }
         TT_FATAL(
             VDH % tt::constants::TILE_WIDTH == 0,
             "Latent-V head dim must be tile aligned. Got V: {}, tile width: {}",
@@ -880,7 +960,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 joint_v_shape[3]);
         }
     } else {
-        TT_FATAL(k_shape[3] == DH, "Q/K head dimensions must match. Got Q: {}, K: {}", DH, k_shape[3]);
+        if (!tensor_args.has_packed_kv()) {
+            TT_FATAL(k_shape[3] == DH, "Q/K head dimensions must match. Got Q: {}, K: {}", DH, k_shape[3]);
+        }
         if (has_joint_tensors) {
             TT_FATAL(
                 joint_k_shape[3] == DH,
@@ -1012,19 +1094,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             NVH);
     }
 
-    // Validate chunk sizes if program config is provided
-
-    TT_FATAL(
-        q_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
-        q_chunk_size,
-        tt::constants::TILE_WIDTH);
-    TT_FATAL(
-        k_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
-        k_chunk_size,
-        tt::constants::TILE_WIDTH);
-
     TT_FATAL(
         N_local_q % tt::constants::TILE_HEIGHT == 0,
         "Per-device Q seq length must be divisible by TILE_HEIGHT. Got N_local_q: {}, TILE_HEIGHT: {}",
@@ -1057,7 +1126,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
 void RingJointSDPADeviceOperation::validate_on_program_cache_hit(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
-    validate_metadata_tensors(tensor_args);
+    validate_metadata_tensors(tensor_args, args.kv_stripe_split);
     validate_runtime_patched_scalars(args, tensor_args);
 }
 
@@ -1142,20 +1211,21 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.logical_l,
         tensor_args.joint_is_sharded(),
         args.ring_size,
+        args.kv_stripe_split,
         args.compute_kernel_config,
         args.program_config,
         args.ccl_core_grid_offset,
         args.kv_cache_batch_idx.has_value(),
         kv_pad_rotation_enabled,
         tensor_args.has_metadata(),
-        // The metadata accessors are baked into compile-time args; the validator pins one form, so this key is
-        // defense in depth should that pin ever relax. Only the config is keyed, never the value.
-        tensor_args.slot_id.has_value() ? tensor_args.slot_id->memory_config() : tt::tt_metal::MemoryConfig{},
-        tensor_args.kv_actual_isl.has_value() ? tensor_args.kv_actual_isl->memory_config()
-                                              : tt::tt_metal::MemoryConfig{},
-        // Presence changes how the kernels compile; the numeric attrs above hash as stable placeholders.
-        tensor_args.has_logical_n_tensor(),
-        tensor_args.has_logical_l_tensor(),
+        // The metadata, logical_n / logical_l and kv_valid_end tensors' accessors are baked into compile-time args,
+        // and presence changes how the kernels compile, so each is keyed by its optional spec. Only the spec is keyed,
+        // never the value; the numeric attrs above hash as stable placeholders.
+        optional_spec(tensor_args.slot_id),
+        optional_spec(tensor_args.kv_actual_isl),
+        optional_spec(tensor_args.logical_n_tensor),
+        optional_spec(tensor_args.logical_l_tensor),
+        optional_spec(tensor_args.kv_valid_end),
         // The layer fold is baked into kernel runtime args only on the metadata path; the host path re-patches
         // the folded index per dispatch, so keying the factors there would only multiply programs per layer.
         tensor_args.has_metadata() ? args.kv_cache_num_layers : 0u,
@@ -1204,7 +1274,10 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
 
     CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                      : output_tensor.device()->compute_with_storage_grid_size();
-    tt::tt_metal::MathFidelity fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+    // QK^T and softmax @ V dominate the modeled cycles, so use their fidelity when it is overridden.
+    const auto matmul_fidelity =
+        args.program_config.has_value() ? args.program_config->matmul_math_fidelity : std::nullopt;
+    tt::tt_metal::MathFidelity fidelity = matmul_fidelity.value_or(ttnn::get_math_fidelity(args.compute_kernel_config));
 
     const uint32_t B = q_shape[0];
     const uint32_t NQH = q_shape[1];
@@ -1298,7 +1371,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<uint32_t> sliding_window_size,
     const bool circular_kv_cache,
     const std::optional<ttnn::Tensor>& logical_n_tensor,
-    const std::optional<ttnn::Tensor>& logical_l_tensor) {
+    const std::optional<ttnn::Tensor>& logical_l_tensor,
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1337,6 +1411,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     std::optional<uint64_t> route_plan_hash;
     // The caller asks for a full-mesh gather; the proved route decides whether it closes.
     ttnn::ccl::Topology resolved_topology = topology;
+    uint32_t resolved_kv_stripe_split = 1;
     if (full_mesh) {
         TT_FATAL(
             topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
@@ -1346,13 +1421,38 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
                 ttnn::operations::ccl::common::has_row_major_mesh_coordinates(input_tensor_k) &&
                 ttnn::operations::ccl::common::has_row_major_mesh_coordinates(persistent_output_buffer_k),
             "ring_mla cluster_axis=None requires row-major mesh coordinates for Q, KV, and the persistent buffer");
+        const uint32_t q_shards = ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_q, 2);
+        const uint32_t kv_shards = ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_k, gather_dim);
         TT_FATAL(
-            ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_q, 2) == num_devices &&
-                ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_k, gather_dim) == num_devices,
-            "ring_mla cluster_axis=None requires Q sequence dim 2 and KV gather dim {} to be sharded across all {} "
-            "mesh devices",
+            kv_shards == num_devices,
+            "Full-mesh ring MLA requires KV sequence shards on every device (dim {}); got {} shards on {} devices",
             gather_dim,
+            kv_shards,
             num_devices);
+        TT_FATAL(
+            q_shards > 0 && kv_shards % q_shards == 0,
+            "KV shard count must be divisible by Q sequence shard count; got {} KV and {} Q shards",
+            kv_shards,
+            q_shards);
+        resolved_kv_stripe_split = kv_shards / q_shards;
+        if (resolved_kv_stripe_split > 1) {
+            const auto& placements = input_tensor_q.tensor_topology().placements();
+            const uint32_t dims = input_tensor_q.logical_shape().rank();
+            TT_FATAL(
+                placements.size() == 2 &&
+                    ttnn::operations::ccl::common::placement_shards_tensor_dim(placements[0], 2, dims) &&
+                    !ttnn::operations::ccl::common::placement_shards_tensor_dim(placements[1], 2, dims) &&
+                    q_shards == mesh_shape[0] && resolved_kv_stripe_split == mesh_shape[1],
+                "Split KV requires Q sequence sharded only on mesh axis 0 and the extra KV stripes on axis 1. Got "
+                "{} Q shards, mesh shape {}, KV/Q shard ratio {}",
+                q_shards,
+                mesh_shape,
+                resolved_kv_stripe_split);
+            const uint32_t q_slab = input_tensor_q.logical_shape()[2];
+            TT_FATAL(
+                q_slab % (resolved_kv_stripe_split * tt::constants::TILE_HEIGHT) == 0,
+                "Q slab must divide into tile-aligned KV regions");
+        }
         TT_FATAL(
             is_replicated_across_complete_mesh(persistent_output_buffer_k),
             "ring_mla cluster_axis=None requires the persistent gathered-KV buffer to be replicated across the "
@@ -1390,7 +1490,6 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     }
 
     auto all_gather_operation_attributes = ttnn::experimental::prim::RingAttentionAllGatherAsyncParams{
-        {},
         gather_dim,
         num_links,
         num_devices,
@@ -1495,7 +1594,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         kv_cache_num_layers,
         kv_cache_layer_idx,
         sliding_window_size,
-        circular_kv_cache);
+        circular_kv_cache,
+        resolved_kv_stripe_split);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
@@ -1514,7 +1614,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .slot_id = slot_id,
         .kv_actual_isl = kv_actual_isl_tensor,
         .logical_n_tensor = logical_n_tensor,
-        .logical_l_tensor = logical_l_tensor};
+        .logical_l_tensor = logical_l_tensor,
+        .kv_valid_end = kv_valid_end_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

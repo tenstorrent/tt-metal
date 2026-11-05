@@ -39,7 +39,7 @@ namespace detail {
 template <DataFormat data_format>
 constexpr InstrModLoadStore bitwise_instr_mode() {
     static_assert(
-        data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
+        data_format == DataFormat::Int32 || is_uint32_format(data_format) || data_format == DataFormat::UInt16,
         "Unsupported data format for bitwise operation. Supported data formats are: Int32, UInt32, UInt16");
     return data_format == DataFormat::UInt16 ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
 }

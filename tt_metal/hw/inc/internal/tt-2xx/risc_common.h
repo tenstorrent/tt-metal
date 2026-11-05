@@ -138,6 +138,29 @@ inline void deassert_trisc_reset() {
     WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR, soft_reset_0 & ~trisc_reset_mask);
 }
 
+// Quasar-only: the droop detector wait-counter delay never works; register must stay at reset (0).
+static_assert(
+    T6_DEBUG_REGS__ACTIVITY_BASED_PLL_DROOP_CTRL_1__DROOP_CONSC_TRIGGER_MASK_reset == 0 &&
+        T6_DEBUG_REGS__ACTIVITY_BASED_PLL_DROOP_CTRL_1__DROOP_CONSC_TRIGGER_DISABLE_reset == 0 &&
+        T6_DEBUG_REGS__ACTIVITY_BASED_PLL_DROOP_CTRL_1__DROOP_TRIGGER_HOLD_reset == 0,
+    "ACTIVITY_BASED_PLL_DROOP_CTRL_1 must reset to 0");
+
+// True when ACTIVITY_BASED_PLL_DROOP_CTRL_1 reads 0 on all four NEOs. Reads NEO MMIO: DM0 calls it at boot.
+inline bool droop_ctrl_at_reset() {
+    constexpr uintptr_t droop_ctrl_1_regs[] = {
+        NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_ACTIVITY_BASED_PLL_DROOP_CTRL_1_REG_ADDR,
+        NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_ACTIVITY_BASED_PLL_DROOP_CTRL_1_REG_ADDR,
+        NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_ACTIVITY_BASED_PLL_DROOP_CTRL_1_REG_ADDR,
+        NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_ACTIVITY_BASED_PLL_DROOP_CTRL_1_REG_ADDR,
+    };
+    for (uintptr_t addr : droop_ctrl_1_regs) {
+        if (READ_REG(addr) != 0) {  // whole register: the wait-counter field is not named in the map
+            return false;
+        }
+    }
+    return true;
+}
+
 inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
     if (special_b == TILE_WORD_8_BIT) {
         return a * TILE_WORD_8_BIT;
@@ -244,6 +267,13 @@ inline __attribute__((always_inline)) void invalidate_l2_cache_line(uintptr_t ad
     volatile uint64_t* inv_reg = (volatile uint64_t*)L2_INVALIDATE_ADDR;
     *inv_reg = (uint64_t)addr;
     __asm__ __volatile__("fence" ::: "memory");
+}
+
+// Same as invalidate_l2_cache_line without the fences, so it returns before the line is dropped and is not
+// ordered with the caller's other accesses. Only for clean lines whose readers tolerate the old contents for a while.
+inline __attribute__((always_inline)) void invalidate_l2_cache_line_async(uintptr_t addr) {
+    volatile uint64_t* inv_reg = (volatile uint64_t*)L2_INVALIDATE_ADDR;
+    *inv_reg = (uint64_t)addr;
 }
 
 // Invalidate a range of addresses from L2 to TL1.
@@ -441,29 +471,12 @@ inline __attribute__((always_inline)) void disable_dfb_tile_isr() {
     // Keep machine interrupts enabled so an FDS machine-external go interrupt can reach DM0.
 }
 #else
-inline __attribute__((interrupt, hot)) void handle_interrupt() {
-    uint32_t trisc_id = internal_::get_trisc_id();
-    uint32_t error_code = RISC_PIC_BRISC_EX_REG_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
-    if (error_code == trisc_id || (35 - error_code) == trisc_id ||
-        (error_code > 3 && error_code < 32 && trisc_id == 0)) {
-        ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
-        uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt after handling the error
-        (void)hirv;
-    } else {
-        uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt
-        (void)hirv;
-        return;
-    }
-#if !defined(WATCHER_ENABLED)  // hang anyway
-    while (1) {
-        ;
-    }
-#endif
-}
+// HW error interrupt entry, in trisc.cc.
+extern "C" void trisc_irq_entry();
 
 inline __attribute__((always_inline)) void setup_isr_csrs() {
     uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
-    RISC_PIC_BRISC_HW_IVT_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] = reinterpret_cast<uint32_t>(handle_interrupt);
+    RISC_PIC_BRISC_HW_IVT_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] = reinterpret_cast<uint32_t>(trisc_irq_entry);
     *(RISC_PIC_BRISC_HW_INT_EN(trisc_id)) = 1 << HW_ERROR_INTERRUPT_INDEX;
     RISCV_DEBUG_REGS->ERR_MASK = 0xFFFF;  // enable all errors
 }

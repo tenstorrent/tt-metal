@@ -6,10 +6,10 @@ import torch
 
 import ttnn
 import pytest
-from models.common.utility_functions import comp_allclose_and_pcc
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc
 from loguru import logger
 import torch.nn.functional as F
-from models.common.utility_functions import is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
@@ -43,8 +43,6 @@ def run_moreh_logsoftmax_test(
     strategy=None,
     compute_kernel_options=None,
 ):
-    if ttnn_dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported")
     torch_dtype = get_torch_dtype(ttnn_dtype)
     if use_randint == True:
         torch_input = torch.randint(low=0, high=4, size=shape).to(torch_dtype) + 100
@@ -182,12 +180,18 @@ def test_logsoftmax_for_dim_hw(shape_dim, dtype, compute_kernel_options, device)
     "dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_logsoftmax_large_algorithm_for_dim_hw(shape_dim, dtype, compute_kernel_options, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
+    strategy = (
+        ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_W
+        if dim == 3
+        else ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_H
+    )
     rtol = atol = 0.1
 
     run_moreh_logsoftmax_test(
@@ -200,6 +204,7 @@ def test_logsoftmax_large_algorithm_for_dim_hw(shape_dim, dtype, compute_kernel_
         atol,
         True,
         compute_kernel_options=compute_kernel_options,
+        strategy=strategy,
     )
 
 
@@ -527,3 +532,29 @@ def test_logsoftmax_backward_callback(shape_dim_strategy, dtype, device):
             assert device.num_program_cache_entries() == num_program_cache_entries
         torch_dummy = torch.randn([32, 32])
         tt_dummy = ttnn.from_torch(torch_dummy, device=device)
+
+
+@pytest.mark.parametrize(
+    "shape, dim, strategy",
+    [
+        ([1, 1, 32, 4096], 3, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_W),
+        ([1, 1, 4096, 32], 2, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_H),
+        ([1, 64, 32, 32], 1, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_C),
+    ],
+)
+def test_logsoftmax_bfloat8_b_intermediates(shape, dim, strategy, device):
+    """Regression test for Item 5 of #58406: bfloat8_b input keeps its intermediates in Float16_b."""
+    torch.manual_seed(0)
+    ttnn_input = ttnn.from_torch(torch.rand(shape), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Use rounded input for the golden to minimize error
+    torch_input = ttnn.to_torch(ttnn_input).float()
+
+    torch_output = F.log_softmax(torch_input, dim)
+    rounded = ttnn.to_torch(ttnn.from_torch(torch_output, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).float()
+    rounding_floor = (rounded - torch_output).abs().max()
+
+    ttnn_output = ttnn.to_torch(ttnn.operations.moreh.logsoftmax(ttnn_input, dim, strategy=strategy)).float()
+
+    passing, out = comp_allclose_and_pcc(torch_output, ttnn_output, rtol=0, atol=4.5 * rounding_floor)
+    logger.debug(out)
+    assert passing, out

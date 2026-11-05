@@ -20,11 +20,12 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
+#include <gmock/gmock.h>
 #include "gtest/gtest.h"
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/program.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
@@ -34,6 +35,8 @@ enum class DataFormat : uint8_t;
 
 using std::vector;
 using namespace tt::tt_metal;
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
 
 namespace basic_tests::circular_buffer {
 
@@ -86,7 +89,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program;
+    Program program = CreateProgram(*this->devices_[0]);
     initialize_program(program, cr_set);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
@@ -127,11 +130,22 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
 TEST_F(MeshDeviceFixture, TestCreateCircularBufferAtInvalidIndex) {
     CBConfig cb_config;
 
-    EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{max_dfbs_, cb_config.data_format}}));
+    EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{NUM_CIRCULAR_BUFFERS, cb_config.data_format}}));
+
+    // An index the config can store but the architecture does not support is rejected when added to a program.
+    if (max_dfbs_ < NUM_CIRCULAR_BUFFERS) {
+        CircularBufferConfig config(cb_config.page_size, {{max_dfbs_, cb_config.data_format}});
+        config.set_page_size(max_dfbs_, cb_config.page_size);
+        Program program = CreateProgram(*this->devices_[0]);
+        EXPECT_THAT(
+            [&] { CreateCircularBuffer(program, CoreCoord(0, 0), config); },
+            ThrowsMessage<std::runtime_error>(HasSubstr("exceeds max number of circular buffers per core")));
+        EXPECT_TRUE(program.circular_buffers().empty());
+    }
 }
 
 TEST_F(MeshDeviceFixture, TestCreateCircularBufferWithMismatchingConfig) {
-    Program program;
+    Program program = CreateProgram(*this->devices_[0]);
     CBConfig cb_config;
 
     EXPECT_ANY_THROW(
@@ -166,7 +180,7 @@ TEST_F(MeshDeviceFixture, TestCircularBufferConfigConstructorWithDataTypeMatches
 }
 
 TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtOverlappingIndex) {
-    Program program;
+    Program program = CreateProgram(*this->devices_[0]);
     CBConfig cb_config;
 
     CoreRange cr({0, 0}, {1, 1});
@@ -190,7 +204,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtOverlappingIndex) {
 }
 
 TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferWithTooManyPages) {
-    Program program;
+    Program program = CreateProgram(*this->devices_[0]);
     CBConfig cb_config;
 
     CoreRange cr({0, 0}, {1, 1});
@@ -208,7 +222,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program;
+        Program program = CreateProgram(*device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 

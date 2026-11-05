@@ -12,8 +12,6 @@
 using uint32_t = std::uint32_t;
 
 // tile index to address
-inline uint32_t TADDR(uint32_t ti) { return ti << 11; }
-
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t input_Wt = get_arg_val<uint32_t>(1);
@@ -23,12 +21,15 @@ void kernel_main() {
     uint32_t output_Wt = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t ALIGNMENT = get_compile_time_arg_val(0);
-    constexpr auto src0_args = TensorAccessorArgs<1>();
+    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(1);
+    constexpr auto src0_args = TensorAccessorArgs<2>();
 
     uint32_t num_sticks_per_input_tile_row = input_Wt << 5;  // Tile height is 32
     uint32_t num_sticks_per_output_tile_row = output_Wt << 5;
 
-    constexpr uint32_t SUBTILE_LINE_BYTES = (16 << 1);
+    // A tile is four 16x16 faces; a face row is 16 values and each tile row spans two faces.
+    constexpr uint32_t SUBTILE_LINE_BYTES = 16 * ELEMENT_SIZE;
+    constexpr uint32_t FACE_BYTES = 16 * SUBTILE_LINE_BYTES;
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dfb_id_in0 = 0;
 
@@ -62,13 +63,12 @@ void kernel_main() {
                             output_stick_id % num_sticks_per_input_tile_row / input_Wt;
 
                         // intra-tile offset within the source tile
-                        uint32_t intra_tile_offset =
-                            (((input_tile_sub_row_to_read >> 4) << 1) << 9) + ((input_tile_sub_row_to_read & 15) << 5);
+                        uint32_t intra_tile_offset = (input_tile_sub_row_to_read >> 4) * 2 * FACE_BYTES +
+                                                     (input_tile_sub_row_to_read & 15) * SUBTILE_LINE_BYTES;
 
                         uint32_t dest_tr0_l1 = dfb_in0.get_write_ptr();
-                        dest_tr0_l1 +=
-                            (((tile_h >> 4) << 1) << 9);  // if intra-tile source h is > 16, add 2*512 to subtile offset
-                        dest_tr0_l1 += ((tile_h & 15) << 5);  // 16 * 2 bytes per face row
+                        dest_tr0_l1 += (tile_h >> 4) * 2 * FACE_BYTES;  // rows 16-31 are in the bottom two faces
+                        dest_tr0_l1 += (tile_h & 15) * SUBTILE_LINE_BYTES;
 
                         for (uint8_t i = 0; i < 2; ++i) {
                             if (MISALIGNED) {
@@ -109,8 +109,8 @@ void kernel_main() {
                             }
                             // Read the 16 elements for the row of the face directly adjacent since this comes from the
                             // same input tile
-                            dest_tr0_l1 += 512;  // 16 subtile rows of 16 elements of 2 bytes for bfloat16 (16 * 16 * 2)
-                            intra_tile_offset += 512;
+                            dest_tr0_l1 += FACE_BYTES;
+                            intra_tile_offset += FACE_BYTES;
                         }
 
                         output_stick_id += output_Wt;

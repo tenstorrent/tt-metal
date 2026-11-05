@@ -105,7 +105,7 @@ def _tt_decoder(config: dict, mesh_device) -> MiniMaxH3AudioDecoder:
 def test_decode(mesh_device, num_latent_frames):
     """The whole decode path against the reference, at a production duration, stereo.
 
-    Constructor defaults are accurate mode (split_mode='full'), so the bars are the
+    Constructor defaults are accurate mode (split_mode='kernel'), so the bars are the
     accurate-mode ones: measured 0.0045 rel RMSE / 99.9990% PCC / 67.5 dB PSNR.
     """
     reference, config = _build_reference()
@@ -117,8 +117,8 @@ def test_decode(mesh_device, num_latent_frames):
 
     tt_decoder = _tt_decoder(config, mesh_device)
     # The precision levers are the constructed defaults; assert they landed where they matter.
-    assert tt_decoder.dec_in_proj.split_mode == "full", "split_mode='full' did not land on dec_in_proj"
-    assert tt_decoder.decoder.conv_post.split_mode == "full", "split_mode='full' did not land on conv_post"
+    assert tt_decoder.dec_in_proj.split_mode == "kernel", "split_mode='kernel' did not land on dec_in_proj"
+    assert tt_decoder.decoder.conv_post.split_mode == "kernel", "split_mode='kernel' did not land on conv_post"
 
     tt_decoder.load_torch_state_dict(convert_minimax_h3_audio_state_dict(dict(reference.state_dict())), strict=False)
 

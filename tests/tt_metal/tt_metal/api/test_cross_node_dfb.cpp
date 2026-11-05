@@ -17,7 +17,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <exception>
 #include <limits>
-#include <map>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -31,11 +30,12 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program.hpp>
 
-// Access to internal API: ProgramImpl::finalize_offsets, get_sem_base_addr
+// Access to internal API: ProgramImpl::finalize_offsets, get_sem_base_addr, MeshDeviceImpl, MetalEnvImpl
 #include "impl/program/program_impl.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/program/dispatch.hpp"
-#include "impl/context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "tests/tt_metal/tt_metal/api/cross_node_dfb_test_utils.hpp"
 
 namespace tt::tt_metal {
@@ -86,7 +86,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
 
     // Valid: create into program on sender and receiver cores.
     {
-        tt_metal::Program program = CreateProgram();
+        tt_metal::Program program = CreateProgram(*mesh_device);
         tt::tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
@@ -110,7 +110,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
     }
     // UpdateDynamicCrossNodeDFBAddress: valid case - retargets to a distinct matching buffer.
     {
-        tt_metal::Program program = CreateProgram();
+        tt_metal::Program program = CreateProgram(*mesh_device);
         tt::tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
@@ -139,7 +139,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
     }
     // UpdateDynamicCrossNodeDFBAddress: invalid case - throws when gdfb does not match.
     {
-        tt_metal::Program program = CreateProgram();
+        tt_metal::Program program = CreateProgram(*mesh_device);
         tt::tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
@@ -158,7 +158,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
     }
     // No CrossNodeDFBs created: cross_node_dfb_offset must be REMOTE_DFB_OFFSET_NONE.
     {
-        tt_metal::Program program = CreateProgram();
+        tt_metal::Program program = CreateProgram(*mesh_device);
         tt::tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
@@ -184,7 +184,7 @@ TEST_F(CrossNodeDFBFixture, MeshWorkload_CrossNodeOffsetUsesPerProgramParticipan
     CoreRangeSet receiver_cores(CoreRange({1, 0}, {2, 0}));
     auto all_cores = CoreRangeSet(CoreRange(sender_core)).merge(receiver_cores);
     auto make_blank_program = [&]() {
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
@@ -205,8 +205,7 @@ TEST_F(CrossNodeDFBFixture, MeshWorkload_CrossNodeOffsetUsesPerProgramParticipan
     program_with_cn.impl().compile_and_allocate(mesh_device.get(), /*force_slow_dispatch=*/false);
     program_without_cn.impl().compile_and_allocate(mesh_device.get(), /*force_slow_dispatch=*/false);
 
-    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device.get()));
-    const auto& hal = metal_ctx.hal();
+    const auto& hal = mesh_device->impl().metal_env().get_hal();
     const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     ASSERT_FALSE(program_with_cn.impl().get_kernel_groups(index).empty());
     ASSERT_FALSE(program_without_cn.impl().get_kernel_groups(index).empty());
@@ -215,7 +214,10 @@ TEST_F(CrossNodeDFBFixture, MeshWorkload_CrossNodeOffsetUsesPerProgramParticipan
     // Any L1-aligned offset that is not the NONE sentinel.
     constexpr uint32_t kSharedRegionOffset = 256;
     program_dispatch::finalize_cross_node_dfbs(
-        metal_ctx, index, ttsl::Span<detail::ProgramImpl*>(programs.data(), programs.size()), kSharedRegionOffset);
+        mesh_device->impl().metal_context(),
+        index,
+        ttsl::Span<detail::ProgramImpl*>(programs.data(), programs.size()),
+        kSharedRegionOffset);
 
     for (const auto& kg : program_with_cn.impl().get_kernel_groups(index)) {
         EXPECT_EQ(
@@ -240,7 +242,7 @@ TEST_F(CrossNodeDFBFixture, DispatchPartitionsHeterogeneousKernelGroupByPayload)
     const CoreCoord non_participant_core(3, 0);
     // One kernel covers participant and non-participant cores → one heterogeneous kernel group.
     const CoreRangeSet kernel_cores(CoreRange({0, 0}, {3, 0}));
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
@@ -257,8 +259,7 @@ TEST_F(CrossNodeDFBFixture, DispatchPartitionsHeterogeneousKernelGroupByPayload)
 
     program.impl().compile_and_allocate(mesh_device.get(), /*force_slow_dispatch=*/false);
 
-    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device.get()));
-    const auto& hal = metal_ctx.hal();
+    const auto& hal = mesh_device->impl().metal_env().get_hal();
     const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     const auto& kernel_groups = program.impl().get_kernel_groups(index);
     ASSERT_EQ(kernel_groups.size(), 1u);
@@ -317,7 +318,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI_SlotAssignment) {
     CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
     auto all_cores = sender_cores.merge(receiver_cores);
 
-    tt_metal::Program program = CreateProgram();
+    tt_metal::Program program = CreateProgram(*mesh_device);
     tt::tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
@@ -350,7 +351,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI_IndependentTopologiesUseProg
     const CoreRangeSet topology1_cores(std::vector<CoreRange>{CoreRange(sender1), CoreRange(receiver1)});
     const CoreRangeSet all_cores = topology0_cores.merge(topology1_cores);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
@@ -416,14 +417,13 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI_IndependentTopologiesUseProg
     // finalize sizes only the shared dense index from the program-wide slot count (2),
     // not from any one core's sparse participant count (1).
     program.impl().compile_and_allocate(mesh_device.get(), /*force_slow_dispatch=*/false);
-    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device.get()));
-    const auto& hal = metal_ctx.hal();
+    const auto& hal = mesh_device->impl().metal_env().get_hal();
     const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     detail::ProgramImpl* programs[] = {&program.impl()};
     constexpr uint32_t kBase = 256;
     const uint32_t next = program_dispatch::finalize_cross_node_dfbs(
-        metal_ctx, index, ttsl::Span<detail::ProgramImpl*>(programs, 1), kBase);
-    const uint32_t l1_align = metal_ctx.hal().get_alignment(HalMemType::L1);
+        mesh_device->impl().metal_context(), index, ttsl::Span<detail::ProgramImpl*>(programs, 1), kBase);
+    const uint32_t l1_align = hal.get_alignment(HalMemType::L1);
     const uint32_t region_bytes = remote_dfb_config_region_words(2) * sizeof(uint32_t);
     const uint32_t expected_next = (kBase + region_bytes + l1_align - 1) & ~(l1_align - 1);
     EXPECT_EQ(next, expected_next);
@@ -444,7 +444,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_RelayDFB_HostRelationshipValidation) {
     CoreCoord sender_core(0, 0);
     CoreRangeSet receiver_cores(CoreRange({1, 0}, {2, 0}));
     {
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         const uint8_t remote_dfb_id =
             experimental::CreateCrossNodeDFB(program, *mesh_device, sender_core, receiver_cores, 256, 4);
         experimental::dfb::DataflowBufferConfig config{.entry_size = 256, .num_entries = 4};
@@ -472,7 +472,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_RelayDFB_HostRelationshipValidation) {
     }
 
     {
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         const uint8_t remote_dfb_id =
             experimental::CreateCrossNodeDFB(program, *mesh_device, sender_core, receiver_cores, 256, 4);
         experimental::dfb::DataflowBufferConfig wrong_size{.entry_size = 128, .num_entries = 4};
@@ -482,7 +482,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_RelayDFB_HostRelationshipValidation) {
     }
 
     {
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         experimental::dfb::DataflowBufferConfig config{.entry_size = 256, .num_entries = 4};
         EXPECT_THROW(
             experimental::CreateCrossNodeRelayDataflowBuffer(program, receiver_cores, config, /*remote_dfb_id=*/0),
@@ -584,7 +584,7 @@ static uint32_t run_1toN_program(
     const uint32_t data_pattern = cross_node_dfb_test::data_pattern_for_write_primitive(write_primitive);
     const uint32_t staging_size =
         cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, num_entries, num_receivers);
-    tt_metal::Program program = CreateProgram();
+    tt_metal::Program program = CreateProgram(device);
     const uint8_t remote_dfb_id =
         experimental::CreateCrossNodeDFB(program, device, sender_core, receiver_cores, entry_size, num_entries);
     const auto& gdfb = program.impl().get_cross_node_dfb(remote_dfb_id);
@@ -724,7 +724,7 @@ static uint32_t run_relay_program(
     slow_dispatch::WriteToL1(
         device, sender_core, static_cast<uint32_t>(staging_buffer->address()), staging_words, CoreType::WORKER);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(device);
     const uint8_t remote_dfb_id =
         experimental::CreateCrossNodeDFB(program, device, sender_core, receiver_cores, entry_size, ring_depth);
 
@@ -914,7 +914,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_ProgramInitResetsPointers) {
     auto user_data = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
 
     auto build_and_run = [&](uint32_t counter_base) {
-        tt_metal::Program program = CreateProgram();
+        tt_metal::Program program = CreateProgram(device);
         const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(
             program, device, sender_core, receiver_cores, entry_size, num_entries, *user_data);
         // Copy keeps shared buffer refs alive for host verify after the program is moved.
@@ -1009,7 +1009,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_UpdateDynamicCrossNodeDFBAddressFunctio
     constexpr uint32_t counter_base = 0x40;
 
     auto data_b = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
-    tt_metal::Program program = CreateProgram();
+    tt_metal::Program program = CreateProgram(device);
     const uint8_t remote_dfb_id =
         experimental::CreateCrossNodeDFB(program, device, sender_core, receiver_cores, entry_size, num_entries);
     // Keep a copy of the original ring for "untouched" checks after UpdateDynamic.
@@ -1081,7 +1081,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BarrierCompletesAll) {
     const uint32_t entry_size = 256;
     const uint32_t num_entries = 4;
 
-    tt_metal::Program program = CreateProgram();
+    tt_metal::Program program = CreateProgram(device);
     const uint8_t remote_dfb_id =
         experimental::CreateCrossNodeDFB(program, device, sender_core, receiver_cores, entry_size, num_entries);
     const auto& gdfb = program.impl().get_cross_node_dfb(remote_dfb_id);
@@ -1148,7 +1148,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedMemoryPushPop_1to1) {
     constexpr uint32_t data_pattern = static_cast<uint32_t>(cross_node_dfb_test::SenderDataPattern::MulticastCounter);
 
     auto user_data = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
-    tt_metal::Program program = CreateProgram();
+    tt_metal::Program program = CreateProgram(device);
     const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(
         program, device, sender_core, receiver_cores, entry_size, num_entries, *user_data);
     const auto& gdfb = program.impl().get_cross_node_dfb(remote_dfb_id);
@@ -1273,7 +1273,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedUpdateDynamic) {
 
     auto user_a = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
     auto user_b = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
-    tt_metal::Program program = CreateProgram();
+    tt_metal::Program program = CreateProgram(device);
     const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(
         program, device, sender_core, receiver_cores, entry_size, num_entries, *user_a);
     experimental::CrossNodeDFB gdfb_a = program.impl().get_cross_node_dfb(remote_dfb_id);
@@ -1337,7 +1337,7 @@ TEST_F(CrossNodeDFBFixture, UpdateDynamicDoesNotEagerlyWriteDeviceConfig) {
     const uint32_t entry_size = 256;
     const uint32_t num_entries = 4;
     auto data_b = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
-    Program program = CreateProgram();
+    Program program = CreateProgram(device);
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
@@ -1415,7 +1415,7 @@ TEST_F(CrossNodeDFBFixture, BackToBackRelaunchOrdersConfigRewrite) {
     constexpr uint32_t counter_base = 0x40;
     constexpr uint32_t num_launches = 4;
 
-    tt_metal::Program program = CreateProgram();
+    tt_metal::Program program = CreateProgram(device);
     const uint8_t remote_dfb_id =
         experimental::CreateCrossNodeDFB(program, device, sender_core, receiver_cores, entry_size, num_entries);
     const experimental::CrossNodeDFB gdfb = program.impl().get_cross_node_dfb(remote_dfb_id);
@@ -1502,7 +1502,7 @@ struct CrossNodeTracePushPop {
 // reused across warmup / capture / replay / relaunch.
 CrossNodeTracePushPop make_1to1_trace_push_pop(distributed::MeshDevice& device) {
     CrossNodeTracePushPop ctx;
-    Program program = CreateProgram();
+    Program program = CreateProgram(device);
     ctx.remote_dfb_id = experimental::CreateCrossNodeDFB(
         program, device, ctx.sender_core, ctx.receiver_cores, ctx.entry_size, ctx.num_entries);
     ctx.gdfb = program.impl().get_cross_node_dfb(ctx.remote_dfb_id);
@@ -1573,15 +1573,15 @@ TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_OrdersConfigRewrite) {
     distributed::EnqueueMeshWorkload(cq, ctx.workload, true);
 
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, *ctx.gdfb, ctx.receiver_core);
-    const auto tid = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    const auto tid = mesh_device->begin_mesh_trace(cq);
     distributed::EnqueueMeshWorkload(cq, ctx.workload, false);
     // Second enqueue of the same CrossNode program inside the capture: the
     // allocator must stall_first on the prior launch before rewriting credits.
     distributed::EnqueueMeshWorkload(cq, ctx.workload, false);
-    mesh_device->end_mesh_trace(cq.id(), tid);
+    mesh_device->end_mesh_trace(cq, tid);
 
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, *ctx.gdfb, ctx.receiver_core);
-    mesh_device->replay_mesh_trace(cq.id(), tid, true);
+    mesh_device->replay_mesh_trace(cq, tid, true);
     expect_1to1_ring_and_credits(*mesh_device, ctx, "CaptureReplay");
     mesh_device->release_mesh_trace(tid);
 }
@@ -1596,12 +1596,12 @@ TEST_F(CrossNodeDFBTraceFixture, ReplayThenRelaunch_OrdersConfigRewrite) {
 
     distributed::EnqueueMeshWorkload(cq, ctx.workload, true);
 
-    const auto tid = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    const auto tid = mesh_device->begin_mesh_trace(cq);
     distributed::EnqueueMeshWorkload(cq, ctx.workload, false);
-    mesh_device->end_mesh_trace(cq.id(), tid);
+    mesh_device->end_mesh_trace(cq, tid);
 
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, *ctx.gdfb, ctx.receiver_core);
-    mesh_device->replay_mesh_trace(cq.id(), tid, true);
+    mesh_device->replay_mesh_trace(cq, tid, true);
     expect_1to1_ring_and_credits(*mesh_device, ctx, "Replay");
 
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, *ctx.gdfb, ctx.receiver_core);
@@ -1631,7 +1631,7 @@ TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_UpdateDynamicSnapshot) {
 
     auto data_b = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(device);
     const uint8_t remote_dfb_id =
         experimental::CreateCrossNodeDFB(program, device, sender_core, receiver_cores, entry_size, num_entries);
     experimental::CrossNodeDFB gdfb_a = program.impl().get_cross_node_dfb(remote_dfb_id);
@@ -1675,13 +1675,13 @@ TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_UpdateDynamicSnapshot) {
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb_a, receiver_core);
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb_b, receiver_core);
 
-    const auto tid = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    const auto tid = mesh_device->begin_mesh_trace(cq);
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    mesh_device->end_mesh_trace(cq.id(), tid);
+    mesh_device->end_mesh_trace(cq, tid);
 
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb_a, receiver_core);
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb_b, receiver_core);
-    mesh_device->replay_mesh_trace(cq.id(), tid, true);
+    mesh_device->replay_mesh_trace(cq, tid, true);
 
     EXPECT_TRUE(cross_node_dfb_test::verify_receiver_ring(
         *mesh_device, gdfb_b, receiver_core, data_pattern, entry_size, num_entries, 0, 1, counter_base))

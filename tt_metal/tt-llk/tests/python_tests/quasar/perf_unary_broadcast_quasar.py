@@ -6,7 +6,7 @@ from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
 )
-from helpers.param_config import parametrize, runtime
+from helpers.param_config import parametrize, quasar_dest_sync_modes, runtime
 from quasar.test_unary_broadcast_quasar import (
     BROADCAST_TYPES,
     INPUT_DIMENSIONS,
@@ -16,10 +16,6 @@ from quasar.test_unary_broadcast_quasar import (
 from quasar.test_unary_broadcast_quasar import (
     test_unary_broadcast_quasar as run_unary_broadcast,
 )
-from quasar.test_unary_broadcast_quasar import (
-    unary_broadcast_dest_sync_modes,
-    unary_broadcast_implied_math_formats,
-)
 
 
 @pytest.mark.perf
@@ -28,10 +24,7 @@ from quasar.test_unary_broadcast_quasar import (
     formats=UNARY_BROADCAST_FORMATS,
     dest_acc=get_valid_dest_acc_unary_broadcast,
     broadcast_type=BROADCAST_TYPES,
-    implied_math_format=lambda formats: unary_broadcast_implied_math_formats(
-        formats, is_perf=True
-    ),
-    dest_sync_mode=lambda: unary_broadcast_dest_sync_modes(is_perf=True),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=True),
     input_dimensions=runtime(INPUT_DIMENSIONS),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
@@ -42,7 +35,6 @@ def test_perf_unary_broadcast_quasar(
     formats,
     dest_acc,
     broadcast_type,
-    implied_math_format,
     dest_sync_mode,
     input_dimensions,
     run_types,
@@ -53,7 +45,6 @@ def test_perf_unary_broadcast_quasar(
         formats,
         dest_acc,
         broadcast_type,
-        implied_math_format,
         dest_sync_mode,
         input_dimensions,
         run_types=run_types,

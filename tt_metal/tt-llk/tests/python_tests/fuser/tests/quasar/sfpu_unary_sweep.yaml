@@ -1,11 +1,15 @@
-# Sweep unary SFPU operations and independent input/output formats.
+# Sweep unary SFPU operations: Float32 input unpacked to Dest, Float16_b/Float32 output.
 
 dest_acc: true
 
 operands:
   - name: "input_A"
     dims: [32, 32]
-    format: [Float16_b, Float32]
+    # Float32 only: with dest_acc the datacopy unpacks straight into a 32-bit Dest, and the unpacker
+    # cannot widen a 16-bit input on the way (see is_valid_quasar_unpack_to_dest). A Float16_b input
+    # left bf16 cells in Dest for an SFPU and packer that read it as fp32. The 16-bit routes are in the
+    # sfpu_unary_float / approx_modes configs, per-op 16-bit coverage in test_eltwise_unary_sfpu_quasar.py.
+    format: [Float32]
     stimuli:
       include:
         - 0.005
@@ -29,7 +33,9 @@ operations:
         unpack_to_dest: true
         block_size: [32, 32]
       - type: "UnarySfpu"
-        operation: all
+        # The ops this sweep covered before the BH SFPI port registered more; `all` would now also
+        # pick the Int32-only and domain-limited ports, which this float, [0.005, 10] sweep cannot test.
+        operation: [Abs, Exp, Gelu, Reciprocal, Relu, Rsqrt, Sigmoid, Silu, Sqrt, Square, Tanh, EqualZero, NotEqualZero, LessThanZero, GreaterThanZero, LessThanEqualZero, GreaterThanEqualZero]
         approximation_mode: all
         iterations: 32
         block_size: [32, 32]

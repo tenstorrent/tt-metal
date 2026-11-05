@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_metal {

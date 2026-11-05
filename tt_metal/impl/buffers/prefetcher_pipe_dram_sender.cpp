@@ -18,8 +18,6 @@
 #include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe_dram_sender_internal.hpp"
-#include "mesh_device.hpp"
-#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -69,10 +67,31 @@ std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
     const uint64_t factory_id = next_tensor_prefetcher_factory_id.fetch_add(1, std::memory_order_relaxed);
     for (size_t s = 0; s < mapping.size(); ++s) {
         const auto& [sender_logical, receivers] = mapping[s];
-        pipes.push_back(create_dram_sender_pipe(
-            space, sender_logical, receivers, bases[s], factory_id, static_cast<uint32_t>(mapping.size())));
+        pipes.push_back(space.impl().create_dram_sender_pipe(
+            sender_logical, receivers, bases[s], factory_id, static_cast<uint32_t>(mapping.size())));
     }
+    space.impl().order_dram_sender_pages();
     return pipes;
+}
+
+std::vector<TensorPrefetcherReceiverShard> GetTensorPrefetcherReceiverShards(
+    const std::vector<std::reference_wrapper<const PrefetcherPipe>>& pipes) {
+    std::vector<TensorPrefetcherReceiverShard> shards;
+    for (size_t p = 0; p < pipes.size(); ++p) {
+        const PrefetcherPipe& pipe = pipes[p];
+        TT_FATAL(
+            pipe.sender_core_type() == SenderCoreType::Dram,
+            "GetTensorPrefetcherReceiverShards requires pipes from CreatePrefetcherPipesForTensorPrefetcher, but pipe "
+            "{} (sender {}) has a worker sender",
+            p,
+            pipe.sender_core().str());
+        const auto bank = static_cast<uint32_t>(pipe.sender_core().x);
+        uint32_t bank_local_shard = pipe.impl().recv_index_base();
+        for (const CoreCoord& receiver : pipe.impl().dram_sender_receiver_table()) {
+            shards.push_back({.receiver = receiver, .bank = bank, .bank_local_shard = bank_local_shard++});
+        }
+    }
+    return shards;
 }
 
 DeviceAddr sender_state_drisc_l1_base(const PrefetcherPipe& pipe) { return pipe.impl().sender_state_drisc_l1_base(); }

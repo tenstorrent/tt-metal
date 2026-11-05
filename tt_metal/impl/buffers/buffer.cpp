@@ -11,15 +11,11 @@
 #include <graph_tracking.hpp>
 #include <enchantum/enchantum.hpp>
 #include <math.hpp>
-#include <nlohmann/json.hpp>
 #include <tt_stl/reflection.hpp>
-#include <tt_stl/overloaded.hpp>
 #include <algorithm>
 #include <atomic>
-#include <map>
 #include <mutex>
 #include <string>
-#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include "context/context_types.hpp"
@@ -33,7 +29,6 @@
 #include "tt-metalium/mesh_device.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_align.hpp"
 #include <tt-metalium/allocator.hpp>
 
 #include "impl/emulation/emule_live_ranges.hpp"
@@ -182,8 +177,8 @@ std::unordered_set<CoreCoord> claimed_service_cores(const IDevice* device) {
         return claimed;
     }
     if (const auto* mesh = dynamic_cast<const distributed::MeshDevice*>(device)) {
-        for (const IDevice* chip : mesh->get_devices()) {
-            const auto chip_claimed = service_cores.claimed_cores(chip->id());
+        for (auto chip_id : mesh->get_device_ids()) {
+            const auto chip_claimed = service_cores.claimed_cores(chip_id);
             claimed.insert(chip_claimed.begin(), chip_claimed.end());
         }
     } else {
@@ -489,7 +484,8 @@ BufferImpl::BufferImpl(
     const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id,
-    const bool owns_data) :
+    const bool owns_data,
+    const std::optional<size_t> unique_id) :
     device_(device),
     size_(size),
     buffer_type_(buffer_type),
@@ -524,7 +520,7 @@ BufferImpl::BufferImpl(
         buffer_distribution_spec_,
         *this->allocator_,
         this->device_);
-    unique_id_ = next_unique_id.fetch_add(1);
+    unique_id_ = unique_id.has_value() ? *unique_id : allocate_unique_id();
 }
 
 Buffer::Buffer(BufferImpl impl) : impl_(std::make_unique<BufferImpl>(std::move(impl))) {}
@@ -547,10 +543,50 @@ std::shared_ptr<Buffer> BufferImpl::create(
     const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
+    return create_owning(
+        device,
+        size,
+        page_size,
+        buffer_type,
+        sharding_args,
+        bottom_up,
+        sub_device_id,
+        /*unique_id=*/std::nullopt);
+}
+
+std::shared_ptr<Buffer> BufferImpl::create_for_mesh_buffer(
+    IDevice* device,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const BufferShardingArgs& sharding_args,
+    const std::optional<bool> bottom_up,
+    const std::optional<SubDeviceId> sub_device_id,
+    const size_t unique_id) {
+    return create_owning(device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, unique_id);
+}
+
+std::shared_ptr<Buffer> BufferImpl::create_owning(
+    IDevice* device,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const BufferShardingArgs& sharding_args,
+    const std::optional<bool> bottom_up,
+    const std::optional<SubDeviceId> sub_device_id,
+    const std::optional<size_t> unique_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
 
     auto buffer = std::make_shared<Buffer>(BufferImpl(
-        device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, true /* owns data */));
+        device,
+        size,
+        page_size,
+        buffer_type,
+        sharding_args,
+        bottom_up,
+        sub_device_id,
+        true /* owns data */,
+        unique_id));
 
     if (buffer->impl().size_ == 0) {
         buffer->impl().allocation_status_ = BufferImpl::AllocationStatus::ALLOCATED;
@@ -910,7 +946,7 @@ DeviceAddr ShardSpecBuffer::num_pages() const {
 namespace ttsl::json {
 tt::tt_metal::ShardSpec from_json_t<tt::tt_metal::ShardSpec>::operator()(const nlohmann::json& json_object) const {
     return tt::tt_metal::ShardSpec{
-        from_json<CoreRangeSet>(json_object.at("grid")),
+        from_json<tt::tt_metal::CoreRangeSet>(json_object.at("grid")),
         from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
         from_json<tt::tt_metal::ShardOrientation>(json_object.at("orientation")),
     };

@@ -1,0 +1,152 @@
+{
+  "schema": "nllb-local-reference-assets-v1",
+  "models": {
+    "600m": {
+      "repo_id": "facebook/nllb-200-distilled-600M",
+      "revision": "f8d333a098d19b4fd9a8b18f94170487ad3f821d",
+      "license": "cc-by-nc-4.0",
+      "files": {
+        "config.json": {
+          "sha256": "f9b4081d3d108e9d06532ea8d92b932c04ed3a15ff2f87e6982f8e14db51fbc5",
+          "bytes": 846
+        },
+        "pytorch_model.bin": {
+          "sha256": "c266c2cfd19758b6d09c1fc31ecdf1e485509035f6b51dfe84f1ada83eefcc42",
+          "bytes": 2460457927
+        },
+        "generation_config.json": {
+          "sha256": "0bb604cdb8392649176935a447ce994128f170a6908c135a17d0e3dfb8113cb2",
+          "bytes": 189
+        },
+        "sentencepiece.bpe.model": {
+          "sha256": "14bb8dfb35c0ffdea7bc01e56cea38b9e3d5efcdcb9c251d6b40538e1aab555a",
+          "bytes": 4852054
+        },
+        "tokenizer.json": {
+          "sha256": "e316b82de11d0f951f370943b3c438311629547285129b0b81dadabd01bca665",
+          "bytes": 17331176
+        },
+        "tokenizer_config.json": {
+          "sha256": "d1aa8c3697d3e35674f97b5b7e9c99d22b010f528e80140257d97316be90d044",
+          "bytes": 564
+        },
+        "special_tokens_map.json": {
+          "sha256": "992bd4ed610d644d6823081937bcc91bb8878dd556cea4ae5327f2480361330e",
+          "bytes": 3548
+        }
+      },
+      "weight_files": [
+        "pytorch_model.bin"
+      ],
+      "weight_index": null,
+      "source_urls": [
+        "https://huggingface.co/api/models/facebook/nllb-200-distilled-600M/revision/f8d333a098d19b4fd9a8b18f94170487ad3f821d?blobs=true",
+        "https://huggingface.co/facebook/nllb-200-distilled-600M/tree/f8d333a098d19b4fd9a8b18f94170487ad3f821d",
+        "https://huggingface.co/facebook/nllb-200-distilled-600M/resolve/f8d333a098d19b4fd9a8b18f94170487ad3f821d/config.json"
+      ]
+    },
+    "1.3b-distilled": {
+      "repo_id": "facebook/nllb-200-distilled-1.3B",
+      "revision": "7be3e24664b38ce1cac29b8aeed6911aa0cf0576",
+      "license": "cc-by-nc-4.0",
+      "files": {
+        "config.json": {
+          "sha256": "6918d76e923d6b372a14b8d1d837f27b809bd009943c4ebe943f8e34b2226233",
+          "bytes": 808
+        },
+        "pytorch_model.bin": {
+          "sha256": "7e40f838a5aad3d60e9254632ab876bda44340386ca7ebad3e099db7432b04e1",
+          "bytes": 5482882236
+        },
+        "generation_config.json": {
+          "sha256": "0bb604cdb8392649176935a447ce994128f170a6908c135a17d0e3dfb8113cb2",
+          "bytes": 189
+        },
+        "sentencepiece.bpe.model": {
+          "sha256": "14bb8dfb35c0ffdea7bc01e56cea38b9e3d5efcdcb9c251d6b40538e1aab555a",
+          "bytes": 4852054
+        },
+        "tokenizer.json": {
+          "sha256": "e316b82de11d0f951f370943b3c438311629547285129b0b81dadabd01bca665",
+          "bytes": 17331176
+        },
+        "tokenizer_config.json": {
+          "sha256": "d1aa8c3697d3e35674f97b5b7e9c99d22b010f528e80140257d97316be90d044",
+          "bytes": 564
+        },
+        "special_tokens_map.json": {
+          "sha256": "992bd4ed610d644d6823081937bcc91bb8878dd556cea4ae5327f2480361330e",
+          "bytes": 3548
+        }
+      },
+      "weight_files": [
+        "pytorch_model.bin"
+      ],
+      "weight_index": null,
+      "source_urls": [
+        "https://huggingface.co/api/models/facebook/nllb-200-distilled-1.3B/revision/7be3e24664b38ce1cac29b8aeed6911aa0cf0576?blobs=true",
+        "https://huggingface.co/facebook/nllb-200-distilled-1.3B/tree/7be3e24664b38ce1cac29b8aeed6911aa0cf0576",
+        "https://huggingface.co/facebook/nllb-200-distilled-1.3B/resolve/7be3e24664b38ce1cac29b8aeed6911aa0cf0576/config.json"
+      ]
+    },
+    "3.3b": {
+      "repo_id": "facebook/nllb-200-3.3B",
+      "revision": "1a07f7d195896b2114afcb79b7b57ab512e7b43e",
+      "license": "cc-by-nc-4.0",
+      "files": {
+        "config.json": {
+          "sha256": "24027fbba45b65c168cc22f5afa3561476691e0e9a06286e1430ffff74e418eb",
+          "bytes": 808
+        },
+        "pytorch_model.bin.index.json": {
+          "sha256": "c1290129b7a4156bfeb180501a37729dafddec3233d58e52ab0465eb03bf5ead",
+          "bytes": 90035
+        },
+        "pytorch_model-00001-of-00003.bin": {
+          "sha256": "06aec913c891950ff0c59bd018c1b46dc95be6e106c36df87d13175418b3972c",
+          "bytes": 6933375959
+        },
+        "pytorch_model-00002-of-00003.bin": {
+          "sha256": "1c5a44acb0287e905a62a506cf3e5af37956607f4c667d891ec069aa276be0be",
+          "bytes": 8545249147
+        },
+        "pytorch_model-00003-of-00003.bin": {
+          "sha256": "2cf744009996251567d7972f4436d65cf94380c5ddd8f524cb878e090b27bb50",
+          "bytes": 2098840299
+        },
+        "generation_config.json": {
+          "sha256": "0bb604cdb8392649176935a447ce994128f170a6908c135a17d0e3dfb8113cb2",
+          "bytes": 189
+        },
+        "sentencepiece.bpe.model": {
+          "sha256": "14bb8dfb35c0ffdea7bc01e56cea38b9e3d5efcdcb9c251d6b40538e1aab555a",
+          "bytes": 4852054
+        },
+        "tokenizer.json": {
+          "sha256": "e316b82de11d0f951f370943b3c438311629547285129b0b81dadabd01bca665",
+          "bytes": 17331176
+        },
+        "tokenizer_config.json": {
+          "sha256": "d1aa8c3697d3e35674f97b5b7e9c99d22b010f528e80140257d97316be90d044",
+          "bytes": 564
+        },
+        "special_tokens_map.json": {
+          "sha256": "992bd4ed610d644d6823081937bcc91bb8878dd556cea4ae5327f2480361330e",
+          "bytes": 3548
+        }
+      },
+      "weight_files": [
+        "pytorch_model-00001-of-00003.bin",
+        "pytorch_model-00002-of-00003.bin",
+        "pytorch_model-00003-of-00003.bin"
+      ],
+      "weight_index": "pytorch_model.bin.index.json",
+      "source_urls": [
+        "https://huggingface.co/api/models/facebook/nllb-200-3.3B/revision/1a07f7d195896b2114afcb79b7b57ab512e7b43e?blobs=true",
+        "https://huggingface.co/facebook/nllb-200-3.3B/tree/1a07f7d195896b2114afcb79b7b57ab512e7b43e",
+        "https://huggingface.co/facebook/nllb-200-3.3B/resolve/1a07f7d195896b2114afcb79b7b57ab512e7b43e/config.json",
+        "https://huggingface.co/facebook/nllb-200-3.3B/resolve/1a07f7d195896b2114afcb79b7b57ab512e7b43e/pytorch_model.bin.index.json"
+      ]
+    }
+  }
+}

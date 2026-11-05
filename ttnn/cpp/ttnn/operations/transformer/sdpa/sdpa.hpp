@@ -39,7 +39,11 @@ ttnn::Tensor scaled_dot_product_attention(
     /// Windowed mode only. Per-device form of the offset above: a 1-element int32/uint32 ROW_MAJOR device
     /// tensor, read at runtime rather than baked into the program. Shard it on the sequence-parallel axis
     /// so every device runs the SAME program yet sees its own origin. Overrides the scalar when set.
-    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt,
+    bool output_concat_heads = false,
+    /// Non causal with attn_mask only. [Bm, Hm, ceil(Sq / q_chunk), ceil(Sk / k_chunk)] int32/uint32 ROW_MAJOR, nonzero
+    /// where a (q chunk, k chunk) block of the mask has a visible entry; the other blocks are skipped.
+    const std::optional<ttnn::Tensor>& attn_mask_block_map = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
@@ -58,7 +62,11 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     // Geometry override for an HMA-shared paged cache. Q drives head_dim; supply this
     // call's view (block_size + num_kv_heads) when the cache was allocated for a different
     // layer. nullopt ⇒ cache shape.
-    std::optional<operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt);
+    std::optional<operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
+    // Sliding window over absolute positions (the kernels offset the window by chunk_start_idx)
+    // and a per-head learned attention sink, both as in scaled_dot_product_attention.
+    std::optional<uint32_t> sliding_window_size = std::nullopt,
+    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt);
 
 /// Flexible: chunk start index in device tensor [1] (int32). Read at runtime; use for trace.
 ttnn::Tensor chunked_scaled_dot_product_attention(
@@ -71,7 +79,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    std::optional<operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt);
+    std::optional<operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
+    std::optional<uint32_t> sliding_window_size = std::nullopt,
+    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
@@ -126,7 +136,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
-    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
+    // Metadata path only: global real-token count, so attention stops at the tile holding the last real token.
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,
@@ -154,7 +166,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
-    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt);
 
 struct ExecuteExpRingJointAttention {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(

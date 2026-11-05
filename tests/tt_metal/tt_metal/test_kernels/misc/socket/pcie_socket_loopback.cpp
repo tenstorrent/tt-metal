@@ -79,4 +79,8 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_read_barrier();
+    // The PCIe transfers above leave both MID registers routed to host, and firmware does not reset them
+    // before the next kernel.
+    noc_async_write_clear_pcie_state(NOC_INDEX, write_cmd_buf);
+    noc_async_read_clear_pcie_state(NOC_INDEX, read_cmd_buf);
 }

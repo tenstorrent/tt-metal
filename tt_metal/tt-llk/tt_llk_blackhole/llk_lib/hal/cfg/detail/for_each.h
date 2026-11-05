@@ -20,12 +20,20 @@ namespace hal::cfg::detail
 
 /**
  * @brief An index carried as a type, so passing it by value keeps it a constant expression.
+ *
+ * @tparam Value: Compile-time descriptor-table index.
  */
 template <std::uint32_t Value>
 using CompileTimeIndex = std::integral_constant<std::uint32_t, Value>;
 
 /**
- * @brief Invokes `function(CompileTimeIndex<I>{})` once per index in the sequence.
+ * @brief Invoke function once per index, passing each index as a @ref CompileTimeIndex object.
+ *
+ * The unnamed integer-sequence argument supplies the indices and their iteration order.
+ *
+ * @tparam Function: Callable accepting a CompileTimeIndex specialization, deduced from function.
+ * @tparam Indices: Compile-time index values in invocation order.
+ * @param function: Callable to invoke for every index. Return values are discarded.
  */
 template <typename Function, std::uint32_t... Indices>
 inline constexpr void for_each_index(Function&& function, std::integer_sequence<std::uint32_t, Indices...>)
@@ -34,7 +42,7 @@ inline constexpr void for_each_index(Function&& function, std::integer_sequence<
 }
 
 /**
- * @brief Invokes `function(CompileTimeIndex<I>{})` for each I in [0, Count), unrolled at compile time.
+ * @brief Invoke function for each index in [0, Count), unrolled at compile time.
  *
  * The generic lambda parameter is a @ref CompileTimeIndex, so indexing a table
  * with it still yields a Field usable as a template argument:
@@ -42,6 +50,10 @@ inline constexpr void for_each_index(Function&& function, std::integer_sequence<
  *     Unpacker.forEach([&](auto U) {
  *         write<Access::MMIO, Unpacker[U].Cntx[0].Base, Sec::S0>(base[U]);
  *     });
+ *
+ * @tparam Count: Number of indices, starting at zero. Zero invokes nothing.
+ * @tparam Function: Callable accepting a CompileTimeIndex specialization, deduced from function.
+ * @param function: Callable to invoke in ascending index order. Return values are discarded.
  */
 template <std::uint32_t Count, typename Function>
 inline constexpr void for_each_index(Function&& function)

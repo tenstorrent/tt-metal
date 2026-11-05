@@ -18,7 +18,13 @@ import time
 import sys
 import os
 
+import pytest
+
+from models.common.device_utils import is_blackhole
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+_CHUNKED_BLACKHOLE_ONLY = "test_gated_deltanet_chunked_ttnn runs on Blackhole only (the seq kernel's L1 use)"
 
 
 def assert_with_pcc(torch_output, ttnn_output, pcc_threshold=0.99):
@@ -171,8 +177,9 @@ def test_gated_deltanet_recurrent_ttnn(seq_len=16):
         ttnn.close_device(device)
 
 
+@pytest.mark.skipif(not is_blackhole(), reason=_CHUNKED_BLACKHOLE_ONLY)
 def test_gated_deltanet_chunked_ttnn(seq_len=128, chunk_size=128):
-    """Validate production-shaped TTNN GatedDeltaNet chunked mode.
+    """Validate production-shaped TTNN GatedDeltaNet chunked mode (Blackhole only).
 
     The production seq-kernel path intentionally differs from the generic torch
     golden for these stress shapes, so this test checks the Win 1 invariant:
@@ -183,6 +190,9 @@ def test_gated_deltanet_chunked_ttnn(seq_len=128, chunk_size=128):
         import ttnn
     except ImportError:
         print("SKIP: test_gated_deltanet_chunked_ttnn (ttnn not available)")
+        return
+    if not is_blackhole():
+        print(f"SKIP: {_CHUNKED_BLACKHOLE_ONLY}")
         return
 
     from tt import ttnn_delta_rule_seq

@@ -53,7 +53,7 @@ ComplexMulDeviceOperation::tensor_return_value_t ComplexMulDeviceOperation::crea
     return {make_like(args.a_real), make_like(args.a_real)};
 }
 
-tt::stl::hash::hash_t ComplexMulDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t ComplexMulDeviceOperation::compute_program_hash(
     const operation_attributes_t&, const tensor_args_t& args) {
     // No kernel-affecting attributes — the program identity is purely
     // a function of the input dtype + shape + memory config.  All four
