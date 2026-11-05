@@ -1266,6 +1266,10 @@
     export MINIMAX_H3_REQUIRE_WEIGHTS=1
     export MINIMAX_H3_DRAM_PROBE=1
     export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/MiniMaxAI/MiniMax-H3
+    # SHM memory tracking (tt-smi stats) re-merges the CB regions of every cached program on each of the 32 devices
+    # whenever a new program allocates its CBs: quadratic in the program count. The warmup creates thousands of
+    # programs, so this took 94% of the audio warm and pushed the job past its 180 min timeout. Nothing here reads it.
+    export TT_METAL_SHM_TRACKING_DISABLED=1
     pytest --timeout 7200 -s models/tt_dit/tests/models/minimax_h3/test_mock_oom_minimax_h3.py
   model: minimax-h3
   skus:
