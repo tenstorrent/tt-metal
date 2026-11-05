@@ -5,6 +5,7 @@
 #include "risc_firmware_initializer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <chrono>
 #include <future>
@@ -55,6 +56,12 @@ namespace {
 // True when this Quasar chip's soc descriptor lists ethernet cores.
 bool quasar_device_has_ethernet_cores(const Cluster& cluster, ChipId device_id) {
     return cluster.arch() == ARCH::QUASAR && !cluster.get_soc_desc(device_id).logical_eth_core_to_chan_map.empty();
+}
+
+// A Quasar chip with Ethernet cores whose descriptor lists them as Keraunos cores (keraunos.cores).
+bool quasar_device_has_keraunos_cores(const Cluster& cluster, ChipId device_id) {
+    return quasar_device_has_ethernet_cores(cluster, device_id) &&
+           !cluster.get_soc_desc(device_id).get_arch_descriptor().get_keraunos().cores.empty();
 }
 
 tt::umd::RiscType dram_core_reset_riscs(ARCH arch) {
@@ -162,6 +169,28 @@ std::optional<uint32_t> dram_channel_for_translated_core(const metal_SocDescript
         }
     }
     return std::nullopt;
+}
+
+// The Ethernet-link slot (HalL1MemAddrType::ETH_LINK) of linked Quasar Ethernet core `logical_eth` on `chip`, laid out
+// as internal_::cce_eth::EthLink in tt-2xx/quasar/eth_cce_send.h. When the cluster's link table has no peer for the
+// core, the valid word stays 0 and a warning is logged. Fatal when either end has no keraunos.cores entry.
+std::array<uint32_t, 4> quasar_eth_link_slot(const Cluster& cluster, ChipId chip, const CoreCoord& logical_eth) {
+    constexpr uint32_t k_eth_link_valid = 0x4B4E494C;  // kEthLinkValid in eth_cce_send.h
+    const auto& soc = cluster.get_soc_desc(chip);
+    const uint32_t chan = soc.logical_eth_core_to_chan_map.at(logical_eth);
+    std::array<uint32_t, 4> slot{soc.get_keraunos_core_for_channel(chan).hsio, 0, 0, 0};
+    const auto& connections = cluster.get_ethernet_connections();
+    const auto chip_links = connections.find(chip);
+    TT_FATAL(
+        chip_links != connections.end() && chip_links->second.contains(chan),
+        "Chip {} Ethernet core {} (channel {}) is active, but the cluster's link table lists no peer for it",
+        chip,
+        logical_eth.str(),
+        chan);
+    const auto& [peer_chip, peer_chan] = chip_links->second.at(chan);
+    slot[1] = cluster.get_soc_desc(peer_chip).get_keraunos_core_for_channel(peer_chan).hsio;
+    slot[2] = k_eth_link_valid;
+    return slot;
 }
 
 // Whether a Mock device of `arch` builds firmware. Quasar Mock skips kernel JIT (ProgramImpl::compile), which is
@@ -1790,6 +1819,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
     go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
+    const bool keraunos_ethernet = quasar_device_has_keraunos_cores(cluster_, device_id);
     for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
@@ -1802,6 +1832,19 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             hal_.get_dev_addr(
                 llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core),
                 HalL1MemAddrType::CORE_INFO));
+        if (keraunos_ethernet) {
+            const auto slot = quasar_eth_link_slot(cluster_, device_id, eth_core);
+            TT_FATAL(
+                hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK) == sizeof(slot),
+                "HAL Ethernet-link slot is {} B, the host writes {} B",
+                hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK),
+                sizeof(slot));
+            cluster_.write_core_immediate(
+                slot.data(),
+                sizeof(slot),
+                {static_cast<size_t>(device_id), virtual_core},
+                hal_.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK));
+        }
         initialize_firmware(
             device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         if (!hal_.get_eth_fw_is_cooperative()) {
