@@ -76,8 +76,8 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
     uint32_t cb_idx = tt::CBIndex::c_0;
 
     // Create CBs
-    const uint32_t grid_stick_size =
-        is_sharded ? grid_shape[-1] * grid_tensor.element_size() : get_aligned_stick_size(grid_shape, grid_tensor);
+    // Sharded grid rows are stored at the buffer's aligned page size, so stride by the aligned stick size too.
+    const uint32_t grid_stick_size = get_aligned_stick_size(grid_shape, grid_tensor);
     const uint32_t grid_cb_index0 = cb_idx++;
     const uint32_t grid_cb_num_pages0 = is_sharded ? grid_nsticks_per_core : 1;
     desc.cbs.push_back(CBDescriptor{
@@ -136,15 +136,13 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
 
     // Prepare stick size arguments with proper names
     const uint32_t input_stick_size = get_aligned_stick_size(input_shape, input_tensor);
-    const uint32_t grid_stick_size_arg =
-        is_sharded ? grid_shape[-1] * grid_tensor.element_size() : get_aligned_stick_size(grid_shape, grid_tensor);
 
     // Writer for nearest mode with sharded grid - matches sharded reader argument structure
     std::vector<uint32_t> writer_compile_time_args = {
         grid_cb_index0,                              // ct_arg[0]: grid_cb_index
         output_cb_index,                             // ct_arg[1]: output_cb_index (replaces scalar_cb_index)
         input_stick_size,                            // ct_arg[2]: input_stick_size
-        grid_stick_size_arg,                         // ct_arg[3]: grid_stick_size
+        grid_stick_size,                             // ct_arg[3]: grid_stick_size
         input_height,                                // ct_arg[4]: input_height
         input_width,                                 // ct_arg[5]: input_width
         grid_batching_factor,                        // ct_arg[6]: grid_batching_factor
