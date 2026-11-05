@@ -13,7 +13,8 @@
 #     Runs one group only (same as a single CI matrix job).
 #     Groups: unit, phys-grouping, control-plane, t3k, wh-galaxy,
 #       bh-6u, bh-single-galaxy, bh-dual-galaxy,
-#       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-fsd-reliability, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-ring-stress, bh-heterogeneous, pipeline-placement, bh-misc#
+#       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-fsd-reliability, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-ring-stress, bh-heterogeneous, pipeline-placement, bh-misc,
+#       teardown-litmus
 #   Parallel (all groups at once):
 #     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --parallel
 #     Runs all groups in parallel via self-invocation. Each group's output is
@@ -310,7 +311,7 @@ done
 
 CURRENT_GROUP="$GROUP"
 
-VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc"
+VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc teardown-litmus"
 if ! echo "$VALID_GROUPS" | tr ' ' '\n' | grep -qx "$GROUP"; then
   echo "Invalid --group value '$GROUP'. Valid groups: $VALID_GROUPS" >&2; exit 1
 fi
@@ -322,7 +323,8 @@ if [[ "$GROUP" == "all" && "$PARALLEL" -eq 1 ]]; then
   GROUPS=(
     unit phys-grouping control-plane t3k wh-galaxy
     bh-6u bh-single-galaxy bh-dual-galaxy
-    bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc  )
+    bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc
+    teardown-litmus )
   tmpdir=$(mktemp -d)
   trap 'rm -rf "$tmpdir"' EXIT
   pids=()
@@ -1178,5 +1180,18 @@ run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-desc
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/disconnected_sc36_quads_2bigmesh_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding tests/tt_metal/tt_fabric/mock_cluster_mappings/disconnected_sc36_quads_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestDisconnectedQuadsZeroIntermeshResolved"
 
 fi # bh-misc
+
+######################################
+# Teardown litmus (#56902): one fault, one assertion, on the mock dual galaxy
+######################################
+if run_group "teardown-litmus"; then
+
+# Does a distributed job end, end cleanly, and report it after one failure? Two tt-metal ranks on the 6U
+# dual-host mock through tt-run (the distributed context, the control plane's init, the collectives, close,
+# the user's signals); rows that fail today are xfail(strict) with the error id of the plan, so a fix flips
+# them. Each row kills what it left; the outer cap only guards the whole file. See the README next to it.
+TT_FABRIC_TEST_TIMEOUT=1500s run_test python3 -m pytest tests/tt_metal/distributed/multiprocess/teardown_litmus -v -p no:cacheprovider
+
+fi # teardown-litmus
 
 print_failure_summary
