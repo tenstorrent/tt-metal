@@ -222,49 +222,61 @@ explicitly in that case.
 
 ### Cache pruning
 
-Off by default. Set `TT_METAL_JIT_SERVER_CACHE_MIN_FREE_PCT` to have the server keep the
-cache filesystem from filling up. Pruning also needs `TT_METAL_JIT_SERVER_CACHE_ROOT` set
-to a directory only this server uses:
+Pruning is opt-in. Set `TT_METAL_JIT_SERVER_CACHE_MIN_FREE_PCT` to have the server keep the
+cache filesystem from filling up, and point `TT_METAL_JIT_SERVER_CACHE_ROOT` at a directory
+only this server uses:
 
 ```bash
 # Below 20% free, delete least recently used kernels until 30% is free again
-export TT_METAL_JIT_SERVER_CACHE_ROOT=/localdev/jit-server-cache/
+export TT_METAL_JIT_SERVER_CACHE_ROOT=/local/jit-server-cache/
 export TT_METAL_JIT_SERVER_CACHE_MIN_FREE_PCT=20
-export TT_METAL_JIT_SERVER_CACHE_TARGET_FREE_PCT=30   # default: MIN_FREE_PCT + 10
+export TT_METAL_JIT_SERVER_CACHE_TARGET_FREE_PCT=30
 ./build/tools/jit_compile_server
 ```
 
-A background thread checks free space at startup and every
-`TT_METAL_JIT_SERVER_CACHE_CHECK_INTERVAL_S` seconds (default 300). The check is one
-`statvfs` call; the cache is only scanned once free space is below the threshold. Then the
-server deletes whole `<build_key>/kernels/<kernel>/<hash>/` directories, least recently
-used first across all build keys, until free space reaches the target. Free space is
-measured the way `df` reports it, so it excludes blocks reserved for root, and it is measured
-again after every deletion rather than estimated. On filesystems that free blocks lazily, a
-run stops once it has deleted twice the original shortfall. Each run logs one `Cache prune:`
-line with what it deleted and why anything idle was skipped. A run that frees nothing
-doubles the time to the next check, up to 1 hour, so an unreachable target does not rescan
-the cache every few minutes.
+The server logs a `JIT compile server cache pruning:` line at startup with the settings in
+effect, or says pruning is disabled. A new cache root starts empty, so the first requests
+after moving it recompile.
 
+A background thread checks free space at startup and then every
+`TT_METAL_JIT_SERVER_CACHE_CHECK_INTERVAL_S` seconds. The check is one `statvfs` call; the
+cache is only scanned once free space is below `..._MIN_FREE_PCT`. Then the server deletes
+whole `<build_key>/kernels/<kernel>/<hash>/` directories, least recently used first across
+all build keys, until free space reaches `..._TARGET_FREE_PCT`.
+
+- **Free space is measured, not estimated.** It is read the way `df` reports it (excluding
+  blocks reserved for root) and read again after every deletion. A run never deletes more
+  than twice the original shortfall, in case the filesystem frees blocks lazily.
 - **Deleting a kernel only costs a recompile.** The next request for it is a cache miss.
 - **Kernels in use are never deleted.** A request holds its kernel directory for its whole
   duration, so a prune cannot race a compile.
 - **Recently used kernels are kept.** Nothing used within the last
-  `TT_METAL_JIT_SERVER_CACHE_MIN_IDLE_S` seconds (default 3600) is deleted. Every request
-  stamps its kernel directory's mtime, so last use is exact for kernels this server has
-  served; for older entries the newest file mtime or atime counts.
+  `TT_METAL_JIT_SERVER_CACHE_MIN_IDLE_S` seconds is deleted. Every request stamps its kernel
+  directory's mtime, so last use is exact for kernels this server has served; for older
+  entries the newest file mtime or atime counts.
 - **Firmware and the shared `pch/` directory are never deleted.** Running clients upload
-  firmware only once (§5c). If they are what fills the disk, the log line says the target
-  could not be reached.
+  firmware only once (§5c). If they are what fills the disk, the log says the target could
+  not be reached.
 - **The cache root must belong to the server alone.** Leases only protect this server's own
-  requests. The server refuses to start with pruning on when the cache root is unset or is
-  one a client's `TT_METAL_CACHE` can resolve to — `/tmp/tt-metal-cache/`,
+  requests. With pruning on, the server refuses to start when `..._CACHE_ROOT` is unset or
+  is a directory a client's `TT_METAL_CACHE` can resolve to — `/tmp/tt-metal-cache/`,
   `$HOME/.cache/tt-metal-cache/` or `$TT_METAL_CACHE/tt-metal-cache/` — because a client's
   cache has the same layout and the pruner would delete ELFs the client is loading.
+- **An unreachable target does not mean constant rescanning.** After a run that frees
+  nothing, the wait before the next check doubles, up to an hour, and resets once a run frees
+  space again.
 
+Each run logs a `Cache prune:` line with what it deleted and why anything idle was skipped.
 A malformed or out-of-range value in any of these variables stops the server at startup
 rather than silently disabling pruning. Setting the others while `..._MIN_FREE_PCT` is unset
 or 0 logs a warning, since pruning stays off.
+
+The pruner's unit tests need no device:
+
+```bash
+./build_metal.sh --build-metal-tests      # or: cmake --build build --target unit_tests_jit_build
+./build/test/tt_metal/unit_tests_jit_build --gtest_filter='ServerCachePruner*:CachePrune*'
+```
 
 ### Point a client at it
 
@@ -483,10 +495,15 @@ local ELF.
 | --- | --- | --- |
 | `TT_METAL_JIT_SERVER_ENDPOINT` | `localhost:9876` | Bind address. Use `0.0.0.0:9876` or a specific interface to accept remote clients — see the disclaimer. |
 | `TT_METAL_JIT_SERVER_CACHE_ROOT` | `/tmp/tt-metal-cache/` | Directory for compiled objects, ELFs, and firmware. Grows without bound unless pruning is enabled; relocate off `/tmp` when disk is tight. See §3. |
-| `TT_METAL_JIT_SERVER_CACHE_MIN_FREE_PCT` | unset (off) | Enables cache pruning: when free space on the cache filesystem drops below this percentage, delete least recently used kernels. Requires an explicit, server-only `..._CACHE_ROOT`. See §3, Cache pruning. |
-| `TT_METAL_JIT_SERVER_CACHE_TARGET_FREE_PCT` | `MIN_FREE_PCT + 10` (at most 100) | Pruning stops once free space reaches this percentage. |
-| `TT_METAL_JIT_SERVER_CACHE_MIN_IDLE_S` | `3600` | Kernels used more recently than this are never pruned. |
-| `TT_METAL_JIT_SERVER_CACHE_CHECK_INTERVAL_S` | `300` | How often to check free space. Backs off to at most 1 hour while runs free nothing. |
+
+### Server cache pruning (see §3, Cache pruning)
+
+| Variable | Meaning |
+| --- | --- |
+| `TT_METAL_JIT_SERVER_CACHE_MIN_FREE_PCT` | Enables pruning: when free space on the cache filesystem drops below this percentage, delete least recently used kernels. Unset or 0 leaves pruning off. Requires an explicit, server-only `..._CACHE_ROOT`. |
+| `TT_METAL_JIT_SERVER_CACHE_TARGET_FREE_PCT` | A run stops once free space reaches this percentage. Must not be below `..._MIN_FREE_PCT`. |
+| `TT_METAL_JIT_SERVER_CACHE_MIN_IDLE_S` | Kernels used more recently than this are never pruned. |
+| `TT_METAL_JIT_SERVER_CACHE_CHECK_INTERVAL_S` | How often to check free space. Backs off to at most an hour while runs free nothing. |
 
 ---
 
@@ -498,6 +515,7 @@ local ELF.
 | `Failed to connect to remote JIT compile server at <ep>` | Server not running, wrong port, firewall, or server bound to `localhost` while the client is remote. |
 | Compile fails with "No such file or directory" on a header or kernel source | §5a/§5b: the server does not see the same tree, or the generated source isn't on a shared filesystem. Fix the mount, or use `TT_METAL_JIT_PREPROCESS=1`. |
 | `Firmware artifact not found for build_key ...` | Server cache root was cleared after the client uploaded firmware. Restart the client (or don't clear the cache mid-run). Cache pruning never deletes firmware. |
+| `JIT server cache pruning: Cache pruning needs TT_METAL_JIT_SERVER_CACHE_ROOT ...` or `... client kernel cache ...` | Pruning is on but the cache root is unset or shared with a client cache. Set `TT_METAL_JIT_SERVER_CACHE_ROOT` to a directory only the server uses. |
 | `Cache prune: ... Could not reach N%` | The line says why. `nothing else has been idle`: everything left is firmware, PCH, or used within `..._MIN_IDLE_S`; free space elsewhere, lower the idle window, or move the cache root to a bigger disk. `could not be deleted (first error: ...)`: fix the permission or mount problem it names. |
 | `Absolute <field> is not allowed` / `must not contain '..'` | The server rejected a client-supplied path component. Expected for a malformed or mismatched client; report it if it happens in a normal run. |
 | No speedup at all | No kernel overlap, and no extra compile CPU — see §2. |
