@@ -7,6 +7,8 @@
 #include <bit>
 #include <limits>
 #include <string_view>
+#include <type_traits>
+#include <variant>
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -58,7 +60,19 @@ Tensor to_layout_impl(
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const float pad_value) {
+    const PadValue& pad_value_arg) {
+    // Numeric float view of the pad value, for the paths that pad through float (pad, host pad, bf16/fp32 tilize).
+    // A uint32 arm is an exact integer: a two's-complement word on INT32 tensors, a plain value otherwise.
+    const float pad_value = std::visit(
+        [dtype = tensor_arg.dtype()](auto v) -> float {
+            if constexpr (std::is_same_v<decltype(v), uint32_t>) {
+                if (dtype == ttnn::DataType::INT32) {
+                    return static_cast<float>(static_cast<int32_t>(v));
+                }
+            }
+            return static_cast<float>(v);
+        },
+        pad_value_arg);
     if (tensor_arg.layout() == layout) {
         if (dtype.has_value() and dtype.value() != tensor_arg.dtype()) {
             log_warning(
@@ -204,6 +218,9 @@ Tensor to_layout_impl(
                 PadValue pad_value_variant;
                 if (tensor.dtype() == ttnn::DataType::BFLOAT16 or tensor.dtype() == ttnn::DataType::FLOAT32) {
                     pad_value_variant = pad_value;
+                } else if (std::holds_alternative<uint32_t>(pad_value_arg)) {
+                    // Exact integer: INT32 takes the raw word, UINT32 the value itself.
+                    pad_value_variant = std::get<uint32_t>(pad_value_arg);
                 } else if (tensor.dtype() == ttnn::DataType::INT32) {
                     TT_FATAL(
                         pad_value >= static_cast<float>(std::numeric_limits<int32_t>::min()) &&
@@ -280,6 +297,16 @@ Tensor to_layout(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const float pad_value) {
+    return to_layout(tensor_arg, layout, dtype, memory_config, sub_core_grids, PadValue{pad_value});
+}
+
+Tensor to_layout(
+    const Tensor& tensor_arg,
+    Layout layout,
+    const std::optional<DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const PadValue& pad_value) {
     return operations::core::CMAKE_UNIQUE_NAMESPACE::to_layout_impl(
         tensor_arg, layout, dtype, memory_config, sub_core_grids, pad_value);
 }
