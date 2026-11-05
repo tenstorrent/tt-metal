@@ -1,6 +1,6 @@
 {
  "task": "P.23",
- "t": "2026-11-05T10:09:17",
+ "t": "2026-11-05T21:27:11",
  "mode": "runner",
  "prompt": "What is the capital of France? Answer in one word.",
  "expected": "Paris",
@@ -19,7 +19,7 @@
   11111
  ],
  "ok": true,
- "seconds": 826.7,
+ "seconds": 891.5,
  "prompt_len": 160,
  "boundary": 128,
  "records": 192,
