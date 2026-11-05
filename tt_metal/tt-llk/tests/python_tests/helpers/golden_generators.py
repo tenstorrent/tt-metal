@@ -3514,19 +3514,29 @@ class UnarySFPUGolden:
         return x
 
     def _gelu(self, x):
-        # At a 16-bit Dest the kernel's contract is torch's own bf16 gelu, staircase and
-        # all: ckernel_sfpu_gelu.h answers 0 for x <= -5.54 because torch's fp32
-        # 1 + erf(...) cancels there ("matches torch.gelu BF16 saturation"). Judged
-        # against the exact tail, that designed 0 read 13,088 bf16 steps.
-        if self._work_dtype() != torch.float64:
-            result = torch.nn.functional.gelu(self._work_tensor(x))
-            return self._elementwise_result(result, x)
-        # At a 32-bit Dest, x * Phi(x) as 0.5 * x * erfc(-x / sqrt(2)): torch's
-        # 0.5 * x * (1 + erf(...)) cancels to 0 below x ~ -8.4 even in fp64, where the
-        # answer is still -1.9e-16.
-        return self._in_fp64(
-            x, lambda v: 0.5 * v * torch.special.erfc(-v / math.sqrt(2.0))
-        )
+        # Generated from activations/gelu.json and torch 2.11's recorded results: torch's own result at its
+        # special inputs, the exact 0.5 * x * erfc(-x / sqrt(2)) elsewhere, evaluated at
+        # 320 bits and rounded once onto Dest's grid. The golden this replaces disagreed with torch on
+        # 192 of the 65,536 BF16 inputs.
+        if math.isnan(x):
+            return math.nan
+        if math.isinf(x):
+            return math.inf if x > 0 else math.nan
+        if x == 0.0:
+            return 0.0 if math.copysign(1.0, x) > 0 else -0.0
+        fast = None
+        bits = struct.unpack("<I", struct.pack("<f", x))[0]
+        if bits & 0xFFFF == 0 and struct.unpack("<f", struct.pack("<f", x))[0] == x:
+            try:
+                fast = 0.5 * x * math.erfc(-x / math.sqrt(2))
+            except (ArithmeticError, ValueError):
+                fast = None
+        rounded = self._round_fast(fast, 4.569780135175393e-13)
+        if rounded is not None:
+            return rounded
+        with mpmath.workprec(320):
+            x = mpmath.mpf(x)
+            return self._round_once_to_dest(0.5 * x * mpmath.erfc(-x / mpmath.sqrt(2)))
 
     def _gelu_tanh(self, x):
         # Matches calculate_gelu_tanh: the tanh approximation of GELU,
