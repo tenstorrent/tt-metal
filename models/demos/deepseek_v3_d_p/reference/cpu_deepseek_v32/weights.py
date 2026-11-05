@@ -236,13 +236,13 @@ def _read_safetensors_subset(f, keys) -> dict:
     return out
 
 
-def extract_layer_attention(repo: str, layer: int, token: str = None, local_files_only: bool = False, fs=None):
+def extract_layer_attention(repo: str, layer: int, token: str = None, local_files_only: bool = False):
     """Fetch ONLY ``layer``'s attention (MLA + indexer) tensors from ``repo`` into one small local safetensors file.
 
     Range-reads each tensor's bytes from the remote shards (safetensors headers carry byte offsets), so a
     multi-TB checkpoint whose shards are tens of GB each (Kimi-K3.1: 96 shards) costs only the layer's
     attention bytes (~0.5 GB for a K3.1 DSA layer). Cached under the HF cache, per checkpoint revision;
-    returns the local path. ``fs`` overrides the remote filesystem (tests).
+    returns the local path.
     """
     import json
     import os
@@ -273,13 +273,13 @@ def extract_layer_attention(repo: str, layer: int, token: str = None, local_file
     if not any(k.endswith("self_attn.q_a_proj.weight") for k in found):
         raise ValueError(f"layer {layer} of {repo} has no MLA attention tensors (a non-MLA layer, e.g. KDA?)")
 
-    fs = fs or HfFileSystem(token=token)
+    fs = HfFileSystem(token=token)
     tensors = {}
     logger.info(f"Range-reading {len(found)} layer-{layer} attention tensors of {repo} from {len(by_shard)} shard(s)")
     for shard, keys in sorted(by_shard.items()):
         # Pinned to the index's revision, so a repo update mid-extract cannot mix revisions under one cache key.
         # Buffered random access (block_size=0 would stream and could not seek).
-        with fs.open(f"{repo}@{revision}/{shard}" if isinstance(fs, HfFileSystem) else shard, "rb") as f:
+        with fs.open(f"{repo}@{revision}/{shard}", "rb") as f:
             tensors.update(_read_safetensors_subset(f, keys))
     out.parent.mkdir(parents=True, exist_ok=True)
     # A unique temp file per writer + atomic replace: concurrent extractors never expose a partial file and
