@@ -26,16 +26,16 @@ void bind_sort_operation(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): The input tensor to be sorted.
-
-        Keyword Arguments:
             dim (int, optional): The dimension along which to sort. Defaults to `-1` (last dimension).
             descending (bool, optional): If `True`, sorts in descending order. Defaults to `False`.
             stable (bool, optional): If `True`, ensures the original order of equal elements is preserved. Defaults to `False`. With `stable=False` the returned indices are a valid permutation (no duplicates inside tie groups, no out-of-range indices), but which of several equal elements comes first is unspecified. Known exception: on the single-core path (sort dimension padded to at most 2048), an input containing the padding value (`-inf` descending / `+inf` ascending, or `0` / `65535` for `uint16`) can still emit padding indices past the logical row. `float32` inputs have `-0.0` canonicalized to `+0.0` in the returned values with `stable=True` on every factory (the two zeros form one tie class, ordered by index as in PyTorch), and with `stable=False` on the cross-core path and on padded multi-core DRAM sorts; bit-exact consumers of signed zeros (`copysign`, `1/x`, `signbit`) see `+0.0` there.
+
+        Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
-            out (tuple of ttnn.Tensor, optional): Preallocated output tensors for the sorted values and indices. Defaults to `None`. The index tensor must be of type uint16 or uint32.
+            out (Tuple[ttnn.Tensor, ttnn.Tensor], optional): Preallocated output tensors for the sorted values and indices. Defaults to `None`. The index tensor must be UINT32 for FLOAT32 and UINT16 inputs, and UINT16 or UINT32 for BFLOAT16 inputs.
 
         Returns:
-            List of ttnn.Tensor: A list containing two tensors: The first tensor contains the sorted values, the second tensor contains the indices of the original elements in the sorted order.
+            List[ttnn.Tensor]: A list containing two tensors: The first tensor contains the sorted values, the second tensor contains the indices of the original elements in the sorted order.
 
         Note:
 
@@ -63,13 +63,14 @@ void bind_sort_operation(nb::module_& mod) {
                 * - UINT16, UINT32
                   - TILE, ROW_MAJOR
 
-            NaN input is unsupported (undefined ordering) for BFLOAT16: the bfloat16 datapath
-            canonicalizes NaN to same-sign infinity before comparing, so NaN placement deviates
-            from torch.sort's NaN-last ordering. Mask or replace NaNs before sorting.
+            NaN input is unsupported (undefined ordering). The bfloat16 datapath canonicalizes NaN
+            to same-sign infinity before comparing, and FLOAT32 orders NaN by sign, so NaN placement
+            deviates from torch.sort, which treats NaN as larger than any number. Mask or replace
+            NaNs before sorting.
 
         Memory Support:
             - Interleaved: DRAM and L1
-            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED (DRAM and L1)
+            - Sharded: HEIGHT_SHARDED and WIDTH_SHARDED in DRAM and L1; BLOCK_SHARDED in L1 only
     )doc";
 
     ttnn::bind_function<"sort">(
