@@ -336,6 +336,49 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::ValuesIn(::test_utils::kMxDataTypes),
     ::test_utils::dtype_param_name);
 
+// BFLOAT2_B has one magnitude bit per element, so like MXINT2 it can't round-trip a ramp. 0, 1 and -1 are
+// exact: every face row that holds a nonzero value gets a shared exponent of 2^0.
+TEST(Bfp2VectorConversionTest, InvalidLayout) {
+    Shape shape{32, 32};
+    // Block float types are only supported in TILE layout.
+    EXPECT_ANY_THROW((void)HostTensor::from_vector(
+        std::vector<float>(shape.volume()), get_tensor_spec(shape, DataType::BFLOAT2_B, Layout::ROW_MAJOR)));
+}
+
+TEST(Bfp2VectorConversionTest, Roundtrip) {
+    Shape shape{32, 32};
+    std::vector<float> input = make_mx_exact_data(shape.volume());
+
+    auto tensor = HostTensor::from_vector(input, get_tensor_spec(shape, DataType::BFLOAT2_B, Layout::TILE));
+
+    EXPECT_THAT(tensor.logical_shape(), Eq(shape));
+    EXPECT_THAT(tensor.dtype(), Eq(DataType::BFLOAT2_B));
+    EXPECT_THAT(tensor.to_vector<float>(), Pointwise(Eq(), input));
+}
+
+TEST(Bfp2VectorConversionTest, RoundtripWithPadding) {
+    Shape shape{14, 47};
+    std::vector<float> input = make_mx_exact_data(shape.volume());
+
+    auto tensor = HostTensor::from_vector(input, get_tensor_spec(shape, DataType::BFLOAT2_B, Layout::TILE));
+
+    EXPECT_THAT(tensor.logical_shape(), ShapeIs(14, 47));
+    EXPECT_THAT(tensor.padded_shape(), ShapeIs(32, 64));
+    EXPECT_THAT(tensor.to_vector<float>(), Pointwise(Eq(), input));
+}
+
+TEST(Bfp2VectorConversionTest, RoundtripWithPaddingAndCustomTile) {
+    Shape shape{14, 47};
+    std::vector<float> input = make_mx_exact_data(shape.volume());
+
+    TensorSpec spec(shape, TensorLayout(DataType::BFLOAT2_B, PageConfig(Layout::TILE, Tile({16, 16})), MemoryConfig{}));
+    auto tensor = HostTensor::from_vector(input, spec);
+
+    EXPECT_THAT(tensor.logical_shape(), ShapeIs(14, 47));
+    EXPECT_THAT(tensor.padded_shape(), ShapeIs(16, 48));
+    EXPECT_THAT(tensor.to_vector<float>(), Pointwise(Eq(), input));
+}
+
 using DeviceVectorConversionTest = MeshDevice1x1Fixture;
 
 TEST_F(DeviceVectorConversionTest, RoundtripWithMemoryConfig) {

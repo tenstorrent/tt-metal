@@ -116,9 +116,9 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
             (dtype == DataType::UINT32 || dtype == DataType::INT32 || dtype == DataType::FLOAT32 ||
              dtype == DataType::UINT8 || dtype == DataType::INT8 || dtype == DataType::UINT16 ||
              dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B ||
-             dtype == DataType::FP8_E4M3 || is_mx(dtype)),
-            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, INT8, BFLOAT16, BFLOAT8_B, BFLOAT4_B, FP8_E4M3, or MX dtypes "
-            "are supported on device!");
+             dtype == DataType::BFLOAT2_B || dtype == DataType::FP8_E4M3 || is_mx(dtype)),
+            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, INT8, BFLOAT16, BFLOAT8_B, BFLOAT4_B, BFLOAT2_B, FP8_E4M3, or "
+            "MX dtypes are supported on device!");
     };
     auto supported_layout = [&dtype, &layout]() {
         switch (dtype) {
@@ -131,7 +131,8 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
             case DataType::BFLOAT16: break;
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B:
-                TT_FATAL(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
+            case DataType::BFLOAT2_B:
+                TT_FATAL(layout == Layout::TILE, "Only TILE layout is supported for {} dtype!", dtype);
                 break;
             case DataType::MXFP8_E4M3:
             case DataType::MXFP8_E5M2:
@@ -157,8 +158,8 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
             default:
                 TT_FATAL(
                     false,
-                    "Only UINT32, INT32, FLOAT32, UINT16, UINT8, INT8, BFLOAT16, BFLOAT8_B, BFLOAT4_B, or FP8_E4M3 "
-                    "dtypes are "
+                    "Only UINT32, INT32, FLOAT32, UINT16, UINT8, INT8, BFLOAT16, BFLOAT8_B, BFLOAT4_B, BFLOAT2_B, or "
+                    "FP8_E4M3 dtypes are "
                     "supported on device!");
                 break;
         }
@@ -183,6 +184,12 @@ TensorSpec::TensorSpec(tt::tt_metal::Shape logical_shape, TensorLayout tensor_la
     auto shard_grid_fit_error = CMAKE_UNIQUE_NAMESPACE::get_shape_fits_shard_grid_error(tensor_layout_, logical_shape_);
     TT_FATAL(!shard_grid_fit_error.has_value(), "{}", shard_grid_fit_error);
     CMAKE_UNIQUE_NAMESPACE::validate_dtype_and_layout(data_type(), layout());
+    // The BFP2 unpacker packs 16 two-bit values per dword and assumes 16 elements per face row; a narrower
+    // face would write past the end of the unpacked float buffer.
+    TT_FATAL(
+        data_type() != DataType::BFLOAT2_B || tile().get_face_shape()[1] == 16,
+        "BFLOAT2_B requires a face width of 16, got {}",
+        tile().get_face_shape()[1]);
     populate_sharding_specs();
 }
 

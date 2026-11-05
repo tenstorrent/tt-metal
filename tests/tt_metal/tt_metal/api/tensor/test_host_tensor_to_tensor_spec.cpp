@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat2.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
@@ -102,6 +103,20 @@ std::pair<UnpackedBfp, PackedBfp> generate_float_to_bfp4_dataset(const Shape& sh
     auto floats = make_bfp_data(shape, tile);
     auto packed =
         pack_as_bfp4_tiles(ttsl::make_const_span(floats), /*row_major_input=*/false, /*is_exp_a=*/false, tile);
+    return {std::move(floats), std::move(packed)};
+}
+
+std::pair<PackedBfp, UnpackedBfp> generate_bfp2_dataset(const Shape& shape, const Tile& tile) {
+    const auto src = make_bfp_data(shape, tile);
+    auto packed = pack_as_bfp2_tiles(ttsl::make_const_span(src), /*row_major_input=*/true, /*is_exp_a=*/false, tile);
+    auto unpacked = unpack_bfp2_tiles_into_float_vec(packed, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    return {std::move(packed), std::move(unpacked)};
+}
+
+std::pair<UnpackedBfp, PackedBfp> generate_float_to_bfp2_dataset(const Shape& shape, const Tile& tile) {
+    auto floats = make_bfp_data(shape, tile);
+    auto packed =
+        pack_as_bfp2_tiles(ttsl::make_const_span(floats), /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     return {std::move(floats), std::move(packed)};
 }
 
@@ -806,6 +821,94 @@ INSTANTIATE_TEST_SUITE_P(
     HostTensorToTensorSpecMx,
     ::testing::ValuesIn(::test_utils::kMxDataTypes),
     ::test_utils::dtype_param_name);
+
+TEST(HostTensorToTensorSpec, Float32TileToBfp2ValueCheck) {
+    const Shape shape{32, 32};
+    const auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    const auto alignment = Alignment({32, 32});
+    const auto tile = Tile({16, 16});
+    const auto& [floats, packed_golden] = CMAKE_UNIQUE_NAMESPACE::generate_float_to_bfp2_dataset(shape, tile);
+
+    auto src_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto dest_spec =
+        TensorSpec(shape, TensorLayout(DataType::BFLOAT2_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(floats, src_spec);
+
+    auto result = host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, /*pad_value=*/0.f);
+
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), dest_spec));
+    EXPECT_EQ(result.dtype(), DataType::BFLOAT2_B);
+    EXPECT_EQ(result.layout(), Layout::TILE);
+    EXPECT_EQ(result.tensor_spec().tile(), tile);
+    EXPECT_THAT(host_buffer::get_as<uint32_t>(result), Pointwise(Eq(), packed_golden));
+    CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(result);
+}
+
+TEST(HostTensorToTensorSpec, Bfp2TileToFloat32RowMajorValueCheck) {
+    const Shape shape{32, 32};
+    const auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    const auto alignment = Alignment({32, 32});
+    const auto tile = Tile({16, 16});
+    const auto& [packed, unpacked_golden] = CMAKE_UNIQUE_NAMESPACE::generate_bfp2_dataset(shape, tile);
+
+    auto src_spec =
+        TensorSpec(shape, TensorLayout(DataType::BFLOAT2_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto dest_spec = TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
+    auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(packed, src_spec);
+
+    auto result = to_tensor_spec<float>(source, dest_spec);
+
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), dest_spec));
+    EXPECT_EQ(result.dtype(), DataType::FLOAT32);
+    EXPECT_EQ(result.layout(), Layout::ROW_MAJOR);
+    CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(result);
+
+    // unpacked_golden is tile-major; convert to RM logical for comparison.
+    auto rm_golden = CMAKE_UNIQUE_NAMESPACE::untilize_nfaces(
+        src_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_golden));
+    EXPECT_THAT(result.to_vector<float>(), Pointwise(Eq(), rm_golden));
+}
+
+// Ternary data is exact in BFLOAT2_B, so the round trip through the packed tiles compares exactly.
+TEST(HostTensorToTensorSpec, RowMajorToBfp2ChangesLayoutAndPreservesTile) {
+    const Shape shape{32, 32};
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_mx_exact_data(shape.volume());
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto alignment = Alignment({32, 32});
+    auto tile = Tile({16, 16});
+
+    auto src_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+    auto dest_spec =
+        TensorSpec(shape, TensorLayout(DataType::BFLOAT2_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto source = HostTensor::from_vector<float>(data, src_spec);
+
+    auto result = host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, /*pad_value=*/0.f);
+
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), dest_spec));
+    EXPECT_EQ(result.layout(), Layout::TILE);
+    EXPECT_EQ(result.dtype(), DataType::BFLOAT2_B);
+    EXPECT_EQ(result.tensor_spec().tile(), tile);
+    CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(result);
+
+    auto unpacked_data = unpack_bfp2_tiles_into_float_vec(
+        host_buffer::get_as<uint32_t>(result), /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    auto rm_data =
+        CMAKE_UNIQUE_NAMESPACE::untilize_nfaces(dest_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_data));
+    EXPECT_THAT(rm_data, Pointwise(Eq(), data));
+}
+
+TEST(HostTensorToTensorSpec, Bfp2StagingRequiresFloatPad) {
+    const Shape shape{32, 32};
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
+    auto src_spec = CMAKE_UNIQUE_NAMESPACE::make_tile_spec(shape, DataType::FLOAT32, Tile({16, 16}));
+    auto dest_spec = CMAKE_UNIQUE_NAMESPACE::make_tile_spec(shape, DataType::BFLOAT2_B, Tile({16, 16}));
+
+    auto source = HostTensor::from_vector<float>(data, src_spec);
+    EXPECT_ANY_THROW(host_tensor_to_tensor_spec_with_pad_value<bfloat16>(source, dest_spec, bfloat16(0.f)));
+    EXPECT_NO_THROW(host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, 0.f));
+}
 
 }  // namespace
 }  // namespace tt::tt_metal

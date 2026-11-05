@@ -395,6 +395,7 @@ uint32_t Tensor::element_size() const {
         case DataType::INT8: return sizeof(int8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B:
         case DataType::MXFP8_E4M3:
         case DataType::MXFP8_E5M2:
         case DataType::MXFP6_E2M3:

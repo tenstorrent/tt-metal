@@ -232,13 +232,32 @@ def test_typecast_subcore_grid_large_tensor(device, shape, sub_core_grid):
                 ]
             ),
         ),
+        (
+            torch.Size([1, 1, 1024, 2048]),
+            ttnn.bfloat2_b,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 6))]),
+        ),
+        (
+            torch.Size([1, 4, 2048, 2048]),
+            ttnn.bfloat2_b,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+                ]
+            ),
+        ),
     ],
 )
 def test_typecast_bfloat_subcore_grid_large_tensor(device, shape, output_dtype, sub_core_grid):
-    """Regression test: bfloat16 -> bfloat8_b/bfloat4_b typecast with sub_core_grids on large tensors."""
+    """Regression test: bfloat16 -> block float typecast with sub_core_grids on large tensors."""
     torch.manual_seed(0)
 
-    in_data = torch.randn(shape, dtype=torch.bfloat16)
+    if output_dtype == ttnn.bfloat2_b:
+        # BFLOAT2_B holds {-1, 0, +1} times a power of two exactly, so the round trip is exact.
+        in_data = torch.randint(-1, 2, shape).to(torch.bfloat16)
+    else:
+        in_data = torch.randn(shape, dtype=torch.bfloat16)
     input_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     input_tensor = ttnn.from_torch(

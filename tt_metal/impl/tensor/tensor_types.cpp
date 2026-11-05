@@ -27,6 +27,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_ty
         case DataType::MXINT8: return os << "DataType::MXINT8";
         case DataType::MXINT4: return os << "DataType::MXINT4";
         case DataType::MXINT2: return os << "DataType::MXINT2";
+        case DataType::BFLOAT2_B: return os << "DataType::BFLOAT2_B";
         case DataType::INVALID:
         default: return os << "Invalid";
     }
@@ -84,6 +85,7 @@ bool is_floating_point(DataType dtype) {
         case DataType::FLOAT32:
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B:
         case DataType::FP8_E4M3:
         // MXINT elements are integers, but every MX value carries a block exponent and the hardware
         // computes on them as Float16_b, so all MX formats count as floating point.
@@ -102,7 +104,8 @@ bool is_floating_point(DataType dtype) {
 bool is_block_float(DataType dtype) {
     switch (dtype) {
         case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: return true;
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B: return true;
         default: return false;
     }
 }
@@ -126,6 +129,7 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
         case tt::tt_metal::DataType::BFLOAT16: return tt::DataFormat::Float16_b;
         case tt::tt_metal::DataType::BFLOAT8_B: return tt::DataFormat::Bfp8_b;
         case tt::tt_metal::DataType::BFLOAT4_B: return tt::DataFormat::Bfp4_b;
+        case tt::tt_metal::DataType::BFLOAT2_B: return tt::DataFormat::Bfp2_b;
         case tt::tt_metal::DataType::FLOAT32: return tt::DataFormat::Float32;
         case tt::tt_metal::DataType::INT32: return tt::DataFormat::Int32;
         case tt::tt_metal::DataType::INT8: return tt::DataFormat::Int8;
@@ -156,6 +160,7 @@ tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataforma
         case tt::DataFormat::Float16_b: return tt::tt_metal::DataType::BFLOAT16;
         case tt::DataFormat::Bfp8_b: return tt::tt_metal::DataType::BFLOAT8_B;
         case tt::DataFormat::Bfp4_b: return tt::tt_metal::DataType::BFLOAT4_B;
+        case tt::DataFormat::Bfp2_b: return tt::tt_metal::DataType::BFLOAT2_B;
         case tt::DataFormat::Float32: return tt::tt_metal::DataType::FLOAT32;
         case tt::DataFormat::Int32: return tt::tt_metal::DataType::INT32;
         case tt::DataFormat::Int8: return tt::tt_metal::DataType::INT8;
@@ -204,6 +209,7 @@ auto fmt::formatter<tt::tt_metal::DataType>::format(tt::tt_metal::DataType dt, f
         case tt::tt_metal::DataType::MXINT8: name = "DataType::MXINT8"; break;
         case tt::tt_metal::DataType::MXINT4: name = "DataType::MXINT4"; break;
         case tt::tt_metal::DataType::MXINT2: name = "DataType::MXINT2"; break;
+        case tt::tt_metal::DataType::BFLOAT2_B: name = "DataType::BFLOAT2_B"; break;
         case tt::tt_metal::DataType::INVALID:
         default: name = "Invalid"; break;
     }

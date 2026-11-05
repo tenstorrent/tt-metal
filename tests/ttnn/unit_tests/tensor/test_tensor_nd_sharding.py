@@ -64,17 +64,21 @@ from tests.ttnn.utils_for_testing import (
         ttnn.bfloat16,
         ttnn.bfloat8_b,
         ttnn.bfloat4_b,
+        ttnn.bfloat2_b,
     ],
 )
 def test_tensor_nd_sharding_loopback(tensor_shape, shard_shape, layout, buffer_type, tt_dtype, device):
     torch.manual_seed(0)
 
-    if tt_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
+    if tt_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat2_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("{} is only valid for ttnn.TILE_LAYOUT!".format(tt_dtype))
 
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
 
-    if dtype in TORCH_INTEGER_DTYPES:
+    if tt_dtype == ttnn.bfloat2_b:
+        # BFLOAT2_B holds {-1, 0, +1} times a power of two exactly.
+        py_tensor = torch.randint(-1, 2, tensor_shape).to(dtype)
+    elif dtype in TORCH_INTEGER_DTYPES:
         py_tensor = torch.randint(torch.iinfo(dtype).min, torch.iinfo(dtype).max, tensor_shape, dtype=dtype)
     else:
         py_tensor = torch.rand(tensor_shape, dtype=dtype)

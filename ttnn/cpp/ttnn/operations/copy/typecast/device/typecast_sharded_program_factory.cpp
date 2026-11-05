@@ -61,7 +61,8 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
     // Use dimension-based tile count if either input or output is block format
     bool is_block_format =
         (input.dtype() == DataType::BFLOAT8_B || input.dtype() == DataType::BFLOAT4_B ||
-         output.dtype() == DataType::BFLOAT8_B || output.dtype() == DataType::BFLOAT4_B);
+         input.dtype() == DataType::BFLOAT2_B || output.dtype() == DataType::BFLOAT8_B ||
+         output.dtype() == DataType::BFLOAT4_B || output.dtype() == DataType::BFLOAT2_B);
 
     if (is_block_format) {
         // For block formats, calculate tile count based on element dimensions

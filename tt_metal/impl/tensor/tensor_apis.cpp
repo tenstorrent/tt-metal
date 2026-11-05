@@ -21,6 +21,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/bfloat2.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
@@ -322,6 +323,11 @@ HostTensor to_row_major_layout(const HostTensor& tensor) {
             // MX formats are TILE-only and, unlike BFP, have no legacy callers relying on a silent no-op.
             TT_THROW("to_layout: {} supports TILE layout only; convert to a non-MX dtype first", tensor.dtype());
             return tensor;
+        } else if constexpr (std::is_same_v<T, tensor_impl::bfloat2_b>) {
+            // BFLOAT2_B is TILE-only and, like MX and unlike BFLOAT8_B/BFLOAT4_B, has no legacy callers relying on
+            // the silent no-op below.
+            TT_THROW("to_layout: {} supports TILE layout only; convert it to another dtype first", tensor.dtype());
+            return tensor;
         } else if constexpr (
             std::is_same_v<T, tensor_impl::bfloat4_b> || std::is_same_v<T, tensor_impl::bfloat8_b> ||
             std::is_same_v<T, float8_e4m3>) {
@@ -351,8 +357,8 @@ HostTensor to_tile_layout(const HostTensor& tensor, const Tile& tile) {
     }
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         if constexpr (
-            std::is_same_v<T, tensor_impl::bfloat4_b> || std::is_same_v<T, tensor_impl::bfloat8_b> ||
-            std::is_same_v<T, tensor_impl::mx_tiles>) {
+            std::is_same_v<T, tensor_impl::bfloat2_b> || std::is_same_v<T, tensor_impl::bfloat4_b> ||
+            std::is_same_v<T, tensor_impl::bfloat8_b> || std::is_same_v<T, tensor_impl::mx_tiles>) {
             // Block-float and MX formats are natively TILE — no conversion needed.
             return tensor;
         } else {
@@ -376,11 +382,12 @@ HostTensor to_layout(const HostTensor& tensor, Layout target_layout) {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
+struct bfloat2_tag {};
 struct bfloat4_tag {};
 struct bfloat8_tag {};
 struct mx_tag {};  // any MX format; the concrete one is output_spec.data_type()
 
-// Preprocess the storage to unpack the bfloat8/4 or MX tiles into float32.
+// Preprocess the storage to unpack the bfloat8/4/2 or MX tiles into float32.
 tt::tt_metal::DistributedHostBuffer preprocess_buffers(
     const tt::tt_metal::DistributedHostBuffer& input_storage,
     const DataType input_dtype,
@@ -399,6 +406,15 @@ tt::tt_metal::DistributedHostBuffer preprocess_buffers(
         return input_storage.transform([&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const uint32_t> uint32_data = buffer.view_as<const uint32_t>();
             auto float_unpacked_data = unpack_bfp4_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a, tile);
+            return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
+        });
+    }
+    if (input_dtype == DataType::BFLOAT2_B) {
+        return input_storage.transform([&](const tt::tt_metal::HostBuffer& buffer) {
+            ttsl::Span<const uint32_t> uint32_data = buffer.view_as<const uint32_t>();
+            // bfloat2.hpp also declares tt::tt_metal forwarding overloads; qualify to pick the global one.
+            auto float_unpacked_data =
+                ::unpack_bfp2_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a, tile);
             return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
         });
     }
@@ -441,7 +457,9 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
             TT_THROW("to_dtype: FP8_E4M3 cross-type conversion is only supported to/from FLOAT32");
             return input_buffer;  // unreachable, satisfies return type
         }
-    } else if constexpr (std::is_same_v<DstType, bfloat4_tag> || std::is_same_v<DstType, bfloat8_tag>) {
+    } else if constexpr (
+        std::is_same_v<DstType, bfloat2_tag> || std::is_same_v<DstType, bfloat4_tag> ||
+        std::is_same_v<DstType, bfloat8_tag>) {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
             std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
@@ -458,6 +476,8 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
                     return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, output_spec.tile());
                 } else if constexpr (std::is_same_v<DstType, bfloat4_tag>) {
                     return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, output_spec.tile());
+                } else if constexpr (std::is_same_v<DstType, bfloat2_tag>) {
+                    return ::pack_as_bfp2_tiles(data, row_major_input, is_exp_a, output_spec.tile());
                 } else {
                     static_assert(ttsl::concepts::always_false_v<DstType>, "Unsupported data type");
                 }
@@ -534,9 +554,10 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
     auto input_buffer =
         CMAKE_UNIQUE_NAMESPACE::preprocess_buffers(input_tensor.buffer(), src_type, input_tensor.tensor_spec().tile());
 
-    const auto layout = (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B || is_mx(dtype))
-                            ? Layout::TILE
-                            : input_tensor.layout();
+    const auto layout =
+        (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT2_B || is_mx(dtype))
+            ? Layout::TILE
+            : input_tensor.layout();
 
     tt::tt_metal::PageConfig page_config(layout, input_tensor.tensor_spec().tile());
 
@@ -568,6 +589,8 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
                     return with_src_and_dst.operator()<SrcType, CMAKE_UNIQUE_NAMESPACE::bfloat4_tag>();
                 case DataType::BFLOAT8_B:
                     return with_src_and_dst.operator()<SrcType, CMAKE_UNIQUE_NAMESPACE::bfloat8_tag>();
+                case DataType::BFLOAT2_B:
+                    return with_src_and_dst.operator()<SrcType, CMAKE_UNIQUE_NAMESPACE::bfloat2_tag>();
                 case DataType::FLOAT32: return with_src_and_dst.operator()<SrcType, float>();
                 case DataType::BFLOAT16: return with_src_and_dst.operator()<SrcType, bfloat16>();
                 case DataType::UINT8: return with_src_and_dst.operator()<SrcType, uint8_t>();
@@ -591,6 +614,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
 
         switch (src_type) {
             // Block formats were unpacked to float by preprocess_buffers.
+            case DataType::BFLOAT2_B:
             case DataType::BFLOAT4_B:
             case DataType::BFLOAT8_B:
             case DataType::MXFP8_E4M3:
@@ -645,7 +669,8 @@ void validate_datatype(DataType dtype) {
     using BaseType = std::remove_cvref_t<T>;
     if constexpr (std::is_same_v<BaseType, uint32_t>) {
         TT_FATAL(
-            dtype == DataType::UINT32 or dtype == DataType::BFLOAT8_B or dtype == DataType::BFLOAT4_B or is_mx(dtype),
+            dtype == DataType::UINT32 or dtype == DataType::BFLOAT8_B or dtype == DataType::BFLOAT4_B or
+                dtype == DataType::BFLOAT2_B or is_mx(dtype),
             "Incorrect data type {}",
             dtype);
     } else if constexpr (std::is_same_v<BaseType, int32_t>) {

@@ -25,6 +25,11 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
+  # SFPLOAD with a BFP2 SrcB format is not supported by ttsim
+  # (UnsupportedFunctionality: tensix_sfpload: src_b_fmt=15)
+  - tests/ttnn/unit_tests/tensor/test_bfp2_dtype.py::test_bfp2_device_typecast_integer[integer=DataType.UINT16]
+  - tests/ttnn/unit_tests/tensor/test_bfp2_dtype.py::test_bfp2_device_typecast_uint16_matches_golden
+
 blackhole:
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py

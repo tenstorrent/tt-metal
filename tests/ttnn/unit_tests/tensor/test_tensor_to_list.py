@@ -19,7 +19,11 @@ def get_types_from_binding_framwork():
             for _, dtype in ttnn.DataType._member_map_.items()
             # skipping FP8_E4M3 for now, until it is fully supported in tt-metal
             # MX formats are Quasar-only and covered by tests/ttnn/unit_tests/tensor/test_mx_dtypes.py
-            if dtype != ttnn.DataType.INVALID and dtype != ttnn.DataType.FP8_E4M3 and not ttnn.is_mx_dtype(dtype)
+            # BFLOAT2_B is covered by tests/ttnn/unit_tests/tensor/test_bfp2_dtype.py
+            if dtype != ttnn.DataType.INVALID
+            and dtype != ttnn.DataType.FP8_E4M3
+            and dtype != ttnn.DataType.BFLOAT2_B
+            and not ttnn.is_mx_dtype(dtype)
         ]
     else:
         raise Exception(

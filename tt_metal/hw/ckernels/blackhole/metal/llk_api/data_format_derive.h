@@ -51,6 +51,8 @@ constexpr bool df_is_exp_b_format(DataFormat f) {
 // (applied inside IS_BFP_FORMAT) is a no-op for plain L1 formats -- same value as an explicit enum compare.
 constexpr bool df_is_bfp_format(DataFormat f) { return ckernel::IS_BFP_FORMAT(static_cast<std::uint32_t>(f)); }
 
+constexpr bool df_is_bfp2_format(DataFormat f) { return f == DataFormat::Bfp2_b || f == DataFormat::Bfp2; }
+
 // Keep in sync with tt::is_integer_format (common/tt_backend_api_types.cpp:59) -- BH-enum subset. NOTE the device
 // ckernel_defs.h is_int8_or_int32_format is a NARROWER set (int8/int32 only), so it is not a substitute here.
 constexpr bool df_is_integer_format(DataFormat f) {
@@ -83,6 +85,9 @@ constexpr DataFormat infer_pack_src_format(DataFormat l1_format, bool fp32_dest_
     }
 
     if (fp32_dest_acc) {
+        if (df_is_bfp2_format(l1_format)) {
+            return DataFormat::Float32;
+        }
         if (df_is_bfp_format(l1_format)) {
             // bfp8_pack_precise == false
             return df_is_exp_b_format(l1_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;
@@ -116,6 +121,9 @@ constexpr DataFormat infer_pack_src_format(DataFormat l1_format, bool fp32_dest_
     if (l1_format == DataFormat::Float32) {
         // fp32 buffer, no dest-acc: pack src is the conditional fp16a/b (here Float16_b).
         return cond;
+    }
+    if (df_is_bfp2_format(l1_format)) {
+        return df_is_exp_b_format(l1_format) ? DataFormat::Float16_b : DataFormat::Float16;
     }
     if (df_is_bfp_format(l1_format)) {
         // bfp8_pack_precise == false

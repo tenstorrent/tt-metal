@@ -92,7 +92,8 @@ enum DataType : ubyte {
     MxFp4 = 14,
     MxInt8 = 15,
     MxInt4 = 16,
-    MxInt2 = 17
+    MxInt2 = 17,
+    BFloat2B = 18
 }
 
 table RowMajorPageConfig {}

@@ -177,8 +177,8 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     if (tile_height < tt::constants::TILE_HEIGHT) {
         const DataType out_dt = operation_attributes.output_dtype;
         TT_FATAL(
-            out_dt != DataType::BFLOAT8_B && out_dt != DataType::BFLOAT4_B,
-            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
+            out_dt != DataType::BFLOAT8_B && out_dt != DataType::BFLOAT4_B && out_dt != DataType::BFLOAT2_B,
+            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B, BFLOAT4_B or BFLOAT2_B");
     }
 
     TT_FATAL(

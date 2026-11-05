@@ -252,6 +252,9 @@ DataFormat get_single_pack_src_format(
     bool is_input_or_output_float32 = data_format == DataFormat::Float32;
     bool condition_exp_float32_match_output =
         is_input_or_output_float32 && fp32_condition_exp_width == output_exp_width;
+    // Bfp2 always packs from the Dest format, as the LLK tests do: ttsim does not model a Bfp8 to Bfp2 pack.
+    const bool bfp_pack_precise =
+        bfp8_pack_precise || data_format == DataFormat::Bfp2_b || data_format == DataFormat::Bfp2;
 
     if (data_format == DataFormat::RawUInt32 || data_format == DataFormat::RawUInt16 ||
         data_format == DataFormat::RawUInt8) {
@@ -271,7 +274,7 @@ DataFormat get_single_pack_src_format(
         if (arch == tt::ARCH::QUASAR && !tt::is_integer_format(data_format)) {
             pack_src_format = DataFormat::Float32;
         } else if (is_bfp_format(data_format)) {
-            if (bfp8_pack_precise) {
+            if (bfp_pack_precise) {
                 pack_src_format = DataFormat::Float32;
             } else {
                 pack_src_format = is_exp_b_format(data_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;
@@ -323,7 +326,7 @@ DataFormat get_single_pack_src_format(
             }
             pack_src_format = unpack_conditional_dst_format;
         } else if (is_bfp_format(data_format)) {
-            if (bfp8_pack_precise) {
+            if (bfp_pack_precise) {
                 pack_src_format = is_exp_b_format(data_format) ? DataFormat::Float16_b : DataFormat::Float16;
             } else {
                 pack_src_format = is_exp_b_format(data_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;
@@ -341,7 +344,7 @@ DataFormat get_single_pack_src_format(
         DataFormat pack_src_format_tmp = data_format;
 
         if (is_bfp_format(data_format)) {
-            if (bfp8_pack_precise) {
+            if (bfp_pack_precise) {
                 pack_src_format_tmp = is_exp_b_format(data_format) ? DataFormat::Float16_b : DataFormat::Float16;
             } else {
                 pack_src_format_tmp = is_exp_b_format(data_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;

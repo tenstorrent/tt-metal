@@ -23,6 +23,7 @@ def supported_autograd_types_except(*except_types):
             ttnn.DataType.INVALID,
             ttnn.DataType.BFLOAT8_B,
             ttnn.DataType.BFLOAT4_B,
+            ttnn.DataType.BFLOAT2_B,
             ttnn.DataType.UINT8,
             ttnn.DataType.UINT16,
             ttnn.DataType.INT8,

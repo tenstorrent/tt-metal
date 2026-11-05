@@ -53,6 +53,7 @@ inline ttnn::Tensor make_zero_host_tensor(const tt::tt_metal::TensorSpec& spec) 
             return ttnn::Tensor::from_vector<uint8_t>(std::vector<uint8_t>(bytes / sizeof(uint8_t)), spec);
         case DataType::UINT16:
             return ttnn::Tensor::from_vector<uint16_t>(std::vector<uint16_t>(bytes / sizeof(uint16_t)), spec);
+        case DataType::BFLOAT2_B:
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
         case DataType::MXFP8_E4M3:

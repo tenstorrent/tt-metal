@@ -121,6 +121,24 @@ TEST(DataFormatFp8ArchGuard, Fp8E4m3PackSrcFormatPerArch) {
     EXPECT_ANY_THROW(tt::get_pack_src_formats(fp8_formats, unpack_dst, true, false, false, tt::ARCH::WORMHOLE_B0));
 }
 
+// Bfp2 outputs pack from the Dest format (Float16_b, or Float32 with fp32 dest acc) even without
+// bfp8_pack_precise; Bfp8 and Bfp4 outputs keep the Bfp8 intermediate. Host-only, no device required.
+TEST(DataFormatPackSrc, Bfp2PacksFromDestFormat) {
+    constexpr auto unpack_dst = tt::DataFormat::Float16_b;
+    for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE}) {
+        const auto pack_src = [&](tt::DataFormat format, bool fp32_dest_acc_en) {
+            const std::array<tt::DataFormat, 1> formats{format};
+            return tt::get_pack_src_formats(formats, unpack_dst, fp32_dest_acc_en, false, false, arch).at(0);
+        };
+        EXPECT_EQ(pack_src(tt::DataFormat::Bfp2_b, false), tt::DataFormat::Float16_b);
+        EXPECT_EQ(pack_src(tt::DataFormat::Bfp2_b, true), tt::DataFormat::Float32);
+        EXPECT_EQ(pack_src(tt::DataFormat::Bfp4_b, false), tt::DataFormat::Bfp8_b);
+        EXPECT_EQ(pack_src(tt::DataFormat::Bfp4_b, true), tt::DataFormat::Bfp8_b);
+        EXPECT_EQ(pack_src(tt::DataFormat::Bfp8_b, false), tt::DataFormat::Bfp8_b);
+        EXPECT_EQ(pack_src(tt::DataFormat::Bfp8_b, true), tt::DataFormat::Bfp8_b);
+    }
+}
+
 namespace {
 template <int bits, typename T>
 void check_simd_rows(tt::tt_metal::bfp_simd::Isa isa) {
