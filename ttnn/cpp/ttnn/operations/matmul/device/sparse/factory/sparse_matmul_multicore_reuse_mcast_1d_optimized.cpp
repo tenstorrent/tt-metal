@@ -37,6 +37,9 @@ using tt::tt_metal::experimental::KernelSpec;
 using tt::tt_metal::experimental::KernelSpecName;
 using tt::tt_metal::experimental::ProgramRunArgs;
 using tt::tt_metal::experimental::ProgramSpec;
+using tt::tt_metal::experimental::ScratchpadBinding;
+using tt::tt_metal::experimental::ScratchpadSpec;
+using tt::tt_metal::experimental::ScratchpadSpecName;
 using tt::tt_metal::experimental::TensorBinding;
 using tt::tt_metal::experimental::TensorParameter;
 using tt::tt_metal::experimental::TensorParamName;
@@ -148,7 +151,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     const uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
     const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
 
-    // The in1 sender/writer's own "sparsity" slot (its tensor binding, page size and dataflow buffer)
+    // The in1 sender/writer's own "sparsity" slot (its tensor binding, page size and scratchpad)
     // carries the active-group id list in indexed/gather mode -- that kernel never reads the sparsity
     // mask there, so reusing the slot avoids adding an operand to a kernel shared with the dense
     // matmul factories. The in0 sender ignores its own slot entirely in this mode, so it keeps
@@ -375,12 +378,13 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
 
     const DFBSpecName IN0_DFB{"in0"};
     const DFBSpecName IN1_DFB{"in1"};
-    const DFBSpecName SPARSITY_DFB{"sparsity"};
-    const DFBSpecName IN1_SPARSITY_DFB{"in1_sparsity"};
     const DFBSpecName OUT_DFB{"out"};
     const DFBSpecName INTERM0_DFB{"intermed0"};
     const DFBSpecName INTERM0_ALIAS_DFB{"intermed0_reload_alias"};
     const DFBSpecName BIAS_DFB{"bias"};
+
+    const ScratchpadSpecName SPARSITY_SCRATCH{"sparsity"};
+    const ScratchpadSpecName IN1_SPARSITY_SCRATCH{"in1_sparsity"};
 
     const TensorParamName IN0{"in0"};
     const TensorParamName IN1{"in1"};
@@ -442,23 +446,6 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
             .data_format_metadata = in1_data_format,
             .tile_format_metadata = in1_tile,
         },
-        // One page of the sparsity mask, staged by the in0 sender and read back by it through a raw
-        // pointer. Legacy carried no tile descriptor here: the page is a run of bf16 validity flags,
-        // not tiles.
-        DataflowBufferSpec{
-            .unique_id = SPARSITY_DFB,
-            .entry_size = sparsity_pagesize,
-            .num_entries = 1,
-            .data_format_metadata = tt::tt_metal::datatype_to_dataformat_converter(sparsity_mesh_tensor.dtype()),
-        },
-        // The in1 sender/writer's own slot; in indexed/gather mode it holds the active-group id list
-        // instead of a sparsity page, so it is sized and typed from whichever tensor that kernel reads.
-        DataflowBufferSpec{
-            .unique_id = IN1_SPARSITY_DFB,
-            .entry_size = in1_sparsity_pagesize,
-            .num_entries = 1,
-            .data_format_metadata = tt::tt_metal::datatype_to_dataformat_converter(in1_sparsity_mesh_tensor.dtype()),
-        },
         DataflowBufferSpec{
             .unique_id = OUT_DFB,
             .entry_size = output_single_tile_size,
@@ -497,6 +484,28 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
             .tile_format_metadata = bias_tile,
         });
     }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Scratchpads
+    ////////////////////////////////////////////////////////////////////////////
+    // The in0 sender and the in1 sender/writer each stage one sparsity page by NoC read and read it
+    // back themselves. No kernel exchanges FIFO credits on such a page, so each page is a
+    // kernel-private scratchpad. (A data movement kernel bound as both PRODUCER and CONSUMER of one
+    // DFB is a self-loop, which Gen2 (Quasar) rejects.) A page is a run of bf16 validity flags or
+    // uint16 group ids, not tiles, so it carries no format metadata.
+    Group<ScratchpadSpec> scratchpads = {
+        // One page of the sparsity mask, read by the in0 sender.
+        ScratchpadSpec{
+            .unique_id = SPARSITY_SCRATCH,
+            .size_per_node = sparsity_pagesize,
+        },
+        // The in1 sender/writer's own page; in indexed/gather mode it holds the active-group id list
+        // instead of a sparsity page, so it is sized from whichever tensor that kernel reads.
+        ScratchpadSpec{
+            .unique_id = IN1_SPARSITY_SCRATCH,
+            .size_per_node = in1_sparsity_pagesize,
+        },
+    };
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Defines
@@ -589,18 +598,11 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                     .accessor_name = "in0",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                // The sparsity page is staged and consumed by this one kernel, so it carries both
-                // endpoints itself.
-                DFBBinding{
-                    .dfb_spec_name = SPARSITY_DFB,
-                    .accessor_name = "sparsity",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = SPARSITY_DFB,
-                    .accessor_name = "sparsity",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
+            },
+        // The sparsity page is staged and read back by this one kernel.
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = SPARSITY_SCRATCH, .accessor_name = "sparsity"},
             },
         .tensor_bindings =
             {
@@ -703,18 +705,12 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                     .accessor_name = "out",
                     .endpoint_type = DFBEndpointType::CONSUMER,
                 },
-                // This kernel's own sparsity slot -- the active-group id list in indexed/gather mode,
-                // the sparsity mask otherwise. Staged and read back here alone, so both endpoints.
-                DFBBinding{
-                    .dfb_spec_name = IN1_SPARSITY_DFB,
-                    .accessor_name = "sparsity",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = IN1_SPARSITY_DFB,
-                    .accessor_name = "sparsity",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
+            },
+        // This kernel's own sparsity page: the active-group id list in indexed/gather mode, the
+        // sparsity mask otherwise. Staged and read back here alone.
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = IN1_SPARSITY_SCRATCH, .accessor_name = "sparsity"},
             },
         .tensor_bindings =
             {
@@ -1059,6 +1055,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
         .name = "sparse_matmul_multi_core_reuse_mcast_1d",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = std::move(scratchpads),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
     };
@@ -1067,9 +1064,11 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     if (has_in0_receiver_kernel) {
         mcast_kernels.push_back(IN0_RECEIVER);
     }
+    // Quasar has a single NoC: the multicast helper accepts only NOC_0 there, and Quasar data movement
+    // kernels are built for NOC_0 (their config_1xx NOC applies to WH/BH only).
     ttnn::kernel_lib::host::Mcast in0_mcast(
         *device,
-        {.noc = in0_noc, .handshake_cores = all_cores},
+        {.noc = (device->arch() == tt::ARCH::QUASAR) ? tt_metal::NOC::NOC_0 : in0_noc, .handshake_cores = all_cores},
         CoreRangeSet(in0_mcast_receiver_cores_bounding_box),
         in0_mcast_receiver_num_cores,
         ttnn::kernel_lib::host::McastExplicitFixedSenderConfig{.senders_per_group = {start_core}});
