@@ -103,7 +103,9 @@ public:
         // relaxation so HI20/LO12 stay paired/adjacent. The assembler still emits R_RISCV_RELAX relocs
         // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
         flags += "-Wl,--no-relax ";
-        if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
+        // Linked or not, a Quasar Ethernet core runs the shared CCE image on the MEM_IERISC_* map.
+        if (params.core_type == HalProgrammableCoreType::IDLE_ETH ||
+            params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             const DeviceAddr text = MEM_IERISC_FIRMWARE_BASE;
             const DeviceAddr data = MEM_IERISC_GLOBAL_BASE;
             const DeviceAddr tls = MEM_IERISC_LOCAL_BASE;
