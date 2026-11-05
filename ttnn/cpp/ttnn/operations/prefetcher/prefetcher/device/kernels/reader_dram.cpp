@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
@@ -61,15 +62,14 @@ void kernel_main() {
     const uint32_t* partial_block_page_sizes = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     const uint32_t* partial_block_num_pages = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
 
-    // Zero the zero CB once, from MEM_ZEROS, before any block is staged.
+    // Zero the zero CB once, before any block is staged.
     uint32_t zero_cb_addr = 0;
     if constexpr (any_tensor_padded) {
         zero_cb_addr = get_write_ptr(zero_cb_id);
-        constexpr uint32_t zero_init_trid = 1;  // drained here, before block 0 uses it again
-        noc_async_read_set_trid(zero_init_trid);
-        zero_fill_with_trid<skip_ptr_update, MEM_ZEROS_SIZE>(
-            MEM_ZEROS_BASE, zero_cb_addr, zero_cb_size, vc, zero_init_trid);
-        noc_async_read_barrier_with_trid(zero_init_trid);
+        Noc noc;
+        CircularBuffer zero_cb(zero_cb_id);
+        noc.async_write_zeros(zero_cb, zero_cb_size);
+        noc.write_zeros_l1_barrier();
     }
 
     uint32_t l1_buffer_start_addr = get_write_ptr(cb_id);
