@@ -352,3 +352,6 @@ foreach(_case Unharvested Harvested Disagreement)
                 "\\[  FAILED  \\]"
     )
 endforeach()
+
+# Experimental telemetry image and its driver.
+add_subdirectory(telemetry)
