@@ -2765,7 +2765,8 @@ void update_program_dispatch_commands(
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
     const ProgramDispatchMetadata& dispatch_md,
-    ProgramBinaryStatus program_binary_status) {
+    ProgramBinaryStatus program_binary_status,
+    bool record_program_metadata) {
     TT_ASSERT(cached_program_command_sequence.ctx != nullptr);
     MetalContext& metal_ctx = *cached_program_command_sequence.ctx;
 
@@ -2808,7 +2809,9 @@ void update_program_dispatch_commands(
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         program_host_id_offset, &runtime_id, sizeof(runtime_id));
 
-    RecordProgramMetadata(program.get_context_id(), program);
+    if (record_program_metadata) {
+        RecordProgramMetadata(program.get_context_id(), program);
+    }
 
     if (hal.get_programmable_core_type_count() >= 2) {
         cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(

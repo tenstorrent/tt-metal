@@ -534,7 +534,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     const bool tag_tracy_zones = !tt::tt_metal::getDeviceProfilerState(mesh_device_->impl().metal_env());
 #endif
 
-    // TT_METAL_WORKLOAD_FAN_OUT=1: update every program first, then write all devices in one parallel_for.
+    // TT_METAL_WORKLOAD_FAN_OUT=1: write all devices in one parallel_for. A program on one device is updated by its
+    // worker; the others are updated here first.
     static const bool fan_out = tt::parse_env("TT_METAL_WORKLOAD_FAN_OUT", false);
     const bool fan_out_writes = fan_out && mesh_device_->impl().get_devices().size() > 1;
     program_writes_.clear();
@@ -555,18 +556,25 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             "use_prefetcher_cache: {}, program_cmd_seq.prefetcher_cache_used: {}",
             use_prefetcher_cache,
             program_cmd_seq.prefetcher_cache_used);
-        program_dispatch::update_program_dispatch_commands(
-            program.impl(),
-            program_cmd_seq,
-            mcast_launch_msg_wptr,
-            expected_num_workers_completed,
-            dispatch_metadata,
-            program_binary_status);
-
         const auto& local_devices = mesh_device_->impl().get_local_devices(device_range);
+        const bool update_on_worker = fan_out_writes && local_devices.size() == 1;
+        if (!update_on_worker) {
+            program_dispatch::update_program_dispatch_commands(
+                program.impl(),
+                program_cmd_seq,
+                mcast_launch_msg_wptr,
+                expected_num_workers_completed,
+                dispatch_metadata,
+                program_binary_status);
+        } else {
+            // Recorded here: the recording takes a process-wide mutex the workers would queue on.
+            RecordProgramMetadata(program.impl().get_context_id(), program.impl());
+        }
+
         sub_device_recorder.record(local_devices, program.get_runtime_id(), sub_device_id);
         if (fan_out_writes) {
-            ProgramWrite write{.program_cmd_seq = &program_cmd_seq};
+            ProgramWrite write{
+                .program_cmd_seq = &program_cmd_seq, .program = update_on_worker ? &program.impl() : nullptr};
             const auto size = program_cmd_seq.get_one_shot_fetch_size(
                 dispatch_metadata.stall_first, dispatch_metadata.stall_before_program, true);
             if (local_devices.size() > 1 &&
@@ -611,9 +619,26 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         const bool stall_first = dispatch_metadata.stall_first;
         const bool stall_before_program = dispatch_metadata.stall_before_program;
         dispatch_thread_pool_->parallel_for(
-            program_write_device_ids_, [this, stall_first, stall_before_program](size_t i) {
+            program_write_device_ids_,
+            [this,
+             stall_first,
+             stall_before_program,
+             mcast_launch_msg_wptr,
+             expected_num_workers_completed,
+             program_binary_status,
+             &dispatch_metadata](size_t i) {
                 const auto& write = program_writes_[i];
                 auto& manager = write.device->sysmem_manager();
+                if (write.program != nullptr) {
+                    program_dispatch::update_program_dispatch_commands(
+                        *write.program,
+                        *write.program_cmd_seq,
+                        mcast_launch_msg_wptr,
+                        expected_num_workers_completed,
+                        dispatch_metadata,
+                        program_binary_status,
+                        /*record_program_metadata=*/false);
+                }
                 if (write.packed != nullptr) {
                     manager.issue_queue_reserve(write.packed_size, id_);
                     manager.cq_write(write.packed->data(), write.packed_size, manager.get_issue_queue_write_ptr(id_));
