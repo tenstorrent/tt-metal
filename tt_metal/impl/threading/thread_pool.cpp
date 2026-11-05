@@ -509,7 +509,9 @@ public:
 
     // Runs all calls of participant `node` in order, so that calls for one worker never overlap.
     void run_if_unclaimed(size_t node) noexcept {
-        if (claims_[node].use.exchange(use_, std::memory_order_acq_rel) == use_) {
+        // A read first: the caller's sweep would otherwise pay one serialized exchange per participant a worker holds.
+        if (claims_[node].use.load(std::memory_order_relaxed) == use_ ||
+            claims_[node].use.exchange(use_, std::memory_order_acq_rel) == use_) {
             return;
         }
         for (uint32_t call = first_call_[node]; call != NO_INDEX; call = next_call_[call]) {
