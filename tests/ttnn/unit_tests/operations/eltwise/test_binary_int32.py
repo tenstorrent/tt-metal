@@ -1876,6 +1876,64 @@ def test_binary_remainder_int32_float_scalar_row_major_sharded_output_dtype(outp
         ttnn.remainder(input_tensor, 1.5, sub_core_grids=other_cores)
 
 
+def _nd_sharded_int32_input(torch_input, layout, cores, device):
+    memory_config = ttnn.MemoryConfig(
+        ttnn.BufferType.L1,
+        ttnn.NdShardSpec(
+            ttnn.Shape([1, 1, 32, 32]),
+            cores,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.int32, layout=layout, device=device, memory_config=memory_config
+    )
+    assert input_tensor.memory_config().shard_spec is None
+    return input_tensor
+
+
+@pytest.mark.parametrize(
+    "ttnn_op, torch_op",
+    [
+        pytest.param(ttnn.remainder, torch.remainder, id="remainder"),
+        pytest.param(ttnn.fmod, torch.fmod, id="fmod"),
+        pytest.param(ttnn.div, torch.div, id="div"),
+        pytest.param(
+            lambda x, s, **kw: ttnn.div(x, s, rounding_mode="trunc", **kw),
+            lambda x, s: torch.div(x, s, rounding_mode="trunc"),
+            id="div_trunc",
+        ),
+        pytest.param(
+            lambda x, s, **kw: ttnn.div(x, s, rounding_mode="floor", **kw),
+            lambda x, s: torch.div(x, s, rounding_mode="floor"),
+            id="div_floor",
+        ),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_binary_int32_float_scalar_nd_sharded_sub_core_grids(ttnn_op, torch_op, layout, device):
+    """ND-sharded inputs have no 2D shard_spec; promotion must read the grid from nd_shard_spec (#64039)."""
+    torch_input = ((torch.arange(96 * 128).reshape(1, 1, 96, 128) % 17) - 8).to(torch.int32)
+    shard_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1))})
+    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 1))})
+    input_tensor = _nd_sharded_int32_input(torch_input, layout, shard_cores, device)
+
+    result = ttnn_op(input_tensor, 1.5, sub_core_grids=sub_core_grids)
+    assert result.layout == layout
+    assert_equal(torch_op(torch_input.float(), 1.5), ttnn.to_torch(result).float())
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod, ttnn.div])
+def test_binary_int32_float_scalar_nd_sharded_sub_core_grids_missing_shard_cores(ttnn_op, device, expect_error):
+    torch_input = ((torch.arange(96 * 128).reshape(1, 1, 96, 128) % 17) - 8).to(torch.int32)
+    shard_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1))})
+    input_tensor = _nd_sharded_int32_input(torch_input, ttnn.TILE_LAYOUT, shard_cores, device)
+    other_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 1))})
+    with expect_error(RuntimeError, "requested grid to contain all input shard cores"):
+        ttnn_op(input_tensor, 1.5, sub_core_grids=other_cores)
+
+
 @pytest.mark.parametrize(
     "ttnn_op",
     [
