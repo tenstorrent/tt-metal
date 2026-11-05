@@ -10,11 +10,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
 
-#if (defined(COMPILE_FOR_TRISC) || (defined(COMPILE_FOR_DM) && COMPILE_FOR_DM < 2)) && defined(DEBUG_PRINT_ENABLED)
-#include "debug/dprint.h"
-#define HAS_DPRINT 1
-#endif
-
 void kernel_main() {
     const uint32_t recv_l1_addr = get_arg(args::recv_l1_addr);
     const uint32_t num_words = get_arg(args::num_words);
@@ -24,16 +19,8 @@ void kernel_main() {
     volatile uint32_t* recv_uncached = reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + recv_l1_addr);
     volatile uint32_t* result_uncached = reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + result_l1_addr);
 
-#ifdef HAS_DPRINT
-    DPRINT("C: recv_l1={:#x} num_words={}\n", recv_l1_addr, num_words);
-#endif
-
     while (recv_uncached[0] == 0) {
     }
-
-#ifdef HAS_DPRINT
-    DPRINT("C: got data word0={:#x}\n", recv_uncached[0]);
-#endif
 
     uint32_t pass = 1u;
     for (uint32_t i = 0; i < num_words; i++) {
@@ -44,8 +31,4 @@ void kernel_main() {
     }
 
     *result_uncached = pass;
-
-#ifdef HAS_DPRINT
-    DPRINT("C: result={:#x}\n", pass);
-#endif
 }

@@ -13,11 +13,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "hostdev/fabric_edm_packet_header.hpp"
 
-#if (defined(COMPILE_FOR_TRISC) || (defined(COMPILE_FOR_DM) && COMPILE_FOR_DM < 2)) && defined(DEBUG_PRINT_ENABLED)
-#include "debug/dprint.h"
-#define HAS_DPRINT 1
-#endif
-
 void kernel_main() {
     const uint32_t src_l1_addr = get_arg(args::src_l1_addr);
     const uint32_t dst_l1_addr = get_arg(args::dst_l1_addr);
@@ -26,23 +21,8 @@ void kernel_main() {
     const uint32_t dst_dev_id = get_arg(args::dst_dev_id);
     const uint32_t size = get_arg(args::size);
 
-#ifdef HAS_DPRINT
-    DPRINT(
-        "S: src={:#x} dst={:#x} noc_x={} noc_y={} dev={} size={}\n",
-        src_l1_addr,
-        dst_l1_addr,
-        dst_noc_x,
-        dst_noc_y,
-        dst_dev_id,
-        size);
-#endif
-
     const uint64_t noc_addr =
         get_noc_addr(static_cast<uint8_t>(dst_noc_x), static_cast<uint8_t>(dst_noc_y), dst_l1_addr);
-
-#ifdef HAS_DPRINT
-    DPRINT("S: noc_addr hi={:#x} lo={:#x}\n", (uint32_t)(noc_addr >> 32), (uint32_t)noc_addr);
-#endif
 
     tt::tt_fabric::NocUnicastCommandHeader cmd{noc_addr};
 
@@ -55,13 +35,5 @@ void kernel_main() {
         size,
         cmd);
 
-#ifdef HAS_DPRINT
-    DPRINT("S: write issued, waiting barrier\n");
-#endif
-
     noc_async_write_barrier();
-
-#ifdef HAS_DPRINT
-    DPRINT("S: barrier done\n");
-#endif
 }
