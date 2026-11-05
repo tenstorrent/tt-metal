@@ -211,3 +211,10 @@ imported, unchanged.
   packets", 10880 B builds); the flat fork's model cases and tests/unit unchanged (CHANGELOG there, 2026-10-27).
 - Needed by: deepseek_v41_flash_d_p K.1 (DS41-127)
 - Files: sparse_combine_rf.py, tests/unit/test_fabric_payload.py
+
+### Merge: L1_MAX_WRITERS and the fabric payload check on the Marko sync (2026-10-28, deepseek_v41_flash_d_p galaxy_8x4-full)
+- What: both kept in the synced sparse_combine_rf_prepare (the check before the CombineProbes setup; its message names
+  piece_max, SPC_PIECE is no longer read). No kernel or program change.
+- Results (Galaxy 8x4): tests/unit/test_fabric_payload.py 2 / 2.
+- Needed by: deepseek_v41_flash_d_p
+- Files: sparse_combine_rf.py, README.md

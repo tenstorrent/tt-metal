@@ -1231,6 +1231,7 @@ class TtK3TokenSplitMoE:
             y_l1=True,
             layout=layout,
             weights_nk=bool(getattr(op, "weights_nk", False)),  # (an op laid out from [N, K] weights)
+            max_y_writers=int(getattr(op, "max_y_writers", 0)),  # (the cap the op's plan was made with)
         )
 
     def latent_up(self, yr_l1=False):

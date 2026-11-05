@@ -274,7 +274,7 @@ def abort(ledger_dir: Path, run_dir: Path, reason: str, tasks=None, kill=os.kill
         tasks or [agent["task"]],
     )
     (Path(run_dir) / ABORT_FILE).write_text(json.dumps({**agent, "reason": reason, "note": note["id"], "at": now()}))
-    (wait_triage or _wait_triage)()  # F201: a hang dump being written is never cut off
+    (wait_triage or _wait_triage)()  # F204: a hang dump being written is never cut off
     try:
         kill(agent["pgid"], signal.SIGTERM)
     except ProcessLookupError:

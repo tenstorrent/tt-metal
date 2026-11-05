@@ -217,6 +217,7 @@ def _combine_ref(xr, ids, wts, col, Eg, experts, act, formats=None):
     indirect=["mesh_device", "device_params"],
 )
 def test_flat_routed_expert_with_program(mesh_device, device_params, case):
+    from ttnn.bringup.combine_rf.sparse_combine_rf import L1_MAX_WRITERS
     from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
 
     wcase = _load("weighted_case")
@@ -246,6 +247,7 @@ def test_flat_routed_expert_with_program(mesh_device, device_params, case):
         weights_nk=c["weights_nk"],
         check_exact=True,
         layout=_layout(c),
+        max_y_writers=L1_MAX_WRITERS,  # (as the model: the combine's L1 hand-off, on any Galaxy chip's harvesting)
     )
     del per_dev
     logger.info(f"{c['id']}: {E} experts built and laid out in {time.time() - t0:.0f} s")
@@ -341,6 +343,7 @@ def test_flat_routed_expert_exchange(mesh_device, device_params, case):
     out[t] = sum_k w[t, k] ffn_{ids[t, k]}(x[t]) over all K picks (the exchange sends every pick to its expert's chip and
     the combine brings it home). Limit: calib x the formats run (reference.ffn(formats=), y bf16, fp32 sums of w y,
     bf16 out) vs float64. The combine's 2^-19 snap of each term is below that noise (not modelled)."""
+    from ttnn.bringup.combine_rf.sparse_combine_rf import L1_MAX_WRITERS
     from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
 
     from models.demos.deepseek_v3_d_p.tt.moe.tt_k3_token_split_moe import planned_accumulators
@@ -391,6 +394,7 @@ def test_flat_routed_expert_exchange(mesh_device, device_params, case):
         weights_nk=c["weights_nk"],
         check_exact=True,
         layout=_layout(c),
+        max_y_writers=L1_MAX_WRITERS,  # (as the model's tt/experts.py flat_op, which the block shares)
     )
     logger.info(f"{c['id']}: {E} experts built and laid out in {time.time() - t0:.0f} s")
     rexp = RoutedExperts(mesh_device, g_, model, None, MoEDtypes(), op=op, layout=_layout(c))
