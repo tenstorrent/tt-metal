@@ -44,6 +44,7 @@ class TrainerCallback:
         pass
 
     def on_before_optimizer_step(self, trainer: Any) -> None:
+        """Fires after gradient sync, before gradient clipping and ``optimizer.step()``."""
         pass
 
     def on_save(self, trainer: Any, step: int, path: str) -> None:
