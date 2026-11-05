@@ -41,6 +41,8 @@ jobs:
       - {name: CCACHE_MAXSIZE, value: 4G}
       - {name: TRACY_NO_INVARIANT_CHECK, value: '1'}
       - {name: TRACY_NO_ISA_EXTENSIONS, value: '1'}
+      # TEMPORARY (torrentci#2377): pin set iteration order in HAL codegen.py.
+      - {name: PYTHONHASHSEED, value: '0'}
     artifacts:
       publish:
         # Consumed as packages-artifact-name by smoke, sdk-examples and
