@@ -45,6 +45,9 @@
 #if defined(NOC_ATT_ENABLED)
 #include "internal/tt-2xx/quasar/noc/att/att_config.h"
 #endif
+#if defined(KERAUNOS_CCE_NOC)
+#include "internal/tt-2xx/quasar/cce_noc.h"
+#endif
 
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true
@@ -72,6 +75,13 @@ inline bool debug_l1_access_within_single_view(uint64_t addr, uint64_t len) {
 
 // Helper function to get the core type from noc coords.
 AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is_virtual_coord) {
+#if defined(KERAUNOS_CCE_NOC)
+    // A Keraunos CCE serves exactly the coordinates its channel record resolves, in either form (cce_noc.h lookup()).
+    if (keraunos_noc_core(internal_::cce_noc::latched.channels, x, y) >= 0) {
+        is_virtual_coord = true;
+        return AddressableCoreType::ETH;
+    }
+#endif
     core_info_msg_t tt_l1_ptr* core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
     // Check if the target NOC endpoint is a valid non-Tensix core in the Physical Coordinate Space
     for (uint32_t idx = 0; idx < MAX_PHYSICAL_NON_WORKER_CORES; idx++) {
@@ -418,7 +428,9 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
 #endif
     }
 
-#if defined(COMPILE_FOR_ERISC)
+    // A Keraunos CCE (Quasar) has no base firmware to exit to, and disable_erisc_app() would store to its reset
+    // vector, so it hangs.
+#if defined(COMPILE_FOR_ERISC) && !defined(ARCH_QUASAR)
     // Update launch msg to show that we've exited. This is required so that the next run doesn't think there's a kernel
     // still running and try to make it exit.
     volatile tt_l1_ptr go_msg_t* go_message_ptr = GET_MAILBOX_ADDRESS_DEV(go_messages[0].slot[0]);
@@ -743,7 +755,12 @@ void debug_sanitize_noc_and_worker_addr(
 #if defined(ARCH_QUASAR)
     // Quasar-only: a NOC read whose destination is a local register can strand the response and stall L1
     // writes; reads must land in L1. Every register map sits at or above TT_LOCAL_TENSIX_REG_MAP_BASE_ADDR.
-    if (dir == DEBUG_SANITIZE_NOC_READ && worker_addr + len > TT_LOCAL_TENSIX_REG_MAP_BASE_ADDR) {
+    // A Keraunos CCE's SRAM has its uncached alias there; a read into the alias is checked as L1 below.
+    if (dir == DEBUG_SANITIZE_NOC_READ && worker_addr + len > TT_LOCAL_TENSIX_REG_MAP_BASE_ADDR
+#if defined(KERAUNOS_CCE_NOC)
+        && debug_valid_eth_addr(worker_addr, len, false) != DebugSanitizeOK
+#endif
+    ) {
         debug_sanitize_post_addr_and_hang(
             noc_id,
             noc_addr,
@@ -839,9 +856,9 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
 
 void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
     bool illegal = (addr + len <= addr);  // zero length / wraparound
-#if defined(COMPILE_FOR_ERISC)
+#if defined(COMPILE_FOR_ERISC) && !defined(ETH_NO_BASE_FIRMWARE)
     illegal = illegal || (addr + len > MEM_ETH_SIZE);
-#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_IDLE_ERISC)
+#elif defined(ARCH_QUASAR) && (defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_ERISC))
     // Either CCE of the tile, in its cached view or its uncached alias, within one CCE (see debug_valid_eth_addr).
     illegal = illegal || (debug_valid_eth_addr(addr, len, false) != DebugSanitizeOK);
 #elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
@@ -870,7 +887,7 @@ void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
 
 void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
     // This check assumes all chips have the same size of eth core L1 memory.
-#if defined(COMPILE_FOR_ERISC)
+#if defined(COMPILE_FOR_ERISC) && !defined(ETH_NO_BASE_FIRMWARE)
     constexpr uint32_t l1_overflow_addr = MEM_ETH_SIZE;
     if (src_addr + len <= src_addr || src_addr + len > l1_overflow_addr) {
         debug_sanitize_post_addr_and_hang(

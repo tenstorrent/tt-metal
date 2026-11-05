@@ -20,11 +20,15 @@
 // - Blackhole:       MPSC, slot claimed via a 32-bit RISC-V atomic on the in-mailbox head
 // - Wormhole:        SPSC, no synchronization between RISCs
 
+#if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_DRISC) || defined(KERAUNOS_CCE))
+#define WATCHER_RING_BUFFER_CCE_LOCK
+#endif
+
 #if defined(DEBUG_RING_BUFFER_MPSC)
-#if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_DRISC) || defined(COMPILE_FOR_IDLE_ERISC))
-// CCE cores (Mimir DRISC and Keraunos idle-eth) claim slots under a lock in their own SRAM, reached through the cached
+#if defined(WATCHER_RING_BUFFER_CCE_LOCK)
+// CCE cores (Mimir DRISC and Keraunos Ethernet) claim slots under a lock in their own SRAM, reached through the cached
 // view at this core's native base.
-#if defined(COMPILE_FOR_IDLE_ERISC)
+#if defined(KERAUNOS_CCE)
 constexpr uintptr_t watcher_cce_ring_buffer_lock_addr = ETH_CCE_LOCAL_BASE + MEM_IERISC_WATCHER_RING_BUFFER_LOCK;
 #else
 constexpr uintptr_t watcher_cce_ring_buffer_lock_addr = MEM_MIMIR_CCE_WATCHER_RING_BUFFER_LOCK;
@@ -34,7 +38,7 @@ constexpr uintptr_t watcher_cce_ring_buffer_lock_addr = MEM_MIMIR_CCE_WATCHER_RI
 #include "risc_common.h"
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
 #include "internal/tt-2xx/quasar/cache.h"
-#elif defined(ARCH_QUASAR) && !defined(COMPILE_FOR_DRISC) && !defined(COMPILE_FOR_IDLE_ERISC)
+#elif defined(ARCH_QUASAR) && !defined(WATCHER_RING_BUFFER_CCE_LOCK)
 #include "api/debug/waypoint.h"
 #include "tensix_neo_reg.h"
 // NEO cluster semaphore 31 is reserved for the MPSC head; kernels must not use it. The watcher's
@@ -74,7 +78,7 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
     // AMOs hang on the uncached alias, so the head is claimed through the cached view.
     uint32_t pos = __atomic_fetch_add(reinterpret_cast<uint32_t*>(MEM_DISPATCH_WATCHER_RING_HEAD), 1, __ATOMIC_RELAXED);
-#elif defined(ARCH_QUASAR) && !defined(COMPILE_FOR_DRISC) && !defined(COMPILE_FOR_IDLE_ERISC)
+#elif defined(ARCH_QUASAR) && !defined(WATCHER_RING_BUFFER_CCE_LOCK)
     // A claim past reset_at landed before the rewind, which erases it: wait for the rewind and claim again.
     uint32_t pos;
     while (true) {
@@ -137,7 +141,7 @@ inline __attribute__((always_inline)) void init_ring_buffer() {
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
     __atomic_store_n(reinterpret_cast<uint32_t*>(MEM_DISPATCH_WATCHER_RING_HEAD), 0, __ATOMIC_RELAXED);
     flush_l2_cache_line(MEM_DISPATCH_WATCHER_RING_HEAD);
-#elif defined(ARCH_QUASAR) && !defined(COMPILE_FOR_DRISC) && !defined(COMPILE_FOR_IDLE_ERISC)
+#elif defined(ARCH_QUASAR) && !defined(WATCHER_RING_BUFFER_CCE_LOCK)
     watcher_ring_buf_sem_init(0);
 #elif defined(ARCH_QUASAR)
     auto* lock = reinterpret_cast<uint32_t tt_l1_ptr*>(watcher_cce_ring_buffer_lock_addr);

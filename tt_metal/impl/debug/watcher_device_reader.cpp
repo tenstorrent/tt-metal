@@ -60,15 +60,18 @@ const char* get_riscv_name(const Hal& hal, HalProgrammableCoreType core_type, ui
                 num_processors - 1);
             return hal.get_processor_class_name(core_type, processor_index, false).c_str();
         }
-        case HalProgrammableCoreType::ACTIVE_ETH: {
-            static const char* const names[] = {"erisc", "subordinate_erisc"};
-            TT_FATAL(
-                processor_index < 2,
-                "Watcher data corrupted, unexpected processor index {} on core {}",
-                processor_index,
-                core_type);
-            return names[processor_index];
-        }
+        case HalProgrammableCoreType::ACTIVE_ETH:
+            if (hal.has_eth_base_firmware()) {
+                static const char* const names[] = {"erisc", "subordinate_erisc"};
+                TT_FATAL(
+                    processor_index < 2,
+                    "Watcher data corrupted, unexpected processor index {} on core {}",
+                    processor_index,
+                    core_type);
+                return names[processor_index];
+            }
+            // Without base firmware an active Ethernet core is a Keraunos CCE: its harts are named as an idle core's.
+            [[fallthrough]];
         case HalProgrammableCoreType::IDLE_ETH: {
             if (hal.get_arch() == tt::ARCH::QUASAR) {
                 // A Keraunos CCE runs eight harts.
@@ -333,6 +336,13 @@ dev_msgs::launch_msg_t::ConstView get_valid_launch_message(dev_msgs::mailboxes_t
                               dev_msgs::launch_msg_buffer_num_entries;
     }
     return mbox_data.launch()[launch_msg_read_ptr];
+}
+
+// True when the core keeps its MPSC ring-buffer head outside the mailbox: Quasar Tensix and dispatch cores. False on
+// Quasar CCE cores (DRAM, IDLE_ETH, ACTIVE_ETH) and on every other architecture.
+bool mpsc_head_outside_mailbox(const Hal& hal, HalProgrammableCoreType core_type) {
+    return hal.get_arch() == tt::ARCH::QUASAR && core_type != HalProgrammableCoreType::DRAM &&
+           core_type != HalProgrammableCoreType::IDLE_ETH && core_type != HalProgrammableCoreType::ACTIVE_ETH;
 }
 
 }  // anonymous namespace
@@ -696,12 +706,10 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     // Quasar's MPSC head lives outside the mailbox: in a semaphore register on Tensix, in its own L1 line on
     // dispatch engines. Read it here with the rest of the snapshot. Gated on the same condition as
     // DumpMpscRingBuffer(), the only consumer: on Tensix, with the ring buffer disabled the firmware never
-    // initializes semaphore 31, so touching it would fault. CCE cores (Mimir DRISC, Keraunos idle-eth) have no
+    // initializes semaphore 31, so touching it would fault. CCE cores (Mimir DRISC, Keraunos Ethernet) have no
     // such register and keep the head in the mailbox.
     uint32_t ring_buf_head = 0;
-    if (hal.get_arch() == tt::ARCH::QUASAR && !rtoptions.watcher_ring_buffer_disabled() &&
-        programmable_core_type != HalProgrammableCoreType::DRAM &&
-        programmable_core_type != HalProgrammableCoreType::IDLE_ETH) {
+    if (!rtoptions.watcher_ring_buffer_disabled() && mpsc_head_outside_mailbox(hal, programmable_core_type)) {
         uint64_t head_addr = (programmable_core_type == HalProgrammableCoreType::DISPATCH)
                                  ? hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::RING_BUF_HEAD)
                                  : watcher_ring_buf_sem_peek_addr;
@@ -1158,11 +1166,8 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
     uint32_t capacity = hal.get_ring_buffer_capacity();
     uint32_t mask = capacity - 1;  // capacity is a power of two
     // Quasar keeps head outside the mailbox, snapshotted alongside it, except on CCE cores (Mimir DRISC,
-    // Keraunos idle-eth), which keep it in the mailbox as Blackhole does.
-    uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type_ != HalProgrammableCoreType::DRAM &&
-                     programmable_core_type_ != HalProgrammableCoreType::IDLE_ETH)
-                        ? ring_buf_head_
-                        : rb->head;
+    // Keraunos Ethernet), which keep it in the mailbox as Blackhole does.
+    uint32_t head = mpsc_head_outside_mailbox(hal, programmable_core_type_) ? ring_buf_head_ : rb->head;
 
     // Check every slot: head restarts at 0 after a rewind, so a small head doesn't mean few entries.
     std::vector<uint32_t> data, thread_indices;  // newest first
