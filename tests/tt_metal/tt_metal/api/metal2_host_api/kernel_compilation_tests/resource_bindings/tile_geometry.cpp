@@ -94,7 +94,7 @@ protected:
 };
 
 // Blackhole DFB shape queries compile in data movement and all compute stages.
-TEST_P(BindingTokenGeometry, DfbTensorShape) {
+TEST_P(BindingTokenGeometry, CPU_DfbTensorShape) {
     const GeometryCase geometry = GetParam();
     const std::string source = MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(dfb::input_dfb)");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
@@ -102,7 +102,7 @@ TEST_P(BindingTokenGeometry, DfbTensorShape) {
 }
 
 // Blackhole scratchpad shape queries compile in data movement and all compute stages.
-TEST_P(BindingTokenGeometry, ScratchpadTensorShape) {
+TEST_P(BindingTokenGeometry, CPU_ScratchpadTensorShape) {
     const GeometryCase geometry = GetParam();
     const std::string source = MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(scratch::pad)");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
@@ -110,7 +110,7 @@ TEST_P(BindingTokenGeometry, ScratchpadTensorShape) {
 }
 
 // Blackhole common and per-node tensor shape queries compile in data movement and all compute stages.
-TEST_P(BindingTokenGeometry, TensorBindingTensorShape) {
+TEST_P(BindingTokenGeometry, CPU_TensorBindingTensorShape) {
     const GeometryCase geometry = GetParam();
     const std::string source =
         MakeNonPublicTensorShapeQuerySource(geometry, "tensor_accessor::get_tensor_shape(tensor::local)");
@@ -119,7 +119,7 @@ TEST_P(BindingTokenGeometry, TensorBindingTensorShape) {
 }
 
 // A bound resource exposes its tile height as a constant in DM and all compute stages.
-TEST_P(BindingTokenGeometry, TileHeight) {
+TEST_P(BindingTokenGeometry, CPU_TileHeight) {
     const GeometryCase geometry = GetParam();
     const std::string source = fmt::format(
         R"(
@@ -135,7 +135,7 @@ void kernel_main() {{
 }
 
 // A bound resource exposes its tile width as a constant in DM and all compute stages.
-TEST_P(BindingTokenGeometry, TileWidth) {
+TEST_P(BindingTokenGeometry, CPU_TileWidth) {
     const GeometryCase geometry = GetParam();
     const std::string source = fmt::format(
         R"(
@@ -151,7 +151,7 @@ void kernel_main() {{
 }
 
 // A bound resource exposes its tile element count independently of its storage format.
-TEST_P(BindingTokenGeometry, TileElementCount) {
+TEST_P(BindingTokenGeometry, CPU_TileElementCount) {
     const GeometryCase geometry = GetParam();
     const std::string source = fmt::format(
         R"(
@@ -167,7 +167,7 @@ void kernel_main() {{
 }
 
 // A bound resource exposes the total number of faces, including custom face layouts.
-TEST_P(BindingTokenGeometry, TileFaceCount) {
+TEST_P(BindingTokenGeometry, CPU_TileFaceCount) {
     const GeometryCase geometry = GetParam();
     const std::string source = fmt::format(
         R"(
@@ -183,7 +183,7 @@ void kernel_main() {{
 }
 
 // A bound resource exposes its partial-height flag as uint32_t with the expected 0/1 value.
-TEST_P(BindingTokenGeometry, PartialFace) {
+TEST_P(BindingTokenGeometry, CPU_PartialFace) {
     const GeometryCase geometry = GetParam();
     const std::string source = MakeNonPublicTileFlagQuerySource("get_partial_face", geometry.partial);
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
@@ -191,7 +191,7 @@ TEST_P(BindingTokenGeometry, PartialFace) {
 }
 
 // A bound resource exposes its narrow-width flag as uint32_t with the expected 0/1 value.
-TEST_P(BindingTokenGeometry, NarrowTile) {
+TEST_P(BindingTokenGeometry, CPU_NarrowTile) {
     const GeometryCase geometry = GetParam();
     const std::string source = MakeNonPublicTileFlagQuerySource("get_narrow_tile", geometry.narrow);
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
@@ -219,7 +219,7 @@ protected:
 };
 
 // Wormhole DFB shape queries compile in data movement and all compute stages.
-TEST_P(BindingTokenGeometryWormhole, DfbTensorShape) {
+TEST_P(BindingTokenGeometryWormhole, CPU_DfbTensorShape) {
     const GeometryCase geometry = GetParam();
     const std::string source = MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(dfb::input_dfb)");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
@@ -227,7 +227,7 @@ TEST_P(BindingTokenGeometryWormhole, DfbTensorShape) {
 }
 
 // Wormhole scratchpad shape queries compile in data movement and all compute stages.
-TEST_P(BindingTokenGeometryWormhole, ScratchpadTensorShape) {
+TEST_P(BindingTokenGeometryWormhole, CPU_ScratchpadTensorShape) {
     const GeometryCase geometry = GetParam();
     const std::string source = MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(scratch::pad)");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
@@ -235,7 +235,7 @@ TEST_P(BindingTokenGeometryWormhole, ScratchpadTensorShape) {
 }
 
 // Wormhole common and per-node tensor shape queries compile in data movement and all compute stages.
-TEST_P(BindingTokenGeometryWormhole, TensorBindingTensorShape) {
+TEST_P(BindingTokenGeometryWormhole, CPU_TensorBindingTensorShape) {
     const GeometryCase geometry = GetParam();
     const std::string source =
         MakeNonPublicTensorShapeQuerySource(geometry, "tensor_accessor::get_tensor_shape(tensor::local)");
@@ -286,7 +286,7 @@ protected:
 };
 
 // A scratchpad's scalar geometry reflects the face width configured on its resource.
-TEST_P(BindingTokenCustomFaceWidth, ScratchpadGeometry) {
+TEST_P(BindingTokenCustomFaceWidth, CPU_ScratchpadGeometry) {
     const GeometryCase geometry = GetParam();
     const std::string source = MakeNonPublicCustomFaceQuerySource(geometry, "scratch::pad");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
@@ -295,7 +295,7 @@ TEST_P(BindingTokenCustomFaceWidth, ScratchpadGeometry) {
 }
 
 // A tensor binding's scalar geometry reflects the face width configured on its resource.
-TEST_P(BindingTokenCustomFaceWidth, TensorGeometry) {
+TEST_P(BindingTokenCustomFaceWidth, CPU_TensorGeometry) {
     const GeometryCase geometry = GetParam();
     const std::string source = MakeNonPublicCustomFaceQuerySource(geometry, "tensor::local");
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
@@ -304,7 +304,7 @@ TEST_P(BindingTokenCustomFaceWidth, TensorGeometry) {
 }
 
 // A scratchpad's aggregate shape preserves custom face dimensions and grid counts.
-TEST_P(BindingTokenCustomFaceWidth, ScratchpadTensorShape) {
+TEST_P(BindingTokenCustomFaceWidth, CPU_ScratchpadTensorShape) {
     const GeometryCase geometry = GetParam();
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
     spec.dataflow_buffers[0].tile_format_metadata.reset();
@@ -314,7 +314,7 @@ TEST_P(BindingTokenCustomFaceWidth, ScratchpadTensorShape) {
 }
 
 // A tensor binding's aggregate shape preserves custom face dimensions and grid counts.
-TEST_P(BindingTokenCustomFaceWidth, TensorBindingTensorShape) {
+TEST_P(BindingTokenCustomFaceWidth, CPU_TensorBindingTensorShape) {
     const GeometryCase geometry = GetParam();
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
     spec.dataflow_buffers[0].tile_format_metadata.reset();
@@ -345,7 +345,7 @@ protected:
 };
 
 // An aggregate shape query returns default geometry without requiring a storage format.
-TEST_P(BindingTokenTensorShapeWithoutFormat, DefaultGeometry) {
+TEST_P(BindingTokenTensorShapeWithoutFormat, CPU_DefaultGeometry) {
     const ShapeWithoutFormatCase missing = GetParam();
     const GeometryCase geometry{"Default", std::nullopt, 32, 32, 4, false, false, missing.per_node};
     ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
