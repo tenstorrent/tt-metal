@@ -1,8 +1,8 @@
 {
-  "config_id": "combined_head4_gdn4_lofi",
+  "config_id": "combined_head4_gdn8hifi2_lofi",
   "weight_groups": {
-    "gdn_input": "bfloat4_b",
-    "gdn_output": "bfloat4_b",
+    "gdn_input": "bfloat8_b",
+    "gdn_output": "bfloat8_b",
     "qsa_prefill": "bfloat8_b",
     "qsa_decode": "bfloat4_b",
     "qsa_output": "bfloat8_b",
@@ -19,8 +19,8 @@
     "terminal_mixer": "bfloat16"
   },
   "compute_fidelities": {
-    "gdn_input": "LoFi",
-    "gdn_output": "LoFi",
+    "gdn_input": "HiFi2",
+    "gdn_output": "HiFi2",
     "qsa_prefill": "HiFi2",
     "qsa_decode": "LoFi",
     "qsa_output": "LoFi",
