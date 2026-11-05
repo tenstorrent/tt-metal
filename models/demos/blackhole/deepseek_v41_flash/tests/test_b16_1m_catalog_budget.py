@@ -69,7 +69,12 @@ def catalog():
             "max_concurrency": 8,
             "max_context": 1048576,
             "max_tokens_all_users_override": 8388608,
-            "vllm_args": {"max_num_seqs": "8", "max_model_len": "1048576"},
+            "vllm_args": {
+                "max_num_seqs": "8",
+                "max_model_len": "1048576",
+                "additional_config": '{"tt": {"l1_small_size": 16384, "trace_region_size": 1200000000}}',
+            },
+            "override_tt_config": {"l1_small_size": 16384, "trace_region_size": 1200000000},
             "env_vars": dict(env),
         },
     }
@@ -183,3 +188,14 @@ def test_allon_entry_keeps_every_optimization_and_adds_the_dram_levers():
             and env["DSV41_TRACE_REGION"] == "1000000000"
         )
         assert env["DSV41_APC_PAGED"] == "0" and env["DSV41_MHC_PRE24"] == "0" and env["MAX_NUM_SEQS"] == "16"
+
+
+def test_allon_trace_region_reaches_the_device_config():
+    import json
+
+    full = M.add_b16_entry(catalog(), all_on=True)
+    d = full["model_specs"]["deepseek-ai/DeepSeek-V4.1-Flash"]["BLACKHOLE_GALAXY"]["vLLM"][M.NEW_IMPL_ALLON][
+        "device_model_spec"
+    ]
+    assert json.loads(d["vllm_args"]["additional_config"])["tt"]["trace_region_size"] == 1000000000
+    assert d["override_tt_config"]["trace_region_size"] == 1000000000

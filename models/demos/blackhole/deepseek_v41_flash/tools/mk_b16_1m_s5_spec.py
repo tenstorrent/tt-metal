@@ -95,6 +95,15 @@ def add_b16_entry(full, extra=None, all_on=False):
     env = b16_env(e["env_vars"], extra, all_on)
     e["env_vars"] = env
     d["env_vars"] = b16_env(d.get("env_vars", e["env_vars"]), extra, all_on)
+    if (
+        all_on
+    ):  # the device is opened with the vLLM additional_config / override_tt_config trace_region_size (DSV41_TRACE_REGION is only read by the tools)
+        tr = int(ALLON_ENV["DSV41_TRACE_REGION"])
+        ac = json.loads(d["vllm_args"]["additional_config"])
+        ac["tt"]["trace_region_size"] = tr
+        d["vllm_args"]["additional_config"] = json.dumps(ac)
+        if isinstance(d.get("override_tt_config"), dict):
+            d["override_tt_config"]["trace_region_size"] = tr
     v[new] = e
     return full
 
