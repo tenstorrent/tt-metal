@@ -702,9 +702,7 @@ def _lookup_nearest_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, t
     return (Mb, Kb, Nb, sb) if sb is not None else (Mb, Kb, Nb)
 
 
-def get_matmul_config(
-    M, K, N, core_grid, default_block_size=None, use_heuristic=False, num_k_shards=-1, m_cores=None
-):
+def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic=False, num_k_shards=-1, m_cores=None):
     """Get the matmul config for the given shape and core grid.
 
     Args:
