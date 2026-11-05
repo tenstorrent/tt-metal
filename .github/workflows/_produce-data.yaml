@@ -44,7 +44,6 @@ on:
       - "(Single-card) Demo tests"
       - "(Single-card) Frequent model and ttnn tests"
       - "T3K tests"
-      - "(End of Life - 31 October 2026) T3K dispatch tests"
       - "(T3K) Profiler tests"
       - "(Tier 1) Models End-To-End Tests"
       - "(Tier 1) Models Sweep Tests"
