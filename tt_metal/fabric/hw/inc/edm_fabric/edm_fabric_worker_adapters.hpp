@@ -22,6 +22,10 @@
 #include <cstdint>
 #include <array>
 
+#if defined(KERAUNOS_CCE) && !defined(KERAUNOS_CCE_NOC)
+#error "A fabric kernel on a Keraunos CCE reaches the NOC through cce_noc.h: build it with KERAUNOS_CCE_NOC"
+#endif
+
 namespace tt::tt_fabric {
 
 template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0, uint8_t VC_ID = 0>
