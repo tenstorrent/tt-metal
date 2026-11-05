@@ -12,6 +12,7 @@
 //   * ckernel::_llk_math_topk_xl_copy_init_ / _llk_math_topk_xl_copy_
 //   * ckernel::sfpu::_topk_xl_init_ / _topk_xl_local_sort_ /
 //     _topk_xl_local_sort_generic_ / _topk_xl_merge_ / _topk_xl_rebuild_ /
+//     _topk_xl_rebuild_columns_ /
 //     _topk_xl_add_lsb_indices_(_init_) /
 //     _topk_xl_separate_indices_row_major_(_init_static_ / _reinit_ /
 //     _advance_chunk_base_) / _topk_xl_separate_indices_(_init_) /
@@ -55,7 +56,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 //   TOPK_XL_CORE_ID:         add_lsb_indices core_id, index bits [15:11] (0 .. 31)
 //   TOPK_XL_ASCENDING:       rebuild direction (false descending, true ascending),
 //                            or, for the single-chunk terminal index ops that never
-//                            rebuild, the local-sort direction
+//                            rebuild, the local-sort direction; fused end-to-end rows
+//                            rebuild only their last chunk in it
 //   TOPK_XL_FUSED_REDUCE:    false unfused merge/rebuild (op path), true fused
 //   TOPK_XL_CHUNK_BASE_MODE: three ways to init chunk_base:
 //                            0 init_static<hi,lo> | 1 init_upper<hi>(lo) | 2 init(runtime)
@@ -66,6 +68,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 //     2 early_exit  the same, stopping after the per-column len-64 builds so each
 //                   64-element column ends up sorted on its own. K=1024 | 2048,
 //                   single chunk, no merge.
+//     3 columns     the topk_large_indices column body: early_exit sorts, and after
+//                   each fused merge the column rebuild, so every 64-element column
+//                   keeps its own top 64. K=1024, two or more chunks, fused region only.
 //   TOPK_XL_LSB_ROW_MAJOR:   add_lsb_indices numbering: false stamps a tile coordinate
 //                            to decode, true the element's chunk offset directly. Only
 //                            the raw-coordinate index ops (1, 2) read it back;
@@ -83,6 +88,7 @@ constexpr bool INDEX_OP_REMOVE_MSB = (TOPK_XL_INDEX_OP == 2);
 
 constexpr bool SORT_MODE_GENERIC    = (TOPK_XL_SORT_MODE == 1);
 constexpr bool SORT_MODE_EARLY_EXIT = (TOPK_XL_SORT_MODE == 2);
+constexpr bool SORT_MODE_COLUMNS    = (TOPK_XL_SORT_MODE == 3);
 
 constexpr bool FUSED_REDUCE = TOPK_XL_FUSED_REDUCE;
 // Fused END-TO-END (the topk_large_indices wide-row family): runtime chunk-id
@@ -92,7 +98,7 @@ constexpr bool FUSED_E2E = TOPK_XL_FUSED_E2E;
 
 // The early-exit column sort is the one sort the compute API does not pair with a
 // dummy SrcB valid: it returns before anything consumes the operand.
-constexpr bool LOCAL_SORT_NEEDS_SRCB = !SORT_MODE_EARLY_EXIT;
+constexpr bool LOCAL_SORT_NEEDS_SRCB = !SORT_MODE_EARLY_EXIT && !SORT_MODE_COLUMNS;
 
 // copy_sort_rt hard-codes the dispatch sort, so TOPK_XL_SORT_MODE reaches copy_sort
 // only. Under fused-e2e a non-default mode would compile and then be ignored: Generic
@@ -105,6 +111,9 @@ static_assert(TOPK_XL_SORT_MODE == 0 || !FUSED_E2E, "TOPK_XL_SORT_MODE has no ef
 static_assert(
     !SORT_MODE_EARLY_EXIT || (TOPK_XL_NUM_CHUNKS == 1 && !FUSED_REDUCE && !INDEX_OP_ROW_MAJOR),
     "the early-exit sort leaves a partial order, so nothing may merge or rebuild over it");
+static_assert(
+    !SORT_MODE_COLUMNS || (TOPK_XL_K == 1024 && TOPK_XL_NUM_CHUNKS >= 2 && !FUSED_REDUCE && !FUSED_E2E && !TOPK_XL_LSB_ROW_MAJOR),
+    "the column body sorts the 64 row columns of one K=1024 tile and needs a second chunk to merge");
 // Op 0 is the only index op that decodes the tile-coordinate numbering. It is also the
 // ignored default under the fused branches, which reach their own terminal split, so
 // exclude those before rejecting the combination.
@@ -113,7 +122,7 @@ static_assert(!TOPK_XL_LSB_ROW_MAJOR || !INDEX_OP_ROW_MAJOR || FUSED_REDUCE, "se
 // Second merge operand. `_topk_xl_merge_` reads it at a fixed distance from the
 // first: 64 dest units (one tile) per sequence-tile when fused, 128 (value +
 // index region) when unfused, so the slot stride follows the mode.
-constexpr std::uint32_t SLOT1 = (FUSED_REDUCE || FUSED_E2E) ? TILES_PER_SEQ : (2 * TILES_PER_SEQ);
+constexpr std::uint32_t SLOT1 = (FUSED_REDUCE || FUSED_E2E || SORT_MODE_COLUMNS) ? TILES_PER_SEQ : (2 * TILES_PER_SEQ);
 
 // A lone chunk has nothing to merge with, but the row-major path still rebuilds it;
 // the fused path merges/rebuilds only when there is a second operand.
@@ -191,7 +200,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _llk_unpack_set_srcb_dummy_valid_(); // local_sort
             }
-            if (c > 0)
+            if (c > 0 && !SORT_MODE_COLUMNS)
             {
                 _llk_unpack_set_srcb_dummy_valid_(); // rebuild(slot0)
             }
@@ -214,8 +223,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
-#include "sfpu/ckernel_sfpu_fill.h"
+#include "llk_sfpu/ckernel_sfpu_fill.h"
 #include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
+#include "topk_xl_scrub_dest.h"
 
 using namespace ckernel;
 
@@ -262,6 +272,12 @@ template <std::uint32_t K, bool fused>
 inline void topk_xl_rebuild(std::uint32_t dst_index, bool ascending)
 {
     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_rebuild_<K, fused>, dst_index, VectorMode::RC_custom, dst_index, ascending);
+}
+
+template <std::uint32_t K>
+inline void topk_xl_rebuild_columns(std::uint32_t dst_index, bool ascending)
+{
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_rebuild_columns_<K>, dst_index, VectorMode::RC_custom, dst_index, ascending);
 }
 
 inline void topk_xl_add_lsb_indices_init()
@@ -348,7 +364,7 @@ __attribute__((noinline)) void copy_sort(std::uint32_t slot, std::uint32_t activ
     topk_xl_add_lsb_indices<K, TOPK_XL_CORE_ID, TOPK_XL_LSB_ROW_MAJOR>(slot);
 
     topk_xl_init<K, true>();
-    if constexpr (SORT_MODE_EARLY_EXIT)
+    if constexpr (SORT_MODE_EARLY_EXIT || SORT_MODE_COLUMNS)
     {
         topk_xl_local_sort_generic<K, true /* early_exit_K64 */>(slot, ascending);
     }
@@ -442,7 +458,7 @@ inline void topk_xl_reinit_after_copy(std::uint32_t dst_format)
 // instead of a full init, which is why `dst_format` is needed: the copy init it replays
 // takes it.
 template <std::uint32_t K, bool fused>
-__attribute__((noinline)) void merge_and_rebuild(bool do_merge, std::uint32_t dst_format)
+__attribute__((noinline)) void merge_and_rebuild(bool do_merge, std::uint32_t dst_format, bool ascending = TOPK_XL_ASCENDING)
 {
     if constexpr (TOPK_XL_REINIT_AFTER_COPY)
     {
@@ -456,7 +472,7 @@ __attribute__((noinline)) void merge_and_rebuild(bool do_merge, std::uint32_t ds
     {
         topk_xl_merge<K, fused>(SLOT0);
     }
-    topk_xl_rebuild<K, fused>(SLOT0, TOPK_XL_ASCENDING);
+    topk_xl_rebuild<K, fused>(SLOT0, ascending);
 }
 
 // Save the starting chunk_base through the requested init flavor.
@@ -477,29 +493,6 @@ inline void topk_xl_chunk_base_init()
     }
 }
 
-// ZEROACC only sets Dest's zero flags; the words stay. The transpose CFG block
-// disables those flags, so the next kernel's FPU adds onto topk's leftovers.
-// Write real zeros once PACK has released Dest.
-inline void topk_xl_scrub_dest()
-{
-    ckernel::tensix_sync();
-    while (semaphore_read(semaphore::MATH_PACK) > 0)
-    {
-    } // Wait for PACK to release every Dest section before touching it
-
-    // Address Dest absolutely from row 0, whatever the sync mode.
-    reset_dest_offset_id();
-    math::set_dest_section_base<StartZero>();
-
-    constexpr std::uint32_t dest_tiles = get_dest_max_tiles<DstSync::SyncFull, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
-    for (std::uint32_t tile = 0; tile < dest_tiles; tile++)
-    {
-        _llk_math_eltwise_unary_sfpu_params_(
-            ckernel::sfpu::_calculate_fill_int_<false, InstrModLoadStore::INT32, 8>, tile, VectorMode::RC, 0u /* raw zero word */);
-    }
-    ckernel::tensix_sync();
-}
-
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -509,12 +502,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
+    topk_xl_scrub_dest();
 
     for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
     {
         _llk_math_wait_for_dest_available_<dest_sync>();
 
-        if constexpr (FUSED_E2E)
+        if constexpr (SORT_MODE_COLUMNS)
+        {
+            // Descending columns merge with ascending ones, so every merged column is bitonic.
+            copy_sort<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* ascending */, math_format);
+            for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
+            {
+                copy_sort<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, math_format);
+                topk_xl_merge<TOPK_XL_K, true /* fused */>(SLOT0);
+                topk_xl_rebuild_columns<TOPK_XL_K>(SLOT0, TOPK_XL_ASCENDING && c + 1 == TOPK_XL_NUM_CHUNKS);
+            }
+        }
+        else if constexpr (FUSED_E2E)
         {
             // Fused end-to-end: runtime chunk-id stamps, fused merge/rebuild,
             // then ONE global split -- plain or with a segment base.
@@ -522,7 +527,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
             {
                 copy_sort_rt<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, c, math_format);
-                merge_and_rebuild<TOPK_XL_K, true /* fused */>(true /* do_merge */, math_format);
+                merge_and_rebuild<TOPK_XL_K, true /* fused */>(true /* do_merge */, math_format, TOPK_XL_ASCENDING && c + 1 == TOPK_XL_NUM_CHUNKS);
             }
             topk_xl_separate_indices_row_major_global_init();
             if constexpr (TOPK_XL_SEG_BASE != 0)
@@ -617,7 +622,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // remove_msb: the in-place fused region [0|index] (TILES_PER_SEQ). Otherwise the
     // value region then the index region (2*TILES_PER_SEQ).
-    constexpr std::uint32_t RESULT_TILES_PER_ROW = INDEX_OP_REMOVE_MSB ? TILES_PER_SEQ : (2 * TILES_PER_SEQ);
+    constexpr bool FUSED_REGION_ONLY             = INDEX_OP_REMOVE_MSB || SORT_MODE_COLUMNS;
+    constexpr std::uint32_t RESULT_TILES_PER_ROW = FUSED_REGION_ONLY ? TILES_PER_SEQ : (2 * TILES_PER_SEQ);
 
     for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
     {
@@ -636,7 +642,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(SLOT0 + t, L1_ADDRESS(params.buffer_Res[res++]));
         }
-        if constexpr (!INDEX_OP_REMOVE_MSB)
+        if constexpr (!FUSED_REGION_ONLY)
         {
             // Index region of slot0: Dest tiles [SLOT0 + TILES_PER_SEQ .. +2*TILES_PER_SEQ - 1].
             for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)

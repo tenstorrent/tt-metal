@@ -80,8 +80,9 @@ Optional:
                                             (required for non-Blackhole systems)
     --no-send-traffic                       Disable --send-traffic in cluster validation
     --check                                 Dry run: verify MPI can reach all hosts via hostname, then exit
-    --mpi-if <interface>                    Network interface for MPI TCP transport
-                                            (auto-detected if not specified)
+    --mpi-if <interface>                    Network interface for MPI TCP transport. If not specified,
+                                            none is pinned and Open MPI picks one (auto-detected
+                                            with --use-docker, since mpi-docker must pin one)
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
     --docker-args <args>                    Extra arguments passed verbatim to 'docker run' (quoted string).
@@ -123,7 +124,9 @@ Optional:
     --cluster-debug-always                  Collect the snapshot after every attempt, passing or failing,
                                             e.g. for a known-good baseline. Ignored with --skip-cluster-debug.
     --cluster-debug-use-ipmi                Read the QSFP cages with ipmitool on each host instead of the
-                                            BMC API (\$TT_BMC_API_URL / \$TT_BMC_API_TOKEN, passed through).
+                                            BMC API. Without it the snapshot uses --bmc-api-url as
+                                            \$TT_BMC_API_URL, and \$TT_BMC_API_TOKEN, else --bmc-password, as
+                                            the token.
     --cluster-debug-tool <path>             The tt-bh-glx-cluster-debug executable for that snapshot; must be
                                             visible at the same path on every host (default: \$TT_CLUSTER_DEBUG_TOOL,
                                             else the one on PATH)
@@ -136,9 +139,8 @@ Optional:
     --help                                  Display this help message and exit
 
 Environment:
-    OMPI_MCA_btl_tcp_if_exclude             When set and --use-docker is not, the MPI interface
-                                            is left to it: no auto-detection, and no
-                                            btl_tcp_if_include. --mpi-if or --use-docker pins
+    OMPI_MCA_btl_tcp_if_exclude             Without --mpi-if or --use-docker, Open MPI honours it
+                                            when picking the interface. --mpi-if or --use-docker pins
                                             an interface instead, and it is dropped
 
 ================================================================================
@@ -567,8 +569,9 @@ if [[ "$MPI_IF_EXPLICIT" == "true" || -n "$DOCKER_IMAGE" ]]; then
 fi
 if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
     validate_mpi_interface "$MPI_IF" "true" "$FIRST_HOST"
-elif [[ -z "$DOCKER_IMAGE" ]] && mpi_if_set_by_env; then
-    # mpi-docker always pins an interface, so only plain mpirun leaves it to the environment.
+elif [[ -z "$DOCKER_IMAGE" ]]; then
+    # Without --mpi-if, plain mpirun pins nothing and Open MPI picks the interface.
+    # mpi-docker always pins one, so only the docker path auto-detects.
     MPI_IF=""
 else
     MPI_IF=$(validate_mpi_interface "" "false" "$FIRST_HOST")
@@ -619,7 +622,7 @@ if [[ "$CHECK" == true ]]; then
     echo "=========================================="
     echo "MPI connectivity check"
     echo "Using hosts: $HOSTS"
-    echo "MPI interface: ${MPI_IF:-set by the MPI environment}"
+    echo "MPI interface: ${MPI_IF:-not pinned (Open MPI picks)}"
     echo "=========================================="
     mpirun --host "$HOSTS" \
         "${MPI_IF_ARGS[@]}" \
@@ -723,7 +726,7 @@ echo "Cluster recovery"
 echo "Using hosts: $HOSTS"
 echo "Configuration: $CONFIG"
 echo "Reset command: $GLX_RESET_CMD"
-echo "MPI interface: ${MPI_IF:-set by the MPI environment}"
+echo "MPI interface: ${MPI_IF:-not pinned (Open MPI picks)}"
 if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
     echo "MPI extra args: ${MPI_EXTRA_ARGS[*]}"
 fi
@@ -1045,7 +1048,8 @@ collect_cluster_debug() {
     # A failed snapshot is a warning; an interrupted one (Ctrl-C, or a TERM aimed at the
     # collector) stops recovery here rather than rolling on to the next reset.
     local debug_exit=0
-    "$SCRIPT_DIR/run_cluster_debug.sh" "${args[@]}" || debug_exit=$?
+    TT_BMC_API_URL="$BMC_API_URL" TT_BMC_API_TOKEN="${TT_BMC_API_TOKEN:-$BMC_PASSWORD}" \
+        "$SCRIPT_DIR/run_cluster_debug.sh" "${args[@]}" || debug_exit=$?
     if [[ $debug_exit -eq 130 || $debug_exit -eq 143 ]]; then
         echo "Cluster debug collection was interrupted; stopping recovery."
         exit "$debug_exit"

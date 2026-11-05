@@ -9,10 +9,14 @@ PCC-checks every layer's post-RoPE K / raw V / MSA index_k against the golden tr
 scripts/generate_golden_kv_cache.py.
 
 Env:
-  PREFILL_TRACE_DIR   golden trace dir (metadata.json + kv_cache/layer_N.safetensors)   [required in single-run;
+  PREFILL_TRACE_DIR   golden trace dir (metadata.json + kv_cache/layer_N.safetensors), or a bare trace name under the
+                      variant's golden dir                                            [required in single-run;
                       in multi-run optional: seeds the initial capacity and the default PREFILL_GOLDEN_ROOT]
   PREFILL_CHUNKED     "1" -> chunked prefill (chunk loop, cache-read path); "0" -> one-shot  [default 0]
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode)                                  [default 5120]
+  PREFILL_FORWARD_TOKENS_BUDGET  tokens per forward (chunked mode): consecutive chunks of the prompt packed
+                      into one forward of PREFILL_FORWARD_TOKENS_BUDGET // PREFILL_CHUNK_SIZE chunks, the last
+                      forward padded with empty chunks                                [default: chunk size]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement (less noise)      [default 1]
   PREFILL_SKIP_PCC    "1" -> perf only: skip the per-layer golden KV PCC (no kv_cache/ needed) [default 0]
   PREFILL_EXPECTED_TPS  whole-sequence tok/s baseline; when set, assert measured median is
@@ -24,7 +28,12 @@ Env:
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs; also auto-sets
                       M3_LOAD_NLAYERS so only those layers' weight shards are read)          [default: all]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8" (cache holds both)      [default bf4]
-  HF_MODEL            real MiniMax-M3 weights dir (read by ModelArgs)
+  HF_MODEL            real weights dir (read by ModelArgs): a MiniMax-M3 / MiniMax-M3.1 checkpoint (bf16, or MXFP8/NVFP4
+                      dequantized to bf16 at load); its config.json decides the variant. For a checkpoint other than
+                      the variant's default dir, set TT_CACHE_PATH (else the cache goes under HF_MODEL)
+                                                                  [default: the M3_MODEL_VARIANT checkpoint dir]
+  M3_MODEL_VARIANT    MiniMax-M3 or MiniMax-M3.1: picks the default HF_MODEL and golden root when HF_MODEL is unset
+                      (utils/model_variant.py)                                              [default MiniMax-M3]
 
 Multi-run mode (load weights + compile ONCE, then run many specs against the resident model):
   PREFILL_RUNS        where run specs come from:
@@ -46,7 +55,8 @@ Multi-run mode (load weights + compile ONCE, then run many specs against the res
                         capacity=N         KV-cache capacity for this run (tokens; rounded up to a chunk
                                            multiple)                          [default: PREFILL_MAX_SEQ_LEN or fit]
                         label=<str>        tag for the log lines / summary
-  PREFILL_GOLDEN_ROOT dir that bare trace names resolve under   [default: dirname(PREFILL_TRACE_DIR)]
+  PREFILL_GOLDEN_ROOT dir that bare trace names resolve under
+                      [default: dirname(PREFILL_TRACE_DIR), else the variant's golden dir (<cache root>/golden)]
   PREFILL_MAX_SEQ_LEN when set, the FIXED KV-cache capacity (tokens) for every run without its own
                       capacity=; when unset each run FITS the cache to its trace (padded length), as a
                       standalone run would. [default: unset -> fit]
@@ -55,7 +65,7 @@ Multi-run mode (load weights + compile ONCE, then run many specs against the res
   PREFILL_WARMUP_ITERS untimed whole-sequence passes before the timed iterations of each run. Programs are
                       keyed by cache capacity and chunk kind (first / cache-read / ragged), not by ISL, and
                       compile() warms those three; iteration 0 still carries host-side first-call costs
-                      (e.g. the per-actual_isl MoE padding-config upload), so 1 is a good default for perf
+                      (e.g. the MoE padding-config upload per new ragged tail), so 1 is a good default for perf
                                                                                                    [default 0]
   PREFILL_COMPILE     "0" -> skip runtime.compile()'s three-variant warm-up entirely (then iteration 0 pays
                       the program-cache misses)                                                    [default 1]
@@ -64,8 +74,8 @@ Multi-run mode (load weights + compile ONCE, then run many specs against the res
   one-shot run is just a trace whose padded length equals the chunk size. The cache capacity is NOT
   fixed: when a run needs a different capacity the KV cache is re-allocated, the indexed RoPE rebuilt
   and the JIT buckets re-warmed (TtPrefillRuntime.reconfigure_capacity) — seconds to minutes, no
-  weight reload. Fitting matters: the dense layers' ring-joint SDPA gathers the whole cache shard per
-  chunk, so an over-sized cache costs real time (MSA layers are bounded by the valid prefix).
+  weight reload. Fitting matters: on a 1D fabric the MSA index_k gather moves close to the whole slot
+  capacity per chunk, so an over-sized cache costs real time.
 
   # serve: weights load once, then from ANY shell on the node:
   PREFILL_TRACE_DIR=$GOLDEN/longbook_56320 PREFILL_RUNS=fifo:/tmp/m3_pcc.fifo \
@@ -86,6 +96,12 @@ Run (after weights are present on disk):
   PREFILL_CHUNKED=1 PREFILL_TPS_ITERS=5 \
     PREFILL_TRACE_DIR=$HF_MODEL/golden/longbook_10240 \
     python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
+  # MiniMax-M3.1 from its default checkpoint, cache root and golden dir (bare trace name):
+  env -u HF_MODEL M3_MODEL_VARIANT=MiniMax-M3.1 PREFILL_TRACE_DIR=longbook_10240 PREFILL_CHUNKED=1 \
+    python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
+  # another checkpoint of the same architecture: its own cache root and golden
+  HF_MODEL=<checkpoint dir> TT_CACHE_PATH=<fresh cache dir> PREFILL_TRACE_DIR=<golden dir> PREFILL_CHUNKED=1 \
+    python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
 """
 
 import json
@@ -99,14 +115,18 @@ import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.prefill_chunk import PrefillChunk
 from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE
 from models.demos.minimax_m3.tt.moe import shared_overlap
 from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env
+from models.demos.minimax_m3.utils.general_utils import msa_topk_window
+from models.demos.minimax_m3.utils.model_variant import select_variant
 
 
 def _raise_nproc_limit():
@@ -129,11 +149,15 @@ def _raise_nproc_limit():
             )
 
 
-# MSA (sparse) layers 3-59 pick the top-TOPK_BLOCKS of BLOCK_SIZE-token blocks. A cold chunk of at least
+# The run's model variant (HF_MODEL's config.json, else M3_MODEL_VARIANT; utils/model_variant.py). It supplies the
+# default checkpoint and golden root below.
+VARIANT = select_variant()
+
+# MSA (sparse) layers pick the top sparse_topk_blocks of sparse_block_size-token blocks. A cold chunk of at least
 # this many tokens runs the exact-size MSA path; a shorter one reads the KV cache instead. One-shot pads to
 # it so it stays on the exact-size path; chunked only needs whole 128-token blocks per SP rank (a multiple
-# of 1024 at SP=8). Keep in sync with TOPK_BLOCKS * BLOCK_SIZE in models/demos/minimax_m3/tt/attention/msa.py.
-MSA_MIN_TOKENS = 16 * 128  # = 2048
+# of 1024 at SP=8).
+MSA_MIN_TOKENS = msa_topk_window(SimpleNamespace(**VARIANT.config))
 
 
 class GateFailure(AssertionError):
@@ -173,11 +197,12 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config,
 
     from models.common.utility_functions import comp_pcc
     from models.demos.minimax_m3.tt.runners.prefill_kv_validation import naturalize_kv_block
+    from models.demos.minimax_m3.utils.general_utils import is_sparse_attention_layer
 
     if threshold is None:
         threshold = float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88"))
     head_dim = hf_config.head_dim
-    rotary_dim = getattr(hf_config, "rotary_dim", head_dim)
+    rotary_dim = hf_config.rotary_dim
     half = rotary_dim // 2
     src = list(range(head_dim))
     for m in range(rotary_dim):
@@ -187,6 +212,7 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config,
     kv_dir = Path(golden_dir) / "kv_cache"
     logger.info(f"[kv-pcc] per-layer K / V / index_k vs golden ({golden_dir}):")
     mins = {"k": 1.0, "v": 1.0, "index_k": 1.0}
+    msa_without_golden_ik = []  # MSA layers (per the config) whose golden carries no index_k
     assert kv_cache.max_seq_len == runtime.config.max_seq_len, (
         f"KV cache capacity {kv_cache.max_seq_len} != runtime capacity {runtime.config.max_seq_len}: the un-rotation "
         f"below would decode the wrong block-cyclic layout (stale handle after a re-target?)"
@@ -202,6 +228,8 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config,
             g_k = h.get_tensor(f"key_cache_layer_{L}").float()[:, :, :n_tokens, :][..., src]  # HF -> Meta
             g_v = h.get_tensor(f"value_cache_layer_{L}").float()[:, :, :n_tokens, :]
             has_ik = f"index_k_cache_layer_{L}" in keys
+            if not has_ik and is_sparse_attention_layer(hf_config, L):
+                msa_without_golden_ik.append(L)
             g_ik = h.get_tensor(f"index_k_cache_layer_{L}").float()[:, :, :n_tokens, :][..., src] if has_ik else None
 
         pcc_k = float(comp_pcc(g_k, dev_k, 0.0)[1])
@@ -214,6 +242,10 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config,
             line += f" index_k={pcc_ik:.5f}"
         logger.info(line)
 
+    if msa_without_golden_ik:
+        logger.warning(
+            f"[kv-pcc] golden has no index_k for MSA layers {msa_without_golden_ik}: index_k unchecked there"
+        )
     min_pcc = min(mins.values())
     logger.info(
         f"[kv-pcc] min PCC across {num_layers} layers: "
@@ -388,13 +420,14 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
     is re-allocated, the runtime re-targeted (reconfigure_capacity) and the JIT buckets re-warmed."""
     from models.demos.minimax_m3.tt.attention import allocate_kv_caches
 
-    chunk = runtime.config.chunk_size
+    chunk, fwd_chunks = runtime.config.chunk_size, runtime.config.forward_chunks
     trace_ids = load_trace_tokens(spec.trace_dir)
     n_trace = len(trace_ids)
     n_tokens = spec.isl if spec.isl is not None else n_trace  # tokens actually prefilled (the "isl")
     token_ids = tile_tokens(trace_ids, n_tokens) if n_tokens != n_trace else trace_ids
     n_pcc = min(n_tokens, n_trace)  # golden covers the trace only; causality keeps the tiled tail off it
     n_chunks = max(1, math.ceil(n_tokens / chunk))
+    n_forwards = math.ceil(n_chunks / fwd_chunks)
     total = n_chunks * chunk
     capacity = math.ceil((spec.capacity if spec.capacity is not None else total) / chunk) * chunk
     if total > capacity:
@@ -407,7 +440,7 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
     print(
         f"[prefill-pcc] === run '{spec.name}': golden={spec.trace_dir} isl={n_tokens} (trace {n_trace}"
         f"{', TILED cyclically' if n_tokens > n_trace else (', truncated' if n_tokens < n_trace else '')}) "
-        f"chunk={chunk} n_chunks={n_chunks} total={total} capacity={capacity} "
+        f"chunk={chunk} n_chunks={n_chunks} forwards={n_forwards}x{fwd_chunks} total={total} capacity={capacity} "
         f"warmup_iters={warmup_iters} tps_iters={tps_iters} skip_pcc={spec.skip_pcc}",
         flush=True,
     )
@@ -448,30 +481,33 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
 
     # --- throughput. Each iteration re-fills slot 0 (valid for the PCC check after the loop) and
     # times two distinct full-prefill passes, each with syncs placed so it pays for no extra barrier:
-    #   WHOLE SEQUENCE  all n_chunks cold from an empty cache, ONE sync at the very end
+    #   WHOLE SEQUENCE  all n_forwards cold from an empty cache, ONE sync at the very end
     #                   -> time to prefill the whole prompt         (e.g. 55k @ 0 cache)
-    #   LAST CHUNK      pre-fill chunks 0..n-2, sync ONCE (barrier, NOT timed), then time only the
-    #                   final chunk against that accumulated cache   (e.g. 5k @ 50k cache)
+    #   LAST CHUNK      pre-fill forwards 0..n-2, sync ONCE (barrier, NOT timed), then time only the
+    #                   final forward against that accumulated cache   (e.g. 5k @ 50k cache)
     padded = token_ids + [0] * (total - n_tokens)
-    a_last = (n_chunks - 1) * chunk  # context tokens already in cache ahead of the final chunk
-    last_len = min(a_last + chunk, total) - a_last  # width of the final chunk (incl pad)
+    a_last = (n_forwards - 1) * fwd_chunks * chunk  # context tokens already in cache ahead of the final forward
+    last_len = total - a_last  # width of the final forward's chunks (incl pad)
 
-    def prefill_chunk(c):
-        a = c * chunk
-        inp = runtime.make_chunk_input(padded[a : a + chunk], a)
-        runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=a, actual_end=min(a + chunk, n_tokens))
+    def prefill_forward(f):
+        # Forward f packs chunks f*fwd_chunks.. of slot 0; past the prompt's last chunk the forward's chunks are empty.
+        starts = [c * chunk for c in range(f * fwd_chunks, (f + 1) * fwd_chunks)]
+        chunks = [PrefillChunk(0, a, min(a + chunk, n_tokens)) if a < total else PrefillChunk(0, 0, 0) for a in starts]
+        tokens = [padded[e.actual_start : e.actual_start + chunk] if not e.is_empty else [0] * chunk for e in chunks]
+        inp = runtime.make_forward_input(tokens, [e.actual_start for e in chunks])
+        runtime.prefill_forward(inp, kv_cache, chunks)
 
     def run_whole():  # cold, no mid-loop syncs — one barrier at the end
-        for c in range(n_chunks):
-            prefill_chunk(c)
+        for f in range(n_forwards):
+            prefill_forward(f)
         ttnn.synchronize_device(mesh)
 
-    def run_last_chunk():  # returns the timed last-chunk wall seconds
-        for c in range(n_chunks - 1):
-            prefill_chunk(c)
+    def run_last_chunk():  # returns the timed last-forward wall seconds
+        for f in range(n_forwards - 1):
+            prefill_forward(f)
         ttnn.synchronize_device(mesh)  # barrier before the timed region — NOT counted
         t0 = time.perf_counter()
-        prefill_chunk(n_chunks - 1)
+        prefill_forward(n_forwards - 1)
         ttnn.synchronize_device(mesh)
         return time.perf_counter() - t0
 
@@ -503,7 +539,7 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
     last_tps = last_len / lc  # processed (padded) tokens, the historical basis of this line
     last_real = n_tokens - a_last  # real tokens in the final chunk (== last_len unless the trace is ragged)
     print(
-        f"[prefill-pcc] LAST CHUNK over {tps_iters} iters: {last_len} tok @ {a_last} cache, "
+        f"[prefill-pcc] LAST {'FORWARD' if fwd_chunks > 1 else 'CHUNK'} over {tps_iters} iters: {last_len} tok @ {a_last} cache, "
         f"median {last_tps:.1f} tok/s (processed), {last_real / lc:.1f} tok/s ({last_real} real); "
         f"wall median {lc * 1000:.1f} ms [min {min(last_times) * 1000:.1f}, max {max(last_times) * 1000:.1f}]",
         flush=True,
@@ -515,6 +551,8 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
         "trace_tokens": n_trace,
         "chunk": chunk,
         "n_chunks": n_chunks,
+        "forward_tokens_budget": fwd_chunks * chunk,
+        "n_forwards": n_forwards,
         "capacity": capacity,
         "recompile_s": recompile_s,
         "warmup_iters": warmup_iters,
@@ -586,12 +624,18 @@ def main():
             )
             return 0
 
+    # ModelArgs reads HF_MODEL; default it (and the golden root) to the variant's.
+    os.environ.setdefault("HF_MODEL", VARIANT.weights_dir)
+    print(f"[prefill-pcc] model variant {VARIANT.name}: HF_MODEL={os.environ['HF_MODEL']}", flush=True)
     golden_dir = os.environ.get("PREFILL_TRACE_DIR")
+    if golden_dir and os.sep not in golden_dir:  # a bare trace name
+        golden_dir = os.path.join(VARIANT.golden_dir, golden_dir)
     runs_source = os.environ.get("PREFILL_RUNS")
     chunked = os.getenv("PREFILL_CHUNKED", "0") == "1"
     chunk_size = int(os.getenv("PREFILL_CHUNK_SIZE", "5120"))
+    forward_tokens_budget = int(os.getenv("PREFILL_FORWARD_TOKENS_BUDGET") or chunk_size)
     golden_root = os.environ.get("PREFILL_GOLDEN_ROOT") or (
-        os.path.dirname(os.path.normpath(golden_dir)) if golden_dir else None
+        os.path.dirname(os.path.normpath(golden_dir)) if golden_dir else VARIANT.golden_dir
     )
 
     # --- resolve the process-wide (chunk, capacity) and the run list -----------------------------
@@ -617,8 +661,8 @@ def main():
             print(
                 f"\n{bang}\n"
                 f"[prefill-pcc] WARNING: prompt is only {n_tokens} tokens, below the one-shot MSA floor of\n"
-                f"  {MSA_MIN_TOKENS} (TOPK_BLOCKS*BLOCK_SIZE = 16*128): the exact-size MSA path needs 16\n"
-                f"  128-token blocks (a shorter cold chunk would read the KV cache instead). PADDING the\n"
+                f"  {MSA_MIN_TOKENS} (sparse_topk_blocks * sparse_block_size): the exact-size MSA path needs that\n"
+                f"  many blocks (a shorter cold chunk would read the KV cache instead). PADDING the\n"
                 f"  sequence {n_tokens} -> {capacity} tokens (token 0) so one-shot stays on that path.\n"
                 f"  * ACCURACY IS STILL VALID: KV PCC compares only the first {n_tokens} real tokens, and\n"
                 f"    causal masking keeps the trailing pad (positionally future) from touching them.\n"
@@ -741,13 +785,14 @@ def main():
                 f"{bang}\n",
                 flush=True,
             )
-            print("[prefill-pcc] loading real bf16 weights + EP placement (slow: bf16 source read) ...", flush=True)
+            print("[prefill-pcc] loading real weights + EP placement (slow: source read) ...", flush=True)
             state_dict = ModelArgs.load_state_dict(model_args.weights_path)
         cfg = TtPrefillRuntimeConfig(
             num_layers=num_layers,
             max_seq_len=capacity,
             mesh_shape=(rows, cols),
             chunk_size=chunk,
+            forward_tokens_budget=forward_tokens_budget if chunked or runs_source is not None else chunk,
             num_users=1,
             expert_weight_dtype=expert_dtype,
             weight_cache_path=cache_path,

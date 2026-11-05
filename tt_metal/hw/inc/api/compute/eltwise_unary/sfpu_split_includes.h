@@ -20,6 +20,10 @@
 #include "api/compute/eltwise_unary/exp.h"
 #endif
 
+#ifdef SFPU_OP_GEGLU_TANH_INCLUDE
+#include "api/compute/geglu_tanh.h"
+#endif
+
 #ifdef SFPU_OP_GELU_INCLUDE
 #include "api/compute/eltwise_unary/gelu.h"
 #endif
@@ -130,6 +134,18 @@
 
 #ifdef SFPU_OP_DROPOUT_INCLUDE
 #include "api/compute/eltwise_unary/dropout.h"
+#endif
+
+#ifdef SFPU_OP_RAND_INCLUDE
+#include "api/compute/eltwise_unary/rand.h"
+#endif
+
+#ifdef SFPU_OP_EMA_INCLUDE
+#include "api/compute/ema.h"
+#endif
+
+#ifdef SFPU_OP_RESHUFFLE_INCLUDE
+#include "api/compute/reshuffle.h"
 #endif
 
 #ifdef SFPU_OP_FILL_INCLUDE
@@ -288,6 +304,18 @@
 #include "api/compute/binary_bitwise_sfpu.h"
 #endif
 
+#ifdef SFPU_OP_BINARY_GCD_INCLUDE
+#include "api/compute/gcd.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_LCM_INCLUDE
+#include "api/compute/lcm.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_BCAST_INCLUDE
+#include "api/compute/sfpu_binary_bcast.h"
+#endif
+
 #ifdef SFPU_OP_BINARY_SHIFT_INCLUDE
 #include "api/compute/binary_shift.h"
 #endif
@@ -301,18 +329,14 @@
 #include "api/compute/sub_int_sfpu.h"
 #endif
 
+#ifdef SFPU_OP_SILU_GLU_INCLUDE
+#include "api/compute/silu_glu.h"
+#endif
+
 #ifdef SFPU_OP_SITU_GLU_INCLUDE
 #include "api/compute/situ_glu.h"
 #endif
 
 #ifdef SFPU_OP_CLAMPED_SILU_GLU_INCLUDE
 #include "api/compute/clamped_silu_glu.h"
-#endif
-
-#ifdef SFPU_OP_GEGLU_TANH_INCLUDE
-#include "api/compute/geglu_tanh.h"
-#endif
-
-#ifdef SFPU_OP_SILU_GLU_INCLUDE
-#include "api/compute/silu_glu.h"
 #endif
