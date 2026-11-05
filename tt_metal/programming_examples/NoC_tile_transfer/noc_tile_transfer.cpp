@@ -5,6 +5,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 #include <cstdint>
 #include <vector>
@@ -45,21 +47,26 @@ int main() {
 
     // Input data preparation
     constexpr uint32_t single_tile_size = sizeof(uint16_t) * tt::constants::TILE_HW;
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
-    distributed::ReplicatedBufferConfig buffer_config{.size = single_tile_size};
+    // A row-major tensor with one row of one tile's worth of elements is a single DRAM page of one tile.
+    TensorSpec dram_tensor_spec(
+        Shape({1, tt::constants::TILE_HW}),
+        TensorLayout(
+            DataType::UINT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
 
-    auto src_dram_buffer =
-        distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());  // replicated per device
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    MeshTensor src_dram_tensor =
+        MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);  // replicated per device
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
 
     // Core synchronization semaphore setup
     const uint32_t sem_id = CreateSemaphore(program, sem_core_range, 0);
 
     // Source data preparation and DRAM transfer
     const uint16_t input_data = 14;  // Example input data
-    std::vector<uint16_t> src_vec(buffer_config.size / sizeof(uint16_t), input_data);
-    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, false);
+    std::vector<uint16_t> src_vec(single_tile_size / sizeof(uint16_t), input_data);
+    HostTensor src_host_tensor = HostTensor::from_vector(src_vec, dram_tensor_spec);
+    cq.enqueue_write_tensor(src_host_tensor, src_dram_tensor);
 
     // L1 circular buffer setup
     constexpr uint32_t src0_cb_index = CBIndex::c_0;
@@ -77,7 +84,7 @@ int main() {
     // Kernels setup
     // Core 0 kernels
     std::vector<uint32_t> reader_compile_time_args = {src0_cb_index};
-    TensorAccessorArgs(*src_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src_dram_tensor).append_to(reader_compile_time_args);
     KernelHandle core0_reader_kernel_id = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "NoC_tile_transfer/kernels/dataflow/reader0.cpp",
@@ -96,7 +103,7 @@ int main() {
         core1,
         tt::tt_metal::ReaderDataMovementConfig{{src0_cb_index, src1_cb_index}});
     std::vector<uint32_t> writer_compile_time_args = {src1_cb_index};
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_dram_tensor).append_to(writer_compile_time_args);
     KernelHandle core1_writer_kernel_id = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "NoC_tile_transfer/kernels/dataflow/writer1.cpp",
@@ -104,10 +111,10 @@ int main() {
         tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
 
     // Runtime args setup
-    SetRuntimeArgs(program, core0_reader_kernel_id, core0, {src_dram_buffer->address()});
+    SetRuntimeArgs(program, core0_reader_kernel_id, core0, {src_dram_tensor.address()});
     SetRuntimeArgs(program, core0_writer_kernel_id, core0, {core1_physical_coord.x, core1_physical_coord.y, sem_id});
     SetRuntimeArgs(program, core1_reader_kernel_id, core1, {core0_physical_coord.x, core0_physical_coord.y, sem_id});
-    SetRuntimeArgs(program, core1_writer_kernel_id, core1, {dst_dram_buffer->address()});
+    SetRuntimeArgs(program, core1_writer_kernel_id, core1, {dst_dram_tensor.address()});
 
     // Program enqueue (non-blocking). Wait for completion before reading back.
     workload.add_program(device_range, std::move(program));
@@ -115,8 +122,7 @@ int main() {
     distributed::Finish(cq);
 
     // Data transfer back to host machine
-    std::vector<uint16_t> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+    std::vector<uint16_t> result_vec = cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<uint16_t>();
 
     fmt::print("Result = {} : Expected = {}\n", result_vec[0], input_data);
 

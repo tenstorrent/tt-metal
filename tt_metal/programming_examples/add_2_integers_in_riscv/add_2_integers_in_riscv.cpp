@@ -7,6 +7,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -50,37 +52,44 @@ int main() {
     // access to DRAM, an extra buffer on L1 (SRAM) is required to read/write data from/to DRAM.
     // page_size is the size of each page in the buffer. In most applications this will be set to the size of a tile.
     // But for this example we set it to the size of a single integer as that is what we are adding.
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = buffer_size,
-        .buffer_type = BufferType::DRAM};
-    distributed::DeviceLocalBufferConfig l1_config{
-        .page_size = buffer_size,
-        .buffer_type = BufferType::L1};
-    distributed::ReplicatedBufferConfig buffer_config{
-        .size = buffer_size,
-    };
+    // Each row of a row-major tensor is one page, so a row of one integer gives a page size of buffer_size.
+    constexpr uint32_t elements_per_page = buffer_size / sizeof(uint32_t);
+    TensorSpec dram_tensor_spec(
+        Shape({1, elements_per_page}),
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    TensorSpec l1_tensor_spec(
+        Shape({1, elements_per_page}),
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));
 
-    // Create the DRAM and SRAM buffers:
-    // MeshBuffer objects are allocated per device according to the DeviceLocalBufferConfig (location, page size)
-    // and sized by the ReplicatedBufferConfig. Here we create three DRAM buffers for inputs/outputs and three L1
-    // buffers used as on-core scratch space for the Data Movement kernels.
-    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-    auto src0_l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
-    auto src1_l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
-    auto dst_l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+    // Create the DRAM and SRAM tensors:
+    // MeshTensor objects are allocated per device according to the TensorSpec (location, page size, size).
+    // Here we create three DRAM tensors for inputs/outputs and three L1 tensors used as on-core scratch space for
+    // the Data Movement kernels.
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+    MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+    MeshTensor src0_l1_tensor = MeshTensor::allocate_on_device(*mesh_device, l1_tensor_spec);
+    MeshTensor src1_l1_tensor = MeshTensor::allocate_on_device(*mesh_device, l1_tensor_spec);
+    MeshTensor dst_l1_tensor = MeshTensor::allocate_on_device(*mesh_device, l1_tensor_spec);
 
     // Create source data and write to DRAM
     std::vector<uint32_t> src0_vec = {14};
     std::vector<uint32_t> src1_vec = {7};
 
-    // Enqueue write operations to copy data from host vectors to DRAM buffers. The last argument specifies whether the
-    // write operation should block until the data is written to the device. In this case, we set it to false for
-    // asynchronous writes, allowing the program to continue executing while the data is being written. This is
-    // recommended for most writes to device in applications to improve performance.
-    EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/false);
-    EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, /*blocking=*/false);
+    // Enqueue write operations to copy data from host tensors to DRAM tensors. The write operation does not block
+    // until the data is written to the device. This allows the program to continue executing while the data is being
+    // written, so the host tensors must stay alive until the write is done. This is recommended for most writes to
+    // device in applications to improve performance.
+    HostTensor src0_host_tensor = HostTensor::from_vector(src0_vec, dram_tensor_spec);
+    HostTensor src1_host_tensor = HostTensor::from_vector(src1_vec, dram_tensor_spec);
+    cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
+    cq.enqueue_write_tensor(src1_host_tensor, src1_dram_tensor);
 
     // Create the kernel (code that runs on the Tensix core) that will perform the addition of the 2 integers.
     // The Data Movement cores are the only cores that can read/write data from/to DRAM. Thus we use them for
@@ -100,12 +109,12 @@ int main() {
         kernel_id,
         core,
         {
-            static_cast<uint32_t>(src0_dram_buffer->address()),
-            static_cast<uint32_t>(src1_dram_buffer->address()),
-            static_cast<uint32_t>(dst_dram_buffer->address()),
-            static_cast<uint32_t>(src0_l1_buffer->address()),
-            static_cast<uint32_t>(src1_l1_buffer->address()),
-            static_cast<uint32_t>(dst_l1_buffer->address()),
+            static_cast<uint32_t>(src0_dram_tensor.address()),
+            static_cast<uint32_t>(src1_dram_tensor.address()),
+            static_cast<uint32_t>(dst_dram_tensor.address()),
+            static_cast<uint32_t>(src0_l1_tensor.address()),
+            static_cast<uint32_t>(src1_l1_tensor.address()),
+            static_cast<uint32_t>(dst_l1_tensor.address()),
         });
 
     // Add the program to the workload and enqueue it for execution on the MeshDevice.
@@ -113,12 +122,10 @@ int main() {
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
 
-    // Read a shard of the destination MeshBuffer back to host.
-    // ReadShard reads from a specific device identified by MeshCoordinate; the last argument controls blocking.
+    // Read the destination MeshTensor back to host. The last argument controls blocking.
     // This time we set blocking=true since we must have the data before comparing.
     // NOTE: Everything on the command queue executes in order; a read will not run before the prior kernel finishes.
-    std::vector<uint32_t> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
+    std::vector<uint32_t> result_vec = cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<uint32_t>();
     if (result_vec.size() != 1) {
         std::cout << "Error: Expected result vector size of 1, got " << result_vec.size() << std::endl;
         mesh_device->close();
