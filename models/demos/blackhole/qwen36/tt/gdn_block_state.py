@@ -79,6 +79,7 @@ class GdnBlockState:
         kv_by_slot = {e[2]: kv_caches[n] for n, (_, e) in enumerate(attn_entries)}
         self.kv_caches = kv_caches
         self.layers = []  # (layer index, TPGatedDeltaNet)
+        self._slot_layer = {}  # layer slot -> its first GDN layer (whose views cover the slot's K and V)
         self._host_idx = {}
         for i, e in enumerate(per_layer_specs):
             if not is_mamba_entry(e):
@@ -90,6 +91,15 @@ class GdnBlockState:
             k, v = kv_by_slot[e[2]]
             dn._paged_state = self._bind(dn, k, v)
             self.layers.append((i, dn))
+            self._slot_layer.setdefault(e[2], dn)
+        # The gather tables and the zero block live as long as the model. Allocate them now, before the warmup
+        # captures any trace: a buffer allocated after a capture and still alive at a replay can be overwritten by it.
+        for _, dn in self.layers:
+            self._mirror_table(dn.Nv * 4, 0)
+            self._mirror_table(dn.Nv * 4, 1)
+            self._unpack_table(dn)
+        if kv_caches:
+            zero_block(model, kv_caches[0][0])
 
     def _bind(self, dn, k, v):
         num_blocks, heads, block, hd = (int(x) for x in k.shape)
@@ -112,7 +122,8 @@ class GdnBlockState:
             rv = -(-hv * head_pages // nb)
             period = FP32_PAGE_BYTES // math.gcd(s_v, FP32_PAGE_BYTES)
             if any(
-                (_first_row(b, s_v, FP32_PAGE_BYTES) + rv) * FP32_PAGE_BYTES > (b + 1) * s_v - hist_rows * BF16_PAGE_BYTES
+                (_first_row(b, s_v, FP32_PAGE_BYTES) + rv) * FP32_PAGE_BYTES
+                > (b + 1) * s_v - hist_rows * BF16_PAGE_BYTES
                 for b in range(period)
             ):
                 raise ValueError(
@@ -179,32 +190,38 @@ class GdnBlockState:
     def set_decode_blocks(self, state_block_ids_per_layer, row_of=None):
         """Point device row d of every GDN layer at its request's block. ``row_of[i]`` = device row of submitted row i
         (None = identity); rows no request occupies point at block 0, vLLM's null block. Copies only changed indices."""
+        built = {}  # the layers of one KV cache group share block ids and page geometry: one host index for all
         for i, dn in self.layers:
             ids = self._block_ids(state_block_ids_per_layer, i, self.bmax)
             blocks = [0] * self.bmax
             for r, b in enumerate(ids):
                 blocks[r if row_of is None else row_of[r]] = b
-            ps = dn._paged_state
-            hp = dn.Dk * dn.Dv // 1024
-            b = torch.tensor(blocks, dtype=torch.int64)
-            pk = ps.banks * (-(-b * ps.bank_bytes_k // FP32_PAGE_BYTES))
-            pv = ps.rec_pages_k + ps.banks * (-(-b * ps.bank_bytes_v // FP32_PAGE_BYTES))
-            h = torch.arange(dn.Nv, dtype=torch.int64).reshape(-1, 1)
-            rec = torch.where(h < ps.heads_k, pk + hp * h, pv + hp * (h - ps.heads_k))
-            host = torch.cat([rec, b * ps.hist_pages + ps.hist_first + 4 * h]).to(torch.int32)  # [2 * Nv, Bmax]
+            key = tuple(blocks)
             prev = self._host_idx.get(i)
-            if prev is not None and torch.equal(prev, host):
+            if prev is not None and prev[0] == key:
                 continue
-            ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(
-                    host,
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-                ),
-                ps.idx,
-            )
-            self._host_idx[i] = host
+            ps = dn._paged_state
+            geom = (ps.banks, ps.bank_bytes_k, ps.bank_bytes_v, ps.heads_k, ps.rec_pages_k, ps.hist_pages)
+            geom += (ps.hist_first, dn.Nv, dn.Dk * dn.Dv // 1024, key)
+            host = built.get(geom)
+            if host is None:
+                host = built[geom] = self._index_host(ps, dn, blocks)
+            ttnn.copy_host_to_device_tensor(host, ps.idx)
+            # Held until the index changes again: the copy may read the host tensor after this call returns.
+            self._host_idx[i] = (key, host)
+
+    def _index_host(self, ps, dn, blocks):
+        """Host uint32 [2 * Nv, Bmax] gdn_decode_step state_page_idx for device rows holding `blocks`."""
+        hp = dn.Dk * dn.Dv // 1024
+        b = torch.tensor(blocks, dtype=torch.int64)
+        pk = ps.banks * (-(-b * ps.bank_bytes_k // FP32_PAGE_BYTES))
+        pv = ps.rec_pages_k + ps.banks * (-(-b * ps.bank_bytes_v // FP32_PAGE_BYTES))
+        h = torch.arange(dn.Nv, dtype=torch.int64).reshape(-1, 1)
+        rec = torch.where(h < ps.heads_k, pk + hp * h, pv + hp * (h - ps.heads_k))
+        host = torch.cat([rec, b * ps.hist_pages + ps.hist_first + 4 * h]).to(torch.int32)
+        return ttnn.from_torch(
+            host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh)
+        )
 
     def write_prefill_rows(self, state_block_ids_per_layer, rows):
         """Copy device row rows[u] of every GDN layer's decode buffers (the state prefill just wrote, packed for the
@@ -229,7 +246,7 @@ class GdnBlockState:
                         rec_rows,
                         (d * halves + lo, 0, 0, 0),
                         (d * halves + hi, 1, dk // 2, dv),
-                        memory_config=dn._rec_row_shard_memcfg(),
+                        memory_config=self._halves_shard_memcfg(dn, hi - lo),
                     )
                     ttnn.experimental.slice_write(
                         src, view, [s0, 0, 0, 0], [s0 + hi - lo, 1, dk // 2, dv], [1, 1, 1, 1]
@@ -249,6 +266,38 @@ class GdnBlockState:
                     src, ps.hist_view, [blk, t0, 0, 0], [blk + 1, t0 + nr, 32, 32], [1, 1, 1, 1]
                 )
                 ttnn.deallocate(src)
+
+    def copy_blocks(self, copies):
+        """vLLM's (src, dst) state block copies, in list order: whole blocks (copy_kv_blocks), then the head pages
+        again wherever src and dst hold them at different offsets inside the block. When a block is not a whole number
+        of fp32 pages per bank, its whole pages start at an offset that depends on the block (BF8 1024: 0 for even
+        blocks, 2048 B for odd ones), and a byte copy keeps the source's offset. The bf16 history pages are whole in
+        every block (17 per bank at BF8 1024), so the byte copy places them right."""
+        copy_kv_blocks(self.model, copies)
+        for src, dst in copies:
+            src, dst = int(src), int(dst)
+            if src == dst:
+                continue
+            for dn in self._slot_layer.values():
+                ps = dn._paged_state
+                (pk_s, pv_s), (pk_d, pv_d) = self._rec_pages(ps, src), self._rec_pages(ps, dst)
+                parts = [(ps.rec_view, ps.bank_bytes_k, pk_s, pk_d, 2 * ps.heads_k)]
+                if ps.rec_view2 is not None:
+                    parts.append((ps.rec_view2, ps.bank_bytes_v, pv_s, pv_d, 2 * (dn.Nv - ps.heads_k)))
+                for view, s, p_s, p_d, n in parts:
+                    if (src * s) % FP32_PAGE_BYTES == (dst * s) % FP32_PAGE_BYTES:
+                        continue
+                    s0, d0 = p_s // HALF_HEAD_PAGES, p_d // HALF_HEAD_PAGES
+                    halves = ttnn.slice(
+                        view,
+                        (s0, 0, 0, 0),
+                        (s0 + n, 1, dn.Dk // 2, dn.Dv),
+                        memory_config=self._halves_shard_memcfg(dn, n),
+                    )
+                    ttnn.experimental.slice_write(
+                        halves, view, [d0, 0, 0, 0], [d0 + n, 1, dn.Dk // 2, dn.Dv], [1, 1, 1, 1]
+                    )
+                    ttnn.deallocate(halves)
 
     def set_prefill_blocks(self, state_block_ids_per_layer):
         """The state block ids of this prefill step (row u = prefilled request u), for restore()."""
@@ -291,6 +340,28 @@ class GdnBlockState:
             ttnn.deallocate(rows)
             ttnn.copy(carry, dn.conv_carry)
             ttnn.deallocate(carry)
+
+    def _halves_shard_memcfg(self, dn, halves):
+        """L1 height-sharded config for `halves` half-head slices [halves, 1, Dk / 2, Dv], with the core choice of
+        TPGatedDeltaNet._rec_row_shard_memcfg for that row count (the same config for a whole row). slice_write writes
+        into the destination view in place only from an L1-sharded source whose shards it fills exactly."""
+        cfgs = self.__dict__.setdefault("_halves_shard_cfgs", {})
+        key = (halves, dn.Dk, dn.Dv)
+        if key not in cfgs:
+            grid_size = self.mesh.compute_with_storage_grid_size()
+            rows = halves * dn.Dk // 2
+            n_tiles = rows // ttnn.TILE_SIZE
+            num_cores = max(c for c in range(1, min(48, grid_size.x * grid_size.y) + 1) if n_tiles % c == 0)
+            cfgs[key] = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.num_cores_to_corerangeset(num_cores, grid_size, row_wise=True),
+                    (rows // num_cores, dn.Dv),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+        return cfgs[key]
 
     def _unpack_table(self, dn):
         """uint32 [1, (K - 1) * C / 32] gather table: 32-channel row (j, ch) of conv_carry <- packed row
@@ -378,17 +449,12 @@ def copy_kv_blocks(model, copies):
         ttnn.deallocate(pt)
 
 
-def zero_kv_blocks(model, block_ids):
-    """Zero blocks in every K and V buffer of model._paged_kv_caches (vLLM's new_block_ids_to_zero: a block that held
-    fp32 GDN state reads as NaN / Inf in bf16 attention)."""
-    kv_caches = getattr(model, "_paged_kv_caches", None)
-    if not block_ids or not kv_caches:
-        return
-    mesh = model.mesh_device
-    k0 = kv_caches[0][0]
+def zero_block(model, k0):
+    """model._zero_kv_block: one zero block shaped and typed like the paged buffer k0 (created on the first call)."""
     shape = [1] + [int(x) for x in list(k0.shape)[1:]]
     zeros = getattr(model, "_zero_kv_block", None)
     if zeros is None or list(zeros.shape) != shape or zeros.dtype != k0.dtype:
+        mesh = model.mesh_device
         zeros = model._zero_kv_block = ttnn.from_torch(
             torch.zeros(shape, dtype=torch.bfloat16),
             dtype=k0.dtype,
@@ -397,6 +463,17 @@ def zero_kv_blocks(model, block_ids):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
+    return zeros
+
+
+def zero_kv_blocks(model, block_ids):
+    """Zero blocks in every K and V buffer of model._paged_kv_caches (vLLM's new_block_ids_to_zero: a block that held
+    fp32 GDN state reads as NaN / Inf in bf16 attention)."""
+    kv_caches = getattr(model, "_paged_kv_caches", None)
+    if not block_ids or not kv_caches:
+        return
+    mesh = model.mesh_device
+    zeros = zero_block(model, kv_caches[0][0])
     for blk in block_ids:
         pt = ttnn.from_torch(
             torch.tensor([[blk]], dtype=torch.int32),

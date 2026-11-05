@@ -59,7 +59,7 @@ def _model(n_layers=8, bmax=8, nv=NV):
     attn_idx = [i for i in range(n_layers) if i % 4 == 3]
     layers = []
     for i in range(n_layers):
-        dn = SimpleNamespace(Nv=nv, Dk=DK, Dv=DV, _decode_op=True, use_fused_recurrent_decode=False)
+        dn = SimpleNamespace(Nv=nv, Nk=nv // 3, Dk=DK, Dv=DV, K=4, _decode_op=True, use_fused_recurrent_decode=False)
         layers.append(SimpleNamespace(is_full_attention=i in attn_idx, attention=dn))
     return SimpleNamespace(
         mesh_device="mesh", args=SimpleNamespace(max_batch_size=bmax), _attention_layer_indices=attn_idx, layers=layers
@@ -154,8 +154,11 @@ def test_state_pages_lie_inside_their_block_on_every_bank(fake, dtype, block, nv
             for h in range(2 * nv):
                 p = int(idx[h, d])
                 if h < nv:
-                    pool, q0, n, size, s = ("k", p, 16, 4096, ps.bank_bytes_k) if p < ps.rec_pages_k else (
-                        "v", p - ps.rec_pages_k, 16, 4096, ps.bank_bytes_v)
+                    pool, q0, n, size, s = (
+                        ("k", p, 16, 4096, ps.bank_bytes_k)
+                        if p < ps.rec_pages_k
+                        else ("v", p - ps.rec_pages_k, 16, 4096, ps.bank_bytes_v)
+                    )
                 else:
                     pool, q0, n, size, s = "v", p, 4, 2048, ps.bank_bytes_v
                 for q in range(q0, q0 + n):
@@ -296,6 +299,7 @@ def torch_ttnn(monkeypatch):
     monkeypatch.setattr(gbs, "ttnn", t)
     monkeypatch.setattr(gbs, "_tile_bytes", lambda dtype: {"bf16": 2048, "fp32": 4096, "bf8": 1088}[dtype])
     monkeypatch.setattr(gbs, "_dram_banks", lambda mesh: BANKS)
+    monkeypatch.setattr(gbs.GdnBlockState, "_halves_shard_memcfg", lambda self, dn, halves: None)
     return t
 
 
@@ -350,17 +354,23 @@ def _group_copies(src, dst):
     return [(src + 8 * g, dst + 8 * g) for g in range(3)]
 
 
-@pytest.mark.parametrize("block, nv, nk", [(4096, NV, NK), (1024, 6, 2)], ids=["tp4_b4096", "tp8_b1024_split"])
-def test_prefill_rows_survive_block_copy_and_restore(torch_ttnn, monkeypatch, block, nv, nk):
+@pytest.mark.parametrize(
+    "block, nv, nk, src, dst",
+    [(4096, NV, NK, 5, 7), (1024, 6, 2, 5, 7), (1024, 6, 2, 4, 7), (1024, 6, 2, 5, 6)],
+    ids=["tp4_b4096", "tp8_b1024_split", "tp8_b1024_split_even_to_odd", "tp8_b1024_split_odd_to_even"],
+)
+def test_prefill_rows_survive_block_copy_and_restore(torch_ttnn, monkeypatch, block, nv, nk, src, dst):
+    # BF8 1024 holds 8.5 fp32 pages per bank: the whole pages of an even block start at its first byte, those of an
+    # odd block half a page later, so a copy between parities must move the head pages, not only the block's bytes.
     model, kv, carries = _staged_model(monkeypatch, block=block, nv=nv, nk=nk)
     st = gbs.GdnBlockState(model, _specs(model, block=block), kv)
     rec0 = {i: dn.rec_state.clone() for i, dn in st.layers}
-    st.write_prefill_rows(_ids(model, [5, 2]), rows=[3, 0])  # request 0 on device row 3, request 1 on row 0
-    gbs.copy_kv_blocks(model, _group_copies(5, 7))
+    st.write_prefill_rows(_ids(model, [src, 2]), rows=[3, 0])  # request 0 on device row 3, request 1 on row 0
+    st.copy_blocks(_group_copies(src, dst))
     for i, dn in st.layers:  # the B=1 prefill scratch, bound
         dn.rec_state = torch.zeros(1, nv, DK, DV)
         dn.conv_carry = torch.zeros(1, KCONV - 1, dn.qkv_dim_tp, dtype=torch.bfloat16)
-    st.set_prefill_blocks(_ids(model, [7, 2]))
+    st.set_prefill_blocks(_ids(model, [dst, 2]))
     for u, row in ((0, 3), (1, 0)):
         st.restore(u)
         for i, dn in st.layers:
