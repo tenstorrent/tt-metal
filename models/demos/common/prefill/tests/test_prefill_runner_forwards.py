@@ -138,7 +138,7 @@ def test_a_refused_forward_shuts_down_the_next_rank(loop, monkeypatch, expect_er
     assert runtime.calls == []
 
 
-def test_index_endpoints_use_the_chunk_metadata(monkeypatch):
+def test_index_endpoints_use_the_d2d_metadata(monkeypatch):
     made = []
     services = SimpleNamespace(
         create_receiver=lambda **kw: made.append(kw["metadata_size_bytes"]),
@@ -149,7 +149,7 @@ def test_index_endpoints_use_the_chunk_metadata(monkeypatch):
     monkeypatch.setattr(runner, "indexer_indices_global_spec", lambda *a: None)
     monkeypatch.setattr(runner, "D2D_METADATA_SIZE_BYTES", 16)
     runner.build_d2d_index_endpoints(None, 1, (1, 1, 32, 8), inbound=True, outbound=True)
-    assert made == [12, 12]
+    assert made == [16, 16]
 
 
 def _request_ids(forwards):

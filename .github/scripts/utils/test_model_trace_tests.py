@@ -221,7 +221,7 @@ def test_runner_dry_run_keeps_existing_model_command():
     assert "TT_METAL_TRACE_ALLOC_TRACKING=1" in result.stdout
     assert "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0" in result.stdout
     assert "performance-ci-token-matching" in result.stdout
-    assert "--use_prefetcher True --repeat_batches 1" in result.stdout
+    assert "--use_prefetcher --repeat_batches 1" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="workflow filter requires jq")

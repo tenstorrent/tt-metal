@@ -23,7 +23,6 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
-#include "hal_types.hpp"
 
 namespace tt::tt_metal {
 
