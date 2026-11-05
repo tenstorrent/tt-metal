@@ -190,8 +190,8 @@ def swap_in_ternary_mlp(model, mlp_only=False) -> None:
             os.environ.get("BONSAI_TERNARY_CACHE", "/local/ttuser/jerrywang/bonsai/ternary_cache"),
             prefill_rotations=getattr(model, "_prefill_rotations", None),
         )
-    if os.environ.get("BONSAI_NORM_ROT") == "1":
-        # decode norms fused with the 5120-wide rotation (rotate.NormRotation): every layer, both norms
+    if os.environ.get("BONSAI_NORM_ROT", "1") == "1":
+        # decode norms fused with the 5120-wide rotation (rotate.NormRotation): every layer, both norms (=0: off)
         from models.demos.blackhole.bonsai2.tt.ternary.rotate import NormRotation
 
         for layer in model.layers:

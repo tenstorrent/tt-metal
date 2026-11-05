@@ -128,9 +128,9 @@ class NormRotation:
     """RMSNorm + rotation in one op (kernels/nrot_*.cpp) for a decode activation of width K: returns the normalised
     activation (bf16 TILE in L1, row 0 = the token; the a/b projection and the shared attention code read it) and the
     C rotated copies x' the ternary linears read. Replaces the sharded norm's 3 ops and the rotation op.
-    Not enabled (BONSAI_NORM_ROT=1 turns it on): correct (norm 0.18% from torch fp32), but no faster on the P150. The
-    op takes 19.8 us against 13.4 (rotation) + ~8 (norm), and traced decode measured 35.89 / 35.91 ms with it vs
-    35.79 / 35.81 without (alternating runs)."""
+    On by default (BONSAI_NORM_ROT=0 turns it off): correct (norm 0.18% from torch fp32). Once the rotation and norm
+    ops stopped paying per-core launches (core_ranges.py), traced decode went 29.91 -> 29.47 ms with it; before, it
+    measured no faster (35.89 / 35.91 vs 35.79 / 35.81)."""
 
     def __init__(self, device, signs: np.ndarray, norm_w, eps, copies: int = 8):
         K = signs.shape[0]
@@ -160,12 +160,7 @@ class NormRotation:
             ttnn.Shape(list(x.shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
         )
         grid = device.compute_with_storage_grid_size()
-        crs = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(b % grid.x, b // grid.x), ttnn.CoreCoord(b % grid.x, b // grid.x))
-                for b in range(B)
-            ]
-        )
+        crs = row_major_crs(B, grid.x)
 
         def cb(index, fmt, page, pages):
             return ttnn.CBDescriptor(
