@@ -42,10 +42,15 @@ def pad_bucket(n: int) -> int | None:
     None, the model's own 256-token steps. ``coarse``: 256-token steps to 4096, 512 to 8192, 1024 above, i.e. 32
     lengths up to a 16384-token chunk instead of 64. Every padded length keeps DRAM resident, and a 16384-chunk runner
     warmed with all 64 OOMed at the 63rd (tt-blaze G53F-0256, 14:52). ``mesh_model.prefill(pad_to=)`` is the tail-
-    bucket path of G53F-0221."""
-    if os.environ.get("GLM53F_RUNNER_BUCKETS", "") != "coarse":
+    bucket path of G53F-0221. ``STEP:UPTO,...`` (e.g. ``512:4096,1024:8192,2048:16384``): STEP-token steps up to
+    each UPTO, the last step past the last UPTO -- a 1M cache leaves room for only ~24 lengths (G53F-0256, 19:53)."""
+    spec = os.environ.get("GLM53F_RUNNER_BUCKETS", "")
+    if not spec:
         return None
-    step = 256 if n <= 4096 else 512 if n <= 8192 else 1024
+    if spec == "coarse":
+        spec = "256:4096,512:8192,1024:16384"
+    tiers = [tuple(int(x) for x in t.split(":")) for t in spec.split(",")]
+    step = next((st for st, upto in tiers if n <= upto), tiers[-1][0])
     return -(-n // step) * step
 
 
@@ -148,8 +153,21 @@ class GLM53FlashPrefillRuntime:
                 tp, te = tp + (t1 - t0), te + (time.perf_counter() - t1)
             logger.info(
                 f"[glm53f-runtime] warm-up {item} ({len(parts)} chunk(s), {parts[-1][1]} tokens): prefill {tp:.2f} s, "
-                f"export {te:.2f} s, wall {time.perf_counter() - tw:.2f} s"
+                f"export {te:.2f} s, wall {time.perf_counter() - tw:.2f} s{self._dram_note()}"
             )
+
+    def _dram_note(self) -> str:
+        """DRAM held after a warm-up item (tt-blaze G53F-0256: each padded chunk length keeps DRAM resident and the
+        warm-up OOMs past ~24 lengths at a 1M cache), with the program-cache size, to say what grows per length."""
+        try:
+            v = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.DRAM)
+            n = getattr(self.mesh_device, "num_program_cache_entries", lambda: -1)()
+            return (
+                f", DRAM {v.total_bytes_allocated_per_bank / 2**20:.1f} MiB/bank held, largest free "
+                f"{v.largest_contiguous_bytes_free_per_bank / 2**20:.1f} MiB, programs {n}"
+            )
+        except Exception as e:  # noqa: BLE001 -- a report must not fail the warm-up
+            return f", DRAM view unavailable ({type(e).__name__})"
 
     def _warm_async(self, kv_caches, n: int, chunk: int) -> None:
         """Warm-up item ``aN``: an N-token prompt through ``prefill_chunk`` exactly as the engine drives it (export pipeline
