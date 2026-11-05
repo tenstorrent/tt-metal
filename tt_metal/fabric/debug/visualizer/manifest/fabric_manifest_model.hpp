@@ -419,9 +419,16 @@ struct CoreRegisters {
     uint32_t wall_clock_high = 0;
 };
 
+// The whole L1 of the Ethernet core a router runs on: size_bytes bytes from address.
+struct EthCoreL1 {
+    uint32_t address = 0;
+    uint32_t size_bytes = 0;
+};
+
 // What the manifest describes of the architecture the routers run on.
 struct Arch {
     tt::ARCH arch = tt::ARCH::Invalid;
+    EthCoreL1 l1;
     ArchAreas areas;
     CoreRegisters core_registers;
     // FABRIC_TELEMETRY_VERSION: which layout of FabricTelemetry the fabric_telemetry area holds.
@@ -434,6 +441,8 @@ struct Arch {
 struct RunInfo {
     uint32_t mpi_rank = 0;
     uint32_t world_size = 1;
+    // The host this process runs on, as the physical system descriptor names it.
+    std::string host_name;
     // When the manifest was written, in UTC, as ISO 8601.
     std::string written_at;
     BuildIdentity build;

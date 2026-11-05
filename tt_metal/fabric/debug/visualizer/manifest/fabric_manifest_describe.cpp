@@ -17,6 +17,7 @@
 
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-umd/arch/architecture_implementation.hpp>
 
@@ -65,6 +66,14 @@ uint32_t get_hal_l1_address(const tt::tt_metal::Hal& hal, HalL1MemAddrType area_
 
 uint32_t get_hal_l1_size(const tt::tt_metal::Hal& hal, HalL1MemAddrType area_id) {
     return hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, area_id);
+}
+
+// The whole L1 of the Ethernet core a router runs on: the HAL's BASE area on an active Ethernet core.
+EthCoreL1 describe_eth_core_l1(const tt::tt_metal::Hal& hal) {
+    return EthCoreL1{
+        .address = get_hal_l1_address(hal, HalL1MemAddrType::BASE),
+        .size_bytes = get_hal_l1_size(hal, HalL1MemAddrType::BASE),
+    };
 }
 
 // A HAL L1 area holding a whole number of Ts, as many as the HAL's size holds.
@@ -161,11 +170,12 @@ IntermeshVc describe_intermesh_vc(const FabricBuilderContext& builder_context) {
 
 }  // namespace
 
-RunInfo describe_run() {
+RunInfo describe_run(const ControlPlane& control_plane) {
     const auto& world = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     return RunInfo{
         .mpi_rank = static_cast<uint32_t>(*world->rank()),
         .world_size = static_cast<uint32_t>(*world->size()),
+        .host_name = control_plane.get_physical_system_descriptor().my_host_name(),
         .written_at = get_utc_now_iso8601(),
         .build = get_build_identity(),
     };
@@ -222,6 +232,7 @@ std::vector<VcCreditTransport> describe_credit_transport(const FabricBuilderCont
 Arch describe_arch(const tt::tt_metal::Hal& hal) {
     return Arch{
         .arch = hal.get_arch(),
+        .l1 = describe_eth_core_l1(hal),
         .areas =
             ArchAreas{
                 .heartbeat = describe_heartbeat(hal.get_arch()),

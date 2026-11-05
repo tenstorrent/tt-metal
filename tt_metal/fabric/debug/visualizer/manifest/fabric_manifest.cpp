@@ -75,11 +75,12 @@ json make_stream_reg_json(const manifest::content::StreamReg& stream) {
 
 // ============ Run and fabric ============
 
-// This process and the build it runs: ranks, when the manifest was written, and the commit built from.
+// This process and the build it runs: ranks, host, when the manifest was written, and the commit built from.
 json make_run_json(const manifest::RunInfo& run) {
     json out;
     out["mpi_rank"] = run.mpi_rank;
     out["world_size"] = run.world_size;
+    out["host_name"] = run.host_name;
     out["written_at"] = run.written_at;
     json build;
     build["git_sha"] = std::string(run.build.git_sha);
@@ -176,7 +177,7 @@ json make_core_registers_json(const manifest::CoreRegisters& registers) {
          entry("wall_clock_high", registers.wall_clock_high)});
 }
 
-// What the architecture fixes on every router core: L1 areas at the HAL's addresses, and the register blocks.
+// What the architecture fixes on every router core: its L1, L1 areas at the HAL's addresses, and the register blocks.
 json make_arch_json(const manifest::Arch& arch) {
     const auto& areas = arch.areas;
     json areas_json;
@@ -191,6 +192,10 @@ json make_arch_json(const manifest::Arch& arch) {
     areas_json["base_fw_postcode"] = make_optional_l1_json(areas.base_fw_postcode);
     json out;
     out["name"] = lower_enum_name(arch.arch);
+    json l1;
+    l1["address"] = arch.l1.address;
+    l1["size_bytes"] = arch.l1.size_bytes;
+    out["l1"] = std::move(l1);
     out["l1_areas"] = std::move(areas_json);
     out["core_registers"] = make_core_registers_json(arch.core_registers);
     out["fabric_telemetry_version"] = arch.fabric_telemetry_version;
@@ -567,7 +572,7 @@ void serialize_fabric_manifest_to_file(
         fabric_context.has_builder_context(), "Fabric manifest: must be written after the fabric routers are compiled");
     const auto& metal_context = tt::tt_metal::MetalContext::instance();
     const manifest::ManifestFacts facts{
-        .run = manifest::describe_run(),
+        .run = manifest::describe_run(control_plane),
         .fabric = manifest::describe_fabric(control_plane),
         .arch = manifest::describe_arch(metal_context.hal()),
         .meshes =

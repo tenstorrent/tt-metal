@@ -415,6 +415,22 @@ void check_router_regions_disjoint(const json& manifest, const std::vector<Route
     }
 }
 
+// Every L1 region a router names, and every arch area, lies inside the L1 of the Ethernet core it runs on.
+void check_router_regions_in_l1(const json& manifest, const std::vector<RouterEntry>& routers) {
+    const auto& l1 = manifest.at("arch").at("l1");
+    const uint64_t l1_start = l1.at("address").get<uint32_t>();
+    const uint64_t l1_end = l1_start + l1.at("size_bytes").get<uint32_t>();
+    std::vector<std::tuple<uint32_t, uint32_t, std::string>> regions;
+    collect_regions(arch_areas(manifest), "l1_areas", regions);
+    for (const auto& entry : routers) {
+        collect_regions(*entry.router, entry.path, regions);
+    }
+    for (const auto& [address, size, path] : regions) {
+        EXPECT_GE(address, l1_start) << path;
+        EXPECT_LE(uint64_t{address} + size, l1_end) << path;
+    }
+}
+
 // The last component of a router path, e.g. "E0" for "M0/C7/E0".
 std::string key_of_path(const std::string& path) { return path.substr(path.rfind('/') + 1); }
 
@@ -955,6 +971,7 @@ TEST(ManifestArgs, KernelInputsAccounted) {
     TEST_F(Fixture, RouterFields) { check_router_fields(manifest_, routers_); }                            \
     TEST_F(Fixture, LocalSync) { check_local_sync(manifest_); }                                            \
     TEST_F(Fixture, RouterRegionsDisjoint) { check_router_regions_disjoint(manifest_, routers_); }         \
+    TEST_F(Fixture, RouterRegionsInL1) { check_router_regions_in_l1(manifest_, routers_); }                \
     TEST_F(Fixture, Arch) { check_arch(manifest_); }                                                       \
     TEST_F(Fixture, RouterStreamRegisters) { check_router_stream_registers(routers_); }                    \
     TEST_F(Fixture, ArchCoreRegisters) { check_arch_core_registers(manifest_, routers_); }                 \
