@@ -6,7 +6,8 @@
 // and the unpack-to-DEST page copy (experimental/llk_{math,unpack}_dest_srca_mm.h), Blackhole, 32-bit DEST, MATH_ISOLATE.
 // The math thread's TILE_LOOP runs LOOP_FACTOR * TILE_CNT steps of GGUF_STEP:
 //   0 decode, 1 params, 2 body: sfpu_gguf_decode_tile<GGUF_FMT> with both phases, phase 1 or phase 2, over the tile
-//     indices 0..TILE_CNT-1 of a group (the timing does not depend on the page's bits);
+//     indices 0..TILE_CNT-1 of a group (the timing does not depend on the page's bits); decode and params include
+//     sfpu_gguf_decode_group once per group;
 //   3 matmul: _llk_math_dest_srca_mm_ with GGUF_IN0_ROWS rows at MATH_FIDELITY; the unpack thread sets SrcA and SrcB
 //     valid without data;
 //   4 copy: the unpack-to-DEST copy of a GGUF_PAGE_FACES-face 32-bit page, from the post to the end of the wait, while
@@ -93,7 +94,12 @@ inline void decode_steps()
     constexpr std::uint32_t group_tiles = gguf::page_layout<static_cast<gguf::Format>(FMT)>().group_tiles;
     for (std::uint32_t i = 0; i < STEPS; i++)
     {
-        sfpu::sfpu_gguf_decode_tile<FMT, GGUF_STEP != 2, GGUF_STEP != 1>(0, i % TILE_CNT % group_tiles);
+        const std::uint32_t ti = i % TILE_CNT % group_tiles;
+        if (GGUF_STEP != 2 && ti == 0)
+        {
+            sfpu::sfpu_gguf_decode_group<FMT>(0);
+        }
+        sfpu::sfpu_gguf_decode_tile<FMT, GGUF_STEP != 2, GGUF_STEP != 1>(0, ti);
     }
 }
 

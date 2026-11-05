@@ -81,7 +81,7 @@ FORMATS = {
         GgufFormat("MXFP4", 4, 32, 17, 2, 1, 512, 1, 0),
         GgufFormat("NVFP4", 5, 64, 36, 1, 1, 512, 1, 0),
         GgufFormat("Q6_K", 6, 256, 210, 8, 1, 768, 9, 1),
-        GgufFormat("Q4_K", 7, 256, 144, 8, 1, 512, 8, 2),
+        GgufFormat("Q4_K", 7, 256, 144, 8, 1, 512, 8, 0),
         GgufFormat("Q5_K", 8, 256, 176, 8, 2, 1280, 8, 2),
         GgufFormat("Q3_K", 9, 256, 110, 8, 2, 768, 7, 1),
         GgufFormat("Q2_K", 10, 256, 84, 8, 1, 256, 10, 2),

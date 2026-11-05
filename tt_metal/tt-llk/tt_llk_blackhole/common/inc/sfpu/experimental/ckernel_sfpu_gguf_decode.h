@@ -200,13 +200,21 @@ template <int FMT, int TI, bool PARAMS, bool BODY>
 inline void sfpu_gguf_decode_tile_ti(const std::uint32_t dst_index, const std::uint32_t rows)
 {
     sfpu_gguf_decode_start(dst_index, rows);
-    if constexpr (PARAMS)
+    if constexpr (PARAMS && BODY && gguf::k4_regs<FMT>)
     {
-        gguf::_calculate_gguf_decode_params_<FMT, TI>();
+        gguf::k4_params_regs<TI>();
+        gguf::body_macro_q4<true>();
     }
-    if constexpr (BODY && !gguf::two_calls<FMT>)
+    else
     {
-        gguf::_calculate_gguf_decode_body_<FMT, TI>();
+        if constexpr (PARAMS)
+        {
+            gguf::_calculate_gguf_decode_params_<FMT, TI>();
+        }
+        if constexpr (BODY && !gguf::two_calls<FMT>)
+        {
+            gguf::_calculate_gguf_decode_body_<FMT, TI>();
+        }
     }
     sfpu_gguf_decode_done();
 }
@@ -225,6 +233,27 @@ inline void sfpu_gguf_decode_init()
 }
 
 /**
+ * @brief Group step of Q4_K and Q5_K: unpack the 6-bit scales and mins of a group once, for every tile of it decoded
+ *        at the same DEST tiles (Q4_K: also its fp16 d and dmin, into tile dst_index + 1 past the 1 KB page). Nothing
+ *        for the other formats.
+ *
+ * @tparam FMT: ckernel::gguf::Format of the page.
+ * @param dst_index: As @ref sfpu_gguf_decode_tile; the page in tile dst_index + 1 is any page of the group.
+ * @note Call before the first tile of a group that @ref sfpu_gguf_decode_tile decodes at dst_index; nothing else may
+ *       write scratch tile dst_index + 2 (entries 0..15) or, Q4_K, tile dst_index + 1 past its page until the group ends.
+ */
+template <int FMT>
+inline void sfpu_gguf_decode_group(const std::uint32_t dst_index)
+{
+    if constexpr (FMT == gguf::Q4_K || FMT == gguf::Q5_K)
+    {
+        sfpu_gguf_decode_start(dst_index, 0);
+        gguf::k4_group<FMT>();
+        sfpu_gguf_decode_done();
+    }
+}
+
+/**
  * @brief Decode one GGUF weight tile into a Float32 [K][N] tile in DEST, scales applied (ggml's dequantization).
  *
  * @tparam FMT: ckernel::gguf::Format of the page.
@@ -235,8 +264,8 @@ inline void sfpu_gguf_decode_init()
  * @param ti: The tile's index in its group of K tiles (page_layout<FMT>().group_tiles).
  * @param rows: DEST row offset of the page inside tile dst_index + 1 (several pages unpacked as one tile); the output
  *              tile and the scratch tile move with it.
- * @note Needs a 32-bit DEST and @ref sfpu_gguf_decode_init. Overwrites the programmable constants and may record
- *       into the replay buffer.
+ * @note Needs a 32-bit DEST and @ref sfpu_gguf_decode_init (Q4_K, Q5_K: and @ref sfpu_gguf_decode_group for the tile's
+ *       group). Overwrites the programmable constants and may record into the replay buffer.
  */
 template <int FMT, bool PARAMS = true, bool BODY = true>
 inline void sfpu_gguf_decode_tile(const std::uint32_t dst_index, const std::uint32_t ti, const std::uint32_t rows = 0)
