@@ -93,6 +93,18 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeade
 #endif
 }
 
+// Waits until two command buffers are ready, reading both before testing either so the reads overlap. A used read of
+// a buffer's ready state orders later NIU status reads after the commands issued on it: a transaction ID's counters
+// include a command only once the NIU has processed it, and a status read can otherwise overtake it (#59623).
+FORCE_INLINE void wait_cmd_bufs_ready(uint8_t noc_a, uint8_t cmd_buf_a, uint8_t noc_b, uint8_t cmd_buf_b) {
+    const bool ready_a = noc_cmd_buf_ready(noc_a, cmd_buf_a);
+    const bool ready_b = noc_cmd_buf_ready(noc_b, cmd_buf_b);
+    if (!(ready_a & ready_b)) {
+        while (!noc_cmd_buf_ready(noc_a, cmd_buf_a));
+        while (!noc_cmd_buf_ready(noc_b, cmd_buf_b));
+    }
+}
+
 // Waits until the receiver channel's earlier non-posted writes (local writes and forwards) are acknowledged, so that a
 // flushed atomic increment issued next is seen after them. Earlier atomics are not waited on.
 //
@@ -112,7 +124,13 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
         return;
     }
 #endif
-    // The channel's own transaction IDs (its range from the host), with or without deadlock avoidance.
+    // The channel's own transaction IDs (its range from the host), with or without deadlock avoidance; read after the
+    // channel's last local write and forward reach the NIU (wait_cmd_bufs_ready).
+    wait_cmd_bufs_ready(
+        tt::tt_fabric::edm_to_local_chip_noc,
+        tt::tt_fabric::local_chip_data_cmd_buf,
+        tt::tt_fabric::edm_to_downstream_noc,
+        receiver_channel_forwarding_data_cmd_buf_ids[rx_channel_id]);
     const uint32_t start_trid = RX_CH_TRID_STARTS[rx_channel_id];
     const uint32_t end_trid = start_trid + RX_CH_NUM_TRIDS[rx_channel_id];
     for (uint32_t i = start_trid; i < end_trid; i++) {

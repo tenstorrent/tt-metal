@@ -544,6 +544,22 @@ FORCE_INLINE bool credit_completions(
     }
     constexpr uint32_t proof_checks = completion_group_size == 1 ? 1 : COMPLETION_PROOF_MAX_CHECKS;
     const uint32_t first = oldest_uncredited<num_slots>(next_index, waiting);
+    if constexpr (credit_this_pass_slot) {
+        // The slot may have been retired this pass, its writes issued just now: order the status read after them
+        // (wait_cmd_bufs_ready). Blackhole never proves this pass's slot: its writes went out a pass or more before,
+        // and under traffic the pass's forward has read the same buffers' ready states first.
+        if (handled_packet) {
+            if constexpr (ReceiverChannel<VC>::forwards) {
+                wait_cmd_bufs_ready(
+                    LOCAL_NOC,
+                    CommandBuffers::local_writes,
+                    tt::tt_fabric::edm_to_downstream_noc,
+                    CommandBuffers::forward_data[VC]);
+            } else {
+                while (!noc_cmd_buf_ready(LOCAL_NOC, CommandBuffers::local_writes));
+            }
+        }
+    }
     if (!trid_writes_sent_within<proof_checks>(ReceiverChannel<VC>::CompletionTrids::of_slot(first))) {
         return false;
     }
