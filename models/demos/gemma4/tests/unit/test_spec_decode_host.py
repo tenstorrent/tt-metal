@@ -3861,3 +3861,179 @@ def test_select_verify_ids_takes_the_draw_on_sampled_rows_and_the_argmax_elsewhe
     # an all-greedy plan hands the argmax back untouched (and never reads the draws)
     assert select_verify_ids(greedy_sampling_rows((2, 2)), argmax, None).tolist() == argmax.tolist()
     assert select_verify_ids(plan, argmax.reshape(-1).tolist(), draws).shape == (2, 3)
+
+
+def test_lane_sampling_frame_groups_rows_per_column_and_selects_in_call_order():
+    """On the lane engine the plan is the frame of every column's: the global rows grouped per lane in the call's
+    lane-major order, each column's ``SamplingRowsPlan`` over its own rows and anchors (an idle column takes the
+    greedy plan), the rows' own parameters kept in call order; the selection takes a column's draws on its
+    sampled packed rows and the record's argmax elsewhere, lane by lane in the call's order."""
+    from models.demos.gemma4.tt.lane_prefill import lane_row_groups
+    from models.demos.gemma4.tt.spec_sampling import (
+        SPEC_SAMPLED_IDLE_SEED,
+        LaneSamplingPlan,
+        greedy_sampling_frame,
+        select_verify_ids_frame,
+        serving_sampling_frame,
+    )
+
+    lanes, slots = 4, 32
+    sampling = SimpleNamespace(
+        temperature=[0.0] * 128, top_k=[1] * 128, top_p=[1.0] * 128, seed=[None] * 128
+    )  # the global slot space
+    for slot, temp, seed in ((3, 0.8, 11), (70, 1.0, None), (100, 0.5, 7)):
+        sampling.temperature[slot], sampling.top_k[slot], sampling.top_p[slot], sampling.seed[slot] = (
+            temp,
+            20,
+            0.9,
+            seed,
+        )
+    rows, positions = [1, 3, 70, 100], [10, 20, 30, 40]  # lanes 0, 0, 2, 3 (lane 1 idle)
+    fresh = iter(range(500, 600))
+    plan = serving_sampling_frame((2, 2), rows, positions, sampling, lanes, slots, fresh_seed=lambda: next(fresh))
+    assert isinstance(plan, LaneSamplingPlan) and (plan.B, plan.P, plan.lanes, plan.chunks) == (2, 3, 4, 1)
+    assert plan.any_sampled and [p.any_sampled for p in plan.plans] == [True, False, True, True]
+    # call order: row 1 greedy, row 3 sampled (seeded), row 70 sampled (unseeded), row 100 sampled (seeded)
+    assert plan.row_params[0] == (0.0, 1, 1.0, None) and plan.row_params[1] == pytest.approx((0.8, 20, 0.9, 11))
+    assert plan.row_params[2] == (1.0, 20, 0.9, None) and plan.row_params[3] == pytest.approx((0.5, 20, 0.9, 7))
+    # lane 0 holds rows 1 and 3 in order: packed rows 0-2 greedy, 3-5 sampled
+    assert plan.plans[0].sampled[:6] == [False] * 3 + [True] * 3 and plan.plans[0].top_k[3:6] == [20] * 3
+    # lane 1 is idle: the greedy plan; lane 2's one row is the unseeded request (fresh seeds per column)
+    assert plan.plans[1].sampled == [False] * 32 and plan.plans[1].seeds == [SPEC_SAMPLED_IDLE_SEED] * 32
+    assert plan.plans[2].sampled[:3] == [True] * 3 and plan.plans[2].seeds[:3] == [500, 501, 502]
+    assert plan.plans[3].sampled[:3] == [True] * 3 and plan.plans[3].seeds[3:] == [SPEC_SAMPLED_IDLE_SEED] * 29
+    groups = lane_row_groups(rows, lanes, slots)
+    assert groups == [[0, 1], [], [2], [3]]
+    argmax = torch.arange(lanes * 2 * 3).reshape(lanes, 2, 3)  # every column's record argmax [lanes, B, P]
+    draws = [[1000 + lane * 100 + r for r in range(32)] for lane in range(lanes)]
+    out = select_verify_ids_frame(plan, argmax, draws, groups)
+    assert out.tolist() == [
+        [0, 1, 2],  # row 1 (lane 0, packed rows 0-2): the argmax
+        [1003, 1004, 1005],  # row 3 (lane 0, packed rows 3-5): lane 0's draws
+        [1200, 1201, 1202],  # row 70 (lane 2, packed rows 0-2): lane 2's draws
+        [1300, 1301, 1302],  # row 100 (lane 3): lane 3's draws
+    ]
+    # the greedy frame: no sampled row on any column, nothing to select
+    greedy = greedy_sampling_frame((2, 2), lanes)
+    assert isinstance(greedy, LaneSamplingPlan) and not greedy.any_sampled and greedy.row_params == []
+    assert select_verify_ids_frame(greedy, argmax, None, groups).tolist() == [
+        [0, 1, 2],
+        [3, 4, 5],
+        [12, 13, 14],
+        [18, 19, 20],
+    ]
+    # one column is serving_sampling_rows' business; a frame of the wrong lane count is refused
+    with pytest.raises(ValueError, match="lanes > 1"):  # allow-pytest.raises (pure)
+        serving_sampling_frame((2, 2), rows, positions, sampling, 1, slots)
+    with pytest.raises(ValueError, match="positions for"):  # allow-pytest.raises (pure)
+        serving_sampling_frame((2, 2), rows, positions[:-1], sampling, lanes, slots)
+    with pytest.raises(ValueError, match="LaneSamplingPlan of 4 lanes"):  # allow-pytest.raises (pure)
+        select_verify_ids_frame(plan.plans[0], argmax, draws, groups)
+
+
+def test_the_lane_sampler_uploads_lane_frames_and_reads_every_columns_draws(monkeypatch):
+    """On the lane engine the sampler's buffers hold one column's rows per chip (stacked and lane-sharded at the
+    allocation), an upload is the lane frame of every column's parameter / tie-break / seed rows (parameters only
+    when a column's rows changed, seeds when any column has a sampled row, never on a greedy frame) and the draws
+    come back per column."""
+    import models.demos.gemma4.tt.spec_sampling as spec_sampling_module
+    from models.demos.gemma4.tt.spec_sampling import (
+        SPEC_SAMPLED_IDLE_SEED,
+        SpecVerifySampler,
+        _top1_mask,
+        greedy_sampling_frame,
+        serving_sampling_frame,
+        serving_sampling_rows,
+    )
+
+    class _Buf:
+        def __init__(self, host, dtype, layout, lane_dim=None, on_device=False):
+            self.host, self.dtype, self.layout, self.lane_dim, self.on_device = host, dtype, layout, lane_dim, on_device
+            self.freed = False
+
+        def deallocate(self, force=False):
+            self.freed = True
+
+    uploads = []  # (buffer, host frame) in order
+
+    fake = SimpleNamespace(
+        uint32="u32",
+        bfloat16="bf16",
+        int32="i32",
+        ROW_MAJOR_LAYOUT="rm",
+        TILE_LAYOUT="tile",
+        copy_host_to_device_tensor=lambda host, dev: uploads.append((dev, host.host.clone()))
+        or setattr(dev, "host", host.host.clone()),
+    )
+    monkeypatch.setattr(spec_sampling_module, "ttnn", fake)
+    lanes = 4
+    decoder = SimpleNamespace(
+        _srv_lanes=lanes,
+        _tp=2,
+        _srv_frozen=False,
+        target=SimpleNamespace(
+            mesh_config=object(),
+            ccl_manager=object(),
+            sampling=SimpleNamespace(
+                tt_sampling=SimpleNamespace(
+                    user_ids_tt_tensor=object(),
+                    _sampling_sub_core_grids=None,
+                    tt_invalid_vocab_mask=None,
+                    max_top_k=32,
+                    _allow_topk_sampling=True,
+                )
+            ),
+        ),
+        _pv_from_torch=lambda t, dtype, layout="rm", device=True: _Buf(t.clone(), dtype, layout, on_device=device),
+        _srv_from_torch=lambda t, dtype, layout="rm", lane_dim=None, device=True: _Buf(
+            torch.cat([t] * lanes, dim=int(lane_dim)), dtype, layout, lane_dim, on_device=device
+        ),
+        _srv_frame_from_torch=lambda frame, dtype, layout="rm", lane_dim=0, device=False: _Buf(
+            frame.clone(), dtype, layout, lane_dim, on_device=device
+        ),
+        _srv_lane_read_u32=lambda t, n: t.host.reshape(lanes, -1)[:, :n].to(torch.int64),
+        _free_tensor_tree=lambda t: None,
+    )
+    sampler = SpecVerifySampler(decoder)
+    assert sampler.lanes == lanes
+    S = sampler.alloc(2, 3)
+    # one column's rows per chip: the frame of 4 columns, lane-sharded along the rows' dim
+    assert (S["k"][0].host.shape, S["k"][0].lane_dim) == ((lanes * 32,), 0)
+    assert (S["gcol"][0].host.shape, S["gcol"][0].lane_dim, S["gcol"][0].layout) == ((1, 1, lanes * 32, 1), 2, "tile")
+    assert (S["sidx"][0].host.shape, S["sidx"][0].lane_dim) == ((1, 1, 1, lanes * 32), 3)
+    sampling = SimpleNamespace(temperature=[0.0] * 128, top_k=[1] * 128, top_p=[1.0] * 128, seed=[None] * 128)
+    sampling.temperature[3], sampling.top_k[3], sampling.seed[3] = 0.8, 20, 11
+    sampling.temperature[100], sampling.top_k[100], sampling.seed[100] = 0.5, 5, 7
+    rows, positions = [1, 3, 70, 100], [10, 20, 30, 40]
+    plan = serving_sampling_frame((2, 2), rows, positions, sampling, lanes, 32)
+    sampler.upload(S, plan)
+    kinds = [dev for dev, _ in uploads]
+    assert kinds == [S["k"][0], S["p"][0], S["temp"][0], S["gcol"][0], S["seeds"][0]]
+    k_frame = uploads[0][1]
+    assert k_frame.shape == (lanes * 32,) and k_frame.tolist() == [v for p in plan.plans for v in p.top_k]
+    assert k_frame[3:6].tolist() == [20] * 3 and k_frame[32:64].tolist() == [1] * 32  # lane 0's row 3; lane 1 idle
+    assert k_frame[96:99].tolist() == [5] * 3  # lane 3's row 100
+    gcol = uploads[3][1]
+    assert gcol.shape == (1, 1, lanes * 32, 1) and torch.equal(
+        gcol, torch.cat([_top1_mask(p.top_k) for p in plan.plans], dim=2)
+    )
+    seeds = uploads[4][1]
+    assert seeds.tolist() == [v for p in plan.plans for v in p.seeds]
+    assert seeds[32:64].tolist() == [SPEC_SAMPLED_IDLE_SEED] * 32  # the idle column's cores stay untouched
+    # the same parameters again: seeds only (a sampled row draws every replay)
+    uploads.clear()
+    sampler.upload(S, plan)
+    assert [dev for dev, _ in uploads] == [S["seeds"][0]]
+    # a greedy frame re-uploads the parameter rows and the mask, never seeds
+    uploads.clear()
+    sampler.upload(S, greedy_sampling_frame((2, 2), lanes))
+    assert [dev for dev, _ in uploads] == [S["k"][0], S["p"][0], S["temp"][0], S["gcol"][0]]
+    # the draws come back per column (each lane's first chip); the one-column readback is refused here
+    S["sidx"][0].host = torch.arange(lanes * 32).reshape(1, 1, 1, lanes * 32)
+    frame = sampler.read_frame(S)
+    assert len(frame) == lanes and frame[2][:3] == [64, 65, 66] and frame[3][31] == 127
+    with pytest.raises(ValueError, match="one-column readback"):  # allow-pytest.raises (pure)
+        sampler.read(S, 6)
+    # one column's plan on the lane engine is refused by name
+    with pytest.raises(ValueError, match="LaneSamplingPlan"):  # allow-pytest.raises (pure)
+        sampler.upload(S, serving_sampling_rows((2, 2), [1], [10], sampling))

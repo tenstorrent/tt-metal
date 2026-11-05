@@ -79,6 +79,7 @@ from models.demos.gemma4.tt.spec_policy import (
 from models.demos.gemma4.tt.spec_sampling import (
     SPEC_SAMPLED_VERIFY_ENV,
     row_sampling_params,
+    serving_sampling_frame,
     serving_sampling_rows,
     spec_sampled_verify_enabled,
 )
@@ -8593,8 +8594,16 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             self._spec_note_entry(shape, self._spec_last_phase_ms, self._spec_reseed_table_ms(shape, max(posits)))
         flat = self._mtp_record_table(full, shape[0], row_ids)
         # GEMMA4_SPEC_SAMPLED_VERIFY: the replay's sampler plan (row ids index the step's sampling params; the
-        # anchors' positions seed the columns); None keeps the record's argmax ids for every row.
-        plan = serving_sampling_rows(shape, row_ids, posits, step_sampling) if self._mtp_sampled_verify else None
+        # anchors' positions seed the columns); None keeps the record's argmax ids for every row. On the lane
+        # engine the plan is the frame of every column's (the global rows grouped per lane, in call order).
+        plan = None
+        if self._mtp_sampled_verify:
+            lanes, lane_slots = self._mtp_lane_geometry()
+            plan = (
+                serving_sampling_frame(shape, row_ids, posits, step_sampling, lanes, lane_slots)
+                if lanes > 1
+                else serving_sampling_rows(shape, row_ids, posits, step_sampling)
+            )
         result = self._spec_timed(
             "replay", decoder.serving_step, shape, row_ids, anchors, posits, flat, seed_cols, plan
         )

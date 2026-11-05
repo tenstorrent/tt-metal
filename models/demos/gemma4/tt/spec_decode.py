@@ -46,10 +46,13 @@ from models.demos.gemma4.tt.ccl import ccl_allgather
 from models.demos.gemma4.tt.lane_prefill import lane_frame_rows, lane_of_row, lane_row_groups
 from models.demos.gemma4.tt.spec_sampling import (
     SPEC_SAMPLED_VERIFY_ENV,
+    LaneSamplingPlan,
     SamplingRowsPlan,
     SpecVerifySampler,
+    greedy_sampling_frame,
     greedy_sampling_rows,
     select_verify_ids,
+    select_verify_ids_frame,
     spec_sampled_verify_enabled,
 )
 
@@ -2621,12 +2624,9 @@ class SpeculativeDecoder:
                 "uploaded per buffer); unset it"
             )
         if self._srv_sampled_verify:
-            if self._srv_lanes > 1:
-                raise ValueError(
-                    f"{SPEC_SAMPLED_VERIFY_ENV}=1 is not available on the lane engine (its sampling groups are per "
-                    "lane; the sampled rows of a lane entry decode plain): unset it"
-                )
-            # Raises when the target has no device top-k sampler (fractured meshes, host sampling).
+            # Raises when the target has no device top-k sampler (fractured meshes, host sampling). On the lane
+            # engine the sampler's inputs are lane frames (one column's parameter / seed / draw rows per chip)
+            # and the plan a LaneSamplingPlan (SpecVerifySampler.lanes).
             self._srv_sampler = SpecVerifySampler(self)
         self._srv_check_steps = int(os.environ.get(SPEC_VERIFY_CHECK_ENV, "0") or 0)
         if self._srv_check_steps > 0 and self._srv_lanes > 1:
@@ -3001,19 +3001,27 @@ class SpeculativeDecoder:
             raise ValueError(
                 f"serving_step was handed a sampling plan but {SPEC_SAMPLED_VERIFY_ENV} is off (no sampler in the records)"
             )
-        if self._srv_lanes > 1:
-            return self._srv_lane_step(shape, rows, anchors, positions, page_tables, seed_cols)
         B, K = shape
         P = K + 1
-        live = self._srv_check_rows(shape, rows, anchors, positions)
-        if len(seed_cols) != live:
-            raise ValueError(f"shape {shape}: {len(seed_cols)} seed_cols for {live} live rows")
         plan = None
         if self._srv_sampler is not None:
             plan = sampling if sampling is not None else self._srv_greedy_plan(shape)
-            if not isinstance(plan, SamplingRowsPlan) or (plan.B, plan.P) != (B, P):
+            if self._srv_lanes > 1:
+                # the lane engine's plan is the frame of every column's (serving_sampling_frame)
+                want = (B, P, self._srv_lanes)
+                if not isinstance(plan, LaneSamplingPlan) or (plan.B, plan.P, plan.lanes) != want:
+                    got = (getattr(plan, "B", None), getattr(plan, "P", None), getattr(plan, "lanes", None))
+                    raise ValueError(
+                        f"shape {shape}: the lane engine needs a LaneSamplingPlan for (B, P, lanes) = {want}, got {got}"
+                    )
+            elif not isinstance(plan, SamplingRowsPlan) or (plan.B, plan.P) != (B, P):
                 got = (getattr(plan, "B", None), getattr(plan, "P", None))
                 raise ValueError(f"shape {shape}: the sampling plan is for {got}, not (B, P) = {(B, P)}")
+        if self._srv_lanes > 1:
+            return self._srv_lane_step(shape, rows, anchors, positions, page_tables, seed_cols, plan)
+        live = self._srv_check_rows(shape, rows, anchors, positions)
+        if len(seed_cols) != live:
+            raise ValueError(f"shape {shape}: {len(seed_cols)} seed_cols for {live} live rows")
         top = max(int(p) for p in positions)
         width = serving_width_for(self._srv_widths[shape], top, K)
         if width is None:
@@ -3865,7 +3873,8 @@ class SpeculativeDecoder:
         sampled rows runs on the greedy triple and nothing reads its draws)."""
         plan = self._srv_greedy_plans.get(shape)
         if plan is None:
-            plan = greedy_sampling_rows(shape)
+            # the lane engine's greedy plan is the frame of every column's (LaneSamplingPlan)
+            plan = greedy_sampling_frame(shape, self._srv_lanes) if self._srv_lanes > 1 else greedy_sampling_rows(shape)
             self._srv_greedy_plans[shape] = plan
         return plan
 
@@ -4094,10 +4103,12 @@ class SpeculativeDecoder:
         # row id -> its row in its lane's reseed (the reseed pool is per column)
         self._srv_seeded = {int(rows[i]): j for g in groups for j, i in enumerate(g)}
 
-    def _srv_lane_step(self, shape, rows, anchors, positions, page_tables, seed_cols):
+    def _srv_lane_step(self, shape, rows, anchors, positions, page_tables, seed_cols, plan=None):
         """``serving_step`` on the lane engine: one replay of the record on every column, each column's seed gather,
         drafter chain and packed verify over its own lane's rows; the drafts and argmax ids come back lane by lane
-        in the call's (lane-major) order, so result row i is ``rows[i]``."""
+        in the call's (lane-major) order, so result row i is ``rows[i]``. ``plan`` (GEMMA4_SPEC_SAMPLED_VERIFY):
+        the ``LaneSamplingPlan`` of the replay, every column's sampler rows; a column's sampled rows take its
+        draws (``select_verify_ids_frame``)."""
         B, K = shape
         P = K + 1
         groups, live = self._srv_lane_groups(shape, rows, anchors, positions)
@@ -4124,13 +4135,19 @@ class SpeculativeDecoder:
                 serving_seed_index(shape, [int(rows[i]) for i in g], [seed_cols[i] for i in g], prev, self._srv_seeded)
             )
         t0 = time.perf_counter()
-        self._srv_lane_upload(rec, groups, rows, anchors, positions, page_tables, seed_idx)
+        self._srv_lane_upload(rec, groups, rows, anchors, positions, page_tables, seed_idx, plan=plan)
         t1 = time.perf_counter()
         ttnn.execute_trace(self.mesh_device, rec["id"], cq_id=0, blocking=self._srv_replay_blocking)
         t2 = time.perf_counter()
         lanes = self._srv_lanes
         vx = self._srv_lane_read_u32(rec["verify_x"], B * P).reshape(lanes, B, P)
         gids = self._srv_lane_read_u32(rec["vidx"], B * P).reshape(lanes, B, P)
+        argmax = torch.cat([gids[lane, : len(g)] for lane, g in enumerate(groups) if g], dim=0)
+        ids = argmax
+        if plan is not None and plan.any_sampled:
+            # every column's draws; a column's sampled packed rows take them, the rest keep the record's argmax
+            draws = self._srv_sampler.read_frame(self._srv_shape_bufs[shape]["sampler"])
+            ids = select_verify_ids_frame(plan, gids, draws, groups)
         t3 = time.perf_counter()
         self._srv_phase_ms = {
             "replay_upload": (t1 - t0) * 1e3,
@@ -4138,26 +4155,28 @@ class SpeculativeDecoder:
             "replay_read": (t3 - t2) * 1e3,
         }
         drafts = torch.cat([vx[lane, : len(g), 1:] for lane, g in enumerate(groups) if g], dim=0)
-        argmax = torch.cat([gids[lane, : len(g)] for lane, g in enumerate(groups) if g], dim=0)
         self._srv_last = {"shape": shape, "rows": [int(r) for r in rows], "K": K}
         return ServingStepResult(
             shape=shape,
             width=int(width),
             live=live,
             drafts=drafts.clone(),
-            argmax_ids=argmax.clone(),
+            argmax_ids=ids.clone(),
             logits=self._srv_logits,
             _reader=lambda rec=rec, groups=groups: self._srv_lane_logits_to_host(rec, groups),
         )
 
-    def _srv_lane_upload(self, rec, groups, rows, anchors, positions, page_tables, seed_idx):
+    def _srv_lane_upload(self, rec, groups, rows, anchors, positions, page_tables, seed_idx, plan=None):
         """``_srv_upload`` over the lane frame: every per-row input is laid out per lane (``lane_frame_rows``) and
         sharded over the lane axis; the frame is lane-major, so ``v_pos`` / ``v_pos_rows`` keep each column's
-        packed-row order."""
+        packed-row order. ``plan``: the replay's ``LaneSamplingPlan`` under GEMMA4_SPEC_SAMPLED_VERIFY (the
+        greedy frame when None)."""
         shape = rec["shape"]
         S = self._srv_shape_bufs[shape]
         B, P = S["B"], S["P"]
         lanes = self._srv_lanes
+        if self._srv_sampler is not None:
+            self._srv_sampler.upload(S["sampler"], plan if plan is not None else self._srv_greedy_plan(shape))
         toks = lane_frame_rows([int(t) for t in anchors], groups, B, 0)
         pos = lane_frame_rows([int(p) for p in positions], groups, B, 0)
         for host, dev in (

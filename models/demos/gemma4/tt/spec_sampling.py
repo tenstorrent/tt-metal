@@ -32,10 +32,17 @@ top-k -> (TP gather | split concat) -> global indices -> manual_seed ->
 sampling. Greedy rows keep the record's argmax ids by selection on the host
 (``select_verify_ids``), so an all-greedy step is bit-identical to the knob off.
 
-Not available on the lane engine (per-lane sampling groups), on a target
-without the device top-k sampler (fractured meshes) or on one whose sampler
-masks a padded vocabulary: ``serving_prepare`` refuses the knob there with a
-ValueError at warmup (the capability follows the env; the refusal is loud).
+On the lane engine every sampler input is a lane frame: each mesh column
+(lane) holds its own parameter rows, seed rows and draw output, sharded over
+the lane axis the way the plain sampler shards its data-parallel groups, and
+the plan is a ``LaneSamplingPlan`` (one ``SamplingRowsPlan`` per column over
+that column's rows, ``serving_sampling_frame``); the draws come back per
+column and ``select_verify_ids_frame`` reassembles the call order.
+
+Not available on a target without the device top-k sampler (fractured
+meshes) or on one whose sampler masks a padded vocabulary: ``serving_prepare``
+refuses the knob there with a ValueError at warmup (the capability follows the
+env; the refusal is loud).
 """
 
 import itertools
@@ -55,6 +62,7 @@ from models.common.sampling.generator import (
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.sampling.tt_sampling import TIEBREAK_DELTA_FLOOR, TIEBREAK_DELTA_SCALE, TIEBREAK_INDEX_SENTINEL
 from models.demos.gemma4.tt.ccl import ccl_allgather
+from models.demos.gemma4.tt.lane_prefill import lane_row_groups
 
 SPEC_SAMPLED_VERIFY_ENV = "GEMMA4_SPEC_SAMPLED_VERIFY"
 SPEC_SAMPLED_ROW_TILE = 32
@@ -229,6 +237,70 @@ def greedy_sampling_rows(shape):
     return serving_sampling_rows(shape, [], [], None)
 
 
+@dataclass
+class LaneSamplingPlan:
+    """The lane engine's plan for one replay: ``plans[lane]`` is that column's ``SamplingRowsPlan`` over its own
+    live rows (in the call's lane-major order, ``B`` rows each; the greedy plan on an idle column) and
+    ``row_params`` what every live row asked for, in call order (``SamplingRowsPlan.row_params``)."""
+
+    B: int
+    P: int
+    plans: list
+    row_params: list
+
+    @property
+    def lanes(self):
+        return len(self.plans)
+
+    @property
+    def chunks(self):
+        return self.plans[0].chunks
+
+    @property
+    def any_sampled(self):
+        return any(plan.any_sampled for plan in self.plans)
+
+
+def serving_sampling_frame(shape, rows, positions, sampling, lanes, lane_slots, **kw):
+    """The ``LaneSamplingPlan`` of one lane-engine replay: the global ``rows`` grouped per lane
+    (``lane_row_groups``: lane-major, as the record call orders them and as its outputs come back), each
+    column's ``serving_sampling_rows`` over its own rows and anchors (``kw`` reaches it)."""
+    lanes = int(lanes)
+    if lanes <= 1:
+        raise ValueError(f"serving_sampling_frame needs lanes > 1, got {lanes} (one column: serving_sampling_rows)")
+    if len(positions) != len(rows):
+        raise ValueError(f"shape {shape}: {len(positions)} positions for {len(rows)} live rows")
+    groups = lane_row_groups(rows, lanes, lane_slots)
+    plans, row_params = [], [None] * len(rows)
+    for g in groups:
+        plan = serving_sampling_rows(shape, [rows[i] for i in g], [positions[i] for i in g], sampling, **kw)
+        plans.append(plan)
+        for j, i in enumerate(g):
+            row_params[i] = plan.row_params[j]
+    return LaneSamplingPlan(B=plans[0].B, P=plans[0].P, plans=plans, row_params=row_params)
+
+
+def greedy_sampling_frame(shape, lanes):
+    """The all-greedy ``LaneSamplingPlan`` of ``shape`` on ``lanes`` columns."""
+    plans = [greedy_sampling_rows(shape) for _ in range(int(lanes))]
+    return LaneSamplingPlan(B=plans[0].B, P=plans[0].P, plans=plans, row_params=[])
+
+
+def select_verify_ids_frame(plan, argmax_ids, draws, groups):
+    """``[live, P]`` host ids of a lane-engine replay in call order: ``argmax_ids`` ``[lanes, B, P]`` (every
+    column's record argmax), ``draws`` ``[lanes][rows]`` (every column's sampler draws), ``groups`` the call's
+    lane row groups; a column's live rows take ``select_verify_ids`` under the column's own plan."""
+    if not isinstance(plan, LaneSamplingPlan) or plan.lanes != len(groups):
+        raise ValueError(f"select_verify_ids_frame needs a LaneSamplingPlan of {len(groups)} lanes, got {plan!r}")
+    parts = []
+    for lane, g in enumerate(groups):
+        if not g:
+            continue
+        column = None if draws is None else draws[lane]  # a greedy frame never reads the draws
+        parts.append(select_verify_ids(plan.plans[lane], argmax_ids[lane], column)[: len(g)])
+    return torch.cat(parts, dim=0)
+
+
 def select_verify_ids(plan, argmax_ids, sampled_ids):
     """``[B, P]`` host ids: the sampler's draw on a sampled packed row, the record's argmax elsewhere."""
     B, P = plan.B, plan.P
@@ -280,16 +352,34 @@ class SpecVerifySampler:
                 "invalid-vocabulary mask): unset the knob (sampled rows then decode plain)"
             )
         self.max_top_k = min(SPEC_SAMPLED_MAX_TOP_K, int(tt_sampling.max_top_k))
+        # the lane engine: every per-row input below is a lane frame (one column's rows per chip), the plan a
+        # LaneSamplingPlan and the draws read per column (``read_frame``); one column otherwise
+        self.lanes = int(getattr(decoder, "_srv_lanes", 1) or 1)
         # (width, slice, block) -> [1, 1, 32, width] int32 TILE: candidate block d (``block`` = top-k columns from
         # one chip or one vocabulary chunk) holds the offset d * slice
         self._offsets = {}
-        self._uploaded = {}  # (S's serial, chunk) -> params_key last uploaded
+        self._uploaded = {}  # (S's serial, chunk) -> the params_key of every column last uploaded
         self._serial = itertools.count(1)  # one per alloc: a recycled id() never reads as the same buffers
         self.ops = 0  # device programs the last body issued (diagnostics)
 
     # -- persistent buffers ----------------------------------------------------------------------------------
     def _from_torch(self, t, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=True):
+        """A replicated tensor (the same on every chip)."""
         return self.decoder._pv_from_torch(t, dtype, layout=layout, device=device)
+
+    def _column_buffer(self, t, dtype, lane_dim, layout=ttnn.ROW_MAJOR_LAYOUT):
+        """A persistent per-column device buffer: ``t`` on every chip (under lanes: ``t`` stacked ``lanes`` times
+        along ``lane_dim`` and sharded over the lane axis, so every column holds its own copy)."""
+        if self.lanes > 1:
+            return self.decoder._srv_from_torch(t, dtype, layout=layout, lane_dim=lane_dim, device=True)
+        return self._from_torch(t, dtype, layout=layout)
+
+    def _frame_host(self, frame, dtype, lane_dim, layout=ttnn.ROW_MAJOR_LAYOUT):
+        """The host tensor of one upload: under lanes ``frame`` is the lane frame (the columns' values stacked
+        along ``lane_dim``), sharded over the lane axis; one column otherwise."""
+        if self.lanes > 1:
+            return self.decoder._srv_frame_from_torch(frame, dtype, layout=layout, lane_dim=lane_dim, device=False)
+        return self._from_torch(frame, dtype, layout=layout, device=False)
 
     def alloc(self, B, P):
         """The shape's per-chunk parameter rows, seed rows and draw outputs (``_srv_alloc_shape``)."""
@@ -312,13 +402,15 @@ class SpecVerifySampler:
         }
         for c in range(chunks):
             k, p, temp, seeds = greedy.chunk(c)
-            S["k"].append(self._from_torch(torch.tensor(k, dtype=torch.int32), ttnn.uint32))
+            # per column (a lane frame under lanes): the 32 parameter rows along dim 0, the draw output's rows
+            # along dim 3, the tie-break mask's rows along dim 2
+            S["k"].append(self._column_buffer(torch.tensor(k, dtype=torch.int32), ttnn.uint32, 0))
             # the top-1 tie-break's mask (1.0 on the rows whose k == 1), TILE so it broadcasts over the width
-            S["gcol"].append(self._from_torch(_top1_mask(k), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
-            S["p"].append(self._from_torch(torch.tensor(p, dtype=torch.float32), ttnn.bfloat16))
-            S["temp"].append(self._from_torch(torch.tensor(temp, dtype=torch.float32), ttnn.bfloat16))
-            S["seeds"].append(self._from_torch(torch.tensor(seeds, dtype=torch.int64), ttnn.uint32))
-            S["sidx"].append(self._from_torch(torch.zeros(1, 1, 1, R, dtype=torch.int64), ttnn.uint32))
+            S["gcol"].append(self._column_buffer(_top1_mask(k), ttnn.bfloat16, 2, layout=ttnn.TILE_LAYOUT))
+            S["p"].append(self._column_buffer(torch.tensor(p, dtype=torch.float32), ttnn.bfloat16, 0))
+            S["temp"].append(self._column_buffer(torch.tensor(temp, dtype=torch.float32), ttnn.bfloat16, 0))
+            S["seeds"].append(self._column_buffer(torch.tensor(seeds, dtype=torch.int64), ttnn.uint32, 0))
+            S["sidx"].append(self._column_buffer(torch.zeros(1, 1, 1, R, dtype=torch.int64), ttnn.uint32, 3))
         return S
 
     def offsets_for(self, width, vocab_slice, block):
@@ -491,40 +583,74 @@ class SpecVerifySampler:
         return values, indices, k * splits, V_x // splits
 
     # -- per replay ------------------------------------------------------------------------------------------
+    def _column_plans(self, plan):
+        """The per-column ``SamplingRowsPlan`` list of ``plan``: a ``LaneSamplingPlan`` of ``lanes`` columns on
+        the lane engine, one ``SamplingRowsPlan`` otherwise."""
+        if self.lanes > 1:
+            if not isinstance(plan, LaneSamplingPlan) or plan.lanes != self.lanes:
+                raise ValueError(
+                    f"the lane engine's sampler takes a LaneSamplingPlan of {self.lanes} columns, got {plan!r}"
+                )
+            return list(plan.plans)
+        if isinstance(plan, LaneSamplingPlan):
+            raise ValueError("a LaneSamplingPlan on one column: serving_sampling_rows makes the plain plan")
+        return [plan]
+
     def upload(self, S, plan):
-        """The plan's parameter rows (chunks whose rows changed) and seeds (every replay with a sampled row)."""
-        if plan.chunks != S["chunks"]:
-            raise ValueError(f"the plan has {plan.chunks} chunks, the record's sampler {S['chunks']}")
+        """The plan's parameter rows (chunks whose rows changed on any column) and seeds (every replay with a
+        sampled row); on the lane engine each upload is the lane frame of every column's rows."""
+        plans = self._column_plans(plan)
+        if any(p.chunks != S["chunks"] for p in plans):
+            raise ValueError(f"the plan has {[p.chunks for p in plans]} chunks, the record's sampler {S['chunks']}")
+        R = SPEC_SAMPLED_ROW_TILE
         for c in range(S["chunks"]):
             key = (S["serial"], c)
-            params = plan.params_key(c)
-            k, p, temp, seeds = plan.chunk(c)
+            params = tuple(p.params_key(c) for p in plans)
+            cols = [p.chunk(c) for p in plans]  # (k, p, temp, seeds) of chunk c per column
             if self._uploaded.get(key) != params:
-                for host, dev, dtype, hdtype in (
-                    (k, S["k"][c], ttnn.uint32, torch.int32),
-                    (p, S["p"][c], ttnn.bfloat16, torch.float32),
-                    (temp, S["temp"][c], ttnn.bfloat16, torch.float32),
+                for which, dev, dtype, hdtype in (
+                    (0, S["k"][c], ttnn.uint32, torch.int32),
+                    (1, S["p"][c], ttnn.bfloat16, torch.float32),
+                    (2, S["temp"][c], ttnn.bfloat16, torch.float32),
                 ):
-                    h = self._from_torch(torch.tensor(host, dtype=hdtype), dtype, device=False)
+                    frame = torch.tensor([v for col in cols for v in col[which]], dtype=hdtype)
+                    h = self._frame_host(frame, dtype, 0)
                     ttnn.copy_host_to_device_tensor(h, dev)
                     h.deallocate(True)
-                h = self._from_torch(_top1_mask(k), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False)
+                gcol = torch.cat([_top1_mask(col[0]) for col in cols], dim=2)
+                h = self._frame_host(gcol, ttnn.bfloat16, 2, layout=ttnn.TILE_LAYOUT)
                 ttnn.copy_host_to_device_tensor(h, S["gcol"][c])
                 h.deallocate(True)
                 self._uploaded[key] = params
-            if any(plan.sampled[c * SPEC_SAMPLED_ROW_TILE : (c + 1) * SPEC_SAMPLED_ROW_TILE]):
-                h = self._from_torch(torch.tensor(seeds, dtype=torch.int64), ttnn.uint32, device=False)
+            if any(any(p.sampled[c * R : (c + 1) * R]) for p in plans):
+                # every column's seed rows go up together: an idle column's rows carry the SKIP sentinel, so its
+                # cores' PRNG stays untouched exactly as a greedy row's does
+                frame = torch.tensor([v for col in cols for v in col[3]], dtype=torch.int64)
+                h = self._frame_host(frame, ttnn.uint32, 0)
                 ttnn.copy_host_to_device_tensor(h, S["seeds"][c])
                 h.deallocate(True)
 
     def read(self, S, rows):
-        """The sampler's draws of the first ``rows`` packed rows, as a host list (chip 0's replica)."""
+        """The sampler's draws of the first ``rows`` packed rows, as a host list (chip 0's replica; one column)."""
+        if self.lanes > 1:
+            raise ValueError("read() is the one-column readback; the lane engine reads every column (read_frame)")
         out = []
         for c in range(S["chunks"]):
             t = S["sidx"][c]
             host = ttnn.to_torch(ttnn.get_device_tensors(t)[0]) if self.tp > 1 else ttnn.to_torch(t)
             out.extend(int(v) for v in host.reshape(-1).tolist())
         return out[: int(rows)]
+
+    def read_frame(self, S):
+        """``[lanes][chunks * 32]`` host draws of every column (each lane's first chip, ``_srv_lane_read_u32``)."""
+        if self.lanes <= 1:
+            raise ValueError("read_frame() is the lane engine's readback; one column reads with read()")
+        out = [[] for _ in range(self.lanes)]
+        for c in range(S["chunks"]):
+            per_lane = self.decoder._srv_lane_read_u32(S["sidx"][c], SPEC_SAMPLED_ROW_TILE)  # [lanes, 32]
+            for lane in range(self.lanes):
+                out[lane].extend(int(v) for v in per_lane[lane].reshape(-1).tolist())
+        return out
 
 
 def _top1_mask(k):
