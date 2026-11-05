@@ -236,10 +236,9 @@ struct FullPresetForwards {
     template <size_t ENTRY>
     FORCE_INLINE static void forward(
         const DownstreamLink&, uint32_t dst, uint32_t src_addr, uint32_t size_bytes, uint8_t trid) {
-#if defined(ARCH_BLACKHOLE)
         // The two commands' buffers' ready states are read as a pair, so the reads overlap instead of each being a lone
         // read inside the NoC API; a buffer not ready is waited for just before its command. Only this ERISC issues on
-        // them, so a buffer seen ready stays ready until its next command.
+        // them, so a buffer seen ready stays ready until its next command. Blackhole counts the write (issue 28758).
         const bool data_ready = noc_cmd_buf_ready(Traits::noc, Traits::data_cmd_buf);
         const bool sync_ready = noc_cmd_buf_ready(Traits::noc, Traits::sync_cmd_buf);
         if (!data_ready) {
@@ -249,13 +248,9 @@ struct FullPresetForwards {
         ncrisc_noc_write_with_state<
             DM_DEDICATED_NOC,
             /*posted=*/true,
-            /*update_counter=*/true,
+            /*update_counter=*/is_blackhole_arch,
             /*one_packet=*/false,
             /*skip_cmdbuf_chk=*/true>(Traits::noc, Traits::data_cmd_buf, src_addr, dst, size_bytes);
-#else
-        noc_async_write_one_packet_with_trid_with_state</*update_counter=*/false, /*posted=*/true>(
-            src_addr, dst, size_bytes, trid, Traits::data_cmd_buf, Traits::noc);
-#endif
         // The credit register, where it is set on every forward (credit_register_varies): one command-buffer register
         // write.
         if (!sync_ready) {
