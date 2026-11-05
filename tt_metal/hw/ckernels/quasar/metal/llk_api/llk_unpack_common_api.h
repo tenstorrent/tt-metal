@@ -53,6 +53,12 @@ namespace ckernel::trisc {
 // each Neo has its own UNP_B and runs its own init/uninit (tt-llk#1678). Firmware TLS outlives a kernel, so
 // llk_unpack_hw_configure clears it at kernel start. Defined in tt_metal/hw/firmware/src/tt-2xx/trisc.cc.
 extern thread_local std::uint32_t reduce_2x_scaler_operand_plus_one;
+
+// SrcB dummy dvalids requested in the current unpack-to-dest section (llk_unpack_set_srcb_dummy_valid) and issued by
+// llk_unpack_dest_section_done after its UNPACK_MATH post. thread_local because each Neo's unpack thread runs its own
+// sections; firmware TLS outlives a kernel, so llk_unpack_hw_configure clears it at kernel start. Defined in
+// tt_metal/hw/firmware/src/tt-2xx/trisc.cc.
+extern thread_local std::uint32_t unpack_to_dest_deferred_srcb_dummies;
 }  // namespace ckernel::trisc
 
 constexpr std::uint32_t REDUCE_2X_SCALER_NONE = 0;
@@ -81,6 +87,8 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         static_cast<DataFormat>(unpack_dst_format[unpB_operand_id]));
     // UNP_B is back on its table format, and a previous kernel's 2x reduce scaler record must not leak.
     ckernel::trisc::reduce_2x_scaler_operand_plus_one = REDUCE_2X_SCALER_NONE;
+    // No SrcB dummy dvalid of a previous kernel's section may carry over either.
+    ckernel::trisc::unpack_to_dest_deferred_srcb_dummies = 0;
 
     // Unpack-to-dest: the unpack thread carries its DEST bank in the UNP_DEST tile index (the SEC registers do not move
     // UNPACR_DEST), and this is the once-per-program reset of that bank. Every compute-API site that calls
@@ -135,13 +143,20 @@ inline void llk_unpack_wait_for_dest_available() {
  * @note Math blocks in tile_regs_acquire until this post, so it sees nothing of the section before the unpack thread
  *       commits it. SrcA / SrcB unpacks issued in the same section are therefore consumed only after this call and
  *       must fit the src banks. A section that mixes unpack-to-dest copies with a src-path run is outside
- *       this contract and stalls both threads!
+ *       this contract and stalls both threads! SrcB dummy dvalids are the exception: @ref
+ *       llk_unpack_set_srcb_dummy_valid defers them, and this call issues them after the UNPACK_MATH post.
  */
 template <bool EN_32BIT_DEST>
 inline void llk_unpack_dest_section_done() {
     if constexpr (UnpackToDestEn) {
         _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_PACK);
         _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
+        // Math runs the section from here on and frees a SrcB bank per dummy it consumes, so each deferred dummy's
+        // wait for a free bank now ends.
+        for (std::uint32_t i = 0; i < ckernel::trisc::unpack_to_dest_deferred_srcb_dummies; i++) {
+            _llk_unpack_set_srcB_dummy_valid_();
+        }
+        ckernel::trisc::unpack_to_dest_deferred_srcb_dummies = 0;
         if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
             _llk_unpack_dest_section_advance_<EN_32BIT_DEST>();
         }
@@ -237,7 +252,21 @@ inline void llk_unpack_reconfig_data_format(
 }
 
 /**
- * @brief Issues a dummy SrcB dvalid so the math thread can satisfy its SRCB_VLD
- * stall in transpose-dest. Used by the transpose_dest compute API.
+ * @brief Hands math a dummy SrcB dvalid for an op that reads DEST through SrcB (MOVD2B): transpose-dest and the
+ *        broadcast from DEST. Used by the transpose_dest compute API and the unpack-to-dest broadcast arms of
+ *        llk_unpack_A / llk_unpack_A_block.
+ *
+ * With UnpackToDestEn, math starts a section only after the UNPACK_MATH post of @ref llk_unpack_dest_section_done,
+ * and a dummy waits for a free SrcB bank, which only math frees. Issued inside the section, a dummy that finds no free
+ * bank waits on math while math waits on the post queued behind it, and the kernel deadlocks (the shape of #58115;
+ * ttsim shows it, the emulator does not). So under the flag the dummy is only counted here and issued by
+ * llk_unpack_dest_section_done after that post. Without UnpackToDestEn, math does not wait on the unpacker and the
+ * dummy is issued at once.
  */
-inline void llk_unpack_set_srcb_dummy_valid() { _llk_unpack_set_srcB_dummy_valid_(); }
+inline void llk_unpack_set_srcb_dummy_valid() {
+    if constexpr (UnpackToDestEn) {
+        ckernel::trisc::unpack_to_dest_deferred_srcb_dummies++;
+    } else {
+        _llk_unpack_set_srcB_dummy_valid_();
+    }
+}

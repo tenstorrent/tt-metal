@@ -153,9 +153,10 @@ inline void llk_unpack_A_init(
  * `llk_unpack_dest_section_done` (tile_regs_acquire / tile_regs_commit), so every call between the two lands in the
  * same DEST section. Otherwise `_llk_unpack_unary_operand_` on UNP_A or the broadcast MOP on UNP_B.
  *
- * A broadcast placed in DEST is read back by math through SrcB, so each such tile also publishes one dummy SrcB
- * dvalid here and holds a SrcB bank until math consumes it after tile_regs_commit: one broadcast per section is
- * the verified shape, more than two per section is unverified (SrcB has two banks).
+ * A broadcast placed in DEST is read back by math through SrcB (MOVD2B), so each such tile also requests one dummy
+ * SrcB dvalid (@ref llk_unpack_set_srcb_dummy_valid). Under UnpackToDestEn the dummies are deferred and issued by
+ * llk_unpack_dest_section_done after its UNPACK_MATH post, while math consumes the section, so a section may hold
+ * more broadcast tiles than SrcB has banks (verified with a full 32-bit SyncHalf section of four).
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
@@ -211,9 +212,10 @@ inline void llk_unpack_A(
             dst_tile_index < dest_section_tiles,
             "unpack-to-dest broadcast: dst_tile_index exceeds the DEST section capacity for this sync mode and DEST "
             "width");
-        // Math reads the rows back with MOVD2B, which stalls on SrcB validity: one dummy SrcB dvalid per tile.
-        _llk_unpack_set_srcB_dummy_valid_();
         _llk_unpack_unary_broadcast_operands_to_dest_tile_(l1_tile_idx, dst_tile_index);
+        // Math reads the rows back with MOVD2B, which stalls on SrcB validity: one dummy SrcB dvalid per tile,
+        // deferred to the section end under UnpackToDestEn.
+        llk_unpack_set_srcb_dummy_valid();
     } else {
         _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B>(l1_tile_idx);
     }
@@ -293,8 +295,8 @@ inline void llk_unpack_A_block(
                     dst_tile_index < dest_section_tiles,
                     "unpack-to-dest broadcast: start_dst_tile_index + ntiles exceeds the DEST section capacity for "
                     "this sync mode and DEST width");
-                _llk_unpack_set_srcB_dummy_valid_();
                 _llk_unpack_unary_broadcast_operands_to_dest_tile_(l1_tile_idx, dst_tile_index);
+                llk_unpack_set_srcb_dummy_valid();
             } else {
                 _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B>(l1_tile_idx);
             }
