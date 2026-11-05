@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from tt_py_test_utils_common.ttnn_utility_fuction import get_shard_grid_from_num_cores
+from tt_py_test_utils_common.ttnn_utility_functions import get_shard_grid_from_num_cores
 
 
 class TTConv2D:

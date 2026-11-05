@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from models.demos.stable_diffusion_xl_base.tests.sdxl_group_norm import (
+    run_sdxl_base_group_norm,
+    run_sdxl_base_group_norm_negative_mask,
     run_sdxl_base_group_norm_test,
-    test_sdxl_base_group_norm as _shared_test_sdxl_base_group_norm,
-    test_sdxl_base_group_norm_negative_mask as _shared_test_sdxl_base_group_norm_negative_mask,
 )
 
 import pytest
@@ -1090,7 +1090,7 @@ SDXL_SANITY_INPUTS = [
 def test_sdxl_base_group_norm(device, input_shape, use_welford, specify_grid=True, perf_test_mode=False):
     # Only one test case has C == 512, which has TILE_LAYOUT and inplace False
     # ALL other inputs have ROW_MAJOR_LAYOUT and inplace True
-    return _shared_test_sdxl_base_group_norm(device, input_shape, use_welford, specify_grid, perf_test_mode)
+    return run_sdxl_base_group_norm(device, input_shape, use_welford, specify_grid, perf_test_mode)
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
@@ -1194,7 +1194,7 @@ SDXL_NEG_MASK_SANITY_INPUTS = [
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
 @pytest.mark.parametrize("input_shape", SDXL_NEG_MASK_SANITY_INPUTS)
 def test_sdxl_base_group_norm_negative_mask(device, input_shape, specify_grid=True, perf_test_mode=False):
-    return _shared_test_sdxl_base_group_norm_negative_mask(device, input_shape, specify_grid, perf_test_mode)
+    return run_sdxl_base_group_norm_negative_mask(device, input_shape, specify_grid, perf_test_mode)
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)

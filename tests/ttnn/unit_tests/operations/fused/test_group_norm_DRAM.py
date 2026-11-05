@@ -6,7 +6,7 @@ from tt_py_test_utils_common.group_norm_dram import (
     STATISTICS_MODES,
     _use_two_pass_statistics,
     run_group_norm_DRAM,
-    test_group_norm_DRAM as _shared_test_group_norm_DRAM,
+    run_group_norm_DRAM_with_input_mask,
 )
 
 import pytest
@@ -198,7 +198,7 @@ def test_group_norm_DRAM(
     specify_grid=True,
     perf_test_mode=False,
 ):
-    return _shared_test_group_norm_DRAM(
+    return run_group_norm_DRAM_with_input_mask(
         device,
         N,
         C,

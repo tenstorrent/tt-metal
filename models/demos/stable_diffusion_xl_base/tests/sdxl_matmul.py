@@ -9,7 +9,7 @@ from tt_py_test_utils_common.matmul_determinism import ttnn_linear
 from tt_py_test_utils_common.utils_for_testing import assert_numeric_metrics
 
 
-def test_sdxl_matmul(
+def run_sdxl_matmul(
     device,
     core_grid,
     M,

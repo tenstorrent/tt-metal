@@ -84,7 +84,7 @@ def run_sdxl_base_group_norm_test(
         )
 
 
-def test_sdxl_base_group_norm(device, input_shape, use_welford, specify_grid=True, perf_test_mode=False):
+def run_sdxl_base_group_norm(device, input_shape, use_welford, specify_grid=True, perf_test_mode=False):
     # Only one test case has C == 512, which has TILE_LAYOUT and inplace False
     # ALL other inputs have ROW_MAJOR_LAYOUT and inplace True
     N, C, H, W = input_shape
@@ -93,7 +93,7 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, specify_grid=Tru
     run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, specify_grid, perf_test_mode)
 
 
-def test_sdxl_base_group_norm_negative_mask(device, input_shape, specify_grid=True, perf_test_mode=False):
+def run_sdxl_base_group_norm_negative_mask(device, input_shape, specify_grid=True, perf_test_mode=False):
     num_groups = 32  #  always 32 for SDXL Base 1024x1024
     N, C, H, W = input_shape
     torch.manual_seed(0)

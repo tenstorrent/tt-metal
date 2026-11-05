@@ -219,9 +219,5 @@ class OpTestBase:
         assert catch_nd_on_fail
 
 
-def test():
-    pass
-
-
 def get_mesh_grid_size(mesh_device):
     return mesh_device.compute_with_storage_grid_size()

@@ -5,13 +5,8 @@
 import torch
 from loguru import logger
 import ttnn
+from tt_py_test_utils_common.ccl_semaphores import create_global_semaphores
 from tt_py_test_utils_common.comparison_funcs import comp_equal, comp_pcc
-
-
-def create_global_semaphores(mesh_device, cores, initial_value):
-    # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(3)]
-    return ccl_semaphore_handles
 
 
 def run_reduce_scatter_impl(

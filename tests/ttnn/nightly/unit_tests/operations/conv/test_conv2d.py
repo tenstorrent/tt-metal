@@ -6,8 +6,8 @@ from models.demos.stable_diffusion_xl_base.tests.sdxl_conv2d import (
     BS,
     randomize_torch_tensor,
     run_conv,
-    test_conv2d_sdxl as _shared_test_conv2d_sdxl,
-    test_conv2d_vae_sdxl as _shared_test_conv2d_vae_sdxl,
+    run_sdxl_conv2d,
+    run_sdxl_conv2d_vae,
 )
 
 import math
@@ -2925,7 +2925,7 @@ def test_conv2d_sdxl(
     w_db,
     perf_test_mode = False,
 ):
-    return _shared_test_conv2d_sdxl(
+    return run_sdxl_conv2d(
         device,
         torch_tensor_map,
         batch,
@@ -3135,7 +3135,7 @@ def test_conv2d_vae_sdxl(
     perf_test_mode = False,
 ):
     # Skip all on N300
-    return _shared_test_conv2d_vae_sdxl(
+    return run_sdxl_conv2d_vae(
         device,
         torch_tensor_map,
         batch,
