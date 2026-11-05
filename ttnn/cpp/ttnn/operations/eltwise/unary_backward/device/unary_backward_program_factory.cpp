@@ -493,7 +493,7 @@ ttnn::device_operation::ProgramArtifacts UnaryBackwardProgramFactory::create_pro
                 {
                     .runtime_arg_names = {"num_tiles", "start_id", "block_height", "block_width", "num_cores_y"},
                 },
-            .hw_config = ttnn::create_reader_datamovement_config(),
+            .hw_config = ttnn::create_reader_datamovement_config(can_alias_shards),
         };
 
         // The writer uses its accessor only when OUT_SHARDED is not defined. The output is therefore
@@ -529,7 +529,7 @@ ttnn::device_operation::ProgramArtifacts UnaryBackwardProgramFactory::create_pro
                 {
                     .runtime_arg_names = {"num_pages", "start_id"},
                 },
-            .hw_config = ttnn::create_writer_datamovement_config(),
+            .hw_config = ttnn::create_writer_datamovement_config(can_alias_shards),
         };
     }
 
