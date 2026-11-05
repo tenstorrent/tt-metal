@@ -524,10 +524,13 @@ TEST(MultiHost, MeshPinningFileHonored) {
             const std::string hostname = candidate["hostname"].as<std::string>();
             const std::string devices = candidate["TT_VISIBLE_DEVICES"].as<std::string>();
             allowed += " [" + hostname + " " + devices + "]";
-            if (hostname == hostname_env && parse_devices(devices) == my_devices) {
+            const std::vector<int> pinned_devices = parse_devices(devices);
+            const bool includes_pinned =
+                std::includes(my_devices.begin(), my_devices.end(), pinned_devices.begin(), pinned_devices.end());
+            if (hostname == hostname_env && includes_pinned) {
                 log_info(
                     tt::LogTest,
-                    "mesh {} host rank {}: running on {} devices {}, one of {} allowed placement(s)",
+                    "mesh {} host rank {}: running on {} devices {}, within one of {} allowed placement(s)",
                     mesh_id,
                     mesh_host_rank,
                     hostname_env,
@@ -537,7 +540,7 @@ TEST(MultiHost, MeshPinningFileHonored) {
             }
         }
         FAIL() << "mesh " << mesh_id << " host rank " << mesh_host_rank << " runs on " << hostname_env << " devices "
-               << visible_devices_env << " but the pinning file allows only" << allowed;
+               << visible_devices_env << " but the pinning file requires one of" << allowed;
     }
     GTEST_SKIP() << "mesh " << mesh_id << " host rank " << mesh_host_rank << " is not pinned in " << pinning_file;
 }

@@ -162,7 +162,7 @@ struct TopologyMappingConfig {
     // calling host's chips instead of an arbitrary host. Default empty (no restriction).
     std::set<tt::tt_metal::experimental::PhysicalNodeId> placement_asic_allowlist;
 
-    // Optional hard (mesh, host-rank) -> ASIC-pool pins from --mesh-pinning-file, keyed by solver MeshIds.
+    // --mesh-pinning-file pins keyed by solver MeshIds; a host rank's ASICs must include its pool (exact if same size).
     std::map<std::pair<MeshId, MeshHostRankId>, std::set<tt::tt_metal::experimental::PhysicalNodeId>>
         mesh_host_rank_pinnings;
 };

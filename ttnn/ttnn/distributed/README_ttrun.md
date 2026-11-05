@@ -55,15 +55,19 @@ tt-run -m path/to/mgd.textproto \
 ### Pinning meshes to hosts (optional)
 
 By default the auto-mapper places every logical mesh host rank automatically. Pass `--mesh-pinning-file` to
-constrain selected `(mesh_id, mesh_host_rank)` pairs to exact `(hostname, TT_VISIBLE_DEVICES)` placements.
+constrain selected `(mesh_id, mesh_host_rank)` pairs to `(hostname, TT_VISIBLE_DEVICES)` placements.
 
 ```yaml
 # pinned_meshes.yaml
 mesh_host_rank_pinnings:
-  - mesh_id: 0                     # exact pin
+  - mesh_id: 0                     # exact pin (as many devices as the host rank has nodes)
     mesh_host_rank: 0
     hostname: nodeA
     TT_VISIBLE_DEVICES: "0,1,2,3"
+  - mesh_id: 0                     # partial pin: must include device 6, the mapper fills in the rest
+    mesh_host_rank: 3
+    hostname: nodeD
+    TT_VISIBLE_DEVICES: "6"
   - mesh_id: 0                     # any_of pin: exactly one of these placements
     mesh_host_rank: 1
     any_of:
@@ -80,8 +84,9 @@ tt-run --mesh-graph-descriptor path/to/mgd.textproto \
 
 Each entry pins one logical host rank to one placement, or with `any_of` to exactly one of several candidates
 (several host ranks may share candidates; chosen placements never overlap). Pins are hard constraints:
-`TT_VISIBLE_DEVICES` defines the exact ASIC pool, unlisted host ranks stay automatic, and Phase 1 halts before
-launch when no candidate assignment satisfies the topology. Pinning currently supports a single MGD (`-m`) — see
+`TT_VISIBLE_DEVICES` lists devices the host rank must include (the exact pool when it has as many devices as
+the host rank has nodes), unlisted host ranks stay automatic, and Phase 1 halts before launch when no
+candidate assignment satisfies the topology. Pinning currently supports a single MGD (`-m`) — see
 [`README_generate_rank_bindings.md`](../../../tools/scaleout/README_generate_rank_bindings.md) for details.
 
 The pinning file's contents feed the Phase 1 cache fingerprint, so editing it forces a fresh Phase 1 run; a

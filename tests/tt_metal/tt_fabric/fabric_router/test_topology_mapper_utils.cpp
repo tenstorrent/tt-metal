@@ -543,8 +543,8 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     }
 }
 
-// --mesh-pinning-file: a (mesh, host-rank) pinned to an exact ASIC pool must land on that pool, whichever
-// host the mapper would otherwise have picked, and a pool of the wrong size is rejected.
+// --mesh-pinning-file: a pinned (mesh, host-rank) lands on its pool (exact or partial), whichever host the
+// mapper would otherwise pick; oversized, straddling, or shared pools are rejected.
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MeshHostRankPinning_PinsRankToSelectedPool) {
     using namespace ::tt::tt_fabric;
 
@@ -587,16 +587,37 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         }
     }
 
-    // A pool smaller than the host rank's node count is rejected.
+    // A partial pool (one ASIC of host1) still pulls host rank 0 onto host1, with the solver filling the rest.
     {
         TopologyMappingConfig config;
         config.disable_rank_bindings = false;
         fill_hosts_from_psd(config, psd);
-        config.mesh_host_rank_pinnings[{mesh, rank0}] = {*config.hostname_to_asics.at("host1").begin()};
+        const auto pinned_asic = *config.hostname_to_asics.at("host1").rbegin();
+        config.mesh_host_rank_pinnings[{mesh, rank0}] = {pinned_asic};
+        const auto mapping =
+            map_multi_mesh_to_physical(psd, mgd, config, /*pinnings=*/{}, unset_asic_ranks(psd), fabric_ranks);
+        ASSERT_TRUE(mapping.success) << mapping.error_message;
+        verify_each_rank_on_one_host(mapping, fabric_ranks.at(mesh), config.hostname_to_asics);
+        std::set<tt::tt_metal::experimental::PhysicalNodeId> rank0_asics;
+        for (const auto& [node, rank] : fabric_ranks.at(mesh)) {
+            if (rank == rank0) {
+                rank0_asics.insert(mapping.fabric_node_to_physical.at(node));
+            }
+        }
+        EXPECT_TRUE(rank0_asics.contains(pinned_asic)) << "host rank 0 does not include its pinned ASIC";
+        EXPECT_EQ(rank0_asics, config.hostname_to_asics.at("host1"));
+    }
+
+    // A pool larger than the host rank's node count cannot be satisfied.
+    {
+        TopologyMappingConfig config;
+        config.disable_rank_bindings = false;
+        fill_hosts_from_psd(config, psd);
+        config.mesh_host_rank_pinnings[{mesh, rank0}] = config.hostname_to_asics.at("host1");
+        config.mesh_host_rank_pinnings[{mesh, rank0}].insert(*config.hostname_to_asics.at("host0").begin());
         const auto mapping =
             map_multi_mesh_to_physical(psd, mgd, config, /*pinnings=*/{}, unset_asic_ranks(psd), fabric_ranks);
         EXPECT_FALSE(mapping.success);
-        EXPECT_NE(mapping.error_message.find("Mesh-host-rank pinning"), std::string::npos) << mapping.error_message;
     }
 
     // A right-sized pool straddling both hosts is infeasible (rank 0's chips are adjacent and share a host).
@@ -622,6 +643,56 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         const auto mapping =
             map_multi_mesh_to_physical(psd, mgd, config, /*pinnings=*/{}, unset_asic_ranks(psd), fabric_ranks);
         EXPECT_FALSE(mapping.success) << "two ranks on one host pool must not be satisfiable";
+    }
+}
+
+// --mesh-pinning-file at seating level: with two disjoint 4-chip lines, a pin on the second line seats the
+// whole mesh there on the first SAT model, with no rejected seating to retry.
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MeshHostRankPinning_SelectsSeatingContainingPool) {
+    using namespace ::tt::tt_fabric;
+
+    // Line A: host0 {100,101} host1 {102,103}; line B: host2 {104,105} host3 {106,107}; no links between lines.
+    auto psd = build_mock_psd(
+        {"host0", "host0", "host1", "host1", "host2", "host2", "host3", "host3"},
+        std::vector<std::pair<int, int>>{{0, 1}, {1, 2}, {2, 3}, {4, 5}, {5, 6}, {6, 7}});
+    MeshGraphDescriptor mgd{std::string(R"(
+        mesh_descriptors {
+          name: "M0"
+          arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+    const MeshId mesh{0};
+    const MeshHostRankId rank0{0};
+    const auto fabric_ranks = fabric_ranks_for_host_grid(mesh, 1, 4, 1, 2);
+
+    for (const std::string pinned_host : {"host3", "host1", "host2", "host0"}) {
+        TopologyMappingConfig config;
+        config.disable_rank_bindings = false;
+        fill_hosts_from_psd(config, psd);
+        const auto pinned_asic = *config.hostname_to_asics.at(pinned_host).begin();
+        config.mesh_host_rank_pinnings[{mesh, rank0}] = {pinned_asic};
+
+        // No rank-bound ASICs (Phase 1): the seating is free to pick either line.
+        const auto mapping = map_multi_mesh_to_physical(psd, mgd, config, /*pinnings=*/{}, {}, fabric_ranks);
+        ASSERT_TRUE(mapping.success) << pinned_host << ": " << mapping.error_message;
+        verify_each_rank_on_one_host(mapping, fabric_ranks.at(mesh), config.hostname_to_asics);
+        std::set<tt::tt_metal::experimental::PhysicalNodeId> rank0_asics;
+        for (const auto& [node, rank] : fabric_ranks.at(mesh)) {
+            if (rank == rank0) {
+                rank0_asics.insert(mapping.fabric_node_to_physical.at(node));
+            }
+        }
+        EXPECT_EQ(rank0_asics, config.hostname_to_asics.at(pinned_host)) << pinned_host;
+        EXPECT_EQ(mapping.stats.placement_sat_attempts, 1u)
+            << pinned_host << ": the seating constraint should make the first SAT model the right one";
+        for (const std::string& warning : mapping.stats.warnings) {
+            EXPECT_EQ(warning.find("outside the seated physical mesh"), std::string::npos) << warning;
+        }
     }
 }
 

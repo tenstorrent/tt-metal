@@ -21,7 +21,7 @@
 using tt::tt_fabric::MeshHostRankId;
 using tt::tt_fabric::MeshId;
 
-// One hostname + exact TT_VISIBLE_DEVICES (sorted, unique, non-negative) a host rank may run on.
+// Hostname + TT_VISIBLE_DEVICES (sorted, unique) a host rank must include; exact when the count equals its nodes.
 struct HostPlacement {
     std::string hostname;
     std::vector<int> tt_visible_devices;
@@ -31,7 +31,7 @@ struct HostPlacement {
     }
 };
 
-// One --mesh-pinning-file entry: (mesh_id, mesh_host_rank) runs on exactly one of `candidates` (1 = exact pin).
+// One --mesh-pinning-file entry: (mesh_id, mesh_host_rank) uses exactly one of `candidates` (1 = plain pin).
 struct MeshHostRankPinning {
     MeshId mesh_id{0};
     MeshHostRankId mesh_host_rank{0};
