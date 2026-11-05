@@ -938,14 +938,19 @@ def test_topk_xl_local_sort_early_exit(K, sort_direction):
 
 
 # The topk_large_indices column body (k <= 64): each column keeps the top 64 of its members over all chunks.
-@parametrize(num_chunks=[2, 4], sort_direction=list(TopKSortDirection))
-def test_topk_xl_rebuild_columns(num_chunks, sort_direction):
+@parametrize(
+    num_chunks=[2, 4],
+    sort_direction=list(TopKSortDirection),
+    blaze_compat=[False, True],
+)
+def test_topk_xl_rebuild_columns(num_chunks, sort_direction, blaze_compat):
     K = 1024
     result, rows = _run(
         K,
         num_chunks=num_chunks,
         sort_mode=TopKXLSortMode.Columns,
         sort_direction=sort_direction,
+        blaze_compat=blaze_compat,
     )
     words = torch.tensor(result, dtype=format_dict[FORMATS.output_format])
     assert (
