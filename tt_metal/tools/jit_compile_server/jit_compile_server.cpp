@@ -77,8 +77,8 @@ constexpr const char* kEndpointEnv = "TT_METAL_JIT_SERVER_ENDPOINT";
 // Set TT_METAL_JIT_SERVER_ENDPOINT=0.0.0.0:9876 (or a specific interface) to accept
 // remote connections.  In that case, restrict access with a firewall or SSH tunnel.
 constexpr const char* kDefaultEndpoint = "localhost:9876";
-constexpr const char* kServerCacheRootEnv = "TT_METAL_JIT_SERVER_CACHE_ROOT";
-constexpr const char* kDefaultServerCacheRoot = "/tmp/tt-metal-cache/";
+using tt::tt_metal::jit_server::kDefaultServerCacheRoot;
+using tt::tt_metal::jit_server::kServerCacheRootEnv;
 std::string g_server_cache_root = kDefaultServerCacheRoot;
 
 // Deletes least recently used kernel directories when the cache filesystem runs low on space.
@@ -547,8 +547,9 @@ int main() {
     tt::tt_metal::jit_server::CachePruneConfig prune_config;
     try {
         prune_config = tt::tt_metal::jit_server::CachePruneConfig::from_env();
+        prune_config.validate_cache_root(g_server_cache_root);
     } catch (const std::exception& e) {
-        log_error(tt::LogMetal, "Invalid JIT server cache prune setting: {}", e.what());
+        log_error(tt::LogMetal, "JIT server cache pruning: {}", e.what());
         return 1;
     }
     g_cache_pruner = std::make_unique<tt::tt_metal::jit_server::ServerCachePruner>(
@@ -579,18 +580,12 @@ int main() {
             tt::LogMetal,
             "JIT compile server cache pruning: disabled (set {} to enable)",
             tt::tt_metal::jit_server::kCacheMinFreePctEnv);
-        for (const char* name :
-             {tt::tt_metal::jit_server::kCacheTargetFreePctEnv,
-              tt::tt_metal::jit_server::kCacheMinIdleEnv,
-              tt::tt_metal::jit_server::kCacheCheckIntervalEnv}) {
-            const char* value = std::getenv(name);
-            if (value != nullptr && *value != '\0') {
-                log_warning(
-                    tt::LogMetal,
-                    "{} is set but has no effect because {} is not",
-                    name,
-                    tt::tt_metal::jit_server::kCacheMinFreePctEnv);
-            }
+        for (const auto& name : prune_config.ignored_settings) {
+            log_warning(
+                tt::LogMetal,
+                "{} is set but has no effect because {} is unset or 0",
+                name,
+                tt::tt_metal::jit_server::kCacheMinFreePctEnv);
         }
     }
     g_cache_pruner->start();

@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "impl/jit_server/server_cache_pruner.hpp"
@@ -104,22 +105,32 @@ protected:
         return dir;
     }
 
-    // A pruner whose filesystem reports `free_pct` free space and needs `needed` more bytes to
-    // reach the 30% target. Exactly one of the two is used.
-    ServerCachePruner make_pruner(double free_pct, std::uint64_t needed = 0) {
-        DiskSpace space{kCapacity, 0};
+    // A pruner whose filesystem starts with `free_pct` free space, or `needed` bytes short of the
+    // 30% target when that is given. Deleting from the test tree frees space on it, unless
+    // `frees_lazily` is set, in which case free space never moves.
+    ServerCachePruner make_pruner(double free_pct, std::uint64_t needed = 0, bool frees_lazily = false) {
+        std::uint64_t available = 0;
         if (needed > 0) {
             // Just under the target is still above the usual start threshold, so start there.
             config_.start_below_free_pct = config_.stop_at_free_pct;
-            space.available = static_cast<std::uint64_t>(kCapacity * (config_.stop_at_free_pct / 100.0)) - needed;
+            available = static_cast<std::uint64_t>(kCapacity * (config_.stop_at_free_pct / 100.0)) - needed;
         } else {
-            space.available = static_cast<std::uint64_t>(kCapacity * (free_pct / 100.0));
+            available = static_cast<std::uint64_t>(kCapacity * (free_pct / 100.0));
         }
+        const std::uint64_t initial_tree = allocated_bytes(root_);
         return ServerCachePruner(
             root_,
             config_,
             [this](const std::string& message) { logs_.push_back(message); },
-            [space](const fs::path&) { return space; });
+            [this, available, initial_tree, frees_lazily](const fs::path&) {
+                if (frees_lazily) {
+                    return DiskSpace{kCapacity, available};
+                }
+                const std::uint64_t tree = allocated_bytes(root_);
+                const std::uint64_t now_available =
+                    tree <= initial_tree ? available + (initial_tree - tree) : available - (tree - initial_tree);
+                return DiskSpace{kCapacity, now_available};
+            });
     }
 
     fs::path root_;
@@ -142,7 +153,8 @@ TEST_F(ServerCachePrunerTest, DeletesLeastRecentlyUsedFirstAcrossBuildKeysUntilE
     const fs::path third = make_kernel("1", "reader", "12", 30);
     const fs::path newest = make_kernel("2", "compute", "22", 20);
 
-    auto pruner = make_pruner(0.0, allocated_bytes(oldest) + 1);
+    // One byte more than the writer kernel takes up, so the second-oldest has to go too.
+    auto pruner = make_pruner(0.0, allocated_bytes(oldest.parent_path()) + 1);
     const CachePruneResult result = pruner.prune_once();
 
     EXPECT_TRUE(result.ran);
@@ -235,15 +247,46 @@ TEST_F(ServerCachePrunerTest, ReleasedLeaseNoLongerProtectsAnIdleKernel) {
     EXPECT_FALSE(fs::exists(kernel));
 }
 
-TEST_F(ServerCachePrunerTest, RemovesTrashLeftByAnInterruptedPrune) {
+TEST_F(ServerCachePrunerTest, RemovesTrashOnlyFromExitedProcesses) {
     const fs::path kernel = make_kernel("1", "reader", "11", 0);
-    const fs::path trash = kernel.parent_path() / ".jit-prune-trash.12.999.1";
-    write_file(trash / "brisc" / "brisc.elf", 64 * 1024);
+    // No process can have this pid (it is above the kernel's pid_max).
+    const fs::path dead = kernel.parent_path() / ".jit-prune-trash.12.999999999.1";
+    const fs::path live = kernel.parent_path() / (".jit-prune-trash.13." + std::to_string(::getppid()) + ".1");
+    const fs::path outside_build_key = root_ / "notakey" / "kernels" / "reader" / ".jit-prune-trash.14.999999999.1";
+    for (const auto& trash : {dead, live, outside_build_key}) {
+        write_file(trash / "brisc" / "brisc.elf", 64 * 1024);
+    }
 
-    auto pruner = make_pruner(50.0);
-    EXPECT_GT(pruner.remove_leftover_trash(), 0u);
-    EXPECT_FALSE(fs::exists(trash));
+    auto pruner = make_pruner(1.0);
+    const CachePruneResult result = pruner.prune_once();
+    EXPECT_FALSE(fs::exists(dead));
+    EXPECT_TRUE(fs::exists(live));
+    EXPECT_TRUE(fs::exists(outside_build_key));
     EXPECT_TRUE(fs::exists(kernel));
+    EXPECT_GT(result.free_pct_after, result.free_pct_before);
+}
+
+TEST_F(ServerCachePrunerTest, StopsAtTwiceTheShortfallWhenFreeSpaceDoesNotMove) {
+    std::vector<fs::path> kernels;
+    for (int i = 0; i < 4; ++i) {
+        kernels.push_back(make_kernel("1", "reader", std::to_string(10 + i), 50 - i));
+    }
+    auto pruner = make_pruner(0.0, allocated_bytes(kernels[0]), /*frees_lazily=*/true);
+    const CachePruneResult result = pruner.prune_once();
+    EXPECT_EQ(result.deleted, 2u);
+    EXPECT_FALSE(result.reached_target);
+    EXPECT_TRUE(fs::exists(kernels[2]));
+    EXPECT_TRUE(fs::exists(kernels[3]));
+}
+
+TEST_F(ServerCachePrunerTest, ReachedTargetComesFromMeasuredFreeSpace) {
+    const fs::path kernel = make_kernel("1", "reader", "11", 50);
+    auto pruner = make_pruner(1.0);
+    const CachePruneResult result = pruner.prune_once();
+    EXPECT_EQ(result.deleted, 1u);
+    // Deleting one small kernel does not get a 1%-free disk to 30%, whatever the estimate says.
+    EXPECT_FALSE(result.reached_target);
+    EXPECT_GT(result.still_needed_bytes, 0u);
 }
 
 TEST_F(ServerCachePrunerTest, IgnoresNonBuildKeyEntriesAndSymlinks) {
@@ -322,6 +365,29 @@ TEST_F(ServerCachePrunerTest, StopInterruptsARun) {
     EXPECT_TRUE(fs::exists(kernel));
 }
 
+TEST(CachePruneDelayTest, BacksOffOnlyAfterRunsThatFreeNothing) {
+    CachePruneConfig config;
+    config.check_interval = std::chrono::seconds(300);
+    CachePruneResult idle;  // free space was fine
+    CachePruneResult fruitless;
+    fruitless.ran = true;
+    CachePruneResult useful;
+    useful.ran = true;
+    useful.freed_bytes = 1;
+
+    EXPECT_EQ(next_prune_delay(config.check_interval, idle, config).count(), 300);
+    std::chrono::seconds delay = config.check_interval;
+    delay = next_prune_delay(delay, fruitless, config);
+    EXPECT_EQ(delay.count(), 600);
+    delay = next_prune_delay(delay, fruitless, config);
+    EXPECT_EQ(delay.count(), 1200);
+    for (int i = 0; i < 20; ++i) {
+        delay = next_prune_delay(delay, fruitless, config);
+    }
+    EXPECT_EQ(delay, kMaxPruneBackoff);
+    EXPECT_EQ(next_prune_delay(delay, useful, config).count(), 300);
+}
+
 TEST(CachePruneDiskSpaceTest, MatchesDfByLeavingOutRootReservedBlocks) {
     // 100 blocks, 10 free, of which only 5 are available to non-root users.
     const DiskSpace space = disk_space_from_counts(100, 10, 5, 4096);
@@ -341,6 +407,40 @@ CachePruneConfig config_from(const std::map<std::string, std::string>& values) {
         auto it = values.find(name);
         return it == values.end() ? nullptr : it->second.c_str();
     });
+}
+
+TEST(CachePruneConfigTest, ReportsSettingsThatHaveNoEffect) {
+    const CachePruneConfig config = config_from({{kCacheMinFreePctEnv, "0"}, {kCacheMinIdleEnv, "60"}});
+    EXPECT_FALSE(config.enabled());
+    ASSERT_EQ(config.ignored_settings.size(), 1u);
+    EXPECT_EQ(config.ignored_settings[0], kCacheMinIdleEnv);
+    EXPECT_TRUE(config_from({{kCacheMinFreePctEnv, "20"}, {kCacheMinIdleEnv, "60"}}).ignored_settings.empty());
+}
+
+TEST(CachePruneConfigTest, RefusesCacheRootsAClientMayShare) {
+    const CachePruneConfig enabled = config_from({{kCacheMinFreePctEnv, "20"}});
+    auto check = [&](const std::string& root, std::map<std::string, std::string> env) {
+        enabled.validate_cache_root(root, [&](const char* name) -> const char* {
+            auto it = env.find(name);
+            return it == env.end() ? nullptr : it->second.c_str();
+        });
+    };
+    // The root must be chosen explicitly...
+    EXPECT_THROW(check("/srv/jit-cache/", {}), std::invalid_argument);
+    // ...and must not be anywhere a client's TT_METAL_CACHE can resolve to.
+    EXPECT_THROW(check("/tmp/tt-metal-cache/", {{kServerCacheRootEnv, "/tmp/tt-metal-cache"}}), std::invalid_argument);
+    EXPECT_THROW(
+        check("/home/u/.cache/tt-metal-cache", {{kServerCacheRootEnv, "x"}, {"HOME", "/home/u"}}),
+        std::invalid_argument);
+    EXPECT_THROW(
+        check("/data/c/tt-metal-cache/", {{kServerCacheRootEnv, "x"}, {"TT_METAL_CACHE", "/data/c"}}),
+        std::invalid_argument);
+    EXPECT_NO_THROW(check(
+        "/srv/jit-cache/",
+        {{kServerCacheRootEnv, "/srv/jit-cache/"}, {"HOME", "/home/u"}, {"TT_METAL_CACHE", "/data/c"}}));
+    // Disabled pruning puts no constraint on the root.
+    EXPECT_NO_THROW(
+        CachePruneConfig{}.validate_cache_root("/tmp/tt-metal-cache/", [](const char*) { return nullptr; }));
 }
 
 TEST(CachePruneConfigTest, IsOptIn) {

@@ -4,8 +4,10 @@
 
 #include "impl/jit_server/server_cache_pruner.hpp"
 
+#include <signal.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -15,6 +17,7 @@
 #include <ctime>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 #include <string_view>
 #include <system_error>
 
@@ -67,16 +70,40 @@ bool is_build_key(const fs::path& path) {
     return !name.empty() && std::all_of(name.begin(), name.end(), [](unsigned char c) { return c >= '0' && c <= '9'; });
 }
 
-// True when one path is the other or lies inside it.
-bool overlaps(const fs::path& a, const fs::path& b) {
-    auto ai = a.begin();
-    auto bi = b.begin();
-    for (; ai != a.end() && bi != b.end(); ++ai, ++bi) {
-        if (*ai != *bi) {
-            return false;
-        }
+// The pid embedded in a trash name: .jit-prune-trash.<variant>.<pid>.<counter>
+std::optional<pid_t> trash_owner(const fs::path& path) {
+    const std::string name = path.filename().string();
+    const auto last = name.rfind('.');
+    if (last == std::string::npos || last == 0) {
+        return std::nullopt;
     }
-    return true;
+    const auto previous = name.rfind('.', last - 1);
+    if (previous == std::string::npos) {
+        return std::nullopt;
+    }
+    const std::string pid = name.substr(previous + 1, last - previous - 1);
+    if (pid.empty() || pid.size() > 9 ||
+        !std::all_of(pid.begin(), pid.end(), [](unsigned char c) { return c >= '0' && c <= '9'; })) {
+        return std::nullopt;
+    }
+    return static_cast<pid_t>(std::stol(pid));
+}
+
+bool process_alive(pid_t pid) { return pid > 0 && (::kill(pid, 0) == 0 || errno == EPERM); }
+
+// Trash this process made (a failed delete to retry) or that a process which has since exited
+// left behind. Another live server's trash is its own to finish.
+bool trash_is_ours_to_remove(const fs::path& path) {
+    const auto owner = trash_owner(path);
+    return !owner || *owner == ::getpid() || !process_alive(*owner);
+}
+
+bool same_directory(const fs::path& a, const fs::path& b) {
+    std::error_code ec;
+    if (fs::equivalent(a, b, ec)) {
+        return true;  // also catches symlinks and bind mounts when both exist
+    }
+    return normalize(fs::absolute(a, ec)) == normalize(fs::absolute(b, ec));
 }
 
 double free_pct(const DiskSpace& space) {
@@ -156,6 +183,11 @@ CachePruneConfig CachePruneConfig::from_env(const GetEnvFn& get_env) {
         }
     }
     if (!config.enabled()) {
+        for (const char* name : {kCacheTargetFreePctEnv, kCacheMinIdleEnv, kCacheCheckIntervalEnv}) {
+            if (read_env(get_env, name)) {
+                config.ignored_settings.emplace_back(name);
+            }
+        }
         return config;
     }
     config.stop_at_free_pct = target.value_or(std::min(config.start_below_free_pct + 10.0, 100.0));
@@ -167,6 +199,48 @@ CachePruneConfig CachePruneConfig::from_env(const GetEnvFn& get_env) {
 
 CachePruneConfig CachePruneConfig::from_env() {
     return from_env([](const char* name) -> const char* { return std::getenv(name); });
+}
+
+void CachePruneConfig::validate_cache_root(const fs::path& root, const GetEnvFn& get_env) const {
+    if (!enabled()) {
+        return;
+    }
+    if (!read_env(get_env, kServerCacheRootEnv)) {
+        throw std::invalid_argument(
+            std::string("Cache pruning needs ") + kServerCacheRootEnv + " set to a directory only this server uses. " +
+            "The default, " + kDefaultServerCacheRoot +
+            ", is also where a client with no $HOME keeps its kernel cache, and pruning would delete it.");
+    }
+    std::vector<std::pair<fs::path, std::string>> client_caches = {
+        {fs::path(kDefaultServerCacheRoot), "the client kernel cache used when $HOME is unset"}};
+    if (auto home = read_env(get_env, "HOME")) {
+        client_caches.emplace_back(fs::path(*home) / ".cache" / "tt-metal-cache", "the default client kernel cache");
+    }
+    if (auto cache = read_env(get_env, "TT_METAL_CACHE")) {
+        client_caches.emplace_back(
+            fs::path(*cache) / "tt-metal-cache", "the client kernel cache TT_METAL_CACHE selects");
+    }
+    for (const auto& [client_cache, description] : client_caches) {
+        if (same_directory(root, client_cache)) {
+            throw std::invalid_argument(
+                std::string(kServerCacheRootEnv) + "=" + root.string() + " is " + description +
+                ", which has the same layout, so pruning would delete ELFs clients are loading. Use a directory "
+                "only this server uses.");
+        }
+    }
+}
+
+void CachePruneConfig::validate_cache_root(const fs::path& root) const {
+    validate_cache_root(root, [](const char* name) -> const char* { return std::getenv(name); });
+}
+
+std::chrono::seconds next_prune_delay(
+    std::chrono::seconds previous, const CachePruneResult& result, const CachePruneConfig& config) {
+    if (result.ran && result.freed_bytes == 0 && !result.interrupted) {
+        const std::chrono::seconds cap = std::max(kMaxPruneBackoff, config.check_interval);
+        return std::min(std::max(previous, config.check_interval) * 2, cap);
+    }
+    return config.check_interval;
 }
 
 DiskSpace disk_space_from_counts(
@@ -234,58 +308,51 @@ void ServerCachePruner::stop() {
     }
 }
 
-std::uint64_t ServerCachePruner::remove_leftover_trash() {
-    std::uint64_t freed = 0;
-    for (const auto& build_key : child_dirs(root_)) {
-        for (const auto& kernel : child_dirs(build_key / "kernels")) {
-            if (stopping()) {
-                return freed;
-            }
-            for (const auto& entry : child_dirs(kernel)) {
-                if (is_trash(entry)) {
-                    const std::uint64_t bytes = measure(entry).bytes;
-                    std::error_code ec;
-                    fs::remove_all(entry, ec);
-                    const std::uint64_t remaining = ec ? measure(entry).bytes : 0;
-                    freed += bytes > remaining ? bytes - remaining : 0;
-                }
-            }
-        }
-    }
-    return freed;
-}
-
 bool ServerCachePruner::idle_enough(std::int64_t last_used, std::int64_t now) const {
     return now - last_used >= static_cast<std::int64_t>(config_.min_idle.count());
 }
 
 bool ServerCachePruner::in_use_locked(const fs::path& path) const {
-    return std::any_of(
-        in_use_.begin(), in_use_.end(), [&](const auto& entry) { return overlaps(fs::path(entry.first), path); });
+    // A lease on this directory or on one that contains it...
+    for (fs::path dir = path; !dir.empty(); dir = dir.parent_path()) {
+        if (in_use_.count(dir.string()) > 0) {
+            return true;
+        }
+        if (dir == dir.parent_path()) {
+            break;
+        }
+    }
+    // ...or on anything inside it: those keys sort right after "<path>/".
+    const std::string prefix = path.string() + "/";
+    const auto inside = in_use_.lower_bound(prefix);
+    return inside != in_use_.end() && inside->first.compare(0, prefix.size(), prefix) == 0;
 }
 
-std::vector<ServerCachePruner::Candidate> ServerCachePruner::scan(std::int64_t now) const {
-    std::vector<Candidate> candidates;
+ServerCachePruner::ScanResult ServerCachePruner::scan(std::int64_t now) const {
+    ScanResult result;
     for (const auto& build_key : child_dirs(root_)) {
         if (!is_build_key(build_key)) {
             continue;  // e.g. the shared pch/ directory
         }
         for (const auto& kernel : child_dirs(build_key / "kernels")) {
             if (stopping()) {
-                return candidates;
+                return result;
             }
             for (const auto& variant : child_dirs(kernel)) {
                 if (is_trash(variant)) {
+                    if (trash_is_ours_to_remove(variant)) {
+                        result.trash.push_back(variant);
+                    }
                     continue;
                 }
                 const Usage usage = measure(variant);
                 if (usage.bytes > 0 && idle_enough(usage.last_used, now)) {
-                    candidates.push_back({usage.last_used, usage.bytes, variant});
+                    result.candidates.push_back({usage.last_used, usage.bytes, variant});
                 }
             }
         }
     }
-    return candidates;
+    return result;
 }
 
 ServerCachePruner::RemoveOutcome ServerCachePruner::remove(
@@ -302,6 +369,9 @@ ServerCachePruner::RemoveOutcome ServerCachePruner::remove(
         // without walking the tree while compile requests wait on this mutex.
         struct stat info{};
         if (::lstat(candidate.path.c_str(), &info) != 0) {
+            if (errno == ENOENT) {
+                return RemoveOutcome::Gone;  // someone else deleted it since the scan
+            }
             error = "stat " + candidate.path.string() + ": " + std::generic_category().message(errno);
             return RemoveOutcome::Failed;
         }
@@ -313,6 +383,9 @@ ServerCachePruner::RemoveOutcome ServerCachePruner::remove(
         trash = candidate.path.parent_path() / (std::string(kTrashPrefix) + candidate.path.filename().string() + "." +
                                                 std::to_string(::getpid()) + "." + std::to_string(++trash_counter_));
         fs::rename(candidate.path, trash, ec);
+        if (ec == std::errc::no_such_file_or_directory) {
+            return RemoveOutcome::Gone;
+        }
         if (ec) {
             error = "rename " + candidate.path.string() + ": " + ec.message();
             return RemoveOutcome::Failed;
@@ -355,31 +428,49 @@ CachePruneResult ServerCachePruner::prune_once() {
     }
     result.ran = true;
 
-    // Trash an earlier failed delete left behind goes first, before deciding how much more to free.
-    if (remove_leftover_trash() > 0) {
-        space = disk_space_(root_);
-    }
+    // Re-measured as the run goes: concurrent compiles keep writing, and a file still open elsewhere
+    // frees nothing when deleted, so the sizes measured by the scan are only an estimate.
+    auto remeasure = [&](std::uint64_t estimated_freed) {
+        try {
+            space = disk_space_(root_);
+        } catch (const std::exception&) {
+            space.available += estimated_freed;
+        }
+    };
     const auto target =
         static_cast<std::uint64_t>(static_cast<long double>(space.capacity) * config_.stop_at_free_pct / 100.0L);
-    const std::uint64_t needed = target > space.available ? target - space.available : 0;
+    auto still_needed = [&]() -> std::uint64_t { return target > space.available ? target - space.available : 0; };
 
     const std::int64_t now = std::time(nullptr);
-    std::vector<Candidate> candidates = scan(now);
-    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+    ScanResult scanned = scan(now);
+
+    // Trash an earlier failed or interrupted delete left behind goes before anything live.
+    if (!scanned.trash.empty()) {
+        std::uint64_t trash_bytes = 0;
+        for (const auto& trash : scanned.trash) {
+            trash_bytes += measure(trash).bytes;
+            fs::remove_all(trash, ec);
+        }
+        remeasure(trash_bytes);
+    }
+
+    std::sort(scanned.candidates.begin(), scanned.candidates.end(), [](const Candidate& a, const Candidate& b) {
         return a.last_used < b.last_used;
     });
+    // Filesystems that free blocks lazily (btrfs, ZFS) can lag behind the deletes; stop at twice the
+    // initial shortfall rather than delete the whole cache waiting for them to catch up.
+    const std::uint64_t initial_need = still_needed();
+    const std::uint64_t deletion_cap = initial_need > UINT64_MAX / 2 ? UINT64_MAX : initial_need * 2;
 
-    for (const auto& candidate : candidates) {
-        if (result.freed_bytes >= needed) {
-            break;
-        }
-        if (stopping()) {
+    for (const auto& candidate : scanned.candidates) {
+        if (still_needed() == 0 || result.freed_bytes >= deletion_cap || stopping()) {
             break;
         }
         std::uint64_t freed = 0;
         std::string error;
         switch (remove(candidate, now, freed, error)) {
             case RemoveOutcome::Deleted: ++result.deleted; break;
+            case RemoveOutcome::Gone: break;
             case RemoveOutcome::InUse: ++result.skipped_in_use; break;
             case RemoveOutcome::UsedSinceScan: ++result.skipped_used_since_scan; break;
             case RemoveOutcome::Failed:
@@ -389,36 +480,34 @@ CachePruneResult ServerCachePruner::prune_once() {
                 }
                 break;
         }
-        result.freed_bytes += freed;
+        if (freed > 0) {
+            result.freed_bytes += freed;
+            remeasure(freed);
+        }
     }
     result.interrupted = stopping();
-    result.reached_target = result.freed_bytes >= needed;
-    try {
-        result.free_pct_after = free_pct(disk_space_(root_));
-    } catch (const std::exception&) {
-        result.free_pct_after = result.free_pct_before;
-    }
-    log(summary(result, needed));
+    result.free_pct_after = free_pct(space);
+    result.still_needed_bytes = still_needed();
+    result.reached_target = result.still_needed_bytes == 0;
+    log(summary(result));
     return result;
 }
 
 void ServerCachePruner::run() {
-    try {
-        const std::uint64_t freed = remove_leftover_trash();
-        if (freed > 0) {
-            log("Cache prune: removed " + megabytes(freed) + " MB left over from an interrupted prune");
-        }
-    } catch (const std::exception& e) {
-        log(std::string("Cache prune: removing leftover trash failed: ") + e.what());
-    }
+    std::chrono::seconds delay = config_.check_interval;
     while (!stopping()) {
+        CachePruneResult result;
         try {
-            prune_once();
+            result = prune_once();
         } catch (const std::exception& e) {
             log(std::string("Cache prune failed: ") + e.what());
         }
+        delay = next_prune_delay(delay, result, config_);
+        if (delay > config_.check_interval) {
+            log("Cache prune: freed nothing; next check in " + std::to_string(delay.count()) + " s");
+        }
         std::unique_lock lock(stop_mutex_);
-        if (stop_cv_.wait_for(lock, config_.check_interval, [this] { return stopping(); })) {
+        if (stop_cv_.wait_for(lock, delay, [this] { return stopping(); })) {
             return;
         }
     }
@@ -435,7 +524,7 @@ void ServerCachePruner::log(const std::string& message) const {
     }
 }
 
-std::string ServerCachePruner::summary(const CachePruneResult& result, std::uint64_t needed) const {
+std::string ServerCachePruner::summary(const CachePruneResult& result) const {
     std::string text = "Cache prune: free space " + percent(result.free_pct_before) + " < " +
                        percent(config_.start_below_free_pct) + "; deleted " + std::to_string(result.deleted) +
                        " kernel directories (" + megabytes(result.freed_bytes) + " MB); free space now " +
@@ -460,8 +549,8 @@ std::string ServerCachePruner::summary(const CachePruneResult& result, std::uint
     if (result.interrupted) {
         text += "; stopped early because the server is shutting down";
     } else if (!result.reached_target) {
-        text += ". Could not reach " + percent(config_.stop_at_free_pct) + ": " +
-                megabytes(needed - result.freed_bytes) + " MB more is needed";
+        text += ". Could not reach " + percent(config_.stop_at_free_pct) + ": " + megabytes(result.still_needed_bytes) +
+                " MB more is needed";
         if (skipped.empty()) {
             text += ", but nothing else has been idle for " + std::to_string(config_.min_idle.count()) +
                     " s (firmware and PCH are never deleted)";

@@ -11,10 +11,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -39,6 +39,10 @@
 // Firmware (<build_key>/firmware/) and the shared PCH directory are never deleted: firmware is
 // uploaded once per client process, and a running client whose firmware vanished would fail every
 // later compile until it restarted.
+//
+// Leases only cover this server's own requests, so the cache root must not double as anyone else's
+// cache. validate_cache_root() refuses roots that a client's local TT_METAL_CACHE can resolve to,
+// since that layout is identical and the pruner would delete ELFs a client is about to load.
 
 namespace tt::tt_metal::jit_server {
 
@@ -46,6 +50,10 @@ inline constexpr const char* kCacheMinFreePctEnv = "TT_METAL_JIT_SERVER_CACHE_MI
 inline constexpr const char* kCacheTargetFreePctEnv = "TT_METAL_JIT_SERVER_CACHE_TARGET_FREE_PCT";
 inline constexpr const char* kCacheMinIdleEnv = "TT_METAL_JIT_SERVER_CACHE_MIN_IDLE_S";
 inline constexpr const char* kCacheCheckIntervalEnv = "TT_METAL_JIT_SERVER_CACHE_CHECK_INTERVAL_S";
+inline constexpr const char* kServerCacheRootEnv = "TT_METAL_JIT_SERVER_CACHE_ROOT";
+inline constexpr const char* kDefaultServerCacheRoot = "/tmp/tt-metal-cache/";
+// After a run that frees nothing, checks back off exponentially up to this.
+inline constexpr std::chrono::seconds kMaxPruneBackoff{6 * 3600};
 
 struct CachePruneConfig {
     // Pruning starts when free space falls below this percentage of the filesystem; 0 disables it.
@@ -55,6 +63,8 @@ struct CachePruneConfig {
     // Directories used more recently than this are never deleted.
     std::chrono::seconds min_idle{3600};
     std::chrono::seconds check_interval{300};
+    // Prune variables that are set but have no effect because pruning is disabled.
+    std::vector<std::string> ignored_settings;
 
     bool enabled() const { return start_below_free_pct > 0.0; }
 
@@ -66,6 +76,12 @@ struct CachePruneConfig {
     // startup instead of silently leaving the disk to fill.
     static CachePruneConfig from_env(const GetEnvFn& get_env);
     static CachePruneConfig from_env();
+
+    // When pruning is enabled, throws std::invalid_argument unless kServerCacheRootEnv is set and
+    // names a directory that is not a possible client cache: /tmp/tt-metal-cache/,
+    // $HOME/.cache/tt-metal-cache/ or $TT_METAL_CACHE/tt-metal-cache/.
+    void validate_cache_root(const std::filesystem::path& root, const GetEnvFn& get_env) const;
+    void validate_cache_root(const std::filesystem::path& root) const;
 };
 
 // Sizes as df reports them: capacity excludes blocks reserved for root, so free space can reach 100%.
@@ -90,8 +106,15 @@ struct CachePruneResult {
     std::size_t skipped_used_since_scan = 0;
     std::size_t failed = 0;
     std::string first_error;
-    bool interrupted = false;  // stop() was called mid-run
+    std::uint64_t still_needed_bytes = 0;  // measured after the run
+    bool interrupted = false;              // stop() was called mid-run
 };
+
+// How long to wait before the next check: the configured interval, doubled after each run that
+// had to prune but freed nothing (so an unreachable target does not rescan the cache every few
+// minutes), capped at kMaxPruneBackoff.
+std::chrono::seconds next_prune_delay(
+    std::chrono::seconds previous, const CachePruneResult& result, const CachePruneConfig& config);
 
 class ServerCachePruner {
 public:
@@ -143,16 +166,15 @@ public:
     // Call before touching kernel_dir. Returns an empty lease when pruning is disabled.
     Lease acquire(const std::filesystem::path& kernel_dir);
 
-    // Starts the background thread. It first removes deletions an earlier server left half done,
-    // then checks free space immediately and every check_interval after that.
+    // Starts the background thread. It checks free space immediately and then as next_prune_delay
+    // says.
     void start();
     // Stops the background thread, interrupting a run in progress between directories.
     void stop();
 
-    // Removes trash directories left by a pruner that died mid-delete. Returns the bytes freed.
-    std::uint64_t remove_leftover_trash();
-
-    // One check: does nothing unless free space is below the start threshold.
+    // One check: does nothing unless free space is below the start threshold. A run first removes
+    // trash an earlier failed or interrupted delete left behind, provided the process that made it
+    // has exited.
     CachePruneResult prune_once();
 
 private:
@@ -162,16 +184,21 @@ private:
         std::filesystem::path path;
     };
 
-    enum class RemoveOutcome { Deleted, InUse, UsedSinceScan, Failed };
+    struct ScanResult {
+        std::vector<Candidate> candidates;
+        std::vector<std::filesystem::path> trash;
+    };
 
-    std::vector<Candidate> scan(std::int64_t now) const;
+    enum class RemoveOutcome { Deleted, Gone, InUse, UsedSinceScan, Failed };
+
+    ScanResult scan(std::int64_t now) const;
     RemoveOutcome remove(const Candidate& candidate, std::int64_t now, std::uint64_t& freed, std::string& error);
     bool in_use_locked(const std::filesystem::path& path) const;
     bool idle_enough(std::int64_t last_used, std::int64_t now) const;
     void release(const std::string& key);
     void run();
     void log(const std::string& message) const;
-    std::string summary(const CachePruneResult& result, std::uint64_t needed) const;
+    std::string summary(const CachePruneResult& result) const;
     bool stopping() const { return stopping_.load(std::memory_order_relaxed); }
 
     const std::filesystem::path root_;
@@ -179,8 +206,8 @@ private:
     const LogFn log_;
     const DiskSpaceFn disk_space_;
 
-    std::mutex mutex_;  // guards in_use_ and every rename of a kernel directory
-    std::unordered_map<std::string, int> in_use_;
+    std::mutex mutex_;                   // guards in_use_ and every rename of a kernel directory
+    std::map<std::string, int> in_use_;  // ordered, so leases under a directory are one range
     std::uint64_t trash_counter_ = 0;
 
     std::mutex prune_mutex_;  // one run at a time

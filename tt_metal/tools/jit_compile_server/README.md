@@ -223,10 +223,12 @@ explicitly in that case.
 ### Cache pruning
 
 Off by default. Set `TT_METAL_JIT_SERVER_CACHE_MIN_FREE_PCT` to have the server keep the
-cache filesystem from filling up:
+cache filesystem from filling up. Pruning also needs `TT_METAL_JIT_SERVER_CACHE_ROOT` set
+to a directory only this server uses:
 
 ```bash
 # Below 20% free, delete least recently used kernels until 30% is free again
+export TT_METAL_JIT_SERVER_CACHE_ROOT=/localdev/jit-server-cache/
 export TT_METAL_JIT_SERVER_CACHE_MIN_FREE_PCT=20
 export TT_METAL_JIT_SERVER_CACHE_TARGET_FREE_PCT=30   # default: MIN_FREE_PCT + 10
 ./build/tools/jit_compile_server
@@ -237,8 +239,12 @@ A background thread checks free space at startup and every
 `statvfs` call; the cache is only scanned once free space is below the threshold. Then the
 server deletes whole `<build_key>/kernels/<kernel>/<hash>/` directories, least recently
 used first across all build keys, until free space reaches the target. Free space is
-measured the way `df` reports it, so it excludes blocks reserved for root. Each run logs one
-`Cache prune:` line with what it deleted and why anything idle was skipped.
+measured the way `df` reports it, so it excludes blocks reserved for root, and it is measured
+again after every deletion rather than estimated. On filesystems that free blocks lazily, a
+run stops once it has deleted twice the original shortfall. Each run logs one `Cache prune:`
+line with what it deleted and why anything idle was skipped. A run that frees nothing
+doubles the time to the next check, up to 6 hours, so an unreachable target does not rescan
+the cache every few minutes.
 
 - **Deleting a kernel only costs a recompile.** The next request for it is a cache miss.
 - **Kernels in use are never deleted.** A request holds its kernel directory for its whole
@@ -250,10 +256,15 @@ measured the way `df` reports it, so it excludes blocks reserved for root. Each 
 - **Firmware and the shared `pch/` directory are never deleted.** Running clients upload
   firmware only once (§5c). If they are what fills the disk, the log line says the target
   could not be reached.
+- **The cache root must belong to the server alone.** Leases only protect this server's own
+  requests. The server refuses to start with pruning on when the cache root is unset or is
+  one a client's `TT_METAL_CACHE` can resolve to — `/tmp/tt-metal-cache/`,
+  `$HOME/.cache/tt-metal-cache/` or `$TT_METAL_CACHE/tt-metal-cache/` — because a client's
+  cache has the same layout and the pruner would delete ELFs the client is loading.
 
 A malformed or out-of-range value in any of these variables stops the server at startup
-rather than silently disabling pruning. Setting the others without `..._MIN_FREE_PCT` logs a
-warning, since pruning stays off.
+rather than silently disabling pruning. Setting the others while `..._MIN_FREE_PCT` is unset
+or 0 logs a warning, since pruning stays off.
 
 ### Point a client at it
 
@@ -472,10 +483,10 @@ local ELF.
 | --- | --- | --- |
 | `TT_METAL_JIT_SERVER_ENDPOINT` | `localhost:9876` | Bind address. Use `0.0.0.0:9876` or a specific interface to accept remote clients — see the disclaimer. |
 | `TT_METAL_JIT_SERVER_CACHE_ROOT` | `/tmp/tt-metal-cache/` | Directory for compiled objects, ELFs, and firmware. Grows without bound unless pruning is enabled; relocate off `/tmp` when disk is tight. See §3. |
-| `TT_METAL_JIT_SERVER_CACHE_MIN_FREE_PCT` | unset (off) | Enables cache pruning: when free space on the cache filesystem drops below this percentage, delete least recently used kernels. See §3, Cache pruning. |
+| `TT_METAL_JIT_SERVER_CACHE_MIN_FREE_PCT` | unset (off) | Enables cache pruning: when free space on the cache filesystem drops below this percentage, delete least recently used kernels. Requires an explicit, server-only `..._CACHE_ROOT`. See §3, Cache pruning. |
 | `TT_METAL_JIT_SERVER_CACHE_TARGET_FREE_PCT` | `MIN_FREE_PCT + 10` (at most 100) | Pruning stops once free space reaches this percentage. |
 | `TT_METAL_JIT_SERVER_CACHE_MIN_IDLE_S` | `3600` | Kernels used more recently than this are never pruned. |
-| `TT_METAL_JIT_SERVER_CACHE_CHECK_INTERVAL_S` | `300` | How often to check free space. |
+| `TT_METAL_JIT_SERVER_CACHE_CHECK_INTERVAL_S` | `300` | How often to check free space. Backs off to at most 6 hours while runs free nothing. |
 
 ---
 
