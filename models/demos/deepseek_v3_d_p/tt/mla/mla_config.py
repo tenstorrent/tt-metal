@@ -30,19 +30,14 @@ COMPUTE_GRID = (11, 10)
 # its 640-token configs separate from Kimi and DeepSeek variants sharing the same slot.
 _GLM_TAGS = {"num_heads": 64, "q_lora_rank": 2048, "chunked_only": True}
 _GLM_INDEXER_TAGS = {"num_heads": 64, "q_lora_rank": 2048}
-# Kimi-K3.1's DSA indexer has GLM's 32 x 128 index heads, so the hadamards are the same shapes and wq_b differs
-# only in K (q_lora 1536: K_t 48 vs 64), which in0_block_w 8 / 16 still divide. Its entries are GLM's tilings.
+# Kimi-K3.1's indexer has GLM's 32 x 128 index heads, and in0_block_w 8 / 16 divide its wq_b K_t (48): GLM's tilings.
 _K31_INDEXER_TAGS = {"num_heads": 96, "q_lora_rank": 1536}
 # Mistral-Small-4 at 8x4. tp_factor keeps these off its PP=4 [8,1] stages, which hit the same 640-row
 # slot at TP=1 where these tilings do not fit. fp32_dest_acc (set per entry, not a tag) selects ttMLA's
 # fp32-dest compute config for that matmul: HiFi2, or the entry's math_fidelity (HiFi3 only).
-# Kimi-K3 / K3.1 (96 heads), for the entries whose tiling depends on the TP split. They were tuned at TP=4
-# (24 heads); at TP=2 the same 640-row tiling cannot cover the doubled per-device N (or batch) on the
-# 11-column grid (q_b_proj would need 21 columns, g_proj 22), so the tag rejects it there and the untuned
-# default runs instead. TP-independent K3 entries (kv_a_proj_with_mqa, the SDPA chunk) stay untagged.
+# Kimi-K3 / K3.1 entries tuned at TP=4; at TP=2 they overflow the 11-column grid, so the default runs.
 _K3_TAGS = {"num_heads": 96, "q_lora_rank": 1536, "tp_factor": 4, "chunked_only": True}
-# K3.1 (DSA) early-Q reshard only: dense_head_cap_non_dsa=0 rejects it for every non-DSA model (dense K3 at TP=2 keeps
-# the default), while DSA-family layers are exempt from the cap.
+# K3.1 early-Q at TP=2 only: dense_head_cap_non_dsa=0 keeps non-DSA models (dense K3) on the default.
 _K3_TP2_TAGS = {
     "num_heads": 96,
     "q_lora_rank": 1536,
@@ -205,9 +200,7 @@ MLA_MATMUL_CONFIG = {
                 "out_mem_config": ttnn.L1_MEMORY_CONFIG,
                 "out_dtype": ttnn.bfloat16,
             },
-            # Kimi-K3.1 early-Q reshard at TP=2: q is [1, 96 heads, rows/tp, 128] after the all-to-all, so one head x
-            # 10 row tiles x the full width per core gives 96 blocks on the 110-core grid (the batched default would
-            # split only along M, about 10 cores).
+            # Kimi-K3.1 early-Q at TP=2: one head x 10 row tiles per core -> 96 blocks on 110 cores.
             {
                 **_K3_TP2_TAGS,
                 "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
@@ -288,7 +281,7 @@ MLA_MATMUL_CONFIG = {
     # hidden_states @ kv_a_proj_with_mqa_weight
     "kv_a_proj_with_mqa": {
         640: [
-            # Kimi-K2.x: bf16 dest at ibw=14 passes, but with the depth-degraded cache PCC the K3 entry below fixed.
+            # Kimi-K2.x: bf16 dest at ibw=14 passes per chunk but loses KV-cache PCC at depth (see the K3 entry).
             {
                 "num_heads": 64,
                 "q_lora_rank": 1536,
@@ -308,13 +301,11 @@ MLA_MATMUL_CONFIG = {
                 "out_mem_config": ttnn.L1_MEMORY_CONFIG,
                 "out_dtype": ttnn.bfloat16,
             },
-            # Kimi-K3 / K3.1 (96 heads). fp32 dest + HiFi3 PINNED FOR ACCURACY: the only tuned matmul feeding the
-            # KV cache, so any bias in |y| compounds with depth. A bf16 dest biases |y| high as in0_block_w grows,
-            # HiFi2 truncation biases it low; fp32 + HiFi3 is unbiased, at the bf16 rounding floor, and was
-            # bit-identical across in0_block_w 1..28. 16 us vs 40 us for the old bf16 ibw=1 pin. Measurements and
-            # guard: test_kimi_k3_mla_reference.py::test_k3_accuracy_pinned_blocking.
+            # Kimi-K3 / K3.1: fp32 dest + HiFi3 PINNED FOR ACCURACY (feeds the KV cache, so |y| bias compounds
+            # with depth); unbiased at the bf16 floor, 16 us vs 40 us for the old bf16 ibw=1 pin.
+            # Guard: test_kimi_k3_mla_reference.py::test_k3_accuracy_pinned_blocking.
             {
-                # TP-independent (N_t = 18, 14 divides K_t at TP 1/2/4/8): no tp_factor tag.
+                # No tp_factor tag: ibw=14 divides K_t at TP 1/2/4/8 (224/112/56/28).
                 "num_heads": 96,
                 "q_lora_rank": 1536,
                 "chunked_only": True,

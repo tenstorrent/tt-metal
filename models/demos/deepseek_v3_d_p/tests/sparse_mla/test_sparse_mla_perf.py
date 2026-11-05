@@ -163,9 +163,7 @@ ATTN_MODE = os.environ.get("DS_PERF_ATTN_MODE", "sparse")  # module-level defaul
 # Galaxy/LoudBox use TP=4; QuietBox uses TP=2 so its four chips retain SP=2 and exercise the overlap path.
 # Every model dimension comes from the single-source reference config, never hardcoded here. GLM-5.3
 # additionally exercises a nonzero slot of its compact full-indexer cache below.
-# kimi_k3_1 (96 / 32, NoPE MLA + NoPE indexer, gated): its main KVPE cache is scaled FP8, so only
-# sparse-kv_scaled_fp8 runs every scenario; sparse-kv_bf16 (quantization cost) and dense (sparse-vs-dense)
-# run in `long` only -- dense K3.1 is otherwise just dense K3 again (see PERF_VARIANT_CASES).
+# kimi_k3_1 (96 / 32): scaled-FP8 sparse in every scenario; BF16 sparse and dense in `long` only.
 VARIANTS = ("deepseek_v32", "glm_5_3", "kimi_k3_1")
 VARIANT = os.environ.get("DS_PERF_VARIANT", "deepseek_v32")
 _CONFIG_BUILDERS = {
@@ -514,8 +512,6 @@ _OP_CODE_RULES = (
     ("/ring_attention_all_gather", "RingJointSDPA"),
     ("/transformer/sdpa/", "SDPA"),
     ("/topk_large_indices/", "TopkLargeIndices"),
-    # Head -> sequence reshards (every sparse variant at TP > 1) and the persistent-buffer gathers
-    # (Kimi-K3.1's g_proj input, the q/kv latents). Before the generic all_gather rule.
     ("/ccl/all_to_all_async_generic/", "AllToAllAsyncGeneric"),
     ("/high_bw_all_gather/", "HighBwAllGather"),
     ("/ccl/all_gather_async/", "AllGatherAsync"),
@@ -805,9 +801,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         mla_layer_idx = full_layer_indices[-1]
     else:
         mla_layer_idx = 0
-    # Kimi-K3.1 has no reuse map; its index and KVPE caches share the 24-slot MLA-ordinal space
-    # (KimiK31Config.mla_kv_slot), so profile the LAST DSA layer (model 92 -> slot 23) of a 24-slot cache
-    # for the same reason GLM profiles its last compact slot: slot 0 would never exercise the selection.
+    # Kimi-K3.1: profile the last DSA layer's slot of a 24-slot cache, as GLM profiles its last compact slot.
     mla_layer_num, cache_layer_idx = 1, 0
     if variant.name == "kimi_k3_1" and has_indexer:
         mla_layer_ids = variant.model_config.mla_layer_ids()

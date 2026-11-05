@@ -85,11 +85,7 @@ class DeepSeekV32Adapter(SparseMLAPrefillAdapter):
 
 
 class KimiK31Adapter(SparseMLAPrefillAdapter):
-    """Kimi-K3.1 sparse-MLA (DSA) test variant: K3's gated NoPE MLA plus a NoPE lightning indexer.
-
-    Test-only, like ``DeepSeekV32Adapter``: it feeds the sparse-MLA module tests. Serving the 93-layer
-    KDA + DSA hybrid is out of scope here (``KimiK3Adapter`` owns the K3 runtime).
-    """
+    """Kimi-K3.1 sparse-MLA test variant (test-only): K3's gated NoPE MLA plus a NoPE lightning indexer."""
 
     # --- identity ---
     name = "kimi_k3_1"
@@ -100,14 +96,14 @@ class KimiK31Adapter(SparseMLAPrefillAdapter):
     hf_repo_id = "moonshotai/Kimi-K3.1-Pro"
     env_var = "KIMI_K31_HF_MODEL"
     mla_ref_cache_env = "KIMI_K31_MLA_REF_CACHE"
-    # K3 is NoPE: the KV cache's second half carries no rotation (see KimiK3Adapter.kv_pe_interleave).
+    # NoPE: the KV cache's rope half is unrotated.
     kv_pe_interleave = False
     # None: conftest's pretrained_mla_layer_weights fixture would resolve the whole multi-TB checkpoint.
     pretrained_mla_layer = None
 
     @property
     def default_sparse_kv_cache_format(self):
-        """Scaled-FP8 main KVPE cache (production format, as GLM-5.3); BF16 is a diagnostic only."""
+        """Scaled-FP8 main KVPE cache, as GLM-5.3."""
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
         return MlaKvCacheFormat.SCALED_FP8

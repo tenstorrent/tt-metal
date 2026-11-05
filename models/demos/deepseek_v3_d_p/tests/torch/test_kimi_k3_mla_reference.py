@@ -286,17 +286,16 @@ def test_k3_accuracy_pinned_blocking():
     """kv_a_proj_with_mqa's fp32 dest + HiFi3 are pinned for ACCURACY; re-run the depth test before changing them.
 
     It is the only tuned matmul feeding the KV cache, so any bias in |y| compounds with depth, and single-chunk
-    PCC does not predict it (bf16-dest ibw=2 beats ibw=1 per chunk yet fails at depth). Per chip at TP=4, error
-    vs fp64 (rel / |y| bias) and K3 50k+5k output PCC at kv_actual=51200:
+    PCC does not predict it (bf16 ibw=2 beats ibw=1 per chunk yet fails at depth). Per chip at TP=4,
+    error vs fp64 (rel / |y| bias) and K3 50k+5k output PCC at kv_actual=51200:
 
         bf16 dest HiFi2 ibw=1    40 us  1.04e-2 / -0.08%   0.98578 (old pin)
         bf16 dest HiFi2 ibw>=2          |y| inflates with ibw: fails 0.98 at depth
         fp32 dest HiFi2          15 us  0.44e-2 / -0.22%
         fp32 dest HiFi3 ibw=14   16 us  0.17e-2 / ~0       0.99948 (bf16 rounding floor)
 
-    With an fp32 dest the result was bit-identical across in0_block_w 1..28, so it is not pinned. Depth gate:
-    test_mla_chunked_prefill[k3-production-50k+5k-cpu-torus-xy-8x4] (11 x 5120 tokens, every chunk asserted).
-    Resolved through ttMLA._select_cfg because the 640 slot holds several models' candidates.
+    fp32 dest is bit-identical across in0_block_w 1..28, so that is not pinned. Depth gate:
+    test_mla_chunked_prefill[k3-production-50k+5k-cpu-torus-xy-8x4].
     """
     from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA
     from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG
@@ -309,7 +308,7 @@ def test_k3_accuracy_pinned_blocking():
     mla.default_compute_kernel_config, mla.hifi2_fp32_compute_kernel_config = "bf16/HiFi2", "fp32/HiFi2"
     mla.hifi3_fp32_compute_kernel_config = "fp32/HiFi3"
 
-    # The entry is untagged, so it must resolve (K divisibility included) at every TP the boxes run.
+    # Untagged entry: it must resolve at every TP.
     for tp in (1, 2, 4):
         mla.tp_factor = tp
         mla.kv_a_proj_with_mqa_weight = SimpleNamespace(shape=(KimiK3Config.EMB_SIZE // tp, 576))

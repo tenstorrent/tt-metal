@@ -349,9 +349,7 @@ class TtIndexerBase:
             index_topk=config.index_topk,
             index_rope_interleave=config.index_rope_interleave,
         )
-        # Indexer rope width: absent -> the 64-wide rope half every DS-V3.2 / GLM indexer carries; 0 -> a
-        # NoPE indexer (Kimi-K3.1, dsa_config.index_rope_dim = 0) that scores q/k unrotated, so no
-        # rope_tensors are read at all (ttMLA passes {} under mla_use_nope).
+        # Indexer rope width: absent -> 64 (DS-V3.2 / GLM); 0 -> NoPE indexer (Kimi-K3.1), no rope tables read.
         self._index_rope_dim = getattr(config, "index_rope_dim", None)
         if self._index_rope_dim is None:
             self._index_rope_dim = 64
@@ -580,7 +578,7 @@ class TtIndexerBase:
         so keys land at the same positions update_padded_kv_cache writes them to. For DS (half-split
         weights) self._rope_perm first reorders the rope half into the interleaved arrangement so this
         interleaved op matches the DS reference (the permutation cancels in q·k, applied to both q and k).
-        A NoPE indexer (index_rope_dim == 0) returns x itself: callers then own one tensor, not two."""
+        A NoPE indexer returns x itself."""
         if self._index_rope_dim == 0:
             return x
         if self._rope_perm is None:

@@ -53,18 +53,14 @@ SPARSE_INDEX_PCC = 0.999
 # kimi_k3_1: K3's gated NoPE MLA (96 heads) + a NoPE lightning indexer; its main KVPE cache is scaled FP8.
 # deepseek_v32: 128 heads; covers the heads -> sequence reshard at TP=2 / TP=4 for DeepSeek-V3.2.
 SPARSE_VARIANTS = ["glm_5_2", "kimi_k3_1", "deepseek_v32"]
-# Per-variant main KVPE cache format. Accuracy runs the main format at every sequence and the other format
-# at the real-pruning sequence only, as a diagnostic that separates quantization error from logic error.
+# Main KVPE cache format per variant; the other format runs at the real-pruning sequence only.
 SPARSE_MAIN_KV_FORMAT = {
     "glm_5_2": MlaKvCacheFormat.BF16_RM,
     "kimi_k3_1": MlaKvCacheFormat.SCALED_FP8,
     "deepseek_v32": MlaKvCacheFormat.BF16_RM,
 }
-# Inert-top-k fallback where seq 256 is too short: the shortest of these whose stripe is long enough on that mesh
-# (LoudBox: 1024; Galaxy 8x4: 2048). All are <= index_topk, so sparse == dense there. K3.1's and
-# DeepSeek-V3.2's index caches have ONE layer slot (no compacted multi-layer slab like GLM's), so the SP x TP-striped
-# per-chip stripe must itself hold >= KVPE_MIN_TOKENS_PER_CHIP rows; at 256 tokens on 8 chips (32 rows) the
-# ND-sharded cache collapses to WIDTH_SHARDED and indexer_score rejects it.
+# Single-slot index caches (no multi-layer slab like GLM's) need >= KVPE_MIN_TOKENS_PER_CHIP rows per chip, so
+# where seq 256 is too short they take the shortest of these inert-top-k (sparse == dense) lengths that fits.
 SPARSE_INERT_FALLBACK_SEQS = (1024, 2048)
 SINGLE_SLOT_INDEX_VARIANTS = ("kimi_k3_1", "deepseek_v32")
 
@@ -89,9 +85,7 @@ def _collect_kvpe_cache(cache, mesh_device):
 # ---------------------------------------------------------------------------
 # Box-adaptive candidate meshes (sp, tp), keyed by physical device count. Each box lists ONLY shapes
 # that fit it, so off-box shapes are never generated (no "needs N devices" skips). Shapes must be
-# TP>=2 (the dense 128-head epilogue overflows L1 at TP=1). Every variant runs every listed mesh: sparse
-# attention reshards heads -> sequence at every TP > 1 (ttMLA.reshards_heads_to_seq), fed by the
-# head-replicated seq-sharded indexer.
+# TP>=2 (the dense 128-head epilogue overflows L1 at TP=1). Every variant runs every listed mesh.
 # Coverage rationale:
 #   QuietBox (4):  (1,4) TorusX and (2,2) Fabric2D.
 #   LoudBox  (8):  (2,4) TP=4 and (4,2) TP=2 — every variant at both TP.
@@ -198,9 +192,7 @@ def _inert_fallback_cases():
 
 
 def _sparse_accuracy_cases():
-    """Each variant's main KV format covers both sparsity regimes; the other format runs only in the
-    real-pruning regime (GLM / DeepSeek-V3.2: BF16 main + FP8 at 5120; K3.1: scaled FP8 main + BF16 diagnostic at
-    5120). Single-slot index-cache variants take the inert fallback sequence where 256 is too short."""
+    """Main KV format at both sparsity regimes, the other format at the pruning one only."""
     cases = []
     for case in _sparse_cases(SPARSE_SEQS_ACCURACY, anchor_only=False) + _inert_fallback_cases():
         variant, mesh, seq_len, device_params = case.values
@@ -232,8 +224,7 @@ def _only(cases, *variants):
     return [c for c in cases if c.values[0] in variants]
 
 
-# Multi-chunk coverage on every mesh of the box: each variant's TP=2 early-Q path (all heads per chip after the
-# head->sequence reshard) differs from its TP=4 one.
+# Multi-chunk coverage on every mesh: the TP=2 early-Q path differs from TP=4.
 SPARSE_CHUNKED_CASES = _sparse_cases(SPARSE_SEQS_ANCHOR, anchor_only=False)
 
 
@@ -985,8 +976,7 @@ def run_sparse_mla_rotated_case(
     ttnn.synchronize_device(mesh_device)
 
 
-# glm_5_2 only: writer / indexer_score rotation geometry is model-agnostic, and K3.1's NoPE removes the only
-# model-specific piece (the indexed rope); K3.1's multi-chunk coverage is test_sparse_mla_chunked on every mesh.
+# glm_5_2 only: the rotation geometry is model-agnostic.
 @pytest.mark.parametrize(
     "variant, mesh_device, seq_len, device_params",
     _only(SPARSE_ANCHOR_CASES, "glm_5_2"),
@@ -1058,7 +1048,7 @@ def test_sparse_mla_accuracy_chunked(
     )
 
 
-# GLM-5.2 indexer reuse, the reuse-capable variant, on every mesh: TP=2 injects TP-sequence-sharded indices too.
+# GLM-5.2 indexer reuse, on every mesh.
 SPARSE_REUSE_CASES = _only(SPARSE_CHUNKED_CASES, "glm_5_2")
 
 
@@ -1143,10 +1133,8 @@ def test_sparse_mla_determinism_chunked(
     )
 
 
-# SPARSE_CHUNKED_CASES (every variant on every mesh, seq=5120) crossed with the prefill chunk sizes; collected == run.
 def _chunked_cases():
-    """(case, chunk): every case at 1024, plus the 1280 perf chunk where it tiles the SP x TP stripe (it lands in the
-    tuned 640-row slot on LoudBox 2x4; Galaxy's 32-chip stripe needs 1024 multiples)."""
+    """(case, chunk): every case at 1024, plus 1280 where it tiles the SP x TP stripe."""
     out = []
     for c in SPARSE_CHUNKED_CASES:
         sp, tp = c.values[1]
@@ -1188,9 +1176,7 @@ def test_sparse_mla_chunked(
     )
 
 
-# The clamp itself is model-agnostic, but K3.1's terminal pad overflow runs under NoPE (no indexed rope on
-# the pad rows) with its scaled-FP8 main cache, so both variants run their anchor case. Cache format IS
-# kept -- it changes the page layout the clamp addresses.
+# Cache format is kept: it changes the page layout the clamp addresses.
 SPARSE_PAD_OVERFLOW_CASES = _only(SPARSE_ANCHOR_CASES, "glm_5_2", "kimi_k3_1")
 
 
@@ -1226,7 +1212,6 @@ def test_sparse_mla_pad_overflow_chunked(
     )
 
 
-# glm_5_2 only: K3.1's NoPE KVPE write is already PCC-checked by the accuracy and chunked tests.
 SPARSE_KV_ONLY_CASES = _only(SPARSE_ANCHOR_CASES, "glm_5_2")
 
 

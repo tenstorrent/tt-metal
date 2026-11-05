@@ -78,11 +78,9 @@ class ModelArgs:
     index_rope_interleave: bool = False
     # Indexer rope width. None -> qk_rope_head_dim (DS-V3.2 / GLM, 64); 0 -> NoPE indexer (Kimi-K3.1).
     index_rope_dim: Optional[int] = None
-    # Kimi-K3 MLA deltas; both off for DS-V3.2 / GLM.
-    # NoPE: q_pe / k_pe are never rotated (the 64 columns still exist and are still cached) and the
-    # softmax scale is plain qk_head_dim**-0.5, with no YaRN mscale.
+    # Kimi-K3 NoPE: q_pe / k_pe stay unrotated (still 64 wide and cached); softmax scale is plain qk_head_dim**-0.5.
     mla_use_nope: bool = False
-    # Output gate: sigmoid(g_proj(x)) multiplies the per-head attention output before wo.
+    # Kimi-K3 output gate: sigmoid(g_proj(x)) multiplies the per-head attention output before wo.
     mla_use_output_gate: bool = False
 
     @property

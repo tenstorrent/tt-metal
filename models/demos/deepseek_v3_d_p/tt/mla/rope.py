@@ -265,12 +265,9 @@ def refresh_llama4_scale(
 def identity_rope_tensors_indexed(
     mesh_device: ttnn.MeshDevice, *, sp_axis: int, chunk_size_global: int, rope_dim: int
 ) -> dict[str, ttnn.Tensor]:
-    """cos = 1 / sin = 0 tables for ``rotary_embedding_indexed`` covering ONE chunk slab, for NoPE layers.
-
-    With them the op leaves its input unchanged (x * 1 + rot(x) * 0, exact for normal values at HiFi2 and up) while still
-    doing its fused prefix concat and row-major write. Every position has the same rotation, so the table only needs
-    one SP slab: call the op with the scalar kv_actual_global = 0 and no metadata.
-    """
+    """cos = 1 / sin = 0 tables over one chunk slab: ``rotary_embedding_indexed`` then only does its fused concat
+    and row-major write (exact for normal values at HiFi2+). Every position has the same rotation, so one slab
+    serves every chunk: call it with kv_actual_global = 0 and no metadata."""
     sp = mesh_device.shape[sp_axis]
     tp = mesh_device.shape[1 - sp_axis]
     assert chunk_size_global % (ttnn.TILE_SIZE * sp * tp) == 0, (

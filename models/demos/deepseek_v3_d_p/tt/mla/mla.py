@@ -54,15 +54,13 @@ class ttMLA:
 
     @staticmethod
     def reshards_heads_to_seq(tp_factor: int) -> bool:
-        """Sparse attention moves the TP split from heads to sequence at every TP > 1. sparse_sdpa gathers each
-        token's top-k KV rows once for all of that token's heads, so a head-sharded q would repeat the gather on
-        every TP chip, and the indexer's TP-sequence-split top-k would have to be all-gathered back."""
+        """Sparse attention runs TP-sharded on sequence at every TP > 1: each token's top-k KV rows are then
+        gathered once, not once per TP chip."""
         return tp_factor > 1
 
     @staticmethod
     def replicates_wkv_b1(config, tp_factor: int, has_indexer: bool) -> bool:
-        """True for the layers that take _early_q_reshard: sparse layers that reshard run wkv_b1 over every head
-        after the all-to-all to sequence sharding, so they load all heads' wkv_b1 on every chip."""
+        """Layers on the early-Q path run wkv_b1 over every head, so they load it replicated."""
         return has_indexer and ttMLA.reshards_heads_to_seq(tp_factor)
 
     @staticmethod
@@ -478,7 +476,7 @@ class ttMLA:
             packer_l1_acc=True,
         )
 
-        # Same HiFi2 fidelity with an fp32 dest, for tuned matmuls that set fp32_dest_acc (no math_fidelity). A wide
+        # Same HiFi2 fidelity with an fp32 dest, for tuned matmuls that set fp32_dest_acc. A wide
         # in0_block_w accumulates that much more K in dest before the packer spills; in bf16 dest that
         # costs precision (Mistral q_a_proj at in0_block_w=8: 1.4% rel. error vs 0.86% default), in fp32
         # it is both faster and more accurate than the default (0.44%).
@@ -489,7 +487,7 @@ class ttMLA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        # HiFi3 + fp32 dest for entries with math_fidelity=HiFi3: removes HiFi2's ~0.2% |y| shrink (K3 kv_a_proj).
+        # fp32 dest at HiFi3, for entries with math_fidelity=HiFi3 (K3 kv_a_proj).
         self.hifi3_fp32_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi3,
@@ -703,9 +701,7 @@ class ttMLA:
         requested_overlap_profile = sparse_mla_overlap_profile
         if requested_overlap_profile is None:
             requested_overlap_profile = os.getenv("TT_SPARSE_MLA_OVERLAP_PROFILE")
-        # The config value is the MODEL's default, not a caller request: "auto" there means "overlap where
-        # the mesh can", so an SP=1 mesh (QuietBox 1x4) runs the serial schedule instead of raising. An
-        # explicit argument / env request on SP=1 still fails loudly below.
+        # A model-config "auto" runs serial on SP=1; an explicit argument / env request there still raises.
         overlap_from_model_default = requested_overlap_profile is None
         if requested_overlap_profile is None:
             requested_overlap_profile = getattr(config, "sparse_mla_overlap_profile", None)
@@ -765,19 +761,16 @@ class ttMLA:
         # offset 0 — so its key cache persists layer-stacked (migratable to decode). Dense: chunked ->
         # indexed, single-shot -> rotary_embedding_llama.
         # NoPE (Kimi-K3) binds a pass-through: the op is dropped but the nope/rope slices stay (they
-        # are dimension-driven), so the cached latent is still 576 wide. The forward's rope_tensors ({} under
-        # NoPE) go unused; the early-Q path uses this layer's own identity tables.
+        # are dimension-driven), so the cached latent is still 576 wide and rope_tensors goes unused.
         self._use_indexed_rope = not self._use_nope and (self.is_chunked or self._has_indexer)
         if self._use_nope:
-            # NoPE + DSA (Kimi-K3.1) needs a NoPE indexer too: RotarySetup returns no rope tables under
-            # mla_use_nope, so an indexer that ropes its q/k (index_rope_dim 64) would have nothing to read.
+            # NoPE has no rope tables, so a DSA indexer must be NoPE too (Kimi-K3.1).
             assert not self._has_indexer or getattr(config, "index_rope_dim", None) == 0, (
                 "mla_use_nope with a DSA indexer requires index_rope_dim == 0: under NoPE there are no rope "
                 "tables for the indexer's q/k"
             )
             self._apply_rope = self._apply_rope_none
-            # The early-Q path still needs rotary_embedding_indexed for its fused prefix concat + row-major write;
-            # identity tables (one chunk slab) make it a pure layout op under NoPE.
+            # Early-Q still uses rotary_embedding_indexed for its fused concat + row-major write: identity tables.
             self._identity_rope_tensors = (
                 identity_rope_tensors_indexed(
                     mesh_device,
@@ -995,9 +988,8 @@ class ttMLA:
         return self.hifi2_fp32_compute_kernel_config
 
     def _early_q_wkv_b1_kwargs(self, seq_len_local: int) -> dict:
-        """wkv_b1 on the early-Q path: q is [1, all heads, rows / tp, qk_nope]. A tuned entry tagged with this model's
-        num_heads applies as is; otherwise each core takes one head x up to 10 row tiles x the full kv_lora width, so
-        the heads spread over the grid (the batched default and the untagged 1D entries split only along M)."""
+        """wkv_b1 on the early-Q path ([1, all heads, rows / tp, qk_nope]): a model-tagged tuned entry, else one head
+        x up to 10 row tiles per core so the heads spread over the grid."""
         m_tiles = seq_len_local // self.tp_factor // ttnn.TILE_SIZE
         cfg = self._resolve_mm_cfg("wkv_b1", seq_len_local)
         if cfg is not None and cfg.get("num_heads") is not None and m_tiles % cfg["program_config"].per_core_M == 0:
@@ -1097,9 +1089,8 @@ class ttMLA:
         row_major_output: bool = False,
         compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
     ) -> ttnn.Tensor:
-        """Chunked rotated RoPE via the indexed op. rope_tensors carry the block-cyclic-sharded cos/sin: the
-        whole cache (RotarySetup.get_rope_tensors_indexed), or one slab of identity tables for NoPE's early-Q
-        layout write (rope.identity_rope_tensors_indexed, which the op reads with start 0 and no metadata); the op
+        """Chunked rotated RoPE via the indexed op. rope_tensors carry the whole-cache,
+        block-cyclic-sharded cos/sin (or NoPE's one-slab identity tables, read at start 0); the op
         derives this chunk's per-chip shard offset on-device from kv_actual_global -- the same
         update_idxt math the KV-cache writer uses, keeping rotation and cache write consistent.
 
@@ -1431,11 +1422,8 @@ class ttMLA:
 
     @property
     def _early_q_reshard(self) -> bool:
-        """Sparse layers that reshard (reshards_heads_to_seq) move q to sequence sharding before the wkv_b1 absorption,
-        where it is qk_nope + qk_rope wide (192 for K3.1 and DeepSeek-V3.2, 256 for GLM) instead of 576, and RoPE (an identity under NoPE)
-        writes it row-major for sparse_sdpa, so no untilize follows; sparse_sdpa's row-major output then goes to the
-        all-to-all back to heads, which tilizes it on the way. Costs all heads' wkv_b1 on every chip, which __init__
-        loads replicated for these layers."""
+        """Resharding sparse layers move q to sequence sharding before the wkv_b1 absorption, while it is
+        qk_nope + qk_rope wide instead of 576; RoPE writes it row-major for sparse_sdpa. Needs wkv_b1 replicated."""
         return ttMLA.replicates_wkv_b1(self.config, self.tp_factor, self._has_indexer)
 
     def _q_stem_seq_sharded(self, tt_q_nope, tt_q_rope, rope_tensors, kv_actual_isl, seq_len_local, metadata):
@@ -2465,11 +2453,8 @@ class ttMLA:
         q_seq_ready = q.layout == ttnn.ROW_MAJOR_LAYOUT
         seq_len_local = q.shape[2] * (self.tp_factor if q_seq_ready else 1)  # per-chip query rows == S / sp
 
-        # At TP > 1 the TP split moves from heads to sequence for the attention (reshards_heads_to_seq): each
-        # chip then runs every head of its rows, so a token's top-k KV rows are gathered once, not once per TP
-        # chip. One 2D-fabric all-to-all: each chip sends only its destination sequence slice and receives every
-        # head shard of it. The redistribution is inverted after sparse_sdpa to restore the head-sharded layout
-        # expected by the epilogue.
+        # At TP > 1 one 2D-fabric all-to-all moves the TP split from heads to sequence (reshards_heads_to_seq);
+        # it is inverted after sparse_sdpa to restore the head-sharded layout the epilogue expects.
         # The indexer emits matching TP sequence shards directly. The partition fallback below also
         # accepts SP-only or globally replicated indices from callers using the older output contract.
         transpose_head_to_seq = self._needs_head_to_seq_reshard
