@@ -17,7 +17,10 @@ constexpr uint32_t emb_dim_cb_tiles = get_compile_time_arg_val(1);
 // Raw byte count of one emb_dim row — used for the NoC read so we transfer
 // exactly emb_dim bytes and tolerate non-1024-aligned embedding dims.
 constexpr uint32_t emb_dim_bytes = get_compile_time_arg_val(2);
-constexpr auto combine_accessor_args = TensorAccessorArgs<3>();
+// Experts read per NoC barrier: num_experts (all of a token's rows at once) when the factory sized
+// c_0 for it, else 1. One barrier per 8 KB row left the reader latency-bound.
+constexpr uint32_t experts_per_batch = get_compile_time_arg_val(3);
+constexpr auto combine_accessor_args = TensorAccessorArgs<4>();
 // Row-indexed combine: combine_output is a [rows, emb] table and slot j of token t reads row row_index[t, j]; a
 // 32-token chunk of index pages is read at once into cb_row_index. Slots pointing at skip_row are not read: the
 // expert skip drops them, so their c_0 slot only has to hold finite data (zeroed once, then earlier real rows).
@@ -29,6 +32,8 @@ constexpr uint32_t row_index_aligned_page_size = get_compile_time_arg_val(ri_off
 constexpr uint32_t table_rows = get_compile_time_arg_val(ri_off + 3);
 constexpr auto row_index_accessor_args = TensorAccessorArgs<ri_off + 4>();
 constexpr uint32_t cb_row_index_id = tt::CBIndex::c_5;
+// The zero-once above covers a single c_0 slot, so the factory does not batch row-indexed reads.
+static_assert(!row_indexed || experts_per_batch == 1);
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
 
@@ -41,6 +46,7 @@ void kernel_main() {
     CircularBuffer cb_combine_input(cb_combine_input_id);
 
     const auto combine_addrg = TensorAccessor(combine_accessor_args, combine_addr);
+    const uint32_t input_tile_size = cb_combine_input.get_tile_size();
 
     uint32_t row_index_l1 = 0;
     if constexpr (row_indexed) {
@@ -69,25 +75,28 @@ void kernel_main() {
         for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CHUNK; ++token_idx) {
             uint32_t global_token_idx = token_start_idx + token_idx;
 
-            for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
-                cb_combine_input.reserve_back(emb_dim_cb_tiles);
-
-                uint32_t expert_page_idx = global_token_idx * num_experts + expert_idx;
-                if constexpr (row_indexed) {
-                    expert_page_idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        row_index_l1 + token_idx * row_index_aligned_page_size)[expert_idx];
-                    ASSERT(expert_page_idx == skip_row || expert_page_idx < table_rows);
-                }
-                if (!row_indexed || (expert_page_idx != skip_row && expert_page_idx < table_rows)) {
+            for (uint32_t expert_base = 0; expert_base < num_experts; expert_base += experts_per_batch) {
+                cb_combine_input.reserve_back(experts_per_batch * emb_dim_cb_tiles);
+                for (uint32_t e = 0; e < experts_per_batch; ++e) {
+                    const uint32_t expert_idx = expert_base + e;
+                    uint32_t expert_page_idx = global_token_idx * num_experts + expert_idx;
+                    if constexpr (row_indexed) {
+                        expert_page_idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                            row_index_l1 + token_idx * row_index_aligned_page_size)[expert_idx];
+                        ASSERT(expert_page_idx == skip_row || expert_page_idx < table_rows);
+                    }
+                    if (row_indexed && (expert_page_idx == skip_row || expert_page_idx >= table_rows)) {
+                        continue;
+                    }
                     noc.async_read(
                         combine_addrg,
                         cb_combine_input,
                         emb_dim_bytes,
                         {.page_id = expert_page_idx},
-                        {.offset_bytes = 0});
-                    noc.async_read_barrier();
+                        {.offset_bytes = e * emb_dim_cb_tiles * input_tile_size});
                 }
-                cb_combine_input.push_back(emb_dim_cb_tiles);
+                noc.async_read_barrier();
+                cb_combine_input.push_back(experts_per_batch * emb_dim_cb_tiles);
             }
         }
         token_start_idx += TOKENS_PER_CHUNK;

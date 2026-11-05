@@ -44,6 +44,10 @@ constexpr bool weights_per_token =
 constexpr uint32_t weights_aligned_page_size =
     get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset() + 2);
 constexpr uint32_t cb_wtok_id = tt::CBIndex::c_4;
+// Weights read per NoC barrier: num_experts (all of a token's weights at once) when the factory sized
+// c_1 for two tokens of them, else 1 (c_1 holds a single tile). Always divides num_experts.
+constexpr uint32_t weights_per_batch =
+    get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset() + 3);
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
 
@@ -162,51 +166,47 @@ void kernel_main() {
                 }
             }
 
-            for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
-                cb_weights.reserve_back(1);
-
-                if constexpr (use_dispatch_table_skip) {
-                    bool is_last = (expert_idx == num_experts - 1);
-                    if (!has_local && is_last) {
-                        // No local experts for this token — zero the weight tile so compute's
-                        // must_zero_init multiply produces zeros regardless of combine_output.
-                        volatile tt_l1_ptr uint32_t* ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_weights.get_write_ptr());
-                        for (uint32_t w = 0; w < weight_tile_size / sizeof(uint32_t); w++) {
-                            ptr[w] = 0;
+            // weights_per_batch weights under one barrier. With all of a token's weights per batch, c_1
+            // holds two tokens so this runs ahead of compute instead of alternating with it one tile at
+            // a time; with one per batch it is the original single-tile stream.
+            for (uint32_t expert_base = 0; expert_base < num_experts; expert_base += weights_per_batch) {
+                cb_weights.reserve_back(weights_per_batch);
+                for (uint32_t e = 0; e < weights_per_batch; ++e) {
+                    const uint32_t expert_idx = expert_base + e;
+                    const uint32_t slot_offset = e * weight_tile_size;
+                    if constexpr (use_dispatch_table_skip) {
+                        bool is_last = (expert_idx == num_experts - 1);
+                        if (!has_local && is_last) {
+                            // No local experts for this token — zero the weight tile so compute's
+                            // must_zero_init multiply produces zeros regardless of combine_output.
+                            volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                cb_weights.get_write_ptr() + slot_offset);
+                            for (uint32_t w = 0; w < weight_tile_size / sizeof(uint32_t); w++) {
+                                ptr[w] = 0;
+                            }
+                            continue;
                         }
-                    } else if constexpr (weights_per_token) {
+                    }
+                    if constexpr (weights_per_token) {
                         // The compute kernel reads element 0 (scalar broadcast; the zero test reads elements 0-1).
                         volatile tt_l1_ptr uint16_t* dst =
-                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_weights.get_write_ptr());
+                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_weights.get_write_ptr() + slot_offset);
                         const volatile tt_l1_ptr uint16_t* src = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(
                             wtok_l1 + token_idx * weights_aligned_page_size);
                         dst[0] = src[expert_idx];
                         dst[1] = 0;
-                    } else {
-                        uint32_t weight_page_idx = global_token_idx * num_experts + expert_idx;
-                        noc.async_read(
-                            weight_addrg,
-                            cb_weights,
-                            weight_tile_size,
-                            {.page_id = weight_page_idx},
-                            {.offset_bytes = 0});
-                        noc.async_read_barrier();
+                        continue;
                     }
-                } else if constexpr (weights_per_token) {
-                    volatile tt_l1_ptr uint16_t* dst =
-                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_weights.get_write_ptr());
-                    const volatile tt_l1_ptr uint16_t* src = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(
-                        wtok_l1 + token_idx * weights_aligned_page_size);
-                    dst[0] = src[expert_idx];
-                    dst[1] = 0;
-                } else {
                     uint32_t weight_page_idx = global_token_idx * num_experts + expert_idx;
                     noc.async_read(
-                        weight_addrg, cb_weights, weight_tile_size, {.page_id = weight_page_idx}, {.offset_bytes = 0});
-                    noc.async_read_barrier();
+                        weight_addrg,
+                        cb_weights,
+                        weight_tile_size,
+                        {.page_id = weight_page_idx},
+                        {.offset_bytes = slot_offset});
                 }
-                cb_weights.push_back(1);
+                noc.async_read_barrier();
+                cb_weights.push_back(weights_per_batch);
             }
         }
 
