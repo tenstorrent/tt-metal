@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include <circular_buffer.hpp>
 #include <device.hpp>
 #include <tt-metalium/program.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
-#include <array>
 #include <functional>
 #include <memory>
 #include <unordered_map>
@@ -24,8 +22,6 @@
 #include "sub_device_types.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
-
-#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 class Device;

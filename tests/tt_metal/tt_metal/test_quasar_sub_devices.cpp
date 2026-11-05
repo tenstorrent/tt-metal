@@ -6,6 +6,7 @@
 #include "context/metal_context.hpp"
 #include "hostdevcommon/common_values.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>

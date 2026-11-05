@@ -3,12 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/span.hpp>
 #include <bit>
-#include <cstddef>
 #include <optional>
 #include <vector>
 
