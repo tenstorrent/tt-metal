@@ -12,7 +12,8 @@ and M3VLVisionModel.forward_device runs at the checkpoint's widths on stand-ins 
   activations in block shards exactly where fc1's and fc2's configs for that layout pass the matmul's checks, with
   fc1's output shards as fc2's input, in the layouts of SHARDED_MLP_CLASSES. The images of the device test of L1
   against DRAM in CI are among them, and with M3_VISION_ALL_GRIDS=1 its images take each of those layouts. "dram",
-  another grid and every larger image get DRAM_PLACEMENT.
+  another grid, every larger image and a block whose linears are not those of L1_LINEARS (an MLP of 7040, or no fp32
+  accumulation) get DRAM_PLACEMENT.
 - The L1 budget, at every patch count the rule keeps in L1, with "l1" and "l1_interleaved": the forward of a 4-block
   tower is recorded, each op's output allocated before the op runs and freed where the forward frees it or drops its
   last reference, and replayed through a model of one L1 bank of PROOF_L1_BANK_BYTES (tensors from the top down, first
@@ -22,7 +23,9 @@ and M3VLVisionModel.forward_device runs at the checkpoint's widths on stand-ins 
   starts from block 1's L1 state, and L1 is empty when the tower returns. At 2304 patches on 12x10 ten of the thirteen
   block ops have the margins a P150 measured with "l1_interleaved", and fc1 and fc2 the buffers it measured with the
   MLP's hidden activations in shards. With L1_MAX_ROWS lifted, the walk finds ops on 12x10 whose buffers would overlap
-  a tensor above it.
+  a tensor above it. With L1_LINEARS lifted to a block with an MLP of 7040, the rule keeps that block's activations in
+  L1 interleaved at 2304 patches on 12x10, and the walk finds fc1's circular buffers there 46592 B below the lowest
+  tensor, under PROOF_L1_FOREIGN_BYTES.
 - The calls: DRAM_PLACEMENT is pinned field by field. Each op gets the keywords of CALL_KEYWORDS and, where its field
   of the placement is not None, its memory_config, and none where it is None: so DRAM_PLACEMENT gives the LayerNorms,
   GELU and SDPA no memory_config. Each matmul gets linear_program_config's config for its operands. With the L1
@@ -38,6 +41,7 @@ Run:
 from __future__ import annotations
 
 import collections
+import contextlib
 import itertools
 import math
 import weakref
@@ -61,6 +65,7 @@ from models.demos.minimax_m3.tt.vision.common import (
     PROOF_L1_BANK_BYTES,
     PROOF_L1_FOREIGN_BYTES,
     BlockPlacement,
+    block_linear_widths,
     block_linears,
     block_placement,
     l1_free_for_activations,
@@ -575,6 +580,18 @@ def _mlp_shards(device, mlp, rows, grid):
     return ("whole" if m_tiles % fc1.per_core_M == 0 else "partial", math.ceil(m_tiles / fc1.per_core_M))
 
 
+@contextlib.contextmanager
+def _l1_linears_lifted(block):
+    """L1_LINEARS lifted to block's linears inside the context, for the rule at widths it leaves out."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(common, "L1_LINEARS", block_linear_widths(block))
+        common._l1_block_placement.cache_clear()
+        try:
+            yield
+        finally:
+            common._l1_block_placement.cache_clear()
+
+
 @pytest.mark.parametrize("grid", list(L1_GRID_IDS.values()), ids=list(L1_GRID_IDS))
 def test_vision_block_placement_rule(monkeypatch, grid, expect_error):
     """block_placement against linear_program_config at every patch count up to 4096: "l1" and "l1_interleaved" keep
@@ -632,30 +649,58 @@ def test_vision_block_placement_rule(monkeypatch, grid, expect_error):
     ids=["hidden1280-mlp4800", "hidden1280-mlp5056", "hidden1408-mlp5120"],
 )
 def test_vision_block_placement_rule_mlp_width(monkeypatch, hidden, mlp_width, transposed_sizes):
-    """The rule for the MLP's shards on 12x10 with widths other than the checkpoint's, where conditions bind that its
-    widths meet at every size: with an MLP width of 4800 (150 tiles) fc2's K blocks of 6 tiles do not divide fc1's
-    blocks of 15; with 5056 (158 tiles) fc1's width does not split into whole blocks of 16; with a hidden width of 1408
-    (44 tiles) fc2's output takes 9 blocks of 5 tiles, so one of fc1's 10 blocks, fc2's K shards, would sit on a core
-    with no block of fc2's output. fc1 and fc2 get transposed splits with the same rows per core at transposed_sizes
-    patch counts, and "l1" keeps the MLP interleaved at every one, as fc1's and fc2's configs for the shards fail the
-    matmul's checks there."""
+    """The rule for the MLP's shards on 12x10 with widths other than the checkpoint's, with L1_LINEARS lifted to them,
+    where conditions bind that its widths meet at every size: with an MLP width of 4800 (150 tiles) fc2's K blocks of 6
+    tiles do not divide fc1's blocks of 15; with 5056 (158 tiles) fc1's width does not split into whole blocks of 16;
+    with a hidden width of 1408 (44 tiles) fc2's output takes 9 blocks of 5 tiles, so one of fc1's 10 blocks, fc2's K
+    shards, would sit on a core with no block of fc2's output. fc1 and fc2 get transposed splits with the same rows per
+    core at transposed_sizes patch counts, and "l1" keeps the MLP interleaved at every one, as fc1's and fc2's configs
+    for the shards fail the matmul's checks there."""
     model = _model(_Recorder(monkeypatch), (12, 10), mlp_width=mlp_width, hidden=hidden)
     block = model.blocks[0]
     transposed = 0
-    for patches in PATCHES:
-        rows = nearest_32(patches)
-        placement = block_placement(block, rows, "l1")
-        assert placement is not L1_SHARDED_MLP_PLACEMENT, patches
-        if placement is DRAM_PLACEMENT:
-            continue
-        assert _mlp_shards(model.device, block.mlp, rows, (12, 10)) is None, patches
-        mlp = block.mlp
-        fc1, fc2 = (
-            linear_program_config(model.device, rows, *w.padded_shape[-2:], mlp.compute_kernel_config)
-            for w in (mlp.fc1_weight, mlp.fc2_weight)
-        )
-        transposed += fc1.transpose_mcast and fc2.transpose_mcast and fc1.per_core_M == fc2.per_core_M
+    with _l1_linears_lifted(block):
+        for patches in PATCHES:
+            rows = nearest_32(patches)
+            placement = block_placement(block, rows, "l1")
+            assert placement is not L1_SHARDED_MLP_PLACEMENT, patches
+            if placement is DRAM_PLACEMENT:
+                continue
+            assert _mlp_shards(model.device, block.mlp, rows, (12, 10)) is None, patches
+            mlp = block.mlp
+            fc1, fc2 = (
+                linear_program_config(model.device, rows, *w.padded_shape[-2:], mlp.compute_kernel_config)
+                for w in (mlp.fc1_weight, mlp.fc2_weight)
+            )
+            transposed += fc1.transpose_mcast and fc2.transpose_mcast and fc1.per_core_M == fc2.per_core_M
     assert transposed == transposed_sizes, transposed
+
+
+def test_vision_block_placement_proven_linears(monkeypatch):
+    """L1 only for the block linears of L1_LINEARS, the only ones the walk of the L1 budget runs at: a block with an MLP
+    of 7040, and the checkpoint's block without fp32 accumulation, get DRAM_PLACEMENT at every patch count on the grids
+    of L1_GRIDS, with "l1" and "l1_interleaved". With L1_LINEARS lifted to the 7040-wide block, the rule would keep its
+    activations in L1 interleaved at 2304 patches on 12x10, where the walk, as in test_vision_block_placement_l1_budget,
+    finds fc1's circular buffers 46592 B below the lowest tensor, under PROOF_L1_FOREIGN_BYTES."""
+    recorder = _Recorder(monkeypatch)
+    wide, no_fp32_acc = _model(recorder, (12, 10), mlp_width=7040), _model(recorder, (12, 10))
+    config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
+    )
+    for block in no_fp32_acc.blocks:
+        block.attention.compute_kernel_config = block.mlp.compute_kernel_config = config
+    for model, grid in itertools.product((wide, no_fp32_acc), common.L1_GRIDS):
+        model.device.grid = grid
+        for patches, activations in itertools.product(PATCHES, ("l1", "l1_interleaved")):
+            case = ("mlp 7040" if model is wide else "no fp32 accumulation", grid, patches, activations)
+            assert block_placement(model.blocks[0], patches, activations) is DRAM_PLACEMENT, case
+    wide.device.grid = (12, 10)
+    _empty_l1(monkeypatch, (12, 10))
+    with _l1_linears_lifted(wide.blocks[0]):
+        assert block_placement(wide.blocks[0], 2304, "l1") is L1_INTERLEAVED_PLACEMENT
+        margins = [m for m in _walk(recorder.forward(wide, 2304), PROOF_L1_BANK_BYTES)[0] if m[2] is not None]
+    role, _, margin = min(margins, key=lambda m: m[2])
+    assert (role, margin) == ("fc1", 46592) and margin < PROOF_L1_FOREIGN_BYTES, (role, margin)
 
 
 @pytest.mark.parametrize("activations", ["l1", "l1_interleaved"])

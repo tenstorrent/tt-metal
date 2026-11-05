@@ -347,6 +347,11 @@ L1_GRIDS = ((11, 10), (12, 10), (13, 10))
 # model takes larger images, which no device run has covered with activations in L1: with this limit lifted, the host
 # test's walk of the L1 budget finds sizes on 12x10 where an op's circular buffers would overlap the activations.
 L1_MAX_ROWS = 2304
+# The (in_features, out_features, fp32_dest_acc) of the QKV, out_proj, fc1 and fc2, from block_linear_widths, that
+# block_placement keeps activations in L1 for: the checkpoint's, heads padded to 96, with fp32 accumulation, the only
+# ones the host test walks the L1 budget at. Other widths change the splits and buffers: with an MLP of 7040, fc1's
+# circular buffers would end 46592 B below the lowest tensor at 2304 patches on 12x10, under PROOF_L1_FOREIGN_BYTES.
+L1_LINEARS = ((1280, 4608, True), (1536, 1280, True), (1280, 5120, True), (5120, 1280, True))
 # A P150's L1 bank with no L1_SMALL region, as measured on one.
 P150_L1_BANK_BYTES = 1_460_864
 # Room the proof leaves for the runtime to take more of each L1 bank than when P150_L1_BANK_BYTES was measured: on main
@@ -372,7 +377,8 @@ def block_placement(block, rows: int, activations: str) -> BlockPlacement:
     interleaved, the output was bit-identical and every op ran faster except out_proj and fc2, which use each input
     tile for 4 output tiles per core: their input reads slowed down, and they ran 40.5 and 108.5 us per block slower
     than with their input in DRAM. So SDPA's and GELU's outputs stay in DRAM. It applies
-    - on the grids of L1_GRIDS, up to L1_MAX_ROWS rows, where the host test walks the L1 budget;
+    - to the linears of L1_LINEARS, on the grids of L1_GRIDS, up to L1_MAX_ROWS rows, where the host test walks the
+      L1 budget;
     - where linear_program_config gives each of the block's four linears a config: ttnn's own matmul configs plan by
       the free L1, which activations in L1 would change.
     The interleaved LayerNorm plans by the free L1 too; the host test checks that it keeps its plan.
@@ -426,7 +432,7 @@ def _l1_block_placement(
 ) -> BlockPlacement:
     """block_placement's choice at m_tiles tile rows, with linears the (in_features, out_features, fp32_dest_acc) of
     the block's QKV, out_proj, fc1 and fc2, and shard_mlp for "l1"."""
-    if (grid_x, grid_y) not in L1_GRIDS or m_tiles * ttnn.TILE_SIZE > L1_MAX_ROWS:
+    if linears != L1_LINEARS or (grid_x, grid_y) not in L1_GRIDS or m_tiles * ttnn.TILE_SIZE > L1_MAX_ROWS:
         return DRAM_PLACEMENT
     n_tiles, blockings = [], []
     for in_features, out_features, fp32_dest_acc in linears:
