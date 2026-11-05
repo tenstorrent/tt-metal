@@ -52,7 +52,7 @@ way.
 | `ConnectionRegistry`, one per chip | Created by `FabricBuilder::create_routers` when the manifest is on, and passed to each router builder; `ComputeMeshRouterBuilder::establish_connections_to_router` records into it | Each connection a router makes to a sibling's sender channel: the VC, the sibling's channel and direction, the sender channel it lands on, and whether it ends at the sibling's tensix mux. These are the router's downstream edges |
 | `collect_manifest_router(chip_facts)` | Pure virtual on `FabricRouterBuilder`; implemented by `ComputeMeshRouterBuilder` | One `manifest::Router`. The builder gathers what only it can see into a `ManifestRouterInputs` and hands it to the router pass (`fabric_manifest_router_pass.cpp`) |
 | `publish_manifest_chip()` | `FabricBuilder` | The chip: its Z port role, its local sync, and every router sorted by Ethernet channel |
-| `get_manifest_chips()` | `FabricBuilderContext` | The `PublishedChips` (`fabric_manifest_router_pass.hpp`) that holds each chip by physical chip id. The builder context lives in `FabricContext`, so it outlives the builders, and the topology pass reads it at write time |
+| `get_manifest_chips()` | `FabricBuilderContext` | The `PublishedChips` (`fabric_manifest_published_chips.hpp`) that holds each chip by physical chip id. The builder context lives in `FabricContext`, so it outlives the builders, and the topology pass reads it at write time |
 | `remove_stale_fabric_manifest`, `write_fabric_manifest` | Called from `FabricFirmwareInitializer::init`; defined in `fabric_manifest.cpp` | Nothing: they delete last run's file and write this one |
 
 `TT_METAL_FABRIC_GENERATE_MANIFEST` sets `RunTimeOptions::get_generate_fabric_manifest()`, which gates
