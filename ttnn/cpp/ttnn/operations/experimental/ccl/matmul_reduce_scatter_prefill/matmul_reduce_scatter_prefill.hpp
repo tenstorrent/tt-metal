@@ -14,6 +14,12 @@
 
 namespace ttnn::experimental {
 
+// The matmul grid of a call, the caller's choice (the op never picks one; default GRID_2D). GRID_2D: a 2D split of the
+// output block over the matmul area. FOLDED_N: one line of cores along N, folded into a rectangle (every core holds all
+// the block's rows, A is multicast to all). FOLDED_M: the same along M (every core holds all the block's columns, W is
+// multicast to all).
+enum class MatmulReduceScatterPrefillGrid : uint8_t { GRID_2D, FOLDED_N, FOLDED_M };
+
 // Fused multi-device matmul + reduce-scatter (SUM) over one mesh axis: every device holds a K-slice A[g] (..., M, K)
 // and W[g] (K, N); the output is the sum over the group, scattered along scatter_dim.
 //
@@ -31,6 +37,8 @@ namespace ttnn::experimental {
 //                          an L1 output it allocates. The op holds no L1 between calls.
 //   use_column_major_ccl   put the CCL port cores in the last grid column instead of the first row, so the matmul
 //                          keeps every row; default false.
+//   grid                   the matmul grid every plan the planner weighs uses; a shape that cannot take it (no layout,
+//                          or no plan on it fits L1) is refused. Default: GRID_2D
 Tensor matmul_reduce_scatter_prefill(
     const Tensor& input_tensor,
     const Tensor& weight,
@@ -42,6 +50,7 @@ Tensor matmul_reduce_scatter_prefill(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output_tensor = std::nullopt,
     const std::optional<uint32_t>& l1_headroom = std::nullopt,
-    bool use_column_major_ccl = false);
+    bool use_column_major_ccl = false,
+    MatmulReduceScatterPrefillGrid grid = MatmulReduceScatterPrefillGrid::GRID_2D);
 
 }  // namespace ttnn::experimental
