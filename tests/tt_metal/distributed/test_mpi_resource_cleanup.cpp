@@ -196,28 +196,49 @@ protected:
 
         ChildResult result;
         pid_t pid = 0;
+        // The child leads a new process group, so a timeout can signal mpirun and the ranks it started together.
+        posix_spawnattr_t attr;
+        posix_spawnattr_init(&attr);
+        posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
+        posix_spawnattr_setpgroup(&attr, 0);
         // posix_spawn rather than fork(): the parent may already be multi-threaded.
-        if (posix_spawn(&pid, argv[0], nullptr, nullptr, argv.data(), envp.data()) != 0) {
+        const int spawn_rc = posix_spawn(&pid, argv[0], nullptr, &attr, argv.data(), envp.data());
+        posix_spawnattr_destroy(&attr);
+        if (spawn_rc != 0) {
             return result;
         }
         result.spawned = true;
 
-        const auto deadline = std::chrono::steady_clock::now() + timeout;
-        pid_t wait_result = 0;
-        do {
-            wait_result = waitpid(pid, &result.status, WNOHANG);
-            if (wait_result == 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(20));
-            }
-        } while ((wait_result == 0 && std::chrono::steady_clock::now() < deadline) ||
-                 (wait_result < 0 && errno == EINTR));
-        if (wait_result == 0) {
+        if (!wait_until(pid, result.status, std::chrono::steady_clock::now() + timeout)) {
             result.timed_out = true;
-            kill(pid, SIGKILL);
-            while (waitpid(pid, &result.status, 0) < 0 && errno == EINTR) {
+            // SIGTERM first: mpirun then tears down its ranks, including any it moved out of this process group.
+            kill(-pid, SIGTERM);
+            if (!wait_until(pid, result.status, std::chrono::steady_clock::now() + std::chrono::seconds(10))) {
+                kill(-pid, SIGKILL);
+                while (waitpid(pid, &result.status, 0) < 0 && errno == EINTR) {
+                }
             }
+            // Ranks that outlive the launcher keep its stdout open, and with it the CI log pipe.
+            kill(-pid, SIGKILL);
         }
         return result;
+    }
+
+    // False if pid is still running at the deadline.
+    static bool wait_until(pid_t pid, int& status, std::chrono::steady_clock::time_point deadline) {
+        while (true) {
+            const pid_t wait_result = waitpid(pid, &status, WNOHANG);
+            if (wait_result < 0 && errno == EINTR) {
+                continue;
+            }
+            if (wait_result != 0) {
+                return true;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
     }
 
     ChildResult run_child(
