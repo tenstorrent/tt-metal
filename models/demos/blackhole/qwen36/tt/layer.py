@@ -320,14 +320,65 @@ class Qwen36DecoderLayer:
             )
         return norm
 
-    def _tokpar_norm(self, x, norm):
-        return ttnn.rms_norm(
+    def _tokpar_norm(self, x, norm, dtype=None):
+        """Local rms_norm of this chip's [1,1,S/tp,dim] rows -> DRAM interleaved (dtype: optional output dtype, e.g.
+        bf8 for the consumers that cast anyway). The interleaved norm parallelizes over tile rows only (21 cores at
+        S/tp=672); QWEN36_TOKPAR_NORM_SHARD=1 block-shards the rows over gy x 8 cores (gy = the largest divisor of the
+        tile rows <= 10, >= 3), norms there and writes back interleaved in `dtype` (one op for the cast)."""
+        import os
+
+        M, D = int(x.shape[-2]), int(x.shape[-1])
+        mt, dt_ = M // 32, D // 32
+        gy = max((d for d in range(1, 11) if mt % d == 0), default=1)
+        gx = 8
+        if os.environ.get("QWEN36_TOKPAR_NORM_SHARD", "0") == "1" and gy >= 3 and dt_ % gx == 0:
+            key = (M, D, gy, gx)
+            cache = self.__dict__.setdefault("_tokpar_norm_cfg", {})
+            if key not in cache:
+                sh = ttnn.create_sharded_memory_config(
+                    (M // gy, D // gx),
+                    core_grid=ttnn.CoreGrid(y=gy, x=gx),
+                    strategy=ttnn.ShardStrategy.BLOCK,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                bw = dt_ // gx
+                pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=(gx, gy),
+                    subblock_w=max(d for d in (4, 2, 1) if bw % d == 0),
+                    block_h=mt // gy,
+                    block_w=bw,
+                    inplace=False,
+                )
+                cache[key] = (sh, pc)
+            sh, pc = cache[key]
+            xs = ttnn.to_memory_config(x, sh)
+            n = ttnn.rms_norm(
+                xs,
+                epsilon=norm.norm.eps,
+                weight=norm.norm.weight,
+                program_config=pc,
+                compute_kernel_config=norm.norm.compute_kernel_config_hifi2,
+                memory_config=sh,
+            )
+            ttnn.deallocate(xs)
+            out = ttnn.sharded_to_interleaved(
+                n, ttnn.DRAM_MEMORY_CONFIG, **({"output_dtype": dtype} if dtype is not None else {})
+            )
+            ttnn.deallocate(n)
+            return out
+        out = ttnn.rms_norm(
             x,
             epsilon=norm.norm.eps,
             weight=norm.norm.weight,
             compute_kernel_config=norm.norm.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if dtype is not None and out.dtype != dtype:
+            o2 = ttnn.typecast(out, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(out)
+            out = o2
+        return out
 
     def _tokpar_mlp(self, x):
         """Token-parallel SwiGLU MLP on this chip's [1,1,S/tp,dim] rows with the full weights (no CCL)."""
@@ -343,7 +394,7 @@ class Qwen36DecoderLayer:
         )
         dram = ttnn.DRAM_MEMORY_CONFIG
         x8 = x
-        if os.environ.get("QWEN36_TOKPAR_MLP_BF8", "1") == "1":
+        if os.environ.get("QWEN36_TOKPAR_MLP_BF8", "1") == "1" and x.dtype != ttnn.bfloat8_b:
             x8 = ttnn.typecast(x, ttnn.bfloat8_b, memory_config=dram)
         # QWEN36_TOKPAR_MLP_L1=1: gate / up / hidden in L1 (interleaved); QWEN36_TOKPAR_SILU_MUL=1: SiLU applied by the
         # multiply (input activation) instead of the gate matmul's packer
@@ -388,11 +439,8 @@ class Qwen36DecoderLayer:
         pg = prefill_group
         out_tp = "wo" in self._tokpar
         a2a_bf8 = tokpar_a2a_bf8()
-        xn = self._tokpar_norm(x, self.attention_norm)
-        if a2a_bf8:  # the in-proj AGMM gathers bf8 anyway (QWEN36_AGMM_BF8): cast before the all-to-all
-            xn8 = ttnn.typecast(xn, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(xn)
-            xn = xn8
+        # a2a_bf8: the in-proj AGMM gathers bf8 anyway (QWEN36_AGMM_BF8): the norm emits bf8 before the all-to-all
+        xn = self._tokpar_norm(x, self.attention_norm, dtype=ttnn.bfloat8_b if a2a_bf8 else None)
         xh = tokpar_a2a(xn, to_tokens=False)
         ttnn.deallocate(xn)
         if self.is_full_attention:
@@ -453,7 +501,8 @@ class Qwen36DecoderLayer:
         )
         h = ttnn.add(x, at, memory_config=res_mc)
         ttnn.deallocate(at)
-        ff = self._tokpar_norm(h, self.ffn_norm)
+        _mlp_bf8 = os.environ.get("QWEN36_TOKPAR_MLP_BF8", "1") == "1"
+        ff = self._tokpar_norm(h, self.ffn_norm, dtype=ttnn.bfloat8_b if _mlp_bf8 else None)
         f = self._tokpar_mlp(ff)
         ttnn.deallocate(ff)
         out = ttnn.add(h, f, memory_config=res_mc)
