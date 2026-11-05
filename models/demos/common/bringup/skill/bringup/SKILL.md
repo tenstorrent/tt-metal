@@ -188,6 +188,13 @@ Gate rules (hard, owner 2026-10-22, F169):
    segment, an unchanged tree is not measured again, a timeout or box error is retried once, a framework error stops
    for you, a pause stops every agent loop. Anything else that wastes time is a framework bug to fix the same hour.
 
+No fixed limits, checkpoints instead (owner, 2026-11-05, after DeepSeek-V4.1 P.32 lost its agent at a fixed 4 h limit
+while it waited on its own measurement, and the A/B re-ran most of a side): an agent making progress is never
+interrupted; only a stall ends it (F252: agents.stall_s with no transcript activity and no test of its own running;
+agents.timeout_s 0). A measurement is a set of units, each checkpointed and kept: a failed or cut unit costs only
+itself, never the units beside it (an A/B side, a gate, an agent's measure). Anything that discards finished units is
+a framework bug to fix the same hour.
+
 Fork tests (owner, 2026-10-27, F198 / F199): transparency on what works and what does not. A failing fork test is
 never "known" or "pre-existing": report every failing and every skipped test (with its reason) to the owner, fix it or
 let the owner waive it (`tests.fork_waivers`). The full strict run of every fork's every test is task F.1, the run's

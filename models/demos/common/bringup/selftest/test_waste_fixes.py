@@ -307,3 +307,21 @@ def test_the_ab_key_sees_an_untracked_module_and_ignores_a_commit_of_the_same_co
     sandbox.git("add", "src/new.py")
     sandbox.git("commit", "-q", "-m", "same content")
     assert o.ab_code_key(t) == k1
+
+
+def test_an_agent_making_progress_is_never_stopped_only_a_stalled_one(tmp_path):
+    """F252 (owner 2026-11-05, DeepSeek-V4.1 P.32: attempt 1 killed at the fixed 4 h limit while waiting on its own final
+    measurement): no fixed limit; an agent is stopped only when its transcript is quiet for stall_s and no test of its
+    own is running."""
+    import os
+    import time as _t
+
+    from models.demos.common.bringup.orchestrator import agent_stalled
+
+    log = tmp_path / "agent.jsonl"
+    log.write_text("{}\n")
+    now = _t.time()
+    os.utime(log, (now - 100, now - 100))
+    assert not agent_stalled(log, os.getpid(), 5400, now)  # active transcript
+    os.utime(log, (now - 9000, now - 9000))
+    assert agent_stalled(log, 999999, 5400, now)  # quiet and nothing of its own running (no such group)

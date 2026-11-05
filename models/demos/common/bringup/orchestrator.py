@@ -288,6 +288,27 @@ def agents_json(run_dir: Path, agent: str = "bringup-engineer") -> Path:
     return out
 
 
+def agent_stalled(log: Path, pgid: int, stall_s: int, now_t: float | None = None) -> bool:
+    """F252 (owner 2026-11-05: "if an agent is doing meaningful work and making progress, nothing should interrupt it"):
+    an agent is stopped only when stalled: its transcript (the stream-json log, written at every message and tool
+    result) unchanged for stall_s AND no test or device job of its own running in its process group. A long device
+    run (a cold weight conversion, a 1M DRAM measure) or a wait on its own detached job (which polls) is progress."""
+    now_t = time.time() if now_t is None else now_t
+    try:
+        quiet = now_t - log.stat().st_mtime
+    except OSError:
+        quiet = 0.0
+    if quiet < stall_s:
+        return False
+    try:
+        out = subprocess.run(
+            ["pgrep", "-g", str(pgid), "-f", "pytest|run_safe_pytest|devjob|test_"], capture_output=True, text=True
+        ).stdout.split()
+    except OSError:
+        out = []
+    return not [p for p in out if p != str(pgid)]
+
+
 def _killpg(pgid: int, sig) -> None:
     from models.demos.common.bringup.core.hangdump import wait_triage
 
@@ -546,7 +567,7 @@ class Orchestrator:
         self.model = model or spec.get("agents.model")
         self.max_attempts, self.debugger_attempts = max_attempts, debugger_attempts
         self.attempts_override = None
-        self.timeout_s = timeout_s or int(spec.get("agents.timeout_s"))
+        self.timeout_s = timeout_s or int(spec.get("agents.timeout_s") or 0)  # F252: 0 = no fixed limit
         self.run_dir = spec.run_dir(run_name(self.led))
         self.shown: dict[str, list] = {}  # brief name -> the overseer notes it showed (F69)
         self.aborted: dict | None = None  # the overseer's abort of the last agent run (F69)
@@ -913,11 +934,24 @@ class Orchestrator:
             )
             OV.agent_started(self.run_dir, proc.pid, tid, role, attempt)
             try:
-                rc = proc.wait(timeout=self.timeout_s)
-            except subprocess.TimeoutExpired:
-                _killpg(proc.pid, signal.SIGKILL)
-                rc = proc.wait()
-                rc = -9
+                stall_s = int(self.spec.get("agents.stall_s") or 5400)
+                while True:  # F252: no fixed limit; stop only a stalled agent (or one past an explicit timeout_s)
+                    try:
+                        rc = proc.wait(timeout=60)
+                        break
+                    except subprocess.TimeoutExpired:
+                        over = self.timeout_s and time.time() - t0 > self.timeout_s
+                        if over or agent_stalled(log, proc.pid, stall_s):
+                            why = (
+                                "timeout_s"
+                                if over
+                                else f"stalled {stall_s} s (no transcript activity, no test running)"
+                            )
+                            self.echo(f"  [{tid}] agent stopped: {why}")
+                            _killpg(proc.pid, signal.SIGKILL)
+                            proc.wait()
+                            rc = -9
+                            break
             except BaseException:  # the orchestrator is stopped: its agent goes with it
                 _killpg(proc.pid, signal.SIGTERM)
                 raise
