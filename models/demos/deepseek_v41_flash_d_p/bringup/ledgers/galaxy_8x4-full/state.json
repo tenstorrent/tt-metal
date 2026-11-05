@@ -12161,6 +12161,108 @@
   "units": null,
   "waiting": null
  },
+ "P.33": {
+  "ab_pending": null,
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "446c8e0becaa7b6d93f8901bdf15b6b63572b8d5",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "3a81858569143578c4beac9c613747508e11748f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "dcb033c874cea5d21a17080d74e83e95d53bff57",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "f9f8513c-b80c-40a2-a536-4e72eec4119d"
+  },
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 2.4,
+  "history": [
+   {
+    "reused": [
+     "P.33"
+    ],
+    "s": 2.4,
+    "status": "PASS",
+    "t": "2026-11-05T20:17:32"
+   }
+  ],
+  "last_run": "2026-11-05T20:17:32",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/P.33.log",
+  "metrics": {
+   "cut_err_compress_kv_L20": 0.180385,
+   "cut_err_compress_kv_L20_limit": 0.323117,
+   "cut_err_index_k_L20": 0.111631,
+   "cut_err_index_k_L20_limit": 0.311469,
+   "cut_err_window_kv_L00": 0.00488814,
+   "cut_err_window_kv_L00_limit": 0.058373,
+   "cut_err_window_kv_L01": 0.0205395,
+   "cut_err_window_kv_L01_limit": 0.0700602,
+   "cut_err_window_kv_L02": 0.02771,
+   "cut_err_window_kv_L02_limit": 0.0860314,
+   "cut_err_window_kv_L03": 0.0347363,
+   "cut_err_window_kv_L03_limit": 0.0890374,
+   "cut_err_window_kv_L04": 0.0388324,
+   "cut_err_window_kv_L04_limit": 0.0972009,
+   "cut_err_window_kv_L05": 0.0576995,
+   "cut_err_window_kv_L05_limit": 0.123051,
+   "cut_err_window_kv_L06": 0.0678169,
+   "cut_err_window_kv_L06_limit": 0.159904,
+   "cut_err_window_kv_L07": 0.0762237,
+   "cut_err_window_kv_L07_limit": 0.136709,
+   "cut_err_window_kv_L08": 0.0650383,
+   "cut_err_window_kv_L08_limit": 0.12805,
+   "cut_err_window_kv_L09": 0.0897133,
+   "cut_err_window_kv_L09_limit": 0.167069,
+   "cut_err_window_kv_L10": 0.100131,
+   "cut_err_window_kv_L10_limit": 0.182237,
+   "cut_err_window_kv_L11": 0.131898,
+   "cut_err_window_kv_L11_limit": 0.246333,
+   "cut_err_window_kv_L12": 0.124814,
+   "cut_err_window_kv_L12_limit": 0.225317,
+   "cut_err_window_kv_L13": 0.100763,
+   "cut_err_window_kv_L13_limit": 0.185798,
+   "cut_err_window_kv_L14": 0.111018,
+   "cut_err_window_kv_L14_limit": 0.197288,
+   "cut_err_window_kv_L15": 0.109376,
+   "cut_err_window_kv_L15_limit": 0.200771,
+   "cut_err_window_kv_L16": 0.118437,
+   "cut_err_window_kv_L16_limit": 0.210917,
+   "cut_err_window_kv_L17": 0.130607,
+   "cut_err_window_kv_L17_limit": 0.235606,
+   "cut_err_window_kv_L18": 0.149686,
+   "cut_err_window_kv_L18_limit": 0.27116,
+   "cut_err_window_kv_L19": 0.109401,
+   "cut_err_window_kv_L19_limit": 0.215701
+  },
+  "rc": 0,
+  "reason": [],
+  "review": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md: entry \"- **[DS41-209] Window KV rows away from the rung's end: the \" points at known_issues_detail.md, which has no '## Window KV rows away from the rung's end: the golden keeps only rings; recompute them from the dumped inputs' section"
+  ],
+  "role": "perf",
+  "stamp": {
+   "reused": [
+    "P.33"
+   ],
+   "units": {
+    "P.33": "0cce75e3d44bf60f"
+   }
+  },
+  "started": "2026-11-05T20:17:29",
+  "status": "PASS",
+  "units": {
+   "P.33": "PASS"
+  },
+  "waiting": null
+ },
  "P.4": {
   "agent": {
    "defs": {
