@@ -722,7 +722,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Collects fabric router facts during the fabric build process and writes the fabric manifest.
         // Default: false
         // Usage: export TT_METAL_FABRIC_GENERATE_MANIFEST=1
-        case EnvVarID::TT_METAL_FABRIC_GENERATE_MANIFEST: this->generate_fabric_manifest = true; break;
+        case EnvVarID::TT_METAL_FABRIC_GENERATE_MANIFEST: this->generate_fabric_manifest = is_env_enabled(value); break;
 
         // TT_METAL_GTEST_ETH_DISPATCH
         // Use Ethernet cores for dispatch in tests.

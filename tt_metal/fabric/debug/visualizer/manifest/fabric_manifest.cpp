@@ -12,7 +12,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
 
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_describe.hpp"
@@ -570,13 +569,12 @@ void serialize_fabric_manifest_to_file(
     const auto& fabric_context = control_plane.get_fabric_context();
     TT_FATAL(
         fabric_context.has_builder_context(), "Fabric manifest: must be written after the fabric routers are compiled");
-    const auto& metal_context = tt::tt_metal::MetalContext::instance();
     const manifest::ManifestFacts facts{
         .run = manifest::describe_run(control_plane),
         .fabric = manifest::describe_fabric(control_plane),
-        .arch = manifest::describe_arch(metal_context.hal()),
-        .meshes =
-            manifest::describe_meshes(control_plane, metal_context.get_cluster(), fabric_context.get_builder_context()),
+        .arch = manifest::describe_arch(fabric_context.get_hal()),
+        .meshes = manifest::describe_meshes(
+            control_plane, fabric_context.get_cluster(), fabric_context.get_builder_context()),
     };
     const json manifest_json = make_manifest_json(facts);
 
