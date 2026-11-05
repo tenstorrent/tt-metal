@@ -50,9 +50,11 @@ void kernel_main() {
     constexpr uint32_t topk = get_compile_time_arg_val(10);
     // This file runs on both data movement processors: BRISC drives (worker 0), NCRISC helps (worker 1).
     constexpr bool is_helper = get_compile_time_arg_val(11) != 0;
+    constexpr uint32_t dense_below = get_compile_time_arg_val(12);      // dense mode below this chunk start (0: off)
+    constexpr uint32_t dense_slot_rows = get_compile_time_arg_val(13);  // a chip's slot in the dense layout
     constexpr uint32_t max_rows = bitmap_words * kRowsPerWord;
     constexpr uint32_t range_words = owner_stride(num_devices);  // a range's partials
-    constexpr auto indices_args = TensorAccessorArgs<12>();
+    constexpr auto indices_args = TensorAccessorArgs<14>();
     constexpr auto table_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto compact_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
     constexpr auto split_args =
@@ -253,8 +255,15 @@ void kernel_main() {
 
         // 4. Bases and 5. rewrite; then write back the second half of the indices.
         wait_for_step(kStepBases);
-        bases_and_rewrite<num_devices, max_rows, stripe_chunk, range_blocks, pages_per_packet, banks>(
-            idx, index_count, bitmap, word_ranks, partials, misc, worker, sem_done);
+        bases_and_rewrite<
+            num_devices,
+            max_rows,
+            stripe_chunk,
+            range_blocks,
+            pages_per_packet,
+            banks,
+            dense_below,
+            dense_slot_rows>(idx, index_count, bitmap, word_ranks, partials, misc, worker, sem_done);
         write_back(brisc_indices, index_count);
     };
 
@@ -405,14 +414,27 @@ void kernel_main() {
 
         // 4. Owner bases and 5. rewrite, all workers.
         post(sem_step, kStepBases);
-        bases_and_rewrite<num_devices, max_rows, stripe_chunk, range_blocks, pages_per_packet, banks>(
-            idx, index_count, bitmap, word_ranks, partials, misc, worker, sem_done);
+        bases_and_rewrite<
+            num_devices,
+            max_rows,
+            stripe_chunk,
+            range_blocks,
+            pages_per_packet,
+            banks,
+            dense_below,
+            dense_slot_rows>(idx, index_count, bitmap, word_ranks, partials, misc, worker, sem_done);
         wait_workers(kRewritten);
         if (core_idx == 0) {
             const uint32_t* totals = misc + kMiscTotals;
             const uint32_t split_block = has_split ? misc[kMiscSplit] / stripe_chunk : active_blocks;
+            const bool dense = is_dense<dense_below>(misc);
             using namespace sparse_push::plan_table;
             for (uint32_t owner = 0; owner < num_devices; ++owner) {
+                if (dense) {  // the dense gather fills the buffer; the push finds no rows and sends nothing
+                    table_image[kOwnerOff + owner] = 0;
+                    table_image[kOwnerPrefixOff + owner] = 0;
+                    continue;
+                }
                 table_image[kOwnerOff + owner] = totals[owner];
                 // Rows of the owner before the split = its rank at its first block at or after the split block.
                 const uint32_t first_from_split =
@@ -431,6 +453,7 @@ void kernel_main() {
             table_image[kWordPagesPerPacket] = pages_per_packet;
             table_image[kWordBanks] = banks;
             table_image[kWordHasSplit] = has_split ? 1 : 0;
+            table_image[kWordDense] = dense ? 1 : 0;
             write_span(0, bitmap_off * word_bytes);  // header and per-owner counts
         }
         write_back(0, brisc_indices);

@@ -101,13 +101,16 @@ constexpr uint32_t outgoing_shard_chunk_half(uint32_t outgoing_shard) { return o
 struct ChipShardGeometry {
     uint32_t num_outer_slices;
     uint32_t valid_pages_per_outer_slice;
-    uint32_t pages_per_outer_slice;
+    uint32_t pages_per_outer_slice;  // input pages of one outer slice of a chip shard
+    uint32_t
+        output_pages_per_outer_slice;  // a rank's output slot per outer slice: the input's, or less for a short output
     uint32_t num_ranks;
+    bool active;  // false: this chunk starts at or above gathered_active_below, so the op copies nothing
 };
 
 inline uint32_t output_page_index(
     const ChipShardGeometry& geometry, uint32_t rank, uint32_t outer_slice, uint32_t page_in_slice) {
-    return (outer_slice * geometry.num_ranks + rank) * geometry.pages_per_outer_slice + page_in_slice;
+    return (outer_slice * geometry.num_ranks + rank) * geometry.output_pages_per_outer_slice + page_in_slice;
 }
 
 // Chunk numbers per outer slice. Every row block but the last is whole (num_dram_banks chunks); the last one has a

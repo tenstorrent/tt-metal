@@ -124,6 +124,11 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
                     serves every chunk, but a trace replays the captured value, so use ``chunk_start_tensor`` there.
                 chunk_start_tensor: Trace-safe form of ``chunk_start``: a 1-element uint32 DRAM tensor holding the
                     row, read on device. Mutually exclusive with ``chunk_start``.
+                dense_below: Dense mode below this chunk start (0: off): ``compact_indices`` become rows of a dense
+                    gather into the compact buffer, as high_bw_all_gather with ``gathered_active_below=dense_below``
+                    lays it out (chip ``c``'s rows from ``c * slot`` on, in its cache order, with the slot the
+                    largest extent below the threshold in whole slabs / chips), and the table lists no rows, so the
+                    push sends nothing. Needs ``chunk_start`` or ``chunk_start_tensor``. Hashed.
 
             Returns:
                 List[ttnn.Tensor]: ``[table, compact_indices]``: the plan table (uint32 [1, 1, pages, 1024]) to
@@ -136,7 +141,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         nb::arg("max_rows"),
         nb::arg("page_bytes"),
         nb::arg("chunk_start") = nb::none(),
-        nb::arg("chunk_start_tensor") = nb::none());
+        nb::arg("chunk_start_tensor") = nb::none(),
+        nb::arg("dense_below") = 0);
 
     ttnn::bind_function<"sparse_kv_push", "ttnn.experimental.">(
         mod,
