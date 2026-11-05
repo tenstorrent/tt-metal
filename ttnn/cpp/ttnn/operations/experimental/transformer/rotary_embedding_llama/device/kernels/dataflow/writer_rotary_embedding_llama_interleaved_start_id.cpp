@@ -25,7 +25,13 @@ void kernel_main() {
     constexpr auto Ht = get_arg(args::Ht);
     constexpr auto rotary_Ht = get_arg(args::rotary_Ht);
 
+#ifdef ROPE_PAIRED
+    // Paired mode rotates in place: heads [0, n_heads) go back to input, [n_heads, 2 n_heads) to input_b.
+    const auto s = TensorAccessor(tensor::input);
+    const auto s_b = TensorAccessor(tensor::input_b);
+#else
     const auto s = TensorAccessor(tensor::output);
+#endif
 
     DataflowBuffer dfb_out(dfb::out);
     // Zero-fill staging region (Wt tiles). Formerly a self-looped DFB — this kernel bound both
@@ -55,7 +61,13 @@ void kernel_main() {
     for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
         for (uint32_t head_num = head_start; head_num < head_end; ++head_num) {
             for (uint32_t seq_tile = seq_t_start; seq_tile < seq_t_end; ++seq_tile) {
-                uint32_t output_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
+#ifdef ROPE_PAIRED
+                const bool to_b = head_num >= n_heads;
+                const uint32_t tensor_head = to_b ? head_num - n_heads : head_num;
+#else
+                const uint32_t tensor_head = head_num;
+#endif
+                uint32_t output_curr_idx = batch_id * n_heads * Ht * Wt + tensor_head * Ht * Wt + seq_tile * Wt;
                 const bool write_rotary_output = seq_tile < rotary_Ht;
                 if (write_rotary_output) {
                     dfb_out.wait_front(Wt);
@@ -67,7 +79,14 @@ void kernel_main() {
                 const uint32_t l1_read_stride = write_rotary_output ? tile_bytes : zero_tile_bytes;
                 const uint32_t write_bytes = write_rotary_output ? tile_bytes : zero_tile_bytes;
                 for (uint32_t j = 0; j < Wt; j++) {
-                    noc.async_write(l1_read, s, write_bytes, {}, {.page_id = output_curr_idx});
+#ifdef ROPE_PAIRED
+                    if (to_b) {
+                        noc.async_write(l1_read, s_b, write_bytes, {}, {.page_id = output_curr_idx});
+                    } else
+#endif
+                    {
+                        noc.async_write(l1_read, s, write_bytes, {}, {.page_id = output_curr_idx});
+                    }
                     l1_read += l1_read_stride / sizeof(uint32_t);
                     output_curr_idx++;
                 }

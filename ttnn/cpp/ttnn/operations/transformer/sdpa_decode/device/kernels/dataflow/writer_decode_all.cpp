@@ -48,6 +48,12 @@ void kernel_main() {
     constexpr bool spec_multi_pos = spec_multi_pos_T > 0;
 
     constexpr auto out_args = TensorAccessorArgs<23>();
+#ifdef SDPA_V_ON_WRITER
+    // Paged V read here, on the writer's NoC, while the reader reads K (see the program factory).
+    constexpr auto v_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
+    constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
+#endif
 
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
@@ -70,6 +76,9 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_20;
 
     uint32_t arg_idx = 0;
+#ifdef SDPA_V_ON_WRITER
+    const uint32_t v_addr = get_arg_val<uint32_t>(arg_idx++);
+#endif
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
     const bool do_output = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t cur_head_group = get_arg_val<uint32_t>(arg_idx++);
@@ -276,9 +285,45 @@ void kernel_main() {
 
     noc.async_write_barrier();  // #19201 BH hang workaround
 
+#ifdef SDPA_V_ON_WRITER
+    // The reader has read this batch's page-table row into its CB (one page, never popped); read it from there.
+    CircularBuffer cb_page_table(cb_id_page_table);
+    cb_page_table.wait_front(1);
+    volatile tt_l1_ptr uint32_t* v_page_table_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_page_table.get_read_ptr());
+    const auto v_reader = TensorAccessor(v_args, v_addr);
+    constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
+    constexpr uint32_t v_barrier_threshold = get_barrier_read_threshold<v_tile_bytes, num_cores>();
+    uint32_t v_barrier_count = 0;
+#endif
+
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
          ++cur_head) {
+#ifdef SDPA_V_ON_WRITER
+        // This head's V chunks, in the order compute consumes them (K from the reader, then V, per chunk). Compute
+        // needs the writer only after its last chunk (reduction / output), so reading them all here cannot block it.
+        for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
+            read_v<
+                cb_v_in,
+                vDHt,
+                num_kv_heads,
+                SDPA_V_BLOCK_SIZE_T,
+                v_tile_bytes,
+                v_barrier_threshold,
+                false,
+                false,
+                SDPA_V_CAPACITY_T>(
+                Sk_chunk_t_dynamic * vDHt,
+                cur_head,
+                Sk_chunk_t_dynamic,
+                k_chunk * Sk_chunk_t_dynamic,
+                v_reader,
+                nullptr,
+                v_page_table_ptr,
+                v_barrier_count);
+        }
+#endif
         // Tree reduction: receive from children at each round
         // Each round, we wait for one child (if any), read remote_sum, remote_max, remote_output, and push to CBs
         // The compute kernel processes each child's data before we move to the next round

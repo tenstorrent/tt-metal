@@ -23,6 +23,8 @@ ttnn::Tensor dit_minimal_matmul_addcmul_fused(
     const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<const DataType> dtype = std::nullopt,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    bool in0_heads = false,
+    const std::optional<ttnn::Tensor>& row_map = std::nullopt);
 
 }  // namespace ttnn::experimental

@@ -161,7 +161,9 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         nb::arg("mesh_coords").noconvert() = nb::none(),
         nb::arg("block_size") = nb::none(),
         nb::arg("cache_position_modulo") = nb::none(),
-        nb::arg("valid_seq_len_tensor").noconvert() = nb::none());
+        nb::arg("valid_seq_len_tensor").noconvert() = nb::none(),
+        nb::arg("input_tensor_b").noconvert() = nb::none(),
+        nb::arg("cache_tensor_b").noconvert() = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::paged_cache::detail

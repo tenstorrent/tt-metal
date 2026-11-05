@@ -38,6 +38,19 @@ struct MinimalMatmulParams {
     // Fused SwiGLU: the weight is a tile-pair-interleaved [gate|up] matrix of width 2N.
     // The op emits silu(gate) * up of width N (half the weight width) in a single matmul.
     bool fuse_swiglu = false;
+
+    // Head-split output (chunks > 1): when head_split_rows > 0 each chunk is written as
+    // [M / head_split_rows, chunk width / head_split_dim, head_split_rows, head_split_dim] instead of [..., M, width],
+    // i.e. rows are users of head_split_rows rows each and the chunk's columns are heads of head_split_dim.
+    uint32_t head_split_rows = 0;
+    uint32_t head_split_dim = 0;
+
+    // Head-layout activation: the input [users, heads, rows, head_dim] is read as the [users * rows,
+    // heads * head_dim] matrix that concatenating its heads gives (row (user, row), column (head, column)).
+    bool in0_heads = false;
+
+    // Packed rows (MinimalMatmulInputs::row_map_tensor) with head-split output: the padded user count of the output.
+    uint32_t head_split_users = 0;
 };
 
 struct MinimalMatmulInputs {
@@ -51,6 +64,11 @@ struct MinimalMatmulInputs {
     // Fused addcmul: ternary_a + scalar * matmul_output * ternary_b
     std::optional<Tensor> fused_ternary_input_a;  // residual/base (broadcast like bias)
     std::optional<Tensor> fused_ternary_input_b;  // gate/multiplier (full MxN shape)
+
+    // Packed-row map, uint32 ROW_MAJOR [..., 4 * packed row tiles]: entry i = {dest, z0, z1, 0} for packed row tile i.
+    // Head-split output: row tile i goes to padded row tile dest; padded row tiles [z0, z1) are written as zeros.
+    // in0_heads: row tile i reads padded row tile dest of the head-layout activation. dest 0xFFFFFFFF: capacity slack.
+    std::optional<Tensor> row_map_tensor;
 };
 
 }  // namespace ttnn::experimental::prim

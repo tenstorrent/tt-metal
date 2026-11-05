@@ -20,6 +20,19 @@ constexpr bool page_table_is_dram = true;
 constexpr bool page_table_is_dram = false;
 #endif
 
+// bfp8_b row patch (ROW_PATCH). A bfp8_b tile is 64 exponent bytes (byte face * 16 + row: one shared exponent per
+// 16-value face row) followed by four 16 x 16 faces of 1-byte mantissas (face * 256 + row * 16). Tile row r lives in
+// faces 0 and 1 (r < 16) or 2 and 3, at face row r % 16, so updating one row touches two exponent bytes and two
+// 16-byte mantissa rows per tile. The reader fetches each tile from its start to the end of the 64-byte granule that
+// holds the row in the second face (one transaction: 192-576 bytes for rows 0-15, 704-1088 for rows 16-31); the
+// writer patches the row from the packed input and writes the same bytes back (one transaction).
+namespace row_patch {
+constexpr uint32_t kHeadsPerGroup = 4;
+FORCE_INLINE uint32_t first_face(uint32_t row) { return row < 16 ? 0 : 2; }
+// Bytes from the start of the tile through the granule holding cache row `row` in its second face.
+FORCE_INLINE uint32_t prefix_bytes(uint32_t row) { return 64 + (first_face(row) + 1) * 256 + ((row % 16) / 4) * 64 + 64; }
+}  // namespace row_patch
+
 void kernel_main() {
     Noc noc;
 
@@ -34,6 +47,9 @@ void kernel_main() {
     const bool send_signal = get_arg(args::send_signal) == 1;
     const auto send_core_x = get_arg(args::send_core_x);
     const auto send_core_y = get_arg(args::send_core_y);
+    // Heads [head_start, head_start + num_local_heads) of this user (see the reader).
+    const auto head_start = get_arg(args::head_start);
+    const auto num_local_heads = get_arg(args::num_local_heads);
 
     constexpr auto cache_batch_num_tiles = get_arg(args::cache_batch_num_tiles);
     constexpr auto Wt = get_arg(args::Wt);
@@ -54,12 +70,14 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(tensor::cache);
 
+#ifndef ROW_PATCH
     // `dfb::cache` is this kernel's name for the *output* buffer, which compute fills with the
     // retilized block; the reader's same-named handle is the cache buffer it read from DRAM.
     DataflowBuffer dfb_cache(dfb::cache);
     DataflowBuffer dfb_untilized_cache(dfb::untilized_cache);
     DataflowBuffer dfb_untilized_cache2(dfb::untilized_cache2);
     DataflowBuffer dfb_untilized_input(dfb::untilized_input);
+#endif
 #ifdef USE_INDEX_TENSOR
     DataflowBuffer dfb_index(dfb::index);
 #endif
@@ -70,7 +88,9 @@ void kernel_main() {
     // get_entry_size(): this DFB's live per-program entry size. get_tile_size() reads a global descriptor
     // array that intervening ops clobber on Quasar DM kernels (stale -> wrong size -> DRAM over/under-run on
     // a later invocation; cf. fill_cache). Byte-identical to get_tile_size() on WH/BH.
+#ifndef ROW_PATCH
     const uint32_t cache_tile_bytes = dfb_cache.get_entry_size();
+#endif
 
     uint32_t cache_id = cache_start_id;
     uint32_t update_idx = 0;
@@ -133,14 +153,69 @@ void kernel_main() {
     }
 #endif
 
+#ifdef ROW_PATCH
+    {
+        DataflowBuffer dfb_patch_src(dfb::patch_src);
+        DataflowBuffer dfb_scratch(dfb::patch_scratch);
+        dfb_patch_src.wait_front(Wt);
+        const uint32_t src_base = dfb_patch_src.get_read_ptr();
+        const uint32_t src_tile_bytes = dfb_patch_src.get_entry_size();
+        const uint8_t noc_id = noc.get_noc_id();
+
+        const uint32_t row = cache_tile_offset_B / Wbytes;  // 0..31
+        const uint32_t dface = row_patch::first_face(row), drow = row % 16;
+        const uint32_t prefix = row_patch::prefix_bytes(row);
+        const uint32_t entry = dfb_scratch.get_entry_size();
+        const uint32_t mant_dst0 = 64 + dface * 256 + drow * 16;
+        const uint32_t mant_dst1 = mant_dst0 + 256;
+
+        const uint32_t first_id = cache_id + head_start * head_offset_t;
+        for (uint32_t h0 = 0; h0 < num_local_heads; h0 += row_patch::kHeadsPerGroup) {
+            const uint32_t heads = (num_local_heads - h0) < row_patch::kHeadsPerGroup ? (num_local_heads - h0)
+                                                                                     : row_patch::kHeadsPerGroup;
+            dfb_scratch.wait_front(heads * Wt);
+            if (!skip_update) {
+                uint32_t l1 = dfb_scratch.get_read_ptr();
+                for (uint32_t h = 0; h < heads; ++h) {
+                    const uint32_t head = head_start + h0 + h;  // its row in the packed input tiles
+                    const uint32_t sface = row_patch::first_face(head), srow = head % 16;
+                    for (uint32_t t = 0; t < Wt; ++t, l1 += entry) {
+                        const uint32_t src = src_base + t * src_tile_bytes;
+                        volatile tt_l1_ptr uint8_t* src_exp = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src);
+                        volatile tt_l1_ptr uint8_t* dst_exp = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1);
+                        dst_exp[dface * 16 + drow] = src_exp[sface * 16 + srow];
+                        dst_exp[(dface + 1) * 16 + drow] = src_exp[(sface + 1) * 16 + srow];
+                        volatile tt_l1_ptr uint32_t* s0w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                            src + 64 + sface * 256 + srow * 16);
+                        volatile tt_l1_ptr uint32_t* s1w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                            src + 64 + (sface + 1) * 256 + srow * 16);
+                        volatile tt_l1_ptr uint32_t* d0w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1 + mant_dst0);
+                        volatile tt_l1_ptr uint32_t* d1w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1 + mant_dst1);
+                        for (uint32_t w = 0; w < 4; ++w) {
+                            d0w[w] = s0w[w];
+                            d1w[w] = s1w[w];
+                        }
+                        const uint64_t tile = s0.get_noc_addr(first_id + (h0 + h) * head_offset_t + t, 0, noc_id);
+                        noc_async_write(l1, tile, prefix, noc_id);
+                    }
+                }
+                noc_async_writes_flushed(noc_id);
+            }
+            dfb_scratch.pop_front(heads * Wt);
+        }
+        noc_async_write_barrier(noc_id);
+        dfb_patch_src.pop_front(Wt);
+    }
+#else
     dfb_untilized_input.wait_front(Wt);  // input tensor
     const uint8_t noc_id = noc.get_noc_id();
     const uint32_t my_noc_x = my_x[noc_id];
     const uint32_t my_noc_y = my_y[noc_id];
-    uint32_t input_l1_read_addr = dfb_untilized_input.get_read_ptr();
+    uint32_t input_l1_read_addr = dfb_untilized_input.get_read_ptr() + head_start * Wbytes;
     UnicastEndpoint local_src;
 
-    for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
+    cache_id += head_start * head_offset_t;
+    for (uint32_t cur_head = 0; cur_head < num_local_heads; ++cur_head) {
         // Wait on compute to untilize a block. Update that block in SRAM.
         dfb_untilized_cache.wait_front(Wt);
         dfb_untilized_cache2.reserve_back(Wt);
@@ -181,6 +256,7 @@ void kernel_main() {
     }
 
     dfb_untilized_input.pop_front(Wt);
+#endif
 
     if (send_signal) {
         // send signal to receiver core that we are done using the input buffer

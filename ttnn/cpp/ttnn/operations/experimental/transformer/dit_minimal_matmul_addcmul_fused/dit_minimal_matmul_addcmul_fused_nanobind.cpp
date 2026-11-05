@@ -103,6 +103,16 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
             Compute kernel configuration. If omitted, defaults are selected
             (e.g., tt::tt_metal::MathFidelity::HiFi2, fp32 accumulation enabled).
 
+        in0_heads : bool, default: False
+            If True, matmul_input_tensor is in attention-head layout [users, heads, rows, head_dim] (e.g. an SDPA
+            output) and is read as the [users * rows, heads * head_dim] matrix that concatenating its heads gives;
+            the output is [1, 1, users * rows, N].
+
+        row_map : Optional[ttnn.Tensor], default: None
+            With in0_heads: the output rows are packed 32-row tiles; row_map (uint32 ROW_MAJOR, 4 entries per packed
+            row tile, {dest, ...}) gives the padded row tile of the activation each packed row tile reads
+            (0xFFFFFFFF: slack, reads row tile 0).
+
         Returns
         -------
         ttnn.Tensor
@@ -157,7 +167,9 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
         nb::arg("config") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("in0_heads") = false,
+        nb::arg("row_map") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::transformer

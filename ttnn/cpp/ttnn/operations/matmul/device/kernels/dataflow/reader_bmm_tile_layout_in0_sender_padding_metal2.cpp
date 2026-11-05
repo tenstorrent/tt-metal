@@ -322,7 +322,11 @@ void kernel_main() {
                         for (uint32_t h = 0; h < in0_block_h; ++h) {
                             uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
                             for (uint32_t w = 0; w < in0_block_w; ++w) {
+#ifndef ABL_NO_IN0
                                 if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
+#else
+                                if (false) {
+#endif
                                     noc.async_read(
                                         s0,
                                         dfb_in0,
@@ -416,6 +420,12 @@ void kernel_main() {
                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
                         // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
                         // zero for the next block
+#ifdef ABL_NO_IN0
+                        (void)in0_start_address;
+                        if constexpr (false) {
+#else
+                        {
+#endif
                         sender_sem.wait(in0_mcast_num_dests);
                         sender_sem.set(0);
 
@@ -453,6 +463,7 @@ void kernel_main() {
                             in0_mcast_dest_noc_end_x,
                             in0_mcast_dest_noc_end_y,
                             in0_mcast_num_cores);
+                        }
 #endif  // SKIP_MCAST
 
                         // Common for sharded and interleaved paths

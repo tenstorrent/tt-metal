@@ -27,6 +27,9 @@
 #ifdef DSMC_REDUCE
 #include "api/compute/eltwise_binary.h"
 #endif
+#ifdef DSMC_SWIGLU
+#include "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/swiglu_sfpu.hpp"
+#endif
 
 namespace {
 constexpr uint32_t Nbt = get_arg(args::Nbt);
@@ -40,12 +43,26 @@ constexpr uint32_t NGRP = get_arg(args::NGRP);
 constexpr uint32_t ROT = get_arg(args::ROT);
 constexpr uint32_t GX = get_arg(args::GX);
 constexpr uint32_t MAXOWN = get_arg(args::MAXOWN);
+constexpr uint32_t OD = get_arg(args::OD);  // 2 with DSMC_SWIGLU: one output tile per gate / up pair
+constexpr uint32_t MAXOUT = MAXOWN / OD;
 constexpr uint32_t BT = KB * NCP;
 constexpr uint32_t DST_TILES = 8;  // full-sync Dest tiles used per pass
 #ifdef DSMC_L1ACC
 constexpr uint32_t G = get_arg(args::G);  // streamed blocks per packer L1 accumulation step
 #endif
 constexpr uint8_t kRole[] = {DSMC_ROLE};
+
+#ifdef DSMC_SWIGLU
+constexpr bool kSwigluBlockFloat = get_arg(args::SWIGLU_BF) == 1;
+// Dest tiles [0, n) hold gate / up pairs; leaves SiLU(gate) * up of pair i in Dest tile i. Pair i reads tiles 2i and
+// 2i + 1 and writes tile i <= 2i, which no later pair reads.
+FORCE_INLINE void swiglu_dest(uint32_t n) {
+    MATH((ckernel::minimal_matmul_swiglu_tile_init()));
+    for (uint32_t i = 0; i < n; i += 2) {
+        MATH((ckernel::minimal_matmul_swiglu_tile<kSwigluBlockFloat>(i, i + 1, i / 2)));
+    }
+}
+#endif
 }  // namespace
 
 void kernel_main() {
@@ -75,7 +92,7 @@ void kernel_main() {
     dfb_acc.reserve_back(MAXOWN);
 #else
     constexpr uint32_t sink = dfb::out;
-    dfb_out.reserve_back(MAXOWN);
+    dfb_out.reserve_back(MAXOUT);
 #endif
     pack_reconfig_data_format(sink);
     for (uint32_t q = 0; q < P; q++) {
@@ -120,10 +137,13 @@ void kernel_main() {
 #endif
         }
 #ifndef DSMC_L1ACC
+#ifdef DSMC_SWIGLU
+        swiglu_dest(ncq);
+#endif
         tile_regs_commit();
         tile_regs_wait();
-        for (uint32_t jj = 0; jj < ncq; jj++) {
-            pack_tile<true>(jj, dfb::out, qa + jj);
+        for (uint32_t jj = 0; jj < ncq / OD; jj++) {
+            pack_tile<true>(jj, dfb::out, qa / OD + jj);
         }
         tile_regs_release();
 #endif
@@ -132,7 +152,7 @@ void kernel_main() {
     pack_reconfig_l1_acc(0);
     dfb_acc.push_back(MAXOWN);
     dfb_acc.wait_front(MAXOWN);
-    dfb_out.reserve_back(MAXOWN);
+    dfb_out.reserve_back(MAXOUT);
     reconfig_data_format_srca(dfb::w0, dfb::acc);
     reconfig_data_format_srcb(dfb::x, dfb::acc);
     pack_reconfig_data_format(dfb::out);
@@ -140,19 +160,25 @@ void kernel_main() {
     for (uint32_t j0 = 0; j0 < nc; j0 += DST_TILES) {
         const uint32_t m = (nc - j0) < DST_TILES ? (nc - j0) : DST_TILES;
         tile_regs_acquire();
+#ifdef DSMC_SWIGLU
+        copy_init(dfb::acc);  // the SwiGLU init of the previous chunk reprogrammed the math unit
+#endif
         for (uint32_t j = 0; j < m; j++) {
             copy_tile(dfb::acc, j0 + j, j);
         }
+#ifdef DSMC_SWIGLU
+        swiglu_dest(m);
+#endif
         tile_regs_commit();
         tile_regs_wait();
-        for (uint32_t j = 0; j < m; j++) {
-            pack_tile<true>(j, dfb::out, j0 + j);
+        for (uint32_t j = 0; j < m / OD; j++) {
+            pack_tile<true>(j, dfb::out, j0 / OD + j);
         }
         tile_regs_release();
     }
     dfb_acc.pop_front(MAXOWN);
 #endif
-    dfb_out.push_back(MAXOWN);
+    dfb_out.push_back(MAXOUT);
 #else
     static_assert(P == 1, "column passes need CK == 1");
     DataflowBuffer dfb_part(dfb::part);

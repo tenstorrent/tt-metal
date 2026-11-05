@@ -104,6 +104,7 @@ Tensor layer_norm(
     DistributedLayerNormStage distributed_norm_stage = DistributedLayerNormStage::NOT_DISTRIBUTED,
     const std::optional<const Tensor>& stats = std::nullopt,
     const std::optional<const Tensor>& recip_tensor = std::nullopt,
-    const std::optional<operations::unary::UnaryWithParam>& fused_activation = std::nullopt);
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation = std::nullopt,
+    bool write_pre_add_sum = false);
 
 }  // namespace ttnn::prim

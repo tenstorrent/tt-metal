@@ -94,6 +94,20 @@ void bind_minimal_matmul_split(nb::module_& mod) {
         compute_kernel_config : Optional[ttnn.operations.core.compute_kernel.DeviceComputeKernelConfig], default: None
             Compute kernel configuration. If omitted, defaults are selected via `init_device_compute_kernel_config`.
 
+        head_split_rows, head_dim : int, default: 0
+            When head_split_rows > 0, every output chunk is written in attention-head layout
+            [M / head_split_rows, (N / chunks) / head_dim, head_split_rows, head_dim] (rows grouped into users of
+            head_split_rows rows, the chunk's columns into heads of head_dim), the layout nlp_create_qkv_heads
+            produces from [users, 1, rows, N / chunks]. Needs chunks > 1, tile-multiple rows and head_dim, and
+            excludes fuse_swiglu.
+
+        head_split_users : int, default: 0
+        row_map : Optional[ttnn.Tensor], default: None
+            Packed rows: the M rows are packed 32-row tiles of several users. row_map is a uint32 ROW_MAJOR tensor with
+            4 entries per packed row tile {dest, z0, z1, 0}: the tile is written to padded row tile dest of the
+            [head_split_users, heads, head_split_rows, head_dim] chunks, and padded row tiles [z0, z1) are zero-filled.
+            dest 0xFFFFFFFF marks a slack row tile that is not written.
+
         Returns
         -------
         List[ttnn.Tensor]
@@ -124,7 +138,11 @@ void bind_minimal_matmul_split(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("fuse_swiglu") = false);
+        nb::arg("fuse_swiglu") = false,
+        nb::arg("head_split_rows") = 0,
+        nb::arg("head_dim") = 0,
+        nb::arg("head_split_users") = 0,
+        nb::arg("row_map") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::minimal_matmul::detail

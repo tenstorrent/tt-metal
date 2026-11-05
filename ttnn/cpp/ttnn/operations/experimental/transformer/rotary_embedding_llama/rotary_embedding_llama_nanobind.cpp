@@ -33,6 +33,8 @@ void bind_rotary_embedding_llama(nb::module_& mod) {
                 * :attr:`is_decode_mode`: Specify mode of operation
                 * :attr:`memory_config`: Memory Config of the output tensor = DEFAULT_OUTPUT_MEMORY_CONFIG
                 * :attr:`compute_kernel_config`: Optional[DeviceComputeKernelConfig] = None
+                * :attr:`dtype`: Optional[DataType] = None. Output dtype (default: the input's). Prefill with
+                  interleaved cos/sin/trans_mat only, where the input may also be bfloat8_b; bfloat16 or bfloat8_b.
         )doc",
         &ttnn::experimental::rotary_embedding_llama,
         nb::arg("input_tensor"),
@@ -42,7 +44,9 @@ void bind_rotary_embedding_llama(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("is_decode_mode") = false,
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("input_tensor_b") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::transformer

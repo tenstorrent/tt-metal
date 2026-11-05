@@ -35,6 +35,7 @@ class PrefillProgramSignature:
     penalties_enabled: bool = False
     logprobs_enabled: bool = False
     last_token_tile_start: int | None = None
+    packed_row_tiles: int = 0
 
     def key_material(self) -> tuple[tuple[str, str | int | None], ...]:
         material = [
@@ -50,6 +51,8 @@ class PrefillProgramSignature:
         if self.logprobs_enabled:
             material.append(("logprobs_enabled", True))
         material.append(("last_token_tile_start", self.last_token_tile_start))
+        if self.packed_row_tiles:
+            material.append(("packed_row_tiles", self.packed_row_tiles))
         return tuple(material)
 
 
@@ -65,6 +68,7 @@ class PrefillTraceSignature:
     sampling_path: SamplingPath = "logits"
     penalties_enabled: bool = False
     logprobs_enabled: bool = False
+    packed_row_tiles: int = 0
 
     def key_material(self) -> tuple[tuple[str, str | int | None], ...]:
         material = [
@@ -80,6 +84,8 @@ class PrefillTraceSignature:
             material.append(("penalties_enabled", True))
         if self.logprobs_enabled:
             material.append(("logprobs_enabled", True))
+        if self.packed_row_tiles:
+            material.append(("packed_row_tiles", self.packed_row_tiles))
         return tuple(material)
 
 
@@ -141,6 +147,7 @@ def build_program_signatures(
                 penalties_enabled=penalties_enabled,
                 logprobs_enabled=logprobs_enabled,
                 last_token_tile_start=last_token_tile_start,
+                packed_row_tiles=request.packed_row_tiles,
             )
         )
     return tuple(dict.fromkeys(signatures))
@@ -172,6 +179,7 @@ def build_trace_signature(
         sampling_path=sampling_path,
         penalties_enabled=penalties_enabled,
         logprobs_enabled=logprobs_enabled,
+        packed_row_tiles=request.packed_row_tiles,
     )
 
 

@@ -1660,7 +1660,17 @@ void validate_matmul_dram_sharded_config(
             input_tensor_b.memory_config().buffer_type() == BufferType::DRAM,
             "{}: input B must be in DRAM",
             config_name);
+        if (program_config.fuse_swiglu) {
+            const uint32_t n_tiles = input_tensor_b.padded_shape()[-1] / input_tensor_b.tensor_spec().tile().get_width();
+            TT_FATAL(
+                n_tiles % 2 == 0, "{}: fuse_swiglu needs gate / up tile pairs, got {} weight column tiles", config_name, n_tiles);
+        }
     } else {
+        TT_FATAL(
+            !program_config.fuse_swiglu,
+            "{}: fuse_swiglu needs a call that runs the multi-core pipeline (use_multicore_pipeline, "
+            "num_workers_per_dram_bank >= 2, no bias, no fused activation, L1 width-sharded A and output)",
+            config_name);
         if (program_config.use_multicore_pipeline) {
             // Opted in but not qualifying: the single-reader program, with the reader checks that
             // validate_matmul_compute_grid_and_per_core_dims skips for an opted-in config.
@@ -2337,7 +2347,9 @@ void validate_matmul_mcast1d_config(
                     program_config.in0_block_w);
             }
         }
-        if (attributes.output_mem_config.is_sharded()) {
+        // The DRAM-streamed program (dram_stream_workers_per_bank) writes tile by tile through a TensorAccessor and
+        // takes any output layout.
+        if (attributes.output_mem_config.is_sharded() && program_config.dram_stream_workers_per_bank == 0) {
             // Allow BLOCK_SHARDED on 1-row grids (equivalent to WIDTH_SHARDED)
             bool is_width_sharded = attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
             bool is_block_sharded_1d_row = false;
@@ -2778,7 +2790,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
     const auto& input_tensor_b = input_tensors.at(1);
 
     // Use the compute_matmul_output_shape function to get the output shape
-    const auto output_shape = operations::matmul::utilities::compute_matmul_output_shape(
+    auto output_shape = operations::matmul::utilities::compute_matmul_output_shape(
         input_tensor_a, input_tensor_b, attributes.transpose_a, attributes.transpose_b);
 
     const auto& a_shape_padded =
@@ -2787,6 +2799,31 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
         operations::matmul::utilities::get_matmul_tensor_padded_shape(input_tensor_b, attributes.transpose_b);
     auto in0_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_a, attributes.transpose_a);
     auto in1_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_b, attributes.transpose_b);
+
+    // Fused SwiGLU on the 1D mcast_in0 program: the weight's column tiles are gate / up pairs and the output is half
+    // as wide. Only the plain interleaved-output case: no bias, fused activation, untilize, sharded output or padding.
+    if (attributes.program_config.has_value()) {
+        const auto* mcast_1d =
+            std::get_if<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(&*attributes.program_config);
+        if (mcast_1d != nullptr && mcast_1d->fuse_swiglu) {
+            const bool has_bias = !optional_input_tensors.empty() && optional_input_tensors[0].has_value();
+            const uint32_t n_tiles = b_shape_padded[-1] / in1_tile.get_width();
+            TT_FATAL(
+                mcast_1d->mcast_in0 && !mcast_1d->gather_in0 && !has_bias && !mcast_1d->fused_activation.has_value() &&
+                    !attributes.untilize_out && !attributes.output_mem_config.is_sharded() && !attributes.transpose_a &&
+                    !attributes.transpose_b,
+                "MatmulMultiCoreReuseMultiCast1DProgramConfig.fuse_swiglu needs mcast_in0, no bias / fused activation "
+                "/ untilize_out / transposes, and an interleaved output");
+            TT_FATAL(
+                mcast_1d->per_core_N % 2 == 0 && mcast_1d->out_subblock_w % 2 == 0 &&
+                    mcast_1d->out_block_w % mcast_1d->out_subblock_w == 0 && n_tiles % mcast_1d->per_core_N == 0,
+                "fuse_swiglu needs an even per_core_N and out_subblock_w (whole gate / up pairs per subblock) and N "
+                "({} tiles) a multiple of per_core_N ({})",
+                n_tiles,
+                mcast_1d->per_core_N);
+            output_shape[-1] = output_shape[-1] / 2;
+        }
+    }
     auto output_tile = attributes.output_tile.value();
     auto tile_width_ratio = output_tile.get_tile_shape()[1] / in1_tile.get_width();
     auto output_layout = attributes.untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
@@ -2832,7 +2869,11 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         per_core_N,
                         tile_width_ratio);
                     auto mem_config = attributes.output_mem_config;
-                    if (!program_config.gather_in0) {
+                    // The DRAM-streamed program writes through a TensorAccessor: a sharded output keeps the caller's
+                    // shard spec as given.
+                    const bool keep_output_shard_spec =
+                        program_config.dram_stream_workers_per_bank > 0 && mem_config.shard_spec().has_value();
+                    if (!program_config.gather_in0 && !keep_output_shard_spec) {
                         // Check if BLOCK_SHARDED on 1D grid - if so, use user's shard spec with converted memory layout
                         auto memory_layout = mem_config.memory_layout();
                         bool is_block_sharded_1d = false;
@@ -2884,7 +2925,11 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                     const auto M =
                         operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/true);
                     const auto K = operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);
-                    const auto N = operations::matmul::utilities::get_N_dim(b_shape_padded, in1_tile);
+                    // fuse_swiglu: the weight holds gate / up pairs and the output is half as wide.
+                    const uint32_t swiglu_div = program_config.fuse_swiglu ? 2 : 1;
+                    const auto N = operations::matmul::utilities::get_N_dim(b_shape_padded, in1_tile) / swiglu_div;
+                    ttnn::Shape dram_sharded_output_shape = output_shape;
+                    dram_sharded_output_shape[-1] = output_shape[-1] / swiglu_div;
 
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;
@@ -2918,7 +2963,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         attributes.output_mem_config.buffer_type(),
                         shard_spec);
                     return {tt::tt_metal::TensorSpec(
-                        output_shape,
+                        dram_sharded_output_shape,
                         TensorLayout(
                             attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
                 } else if constexpr (std::is_same_v<

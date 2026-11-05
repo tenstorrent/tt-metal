@@ -84,6 +84,7 @@ void kernel_main() {
                     // Operand 0
                     dfb_in0.reserve_back(in0_block_num_tiles);
 
+#ifndef ABL_NO_IN0
                     // Set in0 semaphore value to INVALID
                     receiver_sem.set(INVALID);
 
@@ -92,6 +93,7 @@ void kernel_main() {
 
                     // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
                     receiver_sem.wait(VALID);
+#endif
 
                     dfb_in0.push_back(in0_block_num_tiles);
                 }

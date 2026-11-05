@@ -46,6 +46,9 @@ using tt::tt_metal::experimental::KernelSpec;
 using tt::tt_metal::experimental::KernelSpecName;
 using tt::tt_metal::experimental::ProgramRunArgs;
 using tt::tt_metal::experimental::ProgramSpec;
+using tt::tt_metal::experimental::ScratchpadBinding;
+using tt::tt_metal::experimental::ScratchpadSpec;
+using tt::tt_metal::experimental::ScratchpadSpecName;
 using tt::tt_metal::experimental::SemaphoreBinding;
 using tt::tt_metal::experimental::SemaphoreSpec;
 using tt::tt_metal::experimental::SemaphoreSpecName;
@@ -144,6 +147,9 @@ const TensorParamName TP_IN2{"in2"};
 const TensorParamName TP_IN3{"in3"};
 const TensorParamName TP_TERNARY_A{"ternary_a"};
 const TensorParamName TP_TERNARY_B{"ternary_b"};
+const TensorParamName TP_ROW_MAP{"row_map"};
+const ScratchpadSpecName SP_ROW_MAP_IN0{"row_map_in0"};
+const ScratchpadSpecName SP_ROW_MAP_IN1{"row_map_in1"};
 
 // Kernel spec names.
 const KernelSpecName K_IN0_SENDER{"in0_sender"};
@@ -252,8 +258,15 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     // Fold activation (LHS) upper dimensions into rows: M_total = prod(upper dims) * M.
     // M is derived from input_tensor's OWN K width (K_in); for fused concat that's only the prefix
     // half, so the matmul contraction K must instead span the full weight K (both concat halves).
-    uint32_t K_in = in0_tensor_shape[-1];
+    // in0_heads: the [users, heads, rows, head_dim] input is the [users * rows, heads * head_dim] activation.
+    uint32_t K_in = operation_attributes.in0_heads ? in0_tensor_shape[1] * in0_tensor_shape[-1] : in0_tensor_shape[-1];
     uint32_t M = input_tensor.physical_volume() / K_in;
+    // Packed rows read from a head-layout activation: M is the row map's packed row tiles.
+    const std::optional<Tensor>& row_map_tensor = tensor_args.row_map_tensor;
+    const uint32_t row_map_tiles = row_map_tensor.has_value() ? row_map_tensor->logical_shape()[-1] / 4 : 0;
+    if (row_map_tensor.has_value() && operation_attributes.in0_heads) {
+        M = row_map_tiles * tt::constants::TILE_HEIGHT;
+    }
     uint32_t K = two_input_split ? static_cast<uint32_t>(in1_tensor_shape[-2]) : K_in;
     uint32_t N = in1_tensor_shape[-1];
 
@@ -454,8 +467,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         ternary_a_data_format = tt::tt_metal::datatype_to_dataformat_converter(fused_ternary_input_a.value().dtype());
         auto ternary_a_tile_size = tt::tile_size(ternary_a_data_format);
 
-        TT_FATAL(ternary_a_tile_size == in1_tile_size, "ternary_a_tile_size must be equal to in1_tile_size");
-        TT_FATAL(ternary_a_data_format == in1_data_format, "ternary_a_data_format must be equal to in1_data_format");
+        // ternary_a has its own DFB format: the reader sizes its reads from that DFB and the compute kernel
+        // reconfigures the unpacker to it (reconfig_data_format(intermediate, ternary_a)) before the add, so a bfloat16
+        // residual can be added to a matmul whose weights are bfloat8_b.
         uint32_t ternary_a_num_tiles = out_block_num_tiles;  // Same as output block, not double buffered
 
         push_dfb(DFB_TERNARY_A, ternary_a_tile_size, ternary_a_num_tiles, ternary_a_data_format);
@@ -487,6 +501,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         spec.tensor_parameters.push_back(
             TensorParameter{.unique_id = TP_TERNARY_B, .spec = fused_ternary_input_b.value().tensor_spec()});
     }
+    if (row_map_tensor.has_value()) {
+        spec.tensor_parameters.push_back(TensorParameter{.unique_id = TP_ROW_MAP, .spec = row_map_tensor->tensor_spec()});
+    }
     std::vector<std::string> output_accessor_names;
     output_accessor_names.reserve(output_tensors.size());
     for (uint32_t chunk = 0; chunk < output_tensors.size(); ++chunk) {
@@ -503,6 +520,32 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
 
     if (fuse_swiglu) {
         defines["FUSE_SWIGLU"] = "1";
+    }
+    // Row map bytes (4 x uint32 per packed row tile) and its L1 copy plus one zero output tile, per DM kernel.
+    const uint32_t row_map_bytes = row_map_tiles * 4 * sizeof(uint32_t);
+    const uint32_t row_map_bytes_aligned = tt::round_up(row_map_bytes, 64u);
+    if (row_map_tensor.has_value()) {
+        defines["ROW_MAP"] = "1";
+        defines["ROW_MAP_BYTES"] = std::to_string(row_map_bytes);
+        defines["ROW_MAP_BYTES_ALIGNED"] = std::to_string(row_map_bytes_aligned);
+        for (const auto& name : {SP_ROW_MAP_IN0, SP_ROW_MAP_IN1}) {
+            spec.scratchpads.push_back(
+                ScratchpadSpec{.unique_id = name, .size_per_node = row_map_bytes_aligned + out_tile_size});
+        }
+    }
+    if (operation_attributes.in0_heads) {
+        // Activation in head layout (MinimalMatmulParams::in0_heads): the in0 reader maps tile (m, k) to page
+        // ((user * heads + head) * rows_t + row) * dim_t + col.
+        defines["IN0_HEADS"] = "1";
+        defines["IN0_HEAD_ROWS_T"] = std::to_string(in0_tensor_shape[-2] / tt::constants::TILE_HEIGHT);
+        defines["IN0_HEAD_DIM_T"] = std::to_string(in0_tensor_shape[-1] / tt::constants::TILE_WIDTH);
+    }
+    if (operation_attributes.head_split_rows > 0) {
+        // Output chunks in head layout (see MinimalMatmulParams::head_split_rows): the writer maps tile (m, n) of a
+        // chunk to page ((user * heads + head) * rows_t + row) * dim_t + col.
+        defines["OUT_HEAD_SPLIT"] = "1";
+        defines["OUT_HEAD_ROWS_T"] = std::to_string(operation_attributes.head_split_rows / tt::constants::TILE_HEIGHT);
+        defines["OUT_HEAD_DIM_T"] = std::to_string(operation_attributes.head_split_dim / tt::constants::TILE_WIDTH);
     }
     // Without a bias the compute kernel applies SwiGLU on the pack thread in each output block's last K block
     // (matmul_blocks_swiglu); with one it runs the swiglu_block epilogue. The in-loop path pairs gate / up tiles within
@@ -618,6 +661,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         for (const auto& name : output_accessor_names) {
             bindings.push_back(TensorBinding{.tensor_parameter_name = TensorParamName{name}, .accessor_name = name});
         }
+        if (row_map_tensor.has_value()) {
+            bindings.push_back(TensorBinding{.tensor_parameter_name = TP_ROW_MAP, .accessor_name = *TP_ROW_MAP});
+        }
         return bindings;
     };
 
@@ -691,6 +737,12 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
                 },
             .advanced_options = dm_advanced_options,
         };
+        if (row_map_tensor.has_value()) {
+            // Each DM kernel keeps its own L1 copy of the row map (the in0 and in1 kernels share every node).
+            kernel.scratchpad_bindings.push_back(ScratchpadBinding{
+                .scratchpad_spec_name = own_input == DFB_IN0 ? SP_ROW_MAP_IN0 : SP_ROW_MAP_IN1,
+                .accessor_name = "row_map"});
+        }
         return kernel;
     };
 
@@ -1069,6 +1121,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     }
     for (uint32_t chunk = 0; chunk < output_tensors.size(); ++chunk) {
         run_args.tensor_args.insert({TensorParamName{output_param_name(chunk)}, output_tensors[chunk].mesh_tensor()});
+    }
+    if (row_map_tensor.has_value()) {
+        run_args.tensor_args.insert({TP_ROW_MAP, row_map_tensor->mesh_tensor()});
     }
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};

@@ -177,6 +177,11 @@ void kernel_main() {
     const uint32_t tile_bytes = dfb_in.get_entry_size();
 
     const auto out_gen = TensorAccessor(tensor::cache);
+#ifdef FILL_PAIRED
+    // Paired fill: rows [0, rows_per_tensor) go to cache, the rest (same page table) to cache_b.
+    constexpr auto rows_per_tensor = get_arg(args::rows_per_tensor);
+    const auto out_gen_b = TensorAccessor(tensor::cache_b);
+#endif
     const auto page_table_gen = TensorAccessor(tensor::page_table);
 
 #ifdef ARCH_QUASAR
@@ -205,7 +210,13 @@ void kernel_main() {
     // in the loop below.
     const uint32_t skip_tiles = (capacity_t > 0 && effective_end > capacity_t) ? (effective_end - capacity_t) : 0;
 
-    for (uint32_t row_id = start_row_num; row_id < start_row_num + num_rows; ++row_id) {
+    for (uint32_t row_id_all = start_row_num; row_id_all < start_row_num + num_rows; ++row_id_all) {
+#ifdef FILL_PAIRED
+        const bool second = row_id_all >= rows_per_tensor;
+        const uint32_t row_id = second ? row_id_all - rows_per_tensor : row_id_all;
+#else
+        const uint32_t row_id = row_id_all;
+#endif
         // Decode row_id → (cur_batch, cur_head, seq_tile_id).
         // Input layout: [input_batch, num_heads, input_seq_len_t]
         //   row_id = cur_batch * num_blocks_per_batch
@@ -284,11 +295,23 @@ void kernel_main() {
             // Valid block, proceed with writing.
             dfb_in.wait_front(Wt);
             uint32_t l1_read_addr = dfb_in.get_read_ptr();
-            for (uint32_t w = 0; w < Wt; ++w) {
-                noc.async_write(
-                    CoreLocalMem<uint32_t>(l1_read_addr), out_gen, tile_bytes, {}, {.page_id = physical_tile_id});
-                l1_read_addr += tile_bytes;
-                physical_tile_id += 1;
+#ifdef FILL_PAIRED
+            if (second) {
+                for (uint32_t w = 0; w < Wt; ++w) {
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(l1_read_addr), out_gen_b, tile_bytes, {}, {.page_id = physical_tile_id});
+                    l1_read_addr += tile_bytes;
+                    physical_tile_id += 1;
+                }
+            } else
+#endif
+            {
+                for (uint32_t w = 0; w < Wt; ++w) {
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(l1_read_addr), out_gen, tile_bytes, {}, {.page_id = physical_tile_id});
+                    l1_read_addr += tile_bytes;
+                    physical_tile_id += 1;
+                }
             }
             noc.async_write_barrier();
             dfb_in.pop_front(Wt);

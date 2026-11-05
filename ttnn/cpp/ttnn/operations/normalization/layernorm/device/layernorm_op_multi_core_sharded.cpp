@@ -109,8 +109,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
 
     const std::uint32_t tile_width = a.tensor_spec().tile().get_width();
 
-    std::uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / tile_width;
-    bool skip_write_back = output.shard_spec().value() == a.shard_spec().value();
+    // An interleaved output (non-distributed only) is written tile by tile by the writer (writes_interleaved).
+    const bool output_interleaved = !output.memory_config().is_sharded();
+    std::uint32_t block_wt_resharded =
+        (output_interleaved ? a.shard_spec().value().shape[1] : output.shard_spec().value().shape[1]) / tile_width;
+    bool skip_write_back = output_interleaved || output.shard_spec().value() == a.shard_spec().value();
+    const bool writes_interleaved = output_interleaved && !is_pre_all_gather && !is_post_all_gather;
     // The write-back reads runtime arguments that only the post-all-gather stage supplies, so the
     // build that compiles it is the build where those arguments exist.
     const bool writes_back = is_post_all_gather && !skip_write_back;
@@ -320,8 +324,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .has_b = b.has_value(),
         .has_gamma = gamma.has_value(),
         .has_beta = beta.has_value(),
+        .write_pre_add_sum = operation_attributes.write_pre_add_sum && b.has_value() && !is_pre_all_gather &&
+                             !is_post_all_gather,
         .skip_write_back = skip_write_back,
         .writes_back = writes_back,
+        .writes_interleaved = writes_interleaved,
+        .out_row_tiles = Kt,
         .do_col_mask = do_col_mask,
         .do_legacy_layernorm_col_mask = do_legacy_layernorm_col_mask,
         // Enable the welford-fp32 alias only when the SrcA-routed transpose_tile would

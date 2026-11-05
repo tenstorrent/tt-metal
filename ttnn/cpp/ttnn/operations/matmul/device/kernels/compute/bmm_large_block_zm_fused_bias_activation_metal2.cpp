@@ -13,6 +13,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "internal/mod_div_lib.h"
 
+#ifdef MM_SWIGLU
+#include "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/swiglu_sfpu.hpp"
+#endif
 #ifdef FUSE_BIAS
 #include "api/compute/bcast.h"
 #endif
@@ -301,6 +304,14 @@ void kernel_main() {
 #endif
 
     constexpr bool spill = num_blocks_inner_dim > 1;
+#ifdef MM_SWIGLU
+    // Fused SwiGLU (mcast_in0 1D): a subblock's Dest tiles are gate / up pairs; the last K block leaves SiLU(gate) *
+    // up of pair i in Dest tile i and packs half as many tiles.
+    constexpr bool swiglu_block_float = get_arg(args::SWIGLU_BF) == 1;
+    constexpr uint32_t out_pack_tiles = out_subblock_num_tiles / 2;
+#else
+    constexpr uint32_t out_pack_tiles = out_subblock_num_tiles;
+#endif
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
     matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
@@ -461,8 +472,14 @@ void kernel_main() {
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
+#ifdef MM_SWIGLU
+                                MATH((ckernel::minimal_matmul_swiglu_tile_init()));
+                                for (uint32_t i = 0; i < out_subblock_num_tiles; i += 2) {
+                                    MATH((ckernel::minimal_matmul_swiglu_tile<swiglu_block_float>(i, i + 1, i / 2)));
+                                }
+#endif
                                 tile_regs_commit();
-                                mm_out_dfb.reserve_back(out_subblock_num_tiles);
+                                mm_out_dfb.reserve_back(out_pack_tiles);
 
 #if defined SFPU_ACTIVATION and not defined FUSE_BIAS
                                 apply_activation_from_pack<
@@ -490,10 +507,15 @@ void kernel_main() {
 #endif
 #endif
                                 uint32_t start_dst_index = 0;
-                                pack_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
+                                pack_block(start_dst_index, mm_out_dfb_id, out_pack_tiles);
 
                                 tile_regs_release();
-                                mm_out_dfb.push_back(out_subblock_num_tiles);
+                                mm_out_dfb.push_back(out_pack_tiles);
+#ifdef MM_SWIGLU
+                                // The SwiGLU init reprogrammed the math unit; restore the matmul for the next subblock.
+                                matmul_block_init(
+                                    in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+#endif
 
                             } else {
                                 tile_regs_commit();

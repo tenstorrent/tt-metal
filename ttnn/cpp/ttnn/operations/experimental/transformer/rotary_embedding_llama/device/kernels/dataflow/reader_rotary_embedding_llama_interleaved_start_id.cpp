@@ -35,6 +35,10 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     const auto s0 = TensorAccessor(tensor::input);
+#ifdef ROPE_PAIRED
+    // Paired mode: heads [0, n_heads) come from input, [n_heads, 2 n_heads) from input_b.
+    const auto s0b = TensorAccessor(tensor::input_b);
+#endif
     const auto s1 = TensorAccessor(tensor::cos);
     const auto s2 = TensorAccessor(tensor::sin);
     const auto s3 = TensorAccessor(tensor::trans_mat);
@@ -95,7 +99,13 @@ void kernel_main() {
 
                 dfb_input.reserve_back(Wt);
                 uint32_t input_l1_write_addr = dfb_input.get_write_ptr();
-                uint32_t input_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
+#ifdef ROPE_PAIRED
+                const bool from_b = head_num >= n_heads;
+                const uint32_t tensor_head = from_b ? head_num - n_heads : head_num;
+#else
+                const uint32_t tensor_head = head_num;
+#endif
+                uint32_t input_curr_idx = batch_id * n_heads * Ht * Wt + tensor_head * Ht * Wt + seq_tile * Wt;
                 uint32_t cos_curr_idx;
                 uint32_t sin_curr_idx;
                 if constexpr (freq_per_head) {
@@ -107,12 +117,24 @@ void kernel_main() {
                 }
                 for (uint32_t j = 0; j < Wt; ++j) {
                     // Read input into CB
-                    noc.async_read(
-                        s0,
-                        CoreLocalMem<uint32_t>(input_l1_write_addr),
-                        input_tile_bytes,
-                        {.page_id = input_curr_idx},
-                        {});
+#ifdef ROPE_PAIRED
+                    if (from_b) {
+                        noc.async_read(
+                            s0b,
+                            CoreLocalMem<uint32_t>(input_l1_write_addr),
+                            input_tile_bytes,
+                            {.page_id = input_curr_idx},
+                            {});
+                    } else
+#endif
+                    {
+                        noc.async_read(
+                            s0,
+                            CoreLocalMem<uint32_t>(input_l1_write_addr),
+                            input_tile_bytes,
+                            {.page_id = input_curr_idx},
+                            {});
+                    }
                     input_curr_idx++;
                     input_l1_write_addr += input_tile_bytes;
 

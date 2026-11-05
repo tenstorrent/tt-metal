@@ -339,6 +339,7 @@ void kernel_main() {
                     mask_start_tile_id = read_mask_chunk<cb_mask_in, mask_tile_bytes, barrier_threshold, PNHt>(
                         PSt, Sk_chunk_t_dynamic, mask_chunk_tiles, mask_start_tile_id, mask_reader);
                 }
+#ifndef SDPA_V_ON_WRITER  // otherwise the writer RISC reads V (writer_decode_all.cpp)
                 // Read V chunk - either from DRAM or from K's L1 buffer (transpose) when reuse_k is true
                 read_v<
                     cb_v_in,
@@ -360,6 +361,7 @@ void kernel_main() {
                     barrier_count,
                     k_base_read_ptr,
                     k_tile_bytes);
+#endif
             }
         } else {
             // Offset for current batch

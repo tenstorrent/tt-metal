@@ -38,5 +38,7 @@ ttnn::Tensor rotary_embedding_llama(
     const ttnn::Tensor& trans_mat,
     bool is_decode_mode,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<tt::tt_metal::DataType>& dtype = std::nullopt,
+    const std::optional<ttnn::Tensor>& input_tensor_b = std::nullopt);
 }  // namespace ttnn::prim

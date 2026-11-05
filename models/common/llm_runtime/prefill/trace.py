@@ -15,7 +15,7 @@ from models.common.llm_runtime.prefill.inputs import (
     allocate_device_tensors,
     copy_into_device_tensors,
 )
-from models.common.llm_runtime.prefill.plan import PrefillChunk
+from models.common.llm_runtime.prefill.plan import PrefillChunk, packed_prefill_layout
 from models.common.llm_runtime.prefill.postprocess import (
     KPTSignature,
     PrefillPostprocessor,
@@ -215,6 +215,7 @@ class PrefillTraceLifecycle:
             chunk_page_table=trace_inputs.chunk_page_table,
             chunk_start_idx=trace_inputs.chunk_start_idx,
             last_token_idx=max(request.last_token_indices),
+            packed=packed_prefill_layout(request) if request.packed_row_tiles else None,
         )
         device_inputs = None
         try:

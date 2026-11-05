@@ -68,9 +68,13 @@ void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
 
         // Shape validation
         TT_FATAL(input_tensor.padded_shape()[0] == 1, "Dim 0 of input tensor must be 1");
+        // The kernels address the cache page by page through a TensorAccessor, so a DRAM cache laid out with an ND
+        // shard spec (e.g. a group of heads of one block per bank) works as well as an interleaved one.
         TT_FATAL(
-            cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "Only interleaved cache is supported");
+            cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
+                (cache_tensor.memory_config().buffer_type() == BufferType::DRAM &&
+                 cache_tensor.memory_config().nd_shard_spec().has_value()),
+            "Only an interleaved or a DRAM ND-sharded cache is supported");
         TT_FATAL(
             input_tensor.padded_shape()[-1] == cache_tensor.padded_shape()[-1],
             "Last dim of input tensor must match last dim of cache tensor");

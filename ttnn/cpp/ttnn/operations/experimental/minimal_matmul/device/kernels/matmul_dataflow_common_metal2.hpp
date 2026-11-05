@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "api/scratchpad.h"
 #include <cstdint>
 #include <algorithm>
 #include <tuple>
@@ -40,6 +41,30 @@ struct TensorShape2D {
         ASSERT(_d1 <= _padded_d1);
     }
 };
+
+#ifdef ROW_MAP
+// Packed-row map (MinimalMatmulInputs::row_map_tensor), copied into this kernel's L1 by load_row_map(): entry i =
+// {dest, z0, z1, 0} for packed row tile i. g_zero_tile_l1 is one zeroed output tile for the zero fills.
+constexpr uint32_t ROW_MAP_NONE = 0xFFFFFFFFu;
+inline uint32_t g_row_map_l1 = 0;
+inline uint32_t g_zero_tile_l1 = 0;
+FORCE_INLINE uint32_t row_map_entry(uint32_t i, uint32_t field) {
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_row_map_l1)[i * 4 + field];
+}
+FORCE_INLINE void load_row_map(uint32_t zero_tile_bytes) {
+    Noc noc;
+    Scratchpad<volatile uint32_t> row_map_l1(scratch::row_map);
+    const auto row_map_reader = TensorAccessor(tensor::row_map);
+    g_row_map_l1 = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(row_map_l1.local_mem()));
+    g_zero_tile_l1 = g_row_map_l1 + ROW_MAP_BYTES_ALIGNED;
+    noc.async_read(row_map_reader, CoreLocalMem<uint32_t>(g_row_map_l1), ROW_MAP_BYTES, {.page_id = 0}, {});
+    volatile tt_l1_ptr uint32_t* zero = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_zero_tile_l1);
+    for (uint32_t w = 0; w < zero_tile_bytes / sizeof(uint32_t); ++w) {
+        zero[w] = 0;
+    }
+    noc.async_read_barrier();
+}
+#endif
 
 /**
  * Read a block of in0 from a potentially padded tensor.
@@ -104,7 +129,26 @@ void read_in0_block_sync(
                 }
 #else
                 {
+#ifdef IN0_HEADS
+                    // Activation in head layout [users, heads, rows, head_dim]: row tile i is (user, row), K tile j
+                    // is (head, column).
+                    constexpr uint32_t rows_t = IN0_HEAD_ROWS_T;
+                    constexpr uint32_t dim_t = IN0_HEAD_DIM_T;
+                    const uint32_t heads = shape.logical_d1 / dim_t;
+#ifdef ROW_MAP
+                    // Packed row tile i reads padded row tile dest (slack rows read row tile 0).
+                    uint32_t src_row = row_map_entry(i, 0);
+                    if (src_row == ROW_MAP_NONE) {
+                        src_row = 0;
+                    }
+#else
+                    const uint32_t src_row = i;
+#endif
+                    uint32_t tile_id =
+                        (((src_row / rows_t) * heads + j / dim_t) * rows_t + src_row % rows_t) * dim_t + j % dim_t;
+#else
                     uint32_t tile_id = i * shape.logical_d1 + j;
+#endif
                     noc.async_read(
                         tensor_accessor, CoreLocalMem<uint32_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
                 }
@@ -365,6 +409,18 @@ void write_block_sync_granular(
  * Helper: dispatch to correct tuple element using fold expression.
  * Each branch calls noc.async_write with the concrete TensorAccessor type.
  */
+
+#ifdef OUT_HEAD_SPLIT
+// Head-split output (MinimalMatmulParams::head_split_rows): a chunk is [users, heads, rows, head_dim]. Row tile m is
+// (user m / rows_t, row m % rows_t) and chunk column tile n is (head n / dim_t, column n % dim_t).
+FORCE_INLINE uint32_t out_head_split_page(uint32_t m, uint32_t n, uint32_t chunk_width_tiles) {
+    constexpr uint32_t rows_t = OUT_HEAD_ROWS_T;
+    constexpr uint32_t dim_t = OUT_HEAD_DIM_T;
+    const uint32_t heads = chunk_width_tiles / dim_t;
+    return (((m / rows_t) * heads + n / dim_t) * rows_t + m % rows_t) * dim_t + n % dim_t;
+}
+#endif
+
 template <typename Tuple, size_t... Is>
 FORCE_INLINE void write_tile_to_chunk(
     Noc noc,
@@ -434,7 +490,30 @@ void write_block_sync_split(
                 continue;
             }
 
+#ifdef OUT_HEAD_SPLIT
+#ifdef ROW_MAP
+            const uint32_t dest_row = row_map_entry(i, 0);
+            if (dest_row == ROW_MAP_NONE) {
+                read_ptr += tile_size_bytes;
+                continue;
+            }
+            for (uint32_t z = row_map_entry(i, 1); z < row_map_entry(i, 2); ++z) {
+                write_tile_to_chunk(
+                    noc,
+                    accessors,
+                    chunk_idx,
+                    out_head_split_page(z, tile_idx_in_chunk, chunk_shape.logical_d1),
+                    g_zero_tile_l1,
+                    tile_size_bytes,
+                    std::index_sequence_for<Accessors...>{});
+            }
+            uint32_t tile_id_in_chunk = out_head_split_page(dest_row, tile_idx_in_chunk, chunk_shape.logical_d1);
+#else
+            uint32_t tile_id_in_chunk = out_head_split_page(i, tile_idx_in_chunk, chunk_shape.logical_d1);
+#endif
+#else
             uint32_t tile_id_in_chunk = i * chunk_shape.logical_d1 + tile_idx_in_chunk;
+#endif
 
             // Compile-time dispatch preserving concrete types
             write_tile_to_chunk(
@@ -496,7 +575,30 @@ void write_block_sync_granular_split(
                     break;
                 }
 
+#ifdef OUT_HEAD_SPLIT
+#ifdef ROW_MAP
+                const uint32_t dest_row = row_map_entry(m_tile, 0);
+                if (dest_row == ROW_MAP_NONE) {
+                    out_read_ptr += tile_size_bytes;
+                    continue;
+                }
+                for (uint32_t z = row_map_entry(m_tile, 1); z < row_map_entry(m_tile, 2); ++z) {
+                    write_tile_to_chunk(
+                        noc,
+                        accessors,
+                        chunk_idx,
+                        out_head_split_page(z, tile_idx_in_chunk, chunk_shape.logical_d1),
+                        g_zero_tile_l1,
+                        tile_size_bytes,
+                        std::index_sequence_for<Accessors...>{});
+                }
+                uint32_t tile_id = out_head_split_page(dest_row, tile_idx_in_chunk, chunk_shape.logical_d1);
+#else
+                uint32_t tile_id = out_head_split_page(m_tile, tile_idx_in_chunk, chunk_shape.logical_d1);
+#endif
+#else
                 uint32_t tile_id = m_tile * chunk_shape.logical_d1 + tile_idx_in_chunk;
+#endif
                 // Compile-time dispatch preserving concrete types
                 write_tile_to_chunk(
                     noc,

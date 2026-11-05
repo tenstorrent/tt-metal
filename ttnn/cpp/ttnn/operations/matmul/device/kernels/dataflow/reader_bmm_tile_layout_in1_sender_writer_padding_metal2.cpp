@@ -400,6 +400,74 @@ void kernel_main() {
                     uint32_t l1_read_addr_in1_offset = 0;
 #endif  // IN1_DRAM_WIDTH_SHARDED
 
+#ifdef IN1_DRAM_PIPELINE
+                    // One output block, one batch, no in1 multicast (host-checked): stream the K-blocks with two in
+                    // flight. Block k goes to buffer slot k % 3 under transaction ID (k % 3) + 1; a block is pushed
+                    // once its own ID drains, while the next one is already on the way.
+                    (void)l1_read_addr_in1_offset;
+                    {
+                        constexpr uint32_t num_buffer_blocks = IN1_PIPE_DEPTH;
+                        uint32_t curr_trid = 1;
+                        uint32_t trid_to_wait = 1;
+                        AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+                        dfb_in1.reserve_back(in1_block_num_tiles * (num_buffer_blocks - 1));
+                        const uint32_t l1_start = dfb_in1.get_write_ptr();
+                        uint32_t l1_block_offset = 0;
+                        uint32_t dram_block_offset = 0;
+                        for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                            uint32_t l1_shard_offset = 0;
+                            uint32_t vararg_index = 0;
+                            for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
+                                const uint32_t segment_bytes = get_vararg(vararg_index);
+                                const uint32_t shard_bank_id = get_vararg(vararg_index + 1);
+                                const uint32_t shard_base_addr =
+                                    in1_tensor_addr + (i == 0 ? dram_tensor_start_offset : 0) + dram_block_offset;
+                                uint32_t l1_row = l1_start + l1_block_offset + l1_shard_offset;
+                                uint32_t dram_row = 0;
+                                for (uint32_t m = 0; m < in1_block_h; ++m) {
+#ifndef ABL_NO_IN1
+                                    noc.async_read<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
+                                        dram_bank,
+                                        CoreLocalMem<uint32_t>(l1_row),
+                                        segment_bytes,
+                                        {.bank_id = shard_bank_id, .addr = shard_base_addr + dram_row},
+                                        {},
+                                        NocOptVals{.vc = vc, .trid = curr_trid});
+#endif
+                                    dram_row += in1_block_w_dram_bytes;
+                                    l1_row += in1_block_w_bytes;
+                                }
+                                l1_shard_offset += segment_bytes;
+                                vararg_index += 2;
+                            }
+                            dram_block_offset += in1_dram_block_size_bytes;
+                            // num_buffer_blocks - 1 blocks in flight: once they are, wait for the oldest and hand it
+                            // to compute.
+                            if (block + 2 >= num_buffer_blocks) {
+                                noc.async_read_barrier<NocOptions::TXN_ID>({.trid = static_cast<uint8_t>(trid_to_wait)});
+                                dfb_in1.push_back(in1_block_num_tiles);
+                                trid_to_wait = trid_to_wait == num_buffer_blocks ? 1 : trid_to_wait + 1;
+                                dfb_in1.reserve_back(in1_block_num_tiles * (num_buffer_blocks - 1));
+                            }
+                            if (curr_trid == num_buffer_blocks) {
+                                l1_block_offset = 0;
+                                curr_trid = 1;
+                            } else {
+                                l1_block_offset += in1_block_size_bytes;
+                                curr_trid += 1;
+                            }
+                        }
+                        // Drain the blocks still in flight, oldest first.
+                        constexpr uint32_t pushed_in_loop = num_blocks_inner_dim + 2 > num_buffer_blocks
+                                                                ? num_blocks_inner_dim + 2 - num_buffer_blocks
+                                                                : 0;
+                        for (uint32_t p = pushed_in_loop; p < num_blocks_inner_dim; ++p) {
+                            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = static_cast<uint8_t>(trid_to_wait)});
+                            dfb_in1.push_back(in1_block_num_tiles);
+                            trid_to_wait = trid_to_wait == num_buffer_blocks ? 1 : trid_to_wait + 1;
+                        }
+                    }
+#else
                     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
 #ifdef FUSE_OP_ALL_GATHER
                         fused_op_receiver.update_current_block_start_tile_id(
@@ -431,18 +499,33 @@ void kernel_main() {
                             if (i == 0) {
                                 shard_base_addr += dram_tensor_start_offset;
                             }
+                            // This bank's columns of one K row are contiguous in the bank and land contiguously in
+                            // L1, so a row that fits one NOC packet is read with one request instead of one per
+                            // tile.
+                            const uint32_t in1_segment_bytes = get_vararg(next_bank_id_and_dram_stride_index);
+                            const bool coalesce_row = in1_segment_bytes <= NOC_MAX_BURST_SIZE;
                             noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                 dram_bank,
-                                in1_single_tile_size_bytes,
+                                coalesce_row ? in1_segment_bytes : in1_single_tile_size_bytes,
                                 {.bank_id = shard_bank_id, .addr = shard_base_addr},
                                 NocOptVals{.vc = vc});
 
                             uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
                             uint32_t l1_write_addr_in1 = dfb_in1.get_write_ptr() + l1_write_addr_in1_offset;
-                            uint32_t in1_block_w_dram =
-                                get_vararg(next_bank_id_and_dram_stride_index) / in1_single_tile_size_bytes;
+                            uint32_t in1_block_w_dram = in1_segment_bytes / in1_single_tile_size_bytes;
 
-                            for (uint32_t m = 0; m < in1_block_h; ++m) {
+                            for (uint32_t m = 0; coalesce_row && m < in1_block_h; ++m) {
+                                noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+                                    dram_bank,
+                                    CoreLocalMem<uint32_t>(l1_write_addr_in1),
+                                    in1_segment_bytes,
+                                    {.bank_id = shard_bank_id, .addr = shard_base_addr + l1_read_addr_in1},
+                                    {},
+                                    NocOptVals{.vc = vc});
+                                l1_read_addr_in1 += in1_block_w_dram_bytes;
+                                l1_write_addr_in1 += in1_block_w_bytes;
+                            }
+                            for (uint32_t m = 0; !coalesce_row && m < in1_block_h; ++m) {
                                 uint32_t l1_read_addr_in1_temp = l1_read_addr_in1;
                                 uint32_t l1_write_addr_in1_temp = l1_write_addr_in1;
                                 for (uint32_t w = 0; w < in1_block_w_dram; ++w) {
@@ -586,6 +669,7 @@ void kernel_main() {
                         }
 #endif
                     }
+#endif  // IN1_DRAM_PIPELINE
 #if defined(ENABLE_PREFETCHER_PIPE)
                     drain_in1_pipe_window(pipe, noc, num_blocks_inner_dim);
 #elif defined(ENABLE_GLOBAL_CB)

@@ -44,7 +44,11 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     const uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     const uint32_t batch = input.padded_shape()[0];
-    const uint32_t n_heads = input.padded_shape()[1];
+    // Paired mode (input_tensor_b): one program over both tensors' heads, rotated in place. The kernels take heads
+    // [0, n_heads) from input and [n_heads, 2 n_heads) from input_b.
+    const bool paired = tensor_args.input_tensor_b.has_value();
+    const uint32_t n_heads_per_tensor = input.padded_shape()[1];
+    const uint32_t n_heads = paired ? 2 * n_heads_per_tensor : n_heads_per_tensor;
     const uint32_t seq_len_t = input.padded_shape()[2] / TILE_HEIGHT;
     const uint32_t head_dim_t = input.padded_shape()[3] / TILE_WIDTH;
     const uint32_t cos_seq_len_t = cos.padded_shape()[2] / TILE_HEIGHT;
@@ -94,21 +98,29 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
 
     // When the (batch, sequence tile) split leaves most cores idle, they split the heads too. Every head-split core
     // re-reads the same cos/sin rows, so the split is only worth it when it multiplies the busy cores several times.
+    // Each core still takes at least kMinHeadsPerCore heads: a core's reads, compute and writes then overlap across its
+    // heads instead of running once each. P150, [1, 32, 128, 96]: 32 cores x 4 heads 9.5 us against 128 x 1 11.0 us
+    // (64 cores x 2: 9.8 us, 16 x 8: 12.7 us).
     constexpr uint32_t kMinIdleRatioForHeadSplit = 4;
+    constexpr uint32_t kMinHeadsPerCore = 4;
     const uint32_t idle_ratio = num_cores / (batch_parallel_factor * seq_parallel_factor);
-    const uint32_t head_parallel_factor = idle_ratio >= kMinIdleRatioForHeadSplit ? std::min(n_heads, idle_ratio) : 1;
+    const uint32_t head_parallel_factor =
+        idle_ratio >= kMinIdleRatioForHeadSplit
+            ? std::min({n_heads, idle_ratio, std::max(1u, n_heads / kMinHeadsPerCore)})
+            : 1;
     const uint32_t heads_per_core = (n_heads + head_parallel_factor - 1) / head_parallel_factor;
 
     const uint32_t num_sin_cos_rows_per_core = (seq_len_t + seq_parallel_factor - 1) / seq_parallel_factor;
-    const uint32_t num_rows_per_core = num_sin_cos_rows_per_core * heads_per_core;
 
     uint32_t num_cos_sin_tiles = 2 * head_dim_t * num_sin_cos_rows_per_core;
 
     uint32_t input_cb_num_tiles = num_sin_cos_rows_per_core * num_input_tiles;
 
     // Reload implementation is used if sequence length is larger than some heuristic threshold where
-    // the buffer size will be too large or if sin/cos are not broadcasted across heads.
-    const bool use_reload_impl = num_rows_per_core > 8 || freq_per_head;
+    // the buffer size will be too large or if sin/cos are not broadcasted across heads. The no-reload buffers hold
+    // this core's cos/sin rows once (2 * head_dim_t tiles per sequence tile), whatever the number of heads, so the
+    // threshold counts sequence tiles only: re-reading cos/sin for every head multiplies the DRAM reads by the heads.
+    const bool use_reload_impl = num_sin_cos_rows_per_core > 8 || freq_per_head;
     if (use_reload_impl) {
         // Only size CBs to double buffer head_dim_t tiles for all inputs
         input_cb_num_tiles = num_input_tiles;
@@ -141,11 +153,12 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
         .entry_size = trans_mat_single_tile_size,
         .num_entries = 1,  // We only take one tile of trans_mat
         .data_format_metadata = trans_mat_cb_data_format};
+    // In cos/sin format (bfloat16): with a bfloat8_b input the rotated copy is a product, not a copy of the input.
     DataflowBufferSpec rotated_interm_dfb{
         .unique_id = ROTATED_INTERM_DFB,
-        .entry_size = input_single_tile_size,
+        .entry_size = cos_single_tile_size,
         .num_entries = num_interm_tiles,
-        .data_format_metadata = input_cb_data_format};
+        .data_format_metadata = cos_cb_data_format};
     DataflowBufferSpec cos_interm_dfb{
         .unique_id = COS_INTERM_DFB,
         .entry_size = cos_single_tile_size,
@@ -177,6 +190,11 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     TensorParameter sin_param{.unique_id = SIN_PARAM, .spec = sin.tensor_spec()};
     TensorParameter trans_mat_param{.unique_id = TRANS_MAT_PARAM, .spec = trans_mat.tensor_spec()};
     TensorParameter output_param{.unique_id = OUTPUT_PARAM, .spec = output.tensor_spec()};
+    const TensorParamName INPUT_B_PARAM{"input_b"};
+    std::optional<TensorParameter> input_b_param;
+    if (paired) {
+        input_b_param = TensorParameter{.unique_id = INPUT_B_PARAM, .spec = tensor_args.input_tensor_b->tensor_spec()};
+    }
 
     // ------------------------------------------------------------------
     // hw_config. Style B (build ComputeHardwareConfig directly): the legacy ComputeConfigDescriptor set
@@ -196,7 +214,10 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
         };
     }
 
-    const KernelSpec::CompilerOptions::Defines reload_define{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}};
+    KernelSpec::CompilerOptions::Defines reload_define{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}};
+    if (paired) {
+        reload_define.insert({"ROPE_PAIRED", "1"});
+    }
 
     // ------------------------------------------------------------------
     // Kernels
@@ -220,7 +241,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
              TensorBinding{.tensor_parameter_name = SIN_PARAM, .accessor_name = "sin"},
              TensorBinding{.tensor_parameter_name = TRANS_MAT_PARAM, .accessor_name = "trans_mat"}},
         .compile_time_args =
-            {{"n_heads", n_heads},
+            {{"n_heads", n_heads_per_tensor},
              {"Ht", seq_len_t},
              {"Wt", head_dim_t},
              {"freq_per_head", static_cast<uint32_t>(freq_per_head)},
@@ -242,7 +263,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
         .scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = ZERO_SCRATCH, .accessor_name = "zero"}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "output"}},
         .compile_time_args =
-            {{"n_heads", n_heads}, {"Wt", head_dim_t}, {"Ht", seq_len_t}, {"rotary_Ht", rotary_seq_len_t}},
+            {{"n_heads", n_heads_per_tensor}, {"Wt", head_dim_t}, {"Ht", seq_len_t}, {"rotary_Ht", rotary_seq_len_t}},
         .runtime_arg_schema = {.runtime_arg_names = kPrefillRangeArgNames},
         // This writer explicitly wait_front/pop_front's OUT_DFB; leaving the implicit-sync ISR on would
         // double-bump the Gen2 tile counter (acked = posted + 2 seen on craq-sim), so disable it.
@@ -357,13 +378,22 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     // ------------------------------------------------------------------
     // Assemble spec + run-args.
     // ------------------------------------------------------------------
+    if (paired) {
+        // Both tensors are read by the reader and written back in place by the writer; there is no separate output.
+        reader_spec.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = INPUT_B_PARAM, .accessor_name = "input_b"});
+        writer_spec.tensor_bindings = {
+            TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
+            TensorBinding{.tensor_parameter_name = INPUT_B_PARAM, .accessor_name = "input_b"}};
+    }
     ProgramSpec spec{
         .name = "rotary_embedding_llama_multi_core",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers =
             {input_dfb, cos_dfb, sin_dfb, trans_mat_dfb, rotated_interm_dfb, cos_interm_dfb, sin_interm_dfb, out_dfb},
         .scratchpads = {zero_scratchpad},
-        .tensor_parameters = {input_param, cos_param, sin_param, trans_mat_param, output_param},
+        .tensor_parameters =
+            paired ? Group<TensorParameter>{input_param, cos_param, sin_param, trans_mat_param, *input_b_param}
+                   : Group<TensorParameter>{input_param, cos_param, sin_param, trans_mat_param, output_param},
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}}};
 
     ProgramRunArgs run_args;
@@ -372,8 +402,12 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
         {INPUT_PARAM, TensorArgument{input}},
         {COS_PARAM, TensorArgument{cos}},
         {SIN_PARAM, TensorArgument{sin}},
-        {TRANS_MAT_PARAM, TensorArgument{trans_mat}},
-        {OUTPUT_PARAM, TensorArgument{output}}};
+        {TRANS_MAT_PARAM, TensorArgument{trans_mat}}};
+    if (paired) {
+        run_args.tensor_args.insert({INPUT_B_PARAM, TensorArgument{tensor_args.input_tensor_b->mesh_tensor()}});
+    } else {
+        run_args.tensor_args.insert({OUTPUT_PARAM, TensorArgument{output}});
+    }
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }

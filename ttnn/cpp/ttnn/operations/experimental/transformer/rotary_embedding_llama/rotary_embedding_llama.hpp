@@ -18,6 +18,8 @@ ttnn::Tensor rotary_embedding_llama(
     const Tensor& trans_mat,
     bool is_decode_mode = false,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<DataType>& dtype = std::nullopt,
+    const std::optional<Tensor>& input_tensor_b = std::nullopt);
 
 }  // namespace ttnn::experimental

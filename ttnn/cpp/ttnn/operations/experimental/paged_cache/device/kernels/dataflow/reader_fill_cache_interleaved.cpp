@@ -24,6 +24,11 @@ void kernel_main() {
     }
 
     const auto s = TensorAccessor(tensor::input);
+#ifdef FILL_PAIRED
+    // Paired fill: tiles [0, tiles_per_tensor) come from input, the rest from input_b.
+    constexpr auto tiles_per_tensor = get_arg(args::tiles_per_tensor);
+    const auto s_b = TensorAccessor(tensor::input_b);
+#endif
 
     DataflowBuffer dfb_in(dfb::in);
 
@@ -37,10 +42,22 @@ void kernel_main() {
     for (uint32_t row_num = 0; row_num < num_rows; ++row_num) {
         dfb_in.reserve_back(Wt);
         uint32_t l1_write_addr = dfb_in.get_write_ptr();
-        for (uint32_t w = 0; w < Wt; ++w) {
-            noc.async_read(s, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes, {.page_id = tile_id}, {});
-            l1_write_addr += tile_bytes;
-            tile_id++;
+#ifdef FILL_PAIRED
+        if (tile_id >= tiles_per_tensor) {
+            for (uint32_t w = 0; w < Wt; ++w) {
+                noc.async_read(
+                    s_b, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes, {.page_id = tile_id - tiles_per_tensor}, {});
+                l1_write_addr += tile_bytes;
+                tile_id++;
+            }
+        } else
+#endif
+        {
+            for (uint32_t w = 0; w < Wt; ++w) {
+                noc.async_read(s, CoreLocalMem<uint32_t>(l1_write_addr), tile_bytes, {.page_id = tile_id}, {});
+                l1_write_addr += tile_bytes;
+                tile_id++;
+            }
         }
         noc.async_read_barrier();
         dfb_in.push_back(Wt);

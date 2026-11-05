@@ -364,7 +364,11 @@ void py_module(nb::module_& mod) {
                std::size_t num_global_cb_receivers,
                bool untilize_out,
                std::optional<CoreRangeSet> allowed_worker_cores,
-               bool stream_in1) {
+               bool stream_in1,
+               bool fuse_swiglu,
+               std::size_t dram_stream_workers_per_bank,
+               std::size_t dram_stream_distributors,
+               std::size_t dram_stream_chunk) {
                 std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
                 std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
 
@@ -385,7 +389,11 @@ void py_module(nb::module_& mod) {
                     num_global_cb_receivers,
                     untilize_out,
                     std::move(allowed_worker_cores),
-                    stream_in1};
+                    stream_in1,
+                    fuse_swiglu,
+                    dram_stream_workers_per_bank,
+                    dram_stream_distributors,
+                    dram_stream_chunk};
             },
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
@@ -404,7 +412,18 @@ void py_module(nb::module_& mod) {
             nb::arg("num_global_cb_receivers").noconvert() = 1,
             nb::arg("untilize_out").noconvert() = false,
             nb::arg("allowed_worker_cores") = nb::none(),
-            nb::arg("stream_in1").noconvert() = false)
+            nb::arg("stream_in1").noconvert() = false,
+            nb::arg("fuse_swiglu").noconvert() = false,
+            nb::arg("dram_stream_workers_per_bank").noconvert() = 0,
+            nb::arg("dram_stream_distributors").noconvert() = 1,
+            nb::arg("dram_stream_chunk").noconvert() = 4)
+        .def_rw(
+            "dram_stream_workers_per_bank",
+            &MatmulMultiCoreReuseMultiCast1DProgramConfig::dram_stream_workers_per_bank,
+            R"doc(
+            mcast_in0 with a DRAM width-sharded weight, interleaved activation and output: > 0 runs the multi-row
+            DRAM-streamed program with this many cores per DRAM bank.
+            )doc")
         .def_rw(
             "compute_with_storage_grid_size",
             &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size,
@@ -421,6 +440,13 @@ void py_module(nb::module_& mod) {
 
             **DEPRECATED**: Use ``allowed_worker_cores`` instead for finer control over the compute grid.
         )doc")
+        .def_rw(
+            "fuse_swiglu",
+            &MatmulMultiCoreReuseMultiCast1DProgramConfig::fuse_swiglu,
+            R"doc(
+            mcast_in0 only: the weight's column tiles are SwiGLU gate / up pairs and the output is SiLU(gate) * up,
+            half the weight's width.
+            )doc")
         .def_rw("in0_block_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::in0_block_w, R"doc(
             Block width for both input tensors along the K dimension (shared inner dimension).
 
@@ -564,14 +590,15 @@ void py_module(nb::module_& mod) {
 
     matmul_multi_core_reuse_multicast_dram_sharded_program_config
         .def(
-            nb::init<std::size_t, std::size_t, std::size_t, std::optional<UnaryWithParam>, std::size_t, bool>(),
+            nb::init<std::size_t, std::size_t, std::size_t, std::optional<UnaryWithParam>, std::size_t, bool, bool>(),
             nb::kw_only(),
             nb::arg("in0_block_w").noconvert(),
             nb::arg("per_core_M").noconvert(),
             nb::arg("per_core_N").noconvert(),
             nb::arg("fused_activation") = nb::none(),
             nb::arg("num_workers_per_dram_bank") = 1,
-            nb::arg("use_multicore_pipeline") = false)
+            nb::arg("use_multicore_pipeline") = false,
+            nb::arg("fuse_swiglu") = false)
         .def_rw("in0_block_w", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::in0_block_w, R"doc(
             Block width for both input tensors along the K dimension (shared inner dimension).
 
@@ -630,19 +657,31 @@ void py_module(nb::module_& mod) {
             keeps each core's whole K in fp32 Dest, otherwise 16-bit Dest with packer L1
             accumulation in Float16_b. A call that does not qualify runs as if the flag were False.
         )doc")
+        .def_rw(
+            "fuse_swiglu",
+            &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::fuse_swiglu,
+            R"doc(
+            Fused SwiGLU for the multi-core pipeline (default False).
+
+            The weight's column tiles are gate / up pairs (column tile 2i is gate tile i, 2i + 1 is up
+            tile i); the output is SiLU(gate) * up and N / 2 columns wide, per_core_N describing that
+            output. Needs a call that runs the multi-core pipeline, with every core's columns and column
+            passes starting on a pair, and no K split.
+        )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
             // Include fused_activation in the repr for full visibility during tracing/debugging.
             std::string fused_activation_repr =
                 config.fused_activation.has_value() ? fmt::format("{}", config.fused_activation.value()) : "None";
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w={}, per_core_M={}, per_core_N={}, "
-                "fused_activation={}, num_workers_per_dram_bank={}, use_multicore_pipeline={})",
+                "fused_activation={}, num_workers_per_dram_bank={}, use_multicore_pipeline={}, fuse_swiglu={})",
                 config.in0_block_w,
                 config.per_core_M,
                 config.per_core_N,
                 fused_activation_repr,
                 config.num_workers_per_dram_bank,
-                config.use_multicore_pipeline ? "True" : "False");
+                config.use_multicore_pipeline ? "True" : "False",
+                config.fuse_swiglu ? "True" : "False");
         });
 
     auto matmul_multi_core_reuse_multicast_batched_dram_sharded_program_config =

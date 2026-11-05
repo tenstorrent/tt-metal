@@ -60,6 +60,9 @@ class PrefillRequest:
     padded_batch_size: int
     chunks: tuple[PrefillChunk, ...]
     uses_chunked_prefill: bool
+    # Packed batched prefill: the users' rows occupy this many 32-row tiles back to back (see packed_prefill_layout);
+    # 0 runs the padded batch x padded_sequence_length rows.
+    packed_row_tiles: int = 0
 
     def __post_init__(self) -> None:
         row_count = len(self.source_rows)
@@ -93,6 +96,8 @@ class PrefillRequest:
             raise ValueError("planning must stop at the chunk containing the actual last token")
         if self.uses_chunked_prefill != any(chunk.chunk_page_table is not None for chunk in self.chunks):
             raise ValueError("chunked-prefill classification disagrees with planned chunks")
+        if self.packed_row_tiles and (self.kind != "batched" or self.uses_chunked_prefill):
+            raise ValueError("only unchunked batched prefill requests can be packed")
 
     @property
     def page_table_width(self) -> int:
@@ -114,6 +119,7 @@ def _plan_prefill_requests(
     max_prefill_batch_size: int = 8,
     max_actual_page_table_width: int | None = None,
     canonical_page_table_width: int | None = None,
+    packed_batched_prefill: bool = False,
 ) -> tuple[PrefillRequest, ...]:
     """Plan prefix-caching and chunked-prefill semantics exactly once."""
 
@@ -209,6 +215,7 @@ def _plan_prefill_requests(
                 block_size=block_size,
                 max_actual_page_table_width=max_actual_page_table_width,
                 canonical_page_table_width=canonical_page_table_width,
+                packed=packed_batched_prefill,
             )
         )
 
@@ -287,6 +294,7 @@ def _make_batched_request(
     block_size: int,
     max_actual_page_table_width: int | None,
     canonical_page_table_width: int | None,
+    packed: bool = False,
 ) -> PrefillRequest:
     request_tokens = torch.zeros((padded_batch, sequence_length), dtype=torch.long, device=tokens.device)
     page_width = canonical_page_table_width or _num_blocks(sequence_length, block_size)
@@ -330,7 +338,63 @@ def _make_batched_request(
         padded_batch_size=padded_batch,
         chunks=(chunk,),
         uses_chunked_prefill=False,
+        packed_row_tiles=(
+            packed_prefill_capacity([lengths[row] for row in source_rows], padded_batch, sequence_length) if packed else 0
+        ),
     )
+
+
+_PACKED_TILE = 32
+_PACKED_CAPACITY_GRANULE_TILES = 4
+_PACKED_MIN_CAPACITY_TILES = 8
+_ROW_MAP_NONE = 0xFFFFFFFF
+
+
+def _packed_user_tiles(prompt_lengths: Sequence[int], padded_batch: int) -> list[int]:
+    """32-row tiles per padded user in the packed layout; a padding user (no prompt) takes one tile."""
+
+    lengths = list(prompt_lengths) + [1] * (padded_batch - len(prompt_lengths))
+    return [math.ceil(max(int(length), 1) / _PACKED_TILE) for length in lengths]
+
+
+def packed_prefill_capacity(prompt_lengths: Sequence[int], padded_batch: int, sequence_length: int) -> int:
+    """Packed row tiles for a batched prefill (rounded up to 4 tiles, at least 8), or 0 when packing saves nothing."""
+
+    used = sum(_packed_user_tiles(prompt_lengths, padded_batch))
+    granule = _PACKED_CAPACITY_GRANULE_TILES
+    capacity = max(-(-used // granule) * granule, _PACKED_MIN_CAPACITY_TILES)
+    return capacity if capacity * _PACKED_TILE < padded_batch * sequence_length else 0
+
+
+def packed_prefill_layout(request: PrefillRequest) -> tuple[torch.Tensor, torch.Tensor]:
+    """Packed tokens [1, capacity x 32] and the row map [1, 4 x capacity] of a packed batched request.
+
+    Row map entry i = {dest, z0, z1, 0} for packed row tile i: dest is the padded row tile (user x tiles per user + tile)
+    it holds; a user's last tile also names the padded row tiles after it, [z0, z1), which hold no packed rows. Tiles past
+    the users' are slack: dest 0xFFFFFFFF and token 0.
+    """
+
+    capacity = request.packed_row_tiles
+    rows_t = request.padded_sequence_length // _PACKED_TILE
+    user_tiles = _packed_user_tiles(request.prompt_lengths, request.padded_batch_size)
+    entries = []
+    for user, tiles in enumerate(user_tiles):
+        for tile in range(tiles):
+            last = tile == tiles - 1
+            entries.append(
+                [user * rows_t + tile, user * rows_t + tiles if last else 0, (user + 1) * rows_t if last else 0, 0]
+            )
+    if len(entries) > capacity:
+        raise ValueError(f"packed prefill needs {len(entries)} row tiles, capacity {capacity}")
+    tokens = torch.zeros((1, capacity * _PACKED_TILE), dtype=torch.long)
+    padded_tokens = request.tokens.reshape(-1)
+    for index, (dest, _, _, _) in enumerate(entries):
+        tokens[0, index * _PACKED_TILE : (index + 1) * _PACKED_TILE] = padded_tokens[
+            dest * _PACKED_TILE : (dest + 1) * _PACKED_TILE
+        ]
+    entries += [[_ROW_MAP_NONE, 0, 0, 0]] * (capacity - len(entries))
+    row_map = torch.tensor(entries, dtype=torch.int64).reshape(1, -1)
+    return tokens, row_map
 
 
 def _plan_chunks(

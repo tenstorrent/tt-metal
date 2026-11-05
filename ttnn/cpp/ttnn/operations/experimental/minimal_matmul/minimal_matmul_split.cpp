@@ -25,7 +25,11 @@ std::vector<ttnn::Tensor> minimal_matmul_split(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    bool fuse_swiglu) {
+    bool fuse_swiglu,
+    uint32_t head_split_rows,
+    uint32_t head_dim,
+    uint32_t head_split_users,
+    const std::optional<ttnn::Tensor>& row_map) {
     // Validate chunks
     TT_FATAL(chunks >= 1, "minimal_matmul_split requires chunks >= 1, got chunks={}", chunks);
 
@@ -60,7 +64,13 @@ std::vector<ttnn::Tensor> minimal_matmul_split(
         /*fused_ternary_scalar=*/std::nullopt,
         /*fused_ternary_input_a=*/std::nullopt,
         /*fused_ternary_input_b=*/std::nullopt,
-        fuse_swiglu);
+        fuse_swiglu,
+        /*optional_input_tensor=*/std::nullopt,
+        head_split_rows,
+        head_dim,
+        /*in0_heads=*/false,
+        head_split_users,
+        row_map);
 }
 
 }  // namespace ttnn::experimental

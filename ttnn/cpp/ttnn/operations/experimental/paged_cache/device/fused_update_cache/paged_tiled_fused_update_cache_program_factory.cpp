@@ -4,6 +4,9 @@
 
 #include "paged_tiled_fused_update_cache_program_factory.hpp"
 
+#include <algorithm>
+#include <optional>
+
 #include "paged_fused_update_cache_device_operation.hpp"
 #include "paged_fused_update_cache_device_operation_types.hpp"
 
@@ -42,16 +45,28 @@ const KernelSpecName TF_WRITER1{"writer1"};
 const KernelSpecName TF_WRITER2{"writer2"};
 const KernelSpecName TF_COMPUTE1{"compute1"};
 const KernelSpecName TF_COMPUTE2{"compute2"};
+// Helper triples: extra cores that take a share of a user's heads (see HeadSplit).
+const KernelSpecName TF_READER1_HELPER{"reader1_helper"};
+const KernelSpecName TF_READER2_HELPER{"reader2_helper"};
+const KernelSpecName TF_WRITER1_HELPER{"writer1_helper"};
+const KernelSpecName TF_WRITER2_HELPER{"writer2_helper"};
+const KernelSpecName TF_COMPUTE1_HELPER{"compute1_helper"};
+const KernelSpecName TF_COMPUTE2_HELPER{"compute2_helper"};
 
 const DFBSpecName TF_CACHE_TILES{"cache_tiles"};
 const DFBSpecName TF_INPUT1{"input1_shard"};
 const DFBSpecName TF_INPUT2{"input2_shard"};
+// On a helper core the user's input tiles are copied in over the NoC, into a buffer of the program's own.
+const DFBSpecName TF_INPUT_COPY{"input_copy"};
 const DFBSpecName TF_INDEX{"index"};
 const DFBSpecName TF_PAGE_TABLE{"page_table"};
 const DFBSpecName TF_UNTILIZED_CACHE{"untilized_cache"};
 const DFBSpecName TF_UNTILIZED_CACHE2{"untilized_cache2"};
 const DFBSpecName TF_UNTILIZED_INPUT{"untilized_input"};
 const DFBSpecName TF_OUT_TILES{"out_tiles"};
+// bfp8_b row patch: the input packed to bfp8_b, and the cache granules the writer patches.
+const DFBSpecName TF_PATCH_SRC{"patch_src"};
+const DFBSpecName TF_PATCH_SCRATCH{"patch_scratch"};
 
 const SemaphoreSpecName TF_IN0_SEQUENTIAL{"in0_sequential_mode"};
 
@@ -79,6 +94,67 @@ Table<TensorParamName, TensorArgument> tiled_fused_tensor_args(const PagedFusedU
         args.emplace(TF_PAGE_TABLE_T, tensor_args.page_table->mesh_tensor());
     }
     return args;
+}
+
+// How each user's heads are spread over cores. The core holding the user's input shard updates the first head
+// range; `groups - 1` helper cores per input update the others. Updating one head is a serial read-modify-write
+// of a cache block (DRAM read, untilize, row copy, tilize, DRAM write), so one core walking every head of a user
+// is the op's critical path when there are few users (32 heads at batch 1: 28 us on a P150). Helpers take the free
+// cores of the compute grid in row-major order: the first `users * (groups - 1)` for input 1, the next for input 2.
+// The share_cache mode chains users through a semaphore and keeps one core per user. An index tensor or page
+// table sharded into SRAM is read in place from the shard cores' own L1, which helpers do not have, so those
+// configurations keep one core per user too.
+struct HeadSplit {
+    uint32_t groups = 1;
+    std::vector<CoreCoord> helpers1;  // [user * (groups - 1) + group - 1]
+    std::vector<CoreCoord> helpers2;
+
+    uint32_t head_start(uint32_t num_heads, uint32_t group) const { return group * num_heads / groups; }
+    uint32_t num_local_heads(uint32_t num_heads, uint32_t group) const {
+        return head_start(num_heads, group + 1) - head_start(num_heads, group);
+    }
+};
+
+HeadSplit compute_head_split(
+    const PagedFusedUpdateCacheParams& operation_attributes, const PagedFusedUpdateCacheInputs& tensor_args) {
+    HeadSplit split;
+    const uint32_t num_heads = tensor_args.cache_tensor1.padded_shape()[1];
+    const CoreRangeSet input1_cores = tensor_args.input_tensor1.shard_spec().value().grid;
+    const CoreRangeSet input2_cores = tensor_args.input_tensor2.shard_spec().value().grid;
+    const uint32_t users = input1_cores.num_cores();
+    const bool index_is_sharded =
+        tensor_args.update_idxs_tensor.has_value() && tensor_args.update_idxs_tensor->is_sharded();
+    const bool page_table_is_sharded = tensor_args.page_table.has_value() && tensor_args.page_table->is_sharded();
+    if (operation_attributes.share_cache || index_is_sharded || page_table_is_sharded || num_heads <= 1 ||
+        users == 0) {
+        return split;
+    }
+    const CoreRangeSet shard_cores = input1_cores.merge(input2_cores);
+    const CoreCoord grid = tensor_args.input_tensor1.device()->compute_with_storage_grid_size();
+    std::vector<CoreCoord> free_cores;
+    for (uint32_t y = 0; y < grid.y; ++y) {
+        for (uint32_t x = 0; x < grid.x; ++x) {
+            const CoreCoord core{x, y};
+            if (!shard_cores.contains(core)) {
+                free_cores.push_back(core);
+            }
+        }
+    }
+    const uint32_t helpers_per_user = std::min<uint32_t>(num_heads - 1, free_cores.size() / (2 * users));
+    split.groups = 1 + helpers_per_user;
+    const uint32_t per_input = users * helpers_per_user;
+    split.helpers1.assign(free_cores.begin(), free_cores.begin() + per_input);
+    split.helpers2.assign(free_cores.begin() + per_input, free_cores.begin() + 2 * per_input);
+    return split;
+}
+
+CoreRangeSet cores_to_range_set(const std::vector<CoreCoord>& cores) {
+    std::vector<CoreRange> ranges;
+    ranges.reserve(cores.size());
+    for (const auto& core : cores) {
+        ranges.emplace_back(core, core);
+    }
+    return CoreRangeSet(ranges);
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE_TILED
@@ -225,6 +301,16 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
 
     uint32_t num_input_tiles = input1_shard_spec.value().shape[0] * input1_shard_spec.value().shape[1] / TILE_HW;
 
+    // bfp8_b cache: write only the updated row. A bfp8_b tile keeps one shared exponent per 16-value face row, so the
+    // row's bytes (2 exponents and 2 x 16 mantissas per tile) are the packed input row's, and the rest of the tile is
+    // untouched. The writer reads, patches and writes back three aligned 64-byte granules per tile instead of the
+    // reader, compute and writer moving the whole tile through untilize / tilize (P150, 32 users x 32 heads:
+    // 13.4 MB of DRAM traffic per call at the DRAM limit).
+    const bool row_patch = cache_tensor1.dtype() == DataType::BFLOAT8_B &&
+                           cache_tensor1.tensor_spec().tile().get_height() == TILE_HEIGHT &&
+                           cache_tensor1.tensor_spec().tile().get_width() == TILE_WIDTH &&
+                           input_tensor1.tensor_spec().tile().get_height() == TILE_HEIGHT;
+    constexpr uint32_t row_patch_heads_per_group = 4;  // the kernels' row_patch::kHeadsPerGroup
     uint32_t num_cache_tiles = 2 * Wt;   // double buffered
     uint32_t num_interm_tiles = 2 * Wt;  // double buffered
     uint32_t num_output_tiles = B * Wt;
@@ -236,12 +322,6 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
     // placed over the bounding box of the two: a kernel spanning both grids would extend input1's
     // borrow onto cores where input_tensor1 has no shard at all.
     Group<DataflowBufferSpec> dataflow_buffers = {
-        DataflowBufferSpec{
-            .unique_id = TF_CACHE_TILES,
-            .entry_size = cache_single_tile_size,
-            .num_entries = num_cache_tiles,
-            .data_format_metadata = cache_dfb_data_format,
-        },
         DataflowBufferSpec{
             .unique_id = TF_INPUT1,
             .entry_size = input_single_tile_size,
@@ -256,36 +336,66 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
             .data_format_metadata = input_dfb_data_format,
             .borrowed_from = TF_INPUT2_T,
         },
+    };
+    if (row_patch) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = TF_PATCH_SRC,
+            .entry_size = cache_single_tile_size,
+            .num_entries = Wt,
+            .data_format_metadata = cache_dfb_data_format,
+        });
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = TF_PATCH_SCRATCH,
+            .entry_size = cache_single_tile_size,  // a tile prefix of up to the whole tile (see the reader)
+            .num_entries = 2 * row_patch_heads_per_group * Wt,
+            .data_format_metadata = cache_dfb_data_format,
+        });
+    } else {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = TF_CACHE_TILES,
+            .entry_size = cache_single_tile_size,
+            .num_entries = num_cache_tiles,
+            .data_format_metadata = cache_dfb_data_format,
+        });
         // These two buffers share one backing region, so each names the other. The alias group
         // must agree on total size and on the set of kernels binding it; both hold here, since
         // the writer and compute each bind both.
-        DataflowBufferSpec{
+        dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = TF_UNTILIZED_CACHE,
             .entry_size = interm_single_tile_size,
             .num_entries = num_interm_tiles,
             .data_format_metadata = interm_dfb_data_format,
             .advanced_options = {.alias_with = {TF_UNTILIZED_CACHE2}},
-        },
-        DataflowBufferSpec{
+        });
+        dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = TF_UNTILIZED_CACHE2,
             .entry_size = interm_single_tile_size,
             .num_entries = num_interm_tiles,
             .data_format_metadata = interm_dfb_data_format,
             .advanced_options = {.alias_with = {TF_UNTILIZED_CACHE}},
-        },
-        DataflowBufferSpec{
+        });
+        dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = TF_UNTILIZED_INPUT,
             .entry_size = interm_single_tile_size,
             .num_entries = num_interm_tiles,
             .data_format_metadata = interm_dfb_data_format,
-        },
-        DataflowBufferSpec{
+        });
+        dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = TF_OUT_TILES,
             .entry_size = cache_single_tile_size,
             .num_entries = num_output_tiles,
             .data_format_metadata = cache_dfb_data_format,
-        },
-    };
+        });
+    }
+    const HeadSplit head_split = compute_head_split(operation_attributes, tensor_args);
+    if (head_split.groups > 1) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = TF_INPUT_COPY,
+            .entry_size = input_single_tile_size,
+            .num_entries = Wt,
+            .data_format_metadata = input_dfb_data_format,
+        });
+    }
     if (use_index_tensor) {
         // An index tensor sharded into SRAM is read straight out of its own shard; a DRAM one is
         // NoC-read into a buffer of the program's own.
@@ -324,6 +434,9 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
             optional_resource_defines.emplace("INDEX_IS_DRAM", "1");
         }
     }
+    if (row_patch) {
+        optional_resource_defines.emplace("ROW_PATCH", "1");
+    }
     if (is_paged_cache) {
         optional_resource_defines.emplace("IS_PAGED_CACHE", "1");
         if (page_table_is_dram) {
@@ -342,26 +455,52 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                                        const KernelSpecName& writer_id,
                                        const KernelSpecName& compute_id,
                                        const DFBSpecName& input_dfb,
-                                       const TensorParamName& cache_tensor_param) {
+                                       const TensorParamName& cache_tensor_param,
+                                       const std::optional<TensorParamName>& remote_input_param) {
+        KernelSpec::CompilerOptions::Defines reader_defines = optional_resource_defines;
+        if (remote_input_param.has_value()) {
+            reader_defines.emplace("REMOTE_INPUT", "1");
+        }
         Group<DFBBinding> reader_dfb_bindings = {
             DFBBinding{
                 .dfb_spec_name = input_dfb,
                 .accessor_name = "input",
                 .endpoint_type = DFBEndpointType::PRODUCER,
             },
-            DFBBinding{
+        };
+        if (row_patch) {
+            reader_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = TF_PATCH_SCRATCH,
+                .accessor_name = "patch_scratch",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+        } else {
+            reader_dfb_bindings.push_back(DFBBinding{
                 .dfb_spec_name = TF_CACHE_TILES,
                 .accessor_name = "cache",
                 .endpoint_type = DFBEndpointType::PRODUCER,
-            },
-        };
+            });
+        }
         Group<TensorBinding> reader_tensor_bindings = {
             TensorBinding{
                 .tensor_parameter_name = cache_tensor_param,
                 .accessor_name = "cache",
             },
         };
-        Group<DFBBinding> writer_dfb_bindings = {
+        Group<DFBBinding> writer_dfb_bindings;
+        if (row_patch) {
+            writer_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = TF_PATCH_SRC,
+                .accessor_name = "patch_src",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+            writer_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = TF_PATCH_SCRATCH,
+                .accessor_name = "patch_scratch",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        } else {
+          writer_dfb_bindings = {
             // The writer's `cache` handle names the *output* buffer, the one compute fills with
             // the retilized block. The reader's handle of the same name is the cache buffer it reads
             // from DRAM; accessor names are per-kernel, and this is where the two are told apart.
@@ -385,8 +524,15 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                 .accessor_name = "untilized_input",
                 .endpoint_type = DFBEndpointType::CONSUMER,
             },
-        };
+          };
+        }
 
+        if (remote_input_param.has_value()) {
+            reader_tensor_bindings.push_back(TensorBinding{
+                .tensor_parameter_name = *remote_input_param,
+                .accessor_name = "input",
+            });
+        }
         if (use_index_tensor) {
             reader_dfb_bindings.push_back(DFBBinding{
                 .dfb_spec_name = TF_INDEX,
@@ -430,7 +576,7 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
             .unique_id = reader_id,
             .source = "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
                       "reader_paged_fused_update_cache_interleaved_start_id.cpp",
-            .compiler_options = {.defines = optional_resource_defines},
+            .compiler_options = {.defines = reader_defines},
             .dfb_bindings = std::move(reader_dfb_bindings),
             .semaphore_bindings =
                 {
@@ -456,7 +602,14 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                     {"batch_size", B},
                 },
             .runtime_arg_schema =
-                {.runtime_arg_names = {"has_work", "cache_start_id", "my_batch_idx", "wait_to_start"}},
+                {.runtime_arg_names =
+                     {"has_work",
+                      "cache_start_id",
+                      "my_batch_idx",
+                      "wait_to_start",
+                      "head_start",
+                      "num_local_heads",
+                      "cache_row"}},
             .hw_config = create_reader_datamovement_config(),
         });
 
@@ -501,7 +654,9 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                       "my_batch_idx",
                       "send_signal",
                       "send_core_x",
-                      "send_core_y"}},
+                      "send_core_y",
+                      "head_start",
+                      "num_local_heads"}},
             .hw_config = create_writer_datamovement_config(),
         });
 
@@ -520,9 +675,60 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                         dfb, preserve_fp32_cache ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc);
                 }
             };
-            require_unpack_mode(TF_CACHE_TILES, cache_dfb_data_format);
             require_unpack_mode(input_dfb, input_dfb_data_format);
-            require_unpack_mode(TF_UNTILIZED_CACHE2, interm_dfb_data_format);
+            if (!row_patch) {
+                require_unpack_mode(TF_CACHE_TILES, cache_dfb_data_format);
+                require_unpack_mode(TF_UNTILIZED_CACHE2, interm_dfb_data_format);
+            }
+        }
+
+        KernelSpec::CompilerOptions::Defines compute_defines;
+        if (row_patch) {
+            compute_defines.emplace("ROW_PATCH", "1");
+        }
+        Group<DFBBinding> compute_dfb_bindings = {
+            DFBBinding{
+                .dfb_spec_name = input_dfb,
+                .accessor_name = "in",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            },
+        };
+        if (row_patch) {
+            compute_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = TF_PATCH_SRC,
+                .accessor_name = "patch_src",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+        } else {
+            for (const auto& b : {
+                     DFBBinding{
+                         .dfb_spec_name = TF_CACHE_TILES,
+                         .accessor_name = "cache",
+                         .endpoint_type = DFBEndpointType::CONSUMER,
+                     },
+                     DFBBinding{
+                         .dfb_spec_name = TF_UNTILIZED_CACHE,
+                         .accessor_name = "untilized_cache",
+                         .endpoint_type = DFBEndpointType::PRODUCER,
+                     },
+                     DFBBinding{
+                         .dfb_spec_name = TF_UNTILIZED_CACHE2,
+                         .accessor_name = "untilized_cache2",
+                         .endpoint_type = DFBEndpointType::CONSUMER,
+                     },
+                     DFBBinding{
+                         .dfb_spec_name = TF_UNTILIZED_INPUT,
+                         .accessor_name = "untilized_in",
+                         .endpoint_type = DFBEndpointType::PRODUCER,
+                     },
+                     DFBBinding{
+                         .dfb_spec_name = TF_OUT_TILES,
+                         .accessor_name = "out",
+                         .endpoint_type = DFBEndpointType::PRODUCER,
+                     },
+                 }) {
+                compute_dfb_bindings.push_back(b);
+            }
         }
 
         kernels.push_back(KernelSpec{
@@ -531,59 +737,32 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                       "paged_fused_update_cache.cpp",
             // Legacy compute kernels default to O3; Metal 2.0's type-agnostic default is O2, so it is
             // set explicitly here to keep the compile and link at the level the op has always used.
-            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
-            .dfb_bindings =
-                {
-                    DFBBinding{
-                        .dfb_spec_name = input_dfb,
-                        .accessor_name = "in",
-                        .endpoint_type = DFBEndpointType::CONSUMER,
-                    },
-                    DFBBinding{
-                        .dfb_spec_name = TF_CACHE_TILES,
-                        .accessor_name = "cache",
-                        .endpoint_type = DFBEndpointType::CONSUMER,
-                    },
-                    DFBBinding{
-                        .dfb_spec_name = TF_UNTILIZED_CACHE,
-                        .accessor_name = "untilized_cache",
-                        .endpoint_type = DFBEndpointType::PRODUCER,
-                    },
-                    DFBBinding{
-                        .dfb_spec_name = TF_UNTILIZED_CACHE2,
-                        .accessor_name = "untilized_cache2",
-                        .endpoint_type = DFBEndpointType::CONSUMER,
-                    },
-                    DFBBinding{
-                        .dfb_spec_name = TF_UNTILIZED_INPUT,
-                        .accessor_name = "untilized_in",
-                        .endpoint_type = DFBEndpointType::PRODUCER,
-                    },
-                    DFBBinding{
-                        .dfb_spec_name = TF_OUT_TILES,
-                        .accessor_name = "out",
-                        .endpoint_type = DFBEndpointType::PRODUCER,
-                    },
-                },
+            .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
+            .dfb_bindings = std::move(compute_dfb_bindings),
             .compile_time_args =
                 {
                     {"Wt", Wt},
-                    {"num_heads", num_heads},
                 },
-            .runtime_arg_schema = {.runtime_arg_names = {"has_work"}},
+            .runtime_arg_schema = {.runtime_arg_names = {"has_work", "num_local_heads"}},
             .hw_config = compute_hw,
         });
     };
 
-    add_kernel_triple(TF_READER1, TF_WRITER1, TF_COMPUTE1, TF_INPUT1, TF_CACHE1);
-    add_kernel_triple(TF_READER2, TF_WRITER2, TF_COMPUTE2, TF_INPUT2, TF_CACHE2);
+    add_kernel_triple(TF_READER1, TF_WRITER1, TF_COMPUTE1, TF_INPUT1, TF_CACHE1, std::nullopt);
+    add_kernel_triple(TF_READER2, TF_WRITER2, TF_COMPUTE2, TF_INPUT2, TF_CACHE2, std::nullopt);
+    if (head_split.groups > 1) {
+        add_kernel_triple(
+            TF_READER1_HELPER, TF_WRITER1_HELPER, TF_COMPUTE1_HELPER, TF_INPUT_COPY, TF_CACHE1, TF_INPUT1_T);
+        add_kernel_triple(
+            TF_READER2_HELPER, TF_WRITER2_HELPER, TF_COMPUTE2_HELPER, TF_INPUT_COPY, TF_CACHE2, TF_INPUT2_T);
+    }
 
     // ---------------- Tensor parameters ----------------
 
     Group<TensorParameter> tensor_parameters = {
         TensorParameter{.unique_id = TF_CACHE1, .spec = cache_tensor1.tensor_spec()},
         TensorParameter{.unique_id = TF_CACHE2, .spec = cache_tensor2.tensor_spec()},
-        // Bound by no kernel: each backs a borrowed input-shard buffer, which is what uses it.
+        // Each backs a borrowed input-shard buffer; the helper readers also bind them to copy a user's input.
         TensorParameter{.unique_id = TF_INPUT1_T, .spec = input_tensor1.tensor_spec()},
         TensorParameter{.unique_id = TF_INPUT2_T, .spec = input_tensor2.tensor_spec()},
     };
@@ -593,6 +772,12 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
     }
     if (is_paged_cache) {
         tensor_parameters.push_back(TensorParameter{.unique_id = TF_PAGE_TABLE_T, .spec = page_table->tensor_spec()});
+    }
+
+    CoreRangeSet semaphore_cores = all_cores;
+    if (head_split.groups > 1) {
+        semaphore_cores = semaphore_cores.merge(cores_to_range_set(head_split.helpers1))
+                              .merge(cores_to_range_set(head_split.helpers2));
     }
 
     ProgramSpec spec{
@@ -605,7 +790,7 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
             {
                 SemaphoreSpec{
                     .unique_id = TF_IN0_SEQUENTIAL,
-                    .target_nodes = all_cores,
+                    .target_nodes = semaphore_cores,
                 },
             },
         .tensor_parameters = std::move(tensor_parameters),
@@ -623,6 +808,18 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                 },
             },
     };
+    if (head_split.groups > 1) {
+        spec.work_units.push_back(WorkUnitSpec{
+            .name = "input1_helpers",
+            .kernels = {TF_READER1_HELPER, TF_WRITER1_HELPER, TF_COMPUTE1_HELPER},
+            .target_nodes = cores_to_range_set(head_split.helpers1),
+        });
+        spec.work_units.push_back(WorkUnitSpec{
+            .name = "input2_helpers",
+            .kernels = {TF_READER2_HELPER, TF_WRITER2_HELPER, TF_COMPUTE2_HELPER},
+            .target_nodes = cores_to_range_set(head_split.helpers2),
+        });
+    }
 
     // ---------------- Run args ----------------
 
@@ -637,6 +834,12 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
     KernelRunArgs writer2_run_args{.kernel = TF_WRITER2};
     KernelRunArgs compute1_run_args{.kernel = TF_COMPUTE1};
     KernelRunArgs compute2_run_args{.kernel = TF_COMPUTE2};
+    KernelRunArgs reader1h_run_args{.kernel = TF_READER1_HELPER};
+    KernelRunArgs reader2h_run_args{.kernel = TF_READER2_HELPER};
+    KernelRunArgs writer1h_run_args{.kernel = TF_WRITER1_HELPER};
+    KernelRunArgs writer2h_run_args{.kernel = TF_WRITER2_HELPER};
+    KernelRunArgs compute1h_run_args{.kernel = TF_COMPUTE1_HELPER};
+    KernelRunArgs compute2h_run_args{.kernel = TF_COMPUTE2_HELPER};
 
     for (uint32_t i = 0; i < cores1.size(); ++i) {
         const CoreCoord& core1 = cores1.at(i);
@@ -674,7 +877,10 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                                         KernelRunArgs& compute_run_args,
                                         const CoreCoord& core,
                                         uint32_t send_core_x,
-                                        uint32_t send_core_y) {
+                                        uint32_t send_core_y,
+                                        uint32_t group) {
+            const uint32_t head_start = head_split.head_start(num_heads, group);
+            const uint32_t num_local_heads = head_split.num_local_heads(num_heads, group);
             AddRuntimeArgsForNode(
                 reader_run_args.runtime_arg_values,
                 core,
@@ -683,6 +889,9 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                     {"cache_start_id", cache_start_id},
                     {"my_batch_idx", i},
                     {"wait_to_start", static_cast<uint32_t>(wait_to_start)},
+                    {"head_start", head_start},
+                    {"num_local_heads", num_local_heads},
+                    {"cache_row", use_index_tensor ? 0u : operation_attributes.update_idxs.at(i) % TILE_HEIGHT},
                 });
             AddRuntimeArgsForNode(
                 writer_run_args.runtime_arg_values,
@@ -695,12 +904,20 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                     {"send_signal", static_cast<uint32_t>(send_signal)},
                     {"send_core_x", send_core_x},
                     {"send_core_y", send_core_y},
+                    {"head_start", head_start},
+                    {"num_local_heads", num_local_heads},
                 });
-            AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"has_work", has_work}});
+            AddRuntimeArgsForNode(
+                compute_run_args.runtime_arg_values, core, {{"has_work", has_work}, {"num_local_heads", num_local_heads}});
         };
 
-        add_index_args(reader1_run_args, writer1_run_args, compute1_run_args, core1, send_core1_x, send_core1_y);
-        add_index_args(reader2_run_args, writer2_run_args, compute2_run_args, core2, send_core2_x, send_core2_y);
+        add_index_args(reader1_run_args, writer1_run_args, compute1_run_args, core1, send_core1_x, send_core1_y, 0);
+        add_index_args(reader2_run_args, writer2_run_args, compute2_run_args, core2, send_core2_x, send_core2_y, 0);
+        for (uint32_t g = 1; g < head_split.groups; ++g) {
+            const uint32_t h = i * (head_split.groups - 1) + g - 1;
+            add_index_args(reader1h_run_args, writer1h_run_args, compute1h_run_args, head_split.helpers1[h], 0, 0, g);
+            add_index_args(reader2h_run_args, writer2h_run_args, compute2h_run_args, head_split.helpers2[h], 0, 0, g);
+        }
     }
 
     ProgramRunArgs run_args;
@@ -712,6 +929,14 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
         std::move(compute1_run_args),
         std::move(compute2_run_args),
     };
+    if (head_split.groups > 1) {
+        run_args.kernel_run_args.push_back(std::move(reader1h_run_args));
+        run_args.kernel_run_args.push_back(std::move(reader2h_run_args));
+        run_args.kernel_run_args.push_back(std::move(writer1h_run_args));
+        run_args.kernel_run_args.push_back(std::move(writer2h_run_args));
+        run_args.kernel_run_args.push_back(std::move(compute1h_run_args));
+        run_args.kernel_run_args.push_back(std::move(compute2h_run_args));
+    }
     run_args.tensor_args = tiled_fused_tensor_args(tensor_args);
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
@@ -743,6 +968,11 @@ ProgramRunArgs tiled_fused_run_args(
     KernelRunArgs reader2_run_args{.kernel = TF_READER2};
     KernelRunArgs writer1_run_args{.kernel = TF_WRITER1};
     KernelRunArgs writer2_run_args{.kernel = TF_WRITER2};
+    KernelRunArgs reader1h_run_args{.kernel = TF_READER1_HELPER};
+    KernelRunArgs reader2h_run_args{.kernel = TF_READER2_HELPER};
+    KernelRunArgs writer1h_run_args{.kernel = TF_WRITER1_HELPER};
+    KernelRunArgs writer2h_run_args{.kernel = TF_WRITER2_HELPER};
+    const HeadSplit head_split = compute_head_split(operation_attributes, tensor_args);
 
     // Empty offsets == index-tensor mode, where the artifacts build bakes 0 and the kernels read the
     // real positions on-device; writing 0 back reproduces that build exactly.
@@ -752,7 +982,11 @@ ProgramRunArgs tiled_fused_run_args(
 
         const auto patch_core =
             [&](KernelRunArgs& reader_run_args, KernelRunArgs& writer_run_args, const CoreCoord& core) {
-                AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"cache_start_id", cache_start_id}});
+                AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {{"cache_start_id", cache_start_id},
+                     {"cache_row", offsets.empty() ? 0u : operation_attributes.update_idxs.at(i) % TILE_HEIGHT}});
                 AddRuntimeArgsForNode(
                     writer_run_args.runtime_arg_values,
                     core,
@@ -763,6 +997,11 @@ ProgramRunArgs tiled_fused_run_args(
             };
         patch_core(reader1_run_args, writer1_run_args, cores1[i]);
         patch_core(reader2_run_args, writer2_run_args, cores2[i]);
+        for (uint32_t g = 1; g < head_split.groups; ++g) {
+            const uint32_t h = i * (head_split.groups - 1) + g - 1;
+            patch_core(reader1h_run_args, writer1h_run_args, head_split.helpers1[h]);
+            patch_core(reader2h_run_args, writer2h_run_args, head_split.helpers2[h]);
+        }
     }
 
     params.kernel_run_args = {
@@ -771,6 +1010,12 @@ ProgramRunArgs tiled_fused_run_args(
         std::move(writer1_run_args),
         std::move(writer2_run_args),
     };
+    if (head_split.groups > 1) {
+        params.kernel_run_args.push_back(std::move(reader1h_run_args));
+        params.kernel_run_args.push_back(std::move(reader2h_run_args));
+        params.kernel_run_args.push_back(std::move(writer1h_run_args));
+        params.kernel_run_args.push_back(std::move(writer2h_run_args));
+    }
     return params;
 }
 

@@ -38,6 +38,60 @@ __attribute__((noinline, noclone)) void move_block_ool(uint32_t in_cb, uint32_t 
     move_block<true>(in_cb, out_cb, num_tiles);
 }
 
+#ifdef SDPA_FUSED_RESCALE
+// SUM = PREV_SUM * DIFF + CUR_SUM (into prev_sum) and OUT_ACC = OUT_ACC * DIFF (columns broadcast) + OUT_IM, in one Dest
+// pass; consumes prev_sum, cur_sum, diff, out_acc and out_im. All of them are Float16_b intermediates.
+template <uint32_t Sq, uint32_t cols>
+void fused_rescale(uint32_t cb_prev_sum, uint32_t cb_cur_sum, uint32_t cb_diff, uint32_t cb_acc, uint32_t cb_im) {
+    constexpr uint32_t out_tiles = Sq * cols;
+    CircularBuffer prev_sum(cb_prev_sum), cur_sum(cb_cur_sum), diff(cb_diff), acc(cb_acc), im(cb_im);
+    prev_sum.wait_front(Sq);
+    cur_sum.wait_front(Sq);
+    diff.wait_front(Sq);
+    acc.wait_front(out_tiles);
+    im.wait_front(out_tiles);
+    reconfig_data_format(cb_prev_sum, cb_diff);
+    mul_init(cb_prev_sum, cb_diff, false);
+    tile_regs_acquire();
+    for (uint32_t i = 0; i < Sq; ++i) {
+        mul_tiles(cb_prev_sum, cb_diff, i, i, i);
+    }
+    mul_bcast_cols_init(cb_acc, cb_diff);
+    for (uint32_t i = 0; i < Sq; ++i) {
+        for (uint32_t j = 0; j < cols; ++j) {
+            mul_tiles_bcast_cols(cb_acc, cb_diff, (i * cols) + j, i, Sq + (i * cols) + j);
+        }
+    }
+    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_cur_sum);
+    for (uint32_t i = 0; i < Sq; ++i) {
+        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_cur_sum, i, i);
+    }
+    for (uint32_t t = 0; t < out_tiles; ++t) {
+        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_im, t, Sq + t);
+    }
+    tile_regs_commit();
+    prev_sum.pop_front(Sq);
+    cur_sum.pop_front(Sq);
+    diff.pop_front(Sq);
+    acc.pop_front(out_tiles);
+    im.pop_front(out_tiles);
+    prev_sum.reserve_back(Sq);
+    acc.reserve_back(out_tiles);
+    tile_regs_wait();
+    pack_reconfig_data_format(cb_prev_sum);
+    for (uint32_t i = 0; i < Sq; ++i) {
+        pack_tile(i, cb_prev_sum);
+    }
+    pack_reconfig_data_format(cb_acc);
+    for (uint32_t t = 0; t < out_tiles; ++t) {
+        pack_tile(Sq + t, cb_acc);
+    }
+    tile_regs_release();
+    prev_sum.push_back(Sq);
+    acc.push_back(out_tiles);
+}
+#endif
+
 void kernel_main() {
     // Compile time arguments
 
@@ -531,9 +585,34 @@ void kernel_main() {
                 CircularBuffer(cb_qk_im).pop_front(qk_chunk_tiles_dynamic);
 
                 /* OUT_ACC += OUT_IM */
+#ifdef SDPA_FUSED_RESCALE
+                if (k_chunk == k_chunk_start) {
+                    cb_out_mm = cb_out_im;
+                    // PREV_SUM <- CUR_SUM: prev_sum is empty here, so the two swap roles
+                    const uint32_t t = cb_cur_sum;
+                    cb_cur_sum = cb_prev_sum;
+                    cb_prev_sum = t;
+                } else if constexpr (!single_local_chunk) {
+                    /* EXP_MAX_DIFF = exp(PREV_MAX - CUR_MAX) */
+                    reconfig_data_format(cb_prev_max, cb_cur_max);
+                    pack_reconfig_data_format(cb_exp_max_diff);
+                    sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    CircularBuffer(cb_prev_max).pop_front(Sq_chunk_t);
+                    fused_rescale<Sq_chunk_t, vDHt>(
+                        cb_prev_sum, cb_cur_sum, cb_exp_max_diff, cb_out_accumulate_im, cb_out_im);
+                }
+                {
+                    // PREV_MAX <- CUR_MAX: prev_max is empty here, so the two swap roles
+                    const uint32_t t = cb_cur_max;
+                    cb_cur_max = cb_prev_max;
+                    cb_prev_max = t;
+                }
+                if constexpr (false) {
+#else
                 if (k_chunk == k_chunk_start) {
                     cb_out_mm = cb_out_im;
                 } else if constexpr (!single_local_chunk) {
+#endif
                     // When there is more than 1 chunk, we perform Lazy Softmax
                     // Reconfig register DF
                     reconfig_data_format(cb_prev_max, cb_cur_max);
@@ -563,6 +642,7 @@ void kernel_main() {
                     add_block_inplace<true>(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
                 }
 
+#ifndef SDPA_FUSED_RESCALE
                 // More local chunks to process - move intermediate sum and max values to ping-pong buffers
                 reconfig_data_format(cb_cur_max, cb_cur_max);
                 pack_reconfig_data_format(cb_prev_max);
@@ -572,6 +652,7 @@ void kernel_main() {
 
                 // PREV_SUM <- CUR_SUM
                 move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+#endif
         }
 
         /* END OF FLASH ATTENTION LOOP */

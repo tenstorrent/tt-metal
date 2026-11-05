@@ -186,6 +186,32 @@ void kernel_main() {
     }
 #endif
 
+#ifdef WRITE_INTERLEAVED
+    {
+        // Interleaved output: this core's block_ht x block_w output tiles go to their pages of the output tensor.
+        constexpr auto block_ht = get_arg(args::block_ht);
+        constexpr auto out_row_tiles = get_arg(args::out_row_tiles);
+        const uint32_t height_shard_tile_start_id = get_arg(args::height_shard_tile_start_id);
+        DataflowBuffer dfb_out_il(dfb::out);
+        const auto dst = TensorAccessor(tensor::dst);
+        const uint32_t out_tile_bytes = dfb_out_il.get_tile_size();
+        dfb_out_il.wait_front(block_ht * block_w);
+        uint32_t offset = 0;
+        for (uint32_t h = 0; h < block_ht; ++h) {
+            for (uint32_t w = 0; w < block_w; ++w) {
+                noc.async_write(
+                    dfb_out_il,
+                    dst,
+                    out_tile_bytes,
+                    {.offset_bytes = offset},
+                    {.page_id = (height_shard_tile_start_id + h) * out_row_tiles + width_shard_tile_start_id + w});
+                offset += out_tile_bytes;
+            }
+        }
+        noc.async_write_barrier();
+        dfb_out_il.pop_front(block_ht * block_w);
+    }
+#endif
 #ifndef SKIP_WRITE_BACK
     // The output tensor's shard sits at the same address on every core it is sharded across, so its
     // base address doubles as the destination address on each storage core. No data moves through a

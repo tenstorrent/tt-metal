@@ -55,6 +55,14 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.input;
     const auto& b = tensor_args.residual_input_tensor;
+    if (operation_attributes.write_pre_add_sum) {
+        TT_FATAL(
+            b.has_value() && tensor_args.input.is_sharded() &&
+                std::holds_alternative<LayerNormShardedMultiCoreProgramConfig>(operation_attributes.program_config) &&
+                operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
+            "write_pre_add_sum needs a residual_input_tensor, a sharded input and program config, and a "
+            "non-distributed norm");
+    }
     const auto& gamma = tensor_args.weight;
     const auto& beta = tensor_args.bias;
     const auto& stats = tensor_args.stats;
@@ -225,10 +233,13 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
             "Height sharded inputs are not supported.");
+        // A non-distributed sharded norm may also write an interleaved output (its writer then writes each tile).
         TT_FATAL(
-            operation_attributes.output_mem_config.is_sharded() &&
-                operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
-            "Sharded inputs require sharded outputs.");
+            (operation_attributes.output_mem_config.is_sharded() &&
+             operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) ||
+                (!operation_attributes.output_mem_config.is_sharded() &&
+                 operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED),
+            "Sharded inputs require sharded outputs (or an interleaved output for a non-distributed norm).");
         if (b.has_value()) {
             TT_FATAL(b.value().is_sharded(), "residual tensor b should be sharded if input a is sharded");
             TT_FATAL(b.value().shard_spec() == a.shard_spec(), "Both a and b should have the same shard spec");
@@ -353,8 +364,10 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                     a.memory_config().buffer_type(),
                     operation_attributes.output_mem_config.buffer_type());
                 TT_FATAL(
-                    a.memory_config().memory_layout() == operation_attributes.output_mem_config.memory_layout(),
-                    "Input and output memory layouts must match, got input: {} vs output: {}",
+                    a.memory_config().memory_layout() == operation_attributes.output_mem_config.memory_layout() ||
+                        (!operation_attributes.output_mem_config.is_sharded() &&
+                         operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED),
+                    "Input and output memory layouts must match (or the output be interleaved), got input: {} vs output: {}",
                     a.memory_config().memory_layout(),
                     operation_attributes.output_mem_config.memory_layout());
 
@@ -541,7 +554,9 @@ tt::tt_metal::TensorSpec LayerNormDeviceOperation::compute_output_specs(
                 return tt::tt_metal::TensorSpec(
                     output_shape,
                     TensorLayout(
-                        input_tensor.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
+                        operation_attributes.dtype.value_or(input_tensor.dtype()),
+                        PageConfig(output_layout),
+                        operation_attributes.output_mem_config));
             }
         },
         operation_attributes.program_config);
@@ -578,7 +593,8 @@ Tensor layer_norm(
     DistributedLayerNormStage distributed_norm_stage,
     const std::optional<const Tensor>& stats,
     const std::optional<const Tensor>& recip_tensor,
-    const std::optional<operations::unary::UnaryWithParam>& fused_activation) {
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
+    bool write_pre_add_sum) {
     auto operation_attributes = LayerNormParams{
         .norm_type = norm_type,
         .distributed_norm_stage = distributed_norm_stage,
@@ -587,7 +603,8 @@ Tensor layer_norm(
         .program_config = program_config,
         .compute_kernel_config = compute_kernel_config,
         .dtype = dtype,
-        .fused_activation = fused_activation};
+        .fused_activation = fused_activation,
+        .write_pre_add_sum = write_pre_add_sum};
     auto tensor_args = LayerNormInputs{
         .input = input_tensor,
         .residual_input_tensor = residual_input_tensor,

@@ -256,6 +256,9 @@ struct SpecConfig {
     bool has_b = false;
     bool has_gamma = false;
     bool has_beta = false;
+    // Non-distributed fused pre-add only: also write a + b (in the input's format) over the input tensor's own
+    // shard, so the caller gets the residual stream's sum and its norm from one op.
+    bool write_pre_add_sum = false;
     // True when the output shard spec matches the input's, so the compute kernel's output buffer is
     // already the output tensor's memory and nothing has to be moved.
     bool skip_write_back = false;
@@ -263,6 +266,10 @@ struct SpecConfig {
     // `!skip_write_back`: the write-back reads runtime arguments that only the post-all-gather stage
     // supplies, so the build that compiles it is the build where those arguments exist.
     bool writes_back = false;
+    // Non-distributed with an interleaved output: the writer drains the output buffer to the output tensor's pages
+    // (out_row_tiles tiles per tile row).
+    bool writes_interleaved = false;
+    uint32_t out_row_tiles = 0;
     // Legacy (non-Welford) column masking for a non-tile-aligned width: zero the padding columns of
     // the final tile so they do not enter the statistics.
     bool do_col_mask = false;

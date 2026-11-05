@@ -36,6 +36,19 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
     const auto& sin = tensor_args.sin_cache;
     const auto& trans_mat = tensor_args.trans_mat;
 
+    if (tensor_args.input_tensor_b.has_value()) {
+        const auto& b = tensor_args.input_tensor_b.value();
+        TT_FATAL(!operation_attributes.is_decode_mode, "Paired (input_tensor_b) rotary embedding is prefill only");
+        TT_FATAL(
+            b.tensor_spec() == input_tensor.tensor_spec(),
+            "Paired rotary embedding needs input_tensor_b with input_tensor's shape, dtype, layout and memory config");
+        TT_FATAL(
+            !input_tensor.memory_config().is_sharded(), "Paired rotary embedding needs interleaved input tensors");
+        TT_FATAL(
+            !operation_attributes.output_dtype.has_value() || operation_attributes.output_dtype == input_tensor.dtype(),
+            "Paired rotary embedding rotates in place and cannot change the dtype");
+    }
+
     auto* ref_device = input_tensor.device();
     // Validate inputs are on device and same device
     TT_FATAL(
@@ -70,10 +83,29 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
         "If head_dim is > 128, fp32_dest_acc_en must be False");
     TT_FATAL(head_dim <= 256, "Head dim must be less than 256");
 
+    // The interleaved prefill program (RotaryEmbeddingLlamaMultiCore) also takes a bfloat8_b input and writes a
+    // bfloat16 or bfloat8_b output: its compute kernel reconfigures the unpacker / packer formats between steps and
+    // keeps the rotated intermediate in the cos/sin format. Every other program needs bfloat16 throughout.
+    const bool mixed_dtypes_supported = std::holds_alternative<RotaryEmbeddingLlamaMultiCore>(
+        select_program_factory(operation_attributes, tensor_args));
     TT_FATAL(
-        input_tensor.dtype() == cos.dtype() && cos.dtype() == sin.dtype() && sin.dtype() == trans_mat.dtype() &&
+        cos.dtype() == DataType::BFLOAT16 && sin.dtype() == DataType::BFLOAT16 &&
             trans_mat.dtype() == DataType::BFLOAT16,
-        "All input tensors must have dtype = bfloat16");
+        "cos, sin and trans_mat must have dtype = bfloat16");
+    TT_FATAL(
+        input_tensor.dtype() == DataType::BFLOAT16 ||
+            (mixed_dtypes_supported && input_tensor.dtype() == DataType::BFLOAT8_B),
+        "Input must have dtype = bfloat16 (or bfloat8_b in interleaved prefill), got {}",
+        input_tensor.dtype());
+    if (operation_attributes.output_dtype.has_value()) {
+        const auto out_dtype = operation_attributes.output_dtype.value();
+        TT_FATAL(
+            out_dtype == input_tensor.dtype() ||
+                (mixed_dtypes_supported && (out_dtype == DataType::BFLOAT16 || out_dtype == DataType::BFLOAT8_B)),
+            "Output dtype {} must match the input's ({}) outside interleaved prefill, and be bfloat16 or bfloat8_b",
+            out_dtype,
+            input_tensor.dtype());
+    }
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == operation_attributes.output_mem_config.memory_layout(),
         "Input tensor and output tensor must have same memory layout");
@@ -216,13 +248,17 @@ RotaryEmbeddingLlamaDeviceOperation::spec_return_value_t RotaryEmbeddingLlamaDev
     return {tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
-            input_tensor.dtype(),
+            operation_attributes.output_dtype.value_or(input_tensor.dtype()),
             tt::tt_metal::PageConfig(input_tensor.layout()),
             operation_attributes.output_mem_config))};
 }
 
 RotaryEmbeddingLlamaDeviceOperation::tensor_return_value_t RotaryEmbeddingLlamaDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.input_tensor_b.has_value()) {
+        // Paired mode rotates both inputs in place.
+        return tensor_args.input_tensor;
+    }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args)[0], tensor_args.input_tensor.device());
 }
@@ -238,7 +274,9 @@ ttnn::Tensor rotary_embedding_llama(
     const ttnn::Tensor& trans_mat,
     bool is_decode_mode,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<tt::tt_metal::DataType>& dtype,
+    const std::optional<ttnn::Tensor>& input_tensor_b) {
     using OperationType = ttnn::experimental::prim::RotaryEmbeddingLlamaDeviceOperation;
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
@@ -254,9 +292,14 @@ ttnn::Tensor rotary_embedding_llama(
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_decode_mode = is_decode_mode,
         .output_mem_config = memory_config.value_or(default_memory_config),
-        .compute_kernel_config = kernel_config_val};
+        .compute_kernel_config = kernel_config_val,
+        .output_dtype = dtype};
     auto tensor_args = OperationType::tensor_args_t{
-        .input_tensor = input_tensor, .cos_cache = cos_cache, .sin_cache = sin_cache, .trans_mat = trans_mat};
+        .input_tensor = input_tensor,
+        .cos_cache = cos_cache,
+        .sin_cache = sin_cache,
+        .trans_mat = trans_mat,
+        .input_tensor_b = input_tensor_b};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

@@ -51,6 +51,8 @@ const TensorParamName FC_CACHE{"cache"};
 const TensorParamName FC_PAGE_TABLE_T{"page_table"};
 const TensorParamName FC_BATCH_IDX_T{"batch_idx"};
 const TensorParamName FC_VALID_SEQ_LEN_T{"valid_seq_len"};
+const TensorParamName FC_INPUT_B{"input_b"};
+const TensorParamName FC_CACHE_B{"cache_b"};
 
 // `noop` is the only thing that differs between the single-device and the mesh-workload factory: a
 // mesh coordinate outside operation_attributes.mesh_coords gets a noop program (kernels early-exit).
@@ -81,7 +83,8 @@ std::vector<tt_metal::CoreCoord> compute_paged_fill_cache_cores(
     const uint32_t num_heads = input_tensor.padded_shape()[1];
     const uint32_t input_seq_len = input_tensor.padded_shape()[2];
     const uint32_t input_seq_len_t = input_seq_len / TILE_HEIGHT;
-    const uint32_t num_blocks_of_work = input_batch * num_heads * input_seq_len_t;
+    const uint32_t num_tensors = tensor_args.input_tensor_b_opt.has_value() ? 2 : 1;
+    const uint32_t num_blocks_of_work = num_tensors * input_batch * num_heads * input_seq_len_t;
 
     tt_metal::distributed::MeshDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -107,6 +110,10 @@ Table<TensorParamName, TensorArgument> paged_fill_cache_tensor_args(const PagedF
     }
     if (tensor_args.valid_seq_len_tensor_opt.has_value()) {
         args.emplace(FC_VALID_SEQ_LEN_T, tensor_args.valid_seq_len_tensor_opt->mesh_tensor());
+    }
+    if (tensor_args.input_tensor_b_opt.has_value()) {
+        args.emplace(FC_INPUT_B, tensor_args.input_tensor_b_opt->mesh_tensor());
+        args.emplace(FC_CACHE_B, tensor_args.cache_tensor_b_opt->mesh_tensor());
     }
     return args;
 }
@@ -149,7 +156,9 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
     // index for the batched path; on the legacy path input_batch == 1 so
     // num_blocks_of_work == num_blocks_of_work_per_batch.
     const uint32_t num_blocks_of_work_per_batch = num_heads * input_seq_len_t;
-    const uint32_t num_blocks_of_work = input_batch * num_blocks_of_work_per_batch;
+    const bool paired = tensor_args.input_tensor_b_opt.has_value();
+    const uint32_t rows_per_tensor = input_batch * num_blocks_of_work_per_batch;
+    const uint32_t num_blocks_of_work = (paired ? 2 : 1) * rows_per_tensor;
     const uint32_t num_blocks_of_work_per_head = input_seq_len_t;
 
     // Pagetable-specific parameters
@@ -283,6 +292,8 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
         .source =
             "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
             "reader_fill_cache_interleaved.cpp",
+        .compiler_options = {.defines = paired ? KernelSpec::CompilerOptions::Defines{{"FILL_PAIRED", "1"}}
+                                               : KernelSpec::CompilerOptions::Defines{}},
         .dfb_bindings =
             {
                 DFBBinding{
@@ -291,14 +302,14 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
             },
-        .tensor_bindings =
-            {
-                TensorBinding{
-                    .tensor_parameter_name = FC_INPUT,
-                    .accessor_name = "input",
-                },
-            },
-        .compile_time_args = {{"Wt", Wt}},
+        .tensor_bindings = paired ? Group<TensorBinding>{
+                                        TensorBinding{.tensor_parameter_name = FC_INPUT, .accessor_name = "input"},
+                                        TensorBinding{.tensor_parameter_name = FC_INPUT_B, .accessor_name = "input_b"},
+                                    }
+                                  : Group<TensorBinding>{
+                                        TensorBinding{.tensor_parameter_name = FC_INPUT, .accessor_name = "input"},
+                                    },
+        .compile_time_args = {{"Wt", Wt}, {"tiles_per_tensor", rows_per_tensor * Wt}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_tile_id", "num_rows", "noop"}},
         .hw_config = create_reader_datamovement_config(),
     };
@@ -354,9 +365,17 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
         // carries a placeholder when its tensor is absent.
         {"batch_idx_stick_size", batch_idx_stick_size_B},
         {"valid_seq_len_stick_size", valid_seq_len_stick_size_B},
+        {"rows_per_tensor", rows_per_tensor},
     };
     KernelSpec::CompilerOptions::Defines writer_defines;
     Group<std::string> writer_runtime_arg_names = {"start_row_num", "num_rows", "noop"};
+    if (paired) {
+        writer_defines.emplace("FILL_PAIRED", "1");
+        writer_tensor_bindings.push_back(TensorBinding{
+            .tensor_parameter_name = FC_CACHE_B,
+            .accessor_name = "cache_b",
+        });
+    }
 
     if (use_batch_idx_tensor) {
         writer_defines.emplace("USE_BATCH_IDX_TENSOR", "1");
@@ -436,6 +455,12 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
     if (use_valid_seq_len) {
         tensor_parameters.push_back(
             TensorParameter{.unique_id = FC_VALID_SEQ_LEN_T, .spec = valid_seq_len_tensor->tensor_spec()});
+    }
+    if (paired) {
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = FC_INPUT_B, .spec = tensor_args.input_tensor_b_opt->tensor_spec()});
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = FC_CACHE_B, .spec = tensor_args.cache_tensor_b_opt->tensor_spec()});
     }
 
     ProgramSpec spec{

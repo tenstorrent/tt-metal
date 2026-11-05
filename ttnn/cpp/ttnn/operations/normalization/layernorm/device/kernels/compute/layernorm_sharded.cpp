@@ -215,6 +215,13 @@ void kernel_main() {
 
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
+#ifdef WRITE_PRE_ADD_SUM
+    // a + b also goes over the input's own shard (the residual stream), in the input's format: tile t of the sum is
+    // packed only after the add has unpacked input tile t, and no later step reads the input.
+    constexpr uint32_t dfb_sum_out_id = dfb::sum_out;
+    DataflowBuffer dfb_sum_out(dfb_sum_out_id);
+    dfb_sum_out.reserve_back(num_tiles_per_block);
+#endif
     reconfig_data_format_srcb(dfb_in0, dfb_in1);
     add_init(dfb_in0, dfb_in1);
     // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
@@ -237,12 +244,25 @@ void kernel_main() {
             for (uint32_t i = 0; i < subblock_w; i++) {
                 pack_tile(i, dfb_in_id);
             }
+#ifdef WRITE_PRE_ADD_SUM
+            pack_reconfig_data_format(dfb_in_id, dfb_sum_out_id);
+            for (uint32_t i = 0; i < subblock_w; i++) {
+                pack_tile<true>(i, dfb_sum_out_id, index_h_offset + index_subblock_w_offset + i);
+            }
+            pack_reconfig_data_format(dfb_sum_out_id, dfb_in_id);
+#endif
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
         }
         index_h_offset += block_w;
     }
     dfb_in.push_back(num_tiles_per_block);
+#ifdef WRITE_PRE_ADD_SUM
+    // Nothing on-core consumes the sum: balance the self-looped buffer.
+    dfb_sum_out.push_back(num_tiles_per_block);
+    dfb_sum_out.wait_front(num_tiles_per_block);
+    dfb_sum_out.pop_front(num_tiles_per_block);
+#endif
 #ifndef RMSNORM
     reconfig_data_format(dfb_in0, dfb_in_id, dfb_in1, dfb_scaler_id);
 #else

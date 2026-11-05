@@ -7,6 +7,9 @@
 #include "api/compute/common.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tilize.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/pack.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "experimental/kernel_args.h"
@@ -18,7 +21,29 @@ void kernel_main() {
     }
 
     constexpr auto Wt = get_arg(args::Wt);
-    constexpr auto num_heads = get_arg(args::num_heads);
+#ifdef ROW_PATCH
+    // bfp8_b cache: pack the input (one tile row: a head per row) to bfp8_b once. Every row of a bfp8_b tile has its
+    // own shared exponent per 16 values, so row h of these tiles is exactly the encoding head h's row gets in a
+    // re-packed cache block; the writer copies those bytes into the cache in place.
+    compute_kernel_hw_startup(dfb::in, dfb::patch_src);
+    DataflowBuffer dfb_in(dfb::in);
+    DataflowBuffer dfb_patch(dfb::patch_src);
+    dfb_in.wait_front(Wt);
+    dfb_patch.reserve_back(Wt);
+    copy_init(dfb::in);
+    for (uint32_t t = 0; t < Wt; ++t) {
+        tile_regs_acquire();
+        copy_tile(dfb::in, t, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile<true>(0, dfb::patch_src, t);
+        tile_regs_release();
+    }
+    dfb_patch.push_back(Wt);
+    dfb_in.pop_front(Wt);
+    return;
+#else
+    const auto num_local_heads = get_arg(args::num_local_heads);
 
     // Which of the two inputs this instance serves is structural: the factory places one compute
     // kernel per input shard grid, and each binds only its own input buffer.
@@ -33,7 +58,7 @@ void kernel_main() {
         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
 
-    for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
+    for (uint32_t cur_head = 0; cur_head < num_local_heads; ++cur_head) {
         // Untilize a block from the cache with reconfiguration from previous iteration
         compute_kernel_lib::untilize<Wt, dfb::cache, dfb::untilized_cache>(1);
 
@@ -47,4 +72,5 @@ void kernel_main() {
 #endif
         compute_kernel_lib::tilize<Wt, dfb::untilized_cache2, dfb::out>(1);
     }
+#endif
 }

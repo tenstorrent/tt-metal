@@ -50,6 +50,8 @@ Tensor paged_fill_cache(
     const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt,
     std::optional<uint32_t> block_size_override = std::nullopt,
     std::optional<uint32_t> cache_position_modulo = std::nullopt,
-    const std::optional<Tensor>& valid_seq_len_tensor = std::nullopt);
+    const std::optional<Tensor>& valid_seq_len_tensor = std::nullopt,
+    const std::optional<Tensor>& input_tensor_b = std::nullopt,
+    const std::optional<Tensor>& cache_tensor_b = std::nullopt);
 
 }  // namespace ttnn::prim

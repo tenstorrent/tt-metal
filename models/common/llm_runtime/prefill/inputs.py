@@ -11,7 +11,7 @@ from typing import Any, Callable, Sequence
 import torch
 
 import ttnn
-from models.common.llm_runtime.prefill.plan import PrefillChunk, PrefillRequest
+from models.common.llm_runtime.prefill.plan import PrefillChunk, PrefillRequest, packed_prefill_layout
 from models.common.llm_runtime.prefill.sampling_helpers import _TILE_SIZE
 from models.common.llm_runtime.tensor_resources import (
     attach_cleanup_failures,
@@ -27,6 +27,7 @@ class PrefillHostInputs:
     page_table: Any
     chunk_page_table: Any | None
     chunk_start_idx: Any | None
+    row_map: Any | None = None
 
     def values(self) -> tuple[Any, ...]:
         return (
@@ -35,6 +36,7 @@ class PrefillHostInputs:
             self.page_table,
             self.chunk_page_table,
             self.chunk_start_idx,
+            self.row_map,
         )
 
 
@@ -47,6 +49,8 @@ class PrefillDeviceInputs:
     chunk_page_table: Any | None
     position_indices: Any
     chunk_start_idx: Any | None
+    # Packed batched prefill: the row map of the packed tokens (see plan.packed_prefill_layout).
+    row_map: Any | None = None
 
     def model_values(self) -> tuple[Any, ...]:
         return (
@@ -57,6 +61,7 @@ class PrefillDeviceInputs:
             self.chunk_page_table,
             self.position_indices,
             self.chunk_start_idx,
+            self.row_map,
         )
 
     def owned_tensor_values(self) -> tuple[Any, ...]:
@@ -146,6 +151,7 @@ class PrefillInputStager:
             chunk_page_table=chunk.chunk_page_table if chunked else None,
             chunk_start_idx=chunk.chunk_start_idx if chunked else None,
             last_token_idx=max(request.last_token_indices),
+            packed=packed_prefill_layout(request) if request.packed_row_tiles else None,
         )
         device_inputs = None
         position_inputs = None
@@ -171,12 +177,15 @@ class PrefillInputStager:
         chunk_page_table: torch.Tensor | None = None,
         chunk_start_idx: int | None = None,
         last_token_idx: int | None = None,
+        packed: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> PrefillHostInputs:
+        """``packed``: the packed tokens and row map of a packed batched request (plan.packed_prefill_layout); the
+        device tokens are then the packed ones. Rotary positions follow the padded ``tokens`` either way."""
         if tokens.ndim != 2:
             raise ValueError("prefill tokens must be rank 2")
         mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
         tokens_tt = ttnn.from_torch(
-            tokens.reshape(1, 1, 1, -1),
+            (packed[0] if packed is not None else tokens).reshape(1, 1, 1, -1),
             device=None,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -232,7 +241,18 @@ class PrefillInputStager:
             if chunk_start_idx is not None
             else None
         )
-        return PrefillHostInputs(tokens_tt, position_indices_tt, page_table_tt, chunk_tt, chunk_start_tt)
+        row_map_tt = (
+            ttnn.from_torch(
+                packed[1].reshape(1, 1, 1, -1),
+                device=None,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mapper,
+            )
+            if packed is not None
+            else None
+        )
+        return PrefillHostInputs(tokens_tt, position_indices_tt, page_table_tt, chunk_tt, chunk_start_tt, row_map_tt)
 
     def prepare_position_inputs_host(self, relative_last: int, sequence_length: int) -> PrefillPositionInputs:
         relative_last = int(relative_last)
@@ -285,12 +305,14 @@ class PrefillInputStager:
             chunk_page_table=raw_inputs[3],
             position_indices=raw_inputs[1],
             chunk_start_idx=raw_inputs[4],
+            row_map=raw_inputs[5],
         )
 
     def refresh_regular_device_inputs(self, request: PrefillRequest, device_inputs: PrefillDeviceInputs) -> None:
         mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        packed = packed_prefill_layout(request) if request.packed_row_tiles else None
         host_tokens = ttnn.from_torch(
-            request.tokens.reshape(1, 1, 1, -1),
+            (packed[0] if packed is not None else request.tokens).reshape(1, 1, 1, -1),
             device=None,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -304,6 +326,15 @@ class PrefillInputStager:
             mesh_mapper=mapper,
         )
         copy_into_device_tensors((host_tokens, host_page_table), (device_inputs.tokens, device_inputs.page_table))
+        if packed is not None:
+            host_row_map = ttnn.from_torch(
+                packed[1].reshape(1, 1, 1, -1),
+                device=None,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mapper,
+            )
+            copy_into_device_tensors((host_row_map,), (device_inputs.row_map,))
 
     def refresh_chunk_device_inputs(
         self,

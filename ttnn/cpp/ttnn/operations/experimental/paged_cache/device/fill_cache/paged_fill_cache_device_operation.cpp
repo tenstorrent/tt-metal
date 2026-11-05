@@ -179,6 +179,22 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
             "valid_seq_len tensor is only supported when cache_position_modulo is set (bounded fill)");
     }
 
+    // Paired fill: the second pair must match the first in every property the program reads.
+    TT_FATAL(
+        tensor_args.input_tensor_b_opt.has_value() == tensor_args.cache_tensor_b_opt.has_value(),
+        "paged_fill_cache: input_tensor_b and cache_tensor_b must be given together");
+    if (tensor_args.input_tensor_b_opt.has_value()) {
+        const auto& input_b = tensor_args.input_tensor_b_opt.value();
+        const auto& cache_b = tensor_args.cache_tensor_b_opt.value();
+        TT_FATAL(
+            input_b.padded_shape() == input_shape && input_b.dtype() == input_tensor.dtype() &&
+                input_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "paged_fill_cache: input_tensor_b must match input_tensor's shape, dtype and interleaved layout");
+        TT_FATAL(
+            cache_b.padded_shape() == cache_shape && cache_b.dtype() == cache_tensor.dtype(),
+            "paged_fill_cache: cache_tensor_b must match cache_tensor's shape and dtype");
+    }
+
     // When mesh_coords is provided, validate it is a subset of the tensor's mesh
     // coordinates. The descriptor framework dispatches a (noop) program for every
     // tensor_coord regardless of mesh_coords membership, so a stray coord in mesh_coords
@@ -237,7 +253,9 @@ Tensor paged_fill_cache(
     const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords,
     std::optional<uint32_t> block_size_override,
     std::optional<uint32_t> cache_position_modulo,
-    const std::optional<Tensor>& valid_seq_len_tensor) {
+    const std::optional<Tensor>& valid_seq_len_tensor,
+    const std::optional<Tensor>& input_tensor_b,
+    const std::optional<Tensor>& cache_tensor_b) {
     using OperationType = ttnn::experimental::prim::PagedFillCacheDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -253,6 +271,8 @@ Tensor paged_fill_cache(
         .page_table = page_table,
         .batch_idx_tensor_opt = batch_idx_tensor,
         .valid_seq_len_tensor_opt = valid_seq_len_tensor,
+        .input_tensor_b_opt = input_tensor_b,
+        .cache_tensor_b_opt = cache_tensor_b,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

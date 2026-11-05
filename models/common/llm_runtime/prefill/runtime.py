@@ -205,6 +205,11 @@ class PrefillRuntime:
             max_prefill_batch_size=self.config.max_prefill_batch_size,
             max_actual_page_table_width=layout.raw_capacity_width,
             canonical_page_table_width=layout.prefill_width,
+            # Packed rows need the batched last-token extract, which reads the model's own (packed) hidden layout.
+            packed_batched_prefill=(
+                bool(getattr(self.config.model, "supports_packed_batched_prefill", False))
+                and self.config.batched_prefill_batched_extract
+            ),
         )
         prepared = []
         pending_slot_remap = slot_remap
@@ -407,6 +412,11 @@ class PrefillRuntime:
             fill_rows = len(request.source_rows)
         if fill_rows < len(request.source_rows) or fill_rows > request.padded_batch_size:
             raise ValueError("fill_rows must cover active rows without exceeding padded batch size")
+        packed_kwargs = (
+            {"row_map": device_inputs.row_map, "padded_sequence_length": request.padded_sequence_length}
+            if request.packed_row_tiles
+            else {}
+        )
         return self.config.model.prefill_forward(
             self.config.model.embed_prefill(device_inputs.tokens),
             [device_inputs.rotary_cos, device_inputs.rotary_sin],
@@ -416,6 +426,7 @@ class PrefillRuntime:
             get_last_token=-1,
             batch_size=request.padded_batch_size,
             chunk_start_idx_tensor=device_inputs.chunk_start_idx,
+            **packed_kwargs,
         )
 
     def _release_or_retain_transient(self, values: Any) -> list[BaseException]:

@@ -51,6 +51,9 @@ void bind_normalization_rms_norm(nb::module_& mod) {
             residual_input_tensor (ttnn.Tensor, optional): Defaults to `None`.
             program_config (ttnn.ProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): Defaults to `None`.
+            dtype (ttnn.DataType, optional): Output dtype. Defaults to `None` (the input's).
+            write_pre_add_sum (bool): With `residual_input_tensor` and a sharded program config, also write
+                `input_tensor + residual_input_tensor` over `input_tensor` in place. Defaults to `False`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -116,7 +119,9 @@ void bind_normalization_rms_norm(nb::module_& mod) {
         nb::arg("residual_input_tensor") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("write_pre_add_sum") = false);
 }
 
 }  // namespace ttnn::operations::normalization::detail

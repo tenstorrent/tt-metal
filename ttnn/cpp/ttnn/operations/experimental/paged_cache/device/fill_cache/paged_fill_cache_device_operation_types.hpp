@@ -38,6 +38,10 @@ struct PagedFillCacheInputs {
     // tiles (ending at valid_seq_len) instead of the padded end, matching the
     // host-side fill cap but per-request under a captured prefill trace.
     std::optional<Tensor> valid_seq_len_tensor_opt;
+    // Optional second (input, cache) pair filled by the same program with the same page table and
+    // batch index (K and V of one layer): one dispatch instead of two.
+    std::optional<Tensor> input_tensor_b_opt = std::nullopt;
+    std::optional<Tensor> cache_tensor_b_opt = std::nullopt;
 };
 
 }  // namespace ttnn::experimental::prim

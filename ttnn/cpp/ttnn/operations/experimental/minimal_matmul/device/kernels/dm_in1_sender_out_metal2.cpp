@@ -74,6 +74,9 @@ void kernel_main() {
     // Tuple of output accessors, one per chunk. tensor::outputs is a TensorBindingSequence, which
     // is how a compile-time-variadic binding count is expressed: its size is N_chunks.
     auto outputs_tuple = make_tensor_accessors(tensor::outputs);
+#ifdef ROW_MAP
+    load_row_map(out_tile_size);
+#endif
 
 #ifdef FUSE_BIAS
     const auto in2_reader = TensorAccessor(tensor::in2);

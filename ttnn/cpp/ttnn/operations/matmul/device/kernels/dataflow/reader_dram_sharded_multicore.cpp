@@ -64,6 +64,8 @@ constexpr uint32_t OT = get_arg(args::OT);      // output tile bytes
 constexpr uint32_t OW = get_arg(args::OW);      // output shard width (tiles)
 constexpr uint32_t OCAP = get_arg(args::OCAP);  // output shard capacity over all shards (tiles)
 constexpr uint32_t MAXOWN = get_arg(args::MAXOWN);
+constexpr uint32_t OD = get_arg(args::OD);  // 2 with DSMC_SWIGLU: one output tile per owned gate / up pair
+constexpr uint32_t MAXOUT = MAXOWN / OD;
 constexpr uint32_t X_TRID0 = 8;
 static_assert(XL >= 1 && XL <= 8, "at most 8 activation reads in flight (trids 8..15)");
 // NoC0 virtual coordinates (y << 16 | x) of the activation and output shard cores, in shard order.
@@ -303,10 +305,10 @@ void kernel_main() {
     {
         DataflowBuffer dfb_out(dfb::out);
         const uint32_t out_addr = TensorAccessor(tensor::output).get_bank_base_address();
-        dfb_out.wait_front(MAXOWN);
+        dfb_out.wait_front(MAXOUT);
         const uint32_t l1 = dfb_out.get_read_ptr();
-        for (uint32_t i = 0; i < nown; i++) {
-            const uint32_t n = bank * Nbt + o0 + i;  // global output column (tile)
+        for (uint32_t i = 0; i < nown / OD; i++) {
+            const uint32_t n = (bank * Nbt + o0) / OD + i;  // global output column (tile)
             if (n < OCAP) {
                 const uint32_t oxy = kOutCores[n / OW];
                 noc.async_write(
@@ -318,7 +320,7 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();
-        dfb_out.pop_front(MAXOWN);
+        dfb_out.pop_front(MAXOUT);
     }
 #ifdef DSMC_REDUCE
     noc.async_atomic_barrier();

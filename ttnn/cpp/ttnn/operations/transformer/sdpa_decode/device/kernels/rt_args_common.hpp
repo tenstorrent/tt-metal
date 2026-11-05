@@ -97,6 +97,24 @@ inline uint32_t get_dynamic_Sk_chunk_t(int cur_pos) {
         // Cur_pos + 1 for position, but -1 for divup, so cancels out
         // ie. divup(a, b) = (a - 1) / b + 1
         uint32_t seq_len_in_tiles = cur_pos / tt::constants::TILE_HEIGHT + 1;
+#ifdef SDPA_CHUNK_COST_MODEL
+        // Pick the power-of-2 chunk (CB capacities are a whole number of max_size chunks, so only powers of 2 up to
+        // max_size keep every reservation contiguous) that minimizes 2 x tiles read + number of chunks: rounding
+        // the sequence up to one big chunk reads and computes up to max_size - 1 tiles past the position. P150,
+        // 32 users x 32 heads: position 130 (5 tiles) 164 -> 146 us with 2-tile chunks, position 300 (10 tiles)
+        // 289 -> 226 us with 4-tile chunks; positions that fill a chunk keep it.
+        uint32_t best_chunk = 1;
+        uint32_t best_cost = 3 * seq_len_in_tiles;  // 1-tile chunks: 2 * s + s
+        for (uint32_t chunk = 2; chunk <= max_size; chunk *= 2) {
+            const uint32_t num_chunks = (seq_len_in_tiles + chunk - 1) / chunk;
+            const uint32_t cost = 2 * num_chunks * chunk + num_chunks;
+            if (cost <= best_cost) {
+                best_cost = cost;
+                best_chunk = chunk;
+            }
+        }
+        return best_chunk;
+#endif
 
         // Use nearest power of 2 to nicely divide total CB size which is some factor of max_size
         // Technically, should not be an issue but seeing PCC issues when using 3 tiles eg.

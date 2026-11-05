@@ -72,8 +72,37 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(w_logical[i] == 1, "minimal_matmul weight must have 1 in all dims < -2");
     }
 
-    const uint32_t M = a_logical[-2];
-    const uint32_t K = a_logical[-1];
+    if (operation_attributes.in0_heads) {
+        TT_FATAL(a_logical.rank() == 4, "minimal_matmul in0_heads needs a [users, heads, rows, head_dim] input");
+        TT_FATAL(
+            a_logical[-2] % TILE_HEIGHT == 0 && a_logical[-1] % TILE_WIDTH == 0,
+            "minimal_matmul in0_heads needs tile-multiple rows ({}) and head_dim ({})",
+            a_logical[-2],
+            a_logical[-1]);
+        TT_FATAL(
+            !tensor_args.optional_input_tensor.has_value(), "minimal_matmul in0_heads does not combine with fused concat");
+    }
+    const bool has_row_map = tensor_args.row_map_tensor.has_value();
+    uint32_t row_map_tiles = 0;
+    if (has_row_map) {
+        const auto& row_map = tensor_args.row_map_tensor.value();
+        TT_FATAL(row_map.storage_type() == StorageType::DEVICE, "minimal_matmul row_map must be on device");
+        TT_FATAL(
+            row_map.dtype() == DataType::UINT32 && row_map.layout() == Layout::ROW_MAJOR,
+            "minimal_matmul row_map must be uint32 ROW_MAJOR");
+        TT_FATAL(
+            row_map.physical_volume() == row_map.logical_shape()[-1] && row_map.logical_shape()[-1] % 4 == 0,
+            "minimal_matmul row_map must be one row of 4 x uint32 entries");
+        row_map_tiles = row_map.logical_shape()[-1] / 4;
+        TT_FATAL(
+            operation_attributes.in0_heads != (operation_attributes.head_split_rows > 0),
+            "minimal_matmul row_map needs exactly one of in0_heads and head-split output");
+    }
+    // in0_heads: rows are users x rows (with a row map, its packed row tiles), the contraction is heads x head_dim.
+    const uint32_t M = operation_attributes.in0_heads
+                           ? (has_row_map ? row_map_tiles * TILE_HEIGHT : a_logical[0] * a_logical[-2])
+                           : a_logical[-2];
+    const uint32_t K = operation_attributes.in0_heads ? a_logical[1] * a_logical[-1] : a_logical[-1];
     const uint32_t K_w = w_logical[-2];
     const uint32_t N = w_logical[-1];
 
@@ -158,6 +187,37 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
             "2*TILE_WIDTH={}",
             N / chunks,
             2 * tt::constants::TILE_WIDTH);
+    }
+
+    if (operation_attributes.head_split_rows > 0) {
+        const uint32_t rows = operation_attributes.head_split_rows;
+        const uint32_t head_dim = operation_attributes.head_split_dim;
+        const uint32_t M_rows = act_tensor.physical_volume() / act_tensor.padded_shape()[-1];
+        TT_FATAL(chunks > 1, "minimal_matmul head-split output needs chunks > 1, got {}", chunks);
+        TT_FATAL(
+            !operation_attributes.fuse_swiglu && !operation_attributes.fused_ternary_scalar.has_value() &&
+                !tensor_args.optional_input_tensor.has_value(),
+            "minimal_matmul head-split output does not combine with fuse_swiglu, fused ternary or fused concat");
+        TT_FATAL(
+            rows % TILE_HEIGHT == 0 && head_dim % TILE_WIDTH == 0 && head_dim > 0,
+            "minimal_matmul head-split rows ({}) and head_dim ({}) must be tile multiples",
+            rows,
+            head_dim);
+        if (has_row_map) {
+            TT_FATAL(
+                M_rows == row_map_tiles * TILE_HEIGHT && operation_attributes.head_split_users > 0,
+                "minimal_matmul head-split row_map: {} entries for {} input rows, head_split_users {}",
+                row_map_tiles,
+                M_rows,
+                operation_attributes.head_split_users);
+        }
+        TT_FATAL(
+            (has_row_map || M_rows % rows == 0) && (N / chunks) % head_dim == 0,
+            "minimal_matmul head-split: rows ({}) must divide M ({}) and head_dim ({}) the chunk width ({})",
+            rows,
+            M_rows,
+            head_dim,
+            N / chunks);
     }
 
     if (chunks > 1) {
@@ -311,6 +371,20 @@ MinimalMatmulDeviceOperation::spec_return_value_t MinimalMatmulDeviceOperation::
     for (int32_t i = 0; i < chunks; ++i) {
         ttnn::Shape output_shape(in0_input_tensor_shape);
         output_shape[-1] = N_per_chunk;
+        if (operation_attributes.in0_heads) {
+            const uint32_t rows = tensor_args.row_map_tensor.has_value()
+                                      ? tensor_args.row_map_tensor->logical_shape()[-1] / 4 * TILE_HEIGHT
+                                      : in0_input_tensor_shape[0] * in0_input_tensor_shape[-2];
+            output_shape = ttnn::Shape({1, 1, rows, N_per_chunk});
+        }
+        if (operation_attributes.head_split_rows > 0) {
+            const uint32_t rows = operation_attributes.head_split_rows;
+            const uint32_t head_dim = operation_attributes.head_split_dim;
+            const uint32_t M_rows = in0_input_tensor.physical_volume() / in0_input_tensor.padded_shape()[-1];
+            const uint32_t users = tensor_args.row_map_tensor.has_value() ? operation_attributes.head_split_users
+                                                                          : M_rows / rows;
+            output_shape = ttnn::Shape({users, N_per_chunk / head_dim, rows, head_dim});
+        }
         output_specs.push_back(
             tt::tt_metal::TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
     }
@@ -352,7 +426,12 @@ std::vector<Tensor> minimal_matmul(
     const std::optional<Tensor>& fused_ternary_input_a,
     const std::optional<Tensor>& fused_ternary_input_b,
     bool fuse_swiglu,
-    const std::optional<Tensor>& optional_input_tensor) {
+    const std::optional<Tensor>& optional_input_tensor,
+    uint32_t head_split_rows,
+    uint32_t head_split_dim,
+    bool in0_heads,
+    uint32_t head_split_users,
+    const std::optional<Tensor>& row_map_tensor) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     const auto arch = input_tensor.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -374,14 +453,19 @@ std::vector<Tensor> minimal_matmul(
             .compute_kernel_config = kernel_config_val,
             .chunks = chunks,
             .dim = dim,
-            .fuse_swiglu = fuse_swiglu},
+            .fuse_swiglu = fuse_swiglu,
+            .head_split_rows = head_split_rows,
+            .head_split_dim = head_split_dim,
+            .in0_heads = in0_heads,
+            .head_split_users = head_split_users},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,
             .bias_tensor = bias_tensor,
             .optional_input_tensor = optional_input_tensor,
             .fused_ternary_input_a = fused_ternary_input_a,
-            .fused_ternary_input_b = fused_ternary_input_b});
+            .fused_ternary_input_b = fused_ternary_input_b,
+            .row_map_tensor = row_map_tensor});
 }
 
 }  // namespace ttnn::prim

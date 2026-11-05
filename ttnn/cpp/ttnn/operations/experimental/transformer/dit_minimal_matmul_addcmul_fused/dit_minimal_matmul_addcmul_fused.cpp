@@ -17,7 +17,9 @@ ttnn::Tensor dit_minimal_matmul_addcmul_fused(
     const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    bool in0_heads,
+    const std::optional<ttnn::Tensor>& row_map) {
     // Delegates to minimal_matmul with fused addcmul (ternary) parameters.
     // Formula: output = addcmul_input_tensor1 + (scalar * matmul_output * addcmul_input_tensor2).
     auto outputs = ttnn::prim::minimal_matmul(
@@ -33,7 +35,14 @@ ttnn::Tensor dit_minimal_matmul_addcmul_fused(
         -1,                      // dim
         scalar,                  // fused_ternary_scalar
         addcmul_input_tensor1,   // fused_ternary_input_a (residual/base, full shape)
-        addcmul_input_tensor2);  // fused_ternary_input_b (gate/multiplier, broadcast)
+        addcmul_input_tensor2,   // fused_ternary_input_b (gate/multiplier, broadcast)
+        /*fuse_swiglu=*/false,
+        /*optional_input_tensor=*/std::nullopt,
+        /*head_split_rows=*/0,
+        /*head_split_dim=*/0,
+        in0_heads,
+        /*head_split_users=*/0,
+        row_map);
 
     TT_FATAL(outputs.size() == 1, "Expected single output from minimal_matmul, got {}", outputs.size());
     return outputs[0];

@@ -23,6 +23,8 @@ struct LayerNormParams {
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
     std::optional<operations::unary::UnaryWithParam> fused_activation;
+    // Sharded, non-distributed, with a residual: also write input + residual over the input tensor (in place).
+    bool write_pre_add_sum = false;
 };
 
 struct LayerNormInputs {

@@ -70,6 +70,17 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     // request MUST supply a per-receiver rotation. GCB-backed mcast_in0 instead consumes natural FIFO
     // order and requires this flag to remain false.
     bool stream_in1 = false;
+    // mcast_in0 only. The weight's column tiles are SwiGLU gate / up pairs (column tile 2i is gate tile i, 2i + 1 is
+    // up tile i) and the output is SiLU(gate) * up, N / 2 columns wide: one matmul instead of a gate matmul, an up
+    // matmul and a multiply that reads both back.
+    bool fuse_swiglu = false;
+    // mcast_in0 with a DRAM width-sharded B, interleaved A and output, a few tile rows (prefill): > 0 runs the
+    // multi-row DRAM-streamed program instead, with this many cores next to each DRAM bank streaming its columns,
+    // the activation multicast once and resident, and in0_block_w K rows per streamed weight block.
+    std::size_t dram_stream_workers_per_bank = 0;
+    // dram_stream only: cores that multicast the activation (1..4) and K tiles per multicast chunk.
+    std::size_t dram_stream_distributors = 1;
+    std::size_t dram_stream_chunk = 4;
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
@@ -87,6 +98,10 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
     // bank run the multi-core pipeline; a call that does not qualify keeps the behaviour above and its
     // validation (num_workers_per_dram_bank > 1 is then Blackhole only).
     bool use_multicore_pipeline = false;
+    // Multi-core pipeline only. The weight's column tiles are SwiGLU gate / up pairs (column tile 2i is gate tile i,
+    // 2i + 1 is up tile i) and the output is SiLU(gate) * up, N / 2 columns wide: one matmul instead of a gate
+    // matmul, an up matmul and a multiply that reads both back.
+    bool fuse_swiglu = false;
 };
 
 struct MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig {

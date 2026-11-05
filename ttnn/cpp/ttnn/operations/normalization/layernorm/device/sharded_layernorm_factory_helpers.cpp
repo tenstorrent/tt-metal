@@ -36,6 +36,7 @@ const m2::KernelSpecName IDLE_COMPUTE{"idle_compute"};
 const m2::DFBSpecName IN0{"in0"};
 const m2::DFBSpecName IN1{"in1"};
 const m2::DFBSpecName IN_PRE_ADD{"in_pre_add"};
+const m2::DFBSpecName SUM_OUT{"sum_out"};
 const m2::DFBSpecName SCALER{"scaler"};
 const m2::DFBSpecName EPS{"eps"};
 const m2::DFBSpecName SCALER_GLOBAL{"scaler_global"};
@@ -640,6 +641,11 @@ void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& c) {
         add_dfb(spec, IN1, sizes.in1_dfb_size, c.residual_single_tile_size, c.residual_data_format, RESIDUAL);
     }
 
+    // write_pre_add_sum: a + b is also packed over the input tensor's own shard (in the input's format).
+    if (c.write_pre_add_sum) {
+        add_dfb(spec, SUM_OUT, sizes.in0_dfb_size, c.in_single_tile_size, c.in_data_format, INPUT);
+    }
+
     // Pre-all-gather pre-add destination. It borrows the *input* tensor, so a + b is written back
     // over a's own shard.
     if (c.is_pre_all_gather && c.has_b) {
@@ -741,7 +747,7 @@ void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& c) {
         sizes.out_dfb_size,
         c.out_single_tile_size,
         c.out_data_format,
-        c.writes_back ? std::nullopt : std::optional<m2::TensorParamName>(OUTPUT));
+        (c.writes_back || c.writes_interleaved) ? std::nullopt : std::optional<m2::TensorParamName>(OUTPUT));
 
     // Welford-fp32 alias: a second index over the primary buffer's SRAM, same total size. Alias group
     // members must agree on whether they borrow their memory, so the non-fused alias borrows the input
@@ -840,6 +846,9 @@ void bind_semaphore(m2::KernelSpec& kernel, const m2::SemaphoreSpecName& sem, st
 void add_shared_defines(m2::KernelSpec& kernel, const SpecConfig& c) {
     if (c.has_b) {
         kernel.compiler_options.defines.emplace("FUSE_PRE_ADD", "1");
+    }
+    if (c.write_pre_add_sum) {
+        kernel.compiler_options.defines.emplace("WRITE_PRE_ADD_SUM", "1");
     }
     if (c.has_gamma) {
         kernel.compiler_options.defines.emplace("FUSE_GAMMA", "1");
@@ -973,6 +982,10 @@ m2::KernelSpec::CompileTimeArgs writer_compile_time_args(
         args.emplace("gamma_is_float32", static_cast<uint32_t>(c.gamma_dfb_data_format == tt::DataFormat::Float32));
         args.emplace("beta_is_float32", static_cast<uint32_t>(c.beta_dfb_data_format == tt::DataFormat::Float32));
     }
+    if (c.writes_interleaved) {
+        args.emplace("block_ht", c.block_ht);
+        args.emplace("out_row_tiles", c.out_row_tiles);
+    }
     if (c.writes_back) {
         args.emplace("worker_core_stride_w_bytes", c.block_wt * c.out_single_tile_size);
         args.emplace("storage_core_stride_w_bytes", c.block_wt_resharded * c.out_single_tile_size);
@@ -1022,10 +1035,10 @@ void bind_writer_resources(m2::KernelSpec& kernel, const SpecConfig& c) {
         bind_dfb(kernel, BETA, "beta", m2::DFBEndpointType::PRODUCER);
         bind_tensor(kernel, BETA_T, "beta");
     }
-    if (c.writes_back) {
+    if (c.writes_back || c.writes_interleaved) {
         bind_dfb(kernel, OUT, "out", m2::DFBEndpointType::CONSUMER);
         // The write-back moves nothing through a buffer: it reads this binding's base address and
-        // issues its own remote writes to the storage cores.
+        // issues its own remote writes to the storage cores. The interleaved write pages through it.
         bind_tensor(kernel, OUTPUT, "dst");
     }
 }
@@ -1042,6 +1055,9 @@ void add_writer_defines(m2::KernelSpec& kernel, const SpecConfig& c) {
     // that compiles it is the build where those arguments exist.
     if (!c.writes_back) {
         kernel.compiler_options.defines.emplace("SKIP_WRITE_BACK", "1");
+    }
+    if (c.writes_interleaved) {
+        kernel.compiler_options.defines.emplace("WRITE_INTERLEAVED", "1");
     }
     // Matches bind_writer_resources: after the all-gather the writer holds both ends of the scaler DFB.
     if (c.is_post_all_gather && !c.use_welford) {
@@ -1108,6 +1124,9 @@ void bind_compute_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool is
     if (c.has_b && !c.is_post_all_gather) {
         bind_self_loop(kernel, IN1, "in1");
     }
+    if (c.write_pre_add_sum) {
+        bind_self_loop(kernel, SUM_OUT, "sum_out");
+    }
     if (c.has_gamma && !c.is_pre_all_gather) {
         bind_dfb(kernel, GAMMA, "gamma", m2::DFBEndpointType::CONSUMER);
     }
@@ -1141,7 +1160,7 @@ void bind_compute_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool is
     bind_dfb(kernel, EX_GLOBAL, "ex_global", m2::DFBEndpointType::CONSUMER);
     // Where the writer reshards, it drains this buffer; compute is then the producer alone. Otherwise
     // compute is its only toucher.
-    if (c.writes_back) {
+    if (c.writes_back || c.writes_interleaved) {
         bind_dfb(kernel, OUT, "out", m2::DFBEndpointType::PRODUCER);
     } else {
         bind_self_loop(kernel, OUT, "out");
@@ -1220,7 +1239,7 @@ void add_compute_defines(m2::KernelSpec& kernel, const SpecConfig& c, bool is_al
         kernel.compiler_options.defines.emplace("IS_ALLGATHER_WORKER", "1");
     }
     // Without a write-back, compute holds both ends of the output buffer (bind_self_loop) and must pop it.
-    if (!c.writes_back && !c.is_pre_all_gather) {
+    if (!c.writes_back && !c.writes_interleaved && !c.is_pre_all_gather) {
         kernel.compiler_options.defines.emplace("OUT_SELF_LOOP", "1");
     }
     for (const auto& [key, value] : c.activation_defines) {
@@ -1374,6 +1393,9 @@ void add_kernel_and_work_unit_specs(
         if (c.writes_back) {
             schema.runtime_arg_names.push_back("num_segments_to_write_back");
             schema.runtime_arg_names.push_back("storage_core_start_offset");
+        }
+        if (c.writes_interleaved) {
+            schema.runtime_arg_names.push_back("height_shard_tile_start_id");
         }
         return schema;
     }();
@@ -1887,6 +1909,10 @@ RunArgsAndWriterVarargs build_run_args(
         if (!config.is_pre_all_gather || config.do_col_mask) {
             m2::AddRuntimeArgsForNode(
                 writer.runtime_arg_values, core, {{"width_shard_tile_start_id", idx.width_shard_tile_start_id}});
+        }
+        if (config.writes_interleaved) {
+            m2::AddRuntimeArgsForNode(
+                writer.runtime_arg_values, core, {{"height_shard_tile_start_id", idx.height_index * config.block_ht}});
         }
         if (ctx.writes_back) {
             uint32_t num_segments = 0;
