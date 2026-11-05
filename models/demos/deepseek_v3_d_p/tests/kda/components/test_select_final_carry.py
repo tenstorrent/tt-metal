@@ -25,6 +25,12 @@ pytestmark = run_for_blackhole()
 _ROWS, _HEADS, _KEY, _VALUE = 640, 24, 128, 128
 
 
+def _carry_args(mesh_device) -> dict:
+    """The model's links, cores and persistent semaphores for the carry along axis 0."""
+    carry = _RelayFinalCarry.shared(mesh_device, 0, _sp_links(mesh_device, 0))
+    return {"num_links": carry._num_links, "cores": carry._cores, "semaphores": carry._semaphores}
+
+
 def _bounds(sp_size: int, bounded: bool) -> list[tuple[int, int | None]]:
     """Bounds replayed through one trace: aligned, rotated, split, last-rank and wrapped starts, and intervals ending
     before, exactly at and past the start of the separated tail (span - 32 rows after a 32-row offset)."""
@@ -85,6 +91,8 @@ def test_select_final_carry_follows_bounds_across_replays(mesh_device, bounded, 
     start_tt = make_actual_start(mesh_device, bounds[0][0])
     end_tt = make_actual_start(mesh_device, bounds[0][1]) if bounded else None
 
+    carry_args = _carry_args(mesh_device)
+
     def run():
         return ttnn.experimental.kda.select_final_carry(
             rank_final_tt,
@@ -94,6 +102,7 @@ def test_select_final_carry_follows_bounds_across_replays(mesh_device, bounded, 
             local_rows=_ROWS,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             sequence_parallel_axis=0,
+            **carry_args,
         )
 
     # Compile, then capture once; every replay below only changes the bounds on device.
@@ -158,7 +167,7 @@ def test_select_final_carry_rejects_contract_violations(mesh_device, case, error
     rank_final = to_device(state_shape)
     prefix_final = to_device(state_shape)
     actual_start = make_actual_start(mesh_device)
-    kwargs = {"local_rows": _ROWS, "sequence_parallel_axis": 0}
+    kwargs = {"local_rows": _ROWS, "sequence_parallel_axis": 0, **_carry_args(mesh_device)}
     if case == "rank_final_dtype":
         rank_final = to_device(state_shape, dtype=ttnn.bfloat16)
     elif case == "prefix_final_dtype":
@@ -229,6 +238,7 @@ def test_select_final_carry_from_the_last_rank(mesh_device):
                 local_rows=_ROWS,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 sequence_parallel_axis=0,
+                num_links=_sp_links(mesh_device, 0),
                 cores=cores,
                 semaphores=semaphores,
             )
@@ -270,6 +280,7 @@ def test_select_final_carry_determinism(mesh_device):
 
     prefix_tt = shard(closed_form_tensor(_HEADS, _KEY, width, offset=0.5), (None, 2))
     mismatch = DeviceMismatch(mesh_device)
+    carry_args = _carry_args(mesh_device)
     for groups in (1, 4):
         shape = (sp_size * _HEADS, _KEY, width) if groups == 1 else (sp_size * _HEADS, groups, _KEY, width)
         rank_final_tt = shard(closed_form_tensor(*shape, offset=-0.5), (0, len(shape) - 1))
@@ -286,6 +297,7 @@ def test_select_final_carry_determinism(mesh_device):
                     local_rows=_ROWS,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     sequence_parallel_axis=0,
+                    **carry_args,
                 )
                 if first is None:
                     first = carry

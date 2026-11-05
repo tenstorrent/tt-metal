@@ -41,8 +41,6 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
     const uint32_t cores_per_head = attrs.cores.size() / batch_heads;
     const uint32_t per_core = num_chunks / cores_per_head;
     const tt::tt_metal::CoreRangeSet cores = kda_factory_detail::merged_core_set(attrs.cores);
-    // Sharded terms are read in place; interleaved ones stream a chunk row at a time.
-    const bool streamed = !in.terms.memory_config().is_sharded();
 
     const m2::KernelSpecName reader_kernel{"reader"};
     const m2::KernelSpecName writer_kernel{"writer"};
@@ -76,12 +74,9 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
             .data_format_metadata = format,
         };
     };
-    // A chunk row of F(0) then of F(I). In place, the core's whole terms shard: its chunk rows of F(0), then of F(I).
-    // Streamed, two chunks' rows.
-    auto terms_buffer = make_dfb(terms_dfb, (streamed ? 2 : per_core) * 2 * kt, fp32);
-    if (!streamed) {
-        terms_buffer.borrowed_from = terms_name;
-    }
+    // The core's terms shard, read in place: its chunk rows of F(0), then of F(I).
+    auto terms_buffer = make_dfb(terms_dfb, per_core * 2 * kt, fp32);
+    terms_buffer.borrowed_from = terms_name;
     const auto control = [](const m2::DFBSpecName& name) {
         return m2::DataflowBufferSpec{
             .unique_id = name, .entry_size = 64, .num_entries = 1, .data_format_metadata = tt::DataFormat::UInt32};
@@ -90,7 +85,7 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
         make_dfb(seed_dfb, state_tiles, fp32),
         make_dfb(tail_dfb, state_tiles, fp32),
         std::move(terms_buffer),
-        make_dfb(diff_dfb, (streamed ? 2 : per_core) * kt, fp32),
+        make_dfb(diff_dfb, per_core * kt, fp32),
         make_dfb(out_dfb, 2 * kt, tt::DataFormat::Float16_b),
         make_dfb(a_dfb, kt, fp32),
         make_dfb(b_dfb, kt, fp32),
@@ -122,14 +117,12 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
                 m2::TensorBinding{entry_name, "entry"},
                 m2::TensorBinding{tail_entry_name, "tail_entry"},
                 m2::TensorBinding{actual_start_name, "actual_start"},
-                m2::TensorBinding{terms_name, "terms"},
             },
         .compile_time_args =
             {{"kt", kt},
              {"seed_receivers", cores_per_head - 1},
              {"core_chunks", per_core},
-             {"final_stride", cores_per_head},
-             {"streamed", static_cast<uint32_t>(streamed)}},
+             {"final_stride", cores_per_head}},
         .runtime_arg_schema = {.runtime_arg_names = {"head", "first_chunk", "last_chunk", "final_row", "seed_sender"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
@@ -177,7 +170,7 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
                 m2::ProducerOf(final_dfb, "final_rows"),
                 m2::ConsumerOf(ctl_dfb, "ctl"),
             },
-        .compile_time_args = {{"kt", kt}, {"core_chunks", per_core}, {"streamed", static_cast<uint32_t>(streamed)}},
+        .compile_time_args = {{"kt", kt}, {"core_chunks", per_core}},
         .hw_config = std::move(compute_hw),
     };
 

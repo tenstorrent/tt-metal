@@ -34,17 +34,15 @@ void bind_select_final_carry(nb::module_& mod) {
             actual_start (ttnn.Tensor): Replicated UINT32 row-major scalar with the chunk's first
                 absolute position.
             local_rows (int): Positive, 32-aligned token rows per SP device.
+            num_links (int): Fabric links used by the owner's multicast, at most those of the
+                sequence-parallel axis.
+            cores (list[ttnn.CoreCoord]): One core per fabric link, at least ``num_links``.
+            semaphores (list[ttnn.GlobalSemaphore]): The zeroed barrier and arrival global semaphores,
+                kept alive across calls.
             actual_end (ttnn.Tensor, optional): Replicated UINT32 row-major exclusive valid end.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory. Defaults to DRAM.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the sequence, of at least two
                 ranks.
-            num_links (int, optional): Fabric links used by the owner's multicast. Defaults to the
-                links available on the sequence-parallel axis.
-            cores (list[ttnn.CoreCoord], optional): One core per fabric link, at least ``num_links``.
-                Defaults to cores chosen for the links.
-            semaphores (list[ttnn.GlobalSemaphore], optional): The zeroed barrier and arrival global
-                semaphores, kept alive across calls. Without them each cached program allocates its
-                own when it is built.
 
         Returns:
             ttnn.Tensor: FLOAT32 TILE-layout ``[B*H, K, V]`` final state, replicated along the line.
@@ -55,12 +53,12 @@ void bind_select_final_carry(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("actual_start").noconvert(),
         nb::arg("local_rows"),
+        nb::arg("num_links"),
+        nb::arg("cores"),
+        nb::arg("semaphores"),
         nb::arg("actual_end") = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("num_links") = nb::none(),
-        nb::arg("cores") = nb::none(),
-        nb::arg("semaphores") = nb::none());
+        nb::arg("sequence_parallel_axis") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::kda::select_final_carry::detail

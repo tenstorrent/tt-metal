@@ -20,11 +20,10 @@ struct SelectFinalCarryParams {
     uint32_t num_links;
     tt::tt_fabric::Topology topology;
     tt::tt_metal::MemoryConfig output_mem_config;
-    // One worker core per fabric link, when given (the first num_links are used).
-    std::optional<std::vector<tt::tt_metal::CoreCoord>> cores;
-    // L1 addresses of the caller's barrier and arrival global semaphores; without them each cached workload allocates
-    // its own.
-    std::optional<std::array<uint32_t, 2>> semaphore_addresses;
+    // One worker core per fabric link (the first num_links are used).
+    std::vector<tt::tt_metal::CoreCoord> cores;
+    // L1 addresses of the caller's barrier and arrival global semaphores.
+    std::array<uint32_t, 2> semaphore_addresses{};
 };
 
 struct SelectFinalCarryInputs {

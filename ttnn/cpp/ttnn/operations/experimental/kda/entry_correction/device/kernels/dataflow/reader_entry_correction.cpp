@@ -14,14 +14,12 @@
 // Entry correction reader: the chronology (this core's valid chunks and the reset chunk), the head's seeds, and the
 // rows of A and B this core forms the final state of.
 // final_stride: a head's cores each form every final_stride-th tile row of the final state.
-// streamed: interleaved terms, read a chunk row of F(0) and F(I) at a time; otherwise they are in place in the shard.
 // seed_receivers: the head's other cores, which the head's first core writes the seeds to (varargs: NoC x | y << 16).
 template <
     uint32_t kt,
     uint32_t seed_receivers,
     uint32_t core_chunks,
     uint32_t final_stride,
-    uint32_t streamed,
     uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows,
@@ -136,28 +134,7 @@ TT_KERNEL void reader(
             tail.push_back(state_tiles);
         }
     }
-    if constexpr (streamed) {
-        // Head h's F(0) rows are tile rows h * 2 * num_chunks + chunk of the terms, its F(I) rows num_chunks further.
-        // Each chunk's F(0) row then its F(I) row go to the terms buffer together.
-        constexpr uint32_t num_chunks = local_rows / 32;
-        const auto accessor = TensorAccessor(tensor::terms);
-        const uint32_t tile = terms.get_entry_size();
-        for (uint32_t c = 0; c < chunks; ++c) {
-            const uint32_t zero_page = (head * 2 * num_chunks + first_chunk + c) * kt;
-            terms.reserve_back(2 * kt);
-            for (uint32_t j = 0; j < kt; ++j) {
-                noc.async_read(accessor, terms, tile, {.page_id = zero_page + j}, {.offset_bytes = j * tile});
-                noc.async_read(
-                    accessor,
-                    terms,
-                    tile,
-                    {.page_id = zero_page + num_chunks * kt + j},
-                    {.offset_bytes = (kt + j) * tile});
-            }
-            noc.async_read_barrier();
-            terms.push_back(2 * kt);
-        }
-    } else if (chunks != 0) {
+    if (chunks != 0) {
         // This core's chunk rows are in place in its shard of the emitted terms.
         terms.reserve_back(2 * core_chunks * kt);
         terms.push_back(2 * core_chunks * kt);

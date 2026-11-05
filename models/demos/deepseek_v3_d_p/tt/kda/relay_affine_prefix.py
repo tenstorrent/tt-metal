@@ -65,8 +65,6 @@ class RelayAffinePrefix:
     def shared(cls, mesh_device, **kwargs) -> RelayAffinePrefix:
         """One relay per mesh and geometry (mesh ids are never reused): layers run one after another, so they share
         its L1 landing buffer."""
-        if kwargs.get("cores") is not None:
-            kwargs["cores"] = tuple((c.x, c.y) if hasattr(c, "x") else tuple(c) for c in kwargs["cores"])
         key = (mesh_device.id(), tuple(sorted(kwargs.items())))
         if key not in cls._shared:
             cls._shared[key] = cls(mesh_device, **kwargs)
@@ -83,7 +81,6 @@ class RelayAffinePrefix:
         num_links,
         local_rows,
         math_fidelity=ttnn.MathFidelity.HiFi2,
-        cores=None,
     ):
         if key_dim != value_dim:
             raise ValueError("relay prefix requires K == V")
@@ -97,11 +94,9 @@ class RelayAffinePrefix:
         self.axis = sequence_parallel_axis
         self.num_links = num_links
         self.local_rows = local_rows
-        # One core per head, then one sender per link: the given cores, else the grid in row-major order.
-        if cores is None:
-            grid = mesh_device.compute_with_storage_grid_size()
-            cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
-        cores = [c if isinstance(c, ttnn.CoreCoord) else ttnn.CoreCoord(*c) for c in cores]
+        # One core per head, then one sender per link, in the grid's row-major order.
+        grid = mesh_device.compute_with_storage_grid_size()
+        cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
         if batch_heads + num_links > len(cores):
             raise ValueError(f"relay prefix needs {batch_heads + num_links} cores, has {len(cores)}")
         self.cores = cores[: batch_heads + num_links]
@@ -120,8 +115,8 @@ class RelayAffinePrefix:
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=math_fidelity, math_approx_mode=False, fp32_dest_acc_en=True
         )
-        # Where the entry states land for their reader (the chunk scan, or the entry correction's many cores).
-        self.entry_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        # Every entry correction core reads its head's entry state: L1 spares those DRAM reads.
+        self.entry_memory_config = ttnn.L1_MEMORY_CONFIG
 
     def reserve(self):
         """Allocate the landing buffer for the next call, before any program of its layer (a no-op while reserved)."""
@@ -130,9 +125,9 @@ class RelayAffinePrefix:
                 self._landing_shape, ttnn.float32, ttnn.TILE_LAYOUT, self.mesh_device, self._landing_memory_config
             )
 
-    def __call__(self, packed, initial_state, actual_start, entry_memory_config=None):
-        """Return this rank's entry states (in entry_memory_config, default self.entry_memory_config) and the final
-        state, both [BH, K, K] FP32. Frees the landing buffer once the relay has run."""
+    def __call__(self, packed, initial_state, actual_start):
+        """Return this rank's entry states (in L1) and the final state, both [BH, K, K] FP32. Frees the landing buffer
+        once the relay has run."""
         # Reserving here suffices only when no program of this rank runs between its predecessor's relay and its own.
         self.reserve()
         result = ttnn.experimental.kda.relay_affine_prefix(
@@ -145,7 +140,7 @@ class RelayAffinePrefix:
             num_links=self.num_links,
             cores=self.cores,
             sequence_parallel_axis=self.axis,
-            entry_memory_config=entry_memory_config or self.entry_memory_config,
+            entry_memory_config=self.entry_memory_config,
             compute_kernel_config=self.compute_config,
         )
         # Every write into it is consumed within the call: the predecessor's entry columns by this rank's heads, and

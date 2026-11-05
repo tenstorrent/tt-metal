@@ -358,10 +358,7 @@ def _scan_sp_chunks(
     # The summary is the chunk terms' last reader: free their L1 before the relay and its companion.
     for tensor in grouped.as_kernel_args():
         ttnn.deallocate(tensor)
-    # Every correction core reads its head's entry state: L1 spares those DRAM reads.
-    entry_states, prefix_final_state = affine_relay(
-        packed, initial_state, actual_start, entry_memory_config=ttnn.L1_MEMORY_CONFIG
-    )
+    entry_states, prefix_final_state = affine_relay(packed, initial_state, actual_start)
     output, rank_final = correction(*emitted, entry_states, prefix_final_state, actual_start, actual_end)
     for tensor in (*emitted, entry_states):
         ttnn.deallocate(tensor)
@@ -488,7 +485,7 @@ class KDARecurrence:
         # With sequence parallelism the SP prefix is a relay along the SP axis: each rank forwards its successor the
         # entry state (the last rank hands the final state to the first), and the final carry runs as its own program.
         # Each head is one group: the summary emits every chunk's output terms and the entry correction forms the chunk
-        # outputs from the relayed entry state, with the terms in L1 when they fit and streamed from DRAM otherwise.
+        # outputs from the relayed entry state, with the terms in its cores' L1.
         self._affine_relay = None
         self._relay_final_carry = None
         self._entry_correction = None

@@ -15,7 +15,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
-#include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
@@ -70,17 +69,9 @@ tt::tt_metal::ProgramDescriptor build_program(
     const auto backward =
         ttnn::ccl::get_physical_neighbor_from_physical_coord(in.prefix_final, coord, -1, topology, axis);
     TT_FATAL(forward || backward, "select_final_carry: no fabric neighbor on the sequence-parallel line");
-    // One core per fabric link: the first num_links given cores, else cores chosen for the links.
-    CoreRangeSet all_cores;
-    std::vector<CoreCoord> fabric_cores;
-    if (attrs.cores) {
-        fabric_cores.assign(attrs.cores->begin(), attrs.cores->begin() + attrs.num_links);
-        all_cores = kda_factory_detail::merged_core_set(fabric_cores);
-    } else {
-        const auto sub_device = mesh->get_sub_device_ids().at(0);
-        std::tie(all_cores, fabric_cores) =
-            ttnn::ccl::choose_worker_cores(attrs.num_links, 1, mesh, sub_device, CoreCoord(0, 0), std::nullopt);
-    }
+    // One core per fabric link: the first num_links given cores.
+    const std::vector<CoreCoord> fabric_cores(attrs.cores.begin(), attrs.cores.begin() + attrs.num_links);
+    const CoreRangeSet all_cores = kda_factory_detail::merged_core_set(fabric_cores);
     // A 2D multicast leaves every hop in one ETH direction. On a 2D fabric whose SP axis turns, every send goes to
     // each other rank as a 2D unicast, through the connection its route leaves on.
     const bool unicast_peers = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) &&
@@ -232,24 +223,7 @@ tt::tt_metal::WorkloadDescriptor SelectFinalCarryProgramFactory::create_workload
     std::vector<Tensor>& outputs,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     tt::tt_metal::WorkloadDescriptor workload;
-    auto* mesh = in.prefix_final.device();
-    std::array<uint32_t, 2> semaphores{};
-    if (attrs.semaphore_addresses) {
-        semaphores = *attrs.semaphore_addresses;
-    } else {
-        const auto sub_device = mesh->get_sub_device_ids().at(0);
-        const auto cores = mesh->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device);
-        // Both counters persist across replays, so they live where a fabric mux cannot clobber them.
-        const auto semaphore_memory = ttnn::ccl::prefer_l1_small_buffer_type(*mesh);
-        for (auto& address : semaphores) {
-            workload.semaphores.push_back(
-                ttnn::global_semaphore::create_global_semaphore(mesh, cores, 0, semaphore_memory));
-            address = static_cast<uint32_t>(workload.semaphores.back().address());
-        }
-        // The zeroed counters must land before any device's program can increment a peer's.
-        tt::tt_metal::distributed::Synchronize(
-            *mesh, std::nullopt, ttsl::SmallVector<tt::tt_metal::SubDeviceId>{sub_device});
-    }
+    const auto& semaphores = attrs.semaphore_addresses;
     for (const auto& coord : tensor_coords.coords()) {
         workload.programs.push_back(
             {ttnn::MeshCoordinateRange(coord),
