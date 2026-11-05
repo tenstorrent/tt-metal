@@ -5,7 +5,8 @@ import struct
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from conftest import blackhole_only
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TernarySFPUGolden,
@@ -195,8 +196,7 @@ def _run_sfpu_ternary(
     ],
 )
 def test_sfpu_ternary(formats, dest_acc, mathop):
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
     if (
         formats.input_format == DataFormat.Bfp8_b
         and mathop != MathOperation.SfpuAddcmul
@@ -215,6 +215,10 @@ _TERNARY_RECIP_NEWTON_OPS = [
 ]
 
 
+# Blackhole regression for https://github.com/tenstorrent/tt-llk/issues/1701 items 2 and
+# 5, verified on Blackhole silicon only; Wormhole's sfpu_reciprocal_init programs its
+# constants in both modes
+@blackhole_only
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
@@ -224,14 +228,7 @@ def test_sfpu_ternary_approx_after_lreg_clobber(formats, dest_acc, mathop):
     """APPROX_MODE=Yes with the SFPU registers clobbered first: the init must program the
     Newton step's 2.0 (vConstFloatPrgm0) itself, or 1/c comes out about 47.6x too large.
     """
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip(
-            "Blackhole regression for https://github.com/tenstorrent/tt-llk/issues/1701 "
-            "items 2 and 5, verified on Blackhole silicon only; Wormhole's "
-            "sfpu_reciprocal_init programs its constants in both modes"
-        )
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     _run_sfpu_ternary(
         formats,
@@ -280,8 +277,7 @@ _TERNARY_NONZERO_B = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], s
 )
 def test_sfpu_ternary_edges(formats, dest_acc, mathop):
     """Drive each ternary op's operand-C pole or knee, where it has one."""
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     spec_C = edge_spec(
         mathop,
