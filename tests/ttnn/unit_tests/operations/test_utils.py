@@ -198,10 +198,10 @@ def create_ttnn_tilized_tensor(torch_tensor, device, dtype, pad_value=float("nan
 
 
 def merge_gate_subset(cases, keep, ids=None):
-    """Return parametrize values, with merge_gate on the tuples in keep.
+    """Mark only the tuples in keep.
 
-    cases is an iterable of argument tuples. keep is those tuples; wrap a single tuple in a list.
-    ids is an optional list aligned with cases, or a callable from the case tuple to its pytest id.
+    keep is a list of argument tuples; wrap a single tuple in a list.
+    ids is an optional list aligned with cases, or a callable from the tuple to its pytest id.
     """
     chosen = {tuple(case) for case in keep}
 

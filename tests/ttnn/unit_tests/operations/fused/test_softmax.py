@@ -272,7 +272,7 @@ def run_softmax_sharded_stable(
         )
 
 
-# skip_scale_mask off: bf16 with approx off and fp32 acc on and off, plus bf8 with fp32 acc and approx on.
+# Mask on: bf16 with approx off and fp32 acc on and off, plus bf8 with fp32 acc and approx on.
 _SOFTMAX_SHARDED_STABLE_MERGE_GATE = {
     (False, False, True, ttnn.bfloat16),
     (False, False, False, ttnn.bfloat16),
@@ -888,8 +888,8 @@ def test_softmax_large_non_divisible_width(device, Wt):
     _run_softmax_non_divisible_width(device, Wt, fp32_acc_en=True, numeric_stable=True)
 
 
-SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_CASES = [
-    # broadcast mask: batch * Ht = 128 tile rows, so every core gets more than one row
+# broadcast mask: batch * Ht = 128 tile rows, so every core gets more than one row
+_SCALE_MASK_UNPADDED_CASES = [
     (64, False, 5, 0),
     (64, False, 7, 0),
     (64, False, 13, 0),
@@ -901,13 +901,16 @@ SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_CASES = [
     # wide enough to select the streaming large kernel, which pads c_4 per pass; the other large-kernel
     # cases are in SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_NIGHTLY_CASES
     (1, False, 637, 0),
-    # W not a multiple of 32: the mask's zero tile padding must not reach the row sum
+]
+# W not a multiple of 32: the mask's zero tile padding must not reach the row sum
+_SCALE_MASK_PADDED_CASES = [
     (64, False, 1, 15),
     (64, False, 4, 30),
     (64, False, 7, 15),
     (16, True, 2, 15),
     (16, True, 4, 30),
 ]
+SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_CASES = _SCALE_MASK_UNPADDED_CASES + _SCALE_MASK_PADDED_CASES
 
 # Large-kernel masked cases that run nightly only (tests/ttnn/nightly/unit_tests/operations/fused/test_softmax.py):
 # the Wt=637 pad=15 one is 2.5 min on the simulator (#62486).
@@ -918,22 +921,7 @@ SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_NIGHTLY_CASES = [
 ]
 
 
-# #58691: both flags on for the eight unpadded geometries still in this list
-# (1001 moved to nightly), plus (16, causal, Wt=13, pad=0) with both off.
-# The pad != 0 rows were added later and are not gated.
-_SCALE_MASK_FP32_STABLE_MERGE_GATE = {
-    (64, False, 5, 0),
-    (64, False, 7, 0),
-    (64, False, 13, 0),
-    (64, False, 47, 0),
-    (16, True, 5, 0),
-    (16, True, 7, 0),
-    (16, True, 13, 0),
-    (1, False, 637, 0),
-}
-_SCALE_MASK_BOTH_OFF_MERGE_GATE = (16, True, 13, 0, False, False)
-
-
+# Unpadded rows with fp32 acc and numeric stable on, plus causal Wt=13 with both off.
 @pytest.mark.parametrize(
     "batch, causal, Wt, pad, fp32_acc_en, numeric_stable",
     merge_gate_subset(
@@ -943,8 +931,7 @@ _SCALE_MASK_BOTH_OFF_MERGE_GATE = (16, True, 13, 0, False, False)
                 [True, False], [True, False], SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_CASES
             )
         ),
-        keep={(*geometry, True, True) for geometry in _SCALE_MASK_FP32_STABLE_MERGE_GATE}
-        | {_SCALE_MASK_BOTH_OFF_MERGE_GATE},
+        keep={(*case, True, True) for case in _SCALE_MASK_UNPADDED_CASES} | {(16, True, 13, 0, False, False)},
     ),
 )
 def test_scale_mask_softmax_non_divisible_width(device, batch, causal, Wt, pad, fp32_acc_en, numeric_stable):

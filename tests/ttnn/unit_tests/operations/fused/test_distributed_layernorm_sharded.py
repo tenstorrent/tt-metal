@@ -317,7 +317,7 @@ def run_pre_allgather_layernorm(
     logger.info("Pre-allgather layernorm test passed for all devices")
 
 
-# seed 0, 4 devices, bf16. is_rmsnorm and fuse_residual stay separate, so both values of each are gated.
+# Seed 0, 4 devices, bf16. Both RMS and both residual.
 _PRE_ALLGATHER_MERGE_GATE = (0, 4, ttnn.bfloat16)
 
 

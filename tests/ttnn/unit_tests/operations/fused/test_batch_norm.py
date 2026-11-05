@@ -1139,7 +1139,7 @@ def test_batch_norm_fpu_running_statistics(input_shapes, weight, bias, check_mea
 
 @pytest.mark.parametrize(
     "check_mean, check_var",
-    # mean-only (batch_var still drained), then var-only (batch_mean still drained, FPU). Gate the var-only row.
+    # Gate the var-only row, with fp32 acc on and off.
     merge_gate_subset([(True, False), (False, True)], keep=[(False, True)]),
 )
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True])

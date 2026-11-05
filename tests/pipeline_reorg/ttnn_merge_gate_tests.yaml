@@ -157,7 +157,7 @@
 # Matmul, fused and reduction coverage, reusing the Sanity op groups.
 #
 # The selection lives in the test files, as @pytest.mark.merge_gate (registered in pytest.ini),
-# not as a list of node IDs here. LLK asserts catch LLK misuse that an output check can miss (#49219).
+# not as a list of node IDs here. LLK asserts catch misuse an output check can miss.
 - name: "ttnn matmul fused reduction ops"
   cmd: >-
     TT_METAL_LLK_ASSERTS=1
