@@ -48,7 +48,9 @@ struct GdnDecodeStepInputs {
     std::optional<Tensor> conv_taps;  // fused-conv mode: packed taps [Nv, 4, 32, 32] bf16 (row c = channel chunk c)
     // fused-conv mode, optional: [2, >= B] ROW_MAJOR (u)int32. Column b holds the first `state` page (row 0) and the
     // first `conv_hist` page (row 1) of batch row b, so `state` and `conv_hist` can be page pools. Absent: row b owns
-    // state pages [b*Nv*KV, (b+1)*Nv*KV) and conv_hist pages [b*Nv*4, (b+1)*Nv*4).
+    // state pages [b*Nv*KV, (b+1)*Nv*KV) and conv_hist pages [b*Nv*4, (b+1)*Nv*4). With it, the packed history holds
+    // channel chunk c in both tile rows 2c and 2c + 1 (without it: row 2c + (b & 1) only), so a request's pages stay
+    // valid when it moves to a batch row of the other parity.
     std::optional<Tensor> state_page_idx;
 };
 

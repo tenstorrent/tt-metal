@@ -46,7 +46,10 @@ void bind_gdn_decode_step(nb::module_& mod) {
                 Column ``b`` holds the first page of batch row ``b``: row 0 indexes the FLOAT32 tiles of ``state``
                 (row ``b``, value head ``h`` uses pages ``[idx[0][b] + h*KV, idx[0][b] + (h+1)*KV)``, KV = Dk*Dv/1024,
                 tile order as in ``[Nv, Dk, Dv]``), row 1 indexes the BFLOAT16 tiles of ``conv_hist`` (pages
-                ``idx[1][b] + 4*h + slot``). ``state`` and ``conv_hist`` may then have any tiled shape. The rows' page
+                ``idx[1][b] + 4*h + slot``). ``state`` and ``conv_hist`` may then have any tiled shape. In this mode
+                the packed history holds channel chunk c in both tile rows ``2c`` and ``2c + 1`` (as ``conv_taps``
+                does; without the index only row ``2c + (b & 1)``), and the op keeps both when it shifts in the new
+                token, so a request may sit on batch rows of either parity from step to step. The rows' page
                 ranges must not overlap. The values are read on device on every call, so a captured trace follows
                 new pages when only the contents of ``state_page_idx`` change. Default None: row ``b`` uses rows ``b``
                 of ``state`` ``[Bmax, Nv, Dk, Dv]`` and ``conv_hist`` ``[Bmax, Nv, 4, 32, 32]``.

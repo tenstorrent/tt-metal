@@ -305,6 +305,27 @@ inline void build_user_selectors(DataflowBuffer& sel, DataflowBuffer& mask, Noc&
     mask.push_back(1);
 }
 
+// Pooled conv history (state_page_idx) holds channel chunk c in both rows 2c and 2c + 1 (as the taps do), so a request
+// reads correctly from a batch row of either parity. pack_head_tile_user fills only rows 2c + (b & 1) (the NoC copy
+// keeps the source row's 64 B alignment class); this copies them to the other parity with RISC-V loads and stores.
+// `tile` counts entries from the DFB's write pointer; the reads into it must have completed.
+inline void packed_rows_mirror_parity(DataflowBuffer& dfb, uint32_t tile, uint32_t n_chunks, uint32_t b) {
+    auto lock = dfb.scoped_write_lock(tile + 1);
+    auto p = lock.template get_ptr<volatile uint32_t>();
+    const uint32_t base = tile * (dfb.get_entry_size() / 4);
+    const uint32_t par = b & 1u;
+    for (uint32_t c = 0; c < n_chunks; ++c) {
+        for (uint32_t half = 0; half < 2; ++half) {
+            // one face row = 16 bf16 = 8 words; rows 2c and 2c + 1 sit in the same face
+            const uint32_t src = base + tile_elem_index(2 * c + par, 16 * half) / 2;
+            const uint32_t dst = base + tile_elem_index(2 * c + 1 - par, 16 * half) / 2;
+            for (uint32_t w = 0; w < 8; ++w) {
+                p[dst + w] = p[src + w];
+            }
+        }
+    }
+}
+
 // Write rows [r0, r0 + nr) of `count` consecutive L1 tiles to the same rows of the destination tiles. Rows are written
 // as whole face-row spans; r0 must be even and nr even (or r0 == 0, nr == 1 -> rows 0..1, row 1 being zero padding),
 // so every DRAM destination address is 64 B aligned.

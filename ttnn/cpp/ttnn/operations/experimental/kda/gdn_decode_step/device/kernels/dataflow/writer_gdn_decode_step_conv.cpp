@@ -54,6 +54,11 @@ TT_KERNEL void writer(uint32_t head, uint32_t u0, uint32_t nu) {
         read_tiles_at(hist_acc, wshift, noc, hist_page + 1, 3, 0);
         pack_head_tile_user<Kt, Vt, Nk>(qkv_acc, wshift, noc, hk, h, b, 3);
         noc.async_read_barrier();
+#ifdef GDN_STATE_PAGE_IDX
+        // the new slot gets both parities, as slots 0..2 already have them (the writer waits on the compute next, so
+        // this copy is off the critical path)
+        packed_rows_mirror_parity(wshift, 3, 2 * Kt + Vt, b);
+#endif
         wshift.push_back(4);
         write_tiles(state_acc, hnew, noc, state_page, KV);  // waits for compute -> old history already consumed
         write_tiles(hist_acc, wshift, noc, hist_page, 4);   // slot0 <- slot1, ..., slot3 <- new token

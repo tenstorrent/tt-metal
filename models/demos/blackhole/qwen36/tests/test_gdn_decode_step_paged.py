@@ -36,16 +36,35 @@ def _inputs(B, seed):
     rn = lambda *s: torch.randn(*s, generator=gen)
     rows = (0.5 * rn(B, W)).bfloat16()
     rows[:, AZ + 2 * Nv :] = 0
+    cs = [[(0.5 * rn(C)).bfloat16() for _ in range(4)] for _ in range(B)]  # per row: history rows cs0..cs3
     return {
         "h": (0.05 * rn(B, Nv, Dk, Dv)).float(),
-        # row b's history is packed with parity b & 1 (the kernels read it that way)
-        "hist": torch.stack([_pack_rows_user([(0.5 * rn(C)).bfloat16() for _ in range(4)], b) for b in range(B)]),
+        # default layout: row b's history packed with parity b & 1; pooled layout (state_page_idx): both parities
+        "hist": torch.stack([_pack_rows_user(cs[b], b) for b in range(B)]),
+        "hist2": torch.stack([_pack_rows_user(cs[b], 0, both=True) for b in range(B)]),
         "rows": rows,
         "w": (1.0 + 0.1 * rn(Dv)).bfloat16(),
         "taps": _pack_rows_user([(0.3 * rn(C)).bfloat16() for _ in range(4)], 0, both=True),
         "dtb": (0.1 * rn(Nv)).bfloat16(),
         "nea": (-torch.exp(0.2 * rn(Nv))).bfloat16(),
     }
+
+
+def _to_pooled(t, b):
+    """Packed history tiles [..., 32, 32] of batch row b (chunk c in row 2c + (b & 1)) -> the pooled layout (chunk c
+    in rows 2c and 2c + 1)."""
+    p = b % 2
+    out = t.clone()
+    out[..., 1 - p :: 2, :] = t[..., p::2, :]
+    return out
+
+
+def _from_pooled(t, b):
+    """The pooled layout (both parities) -> the default layout of batch row b (row 2c + (b & 1), the other rows 0)."""
+    p = b % 2
+    out = torch.zeros_like(t)
+    out[..., p::2, :] = t[..., p::2, :]
+    return out
 
 
 def _random_starts(n, run, pool_pages, gen):
@@ -74,7 +93,7 @@ def _pools(B, inp, state_starts, hist_starts, state_pool_pages, hist_pool_pages,
     hp = torch.randn(1, hist_pool_pages, 32, 32, generator=gen).bfloat16()
     for b in range(B):
         sp[0, state_starts[b] : state_starts[b] + STATE_PAGES] = _tiles(inp["h"][b])
-        hp[0, hist_starts[b] : hist_starts[b] + HIST_PAGES] = _tiles(inp["hist"][b])
+        hp[0, hist_starts[b] : hist_starts[b] + HIST_PAGES] = _tiles(inp["hist2"][b])
     return sp, hp
 
 
@@ -110,7 +129,8 @@ def _consts_dev(device, inp):
 
 
 def _contiguous_step(device, B, inp, inp_dev, fast_mode, fp32_state):
-    """The op without state_page_idx on [BMAX, ...] state / history (rows >= B zero). Returns host (out, h, hist)."""
+    """The op without state_page_idx on [BMAX, ...] state / history (rows >= B zero). Returns host (out, h, hist), the
+    history converted to the pooled (both parities) layout."""
     h = torch.zeros(BMAX, Nv, Dk, Dv)
     h[:B] = inp["h"]
     hist = torch.zeros(BMAX, Nv, 4, 32, 32, dtype=torch.bfloat16)
@@ -119,11 +139,12 @@ def _contiguous_step(device, B, inp, inp_dev, fast_mode, fp32_state):
     hist_dev = _tile_dev(device, hist, ttnn.bfloat16)
     x = _tile_dev(device, inp["rows"].reshape(1, B, W), ttnn.bfloat16)
     out = _run(device, x, inp_dev, state_dev, hist_dev, fast_mode, fp32_state)
-    return ttnn.to_torch(out), ttnn.to_torch(state_dev)[:B], ttnn.to_torch(hist_dev)[:B]
+    hist_t = ttnn.to_torch(hist_dev)
+    return ttnn.to_torch(out), ttnn.to_torch(state_dev)[:B], torch.stack([_to_pooled(hist_t[b], b) for b in range(B)])
 
 
 def _check_pools(B, sp0, hp0, sp, hp, state_starts, hist_starts, h_ref, hist_ref):
-    """Row b's pages equal the contiguous result bit for bit; every other pool page is unchanged."""
+    """Row b's pages equal the reference (state, pooled history) bit for bit; every other pool page is unchanged."""
     s_mask = torch.zeros(sp.shape[1], dtype=torch.bool)
     h_mask = torch.zeros(hp.shape[1], dtype=torch.bool)
     for b in range(B):
@@ -167,6 +188,53 @@ def test_paged_matches_contiguous(device, B, fast_mode, fp32_state, contiguous_p
     _check_pools(B, sp0, hp0, ttnn.to_torch(sp_dev), ttnn.to_torch(hp_dev), state_starts, hist_starts, h_ref, hist_ref)
 
 
+@pytest.mark.parametrize("fast_mode, fp32_state", MODES, ids=["default", "fast", "fast_fp32state"])
+def test_paged_rows_change_parity(device, fast_mode, fp32_state):
+    """Eight requests keep their pool pages while their batch rows change every step, so each request sits on even
+    and odd rows in turn. Each step matches the default layout with the same request on the same row (its state and
+    history repacked for that row's parity) bit for bit: output, state and history."""
+    B, steps = 8, 4
+    gen = torch.Generator().manual_seed(77)
+    inp = _inputs(B, seed=31)
+    inp_dev = _consts_dev(device, inp)
+    perms = [
+        list(range(B)),
+        [1, 0, 3, 2, 5, 4, 7, 6],
+        [7, 0, 1, 2, 3, 4, 5, 6],
+        torch.randperm(B, generator=gen).tolist(),
+    ]
+    assert len(perms) == steps
+    state_pool_pages, hist_pool_pages = (B + 2) * STATE_PAGES + 5, (B + 2) * HIST_PAGES + 3
+    ss = _random_starts(B, STATE_PAGES, state_pool_pages, gen)
+    hs = _random_starts(B, HIST_PAGES, hist_pool_pages, gen)
+    sp0, hp0 = _pools(B, inp, ss, hs, state_pool_pages, hist_pool_pages, gen)  # request r starts in pages ss[r], hs[r]
+    sp_dev = _tile_dev(device, sp0, ttnn.float32)
+    hp_dev = _tile_dev(device, hp0, ttnn.bfloat16)
+    ref_h = [inp["h"][r].clone() for r in range(B)]
+    ref_hist2 = [inp["hist2"][r].clone() for r in range(B)]
+    for step, perm in enumerate(perms):  # batch row b holds request perm[b]
+        rows = (0.5 * torch.randn(B, W, generator=gen)).bfloat16()
+        rows[:, AZ + 2 * Nv :] = 0
+        x = _tile_dev(device, rows.reshape(1, B, W), ttnn.bfloat16)
+        # reference: the default layout with request perm[b] in row b
+        h = torch.zeros(BMAX, Nv, Dk, Dv)
+        hist = torch.zeros(BMAX, Nv, 4, 32, 32, dtype=torch.bfloat16)
+        for b, r in enumerate(perm):
+            h[b] = ref_h[r]
+            hist[b] = _from_pooled(ref_hist2[r], b)
+        state_dev, hist_dev = _tile_dev(device, h, ttnn.float32), _tile_dev(device, hist, ttnn.bfloat16)
+        out_ref = ttnn.to_torch(_run(device, x, inp_dev, state_dev, hist_dev, fast_mode, fp32_state))
+        h_t, hist_t = ttnn.to_torch(state_dev), ttnn.to_torch(hist_dev)
+        for b, r in enumerate(perm):
+            ref_h[r] = h_t[b]
+            ref_hist2[r] = _to_pooled(hist_t[b], b)
+        # pooled: the same requests, addressed through state_page_idx
+        idx = _idx_dev(device, [ss[r] for r in perm], [hs[r] for r in perm])
+        out = ttnn.to_torch(_run(device, x, inp_dev, sp_dev, hp_dev, fast_mode, fp32_state, state_page_idx=idx))
+        assert torch.equal(out, out_ref), f"step {step}: output differs"
+        _check_pools(B, sp0, hp0, ttnn.to_torch(sp_dev), ttnn.to_torch(hp_dev), ss, hs, ref_h, ref_hist2)
+
+
 def test_paged_rejects_short_index(device, expect_error):
     """An index with fewer than B columns is refused on the host."""
     B = 8
@@ -198,7 +266,7 @@ def test_paged_trace_follows_index(device, B):
     sp0, hp0 = _pools(B, inp, *sets[0], state_pool_pages, hist_pool_pages, gen)
     for b in range(B):
         sp0[0, sets[1][0][b] : sets[1][0][b] + STATE_PAGES] = _tiles(inp["h"][b])
-        hp0[0, sets[1][1][b] : sets[1][1][b] + HIST_PAGES] = _tiles(inp["hist"][b])
+        hp0[0, sets[1][1][b] : sets[1][1][b] + HIST_PAGES] = _tiles(inp["hist2"][b])
     sp_dev = _tile_dev(device, sp0, ttnn.float32)
     hp_dev = _tile_dev(device, hp0, ttnn.bfloat16)
     x = _tile_dev(device, inp["rows"].reshape(1, B, W), ttnn.bfloat16)
