@@ -32,6 +32,18 @@ from models.demos.glm53_flash.tt.runners.kv_export import (
 )
 
 
+def pad_bucket(n: int) -> int | None:
+    """The padded length a chunk of ``n`` tokens runs at (``GLM53F_RUNNER_BUCKETS``, read per call). Default (unset):
+    None, the model's own 256-token steps. ``coarse``: 256-token steps to 4096, 512 to 8192, 1024 above, i.e. 32
+    lengths up to a 16384-token chunk instead of 64. Every padded length keeps DRAM resident, and a 16384-chunk runner
+    warmed with all 64 OOMed at the 63rd (tt-blaze G53F-0256, 14:52). ``mesh_model.prefill(pad_to=)`` is the tail-
+    bucket path of G53F-0221."""
+    if os.environ.get("GLM53F_RUNNER_BUCKETS", "") != "coarse":
+        return None
+    step = 256 if n <= 4096 else 512 if n <= 8192 else 1024
+    return -(-n // step) * step
+
+
 class GLM53FlashPrefillRuntime:
     def __init__(self, *, mesh_device, hf_config, params):
         from models.demos.glm53_flash.tt.mesh_model import GLM53MeshModel
@@ -159,7 +171,7 @@ class GLM53FlashPrefillRuntime:
 
     # ------------------------------------------------------------------ internals
     def _prefill(self, ids: torch.Tensor, start: int) -> None:
-        streams, logits, _ = self.model.prefill(ids, user=0, start=start)
+        streams, logits, _ = self.model.prefill(ids, user=0, start=start, pad_to=pad_bucket(int(ids.numel())))
         ttnn.deallocate(streams)
         if logits is not None:
             ttnn.deallocate(logits)
