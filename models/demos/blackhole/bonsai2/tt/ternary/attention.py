@@ -91,8 +91,14 @@ class TernaryAttention:
         return v
 
     def project_o(self, a):
-        lead = tuple(list(a.shape)[:-1])
-        ar = self.rot_out(a)
+        if isinstance(a, _GatedOut):  # sigmoid(gate) * attn, rotated in one op
+            lead = tuple(list(a.attn.shape)[:-1])
+            ar = self.rot_out(a.gate, u=a.attn, sig=True)
+            ttnn.deallocate(a.attn)
+            ttnn.deallocate(a.gate)
+        else:
+            lead = tuple(list(a.shape)[:-1])
+            ar = self.rot_out(a)
         y = self.o(ar, lead=lead, residual=prerot.take_residual())  # the layer's residual add, if registered
         ttnn.deallocate(ar)
         return y
@@ -208,6 +214,13 @@ class _NormRope:
         self.t, self.op, self.head_major = t, op, head_major
 
 
+class _GatedOut:
+    """Decode attn * sigmoid(gate), not computed yet (TernaryAttention.project_o rotates it in one op)."""
+
+    def __init__(self, attn, gate):
+        self.attn, self.gate = attn, gate
+
+
 class TernaryAttentionTtnn:
     """ttnn stand-in for gated_attention_forward_ttnn's module (decode only): its four projections go to the
     TernaryAttention; the q / k norms run fused with the RoPE (apply_rope, BONSAI_DECODE_QKR=0: off); everything else
@@ -236,7 +249,20 @@ class TernaryAttentionTtnn:
     def deallocate(self, t, *args, **kwargs):
         if isinstance(t, _NormRope):
             return ttnn.deallocate(t.t)
+        if isinstance(t, (SigGate, _GatedOut)):
+            return None  # consumed (and freed) by project_o's gated rotation
         return ttnn.deallocate(t, *args, **kwargs)
+
+    # sigmoid(gate) * attn -> o_proj: the rotation before o computes the gated product (rotate.py sig=)
+    def sigmoid(self, x, *args, **kwargs):
+        if os.environ.get("BONSAI_DECODE_GATEROT", "1") == "1" and not args and not kwargs:
+            return SigGate(x)
+        return ttnn.sigmoid(x, *args, **kwargs)
+
+    def multiply(self, a, b, *args, **kwargs):
+        if isinstance(b, SigGate) and not args and not kwargs:
+            return _GatedOut(a, b.t)
+        return ttnn.multiply(a, b, *args, **kwargs)
 
     def apply_rope(self, q, k, cos, sin, orig):
         """Stands in for the shared apply_rotary_pos_emb_ttnn (attention/decode.py swaps it in)."""

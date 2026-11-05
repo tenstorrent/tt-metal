@@ -44,8 +44,13 @@ void kernel_main() {
     copy_init(cb_xt);
     tile_regs_acquire();
     copy_tile(cb_xt, 0, 0);
+#ifdef ROT_SIGMUL
+    sigmoid_tile_init();  // ROT_SIGMUL: sigmoid(x) * (D u) (the attention's gate)
+    sigmoid_tile(0);
+#else
     silu_tile_init();
     silu_tile(0);
+#endif
     reconfig_data_format(cb_ut, cb_ut);
     mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_ut);
     mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_ut, 0, 0);

@@ -35,8 +35,9 @@ class DecodeRotation:
         )
         self.device = device
 
-    def __call__(self, x: ttnn.Tensor, debug_copy=False, u=None) -> ttnn.Tensor:
-        """u: rotate silu(x) * u instead of x (the MLP's gate/up product, one op instead of a mul and a rotation)."""
+    def __call__(self, x: ttnn.Tensor, debug_copy=False, u=None, sig=False) -> ttnn.Tensor:
+        """u: rotate silu(x) * u instead of x (the MLP's gate/up product, one op instead of a mul and a rotation);
+        sig: sigmoid(x) * u (the attention's gated output)."""
         device, K, B, C = self.device, self.K, self.B, self.copies
         out = ttnn.allocate_tensor_on_device(
             ttnn.Shape([C, K]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
@@ -99,7 +100,8 @@ class DecodeRotation:
                     compile_time_args=[],
                     runtime_args=[],
                     defines=([("ROT_DEBUG_COPY", "1")] if debug_copy else [])
-                    + ([("ROT_GLU", "1")] if u is not None else []),
+                    + ([("ROT_GLU", "1")] if u is not None else [])
+                    + ([("ROT_SIGMUL", "1")] if sig else []),
                     config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False
                     ),
