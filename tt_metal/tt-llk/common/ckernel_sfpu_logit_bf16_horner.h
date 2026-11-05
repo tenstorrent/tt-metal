@@ -13,7 +13,7 @@ namespace ckernel::sfpu::ttpoly::logit
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
 
-inline vFloat sfpu_mad(vFloat a, vFloat b, vFloat c)
+__attribute__((always_inline)) inline vFloat sfpu_mad(vFloat a, vFloat b, vFloat c)
 {
     return __builtin_rvtt_sfpmad(a.get(), b.get(), c.get(), SFPMAD_MOD1_OFFSET_NONE);
 }

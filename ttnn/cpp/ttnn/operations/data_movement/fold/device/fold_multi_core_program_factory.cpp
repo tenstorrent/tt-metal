@@ -6,7 +6,7 @@
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"

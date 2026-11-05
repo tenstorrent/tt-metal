@@ -20,6 +20,6 @@ template <typename Config, int Iterations = 32>
 inline void calculate_normalized_log_odds()
 {
     static_assert(Iterations == 32, "normalized log odds requires a complete tile");
-    ttpoly::logit::normalized_log_odds_tile<Config>(Config::kLut, [](sfpi::vFloat x) { return x; });
+    ttpoly::logit::normalized_log_odds_tile<Config>(Config::kLut, [](sfpi::vFloat x) __attribute__((always_inline)) { return x; });
 }
 } // namespace ckernel::sfpu::bf16::logit

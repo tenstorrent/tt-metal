@@ -6,13 +6,13 @@
 
 #include "api/compute/common_globals.h"
 
-// Blackhole and Wormhole only: ckernel_sfpu_logit_bf16.h exists under those ckernel trees.
-// Quasar keeps the op's own kernel.
+// The generated kernel exists on Blackhole and Wormhole, where TT-NN runs it; Quasar keeps the op's own kernel, and
+// a call there fails to build.
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
-
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_logit_bf16.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
+#endif
 #endif
 
 namespace ckernel {
@@ -30,17 +30,26 @@ namespace ckernel {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void logit_tile(uint32_t idst) {
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool on_board = false>
+ALWI void logit_tile([[maybe_unused]] uint32_t idst) {
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
     static_assert(!is_fp32_dest_acc_en, "logit_tile evaluates BF16 DEST");
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_logit_bf16, (32), idst, VectorMode::None));
+#else
+    static_assert(on_board, "logit_tile: Blackhole and Wormhole only");
+#endif
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void logit_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+template <bool on_board = false>
+ALWI void logit_tile_init() {
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
+    MATH(SFPU_UNARY_INIT(unused));
+#else
+    static_assert(on_board, "logit_tile_init: Blackhole and Wormhole only");
+#endif
+}
 
 }  // namespace ckernel
-
-#endif  // ARCH_BLACKHOLE || ARCH_WORMHOLE

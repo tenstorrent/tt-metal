@@ -5,9 +5,36 @@ large-message collective for the sparse-MLA prefill path. It is independent of
 `ttnn.all_gather`: there is no composite fallback and no environment-variable
 selection.
 
+The program is `device/high_bw_all_gather_fabric_factory.cpp`, with its kernels in `device/kernels/fabric/`.
+
+## Program
+Terms (logical vs physical pages, outer slices, fabric chunks, CB batches, outgoing shards, the counters):
+`device/kernels/fabric/fabric_all_gather_chunk_walk.hpp`.
+
+Per chip, per ring, per ring direction and per link, one **fabric link worker** core: a reader (NCRISC, NoC0) reads
+this chip's own shard from the input, then the shards it forwards from its own output; a sender (BRISC, NoC1) sends
+each fabric chunk one fabric hop into the same pages of the neighbour's output. **Local copy cores** write the chip's
+own shard: one per link, or two per link for a non-interleaved input (the ND-sharded KV cache), which they convert
+block by block into the output for the link workers to read from there. Link workers sit next to the Ethernet core of
+their link (`tt_fabric::get_forwarding_eth_core`).
+
+- **Fabric chunks**: up to `payload / page` consecutive pages of one page lane (pages k, k + B, k + 2B, ... for B
+  DRAM banks), physically contiguous in an interleaved tensor, one packet each (a page larger than the payload is split
+  over several packets). Chunks are numbered row block by row block and dealt round robin to the link workers (and to
+  the local copy cores), so the cores stay balanced for any bank count: 8 on Blackhole, 7 with a harvested bank.
+- **Forwarding**: outgoing shard k is what upstream sent as its outgoing shard k - 1. Upstream's last packet of every
+  outgoing shard (or a bare increment, if none of the shard's chunks is that worker's) increments this worker's
+  shards-arrived counter, so the reader forwards shard k once the counter reaches k.
+- **Fence**: before sending, each sender waits until its downstream has signalled that it started this call (the
+  downstream-started counter), so a reused output is never overwritten early.
+- **Rings**: axis line / ring; for `cluster_axis=None` a snake, or on a torus with both sides >= 3 two edge-disjoint
+  Hamiltonian cycles (every chip uses all four neighbours). Even rings are balanced: the opposite shard goes half each
+  way.
+
 ## Contract
 
-- row-major or tile-layout DRAM input;
+- row-major or tile-layout DRAM input. Pages move whole, so a row-major input
+  cannot be gathered along its innermost dim (every output row would mix ranks);
 - preallocated, persistent, interleaved-DRAM output;
 - required `cluster_axis`: 0 selects N/S, 1 selects E/W, and explicit `None`
   linearizes the complete 2D mesh into one snake ring;
@@ -35,13 +62,12 @@ selection.
   uses the line schedule because its ordinary and wrap neighbors coincide;
 - semaphores use L1-small when the device reserves it, otherwise L1 with a
   warning.
-- worker and mux cores must be exclusive to this program for its duration. On
-  the qualified two-link Blackhole ring, the large-message path uses 32
-  reader/writer workers plus four mux cores. Each active mux owns its
-  `FabricMuxConfig` region starting at the L1 allocator base (about 230 KiB for
-  eight full-size, double-buffered channels); program creation rejects a mux
-  map that exceeds the physical per-core L1 capacity. Use `sub_core_grid` to
-  keep unrelated L1-resident tensors and concurrent programs off those cores.
+- worker cores must be exclusive to this program for its duration: one fabric
+  link worker per ring, direction and link, plus one local copy core per link
+  (two for a non-interleaved input). With two links that is 6 cores for an axis
+  gather, 8 for the ND-sharded KV cache and 10 for the full-mesh torus path. Use
+  `sub_core_grids` to keep unrelated L1-resident tensors and concurrent programs
+  off those cores.
 
 Fabric2D eligibility is intentionally strict. The host resolves each directed
 line or ring neighbor, verifies every requested link index, and hashes the
@@ -84,9 +110,8 @@ The snake schedule uses one forward and one backward port per device. For an
 8x4 mesh its idealized link-volume bound matches a two-phase axis-1 then axis-0
 all-gather: the advantage is a single program, one synchronization sequence,
 and a directly produced 32-way row-major layout, not an inherent claim of
-higher fabric bandwidth. Worker-count thresholds were qualified on the
-existing axis rings; measure the full-mesh path before assigning performance
-targets or retuning those thresholds.
+higher fabric bandwidth. On a torus with both sides >= 3 the snake is replaced by
+the two Hamiltonian cycles described above, which use all four links per chip.
 
 ## External semaphore interface
 
@@ -108,7 +133,7 @@ ttnn.experimental.high_bw_all_gather(
 
 The two semaphores are persistent runtime resources, not program structure.
 They must be distinct, belong to the input tensor's mesh device, use the same
-buffer type the legacy path would select (`L1_SMALL` when configured,
+buffer type the op would select itself (`L1_SMALL` when configured,
 otherwise `L1`), and cover every selected reader/writer core. Create them at
 zero over the complete gather strip, then perform one mesh-wide readiness
 barrier across every participating device before the first dispatch. The op
@@ -122,38 +147,50 @@ is aborted or fails after dispatch, the owner must join the affected subdevice,
 drain any in-flight work, and reset both semaphore values to zero before reuse.
 
 Omitting both handles preserves the existing behavior: the op allocates its
-own semaphores on a cache miss and performs the legacy readiness synchronization.
+own semaphores on a cache miss and performs one readiness `Synchronize`.
 
 ## Data flow
 
 ```text
-local DRAM pages
-      |
-      | bank-owned readers (2 links x 8 workers/direction on Blackhole)
-      v
-  Tensix CBs -- full-packet coalescing --> Fabric mux --> adjacent ERISC
-                                                        |
-                                                        | terminal one-hop packet
-                                                        v
-                                                neighbor output DRAM
-                                                        |
-                                                        | next relay iteration
-                                                        v
-                                                neighbor Tensix readers
+own shard (input DRAM)                forwarded shards (this chip's output DRAM)
+      |                                          |
+      +--------------------+---------------------+
+                           |
+                           | link worker reader (NCRISC, NoC0): one fabric chunk =
+                           | consecutive pages of one DRAM bank, one DRAM read
+                           v
+                 chunk CB (two CB batches)
+                           |
+                           | link worker sender (BRISC, NoC1): one chunk per packet,
+                           | direct fabric connection (no mux)
+                           v
+                     adjacent ERISC
+                           |
+                           | terminal one-hop packet; a shard's last packet
+                           | increments the neighbour's shards-arrived counter
+                           v
+                  neighbour output DRAM
+                           |
+                           | next hop: forwarded once the whole shard has arrived
+                           v
+                neighbour link worker reader
+
+own shard (input DRAM) --> local copy cores --> this chip's output DRAM
 ```
 
-Forward and backward halves run concurrently. A shard reaches a distant
-logical rank through store-and-forward iterations: each transfer is terminal
-at the adjacent physical device, and the next device rereads the received rows
-from its persistent output before sending the next hop. This avoids multi-hop
-Fabric2D packets, corner forwarding, dateline handling, and router-side
-terminal delivery changes.
+Forward and backward directions run concurrently, and on a torus with both sides >= 3 so do the two Hamiltonian
+cycles. A shard reaches a distant logical rank through store-and-forward hops: each transfer is terminal at the
+adjacent physical device, and the next device rereads the received pages from its persistent output before sending
+the next hop. This avoids multi-hop Fabric2D packets, corner forwarding, dateline handling, and router-side terminal
+delivery changes.
 
-Small sparse-MLA rows and tiles are assigned by destination DRAM bank. Each
-writer can therefore combine consecutive bank-local pages into large Fabric
-packets rather than issuing small scatter packets. One L1-small `data_valid`
-semaphore per worker grid gates relay reads and records completion; persistent
-output removes the separate allocation-readiness handshake.
+Pages are dealt to the link workers as fabric chunks: up to one packet of consecutive pages of one DRAM page lane
+(pages k, k + B, k + 2B, ... for B banks), numbered by row block and lane and dealt round robin, so the workers stay
+balanced for any bank count. Each chunk is one DRAM read and one full Fabric packet rather than many small scatter
+packets. Two L1-small counters per link worker order the protocol: the downstream-started counter fences each call
+(no chip writes into a neighbour's output before the neighbour has started the same call), and the shards-arrived
+counter gates forwarding and records completion. Both return to zero at the end of every call, and the persistent
+output removes any separate allocation-readiness handshake.
 
 ## Minimal Fabric requirements
 
@@ -185,7 +222,7 @@ stranded slots to the live VC0 local-worker injection channel:
 - Fabric1D Ring allocation: unchanged and covered by a host unit test.
 
 This cannot be recovered by more op-level packet coalescing. The op already
-emits large packets through the mux; the two-slot sender credit window is owned
+emits full-payload packets; the two-slot sender credit window is owned
 by the ERISC Fabric allocator and limits how many packets the workers can have
 in flight. An op-only workaround would require smaller packets or topology- and
 format-specific throttling, reducing link efficiency without exposing the
@@ -211,7 +248,7 @@ substantial performance regression.
 TT_METAL_FABRIC_TRIMMING_PROFILE=/path/to/channel_trimming_capture.yaml \
 TT_METAL_FABRIC_TRIMMING_OVERRIDE=/path/to/enable_vc0_all_channels.yaml \
 scripts/run_safe_pytest.sh \
-  tests/ttnn/unit_tests/operations/experimental/deepseek_prefill/test_high_bw_all_gather.py
+  tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py
 ```
 
 Create `enable_vc0_all_channels.yaml` with:
@@ -231,16 +268,16 @@ instance if another workload needs a different trimming policy.
 
 ## Measured contribution
 
-Measurements use firmware `19.10.99`, an 8x1 mesh, two links, a 14,336-byte
-Fabric payload, 65,536 rows per device (512K rows globally), persistent output,
-and seven cached device-profiler samples. Effective receive bandwidth is
+Measurements use a Blackhole LoudBox (8x P150b, firmware bundle `19.12.0` with 200G Ethernet links and a 12x10
+worker grid), opened as an 8x1 mesh, two links, a 14,336-byte Fabric payload, 65,536 rows per device (512K rows
+globally), persistent output, and seven cached device-profiler samples. Effective receive bandwidth is
 `local_bytes * (axis_size - 1) / device_program_time`.
 
 | Format | Fabric | Schedule | Median | Effective receive BW |
 | --- | --- | ---: | ---: | ---: |
-| BF16, 1,152-B row | Fabric1D | line | 10.901 ms | 48.480 GB/s |
-| BF16, 1,152-B row | Fabric1D Ring | ring | 5.565 ms | 94.969 GB/s |
-| BF16, 1,152-B row | Fabric2D | direct physical line | 10.973 ms | 48.162 GB/s |
+| BF16, 1,152-B row | Fabric1D | line | 10.941 ms | 48.304 GB/s |
+| BF16, 1,152-B row | Fabric1D Ring | ring | 5.533 ms | 95.519 GB/s |
+| BF16, 1,152-B row | Fabric2D | direct physical line | 11.005 ms | 48.024 GB/s |
 
 The Fabric2D line is therefore expected to provide line bandwidth, not the
 two-direction ring bandwidth. Fabric2D Torus uses the ring schedule only when
@@ -262,12 +299,12 @@ both layouts, and all four format/layout combinations:
 ```bash
 TT_METAL_DISABLE_PRECOMPILED_FW=1 \
 scripts/run_safe_pytest.sh \
-  tests/ttnn/unit_tests/operations/experimental/deepseek_prefill/test_high_bw_all_gather.py \
+  tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py \
   -x -s -v
 ```
 
 Do not add `--dev`: watcher and LLK assertions increase firmware code size for
-this test. The test requires the standalone unicast kernel in profiler records,
+this test. The test requires the fabric sender kernel in profiler records,
 compares every gathered replica exactly (including opaque FP8 payload bytes and
 decoded BFP8_B tiles), and enforces a 90 GB/s regression floor for Fabric1D
 Ring and active-axis Fabric2D Torus, and a 45 GB/s floor for line schedules.

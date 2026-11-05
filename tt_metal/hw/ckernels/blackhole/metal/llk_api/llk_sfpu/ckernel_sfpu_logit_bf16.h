@@ -32,7 +32,7 @@ struct LogitBf16Config {
 namespace ckernel::sfpu {
 
 template <int ITERATIONS = 32>
-inline void calculate_logit_bf16() {
+__attribute__((noinline)) inline void calculate_logit_bf16() {
     ckernel::sfpu::bf16::logit::calculate_normalized_log_odds<ckernel::sfpu::LogitBf16Config, ITERATIONS>();
 }
 

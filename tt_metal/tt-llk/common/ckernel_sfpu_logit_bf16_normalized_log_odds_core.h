@@ -11,7 +11,7 @@ namespace ckernel::sfpu::ttpoly::logit
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
 
-inline void normalized_log_reduce(vFloat x, vFloat& m, vInt& e_int)
+__attribute__((always_inline)) inline void normalized_log_reduce(vFloat x, vFloat& m, vInt& e_int)
 {
     // Extract biased exponent: for x = 2^e * m, biased_exp = e + 127
     vInt biased_exp = exexp(x, ExponentMode::Biased);
@@ -29,7 +29,7 @@ inline void normalized_log_reduce(vFloat x, vFloat& m, vInt& e_int)
 // poly_result = log(m) where m ∈ [1, 2)
 // Final result = e*ln(2) + poly_result
 template <std::uint32_t ExpandBits>
-inline vFloat normalized_log_expand(vFloat poly_result, vInt e_int)
+__attribute__((always_inline)) inline vFloat normalized_log_expand(vFloat poly_result, vInt e_int)
 {
     // LOG_EXPAND_CONSTANT is base-specific: ln(2) for log, 1.0 for log2, log10(2) for log10
     constexpr float EXPAND_C = __builtin_bit_cast(float, ExpandBits);

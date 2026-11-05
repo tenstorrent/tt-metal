@@ -30,7 +30,7 @@ void RepeatDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor_a = tensor_args.input;
     TT_FATAL(input_tensor_a.storage_type() == ttnn::StorageType::DEVICE, "Operands to repeat need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands need to be allocated in buffers on device!");
 
     if (operation_attributes.m_tile_page_size_bytes > 0) {
         TT_FATAL(input_tensor_a.layout() == tt::tt_metal::Layout::TILE, "Tile-native repeat requires TILE layout");
