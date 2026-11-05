@@ -348,7 +348,8 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t num_kv_steps) {
 
         // (2) alpha = exp(scale * (old max - new max)): the running sum and output of the previous steps
         //     were computed against the old max, so they get scaled by alpha before this step's are added.
-        //     TODO: alpha carries a bias per step. On Blackhole the SFPU exp returns slightly more than 1
+        //     TODO(agobeljicTT): https://github.com/tenstorrent/tt-metal/issues/64302
+        //     Alpha carries a bias per step. On Blackhole the SFPU exp returns slightly more than 1
         //     at 0 (the common case, the max unchanged), so the accumulator and the sum grow by about
         //     0.09% and 0.06% per step (the running sum also loses to TF32 truncation in the Src registers
         //     below): at 64 steps O is 2.4% high and the LSE 0.037 high against an fp64 reference

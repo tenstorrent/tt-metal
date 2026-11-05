@@ -2304,7 +2304,7 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_LongRows_Fp64Reference) {
     // truncation of the running sum in the Src registers (which the reviewer's host emulation put at
     // about 1% low at 64 steps) partly cancelling on the sum. Pre-existing, main has the same loop; the
     // bounds here hold the current error so a fix (or a regression) shows. See the TODO at step (2) of
-    // process_q_chunk in sdpa_fw_compute_kernel.cpp.
+    // process_q_chunk in sdpa_fw_compute_kernel.cpp and https://github.com/tenstorrent/tt-metal/issues/64302.
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     using namespace ttml;
     constexpr std::size_t D = 128U;
