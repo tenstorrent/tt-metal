@@ -342,7 +342,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if join_topp_candidates_enabled():  # QWEN36_JOIN_TOPP_CANDIDATES: plugin host sampler without the full sort
             from models.demos.blackhole.qwen36.tt.host_topp import install_plugin_topp_candidates
 
-            logger.info(f"QWEN36_JOIN_TOPP_CANDIDATES: plugin sampler hook installed={install_plugin_topp_candidates()}")
+            logger.info(
+                f"QWEN36_JOIN_TOPP_CANDIDATES: plugin sampler hook installed={install_plugin_topp_candidates()}"
+            )
         # Weights dir: MODEL_WEIGHTS_DIR → HF_MODEL → hf_config._name_or_path; a hub id resolves to a local snapshot.
         name_or_path = os.environ.get("MODEL_WEIGHTS_DIR") or os.environ.get("HF_MODEL") or hf_config._name_or_path
         if name_or_path and not os.path.isdir(os.path.expanduser(name_or_path)):
@@ -477,10 +479,14 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         zero_kv_blocks(self.model[0], [int(b) for b in block_ids])
 
     def copy_kv_cache_blocks(self, kv_cache=None, copies=()):
-        """vllm-tt-plugin block hook: copy each (src, dst) block in every K and V buffer, in list order."""
+        """vllm-tt-plugin block hook: copy each (src, dst) block in every K and V buffer, in list order (with the GDN
+        state bound, GdnBlockState.copy_blocks, which also moves head pages that sit at another offset in dst)."""
         from models.demos.blackhole.qwen36.tt.gdn_block_state import copy_kv_blocks
 
-        copy_kv_blocks(self.model[0], copies)
+        if getattr(self, "_gdn_blocks", None) is not None:
+            self._gdn_blocks.copy_blocks(copies)
+        else:
+            copy_kv_blocks(self.model[0], copies)
 
     @staticmethod
     def _has_visual(kwargs, pixel_key, u=0):

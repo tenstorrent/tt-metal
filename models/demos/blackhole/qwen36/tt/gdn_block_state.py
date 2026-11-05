@@ -79,6 +79,7 @@ class GdnBlockState:
         kv_by_slot = {e[2]: kv_caches[n] for n, (_, e) in enumerate(attn_entries)}
         self.kv_caches = kv_caches
         self.layers = []  # (layer index, TPGatedDeltaNet)
+        self._slot_layer = {}  # layer slot -> its first GDN layer (whose views cover the slot's K and V)
         self._host_idx = {}
         for i, e in enumerate(per_layer_specs):
             if not is_mamba_entry(e):
@@ -90,6 +91,7 @@ class GdnBlockState:
             k, v = kv_by_slot[e[2]]
             dn._paged_state = self._bind(dn, k, v)
             self.layers.append((i, dn))
+            self._slot_layer.setdefault(e[2], dn)
         # The gather tables and the zero block live as long as the model. Allocate them now, before the warmup
         # captures any trace: a buffer allocated after a capture and still alive at a replay can be overwritten by it.
         for _, dn in self.layers:
@@ -264,6 +266,38 @@ class GdnBlockState:
                     src, ps.hist_view, [blk, t0, 0, 0], [blk + 1, t0 + nr, 32, 32], [1, 1, 1, 1]
                 )
                 ttnn.deallocate(src)
+
+    def copy_blocks(self, copies):
+        """vLLM's (src, dst) state block copies, in list order: whole blocks (copy_kv_blocks), then the head pages
+        again wherever src and dst hold them at different offsets inside the block. When a block is not a whole number
+        of fp32 pages per bank, its whole pages start at an offset that depends on the block (BF8 1024: 0 for even
+        blocks, 2048 B for odd ones), and a byte copy keeps the source's offset. The bf16 history pages are whole in
+        every block (17 per bank at BF8 1024), so the byte copy places them right."""
+        copy_kv_blocks(self.model, copies)
+        for src, dst in copies:
+            src, dst = int(src), int(dst)
+            if src == dst:
+                continue
+            for dn in self._slot_layer.values():
+                ps = dn._paged_state
+                (pk_s, pv_s), (pk_d, pv_d) = self._rec_pages(ps, src), self._rec_pages(ps, dst)
+                parts = [(ps.rec_view, ps.bank_bytes_k, pk_s, pk_d, 2 * ps.heads_k)]
+                if ps.rec_view2 is not None:
+                    parts.append((ps.rec_view2, ps.bank_bytes_v, pv_s, pv_d, 2 * (dn.Nv - ps.heads_k)))
+                for view, s, p_s, p_d, n in parts:
+                    if (src * s) % FP32_PAGE_BYTES == (dst * s) % FP32_PAGE_BYTES:
+                        continue
+                    s0, d0 = p_s // HALF_HEAD_PAGES, p_d // HALF_HEAD_PAGES
+                    halves = ttnn.slice(
+                        view,
+                        (s0, 0, 0, 0),
+                        (s0 + n, 1, dn.Dk // 2, dn.Dv),
+                        memory_config=self._halves_shard_memcfg(dn, n),
+                    )
+                    ttnn.experimental.slice_write(
+                        halves, view, [d0, 0, 0, 0], [d0 + n, 1, dn.Dk // 2, dn.Dv], [1, 1, 1, 1]
+                    )
+                    ttnn.deallocate(halves)
 
     def set_prefill_blocks(self, state_block_ids_per_layer):
         """The state block ids of this prefill step (row u = prefilled request u), for restore()."""
