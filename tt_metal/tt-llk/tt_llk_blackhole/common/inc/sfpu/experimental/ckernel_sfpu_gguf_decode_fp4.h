@@ -93,9 +93,8 @@ sfpi_inline void fp4_params()
 template <int FMT>
 constexpr bool fp4_macro_body = LOADMACRO && (FMT == MXFP4 || FMT == NVFP4);
 
-// MXFP4 / NVFP4 instruction templates: 0 = E2M1_TABLE (LReg12) << x, 1 = x with the sign of S (LReg4) replaced by z's,
-// 2 / 3 = L0 / L1 times z. Macro 0 (v) runs the table shift 2 instructions after it; macro 1 / 2 (z, v = L0 / L1) the
-// sign 4, the product into LReg16 5 and its store 7 instructions after it.
+// Instruction templates: 0 = E2M1_TABLE (LReg12) << x, 1 = S (LReg4) with z's sign, 2 / 3 = L0 / L1 times z. Macro 0
+// runs the table shift 2 instructions on; macros 1 / 2 the sign 4, the product into LReg16 5 and its store 7 on.
 inline void macro_init_fp4()
 {
     TTI_SFPSHFT2(12, 0, 12, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
@@ -119,11 +118,8 @@ inline void macro_init_fp4()
     TTI_SFPNOP;
 }
 
-// MXFP4 / NVFP4: body()'s arithmetic, copysgn(kv, s) S + 0 as kv (+-S) + 0 (equal bits, also for zeros). Groups
-// (a, h, b) of four outputs o = 16h + 8a + 2j + b read nibbles i = 2j + b of code word 2h + a, masked to their parity
-// (x, L3) so that x >> (4i - 2) is 4 code3 below zero bits: the table shift amount. Per output six instructions: macro
-// 0 on v (table shift), x >> (4i - 2) into v, macro 1 / 2 on z (sign, product, store), v >> 28, x << (28 - 4i) into z
-// (the sign at bit 31), the cast of v. Between groups: the code word, its mask, S (L4), after the last reads of x / S.
+// MXFP4 / NVFP4: kv (+-S), as body(). Groups (a, h, b) of four outputs o = 16h + 8a + 2j + b take nibbles i = 2j + b
+// of code word 2h + a (x, L3), masked to their parity; six instructions per output.
 template <int FMT>
 sfpi_inline void body_macro_fp4()
 {

@@ -16,7 +16,7 @@
 //   from scale_offset: the scale fields of the K tile's group, regrouped the same way: raw_rows native rows, then
 //                     fp16_rows rows of fp16 fields, then the fp32 rows prepare_scales adds.
 // The bits are the GGUF file's, moved: a page's code and scale bytes are its weights' GGUF bytes. Each format's rows
-// are described in ckernel_sfpu_gguf_decode.h.
+// are described in the ckernel_sfpu_gguf_decode*.h headers.
 
 #pragma once
 

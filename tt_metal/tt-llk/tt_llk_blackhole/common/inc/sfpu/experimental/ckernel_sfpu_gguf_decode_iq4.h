@@ -65,9 +65,8 @@ sfpi_inline void iq4_params()
 template <int FMT>
 constexpr bool iq4_macro_body = LOADMACRO && (FMT == IQ4_NL || FMT == IQ4_XS);
 
-// IQ4 instruction templates (body_macro_iq4): 0 = v >> 28 (amount in L7), 1 = int to fp32, 2 = TF32 round to nearest,
-// 3 = S u + M (L5, L6). Macro 0 runs the shift and the cast 2 and 3 instructions after it; macro 1 the round, the MAD
-// into LReg16 and the store of LReg16 4, 5 and 7 instructions after it.
+// Instruction templates: 0 = v >> 28 (amount in L7), 1 = int to fp32, 2 = TF32 round to nearest, 3 = S u + M (L5,
+// L6). Macro 0 runs the shift and cast 2 and 3 instructions on; macro 1 the round, MAD and store 4, 5 and 7 on.
 inline void macro_init_iq4()
 {
     TTI_SFPSHFT2(0, 7, 12, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
@@ -89,19 +88,10 @@ inline void macro_init_iq4()
     TTI_SFPNOP;
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// IQ4_NL / IQ4_XS through SFPLOADMACRO. The level is a degree-4 polynomial of q (minimax, max error 0.433) whose
-// constant term carries K = -1536, so a TF32 round to nearest gives kv + K exactly, and S (kv + K) + M with M = -K S
-// rounds once to kv S like body(). Zeros may differ in sign from body() (IQ4_XS sub-blocks with ls = 32 give +0 where
-// body() gives -0 for negative levels). Stream position k:
-//   7k          macro 0 on v = L[k % 2] loads the code word; v >> 28 and the cast run 2 and 3 instructions on
-//   7k + 1      v <<= 28 - 4i
-//   7k + 4,6,9  Horner into t = L[3 + k % 2] (c4, c3, c2, c1 in L12, L13, L14, L11)
-//   7k + 10     macro 1 on L2 (loads zero, output row); 7k + 12: L2 = t v + c0K (L7); the round, S L2 + M into
-//               LReg16 and its store run at 7k + 14, 15 and 17.
-// Outputs go by scale group (a, b), b = i % 2. S, M (L5, L6) reload right after the group's last MAD, where only the
-// first two macro ops of a later output are pending. The low five bits of c0K make L7 the shift amount -28. L11 gets
-// back its -1.0 at the end.
+// IQ4_NL / IQ4_XS through SFPLOADMACRO: a degree-4 polynomial of q whose constant term carries K = -1536, so a TF32
+// round gives kv + K exactly and S (kv + K) + M with M = -K S equals kv S (zeros may differ in sign from body()).
+// Seven slots per output (make_qplan), Horner in L[3 + k % 2] with c4, c3, c2, c1 in L12, L13, L14, L11 and c0K in L7,
+// whose low five bits are also the shift amount -28. S, M in L5, L6. L11 is restored to -1.0 at the end.
 constexpr std::uint32_t IQ4M_C4    = 0x3ACFE2C4;
 constexpr std::uint32_t IQ4M_C3    = 0x3CFEA8FD;
 constexpr std::uint32_t IQ4M_C2    = 0xBFAF9B4E;
@@ -231,7 +221,7 @@ sfpi_inline void body_macro_iq4()
     TTI_SFPCONFIG(0, 11, 0);
 }
 
-// One copy for IQ4_XS's eight tile indices (inlined per tile index, its instruction fetches are slower).
+// One copy shared by IQ4_XS's eight tile indices.
 inline __attribute__((noinline)) void body_macro_iq4_shared()
 {
     body_macro_iq4();

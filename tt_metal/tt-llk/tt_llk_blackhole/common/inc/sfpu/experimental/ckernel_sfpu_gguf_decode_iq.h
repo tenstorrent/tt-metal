@@ -15,18 +15,11 @@ namespace gguf
 
 using namespace ckernel::gguf;
 
-// ---------------------------------------------------------------------------------------------------------------
-// IQ2_XXS: after the grid lookup (ckernel_gguf_page.h lookup_grid) the page holds:
-//   word-vectors 0 / 1 (rows 0..3): level words, lane (r, c) of word-vector a: entry l = r (elements 8l .. 8l + 7) of
-//     columns 16a + 2c + b, element i at bits 16b + 2i, an index into (8, 25, 43);
-//   rows 4..5, word n: column n's sign word, byte l = the 7 sign bits of entry l and, in bit 7, scale bit l;
-//   the d page (fp16, prepared to fp32).
-// Output o of lane (r, c) is element i = 4 ((o / 2) % 2) + r of entry l = 2h + (o / 4) % 2 of column (a, b). A
-// transpose gives every lane all four row groups of a word-vector, and a right shift by 2r (levels) or r (signs) per
-// lane moves each output's field to a position that depends on o only. The eighth sign bit of an entry is the parity
-// of its seven (ksigns_iq2xs). Value = (d / 4 (ls + 0.5)) * level, sign applied: ggml's db * grid * sign, one
-// rounding. The sign bits set the value's sign (copysgn), so d must not be negative, as ggml's quantizers write it; the
-// same holds for IQ2_S, IQ2_XS, IQ3_S and IQ3_XXS.
+// IQ2_XXS page after lookup_grid: word-vectors 0 / 1 hold level words (lane (r, c) of word-vector a: entry l = r of
+// columns 16a + 2c + b, element i at bits 16b + 2i, an index into (8, 25, 43)); rows 4..5 word n hold column n's sign
+// word (byte l: entry l's 7 sign bits, scale bit l in bit 7); then d. Output o of lane (r, c) is element
+// 4 ((o / 2) % 2) + r of entry 2h + (o / 4) % 2. The eighth sign bit is the parity of the seven. Value =
+// (d / 4 (ls + 0.5)) * level with the sign set by copysgn, so d must not be negative (also IQ2_S, IQ2_XS, IQ3_S, IQ3_XXS).
 
 constexpr int LV = 2 * TILE; // level words of entry l, columns (a, b): LV + 4a + l, pre-shifted
 constexpr int NR = LV + 8;   // -r and -2r per lane (shift amounts: negative = right)
@@ -87,10 +80,9 @@ sfpi_inline void iq2_xxs_params()
     }
 }
 
-// IQ1_S: the same level words (values -1, 0, 1 as indices 0..2); row 6 word j = 2c + a holds, in half b, column
-// 16a + 2c + b's scale ls (bits 6, 7, 14) and delta sign s (bit 15) among the lookup's high index bits, so row group 2
-// of word-vector 2 + a has columns (a, 0) and (a, 1) in its two halves. Value = d (2 ls + 1) * (q - 1 + delta),
-// delta = 0.125 (s = 0) or -0.125: ggml's dl * (grid + delta), one rounding. PS = d (2 ls + 1), PM = delta - 1.
+// IQ1_S: the same level words (values -1, 0, 1 as indices 0..2). Row 6 word 2c + a holds, in half b, column
+// 16a + 2c + b's scale ls (bits 6, 7, 14) and delta sign s (bit 15). Value = d (2 ls + 1) (q - 1 + delta),
+// delta = +-0.125: PS = d (2 ls + 1), PM = delta - 1.
 sfpi_inline void iq1_s_params()
 {
     iq_level_words();
@@ -119,11 +111,10 @@ sfpi_inline void iq1_s_params()
     }
 }
 
-// IQ1_M: IQ1_S's pages and level words, with column 16a + 2c + b's delta signs of entries 0..3 in bits 6, 7, 14, 15 of
-// half b of row 6 word 2c + a. The 3-bit scales come from the group's scale page: rows 0..2 word 2c + a, field
-// f = 4 TI + 2b + h at bit 3 (f % 10) of row f / 10 (fields 30 / 31: bits 0..1 at bits 30..31 of rows 0 / 1, bit 2 at
-// bit f of row 2). Value = d (2 ls + 1) * (q - 1 + delta): ggml's dl * (grid + delta),
-// one rounding. PS = d (2 ls + 1) per column and half, DM = delta - 1 per column and entry.
+// IQ1_M: IQ1_S's pages; delta signs of entries 0..3 in bits 6, 7, 14, 15 of half b of row 6 word 2c + a. 3-bit
+// scales from the group's scale page, rows 0..2 word 2c + a: field f = 4 TI + 2b + h at bit 3 (f % 10) of row f / 10
+// (f = 30, 31: bits 0..1 at bits 30..31 of rows 0 / 1, bit 2 at bit f of row 2). PS per column and half, DM = delta - 1
+// per column and entry.
 constexpr int DM = CO + 16; // rows 32..63 of the page tile, past the page
 
 template <int TI>
@@ -220,10 +211,8 @@ sfpi_inline void iq2_xxs_init()
     sfpi::vConstFloatPrgm2 = 8.0f;
 }
 
-// IQ2_S: the same level words and body as IQ2_XXS. Rows 4..5 hold each column's 32 sign bits (no parity bit), row 8
-// word j = 2c + a holds, in half b, column 16a + 2c + b's scales of elements 0..15 / 16..31 in bits 4..7 / 12..15
-// among the lookup's high index bits, so row group 0 of word-vector 4 + a has columns (a, 0) and (a, 1) in its halves.
-// S per column and half: d / 4 (ls + 0.5), as IQ2_XXS.
+// IQ2_S: IQ2_XXS's level words and body. Rows 4..5 hold each column's 32 sign bits; row 8 word 2c + a holds, in half
+// b, column 16a + 2c + b's scales of elements 0..15 / 16..31 in bits 4..7 / 12..15. S = d / 4 (ls + 0.5) per half.
 sfpi_inline void iq2_s_params()
 {
     iq_level_words();
@@ -265,11 +254,9 @@ sfpi_inline void iq2_s_params()
     }
 }
 
-// IQ2_XS: IQ2_S's level words and scales per column and half, IQ2_XXS's 7-bit sign indices with their parity as the
-// eighth bit, grouped per entry: rows 4..5 word 16 (l / 2) + 2c + l % 2 holds entry l of columns 2c, 2c + 1, 16 + 2c,
-// 17 + 2c in bytes 0..3 (bit 7: the lookup's ninth index bit), so row groups 0 / 1 of word-vector 2 + p give every lane
-// entries p and 2 + p, each column (a, b) in byte 2a + b. The scales come from the group's scale page: rows 0..3 word
-// 2c + a, byte 2 (TI % 2) + b of row TI / 2. S = d / 4 (ls + 0.5), as IQ2_S.
+// IQ2_XS: IQ2_S's level words and scales, IQ2_XXS's 7-bit signs per entry: rows 4..5 word 16 (l / 2) + 2c + l % 2
+// holds entry l of columns 2c, 2c + 1, 16 + 2c, 17 + 2c in bytes 0..3. Scales from the group's scale page: rows 0..3
+// word 2c + a, byte 2 (TI % 2) + b of row TI / 2.
 template <int TI>
 sfpi_inline void iq2_xs_params()
 {
@@ -311,12 +298,9 @@ sfpi_inline void iq2_xs_params()
     }
 }
 
-// IQ3_S: grid entries of 4 elements (elements 4e .. 4e + 3, so element r of every entry belongs to lane row r) with
-// 3-bit indices into (1, 3, .., 15). The lookup (variant 5) writes 16-bit level codes, element i at bits 3i, of entry
-// e of columns 16a + 2c + b in the two halves of word-vector 2a + e / 4, row group e % 4, and puts each column's 4-bit
-// scale in bits 12..15 of its entry 0. Rows 8..9 hold each column's 32 sign bits. Each word-vector's four row groups go
-// to every lane; levels are shifted right by 3r, signs by r. Value = (2q + 1) * d (1 + 2 ls), as q * 2S + S, with the
-// sign: ggml's db * grid * sign, exactly (every product is exact in fp32).
+// IQ3_S: entries of 4 elements with 3-bit indices into (1, 3, .., 15). lookup_grid writes entry e of columns
+// 16a + 2c + b in the halves of word-vector 2a + e / 4, row group e % 4, element i at bits 3i, and each column's 4-bit
+// scale in bits 12..15 of its entry 0. Rows 8..9 hold each column's 32 sign bits. Value = (2q + 1) d (1 + 2 ls), signed.
 constexpr int LV3 = 2 * TILE; // level words of entry e, columns (a, b): LV3 + 8a + e (IQ3_S: pre-shifted)
 constexpr int NR3 = PS + 1;   // -r; NR3 + 2: -3r (the odd PS slots: S is per column)
 constexpr int SC3 = PS + 5;   // entry-0 words of a = 0 / 1 (SC3, SC3 + 2), unshifted: the scales
@@ -369,7 +353,6 @@ sfpi_inline void iq3_s_params()
     }
 }
 
-// S, 2 S and the sign word are loaded once per (a, h, b) and the level word per output.
 sfpi_inline void iq3_s_body()
 {
 #pragma GCC unroll 2
@@ -398,12 +381,9 @@ sfpi_inline void iq3_s_body()
     }
 }
 
-// IQ3_XXS: the page holds IQ3_S's level words with 4-bit codes f (element r at bits
-// 16b + 4r; f = 0..6 for the grid values 4, 12, .., 52 and 8 for 62), and IQ2_XXS's sign words in rows 8..9 (byte l:
-// the 7 sign bits of elements 8l .. 8l + 6, scale bit l in bit 7). Value = (d / 2 (ls + 0.5)) (65 - |61 - 8 f|), sign
-// applied: ggml's db * grid * sign, exact. The level words are IQ3_S's, stored unshifted: the body brings element
-// r of half b to the top with a left shift by 28 - 16b - 4r per lane (AM3, AM3 + 2). The sign stage is IQ2_XXS's,
-// with its masks in programmable constants 0 / 1 (iq3_xxs_init sets them again for the body).
+// IQ3_XXS: IQ3_S's level words with 4-bit codes f (element r at bits 16b + 4r; f = 0..6 for 4, 12, .., 52 and 8 for
+// 62), stored unshifted; IQ2_XXS's sign words in rows 8..9. Value = (d / 2 (ls + 0.5)) (65 - |61 - 8 f|), signed. AM3,
+// AM3 + 2: per-lane left shift 28 - 16b - 4r of element r of half b to the top.
 constexpr int AM3 = PS + 3;
 
 sfpi_inline void iq3_xxs_params()
@@ -465,7 +445,6 @@ sfpi_inline void iq3_xxs_init()
     sfpi::vConstFloatPrgm1 = 61.0f;
 }
 
-// The shift amount once per b, S, its multiple and the sign word once per (b, a), the level word per output.
 sfpi_inline void iq3_xxs_body()
 {
 #pragma GCC unroll 2
