@@ -114,6 +114,14 @@ std::uint32_t _start() {
         sem_internal::init_dm_local_cached<static_cast<ProgrammableCoreType>(PROGRAMMABLE_CORE_TYPE)>(
             sem_internal::kCachedSemaphores);
         WAYPOINT("K");
+        // The transaction-id registers of the read/write command buffers are sticky: a kernel that tags its
+        // transactions (NocOptions::TXN_ID) and does not put the tag back leaves every later untagged read/write
+        // on this hart tagged, so noc.async_read_barrier() no longer waits for them (#60551). Restore the
+        // untagged id before each kernel.
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, NOC_OVERLAY_TRID_STATIC);
         kernel_main();
         WAYPOINT("KD");
         sem_internal::finish_dm_local_cached(sem_internal::kCachedSemaphores);
