@@ -13,6 +13,7 @@
 #include <string_view>
 
 #include "autograd/auto_context.hpp"
+#include "core/ttnn_all_includes.hpp"
 
 namespace ttml::core {
 
@@ -97,6 +98,18 @@ std::optional<ttnn::DataType> apply_precision_config(
         }
     }
     return master_dtype;
+}
+
+void cast_fp32_gradients_to_bf16(const serialization::NamedParameters& parameters) {
+    for (const auto& [name, parameter] : parameters) {
+        if (!parameter->is_grad_initialized()) {
+            continue;
+        }
+        const auto& grad = parameter->get_grad();
+        if (grad.dtype() == ttnn::DataType::FLOAT32) {
+            parameter->set_grad(ttnn::typecast(grad, ttnn::DataType::BFLOAT16));
+        }
+    }
 }
 
 }  // namespace ttml::core

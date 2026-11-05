@@ -13,6 +13,9 @@
 #include "autograd/tensor.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/program_cache.hpp"
+#include "test_utils/random_data.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 class ClipGradNormTest : public ::testing::Test {
 protected:
@@ -88,5 +91,43 @@ TEST_F(ClipGradNormTest, ClipGradNorm_GENEROUS_TOLERANCE) {
     for (uint32_t i = 0; i < num_tensors; i++) {
         auto grad_data = core::to_xtensor(tensors[i]->get_grad());
         EXPECT_TRUE(xt::allclose(grad_data, expected_clipped_grads[i], 7e-2F));
+    }
+}
+
+// With reduce_dtype float32 the gradients can reach clip_grad_norm in fp32. moreh_clip_grad_norm takes bf16 ones, so
+// clip_grad_norm rounds each fp32 gradient to bf16 first: it must clip exactly as it does the same gradients cast to
+// bf16 beforehand, and leave bf16 gradients behind.
+TEST_F(ClipGradNormTest, Fp32GradientsClipAsTheirBf16Cast) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const std::array<std::size_t, 4> shape = {1U, 1U, 32U, 64U};
+
+    serialization::NamedParameters fp32_parameters;
+    serialization::NamedParameters bf16_parameters;
+    for (uint32_t i = 0; i < 3U; ++i) {
+        const auto values = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 20U + i);
+        const auto fp32_grad = core::from_xtensor<float, ttnn::DataType::FLOAT32>(values, device);
+        auto fp32_tensor = autograd::create_tensor(core::zeros(ttnn::Shape({1U, 1U, 32U, 64U}), device), true);
+        auto bf16_tensor = autograd::create_tensor(core::zeros(ttnn::Shape({1U, 1U, 32U, 64U}), device), true);
+        fp32_tensor->set_grad(fp32_grad);
+        bf16_tensor->set_grad(ttnn::typecast(fp32_grad, ttnn::DataType::BFLOAT16));
+        fp32_parameters[std::to_string(i)] = fp32_tensor;
+        bf16_parameters[std::to_string(i)] = bf16_tensor;
+    }
+
+    // Well below the norm of 3 x 2048 values uniform in [-1, 1], so the gradients are scaled.
+    const float max_norm = 1.0F;
+    const auto bf16_norm = core::to_xtensor(core::clip_grad_norm(bf16_parameters, max_norm, 2.0F)->get_value());
+    const auto fp32_norm = core::to_xtensor(core::clip_grad_norm(fp32_parameters, max_norm, 2.0F)->get_value());
+    EXPECT_EQ(test_utils::count_bit_mismatches(bf16_norm, fp32_norm), 0U);
+    ASSERT_GT(bf16_norm.flat(0), 2.0F * max_norm);
+
+    for (const auto& [name, fp32_tensor] : fp32_parameters) {
+        ASSERT_EQ(fp32_tensor->get_grad().dtype(), ttnn::DataType::BFLOAT16) << name;
+        EXPECT_EQ(
+            test_utils::count_bit_mismatches(
+                core::to_xtensor(bf16_parameters.at(name)->get_grad()), core::to_xtensor(fp32_tensor->get_grad())),
+            0U)
+            << name;
     }
 }

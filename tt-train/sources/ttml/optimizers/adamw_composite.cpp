@@ -7,6 +7,7 @@
 #include "autograd/autocast_tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/debug.hpp"
+#include "core/parameter_dtype.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/optimizer_base.hpp"
 #include "serialization/serializable.hpp"
@@ -61,6 +62,8 @@ void MorehAdamW::zero_grad() {
 }
 
 void MorehAdamW::step() {
+    // The moreh_adamw op takes bf16 gradients: an fp32 gradient (accumulated in fp32) is rounded to bf16 once here.
+    core::cast_fp32_gradients_to_bf16(m_parameters);
     if (core::debug::Debug::enable_print_tensor_stats()) {
         print_stats();
     }
@@ -190,6 +193,8 @@ void AdamWComposite::zero_grad() {
 }
 
 void AdamWComposite::step() {
+    // The update takes bf16 gradients: an fp32 gradient (accumulated in fp32) is rounded to bf16 once here.
+    core::cast_fp32_gradients_to_bf16(m_parameters);
     if (core::debug::Debug::enable_print_tensor_stats()) {
         print_stats();
     }

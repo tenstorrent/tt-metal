@@ -7,6 +7,8 @@
 #include <numeric>
 #include <vector>
 
+#include "core/parameter_dtype.hpp"
+
 namespace ttml::optimizers {
 
 namespace {
@@ -69,6 +71,9 @@ SortedParameters RemoteOptimizer::get_sorted_parameters() const {
 }
 
 void RemoteOptimizer::send_gradients() {
+    // The aggregator receives bf16 gradients: an fp32 gradient (accumulated in fp32) is rounded to bf16 once here,
+    // so the bytes on the wire stay those of bf16.
+    core::cast_fp32_gradients_to_bf16(m_parameters);
     auto& socket_manager = autograd::ctx().get_socket_manager();
     for (auto& [name, tensor_ptr] : m_sorted_parameters) {
         if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {

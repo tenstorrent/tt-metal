@@ -6,6 +6,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/debug.hpp"
+#include "core/parameter_dtype.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/newton_schulz_op.hpp"
 #include "serialization/serializable.hpp"
@@ -65,6 +66,8 @@ void MuonComposite::zero_grad() {
 }
 
 void MuonComposite::step() {
+    // The update takes bf16 gradients: an fp32 gradient (accumulated in fp32) is rounded to bf16 once here.
+    core::cast_fp32_gradients_to_bf16(m_parameters);
     if (core::debug::Debug::enable_print_tensor_stats()) {
         print_stats();
     }

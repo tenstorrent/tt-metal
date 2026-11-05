@@ -39,4 +39,11 @@ void store_trainable_parameters_as(const serialization::NamedParameters& paramet
 std::optional<ttnn::DataType> apply_precision_config(
     const YAML::Node& training_config, const serialization::NamedParameters& parameters);
 
+// Installs a bf16 copy of every fp32 gradient of the parameters, which frees the fp32 one; bf16 gradients and
+// parameters without one are left as they are. With reduce_dtype "float32" a trainable parameter's gradient can be fp32
+// (see apply_precision_config), and the consumers that take bf16 gradients only call this right before they read them:
+// the optimizers other than fused AdamW (which reads an fp32 gradient as it is), clip_grad_norm and RemoteOptimizer
+// before it sends. It is the gradient's one rounding to bf16, and calling it again does nothing.
+void cast_fp32_gradients_to_bf16(const serialization::NamedParameters& parameters);
+
 }  // namespace ttml::core

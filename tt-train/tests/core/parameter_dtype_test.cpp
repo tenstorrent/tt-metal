@@ -14,6 +14,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/adamw.hpp"
 #include "test_utils/optimizer_state.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
@@ -201,4 +202,34 @@ TEST_F(ParameterDtypeTest, SetsFp32GradAccumulationOnTrainableParametersWithAnFp
     EXPECT_EQ(frozen_marked->get_grad_accumulation_dtype(), ttnn::DataType::FLOAT32);
 
     autograd::ctx().set_gradient_reduce_dtype(std::nullopt);
+}
+
+// The bf16-only gradient consumers call this right before they read the gradients. An fp32 gradient is replaced by its
+// bf16 cast, the same bits ttnn::typecast gives; a bf16 gradient, a parameter without one and a second call are left
+// alone.
+TEST_F(ParameterDtypeTest, CastsFp32GradientsToBf16Once) {
+    auto fp32_grad = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
+    auto bf16_grad = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
+    auto no_grad = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
+    const auto fp32_values = random_values(ttnn::DataType::FLOAT32);
+    fp32_grad->set_grad(fp32_values);
+    bf16_grad->set_grad(random_values(ttnn::DataType::BFLOAT16));
+    const auto bf16_address = bf16_grad->get_grad().buffer()->address();
+    const serialization::NamedParameters parameters{
+        {"fp32_grad", fp32_grad}, {"bf16_grad", bf16_grad}, {"no_grad", no_grad}};
+
+    core::cast_fp32_gradients_to_bf16(parameters);
+
+    ASSERT_EQ(fp32_grad->get_grad().dtype(), ttnn::DataType::BFLOAT16);
+    const auto expected = core::to_xtensor(ttnn::typecast(fp32_values, ttnn::DataType::BFLOAT16));
+    EXPECT_EQ(test_utils::count_bit_mismatches(expected, core::to_xtensor(fp32_grad->get_grad())), 0U);
+    // The values are random fp32 ones, so the cast changed them: the check above isn't a copy of the input.
+    EXPECT_GT(test_utils::count_bit_mismatches(expected, core::to_xtensor(fp32_values)), 0U);
+    EXPECT_EQ(bf16_grad->get_grad().buffer()->address(), bf16_address);
+    EXPECT_FALSE(no_grad->is_grad_initialized());
+
+    const auto cast_address = fp32_grad->get_grad().buffer()->address();
+    core::cast_fp32_gradients_to_bf16(parameters);
+    EXPECT_EQ(fp32_grad->get_grad().buffer()->address(), cast_address);
+    EXPECT_EQ(bf16_grad->get_grad().buffer()->address(), bf16_address);
 }
