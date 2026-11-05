@@ -327,7 +327,7 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
         cb_push_back(part_cb, mt * gw);
         // the sum back into DST (unpack srcA: the weights' format -> the bf16 partials), then the matmul state again
         reconfig_data_format_srca(in1_cb, part_cb);
-        copy_tile_to_dst_init_short(part_cb);
+        copy_init(part_cb);
         tile_regs_acquire();
         cb_wait_front(part_cb, mt * gw);
         for (uint32_t i = 0; i < rows * gw; ++i) {

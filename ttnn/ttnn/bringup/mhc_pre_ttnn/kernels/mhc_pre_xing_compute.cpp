@@ -311,7 +311,7 @@ void kernel_main() {
             for (uint32_t k0 = 0; k0 < k_tiles; k0 += chunk) {
                 cb_wait_front(cb_x, chunk);
                 srca_to(cb_x);
-                copy_tile_to_dst_init_short(cb_x);
+                copy_init(cb_x);
                 for (uint32_t t = 0; t < chunk; ++t) {
                     copy_tile(cb_x, t, 1 + t);
                 }
@@ -334,7 +334,7 @@ void kernel_main() {
             pack_reconfig_data_format(cb_soa_out);
             tile_regs_acquire();
             srca_to(cb_soa);
-            copy_tile_to_dst_init_short(cb_soa);
+            copy_init(cb_soa);
             copy_tile(cb_soa, 0, 0);
             custom_sfpu_init();
             MATH((_llk_math_eltwise_unary_sfpu_params_(xing_sfpu::slot_total, 0, VectorMode::None)));
@@ -366,7 +366,7 @@ void kernel_main() {
             pack_reconfig_data_format(cb_soa_out);
             tile_regs_acquire();
             srca_to(cb_soa);
-            copy_tile_to_dst_init_short(cb_soa);
+            copy_init(cb_soa);
             copy_tile(cb_soa, 0, 0);
 #ifdef MHC_XING_PARTIALS
             for (uint32_t q = 1; q < np; ++q) {  // the partials summed in dim-1 order: ((p0 + p1) + p2) + ...
@@ -393,10 +393,10 @@ void kernel_main() {
                 cb_reserve_back(cb_y, 1);
                 tile_regs_acquire();
                 srca_to(cb_pb);
-                copy_tile_to_dst_init_short(cb_pb);
+                copy_init(cb_pb);
                 copy_tile(cb_pb, 0, 0);
                 srca_to(cb_x);
-                copy_tile_to_dst_init_short(cb_x);
+                copy_init(cb_x);
                 for (uint32_t i = 0; i < n_streams; ++i) {
                     copy_tile(cb_x, i, 1 + i);
                 }

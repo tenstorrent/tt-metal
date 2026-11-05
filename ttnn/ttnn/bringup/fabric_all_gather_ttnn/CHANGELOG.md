@@ -64,3 +64,7 @@ Tests: `tests/unit/` (the source branch's `tests/ttnn/unit_tests/operations/ccl/
 - Why: kernel compile error; TypeError in automatic core placement.
 - Needed by: rebase 2026-10-27
 - Files: `device/kernels/fabric_all_gather_sender.cpp`, `fabric_all_gather_py.py`
+
+### Port to llk_helper_library `107f838f379` (2026-11-05): fabric resolved through the MeshDevice (#61503, #61262)
+- `tt_fabric::get_forwarding_link_indices` takes the mesh device first (factory and `fabric_all_gather_py.py`);
+  `MeshDevice::get_device(coord)` -> `tt::tt_metal::internal::get_device(mesh, coord)`. No behaviour change.
