@@ -31,10 +31,13 @@ namespace {
 
 constexpr std::string_view kKernelDir = "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/";
 
+uint32_t buffer_alignment(BufferType buffer_type) {
+    return buffer_type == BufferType::DRAM ? tt::tt_metal::hal::get_dram_alignment()
+                                           : tt::tt_metal::hal::get_l1_alignment();
+}
+
 uint32_t aligned_page_size(uint32_t raw_bytes, BufferType buffer_type) {
-    const uint32_t alignment = buffer_type == BufferType::DRAM ? tt::tt_metal::hal::get_dram_alignment()
-                                                               : tt::tt_metal::hal::get_l1_alignment();
-    return tt::round_up(raw_bytes, alignment);
+    return tt::round_up(raw_bytes, buffer_alignment(buffer_type));
 }
 
 // One unit of work: up to 32 consecutive queries of a single (batch, head).
@@ -168,7 +171,6 @@ constexpr uint8_t attn_scratch_cb = tt::CBIndex::c_1;
 constexpr uint8_t loc_scratch_cb = tt::CBIndex::c_2;
 constexpr uint8_t input_tile_cb = tt::CBIndex::c_3;
 constexpr uint8_t scalar_tile_cb = tt::CBIndex::c_4;
-constexpr uint8_t output_scratch_cb = tt::CBIndex::c_5;
 constexpr uint8_t ref_scratch_cb = tt::CBIndex::c_6;
 // The geometry pipeline (README.md §6). geom/attn go reader -> compute, the
 // corner words come back compute -> reader.
@@ -259,7 +261,8 @@ bool uses_tiled_geometry(
 }
 
 uint32_t page_size_for_cb(const MSDACircularBufferPlan& plan, uint8_t index) {
-    const auto *const it = std::find_if(plan.begin(), plan.end(), [index](const auto& spec) { return spec.index == index; });
+    const auto* const it =
+        std::find_if(plan.begin(), plan.end(), [index](const auto& spec) { return spec.index == index; });
     TT_FATAL(it != plan.end(), "fused_msda: internal error, missing circular buffer {}", index);
     return it->page_size;
 }
@@ -433,7 +436,6 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
     const FusedMSDAOperation::tensor_args_t& args,
     const MSDAShapes& s,
     BufferType value_buffer_type,
-    BufferType output_buffer_type,
     DataType output_dtype) {
     const auto& value = args.value;
     const auto& attn = args.attention_weights;
@@ -451,8 +453,6 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
     const uint32_t value_stick_aligned = aligned_page_size(value_stick_raw, value_buffer_type);
     const uint32_t attn_stick_aligned = aligned_page_size(attn_stick_raw, attn.buffer()->buffer_type());
     const uint32_t loc_stick_aligned = aligned_page_size(loc_stick_raw, loc.buffer()->buffer_type());
-    // Writer scratch holds one head's D-wide stick, not the whole output page.
-    const uint32_t head_stick_aligned = aligned_page_size(value_stick_raw, output_buffer_type);
 
     uint32_t ref_stick_aligned = 0;
     if (attrs.from_offsets) {
@@ -546,8 +546,6 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
     }
     // Compute -> writer, double-buffered.
     push(output_tile_cb, 2 * n_d_tiles, tile_nbytes, output_format);
-    // Writer-only scratch.
-    push(output_scratch_cb, 1, head_stick_aligned, output_format);
     if (uses_split_gather(s, value.device()->arch())) {
         // Reader -> writer, one point's gather arguments at a time. Raw uint32
         // words; the format only satisfies the CB config.
@@ -592,8 +590,8 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     const auto& all_cores = split.all_cores;
 
     // ---- page / stick sizes ----
-    const auto cb_plan = derive_circular_buffer_plan(
-        attrs, tensor_args, s, value.buffer()->buffer_type(), output.buffer()->buffer_type(), output.dtype());
+    const auto cb_plan =
+        derive_circular_buffer_plan(attrs, tensor_args, s, value.buffer()->buffer_type(), output.dtype());
     const uint32_t value_stick_raw = s.head_dim * value.element_size();
     const uint32_t output_page_raw = s.num_heads * s.head_dim * output.element_size();
     const uint32_t value_stick_aligned = page_size_for_cb(cb_plan, value_scratch_cb);
@@ -607,33 +605,20 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     const uint32_t ref_stick_aligned = attrs.from_offsets ? page_size_for_cb(cb_plan, ref_scratch_cb) : 0;
     const uint32_t output_page_aligned = aligned_page_size(output_page_raw, output.buffer()->buffer_type());
 
-    // The writer places head h at byte offset h * D * elem_size inside the
-    // output page, so that offset has to be a legal NoC destination address.
-    // D % 16 == 0 makes it a multiple of 32, which covers Wormhole but not a
-    // 64-byte-aligned target at D == 16. Check it rather than silently
-    // scribbling into the neighbouring head.
-    if (s.num_heads > 1) {
-        const uint32_t out_alignment = output.buffer()->buffer_type() == BufferType::DRAM
-                                           ? tt::tt_metal::hal::get_dram_alignment()
-                                           : tt::tt_metal::hal::get_l1_alignment();
+    // Packed value stores the heads back to back in one (b, s) page, so head h
+    // is read at byte offset h * D * elem_size, which must be a multiple of
+    // value's buffer alignment. Checked here, on the buffer the program reads,
+    // not in derive_shapes: can_use_fused_msda_from_offsets_l1_value runs
+    // derive_shapes on a DRAM value it has yet to stage in L1. The writer's
+    // per-head output offsets need only the NoC write alignment, which
+    // writer_msda.cpp static_asserts.
+    if (s.num_heads > 1 && s.value_packed) {
         TT_FATAL(
-            value_stick_raw % out_alignment == 0,
-            "fused_msda: with num_heads > 1 the per-head output stride (head_dim * element_size = {} B) must be a "
-            "multiple of this device's output alignment ({} B). head_dim {} is too small on this architecture; use a "
-            "head_dim of at least {}",
+            value_stick_aligned == value_stick_raw,
+            "fused_msda: packed value (B, S, H*D) reads head h at byte offset h * {} B, which must be a multiple "
+            "of value's {} B buffer alignment; pass value as (B, S, H, D) or place it in L1",
             value_stick_raw,
-            out_alignment,
-            s.head_dim,
-            out_alignment / output.element_size());
-        if (s.value_packed) {
-            TT_FATAL(
-                value_stick_aligned == value_stick_raw,
-                "fused_msda: packed value (B, S, H*D) stores heads without per-head page padding, so the D-wide NoC "
-                "read ({} B aligned) must equal the raw head stick ({} B); otherwise the read would overlap the next "
-                "head",
-                value_stick_aligned,
-                value_stick_raw);
-        }
+            buffer_alignment(value.buffer()->buffer_type()));
     }
 
     // ---- circular buffers (see README.md §6) ----
@@ -812,7 +797,6 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     // Compile-time arg order is fixed by writer_msda.cpp.
     KernelDescriptor::CompileTimeArgs writer_ct{
         output_tile_cb,
-        output_scratch_cb,
         output_page_aligned,
         s.head_dim,
         static_cast<uint32_t>(split_gather),
@@ -874,13 +858,8 @@ void FusedMSDAOperation::ProgramFactory::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     const auto s = derive_shapes(attrs, tensor_args);
     const auto split = msda_work_split(attrs, s, tensor_args.value.device()->compute_with_storage_grid_size());
-    const auto cb_plan = derive_circular_buffer_plan(
-        attrs,
-        tensor_args,
-        s,
-        tensor_args.value.buffer()->buffer_type(),
-        output.buffer()->buffer_type(),
-        output.dtype());
+    const auto cb_plan =
+        derive_circular_buffer_plan(attrs, tensor_args, s, tensor_args.value.buffer()->buffer_type(), output.dtype());
     const bool tiled_geometry =
         std::any_of(cb_plan.begin(), cb_plan.end(), [](const auto& spec) { return spec.index == geom_rm_cb; });
     const auto rt = msda_runtime_args(attrs, tensor_args, output, s, split, tiled_geometry);
