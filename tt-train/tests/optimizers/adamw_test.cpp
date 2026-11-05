@@ -43,12 +43,15 @@ struct AdamWCase {
     float weight_decay{0.0f};
     bool amsgrad{false};
     std::string name;
+    // The gradient is passed in fp32, unrounded, as accumulating it in fp32 leaves it; otherwise rounded to bf16.
+    bool fp32_grad{false};
 };
 
 // Custom printer for AdamWCase used by gtest to make test output readable
 void PrintTo(const AdamWCase& pc, std::ostream* os) {
     *os << fmt::format(
-        "AdamWCase(name='{}', shape=[{},{},{},{}], lr={}, beta1={}, beta2={}, eps={}, wd={}, amsgrad={})",
+        "AdamWCase(name='{}', shape=[{},{},{},{}], lr={}, beta1={}, beta2={}, eps={}, wd={}, amsgrad={}, "
+        "fp32_grad={})",
         pc.name,
         pc.shape[0],
         pc.shape[1],
@@ -59,7 +62,8 @@ void PrintTo(const AdamWCase& pc, std::ostream* os) {
         pc.beta2,
         pc.epsilon,
         pc.weight_decay,
-        pc.amsgrad);
+        pc.amsgrad,
+        pc.fp32_grad);
 }
 
 class AdamWComparisonTest : public ::testing::TestWithParam<AdamWCase> {
@@ -79,6 +83,10 @@ protected:
 
 static ttnn::Tensor to_tt_bf16(const xt::xarray<float>& x) {
     return ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(x, &ttml::autograd::ctx().get_device());
+}
+
+static ttnn::Tensor to_tt_fp32(const xt::xarray<float>& x) {
+    return ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(x, &ttml::autograd::ctx().get_device());
 }
 
 // CPU reference implementation of AdamW
@@ -211,7 +219,7 @@ static void run_step_and_compare(const AdamWCase& pc) {
 
     // AdamW implementation
     auto theta_fused = autograd::create_tensor(to_tt_bf16(w0), true);
-    theta_fused->set_grad(to_tt_bf16(g0));
+    theta_fused->set_grad(pc.fp32_grad ? to_tt_fp32(g0) : to_tt_bf16(g0));
     ttml::serialization::NamedParameters params_fused{{"theta", theta_fused}};
 
     ttml::optimizers::AdamWConfig fused_cfg;
@@ -241,6 +249,8 @@ static void run_step_and_compare(const AdamWCase& pc) {
 
     cpu_opt.step(w_cpu, g_cpu);
     opt_fused.step();
+    // Fused AdamW reads an fp32 gradient as it is, without casting it.
+    EXPECT_EQ(theta_fused->get_grad().dtype(), pc.fp32_grad ? ttnn::DataType::FLOAT32 : ttnn::DataType::BFLOAT16);
 
     auto result_fused = theta_fused->get_value();
     auto result_fused_cpu = core::to_xtensor(result_fused);
@@ -748,6 +758,17 @@ static const AdamWCase kAMSGradCases[] = {
 };
 
 INSTANTIATE_TEST_SUITE_P(AdamWAMSGrad, AdamWComparisonTest, ::testing::ValuesIn(kAMSGradCases), CaseName);
+
+// An fp32 gradient on a bf16 parameter: the gradient's circular buffer takes fp32 tiles, the rest of the launch stays
+// bf16.
+static const AdamWCase kFp32GradientCases[] = {
+    {{1, 1, 128, 512}, 1e-2f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Fp32Grad_lr1e2", true},
+    {{2, 4, 32, 256}, 1e-4f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Fp32Grad_lr1e4", true},
+    {{1, 8, 32, 128}, 1e-3f, 0.9f, 0.99f, 1e-8f, 0.01f, false, "Fp32Grad_WeightDecay", true},
+    {{1, 4, 64, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Fp32Grad_AMSGrad", true},
+};
+
+INSTANTIATE_TEST_SUITE_P(AdamWFp32Gradient, AdamWComparisonTest, ::testing::ValuesIn(kFp32GradientCases), CaseName);
 
 // ====================================================================
 // Stochastic Rounding Tests

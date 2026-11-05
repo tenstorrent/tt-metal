@@ -67,10 +67,17 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
         "Got stochastic_rounding=Enabled with parameter dtype '{}'",
         enchantum::to_string(param_dtype));
 
+    // The gradient may be bf16 or fp32, whatever the parameter's dtype: an fp32 gradient (accumulated in fp32) is
+    // read as it is, without rounding it to bf16 first.
+    const auto grad_dtype = grad.dtype();
+    TT_FATAL(
+        grad_dtype == tt::tt_metal::DataType::BFLOAT16 || grad_dtype == tt::tt_metal::DataType::FLOAT32,
+        "Gradient tensor must be BFLOAT16 or FLOAT32, but got '{}'",
+        enchantum::to_string(grad_dtype));
+
     // Validate all tensors
     check_tensor(param, "Parameter", tt::tt_metal::Layout::TILE, param_dtype);
-    // Gradient is always bf16
-    check_tensor(grad, "Gradient", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    check_tensor(grad, "Gradient", tt::tt_metal::Layout::TILE, grad_dtype);
     // Optimizer states must match param dtype
     check_tensor(exp_avg, "Exponential Average Buffer", tt::tt_metal::Layout::TILE, param_dtype);
     check_tensor(exp_avg_sq, "Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
@@ -103,8 +110,15 @@ ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
     auto amsgrad = args.amsgrad;
     auto stochastic_rounding = args.stochastic_rounding;
     auto max_exp_avg_sq_initialized = tensor_args.max_exp_avg_sq.has_value();
+    // The gradient's dtype sets its circular buffer's format, so a program built for a bf16 gradient can't run on an
+    // fp32 one.
     auto hash = tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(
-        amsgrad, stochastic_rounding, max_exp_avg_sq_initialized, param_tensor.dtype(), param_logical_shape);
+        amsgrad,
+        stochastic_rounding,
+        max_exp_avg_sq_initialized,
+        param_tensor.dtype(),
+        tensor_args.grad.dtype(),
+        param_logical_shape);
 
     return hash;
 }

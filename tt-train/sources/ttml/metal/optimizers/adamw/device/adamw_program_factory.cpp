@@ -135,9 +135,10 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
 
-    // Determine data formats based on param dtype
+    // Data formats: the parameter and its moments share the parameter's dtype; the gradient has its own (bf16, or fp32
+    // when it was accumulated in fp32).
     tt::DataFormat param_data_format = datatype_to_dataformat_converter(param.dtype());
-    tt::DataFormat grad_data_format = tt::DataFormat::Float16_b;  // Gradient is always bf16
+    tt::DataFormat grad_data_format = datatype_to_dataformat_converter(grad.dtype());
     tt::DataFormat intermediate_data_format = tt::DataFormat::Float32;
 
     uint32_t param_single_tile_size_bytes = tt::tile_size(param_data_format);
@@ -180,7 +181,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     [[maybe_unused]] auto cb_param = create_circular_buffer(
         program, all_cores, kParamCbIndex, param_data_format, param_single_tile_size_bytes, num_input_tiles);
 
-    // grad CB - always bf16
+    // grad CB - uses grad_data_format (bf16 or fp32)
     [[maybe_unused]] auto cb_grad = create_circular_buffer(
         program, all_cores, kGradCbIndex, grad_data_format, grad_single_tile_size_bytes, num_input_tiles);
 
