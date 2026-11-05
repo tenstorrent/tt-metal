@@ -67,7 +67,8 @@
 #define WHS_S_SAVED (WHS_S_STATS + 9u)       // TRISC0 has saved the configuration
 #define WHS_S_DONE (WHS_S_STATS + 10u)       // TRISC i done at WHS_S_DONE + i
 #define WHS_S_RESTORED (WHS_S_STATS + 13u)
-#define WHS_S_LINES (WHS_S_STATS + 14u)
+#define WHS_S_RING_PROBE (WHS_S_STATS + 14u)  // the feed's landing word for a ring counter read
+#define WHS_S_LINES (WHS_S_STATS + 15u)
 // The configuration (state 0) and each TRISC's GPRs as the previous op left them, restored at the end.
 #define WHS_SAVE_CFG 1536u
 #define WHS_SAVE_GPR 2304u
@@ -102,7 +103,11 @@ enum WhsArg : uint32_t {
     WHS_A_LEADER_Y,
     WHS_A_BARRIER_SEM,  // a program semaphore id: the group barrier's count on the leader
     WHS_A_DEBUG,
-    WHS_A_VALID_ADDR,  // DRAM address of a [1, 1, 1, 1] uint32 logical length tensor (0: use WHS_A_VALID_KEYS)
+    WHS_A_VALID_ADDR,     // DRAM address of a [1, 1, 1, 1] uint32 logical length tensor (0: use WHS_A_VALID_KEYS)
+    WHS_A_RING_COUNTERS,  // ring gather (wh_sdpa_gather.cpp): L1 address of the landing counters, 0 without
+    WHS_A_RING_X,         // the counter core, NoC 0 coordinates
+    WHS_A_RING_Y,
+    WHS_A_RING_TARGET,  // a head's counter once its K and V^T have landed this launch (senders x launch)
     WHS_A_ROUNDS,
     WHS_A_ROUND0,
 };
@@ -122,5 +127,12 @@ enum WhsArg : uint32_t {
 // (NoC, VC) carries one source a group (two unreserved casters on one (NoC, VC) in a group deadlocked the NoC in
 // tt-lab-private h3-wh, notes/minimax-h3-wh-compute.md "The feed redesign"). With WHS_CAST_BY_IO only.
 #define WHS_CAST_BUDDY_VC 512u
+
+// Ring gather (wh_sdpa_gather.cpp): K and V^T arrive while the op runs; head h's landing counter (L1 of the counter
+// core, line h of 16 bytes) counts its senders' increments, the barrier line the launches started on the other chips.
+#define WHS_RING_BARRIER 31u
+#define WHS_GATHER_BATCH 4u    // 2-tile packets a gather batch (two in flight)
+#define WHS_HEADER_BYTES 256u  // a packet header slot in the gather's staging
+#define WHS_GATHER_BYTES (2u * WHS_GATHER_BATCH * 2u * WHS_TILE + (2u * WHS_GATHER_BATCH + 1u) * WHS_HEADER_BYTES)
 
 static inline uint32_t whs_key_blocks(uint32_t valid_keys) { return (valid_keys + WHS_ROWS - 1u) / WHS_ROWS; }

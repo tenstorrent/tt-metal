@@ -169,9 +169,37 @@ void kernel_main() {
     // its own transaction id.
     constexpr uint32_t depth = WHS_FEED_DEPTH;
     uint32_t n = 0;
+    // Ring gather: a head's blocks only once its K and V^T have landed on this chip.
+    const uint32_t ring_counters = get_arg_val<uint32_t>(WHS_A_RING_COUNTERS);
+    const uint32_t ring_target = get_arg_val<uint32_t>(WHS_A_RING_TARGET);
+    const uint64_t ring_noc =
+        ring_counters
+            ? get_noc_addr(get_arg_val<uint32_t>(WHS_A_RING_X), get_arg_val<uint32_t>(WHS_A_RING_Y), ring_counters)
+            : 0u;
+    uint32_t landed_heads = 0;
+    const auto wait_head = [&](uint32_t head) {
+        if (landed_heads >> head & 1u) {
+            return;
+        }
+        const uint32_t probe = whs_line(scratch, WHS_S_RING_PROBE);
+        while (true) {
+            noc_async_read(ring_noc + head * 16u, probe, 4u);
+            noc_async_read_barrier();
+            if (line(scratch, WHS_S_RING_PROBE) - ring_target < 0x80000000u) {
+                break;
+            }
+            for (uint32_t i = 0; i < 64u; ++i) {
+                __asm__ volatile("nop");
+            }
+        }
+        landed_heads |= 1u << head;
+    };
     for (uint32_t g = reader_index; g < total; g += readers, ++n) {
         const uint32_t b = g % bufs, use = g / bufs;
         while (line(scratch, WHS_S_CONSUMED + b) < group_cores * use) {
+        }
+        if (ring_counters) {
+            wait_head(get_arg_val<uint32_t>(WHS_A_ROUND0 + g / blocks) >> 16);
         }
         if (!(debug & WHS_DEBUG_NO_READS)) {
             read_block(g, 1u + n % depth);
