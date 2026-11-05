@@ -23,12 +23,8 @@ void zero(uint32_t l1, uint32_t bytes) {
     }
 }
 
-void copy32(uint32_t dst, uint32_t src) {  // 32 B, word by word (L1 to L1)
-    volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
-    const volatile tt_l1_ptr uint32_t* s = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(src);
-    for (uint32_t w = 0; w < 8; ++w) {
-        d[w] = s[w];
-    }
+void copy32(uint32_t dst, uint32_t src) {  // 32 B, L1 to L1 by a local NoC read (a RISC word loop is ~10x slower);
+    noc_async_read(get_noc_addr(src), dst, 32);  // the caller's barrier completes it
 }
 
 // Row 0 of a bf16 tile filled with one value (face 0 and face 1, 16 values each).
@@ -120,6 +116,7 @@ void kernel_main() {
         copy32(Z + i * TB, SC + NCH * 128 + i * 128);
         copy32(Z + i * TB + 512, SC + NCH * 128 + i * 128 + 64);
     }
+    noc_async_read_barrier();
     cb_push_back(cb_a, 1);
     cb_push_back(cb_b, 1);
     cb_push_back(cb_z, HT);
@@ -149,6 +146,7 @@ void kernel_main() {
         copy32(X + c * TB + 96, SC + c * 128);             // the token into row 3, face 0
         copy32(X + c * TB + 512 + 96, SC + c * 128 + 64);  // face 1
     }
+    noc_async_read_barrier();
     cb_push_back(cb_x, NCH);
     cb_push_back(cb_t, NCH);
     cb_push_back(cb_e, 1);
@@ -177,16 +175,12 @@ void kernel_main() {
             copy32(n + f * 128 + 64, x + f * 512 + 96);
         }
     }
-    {
-        volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(N);
-        for (uint32_t c = 0; c < NCH; ++c) {
-            for (uint32_t f = 0; f < 2; ++f) {
-                for (uint32_t w = 0; w < 8; ++w) {
-                    d[(c * 256 + f * 128 + 96) / 4 + w] = 0;
-                }
-            }
+    for (uint32_t c = 0; c < NCH; ++c) {
+        for (uint32_t f = 0; f < 2; ++f) {
+            noc_async_read(get_noc_addr(MEM_ZEROS_BASE), N + c * 256 + f * 128 + 96, 32);
         }
     }
+    noc_async_read_barrier();
     for (uint32_t c = 2 * HT; c < NCH; ++c) {
         const uint64_t s = conv.get_noc_addr(chunk_tile(c));
         noc_async_write(N + c * 256, s, 128);
