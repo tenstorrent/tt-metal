@@ -194,7 +194,7 @@ def zero_kv_blocks(model, block_ids):
         return
     mesh = model.mesh_device
     k0 = kv_caches[0][0]
-    shape = [1] + [int(x) for x in k0.shape[1:]]
+    shape = [1] + [int(x) for x in list(k0.shape)[1:]]
     zeros = getattr(model, "_zero_kv_block", None)
     if zeros is None or list(zeros.shape) != shape or zeros.dtype != k0.dtype:
         zeros = model._zero_kv_block = ttnn.from_torch(
