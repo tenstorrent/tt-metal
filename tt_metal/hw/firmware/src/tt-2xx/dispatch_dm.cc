@@ -143,6 +143,10 @@ extern "C" uint32_t _start1() {
         thread_sync_init();
         wait_subordinates();
         mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
+#if WATCHER_ASSERT_ENABLED
+        // Quasar-only: per-VC initiator throttler desynchronises the router state machine for that VC; stays at reset.
+        ASSERT(noc_throttler_at_reset());
+#endif
 
         noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
         DeviceProfilerInit();

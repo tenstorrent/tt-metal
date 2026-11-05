@@ -37,8 +37,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/command_queue_common.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
@@ -223,7 +223,7 @@ int main(int argc, char** argv) {
         auto device_id = mesh_device->get_device_ids()[0];
 
         auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
         std::string src_mem;
         uint32_t noc_addr_x, noc_addr_y;

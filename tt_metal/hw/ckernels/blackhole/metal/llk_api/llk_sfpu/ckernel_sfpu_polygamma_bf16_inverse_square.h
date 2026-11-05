@@ -7,7 +7,9 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
-#include "sfpu/ckernel_sfpu_polygamma_bf16_inverse_square_core.h"
+// The core records through the window helper; it is included here, outside namespace sfpi.
+#include "ckernel_sfpu_polygamma_bf16_replay_window.h"
+#include "ckernel_sfpu_polygamma_bf16_inverse_square_core.h"
 namespace ckernel::sfpu::bf16::polygamma {
 template <class Config>
 inline void init_inverse_square() {

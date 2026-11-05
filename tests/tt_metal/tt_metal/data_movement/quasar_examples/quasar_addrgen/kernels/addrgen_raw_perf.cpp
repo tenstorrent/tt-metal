@@ -45,6 +45,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include "internal/tt-2xx/quasar/overlay/rocc_instructions.hpp"
@@ -100,7 +101,8 @@ void kernel_main() {
     const uint32_t num_pages = pad.size_in_bytes() / page_size;  // the scratchpad holds one slot per page
     // Raw address: the push path programs the command buffer's destination register directly.
     const uint32_t pad_base = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(pad.local_mem()));
-    const uint32_t bank_base = ta.get_bank_base_address();
+    // Raw: the addrgen walk is programmed with the bank base directly.
+    const uint32_t bank_base = tensor_accessor::detail::TransferAccess::bank_base(ta);
 
     uint64_t elapsed[kNumSections];
     uint64_t sink = 0;

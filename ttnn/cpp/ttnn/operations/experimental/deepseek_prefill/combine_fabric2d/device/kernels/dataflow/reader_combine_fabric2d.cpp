@@ -82,12 +82,28 @@ constexpr uint32_t control_tables_addr = ct.control_addr + ct.meta_prefetch_cap 
 // is ours either way, only the chip differs, and the buffer's device-local address is uniform across the
 // mesh. Chunk boundaries do not appear here — a chunk is just a run of consecutive pages, so both sides
 // address the region by a single running page count.
-constexpr uint32_t fwd_page(uint32_t page_in_stream) { return ct.my_stream * ct.fwd_pages_per_stream + page_in_stream; }
+// Page of one CHANNEL of our region. Each channel is its own ring of ct.vc_pages pages, written by one
+// producer and read by one consumer, so a running page count is still all the two chips agree on -- there
+// are simply num_vcs of them now instead of one. Wrapping costs nothing: both sides address the region a
+// page at a time, so nothing ever straddles the wrap.
+constexpr uint32_t fwd_page(uint32_t vc, uint32_t page_in_vc) {
+    return (ct.my_stream * ct.num_vcs + vc) * ct.vc_pages + page_in_vc % ct.vc_pages;
+}
 
 // Our slice of a run: of [begin, end) take [begin + n*idx/count, begin + n*(idx+1)/count). Integer
 // arithmetic, so consecutive slices meet exactly — no gaps, no overlap, whatever n is.
 constexpr uint32_t slice_begin(uint32_t begin, uint32_t n, uint32_t idx, uint32_t count) {
     return begin + (uint32_t)(((uint64_t)n * idx) / count);
+}
+
+// Pages a reader sits on before posting them back upstream. Capped at a quarter of the channel, because
+// a threshold comparable to the channel's depth starves the producer: hold 15 credits back on a 17-page
+// channel and the chip upstream sees two pages free and stops. Same trap as an arrival-bump batch deeper
+// than the channel -- with capacity a free parameter, every constant measured in pages must scale with it.
+constexpr uint32_t credit_flush_at() {
+    const uint32_t quarter = ct.vc_pages / 4;
+    const uint32_t cap = ::cmbf2d::CREDIT_RETURN_BATCH;
+    return quarter < 1 ? 1u : (quarter < cap ? quarter : cap);
 }
 
 uint32_t slot_addr_of(uint32_t slot) { return ct.ring_addr + slot * ct.slot_stride(); }
@@ -314,10 +330,14 @@ struct Reader {
     // How far into the downstream chip's region we have written, and where the chunk in progress ends. That
     // reader walks its chunks in exactly the order we emit them, sizing each the same way we do, so the page
     // counter alone is what the two chips agree on; the end marks where the sender owes it a bump.
-    uint32_t out_page = 0;
-    uint32_t out_chunk_end = 0;
-    // Pages taken out of our own region, which for the same reason IS the page the next chunk starts at.
-    uint32_t consumed = 0;
+    // Per channel. `out_page` counts into the DOWNSTREAM chip's channel, `consumed` out of ours, and
+    // `expected` is how many will ever arrive -- which is what says when a channel is finished, since
+    // there are no chunk boundaries to walk any more: every page of a channel shares one movement class,
+    // so one rule routes the lot and the destination rides in the page.
+    uint32_t out_page[::cmbf2d::MAX_VCS] = {};
+    uint32_t consumed[::cmbf2d::MAX_VCS] = {};
+    uint32_t expected[::cmbf2d::MAX_VCS] = {};
+    uint32_t credits_pending[::cmbf2d::MAX_VCS] = {};
 
     void flush_publish() {
         if (pending_publish > 0) {
@@ -374,17 +394,125 @@ struct Reader {
                slice_begin(begin, n, desc.split_idx, desc.split_count);
     }
 
-    // Point one slot at `page` of the downstream chip's region. The chunk's last page is marked so the
-    // sender bumps that chip's arrival counter right there: that reader consumes a whole chunk before moving
-    // on, so a tail left inside a partial bump batch would strand it.
-    void aim_at_downstream(volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata, uint32_t page) const {
-        metadata->cmd = (page + 1 == out_chunk_end) ? ::cmbf2d::CMD_FORWARD_END : ::cmbf2d::CMD_FORWARD;
-        metadata->this_addr = dram.fwd.get_noc_addr(fwd_page(page));
+    // Point one slot at page `page` of the downstream chip's channel `vc`. Claiming that page is the
+    // caller's -- `out_page[vc]` is what the downstream chip's credit accounting is read against, so the
+    // step that consumes it stays visible at the call site rather than hiding inside an aim.
+    void aim_at_downstream(volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata, uint32_t vc, uint32_t page) {
+        metadata->cmd = ::cmbf2d::CMD_FORWARD;
+        metadata->vc = vc;
+        metadata->this_addr = dram.fwd.get_noc_addr(fwd_page(vc, page));
+    }
+
+    // Free space in the downstream chip's channel `vc`, in pages.
+    uint32_t downstream_credit(uint32_t vc) {
+        volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.vc_freed_addr(vc));
+        invalidate_l1_cache();
+        return ct.vc_pages - (out_page[vc] - *freed);
+    }
+
+    // How much of `want` may be staged into channel `vc` right now, at least one. While that channel is
+    // full we do OTHER work rather than spin -- which is the whole point of splitting the region up: some
+    // channel always has a page it can move, because the ones that deliver to the next chip's output need
+    // no space anywhere and so can always drain.
+    uint32_t reserve_downstream(uint32_t vc, uint32_t want) {
+        uint32_t credit = downstream_credit(vc);
+        while (credit == 0) {
+            flush_publish();  // never make the sender wait on slots we are holding
+            if (!serve_one_channel()) {
+                flush_credits();  // nothing of ours to move; make sure what we owe is posted
+            }
+            credit = downstream_credit(vc);
+        }
+        return credit < want ? credit : want;
+    }
+
+    // Hand `n` pages of our channel `vc` back to the chip that wrote them. It cannot be told directly --
+    // a stream's fabric connection only points downstream -- so the credit goes to the opposite
+    // direction's worker on this chip, whose sender is aimed at exactly that chip and carries it across.
+    void credit_upstream(uint32_t vc, uint32_t n) {
+        credits_pending[vc] += n;
+        if (credits_pending[vc] >= credit_flush_at()) {
+            flush_credits();
+        }
+    }
+
+    void flush_credits() {
+        for (uint32_t v = 0; v < ct.num_vcs; v++) {
+            if (credits_pending[v] > 0) {
+                noc_semaphore_inc(
+                    get_noc_addr(ct.credit_outbox_noc_x, ct.credit_outbox_noc_y, ct.vc_outbox_addr(v)),
+                    credits_pending[v]);
+                credits_pending[v] = 0;
+            }
+        }
+    }
+
+    // Move up to one batch out of the highest-priority channel that can move anything, and say whether
+    // anything moved. A channel can move when pages have arrived in it and either it delivers to the next
+    // chip's output -- needing no space at all -- or the channel it feeds has room.
+    bool serve_one_channel() {
+        for (uint32_t v = 0; v < ct.num_vcs; v++) {
+            uint32_t remaining = expected[v] - consumed[v];
+            if (remaining == 0) {
+                continue;
+            }
+            volatile tt_l1_ptr uint32_t* arrived =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.vc_arrived_addr(v));
+            invalidate_l1_cache();
+            const uint32_t avail = *arrived - consumed[v];
+            if (avail == 0) {
+                continue;
+            }
+            uint32_t k = avail < remaining ? avail : remaining;
+            if (k > ct.batch) {
+                k = ct.batch;
+            }
+            const uint32_t next = ct.vc_next(v);
+            if (next != ::cmbf2d::VC_NONE) {
+                const uint32_t credit = downstream_credit(next);
+                if (credit == 0) {
+                    continue;  // blocked; some other channel will not be
+                }
+                if (k > credit) {
+                    k = credit;
+                }
+            }
+            take_from_channel(v, next, k);
+            return true;
+        }
+        return false;
+    }
+
+    // Lift `k` pages out of channel `v` and push them one hop: delivered to the next chip's output when
+    // this was their last hop, otherwise staged into that chip's channel `next`.
+    void take_from_channel(uint32_t v, uint32_t next, uint32_t k) {
+        const uint32_t first_slot = claimed;
+        for (uint32_t j = 0; j < k; j++) {
+            const uint32_t slot = claim_slot();
+            // ONE read brings the token AND the [final_addr][dst_chip] pair straight into the slot's
+            // metadata, because the page layout was chosen to match the slot layout exactly.
+            noc_async_read(dram.fwd.get_noc_addr(fwd_page(v, consumed[v] + j)), slot_addr_of(slot), fwd_read_bytes);
+        }
+        noc_async_read_barrier();
+        for (uint32_t j = 0; j < k; j++) {
+            volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata = slot_metadata((first_slot + j) % ct.num_l1_slots);
+            if (next == ::cmbf2d::VC_NONE) {
+                metadata->cmd = ::cmbf2d::CMD_FINAL_WRITE;
+                metadata->this_addr = metadata->final_addr;
+            } else {
+                aim_at_downstream(metadata, next, out_page[next]++);
+            }
+        }
+        publish_n(k);
+        consumed[v] += k;
+        // The barrier above is what makes these pages free -- their tokens are in L1, so the chip that
+        // wrote them may write them again.
+        credit_upstream(v, k);
     }
 
     // Issues one token's read and fills its metadata but does NOT barrier or announce it: the caller does
     // both once per batch, so several reads are in flight together.
-    void issue_token(uint32_t dst_chip_id, uint32_t in_page, uint32_t pad) {
+    void issue_token(uint32_t dst_chip_id, uint32_t own_vc, uint32_t in_page, uint32_t pad) {
         const uint32_t slot = claim_slot();
         volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata = slot_metadata(slot);
         volatile tt_l1_ptr uint32_t* meta =
@@ -404,7 +532,7 @@ struct Reader {
         } else {
             metadata->final_addr = final_addr;
             metadata->dst_chip = (uint64_t)dst_chip_id;
-            aim_at_downstream(metadata, out_page++);
+            aim_at_downstream(metadata, own_vc, out_page[own_vc]++);
         }
     }
 
@@ -422,17 +550,27 @@ struct Reader {
     }
 
     // Stage [lo, hi) of one run: issue and announce its pages `batch` at a time.
-    void stage_run_slice(uint32_t dst_chip_id, uint32_t lo, uint32_t hi) {
+    //
+    // The channel's room is reserved BEFORE the batch starts, never inside it. That ordering is what makes
+    // the reader work-conserving safely: while it waits it goes and moves another channel, and a batch
+    // half-claimed would publish slots whose metadata is not written yet. Between batches nothing is
+    // outstanding, so switching work is free.
+    void stage_run_slice(uint32_t dst_chip_id, uint32_t own_vc, uint32_t lo, uint32_t hi) {
         walk_pages(lo, hi, [&](uint32_t base, uint32_t n) {
-            // `batch` tokens' reads in flight at a time, then one barrier and one announcement.
             for (uint32_t q = 0; q < n;) {
-                const uint32_t k = (n - q) > ct.batch ? ct.batch : (n - q);
-                for (uint32_t j = 0; j < k; j++) {
-                    issue_token(dst_chip_id, base + pad_at(n, q + j), pad_at(n, q + j));
+                uint32_t k = (n - q) > ct.batch ? ct.batch : (n - q);
+                if (own_vc != ::cmbf2d::VC_NONE) {
+                    k = reserve_downstream(own_vc, k);
                 }
-                noc_async_read_barrier();  // every token of the ct.batch is in L1 before any is announced
+                for (uint32_t j = 0; j < k; j++) {
+                    issue_token(dst_chip_id, own_vc, base + pad_at(n, q + j), pad_at(n, q + j));
+                }
+                noc_async_read_barrier();  // every token of the batch is in L1 before any is announced
                 publish_n(k);
                 q += k;
+                // Our own tokens have priority, but a channel left unserved while we are busy is a channel
+                // the chip behind us is stalled on. One batch between ours keeps both moving.
+                serve_one_channel();
             }
         });
     }
@@ -447,92 +585,15 @@ struct Reader {
             kernel_compile_time_args[w + 1],
             kernel_compile_time_args[w + 2],
             kernel_compile_time_args[w + 3]};
-        // Sized before the first page is placed, because the last page has to be recognisable when it comes.
-        out_chunk_end = out_page + (is_direct(dst_chip_id) ? 0 : chunk_tokens(desc, local_expert));
+        const uint32_t own_vc = kernel_compile_time_args[w + 4];
         const uint32_t e = expert_of(ctl, ct.my_dg_index, local_expert);
         const uint32_t begin = ctl.run_begin(desc.dst_dg_index, e);
         const uint32_t n = ctl.run_end(desc.dst_dg_index, e) - begin;
         stage_run_slice(
             dst_chip_id,
+            own_vc,
             slice_begin(begin, n, desc.split_idx, desc.split_count),
             slice_begin(begin, n, desc.split_idx + 1, desc.split_count));
-    }
-
-    // One arrived chunk, pushed exactly one more hop.
-    //
-    // This is where most of a sender's traffic comes from, not its own assignments: on an 8-ring each
-    // sender puts H*H/2 = 8 tok packets on its cable but only ~1.75 tok of those are its own, so ~78% is
-    // relayed. Batching the reads here is therefore what the reader's throughput actually turns on.
-    //
-    // The chunk's length is computed rather than discovered, so the reads are batched with nothing
-    // speculative about them: `batch` pages at a time, capped by what is left of the chunk and by what
-    // upstream says has arrived. An EMPTY chunk occupies no pages at all and so is simply not there.
-    void do_forward_chunk(uint32_t chunk, uint32_t local_expert) {
-        uint32_t remaining = chunk_tokens(forwarding_chunk(chunk), local_expert);
-        if (remaining == 0) {
-            return;
-        }
-        out_chunk_end = out_page + remaining;  // where the marker goes, should this chunk be re-forwarded
-
-        // Every token of a chunk shares one final destination (a chunk IS one (chip -> chip, expert) term),
-        // so the first page decides for the whole chunk whether this hop is the last one.
-        bool reforward = false;
-        bool decided = false;
-        while (remaining > 0) {
-            const uint32_t k = read_arrived_pages(remaining);
-            const uint32_t first_slot = claimed - k;
-            for (uint32_t j = 0; j < k; j++) {
-                volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata = slot_metadata((first_slot + j) % ct.num_l1_slots);
-                if (!decided) {
-                    reforward = (metadata->dst_chip != (uint64_t)ct.nbr_chip_id);
-                    decided = true;
-                }
-                if (reforward) {
-                    aim_at_downstream(metadata, out_page++);
-                } else {
-                    metadata->cmd = ::cmbf2d::CMD_FINAL_WRITE;
-                    metadata->this_addr = metadata->final_addr;
-                }
-            }
-            publish_n(k);
-            consumed += k;
-            remaining -= k;
-        }
-    }
-
-    // Wait for upstream to have written past `consumed`, then read as many of the chunk in progress as are
-    // both available and still inside it — `remaining` is what is left of it. Returns how many slots were
-    // claimed, all of which belong to the chunk.
-    uint32_t read_arrived_pages(uint32_t remaining) {
-        volatile tt_l1_ptr uint32_t* fwd_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr);
-        // Do not outpace the upstream sender. It bumps this counter every fwd_bump_every pages and ALWAYS on
-        // the last page of a chunk, so a chunk boundary is never left unreachable.
-        invalidate_l1_cache();
-        if (*fwd_arrived <= consumed) {
-            flush_publish();  // let the sender work while we wait on upstream
-            while (true) {
-                invalidate_l1_cache();
-                if (*fwd_arrived > consumed) {
-                    break;
-                }
-            }
-        }
-        uint32_t k = *fwd_arrived - consumed;
-        if (k > ct.batch) {
-            k = ct.batch;
-        }
-        if (k > remaining) {
-            k = remaining;
-        }
-
-        for (uint32_t j = 0; j < k; j++) {
-            const uint32_t slot = claim_slot();
-            // ONE read brings the token AND the [final_addr][dst_chip] pair straight into the slot's
-            // metadata, because the page layout was chosen to match the slot layout exactly.
-            noc_async_read(dram.fwd.get_noc_addr(fwd_page(consumed + j)), slot_addr_of(slot), fwd_read_bytes);
-        }
-        noc_async_read_barrier();
-        return k;
     }
 
     // Walk the schedule for one local expert. The schedule is the same for every expert — which chip pairs
@@ -542,16 +603,73 @@ struct Reader {
     //
     // Publishing at the end leaves nothing claimed but unannounced, which is what lets the local phase
     // treat the next slot as private.
+    // Our own tokens for one local expert, in the schedule's order. The schedule's relay entries are not
+    // walked here any more: a channel is drained whenever it can move, by serve_one_channel, rather than at
+    // a fixed point in a fixed order. What is left of the schedule is a PRIORITY: own work first, channels
+    // when it stalls or between its batches.
     void run_schedule(uint32_t local_expert) {
         for (uint32_t si = 0; si < ct.schedule_len; si++) {
             const uint32_t entry = kernel_compile_time_args[ct.schedule_base + si];
-            if (entry & ::cmbf2d::SCHED_FWD) {
-                do_forward_chunk(entry & ~::cmbf2d::SCHED_FWD, local_expert);
-            } else {
+            if (!(entry & ::cmbf2d::SCHED_FWD)) {
                 do_own_assignment(entry, local_expert);
             }
         }
         flush_publish();
+    }
+
+    // Pages that will ever arrive in each channel this launch. Every chip derives it from the same
+    // replicated tables, so it needs nothing from the chip that will send them.
+    void size_channels() {
+        for (uint32_t v = 0; v < ct.num_vcs; v++) {
+            const ::cmbf2d::ChunkDescriptor desc = forwarding_chunk(v);
+            uint32_t total = 0;
+            for (uint32_t e = 0; e < ct.experts_per_chip; e++) {
+                total += chunk_tokens(desc, e);
+            }
+            expected[v] = total;
+        }
+    }
+
+    bool channels_drained() const {
+        for (uint32_t v = 0; v < ct.num_vcs; v++) {
+            if (consumed[v] < expected[v]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Everything still in our channels, once our own work is done and there is nothing to interleave with.
+    void drain_channels() {
+        while (!channels_drained()) {
+            if (!serve_one_channel()) {
+                flush_publish();
+                flush_credits();
+            }
+        }
+        flush_publish();
+    }
+
+    // Tell our courier it will get nothing more, once every page we will ever lift has been credited.
+    void close_credits() {
+        flush_credits();
+        noc_semaphore_inc(get_noc_addr(ct.credit_outbox_noc_x, ct.credit_outbox_noc_y, ct.credit_done_addr), 1);
+    }
+
+    // Leave the cross-chip counters as the next launch expects them. Both are bumped from another chip, so
+    // they are drained by subtraction rather than zeroed -- and the credits are WAITED for first, because
+    // one still in flight would land on the next launch's counter and let it run a whole channel ahead of a
+    // reader that has not got there: a silent overwrite of live tokens.
+    void drain_channel_counters() {
+        for (uint32_t v = 0; v < ct.num_vcs; v++) {
+            volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.vc_freed_addr(v));
+            invalidate_l1_cache();
+            while (*freed < out_page[v]) {
+                invalidate_l1_cache();
+            }
+            noc_semaphore_inc(get_noc_addr(ct.vc_freed_addr(v)), 0u - out_page[v]);
+            noc_semaphore_inc(get_noc_addr(ct.vc_arrived_addr(v)), 0u - consumed[v]);
+        }
     }
 
     // Same-chip tokens for one local expert. An expert here also holds tokens that started here, and those
@@ -644,6 +762,7 @@ struct Reader {
 void kernel_main() {
     const Dram dram = open_dram();
     Reader reader{dram, read_control_tables(dram)};
+    reader.size_channels();
 
     // One pass per local expert, fabric then local, so every token of expert e is placed before expert
     // e + 1 is touched.
@@ -665,6 +784,9 @@ void kernel_main() {
         reader.untilized.finish_expert(reader.walk);
 #endif
     }
+    // Our own work is finished; whatever is still in the channels has nothing left to interleave with.
+    reader.drain_channels();
+    reader.close_credits();
     reader.end_stream();
 #if TILE
     reader.untilized.reset_counters();
@@ -673,13 +795,10 @@ void kernel_main() {
     // only needs its own reader to have ended, never ours, so this cannot close a cycle around the ring.
     reader.wait_for_final_writes();
 
-    // Subtract what this launch consumed rather than zeroing. The sender counts every forwarded page and always
-    // bumps on a chunk's last one, so this launch's bumps sum to exactly `consumed`. The upstream sender's launch
-    // credit (sender_combine_fabric2d.cpp) keeps its next launch's bumps, and its writes into our forwarding
-    // region, out until this chip has started that launch; subtracting stays right without relying on it. The
-    // overlapped op has no launch credit, so there a chip far enough ahead can still overwrite pages we have
-    // not read. The NoC only has an atomic add, so this adds the two's complement.
-    noc_semaphore_inc(get_noc_addr(ct.fwd_sem_addr), 0u - reader.consumed);
+    // The channel counters, left as the next launch expects them. The upstream chip CANNOT now overwrite a
+    // page we have not read -- that is what the credits are for -- so unlike before this is bookkeeping
+    // rather than a known gap.
+    reader.drain_channel_counters();
     // Do not exit with this or any `filled` increment still in flight.
     noc_async_atomic_barrier();
 }

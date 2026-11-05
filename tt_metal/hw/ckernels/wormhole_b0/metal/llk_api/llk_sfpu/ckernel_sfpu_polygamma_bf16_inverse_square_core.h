@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include "ckernel_sfpu_polygamma_bf16_replay_window.h"
 // Included inside namespace sfpi. Exact selected recurrence and same-row suffix.
 namespace ckernel::sfpu::ttpoly::polygamma {
 using namespace ::sfpi;

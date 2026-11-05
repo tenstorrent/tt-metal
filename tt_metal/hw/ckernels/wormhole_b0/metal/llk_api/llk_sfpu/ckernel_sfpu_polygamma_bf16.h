@@ -38,7 +38,7 @@ inline bool bf16_dest_polygamma() {
 // Each call records replay slots 0-3, below replay_buf_offset = 16, where matmul and
 // reduce record.
 template <int ITERATIONS = 32>
-inline void calculate_polygamma_bf16() {
+__attribute__((noinline)) inline void calculate_polygamma_bf16() {
     ckernel::sfpu::bf16::polygamma::calculate_inverse_square<ckernel::sfpu::PolygammaBf16Config, ITERATIONS>();
 }
 inline void init_polygamma_bf16() {

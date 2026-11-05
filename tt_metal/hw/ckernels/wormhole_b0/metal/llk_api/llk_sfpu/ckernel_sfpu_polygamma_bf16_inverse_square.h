@@ -7,6 +7,8 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
+// The core records through the window helper; it is included here, outside namespace sfpi.
+#include "ckernel_sfpu_polygamma_bf16_replay_window.h"
 #include "ckernel_sfpu_polygamma_bf16_inverse_square_core.h"
 namespace ckernel::sfpu::bf16::polygamma {
 template <class Config>
@@ -24,8 +26,8 @@ inline void calculate_inverse_square() {
         sfpi::vFloat x = sfpi::dst_reg[d];
         sfpi::vFloat result = ttpoly::polygamma::inverse_square_scalar<Config>(
             x,
-            [](sfpi::vFloat value) { return sfpu_reciprocal_iter<1>(value); },
-            [](sfpi::vFloat value) { return value; });
+            [](sfpi::vFloat value) __attribute__((always_inline)) { return sfpu_reciprocal_iter<1>(value); },
+            [](sfpi::vFloat value) __attribute__((always_inline)) { return value; });
         result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         // Typed raw terminals of the non-finite inputs, after rounding as on Blackhole.
         v_if(sfpi::exexp(sfpi::setsgn(x, 0), sfpi::ExponentMode::Biased) == 255) {
