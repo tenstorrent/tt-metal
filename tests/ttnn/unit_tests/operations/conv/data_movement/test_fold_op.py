@@ -617,8 +617,9 @@ def test_fold_padded_pixels(device, shape, dtype, memory_config):
     ids=["l1_c3_pad_hw", "l1_c3_pad_c", "l1_c3_pad_hw_c", "l1_c4_pad_hw", "dram_c3_pad_hw"],
 )
 def test_fold_padded_pixels_with_padding(device, shape, buffer_type, padding):
-    """A height-sharded input with a shard wider than C takes the general fold path, which pads it in interleaved
-    memory: the fast path's halo padding needs a shard as wide as C, and pad cannot grow a sharded tensor."""
+    """A height-sharded input with a shard wider than C is padded in interleaved memory: the fast path's halo padding
+    needs a shard as wide as C, and pad cannot grow a sharded tensor. In L1 it is resharded with its shard width, so
+    fold still returns height shards as wide as the unpadded case's."""
     n = math.prod(shape)
     torch_input = ((torch.arange(n) % 29 + 1) / 8).reshape(shape).to(torch.bfloat16)
     memory_config = _legacy_config(HEIGHT, buffer_type, TWO_CORES, [16, 8])
@@ -630,6 +631,54 @@ def test_fold_padded_pixels_with_padding(device, shape, buffer_type, padding):
     top, bottom, left, right, c_front, c_back = padding
     padded = torch.nn.functional.pad(ttnn.to_torch(tt_input), (c_front, c_back, left, right, top, bottom))
     expected = fold_torch(padded, 2, 2)
+    actual = ttnn.to_torch(tt_out)
+    assert actual.shape == expected.shape
+    wrong = int((actual != expected).sum())
+    assert wrong == 0, f"{wrong} of {expected.numel()} values wrong"
+    if buffer_type == L1:
+        out_config = tt_out.memory_config()
+        assert out_config.memory_layout == HEIGHT and out_config.shard_spec.shape[1] == 8 * 4, out_config
+
+
+@pytest.mark.parametrize("padding", [None, [1, 1, 1, 1, 0, 0], [0, 0, 0, 0, 0, 2]], ids=["no_pad", "pad_hw", "pad_c"])
+def test_fold_tile_height_sharded_narrow_channels(device, padding):
+    """A TILE input's shard rows are 32 wide, so with C = 16 each pixel fills half its row. Fold copies only the
+    channels, and pads such an input in interleaved memory."""
+    shape = (1, 32, 32, 16)
+    torch_input = ((torch.arange(math.prod(shape)) % 29 + 1) / 8).reshape(shape).to(torch.bfloat16)
+    memory_config = _legacy_config(HEIGHT, L1, ((0, 0), (7, 0)), [128, 32])
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+
+    tt_out = ttnn.fold(tt_input, 2, 2, padding=padding) if padding else ttnn.fold(tt_input, 2, 2)
+
+    top, bottom, left, right, c_front, c_back = padding or [0] * 6
+    padded = torch.nn.functional.pad(torch_input, (c_front, c_back, left, right, top, bottom))
+    expected = fold_torch(padded, 2, 2)
+    actual = ttnn.to_torch(tt_out)
+    assert actual.shape == expected.shape
+    wrong = int((actual != expected).sum())
+    assert wrong == 0, f"{wrong} of {expected.numel()} values wrong"
+    assert tt_out.memory_config().memory_layout == HEIGHT, tt_out.memory_config()
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+def test_fold_fast_path_unaligned_pixels(device, dtype):
+    """C = 3 in shards exactly 3 wide: each pixel's 6 or 12 bytes are not 16-byte aligned, so the fast path copies the
+    pixels one by one instead of with the NoC."""
+    shape = (1, 4, 8, 3)
+    n = math.prod(shape)
+    if dtype == ttnn.float32:
+        torch_input = (torch.arange(n, dtype=torch.float32) + 1).reshape(shape)
+    else:
+        torch_input = ((torch.arange(n) % 29 + 1) / 8).reshape(shape).to(torch.bfloat16)
+    memory_config = _legacy_config(HEIGHT, L1, TWO_CORES, [16, 3])
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+
+    tt_out = ttnn.fold(tt_input, 2, 2)
+
+    expected = fold_torch(torch_input, 2, 2)
     actual = ttnn.to_torch(tt_out)
     assert actual.shape == expected.shape
     wrong = int((actual != expected).sum())
