@@ -11,7 +11,6 @@
 #include <ostream>
 #include <queue>
 #include <unordered_map>
-#include <unordered_set>
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>

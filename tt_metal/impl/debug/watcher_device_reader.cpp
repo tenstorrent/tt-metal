@@ -17,7 +17,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
-#include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <fmt/base.h>
 #include <fmt/ranges.h>
@@ -28,13 +27,10 @@
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
-#include <tt-umd/types/xy_pair.hpp>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "core_descriptor.hpp"
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
-#include "dispatch_core_common.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "hal_types.hpp"
 #include "hostdev/debug_ring_buffer_common.h"
@@ -371,6 +367,7 @@ private:
     void DumpRunState(uint32_t state) const;
     void DumpLaunchMessage() const;
     void DumpWaypoints(bool to_stdout = false) const;
+    void DumpEthFwStage() const;
     void DumpSyncRegs() const;
     // Returns NEO TC keys (neo_id * NUM_TENSIX_TILE_COUNTERS_FOR_DM + tc_id) covered by
     // programmed remapper pairs so the bypass dump can skip them.
@@ -754,6 +751,11 @@ void WatcherDeviceReader::Core::Dump() const {
 
     // Dump state always available
     DumpLaunchMessage();
+    // Always-on Metal ethernet firmware stage breadcrumb (written unconditionally by eth FW, so it is
+    // available even when the core was not compiled with watcher instrumentation).
+    if (is_eth_core) {
+        DumpEthFwStage();
+    }
     // Ethernet and DRAM cores don't use the sync reg
     if (!is_eth_core && !is_dram_core && rtoptions.get_watcher_dump_all()) {
         // Reading registers while running can cause hangs, only read if
@@ -943,6 +945,10 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg +=
                 " (NOC read lands in a local register; on Quasar the NIU can strand the response and stall L1 "
                 "writes, reads must land in L1).";
+            break;
+        case dev_msgs::DebugSanitizeNocMulticastOutsideNodeSet:
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
+            error_msg += " (multicast rectangle reaches nodes outside the destination).";
             break;
         default:
             error_msg = fmt::format(
@@ -1340,6 +1346,20 @@ void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
     } else {
         fmt::print(reader_.f, "{:>4}  ", fmt::join(risc_status, ","));
     }
+}
+
+void WatcherDeviceReader::Core::DumpEthFwStage() const {
+    const auto& hal = reader_.env.get_hal();
+    const std::vector<uint32_t> slots = tt::llrt::read_eth_fw_stage_slots(
+        hal, reader_.env.get_cluster(), reader_.device_id, virtual_coord_, programmable_core_type_);
+    if (slots.empty()) {
+        // FW stage breadcrumb not mapped for this arch (only instrumented on Blackhole).
+        return;
+    }
+    fprintf(
+        reader_.f,
+        "fw_stage:%s  ",
+        tt::llrt::format_eth_fw_stage_slots(hal, programmable_core_type_, slots, "|").c_str());
 }
 
 void WatcherDeviceReader::Core::DumpSyncRegs() const {

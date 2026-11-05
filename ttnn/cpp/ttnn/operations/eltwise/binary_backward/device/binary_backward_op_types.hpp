@@ -12,6 +12,10 @@ namespace ttnn::operations::binary_backward {
 // device operation, and the discriminator for the program cache key.
 enum class BinaryBackwardOpType : uint8_t {
     MUL_BW,
+    ADD_BW,
+    SUB_BW,
+    RSUB_BW,
+    DIV_BW,
 };
 
 }  // namespace ttnn::operations::binary_backward
