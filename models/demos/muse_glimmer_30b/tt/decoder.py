@@ -74,7 +74,12 @@ class MuseGlimmerDecoderLayer:
     def forward_prefill(self, x, rope, kv_cache, page_table, user_id):
         return self._block(x, lambda h: self.attn.forward_prefill(h, rope, kv_cache, page_table, user_id))
 
-    def forward_decode(self, x, current_pos, rope, kv_cache, page_table, sdpa_inputs=None):
+    def forward_decode(
+        self, x, current_pos, rope, kv_cache, page_table, sdpa_inputs=None, kv_write_rows=None, sdpa_rows=None
+    ):
         return self._block(
-            x, lambda h: self.attn.forward_decode(h, current_pos, rope, kv_cache, page_table, sdpa_inputs)
+            x,
+            lambda h: self.attn.forward_decode(
+                h, current_pos, rope, kv_cache, page_table, sdpa_inputs, kv_write_rows, sdpa_rows
+            ),
         )
