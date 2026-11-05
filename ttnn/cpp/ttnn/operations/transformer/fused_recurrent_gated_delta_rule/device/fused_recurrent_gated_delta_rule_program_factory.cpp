@@ -114,17 +114,17 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     const std::vector<uint32_t> compute_ct = {Kt, Vt, per_token};
 
     std::vector<uint32_t> reader_ct = {Kt, Vt, use_blk_idx};
-    TensorAccessorArgs(*in.q.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.k.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.v.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.decay.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.beta.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct);
+    TensorAccessorArgs(in.q.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.k.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.v.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.decay.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.beta.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(ttnn::as_optional_mesh_tensor(in.initial_state)).append_to(reader_ct);
     TensorAccessorArgs(blk_buf).append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = {Kt, Vt, per_token};
-    TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
-    TensorAccessorArgs(*outputs[1].buffer()).append_to(writer_ct);
+    TensorAccessorArgs(outputs[0].mesh_tensor()).append_to(writer_ct);
+    TensorAccessorArgs(outputs[1].mesh_tensor()).append_to(writer_ct);
 
     KernelDescriptor reader;
     reader.kernel_source = kdir + "dataflow/reader_fused_recurrent_gated_delta_rule.cpp";

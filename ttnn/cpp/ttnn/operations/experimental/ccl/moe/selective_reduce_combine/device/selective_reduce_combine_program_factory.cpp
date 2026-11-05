@@ -669,9 +669,9 @@ uint32_t append_selective_reduce_combine_to_descriptor(
     };
 
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(dense_token_maps_tensor.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(dense_token_counts_tensor.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(token_activations_tensor.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(dense_token_maps_tensor.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(dense_token_counts_tensor.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(token_activations_tensor.mesh_tensor()).append_to(reader_compile_time_args);
 
     // Reader is pushed here; the writer is the next kernel on both paths (kWriterKernelIdx when this
     // append starts empty). CCL mux kernels follow the writer.
@@ -744,7 +744,7 @@ uint32_t append_selective_reduce_combine_to_descriptor(
         };
 
         std::vector<uint32_t> writer_compile_time_args;
-        TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+        TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
         // Writer follows the reader. On a program that started empty this is kWriterKernelIdx.
         const uint32_t writer_kernel_idx = desc.kernels.size();
@@ -844,7 +844,7 @@ uint32_t append_selective_reduce_combine_to_descriptor(
 
     // Positional CT args: TensorAccessorArgs only. The V2 fabric mux client is built entirely from runtime args.
     std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     // Writer follows the reader. Mux kernels follow the writer.
     const uint32_t writer_kernel_idx = desc.kernels.size();

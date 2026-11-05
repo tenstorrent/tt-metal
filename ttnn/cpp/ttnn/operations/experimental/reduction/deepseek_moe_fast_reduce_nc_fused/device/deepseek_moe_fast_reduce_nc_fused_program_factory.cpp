@@ -297,10 +297,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         .shared_expert_scale_bf16 = shared_expert_scale_bf16,
     };
     std::vector<uint32_t> reader_ct_args = to_reader_ct_arg_vector(reader_ct_named);
-    TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(scores_tensor.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(expert_indices_tensor.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(expert_mapping_tensor.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_ct_args);
+    TensorAccessorArgs(scores_tensor.mesh_tensor()).append_to(reader_ct_args);
+    TensorAccessorArgs(expert_indices_tensor.mesh_tensor()).append_to(reader_ct_args);
+    TensorAccessorArgs(expert_mapping_tensor.mesh_tensor()).append_to(reader_ct_args);
 
     std::vector<uint32_t> writer_ct_args = {
         cb_out_id,
@@ -313,7 +313,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         writer_ct_args.push_back(output_page_size);
     }
     for (const ttnn::Tensor& output_tensor : output_tensors) {
-        TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
+        TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_ct_args);
     }
 
     constexpr const char* reader_kernel_file =

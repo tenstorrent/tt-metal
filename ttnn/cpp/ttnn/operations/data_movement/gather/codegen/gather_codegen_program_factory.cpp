@@ -295,7 +295,7 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryInterleaved::create_d
         geometry.index_valid_w_last,
         geometry.index_ht_per_batch,
     };
-    TensorAccessorArgs(*index_t.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(index_t.mesh_tensor()).append_to(reader_ct);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = kReaderInterleaved;
@@ -312,8 +312,8 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryInterleaved::create_d
         split.num_cores,
         gather_output_cb_tiles(geometry.Wt_index),
         kGatherWriteBatchTiles};
-    TensorAccessorArgs(*in_t.buffer()).append_to(writer_ct);
-    TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
+    TensorAccessorArgs(in_t.mesh_tensor()).append_to(writer_ct);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_ct);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kWriterInterleaved;
@@ -374,7 +374,7 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryTiled::create_descrip
         geometry.index_valid_w_last,
         geometry.index_ht_per_batch,
     };
-    TensorAccessorArgs(*index_t.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(index_t.mesh_tensor()).append_to(reader_ct);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = kReaderTiled;
@@ -390,8 +390,8 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryTiled::create_descrip
         geometry.Wt_index,
         gather_output_cb_tiles(geometry.Wt_index),
         kGatherWriteBatchTiles};
-    TensorAccessorArgs(*in_t.buffer()).append_to(writer_ct);
-    TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
+    TensorAccessorArgs(in_t.mesh_tensor()).append_to(writer_ct);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_ct);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kWriterTiled;
@@ -456,7 +456,7 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryStreaming::create_des
         geometry.index_ht_per_batch,
         chunk_tiles,
     };
-    TensorAccessorArgs(*index_t.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(index_t.mesh_tensor()).append_to(reader_ct);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = kReaderStreaming;
@@ -467,8 +467,8 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryStreaming::create_des
 
     KernelDescriptor::CompileTimeArgs writer_ct = {
         kCbInput, kCbOutput, geometry.Ht, geometry.Wt_input, geometry.Wt_index, split.num_cores, chunk_tiles};
-    TensorAccessorArgs(*in_t.buffer()).append_to(writer_ct);
-    TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
+    TensorAccessorArgs(in_t.mesh_tensor()).append_to(writer_ct);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_ct);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kWriterStreaming;

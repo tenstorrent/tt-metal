@@ -539,8 +539,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         log_debug(tt::LogOp, "activation_kernel_compile_args[{}] = {}", index, activation_kernel_compile_args[index]);
     }
 
-    tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(weights_kernel_compile_args);
-    tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(weights_kernel_compile_args);
+    tt::tt_metal::TensorAccessorArgs(b.mesh_tensor()).append_to(weights_kernel_compile_args);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(bias)).append_to(weights_kernel_compile_args);
 
     KernelDescriptor act_kernel_desc;
     act_kernel_desc.kernel_source = activation_kernel_path;

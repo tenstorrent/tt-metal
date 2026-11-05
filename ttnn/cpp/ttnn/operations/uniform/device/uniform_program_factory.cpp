@@ -140,7 +140,7 @@ ProgramDescriptor UniformDeviceOperation::UniformProgramFactory::create_descript
 
     // Writer kernel
     KernelDescriptor::CompileTimeArgs writer_ct_args{output_cb_id};
-    TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(output.mesh_tensor()).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = WRITER_KERNEL_PATH;

@@ -115,10 +115,10 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
         {"scratch_table", place.scratch_table},
     };
     std::vector<uint32_t> place_ct_pos;
-    tt::tt_metal::TensorAccessorArgs(*row_buffer.buffer()).append_to(place_ct_pos);
-    tt::tt_metal::TensorAccessorArgs(*e_t_out.buffer()).append_to(place_ct_pos);
-    tt::tt_metal::TensorAccessorArgs(*activation_out.buffer()).append_to(place_ct_pos);
-    tt::tt_metal::TensorAccessorArgs(*table.buffer()).append_to(place_ct_pos);
+    tt::tt_metal::TensorAccessorArgs(row_buffer.mesh_tensor()).append_to(place_ct_pos);
+    tt::tt_metal::TensorAccessorArgs(e_t_out.mesh_tensor()).append_to(place_ct_pos);
+    tt::tt_metal::TensorAccessorArgs(activation_out.mesh_tensor()).append_to(place_ct_pos);
+    tt::tt_metal::TensorAccessorArgs(table.mesh_tensor()).append_to(place_ct_pos);
     desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
         .kernel_source = std::string(kKernelDir) + "place.cpp",
         .core_ranges = core_set,
@@ -200,9 +200,9 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
         combine_defines.emplace_back("COMBINE_FABRIC", "1");
     }
     std::vector<uint32_t> combine_ct_pos;
-    tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(combine_ct_pos);
-    tt::tt_metal::TensorAccessorArgs(*row_buffer.buffer()).append_to(combine_ct_pos);
-    tt::tt_metal::TensorAccessorArgs(*table.buffer()).append_to(combine_ct_pos);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_tensor()).append_to(combine_ct_pos);
+    tt::tt_metal::TensorAccessorArgs(row_buffer.mesh_tensor()).append_to(combine_ct_pos);
+    tt::tt_metal::TensorAccessorArgs(table.mesh_tensor()).append_to(combine_ct_pos);
     TT_FATAL(
         desc.kernels.size() == kCombineKernelIdx,
         "moe_compute expert rows placement program: the combine is kernel {}, expected {}",

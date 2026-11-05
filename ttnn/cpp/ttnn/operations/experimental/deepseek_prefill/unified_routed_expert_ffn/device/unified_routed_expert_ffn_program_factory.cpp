@@ -952,9 +952,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         reader_ct_args.push_back(CB_DOWN_BIAS);
         // Representative expert-0 bias buffers describe the layout; per-expert
         // bias base addresses are passed as runtime-arg arrays below.
-        tt::tt_metal::TensorAccessorArgs(t.gate_biases[0].buffer()).append_to(reader_ct_args);
-        tt::tt_metal::TensorAccessorArgs(t.up_biases[0].buffer()).append_to(reader_ct_args);
-        tt::tt_metal::TensorAccessorArgs(t.down_biases[0].buffer()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.gate_biases[0].mesh_tensor()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.up_biases[0].mesh_tensor()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.down_biases[0].mesh_tensor()).append_to(reader_ct_args);
         reader_defines.emplace_back("FUSE_BIAS", "1");
     }
     tt::tt_metal::KernelDescriptor reader_kernel_desc;

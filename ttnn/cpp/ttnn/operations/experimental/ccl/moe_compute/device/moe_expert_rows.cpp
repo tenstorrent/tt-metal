@@ -356,10 +356,10 @@ tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
         {"w2_slice_tiles", layout.w2_slice_tiles},
     };
     std::vector<uint32_t> reader_ct_pos;
-    tt::tt_metal::TensorAccessorArgs(*tensor_args.expert_indices_tensor.buffer()).append_to(reader_ct_pos);
-    tt::tt_metal::TensorAccessorArgs(*tensor_args.expert_scores_tensor.buffer()).append_to(reader_ct_pos);
-    tt::tt_metal::TensorAccessorArgs(*tensor_args.expert_mapping_tensor.buffer()).append_to(reader_ct_pos);
-    tt::tt_metal::TensorAccessorArgs(*table_tensor.buffer()).append_to(reader_ct_pos);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.expert_indices_tensor.mesh_tensor()).append_to(reader_ct_pos);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.expert_scores_tensor.mesh_tensor()).append_to(reader_ct_pos);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.expert_mapping_tensor.mesh_tensor()).append_to(reader_ct_pos);
+    tt::tt_metal::TensorAccessorArgs(table_tensor.mesh_tensor()).append_to(reader_ct_pos);
 
     tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs writer_ct = {
         {"cb_activated", cb_activated},
@@ -391,8 +391,8 @@ tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
         {"chunk_piece_max", plan.chunk_piece_max},
     };
     std::vector<uint32_t> writer_ct_pos;
-    tt::tt_metal::TensorAccessorArgs(*tensor_args.input_tensor.buffer()).append_to(writer_ct_pos);
-    tt::tt_metal::TensorAccessorArgs(*rows_tensor.buffer()).append_to(writer_ct_pos);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.mesh_tensor()).append_to(writer_ct_pos);
+    tt::tt_metal::TensorAccessorArgs(rows_tensor.mesh_tensor()).append_to(writer_ct_pos);
 
     tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs compute_ct = {
         {"block_tiles", plan.block_tiles},

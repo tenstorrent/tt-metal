@@ -168,12 +168,12 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     reader_args.set(rct::CB_SLOT, cb_slot);
     std::vector<uint32_t> reader_ct = reader_args.take();
     std::vector<uint32_t> reader_crt;
-    tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(reader_ct, reader_crt);
-    tt::tt_metal::TensorAccessorArgs(t.k.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+    tt::tt_metal::TensorAccessorArgs(t.q.mesh_tensor()).append_to(reader_ct, reader_crt);
+    tt::tt_metal::TensorAccessorArgs(t.k.mesh_tensor(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_ct, reader_crt);
-    tt::tt_metal::TensorAccessorArgs(t.v.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+    tt::tt_metal::TensorAccessorArgs(t.v.mesh_tensor(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_ct, reader_crt);
-    tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
+    tt::tt_metal::TensorAccessorArgs(t.indices.mesh_tensor()).append_to(reader_ct, reader_crt);
 
     // Writer builds persistent compute tiles, co-gathers K/V halves, and drains row-major output.
     const uint32_t row_bytes = vDHt * tt::constants::TILE_WIDTH * out_elem_bytes;
@@ -210,10 +210,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     writer_args.set(wct::CB_V_CACHE, cb_v_cache);
     std::vector<uint32_t> writer_ct = writer_args.take();
     std::vector<uint32_t> writer_crt;
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
-    tt::tt_metal::TensorAccessorArgs(t.k.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+    tt::tt_metal::TensorAccessorArgs(output.mesh_tensor()).append_to(writer_ct, writer_crt);
+    tt::tt_metal::TensorAccessorArgs(t.k.mesh_tensor(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_ct, writer_crt);
-    tt::tt_metal::TensorAccessorArgs(t.v.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+    tt::tt_metal::TensorAccessorArgs(t.v.mesh_tensor(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_ct, writer_crt);
 
     namespace cct = sparse_sdpa_msa::compute_ct;

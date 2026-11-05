@@ -167,9 +167,9 @@ ProgramDescriptor MoeExpertTokenRemapDeviceOperation::Multicore::create_descript
         mapping_page_size_bytes,
         metadata_page_size_bytes,
         local_reduce};
-    TensorAccessorArgs(topk_tensor.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(topk_tensor.mesh_tensor()).append_to(reader_ct_args);
+    TensorAccessorArgs(mapping_tensor.mesh_tensor()).append_to(reader_ct_args);
+    TensorAccessorArgs(metadata_tensor.mesh_tensor()).append_to(reader_ct_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -194,8 +194,8 @@ ProgramDescriptor MoeExpertTokenRemapDeviceOperation::Multicore::create_descript
         output_reduced_page_size_bytes,
         reduction_size,
     };
-    TensorAccessorArgs(*output_mapping_tensor.buffer()).append_to(writer_ct_args);
-    TensorAccessorArgs(*output_reduced_tensor.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(output_mapping_tensor.mesh_tensor()).append_to(writer_ct_args);
+    TensorAccessorArgs(output_reduced_tensor.mesh_tensor()).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =

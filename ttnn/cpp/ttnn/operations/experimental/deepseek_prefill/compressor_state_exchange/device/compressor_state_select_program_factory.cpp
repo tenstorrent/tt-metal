@@ -52,9 +52,9 @@ ProgramDescriptor CompressorStateSelectProgramFactory::create_descriptor(
     const auto scalars = select_scalars(params, args, mesh_dispatch_coordinate);
 
     std::vector<uint32_t> compile_args;
-    TensorAccessorArgs(args.gathered_state.buffer()).append_to(compile_args);
-    TensorAccessorArgs(args.initial_state.buffer()).append_to(compile_args);
-    TensorAccessorArgs(output.buffer()).append_to(compile_args);
+    TensorAccessorArgs(args.gathered_state.mesh_tensor()).append_to(compile_args);
+    TensorAccessorArgs(args.initial_state.mesh_tensor()).append_to(compile_args);
+    TensorAccessorArgs(output.mesh_tensor()).append_to(compile_args);
 
     KernelDescriptor kernel;
     kernel.kernel_source = kKernel;

@@ -244,9 +244,9 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         reader_compile_time_args.push_back(grid_nsticks_per_core);  // ct_arg[18]: grid_nsticks_per_core
     }
 
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_time_args);
     if (!is_sharded) {
-        tt::tt_metal::TensorAccessorArgs(*grid_tensor.buffer()).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(grid_tensor.mesh_tensor()).append_to(reader_compile_time_args);
     }
 
     const std::string reader_kernel_path =
@@ -383,7 +383,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             get_aligned_stick_size(output_shape, output_tensor),  // ct_arg[1]: output_stick_size
             out_ntiles_c                                          // ct_arg[2]: out_ntiles_c
         };
-        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/writer_grid_sample_interleaved.cpp";

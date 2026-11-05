@@ -414,8 +414,8 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         cb_page_size,              // cb entry size
         do_init_barrier,           // wait for remote output allocation before relaying
     };
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(reader_compile_args);
 
     // Writer
     std::vector<uint32_t> writer_compile_args = {
@@ -429,7 +429,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         do_init_barrier,           // send init handshake before relaying
         data_valid_granularity,    // signal data_valid once per this many CB pages
     };
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_args);
 
     // When multiple workers share a fabric mux, the writer connects through it: append the mux geometry (after
     // the tensor-accessor args) and switch the kernel onto its USE_WORKER_MUX path.

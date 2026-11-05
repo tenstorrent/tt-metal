@@ -252,11 +252,11 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
 
     std::vector<uint32_t> reader_ct = common_ct;
     reader_ct.push_back(0u);  // fused_ring off
-    tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
-    tt::tt_metal::TensorAccessorArgs(*k.buffer()).append_to(reader_ct);
-    tt::tt_metal::TensorAccessorArgs(*w.buffer()).append_to(reader_ct);  // q placeholder when synthesize_gate
+    tt::tt_metal::TensorAccessorArgs(q.mesh_tensor()).append_to(reader_ct);
+    tt::tt_metal::TensorAccessorArgs(k.mesh_tensor()).append_to(reader_ct);
+    tt::tt_metal::TensorAccessorArgs(w.mesh_tensor()).append_to(reader_ct);  // q placeholder when synthesize_gate
     // Keep the reader CT layout identical to the fused factory. This accessor is unused when fused_ring is off.
-    tt::tt_metal::TensorAccessorArgs(*k.buffer()).append_to(reader_ct);
+    tt::tt_metal::TensorAccessorArgs(k.mesh_tensor()).append_to(reader_ct);
     // multicast: on/off per direction (q_mcast_on covers q and w) then the 6 semaphore ids.
     reader_ct.push_back(k_mcast_on);
     reader_ct.push_back(q_mcast_on);
@@ -303,15 +303,15 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // 6 zeros: rt base, two CBs, Sq, rotation-exact flag, key-stripe split. The split is only read on the
     // metadata path (rejected here), so 0 is inert -- but the WIDTH must match the reader.
     reader_ct.insert(reader_ct.end(), 6, 0u);
-    tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
+    tt::tt_metal::TensorAccessorArgs(q.mesh_tensor()).append_to(reader_ct);
     // Cache-slot metadata, same discipline minus the presence flag: rt base, pages-per-slot, mailbox CB,
     // cache extent, then a placeholder accessor.
     reader_ct.insert(reader_ct.end(), 4, 0u);
-    tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
+    tt::tt_metal::TensorAccessorArgs(q.mesh_tensor()).append_to(reader_ct);
     // Real-token end: rt base + placeholder accessor, no presence flag (metadata mode is one flag).
     // This path rejects metadata mode, so 0 is inert -- but the WIDTH must match the reader.
     reader_ct.push_back(0u);
-    tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
+    tt::tt_metal::TensorAccessorArgs(q.mesh_tensor()).append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(0u);                             // fused_ring off
@@ -323,7 +323,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     writer_ct.push_back(1u);  // unused block-cyclic run width
     writer_ct.push_back(1u);  // unused logical key stripe count
     writer_ct.push_back(1u);  // unused physical SP size
-    tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
+    tt::tt_metal::TensorAccessorArgs(out.mesh_tensor()).append_to(writer_ct);
     writer_ct.push_back(0u);
     writer_ct.push_back(0u);
 

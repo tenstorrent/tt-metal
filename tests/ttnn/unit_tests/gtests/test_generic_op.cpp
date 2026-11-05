@@ -368,11 +368,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
 
     bool block_or_width_sharded = false;
     KernelDescriptor::CompileTimeArgs reader_compile_time_args = {(uint32_t)block_or_width_sharded};
-    TensorAccessorArgs(*device_input_tensor_a.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*device_input_tensor_b.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(device_input_tensor_a.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(device_input_tensor_b.mesh_tensor()).append_to(reader_compile_time_args);
 
     KernelDescriptor::CompileTimeArgs writer_compile_time_args = {dst_cb_index};
-    TensorAccessorArgs(*device_output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(device_output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     // setup runtime arguments for data movement kernels
     uint32_t num_cores_total = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
@@ -784,9 +784,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
     };
 
     KernelDescriptor::CompileTimeArgs reader_compile_time_args;
-    TensorAccessorArgs(*device_input_tensor.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(device_input_tensor.mesh_tensor()).append_to(reader_compile_time_args);
     KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(std::uint32_t)cb_out_id};
-    TensorAccessorArgs(*device_output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(device_output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     // only core (0, 0) is used
     const KernelDescriptor::CoreRuntimeArgs reader_rt_args = {
@@ -875,9 +875,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
     };
 
     KernelDescriptor::CompileTimeArgs reader_ct_args;
-    TensorAccessorArgs(*device_input_tensor_1.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(device_input_tensor_1.mesh_tensor()).append_to(reader_ct_args);
     KernelDescriptor::CompileTimeArgs writer_ct_args = {(uint32_t)cb_out_id};
-    TensorAccessorArgs(*device_output_tensor_1.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(device_output_tensor_1.mesh_tensor()).append_to(writer_ct_args);
 
     ProgramDescriptor program_descriptor = {
         .kernels =
@@ -990,9 +990,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCacheCommonRuntimeArgs) {
     };
 
     KernelDescriptor::CompileTimeArgs reader_ct_args;
-    TensorAccessorArgs(*device_input_tensor_1.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(device_input_tensor_1.mesh_tensor()).append_to(reader_ct_args);
     KernelDescriptor::CompileTimeArgs writer_ct_args = {(uint32_t)cb_out_id};
-    TensorAccessorArgs(*device_output_tensor_1.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(device_output_tensor_1.mesh_tensor()).append_to(writer_ct_args);
 
     // Use common_runtime_args on the reader kernel — the kernel reads per-core
     // args for the buffer address, and the common args are unused padding, but
@@ -1365,8 +1365,8 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
 
         // Reader CT args
         std::vector<uint32_t> reader_ct_args = common_ct_args;
-        tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_ct_args);
-        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(reader_ct_args);
 
         // Writer CT args
         std::vector<uint32_t> writer_ct_args = common_ct_args;
@@ -1397,7 +1397,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
         } else {
             writer_ct_args.insert(writer_ct_args.end(), {0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u});  // no target
         }
-        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_ct_args);
 
         // Keep this manual descriptor in sync with minimal_default_reader.cpp / minimal_default_writer.cpp.
         // Tensor addresses and semaphores are common RT args laid out by ttnn::ccl::AllGatherCommonArgs;

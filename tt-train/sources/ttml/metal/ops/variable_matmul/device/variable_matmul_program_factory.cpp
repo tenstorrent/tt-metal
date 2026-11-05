@@ -66,8 +66,8 @@ CoreCoord clamped_next(const std::vector<CoreCoord>& order, uint32_t index) {
 
 // Append tensor accessors for input + output
 void append_accessors(std::vector<uint32_t>& args, const Tensor& main_tensor, const Tensor& output_tensor) {
-    tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
-    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
+    tt::tt_metal::TensorAccessorArgs(main_tensor.mesh_tensor()).append_to(args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(args);
 }
 
 }  // namespace
@@ -314,7 +314,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     };
     append_accessors(in0_sender_compile_time_args, input_tensor, output_tensor);
     if (in0_needs_offsets) {
-        tt::tt_metal::TensorAccessorArgs(*tensor_args.offsets_tensor.buffer()).append_to(in0_sender_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(tensor_args.offsets_tensor.mesh_tensor())
+            .append_to(in0_sender_compile_time_args);
     }
 
     const auto in0_sender_kernels_id = CreateKernel(
@@ -348,7 +349,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     };
     append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensor);
     if (in0_needs_offsets) {
-        tt::tt_metal::TensorAccessorArgs(*tensor_args.offsets_tensor.buffer())
+        tt::tt_metal::TensorAccessorArgs(tensor_args.offsets_tensor.mesh_tensor())
             .append_to(in0_receiver_compile_time_args);
     }
 
@@ -383,7 +384,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     };
     append_accessors(in1_sender_compile_time_args, weight_tensor, output_tensor);
     if (in1_needs_offsets) {
-        tt::tt_metal::TensorAccessorArgs(*tensor_args.offsets_tensor.buffer()).append_to(in1_sender_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(tensor_args.offsets_tensor.mesh_tensor())
+            .append_to(in1_sender_compile_time_args);
     }
 
     const auto in1_sender_kernels_id = CreateKernel(
@@ -417,7 +419,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     };
     append_accessors(in1_receiver_compile_time_args, weight_tensor, output_tensor);
     if (in1_needs_offsets) {
-        tt::tt_metal::TensorAccessorArgs(*tensor_args.offsets_tensor.buffer())
+        tt::tt_metal::TensorAccessorArgs(tensor_args.offsets_tensor.mesh_tensor())
             .append_to(in1_receiver_compile_time_args);
     }
 

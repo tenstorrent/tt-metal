@@ -643,14 +643,14 @@ void append_to_descriptor(
         wd);
     append(reader_ct, x_mcast_ct);
     append(reader_ct, h_mcast_ct);
-    for (auto* buffer :
-         {tensor_arguments.activations.buffer(),
-          tensor_arguments.w_gates[0].buffer(),
-          tensor_arguments.w_downs[0].buffer(),
-          tensor_arguments.counts.buffer(),
-          tensor_arguments.global_expert_idx_table.buffer(),
-          start_tensor.buffer()}) {
-        TensorAccessorArgs(buffer).append_to(reader_ct);
+    for (const auto* tensor :
+         {&tensor_arguments.activations,
+          &tensor_arguments.w_gates[0],
+          &tensor_arguments.w_downs[0],
+          &tensor_arguments.counts,
+          &tensor_arguments.global_expert_idx_table,
+          &start_tensor}) {
+        TensorAccessorArgs(tensor->mesh_tensor()).append_to(reader_ct);
     }
     // Bias CB ids then the three bias accessors, appended last so every offset the reader already
     // derives is unmoved. Only present when fuse_bias, which is in the program cache key.
@@ -658,11 +658,9 @@ void append_to_descriptor(
         reader_ct.push_back(geo::CB_GATE_BIAS);
         reader_ct.push_back(geo::CB_UP_BIAS);
         reader_ct.push_back(geo::CB_DOWN_BIAS);
-        for (auto* buffer :
-             {tensor_arguments.gate_biases[0].buffer(),
-              tensor_arguments.up_biases[0].buffer(),
-              tensor_arguments.down_biases[0].buffer()}) {
-            TensorAccessorArgs(buffer).append_to(reader_ct);
+        for (const auto* tensor :
+             {&tensor_arguments.gate_biases[0], &tensor_arguments.up_biases[0], &tensor_arguments.down_biases[0]}) {
+            TensorAccessorArgs(tensor->mesh_tensor()).append_to(reader_ct);
         }
     }
 
@@ -677,9 +675,9 @@ void append_to_descriptor(
         output_tile,
         wg,
         wd);
-    for (auto* buffer :
-         {tensor_arguments.w_ups[0].buffer(), tensor_return_value.buffer(), tensor_arguments.w_downs[0].buffer()}) {
-        TensorAccessorArgs(buffer).append_to(writer_ct);
+    for (const auto* tensor :
+         {&tensor_arguments.w_ups[0], &std::as_const(tensor_return_value), &tensor_arguments.w_downs[0]}) {
+        TensorAccessorArgs(tensor->mesh_tensor()).append_to(writer_ct);
     }
     auto compute_ct = make_compute_ct(blocking, experts_per_chip, activations_are_row_major);
 
@@ -2156,9 +2154,9 @@ void append_to_descriptor(
         reader_ct_args.push_back(CB_DOWN_BIAS);
         // Representative expert-0 bias buffers describe the layout; per-expert
         // bias base addresses are passed as runtime-arg arrays below.
-        tt::tt_metal::TensorAccessorArgs(t.gate_biases[0].buffer()).append_to(reader_ct_args);
-        tt::tt_metal::TensorAccessorArgs(t.up_biases[0].buffer()).append_to(reader_ct_args);
-        tt::tt_metal::TensorAccessorArgs(t.down_biases[0].buffer()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.gate_biases[0].mesh_tensor()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.up_biases[0].mesh_tensor()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.down_biases[0].mesh_tensor()).append_to(reader_ct_args);
         reader_defines["FUSE_BIAS"] = "1";
     }
     tt::tt_metal::KernelDescriptor reader_descriptor{

@@ -108,10 +108,10 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
         num_tile_cols,
         dst_reg_count,
     };
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_id, output_tiles_per_row};
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_args = {
         input_cb_id,

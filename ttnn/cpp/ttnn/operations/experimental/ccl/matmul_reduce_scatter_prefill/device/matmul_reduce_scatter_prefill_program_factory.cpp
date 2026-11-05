@@ -547,8 +547,8 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     reader_ct[args::reader_ct::CHUNK_N] = plan.chunk_n;
     reader_ct[args::reader_ct::BLOCK_M] = block_m;
     reader_ct[args::reader_ct::BLOCK_N] = block_n;
-    TensorAccessorArgs(*a.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*w.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(a.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(w.mesh_tensor()).append_to(reader_ct);
 
     std::vector<uint32_t> compute_ct(args::compute_ct::COUNT);
     compute_ct[args::compute_ct::CB_ACT_K_WINDOW] = args::cb::ACT_K_WINDOW;
@@ -586,7 +586,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     writer_ct[args::writer_ct::CHUNK_N] = plan.chunk_n;
     writer_ct[args::writer_ct::BLOCK_M] = block_m;
     writer_ct[args::writer_ct::BLOCK_N] = block_n;
-    TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
+    TensorAccessorArgs(output.mesh_tensor()).append_to(writer_ct);
 
     std::vector<uint32_t> port_ct(args::port_ct::COUNT);
     port_ct[args::port_ct::CB_PORT_CHUNKS] = args::cb::PORT_CHUNKS;

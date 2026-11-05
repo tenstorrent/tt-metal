@@ -148,9 +148,9 @@ ProgramDescriptor NonZeroIndicesProgramFactory::create_descriptor(
         static_cast<uint32_t>(output_cb_index_0),
         static_cast<uint32_t>(output_cb_index_1),
     };
-    TensorAccessorArgs(*input.buffer()).append_to(compile_time_args);
-    TensorAccessorArgs(*out_num_indices.buffer()).append_to(compile_time_args);
-    TensorAccessorArgs(*out_indices.buffer()).append_to(compile_time_args);
+    TensorAccessorArgs(input.mesh_tensor()).append_to(compile_time_args);
+    TensorAccessorArgs(out_num_indices.mesh_tensor()).append_to(compile_time_args);
+    TensorAccessorArgs(out_indices.mesh_tensor()).append_to(compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =

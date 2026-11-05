@@ -96,8 +96,8 @@ ProgramDescriptor MorehClipGradNormStep3Operation::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     // Use inputs.at(0) for compile-time accessor args (all inputs share same buffer layout)
     KernelDescriptor::CompileTimeArgs reader_ct_args;
-    TensorAccessorArgs(*inputs.at(0).buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(*clip_coef_clamped.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(inputs.at(0).mesh_tensor()).append_to(reader_ct_args);
+    TensorAccessorArgs(clip_coef_clamped.mesh_tensor()).append_to(reader_ct_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = READER_KERNEL_PATH;
@@ -108,7 +108,7 @@ ProgramDescriptor MorehClipGradNormStep3Operation::create_descriptor(
     reader_desc.runtime_args.reserve(num_cores_to_be_used);
 
     KernelDescriptor::CompileTimeArgs writer_ct_args;
-    TensorAccessorArgs(*inputs.at(0).buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(inputs.at(0).mesh_tensor()).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = WRITER_KERNEL_PATH;

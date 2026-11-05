@@ -155,8 +155,8 @@ tt::tt_metal::ProgramDescriptor build_descriptor_at(
     }
     writer_compile_args.insert(writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_args);
 
     // Kernels are pushed in a fixed order — reader first, then writer.  The
     // writer's descriptor index becomes its KernelHandle, which the templated

@@ -108,21 +108,21 @@ tt::tt_metal::ProgramDescriptor build_program(
     reader_ct.push_back(cb_ein_exact);
     reader_ct.push_back(cb_identity);
     for (const auto* tensor : {&in.packed, &in.initial_state, &in.actual_start}) {
-        tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(reader_ct);
+        tt::tt_metal::TensorAccessorArgs(tensor->mesh_tensor()).append_to(reader_ct);
     }
     std::vector<uint32_t> writer_ct = {cb_eout, cb_chron};
     writer_ct.insert(writer_ct.end(), chronology.begin(), chronology.end());
     writer_ct.push_back(kt);
     writer_ct.push_back(ack_semaphore_id);
     for (const auto* tensor : {&entry, &final_state}) {
-        tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(writer_ct);
+        tt::tt_metal::TensorAccessorArgs(tensor->mesh_tensor()).append_to(writer_ct);
     }
     std::vector<uint32_t> sender_ct = {cb_stage, cb_eout};
     sender_ct.insert(sender_ct.end(), chronology.begin(), chronology.end());
     sender_ct.insert(
         sender_ct.end(),
         {kt * state_tile, relay_affine_prefix_packet_bytes(), kt, sender_slots, ack_semaphore_id, successor_hops});
-    tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(sender_ct);
+    tt::tt_metal::TensorAccessorArgs(in.actual_start.mesh_tensor()).append_to(sender_ct);
 
     tt::tt_metal::KernelDescriptor reader{
         .kernel_source = std::string(kernel_dir) + "dataflow/reader_relay_affine_prefix.cpp",

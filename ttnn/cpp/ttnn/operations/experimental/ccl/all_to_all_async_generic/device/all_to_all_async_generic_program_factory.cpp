@@ -686,7 +686,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
         number_pages_per_packet                     // max_pages_per_packet
     };
 
-    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.buffer()).append_to(sender_reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.mesh_tensor()).append_to(sender_reader_compile_args);
 
     tt::tt_metal::KernelDescriptor sender_reader_kernel;
     sender_reader_kernel.kernel_source =
@@ -1051,7 +1051,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
             mcast_negative_direction,                    // mcast_negative_direction (physical slot)
         };
 
-        tt::tt_metal::TensorAccessorArgs(tensor_return_value.buffer()).append_to(sender_writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(tensor_return_value.mesh_tensor()).append_to(sender_writer_compile_args);
         const bool stream_uses_mux = use_worker_mux && stream < num_direction_groups * workers_per_direction &&
                                      sender_stream_direction_masks[stream] != 0;
         sender_writer_compile_args.push_back(stream_uses_mux);

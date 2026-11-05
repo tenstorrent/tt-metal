@@ -221,8 +221,8 @@ tt::tt_metal::ProgramDescriptor IndexFillOperation::create_descriptor(
         (std::uint32_t)index.physical_volume(),  // num elements in index array
         (std::uint32_t)(dim == n - 1)            // is last dim
     };
-    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(index.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input.mesh_tensor()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(index.mesh_tensor()).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc{
         .kernel_source = kernels_dir_path + "reader_index_fill.cpp",
@@ -258,7 +258,7 @@ tt::tt_metal::ProgramDescriptor IndexFillOperation::create_descriptor(
         (std::uint32_t)input.element_size(),     // element size in bytes
         (std::uint32_t)(dim == n - 1)            // is last dim
     };
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_tensor()).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc{
         .kernel_source = kernels_dir_path + "writer_index_fill.cpp",

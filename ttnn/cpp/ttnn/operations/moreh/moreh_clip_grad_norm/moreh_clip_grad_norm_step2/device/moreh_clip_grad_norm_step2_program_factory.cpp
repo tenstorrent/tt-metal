@@ -119,7 +119,7 @@ ProgramDescriptor MorehClipGradNormStep2Operation::create_descriptor(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     KernelDescriptor::CompileTimeArgs reader_ct_args;
-    TensorAccessorArgs(*tmp_pow_sum.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(tmp_pow_sum.mesh_tensor()).append_to(reader_ct_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = READER_KERNEL_PATH;
@@ -129,7 +129,7 @@ ProgramDescriptor MorehClipGradNormStep2Operation::create_descriptor(
     reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor::CompileTimeArgs writer_ct_args;
-    TensorAccessorArgs(*total_norm.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(total_norm.mesh_tensor()).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = WRITER_KERNEL_PATH;
