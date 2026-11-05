@@ -333,6 +333,8 @@ ADAPTER_PATHS = {
     # GLM-5.2: runnable through the runner only (no tests / CI); same architecture as GLM-5.3.
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
     "glm_5_3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3:GLM53Adapter",
+    # GLM-5.3 Flash (45 layers, KDA + DSA): the tt-blaze 48-ring's disaggregated prefill (tt-blaze G53F-0256).
+    "glm53_flash": "models.demos.glm53_flash.tt.runners.adapter:GLM53FlashAdapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
     # Kimi-K2.7-Code: DeepSeek-V3 architecture (MLA + MoE), single expert group (adapters/kimi_k2_7.py).
