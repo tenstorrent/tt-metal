@@ -110,8 +110,10 @@ def _xl1_buffer(device, K, crs, cores):
             ttnn.BufferType.L1,
             ttnn.ShardSpec(crs, [1, K + 256], ttnn.ShardOrientation.ROW_MAJOR),
         )
+        init = torch.zeros(cores, K + 256, dtype=torch.int16)
+        init[:, K + 16] = 1  # the hub's "1" word (2 K + 32 bytes in): the source of its flag multicast, set up front
         _XL1[key] = ttnn.from_torch(
-            torch.zeros(cores, K + 256, dtype=torch.bfloat16),
+            init.view(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
@@ -213,7 +215,7 @@ class TernaryDecodeLinear3:
             extra_defines = list(extra_defines) + [("BATCH4", "1")]
         glu = getattr(self, "glu", False)
         if rot is not None:
-            assert COMMON_ARGS and not glu and not split and not qg_heads and self.inline_scales and self.group16
+            assert COMMON_ARGS and not split and not qg_heads and self.inline_scales and self.group16
             dm_defines = list(dm_defines) + [("X_HUB", "1")]  # x' from the fused rotation (tdec_stream.hpp XHub)
         elif x_rot is not None and list(x_rot.shape) == [K // 1024, 1024]:
             dm_defines = list(dm_defines) + [("X_PAGED", "1")]  # x' as 2-KB pages in L1 (rotate.py XPAGED)
@@ -329,12 +331,14 @@ class TernaryDecodeLinear3:
         if split or qg_heads:
             assert split % TILE == 0, split
             wr_ct += ttnn.TensorAccessorArgs(out2).get_compile_time_args()
-        rkern, rcbs, rins = [], [], []
+        rkern, rcbs, rins, rsems = [], [], [], []
         if rot is not None:
             rotation, rx, ru, rsig = rot
             assert cores + rotation.B <= grid.x * grid.y, (cores, rotation.B)
             hub = device.worker_core_from_logical_core(ttnn.CoreCoord(0, 0))
-            rkern, rcbs, rins = rotation.fused_parts(rx, ru, rsig, cores, grid.x, (hub.x, hub.y), xl1.buffer_address())
+            rkern, rcbs, rins, rsems = rotation.fused_parts(
+                rx, ru, rsig, cores, grid.x, (hub.x, hub.y), xl1.buffer_address()
+            )
         program = ttnn.ProgramDescriptor(
             kernels=rkern
             + [
@@ -379,7 +383,7 @@ class TernaryDecodeLinear3:
                     ),
                 ),
             ],
-            semaphores=[],
+            semaphores=rsems,
             cbs=rcbs
             + [
                 cb(0, ttnn.bfloat16, 64, Kt, tiny),
@@ -404,8 +408,8 @@ class TernaryDecodeLinear3:
         )
         return (out, out2) if out2 is not None else res  # generic_op returns the last tensor of its list
 
-    def rotated(self, rotation, x, lead=(1, 1, TILE), u=None, sig=False, residual=None):
+    def rotated(self, rotation, x, lead=(1, 1, TILE), u=None, sig=False, residual=None, out_l1=False):
         """This linear on rotation(x) (rotation(x, u=u, sig=sig)) in one op: the rotation runs on the cores after this
         linear's and hands x' over through core 0 (no rotation op, no x' round trip; the weight stream starts at
         once). x (and u) should be in L1: the rotation's reads then do not queue behind the weight streams."""
-        return self(None, lead=lead, rot=(rotation, x, u, sig), residual=residual)
+        return self(None, lead=lead, rot=(rotation, x, u, sig), residual=residual, out_l1=out_l1)

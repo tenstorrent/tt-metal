@@ -214,7 +214,7 @@ class DecodeRotation:
             cb(25, bf, 2048, 1),
             cb(cbm["ROT_CB_Y"], bf, 2048, 1),
         ] + ([cb(cbm["ROT_CB_U"], bf, 2048, 1), cb(26, bf, 2048, 1), cb(27, bf, 2048, 1)] if u is not None else [])
-        return kernels, cbs, [x, self.m, self.h] + ([u] if u is not None else [])
+        return kernels, cbs, [x, self.m, self.h] + ([u] if u is not None else []), []
 
 
 class NormRotation:
@@ -333,6 +333,81 @@ class NormRotation:
 
         prerot.put_xnt(xn, xnt)
         return xn, out
+
+    def fused_parts(self, x, u, sig, first: int, grid_x: int, hub_xy, xl1_addr: int):
+        """Norm + rotation inside a ternary decode linear's program (decode_linear3.TernaryDecodeLinear3.rotated) on
+        cores first .. first + B - 1: only x' (no xn / xnt), each block into the hub's (core 0's) x' buffer
+        (nrot_writer.cpp NR_TO_HUB). u, sig: unused. -> (kernels, cbs, input tensors, semaphores)."""
+        from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_range_crs
+
+        device, K, B = self.device, self.K, self.B
+        crs = row_major_range_crs(first, first + B, grid_x)
+        cbm = {"NR_CB_X": 8, "NR_CB_C": 9, "NR_CB_SC": 10, "NR_CB_Y": 11}
+
+        def cb(index, fmt, page, pages):
+            return ttnn.CBDescriptor(
+                total_size=page * pages,
+                core_ranges=crs,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=page)],
+            )
+
+        bf, f32 = ttnn.bfloat16, ttnn.float32
+        noc_xy = []
+        for c in range(first, first + B):
+            v = device.worker_core_from_logical_core(ttnn.CoreCoord(c % grid_x, c // grid_x))
+            noc_xy += [v.x, v.y]
+        defs = [(k, str(v)) for k, v in cbm.items()] + [("NR_FIRST", str(first))]
+        rd_ct = (
+            ttnn.TensorAccessorArgs(x).get_compile_time_args()
+            + ttnn.TensorAccessorArgs(self.consts).get_compile_time_args()
+        )
+        kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=KERNELS + "nrot_reader.cpp",
+                core_ranges=crs,
+                compile_time_args=rd_ct,
+                common_runtime_args=[x.buffer_address(), self.consts.buffer_address(), grid_x, B] + noc_xy,
+                defines=defs,
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=KERNELS + "nrot_writer.cpp",
+                core_ranges=crs,
+                compile_time_args=[],
+                common_runtime_args=[hub_xy[0], hub_xy[1], xl1_addr, xl1_addr + 2 * K + 16, grid_x],
+                defines=defs + [("NR_TO_HUB", "1")],
+                config=ttnn.WriterConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=KERNELS + "nrot_compute.cpp",
+                core_ranges=crs,
+                compile_time_args=[],
+                common_runtime_args=[grid_x, B, _f32_bits(1.0 / K), _f32_bits(self.eps)],
+                defines=defs + [("NR_ONLY_X", "1")],
+                config=ttnn.ComputeConfigDescriptor(
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    fp32_dest_acc_en=True,
+                    math_approx_mode=False,
+                    dst_full_sync_en=True,
+                ),
+            ),
+        ]
+        cbs = [
+            cb(cbm["NR_CB_X"], bf, 2048, 1),
+            cb(cbm["NR_CB_C"], f32, 4096, 6),
+            cb(cbm["NR_CB_SC"], bf, 2048, 2),
+            cb(18, f32, 4096, 1),
+            cb(19, f32, 4096, B),
+            cb(24, bf, 2048, 1),
+            cb(25, f32, 4096, 2),
+            cb(26, f32, 4096, 1),
+            cb(27, f32, 4096, 1),
+            cb(28, f32, 4096, 1),
+            cb(29, f32, 4096, 1),
+            cb(cbm["NR_CB_Y"], bf, 2048, 1),
+        ]
+        sems = [ttnn.SemaphoreDescriptor(id=0, core_ranges=crs, initial_value=0)]
+        return kernels, cbs, [x, self.consts], sems
 
 
 def _f32_bits(v):

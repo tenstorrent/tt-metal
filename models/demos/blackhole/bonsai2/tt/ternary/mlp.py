@@ -76,6 +76,13 @@ class TernaryMLP:
     def forward_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x [..., dim] bf16 TILE, one token (one tile row) -> the same shape."""
         lead = tuple(list(x.shape)[:-1])
+        nrot = prerot.take_norm(x)
+        if nrot is not None and self.gateup is not None:
+            # the layer's norm + rotation inside the gate/up op (x is the un-normalised residual stream)
+            h = self.gateup.rotated(nrot, x, lead=lead, out_l1=True)
+            y = self.down.rotated(self.rot_hidden, h, lead=lead, residual=prerot.take_residual())
+            ttnn.deallocate(h)
+            return y
         xr = prerot.take(x)
         if xr is None:
             xr = self.rot_in(x)

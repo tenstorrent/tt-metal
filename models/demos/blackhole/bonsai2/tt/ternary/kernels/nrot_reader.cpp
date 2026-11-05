@@ -8,16 +8,25 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "core_span.hpp"
+#ifndef NR_CB_X  // CB indices (the fused form inside a ternary decode linear moves them off the linear's)
+#define NR_CB_X 0
+#define NR_CB_C 2
+#define NR_CB_SC 3
+#define NR_CB_Y 16
+#endif
+#ifndef NR_FIRST  // the fused form's cores start after the linear's
+#define NR_FIRST 0
+#endif
 
 void kernel_main() {
     // common args: x, consts, grid_x, B, then the B cores' NOC x, y
     const uint32_t B = get_common_arg_val<uint32_t>(3);
-    const uint32_t b = core_index(get_common_arg_val<uint32_t>(2));
+    const uint32_t b = core_index(get_common_arg_val<uint32_t>(2)) - NR_FIRST;
     constexpr auto x_args = TensorAccessorArgs<0>();
     constexpr auto c_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     const auto xs = TensorAccessor(x_args, get_common_arg_val<uint32_t>(0), 2048);
     const auto cs = TensorAccessor(c_args, get_common_arg_val<uint32_t>(1), 4096);
-    constexpr uint32_t cb_x = 0, cb_c = 2, cb_sc = 3;
+    constexpr uint32_t cb_x = NR_CB_X, cb_c = NR_CB_C, cb_sc = NR_CB_SC;
 
     cb_reserve_back(cb_c, 6);
     const uint32_t C = get_write_ptr(cb_c);

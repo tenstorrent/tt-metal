@@ -59,6 +59,13 @@ def sharded_decode_rms_norm(norm, x, dim, out_memory_config=ttnn.L1_MEMORY_CONFI
     return inter
 
 
+def _bonsai_norm_fuse():
+    """Bonsai: the decode MLP norm + rotation inside the gate/up op (BONSAI_NORM_FUSE=0: its own op)."""
+    import os
+
+    return os.environ.get("BONSAI_NORM_FUSE", "1") == "1"
+
+
 def _bonsai_resid_added():
     """Bonsai: whether a ternary output projection took the layer's registered residual (bonsai2/tt/ternary/prerot.py)."""
     from models.demos.blackhole.bonsai2.tt.ternary import prerot
@@ -470,8 +477,13 @@ class Qwen36DecoderLayer:
         elif single_decode and getattr(self, "_bonsai_ff_nrot", None) is not None:
             from models.demos.blackhole.bonsai2.tt.ternary import prerot
 
-            ff_input, _xr = self._bonsai_ff_nrot(h)
-            prerot.put(ff_input, _xr)
+            if _bonsai_norm_fuse():
+                # Bonsai: the norm + rotation runs inside the MLP's gate/up op (the MLP gets h itself)
+                ff_input = h
+                prerot.put_norm(h, self._bonsai_ff_nrot)
+            else:
+                ff_input, _xr = self._bonsai_ff_nrot(h)
+                prerot.put(ff_input, _xr)
             prerot.put_residual(h)  # Bonsai: the down projection adds h (residual_added below)
         elif single_decode:
             # Interleaved L1: the single-device MLP's decode matmuls mcast an interleaved in0.
@@ -485,7 +497,7 @@ class Qwen36DecoderLayer:
             ttnn.deallocate(h)
             return output
         ff_output = self.feed_forward.forward(ff_input, mode=mode)
-        if pre_ff is None:  # else the ternary MLP took ff_input as its rotated input and freed it
+        if pre_ff is None and ff_input is not h:  # else the ternary MLP took ff_input / ff_input is the residual h
             ttnn.deallocate(ff_input)
 
         if single_decode and getattr(self, "_bonsai_ff_nrot", None) is not None and _bonsai_resid_added():

@@ -177,7 +177,7 @@ class TernaryGDN:
     def out_proj(self, o):
         lead = tuple(list(o.shape)[:-1])
         if os.environ.get("BONSAI_ROT_FUSE", "1") == "1":  # the rotation inside the out projection's op
-            return self.out.rotated(self.rot_out, o, lead=lead, residual=prerot.take_residual())
+            return self.out.rotated(self.rot_out, o, lead=lead, residual=prerot.take_residual(), out_l1=True)
         orr = self.rot_out(o)
         y = self.out(orr, lead=lead, residual=prerot.take_residual())  # the layer's residual add, if registered
         ttnn.deallocate(orr)

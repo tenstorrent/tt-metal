@@ -82,6 +82,15 @@ FORCE_INLINE void stream_records(
                 head = (head + 1) % NB;
                 --count;
             }
+            if (hub != nullptr && !hub->done) {
+                // the compute waits for x' before it frees CB pages: keep the hub moving while the CB is full
+                while (!cb_pages_reservable_at_back(cb, (count + 1) * CBP)) {
+                    xhub_poll(*hub, false);
+                    if (hub->done) {
+                        break;
+                    }
+                }
+            }
             cb_reserve_back(cb, (count + 1) * CBP);
             noc_async_read_set_trid(trid + 1);
 #ifndef FAKE_STREAM

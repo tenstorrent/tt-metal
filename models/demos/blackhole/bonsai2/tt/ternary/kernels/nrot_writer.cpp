@@ -6,10 +6,33 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "core_span.hpp"
+#ifndef NR_CB_X  // CB indices (the fused form inside a ternary decode linear moves them off the linear's)
+#define NR_CB_X 0
+#define NR_CB_C 2
+#define NR_CB_SC 3
+#define NR_CB_Y 16
+#endif
+#ifndef NR_FIRST  // the fused form's cores start after the linear's
+#define NR_FIRST 0
+#endif
 
 void kernel_main() {
+#ifdef NR_TO_HUB
+    // fused into a ternary decode linear (decode_linear3.py rotated()): x' block b into the hub's (core 0's) buffer
+    // and its counter bumped (as rot_writer.cpp ROT_TO_HUB). common args: hub x, hub y, buffer, counter, grid_x
+    const uint32_t hx = get_common_arg_val<uint32_t>(0), hy = get_common_arg_val<uint32_t>(1);
+    const uint32_t hbuf = get_common_arg_val<uint32_t>(2), hcnt = get_common_arg_val<uint32_t>(3);
+    const uint32_t hb = core_index(get_common_arg_val<uint32_t>(4)) - NR_FIRST;
+    constexpr uint32_t cb_yh = NR_CB_Y;
+    cb_wait_front(cb_yh, 1);
+    noc_async_write(get_read_ptr(cb_yh), get_noc_addr(hx, hy, hbuf + hb * 2048), 2048);
+    noc_async_write_barrier();
+    noc_semaphore_inc(get_noc_addr(hx, hy, hcnt), 1);
+    noc_async_atomic_barrier();
+    cb_pop_front(cb_yh, 1);
+#else
     // common args: out (x' copies), xn, grid_x, xnt (the normalised blocks tiled, B tiles)
-    const uint32_t b = core_index(get_common_arg_val<uint32_t>(2));
+    const uint32_t b = core_index(get_common_arg_val<uint32_t>(2)) - NR_FIRST;
     constexpr uint32_t C = get_compile_time_arg_val(0);
     constexpr uint32_t ROW_BYTES = get_compile_time_arg_val(1);
     constexpr auto o_args = TensorAccessorArgs<2>();
@@ -18,7 +41,7 @@ void kernel_main() {
     const auto xnt = TensorAccessor(t_args, get_common_arg_val<uint32_t>(3), 2048);
     const auto out = TensorAccessor(o_args, get_common_arg_val<uint32_t>(0), ROW_BYTES);
     const auto xn = TensorAccessor(n_args, get_common_arg_val<uint32_t>(1), 2048);
-    constexpr uint32_t cb_y = 16, cb_xn = 17;
+    constexpr uint32_t cb_y = NR_CB_Y, cb_xn = 17;
     cb_wait_front(cb_xn, 1);
     const uint32_t n = get_read_ptr(cb_xn);
     for (uint32_t jh = 0; jh < 32; ++jh) {
@@ -42,4 +65,5 @@ void kernel_main() {
     cb_pop_front(20, 1);
     cb_pop_front(cb_y, 1);
     cb_pop_front(cb_xn, 1);
+#endif
 }

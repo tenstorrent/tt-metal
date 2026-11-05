@@ -113,7 +113,9 @@ class TernaryAttention:
     def project_o(self, a):
         if isinstance(a, _GatedOut) and _ROT_FUSE():  # sigmoid(gate) * attn rotated inside the o projection's op
             lead = tuple(list(a.attn.shape)[:-1])
-            y = self.o.rotated(self.rot_out, a.gate, lead=lead, u=a.attn, sig=True, residual=prerot.take_residual())
+            y = self.o.rotated(
+                self.rot_out, a.gate, lead=lead, u=a.attn, sig=True, residual=prerot.take_residual(), out_l1=True
+            )
             ttnn.deallocate(a.attn)
             ttnn.deallocate(a.gate)
             return y

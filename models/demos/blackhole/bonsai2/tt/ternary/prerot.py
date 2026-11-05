@@ -60,3 +60,18 @@ def take_xnt(x):
     """xnt for x, or None (removed: used once)."""
     hit = _XNT.pop(id(x), None)
     return hit[1] if hit is not None and hit[0] is x else None
+
+
+_NORM = {}
+
+
+def put_norm(x, nrot):
+    """A decode norm + rotation not run yet: the ternary module that receives x runs it inside its first linear's op
+    (decode_linear3 rotated() with the NormRotation)."""
+    _NORM.clear()
+    _NORM[id(x)] = (x, nrot)
+
+
+def take_norm(x):
+    hit = _NORM.pop(id(x), None)
+    return hit[1] if hit is not None and hit[0] is x else None

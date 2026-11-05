@@ -16,12 +16,21 @@
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "core_span.hpp"
+#ifndef NR_CB_X  // CB indices (the fused form inside a ternary decode linear moves them off the linear's)
+#define NR_CB_X 0
+#define NR_CB_C 2
+#define NR_CB_SC 3
+#define NR_CB_Y 16
+#endif
+#ifndef NR_FIRST  // the fused form's cores start after the linear's
+#define NR_FIRST 0
+#endif
 
 namespace {
-constexpr uint32_t cb_x = 0, cb_c = 2, cb_sc = 3, cb_st = 23, cb_xt = 24, cb_sq = 25, cb_r = 26, cb_inv = 27,
-                   cb_xd = 28;
+constexpr uint32_t cb_x = NR_CB_X, cb_c = NR_CB_C, cb_sc = NR_CB_SC, cb_st = 23, cb_xt = 24, cb_sq = 25, cb_r = 26,
+                   cb_inv = 27, cb_xd = 28;
 constexpr uint32_t cb_t = 29, cb_p = 18, cb_peer = 19;
-constexpr uint32_t cb_xn = 17, cb_y = 16;
+constexpr uint32_t cb_xn = 17, cb_y = NR_CB_Y;
 constexpr uint32_t H = 0, H32 = 1, OM = 2, WB = 3, WDB = 4, ONES = 5;  // OM: the raw-order row-0 mask
 constexpr auto TO_A = EltwiseBinaryReuseDestType::DEST_TO_SRCA;
 ALWI void fmt(uint32_t a, uint32_t b) { reconfig_data_format(a, b); }
@@ -52,7 +61,7 @@ ALWI void put_untilized(uint32_t cb) {
 
 void kernel_main() {
     // common args: grid_x, B, 1/K (fp32 bits), eps (fp32 bits)
-    const uint32_t b = core_index(get_common_arg_val<uint32_t>(0));
+    const uint32_t b = core_index(get_common_arg_val<uint32_t>(0)) - NR_FIRST;
     const uint32_t B = get_common_arg_val<uint32_t>(1);
     const uint32_t inv_k = get_common_arg_val<uint32_t>(2), eps = get_common_arg_val<uint32_t>(3);
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_c, cb_xt, cb_xt);
@@ -119,6 +128,7 @@ void kernel_main() {
     put(cb_inv, 1);
     cb_pop_front(cb_peer, B);
     cb_wait_front(cb_inv, 1);
+#ifndef NR_ONLY_X  // the fused form needs only x'
     // xn (normalised, untilized for the writer) and xd (with the signs, rotated below)
     tile_regs_acquire();
     fmt(cb_xt, cb_inv);
@@ -137,6 +147,7 @@ void kernel_main() {
     mul_reuse_dest_init<TO_A>(cb_c);
     mul_reuse_dest_tiles<TO_A>(cb_c, WB, 0);
     put(20, 1);
+#endif
     tile_regs_acquire();
     fmt(cb_xt, cb_inv);
     mul_init(cb_xt, cb_inv);
