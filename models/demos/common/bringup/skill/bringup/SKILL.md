@@ -208,7 +208,8 @@ holds a chip. UMD's per-chip in-use locks are world-readable and name the holder
 (prints nothing when all are free; fuser / lsof cannot see other users' files without root). A job in a container keeps
 its locks in its own /dev/shm, so also glance at other users' jobs: `ps -eo user:16,pid,etime,args --no-headers | awk -v
 me=$USER '$1!=me && $1!="root"' | grep -E 'pytest|python|tt-smi|tt_metal|ttnn'`.
-On a Galaxy the box reset is the cluster's `recover-hosts` (Exabox Slurm User Guide: never tt-smi -r alone on a Galaxy
+On a Galaxy the box reset is the cluster's `recover-hosts`, or `tt-smi -glx_reset` for a plain reset (Jacob Panasiuk,
+2026-11-05: the recover-hosts wiki is updated; `-r` is the one to avoid on a Blackhole Galaxy) (Exabox Slurm User Guide: never tt-smi -r alone on a Galaxy
 host): the safe runner calls it itself for a dirty mesh (scripts/lib/tt_device_pool.sh, ~2 min, recorded in the
 cluster-health store; it validates no links on one host, so the next mesh open or the box test is the check). A failed
 recovery leaves the cards dirty and the gate stops as a box error: tell the owner, never fall back to tt-smi -r.
