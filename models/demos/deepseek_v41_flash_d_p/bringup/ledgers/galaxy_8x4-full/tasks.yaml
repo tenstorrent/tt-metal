@@ -501,7 +501,7 @@ tasks:
       DS41_GENERIC_OP_PREPARED: 'on'
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -570,7 +570,7 @@ tasks:
       DS41_FUSED_HEAD_PREPARED_PER_LAYER: 'on'
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit

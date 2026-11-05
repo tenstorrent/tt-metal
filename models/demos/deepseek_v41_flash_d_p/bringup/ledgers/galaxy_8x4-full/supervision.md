@@ -1595,3 +1595,4 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   P.7 PASS 55b3a2bcd5e; P.2 FAIL at once, framework (its old gate's test_profile segment had BRINGUP_PROFILE_WALL=1 while
   device_ms_total is gated: F114 / F212 refuse it). Fixed P.2's gate cmd in tasks.yaml (dropped the flag; the gate adds
   the clean wall run itself); classified framework; resumed.
+- 21:52 P.2 PASS 9da91feb347 (reused). P.1 failed the same way; fixed the same flag in P.1 and P.3 (the only other tasks with it); P.1 classified framework; resumed.
