@@ -23,6 +23,8 @@ from pathlib import Path
 from unittest import mock
 
 HARNESS = Path(__file__).with_name("run_multirank_pcc.sh")
+# tt-smi's ENABLED_GDDR on an emulated Bin6 Galaxy: chip i is missing DRAM bank i % 8.
+BIN6_GDDR = "0xfe,0xfd,0xfb,0xf7,0xef,0xdf,0xbf,0x7f"
 STUB = r"""
 import json
 import os
@@ -48,6 +50,12 @@ def shell_command():
 
 if name == "sleep":
     time.sleep(0.02)
+elif name == "tt-smi":
+    # A 32-chip snapshot whose ENABLED_GDDR masks cycle through TEST_ENABLED_GDDR; unset, tt-smi fails.
+    if "TEST_ENABLED_GDDR" not in os.environ:
+        sys.exit(1)
+    masks = os.environ["TEST_ENABLED_GDDR"].split(",")
+    print(json.dumps({"device_info": [{"smbus_telem": {"ENABLED_GDDR": masks[i % len(masks)]}} for i in range(32)]}))
 elif name.startswith("mpirun"):
     record("mpi")
     if "--output-filename" in args:
@@ -91,7 +99,9 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_producer"):
     for rank in range(4):
         if rank == 3 and mode == "missing":
             continue
-        verdict = {"rank": rank, "ok": True, "min_pcc": 0.99, "threshold": 0.85,
+        # The real producer echoes the threshold it was given; the gate checks it is the model's.
+        threshold = float(os.environ["PREFILL_STANDALONE_CHUNKED_PCC"])
+        verdict = {"rank": rank, "ok": True, "min_pcc": 0.99, "threshold": threshold,
                    "slots_checked": 1, "per_cache": {"kvpe": 0.99}}
         if rank == 3:
             if mode == "false":
@@ -127,7 +137,17 @@ else:
 
 class MultirankPccHarnessTests(unittest.TestCase):
     def run_harness(
-        self, model, *, verdict="pass", runner_rc=0, missing_cache=False, hosts=None, config=None, extra_env=None
+        self,
+        model,
+        *,
+        verdict="pass",
+        runner_rc=0,
+        missing_cache=False,
+        hosts=None,
+        config=None,
+        extra_env=None,
+        options=(),
+        perf_baselines=None,
     ):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -135,7 +155,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         (root / "records").mkdir()
         bin_dir = root / "bin"
         bin_dir.mkdir()
-        for name in ("python3", "mpirun", "mpirun-ulfm", "sleep"):
+        for name in ("python3", "mpirun", "mpirun-ulfm", "sleep", "tt-smi"):
             executable = bin_dir / name
             executable.write_text(f"#!{sys.executable}\n" + STUB)
             executable.chmod(0o755)
@@ -143,9 +163,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
         metal.mkdir()
         mgd_dir = metal / "models/demos/common/prefill/runners/topology_configuration/ci"
         mgd_dir.mkdir(parents=True)
-        for model_key in ("kimi27", "glm52"):
-            for system in ("sc1", "sc4"):
-                (mgd_dir / f"{model_key}_{system}_mgd.textproto").touch()
+        for system in ("sc1", "sc4"):
+            (mgd_dir / f"{system}_mgd.textproto").touch()
         # manifest_env() reads PREFILL_MAX_SEQ_LEN / PREFILL_NUM_USERS straight off these, so the
         # fake tree needs them or the harness dies before it launches anything. Values mirror the
         # real manifests; only their presence and the sc1 override path are under test here.
@@ -153,7 +172,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         manifest_dir.mkdir(parents=True)
         for model_key, max_seq_len, num_users in (
             ("kimi27", 256000, 86),
-            ("glm52", 1049600, 28),
+            ("glm53", 1064960, 54),
             ("mistral4", 61440, 1),
         ):
             (manifest_dir / f"{model_key}.json").write_text(
@@ -174,6 +193,13 @@ class MultirankPccHarnessTests(unittest.TestCase):
         perf_gate = metal / "models/demos/common/prefill/runners/ci/perf_gate.py"
         perf_gate.parent.mkdir(parents=True)
         shutil.copyfile(HARNESS.with_name("perf_gate.py"), perf_gate)
+        if perf_baselines is not None:
+            (perf_gate.parent / "perf_baselines.json").write_text(
+                json.dumps({"margin": {"throughput_tok_s": 0.015}, "baselines": perf_baselines})
+            )
+        telemetry = metal / "models/demos/deepseek_v3_d_p/utils/smbus_telemetry.py"
+        telemetry.parent.mkdir(parents=True)
+        shutil.copyfile(HARNESS.parents[4] / "deepseek_v3_d_p/utils/smbus_telemetry.py", telemetry)
         ttrun_dir = root / "ttop"
         ttrun_dir.mkdir()
         if hosts is None:
@@ -196,6 +222,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         command = ["bash", str(harness), model]
         if config is not None:
             command.append(config)
+        command += options
         result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=30)
         records = [json.loads(path.read_text()) for path in (root / "records").glob("*.json")]
         return result, records
@@ -224,7 +251,6 @@ class MultirankPccHarnessTests(unittest.TestCase):
         for key, value in {
             "PREFILL_SP": "8",
             "PREFILL_TP": "1",
-            "PREFILL_PCC_GOLDEN_LEN": "56320",
             "PREFILL_MAX_SEQ_LEN": "61440",
             "PREFILL_PRODUCER_CHUNKS": "11",
             "PREFILL_PRODUCER_CHECK_PCC": "1",
@@ -237,15 +263,13 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertEqual(len(producer_mpi), 1)
         mpi_args = producer_mpi[0]["args"]
         self.assertEqual(mpi_args[mpi_args.index("-np") + 1], "4")
-        self.assertTrue(producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"].endswith("device_map_r0.json"))
-        self.assertEqual(
-            runner["PREFILL_MIGRATION_DEVICE_MAP_PATH"].replace(".json", "_r0.json"),
-            producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"],
-        )
+        # Both get the base path; each process scopes it to its rank (rank_scoped_device_map_path).
+        self.assertTrue(producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"].endswith("device_map.json"))
+        self.assertEqual(runner["PREFILL_MIGRATION_DEVICE_MAP_PATH"], producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"])
         self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_existing_models_use_discovery_and_four_hosts(self):
-        for model in ("kimi27", "glm52"):
+        for model, max_seq_len, request_len in (("kimi27", 256000, 256000), ("glm53", 1064960, 1044480)):
             with self.subTest(model=model):
                 result, records = self.run_harness(model)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -256,12 +280,11 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 self.assertFalse([record for record in records if record["kind"] == "probe"])
                 producer = self.one_record(records, "producer")["env"]
                 self.assertEqual(producer["TEST_MPI_HOST"], "worker0:1,worker1:1,worker2:1,worker3:1")
-                expected_length = 256000 if model == "kimi27" else 1049600
-                self.assertEqual(producer["PREFILL_MAX_SEQ_LEN"], str(expected_length))
-                self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(expected_length // 5120))
+                self.assertEqual(producer["PREFILL_MAX_SEQ_LEN"], str(max_seq_len))
+                self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(request_len // 5120))
 
     def test_sc1_windows_preserve_model_defaults(self):
-        for model, expected_length in (("mistral4", 61440), ("kimi27", 256000), ("glm52", 256000)):
+        for model, expected_length in (("mistral4", 61440), ("kimi27", 256000), ("glm53", 1064960)):
             with self.subTest(model=model):
                 result, records = self.run_harness(model, config="sc1")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -269,6 +292,59 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 self.assertEqual(
                     self.one_record(records, "producer")["env"]["PREFILL_MAX_SEQ_LEN"], str(expected_length)
                 )
+
+    def test_bin6_runs_glm53_sc1_at_a_7_bank_aligned_length(self):
+        # A glm53 baseline the run would miss by far, so gating Bin6 against it would fail the run.
+        result, records = self.run_harness(
+            "glm53",
+            config="sc1",
+            options=["--bin6"],
+            extra_env={"TEST_ENABLED_GDDR": BIN6_GDDR, "TEST_TPS": "6000"},
+            perf_baselines={"glm53": {"sc1": {"probe": "@55k", "8kw": {"throughput_tok_s": 99999}}}},
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("every chip on worker0 has 7 DRAM banks", result.stdout)
+        runner = self.one_record(records, "runner")["env"]
+        producer = self.one_record(records, "producer")["env"]
+        self.assertEqual(runner["PREFILL_MAX_SEQ_LEN"], "1075200")
+        self.assertEqual(runner["PREFILL_NUM_USERS"], "1")
+        # The 8-bank leg's prompt, so the same golden tail gates it.
+        self.assertEqual(producer["PREFILL_MAX_SEQ_LEN"], "1075200")
+        self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(1044480 // 5120))
+        self.assertIn("TPS: 6,000 tok/s @55k (no PREFILL_EXPECTED_TPS set -- reporting, not gating)", result.stdout)
+        self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_bin6_skips_a_machine_without_7_banks_on_every_chip(self):
+        for gddr, banks in (("0xff", "8"), ("0xff,0xfe", "7,8")):
+            with self.subTest(banks=banks):
+                result, records = self.run_harness(
+                    "glm53", config="sc1", options=["--bin6"], extra_env={"TEST_ENABLED_GDDR": gddr}
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(
+                    f"skipped: --bin6 needs 7 DRAM banks on every chip, and worker0 has {banks}", result.stdout
+                )
+                self.assertFalse([record for record in records if record["kind"] in ("runner_launch", "producer")])
+
+    def test_bin6_fails_when_the_bank_count_is_unreadable(self):
+        result, records = self.run_harness("glm53", config="sc1", options=["--bin6"])
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("could not read the DRAM bank count on worker0", result.stderr)
+        self.assertFalse([record for record in records if record["kind"] == "runner_launch"])
+
+    def test_bin6_rejects_runs_it_does_not_cover(self):
+        for model, config, options, message in (
+            ("glm53", "sc4", ["--bin6"], "--bin6 runs sc1 only"),
+            ("kimi27", "sc1", ["--bin6"], "kimi27 has no Bin6 configuration"),
+            ("glm53", "sc1", ["--bin6", "--variant", "mtp_kv_share"], "--bin6 does not combine with --variant"),
+        ):
+            with self.subTest(model=model, config=config, options=options):
+                result, records = self.run_harness(
+                    model, config=config, options=options, extra_env={"TEST_ENABLED_GDDR": BIN6_GDDR}
+                )
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertFalse(records)
 
     def test_perf_gate_fails_when_no_throughput_was_measured(self):
         result, _ = self.run_harness("mistral4", extra_env={"PREFILL_EXPECTED_TPS": "17000"})
@@ -336,7 +412,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
             "missing": "expected exactly ranks 0..3",
             "false": "ok is not literally true",
             "truthy": "ok is not literally true",
-            "empty": "slots_checked is 0",
+            "empty": "slots_checked is not the 1 slots fed",
             "nan": "non-finite",
             "wrong_rank": "expected exactly ranks 0..3",
         }

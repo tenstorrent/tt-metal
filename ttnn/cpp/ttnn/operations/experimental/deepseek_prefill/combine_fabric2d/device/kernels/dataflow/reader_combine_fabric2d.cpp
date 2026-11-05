@@ -48,9 +48,25 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "combine_fabric2d_reader_ct_args.hpp"
 #include "combine_fabric2d_reader_rt_args.hpp"
 #include "combine_fabric2d_group_walk.hpp"
+
+// A DRAM address that another chip's fabric router writes: the router writes to its own chip on
+// tt::tt_fabric::edm_to_local_chip_noc, so on Blackhole name the bank endpoint for that NoC, as
+// linear/addrgen_api.h get_noc_address does for every other fabric writer. The NOC_0 endpoint only works while
+// every chip has the same NOC_0 port per bank; on DRAM-harvested Blackhole that port differs per chip, and the
+// one it names can be a stream-mode DRISC NIU on the receiving chip. Wormhole keeps NOC_0 addressing (its
+// fabric expects noc0-system DRAM coordinates; get_noc_address flips them there).
+template <typename Accessor>
+FORCE_INLINE uint64_t remote_dram_noc_addr(const Accessor& accessor, uint32_t page) {
+#if defined(ARCH_WORMHOLE)
+    return accessor.get_noc_addr(page);
+#else
+    return accessor.get_noc_addr(page, 0, tt::tt_fabric::edm_to_local_chip_noc);
+#endif
+}
 
 // `local_expert` throughout is a WALK STEP, not a slot id. Standalone the two coincide; overlapped the
 // step is the routed expert's threshold-split order and `expert_of` maps it through the id table. That one
@@ -400,7 +416,7 @@ struct Reader {
     void aim_at_downstream(volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata, uint32_t vc, uint32_t page) {
         metadata->cmd = ::cmbf2d::CMD_FORWARD;
         metadata->vc = vc;
-        metadata->this_addr = dram.fwd.get_noc_addr(fwd_page(vc, page));
+        metadata->this_addr = remote_dram_noc_addr(dram.fwd, fwd_page(vc, page));  // written by the neighbour's router
     }
 
     // Free space in the downstream chip's channel `vc`, in pages.
@@ -525,7 +541,8 @@ struct Reader {
         const uint32_t token_out_page = meta[1] * ct.num_experts_per_tok + meta[2];
         // Computed once and then travelling with the token for however many hops it takes. Valid on any chip
         // because the output buffer's base address and interleaved bank mapping are uniform across the mesh.
-        const uint64_t final_addr = dram.out.get_noc_addr(token_out_page);
+        // Only ever written by a remote fabric router (the local phase forms its own NOC_0 address).
+        const uint64_t final_addr = remote_dram_noc_addr(dram.out, token_out_page);
         if (is_direct(dst_chip_id)) {
             metadata->cmd = ::cmbf2d::CMD_FINAL_WRITE;
             metadata->this_addr = final_addr;

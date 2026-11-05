@@ -12,6 +12,7 @@ from loguru import logger
 from ttnn.device import is_blackhole
 
 import ttnn
+from models.demos.common.prefill.runners.migration import get_num_dram_banks
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
@@ -201,8 +202,9 @@ def test_kimi_kv_cache_mock(
     host_stacked = torch.stack([tp_stripe_major_cache(rows[b], sp, tp) for b in range(num_kvpe_cache_layers)])
 
     # 32-token shards round-robined over the dram banks.
+    num_dram_banks = get_num_dram_banks(mesh_device)
     core_ranges = [
-        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
     ]
     kv_mem_config = ttnn.MemoryConfig(
         buffer_type=ttnn.BufferType.DRAM,
@@ -428,8 +430,9 @@ def test_dflash_kv_cache_mock(
         return torch.cat(device_buffers, dim=2)
 
     # 32-token shards round-robined over the dram banks — the layout allocate_dflash_kv_cache builds.
+    num_dram_banks = get_num_dram_banks(mesh_device)
     core_ranges = [
-        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
     ]
     kv_mem_config = ttnn.MemoryConfig(
         buffer_type=ttnn.BufferType.DRAM,
@@ -567,7 +570,7 @@ def test_dflash_kv_cache_stage_layout_equivalence(mesh_device, seq_len, num_user
     from any device/numerics question: a single galaxy is enough to prove it, and a mismatch means the
     multi-rank table would silently point at the wrong DRAM rather than fail loudly.
     """
-    from models.demos.common.prefill.runners.migration import _host_tag_int, get_num_dram_banks
+    from models.demos.common.prefill.runners.migration import _host_tag_int
 
     sp_axis, tp_axis = 0, 1
     mesh_shape = list(mesh_device.shape)
@@ -578,8 +581,9 @@ def test_dflash_kv_cache_stage_layout_equivalence(mesh_device, seq_len, num_user
     batch = num_users * num_layers
     CHUNK_SIZE_BYTES = (head_dim // 32) * 1088
 
+    num_dram_banks = get_num_dram_banks(mesh_device)
     core_ranges = [
-        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
     ]
     kv_mem_config = ttnn.MemoryConfig(
         buffer_type=ttnn.BufferType.DRAM,
@@ -745,8 +749,9 @@ def test_glm53_tp_sharded_kv_cache_mock(
             host_stacked[:, t, s * rows_per_device : (s + 1) * rows_per_device, :] = torch.cat(slices, dim=1)
 
     # 32-token shards round-robined over the dram banks.
+    num_dram_banks = get_num_dram_banks(mesh_device)
     core_ranges = [
-        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
     ]
     kv_mem_config = ttnn.MemoryConfig(
         buffer_type=ttnn.BufferType.DRAM,
