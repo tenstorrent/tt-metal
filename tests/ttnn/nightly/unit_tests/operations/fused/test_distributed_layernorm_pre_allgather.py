@@ -1241,3 +1241,48 @@ def test_pre_all_gather_non_welford_fp32_requires_fp32_dest_acc(device, op, expe
     )
     with expect_error(RuntimeError, "requires fp32_dest_acc_en=true"):
         op(tt_inp, dtype=ttnn.float32, compute_kernel_config=kernel_config)
+
+
+@pytest.mark.parametrize(
+    "op, stats_tiles",
+    [(ttnn.layer_norm_pre_all_gather, 2), (ttnn.rms_norm_pre_all_gather, 1)],
+    ids=["layer_norm", "rms_norm"],
+)
+def test_pre_all_gather_sharded_honors_dtype(device, op, stats_tiles):
+    torch.manual_seed(0)
+    shape = (1, 1, 32, 128)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    interleaved = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    shard_spec = ttnn.ShardSpec(grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    sharded = ttnn.to_memory_config(interleaved, sharded_mem_config)
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(4, 1), subblock_w=1, block_h=1, block_w=1, inplace=False
+    )
+
+    # Same sharded path and layout, default bf16 stats, so only the dtype differs.
+    expected = op(sharded, program_config=program_config)
+    actual = op(sharded, dtype=ttnn.float32, program_config=program_config)
+    assert expected.dtype == ttnn.bfloat16
+    assert actual.dtype == ttnn.float32
+
+    expected_torch = ttnn.to_torch(expected).float()
+    actual_torch = ttnn.to_torch(actual).float()
+    # The first column of each stats tile holds the statistic for each row.
+    for tile in range(stats_tiles):
+        col = tile * 32
+        assert_numeric_metrics(
+            expected_torch[..., col],
+            actual_torch[..., col],
+            pcc_threshold=0.999,
+            rtol=0.02,
+            atol=0.5,
+            frobenius_threshold=1e-2,
+        )
