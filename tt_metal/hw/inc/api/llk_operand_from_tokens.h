@@ -50,6 +50,8 @@ constexpr ckernel::TensorShape get_tensor_shape(const PerNodeTensorBindingToken<
 
 }  // namespace tensor_accessor
 
+#ifdef ARCH_BLACKHOLE
+
 #include <type_traits>
 
 #include "api/compute/experimental/2_0/llk_operand.h"
@@ -86,3 +88,5 @@ struct LLKOperandExtractor {
  */
 template <const auto& Token>
 using LLKOperandFrom = typename binding_details::LLKOperandExtractor<Token>::OperandT;
+
+#endif  // ARCH_BLACKHOLE
