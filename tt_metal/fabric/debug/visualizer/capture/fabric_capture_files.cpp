@@ -4,6 +4,9 @@
 
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_files.hpp"
 
+#include <array>
+#include <chrono>
+#include <ctime>
 #include <ios>
 #include <string>
 #include <system_error>
@@ -36,8 +39,9 @@ void move_without_replacing(const std::filesystem::path& from, const std::filesy
 }  // namespace
 
 CaptureFilePaths make_capture_file_paths(
-    const std::filesystem::path& directory, uint32_t mpi_rank, uint32_t world_size, std::string_view capture_id) {
-    const std::string stem = visualizer::make_capture_file_stem(mpi_rank, world_size, capture_id);
+    const std::filesystem::path& run_directory, std::string_view capture_id, uint32_t mpi_rank, uint32_t world_size) {
+    const std::filesystem::path directory = visualizer::make_capture_directory(run_directory, capture_id);
+    const std::string stem = visualizer::make_capture_file_stem(mpi_rank, world_size);
     CaptureFilePaths paths{
         .record_path = directory / (stem + ".json"),
         .bin_path = directory / (stem + ".bin"),
@@ -51,8 +55,18 @@ CaptureFilePaths make_capture_file_paths(
     return paths;
 }
 
+std::string make_capture_id() {
+    const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm utc{};
+    gmtime_r(&now, &utc);
+    std::array<char, 32> text{};
+    std::strftime(text.data(), text.size(), "%Y%m%dT%H%M%SZ", &utc);
+    return text.data();
+}
+
 CaptureBinWriter::CaptureBinWriter(std::filesystem::path bin_path) :
     bin_path_(std::move(bin_path)), temporary_path_(make_temporary_path(bin_path_)) {
+    std::filesystem::create_directories(bin_path_.parent_path());
     out_.open(temporary_path_, std::ios::binary | std::ios::trunc);
     TT_FATAL(out_.is_open(), "Fabric capture: can't open {} to write", temporary_path_.string());
     out_.exceptions(std::ios::badbit | std::ios::failbit);
@@ -106,6 +120,7 @@ void write_capture_record(const std::filesystem::path& record_path, const Captur
     try {
         std::ofstream out;
         out.exceptions(std::ios::badbit | std::ios::failbit);
+        std::filesystem::create_directories(record_path.parent_path());
         out.open(temporary_path);
         out << make_capture_record_json(record).dump(2) << '\n';
         out.close();

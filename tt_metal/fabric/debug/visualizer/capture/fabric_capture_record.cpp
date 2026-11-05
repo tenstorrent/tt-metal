@@ -83,6 +83,7 @@ json make_manifest_identity_json(const ManifestIdentity& manifest) {
     json out;
     out["file"] = manifest.path.string();
     out["blake3"] = manifest.blake3;
+    out["run_id"] = manifest.run_id;
     out["mpi_rank"] = manifest.mpi_rank;
     out["world_size"] = manifest.world_size;
     out["host_name"] = manifest.host_name;
@@ -174,6 +175,7 @@ ManifestIdentity read_manifest_identity(const JsonReader& record_reader) {
     return ManifestIdentity{
         .path = record_reader.read_string(pointer / "file"),
         .blake3 = record_reader.read_string(pointer / "blake3"),
+        .run_id = record_reader.read_string(pointer / "run_id"),
         .mpi_rank = record_reader.read_uint32(pointer / "mpi_rank"),
         .world_size = record_reader.read_uint32(pointer / "world_size"),
         .host_name = record_reader.read_string(pointer / "host_name"),
@@ -265,6 +267,7 @@ json make_capture_record_json(const CaptureRecord& record) {
     out["manifest"] = make_manifest_identity_json(record.manifest);
 
     json capture;
+    capture["capture_id"] = record.capture_id;
     capture["git_sha"] = record.capture_git_sha;
     capture["cluster_id"] = make_optional_json(record.cluster_id);
     capture["started_at"] = record.started_at;
@@ -315,6 +318,7 @@ CaptureRecord parse_capture_record(const json& document) {
 
     CaptureRecord record{
         .manifest = read_manifest_identity(record_reader),
+        .capture_id = record_reader.read_string(json_pointer("/capture/capture_id")),
         .capture_git_sha = record_reader.read_string(json_pointer("/capture/git_sha")),
         .cluster_id = read_optional_string(record_reader, json_pointer("/capture/cluster_id")),
         .started_at = record_reader.read_string(json_pointer("/capture/started_at")),

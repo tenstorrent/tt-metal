@@ -33,6 +33,8 @@ ManifestFile read_manifest_file(const std::filesystem::path& path);
 struct ManifestIdentity {
     std::filesystem::path path;
     std::string blake3;
+    // The fabric run the manifest is from. It names the run's folder, which the capture's own folder sits in.
+    std::string run_id;
     // The rank in the whole job that wrote the manifest, and the job's number of ranks.
     uint32_t mpi_rank = 0;
     uint32_t world_size = 1;

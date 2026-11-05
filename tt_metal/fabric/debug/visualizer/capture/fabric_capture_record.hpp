@@ -60,8 +60,11 @@ struct ChipRecord {
 // chip and router, what it read from each and where those bytes are in the .bin, and what failed. It's written after
 // the .bin, so a record on disk means its .bin is complete.
 struct CaptureRecord {
-    // The manifest the capture read. Its path is the manifest's file name, beside the record.
+    // The manifest the capture read, including its run id.
     ManifestIdentity manifest;
+    // The capture's id, which names its folder in the run's folder. Every rank captured together has the same one,
+    // including those across hosts.
+    std::string capture_id;
     // The commit capture was built from.
     std::string capture_git_sha;
     // The reader's cluster id, which names the host it ran on.

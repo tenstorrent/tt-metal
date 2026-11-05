@@ -23,10 +23,15 @@ struct CaptureFilePaths {
     std::filesystem::path bin_path;
 };
 
-// The files for one rank's capture in `directory`, named by visualizer::make_capture_file_stem. Fails if either is
-// already there: a capture never replaces another, so another capture of the same manifest needs another capture_id.
+// The files for one rank's capture: in the capture's folder in the run's folder (visualizer::make_capture_directory),
+// named by visualizer::make_capture_file_stem. Fails if either is already there: a capture never replaces another, so
+// another capture of the same run needs another capture id. The writers create the folder.
 CaptureFilePaths make_capture_file_paths(
-    const std::filesystem::path& directory, uint32_t mpi_rank, uint32_t world_size, std::string_view capture_id);
+    const std::filesystem::path& run_directory, std::string_view capture_id, uint32_t mpi_rank, uint32_t world_size);
+
+// A capture id for a capture starting now: the UTC time to the second, such as "20261105T221500Z". A launcher that
+// captures several ranks at once makes one and gives it to all of them, so their files share a folder.
+std::string make_capture_id();
 
 // The .bin a CaptureBinWriter finished: its size and hash, which the record names it by.
 struct FinishedBin {
