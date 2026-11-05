@@ -48,9 +48,10 @@ inline constexpr ckernel::trisc::BfdResource unpack_a_bfd_resource() {
  * Overload matching Blackhole/Wormhole API signature `(transpose_of_faces, within_face_16x16_transpose, operand)`.
  *
  * When `binary_reuse_dest != NONE`, uses the eltwise-binary dest-reuse init path (UNP_A, default tile/face counts).
- * Otherwise uses the unary / unary-broadcast path. On both, the UNP_DEST routing decision is made solely
- * from the `unpack_to_dest` template parameter (no format inspection); when true, all operands (including 16-bit)
- * are routed to DEST through the sync-free to-dest primitives (`_llk_unpack_unary_operand_to_dest_init_`,
+ * Otherwise uses the unary / unary-broadcast path. On both, the UNP_DEST route is the `unpack_to_dest` template
+ * parameter, which the compute API sets per operand (operand_fits_unpack_to_dest: UNP_DEST does not widen, so the
+ * operand's width must match the DEST width); when true, the operand is routed to DEST through the sync-free to-dest
+ * primitives (`_llk_unpack_unary_operand_to_dest_init_`,
  * `_llk_unpack_unary_broadcast_operands_to_dest_init_`; their section handshake runs once per tile_regs_acquire /
  * tile_regs_commit in llk_unpack_wait_for_dest_available / llk_unpack_dest_section_done, not per tile); otherwise
  * `_llk_unpack_unary_operand_init_` targets UNP_A and the broadcast init targets UNP_B.
@@ -59,7 +60,7 @@ inline constexpr ckernel::trisc::BfdResource unpack_a_bfd_resource() {
  * @tparam acc_to_dest: Unused on Quasar in dest-reuse path; kept for API parity
  * @tparam binary_reuse_dest: Dest reuse mode; when not NONE, selects the dest-reuse sub-path
  * @tparam unpack_to_dest: When true, the unary / unary-broadcast primitive routes the operand through UNP_DEST
- * regardless of format
+ * (set per operand by the compute API, operand_fits_unpack_to_dest)
  * @param transpose_of_faces: Non-zero enables transpose of 16x16 faces (unary/broadcast NONE path only)
  * @param within_face_16x16_transpose: Unused on Quasar; kept for API parity with Blackhole / other arches
  * @param operand: The input operand logical dataflow buffer / CB id
@@ -146,12 +147,14 @@ inline void llk_unpack_A_init(
  *
  * @brief Unpacks a single operand for unary and unary-broadcast paths.
  *
- * On the unary and unary-broadcast paths the UNP_DEST routing decision is made solely from the `unpack_to_dest`
- * template parameter (no format inspection): when true this calls the sync-free placer
+ * On the unary and unary-broadcast paths the UNP_DEST route is the `unpack_to_dest` template parameter, set per
+ * operand by the compute API (see llk_unpack_A_init): when true this calls the sync-free placer
  * (`_llk_unpack_unary_operand_to_dest_tile_` / `_llk_unpack_unary_broadcast_operands_to_dest_tile_`); the
  * UNPACK_MATH / MATH_PACK section handshake and the SyncHalf bank flip live in `llk_unpack_wait_for_dest_available` /
  * `llk_unpack_dest_section_done` (tile_regs_acquire / tile_regs_commit), so every call between the two lands in the
- * same DEST section. Otherwise `_llk_unpack_unary_operand_` on UNP_A or the broadcast MOP on UNP_B.
+ * same DEST section. Otherwise `_llk_unpack_unary_operand_` on UNP_A or the broadcast MOP on UNP_B; inside an
+ * unpack-to-dest section such src-path tiles are consumed only after the section post, so at most two per src
+ * register per section (@ref llk_unpack_count_src_path_tile).
  *
  * A broadcast placed in DEST is read back by math through SrcB (MOVD2B), so each such tile also requests one dummy
  * SrcB dvalid (@ref llk_unpack_set_srcb_dummy_valid). Under UnpackToDestEn the dummies are deferred and issued by
@@ -162,7 +165,7 @@ inline void llk_unpack_A_init(
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
  * @tparam binary_reuse_dest: Dest reuse mode (unary path only)
  * @tparam unpack_to_dest: when true, the unary / unary-broadcast primitive routes the operand through UNP_DEST
- * regardless of format
+ * (set per operand by the compute API, operand_fits_unpack_to_dest)
  * @param operand: The logical dataflow buffer id
  * @param tile_index: The index in the input CB to read from
  * @param dst_tile_index: DEST tile index the tile lands at, relative to the current section base; must be below the
@@ -202,6 +205,7 @@ inline void llk_unpack_A(
             // Sync-free: section handshake is in llk_unpack_wait_for_dest_available / llk_unpack_dest_section_done.
             _llk_unpack_unary_operand_to_dest_tile_(l1_tile_idx, dst_tile_index);
         } else {
+            llk_unpack_count_src_path_tile<p_unpacr::UNP_A>();
             const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
             _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_idx, tensor_shape);
         }
@@ -217,6 +221,7 @@ inline void llk_unpack_A(
         // deferred to the section end under UnpackToDestEn.
         llk_unpack_set_srcb_dummy_valid();
     } else {
+        llk_unpack_count_src_path_tile<p_unpacr::UNP_B>();
         _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B>(l1_tile_idx);
     }
     WAYPOINT("UPAD");
@@ -285,6 +290,7 @@ inline void llk_unpack_A_block(
             // Consecutive tiles of a batch are stride_size_tiles entries apart, as on the pack side (#56194).
             const std::uint32_t l1_tile_idx = rd_entry_idx + tile_index * stride_size_tiles;
             if constexpr (BType == BroadcastType::NONE) {
+                llk_unpack_count_src_path_tile<p_unpacr::UNP_A>();
                 _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_idx, tensor_shape);
             } else if constexpr (unpack_to_dest) {
                 // Per tile as in llk_unpack_A: capacity check and one dummy SrcB dvalid for the math read-back.
@@ -298,6 +304,7 @@ inline void llk_unpack_A_block(
                 _llk_unpack_unary_broadcast_operands_to_dest_tile_(l1_tile_idx, dst_tile_index);
                 llk_unpack_set_srcb_dummy_valid();
             } else {
+                llk_unpack_count_src_path_tile<p_unpacr::UNP_B>();
                 _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B>(l1_tile_idx);
             }
             WAYPOINT("UPAD");

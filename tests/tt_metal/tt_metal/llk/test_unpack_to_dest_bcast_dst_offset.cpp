@@ -68,14 +68,13 @@
 // All stimulus values are integers, exactly representable in Float16_b and Float32 through every
 // conversion on the path, so the comparison is bit-exact.
 //
-// Quasar runs the same sequence through the Metal 2.0 spec (run_unpack_to_dest_bcast_dst_offset_quasar) with BOTH
-// operands Float32 and marked UnpackToDest: the copy is placed at DST[1] by the unpacker, the broadcast source at
-// DST[0], and math broadcasts it in place, so the guarded property is the same, DST[0] = broadcast and DST[1] = copy,
-// in both banks. The copy operand is Float32 there, not Float16_b: under the kernel-wide UnpackToDestEn every
-// copy_tile goes through UNP_DEST, and a 16-bit operand on that path in a 32-bit DEST does not follow the 32-bit
-// DEST addressing of the to-dest placers (observed on the emulator: the bank-1 copy lands in the low plane of
-// bank-0 tile 1, bank-1 DST[1] stays zero). The srcA reconfigs between the two ops are no-ops on Quasar (equal
-// formats); the to-dest reconfig path is covered by the transpose ReconfigSrcA tests.
+// Quasar runs the same sequence through the Metal 2.0 spec (run_unpack_to_dest_bcast_dst_offset_quasar) with the same
+// operand formats: the Float16_b copy operand is unpacked to SrcA and MOVA2D widens it into DST[1], the Float32
+// broadcast operand is placed at DST[0] by the unpacker and math broadcasts it in place. The route is per operand
+// under the kernel-wide UnpackToDestEn (operand_fits_unpack_to_dest): UNP_DEST does not widen, so a 16-bit operand
+// through it in a 32-bit DEST lands wrong (observed on the emulator before the per-operand route: the bank-1 copy in
+// the low plane of bank-0 tile 1, bank-1 DST[1] zero). The srcA reconfigs between the two ops switch Unp0's output
+// format between Float16_b (SrcA) and Float32 (DEST), so they also cover the to-dest reconfig check.
 
 namespace tt::tt_metal {
 
@@ -118,12 +117,12 @@ const char* bcast_dim_name(BcastDim dim) {
 
 // Tilized inputs and golden, repeated kIters times (the same tile pair every iteration).
 struct Stimulus {
-    std::vector<uint32_t> a_all;         // c_0 / copy_in: Float16_b tiles (WH/BH) or Float32 tiles (Quasar)
+    std::vector<uint32_t> a_all;         // c_0 / copy_in: Float16_b tiles
     std::vector<uint32_t> b_all;         // c_1 / bcast_in: Float32 tiles
     std::vector<uint32_t> golden_tiled;  // (DST[0], DST[1]) per iteration
 };
 
-Stimulus make_stimulus(BcastDim dim, bool copy_operand_fp32) {
+Stimulus make_stimulus(BcastDim dim) {
     // Stimulus: integer values, exact in every format on the path; every element of b is distinct
     // so all three broadcast dimensions produce goldens that differ from the raw tile.
     std::vector<float> a_rm(kTileHW);  // c_0, copied to DST[1]
@@ -155,9 +154,7 @@ Stimulus make_stimulus(BcastDim dim, bool copy_operand_fp32) {
     ::unit_tests::compute::GoldenConfig bf16_cfg{.num_tiles_r_dim = 1, .num_tiles_c_dim = 1, .datum_bytes = 2};
     ::unit_tests::compute::GoldenConfig fp32_cfg{.num_tiles_r_dim = 1, .num_tiles_c_dim = 1, .datum_bytes = 4};
 
-    auto a_tiled = copy_operand_fp32
-                       ? ::unit_tests::compute::gold_standard_tilize(reinterpret_fp32_as_u32(a_rm), fp32_cfg)
-                       : ::unit_tests::compute::gold_standard_tilize(pack_bf16_as_u32(a_rm), bf16_cfg);
+    auto a_tiled = ::unit_tests::compute::gold_standard_tilize(pack_bf16_as_u32(a_rm), bf16_cfg);
     auto b_tiled = ::unit_tests::compute::gold_standard_tilize(reinterpret_fp32_as_u32(b_rm), fp32_cfg);
     auto golden0_tiled = ::unit_tests::compute::gold_standard_tilize(reinterpret_fp32_as_u32(golden0_rm), fp32_cfg);
     auto golden1_tiled = ::unit_tests::compute::gold_standard_tilize(reinterpret_fp32_as_u32(golden1_rm), fp32_cfg);
@@ -285,7 +282,7 @@ bool run_unpack_to_dest_bcast_dst_offset(const std::shared_ptr<distributed::Mesh
             .math_approx_mode = false,
             .defines = compute_defines(dim)});
 
-    Stimulus stim = make_stimulus(dim, /*copy_operand_fp32=*/false);
+    Stimulus stim = make_stimulus(dim);
     distributed::WriteShard(cq, src_copy_buffer, stim.a_all, zero_coord);
     distributed::WriteShard(cq, src_bcast_buffer, stim.b_all, zero_coord);
 
@@ -309,7 +306,8 @@ bool run_unpack_to_dest_bcast_dst_offset(const std::shared_ptr<distributed::Mesh
     return check_result(device_tiled, stim.golden_tiled);
 }
 
-// Quasar: Metal 2.0 spec, both operands Float32 and marked UnpackToDest (kernel-wide UnpackToDestEn, 32-bit DEST).
+// Quasar: Metal 2.0 spec, Float16_b copy operand on SrcA and Float32 broadcast operand marked UnpackToDest (kernel-wide
+// UnpackToDestEn, per-operand route, 32-bit DEST).
 bool run_unpack_to_dest_bcast_dst_offset_quasar(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, BcastDim dim) {
     auto& cq = mesh_device->mesh_command_queue();
@@ -317,6 +315,7 @@ bool run_unpack_to_dest_bcast_dst_offset_quasar(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     const experimental::NodeCoord node{0, 0};
 
+    const uint32_t bf16_tile_bytes = kTileHW * 2;
     const uint32_t fp32_tile_bytes = kTileHW * 4;
     auto make_dram = [&](uint32_t bytes) {
         return distributed::MeshBuffer::create(
@@ -325,7 +324,7 @@ bool run_unpack_to_dest_bcast_dst_offset_quasar(
                 .page_size = bytes, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false},
             mesh_device.get());
     };
-    auto src_copy_buffer = make_dram(kIters * fp32_tile_bytes);
+    auto src_copy_buffer = make_dram(kIters * bf16_tile_bytes);
     auto src_bcast_buffer = make_dram(kIters * fp32_tile_bytes);
     auto dst_buffer = make_dram(kIters * 2 * fp32_tile_bytes);
 
@@ -338,9 +337,9 @@ bool run_unpack_to_dest_bcast_dst_offset_quasar(
 
     experimental::DataflowBufferSpec copy_dfb_spec{
         .unique_id = COPY_DFB,
-        .entry_size = fp32_tile_bytes,
+        .entry_size = bf16_tile_bytes,
         .num_entries = 2,
-        .data_format_metadata = tt::DataFormat::Float32,
+        .data_format_metadata = tt::DataFormat::Float16_b,
     };
     experimental::DataflowBufferSpec bcast_dfb_spec{
         .unique_id = BCAST_DFB,
@@ -383,10 +382,9 @@ bool run_unpack_to_dest_bcast_dst_offset_quasar(
     for (const auto& [name, value] : compute_defines(dim)) {
         defines.emplace(name, value);
     }
-    // Both operands route to DEST (see the file comment: a 16-bit operand cannot share a 32-bit DEST with the
-    // to-dest placers).
+    // The Float32 broadcast operand routes to DEST; the Float16_b copy operand stays on SrcA (see the file comment).
     experimental::ComputeHardwareConfig::ComputeUnpackModes unpack_modes = {
-        {COPY_DFB, tt::tt_metal::UnpackMode::UnpackToDest}, {BCAST_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
+        {COPY_DFB, tt::tt_metal::UnpackMode::UnpackToSrc}, {BCAST_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = kComputeKernel,
@@ -435,7 +433,7 @@ bool run_unpack_to_dest_bcast_dst_offset_quasar(
     workload.add_program(device_range, std::move(program));
     auto& program_run = workload.get_programs().at(device_range);
 
-    Stimulus stim = make_stimulus(dim, /*copy_operand_fp32=*/true);
+    Stimulus stim = make_stimulus(dim);
     distributed::WriteShard(cq, src_copy_buffer, stim.a_all, zero_coord);
     distributed::WriteShard(cq, src_bcast_buffer, stim.b_all, zero_coord);
 

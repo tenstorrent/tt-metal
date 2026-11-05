@@ -120,6 +120,9 @@ thread_local BfdAllocatorState bfd_state __attribute__((used)) = {.next = 0, .cu
 thread_local std::uint32_t reduce_2x_scaler_operand_plus_one __attribute__((used)) = 0;
 // SrcB dummy dvalids deferred to the end of the unpack-to-dest section; see llk_unpack_common_api.h.
 thread_local std::uint32_t unpack_to_dest_deferred_srcb_dummies __attribute__((used)) = 0;
+// SrcA-path / SrcB-path tiles of the current unpack-to-dest section; see llk_unpack_common_api.h.
+thread_local std::uint32_t unpack_to_dest_srca_path_tiles __attribute__((used)) = 0;
+thread_local std::uint32_t unpack_to_dest_srcb_path_tiles __attribute__((used)) = 0;
 }  // namespace trisc
 namespace pack {
 // Dest bank cleared by the dvalid pack section-done; thread_local per pack TRISC (tt-llk#1678).

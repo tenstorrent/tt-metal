@@ -63,20 +63,24 @@ ALWI void unary_bcast_init(uint32_t icb) {
 #endif
 #else
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    // Quasar routes on the kernel-wide UnpackToDestEn flag, not on the operand format: under the flag every format
-    // is broadcast from DEST (the unpacker places the source rows, math broadcasts them in place); otherwise SrcB /
-    // B2D.
-    if constexpr (UnpackToDestEn) {
+    // Quasar routes per operand under the kernel-wide UnpackToDestEn flag: a 32-bit operand on a 32-bit DEST is
+    // broadcast from DEST (the unpacker places the source rows, math broadcasts them in place); any other operand
+    // takes SrcB / B2D, as without the flag. UNP_DEST does not widen, so a 16-bit operand on a 32-bit DEST must take
+    // SrcB (operand_fits_unpack_to_dest). The template argument is the compile-time part of the route, so a kernel
+    // without the flag or with a 16-bit DEST never instantiates the from-DEST path.
+    constexpr bool from_dest_possible = UnpackToDestEn && DST_ACCUM_MODE;
+    if (from_dest_possible && operand_fits_unpack_to_dest(icb)) {
         UNPACK((llk_unpack_A_init<
                 bcast_type,
                 false /*acc_to_dest*/,
                 EltwiseBinaryReuseDestType::NONE,
-                true /*unpack_to_dest*/>(false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/, icb)));
+                from_dest_possible /*unpack_to_dest*/>(
+            false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<
-              DataCopyType::A2D,
+              DataCopyType::B2D,
               is_fp32_dest_acc_en,
               bcast_type,
-              true /*unpack_to_dest*/>(icb)));
+              from_dest_possible /*unpack_to_dest*/>(icb)));
     } else {
         UNPACK((llk_unpack_A_init<
                 bcast_type,
@@ -114,12 +118,13 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
 #endif
 #else
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    // Broadcast mode and the DEST / SrcB route are fixed in unary_bcast_init (kernel-wide UnpackToDestEn); pass
-    // logical operand ids through to LLK. From DEST the unpacker places the tile at dst_tile_index itself.
-    if constexpr (UnpackToDestEn) {
-        UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(
+    // Broadcast mode is fixed in unary_bcast_init; the DEST / SrcB route is per operand, as in unary_bcast_init. From
+    // DEST the unpacker places the tile at dst_tile_index itself.
+    constexpr bool from_dest_possible = UnpackToDestEn && DST_ACCUM_MODE;
+    if (from_dest_possible && operand_fits_unpack_to_dest(icb)) {
+        UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, from_dest_possible>(
             icb, in_tile_index, dst_tile_index)));
-        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, bcast_type, true>(
+        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::B2D, is_fp32_dest_acc_en, bcast_type, from_dest_possible>(
             dst_tile_index, icb)));
     } else {
         UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(icb, in_tile_index)));

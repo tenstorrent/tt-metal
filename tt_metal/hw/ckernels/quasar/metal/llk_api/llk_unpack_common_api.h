@@ -59,6 +59,14 @@ extern thread_local std::uint32_t reduce_2x_scaler_operand_plus_one;
 // sections; firmware TLS outlives a kernel, so llk_unpack_hw_configure clears it at kernel start. Defined in
 // tt_metal/hw/firmware/src/tt-2xx/trisc.cc.
 extern thread_local std::uint32_t unpack_to_dest_deferred_srcb_dummies;
+
+// SrcA-path and SrcB-path tiles issued in the current unpack-to-dest section: operands that cannot go through
+// UNP_DEST (operand_fits_unpack_to_dest) under the kernel-wide UnpackToDestEn flag. Math consumes them only after the
+// section's UNPACK_MATH post, so they must fit the two banks of their src register (llk_unpack_count_src_path_tile).
+// Reset per section in llk_unpack_wait_for_dest_available and at kernel start in llk_unpack_hw_configure. Defined in
+// tt_metal/hw/firmware/src/tt-2xx/trisc.cc.
+extern thread_local std::uint32_t unpack_to_dest_srca_path_tiles;
+extern thread_local std::uint32_t unpack_to_dest_srcb_path_tiles;
 }  // namespace ckernel::trisc
 
 constexpr std::uint32_t REDUCE_2X_SCALER_NONE = 0;
@@ -87,8 +95,10 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         static_cast<DataFormat>(unpack_dst_format[unpB_operand_id]));
     // UNP_B is back on its table format, and a previous kernel's 2x reduce scaler record must not leak.
     ckernel::trisc::reduce_2x_scaler_operand_plus_one = REDUCE_2X_SCALER_NONE;
-    // No SrcB dummy dvalid of a previous kernel's section may carry over either.
+    // No SrcB dummy dvalid or src-path tile count of a previous kernel's section may carry over either.
     ckernel::trisc::unpack_to_dest_deferred_srcb_dummies = 0;
+    ckernel::trisc::unpack_to_dest_srca_path_tiles = 0;
+    ckernel::trisc::unpack_to_dest_srcb_path_tiles = 0;
 
     // Unpack-to-dest: the unpack thread carries its DEST bank in the UNP_DEST tile index (the SEC registers do not move
     // UNPACR_DEST), and this is the once-per-program reset of that bank. Every compute-API site that calls
@@ -123,6 +133,8 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
 inline void llk_unpack_wait_for_dest_available() {
     if constexpr (UnpackToDestEn) {
         _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::UNPACK_PACK);
+        ckernel::trisc::unpack_to_dest_srca_path_tiles = 0;
+        ckernel::trisc::unpack_to_dest_srcb_path_tiles = 0;
     }
 }
 
@@ -186,8 +198,12 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
         dim_stride_target == p_dim_stride_target::IGNORE,
         "Quasar unpack reconfig does not support stride/tile-dimension changes");
     const std::uint32_t srca_operand_id = get_operand_id(srca_new_operand);
+    // Unp0 serves UNP_A and UNP_DEST, so its output format follows the operand on either route; an operand routed to
+    // DEST (per-operand routing under UnpackToDestEn) is allowed the Dest-only conversions, e.g. Float32 to Float32.
     _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, EN_32BIT_DEST>(
-        unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id]);
+        unpack_src_format[srca_operand_id],
+        unpack_dst_format[srca_operand_id],
+        UnpackToDestEn && operand_fits_unpack_to_dest(srca_operand_id));
 }
 
 template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, bool skip_int8 /*maybe_unused*/ = false>
@@ -268,5 +284,45 @@ inline void llk_unpack_set_srcb_dummy_valid() {
         ckernel::trisc::unpack_to_dest_deferred_srcb_dummies++;
     } else {
         _llk_unpack_set_srcB_dummy_valid_();
+    }
+}
+
+/**
+ * @brief Counts a SrcA-path or SrcB-path tile issued inside an unpack-to-dest section: an operand that cannot go
+ *        through UNP_DEST (operand_fits_unpack_to_dest) in a kernel with UnpackToDestEn. No-op without the flag.
+ *
+ * Math starts the section only after the UNPACK_MATH post of @ref llk_unpack_dest_section_done, so a src-path tile
+ * issued inside the section is consumed only after that post. Each src register has two banks: a third tile would
+ * stall the unpacker before it can post while math waits for the post, and the kernel deadlocks (the shape of the
+ * SrcB dummy case above). The assert turns that hang into a fault. On a 32-bit DEST a src-path tile takes a bank of
+ * both src registers: the A2D datacopy MOP and the SrcB broadcast ELWADD end with CLR_SRCAB_VLD, and the unpacker
+ * zeroes the unused register with a dvalid per tile (nop_insn_for_unused_unpacker_engine), so there the cap is two
+ * src-path tiles per section in total. A SrcB-path tile may not follow a broadcast from DEST in the same section
+ * either: math consumes SrcB in program order, but the deferred dummy of that broadcast is issued after the post,
+ * behind the tile, so the broadcast would consume the tile's bank and the tile the dummy.
+ *
+ * @tparam UNP_SEL: src register the tile's data goes to, values = <p_unpacr::UNP_A, p_unpacr::UNP_B>
+ */
+template <std::uint32_t UNP_SEL>
+inline void llk_unpack_count_src_path_tile() {
+    static_assert(UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_B, "src-path tiles go to UNP_A or UNP_B");
+    if constexpr (UnpackToDestEn) {
+        constexpr bool takes_srca = (UNP_SEL == p_unpacr::UNP_A) || DST_ACCUM_MODE;
+        constexpr bool takes_srcb = (UNP_SEL == p_unpacr::UNP_B) || DST_ACCUM_MODE;
+        if constexpr (takes_srca) {
+            ckernel::trisc::unpack_to_dest_srca_path_tiles++;
+        }
+        if constexpr (takes_srcb) {
+            ckernel::trisc::unpack_to_dest_srcb_path_tiles++;
+        }
+        LLK_ASSERT(
+            ckernel::trisc::unpack_to_dest_srca_path_tiles <= 2 && ckernel::trisc::unpack_to_dest_srcb_path_tiles <= 2,
+            "unpack-to-dest section: at most two src-path tiles per src register per section (two in total on a "
+            "32-bit DEST), math consumes them only after the section post");
+        if constexpr (UNP_SEL == p_unpacr::UNP_B) {
+            LLK_ASSERT(
+                ckernel::trisc::unpack_to_dest_deferred_srcb_dummies == 0,
+                "unpack-to-dest section: a SrcB-path tile cannot follow a broadcast from DEST in the same section");
+        }
     }
 }

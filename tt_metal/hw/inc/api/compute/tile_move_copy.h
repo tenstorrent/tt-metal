@@ -56,11 +56,11 @@ ALWI void copy_init(
     LLK_ASSERT(transpose_within_16x16_face == false, "Transpose within face not supported on Quasar");
     LLK_ASSERT(transpose == 0, "Transpose not supported on Quasar");
 #endif
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, transpose_within_16x16_face, cbid)));
     // 4th template arg is arch-divergent (unpack_to_dest on Quasar, is_int_fpu_en on WH/BH); keep it
     // arch-specific so WH/BH don't wrongly enable the integer-FPU datacopy MOP.
-#ifndef ARCH_QUASAR
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(cbid)));
     // Src zero-substitution flag, chosen by source format: preserve (keep) bf16 -0.0 and 16b integer
     // datums (drop-in for the eltwise-unary short init and the plain-copy path), but flush fp8
@@ -68,11 +68,27 @@ ALWI void copy_init(
     // config: records no format-reconfig diff, so single-SrcA reconfig tracking is unchanged. Not on Quasar.
     MATH((ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))));
 #else
-    MATH((llk_math_eltwise_unary_datacopy_init<
-          DataCopyType::A2D,
-          is_fp32_dest_acc_en,
-          BroadcastType::NONE,
-          UnpackToDestEn>(cbid)));
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
+    // Quasar routes per operand under the kernel-wide UnpackToDestEn flag (operand_fits_unpack_to_dest): an operand
+    // whose datum width matches the DEST width goes through UNP_DEST and math only forwards the section; any other
+    // operand goes through SrcA, where MOVA2D widens it into the DEST, as on WH/BH. The to-dest section handshake in
+    // tile_regs_acquire / tile_regs_commit is kernel-wide and the same on both routes; src-path tiles inside such a
+    // section are consumed only after its post, so at most two per section (llk_unpack_count_src_path_tile).
+    if (UnpackToDestEn && operand_fits_unpack_to_dest(cbid)) {
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+            transpose, transpose_within_16x16_face, cbid)));
+        MATH((llk_math_eltwise_unary_datacopy_init<
+              DataCopyType::A2D,
+              is_fp32_dest_acc_en,
+              BroadcastType::NONE,
+              UnpackToDestEn>(cbid)));
+    } else {
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+            transpose, transpose_within_16x16_face, cbid)));
+        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
+            cbid)));
+    }
+#endif
 #endif
 }
 // clang-format off
@@ -127,10 +143,30 @@ ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::ui
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, in_tile_index, dst_tile_index)));
     MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
         dst_tile_index, in_cb_id)));
+#else
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
+    // Per-operand route, see copy_init.
+    if (UnpackToDestEn && operand_fits_unpack_to_dest(in_cb_id)) {
+        UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+            in_cb_id, in_tile_index, dst_tile_index)));
+        MATH((llk_math_eltwise_unary_datacopy<
+              DataCopyType::A2D,
+              is_fp32_dest_acc_en,
+              BroadcastType::NONE,
+              UnpackToDestEn>(dst_tile_index, in_cb_id)));
+    } else {
+        UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+            in_cb_id, in_tile_index, dst_tile_index)));
+        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
+            dst_tile_index, in_cb_id)));
+    }
+#endif
+#endif
 }
 
 // clang-format off
@@ -167,6 +203,7 @@ ALWI void copy_block(
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, start_in_tile_index, ntiles, start_dst_tile_index)));
     MATH((llk_math_eltwise_unary_datacopy_block<
@@ -174,6 +211,25 @@ ALWI void copy_block(
           is_fp32_dest_acc_en,
           BroadcastType::NONE,
           UnpackToDestEn>(start_dst_tile_index, ntiles, in_cb_id)));
+#else
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
+    // Per-operand route, see copy_init.
+    if (UnpackToDestEn && operand_fits_unpack_to_dest(in_cb_id)) {
+        UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+            in_cb_id, start_in_tile_index, ntiles, start_dst_tile_index)));
+        MATH((llk_math_eltwise_unary_datacopy_block<
+              DataCopyType::A2D,
+              is_fp32_dest_acc_en,
+              BroadcastType::NONE,
+              UnpackToDestEn>(start_dst_tile_index, ntiles, in_cb_id)));
+    } else {
+        UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+            in_cb_id, start_in_tile_index, ntiles, start_dst_tile_index)));
+        MATH((llk_math_eltwise_unary_datacopy_block<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
+            start_dst_tile_index, ntiles, in_cb_id)));
+    }
+#endif
+#endif
 }
 
 }  // namespace ckernel

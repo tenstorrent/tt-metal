@@ -58,14 +58,13 @@ constexpr BroadcastType kBcastDim = (BCAST_DIM_VAL == 0)   ? BroadcastType::ROW
 
 void kernel_main() {
 #ifdef ARCH_QUASAR
-    // Quasar twin: the same three operands as Metal 2.0 DFBs, both inputs Float32 and UnpackToDest. The kernel-wide
-    // UnpackToDestEn routes both unpacks through UNP_DEST: the copy is placed at DST[1] by the unpacker, the
-    // broadcast source at DST[0]. (A Float16_b copy operand is not an option here: under the flag it would also go
-    // through UNP_DEST, and a 16-bit write does not follow the 32-bit DEST addressing of the placers.)
+    // Quasar twin: the same three operands as Metal 2.0 DFBs with the same formats. The route is per operand under
+    // the kernel-wide UnpackToDestEn: the Float16_b copy goes through SrcA and MOVA2D widens it into DST[1], the
+    // Float32 broadcast source is placed at DST[0] by the unpacker (UNP_DEST does not widen 16-bit operands).
     DataflowBuffer copy_cb(dfb::copy_in);
     DataflowBuffer bcast_cb(dfb::bcast_in);
     DataflowBuffer out_cb(dfb::out);
-    const uint32_t cb_copy = copy_cb.get_id();    // Float32 data tile (UnpackToDest), copied to DST slot 1
+    const uint32_t cb_copy = copy_cb.get_id();    // Float16_b data tile (SrcA), copied to DST slot 1
     const uint32_t cb_bcast = bcast_cb.get_id();  // Float32 tile (UnpackToDest), lands in DST slot 0
     const uint32_t cb_out = out_cb.get_id();      // Float32, two tiles per iteration: DST[0] then DST[1]
 #else
@@ -93,7 +92,7 @@ void kernel_main() {
 
         // (2) 32-bit unpack-to-dest op into dst index 0. The srcA reconfig retargets the unpacker
         // between the two CBs' formats (Float16_b -> Float32) and back, exactly as a real kernel
-        // interleaving the two ops would (a no-op on Quasar, where both operands are Float32).
+        // interleaving the two ops would.
         reconfig_data_format_srca(cb_copy, cb_bcast);
         if constexpr (kPlainCopy) {
             copy_init(cb_bcast);
