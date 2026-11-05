@@ -11,7 +11,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import ttnn
 import ttml
+from ttml.modules import LinearLayer
 from sync_gradients_placements_common import (
     DIM,
     NATIVE,
@@ -28,6 +30,7 @@ from sync_gradients_placements_common import (
     is_sharded_on_axis,
 )
 from tp_block import TPBlock
+from two_device_gradients import exact_mean, make_gradients, to_bf16
 
 pytestmark = [
     pytest.mark.requires_device,
@@ -124,6 +127,53 @@ class TestHSDP:
         assert not is_sharded_on_axis(head, dp)
         assert not is_sharded_on_axis(head, fsdp)
         _assert_mean_over_axis(after_dp["Model/head/weight"], _shards(head), hsdp_mesh.shape, fsdp, "head over fsdp")
+
+    def test_fp32_reduce_rounds_an_hsdp_gradient_once(self, hsdp_mesh):
+        """With reduce_dtype float32 the fsdp reduce-scatter leaves an fp32 shard, so the dp sum adds unrounded means and
+        the gradient is rounded at most once, at the end. Rounding the shard to bf16 in between, as the shard used to
+        be written, rounds it twice and lands on the exact mean less often: about 98.5% of the elements against 76%
+        here."""
+        dp = hsdp_mesh.axis_index("dp")
+        D, F = hsdp_mesh.axis_size("dp"), hsdp_mesh.axis_size("fsdp")
+        values = make_gradients(64, 128, seed=8, devices=D * F)  # device k in mesh row-major order holds values[k]
+        mapper = ttnn.create_mesh_mapper(
+            _device(), ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)])
+        )
+        exact = values.astype(np.float64).mean(axis=0, keepdims=True)
+
+        def reduce(round_shard_to_bf16: bool):
+            layer = LinearLayer(128, 64, has_bias=False)
+            ttml.fsdp.fully_shard(layer, reduce_dtype=ttnn.DataType.FLOAT32)
+            layer.unshard()
+            ((parameter, shard_dim),) = layer._fsdp_state.managed
+            tensor = parameter.tensor
+            gradients = ttml.autograd.Tensor.from_numpy(
+                values.reshape(D, F, *values.shape[2:]), ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper
+            )
+            tensor.set_grad(gradients.get_value())
+            layer._fsdp_state.backward_post()
+            assert tensor.get_grad().dtype == ttnn.DataType.FLOAT32
+            if round_shard_to_bf16:
+                tensor.set_grad(ttnn.typecast(tensor.get_grad(), ttnn.DataType.BFLOAT16))
+            parameters = ttml.NamedParameters()
+            parameters["weight"] = tensor
+            ttml.core.distributed.synchronize_gradients(parameters, [dp], reduce_dtype=ttnn.DataType.FLOAT32)
+            grad = tensor.get_grad()
+            shards = np.stack(_shards(grad)).reshape(D, F, *_shards(grad)[0].shape)
+            for row in range(1, D):
+                np.testing.assert_array_equal(shards[row], shards[0])  # every dp rank holds the same mean
+            return grad.dtype, np.concatenate(list(shards[0]), axis=shard_dim)
+
+        once_dtype, once = reduce(round_shard_to_bf16=False)
+        twice_dtype, twice = reduce(round_shard_to_bf16=True)
+
+        assert once_dtype == ttnn.DataType.FLOAT32
+        assert twice_dtype == ttnn.DataType.BFLOAT16
+        once_share = np.mean(to_bf16(once) == exact_mean(values))
+        twice_share = np.mean(twice == exact_mean(values))
+        assert once_share >= 0.97
+        assert once_share > twice_share
+        assert np.mean(np.abs(once - exact)) < np.mean(np.abs(twice - exact))
 
     def test_causal_lm_collate_hsdp(self, hsdp_mesh):
         """``causal_lm_collate_fn`` with the HSDP mapper: the standard per-device shapes, the collapsed whole-mesh

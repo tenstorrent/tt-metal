@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""``ttml.fsdp.fully_shard(..., reduce_dtype=...)``: unset or bf16 reduce-scatter as before, fp32 sums in fp32.
+"""``ttml.fsdp.fully_shard(..., reduce_dtype=...)``: unset or bf16 reduce-scatter as before, fp32 sums in fp32 and
+keeps the mean shard in fp32.
 
 The two devices of the ``[1, 2]`` ``fsdp_mesh`` hold different bf16 gradients, as data-parallel ranks do.
 ``test_sync_gradients_reduce_dtype.py`` covers the same setting on the DDP sync.
@@ -14,7 +15,7 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, ModuleList
 
-from two_device_gradients import device, exact_mean, make_gradients, per_device, per_device_tensor
+from two_device_gradients import device, exact_mean, make_gradients, per_device, per_device_tensor, to_bf16
 
 _FSDP_AXIS = 1
 
@@ -33,8 +34,11 @@ def _gathered(shard) -> np.ndarray:
 def _reduce_with_backward_post(values: np.ndarray, reduce_dtype) -> tuple:
     """Shard one weight with ``reduce_dtype``, give device i the gathered gradient ``values[i]``, run backward_post.
 
-    Returns the reduced gradient (gathered from the shards) and the shard dim.
+    Returns the reduced gradient (gathered from the shards) and the shard dim. A sum in fp32, from ``reduce_dtype`` or
+    the stored default, leaves an fp32 shard; any other a bf16 one.
     """
+    if reduce_dtype is None:
+        reduce_dtype = ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype()
     layer = LinearLayer(values.shape[-1], values.shape[-2], has_bias=False)
     ttml.fsdp.fully_shard(layer, reduce_dtype=reduce_dtype)
     layer.unshard()  # backward_post expects the gathered weight and restores the cached shard
@@ -44,7 +48,8 @@ def _reduce_with_backward_post(values: np.ndarray, reduce_dtype) -> tuple:
     layer._fsdp_state.backward_post()
 
     grad = parameter.tensor.get_grad()
-    assert grad.dtype == ttnn.DataType.BFLOAT16
+    fp32 = reduce_dtype == ttnn.DataType.FLOAT32
+    assert grad.dtype == (ttnn.DataType.FLOAT32 if fp32 else ttnn.DataType.BFLOAT16)
     return _gathered(grad), shard_dim
 
 
@@ -60,7 +65,8 @@ def test_unset_and_bf16_reduce_dtype_reduce_as_before(fsdp_mesh, reduce_dtype):
     np.testing.assert_array_equal(reduced, _gathered(before))
 
 
-# With two devices and this spread, the fp32 sum gets about 99.5% of the elements exact and the bf16 sum about 86%.
+# With two devices and this spread, the fp32 sum rounded once to bf16 gets about 99.5% of the elements exact and the
+# bf16 sum about 86%. Kept in fp32, the mean is closer to the exact one still.
 @pytest.mark.requires_device
 def test_fp32_reduce_dtype_is_closer_to_the_exact_mean(fsdp_mesh):
     values = make_gradients(64, 128, seed=2)
@@ -69,9 +75,57 @@ def test_fp32_reduce_dtype_is_closer_to_the_exact_mean(fsdp_mesh):
     fp32, _ = _reduce_with_backward_post(values, ttnn.DataType.FLOAT32)
     bf16, _ = _reduce_with_backward_post(values, None)
 
-    fp32_share = np.mean(fp32 == expected)
+    fp32_share = np.mean(to_bf16(fp32) == expected)
     assert fp32_share >= 0.99
     assert fp32_share > np.mean(bf16 == expected)
+    exact = values.astype(np.float64).mean(axis=0, keepdims=True)
+    assert np.mean(np.abs(fp32 - exact)) < np.mean(np.abs(bf16 - exact))
+
+
+# The fp32 shard is the fp32 mean itself: the reduce-scatter in fp32 and the multiply, nothing rounded to bf16.
+@pytest.mark.requires_device
+def test_fp32_reduce_dtype_keeps_the_mean_shard_in_fp32(fsdp_mesh):
+    values = make_gradients(64, 128, seed=4)
+
+    reduced, shard_dim = _reduce_with_backward_post(values, ttnn.DataType.FLOAT32)
+
+    gradients = ttnn.typecast(per_device_tensor(values).get_value(), ttnn.DataType.FLOAT32)
+    mean = ttnn.multiply(ttml.core.distributed.reduce_scatter(gradients, shard_dim, _FSDP_AXIS), 0.5)
+    np.testing.assert_array_equal(reduced, _gathered(mean))
+
+
+# The next micro-batch adds to the fp32 shard: backward_pre gathers it in fp32, add_grad adds the bf16 gradient in fp32,
+# and backward_post reduce-scatters the fp32 total.
+@pytest.mark.requires_device
+def test_fp32_shard_takes_the_next_micro_batch_in_fp32(fsdp_mesh):
+    first_values, second_values = make_gradients(64, 128, seed=6), make_gradients(64, 128, seed=7)
+    layer = LinearLayer(128, 64, has_bias=False)
+    ttml.fsdp.fully_shard(layer, reduce_dtype=ttnn.DataType.FLOAT32)
+    state = layer._fsdp_state
+    layer.unshard()
+    ((parameter, shard_dim),) = state.managed
+    tensor = parameter.tensor
+
+    # Fresh uploads each time: backward_post frees the gathered gradient it casts.
+    tensor.set_grad(per_device_tensor(first_values).get_value())
+    state.backward_post()
+    state.backward_pre()
+    assert tensor.get_grad().dtype == ttnn.DataType.FLOAT32
+    tensor.add_grad(per_device_tensor(second_values).get_value())
+    assert tensor.get_grad().dtype == ttnn.DataType.FLOAT32
+    state.backward_post()
+
+    def mean(total):
+        return ttnn.multiply(ttml.core.distributed.reduce_scatter(total, shard_dim, _FSDP_AXIS), 0.5)
+
+    def fp32(values):
+        return ttnn.typecast(per_device_tensor(values).get_value(), ttnn.DataType.FLOAT32)
+
+    gathered = ttml.core.distributed.all_gather(mean(fp32(first_values)), shard_dim, _FSDP_AXIS)
+    expected = mean(ttnn.add(gathered, fp32(second_values)))
+    grad = tensor.get_grad()
+    assert grad.dtype == ttnn.DataType.FLOAT32
+    np.testing.assert_array_equal(_gathered(grad), _gathered(expected))
 
 
 # Without reduce_dtype, backward_post sums in the default create_optimizer stores, as ttml.sync_gradients does; a
@@ -149,7 +203,7 @@ def test_blocks_and_root_both_sum_in_fp32(fsdp_mesh):
     assert len(fp32) == len(local) == 3  # two block weights and the root's head
     for name, values in local.items():
         expected = exact_mean(values)
-        fp32_share = np.mean(fp32[name] == expected)
+        fp32_share = np.mean(to_bf16(fp32[name]) == expected)
         assert fp32_share >= 0.99, name
         assert fp32_share > np.mean(bf16[name] == expected), name
 

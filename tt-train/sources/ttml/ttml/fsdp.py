@@ -216,7 +216,8 @@ class FSDPState:
         gathered shape. We restore the sharded m_value and free the gathered
         weight first, then reduce-scatter each grad into a shard-shaped grad,
         free the gathered grad, and install the shard (``set_grad``'s shape
-        check then sees the shard-shaped m_value).
+        check then sees the shard-shaped m_value). A sum in fp32 installs an
+        fp32 shard.
 
         Without a ``reduce_dtype`` from ``fully_shard``, the sum takes the one
         ``create_optimizer`` stored from the training config, read here as the
@@ -256,9 +257,13 @@ class FSDPState:
             ttnn.deallocate(to_reduce)
             # Mean-reduction: reduce_scatter sums one shard's contribution
             # per DP rank; divide by axis_size to get the per-shard average,
-            # matching the implicit averaging a DDP all-reduce would do. The
-            # multiply writes the grad's own dtype.
-            reduced = ttnn.multiply(summed, 1.0 / float(self.axis_size), dtype=grad_dtype)
+            # matching the implicit averaging a DDP all-reduce would do. A sum
+            # in fp32 keeps the mean shard in fp32, as add_grad keeps a
+            # parameter's gradient under the same reduce dtype, so the next
+            # micro-batch and an HSDP sync over the other mesh axis add to the
+            # unrounded mean; otherwise the multiply writes the grad's dtype.
+            mean_dtype = ttnn.DataType.FLOAT32 if reduce_dtype == ttnn.DataType.FLOAT32 else grad_dtype
+            reduced = ttnn.multiply(summed, 1.0 / float(self.axis_size), dtype=mean_dtype)
             ttnn.deallocate(summed)
             param_tensor.set_grad(reduced)
 
@@ -745,8 +750,9 @@ def fully_shard(
             ``mesh_axis`` with ``ttml.sync_gradients``; ``SFTTrainer`` and
             ``GRPOTrainer`` already do.
         reduce_dtype: The dtype the gradients are reduce-scattered in, as ``ttml.sync_gradients`` takes it:
-            ``ttnn.DataType.FLOAT32`` sums and averages in fp32 and casts the shard back to the gradient's dtype. It
-            needs a transient fp32 copy of each gathered gradient, twice its bf16 size, during backward. ``None``
+            ``ttnn.DataType.FLOAT32`` sums and averages in fp32 and keeps the mean shard in fp32, so the next
+            micro-batch and an HSDP sync add to the unrounded mean. It needs a transient fp32 copy of each gathered
+            gradient, twice its bf16 size, during backward, and the fp32 shard is twice a bf16 one. ``None``
             takes the training config's ``precision.reduce_dtype`` that ``create_optimizer`` stores
             (``AutoContext.get_gradient_reduce_dtype``), read when the backward hook runs, as ``ttml.sync_gradients``
             does; with no default stored either, it sums in each gradient's own dtype. A value passed here applies to
