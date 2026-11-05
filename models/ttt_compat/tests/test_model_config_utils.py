@@ -70,7 +70,13 @@ def test_native_phi3_reference_decoder_supplies_position_embeddings():
 
 @pytest.mark.parametrize("seq_len", [128, 4096])
 def test_qwen_t3k_prefill_matmul_configs_match_across_batching(monkeypatch, seq_len):
-    args = SimpleNamespace(base_model_name="Qwen3-32B", device_name="T3K", mlp2_grid=lambda _: (8, 8))
+    args = SimpleNamespace(
+        base_model_name="Qwen3-32B",
+        device_name="T3K",
+        num_devices=8,
+        max_grid_size=ttnn.CoreGrid(x=8, y=7),
+        mlp2_grid=lambda _: (8, 8),
+    )
     args.use_minimal_prefill_matmul = MethodType(ModelArgs.use_minimal_prefill_matmul, args)
     args.use_minimal_qkv_prefill_matmul = MethodType(ModelArgs.use_minimal_qkv_prefill_matmul, args)
     monkeypatch.setattr("models.ttt_compat.tt.model_config.is_blackhole", lambda: False)
