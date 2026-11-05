@@ -97,10 +97,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             TensorParameter{.unique_id = BIAS_TENSOR, .spec = bias_tensor->mesh_tensor().tensor_spec()});
     }
 
-    // ---- Prefetcher pipes ----
-    // B over prefetcher pipes: one parameter per pipe, each entry one K chunk of a core's B slice. The reader binds
-    // them all under one accessor (one is present on each core) and publishes each entry into B_slice, a relay over the
-    // rings.
+    // ---- Prefetcher pipes of B: one parameter per pipe, which the reader binds under one accessor ----
     Group<PrefetcherPipeParameter> B_pipe_parameters;
     Group<PrefetcherPipeParamName> B_pipe_names;
     for (size_t p = 0; p < operation_attributes.prefetcher_pipes.size(); ++p) {
@@ -110,7 +107,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             .unique_id = B_pipe_names.back(),
             .receivers = pipe.receiver_cores(),
             .ring_size = pipe.ring_size(),
-            .entry_size = plan.K_chunk_tiles * plan.C_slice_N_tiles * plan.B_entry_bytes,
+            .entry_size = plan.B_pipe_entry_bytes,
         });
     }
 
@@ -175,7 +172,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             B_slice_dfb.borrowed_from = B_TENSOR;  // the resident B shard is the DFB
         }
         if (plan.B_from_pipes) {
-            B_slice_dfb.advanced_options.prefetcher_pipe_relays = B_pipe_names;  // the pipes' rings are the DFB
+            B_slice_dfb.advanced_options.prefetcher_pipe_relays = B_pipe_names;  // the pipes' memory is the DFB
         }
         DataflowBufferSpec C_slice_dfb{
             .unique_id = C_SLICE_DFB,
@@ -305,9 +302,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
-    // B over prefetcher pipes: the reader, single-threaded on Wormhole / Blackhole, is the pipes' receiver and
-    // publishes each entry into B_slice instead of reading B (a relay finer than the pipe entry needs a single-threaded
-    // producer). It acks the senders on NOC 0, which a Tensor prefetcher sender's NIU takes atomics on.
+    // The single-threaded reader (a relay paged finer than a pipe entry needs one) publishes B from the pipes, and acks
+    // on NOC 0, the NoC a Tensor prefetcher sender takes atomics on.
     if (plan.B_from_pipes) {
         reader.compiler_options.defines["B_FROM_PREFETCHER_PIPES"] = "1";
         reader.advanced_options.prefetcher_pipe_bindings = {

@@ -6,7 +6,7 @@
 
 The pipes' receivers are the matmul's cores, laid out row-major in a rectangle of `banks` columns and `receivers_per_bank`
 rows: the core at row-major position i computes all of M for N slice i, and the pipes deliver it that slice's K chunks in
-K order, one pipe entry each. B_slice is a relay over the pipe's ring, so B is never read or copied by the matmul; A is
+K order, one pipe entry each. B_slice is a relay over the pipes, so B is never read or copied by the matmul; A is
 multicast from the first core to all of them. The op queues the prefetch request itself.
 
 Blackhole only: the Tensor prefetcher runs on the DRAM cores' RISC (DRISC). Shapes are Llama-3.1-8B decode (M = 32):
@@ -90,7 +90,7 @@ class _Setup:
     """B in `weight_layout` on `banks` DRAM banks, the pipes delivering its N slices to the receivers (paired with the
     banks as `pairing_layout`'s distribution needs, by default B's), and A."""
 
-    def __init__(self, device, K, N, weight_layout, b_dtype, ring_K_chunks, K_chunk_tiles, pairing_layout=None, seed=0):
+    def __init__(self, device, K, N, weight_layout, b_dtype, pipe_entries, K_chunk_tiles, pairing_layout=None, seed=0):
         require_tensor_prefetcher(device)
         N_tiles = N // TILE
         self.banks, self.receivers_per_bank = _receiver_layout(device, N_tiles)
@@ -116,20 +116,22 @@ class _Setup:
                 dtype=b_dtype,
                 distribution_strategy=strategy,
             )
-        # Ring position i is the core at row-major position i of the rectangle.
-        receivers_of_bank = (
-            bank_receivers_strided
-            if WEIGHT_LAYOUTS[pairing_layout or weight_layout] == ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D
-            else lambda b, r, n, ring_cols: bank_receivers_contiguous(b, r, ring_cols=ring_cols)
-        )
+        # Shard i goes to the core at row-major position i of the rectangle.
+        strided = WEIGHT_LAYOUTS[pairing_layout or weight_layout] == ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D
+        R = self.receivers_per_bank
         bank_to_receivers = [
-            (b, receivers_of_bank(b, self.receivers_per_bank, self.banks, ring_cols=self.banks))
+            (
+                b,
+                bank_receivers_strided(b, R, self.banks, ring_cols=self.banks)
+                if strided
+                else bank_receivers_contiguous(b, R, ring_cols=self.banks),
+            )
             for b in range(self.banks)
         ]
-        self.entry_bytes = K_chunk_tiles * self.C_slice_N_tiles * bytes_per_tile(b_dtype)
-        # Carved before any program runs on the receivers: a live program seals the L1 the rings come from.
+        entry_bytes = K_chunk_tiles * self.C_slice_N_tiles * bytes_per_tile(b_dtype)
+        # Carved before any program runs on the receivers: a live program seals the L1 the pipes are carved from.
         _space, self.pipes = make_tensor_prefetcher_pipes(
-            device, bank_to_receivers, int(ring_K_chunks * self.entry_bytes), single_sender=strategy is None
+            device, bank_to_receivers, int(pipe_entries * entry_bytes), single_sender=strategy is None
         )
         self.a_t = ttnn.from_torch(self.a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -166,35 +168,35 @@ def _run_twice(device, setup, program_config, memory_config=ttnn.DRAM_MEMORY_CON
 @pytest.mark.parametrize("shape", list(LLAMA_8B_DECODE))
 @pytest.mark.parametrize("b_dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bf8b", "bf16"])
 def test_llama_decode(device, shape, b_dtype):
-    """Llama-3.1-8B decode shapes over a receiver-contiguous weight, four K chunks of ring."""
+    """Llama-3.1-8B decode shapes over a receiver-contiguous weight, pipes of four K chunks."""
     K, N = LLAMA_8B_DECODE[shape]
-    setup = _Setup(device, K, N, "recv_contig_contiguous", b_dtype, ring_K_chunks=4, K_chunk_tiles=4)
+    setup = _Setup(device, K, N, "recv_contig_contiguous", b_dtype, pipe_entries=4, K_chunk_tiles=4)
     _run_twice(device, setup, qsr.MatmulUnifiedProgramConfig(cores=setup.cores, K_chunk_tiles=4))
 
 
 @pytest.mark.parametrize("weight_layout", list(WEIGHT_LAYOUTS))
-@pytest.mark.parametrize("ring_K_chunks", [2, 3, 2.5], ids=["ring2", "ring3", "ring2p5"])
-def test_weight_layouts_and_rings(device, weight_layout, ring_K_chunks):
-    """Each DRAM layout of B, with rings of two and three K chunks and one of two and a half, which the pipe uses as
-    two and skips the trailing half at every wrap. Thirty-two K chunks stream through it. The prefetcher slices a
-    K-row-major B over receivers on every DRAM bank, so N is eight receivers of two tiles per bank."""
+@pytest.mark.parametrize("pipe_entries", [2, 3, 2.5], ids=["entries2", "entries3", "entries2p5"])
+def test_weight_layouts_and_pipe_sizes(device, weight_layout, pipe_entries):
+    """Each DRAM layout of B through pipes of two, three and two and a half K chunks (the pipe uses two and skips the
+    half), 32 K chunks in all. A K-row-major B needs receivers on every DRAM bank: N is 8 receivers of 2 tiles per bank.
+    """
     N = device.dram_grid_size().x * 8 * 2 * TILE
-    setup = _Setup(device, 4096, N, weight_layout, ttnn.bfloat8_b, ring_K_chunks=ring_K_chunks, K_chunk_tiles=4)
+    setup = _Setup(device, 4096, N, weight_layout, ttnn.bfloat8_b, pipe_entries=pipe_entries, K_chunk_tiles=4)
     _run_twice(device, setup, qsr.MatmulUnifiedProgramConfig(cores=setup.cores, K_chunk_tiles=4))
 
 
 @pytest.mark.parametrize("with_config", [False, True], ids=["no_config", "config_without_cores"])
 def test_auto_placement_and_K_chunk(device, with_config):
     """Without a program config, or with one without cores, the op places the matmul on the pipes' receivers and
-    picks a K chunk two of which fit the ring."""
-    setup = _Setup(device, 4096, 14336, "recv_contig_contiguous", ttnn.bfloat8_b, ring_K_chunks=2, K_chunk_tiles=8)
+    picks a K chunk two of which fit in a pipe."""
+    setup = _Setup(device, 4096, 14336, "recv_contig_contiguous", ttnn.bfloat8_b, pipe_entries=2, K_chunk_tiles=8)
     _run_twice(device, setup, program_config=qsr.MatmulUnifiedProgramConfig() if with_config else None)
 
 
 def test_fused_bias_and_activation(device):
     """A one-row bias and a ReLU fused into the matmul (16-bit DST): the reader reads the bias of its C slice before
     publishing the K chunks."""
-    setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, ring_K_chunks=2, K_chunk_tiles=4)
+    setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, pipe_entries=2, K_chunk_tiles=4)
     bias = torch.randn(1, 1, 1, 4096, dtype=torch.bfloat16)
     bias_t = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     golden = torch.relu(setup.golden + bias.float())
@@ -216,7 +218,7 @@ def test_fused_bias_and_activation(device):
 
 def test_width_sharded_output_on_the_receivers(device):
     """C width-sharded on the receivers, each core's shard its C slice."""
-    setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, ring_K_chunks=2, K_chunk_tiles=4)
+    setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, pipe_entries=2, K_chunk_tiles=4)
     _run_twice(
         device,
         setup,
@@ -225,22 +227,22 @@ def test_width_sharded_output_on_the_receivers(device):
     )
 
 
-def test_rejects_ring_of_one_K_chunk(device, expect_error):
-    """The reader publishes one K chunk while compute multiplies the previous one, so the ring holds two."""
-    setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, ring_K_chunks=1, K_chunk_tiles=4)
+def test_rejects_a_pipe_of_one_K_chunk(device, expect_error):
+    """The reader publishes one K chunk while compute multiplies the previous one, so a pipe holds two."""
+    setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, pipe_entries=1, K_chunk_tiles=4)
     with expect_error(RuntimeError, "at least 2 K chunks"):
         setup.matmul(device, qsr.MatmulUnifiedProgramConfig(cores=setup.cores, K_chunk_tiles=4))
 
 
 def test_rejects_cores_other_than_the_receivers(device, expect_error):
-    setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, ring_K_chunks=2, K_chunk_tiles=4)
+    setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, pipe_entries=2, K_chunk_tiles=4)
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, setup.receivers_per_bank - 1))])
     with expect_error(RuntimeError, "to be exactly its cores"):
         setup.matmul(device, qsr.MatmulUnifiedProgramConfig(cores=cores, K_chunk_tiles=4))
 
 
 def test_rejects_other_program_configs(device, expect_error):
-    setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, ring_K_chunks=2, K_chunk_tiles=4)
+    setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, pipe_entries=2, K_chunk_tiles=4)
     program_config = qsr.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=(setup.banks, setup.receivers_per_bank),
         in0_block_w=4,
@@ -262,7 +264,7 @@ def test_rejects_bank_pairing_of_another_distribution(device, expect_error):
         4096,
         "recv_contig_strided",
         ttnn.bfloat8_b,
-        ring_K_chunks=2,
+        pipe_entries=2,
         K_chunk_tiles=4,
         pairing_layout="recv_contig_contiguous",
     )
@@ -272,7 +274,7 @@ def test_rejects_bank_pairing_of_another_distribution(device, expect_error):
 
 def test_rejects_a_subblock_that_pads_the_C_slice(device, expect_error):
     """Compute reads B's K rows at the pipe entry's width, so the subblock may not pad the C slice."""
-    setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, ring_K_chunks=2, K_chunk_tiles=4)
+    setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, pipe_entries=2, K_chunk_tiles=4)
     subblock_N_tiles = next(n for n in range(2, 5) if setup.C_slice_N_tiles % n != 0)
     with expect_error(RuntimeError, "in one batch, unpadded"):
         setup.matmul(

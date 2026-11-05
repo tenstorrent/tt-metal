@@ -103,11 +103,10 @@ struct MatmulUnifiedPlan {
     bool borrow_A = false;
     bool borrow_B = false;
     bool borrow_C = false;
-    // B arrives over PrefetcherPipes (MatmulParams::prefetcher_pipes): the cores are the pipes' receivers, each
-    // producing all of M for one slice of N (one C slice per core, one batch). One pipe entry is one K chunk of the
-    // core's B slice, and the B_slice DFB is a relay over the pipe's ring, B_slice_entries tiles of its whole entries,
-    // which the reader publishes; B is neither read, borrowed nor multicast, and takes no L1 of the program's.
+    // B arrives over prefetcher pipes: B_slice is a relay over the pipes on their receivers (the cores), one pipe entry
+    // per K chunk. B is neither read, borrowed nor multicast, and takes no program L1.
     bool B_from_pipes = false;
+    uint32_t B_pipe_entry_bytes = 0;
 
     // DFB sizing; entry sizes are in bytes. Every entry holds one tile; C_slice / C_partials hold
     // C_entries_per_thread entries per thread (see above).
@@ -148,9 +147,8 @@ struct MatmulUnifiedPlan {
     std::pair<double, double> estimated_cycles;
 };
 
-// Prefetcher pipe delivery of B needs a ring of at least this many K chunks: the reader publishes one while compute
-// multiplies the previous one (kIn1PipeWindowBlocks in the matmul's prefetcher_pipe_in1_window.hpp).
-constexpr uint32_t MIN_PIPE_RING_K_CHUNKS = 2;
+// Entries a prefetcher pipe of B holds at least: the reader publishes one while compute multiplies the previous one.
+constexpr uint32_t MIN_PIPE_ENTRIES = 2;
 
 // `output` is the C tensor when the caller supplied one (or the op already created it); it decides whether
 // C can be packed in place. Without it the op allocates C, a sharded C without a shard spec with C_slice_shard_spec's.
