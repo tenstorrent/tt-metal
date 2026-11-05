@@ -52,6 +52,38 @@ def test_to_memory_config_uint16(shape, device):
     assert_equal(ttnn.to_torch(input), ttnn.to_torch(input_b))
 
 
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype, make_input",
+    [
+        (ttnn.int32, ttnn.uint32, lambda shape: torch.randint(0, 100, shape, dtype=torch.int32)),
+        (ttnn.bfloat16, ttnn.float32, lambda shape: torch.randn(shape, dtype=torch.bfloat16)),
+    ],
+)
+def test_to_memory_config_same_config_dtype_change(device, input_dtype, output_dtype, make_input):
+    torch.manual_seed(0)
+    shape = (1, 1, 32, 64)
+    torch_input = make_input(shape)
+    input_tensor = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output_tensor = ttnn.to_memory_config(input_tensor, input_tensor.memory_config(), dtype=output_dtype)
+    assert output_tensor.dtype == output_dtype
+    assert_equal(torch_input, ttnn.to_torch(output_tensor))
+
+
+def test_to_memory_config_same_config_dtype_unchanged(device):
+    torch.manual_seed(0)
+    shape = (1, 1, 32, 64)
+    torch_input = torch.randint(0, 100, shape, dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    for output_tensor in (
+        ttnn.to_memory_config(input_tensor, input_tensor.memory_config()),
+        ttnn.to_memory_config(input_tensor, input_tensor.memory_config(), dtype=ttnn.int32),
+    ):
+        assert output_tensor.dtype == ttnn.int32
+        assert_equal(torch_input, ttnn.to_torch(output_tensor))
+
+
 # Test for block sharding
 @pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])

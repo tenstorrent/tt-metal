@@ -17,6 +17,7 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::core::CMAKE_UNIQUE_NAMESPACE {
@@ -61,11 +62,17 @@ Tensor to_layout_impl(
     const float pad_value) {
     if (tensor_arg.layout() == layout) {
         if (dtype.has_value() and dtype.value() != tensor_arg.dtype()) {
+            if (ttnn::is_device_tensor(tensor_arg)) {
+                // The tensor is already in the requested layout, so honour the dtype (and any requested
+                // memory config) by typecasting instead of silently dropping them.
+                return ttnn::typecast(tensor_arg, dtype.value(), memory_config);
+            }
+            // A host tensor does not support a dtype override (see the host path below), so keep the
+            // previous behaviour and leave the dtype unchanged.
             log_warning(
                 tt::LogOp,
-                "ttnn::to_layout: dtype is specified but the tensor is already in the requested layout! So, the "
-                "dtype "
-                "won't be changed!");
+                "ttnn::to_layout: dtype is specified but the tensor is a host tensor already in the "
+                "requested layout! So, the dtype won't be changed!");
         }
         // Host and deallocated tensors have no memory config.
         const auto current_mem_config = get_memory_config(tensor_arg);

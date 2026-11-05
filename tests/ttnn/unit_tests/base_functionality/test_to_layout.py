@@ -467,6 +467,60 @@ def test_to_layout_host_same_layout_with_memory_config():
     assert_equal(torch_input, ttnn.to_torch(output))
 
 
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype, make_input",
+    [
+        (ttnn.int32, ttnn.uint32, lambda shape: torch.randint(0, 100, shape, dtype=torch.int32)),
+        (ttnn.bfloat16, ttnn.float32, lambda shape: torch.randn(shape, dtype=torch.bfloat16)),
+    ],
+)
+def test_to_layout_same_layout_dtype_change(device, input_dtype, output_dtype, make_input):
+    torch.manual_seed(0)
+    shape = (1, 1, 32, 64)
+    torch_input = make_input(shape)
+    input_tensor = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    output_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, dtype=output_dtype)
+    assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert output_tensor.dtype == output_dtype
+    assert_equal(torch_input, ttnn.to_torch(output_tensor))
+
+
+def test_to_layout_same_layout_dtype_unchanged(device):
+    torch.manual_seed(0)
+    shape = (1, 1, 32, 64)
+    torch_input = torch.randint(0, 100, shape, dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    for output_tensor in (
+        ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT),
+        ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32),
+    ):
+        assert output_tensor.dtype == ttnn.int32
+        assert_equal(torch_input, ttnn.to_torch(output_tensor))
+
+
+def test_to_layout_same_layout_dtype_change_host():
+    torch.manual_seed(0)
+    shape = (1, 1, 32, 64)
+    torch_input = torch.randint(0, 100, shape, dtype=torch.int32)
+    host_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    # A host tensor does not support a dtype override on the same-layout path: it must not crash and
+    # must keep its original dtype.
+    output_tensor = ttnn.to_layout(host_tensor, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32)
+    assert output_tensor.dtype == ttnn.int32
+    assert_equal(torch_input, ttnn.to_torch(output_tensor))
+
+    for output_tensor in (
+        ttnn.to_layout(host_tensor, ttnn.ROW_MAJOR_LAYOUT),
+        ttnn.to_layout(host_tensor, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32),
+    ):
+        assert output_tensor.dtype == ttnn.int32
+        assert_equal(torch_input, ttnn.to_torch(output_tensor))
+
+
 @pytest.mark.parametrize("shape", [(32, 32), (64, 128), (9, 256)])
 def test_int8_to_layout_roundtrip_on_host(shape):
     torch.manual_seed(0)

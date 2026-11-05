@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/sharded/reshard/device/reshard_device_operation.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/hal.hpp>
@@ -261,6 +262,11 @@ Tensor to_memory_config(
     const auto original_memory_config = ttnn::get_memory_config(tensor);
     if (original_memory_config.has_value() && original_memory_config.value() == memory_config &&
         !output_tensor.has_value()) {
+        if (dtype.has_value() && dtype.value() != tensor.dtype()) {
+            // The tensor is already in the requested memory config, so honour the dtype by typecasting
+            // instead of silently dropping it.
+            return ttnn::typecast(tensor, dtype.value(), memory_config);
+        }
         return tensor;
     }
 
