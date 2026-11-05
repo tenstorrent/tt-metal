@@ -404,6 +404,8 @@
 // This core's uncached alias of its own SRAM. An Ethernet core (a CCE) is 8 MiB up. Every other core uses
 // the worker window. Callers use this name; MEM_WORKER_UNCACHED_BASE is the +4 MiB window only.
 #if defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_ERISC)
+// Every Quasar Ethernet core is a Keraunos CCE.
+#define KERAUNOS_CCE
 #define MEM_L1_UNCACHED_BASE MEM_IERISC_UNCACHED_BASE
 #else
 #define MEM_L1_UNCACHED_BASE MEM_WORKER_UNCACHED_BASE

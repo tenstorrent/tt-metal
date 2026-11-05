@@ -156,7 +156,7 @@ constexpr uint64_t k_keraunos_system_sram_base = 0x1206800000ULL;
 // The NOC routes (CceNocRoutes, hostdev/cce_spa_routes.h) of Keraunos core `logical_eth` on `chip`, from the chip's
 // SoC descriptor. Each keraunos.cores entry gets a route at its virtual coordinate and one at its Ethernet channel's
 // coordinate in the device's eth_chan_to_noc_xy, (20 + channel, 25). Fatal when the descriptor has no Keraunos window,
-// when `logical_eth` is not one of its cores, or when the routes do not fit.
+// when `logical_eth` has no keraunos.cores entry, or when the routes do not fit.
 CceNocRoutes quasar_cce_noc_routes(const Cluster& cluster, ChipId chip, const CoreCoord& logical_eth) {
     const auto& soc = cluster.get_soc_desc(chip);
     const auto& keraunos = soc.get_arch_descriptor().get_keraunos();
@@ -165,11 +165,8 @@ CceNocRoutes quasar_cce_noc_routes(const Cluster& cluster, ChipId chip, const Co
         "Chip {} SoC descriptor has no keraunos local_window and tile_stride",
         chip);
     const uint64_t cce_stride = soc.get_arch_descriptor().get_eth_l1_size();
-    const CoreCoord self_noc0 = soc.get_physical_ethernet_core_from_logical(logical_eth);
-    const auto self = std::ranges::find_if(keraunos.cores, [&](const tt::umd::KeraunosCore& core) {
-        return core.coord.x == self_noc0.x && core.coord.y == self_noc0.y;
-    });
-    TT_FATAL(self != keraunos.cores.end(), "Chip {} Ethernet core {} is not a keraunos core", chip, logical_eth.str());
+    const tt::umd::KeraunosCore& self =
+        soc.get_keraunos_core_for_channel(soc.logical_eth_core_to_chan_map.at(logical_eth));
 
     CceNocRoutes routes{};
     const auto add_route = [&](uint32_t x, uint32_t y, CceNocRouteKind kind, uint64_t sram_base) {
@@ -183,11 +180,15 @@ CceNocRoutes quasar_cce_noc_routes(const Cluster& cluster, ChipId chip, const Co
     };
     for (const auto& core : keraunos.cores) {
         const uint64_t region = core.hsio * *keraunos.tile_stride + core.cce * cce_stride;
+        const bool is_self = &core == &self;
         CceNocRouteKind kind = CceNocRouteKind::OTHER_TILE;
         uint64_t sram_base = k_keraunos_system_sram_base + region;
-        if (core.hsio == self->hsio) {
-            kind = core.cce == self->cce ? CceNocRouteKind::THIS_CCE : CceNocRouteKind::THIS_TILE_OTHER_CCE;
-            sram_base = core.cce == self->cce ? *keraunos.local_window + region : 0;
+        if (is_self) {
+            kind = CceNocRouteKind::THIS_CCE;
+            sram_base = *keraunos.local_window + region;
+        } else if (core.hsio == self.hsio) {
+            kind = CceNocRouteKind::THIS_TILE_OTHER_CCE;
+            sram_base = 0;
         }
         const CoreCoord logical = soc.get_logical_ethernet_core_from_physical({core.coord.x, core.coord.y});
         const CoreCoord virtual_core =
@@ -195,7 +196,7 @@ CceNocRoutes quasar_cce_noc_routes(const Cluster& cluster, ChipId chip, const Co
         const uint32_t chan = soc.logical_eth_core_to_chan_map.at(logical);
         add_route(virtual_core.x, virtual_core.y, kind, sram_base);
         add_route(20 + chan, 25, kind, sram_base);
-        if (core.hsio == self->hsio && core.cce == self->cce) {
+        if (is_self) {
             routes.self_x = static_cast<uint8_t>(virtual_core.x);
             routes.self_y = static_cast<uint8_t>(virtual_core.y);
         }
