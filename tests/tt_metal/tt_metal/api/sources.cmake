@@ -108,6 +108,7 @@ set(UNIT_TESTS_API_TENSOR_SOURCES
     tensor/test_host_tensor_to_tensor_spec.cpp
     tensor/test_mesh_tensor.cpp
     tensor/test_tensor_types.cpp
+    tensor/test_gguf_dtypes.cpp
     tensor/test_tensor_layout.cpp
     tensor/test_create_tensor.cpp
     tensor/test_create_tensor_with_layout.cpp
