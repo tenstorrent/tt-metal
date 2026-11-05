@@ -31,7 +31,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
-from models.demos.minimax_m3.tt.packed_rows import packed_real_rows
 
 # Optional per-layer MLA-vs-FFN host timing (rough ratio only). Gated by TT_PREFILL_BLOCK_TIMING=1.
 # Host wall-clock with a device sync bracketing each region, so the syncs serialize the pipeline and
@@ -772,6 +771,8 @@ class TtPrefillBlock(LightweightModule):
         metadata: the traced form. One ChunkMetadata per chunk position, read on device; ``chunks`` is then
             unused (None). Every position runs its attention half, so the caller points an empty chunk at
             a scratch slot. Requires ``padding_config``, the persistent MoE padding config, and no ack.
+        padding_config: the MoE padding config for the whole forward, built once by the caller for every layer
+            (TtPrefillTransformer.forward_packed from packed_real_rows); None when every row is real.
         zero_pad: zero each chunk's KV pad window without acking, for a caller sending D2H acks afterwards.
 
         Returns:
@@ -844,7 +845,7 @@ class TtPrefillBlock(LightweightModule):
         x = self._ffn_half(
             x,
             return_intermediates=return_intermediates,
-            padding_real_rows=None if traced else packed_real_rows(chunks, self.mla.sp_factor, rows),
+            packed=True,
             packed_padding_config=padding_config,
         )
         if _timing:
@@ -954,7 +955,7 @@ class TtPrefillBlock(LightweightModule):
         actual_start: Optional[int] = None,
         metadata: Optional[ttnn.Tensor] = None,
         cache_user_id: int = 0,
-        padding_real_rows: Optional[tuple] = None,
+        packed: bool = False,
         packed_padding_config: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """ffn_norm -> MoE | dense FFN -> residual."""
@@ -972,7 +973,7 @@ class TtPrefillBlock(LightweightModule):
                 actual_start=actual_start,
                 metadata=metadata,
                 cache_user_id=cache_user_id,
-                padding_real_rows=padding_real_rows,
+                packed=packed,
                 packed_padding_config=packed_padding_config,
             )
         else:
@@ -992,7 +993,7 @@ class TtPrefillBlock(LightweightModule):
         actual_start: Optional[int] = None,
         metadata: Optional[ttnn.Tensor] = None,
         cache_user_id: int = 0,
-        padding_real_rows: Optional[tuple] = None,
+        packed: bool = False,
         packed_padding_config: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D TILE → MoE → 3D TILE → 4D TILE.
@@ -1010,7 +1011,7 @@ class TtPrefillBlock(LightweightModule):
             metadata=metadata,
             # Only consumed by the env-gated routing dump, which names its files by KV slot.
             cache_user_id=cache_user_id,
-            padding_real_rows=padding_real_rows,
+            packed=packed,
             packed_padding_config=packed_padding_config,
         )
 

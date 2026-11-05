@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -112,8 +111,24 @@ def gate_mm_config_key(sp_dim: int, per_device_emb_dim: int, n_routed_experts: i
     return (sp_dim, k_tiles * ttnn.TILE_SIZE, n_routed_experts)
 
 
-# Distinct per-chip real-row tuples build_padding_config_for_rows keeps device configs for.
-ROWS_PADDING_CONFIG_CACHE_SIZE = 64
+def padding_config_tensor(mesh_device, padding_config: list) -> ttnn.Tensor:
+    """[sp, 2] (local_real_tokens, pad_side) rows -> the MoE padding config device tensor, one row per SP shard."""
+    return ttnn.from_torch(
+        torch.tensor(padding_config, dtype=torch.int32),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_device.shape),
+    )
+
+
+def packed_padding_config(mesh_device, real_rows: tuple, rows_per_chip: int) -> Optional[ttnn.Tensor]:
+    """An eager packed forward's MoE padding config from each SP chip's leading real rows (packed_real_rows),
+    built once for every MoE layer of the forward, or None when every row is real. The caller owns it."""
+    if all(r == rows_per_chip for r in real_rows):
+        return None
+    return padding_config_tensor(mesh_device, [[r, 0] for r in real_rows])
 
 
 @dataclass
@@ -640,10 +655,6 @@ class TtMoEGatePrefill(LightweightModule):
         # build_padding_config ends in a ttnn.from_torch, so re-issuing it per chunk costs a host
         # transfer; caching the device tensor avoids that. Owned here => callers must NOT deallocate it.
         self._padding_config_cache: dict = {}
-        # build_padding_config_for_rows' configs, one per distinct per-chip real-row tuple. Packed forwards' ragged
-        # tails make that set grow with traffic, so it is LRU-bounded; an evicted config is deallocated (eager
-        # forwards consume it in queue order, and the traced path never uses it).
-        self._rows_padding_config_cache: OrderedDict = OrderedDict()
         # Persistent output row for the DEVICE-built padding config (build_padding_config_device). A
         # host from_torch is illegal inside a trace capture, so the traced path derives the config
         # on-device instead and refreshes THIS buffer in place — a stable address the capture can keep
@@ -1018,47 +1029,9 @@ class TtMoEGatePrefill(LightweightModule):
         self._padding_config_cache[cache_key] = config_tensor
         return config_tensor
 
-    def build_padding_config_for_rows(self, real_rows: tuple) -> Optional[ttnn.Tensor]:
-        """Right-padded per-SP-shard config from each chip's count of leading real rows, or None when every
-        row is real.
-
-        For a packed forward (several chunks back to back on each chip), where no single (actual_isl,
-        actual_start) describes the rows: the caller derives the counts from the chunks (packed_real_rows).
-        Memoized (LRU, ROWS_PADDING_CONFIG_CACHE_SIZE entries) and owned here like build_padding_config, so callers
-        must NOT deallocate the result, nor hold it past the forward it was built for.
-        """
-        sp_factor = self.mesh_device.shape[0]
-        seq_len_per_chip = self.config.sp_dim
-        assert len(real_rows) == sp_factor, f"{len(real_rows)} real-row counts for SP={sp_factor}"
-        assert all(0 <= r <= seq_len_per_chip for r in real_rows), f"{real_rows} outside [0, {seq_len_per_chip}]"
-        if all(r == seq_len_per_chip for r in real_rows):
-            return None
-        cache_key = tuple(real_rows)
-        cached = self._rows_padding_config_cache.get(cache_key)
-        if cached is not None:
-            self._rows_padding_config_cache.move_to_end(cache_key)
-            return cached
-        config_tensor = self._padding_config_tensor([[r, 0] for r in real_rows])
-        self._rows_padding_config_cache[cache_key] = config_tensor
-        if len(self._rows_padding_config_cache) > ROWS_PADDING_CONFIG_CACHE_SIZE:
-            _, evicted = self._rows_padding_config_cache.popitem(last=False)
-            ttnn.deallocate(evicted)
-        return config_tensor
-
     def _padding_config_tensor(self, padding_config: list) -> ttnn.Tensor:
         """[sp, 2] (local_real_tokens, pad_side) rows -> the device tensor, one row per SP shard."""
-        return ttnn.from_torch(
-            torch.tensor(padding_config, dtype=torch.int32),
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                dims=(0, None),
-                mesh_shape=self.mesh_device.shape,
-            ),
-        )
+        return padding_config_tensor(self.mesh_device, padding_config)
 
     def build_padding_config_device(self, metadata, padding_side: str = "right") -> ttnn.Tensor:
         """Trace-safe twin of build_padding_config: derive the per-device

@@ -237,7 +237,13 @@ contract, validated on the first rank (`prefill_chunk.validate_chunks`):
   into the cache instead of moving back over its predecessor;
 - `actual_start % 32 == 0`, `actual_start < actual_end <= actual_start + chunk_size`,
   `actual_start + chunk_size <= max_seq_len`;
-- runs of different slots may come in any order.
+- runs of different slots may come in any order, but a sender should put a forward's partial chunks after its
+  full ones. A packed MoE's padding config holds one leading real-row count per SP chip, so the pad rows of a
+  partial chunk that precedes a non-empty chunk on the same chip are routed like real rows: identical rows that
+  all pick the same experts, which wastes compute and can push those experts past dispatch capacity, dropping
+  real tokens (`packed_routed_pad_rows`; the GLM-5.3 runtime warns once). With one partial chunk, putting it
+  last routes none; with several, all but the last can still route pad rows until the MoE takes per-chunk
+  real-row ranges.
 
 Each layer completion names one chunk, on either path, so a consumer retires each chunk on its own.
 

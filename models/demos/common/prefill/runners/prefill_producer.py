@@ -200,6 +200,9 @@ def _forward_payload(pushes: list, pool_of) -> tuple:
             _mtp_rows(pool, p.actual_start, p.actual_isl, actual_end=p.actual_end),
             _pack_metadata(p.slot_id, p.actual_start, p.actual_end),
         )
+    # Full chunks first: a partial chunk ahead of a non-empty one has its pad rows routed through the MoE
+    # (packed_routed_pad_rows). Stable, so a slot's chunks keep their order (only a run's last chunk is partial).
+    pushes = sorted(pushes, key=lambda p: p.actual_end - p.actual_start < CHUNK_SIZE)
     chunks = pad_chunks([PrefillChunk(p.slot_id, p.actual_start, p.actual_end) for p in pushes], FORWARD_CHUNKS)
     tokens = [_chunk_slice(pool_of(p.slot_id), p.actual_start, p.actual_isl) for p in pushes]
     tokens += [[1] * CHUNK_SIZE] * (FORWARD_CHUNKS - len(pushes))
