@@ -9,6 +9,7 @@ import os
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ....layers.feedforward import ParallelFeedForward
 from ....layers.linear import ColParallelLinear
@@ -153,6 +154,25 @@ class MiniMaxH3TransformerBlock(Module):
         self._eye_tables: dict[int, ttnn.Tensor] = {}
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
+        self.ff1_block_size = None  # None: the per-call M-keyed `agmm_block_size` default
+        # Wormhole default (MINIMAX_H3_MM_FP32_DEST=0): run ff1 with fp32 dest accumulation off, which frees 8 DST tiles
+        # per half and allows a 2x4 subblock (6 unpacks per 8 tile-MACs instead of 4 per 4), at the cost of bf16 partial
+        # sums between K blocks. ff2, to_out and the adaLN projection keep fp32 dest. The blocking is the 15 s / 768P
+        # mesh-bench winner on the 8x8 AGMM grid.
+        self.ff1_compute_kernel_config = None
+        # "1" = fp32 dest everywhere (Blackhole default), "0" = ff1 and to_qkv off (Wormhole default), "ff1" / "qkv"
+        # = only that one off.
+        _fp32_dest_env = os.environ.get("MINIMAX_H3_MM_FP32_DEST", "1" if is_blackhole() else "0")
+        if _fp32_dest_env == "0" or "ff1" in _fp32_dest_env:
+            self.ff1_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            _b = [int(x) for x in os.environ.get("MINIMAX_H3_FF1_BLOCKS", "8,7,16,2,4").split(",")]
+            self.ff1_block_size = (_b[0], _b[1], _b[2], (_b[3], _b[4]))
 
     # ------------------------------------------------------------------ weights
 
@@ -358,7 +378,11 @@ class MiniMaxH3TransformerBlock(Module):
         # Async only supports Ring topology"), so a line-cabled mesh has to take the unfused path
         # below. Gated here rather than left to fail, because the assert fires on the first denoise
         # step of the first request -- long after warmup reports the model loaded.
-        ff1_block_size = agmm_block_size(*self._ff1_kn, normed.padded_shape[-2]) if self.use_fused_agmm else None
+        ff1_block_size = (
+            (self.ff1_block_size or agmm_block_size(*self._ff1_kn, normed.padded_shape[-2]))
+            if self.use_fused_agmm
+            else None
+        )
         ff2_shape = (normed.shape[2], self.ffn_dim // self.tp_factor, self.hidden_size)
         # The grid is what decides whether a swept blocking or a rule pick can be resolved at all,
         # so it has to reach the gate: without it every tile-aligned M looked servable, and Wormhole
@@ -381,6 +405,7 @@ class MiniMaxH3TransformerBlock(Module):
                 default_block_size=ff1_block_size,
                 force_transpose=False,
                 use_persistent_buffer=self.use_persistent_ccl_buffers,
+                ff1_compute_kernel_config=self.ff1_compute_kernel_config,
             )
         ff_out = self.ff(
             normed,
@@ -389,5 +414,6 @@ class MiniMaxH3TransformerBlock(Module):
             default_block_size=ff1_block_size,
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
+            ff1_compute_kernel_config=self.ff1_compute_kernel_config,
         )
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))

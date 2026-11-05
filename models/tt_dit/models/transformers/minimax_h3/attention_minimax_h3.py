@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -220,6 +221,23 @@ class MiniMaxH3Attention(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # Wormhole default (MINIMAX_H3_MM_FP32_DEST=0): to_qkv with fp32 dest off and a 4x2 subblock; to_out keeps
+        # fp32 dest (its K loop waits on the relay, not on DST). Same switch as the transformer block's ff1.
+        self.qkv_compute_kernel_config = self.mm_compute_kernel_config
+        self.qkv_block_size = None  # None: the per-call M-keyed `agmm_block_size` default
+        # "1" = fp32 dest everywhere (Blackhole default), "0" = ff1 and to_qkv off (Wormhole default), "ff1" / "qkv"
+        # = only that one off.
+        _fp32_dest_env = os.environ.get("MINIMAX_H3_MM_FP32_DEST", "1" if is_blackhole() else "0")
+        if _fp32_dest_env == "0" or "qkv" in _fp32_dest_env:
+            self.qkv_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            _b = [int(x) for x in os.environ.get("MINIMAX_H3_QKV_BLOCKS", "12,7,8,4,2").split(",")]
+            self.qkv_block_size = (_b[0], _b[1], _b[2], (_b[3], _b[4]))
 
     # ------------------------------------------------------------------ weights
 
@@ -510,10 +528,13 @@ class MiniMaxH3Attention(Module):
 
         q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
             spatial_1BND,
-            compute_kernel_config=self.mm_compute_kernel_config,
+            compute_kernel_config=self.qkv_compute_kernel_config,
             parallel_config=matmul_parallel_config,
             default_block_size=(
-                agmm_block_size(self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2])
+                (
+                    self.qkv_block_size
+                    or agmm_block_size(self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2])
+                )
                 if self.use_fused_agmm
                 else None
             ),
