@@ -147,12 +147,22 @@ def _variant(
     return config, rows
 
 
-@parametrize(K=[512, 1024, 2048], num_chunks=[2, 4], blaze_compat=[False, True])
-def test_topk_xl_unfused_macro_chained(K, num_chunks, blaze_compat):
+@parametrize(K=[512, 1024, 2048], num_chunks=[2, 4])
+def test_topk_xl_unfused_macro_chained(K, num_chunks):
     """Golden gate on the default (macro-on) build. num_chunks=4 chains three
     merge+rebuild pairs — the only configuration that catches a mis-ordered
     rebuild (interleave/drain bugs present as EXACTLY that failure)."""
-    config, rows = _variant(K, num_chunks=num_chunks, blaze_compat=blaze_compat)
+    config, rows = _variant(K, num_chunks=num_chunks)
+    result = config.run().result
+    _check(result, K, rows, compare_index_set=True)
+
+
+# A separate test rather than a blaze_compat parameter keeps the node IDs above
+# stable: hardware_free/kernels/test_gathering_config.py names one of them.
+@parametrize(K=[512, 1024, 2048], num_chunks=[2, 4])
+def test_topk_xl_unfused_macro_chained_blaze_compat(K, num_chunks):
+    """The chained golden gate with TOPK_XL_BLAZE_COMPAT defined."""
+    config, rows = _variant(K, num_chunks=num_chunks, blaze_compat=True)
     result = config.run().result
     _check(result, K, rows, compare_index_set=True)
 
