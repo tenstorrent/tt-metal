@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""MiMo MoE decode against prefill on the same tokens, one Galaxy row (TP=8), BFP4 experts.
+"""MiMo MoE decode against prefill on the same tokens, one Galaxy row (TP=8), BFP4 experts (and BFP8, the format of
+the layers model.expert_bfp8_layers names: the same streams with twice the bytes per tile, HiFi2 instead of LoFi).
 
 Each step takes 4 (or 8: the deduplicated stream's 8-row tiles) real users (layer-1 MoE inputs of the golden prompts)
 in the first rows of a 32-row tile and runs
@@ -86,10 +87,11 @@ def ulps(a, b, *operands):
     return ((a - b).abs() / torch.exp2(torch.floor(torch.log2(mag)) - 7)).max().item()
 
 
+@pytest.mark.parametrize("expert_dtype", ["bfp4", "bfp8"])
 @pytest.mark.parametrize("users", [4, 8])
 @pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-def test_moe_decode_vs_prefill(mesh_device, users):
+def test_moe_decode_vs_prefill(mesh_device, users, expert_dtype):
     USERS = users
     golden_path()  # skips without the golden file
     torch.manual_seed(0)
@@ -105,11 +107,11 @@ def test_moe_decode_vs_prefill(mesh_device, users):
         LAYER,
         ckpt.router(LAYER),
         ref.LazyExperts(ckpt, LAYER, torch.bfloat16),
-        cache_dir=cache_dir("model_bfp4experts"),
-        expert_dtype=ttnn.bfloat4_b,
+        cache_dir=cache_dir(f"model_{expert_dtype}experts"),
+        expert_dtype={"bfp4": ttnn.bfloat4_b, "bfp8": ttnn.bfloat8_b}[expert_dtype],
     )
     moe.set_decode_users(USERS)
-    assert moe.gate_up_stream is not None, f"BFP4 experts with {USERS} users take the streaming decode path"
+    assert moe.gate_up_stream is not None, f"{expert_dtype} experts with {USERS} users take the streaming decode path"
     red = moe.reduce_expand
     assert red.can_norm
     gamma = ckpt.norms(LAYER + 1)["input_layernorm"]  # the next layer's input norm, as in the model

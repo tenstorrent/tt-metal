@@ -146,6 +146,23 @@ def prefill_warmup_batches(max_tokens, max_users, max_padded, max_seq_len):
     ]
 
 
+def expert_bfp8_layers(cfg):
+    """MoE layers whose routed experts are BFP8 instead of the model's ``expert_dtype`` (BFP4): MIMO_EXPERT_BFP8_LAYERS,
+    a comma list of layer indices, "last" (the default: the last decoder layer) or "" (none).
+
+    BFP4 cannot hold the checkpoint's MXFP4 experts exactly. In the last MoE layer that error reaches the logits
+    directly and lifts the far tail of the output distribution, so sampling at temperature 1.0 picks stray
+    foreign-script tokens inside tool calls (DeepSWE 57.5 on Galaxy vs 65.5 on GPU). Teacher-forced on GPU DeepSWE
+    trajectories, BFP8 experts in the last layer alone cut those tokens ~5x, about as much as BFP8 in every layer;
+    no other single layer helps. It costs 0.4 GB of DRAM per chip (TP 8)."""
+    value = os.environ.get("MIMO_EXPERT_BFP8_LAYERS", "last").strip()
+    if not value:
+        return set()
+    if value == "last":
+        return {cfg.num_hidden_layers - 1}
+    return {int(t) for t in value.split(",")}
+
+
 class TtMiMoModel:
     DECODE_TOPK = 32  # candidates per chip read back each decode step
     DECODE_HISTORY = 64  # device-resident greedy steps between token reads
@@ -239,12 +256,15 @@ class TtMiMoModel:
             )
             del lm
 
-        # Prepared bfloat4_b experts are their own cache files (moe.TtMiMoMoE), so their own layer tag.
-        quant = expert_quant(expert_dtype)
-        expert_tag = f"_{quant}" if quant else ""
+        bfp8_layers = expert_bfp8_layers(cfg) if expert_dtype == ttnn.bfloat4_b else set()
         self.layers = []
         for i in range(self.num_layers):
             t0 = time.time()
+            layer_expert_dtype = ttnn.bfloat8_b if i in bfp8_layers else expert_dtype
+            # Prepared bfloat4_b experts and the BFP8 layers' experts are their own cache files (moe.TtMiMoMoE), so
+            # their own layer tag.
+            quant = expert_quant(layer_expert_dtype)
+            expert_tag = f"_{quant}" if quant else ("_bfp8" if i in bfp8_layers else "")
             # Bump LAYER_CACHE_LAYOUT when a layer's cached tensor set changes, so a warm cache from an older
             # layout is rebuilt instead of loaded with tensors missing. Unchanged tensors (e.g. experts) are
             # still loaded from their cache files; lazy experts are only dequantized when they are missing.
@@ -261,7 +281,7 @@ class TtMiMoModel:
                         cache_dir=cache_dir,
                         attn_dtype=attn_dtype,
                         mlp_dtype=mlp_dtype,
-                        expert_dtype=expert_dtype,
+                        expert_dtype=layer_expert_dtype,
                     )
                 )
                 del weights

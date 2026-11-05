@@ -133,6 +133,13 @@ def stick_buffer(plan, num_pairs, dedup=None):
     return out
 
 
+def stream_fidelity(w_dtype):
+    """LoFi takes srcA's hidden bit and 4 mantissa MSBs: all of BFP4 (3 bits), so BFP4 weights lose nothing. BFP8 needs
+    HiFi2 to keep its 7 bits (moe_prefill.PrefillExperts makes the same choice)."""
+    assert w_dtype in (ttnn.bfloat4_b, ttnn.bfloat8_b), w_dtype
+    return ttnn.MathFidelity.LoFi if w_dtype == ttnn.bfloat4_b else ttnn.MathFidelity.HiFi2
+
+
 class GateUpStream:
     """Top-k routing, then silu(x @ gate) * (x @ up) * w for every decode pair, streamed bank-locally from the
     interleaved w_gate_up.
@@ -178,8 +185,11 @@ class GateUpStream:
         norm_topk_prob=True,
         routed_scaling_factor=1.0,
         dedup=None,
+        w_dtype=ttnn.bfloat4_b,
     ):
+        """``w_dtype``: the expert weights' format, bfloat4_b or bfloat8_b (twice the bytes per tile and per block)."""
         device = plan.mesh_device
+        self.w_dtype = w_dtype
         self.dedup = DEDUP if dedup is None else dedup
         self.cores = list(dram_bank_cores(device))
         self.banks = device.dram_grid_size().x
@@ -208,7 +218,7 @@ class GateUpStream:
 
         self.kt = hidden // TILE
         self.blocks_per_pair = self.kt // self.BLOCK_K
-        self.w_tile_bytes = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat4_b)
+        self.w_tile_bytes = ttnn.Tile([TILE, TILE]).get_tile_size(w_dtype)
         self.block_tiles = 2 * self.BLOCK_K
         self.block_bytes = self.block_tiles * self.w_tile_bytes
         packets = 1
@@ -237,7 +247,7 @@ class GateUpStream:
         self.cb_rstage, self.cb_wstage, self.cb_sel = 4, 5, 6
         self.cbs = [
             cb(self.cb_x, ttnn.bfloat16, tiny, self.kt),
-            cb(self.cb_w, ttnn.bfloat4_b, full, self.NUM_BUFFERS * self.block_tiles),
+            cb(self.cb_w, w_dtype, full, self.NUM_BUFFERS * self.block_tiles),
             # one h tile per pair: compute never waits on the writer while it is still routing
             cb(self.cb_h, ttnn.bfloat16, tiny, num_pairs),
             # page 0: the reader's pair weights, page 1: the writer's
@@ -256,7 +266,7 @@ class GateUpStream:
                 cb(self.cb_wt, ttnn.bfloat16, full, num_pairs),
             ]
         self.compute_config = ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=stream_fidelity(w_dtype),
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             dst_full_sync_en=False,
@@ -267,7 +277,7 @@ class GateUpStream:
         interleaved tiles); writes the routed h rows into ``out`` and the uint16 expert ids into ``ids_out``."""
         for t in (x, scores, biased, w_gate_up):
             assert t.layout == ttnn.TILE_LAYOUT and is_dram_interleaved(t)
-        assert x.dtype == ttnn.bfloat16 and w_gate_up.dtype == ttnn.bfloat4_b
+        assert x.dtype == ttnn.bfloat16 and w_gate_up.dtype == self.w_dtype
         assert scores.dtype == ttnn.float32 and biased.dtype == ttnn.float32
         assert scores.shape[-1] == self.expert_tiles * TILE and biased.shape[-1] == self.expert_tiles * TILE
         has_mask = token_mask is not None
@@ -409,9 +419,11 @@ class DownStream:
     IN_FLIGHT = 6
     TINY_ROWS = 4
 
-    def __init__(self, plan, hidden, inter_local, num_pairs, dedup=None, rows=4):
-        """``rows``: the user rows of the tiny tiles and the compact output (4, or 8 with the deduplicated stream)."""
+    def __init__(self, plan, hidden, inter_local, num_pairs, dedup=None, rows=4, w_dtype=ttnn.bfloat4_b):
+        """``rows``: the user rows of the tiny tiles and the compact output (4, or 8 with the deduplicated stream).
+        ``w_dtype``: w_down's format, bfloat4_b or bfloat8_b."""
         device = plan.mesh_device
+        self.w_dtype = w_dtype
         self.dedup = DEDUP if dedup is None else dedup
         assert rows == 4 or (rows == 8 and self.dedup), rows
         self.rows = rows
@@ -434,7 +446,7 @@ class DownStream:
         self.compact_tiles = nt // self.row_blocks
         self.compact_width = self.compact_tiles * TILE
 
-        self.w_tile_bytes = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat4_b)
+        self.w_tile_bytes = ttnn.Tile([TILE, TILE]).get_tile_size(w_dtype)
         self.block_tiles = self.kt * self.BLOCK_COLS
         self.group_bytes = self.BLOCK_COLS * self.w_tile_bytes
         self.block_bytes = self.kt * self.group_bytes
@@ -459,14 +471,14 @@ class DownStream:
         self.cb_h, self.cb_w, self.cb_out, self.cb_ids, self.cb_cnt = 0, 1, 2, 3, 4
         self.cbs = [
             cb(self.cb_h, ttnn.bfloat16, tiny, num_pairs * self.kt),
-            cb(self.cb_w, ttnn.bfloat4_b, full, self.NUM_BUFFERS * self.block_tiles),
+            cb(self.cb_w, w_dtype, full, self.NUM_BUFFERS * self.block_tiles),
             cb(self.cb_out, ttnn.bfloat16, tiny, self.cols),
             cb(self.cb_ids, ttnn.float32, full, 1),
         ]
         if self.dedup:  # the distinct experts' count, reader -> compute
             self.cbs.append(cb(self.cb_cnt, ttnn.float32, full, 1))
         self.compute_config = ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=stream_fidelity(w_dtype),
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             dst_full_sync_en=False,
@@ -497,8 +509,8 @@ class DownStream:
         return zero_output(plan, self.compact_width)
 
     def __call__(self, act, ids, w_down, out, signal=None, launch=True):
-        """act from ``activation_buffer``, ids the uint16 [1, 1, 1, pairs] stick, w_down [1, E, I, H] BFP4 (DRAM
-        interleaved); fills ``out`` from ``compact_output`` (bf16 DRAM tiles) and returns it.
+        """act from ``activation_buffer``, ids the uint16 [1, 1, 1, pairs] stick, w_down [1, E, I, H] in ``w_dtype``
+        (DRAM interleaved); fills ``out`` from ``compact_output`` (bf16 DRAM tiles) and returns it.
 
         ``signal``: NoC coordinates of cores whose semaphore 0 each bank core raises once its output is written.
         ``launch=False``: return the launch as a section (kernels, cbs, tensors, semaphores) for a merged program."""
@@ -506,7 +518,7 @@ class DownStream:
         assert act.shape[-2] == self.num_pairs and act.shape[-1] * 2 == self.act_page_bytes
         assert ids.layout == ttnn.ROW_MAJOR_LAYOUT and ids.dtype == ttnn.uint16 and is_dram_interleaved(ids)
         assert ids.shape[-1] == (self.ids_bytes // 2 if self.dedup else self.num_pairs)
-        assert w_down.layout == ttnn.TILE_LAYOUT and w_down.dtype == ttnn.bfloat4_b and is_dram_interleaved(w_down)
+        assert w_down.layout == ttnn.TILE_LAYOUT and w_down.dtype == self.w_dtype and is_dram_interleaved(w_down)
         assert w_down.shape[-2] == self.inter_local and w_down.shape[-1] == self.hidden
         assert out.layout == ttnn.TILE_LAYOUT and out.dtype == ttnn.bfloat16 and is_dram_interleaved(out)
         assert out.shape[-2] == TILE and out.shape[-1] == self.compact_width
@@ -624,6 +636,7 @@ class FusedStream:
     def __init__(self, plan, gate_up, down):
         assert gate_up.dedup and down.dedup and gate_up.rows == down.rows
         assert gate_up.cores == down.cores and gate_up.num_pairs == down.num_pairs
+        assert gate_up.w_dtype == down.w_dtype, "gate|up and down share one weight ring"
         self.gu, self.dn = gate_up, down
         self.cols = down.cols
         assert self.DOWN_ROWS * self.cols == gate_up.block_tiles, (self.cols, gate_up.block_tiles)
@@ -659,12 +672,13 @@ class FusedStream:
         ]
 
     def __call__(self, x, scores, biased, token_mask, w_gate_up, w_down, out, signal=None, launch=True):
-        """GateUpStream's inputs plus w_down [1, E, I, H] BFP4 and ``out`` from DownStream.compact_output; fills
-        ``out`` and returns it. ``signal`` / ``launch=False``: as DownStream (a section for a merged program)."""
+        """GateUpStream's inputs plus w_down [1, E, I, H] (w_gate_up's format) and ``out`` from
+        DownStream.compact_output; fills ``out`` and returns it. ``signal`` / ``launch=False``: as DownStream (a section
+        for a merged program)."""
         gu, dn = self.gu, self.dn
         for t in (x, scores, biased, w_gate_up, w_down, out):
             assert t.layout == ttnn.TILE_LAYOUT and is_dram_interleaved(t)
-        assert x.dtype == ttnn.bfloat16 and w_gate_up.dtype == ttnn.bfloat4_b and w_down.dtype == ttnn.bfloat4_b
+        assert x.dtype == ttnn.bfloat16 and w_gate_up.dtype == w_down.dtype == gu.w_dtype
         assert scores.dtype == ttnn.float32 and biased.dtype == ttnn.float32
         assert w_down.shape[-2] == dn.inter_local and w_down.shape[-1] == dn.hidden
         assert out.dtype == ttnn.bfloat16 and out.shape[-2] == TILE and out.shape[-1] == dn.compact_width

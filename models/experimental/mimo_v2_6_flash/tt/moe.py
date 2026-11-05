@@ -280,10 +280,11 @@ class TtMiMoMoE:
             mesh_mapper=rep,
         )
         stream_users = GateUpStream.MAX_USERS_DEDUP if DEDUP else GateUpStream.MAX_USERS
-        if self.expert_dtype == ttnn.bfloat4_b and num_users <= stream_users:
-            # BFP4 decode: top-k routing, gate|up, SwiGLU and the routing weight in one bank-local DRAM-streaming
-            # program. It writes only row u of pair (u, k) into this persistent zeroed activation (the other rows
-            # stay zero) and the pairs' uint16 expert ids into ids_buf for the down sparse_matmul.
+        if self.expert_dtype in (ttnn.bfloat4_b, ttnn.bfloat8_b) and num_users <= stream_users:
+            # Streaming decode (BFP4, or BFP8 for the layers model.expert_bfp8_layers names): top-k routing, gate|up,
+            # SwiGLU and the routing weight in one bank-local DRAM-streaming program. It writes only row u of pair
+            # (u, k) into this persistent zeroed activation (the other rows stay zero) and the pairs' uint16 expert ids
+            # into ids_buf for the down sparse_matmul.
             self.gate_up_stream = GateUpStream(
                 self.plan,
                 self.hidden,
@@ -293,6 +294,7 @@ class TtMiMoMoE:
                 self.num_experts,
                 norm_topk_prob=self.cfg.norm_topk_prob,
                 routed_scaling_factor=self.cfg.routed_scaling_factor,
+                w_dtype=self.expert_dtype,
             )
             # The row-major uint16 expert stick (the pairs' ids, or deduplicated [count, distinct ids...]).
             self.ids_buf = stick_buffer(self.plan, pairs, self.gate_up_stream.dedup)
@@ -301,7 +303,13 @@ class TtMiMoMoE:
             # sums the chips' copies and restores [1, 1, 32, hidden] with zero padding rows.
             rows = self.gate_up_stream.rows
             self.down_stream = DownStream(
-                self.plan, self.hidden, self.inter_local, pairs, self.gate_up_stream.dedup, rows=rows
+                self.plan,
+                self.hidden,
+                self.inter_local,
+                pairs,
+                self.gate_up_stream.dedup,
+                rows=rows,
+                w_dtype=self.expert_dtype,
             )
             self.act_buf = self.down_stream.activation_buffer(self.plan)
             self.out_buf = self.down_stream.compact_output(self.plan)
