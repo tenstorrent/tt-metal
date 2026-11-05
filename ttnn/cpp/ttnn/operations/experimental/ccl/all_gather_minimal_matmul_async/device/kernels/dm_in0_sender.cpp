@@ -20,7 +20,7 @@
 using ttnn::ccl::Topology;
 
 ///////////////////////////////////////////////////
-// COMPILE TIME ARGS (the row count M_tiles is a common runtime arg)
+// COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 constexpr uint32_t K_tiles = get_compile_time_arg_val(0);
 constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(1);
@@ -189,13 +189,8 @@ void kernel_main() {
     const auto in2_reader = TensorAccessor(in2_args, in2_addr);
 #endif
 
-    // Uniform per-core M split from the runtime row count; trailing cores clip against M_tiles when
-    // they read and write, but walk the same block count so the forwarding handshakes line up.
-    const uint32_t M_tiles_per_core = ttnn::runtime_length::tiles_per_core(M_tiles, in0_parallel_axis_cores);
-    const uint32_t M_blocks_per_core = ttnn::runtime_length::blocks_per_core(M_tiles_per_core, M_block_tiles);
-    const uint32_t padded_M_tiles = M_tiles_per_core * in0_parallel_axis_cores;
-    const uint32_t M_start_tile = in0_idx * M_tiles_per_core;
-    const uint32_t M_end_tile = M_start_tile + M_tiles_per_core;
+    const auto [M_tiles_per_core, M_blocks_per_core, padded_M_tiles, M_start_tile, M_end_tile] =
+        ttnn::runtime_length::uniform_split(M_tiles, in0_parallel_axis_cores, in0_idx, M_block_tiles);
 
     const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);

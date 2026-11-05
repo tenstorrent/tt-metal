@@ -42,7 +42,7 @@ constexpr uint32_t kIn0SemBackwardSlot = 3;
 constexpr uint32_t kIn0SemForwardSlot = 4;
 constexpr uint32_t kIn0BarrierSemSlot = 5;
 constexpr uint32_t kIn0LenSlot = 6;
-constexpr uint32_t kIn0TernaryASlot = kIn0LenSlot + 1;
+constexpr uint32_t kIn0TernaryASlot = 7;
 
 // in1 common: [in1, bias, M_tiles, (ternary_a, ternary_b, broadcast)?, (local_weight, fsdp_sem_bwd, fsdp_sem_fwd)?,
 //              outputs...]
@@ -83,9 +83,10 @@ constexpr uint32_t in1_fsdp_sem_forward_slot(bool has_fused_ternary) {
     return in1_fsdp_sem_backward_slot(has_fused_ternary) + 1u;
 }
 
-// A gate of one folded tile row is broadcast from tile row 0; validate_rows admits no other [..., 1, N] gate.
+// A [..., 1, N] gate is broadcast from tile row 0 (validate_rows admits it only with every upper dim 1); a full
+// gate of up to 32 rows also folds to one tile row, so the flag comes from the logical rows, not the folded count.
 uint32_t broadcast_ternary_b_flag(const ttnn::Tensor& ternary_b) {
-    return ttnn::operations::common::folded_rows(ternary_b) == tt::constants::TILE_HEIGHT ? 1u : 0u;
+    return ternary_b.logical_shape()[-2] == 1 ? 1u : 0u;
 }
 
 }  // namespace

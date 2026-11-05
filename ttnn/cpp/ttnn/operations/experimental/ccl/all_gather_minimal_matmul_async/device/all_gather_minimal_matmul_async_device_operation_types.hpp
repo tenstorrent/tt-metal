@@ -54,7 +54,9 @@ struct AllGatherMinimalMatmulAsyncParams {
     bool fuse_swiglu = false;
 
     // Core-grid orientation: nullopt keeps the legacy `force_transpose || M > N` rule, a value pins it
-    // so the program (and its cache entry) does not depend on M.
+    // so the program (and its cache entry) does not depend on M. Neither this nor force_transpose is in
+    // attribute_values(): the program hash keys on the resolved orientation (resolve_transpose_core_grid),
+    // so a pinned and an unpinned call that resolve alike share one program.
     std::optional<bool> transpose_core_grid;
 
     AllGatherMinimalMatmulAsyncParams(
@@ -118,7 +120,6 @@ struct AllGatherMinimalMatmulAsyncParams {
         "output_mem_config",
         "topology",
         "cluster_axis",
-        "force_transpose",
         "num_workers_per_link",
         "num_buffers_per_channel",
         "config",
@@ -129,7 +130,6 @@ struct AllGatherMinimalMatmulAsyncParams {
         "fsdp_ring_size",
         "using_persistent_weight_buffer",
         "fuse_swiglu",
-        "transpose_core_grid",
         "fused_activation",
         "output_dtype",
         // Selects DST_SYNC_MODE and the other compile-time compute settings.
@@ -142,7 +142,6 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->output_mem_config,
             this->topology,
             this->cluster_axis,
-            this->force_transpose,
             this->num_workers_per_link,
             this->num_buffers_per_channel,
             this->config,
@@ -153,7 +152,6 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->fsdp_ring_size,
             this->using_persistent_weight_buffer,
             this->fuse_swiglu,
-            this->transpose_core_grid,
             this->fused_activation,
             this->output_dtype,
             this->compute_kernel_config);
