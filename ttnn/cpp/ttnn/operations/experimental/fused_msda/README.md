@@ -56,6 +56,7 @@ out = ttnn.experimental.fused_msda(
                                 #   or (B, S, H*D)      ROW_MAJOR bf16   [packed]
     sampling_locations,         # (B, Q, H, L, P, 2)    ROW_MAJOR bf16   [canonical]
                                 #   or (B, Q, H, L*P*2) ROW_MAJOR bf16   [packed]
+                                #   or (B, Q, H*L*P*2)  ROW_MAJOR bf16   [heads-packed]
     attention_weights,          # (B, Q, H, L, P)       ROW_MAJOR bf16   [canonical]
                                 #   or (B, Q, H, L*P)   ROW_MAJOR bf16   [packed]
     spatial_shapes,             # host: [(H_0, W_0), ..., (H_{L-1}, W_{L-1})]
@@ -88,6 +89,7 @@ out = ttnn.experimental.fused_msda_from_offsets(
     reference_points,           # (B, Q, R, 2)          ROW_MAJOR bf16 or fp32
     sampling_offsets,           # (B, Q, H, L, P, 2)    ROW_MAJOR bf16   [canonical]
                                 #   or (B, Q, H, L*P*2) ROW_MAJOR bf16   [packed]
+                                #   or (B, Q, H*L*P*2)  ROW_MAJOR bf16   [heads-packed]
     attention_weights,          # as V1
     spatial_shapes,             # as V1
     *,
@@ -95,6 +97,7 @@ out = ttnn.experimental.fused_msda_from_offsets(
     align_corners=False,
     memory_config=None,
     num_valid_queries=None,     # optional per-batch row count, see below
+    num_valid_queries_tensor=None,  # the same counts on device, see below
 )
 # -> (B, Q, H*D) ROW_MAJOR bf16
 ```
@@ -129,6 +132,15 @@ counts are left out of the program hash and rewritten on every cache hit (§5),
 so changing them per call does not recompile; a captured trace replays the
 counts it was captured with.
 
+`num_valid_queries_tensor` passes the counts as a uint32 ROW_MAJOR INTERLEAVED
+device tensor instead, all `B` in its last dim so they form one unpadded page;
+`(B,)` is the natural shape. The kernels read it on every run (§5), so a
+captured trace computes whatever the captured tensor holds at replay. Write new
+counts into that tensor, e.g. with `ttnn.copy_host_to_device_tensor`: the trace
+keeps its address. A device read cannot fail, so the tensor's rules differ from
+the list's: a count above `Q` is treated as `Q`, and all-zero counts compute
+nothing. The two forms build separate programs; pass at most one.
+
 ### 2.3 Output shape
 
 `(B, Q, H*D)` ROW_MAJOR bf16 — chosen, not accidental. Every consumer in this
@@ -144,7 +156,7 @@ default and is one `ttnn.reshape` away for anyone who wants it.
 ```python
 fits = ttnn.experimental.can_use_fused_msda_from_offsets_l1_value(
     value, reference_points, sampling_offsets, attention_weights, spatial_shapes,
-    *, reference_mode="level", align_corners=False,
+    *, reference_mode="level", align_corners=False, device_valid_counts=False,
 )
 # -> bool
 ```
@@ -153,7 +165,8 @@ True when `value`, staged as ROW_MAJOR interleaved L1, and the bf16 output fit
 below the L1 frontier together with this op's circular buffers, under
 `usable_program_l1_capacity` (95%). Per-bank sizes are rounded up to the
 allocator's DRAM-alignment granule; a `value` already in ROW_MAJOR L1 is not
-counted again. `value` may still be TILE or in DRAM. The answer reflects the
+counted again. Pass `device_valid_counts=True` when the op will get
+`num_valid_queries_tensor`, whose staging adds circular buffers (§6). `value` may still be TILE or in DRAM. The answer reflects the
 allocator's current state, so call it right before the op and do not cache it.
 
 ---
@@ -231,7 +244,7 @@ The program and the tiles it runs are sized separately:
 ```text
 slots per core = ceil(B * H * ceil(Q / 32) / cores)       fixed per program
 active tiles   = sum_b H * ceil(q_end_b / 32)            per call
-q_end_b        = num_valid_queries[b], or Q when not given
+q_end_b        = num_valid_queries[b], min(tensor[b], Q), or Q when not given
 ```
 
 `split_work_to_cores` over `compute_with_storage_grid_size()` picks the cores
@@ -251,6 +264,15 @@ per query block rather than once per tile.
 All runtime args, buffer addresses included, are plain values that
 `ProgramFactory::override_runtime_arguments` rebuilds on every cache hit. That
 is what lets `num_valid_queries` stay out of the program hash.
+
+The tile order and the per-core runs are `kernels/msda_work_list.hpp`, plain
+arithmetic over the per-batch counts that both the factory and the kernels
+include. With `num_valid_queries_tensor` the factory lists no tiles and
+allocates no slots: each core gets its index and the core count, and the reader
+and the writer each read the counts into their own CB and derive the core's run
+from that header (`dataflow/msda_device_counts.hpp`). The reader hands its tile
+count to compute through `tile_count`. Nothing that depends on the counts is a
+runtime arg, which is what a trace needs.
 
 A partial block is supported wherever a batch's rows end: at `Q % 32`, or at
 `num_valid_queries[b] % 32`. That tile carries `v_rows` below 32. Rows `>= v_rows`
@@ -311,6 +333,8 @@ reader pops a point's corner tile, or a tiled block's corner tiles, only after
 | `c_16` `output_tile` | compute → writer, the accumulator | `2 * n_d_tiles` | 2048 |
 | `c_17` `tiled_input` | compute → compute, the tilized corners (only when `D % 32 == 0`) | `8 * n_d_tiles` | 2048 |
 | `c_18` `gather_mailbox` | reader → writer, one point's split-gather arguments (split gather only: `D % 32 == 0` on Blackhole) | 1 | 64 |
+| `c_20` `reader_counts`, `c_21` `writer_counts` | reader-only and writer-only L1 scratch, never pushed: each kernel's copy of the valid query counts (`num_valid_queries_tensor` only) | 1 | `align(B*4)` |
+| `c_22` `tile_count` | reader → compute, the core's tile count, read with `read_tile_value` (`num_valid_queries_tensor` only) | 1 | L1 alignment, UInt32 |
 
 `n_d_tiles = ceil(D / 32)`; `G = ceil(L * P / 16)`, the tiled geometry's groups
 of points. The tiled geometry replaces `c_1`, `c_2`, `c_7`, `c_8` and `c_11`
@@ -374,7 +398,7 @@ packed offsets and weights hands the geometry over once per output block instead
 of once per point (`kernels/msda_tiled_geometry.hpp` holds the layout). This
 covers both attentions of every upstream BEVFormer encoder: spatial
 cross-attention at `L * P = 32` (base) and 8 (small, tiny), temporal
-self-attention at 4. The reader NoC-reads the block's offsets and attention rows
+self-attention at 8 (its two BEV maps as two levels of 4 points). The reader NoC-reads the block's offsets and attention rows
 into one row-major page and rewrites the reference tile only when the query
 block changes. Compute tilizes them and, in one window per group of 16 points,
 solves `px | py` and the extents with matmuls against per-level constant
@@ -447,9 +471,11 @@ So there is **no single reference-point convention**, which is exactly why V1
 must not depend on one. V2 supports two modes and rejects the rest loudly:
 
 * `reference_mode="level"` — `R == L`, `r(l, p) = l`. DINO-family decoders
-  (UniAD, VADv2).
+  (UniAD, VADv2), and BEVFormer temporal self-attention with an ego shift, whose
+  BEV maps are levels with their own reference points.
 * `reference_mode="pillar"` — `R == Z`, `P % Z == 0`, `r(l, p) = p % Z`.
-  BEVFormer spatial/temporal attention, where the reference points are the
+  BEVFormer spatial cross-attention, and temporal self-attention without a
+  shift (`Z == 1`); in the cross-attention the reference points are the
   `num_points_in_pillar` z-anchors and the point axis is laid out as
   `(P//Z, Z)` — matching
   `sampling_offsets.view(bs, Q, H, L, P//Z, Z, 2)` in the reference.
@@ -477,7 +503,8 @@ reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (geometry, reduc
 
 1. stage attention weights and locations/offsets (+ reference points for V2,
    unless the previous tile staged the same query block) for all `v_rows` rows
-   into L1 arenas — one `noc.async_read` per page;
+   into L1 arenas — one `noc.async_read` per page, or per head at byte offset
+   `h * stick` inside the `(b, q)` page for heads-packed locations/offsets;
 2. for each `(l, p)`: write the operands into column 0 (and the V2 offset into
    column 16) of the geometry tiles and push them (tiled geometry: one row-major staging of
    `G + 1` tiles per block). No
@@ -562,6 +589,7 @@ Wormhole keeps the reader-only gather; the split has not been measured there.
 | `H_l`, `W_l` | `<= 256` | the largest extent the op is tested at. The corner word's index field holds extents up to 361, and the tiled geometry falls back to the per-point path for an extent that is not bf16-exact. Rejected in `derive_shapes`, pinned by `test_fused_msda_rejects_spatial_shape_beyond_extent_limit` |
 | `Q`, `P`, `H`, `B` | any positive value | `Q % 32 != 0` handled by `v_rows` |
 | `num_valid_queries` | `None`, or `B` counts in `[0, Q]` with at least one nonzero | rows past a count are unwritten; the caller drops them with a select |
+| `num_valid_queries_tensor` | `None`, or a uint32 ROW_MAJOR INTERLEAVED device tensor with its `B` counts in the last dim; counts above `Q` act as `Q`, all zeros compute nothing; not with `num_valid_queries` | read on device so a trace follows it; one unpadded page, read with a single NoC read |
 | `S` | must equal `sum_l H_l * W_l` | validated |
 | padding | zeros | |
 
@@ -571,7 +599,11 @@ Known limitations, to revisit after profiling:
   point, and its DRAM pages are alignment-padded 8x. The packed rank-4 form
   (`(B, Q, H, L*P*2)`) is one read per `(b, q, h)` and no padding — prefer it.
   This is the "flatten the semantics into one channel dimension" idea from the
-  design brief; both forms are accepted and tested for equality.
+  design brief; both forms are accepted and tested for equality. The heads-packed
+  `(B, Q, H*L*P*2)` form is a Linear's output as is, so the producer needs no
+  data-moving reshape; it needs each head's `L*P*2` values to fill whole alignment
+  units of their buffer (`hal::get_l1_alignment` / `get_dram_alignment`: 16 B in
+  L1; 32 B in DRAM on Wormhole, 64 B on Blackhole).
 * Sharded inputs unsupported.
 * `fp32` accumulate not exposed; the L1 accumulator runs at the pack format.
   `fp32_dest_acc_en` is on unconditionally, but that is about the geometry's
@@ -599,6 +631,8 @@ ttnn/cpp/ttnn/operations/experimental/fused_msda/
         ├── msda_tile_layout.hpp                tile face-row byte offsets
         ├── msda_corner_word.hpp                the corner word compute hands the gathers
         ├── msda_tiled_geometry.hpp             tiled geometry layout, shared with the factory
+        ├── msda_work_list.hpp                  tile order and per-core runs, shared with the factory
+        ├── dataflow/msda_device_counts.hpp     device valid query counts: staging and the core's run
         ├── dataflow/fused_msda_reader_common.hpp
         ├── dataflow/reader_msda_v1.cpp
         ├── dataflow/reader_msda_v2.cpp
@@ -617,26 +651,33 @@ models/experimental/bevformer/tests/perf/test_fused_msda_perf.py
 BEVFormer's `TTMSDeformableAttention`
 (`models/experimental/bevformer/tt/tt_ms_deformable_attention.py`) computes its
 core attention with `fused_msda_from_offsets` and `reference_mode="pillar"`.
-Spatial cross-attention, temporal self-attention and the detection decoder build this
-module. The decoder passes float32 reference points: on its 200x200 BEV map a bf16
+Spatial cross-attention and the detection decoder build this module. Temporal
+self-attention calls the op itself with its two BEV maps as two levels of one
+value, in `reference_mode="level"` when the previous map's float32 reference
+points carry the ego shift. The decoder passes float32 reference points: on its 200x200 BEV map a bf16
 point in [0, 1] moves in steps of up to 0.8 px, and each layer's refined points feed
 the next.
 
-Spatial cross-attention pads every camera to the longest camera's query count.
-It passes each camera's valid count as `num_valid_queries`, so MSDA skips the
-padding, and drops the unwritten rows with `ttnn.where(row_mask, ...)`. That
-select has to stay a select: the dropped rows are undefined, not zero.
+Spatial cross-attention pads every camera to the planner's capacity, at least one
+row past it. It passes each camera's valid count as `num_valid_queries_tensor`,
+a uint32 tensor the planner builds on device, so MSDA skips the padding and a
+traced frame follows each frame's counts. The padding stays undefined, not
+zero. The aggregation gathers only valid rows and, for slots a query does not
+fill, a camera's last row, which it zeroes with `ttnn.experimental.slice_write`
+first.
 
-It feeds the op the **packed** rank-4 forms. The `sampling_offsets` Linear emits
-channels ordered `(head, level, point, xy)` and the joint softmax produces
-`(bs, Q, heads, levels*points)`, so the reshape is a dimension split, not a
-permute.
+The `sampling_offsets` Linear emits channels ordered `(head, level, point, xy)`,
+so its output is the heads-packed `(B, Q, H*L*P*2)` form as it is; the module
+passes it unreshaped when a head's `L*P*2` values fill whole alignment units of
+the buffer and splits off the head dim otherwise. The attention weights go
+packed rank-4, `(bs, Q, heads, levels*points)`.
 
 The module passes raw pixel offsets; the op's per-level constants account for
 `scale_l`.
 
 Before each call the module asks `can_use_fused_msda_from_offsets_l1_value`
-(§2.4) and stages `value`, and the op's output with it, in L1 when they fit,
+(§2.4), with `device_valid_counts` when it passes the counts tensor, and stages
+`value`, and the op's output with it, in L1 when they fit,
 interleaved DRAM otherwise. The gather is bound by the DRAM endpoints' request
 rate, so L1 is the fast path.
 
