@@ -51,10 +51,12 @@ ttnn::Tensor alias_view(
     const TensorSpec view_spec(
         shape, TensorLayout(dtype, PageConfig(Layout::TILE, tensor.tensor_spec().tile()), memory_config));
     const auto& owner = tensor.device_storage().get_mesh_buffer();
+    // This base's MeshBuffer has no bank-alignment queries; the reference buffer has the per-device ones.
+    const auto& owner_ref = *owner.get_reference_buffer();
     const uint32_t banks = owner.device()->allocator()->get_num_banks(memory_config.buffer_type());
-    const DeviceAddr owner_page = owner.aligned_page_size();
+    const DeviceAddr owner_page = owner_ref.aligned_page_size();
     const DeviceAddr view_page = view_spec.compute_page_size_bytes();
-    const DeviceAddr view_aligned_page = tt::round_up(view_page, owner.alignment());
+    const DeviceAddr view_aligned_page = tt::round_up(view_page, owner_ref.alignment());
 
     // Interleaved page p sits on bank p % banks at offset (p / banks) * aligned page size. A dim-0 slice of the input
     // (one block of a paged cache) owns the same byte range on every bank only when its page count is a multiple of
@@ -95,10 +97,10 @@ ttnn::Tensor alias_view(
     }
     const DeviceAddr view_bytes_per_bank = tt::div_up(view_pages, banks) * view_aligned_page;
     TT_FATAL(
-        view_bytes_per_bank <= owner.aligned_size_per_bank(),
+        view_bytes_per_bank <= owner_ref.aligned_size_per_bank(),
         "alias_view: the view needs {} bytes per bank, the input owns {}",
         view_bytes_per_bank,
-        owner.aligned_size_per_bank());
+        owner_ref.aligned_size_per_bank());
 
     auto device_config = owner.device_local_config();
     device_config.page_size = view_page;
