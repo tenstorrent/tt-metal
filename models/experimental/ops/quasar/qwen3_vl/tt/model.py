@@ -36,8 +36,7 @@ def _mesh_partition_and_free(tensor, dim):
     1-device mesh, so it always takes that path.
     """
     partitioned = ttnn.mesh_partition(tensor, dim)
-    if tensor.device().get_num_devices() > 1:
-        ttnn.deallocate(tensor)
+    _free_unless_aliased(tensor, partitioned)
     return partitioned
 
 

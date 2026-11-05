@@ -13,7 +13,6 @@
 
 #include "optimizers/adamw.hpp"
 #include "optimizers/adamw_composite.hpp"
-#include "optimizers/adamw_full_precision.hpp"
 #include "optimizers/muon_composite.hpp"
 #include "optimizers/no_op.hpp"
 #include "optimizers/sgd.hpp"
@@ -155,8 +154,6 @@ OptimizerRegistry::OptimizerRegistry() {
     register_optimizer("MorehAdamW", param_groups_creator<MorehAdamW>(parse_adamw_config<AdamWCompositeConfig>));
     register_optimizer(
         "AdamWComposite", param_groups_creator<AdamWComposite>(parse_adamw_config<AdamWCompositeConfig>));
-    register_optimizer(
-        "AdamWFullPrecision", param_groups_creator<AdamWFullPrecision>(parse_adamw_config<AdamWFullPrecisionConfig>));
     register_optimizer("SGD", param_groups_creator<SGD>(parse_sgd_config<SGDConfig>));
     register_optimizer("MuonComposite", param_groups_creator<MuonComposite>(parse_muon_config));
     register_optimizer("SGDComposite", param_groups_creator<SGDComposite>(parse_sgd_config<SGDCompositeConfig>));

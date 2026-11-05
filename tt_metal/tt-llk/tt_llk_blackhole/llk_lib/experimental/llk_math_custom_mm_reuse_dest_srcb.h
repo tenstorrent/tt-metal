@@ -10,6 +10,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
+#include "experimental/llk_custom_mm_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
 
@@ -75,12 +76,10 @@ constexpr std::uint32_t CUSTOM_MM_REUSE_REPLAY_LEN     = 4;
 // Top-anchored so custom_mm's program, which sits at the window base, cannot overwrite
 // it.  That is what lets this one load before the first matmul instead of between them.
 constexpr std::uint32_t CUSTOM_MM_REUSE_REPLAY_OFFSET = ckernel::math::replay_buf_offset + CUSTOM_MM_REUSE_FPU_REPLAY_LEN - CUSTOM_MM_REUSE_REPLAY_LEN;
+// custom_mm's longest program is a full in1 tile with 8-row in0 faces.
 static_assert(
-    CUSTOM_MM_REUSE_REPLAY_OFFSET >= ckernel::math::replay_buf_offset + 11,
-    "replay program overlaps custom_mm's, which uses up to 11 entries at the window base");
-// The 11 above mirrors custom_mm's function-local replay_buf_len (operandB_face_r_dim == 8
-// ? 11 : 9), which is not exported; deriving both from one named constant is a follow-up
-// that touches the already-merged custom_mm.h.
+    CUSTOM_MM_REUSE_REPLAY_OFFSET >= ckernel::math::replay_buf_offset + ckernel::custom_mm_replay_buf_len(8, ckernel::MAX_NUM_FACES),
+    "replay program overlaps custom_mm's at the window base");
 static_assert(
     CUSTOM_MM_REUSE_REPLAY_OFFSET + CUSTOM_MM_REUSE_REPLAY_LEN <= ckernel::math::replay_buf_offset + CUSTOM_MM_REUSE_FPU_REPLAY_LEN,
     "replay program runs past the FPU half of the math replay window");
