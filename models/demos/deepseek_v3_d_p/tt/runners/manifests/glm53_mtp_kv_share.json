@@ -10,6 +10,7 @@
     "PREFILL_USE_TRACE": "1",
     "TT_GLM53_MTP_TTNN_CACHE": "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/glm53_mtp_ttnn_cache",
     "TT_PREFILL_CHUNK_TIMEOUT_SECONDS": "10",
-    "TT_METAL_SHM_TRACKING_DISABLED": "1"
+    "TT_METAL_SHM_TRACKING_DISABLED": "1",
+    "LOGURU_LEVEL": "ERROR"
   }
 }
