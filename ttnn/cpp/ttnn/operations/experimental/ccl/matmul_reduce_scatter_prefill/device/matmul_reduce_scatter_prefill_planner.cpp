@@ -44,10 +44,11 @@ constexpr uint32_t kZoneSets = 2;         // chunks' arrivals the zones hold at 
 constexpr uint32_t kMaxAutoChunks = 256;
 // Unchunked K-window cap. Fewer, larger windows mean fewer multicast handshakes per entry (QB2 1x4 ring, traced:
 // GLM-5.3 indexer wk 640x1536x128 28.0 -> 23.7 us at kb 24, Qwen3 down M=128 198 -> 152 us, K3 dense batched decode
-// 4-7% faster). A resident plan whose cores each hold >= kComputeBoundCoreTiles output tiles keeps kKbMaxSmall. Only
-// the streamed operand moves per window, and with that much matmul per K-tile the compute outpaces the window delivery:
-// the compute never waits for a window after the first block (K3 o_proj 640x3072x7168, 2x7 tiles per core, profiled),
-// so fewer handshakes save nothing there.
+// 4-7% faster). Two kinds of plan keep kKbMaxSmall: a DRAM width-sharded W (K3 dense M=96 ran 12% slower at 24), and a
+// resident plan whose cores each hold >= kComputeBoundCoreTiles output tiles. Only the streamed operand moves per
+// window, and with that much matmul per K-tile the compute outpaces the window delivery: the compute never waits for a
+// window after the first block (K3 o_proj 640x3072x7168, 2x7 tiles per core, profiled), so fewer handshakes save
+// nothing there.
 // A larger window only lengthens the call's start: every core waits for its first window, the resident fill's DRAM
 // reads and multicasts at once, ~4 us + 0.4 us per K-tile, and nothing overlaps it. The 4 output blocks cannot make
 // that up: K3 o_proj ran 1% slower at 24 (first window 10.0 -> 13.8 us, blocks 2-4 0.5 us faster each), DSV3 MLP
@@ -362,9 +363,9 @@ Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& i
         geo.hold_depths[r] = hold_depth(sched_of[r]);
         geo.slots[r] = sched_of[r].slots;
     }
-    const uint32_t kb_cap = chunks == 1 ? kKbMax : kKbMaxChunked;
+    const uint32_t kb_cap = chunks == 1 ? (in.w_dram_sharded ? kKbMaxSmall : kKbMax) : kKbMaxChunked;
     KBlock kblk = choose_k_block(in.Kt, in.budget, kb_cap, geo);
-    if (chunks == 1 && kblk.resident && gd.core_m * gd.core_n >= kComputeBoundCoreTiles) {
+    if (chunks == 1 && kblk.resident && kb_cap > kKbMaxSmall && gd.core_m * gd.core_n >= kComputeBoundCoreTiles) {
         const KBlock small = choose_k_block(in.Kt, in.budget, kKbMaxSmall, geo);
         if (small.resident) {
             kblk = small;
@@ -631,7 +632,8 @@ const Plan& solve_plan(const PlanInputs& in) {
         in.tA,
         in.tW,
         in.scatter_dim,
-        in.budget);
+        in.budget,
+        in.w_dram_sharded);
     static std::mutex solved_mutex;
     static std::map<std::remove_const_t<decltype(key)>, Plan> solved;
     const std::lock_guard<std::mutex> lock(solved_mutex);

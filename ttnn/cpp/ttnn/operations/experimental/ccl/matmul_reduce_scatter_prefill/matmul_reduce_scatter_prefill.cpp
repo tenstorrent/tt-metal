@@ -224,6 +224,8 @@ MatmulReduceScatterPrefillParams resolve_params(
         .tW = static_cast<uint32_t>(weight.buffer()->aligned_page_size()),
         .scatter_dim = canonical_dim,
         .budget = l1_bank - headroom,
+        .w_dram_sharded = weight.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                          weight.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
     };
     // L1 tensors fill from the top; the CBs (staging included) and an L1 output share the free L1 below them
     const uint64_t output = output_preallocated ? 0 : l1_output_bytes_per_bank(mesh, out_mem, Mt, Nt, G);
