@@ -28,6 +28,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 )
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import KVPE_MIN_TOKENS_PER_CHIP, detect_num_devices
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import (
+    SparseMLAReference,
     build_weights,
     cpu_ref_cache_dir,
     make_hidden,
@@ -1446,7 +1447,7 @@ def test_sparse_mla_trace_replay_chunked(mesh_device, seq_len, device_params, va
     mesh_shape = list(mesh_device.shape)
     sp_axis, tp_axis = 0, 1
     num_users = 2
-    weights, src_tag = build_weights(variant, config, seed=42)
+    weights, _ = build_weights(variant, config, seed=42)
     hiddens = {
         1: make_hidden(seq_len, config.hidden_size, seed=42)[0],
         0: make_hidden(seq_len, config.hidden_size, seed=7)[0],
@@ -1592,14 +1593,14 @@ def test_sparse_mla_trace_replay_chunked(mesh_device, seq_len, device_params, va
         if first_cleanup_error is not None and not failing:
             raise first_cleanup_error
 
-    cache_dir = cpu_ref_cache_dir(variant)
     kvpe_all = _collect_kvpe_cache(tt_kvpe_cache, mesh_device)  # [num_users, 1, seq, kvpe]
     p = blockcyclic_positions(sp * tp, chunk, kvpe_all.shape[2])
     for user in (1, 0):
         total = totals[user]
-        ref_output, ref_kvpe, ref_index = run_cpu_reference(
-            config, weights, hiddens[user][:total].unsqueeze(0), total, cache_dir, cache_tag=f"{src_tag}_trace_u{user}"
-        )
+        # Not disk-cached: CI's GLM-5.2 reference cache is read-only and has no entry for this schedule.
+        ref = SparseMLAReference(config, weights, seq_len=total)
+        ref_output = ref.forward(hiddens[user][:total].unsqueeze(0))
+        ref_kvpe, ref_index = ref.kvpe_cache, ref.index_cache
         for u, start, end in schedule:
             if u == user:
                 _, msg = assert_with_pcc(ref_output[0, start:end], outs[user][start:end], SPARSE_OUTPUT_PCC)
