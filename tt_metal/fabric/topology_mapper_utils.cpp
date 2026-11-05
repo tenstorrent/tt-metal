@@ -1560,8 +1560,8 @@ void seed_mesh_host_rank_pins_into_seating(
     ::tt::tt_fabric::SatPlacementEnumerationSession& session, const TopologyMappingConfig& config) {
     for (const auto& [mesh_host_rank, asics] : config.mesh_host_rank_pinnings) {
         session.add_required_constraint(
-            mesh_host_rank.first,
-            std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>(asics.begin(), asics.end()));
+            {mesh_host_rank.first},
+            {std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>(asics.begin(), asics.end())});
     }
 }
 
