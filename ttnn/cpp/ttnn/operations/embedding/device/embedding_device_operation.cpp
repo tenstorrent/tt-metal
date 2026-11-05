@@ -178,24 +178,20 @@ ttsl::hash::hash_t EmbeddingsDeviceOperation::compute_program_hash(
             ttsl::hash::type_hash<EmbeddingsDeviceOperation>, operation_attributes, tensor_args);
     }
     using ttnn::operations::common::hash_spec_without_rows;
-    constexpr uint64_t kSalt = 0x656d6265645f6673ULL;  // "embed_fs"
     const auto& index = tensor_args.input_tensor_arg;
     // The index length is shape[-1] of a [B, 1, 1, S] row-major tensor: keep everything but S.
     const auto& layout = index.tensor_spec().tensor_layout();
     const auto index_hash = ttsl::hash::hash_objects_with_default_seed(
-        kSalt,
         layout.get_data_type(),
         layout.get_page_config(),
         layout.get_memory_config(),
         index.logical_shape().rank(),
         index.padded_shape()[0]);
     return tt::tt_metal::operation::hash_operation<EmbeddingsDeviceOperation>(
-        kSalt,
         operation_attributes,
         index_hash,
-        hash_spec_without_rows(tensor_args.weight_arg, kSalt),
-        tensor_args.optional_output_tensor.has_value(),
-        hash_spec_without_rows(tensor_args.optional_output_tensor, kSalt));
+        hash_spec_without_rows(tensor_args.weight_arg),
+        hash_spec_without_rows(tensor_args.optional_output_tensor));
 }
 
 tt::tt_metal::TensorSpec EmbeddingsDeviceOperation::compute_output_specs(
