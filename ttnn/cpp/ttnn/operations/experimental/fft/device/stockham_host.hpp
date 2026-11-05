@@ -137,7 +137,7 @@ inline std::shared_ptr<BatchFFTPlan> make_batch_plan(const std::shared_ptr<MeshD
     const uint32_t log2_sub_N = log2u(sub_N);
 
     auto [tw_r_data, tw_i_data] = batch_twiddles(sub_N, log2_sub_N);
-    const ttnn::Shape shape{ttnn::SmallVector<uint32_t>{log2_sub_N, kTileElems}};
+    const ttnn::Shape shape{ttsl::SmallVector<uint32_t>{log2_sub_N, kTileElems}};
     const TensorSpec spec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
     bp->tw_r = ttnn::Tensor::from_vector(std::move(tw_r_data), spec, md.get());
     bp->tw_i = ttnn::Tensor::from_vector(std::move(tw_i_data), spec, md.get());
@@ -199,7 +199,7 @@ inline std::shared_ptr<ZeroImagPlan> get_cached_zero_imag(
 
     auto plan = std::make_shared<ZeroImagPlan>();
     plan->device_weak = md;
-    const ttnn::Shape shape{ttnn::SmallVector<uint32_t>{batch, kTileElems}};
+    const ttnn::Shape shape{ttsl::SmallVector<uint32_t>{batch, kTileElems}};
     const TensorSpec spec(shape, TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
     if (dtype == DataType::BFLOAT16) {
         plan->zero = ttnn::Tensor::from_vector(

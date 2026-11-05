@@ -1,0 +1,155 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
+# Copied between tt-metal and tenstorrent/tt-eltwise-accuracy-report; keep both in step.
+# Setup and tokens: that repository's `docs/pr-command.md`.
+
+name: eltwise-accuracy-report-command
+
+# Quoted: a bare `#` would start a comment.
+run-name: "/eltwise-accuracy-report on #${{ github.event.issue.number }}"
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  # What `GITHUB_TOKEN` is checked for on a PR comment; `issues: write` returns 403.
+  pull-requests: write
+
+env:
+  ORACLE: tenstorrent/tt-eltwise-accuracy-report
+
+jobs:
+  dispatch:
+    # Forks inherit this file but not the secret, so they would answer with a failure.
+    # Gated like `/test`: an outsider starts no run. Exact, or `/eltwise-accuracy-reporting` fires it.
+    if: "github.repository == 'tenstorrent/tt-metal'
+      && github.event.issue.pull_request != null
+      && contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'),
+                  github.event.comment.author_association)
+      && (github.event.comment.body == '/eltwise-accuracy-report'
+          || startsWith(github.event.comment.body, '/eltwise-accuracy-report ')
+          || startsWith(github.event.comment.body, '/eltwise-accuracy-report\n'))"
+    runs-on: ubuntu-slim
+    # Mostly waiting; the loop below gives up first.
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+    # No concurrency group: this job waits for hours and would silently queue the next ask.
+    steps:
+      # The real control: the gate above admits read-only collaborators and all org members.
+      - name: Refuse anyone without write access
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.event.comment.user.login }}
+        run: |
+          if ! level=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" \
+                 --jq .permission 2>"$RUNNER_TEMP/err")
+          then
+            # Only 404 means "not a collaborator"; any other failure is the token, not a verdict.
+            grep -q "HTTP 404" "$RUNNER_TEMP/err" || {
+              cat "$RUNNER_TEMP/err" >&2
+              echo "::error::cannot read $ACTOR's access to $GITHUB_REPOSITORY"; exit 1; }
+            level=none
+          fi
+          case "$level" in
+            admin|maintain|write) echo "$ACTOR may run this" ;;
+            *) echo "::error::$ACTOR has $level access; /eltwise-accuracy-report needs write"; exit 1 ;;
+          esac
+
+      - name: Start the run
+        id: start
+        env:
+          # Actions on ORACLE only: nothing here can reach tt-metal with it.
+          GH_TOKEN: ${{ secrets.ACCURACY_REPORT_DISPATCH_TOKEN }}
+          PR: ${{ github.event.issue.number }}
+          # Attacker-controlled. Via env and matched to a fixed shape; `${{ }}` would inject.
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          # Command line only, anchored, validated whole: `foo-ops=` and `ops=exp.gelu` are refused.
+          ops=
+          if [[ ${BODY%%$'\n'*} =~ (^|[[:space:]])ops=([^[:space:]]+) ]]; then
+            ops=${BASH_REMATCH[2]}
+            [[ $ops =~ ^[A-Za-z0-9_,]+$ ]] || {
+              echo "::error::ops= takes comma-separated op names, got '$ops'"; exit 1; }
+          fi
+
+          # Unique per request: two asks on one pull request must not bind to each other's run.
+          request="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if ! gh workflow run accuracy-command.yml --repo "$ORACLE" \
+                 -f pr="$PR" -f request="$request" ${ops:+-f ops="$ops"}
+          then
+            # Comment first, fail after: the asker and the maintainer both need to know.
+            echo "started=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "started=true" >> "$GITHUB_OUTPUT"
+          workflow="$GITHUB_SERVER_URL/$ORACLE/actions/workflows/accuracy-command.yml"
+
+          # `gh workflow run` returns no id, so match the `run-name` the oracle builds from
+          # `request`. On `name`: `displayTitle` errors on older `gh`.
+          for _ in 1 2 3 4 5 6; do
+            sleep 5
+            id=$(gh run list --repo "$ORACLE" --workflow accuracy-command.yml \
+              --limit 20 --json databaseId,name 2>/dev/null \
+              | jq -r --arg name "eltwise-accuracy-report for tt-metal#$PR [$request]" \
+                'first(.[] | select(.name == $name) | .databaseId) // empty' || true)
+            [ -z "$id" ] || break
+          done
+          # Started either way; with no id the link is coarser and the answer step is skipped.
+          if [ -n "$id" ]
+          then
+            echo "id=$id" >> "$GITHUB_OUTPUT"
+            echo "url=$GITHUB_SERVER_URL/$ORACLE/actions/runs/$id" >> "$GITHUB_OUTPUT"
+          else echo "url=$workflow" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Say it started
+        id: ack
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.issue.number }}
+          URL: ${{ steps.start.outputs.url }}
+          STARTED: ${{ steps.start.outputs.started }}
+        run: |
+          if [ "$STARTED" = true ]; then
+            body="Measuring the eltwise ops this change can affect — [run]($URL)."
+            body="$body Informational: it does not gate this pull request."
+          else
+            # This run's log: the `gh` error is here, not on the oracle.
+            body="\`/eltwise-accuracy-report\` could not start a run on \`$ORACLE\`, most likely a"
+            body="$body missing \`ACCURACY_REPORT_DISPATCH_TOKEN\`."
+            body="$body [Log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+          fi
+          # The printed URL ends in the comment id, which the answer edits rather than re-posting.
+          url=$(gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body")
+          echo "comment=${url##*issuecomment-}" >> "$GITHUB_OUTPUT"
+          [ "$STARTED" = true ]
+
+      # Posted with the automatic `GITHUB_TOKEN`, so it reads as `github-actions[bot]`.
+      - name: Answer when it finishes
+        if: steps.start.outputs.id != '' && steps.ack.outputs.comment != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # The one secret: reads the oracle's run and artifact, cannot write to tt-metal.
+          ORACLE_TOKEN: ${{ secrets.ACCURACY_REPORT_DISPATCH_TOKEN }}
+          RUN: ${{ steps.start.outputs.id }}
+          COMMENT: ${{ steps.ack.outputs.comment }}
+        run: |
+          # Two hours; past that the comment still says it is measuring, which stays true.
+          state=
+          for _ in $(seq 240); do
+            state=$(GH_TOKEN="$ORACLE_TOKEN" gh run view "$RUN" --repo "$ORACLE" \
+              --json status --jq .status 2>/dev/null || echo)
+            if [ "$state" = completed ]; then break; fi
+            sleep 30
+          done
+          [ "$state" = completed ] || exit 0
+          # A run that died before its report job uploaded nothing; leave the comment alone.
+          GH_TOKEN="$ORACLE_TOKEN" gh run download "$RUN" --repo "$ORACLE" \
+            --name accuracy-summary --dir answer || exit 0
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT" \
+            -F body=@answer/body.md --silent

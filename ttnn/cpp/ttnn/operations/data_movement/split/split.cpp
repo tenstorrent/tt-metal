@@ -188,7 +188,7 @@ std::vector<ttnn::Tensor> split(
             if (padded_dim % static_cast<uint32_t>(num_chunks_local) != 0) {
                 return std::nullopt;
             }
-            ttnn::SmallVector<uint32_t> v(in_padded.cbegin(), in_padded.cend());
+            ttsl::SmallVector<uint32_t> v(in_padded.cbegin(), in_padded.cend());
             v[norm_dim_local] = padded_dim / static_cast<uint32_t>(num_chunks_local);
             return ttnn::Shape(v);
         };

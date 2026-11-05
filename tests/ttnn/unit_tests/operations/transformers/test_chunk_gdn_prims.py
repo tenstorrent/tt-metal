@@ -18,7 +18,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 _t = ttnn._ttnn.operations.transformer  # the prims are not registered as ttnn.transformer operations
 
@@ -63,19 +63,19 @@ def _const_tiles(device, chunk_size=CHUNK):
     return (_up(eye), _up(tril), _up(ones), _up(masks))
 
 
-def _make_inputs(bh, nc, seed, scale):
+def _make_inputs(bh, nc, seed, scale, chunk=CHUNK):
     """Head-major prim inputs in the op's numeric regime: q/k L2-normalized over the last dim
     (unnormalized keys NaN the recurrence on every path), q pre-scaled on host (the prim applies
     NO scale when qk_norm=False — mirroring the public op, which folds scale into q before prep),
     beta in (0,1), g <= 0."""
     torch.manual_seed(seed)
-    q = F.normalize(torch.randn(bh, nc, CHUNK, KDIM), dim=-1)
-    k = F.normalize(torch.randn(bh, nc, CHUNK, KDIM), dim=-1)
+    q = F.normalize(torch.randn(bh, nc, chunk, KDIM), dim=-1)
+    k = F.normalize(torch.randn(bh, nc, chunk, KDIM), dim=-1)
     q = (q * scale).to(torch.bfloat16)
     k = k.to(torch.bfloat16)
-    v = (0.5 * torch.randn(bh, nc, CHUNK, VDIM)).to(torch.bfloat16)
-    beta = torch.sigmoid(torch.randn(bh, nc, CHUNK))
-    g = -F.softplus(torch.randn(bh, nc, CHUNK)) * 0.5
+    v = (0.5 * torch.randn(bh, nc, chunk, VDIM)).to(torch.bfloat16)
+    beta = torch.sigmoid(torch.randn(bh, nc, chunk))
+    g = -F.softplus(torch.randn(bh, nc, chunk)) * 0.5
     s0 = 0.05 * torch.randn(bh, KDIM, VDIM)
     return q, k, v, g, beta, s0
 
@@ -136,26 +136,34 @@ def _dev(device, t, dtype):
     return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
+def _gate(x):
+    """A per-(head, chunk) gate [BH, NC, C] as the prim reads it: token-major [1, T, BH] (batch 1, BH heads)."""
+    bh = x.shape[0]
+    return x.reshape(bh, -1).transpose(0, 1).unsqueeze(0).contiguous()
+
+
 # ---------------------------------------------------------------------------
 # (1) prep prim vs torch, each of the seven outputs
 # ---------------------------------------------------------------------------
 
 
 # (16, 8) = 128 (head, chunk) work-items: exercises the multi-core fan-out of distribute_prep
-# (fills a full 8x8+ grid); (4, 4) is the small-shape smoke.
-@pytest.mark.parametrize("bh, nc", [(4, 4), (16, 8)])
-def test_prep_outputs_vs_torch(device, bh, nc):
+# (fills a full 8x8+ grid); (4, 4) is the small-shape smoke. The chunk-64 case (Ct = 2, two tile rows per
+# chunk) is the only place the per-tile-row outputs are held to the math rather than to another device path:
+# the second tile row's decay factor (k_dec_t's upper half of C) and the dl tile.
+@pytest.mark.parametrize("bh, nc, chunk", [(4, 4, CHUNK), (16, 8, CHUNK), (4, 2, 64)], ids=["4-4", "16-8", "chunk64"])
+def test_prep_outputs_vs_torch(device, bh, nc, chunk):
     scale = KDIM**-0.5
-    q, k, v, g, beta, _ = _make_inputs(bh, nc, seed=20260820, scale=scale)
+    q, k, v, g, beta, _ = _make_inputs(bh, nc, seed=20260820, scale=scale, chunk=chunk)
 
     outs = _t.chunk_gdn_prep(
         _dev(device, q, ttnn.bfloat16),
         _dev(device, k, ttnn.bfloat16),
         _dev(device, v, ttnn.bfloat16),
-        _dev(device, g.unsqueeze(-1), ttnn.float32),
-        _dev(device, beta.unsqueeze(-1), ttnn.float32),
-        *_const_tiles(device),
-        chunk_size=CHUNK,
+        _dev(device, _gate(g), ttnn.float32),
+        _dev(device, _gate(beta), ttnn.float32),
+        *_const_tiles(device, chunk),
+        chunk_size=chunk,
     )
     refs = _prep_reference(q.float(), k.float(), v.float(), g, beta)
 
@@ -189,6 +197,49 @@ def test_prep_outputs_vs_torch(device, bh, nc):
         max_abs = (got - ref).abs().max().item()
         assert max_abs <= bound, f"{name}: max-abs {max_abs} > {bound}"
         ttnn.deallocate(out)
+
+
+def test_prep_rejects_gates_of_different_length(device, expect_error):
+    """g and beta of the same chunk count but different T are refused: the prep readers address both gates
+    with g's T, so a shorter beta would be read past its end. (The public op checks the gates' shape itself;
+    this is the private prim's own guard.)"""
+    q, k, v, g, beta, _ = _make_inputs(4, 1, seed=20261019, scale=KDIM**-0.5)
+    g_t = _dev(device, _gate(g), ttnn.float32)
+    short_beta = _dev(device, _gate(beta)[:, :1], ttnn.float32)
+    with expect_error(RuntimeError, "the gates must have the same T"):
+        _t.chunk_gdn_prep(
+            _dev(device, q, ttnn.bfloat16),
+            _dev(device, k, ttnn.bfloat16),
+            _dev(device, v, ttnn.bfloat16),
+            g_t,
+            short_beta,
+            *_const_tiles(device),
+            chunk_size=CHUNK,
+        )
+
+
+@pytest.mark.parametrize("qk_flat", [False, True], ids=["head_major", "flat"])
+def test_prep_rejects_zero_chunk_size(device, expect_error, qk_flat):
+    """The prep launcher derives the chunk count by dividing by chunk_size before the prim validates it.
+    Only flat q/k take the T / chunk_size path."""
+    q, k, v, g, beta, _ = _make_inputs(4, 1, seed=20261026, scale=KDIM**-0.5)
+    flat_kwargs = {}
+    if qk_flat:
+        # One head: flat [B, T, Hk*K] with B = BH = 4 and T = one chunk.
+        q = q.reshape(4, CHUNK, KDIM)
+        k = k.reshape(4, CHUNK, KDIM)
+        flat_kwargs = dict(qk_flat=True, Hk=1, qk_norm=True)
+    with expect_error(RuntimeError, "chunk_size must be 32 or 64"):
+        _t.chunk_gdn_prep(
+            _dev(device, q, ttnn.bfloat16),
+            _dev(device, k, ttnn.bfloat16),
+            _dev(device, v, ttnn.bfloat16),
+            _dev(device, _gate(g), ttnn.float32),
+            _dev(device, _gate(beta), ttnn.float32),
+            *_const_tiles(device),
+            chunk_size=0,
+            **flat_kwargs,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -285,20 +336,17 @@ def test_composition_bit_exact(device):
     fs_op = ttnn.to_torch(fs_op_d)  # [B, H, K, V] fp32
 
     # Replicate the op's preprocessing in torch (chunk_gated_delta_rule.cpp head_split_tile /
-    # headvec_split_tile / to_chunks_tile): [B,T,H,D] -> [B,H,T,D] -> [BH,NC,C,D]; values are
-    # moved, never re-rounded, so from_torch of these feeds prep bit-identical inputs.
+    # to_chunks_tile): [B,T,H,D] -> [B,H,T,D] -> [BH,NC,C,D]; values are moved, never re-rounded, so
+    # from_torch of these feeds prep bit-identical inputs. The gates go in as they are ([B, T, H]).
     def head_major(x):
         return x.permute(0, 2, 1, 3).reshape(BH, NC, CHUNK, x.shape[-1]).contiguous()
-
-    def headvec_major(x):
-        return x.permute(0, 2, 1).reshape(BH, NC, CHUNK, 1).contiguous()
 
     prep = _t.chunk_gdn_prep(
         _dev(device, head_major(q), ttnn.bfloat16),
         _dev(device, head_major(k), ttnn.bfloat16),
         _dev(device, head_major(v), ttnn.bfloat16),
-        _dev(device, headvec_major(g), ttnn.float32),
-        _dev(device, headvec_major(beta), ttnn.float32),
+        _dev(device, g, ttnn.float32),
+        _dev(device, beta, ttnn.float32),
         *const_tiles,
         chunk_size=CHUNK,
     )
@@ -317,3 +365,101 @@ def test_composition_bit_exact(device):
     assert torch.equal(
         fs_pr, fs_op.reshape(BH, KDIM, VDIM)
     ), "prep->scan composition changed final_state (must be bit-identical)"
+
+
+# ---------------------------------------------------------------------------
+# (4) the WY-inverse methods (wy_inverse) through the prep prim
+# ---------------------------------------------------------------------------
+
+
+def _tinv_inputs(regime, bh, nc, seed):
+    """Prep inputs whose WY matrix N = tril(beta_i (k_i . k_j) exp(g-cumsum diff), -1) spans the
+    conditioning range: `typical` random keys; `hard` correlated keys (mean cosine ~0.8), beta ~0.9 and
+    slow decay, so |N| approaches 1 across the whole chunk; `adversarial` identical keys, beta = 0.999
+    and no decay, so N ~ tril(ones, -1) (its inverse is bidiagonal-bounded, but powers of N are ~1e8)."""
+    torch.manual_seed(seed)
+    shape = (bh, nc, CHUNK, KDIM)
+    if regime == "typical":
+        k = F.normalize(torch.randn(shape), dim=-1)
+        beta = torch.sigmoid(torch.randn(bh, nc, CHUNK))
+        g = -F.softplus(torch.randn(bh, nc, CHUNK)) * 0.5
+    elif regime == "hard":
+        shared = F.normalize(torch.randn(bh, nc, 1, KDIM), dim=-1)
+        k = F.normalize(2.0 * shared + 0.5 * F.normalize(torch.randn(shape), dim=-1), dim=-1)
+        beta = torch.sigmoid(torch.randn(bh, nc, CHUNK) * 0.5 + 2.2)
+        g = -F.softplus(torch.randn(bh, nc, CHUNK)) * 0.002
+    else:
+        k = F.normalize(torch.randn(bh, nc, 1, KDIM), dim=-1).expand(shape).contiguous()
+        beta = torch.full((bh, nc, CHUNK), 0.999)
+        g = torch.zeros(bh, nc, CHUNK)
+    q = (F.normalize(torch.randn(shape), dim=-1) * KDIM**-0.5).to(torch.bfloat16)
+    v = (0.5 * torch.randn(bh, nc, CHUNK, VDIM)).to(torch.bfloat16)
+    return q, k.to(torch.bfloat16), v, g, beta
+
+
+def _tinv_fp64(k, g, beta):
+    """(I + N)^-1 in fp64 from the exact (bf16-rounded) inputs fed to the device."""
+    k, g, beta = k.double(), g.double(), beta.double()
+    decay = g.cumsum(-1)
+    l_mask = (decay.unsqueeze(-1) - decay.unsqueeze(-2)).tril().exp().tril()
+    n = ((k * beta.unsqueeze(-1)) @ k.transpose(-1, -2) * l_mask).tril(-1)
+    eye = torch.eye(CHUNK, dtype=torch.float64)
+    return torch.linalg.solve_triangular(eye + n, eye.expand_as(n), upper=False)
+
+
+# T_inv max-abs error vs the fp64 inverse, per (method, regime), at ~2x the value measured on QB2
+# (Blackhole p300c, 2026-09-22; measured in the comment). Both methods share the error of the device's
+# own N (tf32-class matmul operands, SFPU exp in L_mask), which is the ~1e-3 floor.
+_TINV_BOUNDS = {
+    ("horner", "typical"): 2.1e-3,  # 1.04e-3
+    ("horner", "hard"): 7.3e-3,  # 3.65e-3
+    ("horner", "adversarial"): 3.4e-3,  # 1.67e-3
+    ("forward_substitution", "typical"): 2.0e-3,  # 0.98e-3
+    ("forward_substitution", "hard"): 6.1e-3,  # 3.04e-3
+    ("forward_substitution", "adversarial"): 3.4e-3,  # 1.67e-3
+}
+_WY = {"horner": ttnn.ChunkGdnWyInverse.HORNER, "forward_substitution": ttnn.ChunkGdnWyInverse.FORWARD_SUBSTITUTION}
+
+
+@pytest.mark.parametrize("regime", ["typical", "hard", "adversarial"])
+def test_prep_tinv_methods(device, regime):
+    """The two WY-inverse methods on the same device-built N: each T_inv within its bound of the fp64
+    inverse (finite, even where powers of N reach ~1e8), the SFPU solve no less accurate than the Horner
+    reference, the six other prep outputs bit-identical across methods — the inverse is the only thing
+    the method changes — and wy_inverse=AUTO resolving to the solve on this device."""
+    # 32 chunks per head: 384 items over the grid, so every core runs several chunks and re-reads negN at the
+    # same CB address (the case the solve's cache invalidate exists for).
+    q, k, v, g, beta = _tinv_inputs(regime, 12, 32, seed=20260922)
+    ref = _tinv_fp64(k.float(), g, beta)
+    tensors = (
+        _dev(device, q, ttnn.bfloat16),
+        _dev(device, k, ttnn.bfloat16),
+        _dev(device, v, ttnn.bfloat16),
+        _dev(device, _gate(g), ttnn.float32),
+        _dev(device, _gate(beta), ttnn.float32),
+    )
+    const_tiles = _const_tiles(device)
+
+    def prep(wy_inverse):
+        outs = _t.chunk_gdn_prep(*tensors, *const_tiles, chunk_size=CHUNK, wy_inverse=wy_inverse)
+        return [ttnn.to_torch(o) for o in outs]
+
+    outs, errs = {}, {}
+    for method in ("horner", "forward_substitution"):
+        got = prep(_WY[method])
+        assert torch.isfinite(got[6]).all(), f"{method}/{regime}: non-finite T_inv"
+        errs[method] = (got[6].double() - ref).abs().max().item()
+        outs[method] = got
+        bound = _TINV_BOUNDS[(method, regime)]
+        assert errs[method] <= bound, f"{method}/{regime}: T_inv max-abs error {errs[method]:.3e} > {bound:.1e}"
+    assert (
+        errs["forward_substitution"] <= 1.05 * errs["horner"]
+    ), f"{regime}: SFPU solve less accurate than Horner: {errs}"
+    for i, name in enumerate(["v_beta", "kd", "q_decay", "intra", "k_dec_t", "dl"]):
+        assert torch.equal(
+            outs["forward_substitution"][i], outs["horner"][i]
+        ), f"{name} changed (only T_inv may differ)"
+    auto = prep(ttnn.ChunkGdnWyInverse.AUTO)
+    assert torch.equal(
+        auto[6], outs["forward_substitution"][6]
+    ), f"{regime}: wy_inverse=AUTO did not resolve to the SFPU solve"

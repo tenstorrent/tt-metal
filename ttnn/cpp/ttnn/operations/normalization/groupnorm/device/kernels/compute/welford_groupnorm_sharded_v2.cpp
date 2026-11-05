@@ -123,9 +123,9 @@ void kernel_main() {
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
-    compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in_id);
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
+    compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in_id);
     constexpr std::uint32_t dfb_in_rm_id = dfb_repack_id;
     compute_kernel_lib::tilize<
         per_core_N,
@@ -135,15 +135,17 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
-    constexpr std::uint32_t dfb_in_rm_id = dfb_in0_id;
+    constexpr std::uint32_t dfb_in_rm_id = welford_fp32_alias ? dfb_in0_welford_id : dfb_in0_id;
+    compute_kernel_hw_startup(dfb_in_rm_id, dfb_in_rm_id, dfb_in_id);
     compute_kernel_lib::tilize<
         per_core_N,
         dfb_in_rm_id,
         dfb_in_id,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::NoWait,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
-#endif
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
+        compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(per_core_M);
+#endif  // READER_REPACK
     dfb_in.wait_front(per_core_MN);
     if constexpr (welford_fp32_alias) {
         // Mirror the tilize push on the alias (c_31, shares SRAM with dfb_in / c_1) so it tracks
@@ -153,9 +155,9 @@ void kernel_main() {
         dfb_in_welford.push_back(per_core_MN);
         dfb_in_welford.wait_front(per_core_MN);
     }
-#else
+#else   // !TILIZE_IN
     compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in0_id);
-#endif
+#endif  // TILIZE_IN
 
     dfb_eps.wait_front(1);
     dfb_input_mask.wait_front(num_tiles_input_mask);
@@ -374,7 +376,7 @@ void kernel_main() {
         add_init(dfb_ex_global_id, dfb_eps_id);
         for (std::uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
-            add_tiles(dfb_ex_global_id, dfb_eps_id, g * stats_tiles_per_group + 1, 0, dst0);
+            add_tiles(dfb_ex_global_id, dfb_eps_id, (g * stats_tiles_per_group) + 1, 0, dst0);
 
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init();
@@ -428,23 +430,25 @@ void kernel_main() {
                     // // a/b. (x-u) * 1/[sqrt(Var + eps)]
                     if constexpr (fp32_sfpu_normalizer) {
                         constexpr std::uint32_t data_dst = 0;
-                        constexpr std::uint32_t mean_dst = 1;
+                        constexpr std::uint32_t norm_mean_dst = 1;
                         constexpr std::uint32_t inv_std_dst = 2;
                         tile_regs_acquire();
 #ifdef TILIZE_IN
+                        reconfig_data_format_srca(dfb_in_welford_id);
                         copy_init(dfb_in_welford_id);
                         copy_tile(dfb_in_welford_id, tile_id, data_dst);
 #else
+                        reconfig_data_format_srca(dfb_in0_welford_id);
                         copy_init(dfb_in0_welford_id);
                         copy_tile(dfb_in0_welford_id, tile_id, data_dst);
 #endif
                         reconfig_data_format_srca(dfb_in0_welford_id, dfb_ex_global_fp32_id);
                         copy_init(dfb_ex_global_fp32_id);
-                        copy_tile(dfb_ex_global_fp32_id, g * stats_tiles_per_group, mean_dst);
+                        copy_tile(dfb_ex_global_fp32_id, g * stats_tiles_per_group, norm_mean_dst);
                         reconfig_data_format_srca(dfb_ex_global_fp32_id, dfb_ex2pe_fp32_id);
                         copy_init(dfb_ex2pe_fp32_id);
                         copy_tile(dfb_ex2pe_fp32_id, g, inv_std_dst);
-                        sfpu_normalize_bcast_scalar(data_dst, mean_dst, inv_std_dst);
+                        sfpu_normalize_bcast_scalar(data_dst, norm_mean_dst, inv_std_dst);
                         tile_regs_commit();
                         tile_regs_wait();
                         pack_tile(data_dst, dfb_xmm_id);
@@ -646,6 +650,17 @@ void kernel_main() {
     if constexpr (do_gamma) {
         dfb_gamma.pop_front(per_core_N);
     }
+
+#ifdef TILIZE_IN
+    // The tilized input is produced once by the tilize above and then read by tile offset for the
+    // whole kernel, so it is waited once rather than per batch. Pop it here, after the last read,
+    // to balance the buffer.
+    dfb_in.pop_front(per_core_MN);
+    if constexpr (welford_fp32_alias) {
+        // The alias mirrors dfb_in's reserve and push, so it takes the matching pop.
+        dfb_in_welford.pop_front(per_core_MN);
+    }
+#endif
 
 #ifdef UNTILIZE_OUT
     // untilize - DEST capacity auto-detected

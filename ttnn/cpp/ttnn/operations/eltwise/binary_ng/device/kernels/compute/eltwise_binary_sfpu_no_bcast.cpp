@@ -28,6 +28,7 @@
 #include "api/compute/logaddexp2.h"
 #include "api/compute/binary_comp.h"
 #include "api/compute/isclose.h"
+#include "api/compute/situ_glu.h"
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"

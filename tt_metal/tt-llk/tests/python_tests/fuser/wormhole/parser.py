@@ -50,11 +50,13 @@ from fuser.validator import (
     OperationSchemaBase,
     PackSchema,
     TernarySfpuMathSchema,
+    TopKSfpuMathSchema,
     UnarySfpuMathSchema,
     eltwise_unpacker_rules,
     forced_unpackers,
     require_dest_tiles,
     require_src_a_tiles,
+    require_src_b_tiles,
 )
 from helpers.llk_params import MathOperation
 from pydantic import Field
@@ -72,6 +74,7 @@ from .packer.packer import Packer
 from .packer.untilize import PackUntilize
 from .sfpu.binary import BinarySfpu
 from .sfpu.ternary import TernarySfpu
+from .sfpu.topk import TopKSfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
@@ -169,7 +172,11 @@ FPU_MAP = {
     ),
     "MatmulNoMop": (
         lambda s: MatmulNoMopFpu(),
-        _matmul_checks,
+        [
+            *_matmul_checks,
+            require_src_a_tiles((32, 32)),
+            require_src_b_tiles((32, 32)),
+        ],
     ),
     "Reduce": (
         lambda s: ReduceFpu(s.reduce_dim, s.reduce_pool),
@@ -304,12 +311,17 @@ class WormholeTernarySfpuMathSchema(TernarySfpuMathSchema):
     _sfpu_ops: ClassVar = TERNARY_SFPU_OPS
 
 
+class WormholeTopKSfpuMathSchema(TopKSfpuMathSchema):
+    _sfpu_cls: ClassVar = TopKSfpu
+
+
 MathSchema = Annotated[
     Union[
         FpuMathSchema,
         WormholeUnarySfpuMathSchema,
         WormholeBinarySfpuMathSchema,
         WormholeTernarySfpuMathSchema,
+        WormholeTopKSfpuMathSchema,
     ],
     Field(discriminator="type"),
 ]
@@ -323,6 +335,7 @@ PackEntrySchema = Union[
     WormholeUnarySfpuMathSchema,
     WormholeBinarySfpuMathSchema,
     WormholeTernarySfpuMathSchema,
+    WormholeTopKSfpuMathSchema,
     WormholePackSchema,
 ]
 

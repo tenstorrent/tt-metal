@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random, is_blackhole, is_wormhole_b0, is_watcher_enabled
+from tt_py_test_utils_common.utility_functions import torch_random, is_blackhole, is_wormhole_b0, is_watcher_enabled
 
 
 @pytest.mark.parametrize("batch_size", [1])

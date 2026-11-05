@@ -4,12 +4,20 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
 #include <tt-metalium/hal_types.hpp>
 
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 
-#include <tt_stl/optional_reference.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/tensor/spec/layout/layout.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 
 namespace tt::tt_metal {
 

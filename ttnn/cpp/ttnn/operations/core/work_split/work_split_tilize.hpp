@@ -23,20 +23,20 @@ namespace operations::core::work_split {
 
 struct BlockSplit {
     uint32_t ncores;
-    CoreRangeSet all_cores;
-    CoreRangeSet core_range;
-    CoreRangeSet core_range_cliff;
+    tt::tt_metal::CoreRangeSet all_cores;
+    tt::tt_metal::CoreRangeSet core_range;
+    tt::tt_metal::CoreRangeSet core_range_cliff;
     uint32_t nblocks_per_core;
     uint32_t nblocks_per_core_cliff;
 };
 
 struct BlockSplitWH {
     uint32_t ncores = 0;
-    CoreRangeSet all_cores;
-    CoreRangeSet core_range;
-    CoreRangeSet cliff_row_core_range;
-    CoreRangeSet cliff_col_core_range;
-    CoreRangeSet cliff_col_row_core_range;
+    tt::tt_metal::CoreRangeSet all_cores;
+    tt::tt_metal::CoreRangeSet core_range;
+    tt::tt_metal::CoreRangeSet cliff_row_core_range;
+    tt::tt_metal::CoreRangeSet cliff_col_core_range;
+    tt::tt_metal::CoreRangeSet cliff_col_row_core_range;
     uint32_t nblocks_per_core = 0;
     uint32_t single_block_size = 0;
     uint32_t single_block_size_cliff_row = 0;
@@ -191,7 +191,7 @@ inline NcoresWHsb compute_ncores_wh_sb(
 }
 
 inline BlockSplitWH split_blocks_for_tilize_wh(
-    CoreRangeSet& grid,
+    tt::tt_metal::CoreRangeSet& grid,
     uint32_t nblocks,
     uint32_t width_tiles,
     uint32_t height_tiles,
@@ -213,8 +213,8 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
         single_sub_block_size = result.single_sub_block_size;
     }
     // Sets to hold different core ranges.
-    std::set<CoreRange> core_range, cliff_col_core_range, cliff_row_core_range, cliff_col_row_core_range;
-    std::set<CoreRange> all_cores;
+    std::set<tt::tt_metal::CoreRange> core_range, cliff_col_core_range, cliff_row_core_range, cliff_col_row_core_range;
+    std::set<tt::tt_metal::CoreRange> all_cores;
     const uint32_t full_cores_per_row = width_tiles / single_block_size;
     const bool has_cliff_row = (full_cores_per_row < total_blocks_width);
     const uint32_t full_cores_per_col = height_tiles / single_block_size;
@@ -223,8 +223,8 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
     const uint32_t single_block_size_cliff_col = height_tiles - (full_cores_per_col * single_block_size);
     // Coordinates for assigning cores sequentially.
     uint32_t core_index = 0;
-    auto addCore = [&](std::set<CoreRange>& targetSet) {
-        CoreRange range{grid_cores.at(core_index), grid_cores.at(core_index)};
+    auto addCore = [&](std::set<tt::tt_metal::CoreRange>& targetSet) {
+        tt::tt_metal::CoreRange range{grid_cores.at(core_index), grid_cores.at(core_index)};
         targetSet.insert(range);
         all_cores.insert(range);
         // Update core coordinates in a cyclic row-wise manner.
@@ -288,8 +288,8 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
         single_sub_block_size = result.single_sub_block_size;
     }
     // Sets to hold different core ranges.
-    std::set<CoreRange> core_range, cliff_col_core_range, cliff_row_core_range, cliff_col_row_core_range;
-    std::set<CoreRange> all_cores;
+    std::set<tt::tt_metal::CoreRange> core_range, cliff_col_core_range, cliff_row_core_range, cliff_col_row_core_range;
+    std::set<tt::tt_metal::CoreRange> all_cores;
     const uint32_t full_cores_per_row = width_tiles / single_block_size;
     const bool has_cliff_row = (full_cores_per_row < total_blocks_width);
     const uint32_t full_cores_per_col = height_tiles / single_block_size;
@@ -299,8 +299,8 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
     // Coordinates for assigning cores sequentially.
     uint32_t i_x = 0;
     uint32_t i_y = 0;
-    auto addCore = [&](std::set<CoreRange>& targetSet) {
-        CoreRange range{tt::tt_metal::CoreCoord{i_x, i_y}, tt::tt_metal::CoreCoord{i_x, i_y}};
+    auto addCore = [&](std::set<tt::tt_metal::CoreRange>& targetSet) {
+        tt::tt_metal::CoreRange range{tt::tt_metal::CoreCoord{i_x, i_y}, tt::tt_metal::CoreCoord{i_x, i_y}};
         targetSet.insert(range);
         all_cores.insert(range);
         // Update core coordinates in a cyclic row-wise manner.
@@ -353,33 +353,33 @@ inline std::tuple<uint32_t, uint32_t> compute_ncores(size_t grid_area, uint32_t 
     return {ncores, nblocks_per_core};
 }
 
-inline BlockSplit split_blocks_for_tilize(const CoreRangeSet& grid, uint32_t nblocks) {
+inline BlockSplit split_blocks_for_tilize(const tt::tt_metal::CoreRangeSet& grid, uint32_t nblocks) {
     size_t grid_area = grid.num_cores();
     auto grid_cores = corerange_to_cores(grid);
     auto [ncores, nblocks_per_core] = compute_ncores(grid_area, nblocks);
     const uint32_t nblocks_per_core_cliff = nblocks_per_core == 0 ? 0 : nblocks % nblocks_per_core;
     const uint32_t ncores_no_cliff = nblocks_per_core_cliff == 0 ? ncores : ncores - 1;
 
-    std::set<CoreRange> core_range, cliff_core_range;
+    std::set<tt::tt_metal::CoreRange> core_range, cliff_core_range;
     std::optional<tt::tt_metal::CoreCoord> cliff_core;
 
     // Top non-cliff range
     for (uint32_t core_id = 0; core_id < ncores_no_cliff; core_id++) {
-        CoreRange range{grid_cores.at(core_id), grid_cores.at(core_id)};
+        tt::tt_metal::CoreRange range{grid_cores.at(core_id), grid_cores.at(core_id)};
         core_range.insert(range);
     }
 
     if (nblocks_per_core_cliff > 0) {
         // Last partial row (excluding last core) and single cliff core
-        CoreRange range{grid_cores.at(ncores_no_cliff), grid_cores.at(ncores_no_cliff)};
+        tt::tt_metal::CoreRange range{grid_cores.at(ncores_no_cliff), grid_cores.at(ncores_no_cliff)};
         cliff_core = grid_cores.at(ncores_no_cliff);
     }
 
-    std::set<CoreRange> all_cores = core_range;
+    std::set<tt::tt_metal::CoreRange> all_cores = core_range;
 
     if (cliff_core.has_value()) {
-        cliff_core_range.insert(CoreRange{*cliff_core, *cliff_core});
-        all_cores.insert(CoreRange{*cliff_core, *cliff_core});
+        cliff_core_range.insert(tt::tt_metal::CoreRange{*cliff_core, *cliff_core});
+        all_cores.insert(tt::tt_metal::CoreRange{*cliff_core, *cliff_core});
     }
 
     return BlockSplit{ncores, all_cores, core_range, cliff_core_range, nblocks_per_core, nblocks_per_core_cliff};
@@ -393,34 +393,37 @@ inline BlockSplit split_blocks_for_tilize(tt::tt_metal::CoreCoord grid_size, uin
     const uint32_t ncores_y = ncores_x == 0 ? 0 : std::ceil(static_cast<float>(ncores) / ncores_x);
     const uint32_t ncores_x_cliff = ncores - ((ncores_y - 1) * ncores_x);
 
-    std::set<CoreRange> core_range, cliff_core_range;
+    std::set<tt::tt_metal::CoreRange> core_range, cliff_core_range;
     std::optional<tt::tt_metal::CoreCoord> cliff_core;
 
     // Top non-cliff range (full rows)
     const uint32_t top_range_end_y = ncores_y - (ncores_x_cliff < ncores_x || nblocks_per_core_cliff > 0);
 
     if (top_range_end_y > 0) {
-        auto range = CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{ncores_x - 1, top_range_end_y - 1}};
+        auto range = tt::tt_metal::CoreRange{
+            tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{ncores_x - 1, top_range_end_y - 1}};
         core_range.insert(range);
     }
 
     if (ncores_x_cliff < ncores_x && nblocks_per_core_cliff == 0) {
         // Last partial row (non-cliff)
-        auto range = CoreRange{tt::tt_metal::CoreCoord{0, ncores_y - 1}, tt::tt_metal::CoreCoord{ncores_x_cliff - 1, ncores_y - 1}};
+        auto range = tt::tt_metal::CoreRange{
+            tt::tt_metal::CoreCoord{0, ncores_y - 1}, tt::tt_metal::CoreCoord{ncores_x_cliff - 1, ncores_y - 1}};
         core_range.insert(range);
     } else if (nblocks_per_core_cliff > 0) {
         // Last partial row (excluding last core) and single cliff core
         if (ncores_x_cliff > 1) {  // Add range only if there are cores before the cliff core
-            auto range = CoreRange{tt::tt_metal::CoreCoord{0, ncores_y - 1}, tt::tt_metal::CoreCoord{ncores_x_cliff - 2, ncores_y - 1}};
+            auto range = tt::tt_metal::CoreRange{
+                tt::tt_metal::CoreCoord{0, ncores_y - 1}, tt::tt_metal::CoreCoord{ncores_x_cliff - 2, ncores_y - 1}};
             core_range.insert(range);
         }
         cliff_core = tt::tt_metal::CoreCoord{ncores_x_cliff - 1, ncores_y - 1};
     }
 
-    std::set<CoreRange> all_cores = core_range;
+    std::set<tt::tt_metal::CoreRange> all_cores = core_range;
 
     if (cliff_core.has_value()) {
-        cliff_core_range.insert(CoreRange{*cliff_core, *cliff_core});
+        cliff_core_range.insert(tt::tt_metal::CoreRange{*cliff_core, *cliff_core});
         if (all_cores.size() == 1) {
             // Cliff core is in a new row, insert it into all_cores
             all_cores.insert(cliff_core_range.begin(), cliff_core_range.end());

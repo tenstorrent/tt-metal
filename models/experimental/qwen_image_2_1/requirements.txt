@@ -1,0 +1,9 @@
+# Runtime dependencies, installed after the tt-metal development environment.
+transformers==5.12.1
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+pydantic>=2,<3
+pillow
+safetensors
+huggingface_hub
+loguru

@@ -35,7 +35,7 @@ FORCE_INLINE void dispatch_subordinate_realtime_profiler() {
 
     // Clear stale RT-profiler carve-out state left in L1 from prior runs.
     rt_profiler_msg->realtime_profiler_core_noc_xy = 0;
-    rt_profiler_msg->realtime_profiler_remote_state_addr = 0;
+    rt_profiler_msg->realtime_profiler_remote_wr_idx_addr = 0;
     rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
 
     // Wait until host explicitly enables RT profiler, or terminate if RT is not used.
@@ -67,6 +67,10 @@ FORCE_INLINE void dispatch_subordinate_realtime_profiler() {
             if (current_count != last_counts[i]) {
                 DeviceZoneScopedN("TRISC0-record-end-ts");
                 last_counts[i] = current_count;
+                // Not synchronized with dispatch_s publishing this slot, which is benign in practice: these stores
+                // finish within a few cycles, long before the BRISC can fetch a published slot (a NOC round trip).
+                // Only a stall of hundreds of cycles here could leave the end a few cycles early. A torn value would
+                // also need time_lo to wrap during that stall (~s/2^32), and the BRISC clamps it anyway.
                 record_realtime_timestamp(rt_profiler_msg, false);
             }
         }

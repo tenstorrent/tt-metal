@@ -48,9 +48,12 @@ def _golden_function(grad_tensor, input_tensor, tensor1_tensor, tensor2_tensor, 
 ttnn.attach_golden_function(ttnn.addcdiv_bw, golden_function=_golden_function)
 
 
-def _golden_function(grad_tensor, input_tensor, end_tensor, weight, *args, **kwargs):
+def _golden_function(grad_tensor, input_tensor_a, input_tensor_b, input_tensor_c=None, *args, scalar=None, **kwargs):
     import torch
 
+    # The public overloads pass the weight either as input_tensor_c or as scalar.
+    input_tensor, end_tensor = input_tensor_a, input_tensor_b
+    weight = input_tensor_c if input_tensor_c is not None else scalar
     pyt_y = torch.lerp(input_tensor, end_tensor, weight)
     if isinstance(weight, (float, int)):
         input_tensor.retain_grad()
@@ -75,7 +78,8 @@ def _golden_function(grad_tensor, condition_tensor, input_tensor, other_tensor, 
     input_tensor.retain_grad()
     other_tensor.retain_grad()
 
-    pyt_y = torch.where(condition_tensor, input_tensor, other_tensor)
+    # TTNN predicates are 0/1 floating-point tensors, while torch.where requires a boolean condition.
+    pyt_y = torch.where(condition_tensor != 0, input_tensor, other_tensor)
 
     pyt_y.backward(gradient=grad_tensor)
 

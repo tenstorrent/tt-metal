@@ -42,7 +42,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import comp_pcc, comp_allclose, profiler
+from tt_py_test_utils_common.utility_functions import comp_pcc, comp_allclose, profiler
 
 # Weight preparation helpers (inlined from experts_throughput/weights.py)
 _FUSED_MAX_TILES_PER_CORE = 8

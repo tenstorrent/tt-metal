@@ -16,13 +16,16 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t total_tiles = get_compile_time_arg_val(0);
 
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_out_obj(cb_out);
+
     compute_kernel_hw_startup(cb_in, cb_out);
 
     using namespace compute_kernel_lib;
     eltwise_chain(
         IterationShape::tiles(total_tiles),
-        CopyTile<input(cb_in), Dst::D0>{},
+        CopyTile<input(cb_in), Dst::D0>{cb_in_obj},
         RandTile<Dst::D0>{0, 1, 17, 0},
         Dropout<Dst::D1>{1, 1, 29},
-        PackTile<output(cb_out)>{});
+        PackTile<output(cb_out)>{cb_out_obj});
 }

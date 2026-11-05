@@ -30,26 +30,39 @@ using test_helpers::pipe_ring_size;
 using test_helpers::PrefetcherPipeSpecTestQuasar;
 using test_helpers::relay_dfb_name;
 
-TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayEntrySizeMismatchFails) {
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayPagingEachEntryFinerPasses) {
+    // Two relay entries per pipe entry, from a single-threaded relay producer.
     ProgramSpec spec = MakeFullPipeSpec();
     spec.dataflow_buffers[0].entry_size = pipe_entry_size / 2;
     spec.dataflow_buffers[0].num_entries = pipe_num_entries * 2;
-    EXPECT_SPEC_REJECTED(
-        spec, "entry_size 1024 differs from relayed PrefetcherPipeParameter 'weights' entry_size 2048");
+    EXPECT_SPEC_VALID(spec);
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayPagingEachEntryFinerWithLanesFails) {
+    ProgramSpec spec = MakeFullPipeSpec(/*receiver_threads=*/2);
+    spec.dataflow_buffers[0].entry_size = pipe_entry_size / 2;
+    spec.dataflow_buffers[0].num_entries = pipe_num_entries * 2;
+    EXPECT_SPEC_REJECTED(spec, "needs a single-threaded relay producer, but kernel 'receiver' has 2 threads");
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayEntryNotDividingPipeEntryFails) {
+    ProgramSpec spec = MakeFullPipeSpec();
+    spec.dataflow_buffers[0].entry_size = pipe_entry_size * 3 / 4;
+    EXPECT_SPEC_REJECTED(spec, "entry_size 1536 must divide relayed PrefetcherPipeParameter 'weights' entry_size 2048");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayNotCoveringRingFails) {
     ProgramSpec spec = MakeFullPipeSpec();
     spec.dataflow_buffers[0].num_entries = pipe_num_entries - 1;
-    EXPECT_SPEC_REJECTED(spec, "must exactly cover relayed PrefetcherPipeParameter 'weights' ring_size");
+    EXPECT_SPEC_REJECTED(spec, "bytes of whole entries in relayed PrefetcherPipeParameter 'weights'");
 }
 
-TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayNodesNotReceiversFails) {
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayNodesMissReceiverFails) {
     // Relay DFB (and its kernels) on 2 of the 3 receivers, without binding the pipe directly.
     ProgramSpec spec = MakeFullPipeSpec();
     KernelNamed(spec, "receiver").advanced_options.prefetcher_pipe_bindings.clear();
     spec.work_units[1].target_nodes = NodeRange{NodeCoord{0, 1}, NodeCoord{0, 2}};
-    EXPECT_SPEC_REJECTED(spec, "receiver nodes do not match the DFB's node set");
+    EXPECT_SPEC_REJECTED(spec, "receiver nodes are not all in the DFB's node set");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayComputeProducerFails) {
@@ -62,6 +75,17 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayComputeProducerFails) {
         spec,
         "Kernel 'compute' is a PRODUCER of relay DFB 'weights_relay' but has no PrefetcherPipe accessor naming "
         "exactly the relayed pipe set");
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayDFBBlockedProducerFails) {
+    auto spec = MakeFullPipeSpec();
+    KernelNamed(spec, "receiver").dfb_bindings = {BlockedProducerOf(relay_dfb_name, "relay", /*block_size=*/4)};
+    EXPECT_SPEC_REJECTED(spec, "relay DFB does not support the BLOCKED access pattern");
+}
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayDFBBlockedConsumerFails) {
+    auto spec = MakeFullPipeSpec();
+    KernelNamed(spec, "compute").dfb_bindings = {BlockedConsumerOf(relay_dfb_name, "relay", /*block_size=*/4)};
+    EXPECT_SPEC_REJECTED(spec, "relay DFB does not support the BLOCKED access pattern");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayProducerNotBindingPipeFails) {
@@ -117,7 +141,8 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeRelayProducerBindsSubsetFails)
     // also fails tiling (it runs on both receiver sets). The tiling rule fires first.
     ProgramSpec spec = MakeTwoPipeReceiverSpec();
     KernelNamed(spec, "receiver").advanced_options.prefetcher_pipe_bindings[0].pipe_parameter_names = {pipe_param_name};
-    EXPECT_SPEC_REJECTED(spec, "Kernel covers 6 node(s): 3 of the 3 receiver node(s), 3 outside the receivers");
+    EXPECT_SPEC_REJECTED(
+        spec, "Kernel covers 6 node(s) besides 0 extra node(s): 3 of the 3 receiver node(s), 3 outside the receivers");
 }
 
 }  // namespace

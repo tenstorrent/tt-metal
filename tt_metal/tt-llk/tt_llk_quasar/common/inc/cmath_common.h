@@ -11,6 +11,80 @@
 namespace ckernel::math
 {
 
+/**
+ * @brief Return the FPU phase count of a fidelity.
+ * @param fidelity: Approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
+ */
+constexpr std::uint32_t math_fidelity_phase_count(const MathFidelity fidelity)
+{
+    return fidelity == MathFidelity::LoFi ? 1 : to_underlying(fidelity);
+}
+
+/**
+ * @brief Fidelity phases an op issues for its source formats.
+ *
+ * phase_count is the number of FPU passes. phase_increment is the fidelity counter step between them:
+ * 0 for LoFi, 1 for consecutive phases, 2 when a narrow SrcA skips phase 1.
+ */
+struct MathFidelitySchedule
+{
+    std::uint8_t phase_count;
+    std::uint8_t phase_increment;
+};
+
+/**
+ * @brief Resolve the issued phase count and counter increment for the source formats.
+ *
+ * Phase 1 needs low SrcA mantissa bits, phase 2 low SrcB bits, phase 3 both. Phases the formats cannot use are dropped.
+ *
+ * @tparam fidelity: Requested approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
+ * @param src_a_format: Effective SrcA register format.
+ * @param src_b_format: Effective SrcB register format.
+ * @note Only Float16, Tf32 and Float32 carry low mantissa bits. Pass register formats, not L1 MX formats; unpacked MX normally uses Float16_b.
+ */
+template <MathFidelity fidelity>
+constexpr MathFidelitySchedule math_fidelity_schedule(const DataFormat src_a_format, const DataFormat src_b_format)
+{
+    static_assert(
+        fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2 || fidelity == MathFidelity::HiFi3 || fidelity == MathFidelity::HiFi4,
+        "Invalid math fidelity");
+    constexpr std::uint32_t requested_phases = math_fidelity_phase_count(fidelity);
+
+    const auto has_low_mantissa = [](const DataFormat format)
+    { return format == DataFormat::Float16 || format == DataFormat::Tf32 || format == DataFormat::Float32; };
+
+    const bool wide_a = has_low_mantissa(src_a_format);
+    const bool wide_b = has_low_mantissa(src_b_format);
+
+    std::uint8_t phases = 1;
+    if (wide_a && requested_phases > 1)
+    {
+        phases++;
+    }
+    if (wide_b && requested_phases > 2)
+    {
+        phases++;
+    }
+    if (wide_a && wide_b && requested_phases > 3)
+    {
+        phases++;
+    }
+    // A narrow SrcA has no phase 1, so its second phase is phase 2.
+    const std::uint8_t increment = phases == 1 ? 0 : (wide_a ? 1 : 2);
+    return {phases, increment};
+}
+
+/**
+ * @brief Return the source register format of an operand that is copied from dest instead of unpacked from L1.
+ * @tparam EN_32BIT_DEST: dest is in 32-bit mode.
+ * @param dest_format: dest format in 16-bit mode.
+ */
+template <bool EN_32BIT_DEST>
+constexpr DataFormat dest_src_format(const DataFormat dest_format)
+{
+    return EN_32BIT_DEST && dest_format == DataFormat::Float16_b ? DataFormat::Tf32 : dest_format;
+}
+
 // Rows one FPU instruction covers: 8 on the base Quasar part, 4 on the narrow one.
 constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS;
 static_assert(ELTWISE_MATH_ROWS == 4 || ELTWISE_MATH_ROWS == 8, "the math LLKs support a 4-row or 8-row FPU");

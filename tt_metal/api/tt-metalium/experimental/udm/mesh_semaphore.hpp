@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <tt-metalium/experimental/udm/types.hpp>
 #include <tt-metalium/experimental/udm/mesh_builder.hpp>
-#include <tt-metalium/global_semaphore.hpp>
 
 namespace tt::tt_metal::experimental::udm {
 

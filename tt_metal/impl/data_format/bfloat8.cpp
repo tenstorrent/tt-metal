@@ -3,10 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt_stl/span.hpp>
-#include <array>
-#include <functional>
-#include <random>
 #include <vector>
 #include <simde/x86/avx2.h>
 

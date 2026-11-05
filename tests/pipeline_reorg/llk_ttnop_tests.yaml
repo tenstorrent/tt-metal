@@ -8,7 +8,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 1 --report-dir reports/wormhole-1
   skus:
     wh_n150_civ2:
@@ -23,7 +23,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 2 --report-dir reports/wormhole-2
   skus:
     wh_n150_civ2:
@@ -38,7 +38,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 3 --report-dir reports/wormhole-3
   skus:
     wh_n150_civ2:
@@ -53,7 +53,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 4 --report-dir reports/wormhole-4
   skus:
     wh_n150_civ2:
@@ -68,7 +68,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 5 --report-dir reports/wormhole-5
   skus:
     wh_n150_civ2:
@@ -83,7 +83,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 6 --report-dir reports/wormhole-6
   skus:
     wh_n150_civ2:
@@ -98,7 +98,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 7 --report-dir reports/wormhole-7
   skus:
     wh_n150_civ2:
@@ -113,7 +113,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 8 --report-dir reports/wormhole-8
   skus:
     wh_n150_civ2:
@@ -128,7 +128,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 9 --report-dir reports/wormhole-9
   skus:
     wh_n150_civ2:
@@ -143,7 +143,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 10 --report-dir reports/wormhole-10
   skus:
     wh_n150_civ2:
@@ -158,7 +158,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 1 --report-dir reports/blackhole-1
   skus:
     bh_p150b_civ2:
@@ -173,7 +173,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 2 --report-dir reports/blackhole-2
   skus:
     bh_p150b_civ2:
@@ -188,7 +188,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 3 --report-dir reports/blackhole-3
   skus:
     bh_p150b_civ2:
@@ -203,7 +203,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 4 --report-dir reports/blackhole-4
   skus:
     bh_p150b_civ2:
@@ -218,7 +218,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 5 --report-dir reports/blackhole-5
   skus:
     bh_p150b_civ2:
@@ -233,7 +233,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 6 --report-dir reports/blackhole-6
   skus:
     bh_p150b_civ2:
@@ -248,7 +248,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 7 --report-dir reports/blackhole-7
   skus:
     bh_p150b_civ2:
@@ -263,7 +263,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 8 --report-dir reports/blackhole-8
   skus:
     bh_p150b_civ2:
@@ -278,7 +278,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 9 --report-dir reports/blackhole-9
   skus:
     bh_p150b_civ2:
@@ -293,7 +293,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 10 --report-dir reports/blackhole-10
   skus:
     bh_p150b_civ2:
@@ -308,7 +308,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 11 --report-dir reports/wormhole-11
   skus:
     wh_n150_civ2:
@@ -323,7 +323,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 12 --report-dir reports/wormhole-12
   skus:
     wh_n150_civ2:
@@ -338,7 +338,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 13 --report-dir reports/wormhole-13
   skus:
     wh_n150_civ2:
@@ -353,7 +353,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 14 --report-dir reports/wormhole-14
   skus:
     wh_n150_civ2:
@@ -368,7 +368,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 15 --report-dir reports/wormhole-15
   skus:
     wh_n150_civ2:
@@ -383,7 +383,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 11 --report-dir reports/blackhole-11
   skus:
     bh_p150b_civ2:
@@ -398,7 +398,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 12 --report-dir reports/blackhole-12
   skus:
     bh_p150b_civ2:
@@ -413,7 +413,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 13 --report-dir reports/blackhole-13
   skus:
     bh_p150b_civ2:
@@ -428,7 +428,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 14 --report-dir reports/blackhole-14
   skus:
     bh_p150b_civ2:
@@ -443,7 +443,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests/ttnop
-    ./ci.sh --test . --k 'not test_pack_reconfig' \
+    ./scripts/ci.sh --test . --k 'not test_pack_reconfig' \
       --splits "${TTNOP_SPLITS:-15}" --group 15 --report-dir reports/blackhole-15
   skus:
     bh_p150b_civ2:

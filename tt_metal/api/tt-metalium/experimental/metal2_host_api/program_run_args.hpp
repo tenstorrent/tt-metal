@@ -6,13 +6,15 @@
 
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <optional>
 #include <span>
-#include <unordered_map>
+#include <string>
+#include <utility>
 #include <variant>
-#include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
+#include <tt-metalium/experimental/metal2_host_api/arg_value.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
@@ -66,7 +68,7 @@ struct ProgramRunArgs {
         // NOTE: If a kernel runtime argument always has the same value for all nodes,
         // passing a common runtime argument would provide better dispatch efficiency.
         //
-        using RuntimeArgValues = Table<std::string, Table<NodeCoord, uint32_t>>;
+        using RuntimeArgValues = Table<std::string, Table<NodeCoord, ArgValue>>;
         RuntimeArgValues runtime_arg_values;
 
         // Common runtime argument values (broadcast to every node).
@@ -78,8 +80,34 @@ struct ProgramRunArgs {
         // When calling UpdateProgramRunArgs (arbitrary partial update):
         //  Any subset of common runtime arguments may be supplied; omitted ones retain their prior value.
         //
-        using CommonRuntimeArgValues = Table<std::string, uint32_t>;
+        using CommonRuntimeArgValues = Table<std::string, ArgValue>;
         CommonRuntimeArgValues common_runtime_arg_values;
+
+        // Per-node runtime array argument values.
+        // Keyed like runtime_arg_values:
+        //   runtime_array_arg_values[name][node] = {v0, v1, ...};
+        // Each value must have exactly the length declared in the array's ArrayArgDecl.
+        //
+        // When calling SetProgramRunArgs:
+        //  Every array in this kernel's RuntimeArgSchema::runtime_array_args must be set,
+        //  for every node the kernel runs on.
+        //
+        // When calling UpdateProgramRunArgs (arbitrary partial args update):
+        //  Any subset of arrays may be supplied, for any subset of the kernel's nodes.
+        //  A supplied value replaces the whole array on that node (there is no per-element update).
+        using RuntimeArrayArgValues = Table<std::string, Table<NodeCoord, ArrayArgValue>>;
+        RuntimeArrayArgValues runtime_array_arg_values;
+
+        // Common runtime array argument values (broadcast to every node).
+        // Each value must have exactly the length declared in the array's ArrayArgDecl.
+        //
+        // When calling SetProgramRunArgs:
+        //  Every array in this kernel's RuntimeArgSchema::common_runtime_array_args must be set.
+        //
+        // When calling UpdateProgramRunArgs (arbitrary partial update):
+        //  Any subset of common runtime arrays may be supplied; a supplied value replaces the whole array.
+        using CommonRuntimeArrayArgValues = Table<std::string, ArrayArgValue>;
+        CommonRuntimeArrayArgValues common_runtime_array_arg_values;
 
         // Advanced options (see advanced_options.hpp).
         // Companion to KernelAdvancedOptions on the schema side; holds
@@ -87,7 +115,7 @@ struct ProgramRunArgs {
         AdvancedKernelRunArgs advanced_options;
     };
     // For SetProgramRunArgs, a KernelRunArgs must be specified for ALL kernels in the ProgramSpec
-    //  (except for kernels that have no runtime or common runtime arguments).
+    //  (except for kernels that have no runtime or common runtime arguments, scalar or array).
     // For UpdateProgramRunArgs, any kernel may be omitted (its arguments retain their prior values).
     Group<KernelRunArgs> kernel_run_args;
 
@@ -109,7 +137,7 @@ struct ProgramRunArgs {
     //          TensorArguments. A stale binding to a destroyed MeshTensor will produce undefined behavior.
     //
     // The argument's TensorSpec MUST match the TensorParameter's TensorSpec (shape, layout, data type).
-    // (Any declared TensorParameter relaxations will modify the matching rules; see advanced_options.hpp.)
+    // (Any declared TensorParameter relaxations will modify the matching rules; see tensor_spec_relaxations.hpp.)
     Table<TensorParamName, TensorArgument> tensor_args;
 
     ////////////////////////////////////////////////////////////////////////
@@ -196,7 +224,7 @@ ProgramRunArgs MergeProgramRunArgs(
 inline void AddRuntimeArgsForNode(
     KernelRunArgs::RuntimeArgValues& runtime_arg_values,                  // existing RTA table
     const NodeCoord& node,                                                // node
-    std::initializer_list<std::pair<std::string, uint32_t>> named_values  // name -> value list
+    std::initializer_list<std::pair<std::string, ArgValue>> named_values  // name -> value list
 ) {
     for (const auto& [name, value] : named_values) {
         runtime_arg_values[name][node] = value;
@@ -205,7 +233,7 @@ inline void AddRuntimeArgsForNode(
 
 // Build a fresh table for a single node
 inline KernelRunArgs::RuntimeArgValues MakeRuntimeArgsForSingleNode(
-    const NodeCoord& node, std::initializer_list<std::pair<std::string, uint32_t>> named_values) {
+    const NodeCoord& node, std::initializer_list<std::pair<std::string, ArgValue>> named_values) {
     KernelRunArgs::RuntimeArgValues runtime_arg_values;
     AddRuntimeArgsForNode(runtime_arg_values, node, named_values);
     return runtime_arg_values;

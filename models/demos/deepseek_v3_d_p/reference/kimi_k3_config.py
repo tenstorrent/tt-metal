@@ -42,14 +42,13 @@ class KimiK3Config:
     EMB_SIZE = 7168  # embedding dimension
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     # The one definition of K3's l1_small pool, read by the adapter (and so by the runner) and by
-    # the pytest gates, whose mesh fixture is built before any adapter is resolved. Only a CEILING
-    # is known: 24576 (this package's usual value) starves MLA chunked attention of circular
-    # buffers as soon as there is a second chunk to attend over. There is no AttnRes floor any
-    # more -- #54834's fix made the sealed set allocate one persistent semaphore set up front, and
-    # tests/attn_res/model/test_l1_small_footprint.py asserts 0 B/bank at every sealed depth with
-    # l1_small_size 1152. 4096 is therefore inherited, not measured: peers run 768 (Kimi-K2.7,
-    # Mistral-4) and 1216 (GLM-5.x). Re-bisect before trusting it.
-    L1_SMALL_SIZE = 4096
+    # the pytest gates, whose mesh fixture is built before any adapter is resolved. It is cut from
+    # the top of L1, so each byte of it lowers the L1 buffers toward MLA's static circular buffers:
+    # 24576 (this package's usual value) starves chunked attention as soon as there is a second
+    # chunk to attend over, and 4096 left ring_mla 1,408 B short (chunked L24) once the fused
+    # matmul + reduce-scatter kept 2,176 B/bank of L1. The K3 L24 tests use 960 B/bank of the pool;
+    # AttnRes uses none since #54834 (tests/attn_res/model/test_l1_small_footprint.py).
+    L1_SMALL_SIZE = 1536
     MOE_INTERMEDIATE_SIZE = 3072  # MoE FFN hidden dimension
     INTERMEDIATE_SIZE = 33792  # Dense FFN hidden dimension
 
@@ -61,6 +60,12 @@ class KimiK3Config:
     NUM_LIMITED_GROUPS = 1
     ROUTE_SCALE = 1.0  # routed_scaling_factor
     ROUTED_EXPERT_HIDDEN_SIZE = 3584  # LatentMoE: routed experts run at a reduced hidden dim
+    # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
+    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
+    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
+    # length. Measured 8x4 at ring8 / 5k over 24..96 pages: the shallowest depth inside 5% of the dense
+    # region on both traffic shapes, at -3.7% balanced and +4.7% hot_expert.
+    DISPATCH_FWD_VC_PAGES = 64
     # Routed-expert hybrid split: experts with <= this many active tokens go to
     # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross ONCE on the
     # 3584x3072 routed-expert shape, between 128 and 192: the composite's cost is flat inside an M
@@ -148,6 +153,12 @@ class KimiK3Config:
         wants: ``[3, 7, 11, ..., 87, 91, 92]``.
         """
         return sorted(layer - 1 for layer in cls.FULL_ATTN_LAYERS_1BASED)
+
+    @classmethod
+    def kda_layer_ids(cls) -> list[int]:
+        """0-indexed model-layer indices of the KDA (linear-attention) layers: every layer that is not MLA."""
+        mla = set(cls.mla_layer_ids())
+        return [layer for layer in range(cls.NUM_LAYERS) if layer not in mla]
 
     @classmethod
     def mla_kv_slot(cls, layer_idx: int) -> int:

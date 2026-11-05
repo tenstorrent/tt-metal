@@ -549,10 +549,10 @@ inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)
     mailbox_base[thread][0] = data;
 }
 
-// Blocking read
-inline std::uint32_t mailbox_read(const std::uint8_t thread)
+// Blocking read: returns only once the message has arrived, even when the caller never uses the value.
+[[nodiscard]] inline std::uint32_t mailbox_read(const std::uint8_t thread)
 {
-    return mailbox_base[thread][0];
+    return load_blocking(&mailbox_base[thread][0]);
 }
 
 inline bool mailbox_not_empty(const std::uint8_t thread)
@@ -669,6 +669,8 @@ inline void enable_gathering()
 // replay buffer, and LEN is the number of instructions to record
 // (should match the expansion of CALLABLE). CALLABLE is a callable,
 // to which ARGS are forwarded.
+// Every record goes through here, never a raw lltt::record / TTI_REPLAY: loading the replay
+// buffer is incompatible with Blackhole instruction gathering, which this disables around it.
 // When we move to c++23 we can use 'using enum lltt::ExecBool;'
 enum ExecBool : bool
 {
@@ -864,14 +866,14 @@ constexpr std::uint32_t get_dest_max_tiles()
 
 /**
  * @brief Runtime variant of get_dest_max_tiles for assert sites. Reads dest
- *        accumulation mode from ALU_ACC_CTRL_Fp32_enabled rather than a
+ *        accumulation mode from llk_assert_fp32_dest_acc_en rather than a
  *        template parameter. Only ever evaluated inside LLK_ASSERT (compiled
  *        out in production via sizeof).
  */
 template <DstSync SYNC_MODE, DstTileShape TILE_SHAPE>
 inline std::uint32_t get_dest_max_tiles_rt()
 {
-    const bool accum_mode = (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK) != 0;
+    const bool accum_mode = llk_assert_fp32_dest_acc_en;
     const std::uint32_t dest_register_size =
         SYNC_MODE == DstSync::SyncHalf ? (accum_mode ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
                                        : (accum_mode ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);

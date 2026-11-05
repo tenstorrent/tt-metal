@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <vector>
 #include <tt-metalium/experimental/udm/types.hpp>
 #include <tt-metalium/experimental/udm/mesh_program.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>

@@ -9,6 +9,7 @@
 #include "device/untilize_device_operation.hpp"
 #include "untilize_force.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
@@ -32,6 +33,11 @@ MassagedUntilize build_ndiml_untilize(BaseUntilizeType base_untilize) {
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
+            // The unpadding path writes a compact output (padded == logical). Handing it the input's
+            // tile-rounded padded shape back would declare more bytes than its buffer holds.
+            if (output.padded_shape() == output.logical_shape()) {
+                return ttnn::reshape(output, original_shape->first);
+            }
             auto unsqueezed_tensor = ttnn::reshape(output, original_shape->first, original_shape->second);
             return unsqueezed_tensor;
         },
@@ -57,8 +63,8 @@ ttnn::Tensor untilize_native(
         return ttnn::untilize_with_unpadding(
             input_tensor, output_tensor_end, memory_config, use_multicore, sub_core_grids);
     }
-    bool fp32_dest_acc_en = input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
-                            input_tensor.dtype() == DataType::FLOAT32;
+    // UInt8 needs 32-bit Dest on WH/BH.
+    bool fp32_dest_acc_en = operations::data_movement::requires_32bit_dest(input_tensor.dtype());
     // The native prim emits BFLOAT16 for a BFLOAT8_B input (UntilizeDeviceOperation::compute_output_specs),
     // so size the output CB estimate and the pending output buffer by the output dtype: sizing them by the
     // input's 1088 B tile under-reserves a 2048 B/tile output and can keep enough_space_height true for a row
@@ -128,9 +134,11 @@ ttnn::Tensor untilize_force_codegen(
         TT_FATAL(
             supported_by_codegen(normalized_input, output_mem_config),
             "untilize_force_codegen invoked for a case the codegen prim does not support (requires "
-            "TILE-layout, interleaved (non-sharded) input and output, dtype bfloat16 or bfloat8_b "
-            "(bfloat8_b additionally requires a tile-aligned logical shape), and a width within the L1 "
-            "chunking threshold). This entry never falls back to native, because a forced leg that "
+            "TILE layout in the default 32x32 non-transposed tile, interleaved (non-sharded) input and "
+            "output, dtype bfloat16, bfloat8_b, int32 or uint32 (bfloat8_b additionally requires a "
+            "tile-aligned logical shape), a tile-row within the L1 chunking threshold, and for a single "
+            "tile-row a column-parallel CB plan that fits L1; see supported_by_codegen). This entry never "
+            "falls back to native, because a forced leg that "
             "quietly served native would make any comparison against native vacuous. Use ttnn::untilize "
             "if you want the case routed.");
         // Deliberately no codegen_cb_plan_fits_live_l1 gate here either: if no codegen CB plan fits
@@ -156,6 +164,39 @@ ttnn::Tensor untilize(
     using ttnn::operations::data_movement::untilize_codegen::is_demoted;
     using ttnn::operations::data_movement::untilize_codegen::supported_by_codegen;
     using ttnn::operations::data_movement::untilize_codegen::supported_execution_controls;
+
+    // Nothing to untilize. The routes below split work by block count, which is 0 for an empty
+    // input, so no work unit is emitted while the dataflow buffers are already declared and the
+    // spec is rejected. The device operation's validation and output spec are both fine on an
+    // empty input, so run them and allocate the result - the only thing skipped is the program,
+    // which cannot be built with no work to do.
+    if (input_tensor.logical_volume() == 0) {
+        // create_device_tensor dereferences the device, which is null for a host tensor.
+        TT_FATAL(input_tensor.device() != nullptr, "untilize: input tensor must be allocated on a device");
+        // A padded interleaved input belongs to untilize_with_unpadding, which derives the output
+        // shard geometry; delegate rather than duplicate that here.
+        if (!input_tensor.is_sharded() && input_tensor.logical_shape() != input_tensor.padded_shape()) {
+            return operations::data_movement::untilize_native(
+                input_tensor, memory_config, use_multicore, sub_core_grids);
+        }
+        // Everything else is the native prim's to decide. fp32_dest_acc_en, enough_space_height
+        // and pf_type only steer factory selection, which is skipped, and neither validate nor
+        // compute_output_specs reads them.
+        const ttnn::prim::UntilizeOperationAttributes attributes{
+            .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+            .use_multicore = use_multicore,
+            .fp32_dest_acc_en = false,
+            .sub_core_grids = sub_core_grids,
+            .enough_space_height = false,
+            .pf_type = 0,
+        };
+        const ttnn::prim::UntilizeTensorArgs tensor_args{input_tensor};
+        ttnn::prim::UntilizeDeviceOperation::validate_on_program_cache_miss(attributes, tensor_args);
+        return create_device_tensor(
+            ttnn::prim::UntilizeDeviceOperation::compute_output_specs(attributes, tensor_args),
+            input_tensor.device(),
+            input_tensor.tensor_topology());
+    }
 
     const bool controls_ok = supported_execution_controls(use_multicore, sub_core_grids);
 

@@ -14,20 +14,20 @@ namespace ttnn::operations::transformer {
 
 struct SDPAProgramConfig {
     tt::tt_metal::CoreCoord compute_with_storage_grid_size;
-    std::optional<CoreRangeSet> sub_core_grids;
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
     std::size_t q_chunk_size;
     std::size_t k_chunk_size;
     std::optional<bool> exp_approx_mode;
     uint32_t max_cores_per_head_batch = 16;
-    // Ring joint chunked prefill only: up to this many cores may share one (head, Q chunk) unit along K when the
-    // units leave the grid idle. 1 disables the split.
-    uint32_t max_k_splits = 1;
+    // Ring joint chunked prefill only (ignored where Q is as long as the local K/V): bands of cores that split each
+    // (head, Q chunk) unit along K; 1 disables. The op refuses a count it cannot apply and names the most it can.
+    uint32_t k_splits = 1;
     // Ring joint streaming compute only: fidelity of the QK^T and softmax @ V matmuls; the rest of the kernel keeps
     // the compute kernel config's.
     std::optional<tt::tt_metal::MathFidelity> matmul_math_fidelity;
-    // Ring joint chunked prefill only: each core accumulates each ring iteration separately and merges, so no bf16
-    // running sum spans the whole prefix. Ignored where K is split; the op refuses it when a core would hold several
-    // Q chunks (raise q_chunk_size).
+    // Ring joint chunked prefill only (ignored where Q is as long as the local K/V): per-ring-iteration accumulation,
+    // so no bf16 running sum spans the whole prefix. Refused with a K split, a sliding window, or several Q chunks
+    // per core (raise q_chunk_size).
     bool segmented_accumulation = false;
 };
 

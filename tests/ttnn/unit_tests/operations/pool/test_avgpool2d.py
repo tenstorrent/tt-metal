@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 import ttnn
 import pytest
 from tests.ttnn.nightly.unit_tests.operations.pool.test_avgpool2d import run_avg_pool2d
@@ -369,3 +370,24 @@ def test_avg_pool2d_fp32_dest_acc_block_sharded(device, tensor_map, input_shape)
         compute_kernel_config=compute_kernel_config,
         config_tensor_in_dram=True,
     )
+
+
+def test_avg_pool2d_global_rejects_zero_batch(device, expect_error):
+    in_c, in_h, in_w = 32, 8, 8
+    ttnn_input = ttnn.from_torch(
+        torch.randn(1, 1, in_h * in_w, in_c, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    with expect_error(RuntimeError, "Batch size must be greater than 0"):
+        ttnn.avg_pool2d(
+            input_tensor=ttnn_input,
+            batch_size=0,
+            input_h=in_h,
+            input_w=in_w,
+            channels=in_c,
+            kernel_size=[in_h, in_w],
+            stride=[1, 1],
+            padding=[0, 0],
+        )
