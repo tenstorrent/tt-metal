@@ -23,6 +23,7 @@
 #include "metal/ops/gumbel_sample/device/gumbel_sample_program_factory.hpp"
 #include "metal/ops/gumbel_sample/gumbel_sample.hpp"
 #include "metal/ops/gumbel_sample/gumbel_sample_constants.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
@@ -33,10 +34,11 @@
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"  // to_l1_interleaved, for the buffer-placement test
 
 // Device tests for the fused ttml::metal::gumbel_sample op (plus, for preallocated outputs, the
-// underlying ttnn::prim::ttml_gumbel_sample). The device is opened and closed PER TEST, matching
-// the suite these tests were extracted from: several tests stage deliberate program-cache
-// collisions and cache-hit re-patches, and a per-test device keeps every test's cache
-// interactions self-contained.
+// underlying ttnn::prim::ttml_gumbel_sample). GumbelSampleOpTest opens and closes the device PER
+// TEST, matching the suite these tests were extracted from: several tests stage deliberate
+// program-cache collisions and cache-hit re-patches, and a per-test device keeps every test's cache
+// interactions self-contained. GumbelSampleCacheHitTest shares one device across its tests and
+// starts each from an empty program cache.
 class GumbelSampleOpTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -241,7 +243,9 @@ ttnn::Tensor upload_as(const xt::xarray<float>& data, ttnn::DataType dtype) {
 // row-major expected argmax. Winners walk the vocabulary with a per-row stride, so a row, page or
 // batch-entry mix-up lands on a DIFFERENT id instead of coincidentally matching. `offset` shifts
 // the walk and `winner_modulo` (0 = the full vocab) restricts which columns can win -- the
-// buffer-placement test uses both to keep winners off its decoy column.
+// buffer-placement test uses both to keep winners off its decoy column. `runner_up_value`, when
+// set, also plants a runner-up half the vocabulary away from each winner: the row's id once a mask
+// bans its winner.
 struct WinnerLogits {
     xt::xarray<float> logits;
     std::vector<uint32_t> expected;  // argmax per (batch, token) row, row-major
@@ -255,7 +259,8 @@ WinnerLogits make_winner_logits(
     uint32_t offset = 0U,
     uint32_t winner_modulo = 0U,
     float winner_value = -0.5F,
-    float floor_value = -1.0F) {
+    float floor_value = -1.0F,
+    std::optional<float> runner_up_value = std::nullopt) {
     const uint32_t modulo = (winner_modulo == 0U) ? vocab : winner_modulo;
     WinnerLogits out;
     out.logits = xt::xarray<float>::from_shape({batch, 1U, tokens, vocab});
@@ -265,6 +270,9 @@ WinnerLogits make_winner_logits(
         for (uint32_t t = 0; t < tokens; ++t) {
             const uint32_t winner = ((b * tokens + t) * stride + offset) % modulo;
             out.logits(b, 0, t, winner) = winner_value;
+            if (runner_up_value.has_value()) {
+                out.logits(b, 0, t, (winner + vocab / 2U) % vocab) = *runner_up_value;
+            }
             out.expected[b * tokens + t] = winner;
         }
     }
@@ -370,8 +378,13 @@ TEST_F(GumbelSampleOpTest, TestSamplingTemperatureScalesLogitsNotNoise) {
     EXPECT_EQ(cold, expected) << "low temperature must reduce to argmax";
 
     // Hot: the logits are scaled down to <= 1e-4 and the noise dominates, so the argmax must not win
-    // every row. All 32 rows agreeing by chance would be (1/64)^32.
+    // every row. All 32 rows agreeing by chance would be (1/64)^32. Only greedy versus noisy is
+    // hashed, not the temperature value, so this call reuses the cold call's program and must
+    // re-apply 1/T on the cache hit.
+    auto& device = ttml::autograd::ctx().get_device();
+    const auto entries_after_cold = device.num_program_cache_entries();
     auto hot = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 1.0e4F, 42));
+    EXPECT_EQ(device.num_program_cache_entries(), entries_after_cold) << "the hot call must reuse the cold program";
     ASSERT_EQ(hot.size(), expected.size());
     EXPECT_NE(hot, expected) << "high temperature must not reduce to argmax";
 }
@@ -798,35 +811,55 @@ TEST_F(GumbelSampleOpTest, TestSamplingAtPerRowPositionsAcrossTokenCounts) {
     // lands inside that entry's own data and inside the buffer: a real token row, no fault, just
     // the wrong one. So this test needs all three of: two different token counts, a position in the
     // last tile row, and assertions on a LATER batch entry. Entry 0 cannot see the bug at all,
-    // because entry * Ht is zero whatever Ht is.
+    // because entry * Ht is zero whatever Ht is. Each later call asserts it was a cache hit: a key
+    // that grew a token dimension would pass every value check while paying a JIT build per length.
     constexpr uint32_t kBatch = 3U;
     constexpr uint32_t kVocab = 77U;
 
+    struct Sampled {
+        std::vector<uint32_t> got;
+        std::vector<uint32_t> expected;
+        size_t new_cache_entries{};
+    };
     auto run = [](uint32_t tokens, const std::vector<uint32_t>& positions) {
+        auto& device = ttml::autograd::ctx().get_device();
         const auto [a, expected_all] = make_winner_logits(kBatch, tokens, kVocab, /* stride */ 11U);
-        auto tensor = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
-        auto got = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(
-            tensor, 0.0F, 7, /* seed_axes */ {}, /* mask */ std::nullopt, make_positions(positions)));
+        auto tensor = ttml::core::from_xtensor(a, &device);
+        auto positions_tt = make_positions(positions);
 
-        std::vector<uint32_t> expected(kBatch);
+        Sampled sampled;
+        const auto entries_before = device.num_program_cache_entries();
+        auto output =
+            ttml::metal::gumbel_sample(tensor, 0.0F, 7, /* seed_axes */ {}, /* mask */ std::nullopt, positions_tt);
+        sampled.new_cache_entries = device.num_program_cache_entries() - entries_before;
+        sampled.got = ttml::core::to_vector<uint32_t>(output);
         for (uint32_t b = 0; b < kBatch; ++b) {
-            expected[b] = expected_all[b * tokens + positions[b]];
+            sampled.expected.push_back(expected_all[b * tokens + positions[b]]);
         }
-        return std::pair<std::vector<uint32_t>, std::vector<uint32_t>>{std::move(got), std::move(expected)};
+        return sampled;
     };
 
     // Builds the program at Ht = 3 (70 tokens pad to 96).
     const auto first = run(70U, {0U, 37U, 69U});
-    ASSERT_EQ(first.first.size(), kBatch);
-    EXPECT_EQ(first.first, first.second) << "70-token call";
+    ASSERT_EQ(first.got.size(), kBatch);
+    EXPECT_EQ(first.got, first.expected) << "70-token call";
 
     // Same batch and vocabulary, so under the normalized key this reuses the program above -- but it
     // needs Ht = 5 (134 tokens pad to 160). Entry 2 at token 133 belongs to tile row 14; replayed
     // with the stale Ht it would resolve to row 10, which is still entry 2 and still in bounds, but
-    // holds token 0.
+    // holds token 5. With a stale logical token count of 70, the clamp would move it to token 69.
     const auto second = run(134U, {0U, 70U, 133U});
-    ASSERT_EQ(second.first.size(), kBatch);
-    EXPECT_EQ(second.first, second.second) << "134-token call reusing the 70-token program";
+    ASSERT_EQ(second.got.size(), kBatch);
+    EXPECT_EQ(second.new_cache_entries, 0U) << "the 134-token call must reuse the 70-token program";
+    EXPECT_EQ(second.got, second.expected) << "134-token call reusing the 70-token program";
+
+    // And back down to Ht = 2 (40 tokens pad to 64). With the stale Ht = 5, entry 1 at token 5 would
+    // resolve to tile row 5, which is entry 2's second tile row: token 37 of entry 2, a real row
+    // with a different winner.
+    const auto third = run(40U, {0U, 5U, 39U});
+    ASSERT_EQ(third.got.size(), kBatch);
+    EXPECT_EQ(third.new_cache_entries, 0U) << "the 40-token call must reuse the 70-token program";
+    EXPECT_EQ(third.got, third.expected) << "40-token call after the 134-token call";
 }
 
 TEST_F(GumbelSampleOpTest, TestSamplingAtPerRowPositionsLargeBatch) {
@@ -859,31 +892,34 @@ TEST_F(GumbelSampleOpTest, TestSamplingAtPerRowPositionsLargeBatch) {
 TEST_F(GumbelSampleOpTest, TestSamplingRepatchesPositionsBufferOnCacheHit) {
     // The positions BUFFER ADDRESS is a runtime arg, and every prefill builds a new tensor. A cached
     // program replayed against a stale address reads whatever DRAM now occupies that region: in
-    // bounds, no fault, a plausible-looking token. Nothing else in this file varies the positions
-    // buffer across two calls that share a program, so a dropped re-patch passes every other test.
+    // bounds, no fault, a plausible-looking token.
     //
-    // The first tensor is deallocated before the second is built, so the allocator is likely to hand
-    // back the same region -- which is exactly the case where a stale address looks healthy.
+    // Both positions tensors stay alive, so the second cannot land on the first one's region (a freed
+    // region handed straight back is exactly the case where a stale address looks healthy). A hit
+    // that kept the first address reads the first call's positions, and every entry below has a
+    // different winner at its first and at its second position.
     constexpr uint32_t kBatch = 4U;
     constexpr uint32_t kTokens = 96U;
     constexpr uint32_t kVocab = 40U;
 
+    auto& device = ttml::autograd::ctx().get_device();
     const auto [a, winner_at] = make_winner_logits(kBatch, kTokens, kVocab, /* stride */ 3U);
-    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
-
-    auto sample_at = [&](const std::vector<uint32_t>& positions) {
-        auto positions_tt = make_positions(positions);
-        auto got = ttml::core::to_vector<uint32_t>(
-            ttml::metal::gumbel_sample(tensor_a, 0.0F, 7, /* seed_axes */ {}, /* mask */ std::nullopt, positions_tt));
-        positions_tt.deallocate(/* force */ true);
-        return got;
-    };
+    auto tensor_a = ttml::core::from_xtensor(a, &device);
 
     const std::vector<uint32_t> first_positions = {0U, 31U, 64U, 95U};
     const std::vector<uint32_t> second_positions = {95U, 64U, 31U, 0U};  // same shapes, different values
+    auto first_positions_tt = make_positions(first_positions);
+    auto second_positions_tt = make_positions(second_positions);
+    ASSERT_NE(first_positions_tt.buffer()->address(), second_positions_tt.buffer()->address());
 
-    auto first = sample_at(first_positions);
-    auto second = sample_at(second_positions);
+    auto sample_at = [&](const ttnn::Tensor& positions_tt) {
+        return ttml::core::to_vector<uint32_t>(
+            ttml::metal::gumbel_sample(tensor_a, 0.0F, 7, /* seed_axes */ {}, /* mask */ std::nullopt, positions_tt));
+    };
+    auto first = sample_at(first_positions_tt);
+    const auto entries_after_first = device.num_program_cache_entries();
+    auto second = sample_at(second_positions_tt);
+    EXPECT_EQ(device.num_program_cache_entries(), entries_after_first) << "the second call must reuse the program";
 
     for (uint32_t b = 0; b < kBatch; ++b) {
         EXPECT_EQ(first[b], winner_at[b * kTokens + first_positions[b]]) << "first call, entry " << b;
@@ -1031,11 +1067,14 @@ TEST_F(GumbelSampleOpTest, TestSamplingPerRowMask) {
     for (uint32_t b = 0; b < kBatch; ++b) {
         ASSERT_EQ(shared_greedy[b * kTokens], b + 1) << "zero shared mask must not change the winner";
     }
+    // The mask's batch dim is not hashed, so both calls below must be hits on this program.
+    const auto entries_after_shared = device->num_program_cache_entries();
 
     // Per-row masked: every entry's own winner is banned, so 0 must win everywhere -- and if entry
     // e were served entry f's mask row (f != e), e's winner e+1 would survive and this fails.
     auto masked =
         ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 0.0F, 7, /* seed_axes */ {}, tensor_m));
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_shared) << "per-row mask after the shared one";
     ASSERT_EQ(masked.size(), kBatch * kTokens);
     for (uint32_t b = 0; b < kBatch; ++b) {
         for (uint32_t t = 0; t < kTokens; ++t) {
@@ -1049,6 +1088,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingPerRowMask) {
     // and the forward (0 -> Wt) direction above is the deterministic guard on the patch line.
     auto shared_again = ttml::core::to_vector<uint32_t>(
         ttml::metal::gumbel_sample(tensor_a, 0.0F, 7, /* seed_axes */ {}, tensor_shared));
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_shared) << "shared mask after the per-row one";
     ASSERT_EQ(shared_again.size(), kBatch * kTokens);
     for (uint32_t b = 0; b < kBatch; ++b) {
         EXPECT_EQ(shared_again[b * kTokens], b + 1) << "stride must re-patch back to 0 for a shared mask";
@@ -1184,11 +1224,15 @@ TEST_F(GumbelSampleOpTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
     // unpack-to-dest instead of SrcA), and the noise chain accumulates against fp32 rather than
     // bf16 scores. The positions tensor is UINT32 either way, so one serves both runs.
     auto positions_tensor = make_positions(entry_positions);
+    auto& device = ttml::autograd::ctx().get_device();
     for (const auto& [dtype_id, label] : kLogitsDtypes) {
         const std::string dtype = label;
         auto tensor_a = upload_as(a, dtype_id);
         auto pos_tensor = upload_as(pos_logits, dtype_id);
         auto mask_tensor = upload_as(mask, dtype_id);
+        // The seed is a runtime arg left out of the program hash: each sampling path below compiles
+        // ONE program however many seeds run on it.
+        const auto entries_before_seeds = device.num_program_cache_entries();
 
         std::array<uint32_t, kActive> counts{};
         uint32_t total_samples = 0U;
@@ -1215,6 +1259,8 @@ TEST_F(GumbelSampleOpTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
         EXPECT_EQ(first, again) << dtype << ": same seed must reproduce the same samples";
         auto other = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 1.0F, 5678U));
         EXPECT_NE(first, other) << dtype << ": different seeds must produce different samples";
+        EXPECT_EQ(device.num_program_cache_entries(), entries_before_seeds + 1U)
+            << dtype << ": the every-row path must reuse one program across its 7 seeded calls";
 
         // ---- the same guarantee through the positions + mask path (see the host-data comment) ----
         std::array<uint32_t, kActive> pos_counts{};
@@ -1232,6 +1278,8 @@ TEST_F(GumbelSampleOpTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
                 ++pos_total;
             }
         }
+        EXPECT_EQ(device.num_program_cache_entries(), entries_before_seeds + 2U)
+            << dtype << ": the positions+mask path must reuse one program across its 4 seeds";
 
         expect_counts_match_weights(pos_counts, pos_total, dtype + ": positions+mask");
     }
@@ -1561,5 +1609,474 @@ TEST_F(GumbelSampleOpTest, TestSamplingNoisyMatchesCompositeDistribution) {
                 5.0 * sigma * std::numbers::sqrt2)
                 << dtype << " fused vs composite: column " << kActiveCols[c];
         }
+    }
+}
+
+// ============================================================================
+// Program-cache hits on live, fresh tensors
+// ============================================================================
+// The program hash leaves out every buffer address, the seed, the temperature value, the mask's batch
+// dim and, in position mode, the token count. Each test starts from an empty program cache, asserts
+// that its first launch compiled a program and that its hits did not, keeps every tensor alive so a
+// hit sees new addresses, and sizes its inputs to split into two core groups on any grid. Greedy ids
+// are checked against greedy_reference, noisy ids against the same launch rebuilt as a miss.
+// ============================================================================
+
+class GumbelSampleCacheHitTest : public ttml::test_utils::ProgramCacheSuiteTest {};
+
+namespace {
+
+using ttml::test_utils::blocks_for_two_core_groups;
+using ttml::test_utils::expect_new_buffer;
+
+constexpr uint32_t kHitVocab = 77U;  // Wt = 3 with a ragged last tile; at 2-3 tiles per core, rows span cores
+constexpr uint32_t kHitWt = 3U;
+constexpr uint32_t kHitBatch = 2U;             // every-row tests: entry 1's output pages follow entry 0's
+constexpr uint32_t kHitTokens = 70U;           // position-mode tests: Ht = 3 with a ragged last tile row
+constexpr uint32_t kNotWritten = 0xFFFFFFFFU;  // fill of preallocated outputs; never a token id
+
+// Tokens of a [kHitBatch, 1, T, kHitVocab] every-row input whose split has two core groups. Each entry's last tile
+// row keeps 27 of its 32 rows.
+uint32_t every_row_two_group_tokens() {
+    return blocks_for_two_core_groups(kHitBatch * kHitWt) * 32U - 5U;
+}
+
+// Greedy data: a -0.25 winner and a -0.5 runner-up above a -1 floor in every row, all exact in bf16. Stride 5 is
+// coprime with kHitVocab, so two positions of one entry fewer than kHitVocab tokens apart never share a winner, and
+// `offset` moves every winner.
+WinnerLogits make_hit_winners(uint32_t batch, uint32_t tokens, uint32_t offset) {
+    return make_winner_logits(
+        batch,
+        tokens,
+        kHitVocab,
+        /* stride */ 5U,
+        offset,
+        /* winner_modulo */ 0U,
+        /* winner_value */ -0.25F,
+        /* floor_value */ -1.0F,
+        /* runner_up_value */ -0.5F);
+}
+
+// A [rows, 1, 1, kHitVocab] mask with the 1e4 penalty on every (row, column) that `banned` selects.
+template <typename Banned>
+xt::xarray<float> make_hit_mask(uint32_t rows, Banned banned) {
+    xt::xarray<float> mask = xt::zeros<float>(xt::xarray<float>::shape_type{rows, 1U, 1U, kHitVocab});
+    for (uint32_t r = 0; r < rows; ++r) {
+        for (uint32_t c = 0; c < kHitVocab; ++c) {
+            if (banned(r, c)) {
+                mask(r, 0, 0, c) = 1e4F;
+            }
+        }
+    }
+    return mask;
+}
+
+// Per-entry positions walking the token range with stride 13, coprime with every token count used here.
+std::vector<uint32_t> walk_positions(uint32_t batch, uint32_t tokens, uint32_t offset) {
+    std::vector<uint32_t> positions(batch);
+    for (uint32_t b = 0; b < batch; ++b) {
+        positions[b] = (b * 13U + offset) % tokens;
+    }
+    return positions;
+}
+
+// A UINT32 ROW_MAJOR tensor of `shape` filled with kNotWritten, for the prim's preallocated output.
+ttnn::Tensor preallocate_ids(const ttnn::Shape& shape) {
+    return ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        std::vector<uint32_t>(shape.volume(), kNotWritten),
+        shape,
+        &ttml::autograd::ctx().get_device(),
+        ttnn::Layout::ROW_MAJOR);
+}
+
+// A greedy launch's host data and device tensors; the tensors stay alive with it.
+struct GreedyLaunch {
+    WinnerLogits winners;
+    xt::xarray<float> mask_host;
+    std::optional<std::vector<uint32_t>> positions_host;
+    std::vector<uint32_t> expected;
+    ttnn::Tensor logits;
+    ttnn::Tensor mask;
+    std::optional<ttnn::Tensor> positions;
+    std::vector<float> mask_values;  // read back right after the upload
+};
+
+// Position-mode launch k, bf16: winners moved by 5 * k, positions offset by 37 * k, and a per-row mask that bans the
+// sampled winner of every entry of parity k, so those entries fall back to their runner-up.
+GreedyLaunch make_position_launch(uint32_t batch, uint32_t k) {
+    GreedyLaunch launch;
+    launch.winners = make_hit_winners(batch, kHitTokens, 5U * k);
+    const auto positions = walk_positions(batch, kHitTokens, 5U + 37U * k);
+    launch.mask_host = make_hit_mask(batch, [&](uint32_t b, uint32_t c) {
+        return b % 2U == k && c == launch.winners.expected[b * kHitTokens + positions[b]];
+    });
+    launch.positions_host = positions;
+    launch.expected = greedy_reference(launch.winners.logits, launch.mask_host, launch.positions_host);
+    auto* device = &ttml::autograd::ctx().get_device();
+    launch.logits = ttml::core::from_xtensor(launch.winners.logits, device);
+    launch.mask = ttml::core::from_xtensor(launch.mask_host, device);
+    launch.positions = make_positions(positions);
+    launch.mask_values = ttml::core::to_vector(launch.mask);
+    return launch;
+}
+
+// Every-row launch k, FLOAT32: winners moved by 5 * k and a shared mask that bans the columns c with
+// (c + k) % 3 == 0.
+GreedyLaunch make_every_row_launch(uint32_t tokens, uint32_t k) {
+    GreedyLaunch launch;
+    launch.winners = make_hit_winners(kHitBatch, tokens, 5U * k);
+    launch.mask_host = make_hit_mask(1U, [k](uint32_t, uint32_t c) { return (c + k) % 3U == 0U; });
+    launch.expected = greedy_reference(launch.winners.logits, launch.mask_host, std::nullopt);
+    launch.logits = upload_as(launch.winners.logits, ttnn::DataType::FLOAT32);
+    launch.mask = upload_as(launch.mask_host, ttnn::DataType::FLOAT32);
+    launch.mask_values = ttml::core::to_vector(launch.mask);
+    return launch;
+}
+
+// Host-only: launch B's ids change when any of launch A's inputs stands in for B's, and A's ids differ from B's, so
+// a hit that kept any buffer of A cannot pass.
+void assert_distinguishable(const GreedyLaunch& a, const GreedyLaunch& b) {
+    ASSERT_NE(greedy_reference(a.winners.logits, b.mask_host, b.positions_host), b.expected) << "A's logits";
+    ASSERT_NE(greedy_reference(b.winners.logits, a.mask_host, b.positions_host), b.expected) << "A's mask";
+    if (b.positions_host.has_value()) {
+        ASSERT_NE(greedy_reference(b.winners.logits, b.mask_host, a.positions_host), b.expected) << "A's positions";
+    }
+    ASSERT_NE(a.expected, b.expected) << "A's output";
+}
+
+void expect_distinct_inputs(const GreedyLaunch& a, const GreedyLaunch& b) {
+    expect_new_buffer(a.logits, b.logits, "logits");
+    expect_new_buffer(a.mask, b.mask, "masks");
+    if (a.positions.has_value() && b.positions.has_value()) {
+        expect_new_buffer(*a.positions, *b.positions, "positions");
+    }
+}
+
+// The inputs are read-only: an output slot that points at an input's buffer shows up here.
+void expect_inputs_unchanged(const GreedyLaunch& launch, const std::string& what) {
+    EXPECT_EQ(ttml::core::to_vector(launch.mask), launch.mask_values) << what << "'s mask";
+    if (launch.positions.has_value()) {
+        EXPECT_EQ(ttml::core::to_vector<uint32_t>(*launch.positions), *launch.positions_host) << what << "'s positions";
+    }
+}
+
+// Through the public op: launch A (the miss), then launch B on fresh tensors (a hit on A's program).
+template <typename MakeLaunch>
+void run_greedy_live_tensors(MakeLaunch make_launch) {
+    auto& device = ttml::autograd::ctx().get_device();
+    auto sample = [](const GreedyLaunch& launch) {
+        return ttml::metal::gumbel_sample(launch.logits, 0.0F, 7U, /* seed_axes */ {}, launch.mask, launch.positions);
+    };
+
+    const auto a = make_launch(0U);
+    auto entries = device.num_program_cache_entries();
+    const auto a_output = sample(a);
+    ASSERT_EQ(device.num_program_cache_entries(), entries + 1U) << "launch A must compile the program";
+    EXPECT_EQ(ttml::core::to_vector<uint32_t>(a_output), a.expected) << "launch A (miss)";
+
+    const auto b = make_launch(1U);
+    ASSERT_NO_FATAL_FAILURE(assert_distinguishable(a, b));
+    entries = device.num_program_cache_entries();
+    const auto b_output = sample(b);
+    EXPECT_EQ(device.num_program_cache_entries(), entries) << "launch B must reuse launch A's program";
+    expect_distinct_inputs(a, b);
+    expect_new_buffer(a_output, b_output, "outputs");
+    EXPECT_EQ(ttml::core::to_vector<uint32_t>(b_output), b.expected) << "launch B (hit)";
+    EXPECT_EQ(ttml::core::to_vector<uint32_t>(a_output), a.expected) << "launch A's output after launch B";
+    expect_inputs_unchanged(a, "launch A");
+    expect_inputs_unchanged(b, "launch B");
+}
+
+// Through the prim: launch A into an op-allocated output and into preallocated P1 (two misses, as the preallocated
+// output's placement is hashed), then launch B on fresh tensors into preallocated P2 (a hit on P1's program). B's
+// ids must land in P2 and nowhere else.
+template <typename MakeLaunch>
+void run_greedy_second_preallocated_output(MakeLaunch make_launch, const ttnn::Shape& output_shape) {
+    auto& device = ttml::autograd::ctx().get_device();
+    auto sample = [](const GreedyLaunch& launch, const std::optional<ttnn::Tensor>& preallocated_output) {
+        return ttnn::prim::ttml_gumbel_sample(
+            launch.logits, 0.0F, 7U, /* seed_axes */ {}, launch.mask, launch.positions, preallocated_output);
+    };
+
+    const auto a = make_launch(0U);
+    auto entries = device.num_program_cache_entries();
+    const auto a_output = sample(a, std::nullopt);
+    ASSERT_EQ(device.num_program_cache_entries(), entries + 1U) << "launch A must compile the program";
+    EXPECT_EQ(ttml::core::to_vector<uint32_t>(a_output), a.expected) << "launch A, op-allocated output";
+
+    const auto p1 = preallocate_ids(output_shape);
+    entries = device.num_program_cache_entries();
+    const auto a_returned = sample(a, p1);
+    ASSERT_EQ(device.num_program_cache_entries(), entries + 1U) << "launch A into P1 must compile a second program";
+    EXPECT_EQ(a_returned.buffer()->address(), p1.buffer()->address()) << "launch A must return P1";
+    EXPECT_EQ(ttml::core::to_vector<uint32_t>(p1), a.expected) << "launch A into P1";
+
+    const auto b = make_launch(1U);
+    ASSERT_NO_FATAL_FAILURE(assert_distinguishable(a, b));
+    const auto p2 = preallocate_ids(output_shape);
+    entries = device.num_program_cache_entries();
+    const auto b_returned = sample(b, p2);
+    EXPECT_EQ(device.num_program_cache_entries(), entries) << "launch B must reuse the P1 program";
+    expect_distinct_inputs(a, b);
+    expect_new_buffer(p1, p2, "preallocated outputs");
+    EXPECT_EQ(b_returned.buffer()->address(), p2.buffer()->address()) << "launch B must return P2";
+    EXPECT_EQ(ttml::core::to_vector<uint32_t>(p2), b.expected) << "launch B into P2 (hit)";
+    EXPECT_EQ(ttml::core::to_vector<uint32_t>(p1), a.expected) << "P1 after launch B";
+    EXPECT_EQ(ttml::core::to_vector<uint32_t>(a_output), a.expected) << "A's op-allocated output after launch B";
+    expect_inputs_unchanged(a, "launch A");
+    expect_inputs_unchanged(b, "launch B");
+}
+
+// A noisy launch whose tensors all stay alive until the test ends.
+struct NoisyLaunch {
+    ttnn::Tensor logits;
+    std::optional<ttnn::Tensor> mask;
+    std::optional<ttnn::Tensor> positions;
+    float temperature{};
+    uint32_t seed{};
+    ttnn::Tensor output;
+    std::vector<uint32_t> ids;  // read right after the launch
+};
+
+ttnn::Tensor sample_noisy(const NoisyLaunch& launch) {
+    return ttml::metal::gumbel_sample(
+        launch.logits, launch.temperature, launch.seed, /* seed_axes */ {}, launch.mask, launch.positions);
+}
+
+// Runs the launches in order: launch 0 must compile the program and every later one reuse it. No launch may change
+// an earlier launch's output, and each launch, rebuilt from an empty program cache, must reproduce its ids bit for
+// bit: a hit that kept any buffer or per-call scalar of an earlier launch samples other ids.
+void run_and_compare_with_misses(std::vector<NoisyLaunch>& launches) {
+    auto& device = ttml::autograd::ctx().get_device();
+    for (size_t k = 0; k < launches.size(); ++k) {
+        auto& launch = launches[k];
+        const auto entries_before = device.num_program_cache_entries();
+        launch.output = sample_noisy(launch);
+        const auto new_entries = device.num_program_cache_entries() - entries_before;
+        launch.ids = ttml::core::to_vector<uint32_t>(launch.output);
+        if (k == 0U) {
+            EXPECT_EQ(new_entries, 1U) << "launch 0 must compile the program";
+            continue;
+        }
+        EXPECT_EQ(new_entries, 0U) << "launch " << k << " compiled a program";
+        const auto& earlier = launches[k - 1U];
+        expect_new_buffer(earlier.logits, launch.logits, "logits");
+        expect_new_buffer(earlier.output, launch.output, "outputs");
+        if (earlier.mask.has_value() && launch.mask.has_value()) {
+            expect_new_buffer(*earlier.mask, *launch.mask, "masks");
+        }
+        if (earlier.positions.has_value() && launch.positions.has_value()) {
+            expect_new_buffer(*earlier.positions, *launch.positions, "positions");
+        }
+    }
+    for (size_t k = 0; k < launches.size(); ++k) {
+        EXPECT_EQ(ttml::core::to_vector<uint32_t>(launches[k].output), launches[k].ids)
+            << "launch " << k << "'s output changed during a later launch";
+    }
+    for (size_t k = 0; k < launches.size(); ++k) {
+        device.clear_program_cache();
+        EXPECT_EQ(ttml::core::to_vector<uint32_t>(sample_noisy(launches[k])), launches[k].ids)
+            << "launch " << k << " differs from the same launch run as a cache miss";
+    }
+}
+
+// Launch k of a noisy masked test bans every third column (phase k) through a shared [1, 1, 1, V] mask, or the
+// columns of each entry's parity through a per-row [B, 1, 1, V] mask, so an entry served another entry's mask row
+// samples a column its own row bans.
+bool banned_in_launch(uint32_t k, bool per_row_mask, uint32_t entry, uint32_t column) {
+    return per_row_mask ? (column + entry) % 2U == 0U : column % 3U == k;
+}
+
+ttnn::Tensor make_launch_mask(uint32_t k, bool per_row_mask, uint32_t batch) {
+    return ttml::core::from_xtensor(
+        make_hit_mask(
+            per_row_mask ? batch : 1U,
+            [&](uint32_t row, uint32_t column) { return banned_in_launch(k, per_row_mask, row, column); }),
+        &ttml::autograd::ctx().get_device());
+}
+
+// Sampled ids (row-major, `rows_per_entry` per batch entry) past the vocabulary or on a column that their entry's
+// mask in launch k bans.
+uint32_t count_banned_ids(const std::vector<uint32_t>& ids, uint32_t rows_per_entry, uint32_t k, bool per_row_mask) {
+    uint32_t banned = 0U;
+    for (size_t i = 0; i < ids.size(); ++i) {
+        const auto entry = static_cast<uint32_t>(i / rows_per_entry);
+        if (ids[i] >= kHitVocab || banned_in_launch(k, per_row_mask, entry, ids[i])) {
+            ++banned;
+        }
+    }
+    return banned;
+}
+
+// One noisy masked launch: its token count, temperature, seed and mask kind.
+struct NoisyPlan {
+    uint32_t tokens;
+    float temperature;
+    uint32_t seed;
+    bool per_row_mask;
+};
+
+// Launch k samples [batch, 1, plans[k].tokens, kHitVocab] logits drawn from data_seed + k, through its mask and, in
+// position mode, positions walking the token range; run_and_compare_with_misses runs them. No launch may sample a
+// column its mask bans or one past the vocabulary.
+void run_noisy_masked_launches(
+    uint32_t batch, const std::array<NoisyPlan, 3>& plans, uint32_t data_seed, bool position_mode) {
+    std::vector<NoisyLaunch> launches;
+    for (uint32_t k = 0; k < plans.size(); ++k) {
+        const auto& plan = plans[k];
+        NoisyLaunch launch;
+        launch.logits = ttml::core::from_xtensor(
+            ttml::test_utils::make_uniform_xarray<float>(
+                std::array<uint32_t, 4>{batch, 1U, plan.tokens, kHitVocab}, -1.0F, 1.0F, data_seed + k),
+            &ttml::autograd::ctx().get_device());
+        launch.mask = make_launch_mask(k, plan.per_row_mask, batch);
+        if (position_mode) {
+            launch.positions = make_positions(walk_positions(batch, plan.tokens, 5U + 4U * k));
+        }
+        launch.temperature = plan.temperature;
+        launch.seed = plan.seed;
+        launches.push_back(std::move(launch));
+    }
+    run_and_compare_with_misses(launches);
+
+    for (uint32_t k = 0; k < launches.size(); ++k) {
+        const uint32_t rows_per_entry = position_mode ? 1U : plans[k].tokens;
+        ASSERT_EQ(launches[k].ids.size(), batch * rows_per_entry) << "launch " << k;
+        EXPECT_EQ(count_banned_ids(launches[k].ids, rows_per_entry, k, plans[k].per_row_mask), 0U)
+            << "launch " << k << " sampled masked or out-of-vocabulary columns";
+    }
+}
+
+}  // namespace
+
+TEST_F(GumbelSampleCacheHitTest, TestSamplingCacheHitPositionModeLiveTensors) {
+    // Greedy, position mode, per-row mask: a hit served any of launch A's logits, mask or positions samples other
+    // ids, and one that writes into A's output changes it.
+    const uint32_t batch = blocks_for_two_core_groups(kHitWt);  // position mode splits B * Wt tiles
+    run_greedy_live_tensors([batch](uint32_t k) { return make_position_launch(batch, k); });
+}
+
+TEST_F(GumbelSampleCacheHitTest, TestSamplingCacheHitEveryRowModeLiveTensors) {
+    // Greedy, every-row mode, FLOAT32, shared mask: the same for the logits, the mask and the output.
+    const uint32_t tokens = every_row_two_group_tokens();
+    run_greedy_live_tensors([tokens](uint32_t k) { return make_every_row_launch(tokens, k); });
+}
+
+TEST_F(GumbelSampleCacheHitTest, TestSamplingCacheHitPositionModeSecondPreallocatedOutput) {
+    // Launch B writes into P2, a second preallocated output of P1's spec: it hits P1's program, and the writer must
+    // get P2's address on the hit. Logits, mask, positions and output are all present: a hit that takes its output
+    // address from the wrong one of the op's tensors writes into the positions (the same [B, 1, 1, 1] UINT32 spec)
+    // or into the mask instead of P2.
+    const uint32_t batch = blocks_for_two_core_groups(kHitWt);  // position mode splits B * Wt tiles
+    run_greedy_second_preallocated_output(
+        [batch](uint32_t k) { return make_position_launch(batch, k); }, ttnn::Shape({batch, 1U, 1U, 1U}));
+}
+
+TEST_F(GumbelSampleCacheHitTest, TestSamplingCacheHitEveryRowModeSecondPreallocatedOutput) {
+    // Every-row mode, FLOAT32, shared mask: the hit must fill every token row of P2, and an output slot taken from
+    // the mask's tensor index writes into the mask instead.
+    const uint32_t tokens = every_row_two_group_tokens();
+    run_greedy_second_preallocated_output(
+        [tokens](uint32_t k) { return make_every_row_launch(tokens, k); }, ttnn::Shape({kHitBatch, 1U, tokens, 1U}));
+}
+
+TEST_F(GumbelSampleCacheHitTest, TestSamplingCacheHitGreedyAndNoisyVariants) {
+    // The hash keys uses_gumbel_noise(temperature), not the temperature value, so one shape has a greedy and a noisy
+    // program. A greedy launch must not reuse the noisy one, a subnormal temperature must reuse the greedy one, and a
+    // noisy launch after them must get the noisy one back. FLOAT32, no mask.
+    auto& device = ttml::autograd::ctx().get_device();
+    const uint32_t tokens = every_row_two_group_tokens();
+    auto upload = [](const xt::xarray<float>& values) { return upload_as(values, ttnn::DataType::FLOAT32); };
+
+    // Noisy, on uniform logits: the miss that builds the noisy program.
+    auto noisy_logits = upload(ttml::test_utils::make_uniform_xarray<float>(
+        std::array<uint32_t, 4>{kHitBatch, 1U, tokens, kHitVocab}, -1.0F, 1.0F, 800U));
+    auto entries = device.num_program_cache_entries();
+    auto noisy_output = ttml::metal::gumbel_sample(noisy_logits, 1.0F, 11U);
+    ASSERT_EQ(device.num_program_cache_entries(), entries + 1U) << "the noisy launch must compile a program";
+    const auto noisy_ids = ttml::core::to_vector<uint32_t>(noisy_output);
+
+    // Greedy, on fresh logits: a second program.
+    const auto greedy = make_hit_winners(kHitBatch, tokens, 0U);
+    auto greedy_logits = upload(greedy.logits);
+    entries = device.num_program_cache_entries();
+    auto greedy_output = ttml::metal::gumbel_sample(greedy_logits, 0.0F, 11U);
+    EXPECT_EQ(device.num_program_cache_entries(), entries + 1U) << "a greedy launch must not reuse the noisy program";
+    EXPECT_EQ(ttml::core::to_vector<uint32_t>(greedy_output), greedy.expected) << "greedy launch (miss)";
+
+    // A subnormal temperature, whose reciprocal overflows, selects greedy: a hit on the greedy program.
+    const auto subnormal = make_hit_winners(kHitBatch, tokens, 5U);
+    auto subnormal_logits = upload(subnormal.logits);
+    entries = device.num_program_cache_entries();
+    auto subnormal_output = ttml::metal::gumbel_sample(subnormal_logits, 1e-39F, 22U);
+    EXPECT_EQ(device.num_program_cache_entries(), entries) << "a subnormal temperature must reuse the greedy program";
+    EXPECT_EQ(ttml::core::to_vector<uint32_t>(subnormal_output), subnormal.expected) << "subnormal launch (hit)";
+
+    // Noisy again, on the greedy launch's logits: a hit on the noisy program. At T = 0.5 the noise outweighs the
+    // planted margins, so the greedy program would return the planted winners and the noisy one rarely does.
+    entries = device.num_program_cache_entries();
+    auto hot_output = ttml::metal::gumbel_sample(greedy_logits, 0.5F, 22U);
+    EXPECT_EQ(device.num_program_cache_entries(), entries) << "the second noisy launch must reuse the noisy program";
+    const auto hot_ids = ttml::core::to_vector<uint32_t>(hot_output);
+    EXPECT_NE(hot_ids, greedy.expected) << "the second noisy launch ran the greedy program";
+
+    expect_new_buffer(greedy_logits, subnormal_logits, "logits");
+    expect_new_buffer(greedy_output, subnormal_output, "outputs");
+    expect_new_buffer(noisy_logits, greedy_logits, "logits");
+    expect_new_buffer(noisy_output, hot_output, "outputs");
+    EXPECT_EQ(ttml::core::to_vector<uint32_t>(noisy_output), noisy_ids) << "the first noisy output after the hits";
+    EXPECT_EQ(ttml::core::to_vector<uint32_t>(greedy_output), greedy.expected) << "the greedy output after the hits";
+    EXPECT_EQ(ttml::core::to_vector<uint32_t>(subnormal_output), subnormal.expected)
+        << "the subnormal output after the noisy hit";
+
+    device.clear_program_cache();
+    EXPECT_EQ(ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(greedy_logits, 0.5F, 22U)), hot_ids)
+        << "the second noisy launch differs from the same launch as a miss";
+}
+
+TEST_F(GumbelSampleCacheHitTest, TestSamplingCacheHitPositionModeNewScalars) {
+    // Noisy, position mode, masked: each hit changes the token count (70 -> 134 -> 40, so Ht 3 -> 5 -> 2, with
+    // positions past 70), the mask's batch dim (stride 0 -> Wt -> 0), the seed, the temperature and every buffer.
+    const uint32_t batch = blocks_for_two_core_groups(kHitWt);  // position mode splits B * Wt tiles
+    run_noisy_masked_launches(
+        batch,
+        {{{70U, 0.5F, 11U, false}, {134U, 2.0F, 22U, true}, {40U, 1.0F, 33U, false}}},
+        /* data_seed */ 500U,
+        /* position_mode */ true);
+}
+
+TEST_F(GumbelSampleCacheHitTest, TestSamplingCacheHitEveryRowModeNewScalars) {
+    // Noisy, every-row mode, masked: each hit changes the mask's batch dim (stride 0 -> Wt -> 0), the seed, the
+    // temperature and every buffer. The token count is hashed in this mode.
+    const uint32_t tokens = every_row_two_group_tokens();
+    run_noisy_masked_launches(
+        kHitBatch,
+        {{{tokens, 0.5F, 11U, false}, {tokens, 2.0F, 22U, true}, {tokens, 1.0F, 33U, false}}},
+        /* data_seed */ 700U,
+        /* position_mode */ false);
+}
+
+TEST_F(GumbelSampleCacheHitTest, TestSamplingCacheHitEveryRowModeNewSeedAndTemperature) {
+    // Noisy, every-row mode, FLOAT32, no mask: the hit changes the seed, the temperature and both buffers, and the
+    // absent mask must not shift the logits' or the output's slot.
+    const std::array<uint32_t, 4> shape = {kHitBatch, 1U, every_row_two_group_tokens(), kHitVocab};
+    const std::array<std::pair<float, uint32_t>, 2> plans = {{{0.5F, 11U}, {2.0F, 22U}}};  // temperature, seed
+
+    std::vector<NoisyLaunch> launches;
+    for (uint32_t k = 0; k < plans.size(); ++k) {
+        NoisyLaunch launch;
+        launch.logits = upload_as(
+            ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 600U + k), ttnn::DataType::FLOAT32);
+        launch.temperature = plans[k].first;
+        launch.seed = plans[k].second;
+        launches.push_back(std::move(launch));
+    }
+    run_and_compare_with_misses(launches);
+
+    for (uint32_t k = 0; k < launches.size(); ++k) {
+        ASSERT_EQ(launches[k].ids.size(), shape[0] * shape[2]) << "launch " << k;
+        EXPECT_TRUE(
+            std::all_of(launches[k].ids.begin(), launches[k].ids.end(), [](uint32_t id) { return id < kHitVocab; }))
+            << "launch " << k << " sampled past the vocabulary";
     }
 }

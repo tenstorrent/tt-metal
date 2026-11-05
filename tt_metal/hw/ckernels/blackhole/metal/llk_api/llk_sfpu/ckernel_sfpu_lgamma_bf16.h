@@ -68,7 +68,7 @@ struct LgammaBf16Config {
 namespace ckernel::sfpu {
 
 template <int ITERATIONS = 32>
-inline void calculate_lgamma_bf16() {
+__attribute__((noinline)) inline void calculate_lgamma_bf16() {
     ckernel::sfpu::bf16::lgamma::calculate_root_native_log<ckernel::sfpu::LgammaBf16Config, ITERATIONS>();
 }
 inline void init_lgamma_bf16() { ckernel::sfpu::bf16::lgamma::init_root_native_log<ckernel::sfpu::LgammaBf16Config>(); }

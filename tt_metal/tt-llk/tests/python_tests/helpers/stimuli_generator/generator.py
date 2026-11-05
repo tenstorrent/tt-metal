@@ -22,6 +22,7 @@ from .strategies.structured import ulp_sweep_value_count
 from .utils import (
     _clamp_mx_tensors,
     _get_dtype_for_format,
+    _get_integer_bounds,
     calculate_tile_and_face_counts,
     calculate_tile_and_face_counts_w_tile_dimensions,
 )
@@ -117,6 +118,29 @@ def _run_face_loop(
     """
     elements_per_face = face_r_dim * FACE_C_DIM
     faces_needed = math.ceil(num_elements / elements_per_face)
+
+    if (
+        faces_needed > 1
+        and not spec.face_specs
+        and not spec.masked_faces
+        and not spec.intervals
+        and (generator is not None or spec.seed is None)
+        and spec.distribution
+        in (
+            DistributionKind.UNIFORM,
+            DistributionKind.GAUSSIAN,
+            DistributionKind.LOG_UNIFORM,
+            DistributionKind.CONSTANT,
+        )
+    ):
+        strategy = lookup_strategy(spec.distribution)
+        return strategy.generate_face(
+            spec,
+            stimuli_format,
+            face_r_dim,
+            faces_needed * elements_per_face,
+            generator,
+        )[:num_elements]
 
     face_tensors: list[torch.Tensor] = []
     for face_idx in range(faces_needed):
@@ -232,7 +256,8 @@ def default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
     """Return the built-in default StimuliSpec for a given data format.
 
     Defaults are chosen to give reasonable value ranges and avoid overflows
-    (e.g. positive ranges for floats, half-range for integers).
+    (e.g. positive ranges for floats, half-range for integers, full range
+    for 4-bit integers).
     """
     if stimuli_format == DataFormat.MxFp8R:
         return StimuliSpec.gaussian(
@@ -248,6 +273,9 @@ def default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
         return StimuliSpec(distribution=_default_bfp4b_face)
     if stimuli_format == DataFormat.Bfp2_b:
         return StimuliSpec(distribution=_default_bfp2b_face)
+    if stimuli_format.is_4bit_integer():
+        int_min, int_max = _get_integer_bounds(stimuli_format)
+        return StimuliSpec.uniform(low=float(int_min), high=float(int_max))
     if stimuli_format.is_integer():
         if stimuli_format == DataFormat.UInt32:
             return StimuliSpec.uniform(low=0.0, high=float(2**32 - 2))

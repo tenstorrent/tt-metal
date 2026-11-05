@@ -1157,27 +1157,6 @@ template std::pair<std::string, std::string> get_op_init_and_func<std::uint32_t>
     const std::string& idst,
     std::optional<DataType> input_dtype);
 
-std::map<std::string, std::string> get_block_defines(
-    const std::vector<EltwiseUnaryWithParam>& op_chain,
-    const std::string& block_id,
-    const std::string& idst,
-    std::optional<DataType> input_dtype) {
-    std::map<std::string, std::string> block_defines;
-    std::string block_define;
-    for (uint32_t i = 0; i < op_chain.size(); i++) {
-        std::string init_def = fmt::format("SFPU_OP_CHAIN_{}_INIT_{}", block_id, i);
-        std::string func_def = fmt::format("SFPU_OP_CHAIN_{}_FUNC_{}", block_id, i);
-        block_define += init_def + " " + func_def + " ";
-        block_defines.merge(std::visit(
-            [&](auto params) {
-                return get_defines_impl(op_chain[i].type(), params, idst, init_def, func_def, input_dtype);
-            },
-            op_chain[i].get_params()));
-    }
-    block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
-    return block_defines;
-}
-
 std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     DataType input_dtype,
@@ -1207,6 +1186,27 @@ std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
         {"SFPU_OP_CHAIN_0_FUNC_0", fmt::format("{}_tile(0);", op_name)},
         {get_macro_definition(op.type()), "1"},
     };
+}
+
+std::map<std::string, std::string> get_block_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    const std::string& block_id,
+    const std::string& idst,
+    std::optional<DataType> input_dtype) {
+    std::map<std::string, std::string> block_defines;
+    std::string block_define;
+    for (uint32_t i = 0; i < op_chain.size(); i++) {
+        std::string init_def = fmt::format("SFPU_OP_CHAIN_{}_INIT_{}", block_id, i);
+        std::string func_def = fmt::format("SFPU_OP_CHAIN_{}_FUNC_{}", block_id, i);
+        block_define += init_def + " " + func_def + " ";
+        block_defines.merge(std::visit(
+            [&](auto params) {
+                return get_defines_impl(op_chain[i].type(), params, idst, init_def, func_def, input_dtype);
+            },
+            op_chain[i].get_params()));
+    }
+    block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
+    return block_defines;
 }
 
 // update split eltwise ops include macros
@@ -1255,6 +1255,11 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
 
 bool uses_dedicated_compute_kernel(UnaryOpType op_type, std::optional<DataType> input_dtype) {
     return get_compute_kernel_path(op_type, input_dtype) != kGenericChainKernel;
+}
+
+bool compute_kernel_supports_work_queue(UnaryOpType op_type, std::optional<DataType> input_dtype) {
+    const std::string_view kernel = get_compute_kernel_path(op_type, input_dtype);
+    return kernel == kGenericChainKernel || kernel == "eltwise_identity_kernel.cpp" || kernel == "hardswish_kernel.cpp";
 }
 
 std::uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype) {

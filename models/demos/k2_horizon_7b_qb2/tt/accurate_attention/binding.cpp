@@ -179,12 +179,13 @@ ttnn::Tensor attention(
         compute->compile_time_args.size() < 48 || compute->compile_time_args[24] != 0) {
         throw std::runtime_error("Unexpected SDPA descriptor layout or streaming kernel");
     }
-    // These slots are the explicitly documented CB argument layout in sdpa.cpp.
+    // These slots are the explicitly documented CB argument layout in sdpa.cpp (its cb_arg_offset).
+    constexpr uint32_t cb_arg_offset = 30;
     const std::array<uint32_t, 4> ids = {
-        compute->compile_time_args[29 + 15],
-        compute->compile_time_args[29 + 16],
-        compute->compile_time_args[29 + 11],
-        compute->compile_time_args[29 + 12]};
+        compute->compile_time_args[cb_arg_offset + 15],
+        compute->compile_time_args[cb_arg_offset + 16],
+        compute->compile_time_args[cb_arg_offset + 11],
+        compute->compile_time_args[cb_arg_offset + 12]};
     const std::array<const char*, 4> names = {"K2_SUM_A", "K2_SUM_B", "K2_OUT_A", "K2_OUT_B"};
     uint32_t next_id = 0;
     for (const auto& cb : desc.cbs) {

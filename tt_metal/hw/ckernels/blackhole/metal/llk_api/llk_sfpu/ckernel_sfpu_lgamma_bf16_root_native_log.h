@@ -30,16 +30,16 @@ template <class Config, int Iterations = 32>
 inline void calculate_root_native_log() {
     static_assert(Iterations == 32 && Config::kBf16);
     ttpoly::lgamma::root_native_log_tile<Config>(
-        [](sfpi::vFloat raw, sfpi::vFloat& result) {
+        [](sfpi::vFloat raw, sfpi::vFloat& result) __attribute__((always_inline)) {
             sfpi::vFloat effective = raw;
             effective = ttpoly::lgamma::raw_daz_action_coordinate(raw);
             ttpoly::lgamma::apply_raw_domain_records<Config, Config::kDomainActionCount - 1>(effective, result);
             ttpoly::lgamma::negative_infinity_terminal<1>(effective, result);
             ttpoly::lgamma::zero_class_terminal<1>(effective, result);
         },
-        [](sfpi::vUInt raw, sfpi::vFloat& result) {
+        [](sfpi::vUInt raw, sfpi::vFloat& result) __attribute__((always_inline)) {
             ttpoly::lgamma::negative_nan_class_terminal<Config::kRawNegativeNanClass, false>(raw, result);
         },
-        [](sfpi::vFloat x) { return root_native_log_reciprocal(x); });
+        [](sfpi::vFloat x) __attribute__((always_inline)) { return root_native_log_reciprocal(x); });
 }
 }  // namespace ckernel::sfpu::bf16::lgamma

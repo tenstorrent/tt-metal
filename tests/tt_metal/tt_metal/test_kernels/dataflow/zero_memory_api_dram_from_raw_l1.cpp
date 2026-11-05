@@ -37,6 +37,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "risc_common.h"
+#include "internal/local_mem/address_access.h"
 
 namespace {
 constexpr uint32_t kStatusOk = 0xCAFEBABEu;
@@ -68,10 +69,12 @@ void kernel_main() {
     CoreLocalMem<volatile uint32_t> scratch(static_cast<uintptr_t>(region_addr));
 #elif defined(ZERO_TARGET_SCRATCHPAD)
     Scratchpad<uint32_t> scratch(scratch::pad);
-    const uint32_t region_addr = scratch.get_base_address();
+    // Raw address: needed for a uniform volatile CPU view (mem) and the L2 range ops over all three handle types.
+    const uint32_t region_addr = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(scratch.local_mem()));
 #elif defined(ZERO_TARGET_LOCAL_TENSOR_ACCESSOR)
     LocalTensorAccessor<uint32_t> scratch(tensor::region);
-    const uint32_t region_addr = scratch.get_bank_base_address();
+    // Raw address: needed for a uniform volatile CPU view (mem) and the L2 range ops over all three handle types.
+    const uint32_t region_addr = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(scratch.local_mem()));
 #else
 #error "define exactly one ZERO_TARGET_*"
 #endif

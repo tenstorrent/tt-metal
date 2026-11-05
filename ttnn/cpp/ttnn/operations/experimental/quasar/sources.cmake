@@ -37,6 +37,9 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     padded_slice/padded_slice.hpp
     slice_write/slice_write.hpp
     op_slicing/op_slicing.hpp
+    common/thread_plan.hpp
+    softmax/softmax.hpp
+    batch_norm/batch_norm.hpp
     # transformer
     transformer/sdpa_decode/sdpa_decode.hpp
     transformer/sdpa/sdpa.hpp
@@ -134,7 +137,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     conv2d/device/conv2d_op_width_sharded_program_factory.cpp
     # binary_ng (device backend; no host op / no nanobind)
     binary_ng/device/binary_ng_device_operation.cpp
-    binary_ng/device/binary_ng_program_factory.cpp
     binary_ng/device/binary_ng_metal_v2_factory.cpp
     binary_ng/device/binary_ng_quasar_native_factory.cpp
     binary_ng/device/binary_ng_utils.cpp
@@ -159,6 +161,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     matmul/matmul.cpp
     matmul/device/matmul_device_operation.cpp
     matmul/device/config/matmul_program_config.cpp
+    matmul/device/config/matmul_unified_plan.cpp
     matmul/device/utilities/matmul_utilities.cpp
     matmul/device/sparse/sparse_matmul_device_operation.cpp
     matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp
@@ -193,9 +196,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     tilize_with_val_padding/tilize_with_val_padding.cpp
     tilize_with_val_padding/device/tilize_with_val_padding_device_operation.cpp
     tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.cpp
-    tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_block_interleaved_program_factory.cpp
     tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_default_program_factory.cpp
-    tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_sharded_program_factory.cpp
     tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.cpp
     # to_layout (composite host op; no device op / kernels)
     to_layout/to_layout_op.cpp
@@ -220,6 +221,14 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     typecast/device/typecast_program_factory.cpp
     typecast/device/typecast_rm_chunked_program_factory.cpp
     typecast/device/typecast_sharded_program_factory.cpp
+    # softmax (Quasar-native, last dim, three-pass streamed)
+    softmax/softmax.cpp
+    softmax/device/softmax_device_operation.cpp
+    softmax/device/softmax_program_factory.cpp
+    # batch_norm (Quasar-native, inference, per-plane)
+    batch_norm/batch_norm.cpp
+    batch_norm/device/batch_norm_device_operation.cpp
+    batch_norm/device/batch_norm_program_factory.cpp
     # transformer (Metal 2.0 fork of operations/transformer/sdpa_decode; isolated in ttnn::prim::qsr)
     transformer/sdpa_decode/sdpa_decode.cpp
     transformer/sdpa_decode/device/sdpa_decode_device_operation.cpp
@@ -263,6 +272,8 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     typecast/typecast_nanobind.cpp
     sharded_to_interleaved/sharded_to_interleaved_nanobind.cpp
     interleaved_to_sharded/interleaved_to_sharded_nanobind.cpp
+    softmax/softmax_nanobind.cpp
+    batch_norm/batch_norm_nanobind.cpp
     # transformer (nested ttnn.experimental.quasar.transformer submodule)
     transformer/transformer_nanobind.cpp
     transformer/sdpa_decode/sdpa_decode_nanobind.cpp
