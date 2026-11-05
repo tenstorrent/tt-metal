@@ -124,9 +124,28 @@ def test_decode_index_follows_rows_and_skips_unchanged(fake):
     st.set_decode_blocks(ids, row_of=row_of)
     i, dn = st.layers[0]
     idx = dn._paged_state.idx.data
-    assert idx[0].tolist() == [7 * 272, 0, 0, 5 * 272, 0, 0, 0, 0]
-    assert idx[1].tolist() == [7 * 544, 0, 0, 5 * 544, 0, 0, 0, 0]
+    assert list(idx.shape) == [2 * NV, 8]
+    for h in range(NV):
+        assert idx[h].tolist() == [7 * 272 + 16 * h, 16 * h, 16 * h, 5 * 272 + 16 * h] + [16 * h] * 4
+        assert idx[NV + h].tolist() == [7 * 544 + 4 * h, 4 * h, 4 * h, 5 * 544 + 4 * h] + [4 * h] * 4
     n = len(fake["h2d"])
     assert n == len(st.layers)
     st.set_decode_blocks(ids, row_of=row_of)
     assert len(fake["h2d"]) == n  # unchanged indices: no copies
+
+
+def test_mirror_table_duplicates_the_row_parity():
+    st = gbs.GdnBlockState.__new__(gbs.GdnBlockState)
+    st.mesh = None
+    calls = {}
+    real = gbs.ttnn
+    try:
+        gbs.ttnn = SimpleNamespace(
+            uint32="u32", ROW_MAJOR_LAYOUT="rm", ReplicateTensorToMesh=lambda m: None, from_torch=lambda x, **k: x
+        )
+        for parity in (0, 1):
+            t = st._mirror_table(2, parity).reshape(2, 32)
+            assert t[1, 0].item() == 32 + parity and t[1, 1].item() == 32 + parity  # rows 0 and 1 <- row parity
+            assert t[0, 22].item() == 22 + parity and t[0, 23].item() == 22 + parity  # chunk 11: rows 22, 23
+    finally:
+        gbs.ttnn = real

@@ -464,9 +464,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             model = self.model[0]
             if model.num_devices <= 1 or model.args.max_batch_size <= 1 or not _ns_slotmap_enabled():
                 raise NotImplementedError(
-                    "QWEN36_MAMBA_SPEC needs the batched TP path (max_num_seqs > 1) with QWEN36_NS_SLOTMAP=1: the "
-                    "packed conv history of a block is written for its device row's parity, so a request must not "
-                    "change rows"
+                    "QWEN36_MAMBA_SPEC (prototype) supports only the batched TP path (max_num_seqs > 1) with "
+                    "QWEN36_NS_SLOTMAP=1"
                 )
             self._gdn_blocks = GdnBlockState(model, per_layer_specs, kv)
         return kv

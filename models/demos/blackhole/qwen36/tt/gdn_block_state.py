@@ -10,9 +10,11 @@ state of a request in the K and V buffers of its slot, at the block its group ow
   (dim-0 slices of half a head, so a block need not hold whole heads: BF8 2048 holds 136 pages, 17 slices);
 * packed conv history: the first Nv * 4 pages of block b in a bfloat16 alias_view of V, [N, pages, 32, 32].
 
-Decode reads and writes them through gdn_decode_step(state_page_idx=...), one persistent [2, Bmax] index tensor per
-GDN layer (device-row order). Prefill keeps writing the model's [Bmax, ...] decode buffers (now a staging row per
-device row) and copies the row into the request's block afterwards. The views use alias_view's default checks, so a
+Decode reads and writes them through gdn_decode_step(state_page_idx=...), one persistent [2 * Nv, Bmax] index tensor
+per GDN layer (device-row order): row h = first fp32 page of head h, row Nv + h = first bf16 page of its history. In
+this pooled mode the op keeps channel chunk c in both tile rows 2c and 2c + 1 of the packed history, so a request may
+change batch-row parity. Prefill keeps writing the model's [Bmax, ...] decode buffers (now a staging row per
+device row) and copies the row into the request's block afterwards, duplicating the history into both parities. The views use alias_view's default checks, so a
 block must hold whole fp32 and bf16 pages on every bank: BF8 [N, 1, 2048, 256] holds 17 fp32 pages per bank (136 per
 block; TP=8 needs 96), BF8 4096 holds 272 (TP=4 needs 192), bf16 2048 holds 256.
 """
@@ -82,7 +84,7 @@ class GdnBlockState:
         )
         hist_view = ttnn.experimental.alias_view(v, [num_blocks, hist_tiles, 32, 32], ttnn.bfloat16)
         idx = ttnn.from_torch(
-            torch.zeros(2, self.bmax, dtype=torch.int32),
+            torch.zeros(2 * dn.Nv, self.bmax, dtype=torch.int32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh,
@@ -112,9 +114,9 @@ class GdnBlockState:
             for r, b in enumerate(ids):
                 blocks[r if row_of is None else row_of[r]] = b
             ps = dn._paged_state
-            host = torch.tensor(
-                [[b * ps.rec_pages for b in blocks], [b * ps.hist_pages for b in blocks]], dtype=torch.int32
-            )
+            b = torch.tensor(blocks, dtype=torch.int32)
+            h = torch.arange(dn.Nv, dtype=torch.int32).reshape(-1, 1)
+            host = torch.cat([b * ps.rec_pages + 16 * h, b * ps.hist_pages + 4 * h])  # [2 * Nv, Bmax]
             prev = self._host_idx.get(i)
             if prev is not None and torch.equal(prev, host):
                 continue
@@ -154,9 +156,34 @@ class GdnBlockState:
                     src, ps.rec_view, [s0, 0, 0, 0], [s0 + halves, 1, dk // 2, dv], [1, 1, 1, 1]
                 )
                 ttnn.deallocate(src)
-                src = ttnn.slice(packed, (d, 0, 0, 0), (d + 1, nr, 32, 32), memory_config=dn._packed_row_shard_memcfg())
+                row = ttnn.to_layout(ttnn.slice(packed, (d, 0, 0, 0), (d + 1, nr, 32, 32)), ttnn.ROW_MAJOR_LAYOUT)
+                src = ttnn.embedding(
+                    self._mirror_table(nr, d & 1),
+                    ttnn.reshape(row, (nr * 32, 32)),
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=dn._packed_row_shard_memcfg(),
+                )  # [1, nr * 32, 32]
+                ttnn.deallocate(row)
+                src = ttnn.reshape(src, (1, nr, 32, 32))
                 ttnn.experimental.slice_write(src, ps.hist_view, [blk, 0, 0, 0], [blk + 1, nr, 32, 32], [1, 1, 1, 1])
                 ttnn.deallocate(src)
+
+    def _mirror_table(self, nr, parity):
+        """uint32 [1, nr * 32] gather table: packed tile row r of tile t <- row 2 * (r // 2) + parity of the same tile.
+        The decode row's packing (chunk c in row 2c + parity, the other parity zero) becomes the pooled packing (chunk c
+        in rows 2c and 2c + 1)."""
+        tabs = self.__dict__.setdefault("_mirror_tables", {})
+        if (nr, parity) not in tabs:
+            r = torch.arange(32)
+            rows = (torch.arange(nr).reshape(-1, 1) * 32 + 2 * (r // 2) + parity).reshape(1, -1)
+            tabs[(nr, parity)] = ttnn.from_torch(
+                rows.to(torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+        return tabs[(nr, parity)]
 
 
 def zero_kv_blocks(model, block_ids):
