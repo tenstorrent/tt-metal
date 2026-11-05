@@ -67,12 +67,48 @@ struct LayerNormShardedProgramFactory {
         const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
 };
 
+// How an interleaved RMSNorm input with few tile rows is split across the width of a rectangle of
+// cores starting at origin: every core holds all tile rows of block_wt consecutive width tiles.
+struct LayerNormWidthSplit {
+    CoreCoord origin;
+    std::uint32_t num_tile_rows = 0;
+    std::uint32_t width_tiles = 0;
+    std::uint32_t block_wt = 0;
+    std::uint32_t num_cores_x = 0;
+    std::uint32_t num_cores_y = 0;
+};
+
+// Interleaved RMSNorm whose tile rows are too few to occupy the grid. The interleaved factory gives
+// each core whole tile rows, so such an input runs on a handful of cores that each walk the full
+// width. This factory splits the width instead: each core reduces its block to a partial sum of
+// squares, the partials are gathered on one core, and the combined 1/sqrt(mean + eps) is multicast
+// back for every core to normalise its block.
+struct LayerNormWidthSplitProgramFactory {
+    // The fourth parameter restricts the cores the program may touch; the split is laid out inside
+    // the largest range of it, and an input whose split does not fit there runs on the interleaved
+    // factory instead.
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const LayerNormParams& operation_attributes,
+        const LayerNormInputs& tensor_args,
+        Tensor& tensor_return_value,
+        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
+
+    // Returns the split for an input this factory serves faster than the interleaved factory, laid
+    // out within core_range_set if given (else the whole compute grid), or nullopt to leave the input
+    // to the interleaved factory. Always nullopt on archs other than Blackhole.
+    static std::optional<LayerNormWidthSplit> select_width_split(
+        const LayerNormParams& operation_attributes,
+        const LayerNormInputs& tensor_args,
+        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
+};
+
 struct LayerNormDeviceOperation {
     using operation_attributes_t = LayerNormParams;
     using tensor_args_t = LayerNormInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<LayerNormMultiCoreProgramFactory, LayerNormShardedProgramFactory>;
+    using program_factory_t = std::
+        variant<LayerNormMultiCoreProgramFactory, LayerNormShardedProgramFactory, LayerNormWidthSplitProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
