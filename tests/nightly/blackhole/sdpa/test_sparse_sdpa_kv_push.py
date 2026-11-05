@@ -204,7 +204,6 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
     from safetensors.numpy import load_file
 
     from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart as Part
-    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import packet_shape
 
     f = _trace_1m_topk(layer)
     grid = mesh_device.compute_with_storage_grid_size()
@@ -216,9 +215,16 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
     stripe_chunk = s_local = chunk_global // n_dev
     cache_tokens = _TRACE_1M_START + chunk_global
     page_bytes = 704  # 656 B scaled FP8 rows, DRAM aligned
-    pages_per_packet, banks = packet_shape(mesh_device, page_bytes)
+    _, kv_dtype, kv_width = _KV_FORMATS[kv_fmt]
     # Capped at the chip's query rows x top-k, as the model sizes it, not at the cache.
-    buffer_rows = min(cache_tokens, s_local * TOPK) + n_dev * pages_per_packet * banks
+    buffer_rows = ttnn.experimental.sparse_kv_push_output_spec(
+        mesh_device,
+        distinct_rows=s_local * TOPK,
+        max_rows=cache_tokens,
+        stripe_chunk=stripe_chunk,
+        row_width=kv_width,
+        dtype=kv_dtype,
+    ).shape[2]
 
     common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     shard_seq = ttnn.ShardTensorToMesh(mesh_device, dim=2)
@@ -246,11 +252,10 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
 
     table, compact_idx = ttnn.experimental.sparse_push_plan(
         idx_natural,
-        num_devices=n_dev,
         stripe_chunk=stripe_chunk,
         max_rows=cache_tokens,
         page_bytes=page_bytes,
-        chunk_start=start,
+        chunk_start_tensor=start,
     )
     tables = ttnn.from_torch(
         torch.zeros(1, 1, table.shape[2] * n_dev, table.shape[3], dtype=torch.int32),
@@ -271,7 +276,7 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
             num_links=links,
             batch_index=slot,
             ready_semaphore=sems[0],
-            data_valid_semaphore=sems[1],
+            done_semaphore=sems[1],
             **grid,
         )
 
@@ -351,7 +356,15 @@ def test_sparse_kv_push_glm_perf(mesh_device, layer):
     planner = SparseKvPushPlanner(mesh_device, links)
     attention_grid, push_grid = planner.grids(query_rows)
     manager = planner.prefetch_manager(query_rows)
-    buffer_rows = planner.buffer_rows(query_rows * TOPK, cache_tokens, stripe_chunk, page_bytes)
+    _, kv_dtype, kv_width = _KV_FORMATS[kv_fmt]
+    buffer_rows = ttnn.experimental.sparse_kv_push_output_spec(
+        mesh_device,
+        distinct_rows=query_rows * TOPK,
+        max_rows=cache_tokens,
+        stripe_chunk=stripe_chunk,
+        row_width=kv_width,
+        dtype=kv_dtype,
+    ).shape[2]
 
     common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     shard_seq = ttnn.ShardTensorToMesh(mesh_device, dim=2)
@@ -374,11 +387,10 @@ def test_sparse_kv_push_glm_perf(mesh_device, layer):
         **common,
     )
     plan_kw = dict(
-        num_devices=num_devices,
         stripe_chunk=stripe_chunk,
         max_rows=cache_tokens,
         page_bytes=page_bytes,
-        chunk_start=start,
+        chunk_start_tensor=start,
     )
     table, compact_idx = ttnn.experimental.sparse_push_plan(indices, **plan_kw)
     tables = ttnn.from_torch(
@@ -398,7 +410,7 @@ def test_sparse_kv_push_glm_perf(mesh_device, layer):
         max_rows=cache_tokens,
         num_links=links,
         ready_semaphore=planner.ready_semaphore,
-        data_valid_semaphore=planner.data_valid_semaphore,
+        done_semaphore=planner.done_semaphore,
     )
     ttnn.experimental.sparse_kv_push(cache, output_tensor=compact_this, part=Part.ALL, batch_index=0, **push_kw)
     sdpa_kw = dict(kv_format=_KV_FORMATS[kv_fmt][0], scale=K_DIM**-0.5, k_chunk_size=128)

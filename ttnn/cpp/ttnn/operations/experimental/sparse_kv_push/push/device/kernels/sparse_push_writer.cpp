@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "sparse_push_constants.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/common/kernels/sparse_push_constants.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 

@@ -8,7 +8,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
-#include "sparse_push_constants.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/common/kernels/sparse_push_constants.hpp"
 
 namespace sparse_push {
 

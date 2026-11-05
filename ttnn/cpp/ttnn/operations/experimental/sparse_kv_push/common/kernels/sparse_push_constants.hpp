@@ -119,7 +119,14 @@ constexpr uint32_t kTableCbBytes = plan_table::kBitmapOff * sizeof(uint32_t) + k
 // ---------------------------------------------------------------------------------------------------------------------
 namespace sparse_push_plan {
 
-constexpr uint32_t kWorkers = 2;      // BRISC and NCRISC of a core
+constexpr uint32_t kWorkers = 2;  // BRISC and NCRISC of a core
+
+// Where the plan gets the chunk start (the prefix ends at the block holding it) from.
+enum SplitSource : uint32_t {
+    kNoSplit = 0,      // none: every row is in the prefix
+    kSplitTensor = 1,  // a 1-element DRAM tensor, read on device (trace-safe)
+    kSplitValue = 2,   // a runtime arg, patched per dispatch
+};
 constexpr uint32_t kChunkWords = 16;  // bitmap words per dirty chunk, the unit of the reduce step
 constexpr uint32_t kChunkRows = kChunkWords * sparse_push::plan_table::kRowsPerWord;
 constexpr uint32_t kMaxChunksPerCore = 32;  // a core's reduce chunks are the bits of one map word

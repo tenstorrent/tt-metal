@@ -8,7 +8,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "sparse_push_constants.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/common/kernels/sparse_push_constants.hpp"
 
 // The L1 loops of the plan's steps (see the overview in sparse_push_plan.cpp); BRISC and NCRISC each run half.
 namespace sparse_push_plan {

@@ -11,7 +11,9 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import packet_shape
+
+# The ops' compact layout (pages_per_packet, banks), exported for tests to lay out reference buffers.
+packet_shape = ttnn._ttnn.operations.experimental._sparse_kv_push_packet_shape
 
 SENTINEL = 0xFFFFFFFF
 MAGIC = 0x5350504C
@@ -87,7 +89,8 @@ def _clustered_indices(rng, n_dev, rows, topk, prefix):
     ],
     ids=["10k", "10k_one_chip_all_masked", "1M", "1M_cap_60k_prefix", "1M_real_L14", "1M_real_L58", "1M_real_L62"],
 )
-def test_sparse_push_plan_matches_reference(mesh_device, max_rows, prefix):
+@pytest.mark.parametrize("start_form", ["tensor", "value"])
+def test_sparse_push_plan_matches_reference(mesh_device, max_rows, prefix, start_form):
     n_dev = mesh_device.get_num_devices()
     rows, topk, sc, page_bytes = 160, 2048, 160, 704
     p, banks = packet_shape(mesh_device, page_bytes)
@@ -128,14 +131,14 @@ def test_sparse_push_plan_matches_reference(mesh_device, max_rows, prefix):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    table, compact = ttnn.experimental.sparse_push_plan(
-        tt_idx,
-        num_devices=n_dev,
-        stripe_chunk=sc,
-        max_rows=max_rows,
-        page_bytes=page_bytes,
-        chunk_start=tt_split,
-    )
+    plan_kw = dict(stripe_chunk=sc, max_rows=max_rows, page_bytes=page_bytes)
+    if start_form == "tensor":
+        plan_kw["chunk_start_tensor"] = tt_split
+    else:
+        # A plan for an earlier chunk first, so the one checked reuses its program with the start patched in.
+        ttnn.experimental.sparse_push_plan(tt_idx, chunk_start=split - 5120, **plan_kw)
+        plan_kw["chunk_start"] = split
+    table, compact = ttnn.experimental.sparse_push_plan(tt_idx, **plan_kw)
 
     def host(t):
         t = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
@@ -182,6 +185,4 @@ def test_sparse_push_plan_rejects_batched_indices(mesh_device, expect_error):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     with expect_error(RuntimeError, r"indices must be \[1, 1, rows, topk\]"):
-        ttnn.experimental.sparse_push_plan(
-            tt_idx, num_devices=mesh_device.get_num_devices(), stripe_chunk=160, max_rows=10240, page_bytes=704
-        )
+        ttnn.experimental.sparse_push_plan(tt_idx, stripe_chunk=160, max_rows=10240, page_bytes=704)

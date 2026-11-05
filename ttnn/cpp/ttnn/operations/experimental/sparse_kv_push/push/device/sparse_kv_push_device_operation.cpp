@@ -8,8 +8,8 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
-#include "sparse_kv_push_common.hpp"
-#include "kernels/sparse_push_constants.hpp"
+#include "ttnn/operations/experimental/sparse_kv_push/common/sparse_kv_push_common.hpp"
+#include "ttnn/operations/experimental/sparse_kv_push/common/kernels/sparse_push_constants.hpp"
 
 namespace ttnn::operations::experimental::sparse_kv_push {
 
@@ -18,37 +18,18 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 constexpr uint32_t kRowDim = 2;  // the cache is sharded over its rows across every chip
 
+// The cheap per-call checks on the two semaphores; the program patches their addresses in on every dispatch.
 void validate_semaphores(const SparseKvPushParams& params, const SparseKvPushInputs& tensor_args) {
     TT_FATAL(
-        params.ready_semaphore.has_value() && params.data_valid_semaphore.has_value(),
-        "the sparse KV push needs caller-owned ready and data_valid semaphores");
+        params.ready_semaphore.has_value() && params.done_semaphore.has_value(),
+        "the sparse KV push needs caller-owned ready and done semaphores");
     const auto& ready = *params.ready_semaphore;
-    const auto& data_valid = *params.data_valid_semaphore;
-    TT_FATAL(ready.address() != data_valid.address(), "the sparse KV push's two semaphores must differ");
+    const auto& done = *params.done_semaphore;
+    TT_FATAL(ready.address() != done.address(), "the sparse KV push's two semaphores must differ");
     auto* mesh_device = tensor_args.input_tensor.device();
     TT_FATAL(
-        ready.device() == mesh_device && data_valid.device() == mesh_device,
+        ready.device() == mesh_device && done.device() == mesh_device,
         "the sparse KV push's semaphores must be created on the input tensor's mesh device");
-    const auto ready_buffer_type = std::get<1>(ready.attribute_values());
-    const auto data_valid_buffer_type = std::get<1>(data_valid.attribute_values());
-    const bool has_l1_small = mesh_device->allocator()->get_bank_size(BufferType::L1_SMALL) > 0;
-    const auto expected_buffer_type = has_l1_small ? BufferType::L1_SMALL : BufferType::L1;
-    TT_FATAL(
-        ready_buffer_type == expected_buffer_type && data_valid_buffer_type == expected_buffer_type,
-        "the sparse KV push's semaphores must use buffer type {}, got ready={} and data_valid={}",
-        expected_buffer_type,
-        ready_buffer_type,
-        data_valid_buffer_type);
-    // The kernels use them on every push core; elsewhere their address is unallocated L1.
-    // attribute_values() returns its tuple by value: copy, don't bind a reference to the temporary.
-    const CoreRangeSet ready_cores = std::get<0>(ready.attribute_values());
-    const CoreRangeSet data_valid_cores = std::get<0>(data_valid.attribute_values());
-    TT_FATAL(
-        ready_cores.contains(params.core_grid) && data_valid_cores.contains(params.core_grid),
-        "the sparse KV push's semaphores must cover its core grid {}, got ready={} and data_valid={}",
-        params.core_grid,
-        ready_cores,
-        data_valid_cores);
 }
 
 void validate_batch_slot(const SparseKvPushParams& params, const SparseKvPushInputs& tensor_args) {
@@ -173,6 +154,7 @@ void validate_config(const SparseKvPushParams& params, const SparseKvPushInputs&
         params.num_links,
         params.core_grid.num_cores());
     validate_stripe_chunk(params.stripe_chunk, params.max_rows);
+    validate_semaphore_placement(params, mesh_device);
 
     if (tensor_args.batch_index_tensor.has_value()) {
         validate_batch_index_tensor(*tensor_args.batch_index_tensor);
@@ -236,13 +218,8 @@ void validate_config(const SparseKvPushParams& params, const SparseKvPushInputs&
 }
 
 ttsl::hash::hash_t program_hash(const SparseKvPushParams& params, const SparseKvPushInputs& tensor_args) {
-    // Routes are resolved from the fabric node ids, so they are part of the key.
+    // The fabric node ids the routes come from are fixed per mesh, and the program cache is per mesh device.
     auto* mesh_device = tensor_args.input_tensor.device();
-    std::vector<tt::tt_fabric::FabricNodeId> fabric_nodes;
-    fabric_nodes.reserve(mesh_device->shape().mesh_size());
-    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape())) {
-        fabric_nodes.push_back(mesh_device->get_fabric_node_id(coord));
-    }
     const auto batch_index_spec =
         tensor_args.batch_index_tensor.has_value()
             ? std::optional<tt::tt_metal::TensorSpec>(tensor_args.batch_index_tensor->tensor_spec())
@@ -256,7 +233,6 @@ ttsl::hash::hash_t program_hash(const SparseKvPushParams& params, const SparseKv
         params.core_grid,
         params.fabric_config,
         mesh_device->shape(),
-        fabric_nodes,
         tensor_args.input_tensor.tensor_spec(),
         tensor_args.output_tensor.tensor_spec(),
         tensor_args.table.tensor_spec(),
@@ -267,6 +243,27 @@ ttsl::hash::hash_t program_hash(const SparseKvPushParams& params, const SparseKv
 }  // namespace
 
 using namespace CMAKE_UNIQUE_NAMESPACE;
+
+void validate_semaphore_placement(
+    const SparseKvPushParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    // attribute_values() returns its tuple by value: copy, don't bind a reference to the temporary.
+    const auto [ready_cores, ready_buffer_type] = params.ready_semaphore->attribute_values();
+    const auto [done_cores, done_buffer_type] = params.done_semaphore->attribute_values();
+    const bool has_l1_small = mesh_device->allocator()->get_bank_size(BufferType::L1_SMALL) > 0;
+    const auto expected_buffer_type = has_l1_small ? BufferType::L1_SMALL : BufferType::L1;
+    TT_FATAL(
+        ready_buffer_type == expected_buffer_type && done_buffer_type == expected_buffer_type,
+        "the sparse KV push's semaphores must use buffer type {}, got ready={} and done={}",
+        expected_buffer_type,
+        ready_buffer_type,
+        done_buffer_type);
+    TT_FATAL(
+        ready_cores.contains(params.core_grid) && done_cores.contains(params.core_grid),
+        "the sparse KV push's semaphores must cover its core grid {}, got ready={} and done={}",
+        params.core_grid,
+        ready_cores,
+        done_cores);
+}
 
 ttsl::hash::hash_t SparseKvPushDeviceOperation::compute_program_hash(
     const SparseKvPushParams& args, const SparseKvPushInputs& tensor_args) {
@@ -311,8 +308,8 @@ Tensor sparse_kv_push(
     uint32_t stripe_chunk,
     uint32_t max_rows,
     const GlobalSemaphore& ready_semaphore,
-    const GlobalSemaphore& data_valid_semaphore,
-    ::sparse_push::PushPart part,
+    const GlobalSemaphore& done_semaphore,
+    operations::experimental::sparse_kv_push::SparseKvPushPart part,
     uint32_t num_links,
     uint32_t batch_index,
     const std::optional<Tensor>& batch_index_tensor,
@@ -333,7 +330,7 @@ Tensor sparse_kv_push(
             .core_grid = grid,
             .fabric_config = tt::tt_fabric::GetFabricConfig(),
             .ready_semaphore = ready_semaphore,
-            .data_valid_semaphore = data_valid_semaphore,
+            .done_semaphore = done_semaphore,
             .batch_index = batch_index,
             .batch_slot_num_layers = batch_slot_num_layers,
             .batch_slot_layer_idx = batch_slot_layer_idx},

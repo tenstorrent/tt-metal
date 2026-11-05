@@ -15,8 +15,11 @@ set_target_properties(
 
 file(
     GLOB_RECURSE kernels
-    device/kernels/*.cpp
-    device/kernels/*.hpp
+    common/kernels/*.hpp
+    plan/device/kernels/*.cpp
+    plan/device/kernels/*.hpp
+    push/device/kernels/*.cpp
+    push/device/kernels/*.hpp
 )
 target_sources(
     ttnn_op_experimental_sparse_kv_push

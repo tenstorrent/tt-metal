@@ -33,6 +33,11 @@ struct SparseKvPushDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
+// The semaphores' buffer type and cores: they must be the L1 kind the device allocates semaphores in and live on every
+// push core (elsewhere their address is unallocated L1). Checked on a program-cache miss, and on a hit only when the
+// semaphores differ from the ones the cached program holds: it needs their attributes, which are copied out.
+void validate_semaphore_placement(const SparseKvPushParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device);
+
 }  // namespace ttnn::operations::experimental::sparse_kv_push
 
 namespace ttnn::prim {
@@ -44,8 +49,9 @@ Tensor sparse_kv_push(
     uint32_t stripe_chunk,
     uint32_t max_rows,
     const GlobalSemaphore& ready_semaphore,
-    const GlobalSemaphore& data_valid_semaphore,
-    ::sparse_push::PushPart part = ::sparse_push::PushPart::kAll,
+    const GlobalSemaphore& done_semaphore,
+    operations::experimental::sparse_kv_push::SparseKvPushPart part =
+        operations::experimental::sparse_kv_push::SparseKvPushPart::kAll,
     uint32_t num_links = 2,
     uint32_t batch_index = 0,
     const std::optional<Tensor>& batch_index_tensor = std::nullopt,

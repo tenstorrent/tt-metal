@@ -493,7 +493,10 @@ class TT_CCL:
             from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner
 
             self.sparse_kv_push_planner = SparseKvPushPlanner(self.mesh_device, links)
-        assert self.sparse_kv_push_planner.links == links, "every MLA layer must use one push link count"
+        if self.sparse_kv_push_planner.links != links:
+            raise ValueError(
+                f"every MLA layer must use one push link count: {self.sparse_kv_push_planner.links}, then {links}"
+            )
         return self.sparse_kv_push_planner
 
     def get_mla_sparse_kv_gather_buffer(self, *, seq_len, row_width, dtype, layout):

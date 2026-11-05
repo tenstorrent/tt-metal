@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sparse_kv_push_program_factory.hpp"
+#include "sparse_kv_push_device_operation.hpp"
 
 #include <algorithm>
 #include <set>
@@ -16,8 +17,8 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
-#include "sparse_kv_push_common.hpp"
-#include "kernels/sparse_push_constants.hpp"
+#include "ttnn/operations/experimental/sparse_kv_push/common/sparse_kv_push_common.hpp"
+#include "ttnn/operations/experimental/sparse_kv_push/common/kernels/sparse_push_constants.hpp"
 
 namespace ttnn::operations::experimental::sparse_kv_push {
 
@@ -32,7 +33,13 @@ constexpr uint8_t kMuxBuffersPerChannel = 2;
 constexpr uint32_t kPacketSlots = 8;
 constexpr uint32_t kUserIdCbBytes = 64;
 
-constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/device/kernels/";
+// The reader takes the part as the kernels' own PushPart, value for value.
+static_assert(
+    static_cast<uint32_t>(SparseKvPushPart::kAll) == static_cast<uint32_t>(::sparse_push::PushPart::kAll) &&
+    static_cast<uint32_t>(SparseKvPushPart::kPrefix) == static_cast<uint32_t>(::sparse_push::PushPart::kPrefix) &&
+    static_cast<uint32_t>(SparseKvPushPart::kRest) == static_cast<uint32_t>(::sparse_push::PushPart::kRest));
+
+constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/push/device/kernels/";
 
 CoreRangeSet to_range_set(const std::vector<CoreCoord>& cores) {
     std::set<CoreRange> ranges;
@@ -301,7 +308,7 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     tt::tt_metal::KernelDescriptor::RTArgList writer_common;
     writer_common.push_back(tensor_args.output_tensor.buffer());
     writer_common.push_back(static_cast<uint32_t>(params.ready_semaphore->address()));  // smuggled-rta-ok: semaphore
-    writer_common.push_back(static_cast<uint32_t>(params.data_valid_semaphore->address()));  // smuggled-rta-ok: same
+    writer_common.push_back(static_cast<uint32_t>(params.done_semaphore->address()));   // smuggled-rta-ok: same
     writer.emplace_common_runtime_args(writer_common);
 
     auto mux_kernel = data_movement_kernel(
@@ -354,8 +361,12 @@ void SparseKvPushProgramFactory::override_runtime_arguments(
     reader[5] = params.batch_index;
     auto& writer = tt::tt_metal::GetCommonRuntimeArgs(program, kWriterKernel);
     writer[0] = tensor_args.output_tensor.buffer()->address();
+    // The semaphores are not in the program hash: check new ones before the program uses them.
+    if (writer[1] != params.ready_semaphore->address() || writer[2] != params.done_semaphore->address()) {
+        validate_semaphore_placement(params, tensor_args.input_tensor.device());
+    }
     writer[1] = params.ready_semaphore->address();
-    writer[2] = params.data_valid_semaphore->address();
+    writer[2] = params.done_semaphore->address();
 }
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push

@@ -17,7 +17,9 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart as Part
-from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import packet_shape
+
+# The ops' compact layout (pages_per_packet, banks), exported for tests to lay out reference buffers.
+packet_shape = ttnn._ttnn.operations.experimental._sparse_kv_push_packet_shape
 
 SENTINEL = 0xFFFFFFFF
 FILL = 0x5A5A5A5A
@@ -117,7 +119,7 @@ def _required_rows(idx, sc, unit):
 class Push:
     """One plan for `idx`, its all-gathered tables, and pushes from `cache` into compact buffers."""
 
-    def __init__(self, mesh_device, cache, idx, *, max_rows, sc, page_bytes, chunk_start, links=2):
+    def __init__(self, mesh_device, cache, idx, *, max_rows, sc, page_bytes, chunk_start, links=2, start_tensor=True):
         self.mesh_device, self.cache, self.idx = mesh_device, cache, idx
         self.max_rows, self.sc, self.links = max_rows, sc, links
         self.width = page_bytes // 4
@@ -132,18 +134,20 @@ class Push:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
         )
-        self.start = _scalar(mesh_device, chunk_start)
+        # The chunk start as the traced path passes it (a device tensor) or as the eager path does (a runtime arg).
+        self.start = _scalar(mesh_device, chunk_start) if start_tensor else None
+        self.chunk_start = chunk_start
         self.tables = None
         self.page_bytes = page_bytes
 
     def plan(self):
         table, self.compact_indices = ttnn.experimental.sparse_push_plan(
             self.indices,
-            num_devices=N_DEV,
             stripe_chunk=self.sc,
             max_rows=self.max_rows,
             page_bytes=self.page_bytes,
-            chunk_start=self.start,
+            chunk_start=None if self.start is not None else self.chunk_start,
+            chunk_start_tensor=self.start,
         )
         # The plan op labels each chip's table as its share of the rows, for the full-mesh gather.
         assert all(isinstance(p, ttnn.PlacementShard) and p.dim == 2 for p in table.tensor_topology().placements())
@@ -154,7 +158,7 @@ class Push:
         )
 
     def push(self, out, part, **slot):
-        return ttnn.experimental.sparse_kv_push(
+        pushed = ttnn.experimental.sparse_kv_push(
             self.cache,
             output_tensor=out,
             table=self.tables,
@@ -163,9 +167,12 @@ class Push:
             part=part,
             num_links=self.links,
             ready_semaphore=self.sems[0],
-            data_valid_semaphore=self.sems[1],
+            done_semaphore=self.sems[1],
             **slot,
         )
+        # Each chip's compact buffer holds different rows: labelled like the cache, sharded over its rows.
+        assert all(isinstance(p, ttnn.PlacementShard) and p.dim == 2 for p in pushed.tensor_topology().placements())
+        return pushed
 
 
 def _check(push, out, *, slot, part, chunk_start, tag):
@@ -340,8 +347,17 @@ def test_sparse_kv_push_configs(mesh_device, page_bytes, sc, links, slot_tensor)
     start = max_rows - sc * N_DEV
     idx = _mask(_lay_out(_pattern("clustered", rng, sc=sc, end=max_rows, start=start), sc, rng), rng)
     cache = _cache(mesh_device, 4, max_rows, sc, page_bytes // 4)
+    # The slot and the chunk start both as tensors (the traced path) or both as ints (the eager path).
     push = Push(
-        mesh_device, cache, idx, max_rows=max_rows, sc=sc, page_bytes=page_bytes, chunk_start=start, links=links
+        mesh_device,
+        cache,
+        idx,
+        max_rows=max_rows,
+        sc=sc,
+        page_bytes=page_bytes,
+        chunk_start=start,
+        links=links,
+        start_tensor=slot_tensor,
     )
     # Slot 3 either way: user 1 of 2 layers, layer 1.
     slot_args = (

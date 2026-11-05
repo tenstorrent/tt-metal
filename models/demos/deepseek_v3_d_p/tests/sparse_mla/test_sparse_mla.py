@@ -1141,7 +1141,7 @@ def test_sparse_mla_push_layers_chunked(
     def run(push):
         with monkeypatch.context() as m:
             if not push:
-                m.setattr(mla_module, "sparse_kv_push_supported", lambda _mesh_device: False)
+                m.setattr(mla_module, "sparse_kv_push_supported", lambda *_: False)
             layers = [
                 ttMLA(
                     config,

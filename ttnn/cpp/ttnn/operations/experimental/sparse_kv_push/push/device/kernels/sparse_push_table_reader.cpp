@@ -5,7 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "sparse_push_constants.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/common/kernels/sparse_push_constants.hpp"
 #include "sparse_push_packet_builder.hpp"
 
 #include <algorithm>

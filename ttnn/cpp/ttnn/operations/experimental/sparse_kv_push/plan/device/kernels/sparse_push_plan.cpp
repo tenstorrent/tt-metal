@@ -20,8 +20,8 @@ using namespace sparse_push_plan;
 // Every core of the grid takes 1/cores of the indices, and its two data movement processors share the L1 work, half
 // each (loops in sparse_push_plan_work.hpp): BRISC (worker 0) drives the steps and does the NoC traffic, NCRISC (worker
 // 1, this file as the helper) shares the NoC pushes and the write-back. Within a core, BRISC posts each step and the
-// helper reports on its done semaphore; across cores, exchange(k) gathers on core 0, which multicasts the result back
-// to all.
+// workers report on their
+// done semaphores; across cores, exchange(k) gathers on core 0, which multicasts the result back to all.
 //
 //   0. Load:    read this core's indices; zero its private full-size bitmap and its dirty-chunk flags.
 //   1. Scatter: set this core's indices' bits in its own bitmap, without atomics: each worker buckets its indices by
@@ -42,7 +42,8 @@ void kernel_main() {
     constexpr uint32_t banks = get_compile_time_arg_val(3);
     constexpr uint32_t cores = get_compile_time_arg_val(4);
     constexpr uint32_t total_chunks = get_compile_time_arg_val(5);  // 512-row chunks of the bitmap
-    constexpr bool has_split = get_compile_time_arg_val(6) != 0;
+    constexpr auto split_source = static_cast<SplitSource>(get_compile_time_arg_val(6));
+    constexpr bool has_split = split_source != kNoSplit;
     constexpr uint32_t bitmap_words = get_compile_time_arg_val(7);
     constexpr uint32_t bucket_cap = get_compile_time_arg_val(8);    // indices per (from, to) scatter bucket
     constexpr uint32_t range_blocks = get_compile_time_arg_val(9);  // blocks per rank range, a multiple of num_devices
@@ -54,7 +55,8 @@ void kernel_main() {
     constexpr auto indices_args = TensorAccessorArgs<12>();
     constexpr auto table_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto compact_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
-    constexpr auto split_args = TensorAccessorArgs<has_split ? compact_args.next_compile_time_args_offset() : 0>();
+    constexpr auto split_args =
+        TensorAccessorArgs<split_source == kSplitTensor ? compact_args.next_compile_time_args_offset() : 0>();
     constexpr uint32_t words_per_block = stripe_chunk / sparse_push::plan_table::kRowsPerWord;
     constexpr uint32_t index_bytes = sizeof(uint32_t);  // one top-k index
     constexpr uint32_t word_bytes = sizeof(uint32_t);   // one bitmap / table / scratch word
@@ -76,7 +78,8 @@ void kernel_main() {
     // write-back.
     constexpr uint32_t brisc_reducers = cores / 2;   // BRISC pushes to reducers [0, this), NCRISC to the rest
     const uint32_t brisc_indices = index_count / 2;  // BRISC writes back idx [0, this), NCRISC the rest
-    const uint32_t split_addr = has_split ? get_arg_val<uint32_t>(arg++) : 0;
+    // The chunk start: its tensor's address (kSplitTensor) or the row itself (kSplitValue).
+    const uint32_t split_arg = has_split ? get_arg_val<uint32_t>(arg++) : 0;
     // Common runtime args: every core's (x, y), core 0 first, then the multicast rectangle of all of them.
     // NoC address of `l1` on plan core `core`.
     auto core_noc_addr = [&](uint32_t core, uint32_t l1) {
@@ -328,9 +331,11 @@ void kernel_main() {
             noc_async_read(
                 indices.get_noc_addr(index_row) + col * index_bytes, idx_l1 + pos * index_bytes, len * index_bytes);
         });
-        if constexpr (has_split) {
-            const auto split = TensorAccessor(split_args, split_addr);
+        if constexpr (split_source == kSplitTensor) {
+            const auto split = TensorAccessor(split_args, split_arg);
             noc_async_read(split.get_noc_addr(0), misc_l1 + kMiscSplit * word_bytes, sizeof(uint32_t));
+        } else if constexpr (split_source == kSplitValue) {
+            misc[kMiscSplit] = split_arg;
         }
         zero(table_image_l1 + bitmap_off * word_bytes, bitmap_words * word_bytes);
         zero(dirty_chunks_l1, l1_transfer_bytes(total_chunks));  // one byte per chunk

@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "kernels/sparse_push_constants.hpp"
 
@@ -50,5 +52,27 @@ struct PlanTableLayout {
 
 // Shared by the plan and the push, which must be built with the same stripe_chunk and max_rows.
 void validate_stripe_chunk(uint32_t stripe_chunk, uint32_t max_rows);
+
+// The plan splits the indices over its cores in multiples of this, so each core's slice starts 64 B aligned.
+constexpr uint32_t kPlanIdxAlign = 16;
+
+// The plan spans the whole worker grid.
+uint32_t plan_cores(tt::tt_metal::distributed::MeshDevice* mesh_device);
+
+// The plan reduces the bitmap in kChunkRows-row chunks, at most kMaxChunksPerCore of them on each core.
+bool plan_fits(tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t max_rows);
+
+// The label of a tensor whose rows (dim 2) differ per chip, chips in row-major order: the plan's tables and the push's
+// compact buffers.
+tt::tt_metal::TensorTopology rows_over_every_chip(const tt::tt_metal::distributed::MeshShape& mesh_shape);
+
+// Compact-buffer rows for up to distinct_rows needed rows of row pages of page_bytes: every distinct row plus at most
+// one unit of padding per owner, or every owner's run full (an owner holds at most its share of the cache's blocks).
+uint32_t output_rows(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    uint32_t distinct_rows,
+    uint32_t max_rows,
+    uint32_t stripe_chunk,
+    uint32_t page_bytes);
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push
