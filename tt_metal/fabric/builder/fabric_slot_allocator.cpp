@@ -107,11 +107,15 @@ Allocation allocate_slots(const RouterShape& shape, const LeftoverOrder& leftove
     a.all_depths = all_depths;
     a.sender_depths = sender_depths;
 
-    // Stage 1: receivers at f = min(1, N / every channel's depth), nearest power of 2.
+    // Stage 1: receivers at f = min(1, N / every channel's depth), nearest power of 2; a bubble-flow-control VC's at
+    // least its floor (a power of 2).
     const bool squeezed = n < all_depths;
     for (auto& c : rx) {
         c.slots = squeezed ? nearest_power_of_2(depth(c) * n, all_depths, limits)
                            : nearest_power_of_2(depth(c), 1, limits);
+        if (shape.vcs[c.vc].bubble_flow_control) {
+            c.slots = std::max(c.slots, nearest_power_of_2(limits.min_bubble_flow_control_receiver_slots, 1, limits));
+        }
         c.stage = 1;
     }
     std::size_t rx_slots = 0;

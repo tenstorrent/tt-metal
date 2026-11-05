@@ -782,6 +782,12 @@ void FabricStaticSizedChannelsAllocator::configure_staged_buffer_slots(
         num_used_receiver_channels_per_vc[0]};
     shape.vcs[1] = {0, num_used_sender_channels_per_vc[1], num_used_receiver_channels_per_vc[1]};
     shape.vcs[2] = {num_used_sender_channels_per_vc[2], 0, num_used_receiver_channels_per_vc[2]};
+    // Bubble flow control runs on a ring or torus fabric's rings, on its VCs that have it; every router of the fabric
+    // gets the same shape, whichever of its axes are rings.
+    for (size_t vc = 0; vc < sa::NUM_VCS; ++vc) {
+        shape.vcs[vc].bubble_flow_control =
+            is_ring_or_torus(topology) && builder_config::bubble_flow_control_enabled_on_vc(static_cast<uint32_t>(vc));
+    }
 
     const sa::Allocation allocation = sa::allocate_slots(shape);
     TT_FATAL(

@@ -13,9 +13,10 @@
 //
 // The stages:
 //   0. N = buffer bytes / slot size. Every channel gets at least min_slots; minimums that do not fit are an error.
-//   1. Receivers first, at their depth x f, f = min(1, N / every channel's depth), rounded to the nearest power of 2.
-//      They go first because the router derives rules from the receiver count (index wrap, completion groups,
-//      transaction IDs, bubble flow control).
+//   1. Receivers first, at their depth x f, f = min(1, N / every channel's depth), rounded to the nearest power of 2;
+//      on a VC with bubble flow control, at least min_bubble_flow_control_receiver_slots. They go first because the
+//      router derives rules from the receiver count (index wrap, completion groups, transaction IDs, bubble flow
+//      control).
 //   2. Senders split the B slots left at their depth x f', f' = min(1, B / the senders' depths), by largest remainder.
 //      A VC's forwarding channels are one unit with one count; each worker is a unit of its own.
 //   3. Leftover slots go to the groups of the leftover order in turn, in whole steps: receivers to their next power of
@@ -82,6 +83,9 @@ struct RouterShape {
         std::size_t workers = 0;
         std::size_t forwarding = 0;
         std::size_t receivers = 0;
+        // The VC runs bubble flow control on the fabric's rings (a ring or torus fabric). Set alike on every router of
+        // the fabric, deadlock-avoiding or not, so that every router keeps deciding alike.
+        bool bubble_flow_control = false;
     };
     std::array<Vc, NUM_VCS> vcs{};
 
@@ -131,6 +135,11 @@ struct Limits {
     // Stage 3 deepens a receiver no further than this: the deepest receiver measured with the rules that read the
     // receiver count.
     std::size_t max_receiver_slots_from_leftovers = 32;
+    // Stage 1 gives a bubble-flow-control receiver no fewer than this (when the senders' minimums leave room): an
+    // injection channel sends only with two of its far receiver's slots free, so a small receiver leaves forwarded
+    // traffic little room. Measured with large packets (14,400 B) on a Blackhole 2x2 torus: 4-slot receivers ran 45%
+    // slower than 8-slot ones.
+    std::size_t min_bubble_flow_control_receiver_slots = 8;
 };
 
 Allocation allocate_slots(const RouterShape& shape, const LeftoverOrder& leftover_order, const Limits& limits = {});

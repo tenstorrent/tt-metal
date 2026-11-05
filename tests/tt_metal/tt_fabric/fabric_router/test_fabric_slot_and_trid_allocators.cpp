@@ -30,7 +30,8 @@ struct NamedShape {
 };
 
 // Router shapes the fabric builds: VC0 with its worker and forwarding channels, plus VC1 (forwarding only) and VC2 (a
-// worker into a delivery-only receiver); 1D lines and rings; a neighbor-exchange router (no forwarding).
+// worker into a delivery-only receiver); 1D lines and rings; a neighbor-exchange router (no forwarding). On a torus or
+// ring fabric VC0 runs bubble flow control.
 std::vector<NamedShape> router_shapes() {
     const auto shape = [](bool is_2d, sa::RouterShape::Vc vc0, sa::RouterShape::Vc vc1, sa::RouterShape::Vc vc2) {
         sa::RouterShape s;
@@ -39,12 +40,17 @@ std::vector<NamedShape> router_shapes() {
         s.vcs = {vc0, vc1, vc2};
         return s;
     };
+    const sa::RouterShape::Vc bubble_vc0_2d{1, 3, 1, /*bubble_flow_control=*/true};
+    const sa::RouterShape::Vc bubble_vc0_1d{1, 1, 1, /*bubble_flow_control=*/true};
     return {
         {"2D VC0", shape(true, {1, 3, 1}, {}, {})},
         {"2D VC0 + VC1", shape(true, {1, 3, 1}, {0, 3, 1}, {})},
         {"2D VC0 + VC2", shape(true, {1, 3, 1}, {}, {1, 0, 1})},
         {"2D VC0 + VC1 + VC2", shape(true, {1, 3, 1}, {0, 3, 1}, {1, 0, 1})},
+        {"torus VC0", shape(true, bubble_vc0_2d, {}, {})},
+        {"torus VC0 + VC1", shape(true, bubble_vc0_2d, {0, 3, 1}, {})},
         {"1D", shape(false, {1, 1, 1}, {}, {})},
+        {"ring", shape(false, bubble_vc0_1d, {}, {})},
         {"neighbor exchange", shape(false, {1, 0, 1}, {}, {})},
     };
 }
@@ -79,6 +85,20 @@ void expect_rules_hold(const std::string& name, const sa::RouterShape& shape, co
         }
     }
     EXPECT_EQ(given + a.unused_slots, a.total_slots);
+
+    // A bubble-flow-control receiver keeps its floor wherever the other channels' minimums leave room for it.
+    std::size_t room_needed = 0;
+    for (const auto& c : a.channels) {
+        const bool floored = c.kind == sa::ChannelKind::Receiver && shape.vcs[c.vc].bubble_flow_control;
+        room_needed += floored ? limits.min_bubble_flow_control_receiver_slots : limits.min_slots;
+    }
+    if (a.total_slots >= room_needed) {
+        for (const auto& c : a.channels) {
+            if (c.kind == sa::ChannelKind::Receiver && shape.vcs[c.vc].bubble_flow_control) {
+                EXPECT_GE(c.slots, limits.min_bubble_flow_control_receiver_slots) << "VC" << c.vc << " receiver";
+            }
+        }
+    }
 
     // The router keeps one downstream buffer count per VC: a VC's forwarding channels share one count.
     for (std::size_t vc = 0; vc < sa::NUM_VCS; ++vc) {
@@ -132,6 +152,23 @@ TEST(FabricSlotAllocatorTest, LeftoversFollowTheLeftoverOrder) {
     EXPECT_EQ(a.slots(0, sa::ChannelKind::Receiver), limits.max_receiver_slots_from_leftovers);
     EXPECT_GT(a.slots(0, sa::ChannelKind::Forwarding), sa::full_rate_depth(0, sa::ChannelKind::Forwarding, true));
     EXPECT_EQ(a.unused_slots, 0u);
+}
+
+TEST(FabricSlotAllocatorTest, LargePacketsOnATorusKeepTheReceiverFloor) {
+    // QuietBox 2's 2x2 torus with 14,400 B packets (14,496 B slots): about 24 slots. Without the floor stage 1 rounds
+    // the receiver to 4; with bubble flow control it keeps 8, and the senders split the rest.
+    sa::RouterShape shape = router_shapes()[0].shape;
+    shape.slot_bytes = 14496;
+    shape.buffer_bytes = 25 * shape.slot_bytes;
+    EXPECT_EQ(sa::allocate_slots(shape).slots(0, sa::ChannelKind::Receiver), 4u);
+    shape.vcs[0].bubble_flow_control = true;
+    const sa::Allocation a = sa::allocate_slots(shape);
+    ASSERT_FALSE(a.error.has_value());
+    EXPECT_EQ(a.slots(0, sa::ChannelKind::Receiver), 8u);
+    EXPECT_EQ(a.slots(0, sa::ChannelKind::Worker), 5u);
+    for (std::size_t i = 0; i < 3; ++i) {
+        EXPECT_EQ(a.slots(0, sa::ChannelKind::Forwarding, i), 4u);
+    }
 }
 
 TEST(FabricSlotAllocatorTest, TooSmallABufferIsAnError) {
