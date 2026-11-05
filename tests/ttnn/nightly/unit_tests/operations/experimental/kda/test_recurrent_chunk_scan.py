@@ -112,7 +112,7 @@ def _recurrent_chunk_scan_ops(
         perf_model.FpuOps(
             matrix_flops=instances * (6 * CHUNK_SIZE * key_dim * value_dim + 4 * CHUNK_SIZE**2 * value_dim),
             multiply_ops=instances * key_dim * value_dim,
-            add_ops=instances * (2 * CHUNK_SIZE * value_dim + key_dim * value_dim),
+            add_ops=instances * 2 * CHUNK_SIZE * value_dim,
         ),
         perf_model.SfpuOps(),
     )
@@ -153,7 +153,7 @@ def test_recurrent_chunk_scan_work_golden() -> None:
         (torch.empty((1, 1, 32, 1)), torch.empty((1, 2, 1))),
     )
 
-    assert fpu == perf_model.FpuOps(matrix_flops=4480, multiply_ops=2, add_ops=66)
+    assert fpu == perf_model.FpuOps(matrix_flops=4480, multiply_ops=2, add_ops=64)
     assert sfpu == perf_model.SfpuOps()
 
 
@@ -177,8 +177,10 @@ def test_recurrent_chunk_scan_work_golden() -> None:
             id="production-four-chunk",
         ),
         pytest.param(6, 2, 64, 32, frozenset(), ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, id="grouped-batch-heads"),
-        # Five key tiles: the state update's row groups must divide them.
+        # Five key tiles: the state update's DST blocks must divide them (one row of one column with FP32 DST).
         pytest.param(2, 2, 160, 32, frozenset(), ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, id="wide-key"),
+        # Six key rows: the state update's DST blocks must divide them (three rows of one column with FP32 DST).
+        pytest.param(1, 2, 192, 32, frozenset(), ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, id="six-key-tiles"),
         pytest.param(
             9,
             2,
@@ -378,16 +380,90 @@ def test_recurrent_chunk_scan_approximate_math_uses_distinct_accurate_program(
     )
 
 
+@pytest.mark.parametrize(
+    ("packer_l1_acc", "fp32_dest_acc_en", "message"),
+    [
+        pytest.param(True, True, "packer_l1_acc=true is unsupported", id="packer-l1-acc"),
+        pytest.param(False, False, "fp32_dest_acc_en=false is unsupported", id="bf16-dst"),
+    ],
+)
 def test_recurrent_chunk_scan_rejects_unsupported_compute_config(
-    zero_actual_start, device: ttnn.Device, expect_error: Callable
+    zero_actual_start,
+    device: ttnn.Device,
+    expect_error: Callable,
+    packer_l1_acc: bool,
+    fp32_dest_acc_en: bool,
+    message: str,
 ) -> None:
     _, _, inputs, state = _regression_inputs(device, protocol_seed=819, state_seed=819)
     unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
-        packer_l1_acc=True,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=packer_l1_acc,
     )
-    with expect_error(RuntimeError, "packer_l1_acc=true is unsupported"):
+    with expect_error(RuntimeError, message):
         run_recurrent(inputs, state, compute_kernel_config=unsupported_config, actual_start=zero_actual_start)
+
+
+def _state_only_protocol(final_decay: float) -> tuple[torch.Tensor, ...]:
+    """One K=V=32 chunk whose only state change is final_decay * S: zero values, keys and update."""
+    zeros = torch.zeros(1, 1, CHUNK_SIZE, 32)
+    identity = torch.eye(CHUNK_SIZE).reshape(1, 1, CHUNK_SIZE, CHUNK_SIZE)
+    return (
+        zeros,  # v_beta
+        zeros,  # kd
+        zeros,  # q_decay
+        torch.zeros(1, 1, CHUNK_SIZE, CHUNK_SIZE),  # intra
+        torch.zeros(1, 1, 32, CHUNK_SIZE),  # k_dec_t
+        torch.full((1, 1, 32, 1), final_decay),  # final_decay
+        identity,  # t_inv
+    )
+
+
+@pytest.mark.parametrize(
+    ("seed_value", "final_decay", "expected_value"),
+    [
+        # 1 + 2^-20 is not representable in a TF32 source register: the seed and the final state copy through FP32.
+        pytest.param(1.0 + 2.0**-20, 0.0, 1.0 + 2.0**-20, id="exact-seed-and-final-state"),
+        # A forgotten fraction of 2^-12 next to 1: exp(-2^-12) rounds to 1 in BF16, its complement is exact.
+        pytest.param(1.0, -(2.0**-12), 1.0 - 2.0**-12, id="small-change-near-one"),
+    ],
+)
+def test_recurrent_chunk_scan_keeps_fp32_state(
+    zero_actual_start, device: ttnn.Device, seed_value: float, final_decay: float, expected_value: float
+) -> None:
+    """The state is seeded, updated by S + (final_decay * S + k_dec_t @ U), and returned without a source register."""
+    inputs = device_protocol(_state_only_protocol(final_decay), device)
+    state = to_device(torch.full((1, 32, 32), seed_value), device)
+    _, final_state = run_recurrent(inputs, state, actual_start=zero_actual_start)
+    assert_bit_identical(torch.full((1, 32, 32), expected_value), ttnn.to_torch(final_state), name="final state")
+
+
+def test_recurrent_chunk_scan_updates_state_in_multi_row_partial_width_blocks(
+    zero_actual_start, device: ttnn.Device
+) -> None:
+    """Two key tiles by five value tiles on one core: with FP32 DST the state update's DST blocks are two key rows
+    of one value column, so each block's tiles are not consecutive in the state and must be packed by index."""
+    key_dim, value_dim = 64, 160
+    value_tiles = value_dim // 32
+    grid = device.compute_with_storage_grid_size()
+    # Five value tiles split only into five blocks; with more heads than fit five to a grid line, no core shares a
+    # head and each core holds all five value tiles.
+    batch_heads = max((grid.x // value_tiles) * grid.y, (grid.y // value_tiles) * grid.x) + 1
+    assert batch_heads <= grid.x * grid.y
+    host_inputs = host_protocol(batch_heads, 2, key_dim, value_dim, bf16_names=frozenset())
+    host_state = initial_state(batch_heads, key_dim, value_dim)
+    expected = recurrent_oracle(host_inputs, host_state)
+    inputs = device_protocol(host_inputs, device)
+    state = to_device(host_state, device)
+    actual = run_recurrent(inputs, state, actual_start=zero_actual_start)
+    assert_outputs_accurate(
+        expected,
+        actual,
+        names=("token_output", "final_state"),
+        context=f"{batch_heads} heads, K={key_dim}, V={value_dim}",
+        nrmse_threshold=0.004,
+    )
 
 
 @pytest.mark.requires_host_iommu
