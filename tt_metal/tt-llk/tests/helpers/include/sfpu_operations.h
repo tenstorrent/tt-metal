@@ -580,7 +580,11 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     }
     else if constexpr (OPERATION == SfpuType::rdiv)
     {
+#ifdef ARCH_WORMHOLE
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(rdiv_init<APPROX_MODE, is_fp32_dest_acc_en>);
+#else
         llk_math_eltwise_unary_sfpu_init<OPERATION>(rdiv_init<APPROX_MODE>);
+#endif
     }
     else if constexpr (OPERATION == SfpuType::gelu)
     {

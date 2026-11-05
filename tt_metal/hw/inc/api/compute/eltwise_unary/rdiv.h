@@ -14,8 +14,17 @@ namespace ckernel {
 
 /**
  * Please refer to documentation for any_init.
+ * DEST precision defaults to DST_ACCUM_MODE; use the same is_fp32_dest_acc_en for rdiv_tile.
  */
-ALWI void rdiv_tile_init() { MATH(SFPU_UNARY_INIT_FN(rdiv, sfpu::rdiv_init, (APPROX))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void rdiv_tile_init() {
+#ifdef ARCH_WORMHOLE
+    // Match the explicit BF16 rounding in calculate_rdiv, as recip_tile_init does for calculate_reciprocal.
+    MATH(SFPU_UNARY_INIT_FN(rdiv, sfpu::rdiv_init, (APPROX, is_fp32_dest_acc_en)));
+#else
+    MATH(SFPU_UNARY_INIT_FN(rdiv, sfpu::rdiv_init, (APPROX)));
+#endif
+}
 
 // clang-format off
 /**
