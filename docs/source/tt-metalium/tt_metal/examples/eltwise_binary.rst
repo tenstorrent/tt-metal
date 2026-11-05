@@ -5,7 +5,7 @@ Eltwise binary
 
 We now build a program that performs elementwise binary operations on a pair of equal-sized tensors using the FPU (matrix engine). The FPU can perform a variety of complex operations efficiently, including matrix multiplication and reduction. It can also perform common elementwise operations like addition. This example will add two tensors together using the FPU.
 
-Although looking trivial, this example introduces essential concepts that are used in more complicated programs. Namely the compute kernel and the use of circular buffers. Tenstorrent devices are designed with explicit data movement in mind. Leading to a separate compute kernel. And for circular buffers is the primary way to move data between kernels.
+Although looking trivial, this example introduces essential concepts that are used in more complicated programs. Namely the compute kernel and the use of dataflow buffers. Tenstorrent devices are designed with explicit data movement in mind. Leading to a separate compute kernel. And dataflow buffers are the primary way to move data between kernels.
 
 We'll go through any new code section by section. This builds on top of
 previous examples. Note that we have this exact, full example program is located under
@@ -28,94 +28,111 @@ Program setup
 Initializing Metalium is almost the same as before. To recap, we need to
 
 1. Create a mesh device (even single devices are treated as a 1x1 mesh)
-2. Obtain the mesh command queue to issue data down/uploads and program execution
-3. Create a program object to hold our kernels
-4. Define the core we are going to use (in this case, only one at {0, 0})
-5. Some basic constants for tile and total buffer sizes
+2. Obtain the mesh command queue to issue data down/uploads and program execution, and create a workload to hold the program
+3. Define the core we are going to use (in this case, only one at {0, 0})
+4. Some basic constants for tile and total buffer sizes
 
 .. code-block:: cpp
 
     constexpr int device_id = 0;
-    auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    // A MeshWorkload is a collection of programs that will be executed on the mesh.
+    distributed::MeshWorkload workload;
+    auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    Program program = CreateProgram();
+    constexpr experimental::NodeCoord core = {0, 0};
 
-    constexpr CoreCoord core = {0, 0};
     constexpr uint32_t n_tiles = 64;
     constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
 
-This time, instead of 2 DRAM buffers to copy data out and back, we will create 3 buffers. 2 as data sources and 1 as the output. Page size is set to one tile. This is the most common setting for buffers in Metalium as the compute engines expect to operate on tiles of data.
+This time, instead of 2 DRAM buffers to copy data out and back, we will create 3 tensors. 2 as data sources and 1 as the output. Each row of the row-major tensor holds one tile's worth of elements, so the page size is one tile. This is the most common setting for buffers in Metalium as the compute engines expect to operate on tiles of data.
 
 .. code-block:: cpp
 
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = tile_size_bytes,
-        .buffer_type = BufferType::DRAM};       // This is a DRAM buffer.
+    TensorSpec dram_tensor_spec(
+        Shape({n_tiles, elements_per_tile}),
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM})); // This is a DRAM tensor.
 
-    distributed::ReplicatedBufferConfig buffer_config{
-        .size = n_tiles * tile_size_bytes       // Total bytes per device (replicated across the mesh).
-    };
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+    MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+    // Each tensor is replicated across the mesh; on a unit mesh this is a single device allocation.
 
-    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-
-Data preparation and upload is the same as before. For this example, buffer 0 will be filled with random values, and buffer 1 will be filled with a constant of -1 just for demonstration purposes. The data is then uploaded to the device asynchronously like before.
+Data preparation and upload is the same as before. For this example, tensor 0 will be filled with random values, and tensor 1 will be filled with a constant of -1 just for demonstration purposes. The data is then uploaded to the device asynchronously like before.
 
 .. code-block:: cpp
 
-    constexpr float val_to_add = -1.0f;
     std::mt19937 rng(std::random_device{}());
     std::uniform_real_distribution<float> distribution(0.0f, 1.0f);
-    std::vector<bfloat16> src0_data(elements_per_tile * n_tiles);
-    std::vector<bfloat16> src1_data(elements_per_tile * n_tiles, bfloat16(val_to_add));
+    std::vector<bfloat16> a_data(elements_per_tile * n_tiles);
     for(auto& val : a_data) {
         val = bfloat16(distribution(rng));
     }
-    // Upload the data from host to the device.
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, false);
 
-Circular buffers
+    constexpr float val_to_add = -1.0f;
+    std::vector<bfloat16> b_data(elements_per_tile * n_tiles, bfloat16(val_to_add));
+
+    // Upload host vectors into the mesh tensors.
+    HostTensor a_host_tensor = HostTensor::from_vector(a_data, dram_tensor_spec);
+    HostTensor b_host_tensor = HostTensor::from_vector(b_data, dram_tensor_spec);
+    cq.enqueue_write_tensor(a_host_tensor, src0_dram_tensor);
+    cq.enqueue_write_tensor(b_host_tensor, src1_dram_tensor);
+
+Dataflow buffers
 ----------------
 
-Here we introduce a new concept: circular buffers. They are communication channels between the different kernel on a Tensix. Conceptually they act as pipes between different kernels. There are in total 32 circular buffers supported on a Tensix. To utilize them, the host program must allocate the circular buffers and utilize the appropriate circular buffer index in the kernel.
+Here we introduce a new concept: dataflow buffers. They are communication channels between the different kernel on a Tensix. Conceptually they act as pipes between different kernels. There are in total 32 dataflow buffers supported on a Tensix. To utilize them, the host program must describe the dataflow buffers in the program spec, and each kernel binds a dataflow buffer to a name it uses in the kernel. Kernels, dataflow buffers and tensor parameters are all identified by name within the program spec.
 
 
 
 .. code-block:: cpp
 
+    const experimental::KernelSpecName reader{"reader"};
+    const experimental::KernelSpecName writer{"writer"};
+    const experimental::KernelSpecName compute{"compute"};
+    const experimental::DFBSpecName src0_dfb{"src0"};
+    const experimental::DFBSpecName src1_dfb{"src1"};
+    const experimental::DFBSpecName dst_dfb{"dst"};
+    const experimental::TensorParamName src0_tensor_param{"src0"};
+    const experimental::TensorParamName src1_tensor_param{"src1"};
+    const experimental::TensorParamName dst_tensor_param{"dst"};
+
     constexpr uint32_t tiles_per_cb = 2;
-    tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
-    CircularBufferConfig c0_cfg = CircularBufferConfig(
-        /*total_size=*/tiles_per_cb * tile_size_bytes,
-        /*data_format_spec=*/{{src0_cb_index, tt::DataFormat::Float16_b}})
-        .set_page_size(src0_cb_index, tile_size_bytes);
-    CBHandle cb_src0 = CreateCircularBuffer(program, core, c0_cfg);
+    experimental::DataflowBufferSpec src0_dfb_spec{
+        .unique_id = src0_dfb,
+        .entry_size = tile_size_bytes,                        // Since we will be sending one tile at a time, we set
+                                                              // the entry size to the tile size
+        .num_entries = tiles_per_cb,                          // The number of entries in the dataflow buffer
+        .data_format_metadata = tt::DataFormat::Float16_b,    // The data format it'll hold
+    };
+    experimental::DataflowBufferSpec src1_dfb_spec{
+        .unique_id = src1_dfb,
+        .entry_size = tile_size_bytes,
+        .num_entries = tiles_per_cb,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    experimental::DataflowBufferSpec dst_dfb_spec{
+        .unique_id = dst_dfb,
+        .entry_size = tile_size_bytes,
+        .num_entries = tiles_per_cb,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
 
-    tt::CBIndex src1_cb_index = tt::CBIndex::c_1;
-    CBHandle cb_src1 = CreateCircularBuffer(program, core, CircularBufferConfig(
-        /*total_size=*/tiles_per_cb * tile_size_bytes,
-        /*data_format_spec=*/{{src1_cb_index, tt::DataFormat::Float16_b}})
-        .set_page_size(src1_cb_index, tile_size_bytes));
-    tt::CBIndex dst_cb_index = tt::CBIndex::c_16;
-    CBHandle cb_dst = CreateCircularBuffer(program, core, CircularBufferConfig(
-        /*total_size=*/tiles_per_cb * tile_size_bytes,
-        /*data_format_spec=*/{{dst_cb_index, tt::DataFormat::Float16_b}})
-        .set_page_size(dst_cb_index, tile_size_bytes));
+The ``DataflowBufferSpec`` describes a dataflow buffer. At the core, there are a few critical parameters:
 
-The API to create a circular buffer is more complicated than for a buffer, providing finer grained control for advanced use cases. At the core, there are a few critical parameters:
-
-* The index of the circular buffer
-* The total size of the circular buffer in bytes (and thus the number of pages within)
-* The data format of the circular buffer (bfloat16, block float4, etc..)
-* How large each pages is
+* The name of the dataflow buffer (``unique_id``)
+* The number of entries in the dataflow buffer (``num_entries``)
+* The data format of the dataflow buffer (bfloat16, block float4, etc..)
+* How large each entry is (``entry_size``)
   * For most cases, this should be the same as the size of a tile of the underlying data format
 
-For instance, to create a circular buffer of 2 tiles of bfloat16 data, we need to set the total size to ``2 * tile_size_bytes``. The page size set to ``tile_size_bytes`` and the data format is set to bfloat16.
+For instance, to create a dataflow buffer of 2 tiles of bfloat16 data, we need to set the number of entries to ``2``. The entry size set to ``tile_size_bytes`` and the data format is set to bfloat16.
 
 Data movement and compute kernels
 ---------------------------------
@@ -127,103 +144,140 @@ In the previous example (DRAM loopback), we used a single kernel to perform the 
 
 .. code-block:: cpp
 
-    std::vector<uint32_t> reader_args;
-    TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_args);
-    TensorAccessorArgs(*src1_dram_buffer->get_backing_buffer()).append_to(reader_args);
-    auto reader = CreateKernel(
-        program,
-        "eltwise_binary/kernels/dataflow/read_tiles.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_args});
-    std::vector<uint32_t> writer_args;
-    TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_args);
-    auto writer = CreateKernel(
-        program,
-        "eltwise_binary/kernels/dataflow/write_tile.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = writer_args});
-    auto compute = CreateKernel(
-        program,
-        "eltwise_binary/kernels/compute/tiles_add.cpp",
-        core,
-        ComputeConfig{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4});
+    experimental::KernelSpec reader_spec{
+        .unique_id = reader,
+        .source = OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/read_tiles.cpp",
+        .dfb_bindings = {experimental::ProducerOf(src0_dfb, "in0"), experimental::ProducerOf(src1_dfb, "in1")},
+        .tensor_bindings =
+            {{.tensor_parameter_name = src0_tensor_param, .accessor_name = "in0"},
+             {.tensor_parameter_name = src1_tensor_param, .accessor_name = "in1"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+            },
+    };
+    experimental::KernelSpec writer_spec{
+        .unique_id = writer,
+        .source = OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/write_tile.cpp",
+        .dfb_bindings = {experimental::ConsumerOf(dst_dfb, "out0")},
+        .tensor_bindings = {{.tensor_parameter_name = dst_tensor_param, .accessor_name = "out0"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
+            },
+    };
+    experimental::KernelSpec compute_spec{
+        .unique_id = compute,
+        .source = OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/compute/tiles_add.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {experimental::ConsumerOf(src0_dfb, "in0"),
+             experimental::ConsumerOf(src1_dfb, "in1"),
+             experimental::ProducerOf(dst_dfb, "out0")},
+        .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+        .hw_config =
+            experimental::ComputeHardwareConfig{
+                .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            },
+    };
 
-Notice the ``ComputeConfig`` object. This indicates to the framework that a compute kernel should be created. There's a plethora of settings that can be set here. The most important one is the ``math_fidelity`` setting. This controls how accurate certain floating point operations are on the FPU specifically. Other operations (like the ones in the vector engine) are _not_ affected by this setting.
+    experimental::ProgramSpec program_spec{
+        .name = "eltwise_binary",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
+        .tensor_parameters =
+            {{.unique_id = src0_tensor_param, .spec = dram_tensor_spec},
+             {.unique_id = src1_tensor_param, .spec = dram_tensor_spec},
+             {.unique_id = dst_tensor_param, .spec = dram_tensor_spec}},
+        .work_units =
+            {{.name = "eltwise_binary",
+              .kernels = {reader, writer, compute},
+              .target_nodes = core}},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, program_spec);
 
-Now let's look at the kernels. First the reader kernel. This kernel reads both input buffers from DRAM and pushes them into the circular buffers (will discuss in the following section) for the compute kernel to consume. For now, consider the circular buffers as a pipe. Data can be pushed into the pipe and read out of it. And both ends must ensure there is space to do so.
+Each kernel is described by a ``KernelSpec``. ``dfb_bindings`` and ``tensor_bindings`` bind the dataflow buffers and tensor parameters to the names the kernel uses in its source (for example ``in0``), and ``runtime_arg_schema`` declares the named runtime arguments. The ``ProgramSpec`` collects the kernels, dataflow buffers and tensor parameters, and its work units place the kernels on cores. ``MakeProgramFromSpec`` builds the program from it.
 
-To do so, the reader creates 2 interleaved address generators. Unlike on most processors, the Tensix doesn't just see raw bytes. The address generator contains metadata about the data it is associated to enable the data be read out of the DRAM in the correct format. Then in a loop, the program waits for space to be available in the circular buffers. Once there is, it reads a tile from DRAM and pushes it into the circular buffer. The ``noc_async_read_barrier()`` call ensures waits for the read to finish before committing the data to the circular buffer. This is important as the read is asynchronous and data is not guaranteed to be there when the program continues.
+Notice the ``ComputeHardwareConfig`` object. This indicates to the framework that a compute kernel should be created. There's a plethora of settings that can be set here. The most important one is the ``fpu_math_fidelity`` setting. This controls how accurate certain floating point operations are on the FPU specifically. Other operations (like the ones in the vector engine) are _not_ affected by this setting.
+
+Now let's look at the kernels. First the reader kernel. This kernel reads both input buffers from DRAM and pushes them into the dataflow buffers for the compute kernel to consume. As discussed above, consider the dataflow buffers as a pipe. Data can be pushed into the pipe and read out of it. And both ends must ensure there is space to do so.
+
+To do so, the reader creates 2 tensor accessors from the tensors bound to it by name (``tensor::in0`` and ``tensor::in1``). Unlike on most processors, the Tensix doesn't just see raw bytes. The tensor accessor contains metadata about the data it is associated to enable the data be read out of the DRAM in the correct format. Then in a loop, the program waits for space to be available in the dataflow buffers. Once there is, it reads a tile from DRAM and pushes it into the dataflow buffer. The ``noc.async_read_barrier()`` call waits for the read to finish before committing the data to the dataflow buffer. This is important as the read is asynchronous and data is not guaranteed to be there when the program continues.
 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/eltwise_binary/kernels/dataflow/read_tiles.cpp
     void kernel_main() {
-        uint32_t in0_addr = get_arg_val<uint32_t>(0);
-        uint32_t in1_addr = get_arg_val<uint32_t>(1);
-        uint32_t n_tiles = get_arg_val<uint32_t>(2);
+        uint32_t n_tiles = get_arg(args::n_tiles);
 
-        // The circular buffers to read the tiles into (same as the ones in the host program)
-        constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-        constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
+        // The dataflow buffers to read the tiles into
+        DataflowBuffer dfb_in0(dfb::in0);
+        DataflowBuffer dfb_in1(dfb::in1);
 
-        const uint32_t tile_size_bytes = get_tile_size(cb_in0);
+        const uint32_t tile_size_bytes = dfb_in0.get_entry_size();
 
-        constexpr auto in0_args = TensorAccessorArgs<0>();
-        const auto in0 = TensorAccessor(in0_args, in0_addr, tile_size_bytes);
+        // The input tensors are bound to this kernel by name in the host code.
+        const auto in0 = TensorAccessor(tensor::in0);
+        const auto in1 = TensorAccessor(tensor::in1);
 
-        constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-        const auto in1 = TensorAccessor(in1_args, in1_addr, tile_size_bytes);
+        // Create Device 2.0 Noc object
+        Noc noc;
 
         for (uint32_t i = 0; i < n_tiles; i++) {
-            cb_reserve_back(cb_in0, 1);
-            cb_reserve_back(cb_in1, 1);
+            dfb_in0.reserve_back(1);
+            dfb_in1.reserve_back(1);
 
-            noc_async_read_page(i, in0, get_write_ptr(cb_in0));
-            noc_async_read_page(i, in1, get_write_ptr(cb_in1));
+            noc.async_read(in0, dfb_in0, tile_size_bytes, {.page_id = i}, {.offset_bytes = 0});
+            noc.async_read(in1, dfb_in1, tile_size_bytes, {.page_id = i}, {.offset_bytes = 0});
 
-            // Wait until tile reads are done
-            noc_async_read_barrier();
-            cb_push_back(cb_in0, 1);
-            cb_push_back(cb_in1, 1);
+            noc.async_read_barrier();  // Wait until tile reads are done
+            dfb_in0.push_back(1);
+            dfb_in1.push_back(1);
         }
     }
 
-The compute kernel performs the actual elementwise addition. It initializes the matrix engine for addition, then enters a loop. Inside the loop, it waits for data to be available in the input circular buffers, and for the destination registers to be free. The destination registers (16 in total, with 8 usable at a time) are used to transfer data to and from the computation engines. The kernel adds the input tiles, writes the result to destination register 0, waits to be sure the result is ready, and waits for the output circular buffer to have space, and pushes the computed tile into it. Finally, it marks the input tiles as consumed, the output tile as produced, and releases the registers.
+The compute kernel performs the actual elementwise addition. It initializes the matrix engine for addition, then enters a loop. Inside the loop, it waits for data to be available in the input dataflow buffers, and for the destination registers to be free. The destination registers (16 in total, with 8 usable at a time) are used to transfer data to and from the computation engines. The kernel adds the input tiles, writes the result to destination register 0, waits to be sure the result is ready, and waits for the output dataflow buffer to have space, and pushes the computed tile into it. Finally, it marks the input tiles as consumed, the output tile as produced, and releases the registers.
 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/eltwise_binary/kernels/compute/tiles_add.cpp
     void kernel_main() {
-        uint32_t n_tiles = get_arg_val<uint32_t>(0);
+        uint32_t n_tiles = get_arg(args::n_tiles);
 
-        constexpr auto cb_in0 = tt::CBIndex::c_0;
-        constexpr auto cb_in1 = tt::CBIndex::c_1;
-        constexpr auto cb_out0 = tt::CBIndex::c_16;
+        DataflowBuffer dfb_in0(dfb::in0);
+        DataflowBuffer dfb_in1(dfb::in1);
+        DataflowBuffer dfb_out0(dfb::out0);
 
-        constexpr uint32_t dst_reg_id = 0;
+        constexpr uint32_t dst_reg = 0;
 
-        compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
-        add_init(cb_in0, cb_in1);
+        compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out0);
+        add_init(dfb::in0, dfb::in1);
 
         // Loop over all the tiles and perform the computation
         for (uint32_t i = 0; i < n_tiles; i++) {
-            cb_wait_front(cb_in0, 1);
-            cb_wait_front(cb_in1, 1);
+            dfb_in0.wait_front(1);
+            dfb_in1.wait_front(1);
 
             tile_regs_acquire();
 
-            add_tiles(cb_in0, cb_in1, /*offset_0*/0, /*offset_1*/0, dst_reg_id);
+            add_tiles(dfb::in0, dfb::in1, 0, 0, dst_reg);
 
             tile_regs_commit();
             tile_regs_wait();
 
-            cb_reserve_back(cb_out0, 1);
-            pack_tile(dst_reg, cb_out0); // copy result to out0
-            tile_regs_release();
+            dfb_out0.reserve_back(1);
+            pack_tile(dst_reg, dfb::out0);
 
-            cb_push_back(cb_out0, 1);
-            cb_pop_front(cb_in0, 1);
-            cb_pop_front(cb_in1, 1);
+            dfb_out0.push_back(1);
+            dfb_in0.pop_front(1);
+            dfb_in1.pop_front(1);
+            tile_regs_release();
         }
     }
 
@@ -234,38 +288,49 @@ The writer kernel looks similar to the reader kernel. Instead of reading, it wri
 
     // tt_metal/programming_examples/eltwise_binary/kernels/dataflow/write_tile.cpp
     void kernel_main() {
-        uint32_t out_addr = get_arg_val<uint32_t>(0);
-        uint32_t n_tiles = get_arg_val<uint32_t>(1);
+        uint32_t n_tiles = get_arg(args::n_tiles);
 
-        // same as the one in the host program
-        constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
+        // The dataflow buffer that we are going to read from and write to DRAM
+        DataflowBuffer dfb_out(dfb::out0);
+        const uint32_t tile_size_bytes = dfb_out.get_entry_size();
 
-        const uint32_t tile_size_bytes = get_tile_size(cb_out0);
+        // The output tensor is bound to this kernel by name in the host code.
+        const auto out0 = TensorAccessor(tensor::out0);
 
-        constexpr auto out_args = TensorAccessorArgs<0>();
-        const auto out = TensorAccessor(out_args, out_addr, tile_size_bytes);
+        // Create Device 2.0 Noc object
+        Noc noc;
 
         for (uint32_t i = 0; i < n_tiles; i++) {
-            cb_wait_front(cb_out0, 1);
-            noc_async_write_page(i, out, get_read_ptr(cb_out0));
-            noc_async_write_barrier();
-            cb_pop_front(cb_out0, 1);
+            dfb_out.wait_front(1);
+            noc.async_write(dfb_out, out0, tile_size_bytes, {}, {.page_id = i});
+            noc.async_write_barrier();
+            dfb_out.pop_front(1);
         }
+    }
 
 
-Then the host program sets the kernel arguments and launches the program. There is no difference in setting the arguments for the compute kernel.
+Then the host program sets the kernel arguments and launches the program. Each kernel gets the named runtime argument ``n_tiles``, and the DRAM tensors are bound to the tensor parameters by name. There is no difference in setting the arguments for the compute kernel.
 
 .. note::
     Unlike OpenCL/CUDA. Each kernel (reader, compute and writer) can have it's own set of arguments. Furthermore, on a multi cored program (i.e. using more then 1 Tensix core), kernels within each core can have different arguments. This enables Metalium to exploit the grid like nature of the Tenstorrent processors to achieve high performance.
 
 .. code-block:: cpp
 
-    SetRuntimeArgs(program, reader, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), n_tiles});
-    SetRuntimeArgs(program, writer, core, {dst_dram_buffer->address(), n_tiles});
-    SetRuntimeArgs(program, compute, core, {n_tiles});
+    experimental::ProgramRunArgs run_args{
+        .kernel_run_args =
+            {{.kernel = reader,
+              .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, {{"n_tiles", n_tiles}})},
+             {.kernel = writer,
+              .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, {{"n_tiles", n_tiles}})},
+             {.kernel = compute,
+              .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, {{"n_tiles", n_tiles}})}},
+        .tensor_args =
+            {{src0_tensor_param, experimental::TensorArgument{src0_dram_tensor}},
+             {src1_tensor_param, experimental::TensorArgument{src1_dram_tensor}},
+             {dst_tensor_param, experimental::TensorArgument{dst_dram_tensor}}},
+    };
+    experimental::SetProgramRunArgs(program, run_args);
 
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
@@ -277,18 +342,17 @@ Finally, we download the result and verify the output. Again we read the data in
 
 .. code-block:: cpp
 
-    std::vector<bfloat16> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+    std::vector<bfloat16> result_vec = cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 
     constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16
     TT_FATAL(result_vec.size() == a_data.size(), "Result vector size mismatch");
     for (size_t i = 0; i < result_vec.size(); ++i) {
-        const float expected = a_data[i].to_float() + val_to_add;
-        const float actual = result_vec[i].to_float();
+        const float expected = static_cast<float>(a_data[i]) + val_to_add;
+        const float actual = static_cast<float>(result_vec[i]);
 
         if (std::abs(expected - actual) > eps) {
             pass = false;
-            tt::log_error(tt::LogTest, "Result mismatch at index {}: expected {}, got {}", i, expected, actual);
+            fmt::print(stderr, "Result mismatch at index {}: expected {}, got {}\n", i, expected, actual);
         }
     }
 

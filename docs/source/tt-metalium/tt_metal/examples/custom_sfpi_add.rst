@@ -21,38 +21,132 @@ Building the example can be done by adding a ``--build-programming-examples`` fl
 Program setup
 -------------
 
-This example assumes familiarity with basic Metalium concepts like device initialization, buffer creation, circular buffers, and kernel setup. If you're new to these concepts, we recommend starting with the :ref:`Eltwise sfpu example<Eltwise sfpu example>` for a gentler introduction to programming Metalium kernels.
+This example assumes familiarity with basic Metalium concepts like device initialization, tensor allocation, dataflow buffers, and kernel setup. If you're new to these concepts, we recommend starting with the :ref:`Eltwise sfpu example<Eltwise sfpu example>` for a gentler introduction to programming Metalium kernels.
 
-The host-side setup for this custom SFPI example follows the standard pattern: device initialization, DRAM buffer creation for two inputs and one output, circular buffer allocation for kernel communication, and kernel creation. The key difference from simpler examples is that we need two input circular buffers (``cb_in0``, ``cb_in1``) to handle the binary operation, plus the standard output buffer (``cb_out0``).
+The host-side setup for this custom SFPI example follows the standard pattern: device initialization, DRAM tensor allocation for two inputs and one output, dataflow buffer descriptions for kernel communication, and kernel descriptions (``KernelSpec``) in a ``ProgramSpec``. The key difference from simpler examples is that we need two input dataflow buffers (``src0``, ``src1``) to handle the binary operation, plus the standard output buffer (``dst``). Each ``KernelSpec`` binds a dataflow buffer or tensor parameter to a local name such as ``"in0"``; the kernel then refers to it as ``dfb::in0`` or ``tensor::in0``.
 
 .. code-block:: cpp
 
-    // Standard device and program setup
+    // tt_metal/programming_examples/custom_sfpi_add/custom_sfpi_add.cpp
+    // Create a 1x1 mesh on device 0 (same API scales to multi-device meshes)
     constexpr int device_id = 0;
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-    // Submit work via the mesh command queue: uploads/downloads and program execution
+    // Submit work via the mesh command queue: uploads/downloads and program execution.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    // Allocate mesh buffers: two inputs + one output (replicated across mesh)
-    auto src0_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
 
-    Program program = CreateProgram();
+    // ...
 
-    // Create mesh workload for program execution across the mesh
+    TensorSpec dram_tensor_spec(
+        Shape({n_tiles, elements_per_tile}),
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+
+    // Allocate the tensors (replicated across mesh; on unit mesh ⇒ single device allocation)
+    // src0, src1 are input tensors; dst is output tensor
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+    MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+
+    // A MeshWorkload is a collection of programs that will be executed on the mesh. Each workload is
+    // local to a single device. Here we create a workload for our single-device mesh.
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    // Circular buffers for kernel communication
-    CreateCircularBuffer(program, core, /* cb_in0 config */);
-    CreateCircularBuffer(program, core, /* cb_in1 config */);
-    CreateCircularBuffer(program, core, /* cb_out0 config */);
+    // This example program will only use 1 Tensix core. So we set the core to {0, 0} (the most top-left core).
+    constexpr experimental::NodeCoord core = {0, 0};
+
+    // Names identify the kernels, the dataflow buffers and the tensor parameters within the program spec.
+    const experimental::KernelSpecName reader{"reader"};
+    const experimental::KernelSpecName writer{"writer"};
+    const experimental::KernelSpecName compute{"compute"};
+    const experimental::DFBSpecName src0_dfb{"src0"};
+    const experimental::DFBSpecName src1_dfb{"src1"};
+    const experimental::DFBSpecName dst_dfb{"dst"};
+    const experimental::TensorParamName src0_tensor_param{"src0"};
+    const experimental::TensorParamName src1_tensor_param{"src1"};
+    const experimental::TensorParamName dst_tensor_param{"dst"};
+
+    // Dataflow buffers for kernel communication
+    constexpr uint32_t tiles_per_cb = 2;
+    experimental::DataflowBufferSpec src0_dfb_spec{
+        .unique_id = src0_dfb,
+        .entry_size = tile_size_bytes,
+        .num_entries = tiles_per_cb,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    experimental::DataflowBufferSpec src1_dfb_spec{
+        .unique_id = src1_dfb,
+        .entry_size = tile_size_bytes,
+        .num_entries = tiles_per_cb,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    experimental::DataflowBufferSpec dst_dfb_spec{
+        .unique_id = dst_dfb,
+        .entry_size = tile_size_bytes,
+        .num_entries = tiles_per_cb,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
 
     // Kernels: reader, writer, and custom SFPU compute
-    auto reader = CreateKernel(program, "..../read_tiles.cpp", core, DataMovementConfig{...});
-    auto writer = CreateKernel(program, "..../write_tile.cpp", core, DataMovementConfig{...});
-    auto compute = CreateKernel(program, "..../tiles_add.cpp", core, ComputeConfig{});
+    experimental::KernelSpec reader_spec{
+        .unique_id = reader,
+        .source = OVERRIDE_KERNEL_PREFIX "custom_sfpi_add/kernels/dataflow/read_tiles.cpp",
+        .dfb_bindings = {experimental::ProducerOf(src0_dfb, "in0"), experimental::ProducerOf(src1_dfb, "in1")},
+        .tensor_bindings =
+            {{.tensor_parameter_name = src0_tensor_param, .accessor_name = "in0"},
+             {.tensor_parameter_name = src1_tensor_param, .accessor_name = "in1"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+            },
+    };
+    experimental::KernelSpec writer_spec{
+        .unique_id = writer,
+        .source = OVERRIDE_KERNEL_PREFIX "custom_sfpi_add/kernels/dataflow/write_tile.cpp",
+        .dfb_bindings = {experimental::ConsumerOf(dst_dfb, "out0")},
+        .tensor_bindings = {{.tensor_parameter_name = dst_tensor_param, .accessor_name = "out0"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
+            },
+    };
+    experimental::KernelSpec compute_spec{
+        .unique_id = compute,
+        .source = OVERRIDE_KERNEL_PREFIX "custom_sfpi_add/kernels/compute/tiles_add.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {experimental::ConsumerOf(src0_dfb, "in0"),
+             experimental::ConsumerOf(src1_dfb, "in1"),
+             experimental::ProducerOf(dst_dfb, "out0")},
+        .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+        .hw_config =
+            experimental::ComputeHardwareConfig{
+                .enable_32_bit_dest = false, // We don't need the destination accumulator to be FP32 as input and output are BFP16
+            },
+    };
+
+    // A program spec describes the program: its kernels, the dataflow buffers between them, the tensors they
+    // operate on, and the cores the kernels run on (the work units).
+    experimental::ProgramSpec program_spec{
+        .name = "custom_sfpi_add",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
+        .tensor_parameters =
+            {{.unique_id = src0_tensor_param, .spec = dram_tensor_spec},
+             {.unique_id = src1_tensor_param, .spec = dram_tensor_spec},
+             {.unique_id = dst_tensor_param, .spec = dram_tensor_spec}},
+        .work_units = {{.name = "custom_sfpi_add", .kernels = {reader, writer, compute}, .target_nodes = core}},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, program_spec);
 
 The Kernels
 -----------
@@ -60,90 +154,108 @@ The Kernels
 Data Movement Kernels
 ~~~~~~~~~~~~~~~~~~~~~
 
-The reader kernel reads tiles from two source DRAM buffers and pushes them into two separate input circular buffers.
+The reader kernel reads tiles from two source DRAM tensors and pushes them into two separate input dataflow buffers. The kernel gets the tile count as the named runtime argument ``args::n_tiles``, and it accesses the input tensors through ``tensor::in0`` and ``tensor::in1``.
 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_add/kernels/dataflow/read_tiles.cpp
     void kernel_main() {
+        // Read parameters from the kernel arguments
+        uint32_t n_tiles = get_arg(args::n_tiles);
+
+        // The dataflow buffers to read the tiles into
+        DataflowBuffer dfb_in0(dfb::in0);
+        DataflowBuffer dfb_in1(dfb::in1);
         // ...
-        for (uint32_t i = 0; i < num_tiles; i++) {
-            cb_reserve_back(cb_in0, 1);
-            cb_reserve_back(cb_in1, 1);
-            uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-            uint32_t cb_in1_addr = get_write_ptr(cb_in1);
-            noc_async_read_page(i, in0, cb_in0_addr);
-            noc_async_read_page(i, in1, cb_in1_addr);
+        // The input tensors are bound to this kernel by name in the host code.
+        const auto in0 = TensorAccessor(tensor::in0);
+        const auto in1 = TensorAccessor(tensor::in1);
+
+        for (uint32_t i = 0; i < n_tiles; i++) {
+            dfb_in0.reserve_back(1);
+            dfb_in1.reserve_back(1);
+            uint32_t dfb_in0_addr = dfb_in0.get_write_ptr();
+            uint32_t dfb_in1_addr = dfb_in1.get_write_ptr();
+            noc_async_read_page(i, in0, dfb_in0_addr);
+            noc_async_read_page(i, in1, dfb_in1_addr);
 
             noc_async_read_barrier();
-            cb_push_back(cb_in0, 1);
-            cb_push_back(cb_in1, 1);
+            dfb_in0.push_back(1);
+            dfb_in1.push_back(1);
         }
     }
 
-The writer kernel is straightforward: it reads result tiles from the output circular buffer and writes them to the destination DRAM buffer.
+The writer kernel is straightforward: it reads result tiles from the output dataflow buffer and writes them to the destination DRAM tensor.
 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_add/kernels/dataflow/write_tile.cpp
     void kernel_main() {
-        // ...
+        uint32_t n_tiles = get_arg(args::n_tiles);
+
+        // The dataflow buffer that we are going to read from and write to DRAM
+        DataflowBuffer dfb_out0(dfb::out0);
+
+        // The output tensor is bound to this kernel by name in the host code.
+        const auto out0 = TensorAccessor(tensor::out0);
+
         for (uint32_t i = 0; i < n_tiles; i++) {
-            cb_wait_front(cb_out0, 1);
-            uint32_t cb_out0_addr = get_read_ptr(cb_out0);
-            noc_async_write_page(i, out0, cb_out0_addr);
+            dfb_out0.wait_front(1);
+            uint32_t dfb_out0_addr = dfb_out0.get_read_ptr();
+            noc_async_write_page(i, out0, dfb_out0_addr);
             noc_async_write_barrier();
-            cb_pop_front(cb_out0, 1);
+            dfb_out0.pop_front(1);
         }
     }
 
 SFPI Compute Kernel
 ~~~~~~~~~~~~~~~~~~~
 
-The compute kernel is where the custom SFPI logic resides. It waits for tiles from the input CBs, performs the addition using the SFPI, and pushes the result to the output CB.
+The compute kernel is where the custom SFPI logic resides. It waits for tiles from the input dataflow buffers, performs the addition using the SFPI, and pushes the result to the output dataflow buffer.
 
 The overall flow follows the same pattern as other compute kernels:
 
-1. Wait for input tiles to be available in ``cb_in0`` and ``cb_in1``.
+1. Wait for input tiles to be available in ``dfb::in0`` and ``dfb::in1``.
 2. Acquire destination registers. These registers will be used as a scratchpad for the computation.
-3. Copy tiles from CBs to the destination registers.
+3. Copy tiles from the dataflow buffers to the destination registers.
 4. Execute the custom SFPI addition function on the data in the destination registers.
 5. Transfer the ownership of the destination registers to the packer
-6. Reserve space in the output CB, pack the result tile, and push it.
-7. Pop the input tiles from the input CBs.
+6. Reserve space in the output dataflow buffer, pack the result tile, and push it.
+7. Pop the input tiles from the input dataflow buffers.
 8. Release the destination registers.
 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_add/kernels/compute/tiles_add.cpp
     void kernel_main() {
-        uint32_t n_tiles = get_arg_val<uint32_t>(0);
+        uint32_t n_tiles = get_arg(args::n_tiles);
 
-        constexpr auto cb_in0 = tt::CBIndex::c_0;
-        constexpr auto cb_in1 = tt::CBIndex::c_1;
-        constexpr auto cb_out0 = tt::CBIndex::c_16;
+        DataflowBuffer dfb_in0(dfb::in0);
+        DataflowBuffer dfb_in1(dfb::in1);
+        DataflowBuffer dfb_out0(dfb::out0);
 
-        compute_kernel_hw_startup(cb_in0, cb_out0);
-        copy_init(cb_in0);
+        compute_kernel_hw_startup(dfb::in0, dfb::out0);
+        copy_init(dfb::in0);
 
         for (uint32_t i = 0; i < n_tiles; i++) {
-            cb_wait_front(cb_in0, 1);
-            cb_wait_front(cb_in1, 1);
+            dfb_in0.wait_front(1);
+            dfb_in1.wait_front(1);
 
             tile_regs_acquire();
-            copy_tile(cb_in0, 0, 0);
-            copy_tile(cb_in1, 0, 1);
+            copy_tile(dfb::in0, 0, 0);
+            copy_tile(dfb::in1, 0, 1);
 
-            my_add_tile(0, 1, 0); // <-- Call to custom SFPI addition function
+            my_add_tile(0, 1, 0);  // <-- The custom SFPU addition happens here
 
             tile_regs_commit();
+            tile_regs_wait();
 
-            cb_reserve_back(cb_out0, 1);
-            pack_tile(0, cb_out0);
-            cb_push_back(cb_out0, 1);
+            dfb_out0.reserve_back(1);
+            pack_tile(0, dfb::out0);
+            dfb_out0.push_back(1);
 
-            cb_pop_front(cb_in0, 1);
-            cb_pop_front(cb_in1, 1);
+            dfb_in0.pop_front(1);
+            dfb_in1.pop_front(1);
             tile_regs_release();
         }
     }
@@ -222,48 +334,50 @@ This layered structure keeps high-level logic separate from hardware-specific de
 Runtime Arguments and Execution
 -------------------------------
 
-Back on the host, we set the runtime arguments for the kernels. The reader and writer kernels need the DRAM buffer addresses, and all three kernels need to know the number of tiles to process.
+Back on the host, we set the runtime arguments for the kernels with ``experimental::ProgramRunArgs`` and ``experimental::SetProgramRunArgs``. All three kernels get the named runtime argument ``n_tiles``. The ``tensor_args`` bind each DRAM tensor to its tensor parameter, so the reader and writer kernels do not need the DRAM addresses as runtime arguments.
 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_add/custom_sfpi_add.cpp
-    SetRuntimeArgs(program, reader, core, {
-        src0_dram_buffer->address(),
-        src1_dram_buffer->address(),
-        n_tiles
-    });
+    experimental::ProgramRunArgs run_args{
+        .kernel_run_args =
+            {{.kernel = reader,
+              .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, {{"n_tiles", n_tiles}})},
+             {.kernel = writer,
+              .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, {{"n_tiles", n_tiles}})},
+             {.kernel = compute,
+              .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, {{"n_tiles", n_tiles}})}},
+        .tensor_args =
+            {{src0_tensor_param, experimental::TensorArgument{src0_dram_tensor}},
+             {src1_tensor_param, experimental::TensorArgument{src1_dram_tensor}},
+             {dst_tensor_param, experimental::TensorArgument{dst_dram_tensor}}},
+    };
+    experimental::SetProgramRunArgs(program, run_args);
 
-    SetRuntimeArgs(program, writer, core, {
-        dst_dram_buffer->address(),
-        n_tiles
-    });
-
-    SetRuntimeArgs(program, compute, core, {
-        n_tiles
-    });
-
-For mesh execution, we add the program to a mesh workload and enqueue it for execution across the mesh. We also upload input data using the mesh buffer API.
+For mesh execution, we add the program to a mesh workload and enqueue it for execution across the mesh. We also upload input data using the mesh tensor API.
 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_add/custom_sfpi_add.cpp
 
-    // Upload input data to mesh buffers (non-blocking)
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, /*blocking=*/false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, /*blocking=*/false);
+    // Upload input data to the mesh tensors (non-blocking)
+    HostTensor a_host_tensor = HostTensor::from_vector(a_data, dram_tensor_spec);
+    HostTensor b_host_tensor = HostTensor::from_vector(b_data, dram_tensor_spec);
+    cq.enqueue_write_tensor(a_host_tensor, src0_dram_tensor);
+    cq.enqueue_write_tensor(b_host_tensor, src1_dram_tensor);
 
     // Add program to mesh workload and execute
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     distributed::Finish(cq);
 
-Finally, we read back the results from the mesh buffer using the distributed API to verify correctness.
+Finally, we read back the results from the mesh tensor to verify correctness.
 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_add/custom_sfpi_add.cpp
-    std::vector<bfloat16> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
+    std::vector<bfloat16> result_vec =
+        cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 
     // Validation against golden output...
 

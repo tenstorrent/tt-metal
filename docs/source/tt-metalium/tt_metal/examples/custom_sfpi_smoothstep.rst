@@ -49,41 +49,116 @@ Run the example:
 Program setup
 -------------
 
-The host-side setup for this custom SFPI example follows the standard pattern: mesh device initialization, DRAM buffer creation, circular buffer allocation for kernel communication, and kernel creation. Unlike binary operations that require two input buffers, smoothstep is a unary operation requiring only a single input buffer (``src0_dram_buffer``) plus the output buffer (``dst_dram_buffer``). Correspondingly, we need only one input circular buffer (``cb_in0``) and one output buffer (``cb_out0``).
+The host-side setup for this custom SFPI example follows the standard pattern: mesh device initialization, DRAM tensor allocation, dataflow buffer descriptions for kernel communication, and kernel descriptions (``KernelSpec``) in a ``ProgramSpec``. Unlike binary operations that require two input tensors, smoothstep is a unary operation requiring only a single input tensor (``src0_dram_tensor``) plus the output tensor (``dst_dram_tensor``). Correspondingly, we need only one input dataflow buffer (``src0``, bound as ``dfb::in0`` in the kernels) and one output dataflow buffer (``dst``, bound as ``dfb::out0``).
 
 .. code-block:: cpp
 
+    // tt_metal/programming_examples/custom_sfpi_smoothstep/custom_sfpi_smoothstep.cpp
     // Create a 1x1 mesh on device 0 (same API scales to multi-device meshes)
     constexpr int device_id = 0;
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-    // Submit work via the mesh command queue: uploads/downloads and program execution
+    // Submit work via the mesh command queue: uploads/downloads and program execution.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    Program program = CreateProgram();
 
-    // A MeshWorkload is a collection of programs that will be executed on the mesh
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
+    constexpr experimental::NodeCoord core = {0, 0};
 
-    // Configure mesh buffers with single-tile page size
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = tile_size_bytes,
-        .buffer_type = BufferType::DRAM};
-    distributed::ReplicatedBufferConfig dram_buffer_config{
-        .size = dram_buffer_size};
+    // ...
 
-    // DRAM buffers: single input + one output for unary operation
-    auto src0_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
+    // Configure mesh tensors. Use single-tile page size so transfers operate tile-by-tile: each row of a
+    // row-major tensor is one page (number of bytes when round-robin between banks), so a row of one tile's
+    // worth of elements gives a page size of one tile. The tensors live in DRAM.
+    TensorSpec dram_tensor_spec(
+        Shape({n_tiles, elements_per_tile}),
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
 
-    // Circular buffers for kernel communication
-    CreateCircularBuffer(program, core, /* cb_in0 config */);
-    CreateCircularBuffer(program, core, /* cb_out0 config */);
+    // Allocate the tensors (replicated across mesh; on unit mesh ⇒ single device allocation)
+    // src0 is input tensor; dst is output tensor
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+
+    // ...
+
+    // Names identify the kernels, the dataflow buffers and the tensor parameters within the program spec.
+    const experimental::KernelSpecName reader{"reader"};
+    const experimental::KernelSpecName writer{"writer"};
+    const experimental::KernelSpecName compute{"compute"};
+    const experimental::DFBSpecName src0_dfb{"src0"};
+    const experimental::DFBSpecName dst_dfb{"dst"};
+    const experimental::TensorParamName src0_tensor_param{"src0"};
+    const experimental::TensorParamName dst_tensor_param{"dst"};
+
+    // Dataflow buffers for kernel communication
+    constexpr uint32_t tiles_per_cb = 2;
+    experimental::DataflowBufferSpec src0_dfb_spec{
+        .unique_id = src0_dfb,
+        .entry_size = tile_size_bytes,                       // Since we will be sending one tile at a time, we set
+                                                             // the entry size to the tile size
+        .num_entries = tiles_per_cb,                         // The number of entries in the dataflow buffer
+        .data_format_metadata = tt::DataFormat::Float16_b,   // The data format it'll hold
+    };
+    experimental::DataflowBufferSpec dst_dfb_spec{
+        .unique_id = dst_dfb,
+        .entry_size = tile_size_bytes,
+        .num_entries = tiles_per_cb,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
 
     // Kernels: reader, writer, and custom SFPU compute
-    auto reader = CreateKernel(program, "..../read_tiles.cpp", core, DataMovementConfig{...});
-    auto writer = CreateKernel(program, "..../write_tile.cpp", core, DataMovementConfig{...});
-    auto compute = CreateKernel(program, "..../tiles_smoothstep.cpp", core, ComputeConfig{});
+    experimental::KernelSpec reader_spec{
+        .unique_id = reader,
+        .source = OVERRIDE_KERNEL_PREFIX "custom_sfpi_smoothstep/kernels/dataflow/read_tiles.cpp",
+        .dfb_bindings = {experimental::ProducerOf(src0_dfb, "in0")},
+        .tensor_bindings = {{.tensor_parameter_name = src0_tensor_param, .accessor_name = "in0"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+            },
+    };
+    experimental::KernelSpec writer_spec{
+        .unique_id = writer,
+        .source = OVERRIDE_KERNEL_PREFIX "custom_sfpi_smoothstep/kernels/dataflow/write_tile.cpp",
+        .dfb_bindings = {experimental::ConsumerOf(dst_dfb, "out0")},
+        .tensor_bindings = {{.tensor_parameter_name = dst_tensor_param, .accessor_name = "out0"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
+            },
+    };
+    experimental::KernelSpec compute_spec{
+        .unique_id = compute,
+        .source = OVERRIDE_KERNEL_PREFIX "custom_sfpi_smoothstep/kernels/compute/tiles_smoothstep.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings = {experimental::ConsumerOf(src0_dfb, "in0"), experimental::ProducerOf(dst_dfb, "out0")},
+        .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+        .hw_config =
+            experimental::ComputeHardwareConfig{
+                .enable_32_bit_dest = false, // We don't need the destination accumulator to be FP32 as input and output are BFP16
+            },
+    };
+
+    // A program spec describes the program: its kernels, the dataflow buffers between them, the tensors they
+    // operate on, and the cores the kernels run on (the work units).
+    experimental::ProgramSpec program_spec{
+        .name = "custom_sfpi_smoothstep",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {src0_dfb_spec, dst_dfb_spec},
+        .tensor_parameters =
+            {{.unique_id = src0_tensor_param, .spec = dram_tensor_spec},
+             {.unique_id = dst_tensor_param, .spec = dram_tensor_spec}},
+        .work_units = {{.name = "custom_sfpi_smoothstep", .kernels = {reader, writer, compute}, .target_nodes = core}},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, program_spec);
 
 The Kernels
 -----------
@@ -91,46 +166,49 @@ The Kernels
 Data Movement Kernels
 ~~~~~~~~~~~~~~~~~~~~~
 
-The reader kernel reads tiles from a single source DRAM buffer and pushes them into the input circular buffer. Since smoothstep is a unary operation, we only need to read from one source buffer.
+The reader kernel reads tiles from a single source DRAM tensor and pushes them into the input dataflow buffer. Since smoothstep is a unary operation, we only need to read from one source tensor. The kernel gets the tile count as the named runtime argument ``args::n_tiles`` instead of by index.
 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_smoothstep/kernels/dataflow/read_tiles.cpp
     void kernel_main() {
-        uint32_t in0_addr = get_arg_val<uint32_t>(0);
-        uint32_t n_tiles = get_arg_val<uint32_t>(1);
+        uint32_t n_tiles = get_arg(args::n_tiles);
+        DataflowBuffer dfb_in0(dfb::in0);
         ...
+        const auto in0 = TensorAccessor(tensor::in0);
+
         for (uint32_t i = 0; i < n_tiles; i++) {
-            cb_reserve_back(cb_in0, 1);
-            uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-            noc_async_read_page(i, in0, cb_in0_addr);
+            dfb_in0.reserve_back(1);
+            uint32_t dfb_in0_addr = dfb_in0.get_write_ptr();
+            noc_async_read_page(i, in0, dfb_in0_addr);
             noc_async_read_barrier();
-            cb_push_back(cb_in0, 1);
+            dfb_in0.push_back(1);
         }
     }
 
-The writer kernel is straightforward: it reads result tiles from the output circular buffer and writes them to the destination DRAM buffer.
+The writer kernel is straightforward: it reads result tiles from the output dataflow buffer and writes them to the destination DRAM tensor.
 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_smoothstep/kernels/dataflow/write_tile.cpp
     void kernel_main() {
-        uint32_t c_addr = get_arg_val<uint32_t>(0);
-        uint32_t n_tiles = get_arg_val<uint32_t>(1);
-        ...
+        uint32_t n_tiles = get_arg(args::n_tiles);
+        DataflowBuffer dfb_out0(dfb::out0);
+        const auto out0 = TensorAccessor(tensor::out0);
+
         for (uint32_t i = 0; i < n_tiles; i++) {
-            cb_wait_front(cb_out0, 1);
-            uint32_t cb_out0_addr = get_read_ptr(cb_out0);
-            noc_async_write_page(i, out0, cb_out0_addr);
+            dfb_out0.wait_front(1);
+            uint32_t dfb_out0_addr = dfb_out0.get_read_ptr();
+            noc_async_write_page(i, out0, dfb_out0_addr);
             noc_async_write_barrier();
-            cb_pop_front(cb_out0, 1);
+            dfb_out0.pop_front(1);
         }
     }
 
 SFPI Compute Kernel
 ~~~~~~~~~~~~~~~~~~~
 
-The compute kernel is where the custom SFPI logic resides. It waits for tiles from the input CB, performs the smoothstep operation using the SFPI, and pushes the result to the output CB.
+The compute kernel is where the custom SFPI logic resides. It waits for tiles from the input dataflow buffer, performs the smoothstep operation using the SFPI, and pushes the result to the output dataflow buffer.
 
 The overall flow follows the standard pattern for unary compute kernels:
 
@@ -138,31 +216,33 @@ The overall flow follows the standard pattern for unary compute kernels:
 
     // tt_metal/programming_examples/custom_sfpi_smoothstep/kernels/compute/tiles_smoothstep.cpp
     void kernel_main() {
-        uint32_t n_tiles = get_arg_val<uint32_t>(0);
+        uint32_t n_tiles = get_arg(args::n_tiles);
 
-        constexpr auto cb_in0 = tt::CBIndex::c_0;
-        constexpr auto cb_out0 = tt::CBIndex::c_16;
+        // Input dataflow buffer for tiles
+        DataflowBuffer dfb_in0(dfb::in0);
+        // Output dataflow buffer for results
+        DataflowBuffer dfb_out0(dfb::out0);
 
+        // Initialize SFPU for computation using dfb_in0 and dfb_out0
+        compute_kernel_hw_startup(dfb::in0, dfb::out0);
+        copy_init(dfb::in0);
+
+        // precompute inverse of (edge1 - edge0) for efficiency
         constexpr float edge0 = 0.0f;
         constexpr float edge1 = 1.0f;
-        // pre-calculate inverse as it is used multiple times and slow (the Baby RISC-V cores)
-        // uses software floating-point. Constexpr making this evaluation compile-time
-        constexpr float inv_delta = 1.0f / (edge1 - edge0);
-
-        compute_kernel_hw_startup(cb_in0, cb_out0);
-        copy_init(cb_in0);
+        float inv_delta = 1.0f / (edge1 - edge0);
 
         for (uint32_t i = 0; i < n_tiles; i++) {
-            cb_wait_front(cb_in0, 1);
+            dfb_in0.wait_front(1);
             tile_regs_acquire();
-            copy_tile(cb_in0, 0, 0); // input x
-            my_smoothstep_tiles(0, edge0, edge1, inv_delta);  // <-- Custom SFPI smoothstep
+            copy_tile(dfb::in0, 0, 0);  // input x
+            my_smoothstep_tiles(0, edge0, edge1, inv_delta);  // <-- Custom SFPU smoothstep
             tile_regs_commit();
             tile_regs_wait();
-            cb_reserve_back(cb_out0, 1);
-            pack_tile(0, cb_out0);
-            cb_push_back(cb_out0, 1);
-            cb_pop_front(cb_in0, 1);
+            dfb_out0.reserve_back(1);
+            pack_tile(0, dfb::out0);
+            dfb_out0.push_back(1);
+            dfb_in0.pop_front(1);
             tile_regs_release();
         }
     }
@@ -243,50 +323,52 @@ This is analogous to conditional execution in other parallel programming models,
 Runtime Arguments and Execution
 -------------------------------
 
-Back on the host, we set the runtime arguments for the kernels. Since this is a unary operation, the reader and writer kernels need only a single DRAM buffer address each, and all three kernels need to know the number of tiles to process.
+Back on the host, we set the runtime arguments for the kernels with ``experimental::ProgramRunArgs`` and ``experimental::SetProgramRunArgs``. All three kernels get the named runtime argument ``n_tiles``. Since this is a unary operation, ``tensor_args`` binds only a single DRAM tensor to each of the reader and writer tensor parameters, so the kernels do not need the DRAM addresses as runtime arguments.
 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_smoothstep/custom_sfpi_smoothstep.cpp
-    SetRuntimeArgs(program, reader, core, {
-        src0_dram_buffer->address(),
-        n_tiles
-    });
+    experimental::ProgramRunArgs run_args{
+        .kernel_run_args =
+            {{.kernel = reader,
+              .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, {{"n_tiles", n_tiles}})},
+             {.kernel = writer,
+              .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, {{"n_tiles", n_tiles}})},
+             {.kernel = compute,
+              .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, {{"n_tiles", n_tiles}})}},
+        .tensor_args =
+            {{src0_tensor_param, experimental::TensorArgument{src0_dram_tensor}},
+             {dst_tensor_param, experimental::TensorArgument{dst_dram_tensor}}},
+    };
+    experimental::SetProgramRunArgs(program, run_args);
 
-    SetRuntimeArgs(program, writer, core, {
-        dst_dram_buffer->address(),
-        n_tiles
-    });
-
-    SetRuntimeArgs(program, compute, core, {
-        n_tiles
-    });
-
-Finally, we add the program to the mesh workload and enqueue it for execution, then read back the results from the destination DRAM buffer to verify correctness against the expected smoothstep function output.
+Finally, we add the program to the mesh workload and enqueue it for execution, then read back the results from the destination DRAM tensor to verify correctness against the expected smoothstep function output.
 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_smoothstep/custom_sfpi_smoothstep.cpp
-    // Add the program to the workload for the mesh
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    // Add the program to the workload for the mesh.
     workload.add_program(device_range, std::move(program));
-
-    // Enqueue the workload for execution on the mesh (non-blocking) and wait for completion
+    // Enqueue the workload for execution on the mesh (non-blocking) and wait for completion before reading back.
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     distributed::Finish(cq);
 
-    std::vector<bfloat16> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking*/ true);
+    // Read the output buffer and compare it with the expected output.
+    std::vector<bfloat16> result_vec =
+        cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 
-    // Validation against golden smoothstep output
     for (size_t i = 0; i < result_vec.size(); ++i) {
-        // CPU version of the same smoothstep function for validation
         auto smoothstep = [](float edge0, float edge1, float x) {
+            // Scale, bias and saturate x to 0..1 range
             x = (x - edge0) / (edge1 - edge0);
             x = std::clamp(x, 0.0f, 1.0f);
+            // Evaluate polynomial
             return x * x * (3 - 2 * x);
         };
-        const float expected = smoothstep(0.0f, 1.0f, a_data[i].to_float());
-        const float actual = result_vec[i].to_float();
+        const float expected = smoothstep(0.0f, 1.0f, static_cast<float>(a_data[i]));
+        const float actual = static_cast<float>(result_vec[i]);
         // Check for match within tolerance...
     }
 

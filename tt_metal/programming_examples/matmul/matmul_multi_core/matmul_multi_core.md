@@ -23,15 +23,13 @@ We first must get information on the layout of the entire chip. This means the g
 
 ``` cpp
 constexpr int device_id = 0;
-auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 distributed::MeshWorkload workload;
 distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-Program program = CreateProgram();
 
-auto compute_with_storage_grid_size = mesh_device->compute_with_storage_grid_size();
-uint32_t num_cores_x = compute_with_storage_grid_size.x;
-uint32_t num_cores_y = compute_with_storage_grid_size.y;
+auto core_grid = mesh_device->compute_with_storage_grid_size();
+auto num_output_tiles_total = (M * N) / TILE_HW;
 ```
 
 ## Splitting the work across cores
@@ -48,7 +46,8 @@ We use a helper function that the Metal team developed to do this. Given the num
 -   B as `uint32_t`, if applicable
 
 ``` cpp
-auto [num_cores, all_cores, core_group_1, core_group_2, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
+auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core1, work_per_core2] =
+    split_work_to_cores(core_grid, num_output_tiles_total);
 ```
 
 The reason why we may have two separate sets of cores and tile counts is because depending on the grid size, it may not be possible to evenly distribute tiles over the full set of cores. We may need another separate set of cores to perform the `spill-over` number of computations.
@@ -62,100 +61,131 @@ We use more complex reader/writer kernels to feed our compute engine.
 These kernels will use banking and interleaving techniques to ensure consistent and performant dataflow operations. We must ensure that cores only receive and perform computations on their specific set of tiles, and nothing more or less.
 
 ``` cpp
-auto reader_id = tt_metal::CreateKernel(
-    program,
-    "tt_metal/programming_examples/matmul/matmul_multi_core/kernels/dataflow/reader_mm_output_tiles_partitioned.cpp",
-    all_cores,
-    tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
+tt_metal::experimental::KernelSpec reader_kernel_spec{
+    .unique_id = reader_kernel,
+    .source =
+        OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/dataflow/reader_mm_output_tiles_partitioned.cpp",
+    .dfb_bindings = {tt_metal::experimental::ProducerOf(src0_dfb, "in0"), tt_metal::experimental::ProducerOf(src1_dfb, "in1")},
+    .tensor_bindings =
+        {{.tensor_parameter_name = src0_tensor_param, .accessor_name = "a"},
+         {.tensor_parameter_name = src1_tensor_param, .accessor_name = "b"}},
+    .runtime_arg_schema =
+        {.runtime_arg_names = {"Mt", "Kt", "Nt", "output_tile_start_id", "num_output_tiles"}},
+    .hw_config =
+        tt_metal::experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                tt_metal::experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
+        },
+};
 
-auto writer_id = tt_metal::CreateKernel(
-    program,
-    "tt_metal/programming_examples/matmul/matmul_multi_core/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-    all_cores,
-    tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
+tt_metal::experimental::KernelSpec writer_kernel_spec{
+    .unique_id = writer_kernel,
+    .source =
+        OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+    .dfb_bindings = {tt_metal::experimental::ConsumerOf(output_dfb, "out0")},
+    .tensor_bindings = {{.tensor_parameter_name = dst_tensor_param, .accessor_name = "c"}},
+    .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
+    .hw_config =
+        tt_metal::experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                tt_metal::experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+        },
+};
 ```
 
 ## Compute kernel args
 
 We need to account for the fact that we may two separate groups of cores that require different arguments for tile count.
+The compute kernel declares the tile count as a named runtime argument, so one `KernelSpec` serves both groups. All three kernels go into one work unit of the `ProgramSpec` that targets `all_cores`.
 
 ``` cpp
-vector<uint32_t> compute_args_group_1 = {
-    1, // B
-    1, // Mt
-    Kt, // Kt
-    num_output_tiles_per_core_group_1 // Nt
-}; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
+tt_metal::experimental::KernelSpec compute_kernel_spec{
+    .unique_id = compute_kernel,
+    .source = OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/compute/mm.cpp",
+    .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+    .dfb_bindings =
+        {tt_metal::experimental::ConsumerOf(src0_dfb, "in0"),
+         tt_metal::experimental::ConsumerOf(src1_dfb, "in1"),
+         tt_metal::experimental::ProducerOf(output_dfb, "out0")},
+    .runtime_arg_schema = {.runtime_arg_names = {"num_output_tiles", "Kt"}},
+    .hw_config =
+        tt_metal::experimental::ComputeHardwareConfig{
+            .fpu_math_fidelity = math_fidelity,
+            .sfpu_precision_mode = Precision::Precise,
+        },
+};
 
-auto matmul_multi_core_kernel_group_1_id = tt_metal::CreateKernel(
-    program,
-    "tt_metal/programming_examples/matmul_common/kernels/compute/bmm.cpp",
-    core_group_1,
-    tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_1}
-);
-
-if (!core_group_2.ranges().empty()) {
-    vector<uint32_t> compute_args_group_2 = {
-        1, // B
-        1, // Mt
-        Kt, // Kt
-        num_output_tiles_per_core_group_2 // Nt
-    }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
-
-    auto matmul_multi_core_kernel_group_2_id = tt_metal::CreateKernel(
-        program,
-        "tt_metal/programming_examples/matmul_common/kernels/compute/bmm.cpp",
-        core_group_2,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_2}
-    );
-}
+tt_metal::experimental::ProgramSpec program_spec{
+    .name = "matmul_multi_core",
+    .kernels = {reader_kernel_spec, writer_kernel_spec, compute_kernel_spec},
+    .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, output_dfb_spec},
+    .tensor_parameters =
+        {{.unique_id = src0_tensor_param, .spec = src0_tensor_spec},
+         {.unique_id = src1_tensor_param, .spec = src1_tensor_spec},
+         {.unique_id = dst_tensor_param, .spec = dst_tensor_spec}},
+    .work_units =
+        {{.name = "matmul_multi_core",
+          .kernels = {reader_kernel, writer_kernel, compute_kernel},
+          .target_nodes = all_cores}},
+};
+Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, program_spec);
 ```
 
 ## Reader/writer kernel runtime args
 
 Here, we introduce the concept of looping over all cores to apply an API.
 
-In this case, we must set runtime args for reader/writer kernels. Note that we also must take care to account for the split groups of cores and to use the appropriate tile count when assigning args.
+In this case, we must set named runtime args per core for the reader, writer and compute kernels with `AddRuntimeArgsForNode`, then pass them in `ProgramRunArgs` to `SetProgramRunArgs`. Note that we also must take care to account for the split groups of cores and to use the appropriate tile count when assigning args.
 
 ``` cpp
-for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
+tt_metal::experimental::KernelRunArgs reader_run_args{.kernel = reader_kernel};
+tt_metal::experimental::KernelRunArgs writer_run_args{.kernel = writer_kernel};
+tt_metal::experimental::KernelRunArgs compute_run_args{.kernel = compute_kernel};
+uint32_t work_offset = 0;
+auto work_groups = {std::make_pair(core_group_1, work_per_core1), std::make_pair(core_group_2, work_per_core2)};
 
-    CoreCoord core = {i / num_cores_y, i % num_cores_y};
+// Iterate through each work group and assign work to cores
+for (const auto& [ranges, work_per_core] : work_groups) {
+    for (const auto& range : ranges.ranges()) {
+        for (const auto& core : range) {
+            // Set arguments for the reader kernel (data input)
+            tt_metal::experimental::AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values,
+                core,
+                {{"Mt", Mt},                                // Number of tiles in M dimension
+                 {"Kt", Kt},                                // Number of tiles in K dimension
+                 {"Nt", Nt},                                // Number of tiles in N dimension
+                 {"output_tile_start_id", work_offset},     // Starting offset for this core's work
+                 {"num_output_tiles", work_per_core}});     // Amount of work for this core
 
-    uint32_t num_output_tiles_per_core;
-    if (core_group_1.contains(core)) {
-        num_output_tiles_per_core = num_output_tiles_per_core_group_1;
-    } else if (core_group_2.contains(core)) {
-        num_output_tiles_per_core = num_output_tiles_per_core_group_2;
-    } else {
-        TT_ASSERT(false, "Core not in specified core ranges");
+            // Set arguments for the writer kernel (data output)
+            tt_metal::experimental::AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values,
+                core,
+                {{"num_tiles", work_per_core}, {"start_id", work_offset}});
+
+            // Set arguments for the compute kernel
+            tt_metal::experimental::AddRuntimeArgsForNode(
+                compute_run_args.runtime_arg_values,
+                core,
+                {{"num_output_tiles", work_per_core},  // Amount of work for this core
+                 {"Kt", Kt}});                         // Number of tiles in K dimension for dot product
+            work_offset += work_per_core;              // Update offset for next core
+        }
     }
-
-    tt_metal::SetRuntimeArgs(
-        program, reader_id, core,
-        {src0_addr,
-        src1_addr,
-        Mt,
-        Kt,
-        Nt,
-        MtKt,
-        KtNt,
-        B,
-        uint32_t(bcast_batch),
-        num_tiles_written,
-        num_output_tiles_per_core,
-        MtNt }
-    );
-    tt_metal::SetRuntimeArgs(
-        program,
-        writer_id,
-        core,
-        {dst_addr,
-        num_output_tiles_per_core,
-        num_tiles_written }
-    );
-    num_tiles_written += num_output_tiles_per_core;
 }
+
+// The matrices A, B and C are passed to the kernels through the tensors bound to the tensor parameters.
+tt_metal::experimental::ProgramRunArgs run_args{
+    .kernel_run_args = {reader_run_args, writer_run_args, compute_run_args},
+    .tensor_args =
+        {{src0_tensor_param, tt_metal::experimental::TensorArgument{src0_dram_tensor}},
+         {src1_tensor_param, tt_metal::experimental::TensorArgument{src1_dram_tensor}},
+         {dst_tensor_param, tt_metal::experimental::TensorArgument{dst_dram_tensor}}},
+};
+tt_metal::experimental::SetProgramRunArgs(program, run_args);
 ```
 
 ## Conclusion

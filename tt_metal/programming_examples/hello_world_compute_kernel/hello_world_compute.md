@@ -14,36 +14,47 @@ Before running, set `TT_METAL_DPRINT_CORES=0,0` to see the kernel prints.
 
 ## Mesh setup
 
-Create a 1x1 mesh device, get the mesh command queue, construct a workload and device range, and create a program.
+Create a 1x1 mesh device, get the mesh command queue, and construct a workload and device range.
 
 ```cpp
-constexpr CoreCoord core = {0, 0};
+constexpr experimental::NodeCoord core = {0, 0};
 int device_id = 0;
-auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+std::shared_ptr<distributed::MeshDevice> mesh_device =
+    distributed::MeshDevice::create_unit_mesh(device_id);  // 1x1 mesh
 distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 distributed::MeshWorkload workload;
 distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-Program program = CreateProgram();
 ```
 
 ## Create the compute kernel
 
-We create a simple compute kernel which prints from the three compute RISC-V cores (UNPACK, MATH, PACK).
+We describe a simple compute kernel which prints from the three compute RISC-V cores (UNPACK, MATH, PACK) with a `KernelSpec`. A `ProgramSpec` then lists the kernels and the work units (the cores the kernels run on), and `MakeProgramFromSpec` creates the program from it.
 
 ```cpp
-KernelHandle void_compute_kernel_id = CreateKernel(
-    program,
-    "tt_metal/programming_examples/hello_world_compute_kernel/kernels/compute/void_compute_kernel.cpp",
-    core,
-    ComputeConfig{});
+const experimental::KernelSpecName void_compute_kernel{"void_compute_kernel"};
+experimental::KernelSpec void_compute_kernel_spec{
+    .unique_id = void_compute_kernel,
+    .source = OVERRIDE_KERNEL_PREFIX "hello_world_compute_kernel/kernels/compute/void_compute_kernel.cpp",
+    .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+    .hw_config = experimental::ComputeHardwareConfig{},
+};
+
+// A program spec describes the program: its kernels and the cores the kernels run on (the work units).
+experimental::ProgramSpec program_spec{
+    .name = "hello_world_compute_kernel",
+    .kernels = {void_compute_kernel_spec},
+    .work_units = {{.name = "hello_world_compute_kernel", .kernels = {void_compute_kernel}, .target_nodes = core}},
+};
+Program program = experimental::MakeProgramFromSpec(*mesh_device, program_spec);
 ```
 
 ## Launch and wait
 
-Set runtime args, enqueue the program in a mesh workload (non-blocking), print a host message, then wait for completion and close the device.
+Set the program run args, enqueue the program in a mesh workload (non-blocking), print a host message, then wait for completion and close the device.
 
 ```cpp
-SetRuntimeArgs(program, void_compute_kernel_id, core, {});
+experimental::ProgramRunArgs run_args{.kernel_run_args = {{.kernel = void_compute_kernel}}};
+experimental::SetProgramRunArgs(program, run_args);
 workload.add_program(device_range, std::move(program));
 distributed::EnqueueMeshWorkload(cq, workload, false);
 fmt::print("Hello, Core (0, 0) on Device 0, I am sending you a compute kernel. Standby awaiting communication.\n");
