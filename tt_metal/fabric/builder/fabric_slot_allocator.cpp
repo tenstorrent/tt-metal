@@ -131,8 +131,8 @@ Allocation allocate_slots(const RouterShape& shape, const LeftoverOrder& leftove
         it->slots /= 2;
     }
 
-    // Stage 2: the senders at f' = min(1, B / the senders' depths). A VC's forwarding channels form one unit with one
-    // count (the router keeps one downstream forwarding ring size per VC); each worker is a unit of its own.
+    // Stage 2: senders at f' = min(1, B / the senders' depths). A VC's forwarding channels are one unit with one count
+    // (the router keeps one downstream buffer count per VC); each worker is a unit of its own.
     std::vector<std::vector<std::size_t>> units;  // indices into tx; a unit's channels share one count
     for (std::size_t i = 0; i < tx.size(); ++i) {
         auto same = units.end();
@@ -196,8 +196,8 @@ Allocation allocate_slots(const RouterShape& shape, const LeftoverOrder& leftove
                 given += units[u].size();
             }
         }
-        // Minimums raised above the share: each step takes a slot from every channel of the unit most above its
-        // minimum. What a step frees beyond the overshoot is left to stage 3.
+        // Minimums raised above the share: take a slot from each channel of the unit most above its minimum until the
+        // units fit; any slot freed beyond the overshoot is left to stage 3.
         while (given > b) {
             std::size_t pick = units.size();
             for (std::size_t u = 0; u < units.size(); ++u) {
@@ -218,11 +218,9 @@ Allocation allocate_slots(const RouterShape& shape, const LeftoverOrder& leftove
         }
     }
 
-    // Stage 3: what is left (the slots past every full-rate depth, or the rounding a squeeze's units could not take)
-    // by the leftover order, in whole steps. A group's receivers each go to their next power of 2 (no deeper than
-    // max_receiver_slots_from_leftovers), all or none; its senders take +1 a unit at a time (stage 2's units, so a
-    // VC's forwarding channels keep one count), unit after unit in the group's order and round after round. A step
-    // that does not fit whole, or a group with no channels, passes what is left on.
+    // Stage 3: the leftovers, group by group in the leftover order, in whole steps: a group's receivers each to their
+    // next power of 2 (all or none, at most max_receiver_slots_from_leftovers), its senders +1 a unit at a time, round
+    // after round. A step that does not fit, or a group with no channels, passes the rest on.
     std::size_t used = 0;
     for (const auto& c : rx) {
         used += c.slots;

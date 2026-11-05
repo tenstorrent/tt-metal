@@ -4,24 +4,18 @@
 
 // Transaction IDs for a router's receiver channels.
 //
-// A receiver channel tags every NoC command that reads one of its slots with the slot's completion group's
-// transaction ID, and returns a group's credits once no command with that ID is in flight. All receiver channels of a
-// router run on one ERISC and share that NoC's 16 IDs.
+// A receiver channel tags each NoC command that reads a slot with the slot's completion group's ID, and credits a group
+// once no command with that ID is in flight. A router's receiver channels share one NoC's 16 IDs.
 //
-// assign_transaction_ids() is a pure function of the channels' final slot counts (the slot allocator's), their
-// first-level acks and whether they forward on Wormhole. Per channel it returns the completion group size, the number
-// of IDs and the first ID:
-//   1. Group size G: 1 under first-level acks (each slot is credited on its own) and on a Wormhole channel that
-//      forwards, else 1 / 2 / 4 for fewer than 8 / 8-15 / 16 or more slots. Groups = ceil(slots / G): a partial last
-//      group counts. On Wormhole a forwarding channel's credits share the one TX queue with data and are what the
-//      upstream router of a forwarding chain waits on, so a held group stalls the chain; a channel that only delivers
-//      keeps its groups, which keep credit frames off the shared queue.
-//   2. When every channel's groups fit in the NoC's IDs together, each group has its own ID.
-//   3. Otherwise the largest count shrinks until they fit: a count that is not a power of 2 is rounded down to one,
-//      a power of 2 is halved. A channel with fewer IDs than groups shares them by mask, so a group's proof also waits
-//      for the writes of the groups sharing its ID: credits come later, never early.
-//   4. Every channel keeps at least one ID. Ranges are consecutive from 0, in receiver channel order; IDs left over
-//      stay unused.
+// assign_transaction_ids() is a pure function of each channel's final slot count, first-level acks and, on Wormhole,
+// whether it forwards. Per channel it returns the group size, the number of IDs and the first ID:
+//   1. Group size: 1 under first-level acks, and on a Wormhole channel that forwards (its credits share the one TX
+//      queue with data, and a held group stalls a forwarding chain); else 1 / 2 / 4 for < 8 / 8-15 / >= 16 slots.
+//      Groups = ceil(slots / group size).
+//   2. If every channel's groups fit in the IDs, each group gets its own.
+//   3. Otherwise the largest count shrinks until they fit (a power of 2 halves, any other count rounds down to one). A
+//      channel with fewer IDs than groups shares them by mask, which can only delay a credit, never send it early.
+//   4. Every channel keeps at least one ID; ranges are consecutive from 0, in channel order.
 
 #pragma once
 
@@ -34,7 +28,7 @@ namespace tt::tt_fabric::trid_allocator {
 
 inline constexpr std::size_t noc_transaction_ids = 16;  // NOC_MAX_TRANSACTION_ID + 1
 
-// One receiver channel, as the rule reads it.
+// One receiver channel, as the rules read it.
 struct ReceiverChannel {
     std::size_t slots = 0;
     bool first_level_ack = false;

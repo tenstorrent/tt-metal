@@ -41,8 +41,7 @@ Assignment assign_transaction_ids(const std::vector<ReceiverChannel>& channels) 
         total += c.num_ids;
         result.channels.push_back(c);
     }
-    // Until the counts fit, the largest shrinks to the largest count that fits below it: a count that is not a power
-    // of 2 rounds down to one (20 -> 16), a power of 2 halves (16 -> 8).
+    // Rule 3: shrink the largest count until they fit (20 -> 16, 16 -> 8).
     while (total > noc_transaction_ids) {
         ChannelIds* largest = nullptr;
         for (ChannelIds& c : result.channels) {

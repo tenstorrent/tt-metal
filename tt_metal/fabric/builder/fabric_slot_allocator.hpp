@@ -2,35 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Slot allocation for a fabric router's channel buffers.
+// Buffer slots for a fabric router's channels.
 //
-// allocate_slots() is a pure function: the router's shape in, a slot count per channel out, each with the stage that
-// set it. It reads only facts the host knows without measuring anything: the channel buffer bytes, the slot size, the
-// VCs built and their channels, and whether the router is 2D or 1D.
+// allocate_slots() is a pure function of what the host knows about a router: the channel buffer bytes, the slot size,
+// the VCs and their channels, and whether the router is 2D or 1D. It returns a slot count per channel and the stage
+// that set it.
 //
-// Each channel kind has a full-rate depth: the slots the channel needs to run at full rate when it alone carries its
-// link. A slot holds one packet whatever its size, so depths are in slots, not bytes. Small packets are router-bound
-// and set the depth; larger ones take longer each and need fewer.
+// Each channel kind has a full-rate depth: the slots it needs to run at full rate when it alone carries its link. A
+// slot holds one packet whatever its size, so depths are in slots.
 //
 // The stages:
-//   0. N = channel buffer bytes / slot size. Every channel gets at least min_slots and at most max_slots; minimums
-//      that do not fit in N are an error.
-//   1. Receivers first: each gets its full-rate depth scaled by f = min(1, N / sum of every channel's depth), rounded
-//      to the nearest power of 2 (ties up). They go first because rules downstream read the final receiver count
-//      (the ring index wrap, the completion group size, the transaction IDs, the bubble flow control threshold).
-//   2. Senders: the slots left, B, split by f' = min(1, B / sum of the senders' depths), by largest remainder. A
-//      VC's forwarding channels are one unit with one count: the unit takes the floor of f' x depth on every channel
-//      and grows by a slot on each of them at a time. Each worker is a unit of its own. A unit below the minimum is
-//      raised, with slots from the unit most above its own.
-//   3. What is left (the slots past every full-rate depth, or the rounding a squeeze's units could not take) goes to
-//      the groups of the leftover order in turn, each in whole steps. A group's receivers take one step: each to its
-//      next power of 2, all of them or none, so their counts stay powers of 2, and none past
-//      max_receiver_slots_from_leftovers. A group's senders take +1 a unit at a time, unit after unit in the group's
-//      order and round after round, up to max_slots. A step that does not fit whole, or a group with no channels,
-//      passes what is left on to the next group. The default order ends with the VC0 worker, which takes the rest.
+//   0. N = buffer bytes / slot size. Every channel gets at least min_slots; minimums that do not fit are an error.
+//   1. Receivers first, at their depth x f, f = min(1, N / every channel's depth), rounded to the nearest power of 2.
+//      They go first because the router derives rules from the receiver count (index wrap, completion groups,
+//      transaction IDs, bubble flow control).
+//   2. Senders split the B slots left at their depth x f', f' = min(1, B / the senders' depths), by largest remainder.
+//      A VC's forwarding channels are one unit with one count; each worker is a unit of its own.
+//   3. Leftover slots go to the groups of the leftover order in turn, in whole steps: receivers to their next power of
+//      2 (all of a group's or none, up to max_receiver_slots_from_leftovers), senders +1 a unit at a time. A step that
+//      does not fit passes the rest on.
 //
-// The router contract stages 2 and 3 keep: the router has one downstream forwarding ring size per VC
-// (router_downstream.hpp, DownstreamTraits::num_slots), so every forwarding channel of a VC has the same count.
+// Contract with the router: it keeps one downstream buffer count per VC (router_downstream.hpp,
+// DownstreamTraits::num_slots), so every forwarding channel of a VC has the same count.
 
 #pragma once
 
@@ -59,33 +52,29 @@ struct FullRateDepths {
     std::size_t receiver = 0;
 };
 
-// 2D routers (mesh, torus), per VC.
-//   VC0 worker: its slot frees only after the router has sent the packet and the far receiver's credit has come back
-//     over Ethernet; the depth covers that loop at the router's per-packet rate, in the measured knee of 17-20 slots.
-//   VC0 forwarding: the worker's loop one hop on: the packet arrives from the router's own receiver, is sent, and the
-//     slot frees when the next router's credit returns.
-//   VC0 receiver: a slot frees only when its local write and its forward have left the router and its credit has been
-//     sent back to the far sender.
-//   VC1 carries inter-mesh traffic through forwarding channels only (a VC1 worker, if one were built, counts as
-//     forwarding); its loops are VC0's forwarding and receiver loops with VC1 alone on its link.
-//   VC2 carries one-hop neighbor exchange to a delivery-only receiver (a VC2 forwarding channel, if one were built,
-//     counts as its worker); what it carries depends on the workload, so its depths start near the minimum and are
-//     meant to grow by override.
+// The depths are measured, not chosen: each is the knee of a slot-depth sweep on Blackhole, the smallest depth within
+// 1% of the best rate that channel kind reached, with small packets (router-bound, so they need the most slots). VC2's
+// are a starting floor, meant to grow by override.
+//
+// 2D routers (mesh, torus), per VC:
+//   VC0: a worker's or forwarding channel's slot frees when the far receiver's credit returns; a receiver's, when its
+//     local write and forward have left and its credit has been sent.
+//   VC1: inter-mesh forwarding only (a VC1 worker, if built, counts as forwarding).
+//   VC2: neighbor exchange into a delivery-only receiver (a VC2 forwarding channel, if built, counts as its worker).
 inline constexpr std::array<FullRateDepths, NUM_VCS> full_rate_depths_2d = {{
     {.worker = 18, .forwarding = 16, .receiver = 16},
     {.worker = 10, .forwarding = 10, .receiver = 8},
     {.worker = 4, .forwarding = 4, .receiver = 4},
 }};
-// 1D routers (line, ring) build VC0 only. A 1D router has fewer channels to serve per pass, so its per-packet time is
-// shorter and the same loops take more packets.
+// 1D routers (line, ring) build VC0 only. They serve fewer channels per pass, so the same credit loop holds more packets.
 inline constexpr FullRateDepths vc0_full_rate_depths_1d = {.worker = 24, .forwarding = 24, .receiver = 32};
 
 // The full-rate depth of a channel kind on a VC (0 past the last VC).
 std::size_t full_rate_depth(std::size_t vc, ChannelKind kind, bool is_2d);
 
-// The facts the stages read about one router.
+// What the stages read about one router.
 struct RouterShape {
-    std::size_t buffer_bytes = 0;  // bytes available for channel buffers
+    std::size_t buffer_bytes = 0;  // bytes for channel buffers
     std::size_t slot_bytes = 0;    // one slot: the largest packet, header included
 
     // Channels of each kind on each VC; a VC with no channel is not built.
@@ -99,20 +88,17 @@ struct RouterShape {
     bool is_2d = true;  // a 2D router (mesh, torus); otherwise 1D (line, ring)
 };
 
-// One channel kind on one VC, as the leftover order names it.
+// One channel kind on one VC.
 using ChannelKindOnVc = std::pair<std::size_t, ChannelKind>;
-// Groups of channel kinds, in the order stage 3 gives them leftover slots. Data, not branches: an override can replace
-// the list.
+// Groups of channel kinds, in the order stage 3 gives them leftover slots (data, so an override can replace it).
 using LeftoverOrder = std::vector<std::vector<ChannelKindOnVc>>;
 
-// The default leftover order. Both start with the VC0 receiver (to its next power of 2, when that whole step fits): a
-// deeper receiver ring lets the far sender run further ahead.
-//   2D: then the VC0 forwarding channels, then the VC0 worker channel. A worker past its full-rate depth already runs
-//       at full rate; traffic that turns or crosses several hops through a forwarding channel can use more than the
-//       depth set for straight-through traffic. The worker takes what no whole forwarding round fits.
-//   1D: then the VC0 worker and forwarding channel in one group, +1 on each in turn, worker first. Both have the same
-//       full-rate depth on a 1D router, so the rest is spread over them evenly.
-// On a router with no forwarding channels (one that only exchanges with its neighbor) the worker takes the rest.
+// The default leftover order. Both start with the VC0 receiver: a deeper receiver lets the far sender run further
+// ahead.
+//   2D: then the VC0 forwarding channels (traffic that turns or crosses several hops can use more than its depth),
+//       then the VC0 worker, which takes the rest.
+//   1D: then the VC0 worker and forwarding channel together, +1 on each in turn (same full-rate depth).
+// A router without forwarding channels gives the rest to its worker.
 LeftoverOrder default_leftover_order(bool is_2d);
 
 struct ChannelSlots {
@@ -125,11 +111,9 @@ struct ChannelSlots {
 
 struct Allocation {
     std::size_t total_slots = 0;         // N
-    std::size_t unused_slots = 0;        // slots no group of the leftover order takes in whole steps
+    std::size_t unused_slots = 0;        // left over in no whole step
     std::vector<ChannelSlots> channels;  // receivers first, then senders, each in VC order
-    // The squeeze inputs: stage 1 covers every channel's full-rate depth (all_depths) with total_slots; stage 2 covers
-    // the senders' depths (sender_depths) with the slots the receivers leave (sender_slots). Each factor is
-    // min(1, slots / depths).
+    // Stage 1's squeeze is total_slots / all_depths, stage 2's sender_slots / sender_depths (each capped at 1).
     std::size_t all_depths = 0;
     std::size_t sender_slots = 0;
     std::size_t sender_depths = 0;
@@ -140,12 +124,12 @@ struct Allocation {
 };
 
 struct Limits {
-    // A channel needs two slots to fill one while the other is sent; bubble flow control also needs two free slots at
-    // a ring's receiver.
+    // Two slots: one filling while the other is sent; bubble flow control also needs two free at a receiver on a ring
+    // or torus.
     std::size_t min_slots = 2;
-    std::size_t max_slots = 127;  // the largest slot count the router takes per channel
-    // Stage 3 raises a receiver no deeper than this: the deepest receiver measured. Rules that read the receiver count
-    // (the bubble flow control threshold, the transaction IDs per slot) were checked up to it.
+    std::size_t max_slots = 127;  // the most slots the router takes per channel
+    // Stage 3 deepens a receiver no further than this: the deepest receiver measured with the rules that read the
+    // receiver count.
     std::size_t max_receiver_slots_from_leftovers = 32;
 };
 
