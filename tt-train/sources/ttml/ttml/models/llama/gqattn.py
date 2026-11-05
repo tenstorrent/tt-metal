@@ -22,8 +22,9 @@ class GroupedQueryAttention(AbstractModuleBase):
     uses ``RowParallelLinear`` with ``input_is_parallel=True``. This avoids redundant
     communication between the two matmuls.
 
-    ``use_composite_sdpa`` selects ``scaled_dot_product_attention_composite``,
-    which also accepts non-broadcast masks such as ``(B, 1, S, S)``.
+    ``use_composite_sdpa`` selects ``scaled_dot_product_attention_composite`` for the
+    forward without a KV cache; it also accepts non-broadcast masks such as ``(B, 1, S, S)``.
+    The KV-cache forward picks the fused SDPA for a ``[1, 1, S, S]`` mask and the composite otherwise.
     """
 
     def __init__(

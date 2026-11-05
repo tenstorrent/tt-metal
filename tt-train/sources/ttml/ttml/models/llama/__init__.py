@@ -63,8 +63,9 @@ class LlamaConfig:
     TP axis (see :class:`EmbeddingPlacement`); it defaults to ``Replicated`` (no
     sharding) and is ignored when ``use_tp=False``.
 
-    ``use_composite_sdpa`` runs attention through ``scaled_dot_product_attention_composite``,
-    which also accepts non-broadcast masks such as ``(B, 1, S, S)``.
+    ``use_composite_sdpa`` runs the attention of the forward without a KV cache through
+    ``scaled_dot_product_attention_composite``, which also accepts non-broadcast masks such as
+    ``(B, 1, S, S)``. The KV-cache forward picks its SDPA from the mask shape.
     """
 
     hidden_size: int = 384
