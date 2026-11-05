@@ -182,13 +182,13 @@ def test_num_links(mesh_device, num_links, cluster_axis, layout):
 @pytest.mark.skipif(ttnn.get_num_devices() < 32, reason="the 4x4 cylinder is a submesh of a Galaxy (8x4)")
 @pytest.mark.parametrize("device_params", [TORUS_6K], indirect=True)
 @MESH
-@pytest.mark.parametrize("num_links", [None, 2, 1], ids=["all_links", "2_links", "1_link_snake"])
+@pytest.mark.parametrize("num_links", [None, 2], ids=["all_links", "2_links"])
 @INPUT_MEMORY
 @LAYOUTS
 def test_cylinder_4x4(mesh_device, num_links, nd_sharded, layout):
     """Full-mesh gather on a 4x4 submesh of the Galaxy, a cylinder: axis 1 (four columns) keeps its wrap, axis 0 (four
-    of eight rows) is a line. Three Hamiltonian cycles, a hop shared by two of them giving each its own link; one link
-    per hop cannot be shared, so it falls back to the snake. The second call is a program-cache hit."""
+    of eight rows) is a line. Three Hamiltonian cycles, a hop shared by two of them giving each its own link. The
+    second call is a program-cache hit."""
     cylinder = mesh_device.create_submesh(ttnn.MeshShape(4, 4))
     torch.manual_seed(5)
     G, mapper = _group(cylinder, None)

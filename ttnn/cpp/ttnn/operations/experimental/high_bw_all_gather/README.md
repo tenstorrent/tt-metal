@@ -113,8 +113,8 @@ and a directly produced 32-way row-major layout, not an inherent claim of
 higher fabric bandwidth. On a torus with both sides >= 3 the snake is replaced by
 the two Hamiltonian cycles described above, which use all four links per chip.
 
-On a 4x4 cylinder (one axis wraps, the other is a line: e.g. four rows of a Galaxy
-under `FABRIC_2D_TORUS_X`) the line-end chips have three neighbours, and two
+On a 4x4 cylinder (one axis wraps, the other is a line: e.g. a 4x4 submesh of a
+Galaxy under `FABRIC_2D_TORUS_XY`) the line-end chips have three neighbours, and two
 edge-disjoint Hamiltonian cycles do not exist (28 edges, not 32). The op instead
 uses three stored Hamiltonian cycles, each owning a third of every shard, with
 no edge on more than two of them. A line-end chip then receives on all three
