@@ -38,25 +38,42 @@ sfpi_inline void iq4_params()
     {
         if constexpr (FMT == IQ4_XS)
         {
-            // Rows 0..2: 96-bit string of 6-bit scales, ls_j(column b) at bit 48b + 6j; field 0: d.
-            rep4_to<FMT>(0, a, 0);
-#pragma GCC unroll 2
-            for (int b = 0; b < 2; b++)
+            // Rows 0..2: 96-bit string of 6-bit scales, ls_j(column b) at bit 48b + 6j; field 0: d. The replicated
+            // words stay in registers, and the two columns' chains interleave (no SFPMAD result used at once).
+            vUInt r0, r1, r2, r3;
+            rep4<FMT>(0, a, r0, r1, r2, r3);
+            (void)r3;
+            constexpr int B0 = 6 * TI, B1 = 48 + 6 * TI;
+            constexpr int k0 = B0 / 32, s0 = B0 % 32, k1 = B1 / 32, s1 = B1 % 32;
+            const vUInt w0 = k0 == 0 ? r0 : r1;
+            const vUInt w1 = k1 == 1 ? r1 : r2;
+            vUInt l0, l1;
+            if constexpr (s0 <= 26)
             {
-                const int B = 48 * b + 6 * TI;
-                const int k = B / 32;
-                const int s = B % 32;
-                vUInt ls;
-                if (s <= 26)
-                {
-                    ls = bits(ldu(k), s, 6);
-                }
-                else
-                {
-                    ls = (ldu(k) >> static_cast<unsigned>(s)) | (bits(ldu(k + 1), 0, s - 26) << static_cast<unsigned>(32 - s));
-                }
-                sfpi::dst_reg[PS + pidx(a, b, 0)] = pf32<FMT>(0, b, a) * (ufloat(ls) + -32.0f);
+                l0 = bits(w0, s0, 6);
             }
+            else
+            {
+                l0 = (w0 >> static_cast<unsigned>(s0)) | (bits(r1, 0, s0 - 26) << static_cast<unsigned>(32 - s0));
+            }
+            if constexpr (s1 <= 26)
+            {
+                l1 = bits(w1, s1, 6);
+            }
+            else
+            {
+                l1 = (w1 >> static_cast<unsigned>(s1)) | (bits(r2, 0, s1 - 26) << static_cast<unsigned>(32 - s1));
+            }
+            vFloat f0                         = ufloat(l0);
+            vFloat f1                         = ufloat(l1);
+            f0                                = f0 + -32.0f;
+            f1                                = f1 + -32.0f;
+            const vFloat d0                   = pf32<FMT>(0, 0, a);
+            const vFloat d1                   = pf32<FMT>(0, 1, a);
+            f0                                = d0 * f0;
+            f1                                = d1 * f1;
+            sfpi::dst_reg[PS + pidx(a, 0, 0)] = f0;
+            sfpi::dst_reg[PS + pidx(a, 1, 0)] = f1;
         }
     }
 }
