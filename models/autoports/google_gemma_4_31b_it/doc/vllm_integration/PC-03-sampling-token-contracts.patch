@@ -1,0 +1,332 @@
+diff --git a/tests/tt/test_seeding_and_variety.py b/tests/tt/test_seeding_and_variety.py
+index 1b23db6..d9f959c 100644
+--- a/tests/tt/test_seeding_and_variety.py
++++ b/tests/tt/test_seeding_and_variety.py
+@@ -15,6 +15,12 @@ from tests.tt.utils import (
+ )
+ 
+ 
++def _first_generated_token_ids(responses):
++    ids = [response.choices[0].token_ids for response in responses]
++    assert all(ids), "every request must return generated token IDs"
++    return [tokens[0] for tokens in ids]
++
++
+ class TestSeedingAndVariety:
+     def test_seeding(self, tt_server, tt_model_name, max_batch_size):
+         """
+@@ -44,8 +50,16 @@ class TestSeedingAndVariety:
+                     )
+                 )
+ 
+-        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)
+-        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)
++        for config in configs:
++            config.return_token_ids = True
++        responses1 = run_concurrent_batch(
++            tt_server, tt_model_name, configs, return_full_response=True
++        )
++        responses2 = run_concurrent_batch(
++            tt_server, tt_model_name, configs, return_full_response=True
++        )
++        results1 = [response.choices[0].text for response in responses1]
++        results2 = [response.choices[0].text for response in responses2]
+ 
+         # This tests both prefill and decode
+         all_greedy = results1[:greedy_count] + results2[:greedy_count]
+@@ -77,7 +91,9 @@ class TestSeedingAndVariety:
+         )
+ 
+         # Check first tokens to make sure prefill is varied
+-        prefill_different_seeds = [x[:1] for x in different_seeds]
++        prefill_different_seeds = _first_generated_token_ids(
++            responses1[greedy_count : greedy_count + seeds]
++        )
+         assert_varied(
+             prefill_different_seeds,
+             expected_variety,
+@@ -266,16 +282,24 @@ class TestSeedingAndVariety:
+         prompt = "Random letter: "
+ 
+         configs = [
+-            RequestConfig(prompt=prompt, max_tokens=10, temperature=2.0)
++            RequestConfig(
++                prompt=prompt,
++                max_tokens=10,
++                temperature=2.0,
++                return_token_ids=True,
++            )
+             for _ in range(batch_size)
+         ]
+ 
+         # Overall
+-        results = run_concurrent_batch(tt_server, tt_model_name, configs)
++        responses = run_concurrent_batch(
++            tt_server, tt_model_name, configs, return_full_response=True
++        )
++        results = [response.choices[0].text for response in responses]
+         assert_varied(results, 2, "With temperature=2.0, outputs should vary in batch.")
+ 
+         # First token (prefill)
+-        prefill_results = [x[:1] for x in results]
++        prefill_results = _first_generated_token_ids(responses)
+         assert_varied(
+             prefill_results,
+             2,
+@@ -285,21 +309,28 @@ class TestSeedingAndVariety:
+     def test_temperature_varied_between_batches(self, tt_server, tt_model_name):
+         prompt = "Random letter: "
+ 
+-        configs = [RequestConfig(prompt=prompt, max_tokens=10, temperature=2.0)]
++        configs = [
++            RequestConfig(
++                prompt=prompt, max_tokens=10, temperature=2.0, return_token_ids=True
++            )
++        ]
+ 
+         tries = 10
+ 
+         # Overall
+-        results = [
+-            run_concurrent_batch(tt_server, tt_model_name, configs)[0]
++        responses = [
++            run_concurrent_batch(
++                tt_server, tt_model_name, configs, return_full_response=True
++            )[0]
+             for _ in range(tries)
+         ]
++        results = [response.choices[0].text for response in responses]
+         assert_varied(
+             results, 2, "With temperature=2.0, outputs should vary on re-runs."
+         )
+ 
+         # First token (prefill)
+-        prefill_results = [x[:1] for x in results]
++        prefill_results = _first_generated_token_ids(responses)
+         assert_varied(
+             prefill_results,
+             2,
+@@ -321,11 +352,19 @@ class TestSeedingAndVariety:
+         ]
+         joint_configs = greedy_config + topk_configs
+ 
+-        results_1 = run_concurrent_batch(tt_server, tt_model_name, joint_configs)
+-        results_2 = run_concurrent_batch(tt_server, tt_model_name, joint_configs)
++        for config in joint_configs:
++            config.return_token_ids = True
++        responses_1 = run_concurrent_batch(
++            tt_server, tt_model_name, joint_configs, return_full_response=True
++        )
++        responses_2 = run_concurrent_batch(
++            tt_server, tt_model_name, joint_configs, return_full_response=True
++        )
++        results_1 = [response.choices[0].text for response in responses_1]
++        results_2 = [response.choices[0].text for response in responses_2]
+ 
+         # Within each batch:
+-        for results in [results_1, results_2]:
++        for results, responses in [(results_1, responses_1), (results_2, responses_2)]:
+             # Overall
+             greedy_results = results[:num_greedy]
+             non_greedy_results = results[num_greedy:]
+@@ -338,7 +377,7 @@ class TestSeedingAndVariety:
+             )
+ 
+             # First token (prefill)
+-            prefill_results = [x[:1] for x in non_greedy_results]
++            prefill_results = _first_generated_token_ids(responses[num_greedy:])
+             assert_varied(
+                 prefill_results, 2, "With top_k=10, first tokens should vary in batch."
+             )
+@@ -362,8 +401,8 @@ class TestSeedingAndVariety:
+         )
+ 
+         # First token (prefill)
+-        prefill_results_1 = [x[:1] for x in non_greedy_results_1]
+-        prefill_results_2 = [x[:1] for x in non_greedy_results_2]
++        prefill_results_1 = _first_generated_token_ids(responses_1[num_greedy:])
++        prefill_results_2 = _first_generated_token_ids(responses_2[num_greedy:])
+         assert_pairwise_varied(
+             prefill_results_1,
+             prefill_results_2,
+diff --git a/tests/tt/test_tt_penalties.py b/tests/tt/test_tt_penalties.py
+index faccacb..1af8d9b 100644
+--- a/tests/tt/test_tt_penalties.py
++++ b/tests/tt/test_tt_penalties.py
+@@ -10,6 +10,25 @@ from tests.tt.utils import (
+ )
+ 
+ 
++def _assert_frequency_batch_controls(mixed, homogeneous, solo):
++    assert len(mixed) >= 2, "mixed penalty check requires both policies"
++    groups = {0.0: [], 2.0: []}
++    for index, response in enumerate(mixed):
++        penalty = 0.0 if index % 2 == 0 else 2.0
++        ids = response.choices[0].token_ids
++        assert ids, "every request must return generated token IDs"
++        assert ids == homogeneous[penalty][index].choices[0].token_ids, (
++            f"slot {index}: mixed and homogeneous penalty={penalty} differ"
++        )
++        assert ids == solo[penalty].choices[0].token_ids, (
++            f"slot {index}: mixed and solo penalty={penalty} differ"
++        )
++        groups[penalty].append(ids)
++    assert groups[0.0][0] != groups[2.0][0], (
++        "frequency penalty must change the generated token sequence"
++    )
++
++
+ class TestRepetitionPenalty:
+     """
+     Different repetition penalties per request in same batch.
+@@ -304,34 +323,41 @@ class TestFrequencyPenalty:
+     ):
+         prompt = "a a a a a a a a a"
+ 
+-        configs = []
+-        for i in range(max_batch_size):
+-            configs.append(
+-                RequestConfig(
+-                    prompt=prompt,
+-                    max_tokens=15,
+-                    temperature=0,
+-                    frequency_penalty=0.0 if i % 2 == 0 else 2.0,
+-                )
++        # Preserve the original alternating requests. Token IDs expose the
++        # penalty's effect without assuming any particular decoded character.
++        configs = [
++            RequestConfig(
++                prompt=prompt,
++                max_tokens=15,
++                temperature=0,
++                frequency_penalty=0.0 if i % 2 == 0 else 2.0,
++                return_token_ids=True,
+             )
+-
+-        results = run_concurrent_batch(tt_server, tt_model_name, configs)
+-
+-        no_penalty = [results[i] for i in range(0, max_batch_size, 2)]
+-        with_penalty = [results[i] for i in range(1, max_batch_size, 2)]
+-
+-        # Count "a"s in each output
+-        no_penalty_a_count = no_penalty[0].count("a")
+-        with_penalty_a_count = with_penalty[0].count("a")
+-
+-        assert no_penalty_a_count > with_penalty_a_count, (
+-            f"Frequency penalty should reduce 'a' repetitions: "
+-            f"no_penalty={no_penalty_a_count},"
+-            f"with_penalty={with_penalty_a_count}"
+-        )
+-        assert_deterministic_allow_near_tie(
+-            no_penalty, "No penalty requests should be identical."
+-        )
+-        assert_deterministic_allow_near_tie(
+-            with_penalty, "With penalty requests should be identical."
++            for i in range(max_batch_size)
++        ]
++        mixed = run_concurrent_batch(
++            tt_server, tt_model_name, configs, return_full_response=True
+         )
++        homogeneous = {}
++        solo = {}
++        for penalty in (0.0, 2.0):
++            # Request logprobs to keep the TP4 control on the same host route
++            # as the mixed penalty batch; greedy token semantics are unchanged.
++            control = RequestConfig(
++                prompt=prompt,
++                max_tokens=15,
++                temperature=0,
++                frequency_penalty=penalty,
++                return_token_ids=True,
++                logprobs=0,
++            )
++            homogeneous[penalty] = run_concurrent_batch(
++                tt_server,
++                tt_model_name,
++                [control] * max_batch_size,
++                return_full_response=True,
++            )
++            solo[penalty] = run_concurrent_batch(
++                tt_server, tt_model_name, [control], return_full_response=True
++            )[0]
++        _assert_frequency_batch_controls(mixed, homogeneous, solo)
+diff --git a/tests/test_sampling_token_contract.py b/tests/test_sampling_token_contract.py
+new file mode 100644
+index 0000000..8ddbc2e
+--- /dev/null
++++ b/tests/test_sampling_token_contract.py
+@@ -0,0 +1,74 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
++"""Token-level variety and per-policy penalty controls reject real failures."""
++
++from types import SimpleNamespace
++
++import pytest
++
++from tests.tt.test_seeding_and_variety import _first_generated_token_ids
++from tests.tt.test_tt_penalties import _assert_frequency_batch_controls
++from tests.tt.utils import assert_pairwise_varied, assert_varied
++
++
++def response(ids, text=" a"):
++    return SimpleNamespace(choices=[SimpleNamespace(token_ids=ids, text=text)])
++
++
++def controls():
++    clean, penalized = response([10, 10, 10]), response([10, 11, 12])
++    return (
++        [clean, penalized, clean, penalized],
++        {0.0: [clean] * 4, 2.0: [penalized] * 4},
++        {0.0: clean, 2.0: penalized},
++    )
++
++
++def test_first_tokens_can_vary_with_the_same_first_character():
++    rows = [response([10], " A"), response([11], " B")]
++    with pytest.raises(AssertionError):
++        assert_varied([row.choices[0].text[:1] for row in rows], 2, "characters")
++    assert_varied(_first_generated_token_ids(rows), 2, "tokens")
++    with pytest.raises(AssertionError):
++        assert_varied(_first_generated_token_ids([rows[0], rows[0]]), 2, "tokens")
++
++
++def test_penalty_effect_does_not_require_a_character_count_change():
++    mixed, homogeneous, solo = controls()
++    assert mixed[0].choices[0].text.count("a") == mixed[1].choices[0].text.count("a")
++    _assert_frequency_batch_controls(mixed, homogeneous, solo)
++
++
++def test_mixed_slot_contamination_is_rejected():
++    mixed, homogeneous, solo = controls()
++    mixed[2] = response([99])
++    with pytest.raises(AssertionError, match="slot 2"):
++        _assert_frequency_batch_controls(mixed, homogeneous, solo)
++
++
++def test_missing_penalty_effect_is_rejected():
++    row = response([10, 10, 10])
++    with pytest.raises(AssertionError, match="must change"):
++        _assert_frequency_batch_controls(
++            [row] * 4, {0.0: [row] * 4, 2.0: [row] * 4}, {0.0: row, 2.0: row}
++        )
++
++
++def test_pairwise_first_tokens_preserve_threshold_with_shared_characters():
++    first = [response([10], "Random"), response([11], "Right")]
++    second = [response([12], "Red"), response([13], "Round")]
++    with pytest.raises(AssertionError):
++        assert_pairwise_varied(["R", "R"], ["R", "R"], 2, "characters")
++    assert_pairwise_varied(
++        _first_generated_token_ids(first),
++        _first_generated_token_ids(second),
++        2,
++        "tokens",
++    )
++    with pytest.raises(AssertionError):
++        assert_pairwise_varied(
++            _first_generated_token_ids(first),
++            _first_generated_token_ids([second[0], first[1]]),
++            2,
++            "tokens",
++        )

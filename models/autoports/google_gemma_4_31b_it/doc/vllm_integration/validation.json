@@ -1,0 +1,82 @@
+{
+  "status": "pass",
+  "runtime_source_manifest": "readiness_vllm/final_source_manifest.json",
+  "adapter_state": {
+    "status": "pass",
+    "evidence": "readiness_vllm/adapter_state.json"
+  },
+  "full_model_resume": {
+    "status": "pass",
+    "evidence": "readiness/prefill_resume_check.json"
+  },
+  "tracked_mixed": {
+    "status": "pass",
+    "evidence": "readiness_vllm/b32_pool36896_tracked/mixed_sync.json"
+  },
+  "async_mixed": {
+    "status": "pass",
+    "evidence": "readiness_vllm/mixed_async.json"
+  },
+  "growing_traffic": {
+    "status": "pass",
+    "evidence": "readiness_vllm/growing_traffic.json"
+  },
+  "headline": {
+    "status": "pass",
+    "evidence": "readiness_vllm/b1_final/vllm_benchmark.json",
+    "workload": {
+      "input_tokens": 4096,
+      "generated_tokens": 128,
+      "batch": 1,
+      "concurrency": 1
+    }
+  },
+  "capacity_batches": [
+    8,
+    16,
+    32
+  ],
+  "prefix_cache": {
+    "status": "pass",
+    "evidence": "readiness_vllm/final_full/prefix_cache_check.json"
+  },
+  "qualitative": {
+    "status": "pass_with_selected_policy_limitation",
+    "evidence": "readiness_vllm/final_full/qualitative_review.json"
+  },
+  "sampling": {
+    "status": "pass",
+    "profile": "full",
+    "passed": 76,
+    "skipped": 75,
+    "duration_seconds": 512.16,
+    "evidence": "readiness_vllm/final_full/sampling_tests.log",
+    "plugin_host_regressions": {
+      "passed": 2303,
+      "skipped": 16,
+      "evidence": "readiness_vllm/plugin_pc02_pc05_host.log"
+    }
+  },
+  "prefill_burst": {
+    "status": "serial_reference_measured",
+    "evidence": "readiness_vllm/vllm_prefill_burst_serial_benchmark.json",
+    "limitation": "Dense batched implementation/equality/ratio assigned to stage10 by explicit skill stage split."
+  },
+  "profiling": false,
+  "stage_review": "doc/vllm_integration/stage_review.md",
+  "cleanup": {
+    "status": "pass",
+    "evidence": "readiness_vllm/final_full/runtime_audit.json"
+  },
+  "stage_checks": {
+    "context": "pass",
+    "serving_contract": "18 rows pass",
+    "prefill_ratio": "stage10 advisory; serial stage9 reference measured",
+    "agentic": "only documented tied-weight and pre-load-budget advisories",
+    "evidence": [
+      "readiness_vllm/final_stage_check.log",
+      "readiness_vllm/final_agentic_check.log"
+    ]
+  },
+  "stage_review_verdict": "clean-pass"
+}

@@ -1,0 +1,181 @@
+{
+  "status": "revised36896-IDfull60B32pool measuredfit; growing32x32KreusePASS",
+  "unit": "bytes per device unless named blocks",
+  "context": 262144,
+  "target_tokens_per_user": 32768,
+  "worker_block_tokens": 32,
+  "global_block_tokens": 64,
+  "sliding_block_tokens": 32,
+  "sliding_groups": 5,
+  "window_tokens": 1024,
+  "max_num_batched_tokens": 2048,
+  "async_max_in_flight_tokens": 4096,
+  "pool_sizing": "fixed",
+  "pool_sizing_reason": "Pinned plugin sizes before model loading. Normalize global pages to64 tokens and add one prior24K-turn equivalent per user as APC headroom. Previous24608-ID pool met live bounds but final32K growing turn retained only40.5077% of prior cached-token ceiling without preemption; live bounds do not guarantee LRU prefix preservation.",
+  "source": [
+    "pinned plugin src/vllm_tt_plugin/worker.py:get_num_available_blocks_tt",
+    "vllm0.31.0 config/vllm.py:max_in_flight_tokens",
+    "vllm0.31.0 v1/kv_cache_interface.py:SlidingWindowSpec",
+    "readiness_vllm/reduced_async_partial/server.log",
+    "doc/agentic_serving.json:ledger"
+  ],
+  "rows": [
+    {
+      "batch": 1,
+      "synthetic_token_budget": 262144,
+      "scheduler_blocks": 8449,
+      "kv_payload_bytes": 5883207680,
+      "steady_target_ids": 672,
+      "projected_free_bytes": 21604655616
+    },
+    {
+      "batch": 8,
+      "synthetic_token_budget": 262144,
+      "scheduler_blocks": 10248,
+      "kv_payload_bytes": 7135887360,
+      "steady_target_ids": 5376,
+      "projected_free_bytes": 20351975936
+    },
+    {
+      "batch": 16,
+      "synthetic_token_budget": 458752,
+      "scheduler_blocks": 18448,
+      "kv_payload_bytes": 12845711360,
+      "steady_target_ids": 10752,
+      "projected_free_bytes": 14642151936
+    },
+    {
+      "batch": 32,
+      "synthetic_token_budget": 917504,
+      "scheduler_blocks": 36896,
+      "kv_payload_bytes": 25691422720,
+      "steady_target_ids": 21504,
+      "projected_free_bytes": 1796440576
+    }
+  ],
+  "batch32_capacity_bounds": {
+    "steady_ids": 21504,
+    "live_with_inflight_alignment_null": 22561,
+    "31_live_plus_new_32k_admission": 23195,
+    "single_max_context_admission": 4902,
+    "calculation_scope": "bounds from normalized specs, not observed allocation/traffic"
+  },
+  "batch32_measured_memory": {
+    "evidence": "readiness_vllm/b32_sync/server.log",
+    "snapshots": [
+      {
+        "phase": "before_serving_cache",
+        "allocator": {
+          "num_banks": 8,
+          "total_bytes_allocated_per_bank": 802478336,
+          "total_bytes_per_bank": 4255564160,
+          "largest_contiguous_bytes_free_per_bank": 3431885696
+        }
+      },
+      {
+        "phase": "after_serving_cache",
+        "allocator": {
+          "num_banks": 8,
+          "total_bytes_allocated_per_bank": 2952222976,
+          "total_bytes_per_bank": 4255564160,
+          "largest_contiguous_bytes_free_per_bank": 1290005376
+        }
+      },
+      {
+        "phase": "after_serving_prepare",
+        "allocator": {
+          "num_banks": 8,
+          "total_bytes_allocated_per_bank": 2961461568,
+          "total_bytes_per_bank": 4255564160,
+          "largest_contiguous_bytes_free_per_bank": 1283437440
+        }
+      }
+    ],
+    "per_bank_times_num_banks": "total mesh-device DRAM bytes for one participating physical device; not sum over4 devices",
+    "scheduler_blocks": 24608,
+    "scope": "Previous pool only; these measurements are not evidence of revised allocation fit."
+  },
+  "prior_turn_reserve_tokens_per_user": 24576,
+  "previous_rows": [
+    {
+      "batch": 1,
+      "synthetic_token_budget": 262144,
+      "scheduler_blocks": 8449,
+      "kv_payload_bytes": 5883207680,
+      "steady_target_ids": 672
+    },
+    {
+      "batch": 8,
+      "synthetic_token_budget": 262144,
+      "scheduler_blocks": 10248,
+      "kv_payload_bytes": 7135887360,
+      "steady_target_ids": 5376
+    },
+    {
+      "batch": 16,
+      "synthetic_token_budget": 262144,
+      "scheduler_blocks": 12304,
+      "kv_payload_bytes": 8567521280,
+      "steady_target_ids": 10752
+    },
+    {
+      "batch": 32,
+      "synthetic_token_budget": 524288,
+      "scheduler_blocks": 24608,
+      "kv_payload_bytes": 17135042560,
+      "steady_target_ids": 21504
+    }
+  ],
+  "apc_repair": {
+    "failure_evidence": "readiness_vllm/growing_traffic.log and growing traffic final report",
+    "failed_final_turn_hits": 318656,
+    "failed_final_turn_ceiling": 786656,
+    "policy_sources": [
+      "vllm/config/cache.py:prefix_cache_retention_interval defaults0",
+      "vllm/v1/core/single_type_kv_cache_manager.py:reachable_block_mask and _remove_blocks_in_range",
+      "vllm/v1/core/block_pool.py:free_blocks/get_new_blocks"
+    ],
+    "mechanism": "Sparse semantic sliding checkpoints from completed turns remain hashed/free in shared FIFO-LRU until reuse; obsolete prior-turn checkpoints receive no priority over global prefixes. Pool occupancy for reusable history exceeds live-cache bounds. Exact evicted block identities were not captured.",
+    "reserve_choice": "One prior24K-turn equivalent (384 normalized IDs/user) beyond target32K global budget; workload-motivated capacity hypothesis, not a guarantee against all LRU histories.",
+    "capacity_limit": {
+      "usable_bytes": 34044513280,
+      "measured_model_bytes": 6419826688,
+      "measured_prepared_other_bytes": 136823296,
+      "required_free_reserve_bytes": 1073741824,
+      "bytes_per_scheduler_id": 696320,
+      "arithmetic_max_ids": 37933,
+      "selected_ids": 36896,
+      "projected_free_bytes": 1796440576
+    },
+    "limitations": [
+      "Revised pool allocator rounding and transient workspace fit require server validation.",
+      "Growing traffic must be rerun and meet original reuse gates; this change does not waive a failed gate.",
+      "No context, concurrency, scheduler token budget, plugin policy or dtype changes."
+    ]
+  },
+  "revised_allocation_validation": {
+    "status": "tracked_mixed_and_async_growing_pass",
+    "source": "readiness_vllm/b32_pool36896_tracked/runtime_audit.json",
+    "normalized_ids": 36896,
+    "allocated_after_prepare_per_bank": 4031009088,
+    "banks": 8,
+    "allocated_after_prepare_per_device": 32248072704,
+    "usable_per_device": 34044513280,
+    "free_after_prepare_per_device": 1796440576,
+    "largest_contiguous_free_per_bank": 213889920,
+    "program_cache_entries": 2354,
+    "prepared_traces": 3,
+    "runtime_captures": 0,
+    "runtime_retirements": 0,
+    "cleanup_device_owners": []
+  },
+  "revised_growing_validation": {
+    "source": "readiness_vllm/growing_traffic.json",
+    "status": "pass",
+    "hit_fraction_of_ceiling": 0.9946692694646745,
+    "late_hit_fraction": 0.9965343876604676,
+    "final_round_hit_fraction": 0.9971118252450881,
+    "preemptions": 0,
+    "trace_captures_after_warmup": 0
+  }
+}

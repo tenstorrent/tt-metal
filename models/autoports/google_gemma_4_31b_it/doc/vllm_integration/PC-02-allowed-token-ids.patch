@@ -1,0 +1,145 @@
+diff --git a/tests/tt/utils.py b/tests/tt/utils.py
+--- a/tests/tt/utils.py
++++ b/tests/tt/utils.py
+@@ -48,6 +48,7 @@
+     logit_bias: dict[int, float] | None = None
+     allowed_token_ids: list[int] | None = None
+     min_tokens: int = 0
++    return_token_ids: bool = False
+     return_tokens_as_token_ids: bool = False
+     reasoning_effort: Literal["low", "medium", "high"] | None = None
+ 
+@@ -71,6 +72,8 @@
+         extra_body["logit_bias"] = config.logit_bias
+     if config.allowed_token_ids is not None:
+         extra_body["allowed_token_ids"] = config.allowed_token_ids
++    if config.return_token_ids:
++        extra_body["return_token_ids"] = True
+     if config.return_tokens_as_token_ids:
+         extra_body["return_tokens_as_token_ids"] = True
+     if config.bad_words is not None:
+diff --git a/tests/tt/test_host_only_params.py b/tests/tt/test_host_only_params.py
+--- a/tests/tt/test_host_only_params.py
++++ b/tests/tt/test_host_only_params.py
+@@ -6,7 +6,19 @@
+ 
+ import string
+ 
++import httpx
++
+ from tests.tt.utils import RequestConfig, run_concurrent_batch
++
++
++def _assert_allowed_token_response(response, allowed_ids):
++    token_ids = response.choices[0].token_ids
++    assert token_ids, "allowed-token request must generate tokens"
++    assert set(token_ids) <= set(allowed_ids), (
++        f"generated tokens outside allowlist: {token_ids}, allowed={allowed_ids}"
++    )
++    assert response.usage is not None
++    assert response.usage.completion_tokens == len(token_ids)
+ 
+ 
+ class TestHostOnlyParameters:
+@@ -80,29 +92,42 @@
+ 
+     def test_allowed_token_ids(self, tt_server, tt_model_name, max_batch_size):
+         """Test allowed_token_ids parameter (smoke test)."""
++        allowed_sets = [list(range(start, start + 3)) for start in (1, 4, 7, 10, 13)]
+         configs = [
+             RequestConfig(
+-                prompt="Allowed: ", max_tokens=10, allowed_token_ids=[1, 2, 3]
+-            ),
+-            RequestConfig(
+-                prompt="Allowed: ", max_tokens=10, allowed_token_ids=[4, 5, 6]
+-            ),
+-            RequestConfig(
+-                prompt="Allowed: ", max_tokens=10, allowed_token_ids=[7, 8, 9]
+-            ),
+-            RequestConfig(
+-                prompt="Allowed: ", max_tokens=10, allowed_token_ids=[10, 11, 12]
+-            ),
+-            RequestConfig(
+-                prompt="Allowed: ", max_tokens=10, allowed_token_ids=[13, 14, 15]
+-            ),
++                prompt="Allowed: ", max_tokens=10,
++                allowed_token_ids=allowed, return_token_ids=True,
++            )
++            for allowed in allowed_sets
+         ]
+-        results = run_concurrent_batch(tt_server, tt_model_name, configs)
++        results = run_concurrent_batch(
++            tt_server, tt_model_name, configs, return_full_response=True
++        )
+         assert len(results) == len(configs)
+-        # With only 3 allowed tokens, output should be limited
+-        for i, result in enumerate(results):
+-            assert result is not None, f"should produce output for request {i}"
+-            assert len(result) > 0, f"should produce non-empty output for request {i}"
++        # Special tokens may all be hidden by default detokenization. Check
++        # the actual constrained tokens, preserving every original allowlist.
++        for response, allowed in zip(results, allowed_sets):
++            _assert_allowed_token_response(response, allowed)
++
++        # Obtain an ordinary token from the serving tokenizer, avoiding fixed
++        # vocabulary assumptions and an additional local tokenizer dependency.
++        encoded = httpx.post(
++            f"{tt_server.base_url}/tokenize",
++            json={"model": tt_model_name, "prompt": "A", "add_special_tokens": False},
++            timeout=30,
++        )
++        encoded.raise_for_status()
++        ordinary = encoded.json()["tokens"]
++        assert ordinary, "ordinary text must tokenize to at least one token"
++        config = RequestConfig(
++            prompt="Allowed: ", max_tokens=10,
++            allowed_token_ids=ordinary, return_token_ids=True,
++        )
++        response = run_concurrent_batch(
++            tt_server, tt_model_name, [config], return_full_response=True
++        )[0]
++        _assert_allowed_token_response(response, ordinary)
++        assert response.choices[0].text, "ordinary-token allowlist must produce text"
+ 
+     def test_min_tokens(self, tt_server, tt_model_name, max_batch_size):
+         """Test min_tokens parameter ensures minimum output length."""
+diff --git a/tests/test_allowed_token_contract.py b/tests/test_allowed_token_contract.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_allowed_token_contract.py
+@@ -0,0 +1,35 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
++"""Allowed-token checks must inspect tokens even when special text is hidden."""
++
++from types import SimpleNamespace
++
++import pytest
++
++from tests.tt.test_host_only_params import _assert_allowed_token_response
++
++
++def response(ids, text="", count=None):
++    return SimpleNamespace(
++        choices=[SimpleNamespace(token_ids=ids, text=text)],
++        usage=SimpleNamespace(completion_tokens=len(ids) if count is None else count),
++    )
++
++
++def test_special_tokens_need_not_produce_visible_text():
++    result = response([1, 2, 3])
++    with pytest.raises(AssertionError):
++        assert len(result.choices[0].text) > 0
++    _assert_allowed_token_response(result, [1, 2, 3])
++
++
++def test_disallowed_tokens_fail_even_with_visible_text():
++    with pytest.raises(AssertionError, match="outside allowlist"):
++        _assert_allowed_token_response(response([4], text="visible"), [1, 2, 3])
++
++
++def test_missing_tokens_and_wrong_usage_fail():
++    with pytest.raises(AssertionError):
++        _assert_allowed_token_response(response([]), [1, 2, 3])
++    with pytest.raises(AssertionError):
++        _assert_allowed_token_response(response([1], count=2), [1, 2, 3])

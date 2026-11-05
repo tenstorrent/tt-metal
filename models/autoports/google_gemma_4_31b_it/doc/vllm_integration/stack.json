@@ -1,0 +1,24 @@
+{
+  "vllm_version": "0.31.0",
+  "vllm_location": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/lib/python3.10/site-packages/vllm/__init__.py",
+  "plugin_location": "/home/mvasiljevic/gemma4-31b-pipeline-v3/vllm-tt-plugin-stage09/src/vllm_tt_plugin/__init__.py",
+  "plugin_commit": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+  "vllm_source": "https://github.com/vllm-project/vllm/tree/v0.31.0",
+  "plugin_source": "https://github.com/tenstorrent/vllm-tt-plugin",
+  "recommendation": "docs/install-vllm-tt.sh at ca7a18246e4111629ed6cb4a7d1192002749fccf",
+  "device_owners_visible_in_proc": [],
+  "hardware_opened": false,
+  "versions": {
+    "torch": "2.11.0+cpu",
+    "transformers": "5.12.1",
+    "vllm-tt-plugin": "0.1.0"
+  },
+  "pip_check_exceptions": {
+    "opencv-python-headless": "4.11.0.86 explicitly prescribed by plugin docs/vllm-overrides.txt despite vLLM >=4.13 metadata",
+    "sse-starlette": "3.5.1 conflicts with unrelated installed fiftyone0.25.2 <1; OpenAI-compatible serving, streaming, qualitative, prefix and benchmark workloads validated in readiness_vllm."
+  },
+  "plugin_runtime_base": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+  "plugin_test_commit": "90f33d2e392eb8bfda6948df9dabe712a724cb1a",
+  "plugin_branch": "mvasiljevic/gemma4-stage09-sampling-tests",
+  "plugin_runtime_changes": false
+}

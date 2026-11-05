@@ -366,7 +366,9 @@ class OptimizedDecoder(LightweightModule):
         # RoPE's shared-cache kernel requires [1,1,S,D]. Flatten batch into
         # sequence, preserving each request's own absolute-position cos/sin.
         flat = ttnn.reshape(ttnn.permute(x, (1, 0, 2, 3)), (1, heads, batch * length, dim)) if batch > 1 else x
-        out = ttnn.experimental.rotary_embedding(
+        # HF RoPE applies the requested compute config to both core groups.
+        # The legacy op's group1 defaults vary numerically with the row split.
+        out = ttnn.experimental.rotary_embedding_hf(
             flat,
             ttnn.reshape(cos, (1, 1, batch * length, dim)),
             ttnn.reshape(sin, (1, 1, batch * length, dim)),
@@ -573,6 +575,7 @@ class OptimizedDecoder(LightweightModule):
         batch_idx_tensor=None,
         attention_page_table=None,
         chunk_start_idx_tensor=None,
+        partial_cache_inputs=None,
     ):
         """x [B,1,S,H]; RoPE [B,1,S,D]; returns [B,1,valid_tokens,H].
 
@@ -604,6 +607,17 @@ class OptimizedDecoder(LightweightModule):
         if self.prefill_l1:
             x = ttnn.clone(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         q, k, v = self._qkv(x, cos, sin, decode=False)
+        if partial_cache_inputs is not None:
+            if x.shape[0] != 1 or x.shape[2] != 32:
+                raise ValueError("Prefix-preserving prefill requires one physical page")
+            starts, ends, prefix_mask = partial_cache_inputs
+            merged = []
+            for cached, new in zip(kv_cache, (k, v)):
+                # Runtime page indices keep physical ownership out of program keys.
+                old = ttnn.slice(cached, starts, ends, slice_dim=0, num_devices=cached.shape[0])
+                blended = ttnn.where(prefix_mask, ttnn.typecast(old, ttnn.bfloat16), ttnn.typecast(new, ttnn.bfloat16))
+                merged.append(ttnn.typecast(blended, self.cache_dtype))
+            k, v = merged
         if batch_idx_tensor is None:
             batch_idx_tensor = self._prefill_indices(x.shape[0])
         if batch_idx_tensor is not None:
@@ -632,7 +646,9 @@ class OptimizedDecoder(LightweightModule):
             program_config=ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 q_chunk_size=32 if attention_start % 128 else self.geometry["prefill_q"],
-                k_chunk_size=32 if attention_start % 128 else self.geometry["prefill_k"],
+                # Keep softmax reduction partitions stable across page-aligned
+                # continuation offsets and shifted sliding-window views.
+                k_chunk_size=32,
             ),
             compute_kernel_config=self.prefill_sdpa_kernel,
         )

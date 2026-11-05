@@ -1,0 +1,30 @@
+{
+  "status": "resolved_authorized_validated_committed",
+  "items": [
+    "PC-02",
+    "PC-03",
+    "PC-04",
+    "PC-05"
+  ],
+  "scope": "generic test-only corrections, validation and local plugin commit; no runtime interface/default changes; never push",
+  "reason": "AGENTS.md operator decision 3, 2026-11-05 22:30 UTC: runtime stays stock; PC-02/03 and further justified generic test-only corrections are authorized.",
+  "records": [
+    "PC-02-allowed-token-ids.md",
+    "PC-03-sampling-token-contracts.md",
+    "PC-04-request-isolation.md",
+    "PC-05-topk-cohorts.md"
+  ],
+  "implemented": true,
+  "plugin_base": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+  "pc01_status": "resolved by rejection and accepted stock compatibility mode",
+  "validation": {
+    "hooks": "pass",
+    "host_suite": "2303 passed, 16 skipped, 5 warnings in 109.37s; readiness_vllm/plugin_pc02_pc05_host.log",
+    "affected_live": "PC02/03 initial7 pass; expandedPC03/04 11 pass and topk defect corrected by PC05; calibrated topk3 pass in99.96s",
+    "full_sampling": "pass: 76 passed, 75 skipped, 2 warnings in 512.16s; readiness_vllm/final_full/sampling_tests.log",
+    "affected_live_evidence": "readiness_vllm/final_topk_calibrated.log; final_affected_sampling.log; final_affected_extended_sampling.log",
+    "focused_host_regressions": "22 passed, 2 warnings in 3.31s; readiness_vllm/plugin_pc05_host.log"
+  },
+  "local_commit": "90f33d2e392eb8bfda6948df9dabe712a724cb1a",
+  "stage_review": "clean-pass: doc/vllm_integration/stage_review.md"
+}

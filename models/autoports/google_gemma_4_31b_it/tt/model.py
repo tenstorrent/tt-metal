@@ -243,6 +243,7 @@ class Gemma4Model:
         attention_tables=None,
         start_tensors=None,
         return_hidden=False,
+        partial_cache_inputs=None,
     ):
         x = self.embed(tokens)
         x = ttnn.reshape(x, (x.shape[0], 1, x.shape[1], self.config.hidden_size))
@@ -258,6 +259,7 @@ class Gemma4Model:
                 chunk_page_table=chunk_page,
                 chunk_start=chunk_start,
                 valid_tokens=valid_tokens,
+                partial_cache_inputs=partial_cache_inputs[index] if partial_cache_inputs is not None else None,
                 **(
                     {"attention_page_table": attention_tables[index], "chunk_start_idx_tensor": start_tensors[index]}
                     if attention_tables is not None
@@ -266,7 +268,7 @@ class Gemma4Model:
             )
         return x if return_hidden else self.terminal(x)
 
-    def decode(self, tokens, positions, *, kv_cache, page_tables):
+    def decode(self, tokens, positions, *, kv_cache, page_tables, return_hidden=False):
         x = self.embed(tokens)
         x = ttnn.reshape(x, (1, 1, tokens.shape[-1], self.config.hidden_size))
         ropes = self.rope(positions, decode=True)
@@ -274,4 +276,4 @@ class Gemma4Model:
         for layer, cache, page in zip(self.layers, kv_cache, page_tables):
             cos, sin = ropes[layer.layer_type]
             x = layer.decode_forward(x, cos=cos, sin=sin, kv_cache=cache, page_table=page, current_pos=current_pos)
-        return self.terminal(x)
+        return x if return_hidden else self.terminal(x)

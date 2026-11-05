@@ -28,6 +28,8 @@ class MultichipDecoder(OptimizedDecoder):
         norm_dtype = kwargs.pop("norm_dtype", ttnn.bfloat16)
         obj.topology = ttnn.Topology.Linear if candidate_baseline else ttnn.Topology.Ring
         obj.residual_sharded = kwargs.pop("residual_sharded", False)
+        obj.prefill_ccl_phase = 0
+        obj.prefill_ccl_padding = {}
         obj.prefill_ccl_bfp8 = kwargs.pop("prefill_ccl_bfp8", not candidate_baseline)
         cache_dtype = kwargs.pop("cache_dtype", ttnn.bfloat8_b)
         activation_dtype = kwargs.pop("activation_dtype", ttnn.bfloat8_b)
@@ -357,6 +359,89 @@ class MultichipDecoder(OptimizedDecoder):
             return self._gather(out)
         return ttnn.to_memory_config(out, self._working_memory(out, 7)) if self.decoding else out
 
+    def prefill_chunk_forward(self, x, **kwargs):
+        previous = self.prefill_ccl_phase
+        self.prefill_ccl_phase = int(kwargs["chunk_start"]) % 256
+        try:
+            return super().prefill_chunk_forward(x, **kwargs)
+        finally:
+            self.prefill_ccl_phase = previous
+
+    def _prefill_ccl_zero_rows(self, batch, rows, dtype):
+        key = (batch, rows, dtype)
+        if key not in self.prefill_ccl_padding:
+            self.prefill_ccl_padding[key] = ttnn.zeros(
+                (batch, 1, rows, self.hidden),
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return self.prefill_ccl_padding[key]
+
+    def _reduce_output(self, out, name):
+        phase = (
+            self.prefill_ccl_phase
+            if not self.decoding and self.prefill_ccl_bfp8 and self.topology == ttnn.Topology.Ring
+            else 0
+        )
+        rows = out.shape[2]
+        if phase:
+            # Ring reduction alternates direction every eight output tiles.
+            # TP4 has 42 tiles per tile row: parity repeats every eight tile
+            # rows (256 tokens). Preserve absolute row parity and BF8 rounding
+            # across continuation offsets by prepending zero rows before CCL.
+            out = ttnn.concat([self._prefill_ccl_zero_rows(out.shape[0], phase, out.dtype), out], dim=2)
+        out = ttnn.experimental.reduce_scatter_minimal_async(
+            out,
+            dim=3,
+            persistent_output_buffers=(
+                self.persistent_ccl[(out.shape[-2], name)][0]
+                if self.decoding and (out.shape[-2], name) in self.persistent_ccl
+                else None
+            ),
+            multi_device_global_semaphore=self.ccl.get_and_cycle_rs_semaphore_handles(),
+            barrier_semaphore=self.ccl.get_and_cycle_barrier_semaphore_handle(),
+            topology=self.topology,
+            num_links=2,
+            num_workers_per_link=2 if self.decoding else None,
+            num_buffers_per_channel=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if phase:
+            out = ttnn.slice(out, (0, 0, phase, 0), (out.shape[0], 1, phase + rows, out.shape[-1]))
+        return out
+
+    def prepare_prefill_ccl(self, *, batch=1, max_rows=1024):
+        """Warm continuation CCL/concat/slice signatures; share returned zero buffers.
+
+        Call once per mesh and precision policy before capture, then assign the
+        returned dictionary to every compatible layer's prefill_ccl_padding.
+        The existing prefill warmup still covers downstream gather/norm kernels.
+        """
+        if self.decoding or max_rows < 32 or max_rows > 1024 or max_rows % 32:
+            raise ValueError("Prefill CCL preparation needs 32..1024 aligned rows outside decode")
+        if not self.prefill_ccl_bfp8 or self.topology != ttnn.Topology.Ring:
+            return self.prefill_ccl_padding
+        previous = self.prefill_ccl_phase
+        try:
+            for rows in range(32, max_rows + 1, 32):
+                source = ttnn.zeros(
+                    (batch, 1, rows, self.hidden),
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                for phase in range(0, 256, 32):
+                    self.prefill_ccl_phase = phase
+                    result = self._reduce_output(source, "self_attn.o_proj")
+                    del result
+                del source
+        finally:
+            self.prefill_ccl_phase = previous
+        return self.prefill_ccl_padding
+
     def _linear(self, x, name):
         if self.decoding and name in self.output_padding and x.shape[-2] <= 32:
             role = self.geometry[name]
@@ -386,22 +471,7 @@ class MultichipDecoder(OptimizedDecoder):
             out = ttnn.typecast(out, self.decode_ccl_dtype)
         elif self.prefill_ccl_bfp8 and not self.decoding:
             out = ttnn.typecast(out, ttnn.bfloat8_b)
-        out = ttnn.experimental.reduce_scatter_minimal_async(
-            out,
-            dim=3,
-            persistent_output_buffers=(
-                self.persistent_ccl[(out.shape[-2], name)][0]
-                if self.decoding and (out.shape[-2], name) in self.persistent_ccl
-                else None
-            ),
-            multi_device_global_semaphore=self.ccl.get_and_cycle_rs_semaphore_handles(),
-            barrier_semaphore=self.ccl.get_and_cycle_barrier_semaphore_handle(),
-            topology=self.topology,
-            num_links=2,
-            num_workers_per_link=2 if self.decoding else None,
-            num_buffers_per_channel=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        out = self._reduce_output(out, name)
         if not self.residual_sharded:
             out = self._gather(out, group=name)
         if out.dtype != self.residual_dtype:

@@ -11,8 +11,8 @@
     16,
     32
   ],
-  "stage": "08-datatype-sweep",
-  "status": "validation complete; independent stage08 review clean-pass",
+  "stage": "09-vllm",
+  "status": "Stage09 validated: full60 B1/8/16/32, sampling, mixed-shape traces, growing multi-turn prefix reuse, headline benchmark and cleanup pass; independent clean-pass.",
   "context_evidence": "context_contract.json",
   "prefix_state_contract": "full_model/README.md",
   "functional_measurements": [
@@ -268,8 +268,8 @@
     }
   ],
   "ledger": {
-    "status": "Selected full-stack persistent allocations measured at batches1/8/16/32; target32-agent prefix checked",
-    "unit": "bytes per ASIC; four identical TP shards",
+    "status": "full60 B32 largerpool fit and32-conversation growing32K reuse measured",
+    "unit": "bytes per physical device; four TP shards",
     "weights": [
       {
         "name": "decoder projections and norms",
@@ -306,156 +306,46 @@
     "model_weights_rope_ccl_bytes_per_device": 6419826688,
     "rope_bytes_per_device": 805306368,
     "decoder_ccl_and_state_bytes_per_device": 299386880,
-    "full_attention_kv_bytes_per_token_per_device": 10880,
-    "sliding_kv_bytes_per_slot_per_device": 222822400,
-    "sliding_physical_tokens_per_slot": 2048,
+    "pool_sizing": "fixed",
+    "pool_sizing_reason": "Pinned worker requests a synthetic token budget before weights load. Adapter converts target global64/sliding32 geometry into normalized IDs; actual allocator fit is measured afterward. See vllm_integration/pool_plan.json.",
     "pool_tokens": 1048576,
+    "pool_tokens_basis": "Measured32*32768 live finalcontext tokens with99.71% finalturn reuse; pool includes prior-turn APC retention reserve, not merely liveworking-set blocks",
     "individual_context_tokens": 262144,
-    "capacity_rows": [
-      {
-        "batch": 1,
-        "individual_context": 262144,
-        "full_attention_pool_tokens": 262144,
-        "kv_bytes_per_device": 3074949120,
-        "page_table_bytes_per_device": 15728640,
-        "constructed_bytes_per_device": 9520641024,
-        "prepared_bytes_per_device": 9561502720,
-        "usable_dram_bytes_per_device": 34044513280,
-        "free_bytes_after_prepare": 24483010560,
-        "headroom_after_transient_budget": 23677704192,
-        "largest_contiguous_bytes_free_per_bank": 3057580928,
-        "source": "datatype_sweep/selected_default/memory.json",
-        "inventory": {
-          "decoder_weights": 4411965440,
-          "decoder_state": 299059200,
-          "embedding": 704643072,
-          "lm_head": 198180864,
-          "final_norm": 344064,
-          "rope": 805306368,
-          "kv_cache": 3074949120,
-          "page_tables": 15728640,
-          "sampler": 53248,
-          "prepared_prefill": 1397248,
-          "generator_state": 8521728,
-          "sum_owned_dram_bytes": 9520148992,
-          "allocator_bytes": 9520641024,
-          "unattributed_allocator_bytes": 492032
-        }
+    "normalized_ids": 36896,
+    "kv_bytes_per_normalized_id": 696320,
+    "kv_cache_bytes_per_device": 25691422720,
+    "cache_groups": {
+      "full_attention": {
+        "groups": 1,
+        "tokens_per_block": 64
       },
-      {
-        "batch": 32,
-        "individual_context": 262144,
-        "full_attention_pool_tokens": 1048576,
-        "kv_bytes_per_device": 18538823680,
-        "page_table_bytes_per_device": 62914560,
-        "constructed_bytes_per_device": 25031751168,
-        "prepared_bytes_per_device": 25072776704,
-        "usable_dram_bytes_per_device": 34044513280,
-        "free_bytes_after_prepare": 8971736576,
-        "headroom_after_transient_budget": 8166430208,
-        "largest_contiguous_bytes_free_per_bank": 1109410688,
-        "source": "datatype_sweep/selected_b32/memory.json",
-        "inventory": {
-          "decoder_weights": 4411965440,
-          "decoder_state": 299059200,
-          "embedding": 704643072,
-          "lm_head": 198180864,
-          "final_norm": 344064,
-          "rope": 805306368,
-          "kv_cache": 18538823680,
-          "page_tables": 62914560,
-          "sampler": 53248,
-          "prepared_prefill": 1397248,
-          "generator_state": 8522240,
-          "sum_owned_dram_bytes": 25031209984,
-          "allocator_bytes": 25031751168,
-          "unattributed_allocator_bytes": 541184
-        }
-      },
-      {
-        "batch": 16,
-        "individual_context": 262144,
-        "full_attention_pool_tokens": 524288,
-        "kv_bytes_per_device": 9269411840,
-        "page_table_bytes_per_device": 31457280,
-        "constructed_bytes_per_device": 15730881536,
-        "prepared_bytes_per_device": 15772079104,
-        "usable_dram_bytes_per_device": 34044513280,
-        "free_bytes_after_prepare": 18272434176,
-        "headroom_after_transient_budget": 17467127808,
-        "largest_contiguous_bytes_free_per_bank": 2272506752,
-        "source": "datatype_sweep/selected_b16/memory.json",
-        "inventory": {
-          "decoder_weights": 4411965440,
-          "decoder_state": 299059200,
-          "embedding": 704643072,
-          "lm_head": 198180864,
-          "final_norm": 344064,
-          "rope": 805306368,
-          "kv_cache": 9269411840,
-          "page_tables": 31457280,
-          "sampler": 53248,
-          "prepared_prefill": 1397248,
-          "generator_state": 8521728,
-          "sum_owned_dram_bytes": 15730340352,
-          "allocator_bytes": 15730881536,
-          "unattributed_allocator_bytes": 541184
-        }
-      },
-      {
-        "batch": 8,
-        "individual_context": 262144,
-        "full_attention_pool_tokens": 262144,
-        "kv_bytes_per_device": 4634705920,
-        "page_table_bytes_per_device": 15728640,
-        "constructed_bytes_per_device": 11080446976,
-        "prepared_bytes_per_device": 11121624064,
-        "usable_dram_bytes_per_device": 34044513280,
-        "free_bytes_after_prepare": 22922889216,
-        "headroom_after_transient_budget": 22117582848,
-        "largest_contiguous_bytes_free_per_bank": 2860757888,
-        "source": "datatype_sweep/selected_b8/memory.json",
-        "inventory": {
-          "decoder_weights": 4411965440,
-          "decoder_state": 299059200,
-          "embedding": 704643072,
-          "lm_head": 198180864,
-          "final_norm": 344064,
-          "rope": 805306368,
-          "kv_cache": 4634705920,
-          "page_tables": 15728640,
-          "sampler": 53248,
-          "prepared_prefill": 1397248,
-          "generator_state": 8521728,
-          "sum_owned_dram_bytes": 11079905792,
-          "allocator_bytes": 11080446976,
-          "unattributed_allocator_bytes": 541184
-        }
+      "sliding_attention": {
+        "groups": 5,
+        "tokens_per_block": 32,
+        "window_tokens": 1024
       }
-    ],
-    "trace_region_bytes_per_device": 134217728,
-    "trace_region_note": "Reserved separately and already excluded from allocator usable DRAM34044513280; never subtract twice.",
-    "page_table_basis": "Each of60 [B,8192] int32 row-major maps reserves ceil(B/8)*8*32768 bytes across8 banks.",
-    "reconciliation_note": "Full-stack construction inventories and prepared allocator snapshots are fresh for all supported batches. Unattributed constructor allocations are program/alignment bytes, explicitly recorded by inventory; output-history storage is included in generator_state. Trace reservation already excluded from usable capacity. Reduced transient measurements are not full-stack peaks.",
-    "reserves": {
-      "transient_peak": 560168960,
-      "transient_peak_scope": "Measured incremental DRAM peak on reduced real layers 0/5, both B1 and B32; not a full-stack peak. NORMAL graph allocation events reconcile exactly to allocator before/after readings.",
-      "transient_peak_evidence": [
-        "optimized_full_model/reduced_memory_b1.json",
-        "optimized_full_model/reduced_memory_b32.json"
-      ],
-      "warm_prefill_incremental_peak": 558891008,
-      "warm_decode_sampling_incremental_peak_b32": 19922944,
-      "budget_bytes_per_device": 805306368,
-      "budget_basis": "Conservative 768 MiB budget exceeds measured cold two-layer prefill peak plus 31 retained selected-logit tiles (31 * 4194304 bytes). Decoder layers execute sequentially and release transient activations. All-layer persistent buffers and trace allocations are accounted separately by prepared allocator snapshots; this budget is an analytical bound, not a measured full-stack peak.",
-      "stage08_basis": "Retain stage07 conservative transient bound: decoder/activation/KV/output shapes and dtypes are unchanged; only head weights shrink from BFP8 to BFP4. Head output and sampling storage remain BF16. This is an analytical bound, not a new full-stack transient peak."
     },
-    "missing": [],
-    "selected_precision_config": "datatype_sweep/selected_precision_config.json",
-    "kv_cache_dtype": "bfloat8_b",
-    "target_workload_evidence": "datatype_sweep/selected_b32/long_prefix.json"
+    "cache_storage": "10 shared K/V buffer pairs; physical pages32; vLLM owns allocation/reclamation. Groups use disjoint normalized IDs in equal-size shared backing buffers.",
+    "page_table_bytes_per_device": 62914560,
+    "prepared_other_bytes_per_device": 73908736,
+    "prepared_allocated_bytes_per_device": 32248072704,
+    "usable_dram_bytes_per_device": 34044513280,
+    "free_bytes_after_prepare": 1796440576,
+    "trace_region_bytes_per_device": 134217728,
+    "trace_region_note": "Already excluded from allocator usable DRAM; not subtracted twice.",
+    "transient_reserve_bytes_per_device": 1073741824,
+    "transient_reserve_basis": "Conservative planning reserve; endpoint allocator snapshots do not measure transient per-op high-water use. No vLLM profiling performed.",
+    "reconciliation": "6419826688 model +25691422720 KV +62914560 page maps +73908736 prepared state =32248072704 measured",
+    "evidence": [
+      "readiness_vllm/b32_pool36896_tracked/runtime_audit.json",
+      "readiness_vllm/growing_traffic.json",
+      "vllm_integration/pool_plan.json"
+    ],
+    "full_attention_kv_bytes_per_token_per_device": 10880,
+    "sliding_kv_steady_bytes_per_user_per_device": 111411200,
+    "sliding_kv_basis": "5 groups *32 retained blocks/group at1024-token window *696320 bytes/normalized ID; alignment/inflight overhead budgeted separately. Groups share the global normalized ID pool rather than reserve per-user arenas."
   },
-  "stage_checker": "Context and stage checks pass. Agentic memory check retains only the measured, reason-backed tied-weight representation advisory; no critical finding.",
+  "stage_checker": "Context and 18-row serving contract pass. Prefill off/on ratio is deferred by the explicit stage9/10 skill split; serial burst measured. Agentic checker has only justified tied-weight representations and fixed pre-load budget advisories. Logs: readiness_vllm/final_stage_check.log and final_agentic_check.log.",
   "fused_measurements": [
     {
       "layer_type": "sliding_attention",
@@ -903,7 +793,7 @@
     "target_agent_pool_status": "Workload estimate only; full-model pool capacity is outside this layer stage.",
     "peak_total_device_memory_bytes": null
   },
-  "stage_review": "datatype_sweep/stage_review.md",
+  "stage_review": "vllm_integration/stage_review.md",
   "multichip_measurements": [
     {
       "layer_type": "sliding_attention",
@@ -1367,5 +1257,242 @@
     "all_slots_retrieve_label": true,
     "evidence": "datatype_sweep/selected_b32/long_prefix.json",
     "scope": "synthetic multi-turn retention/free-running reply; not a long-context HF score"
-  }
+  },
+  "datatype_sweep_ledger": {
+    "status": "Selected full-stack persistent allocations measured at batches1/8/16/32; target32-agent prefix checked",
+    "unit": "bytes per ASIC; four identical TP shards",
+    "weights": [
+      {
+        "name": "decoder projections and norms",
+        "bytes_per_device": 4411965440,
+        "copies": 1,
+        "evidence": "optimized_multichip_decoder/memory_plan.json"
+      },
+      {
+        "name": "tied embedding and vocabulary projection",
+        "bytes_per_device": 902823936,
+        "copies": 2,
+        "representations": [
+          {
+            "name": "lookup",
+            "bytes_per_device": 704643072,
+            "dtype": "BF16 row-major hidden shard"
+          },
+          {
+            "name": "head",
+            "bytes_per_device": 198180864,
+            "dtype": "BFP4 tiled transposed vocabulary shard"
+          }
+        ],
+        "copy_reason": "BF16 row-major hidden-sharded lookup and BFP4 tiled transposed vocabulary-sharded head cannot alias. Two construction-time representations avoid runtime repacking; selected token-out performance and allocator inventory are measured.",
+        "evidence": "datatype_sweep/selected_default/memory.json; datatype_sweep/selected_default/performance_b1.json"
+      },
+      {
+        "name": "final RMSNorm",
+        "bytes_per_device": 344064,
+        "copies": 1,
+        "dtype": "BF16 tiled32 physical rows"
+      }
+    ],
+    "model_weights_rope_ccl_bytes_per_device": 6419826688,
+    "rope_bytes_per_device": 805306368,
+    "decoder_ccl_and_state_bytes_per_device": 299386880,
+    "full_attention_kv_bytes_per_token_per_device": 10880,
+    "sliding_kv_bytes_per_slot_per_device": 222822400,
+    "sliding_physical_tokens_per_slot": 2048,
+    "pool_tokens": 1048576,
+    "individual_context_tokens": 262144,
+    "capacity_rows": [
+      {
+        "batch": 1,
+        "individual_context": 262144,
+        "full_attention_pool_tokens": 262144,
+        "kv_bytes_per_device": 3074949120,
+        "page_table_bytes_per_device": 15728640,
+        "constructed_bytes_per_device": 9520641024,
+        "prepared_bytes_per_device": 9561502720,
+        "usable_dram_bytes_per_device": 34044513280,
+        "free_bytes_after_prepare": 24483010560,
+        "headroom_after_transient_budget": 23677704192,
+        "largest_contiguous_bytes_free_per_bank": 3057580928,
+        "source": "datatype_sweep/selected_default/memory.json",
+        "inventory": {
+          "decoder_weights": 4411965440,
+          "decoder_state": 299059200,
+          "embedding": 704643072,
+          "lm_head": 198180864,
+          "final_norm": 344064,
+          "rope": 805306368,
+          "kv_cache": 3074949120,
+          "page_tables": 15728640,
+          "sampler": 53248,
+          "prepared_prefill": 1397248,
+          "generator_state": 8521728,
+          "sum_owned_dram_bytes": 9520148992,
+          "allocator_bytes": 9520641024,
+          "unattributed_allocator_bytes": 492032
+        }
+      },
+      {
+        "batch": 32,
+        "individual_context": 262144,
+        "full_attention_pool_tokens": 1048576,
+        "kv_bytes_per_device": 18538823680,
+        "page_table_bytes_per_device": 62914560,
+        "constructed_bytes_per_device": 25031751168,
+        "prepared_bytes_per_device": 25072776704,
+        "usable_dram_bytes_per_device": 34044513280,
+        "free_bytes_after_prepare": 8971736576,
+        "headroom_after_transient_budget": 8166430208,
+        "largest_contiguous_bytes_free_per_bank": 1109410688,
+        "source": "datatype_sweep/selected_b32/memory.json",
+        "inventory": {
+          "decoder_weights": 4411965440,
+          "decoder_state": 299059200,
+          "embedding": 704643072,
+          "lm_head": 198180864,
+          "final_norm": 344064,
+          "rope": 805306368,
+          "kv_cache": 18538823680,
+          "page_tables": 62914560,
+          "sampler": 53248,
+          "prepared_prefill": 1397248,
+          "generator_state": 8522240,
+          "sum_owned_dram_bytes": 25031209984,
+          "allocator_bytes": 25031751168,
+          "unattributed_allocator_bytes": 541184
+        }
+      },
+      {
+        "batch": 16,
+        "individual_context": 262144,
+        "full_attention_pool_tokens": 524288,
+        "kv_bytes_per_device": 9269411840,
+        "page_table_bytes_per_device": 31457280,
+        "constructed_bytes_per_device": 15730881536,
+        "prepared_bytes_per_device": 15772079104,
+        "usable_dram_bytes_per_device": 34044513280,
+        "free_bytes_after_prepare": 18272434176,
+        "headroom_after_transient_budget": 17467127808,
+        "largest_contiguous_bytes_free_per_bank": 2272506752,
+        "source": "datatype_sweep/selected_b16/memory.json",
+        "inventory": {
+          "decoder_weights": 4411965440,
+          "decoder_state": 299059200,
+          "embedding": 704643072,
+          "lm_head": 198180864,
+          "final_norm": 344064,
+          "rope": 805306368,
+          "kv_cache": 9269411840,
+          "page_tables": 31457280,
+          "sampler": 53248,
+          "prepared_prefill": 1397248,
+          "generator_state": 8521728,
+          "sum_owned_dram_bytes": 15730340352,
+          "allocator_bytes": 15730881536,
+          "unattributed_allocator_bytes": 541184
+        }
+      },
+      {
+        "batch": 8,
+        "individual_context": 262144,
+        "full_attention_pool_tokens": 262144,
+        "kv_bytes_per_device": 4634705920,
+        "page_table_bytes_per_device": 15728640,
+        "constructed_bytes_per_device": 11080446976,
+        "prepared_bytes_per_device": 11121624064,
+        "usable_dram_bytes_per_device": 34044513280,
+        "free_bytes_after_prepare": 22922889216,
+        "headroom_after_transient_budget": 22117582848,
+        "largest_contiguous_bytes_free_per_bank": 2860757888,
+        "source": "datatype_sweep/selected_b8/memory.json",
+        "inventory": {
+          "decoder_weights": 4411965440,
+          "decoder_state": 299059200,
+          "embedding": 704643072,
+          "lm_head": 198180864,
+          "final_norm": 344064,
+          "rope": 805306368,
+          "kv_cache": 4634705920,
+          "page_tables": 15728640,
+          "sampler": 53248,
+          "prepared_prefill": 1397248,
+          "generator_state": 8521728,
+          "sum_owned_dram_bytes": 11079905792,
+          "allocator_bytes": 11080446976,
+          "unattributed_allocator_bytes": 541184
+        }
+      }
+    ],
+    "trace_region_bytes_per_device": 134217728,
+    "trace_region_note": "Reserved separately and already excluded from allocator usable DRAM34044513280; never subtract twice.",
+    "page_table_basis": "Each of60 [B,8192] int32 row-major maps reserves ceil(B/8)*8*32768 bytes across8 banks.",
+    "reconciliation_note": "Full-stack construction inventories and prepared allocator snapshots are fresh for all supported batches. Unattributed constructor allocations are program/alignment bytes, explicitly recorded by inventory; output-history storage is included in generator_state. Trace reservation already excluded from usable capacity. Reduced transient measurements are not full-stack peaks.",
+    "reserves": {
+      "transient_peak": 560168960,
+      "transient_peak_scope": "Measured incremental DRAM peak on reduced real layers 0/5, both B1 and B32; not a full-stack peak. NORMAL graph allocation events reconcile exactly to allocator before/after readings.",
+      "transient_peak_evidence": [
+        "optimized_full_model/reduced_memory_b1.json",
+        "optimized_full_model/reduced_memory_b32.json"
+      ],
+      "warm_prefill_incremental_peak": 558891008,
+      "warm_decode_sampling_incremental_peak_b32": 19922944,
+      "budget_bytes_per_device": 805306368,
+      "budget_basis": "Conservative 768 MiB budget exceeds measured cold two-layer prefill peak plus 31 retained selected-logit tiles (31 * 4194304 bytes). Decoder layers execute sequentially and release transient activations. All-layer persistent buffers and trace allocations are accounted separately by prepared allocator snapshots; this budget is an analytical bound, not a measured full-stack peak.",
+      "stage08_basis": "Retain stage07 conservative transient bound: decoder/activation/KV/output shapes and dtypes are unchanged; only head weights shrink from BFP8 to BFP4. Head output and sampling storage remain BF16. This is an analytical bound, not a new full-stack transient peak."
+    },
+    "missing": [],
+    "selected_precision_config": "datatype_sweep/selected_precision_config.json",
+    "kv_cache_dtype": "bfloat8_b",
+    "target_workload_evidence": "datatype_sweep/selected_b32/long_prefix.json"
+  },
+  "serving": {
+    "prefix_caching": true,
+    "hit_fraction_of_ceiling": 0.9946692694646745,
+    "pool_bound": false,
+    "growing_contexts": {
+      "concurrency": 32,
+      "final_context_tokens": 32768,
+      "late_hit_fraction": 0.9965343876604676,
+      "pool_bound": false,
+      "elapsed_seconds": 343.08076105907094,
+      "preemptions": 0.0,
+      "context_schedule": [
+        4096,
+        8192,
+        16384,
+        24576,
+        32768
+      ],
+      "output_tokens_per_turn": 8
+    },
+    "trace_captures_after_warmup": {
+      "decode": 0,
+      "sample": 0,
+      "buffered_sample": 0
+    },
+    "prepared_capture_count": 3,
+    "runtime_retirements": 0,
+    "request_count": 160,
+    "prefilled_tokens": 1056768,
+    "final_context_token_sum": 1048576,
+    "prefilled_to_final_context_ratio": 1.0078125,
+    "final_round_hit_fraction": 0.9971118252450881,
+    "memory_endpoint_bytes_per_device": {
+      "min": 32248072704,
+      "max": 32248072704,
+      "snapshots": 1040
+    },
+    "evidence": "readiness_vllm/growing_traffic.json",
+    "mixed_shape_evidence": "readiness_vllm/mixed_async.json",
+    "allocation_tracking_evidence": "readiness_vllm/b32_pool36896_tracked/mixed_sync.json",
+    "limitation": "Synthetic raw-continuation cache stress; not a chat-quality or headline performance benchmark. Endpoint allocator readings do not measure transient high-water use.",
+    "sampling_steps": {
+      "prefill:host_compatibility": 476,
+      "prefill:device": 44,
+      "decode:device": 287
+    },
+    "regime": "Final full60 B32 async server with token range audit enabled"
+  },
+  "datatype_sweep_stage_review": "datatype_sweep/stage_review.md"
 }

@@ -1,0 +1,166 @@
+{
+  "plugin": {
+    "repository": "tenstorrent/vllm-tt-plugin",
+    "commit": "ca7a18246e4111629ed6cb4a7d1192002749fccf"
+  },
+  "vllm": {
+    "version": "0.31.0"
+  },
+  "documents_read": [
+    "README.md",
+    "docs/install-vllm-tt.sh",
+    "docs/vllm-overrides.txt",
+    "docs/MODEL_INTERFACE.md",
+    "docs/MODEL_SETUP.md",
+    "docs/MODEL_EXECUTION.md",
+    "docs/MODEL_LIFECYCLE.md",
+    "docs/MODEL_CAPABILITIES.md",
+    "docs/DECODE_RELOAD_CONTRACT.md"
+  ],
+  "status": "Validated; independent stage09 review clean-pass. Stock mixed intermediate prefill host compatibility accepted by operator.",
+  "rows": [
+    {
+      "item": "initialize_vllm_model",
+      "kind": "call",
+      "status": "supported",
+      "notes": "Engine subprocess resolves this autoport and selected full60 precision policy.",
+      "evidence": "readiness_vllm/b1/server.log"
+    },
+    {
+      "item": "allocate_kv_cache_per_layer",
+      "kind": "call",
+      "status": "supported",
+      "notes": "vLLM owns shared hybrid cache storage; global64 scheduler blocks expand to physical32 pages; sliding32 maps pass through. No standalone cache allocation in serving.",
+      "evidence": "readiness_vllm/b32_sync/server.log"
+    },
+    {
+      "item": "prefill_forward_continuation",
+      "kind": "call",
+      "status": "supported",
+      "notes": "Full60 natural continuation14cases passed; absent-history/fresh-suffix negative controls fail.",
+      "evidence": "readiness/prefill_resume_check.json"
+    },
+    {
+      "item": "decode_forward_resident_inputs",
+      "kind": "call",
+      "status": "supported",
+      "notes": "Reduced real layers0/5 stale tokens/current positions and page-only refresh preserve resident device state; full mixed allocator growth additionally exercised.",
+      "evidence": "readiness_vllm/adapter_state.json"
+    },
+    {
+      "item": "read_decode_output",
+      "kind": "call",
+      "status": "supported",
+      "notes": "Minimal deferred sampled-token read with explicit event synchronization.",
+      "evidence": "readiness_vllm/adapter_state.json"
+    },
+    {
+      "item": "process_decode_output_host",
+      "kind": "call",
+      "status": "supported",
+      "notes": "Formats deferred host output without feeding it back in steady device decode.",
+      "evidence": "readiness_vllm/adapter_state.json"
+    },
+    {
+      "item": "warmup_model_prefill",
+      "kind": "call",
+      "status": "supported",
+      "notes": "Generator-owned prepare warms served cache/buckets before captures; no request-specific warmup.",
+      "evidence": "readiness_vllm/b32_pool36896_tracked/mixed_sync.json"
+    },
+    {
+      "item": "warmup_model_decode",
+      "kind": "call",
+      "status": "supported",
+      "notes": "Three execution signatures captured once; zero workload recapture/retirement.",
+      "evidence": "readiness_vllm/b32_pool36896_tracked/mixed_sync.json"
+    },
+    {
+      "item": "release_persistent_capture",
+      "kind": "call",
+      "status": "supported",
+      "notes": "Three traces explicitly released at shutdown; device drivers close.",
+      "evidence": "readiness_vllm/adapter_seed_rollover.log"
+    },
+    {
+      "item": "supports_prefix_caching",
+      "kind": "capability",
+      "status": "supported",
+      "notes": "Full60 natural continuation and negative controls pass; served cold/warm, long-resume and shared-prefix gates pass on the same caching-enabled B32 server used for full sampling and qualitative collection.",
+      "declaration": true,
+      "evidence": "readiness/prefill_resume_check.json",
+      "additional_evidence": [
+        "readiness_vllm/prefix_cache_check.json"
+      ]
+    },
+    {
+      "item": "batched_prefill",
+      "kind": "call",
+      "status": "supported",
+      "notes": "The adapter accepts multiple logical rows and delegates each to the canonical serial prefill path. Dense packed/equal-padded prefill is not implemented. Per prefill-features.md Stage split, stage9 records the serial burst reference; stage10 implements batched dense work, exact equality evidence and ratio gate.",
+      "evidence": "readiness_vllm/vllm_prefill_burst_serial_benchmark.json",
+      "dense_batched_implementation": false
+    },
+    {
+      "item": "supports_async_decode",
+      "kind": "capability",
+      "status": "supported",
+      "notes": "Explicit async scheduling full60/B32 matched the explicit --no-async-scheduling reference. Real allocator page growth, concurrent arrivals, row retirement/reorder, seeded repeats and unchanged-table steady decode pass; adapter_state.json separately checks deliberately stale host inputs and uint32 seed boundaries.",
+      "evidence": "readiness_vllm/mixed_async.json",
+      "declaration": true
+    },
+    {
+      "item": "logprobs",
+      "kind": "request_feature",
+      "status": "supported",
+      "notes": "Explicit stock host-sampling compatibility path; canonical full-profile logprobs matrix20cases passed. Diagnostic full-logit readback is confined to requested host features, never headline device-sampled decode.",
+      "evidence": "readiness_vllm/final_full/sampling_tests.log"
+    },
+    {
+      "item": "penalties",
+      "kind": "request_feature",
+      "status": "supported",
+      "notes": "supports_device_penalties=False records the device boundary. Explicit penalty requests use stock host compatibility. Authorized PC03 per-policy mixed/solo/homogeneous assertions pass in the final full profile; pinned HF also disproves the original raw-character assertion.",
+      "evidence": "readiness_vllm/final_full/sampling_tests.log",
+      "additional_evidence": [
+        "readiness_vllm/raw_prompt_hf_controls.json"
+      ]
+    },
+    {
+      "item": "per_request_seeds_and_remaps",
+      "kind": "request_feature",
+      "status": "supported",
+      "notes": "Base seeds normalized modulo2**31, then absolute position and advancement modulo2**32. Boundary steady/remap/reset stochastic outputs and actual device seed counters match.",
+      "evidence": "readiness_vllm/adapter_state.json"
+    },
+    {
+      "item": "checkpoint_default_top_k64",
+      "kind": "request_feature",
+      "status": "not_supported",
+      "notes": "Served defaults top_k32, temperature1.0, top_p0.95; explicit operator decision.",
+      "declaration": "max_device_top_k=32",
+      "reason": "Operator authorized served top_k32 override on 2026-11-05; checkpoint temperature1 and top_p0.95 retained."
+    },
+    {
+      "item": "tt_supported_decode_batch_sizes",
+      "kind": "capability",
+      "status": "supported",
+      "notes": "Each server advertises its prepared bucket [max_num_seqs]. Full60 B8 and B16 smoke plus concurrent benchmark rows pass; B32 mixed/growing traffic passes. Final B1 4096/128/C1 measurement passed. Active rows below the configured bucket are padded; no unprepared bucket is advertised.",
+      "evidence": "readiness_vllm/mixed_async.json",
+      "declaration": "[max_num_seqs]",
+      "additional_evidence": [
+        "readiness_vllm/b8_final/vllm_benchmark.json",
+        "readiness_vllm/b16_final/vllm_benchmark.json",
+        "readiness_vllm/b1_final/vllm_benchmark.json"
+      ]
+    },
+    {
+      "item": "device_sampling_mixed_intermediate_final_prefill",
+      "kind": "call",
+      "status": "not_supported",
+      "record": "doc/vllm_integration/plugin_changes.md",
+      "declaration": "Pinned stock plugin routes intermediate-containing prefill batches to host",
+      "reason": "Explicit operator acceptance 2026-11-05. Compatibility mode must be logged/countable. Decode and all-final eligible prefill remain device sampled; no scheduler/context restriction."
+    }
+  ]
+}

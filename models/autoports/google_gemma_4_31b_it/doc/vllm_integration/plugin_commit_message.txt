@@ -1,0 +1,15 @@
+[test] Validate token contracts and calibrate sampling isolation checks
+
+Check allowed-token membership and usage independently of special-token display.
+Use token IDs for first-token comparisons, compare mixed frequency policies with
+solo/homogeneous controls, and keep isolation checks within stable RNG routes.
+Calibrate top-k cohorts before drawing from skewed distributions while preserving
+candidate membership and the original diversity thresholds and request recipes.
+
+Only shared tests change; plugin runtime, interfaces and defaults stay pinned.
+Validation: pinned hooks; 2303 host tests passed, 16 skipped; affected live tests
+passed. Full live sampling: 76 passed, 75 skipped.
+Independent stage review: clean-pass.
+
+Co-authored-by: Codex
+Signed-off-by: Marina Vasiljevic <197624760+mvasiljevicTT@users.noreply.github.com>

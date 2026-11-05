@@ -1,0 +1,216 @@
+diff --git a/tests/tt/test_seeding_and_variety.py b/tests/tt/test_seeding_and_variety.py
+--- a/tests/tt/test_seeding_and_variety.py
++++ b/tests/tt/test_seeding_and_variety.py
+@@ -1,5 +1,6 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
++import math
+ import random
+ 
+ import pytest
+@@ -19,6 +20,59 @@
+     ids = [response.choices[0].token_ids for response in responses]
+     assert all(ids), "every request must return generated token IDs"
+     return [tokens[0] for tokens in ids]
++
++
++def _topk_first_token_plan(top_logprobs, sampled_rows):
++    """Fix two cohort sizes before draws, with a family error bound of 1e-6."""
++    assert sampled_rows > 0
++    assert all(key.startswith("token_id:") for key in top_logprobs)
++    ranked = sorted(
++        ((int(key.split(":", 1)[1]), value) for key, value in top_logprobs.items()),
++        key=lambda item: item[1],
++        reverse=True,
++    )
++    assert len(ranked) >= 20, "Need top20 reference to resolve top10 cutoff ties"
++    cutoff = ranked[9][1]
++    assert math.isfinite(cutoff) and ranked[19][1] < cutoff, (
++        "Top10 support cannot be resolved within top20 reference"
++    )
++    support = {token for token, value in ranked if value >= cutoff}
++    weights = [math.exp((value - ranked[0][1]) / 2.0) for _, value in ranked[:10]]
++    pmax = 1.0 / sum(weights)
++    assert 0 < pmax < 1, "Reference is too concentrated to calibrate diversity"
++    # sum(p_i**N) <= pmax**(N-1). Pair match probability sum(p_i**2)
++    # is at most pmax. Union-bound two constant cohorts and <2 mismatches.
++    for waves in range(1, 1024 // sampled_rows + 1):
++        count = waves * sampled_rows
++        bound = (
++            2 * pmax ** (count - 1)
++            + pmax**count
++            + count * (1 - pmax) * pmax ** (count - 1)
++        )
++        if count >= 2 and bound <= 1e-6 / 3:
++            return dict(
++                support=support,
++                waves=waves,
++                count=count,
++                pmax=pmax,
++                failure_bound=bound,
++            )
++    raise AssertionError(
++        "Cannot calibrate first-token diversity within 1024 draws per cohort"
++    )
++
++
++def _assert_topk_first_token_cohorts(cohorts, support):
++    assert len(cohorts) == 2 and len(cohorts[0]) == len(cohorts[1])
++    for ids in cohorts:
++        assert ids and set(ids) <= support, "Sampled first token outside top10 support"
++        assert_varied(ids, 2, "Calibrated top-k cohort must contain two first tokens")
++    assert_pairwise_varied(
++        cohorts[0],
++        cohorts[1],
++        2,
++        "Calibrated top-k cohorts must differ at two positions",
++    )
+ 
+ 
+ class TestSeedingAndVariety:
+@@ -354,12 +408,45 @@
+ 
+         for config in joint_configs:
+             config.return_token_ids = True
+-        responses_1 = run_concurrent_batch(
+-            tt_server, tt_model_name, joint_configs, return_full_response=True
+-        )
+-        responses_2 = run_concurrent_batch(
+-            tt_server, tt_model_name, joint_configs, return_full_response=True
+-        )
++        # The explicit diagnostic is unfiltered at temperature1. Upstream
++        # raw logprobs differ from logits only by a common additive constant;
++        # zero bias keeps this reference on host without changing that vector.
++        reference = run_concurrent_batch(
++            tt_server,
++            tt_model_name,
++            [
++                RequestConfig(
++                    prompt=prompt,
++                    max_tokens=1,
++                    temperature=1.0,
++                    top_k=-1,
++                    top_p=1.0,
++                    logprobs=20,
++                    return_tokens_as_token_ids=True,
++                    logit_bias={0: 0.0},
++                )
++            ],
++            return_full_response=True,
++        )[0]
++        plan = _topk_first_token_plan(
++            reference.choices[0].logprobs.top_logprobs[0], batch_size - num_greedy
++        )
++        print(f"Predeclared top-k cohorts: {plan}")
++        # Sample counts depend only on reference logits, never on observations.
++        # Every wave keeps the original batch shape, prompt and sampling recipe.
++        cohorts, first_waves = [], []
++        for _ in range(2):
++            ids = []
++            for wave in range(plan["waves"]):
++                responses = run_concurrent_batch(
++                    tt_server, tt_model_name, joint_configs, return_full_response=True
++                )
++                if wave == 0:
++                    first_waves.append(responses)
++                ids.extend(_first_generated_token_ids(responses[num_greedy:]))
++            cohorts.append(ids)
++        _assert_topk_first_token_cohorts(cohorts, plan["support"])
++        responses_1, responses_2 = first_waves
+         results_1 = [response.choices[0].text for response in responses_1]
+         results_2 = [response.choices[0].text for response in responses_2]
+ 
+@@ -374,12 +461,6 @@
+             )
+             assert_varied(
+                 non_greedy_results, 2, "With top_k=10, outputs should vary in batch."
+-            )
+-
+-            # First token (prefill)
+-            prefill_results = _first_generated_token_ids(responses[num_greedy:])
+-            assert_varied(
+-                prefill_results, 2, "With top_k=10, first tokens should vary in batch."
+             )
+ 
+         # Between batches:
+@@ -400,16 +481,6 @@
+             "Non-greedy requests should produce different outputs when re-ran.",
+         )
+ 
+-        # First token (prefill)
+-        prefill_results_1 = _first_generated_token_ids(responses_1[num_greedy:])
+-        prefill_results_2 = _first_generated_token_ids(responses_2[num_greedy:])
+-        assert_pairwise_varied(
+-            prefill_results_1,
+-            prefill_results_2,
+-            2,
+-            "With top_k=10, first tokens should vary when re-ran.",
+-        )
+-
+     def test_top1_is_greedy(self, tt_server, tt_model_name):
+         prompt = "Number: "
+         greedy_config = RequestConfig(prompt=prompt, max_tokens=10, temperature=0)
+diff --git a/tests/test_topk_cohort_contract.py b/tests/test_topk_cohort_contract.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_topk_cohort_contract.py
+@@ -0,0 +1,59 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
++"""Predeclared top-k cohorts preserve support and stochasticity checks."""
++
++import math
++
++import pytest
++
++from tests.tt.test_seeding_and_variety import (
++    _assert_topk_first_token_cohorts,
++    _topk_first_token_plan,
++)
++
++
++def reference(pmax=0.8):
++    probabilities = [pmax] + [(1 - pmax) / 9] * 9
++    return {
++        f"token_id:{i}": value
++        for i, value in enumerate(
++            [2 * math.log(p) for p in probabilities] + [-100.0] * 10
++        )
++    }
++
++
++def test_skewed_distribution_predeclares_more_than_ten_draws():
++    plan = _topk_first_token_plan(reference(), 10)
++    assert plan["count"] > 10
++    assert plan["count"] == 10 * plan["waves"]
++    assert plan["failure_bound"] <= 1e-6 / 3
++    assert _topk_first_token_plan(reference(), 10) == plan
++    assert plan["support"] == set(range(10))
++
++
++def test_cutoff_ties_are_included_or_fail_closed():
++    values = reference()
++    values["token_id:10"] = values["token_id:9"]
++    assert _topk_first_token_plan(values, 10)["support"] == set(range(11))
++    for i in range(10, 20):
++        values[f"token_id:{i}"] = values["token_id:9"]
++    with pytest.raises(AssertionError, match="cannot be resolved"):
++        _topk_first_token_plan(values, 10)
++
++
++def test_uncalibratable_distribution_fails_instead_of_skipping():
++    with pytest.raises(AssertionError, match="Cannot calibrate"):
++        _topk_first_token_plan(reference(0.999999), 10)
++
++
++def test_invalid_cohorts_fail_without_retry():
++    support = {0, 1}
++    _assert_topk_first_token_cohorts([[0, 1, 0, 1], [1, 0, 0, 1]], support)
++    for cohorts in (
++        [[0, 1, 0, 2], [1, 0, 0, 1]],
++        [[0] * 4, [1] * 4],
++        [[0, 1, 0, 1], [0, 1, 0, 1]],
++        [[0, 1, 0, 1], [1, 1, 0, 1]],
++    ):
++        with pytest.raises(AssertionError):
++            _assert_topk_first_token_cohorts(cohorts, support)

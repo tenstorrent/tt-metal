@@ -1,0 +1,15 @@
+{
+  "stage": "09-vllm",
+  "status": "resolved",
+  "blocker": "PC-01",
+  "record": "plugin_changes.md",
+  "requested_authorization": "Add opt-in supports_masked_prefill_sampling capability and prefill_sample_mask keyword semantics described in PC-01.",
+  "implemented": false,
+  "ordinary_stage_work_remaining": true,
+  "sampling_default_decision": "authorized top_k32; temperature1 and top_p0.95 unchanged",
+  "hardware_jobs_started": 0,
+  "stage_completion_commit": null,
+  "consecutive_authorization_blocked_turns": 0,
+  "audit": "Third consecutive occurrence: PC-01 remains proposed and unauthorized; pinned plugin worktree unchanged and unconditional mixed-prefill host routing rechecked. No authorization inferred from automatic continuation.",
+  "resolution": "Operator decision 2026-11-05: PC-01 rejected; stock mixed-chunk host sampling accepted and must be counted. Served top_k32 override authorized."
+}
