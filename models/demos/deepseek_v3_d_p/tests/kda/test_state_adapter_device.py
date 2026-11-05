@@ -37,7 +37,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     kda_window,
     populate_kv_chunk_address_table_kda,
 )
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import all_zero_bits, assert_bit_identical
 
 pytestmark = [
     run_for_blackhole(),
@@ -297,15 +297,20 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
     )
     print(f"host {socket.gethostname()}: table check ok for fabric node {int(fid.mesh_id)}:{int(fid.chip_id)}")
 
-    # 6. Zeroing a slot zeroes every layer of that slot and nothing else.
-    others = {(slot, layer): imported(slot, layer) for slot in range(1, num_slots) for layer in layer_ids}
-    slabs.zero_slot(0)
+    # 6. A request-head import (zero_fill_at_zero reading 0, as a chunk start of 0 does) loads zeros into both
+    #    carries of every layer, over a carry that held a pattern, and reads the slot without writing any slab byte.
+    slabs_before = [*_shards(slabs.recurrent, mesh_device).values(), *_shards(slabs.convolution, mesh_device).values()]
+    slot_tt, head_tt = device_scalar(mesh_device, 0), device_scalar(mesh_device, 0)
     for layer in layer_ids:
-        for index, got in enumerate(imported(0, layer)):
-            assert torch.count_nonzero(got) == 0, f"zero_slot(0) left nonzero bytes in L{layer} dev{index}"
-    for (slot, layer), want in others.items():
-        for index, (w, g) in enumerate(zip(want, imported(slot, layer))):
-            assert_bit_identical(w, g, name=f"zero_slot(0) touched slot{slot} L{layer} dev{index}")
+        carry = natives[(0, layer)]
+        slabs.import_layer(carry, slot_tt, layer, zero_fill_at_zero=head_tt)
+        for index, got in enumerate(host(carry)):
+            assert all_zero_bits(got), f"zero_fill_at_zero import left bytes in L{layer} dev{index}"
+    slabs_after = [*_shards(slabs.recurrent, mesh_device).values(), *_shards(slabs.convolution, mesh_device).values()]
+    for index, (want, got) in enumerate(zip(slabs_before, slabs_after, strict=True)):
+        assert_bit_identical(want, got, name=f"zero_fill_at_zero import wrote slab shard {index}")
+    for tensor in (slot_tt, head_tt):
+        ttnn.deallocate(tensor)
 
     for state in natives.values():
         ttnn.deallocate(state.recurrent)
