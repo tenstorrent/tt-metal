@@ -30,6 +30,15 @@ def tokpar_enabled():
     return os.environ.get("QWEN36_TOKPAR", "0") == "1"
 
 
+def tokpar_out_enabled():
+    """QWEN36_TOKPAR_OUT=1 (with QWEN36_TOKPAR=1): the mixer out-projection (GDN out_proj / attention o_proj) also runs
+    token-parallel with the full weight: the gated pre-projection activation is all-to-all'ed instead of the AGMM /
+    matmul + reduce-scatter."""
+    import os
+
+    return os.environ.get("QWEN36_TOKPAR_OUT", "0") == "1"
+
+
 def tokpar_a2a(x, to_tokens):
     """Hidden-sharded [1,1,S,dim/tp] <-> token-sharded [1,1,S/tp,dim] over the (1, tp) TP axis (all_to_all)."""
     in_dim, out_dim = (3, 2) if to_tokens else (2, 3)
@@ -241,6 +250,18 @@ class Qwen36DecoderLayer:
         self._tokpar = None
         if tokpar_enabled() and self.num_devices > 1 and not args.is_moe_layer(layer_num):
             self._tokpar = _load_tokpar_mlp(mesh_device, mlp_state, mlp_cache)
+            if tokpar_out_enabled():
+                key = "self_attn.o_proj.weight" if self.is_full_attention else "linear_attn.out_proj.weight"
+                self._tokpar["wo"] = ttnn.as_tensor(
+                    state_dict[f"layers.{layer_num}.{key}"],
+                    preprocess=lambda t: t.T.contiguous(),
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    cache_file_name=(mlp_cache / f"{key}.tokpar_rep") if mlp_cache else None,
+                )
 
     def _make_norm(
         self,
@@ -343,13 +364,22 @@ class Qwen36DecoderLayer:
         all-to-all'ed to [1,1,S,dim/tp], its hidden-sharded output all-to-all'ed back to rows. Norms are local (no
         distributed-norm CCL); the MLP is token-parallel with the full weights (no all-gather / reduce-scatter)."""
         pg = prefill_group
+        out_tp = "wo" in self._tokpar
         xn = self._tokpar_norm(x, self.attention_norm)
         xh = tokpar_a2a(xn, to_tokens=False)
         ttnn.deallocate(xn)
         if self.is_full_attention:
             if pg_batched_attn(pg):
                 a = self.attention.forward_prefill_paged_group(
-                    xh, pg["cos_cat"], pg["sin_cat"], pg["Bg"], pg["Tb"], pg["full_pts"], pg["chunk_pts"], pg["csi"]
+                    xh,
+                    pg["cos_cat"],
+                    pg["sin_cat"],
+                    pg["Bg"],
+                    pg["Tb"],
+                    pg["full_pts"],
+                    pg["chunk_pts"],
+                    pg["csi"],
+                    return_gated=out_tp,
                 )
             else:
                 raise NotImplementedError("forward_tokpar needs the batched group attention (cos_cat / sin_cat)")
@@ -362,11 +392,25 @@ class Qwen36DecoderLayer:
                 pg["gdn_scratch"][id(self.attention)],
                 chunk_size=chunk_size,
                 init=(pg.get("gdn_init") or {}).get(id(self.attention)),
+                return_gated=out_tp,
             )
         ttnn.deallocate(xh)
         a = ttnn.reshape(a, (1, 1, a.shape[-2], a.shape[-1]))
         at = tokpar_a2a(a, to_tokens=True)
         ttnn.deallocate(a)
+        if out_tp:
+            # token-parallel out-projection with the full weight (bf8 activation, 12x10 grid, L1 accumulation)
+            M, K = at.shape[-2], at.shape[-1]
+            a8 = ttnn.typecast(at, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(at)
+            at = ttnn.linear(
+                a8,
+                self._tokpar["wo"],
+                compute_kernel_config=tpc.COMPUTE_HIFI2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=_tokpar_pc(M, K, self._tokpar["wo"].shape[-1], 8),
+            )
+            ttnn.deallocate(a8)
         h = ttnn.add(x, at, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(at)
         ff = self._tokpar_norm(h, self.ffn_norm)

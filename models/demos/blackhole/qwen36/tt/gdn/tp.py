@@ -2207,7 +2207,7 @@ class TPGatedDeltaNet:
             return out, captured[0], captured[1]
         return out
 
-    def _prefill_out_tail(self, o, z, M, o_head_major, B=1):
+    def _prefill_out_tail(self, o, z, M, o_head_major, B=1, return_gated=False):
         """Prefill out-projection tail on M token rows: per-head gated RMSNorm, SiLU(z) gate, row-parallel
         out-proj (column-parallel AGMM / fused MMRS / matmul + all-reduce) -> [1,1,M,dim(/tp)].
 
@@ -2231,6 +2231,12 @@ class TPGatedDeltaNet:
             ttnn.deallocate(o)
             out_f = ttnn.reshape(out_n, (1, M, self.value_dim_tp), memory_config=_L1)
             ttnn.deallocate(out_n)
+        if return_gated:
+            # token-parallel out-proj (layer.forward_tokpar): the caller all-to-alls the gated [1, M, value_dim_tp]
+            gated = _silu_mul(out_f, z, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+            ttnn.deallocate(out_f)
+            ttnn.deallocate(z)
+            return gated
         if self._out_colpar_prefill:
             # Column-parallel out-proj: the gate multiply emits the AGMM input directly as bf16 (the
             # only numerics change vs the fp32 MMRS arm: activation quantized to bf16 before the
@@ -2365,7 +2371,7 @@ class TPGatedDeltaNet:
             ttnn.deallocate(qkv_d)
         return outs[0], outs[1], outs[2], new_state
 
-    def forward_prefill_group(self, x, Bg, Tb, masks, scratch, chunk_size=128, init=None):
+    def forward_prefill_group(self, x, Bg, Tb, masks, scratch, chunk_size=128, init=None, return_gated=False):
         """Prefill Bg users (each right-padded to the bucket Tb, from scratch) in ONE pass.
 
         x:       [1, 1, Bg*Tb, dim/tp] K-sharded like forward_prefill's (row u*Tb + t = user u, token t).
@@ -2444,7 +2450,7 @@ class TPGatedDeltaNet:
             ttnn.copy(src, scratch.conv[m])
         ttnn.deallocate(conv_new_state)
 
-        return self._prefill_out_tail(o, z, M, o_head_major=self._gdn_fuse_out, B=Bg)
+        return self._prefill_out_tail(o, z, M, o_head_major=self._gdn_fuse_out, B=Bg, return_gated=return_gated)
 
     def forward_prefill_collect(self, x, chunk_size=128, valid_len=None):
         """Per-user prefill that stashes this user's B=1 state for later assembly.
