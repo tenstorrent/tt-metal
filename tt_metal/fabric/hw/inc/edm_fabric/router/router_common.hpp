@@ -240,16 +240,25 @@ struct CommandBuffers {
     static constexpr const auto& forward_data = receiver_channel_forwarding_data_cmd_buf_ids;     // receiver, by VC
     static constexpr const auto& forward_credits = receiver_channel_forwarding_sync_cmd_buf_ids;  // receiver, by VC
 
-    // Which kinds keep presets: none on one ERISC (both roles' commands share its buffers) or with
-    // DPRINT or the watcher (their traffic shares them); forwards also not where every path uses one NoC, or in UDM
-    // mode (the relay's stateless forwards share the data buffer).
-    static constexpr bool presets =
+    // Which kinds keep presets:
+    //   - two ERISCs: every kind but atomics (`presets`);
+    //   - one ERISC on Blackhole: none (both roles' commands share its buffers: every path is on NoC 1);
+    //   - one ERISC on Wormhole: forwards only (`one_erisc_forward_presets`), whose two buffers carry nothing else
+    //     there: local writes are on the write buffer, worker credits on the other NoC, inline writes on atomics. Not
+    //     in Tensix mux mode, whose downstreams are the muxes (the preset forms take a downstream router's credit
+    //     register);
+    //   - none with DPRINT or the watcher (their traffic shares them).
+    // Forwards also not where every path uses one NoC, or in UDM mode (the relay's stateless forwards share the data
+    // buffer).
 #if !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
-        NUM_ACTIVE_ERISCS > 1;
+    static constexpr bool presets = NUM_ACTIVE_ERISCS > 1;
+    static constexpr bool one_erisc_forward_presets = is_wormhole_arch && NUM_ACTIVE_ERISCS == 1 && !tensix_mux_mode;
 #else
-        false;
+    static constexpr bool presets = false;
+    static constexpr bool one_erisc_forward_presets = false;
 #endif
-    static constexpr bool forward_presets = presets && !FORCE_ALL_PATHS_TO_USE_SAME_NOC && !udm_mode;
+    static constexpr bool forward_presets =
+        (presets || one_erisc_forward_presets) && !FORCE_ALL_PATHS_TO_USE_SAME_NOC && !udm_mode;
 
     // The kinds of command, one bit each; each worker channel's credits are a kind of their own (WORKER_CREDITS << CH).
     enum Kind : uint32_t {
@@ -283,8 +292,8 @@ struct CommandBuffers {
         return kinds;
     }();
     // The kinds kept preset here.
-    static constexpr uint32_t preset_kinds =
-        presets ? ~(ATOMICS | (forward_presets ? 0u : FORWARD_DATA | FORWARD_CREDITS)) : 0u;
+    static constexpr uint32_t preset_kinds = (presets ? ~(ATOMICS | FORWARD_DATA | FORWARD_CREDITS) : 0u) |
+                                             (forward_presets ? FORWARD_DATA | FORWARD_CREDITS : 0u);
 
     // The VCs forwarded on (any_forwards_on_vc) whose forwards use VC's two forward buffers, one bit each (VC's own bit
     // where it is forwarded on).
