@@ -659,14 +659,14 @@ constexpr std::uint32_t get_dest_max_tiles()
 
 /**
  * @brief Runtime variant of get_dest_max_tiles for assert sites. Reads dest
- *        accumulation mode from ALU_ACC_CTRL_Fp32_enabled rather than a
+ *        accumulation mode from llk_assert_fp32_dest_acc_en rather than a
  *        template parameter. Only ever evaluated inside LLK_ASSERT (compiled
  *        out in production via sizeof).
  */
 template <DstSync SYNC_MODE, DstTileShape TILE_SHAPE>
 inline std::uint32_t get_dest_max_tiles_rt()
 {
-    const bool accum_mode = (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK) != 0;
+    const bool accum_mode = llk_assert_fp32_dest_acc_en;
     const std::uint32_t dest_register_size =
         SYNC_MODE == DstSync::SyncHalf ? (accum_mode ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
                                        : (accum_mode ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);

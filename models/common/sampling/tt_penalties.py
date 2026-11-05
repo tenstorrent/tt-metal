@@ -29,29 +29,12 @@ class PenaltyContext:
     sub_core_grids: Any | None = None
 
 
-def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> ttnn.Tensor:
+def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext], keep_input: bool = False) -> ttnn.Tensor:
     if context is None:
         return logits
 
     op_kwargs = {"sub_core_grids": context.sub_core_grids} if context.sub_core_grids else {}
-    # presence
-    presence_term = ttnn.multiply(
-        ttnn.typecast(context.output_mask, ttnn.bfloat16, **op_kwargs), context.presence_penalties, **op_kwargs
-    )
-    presence_term_bf16 = ttnn.typecast(presence_term, ttnn.bfloat16, **op_kwargs)
-    logits = ttnn.subtract(logits, presence_term_bf16, output_tensor=logits, **op_kwargs)
-    presence_term_bf16.deallocate()
-
-    # frequency
-    output_counts_bf16 = ttnn.typecast(context.output_counts, ttnn.bfloat16, **op_kwargs)
-
-    freq_term = ttnn.multiply(output_counts_bf16, context.frequency_penalties, **op_kwargs)
-
-    freq_term_bf16 = ttnn.typecast(freq_term, ttnn.bfloat16, **op_kwargs)
-    logits = ttnn.subtract(logits, freq_term_bf16, output_tensor=logits, **op_kwargs)
-    freq_term_bf16.deallocate()
-
-    # repetition
+    # repetition, applied before presence and frequency as in vLLM's apply_penalties
 
     # If token appears in prompt or output, apply, otherwise use 1.0 for no-op.
 
@@ -69,8 +52,25 @@ def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> t
     logits_gt1.deallocate()
     penalties.deallocate()
     inverse_penalties.deallocate()
-    logits = ttnn.multiply(logits, scaling, output_tensor=logits, **op_kwargs)
+    logits = ttnn.multiply(logits, scaling, output_tensor=None if keep_input else logits, **op_kwargs)
     scaling.deallocate()
+
+    # presence
+    presence_term = ttnn.multiply(
+        ttnn.typecast(context.output_mask, ttnn.bfloat16, **op_kwargs), context.presence_penalties, **op_kwargs
+    )
+    presence_term_bf16 = ttnn.typecast(presence_term, ttnn.bfloat16, **op_kwargs)
+    logits = ttnn.subtract(logits, presence_term_bf16, output_tensor=logits, **op_kwargs)
+    presence_term_bf16.deallocate()
+
+    # frequency
+    output_counts_bf16 = ttnn.typecast(context.output_counts, ttnn.bfloat16, **op_kwargs)
+
+    freq_term = ttnn.multiply(output_counts_bf16, context.frequency_penalties, **op_kwargs)
+
+    freq_term_bf16 = ttnn.typecast(freq_term, ttnn.bfloat16, **op_kwargs)
+    logits = ttnn.subtract(logits, freq_term_bf16, output_tensor=logits, **op_kwargs)
+    freq_term_bf16.deallocate()
 
     return logits
 
@@ -413,7 +413,7 @@ class TTPenalties(LightweightModule):
         mask = ttnn.gt(counts_sliced, 0, output_tensor=mask, **self._op_kwargs)
         return counts, mask
 
-    def apply(self, tt_logits: ttnn.Tensor) -> ttnn.Tensor:
+    def apply(self, tt_logits: ttnn.Tensor, keep_input: bool = False) -> ttnn.Tensor:
         if tt_logits is None:
             return tt_logits
         context = PenaltyContext(
@@ -429,5 +429,8 @@ class TTPenalties(LightweightModule):
         )
         original_shape = tt_logits.shape
         reshaped = ttnn.reshape(tt_logits, (-1, original_shape[-1]))
-        apply_penalties(reshaped, context)
+        if reshaped.dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+            reshaped = ttnn.typecast(reshaped, ttnn.bfloat16, **self._op_kwargs)
+            keep_input = False
+        reshaped = apply_penalties(reshaped, context, keep_input=keep_input)
         return ttnn.reshape(reshaped, original_shape)

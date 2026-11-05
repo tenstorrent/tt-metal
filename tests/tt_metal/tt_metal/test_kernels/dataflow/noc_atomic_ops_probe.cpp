@@ -14,6 +14,33 @@
 // Sends one raw NoC atomic, built the same way as noc_fast_atomic_increment but with a
 // caller-supplied at_len. It never asks for a return value, so the tests check results
 // by reading the target word back from L1.
+#if defined(NOC_API_V1)
+// V1 issues through the NIU command buffers, which every DM core shares: take the buffer's lock
+// and count the response in the shared counter that noc_async_atomic_barrier compares against
+// NIU_MST_ATOMIC_RESP_RECEIVED.
+inline __attribute__((always_inline)) void noc_raw_atomic(uint64_t noc_addr, uint64_t at_len, uint32_t operand) {
+    const uint32_t noc = noc_index;
+    const uint32_t cmd_buf = write_at_cmd_buf;
+    NocCmdBufLock lock(cmd_buf);
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(noc_addr & 0xFFFFFFFF));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(noc_addr >> 32) & NOC_PCIE_MASK);
+    NOC_CMD_BUF_WRITE_REG(
+        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    NOC_CMD_BUF_WRITE_REG(
+        noc,
+        cmd_buf,
+        NOC_CTRL_LO,
+        NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) | NOC_CMD_RESP_MARKED | NOC_CMD_AT |
+            NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, (uint32_t)at_len);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, operand);
+    __atomic_fetch_add(&noc_nonposted_atomics_acked[noc], 1, __ATOMIC_RELAXED);
+    noc_io_fence();
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, 0x1);
+}
+#else
+// V2/V3 issue through this hart's own RoCC simple command buffer.
 inline __attribute__((always_inline)) void noc_raw_atomic(uint64_t noc_addr, uint64_t at_len, uint32_t operand) {
     const uint32_t noc = noc_index;
     const uint64_t misc = CMD_BUF_MISC_ATOMIC_TRANS | CMD_BUF_MISC_SRC_INCLUDE;
@@ -35,6 +62,7 @@ inline __attribute__((always_inline)) void noc_raw_atomic(uint64_t noc_addr, uin
     // context save/restore sees a consistent value.
     noc_nonposted_atomics_acked[noc] += 1;
 }
+#endif  // NOC_API_V1
 #endif
 
 #if defined(PROBE_CAS_RET) && defined(ARCH_QUASAR)
