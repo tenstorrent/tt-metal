@@ -25,6 +25,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/work_split.hpp>
 
@@ -476,20 +478,25 @@ int main(int argc, char* argv[]) {
             Program program{};
             constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
 
-            distributed::DeviceLocalBufferConfig dram_config{
-                .page_size = single_tile_size,
-                .buffer_type = BufferType::DRAM};
+            // Row-major DRAM tensors with one tile's worth of elements per row: each row is one page,
+            // so the page size is one tile.
+            auto make_dram_tensor_spec = [](uint32_t num_tiles) {
+                return TensorSpec(
+                    Shape({num_tiles, TILE_HEIGHT * TILE_WIDTH}),
+                    TensorLayout(
+                        DataType::BFLOAT16,
+                        PageConfig(Layout::ROW_MAJOR),
+                        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+            };
 
-            // Sizes in 64 bits: a 32-bit product would wrap for operands of 4 GiB or more.
-            const DeviceAddr tile_bytes = single_tile_size;
-            auto src0_dram = distributed::MeshBuffer::create(
-                distributed::ReplicatedBufferConfig{.size = tile_bytes * Mt * Kt}, dram_config, mesh_device.get());
-
-            auto src1_dram = distributed::MeshBuffer::create(
-                distributed::ReplicatedBufferConfig{.size = tile_bytes * Kt * Nt}, dram_config, mesh_device.get());
-
-            auto dst_dram = distributed::MeshBuffer::create(
-                distributed::ReplicatedBufferConfig{.size = tile_bytes * Mt * Nt}, dram_config, mesh_device.get());
+            // Shapes count tiles; the tensor computes its byte size in 64 bits, so operands of 4 GiB or
+            // more do not wrap.
+            const TensorSpec src0_spec = make_dram_tensor_spec(Mt * Kt);
+            const TensorSpec src1_spec = make_dram_tensor_spec(Kt * Nt);
+            const TensorSpec dst_spec = make_dram_tensor_spec(Mt * Nt);
+            MeshTensor src0_dram = MeshTensor::allocate_on_device(*mesh_device, src0_spec);
+            MeshTensor src1_dram = MeshTensor::allocate_on_device(*mesh_device, src1_spec);
+            MeshTensor dst_dram = MeshTensor::allocate_on_device(*mesh_device, dst_spec);
 
             // Each CB holds kCbBufferDepth slices of A or B, or output blocks.
             auto make_cb_config = [&](CBIndex cb_index, uint32_t tiles_per_slot) {
@@ -525,8 +532,8 @@ int main(int argc, char* argv[]) {
             }
 
             std::vector<uint32_t> reader_ct_args;
-            TensorAccessorArgs(*src0_dram).append_to(reader_ct_args);
-            TensorAccessorArgs(*src1_dram).append_to(reader_ct_args);
+            TensorAccessorArgs(src0_dram).append_to(reader_ct_args);
+            TensorAccessorArgs(src1_dram).append_to(reader_ct_args);
 
             auto reader_id = tt_metal::CreateKernel(
                 program,
@@ -539,7 +546,7 @@ int main(int argc, char* argv[]) {
                     .defines = reader_defines});
 
             std::vector<uint32_t> writer_ct_args;
-            TensorAccessorArgs(*dst_dram).append_to(writer_ct_args);
+            TensorAccessorArgs(dst_dram).append_to(writer_ct_args);
 
             auto writer_id = tt_metal::CreateKernel(
                 program,
@@ -580,8 +587,8 @@ int main(int argc, char* argv[]) {
                             program,
                             reader_id,
                             core,
-                            {src0_dram->address(),
-                             src1_dram->address(),
+                            {src0_dram.address(),
+                             src1_dram.address(),
                              Kt,
                              Nt,
                              effective_offset,
@@ -591,9 +598,17 @@ int main(int argc, char* argv[]) {
                              total_output_blocks});
 
                         tt_metal::SetRuntimeArgs(
-                            program, writer_id, core,
-                            {dst_dram->address(), work_per_core, effective_offset, num_iterations,
-                             write_repeats, blocks_per_row, Nt, total_output_blocks});
+                            program,
+                            writer_id,
+                            core,
+                            {dst_dram.address(),
+                             work_per_core,
+                             effective_offset,
+                             num_iterations,
+                             write_repeats,
+                             blocks_per_row,
+                             Nt,
+                             total_output_blocks});
 
                         tt_metal::SetRuntimeArgs(
                             program, compute_id, core,
@@ -607,11 +622,17 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            distributed::EnqueueWriteMeshBuffer(cq, src0_dram, src0_vec, /*blocking=*/false);
-            distributed::EnqueueWriteMeshBuffer(cq, src1_dram, src1_vec, /*blocking=*/false);
+            // The host tensors must stay alive until the uploads complete.
+            // On hosts that support memory pinning, an upload larger than 32 MiB takes a pinned-memory path
+            // that blocks until the upload is done, so in legacy mode such an upload finishes before the
+            // clock starts and is not part of the measured interval.
+            HostTensor src0_host = HostTensor::from_vector(src0_vec, src0_spec);
+            HostTensor src1_host = HostTensor::from_vector(src1_vec, src1_spec);
+            cq.enqueue_write_tensor(src0_host, src0_dram);
+            cq.enqueue_write_tensor(src1_host, src1_dram);
             if (!legacy_mode) {
                 // Updated mode waits for the uploads here, so none of them lands in the measured
-                // interval. Legacy mode, like the published measurements, does not wait.
+                // interval. Legacy mode, like the published measurements, does not wait here.
                 distributed::Finish(cq);
             }
 
@@ -655,11 +676,12 @@ int main(int argc, char* argv[]) {
                 t_start = std::chrono::high_resolution_clock::now();
             }
 
-            std::vector<bfloat16> result_vec(Mt * Nt * TILE_HW);
-            distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram, /*blocking=*/true);
+            HostTensor result_host = cq.enqueue_read_tensor(dst_dram, /*blocking=*/true);
 
             auto t_end = std::chrono::high_resolution_clock::now();
             auto sys_end = std::chrono::system_clock::now();
+
+            std::vector<bfloat16> result_vec = result_host.to_vector<bfloat16>();
 
             // Cheap correctness signal. The workload never verifies its output, so with the
             // blocked path this is the only way to notice a tile-indexing mistake: the inputs
