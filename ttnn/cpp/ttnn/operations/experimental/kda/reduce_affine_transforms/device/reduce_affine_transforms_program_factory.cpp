@@ -5,7 +5,6 @@
 
 #include "ttnn/operations/experimental/kda/reduce_affine_transforms/device/reduce_affine_transforms_program_factory.hpp"
 
-#include <algorithm>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -19,6 +18,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
+#include "ttnn/operations/experimental/kda/reduce_affine_transforms/device/kernels/publish_schedule.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -75,10 +75,10 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
     const auto summary_format = tt::tt_metal::datatype_to_dataformat_converter(in.summaries.dtype());
     constexpr auto internal_format = tt::DataFormat::Float32;
     const auto output_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    // Per-core DFB storage is 6*Kt^2 + 7*Kt*Vt + 1 internal tiles plus 2*max(Kt, Vt) output tiles. Production uses
-    // K=V=128 (Kt=Vt=4); supporting larger shapes may require a separately designed chunked protocol rather than
-    // silently assuming this footprint fits every architecture's usable L1. Stage and send buffers are double-buffered
-    // so compute can produce the next prefix while the current one is used.
+    // Per-core DFB storage is 6*Kt^2 + 7*Kt*Vt + 1 internal tiles plus two max(Kt, Vt)-tile output row slots.
+    // Production uses K=V=128 (Kt=Vt=4); supporting larger shapes may require a separately designed chunked protocol
+    // rather than silently assuming this footprint fits every architecture's usable L1. Stage and send buffers are
+    // double-buffered so compute can produce the next prefix while the current one is used.
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
         make_dfb(initial_a_dfb_name, a_tiles, summary_format),
         make_dfb(initial_b_dfb_name, b_tiles, summary_format),
@@ -91,8 +91,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
         make_dfb(scratch_dfb_name, b_tiles, internal_format),
         // The FP32 identity tile the publishing group subtracts to form E = A - I, seeded by the dataflow kernel.
         make_dfb(identity_dfb_name, 1, internal_format),
-        // Published [E | B] tile rows (Kt or Vt tiles each), double-buffered toward the packed output.
-        make_dfb(output_dfb_name, 2 * std::max(Kt, Vt), output_format),
+        // Published [E | B] tile rows (Kt or Vt tiles each), one row per slot, double-buffered toward the output.
+        make_dfb(output_dfb_name, 2 * kda_reduce::published_row_entries(Kt, Vt), output_format),
     };
     // The sender addresses a peer's inbound mailbox with its own local write pointer, which is only
     // valid while these buffers hold one phase-independent slot. Any additional depth lets sender and

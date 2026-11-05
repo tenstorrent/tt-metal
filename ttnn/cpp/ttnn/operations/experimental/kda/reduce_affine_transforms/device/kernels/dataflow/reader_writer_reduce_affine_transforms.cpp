@@ -64,16 +64,17 @@ FORCE_INLINE void write_identity_transform(
 }
 
 // Write the published head transform, Kt rows of E (Kt tiles each) then Kt rows of B (Vt tiles each), into the
-// packed [1, B*H, K, K+V] rows [E | B].
+// packed [1, B*H, K, K+V] rows [E | B]. Each row arrives in its own row slot (kda_reduce::published_row_entries).
 template <uint32_t Kt, uint32_t Vt, typename OutputAccessor, typename DFB>
 FORCE_INLINE void write_published_transform(Noc& noc, DFB& published, uint32_t head, const OutputAccessor& output) {
     constexpr uint32_t row_tiles = Kt + Vt;
+    constexpr uint32_t row_slot = kda_reduce::published_row_entries(Kt, Vt);
     const uint32_t tile_bytes = published.get_entry_size();
     for (uint32_t half = 0; half < 2; ++half) {
         const uint32_t columns = half == 0 ? Kt : Vt;
         const uint32_t first_column = half == 0 ? 0 : Kt;
         for (uint32_t row = 0; row < Kt; ++row) {
-            published.wait_front(columns);
+            published.wait_front(row_slot);
             for (uint32_t column = 0; column < columns; ++column) {
                 noc.async_write(
                     published,
@@ -83,7 +84,7 @@ FORCE_INLINE void write_published_transform(Noc& noc, DFB& published, uint32_t h
                     {.page_id = (head * Kt + row) * row_tiles + first_column + column});
             }
             noc.async_write_barrier();
-            published.pop_front(columns);
+            published.pop_front(row_slot);
         }
     }
 }

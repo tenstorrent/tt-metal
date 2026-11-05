@@ -330,6 +330,11 @@ def test_reduce_affine_transforms_contract_and_trace(
         pytest.param(3, 2, 32, 64, ttnn.float32, "interleaved", id="bh3-g2-k32-v64-fp32-interleaved"),
         pytest.param(2, 2, 160, 32, ttnn.bfloat16, "nd-sharded-l1", id="bh2-g2-k160-v32-bf16-nd-sharded-l1"),
         pytest.param(2, 2, 32, 160, ttnn.float32, "height-sharded-l1", id="bh2-g2-k32-v160-fp32-height-sharded-l1"),
+        # Kt and Vt that do not divide each other: published [E | B] rows of 3 and 4 tiles must never straddle the
+        # end of the output ring (which wraps only at a push), on the composed (g2) and pass-through (g1) paths.
+        pytest.param(2, 2, 96, 128, ttnn.bfloat16, "interleaved", id="bh2-g2-k96-v128-bf16-interleaved"),
+        pytest.param(2, 2, 128, 96, ttnn.float32, "interleaved", id="bh2-g2-k128-v96-fp32-interleaved"),
+        pytest.param(2, 1, 96, 128, ttnn.float32, "interleaved", id="bh2-g1-k96-v128-fp32-interleaved"),
     ],
 )
 def test_reduce_affine_transforms_shape_accuracy(

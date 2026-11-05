@@ -93,16 +93,18 @@ FORCE_INLINE void pack_staged(
 }
 
 // stage = send = a + b over Rows x Columns tiles. With `out`, the publishing group's last update of B also publishes
-// each tile row.
+// each tile row, one Slot-entry row slot (kda_reduce::published_row_entries) at a time.
 template <
     uint32_t Rows,
     uint32_t Columns,
+    uint32_t Slot,
     typename DFBA,
     typename DFBB,
     typename DFBStage,
     typename DFBSend,
     typename DFBPub>
 void add(DFBA& a, DFBB& b, DFBStage& stage, DFBSend& send, DFBPub* out) {
+    static_assert(Columns <= Slot);
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     stage.reserve_back(Rows * Columns);
@@ -113,7 +115,7 @@ void add(DFBA& a, DFBB& b, DFBStage& stage, DFBSend& send, DFBPub* out) {
     add_init(a_id, b_id);
     for (uint32_t row = 0; row < Rows; row++) {
         if (out != nullptr) {
-            out->reserve_back(Columns);
+            out->reserve_back(Slot);
         }
         for (uint32_t column = 0; column < Columns; column++) {
             const uint32_t tile = row * Columns + column;
@@ -125,7 +127,7 @@ void add(DFBA& a, DFBB& b, DFBStage& stage, DFBSend& send, DFBPub* out) {
             tile_regs_release();
         }
         if (out != nullptr) {
-            out->push_back(Columns);
+            out->push_back(Slot);
         }
     }
     stage.push_back(Rows * Columns);
@@ -135,11 +137,13 @@ void add(DFBA& a, DFBB& b, DFBStage& stage, DFBSend& send, DFBPub* out) {
 // Copy a group's Rows x Columns summary tiles to the stage and send buffers. With Complement the input is E (summaries
 // arrive in complement form [E | B], E = A - I) and A = E + I is staged, formed on the diagonal tiles in FP32 DST from
 // the identity tile (UnpackToDest, exact). With `out`, a single active group also publishes its summary unchanged, each
-// tile row as it is staged: E stays in complement form for the output. Initial summaries may be BF16 while stage and
-// send buffers use the canonical FP32 internal format; startup already configured the packer for the internal format.
+// tile row as it is staged, one Slot-entry row slot at a time: E stays in complement form for the output. Initial
+// summaries may be BF16 while stage and send buffers use the canonical FP32 internal format; startup already configured
+// the packer for the internal format.
 template <
     uint32_t Rows,
     uint32_t Columns,
+    uint32_t Slot,
     bool Complement,
     typename DFBIn,
     typename DFBStage,
@@ -147,6 +151,7 @@ template <
     typename DFBIdentity,
     typename DFBPub>
 void copy_rows(DFBIn& in, DFBStage& stage, DFBSend& send, DFBIdentity& identity, DFBPub* out) {
+    static_assert(Columns <= Slot);
     const uint32_t in_id = in.get_id();
     stage.reserve_back(Rows * Columns);
     send.reserve_back(Rows * Columns);
@@ -154,7 +159,7 @@ void copy_rows(DFBIn& in, DFBStage& stage, DFBSend& send, DFBIdentity& identity,
     copy_init(in_id);
     for (uint32_t row = 0; row < Rows; row++) {
         if (out != nullptr) {
-            out->reserve_back(Columns);
+            out->reserve_back(Slot);
         }
         for (uint32_t column = 0; column < Columns; column++) {
             const uint32_t tile = row * Columns + column;
@@ -166,19 +171,21 @@ void copy_rows(DFBIn& in, DFBStage& stage, DFBSend& send, DFBIdentity& identity,
             tile_regs_release();
         }
         if (out != nullptr) {
-            out->push_back(Columns);
+            out->push_back(Slot);
         }
     }
     stage.push_back(Rows * Columns);
     send.push_back(Rows * Columns);
 }
 
-// The last composition of A on the publishing group, publishing each tile row as E. A tile loop rather than
+// The last composition of A on the publishing group, publishing each tile row as E in a Slot-entry row slot. A tile
+// loop rather than
 // matmul_product's matmul_block: E = A - I on a diagonal tile needs DST slots 1 and 2, which a block's output occupies.
 // A stays in slot 0 for the stage and send buffers, and E lands in slot 2, so the subtraction is exact in FP32 DST
 // before the single BF16 rounding of the pack.
 template <
     uint32_t Kt,
+    uint32_t Slot,
     typename DFBA,
     typename DFBB,
     typename DFBOut,
@@ -186,12 +193,13 @@ template <
     typename DFBIdentity,
     typename DFBPub>
 void matmul_product_published(DFBA& a, DFBB& b, DFBOut& stage, DFBSend& send, DFBIdentity& identity, DFBPub& out) {
+    static_assert(Kt <= Slot);
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     stage.reserve_back(Kt * Kt);
     send.reserve_back(Kt * Kt);
     for (uint32_t row = 0; row < Kt; row++) {
-        out.reserve_back(Kt);
+        out.reserve_back(Slot);
         for (uint32_t column = 0; column < Kt; column++) {
             tile_regs_acquire();
             matmul_init(a_id, b_id);
@@ -209,7 +217,7 @@ void matmul_product_published(DFBA& a, DFBB& b, DFBOut& stage, DFBSend& send, DF
             pack_staged(stage, send, &out, row * Kt + column, column, 0, published);
             tile_regs_release();
         }
-        out.push_back(Kt);
+        out.push_back(Slot);
     }
     stage.push_back(Kt * Kt);
     send.push_back(Kt * Kt);
@@ -221,6 +229,7 @@ TT_KERNEL void compute(uint32_t group) {
 
     constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t b_tiles = Kt * Vt;
+    constexpr uint32_t row_slot = kda_reduce::published_row_entries(Kt, Vt);
     DataflowBuffer initial_a(dfb::initial_a);
     DataflowBuffer initial_b(dfb::initial_b);
     DataflowBuffer stage_a(dfb::stage_a);
@@ -246,8 +255,8 @@ TT_KERNEL void compute(uint32_t group) {
     initial_a.wait_front(a_tiles);
     initial_b.wait_front(b_tiles);
     DataflowBuffer* const publish_initial = kda_reduce::publishes_unchanged(active) ? &output : nullptr;
-    copy_rows<Kt, Kt, true>(initial_a, stage_a, send_a, identity, publish_initial);
-    copy_rows<Kt, Vt, false>(initial_b, stage_b, send_b, identity, publish_initial);
+    copy_rows<Kt, Kt, row_slot, true>(initial_a, stage_a, send_a, identity, publish_initial);
+    copy_rows<Kt, Vt, row_slot, false>(initial_b, stage_b, send_b, identity, publish_initial);
     initial_a.pop_front(a_tiles);
     initial_b.pop_front(b_tiles);
 
@@ -269,13 +278,13 @@ TT_KERNEL void compute(uint32_t group) {
         // Both FP32 products remain separate calls: they consume different right-hand operands and publish
         // different output rectangles.
         if (publish_now) {
-            matmul_product_published<Kt>(stage_a, remote_a, stage_a, send_a, identity, output);
+            matmul_product_published<Kt, row_slot>(stage_a, remote_a, stage_a, send_a, identity, output);
         } else {
             matmul_product<Kt, Kt, Kt>(stage_a, remote_a, stage_a, &send_a);
         }
         matmul_product<Kt, Kt, Vt>(stage_a, remote_b, scratch, static_cast<decltype(&send_a)>(nullptr));
         scratch.wait_front(b_tiles);
-        add<Kt, Vt>(scratch, stage_b, stage_b, send_b, publish_now ? &output : nullptr);
+        add<Kt, Vt, row_slot>(scratch, stage_b, stage_b, send_b, publish_now ? &output : nullptr);
         stage_a.pop_front(a_tiles);
         stage_b.pop_front(b_tiles);
         remote_a.pop_front(a_tiles);
