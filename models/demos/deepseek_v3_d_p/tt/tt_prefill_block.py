@@ -38,7 +38,6 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvC
 # NOT the totals. When off (default) there is no sync and no timing, so normal runs are unperturbed.
 # Keyed by global layer_idx -> {"mla": [seconds...], "ffn": [seconds...]} (one entry per forward call).
 _BLOCK_TIMING_ENABLED = os.environ.get("TT_PREFILL_BLOCK_TIMING", "0") == "1"
-# glue track: add the post-attention residual inside the MoE's dispatch || shared-expert window.
 _FOLD_MOE_RESIDUAL = os.environ.get("GLUE_FOLD_MOE_RESIDUAL", "1") == "1"
 _BLOCK_TIMINGS: dict[int, dict[str, list[float]]] = {}
 
@@ -747,8 +746,6 @@ class TtPrefillBlock(LightweightModule):
             # post_attention_layernorm output (the FFN norm), TP-sharded on hidden.
             kv_intermediates["post_attn_norm"] = ttnn.clone(ffn_norm_out)
 
-        # The MoE can add the residual itself inside its dispatch || shared-expert window, off the
-        # critical path (GLUE_FOLD_MOE_RESIDUAL=0 restores the add here).
         fold_residual = self.is_moe and _FOLD_MOE_RESIDUAL and not return_intermediates and isinstance(self.ffn, TtMoe)
         if self.is_moe:
             ffn_out = self._moe_path(

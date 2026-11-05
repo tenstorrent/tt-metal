@@ -682,9 +682,6 @@ class TtMoEGatePrefill(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        # The HBAG gather takes its ready/data_valid semaphores here, at construction: the pair MLA's TP gathers
-        # share. Without them the gather program allocates its own pair mid-forward, under live L1 activations,
-        # where it can later sit inside another op's static CB range (#62699).
         self._hbag_semaphores = {}
         if _GLUE_GATE_AR_HBAG and mesh_device.shape[config.ccl_config["TP_AXIS"]] > 1:
             ready_semaphore, data_valid_semaphore = self.tt_ccl.get_mla_high_bw_gather_semaphores()
@@ -947,16 +944,12 @@ class TtMoEGatePrefill(LightweightModule):
 
         tp_axis = self.config.ccl_config["TP_AXIS"]
         tp = self.mesh_device.shape[tp_axis]
-        # glue track: all-reduce the TP partial logits as one high-bandwidth all-gather of the partials (dim 1,
-        # into a model-owned persistent buffer) + an fp32 fast_reduce_nc, instead of the composite RS + AG of
-        # all_reduce_async (glue R0: 24.8 vs 33.3 us at [640,256], same PCC). GLUE_GATE_AR_HBAG=0 restores it.
         hbag_ar = tp > 1 and _GLUE_GATE_AR_HBAG and len(x.shape) == 2
         logits = ttnn.matmul(
             x,
             self.weight,
             compute_kernel_config=self.config.mm_configs["COMPUTE_CONFIG"],
             program_config=program_config,
-            # high_bw_all_gather streams its source from DRAM
             memory_config=ttnn.DRAM_MEMORY_CONFIG if hbag_ar else ttnn.L1_MEMORY_CONFIG,
         )
         if hbag_ar:
@@ -972,7 +965,6 @@ class TtMoEGatePrefill(LightweightModule):
                 **self._hbag_semaphores,
             )
             ttnn.deallocate(logits)
-            # gathered aliases the persistent buffer: do not free it.
             summed = ttnn.experimental.fast_reduce_nc(
                 gathered,
                 dims=[1],
