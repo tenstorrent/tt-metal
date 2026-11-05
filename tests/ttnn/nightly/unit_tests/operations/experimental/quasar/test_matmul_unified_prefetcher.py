@@ -216,6 +216,30 @@ def test_fused_bias_and_activation(device):
         _check(ttnn.to_torch(out), golden)
 
 
+def test_bias_added_after_the_op_with_fp32_accumulation(device):
+    """With a 32-bit DST ttnn.linear adds the bias after the op, so the auto placement plans no fused bias."""
+    setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, pipe_entries=2, K_chunk_tiles=4)
+    bias = torch.randn(1, 1, 1, 4096, dtype=torch.bfloat16)
+    bias_t = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with tensor_prefetcher_session(device):
+        out = ttnn.experimental.quasar.linear(
+            setup.a_t,
+            setup.b_t,
+            bias=bias_t,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=_compute_kernel_config(device, fp32_dest_acc_en=True),
+            prefetcher_pipes=setup.pipes,
+        )
+        _check(ttnn.to_torch(out), setup.golden + bias.float())
+
+
+def test_width_sharded_output_without_a_shard_spec(device):
+    """A sharded C without a shard spec gets one from the C slices, which the op allocates before queuing the
+    request."""
+    setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, pipe_entries=2, K_chunk_tiles=4)
+    _run_twice(device, setup, program_config=None, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+
+
 def test_width_sharded_output_on_the_receivers(device):
     """C width-sharded on the receivers, each core's shard its C slice."""
     setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, pipe_entries=2, K_chunk_tiles=4)
@@ -272,14 +296,18 @@ def test_rejects_bank_pairing_of_another_distribution(device, expect_error):
         setup.matmul(device, qsr.MatmulUnifiedProgramConfig(cores=setup.cores, K_chunk_tiles=4))
 
 
-def test_rejects_a_subblock_that_pads_the_C_slice(device, expect_error):
-    """Compute reads B's K rows at the pipe entry's width, so the subblock may not pad the C slice."""
+@pytest.mark.parametrize("override", ["subblock_N_tiles", "C_slice_N_tiles", "C_slice_M_tiles"])
+def test_rejects_a_C_slice_other_than_the_pipes(device, expect_error, override):
+    """Each core computes all of M by its own N slice, read at the pipe entry's width: a subblock that pads the C slice,
+    or an explicit C slice of another size, is rejected."""
     setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, pipe_entries=2, K_chunk_tiles=4)
-    subblock_N_tiles = next(n for n in range(2, 5) if setup.C_slice_N_tiles % n != 0)
+    fields = {
+        "subblock_N_tiles": {
+            "subblock_M_tiles": 1,
+            "subblock_N_tiles": next(n for n in range(2, 5) if setup.C_slice_N_tiles % n != 0),
+        },
+        "C_slice_N_tiles": {"C_slice_N_tiles": 2 * setup.C_slice_N_tiles},
+        "C_slice_M_tiles": {"C_slice_M_tiles": 2 * DECODE_M // TILE},
+    }[override]
     with expect_error(RuntimeError, "in one batch, unpadded"):
-        setup.matmul(
-            device,
-            qsr.MatmulUnifiedProgramConfig(
-                cores=setup.cores, K_chunk_tiles=4, subblock_M_tiles=1, subblock_N_tiles=subblock_N_tiles
-            ),
-        )
+        setup.matmul(device, qsr.MatmulUnifiedProgramConfig(cores=setup.cores, K_chunk_tiles=4, **fields))

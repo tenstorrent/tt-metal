@@ -1006,18 +1006,18 @@ MatmulProgramConfig get_program_config(
     // Prefetcher pipes place the matmul on their receivers, the only cores they deliver B to, and fix its K chunk,
     // which the op's prefetch request is cut into before the program is built.
     if (!attributes.prefetcher_pipes.empty() && (requested != nullptr || !attributes.program_config.has_value())) {
+        const ttnn::PrefetcherPipeRefList pipes = ttnn::prefetcher_pipe_refs(attributes.prefetcher_pipes);
         MatmulUnifiedProgramConfig config =
             requested != nullptr ? *requested
                                  : MatmulUnifiedProgramConfig{.fused_activation = attributes.user_fused_activation};
         if (config.cores.num_cores() == 0) {
-            config.cores = tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(
-                               ttnn::prefetcher_pipe_refs(attributes.prefetcher_pipes))
-                               .merge_ranges();
+            config.cores = tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(pipes).merge_ranges();
         }
+        // With a 32-bit DST ttnn.linear adds the bias separately (see the plan), so it takes no L1 here.
         config.K_chunk_tiles = ttnn::prim::qsr::plan_unified_matmul(
                                    input_tensor_a,
                                    input_tensor_b,
-                                   bias_single_tile_size,
+                                   get_fp32_dest_acc_en(attributes.compute_kernel_config) ? 0 : bias_single_tile_size,
                                    config,
                                    attributes,
                                    std::nullopt,

@@ -9,6 +9,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/global_circular_buffer.hpp"
+#include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
@@ -871,7 +872,7 @@ void validate_unified_prefetcher_pipes(
 
 // Over the Tensor prefetcher's pipes the op queues the request that feeds them, cut into its config's K chunks. A
 // worker-sender pipe's producer is the caller's.
-void queue_B_tensor_prefetcher_request(const MatmulParams& attributes, const Tensor& input_tensor_b) {
+void queue_B_tensor_prefetcher_request(const MatmulParams& attributes, const MatmulInputs& tensor_args) {
     namespace metal_exp = tt::tt_metal::experimental;
     const ttnn::PrefetcherPipeRefList pipes = ttnn::prefetcher_pipe_refs(attributes.prefetcher_pipes);
     // A NO_DISPATCH graph capture runs this op without launching its program, so nothing would drain the request.
@@ -879,18 +880,28 @@ void queue_B_tensor_prefetcher_request(const MatmulParams& attributes, const Ten
         ttnn::device_operation::detail::graph_capture_blocks_dispatch()) {
         return;
     }
+    const Tensor& input_tensor_b = tensor_args.input_tensors.at(1);
     const uint32_t K_tiles = input_tensor_b.padded_shape()[-2] / TILE_HEIGHT;
     const auto K_chunk_tiles =
         static_cast<uint32_t>(std::get<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>(
                                   attributes.program_config.value())
                                   .K_chunk_tiles.value());
+    // To the devices launch runs the matmul on: the whole mesh, or the tensors' coordinates when they are not on all.
+    auto* mesh_device = input_tensor_b.device();
+    std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet> devices;
+    if (!ttnn::device_operation::mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
+        devices.emplace();
+        for (const auto& coord : ttnn::device_operation::mesh_device_operation_utils::extract_tensor_coordinates(
+                 tensor_args, mesh_device)) {
+            devices->merge(tt::tt_metal::distributed::MeshCoordinateRange(coord, coord));
+        }
+    }
     // In K order, which every core consumes. On the calling thread's current queue, the one launch dispatches on, so a
     // trace recording there captures the request and re-sends it on every replay.
-    auto* mesh_device = input_tensor_b.device();
     metal_exp::QueueTensorPrefetcherRequest(
         *mesh_device,
         pipes,
-        std::nullopt,
+        devices,
         {{input_tensor_b.mesh_tensor(), K_tiles / K_chunk_tiles}},
         &mesh_device->mesh_command_queue());
 }
@@ -2640,9 +2651,13 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
         normalized_attributes.program_config.value(), input_tensor_a.device()->compute_with_storage_grid_size());
     MatmulInputs inputs{{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}};
     if (!normalized_attributes.prefetcher_pipes.empty()) {
-        // The request goes out ahead of the program (a head start for the prefetcher), so validate first.
+        // The request goes out ahead of the program (a head start for the prefetcher; launch blocks under slow
+        // dispatch), so C is allocated, putting its L1 in the budget the program is planned with, and the op validated.
+        Tensor C = MatmulDeviceOperation::create_output_tensors(normalized_attributes, inputs).at(0);
+        normalized_attributes.output_mem_config = C.memory_config();
+        inputs.optional_output_tensors.at(0) = std::move(C);
         MatmulDeviceOperation::validate_on_program_cache_miss(normalized_attributes, inputs);
-        queue_B_tensor_prefetcher_request(normalized_attributes, input_tensor_b);
+        queue_B_tensor_prefetcher_request(normalized_attributes, inputs);
     }
     return ttnn::device_operation::launch<MatmulDeviceOperation>(normalized_attributes, std::move(inputs));
 }

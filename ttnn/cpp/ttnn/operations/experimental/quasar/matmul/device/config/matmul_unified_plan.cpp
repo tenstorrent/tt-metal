@@ -547,14 +547,12 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     const bool M_fixed = config.C_slice_M_tiles.has_value() || base.B_from_pipes;
     const bool N_fixed = config.C_slice_N_tiles.has_value() || base.B_from_pipes;
     const bool batch_groups_allowed = base.batch_size > 1 && config.num_batch_groups.value_or(2) > 1;
-    const uint32_t max_C_slice_M_tiles =
-        base.B_from_pipes ? base.M_tiles
-                          : config.C_slice_M_tiles.value_or(
-                                batch_groups_allowed ? base.M_tiles : tt::div_up(base.M_tiles, core_rows));
-    const uint32_t max_C_slice_N_tiles =
-        base.B_from_pipes ? tt::div_up(base.N_tiles, static_cast<uint32_t>(config.cores.num_cores()))
-                          : config.C_slice_N_tiles.value_or(
-                                batch_groups_allowed ? base.N_tiles : tt::div_up(base.N_tiles, core_columns));
+    const uint32_t max_C_slice_M_tiles = config.C_slice_M_tiles.value_or(
+        base.B_from_pipes || batch_groups_allowed ? base.M_tiles : tt::div_up(base.M_tiles, core_rows));
+    const uint32_t max_C_slice_N_tiles = config.C_slice_N_tiles.value_or(
+        base.B_from_pipes      ? tt::div_up(base.N_tiles, static_cast<uint32_t>(config.cores.num_cores()))
+        : batch_groups_allowed ? base.N_tiles
+                               : tt::div_up(base.N_tiles, core_columns));
     // An auto K chunk over prefetcher pipes is at most what MIN_PIPE_ENTRIES of fit in a pipe, which dfbs_fit does not
     // bound; at least one tile, so validation reports a pipe that is too small.
     const uint32_t max_K_chunk_tiles =
