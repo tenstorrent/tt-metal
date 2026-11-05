@@ -48,12 +48,16 @@ def _lora_config() -> LoraConfig:
     return LoraConfig(rank=RANK, alpha=2.0 * RANK)
 
 
+def _set_nonzero_lora_B(layer, shard_dim: int | None) -> None:
+    """Replace ``lora_B``'s zero init, which would make ``lora_A``'s grad zero."""
+    B = np.random.default_rng(0).uniform(-0.5, 0.5, (1, 1, DIM, RANK)).astype(np.float32)
+    layer.lora_B.tensor.set_value(_tensor(B, shard_dim).get_value())
+
+
 def _column_layer(gather_output: bool) -> LoraColumnParallelLinear:
-    """A column-parallel LoRA layer with a non-zero ``lora_B`` (its zero init would make ``lora_A``'s grad zero)."""
     base = ColumnParallelLinear(DIM, DIM, has_bias=False, gather_output=gather_output)
     layer = LoraColumnParallelLinear(base, _lora_config())
-    B = np.random.default_rng(0).uniform(-0.5, 0.5, (1, 1, DIM, RANK)).astype(np.float32)
-    layer.lora_B.tensor.set_value(_tensor(B, shard_dim=2).get_value())
+    _set_nonzero_lora_B(layer, shard_dim=2)
     return layer
 
 
@@ -76,6 +80,13 @@ def _weighted_mean(out: ttml.autograd.Tensor, shard_dim: int | None) -> tuple[tt
     return ttml.ops.unary.mean(out * G), G_full
 
 
+def _reference_grads(x, W, A, B, dY, scaling: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(dA, dB, dx) of ``x @ W^T + scaling * (x @ A^T) @ B^T`` for upstream grad ``dY``, all full 2D arrays."""
+    h = x @ A.T
+    dh = scaling * dY @ B
+    return dh.T @ x, scaling * dY.T @ h, dY @ W + dh @ A
+
+
 @pytest.mark.parametrize("gather_output", [True, False], ids=["gathered", "sharded_output"])
 def test_column_parallel_grads_match_reference(tp_mesh, gather_output):
     layer = _column_layer(gather_output)
@@ -93,12 +104,7 @@ def test_column_parallel_grads_match_reference(tp_mesh, gather_output):
     A = _replicated(layer.lora_A.tensor.get_value(NATIVE), "lora_A")
     B = _gathered(layer.lora_B.tensor.get_value(NATIVE), 2)
     out_per_mean = DIM if gather_output else DIM // tp_mesh.axis_size("tp")
-    dY = G / (SEQ * out_per_mean)
-    h = x_ref @ A.T
-    dh = layer.scaling * dY @ B
-    ref_dA = dh.T @ x_ref
-    ref_dB = layer.scaling * dY.T @ h
-    ref_dx = dY @ W + dh @ A
+    ref_dA, ref_dB, ref_dx = _reference_grads(x_ref, W, A, B, G / (SEQ * out_per_mean), layer.scaling)
 
     _assert_close(_replicated(layer.lora_A.tensor.get_grad(), "lora_A grad"), ref_dA, "lora_A grad")
     _assert_close(_gathered(layer.lora_B.tensor.get_grad(), 2), ref_dB, "lora_B grad")
@@ -110,8 +116,7 @@ def test_column_parallel_grads_match_reference(tp_mesh, gather_output):
 def test_row_parallel_grads_match_reference(tp_mesh):
     base = RowParallelLinear(DIM, DIM, has_bias=False, input_is_parallel=True)
     layer = LoraRowParallelLinear(base, _lora_config())
-    B = np.random.default_rng(0).uniform(-0.5, 0.5, (1, 1, DIM, RANK)).astype(np.float32)
-    layer.lora_B.tensor.set_value(_tensor(B).get_value())
+    _set_nonzero_lora_B(layer, shard_dim=None)
     x = _tensor(np.random.default_rng(1).standard_normal((1, 1, SEQ, DIM)).astype(np.float32), shard_dim=3)
     x.set_requires_grad(True)
 
@@ -123,12 +128,7 @@ def test_row_parallel_grads_match_reference(tp_mesh):
     W = _gathered(layer.weight.tensor.get_value(NATIVE), 3)
     A = _gathered(layer.lora_A.tensor.get_value(NATIVE), 3)
     B = _replicated(layer.lora_B.tensor.get_value(NATIVE), "lora_B")
-    dY = G / (SEQ * DIM)
-    h = x_ref @ A.T
-    dh = layer.scaling * dY @ B
-    ref_dA = dh.T @ x_ref
-    ref_dB = layer.scaling * dY.T @ h
-    ref_dx = dY @ W + dh @ A
+    ref_dA, ref_dB, ref_dx = _reference_grads(x_ref, W, A, B, G / (SEQ * DIM), layer.scaling)
 
     _assert_close(_gathered(layer.lora_A.tensor.get_grad(), 3), ref_dA, "lora_A grad")
     _assert_close(_replicated(layer.lora_B.tensor.get_grad(), "lora_B grad"), ref_dB, "lora_B grad")
