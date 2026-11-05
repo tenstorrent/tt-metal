@@ -15,7 +15,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
-#include <tt_align.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -48,7 +47,6 @@
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "dispatch/dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include "math.hpp"
 #include "mesh_device.hpp"
@@ -569,18 +567,14 @@ std::vector<uint32_t> build_prefetcher_pipe_config_payload(
             REMOTE_DFB_REGION_HEADER_WORDS + participant.prefetcher_pipe_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
         // A slot is reserved from geometry and bound to a live pipe later
         TT_FATAL(
-            participant.pipe != nullptr,
+            participant.is_bound(),
             "PrefetcherPipe slot {} is not bound to a PrefetcherPipe object; supply a PrefetcherPipeArgument for "
             "every PrefetcherPipeParameter via SetProgramRunArgs before enqueueing the program",
             participant.prefetcher_pipe_id);
-        // P is a pipe-lifetime property read at build time, not a participant field: a relay or
-        // later Attach (possibly in another program) may arm lanes after this record was added.
-        // Packing it here (rather than poking the persistent page) keeps it ordered with this
-        // program in the command queue.
-        const uint32_t num_credit_lanes = participant.pipe->num_credit_lanes();
         payload[base + 0] = participant.config_page_addr;
         payload[base + 1] = participant.entry_size;
-        payload[base + 2] = pack_prefetcher_pipe_slot_relay_word(participant.relay_dfb_id, num_credit_lanes);
+        payload[base + 2] =
+            pack_prefetcher_pipe_slot_relay_word(participant.relay_dfb_id, participant.num_credit_lanes);
     }
     return payload;
 }
@@ -639,6 +633,10 @@ uint32_t finalize_kernel_bins(
     uint32_t max_offset = 0;
     HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
     uint32_t num_processors = hal.get_num_risc_processors(programmable_core_type);
+    const uint64_t build_key = MetalContext::instance(extract_context_id(device))
+                                   .build_env_manager()
+                                   .get_device_build_env(device->build_id())
+                                   .build_key();
     for (auto& kg : kernel_groups) {
         auto kernel_config = kg->launch_msg.view().kernel_config();
         uint32_t offset = base_offset;
@@ -647,9 +645,7 @@ uint32_t finalize_kernel_bins(
         std::ranges::fill(kg->kernel_text_offsets, 0);
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
-            const auto& binaries = kernel->binaries(BuildEnvManager::get_instance(extract_context_id(device))
-                                                        .get_device_build_env(device->build_id())
-                                                        .build_key());
+            const auto& binaries = kernel->binaries(build_key);
             uint32_t num_binaries = kernel->expected_num_binaries();
             TT_ASSERT(kernel->get_kernel_programmable_core_type() == programmable_core_type);
             for (uint32_t i = 0; i < num_binaries; i++) {

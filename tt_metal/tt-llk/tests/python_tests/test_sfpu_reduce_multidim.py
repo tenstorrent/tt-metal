@@ -59,7 +59,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Number of stacked 32x32 row-tiles to reduce independently. Each tile yields one multi-axis
 # reduction result, so >= 2 keeps the PCC check non-degenerate. Stays <= 4 so the whole column of
@@ -268,7 +268,7 @@ def test_sfpu_reduce_multidim(
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_matrix = untilize_block(res_tensor, formats.output_format, input_dimensions)
 
     # Each tile's multi-axis result lives at its element [0][0] -> row r*32, column 0.

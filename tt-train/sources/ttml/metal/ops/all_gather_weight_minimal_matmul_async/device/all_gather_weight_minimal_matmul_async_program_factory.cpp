@@ -579,6 +579,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
                 {static_cast<uint32_t>(send_virtual_core.x), static_cast<uint32_t>(send_virtual_core.y)});
             // Router connection for this link; the kernel opens it with open_connections.
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                *device,
                 src_node_id,
                 {device->get_fabric_node_id(neighbour.value())},
                 {link},

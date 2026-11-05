@@ -13,6 +13,8 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
+    DEST_ACC_MODES,
     DestAccumulation,
     DestSync,
     MathFidelity,
@@ -62,15 +64,8 @@ MATMUL_FORMATS = input_output_formats(
         DataFormat.Float32,
     ]
 )
-DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
 STOCHASTIC_ROUNDING_MODES = [StochasticRounding.No]
-MATH_FIDELITIES = [
-    MathFidelity.LoFi,
-    MathFidelity.HiFi2,
-    MathFidelity.HiFi3,
-    MathFidelity.HiFi4,
-]
 MATMUL_COMBINATIONS = sweep_matmul(
     MATMUL_FORMATS,
     DEST_ACC_MODES,
@@ -175,14 +170,14 @@ ALL_TEST_PARAMS = list(
         (
             (fidelity, combinations, throttle)
             for fidelity, combinations, throttle in product(
-                MATH_FIDELITIES, MATMUL_COMBINATIONS, [1, 2, 3, 4, 5]
+                ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS, [1, 2, 3, 4, 5]
             )
         ),
         # Tiny tiles at throttle 0: the full sweep, unchanged.
         (
             (fidelity, combinations, 0)
             for fidelity, combinations in product(
-                MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
+                ALL_MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
             )
         ),
         # Tiny tiles at a throttled level <= 3: the fallback to the unthrottled MOP is taken
@@ -190,7 +185,7 @@ ALL_TEST_PARAMS = list(
         (
             (fidelity, combinations, TINY_TILE_LOW_THROTTLE)
             for fidelity, combinations in product(
-                MATH_FIDELITIES, TINY_TILES_THROTTLE_COMBINATIONS
+                ALL_MATH_FIDELITIES, TINY_TILES_THROTTLE_COMBINATIONS
             )
         ),
         # Tiny tiles above level 3, LoFi only: the one case where the fallback depends on

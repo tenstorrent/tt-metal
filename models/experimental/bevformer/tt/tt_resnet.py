@@ -2,11 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""ResNet101-DCN backbone for BEVFormer.
-
-Bottleneck stages. layer3 and layer4 use a modulated deformable conv for conv2.
+"""Bottleneck ResNet backbone for BEVFormer: ResNet101 with a modulated deformable conv2 in
+layer3 and layer4, or ResNet50 without one, as ``model_config`` selects.
 Each BatchNorm is already folded into the conv before it.
 """
+
+import math
 
 import ttnn
 from models.experimental.bevformer.tt.tt_common import TTConv2D, signpost
@@ -21,18 +22,26 @@ class TTModulatedDeformConv2dPack:
     """
 
     def __init__(
-        self, conv_args, conv_pth, device, input_dtype=ttnn.bfloat16, relu=False, weights_dtype=ttnn.bfloat8_b
+        self,
+        conv_args,
+        conv_pth,
+        device,
+        input_dtype=ttnn.bfloat16,
+        relu=False,
+        weights_dtype=ttnn.bfloat8_b,
+        sharded_input=False,
     ):
-        """``weights_dtype`` is the offset conv's."""
+        """``weights_dtype`` is the offset conv's; ``sharded_input`` gives the DCN and the offset
+        conv one height-sharded L1 input."""
         offset_args = conv_args.conv_offset
         # __call__ reshapes the input to the output's (B, H, W), which holds only at stride 1.
-        # BEVFormer's caffe-style ResNet puts every stride on conv1 or the downsample shortcut.
+        # The DCN variants' caffe-style ResNet puts every stride on conv1 or the downsample shortcut.
         assert tuple(offset_args.stride) == (1, 1), f"DCN supports stride 1 only, got {offset_args.stride}"
         self.batch_size = offset_args.batch_size
 
         kernel_size = offset_args.kernel_size[0]
         self.device_dcn = TTModulatedDeformConv2dDevice(
-            weight_chunks=conv_pth.weight_chunks,
+            weight=conv_pth.weight,
             bias=conv_pth.bias,
             kernel_size=kernel_size,
             stride=tuple(offset_args.stride),
@@ -43,14 +52,37 @@ class TTModulatedDeformConv2dPack:
             relu=relu,
         )
 
-        # conv_offset emits the offsets in grid units, in the device DCN's (x, y) order (see
-        # model_preprocessing), then the mask logits. Its output is bfloat16 whatever the
-        # input dtype, since the offsets set the sampling positions.
-        # Offsets can reach tens of pixels, and accumulating in a bfloat16 destination
-        # register errs by up to a few of them, so the register is fp32. The partial sums conv2d
-        # writes back between reduction blocks stay bfloat16 (packer_l1_acc is off): fp32 partial
-        # sums gain no accuracy here.
-        self.num_offset_channels = 2 * kernel_size * kernel_size
+        # The DCN's input, height-sharded over the grid in whole 32-row blocks where that pays
+        # (``sharded_input``): the op gives each core the output rows of its own shard, so
+        # most bilinear corners are in its own L1 and the rest in a neighbour's, instead of spread
+        # over every core's. conv_offset then reads that same shard, so the block input reaches L1
+        # once, as TILE, and is untilized there. Otherwise the DCN reads an interleaved L1 copy and
+        # conv_offset a ROW_MAJOR one in DRAM.
+        self.input_memory_config = None
+        conv_offset_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        if sharded_input:
+            grid = device.compute_with_storage_grid_size()
+            rows = offset_args.batch_size * offset_args.input_height * offset_args.input_width
+            shard_rows = math.ceil(rows / (grid.x * grid.y) / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            self.input_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}),
+                    [shard_rows, offset_args.in_channels],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+            conv_offset_memory_config = self.input_memory_config
+
+        # conv_offset emits DCNv2's offsets, in pixels and (y, x) order, then the mask logits, the
+        # order the DCN op takes, and in ROW_MAJOR, the layout it reads. Its output is bfloat16
+        # whatever the input dtype, since the offsets set the sampling positions. Offsets can
+        # reach tens of pixels, and accumulating in a bfloat16 destination register errs by up to
+        # a few of them, so the register is fp32. The partial sums conv2d writes back between
+        # reduction blocks stay bfloat16 (packer_l1_acc is off): fp32 partial sums gain no
+        # accuracy here. On the shared L1 input conv2d sizes its activation blocks to the whole
+        # shard, and their buffers then overrun the L1 that input holds; one tile row at a time fits.
         self.conv_offset = TTConv2D(
             offset_args,
             conv_pth.conv_offset,
@@ -58,24 +90,39 @@ class TTModulatedDeformConv2dPack:
             weights_dtype=weights_dtype,
             fp32_dest_acc_en=True,
             input_dtype=input_dtype,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            input_memory_config=conv_offset_memory_config,
+            act_block_h=None if self.input_memory_config is None else ttnn.TILE_SIZE,
             output_dtype=ttnn.bfloat16,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
     def __call__(self, x):
         """``x`` is a (1, 1, B*H*W, C_in) tensor in conv2d's layout. Returns the
         (1, 1, B*H_out*W_out, C_out) output, also in conv2d's layout, and its height and width."""
-        out, out_h, out_w = self.conv_offset(x)
-        out = ttnn.reshape(out, (self.batch_size, out_h, out_w, out.shape[-1]))
-        grid_offset = out[:, :, :, : self.num_offset_channels]
-        mask = ttnn.sigmoid(out[:, :, :, self.num_offset_channels :])
-        ttnn.deallocate(out)
+        if self.input_memory_config is not None:
+            x = ttnn.to_memory_config(x, self.input_memory_config)
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x_dcn = x
+        else:
+            # One untilize feeds both conv_offset and the DCN: conv2d reshapes its input
+            # between flat and NHWC, which in TILE copies whenever the width is not a tile multiple.
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            # The DCN's reads are many small scattered sticks, which L1 serves far faster than
+            # DRAM; conv_offset's weights are prepared for a DRAM input, so only the DCN gets the
+            # L1 copy.
+            x_dcn = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        offset_mask, out_h, out_w = self.conv_offset(x)
+        # conv2d's L1 path returns its output sharded, and the DCN op takes offset_mask only
+        # interleaved; in L1, which serves the op's small per-row reads faster than DRAM.
+        offset_mask = ttnn.sharded_to_interleaved(offset_mask, ttnn.L1_MEMORY_CONFIG)
+        offset_mask = ttnn.reshape(offset_mask, (self.batch_size, out_h, out_w, offset_mask.shape[-1]))
 
-        # At stride 1 the input has the output's height and width. To ROW_MAJOR first, the layout
-        # grid_sample reads, where the reshape to NHWC moves no data.
-        x_nhwc = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (self.batch_size, out_h, out_w, x.shape[-1]))
-        out = self.device_dcn(x_nhwc, grid_offset, mask)
-        ttnn.deallocate(grid_offset)
-        ttnn.deallocate(mask)
+        # At stride 1 the input has the output's height and width.
+        x_nhwc = ttnn.reshape(x_dcn, (self.batch_size, out_h, out_w, x.shape[-1]))
+        out = self.device_dcn(x_nhwc, offset_mask)
+        ttnn.deallocate(x_nhwc)
+        ttnn.deallocate(offset_mask)
         return out, out_h, out_w
 
 
@@ -94,8 +141,9 @@ class TTResLayer:
         dram_activation=False,
         dram_input=False,
         dram_conv_slices=None,
-        block_sharded_downsample=False,
+        block_sharded=False,
         fp32_acc=False,
+        dcn_sharded_input=False,
         conv2_act_block_h=None,
         weights_dtype=ttnn.bfloat8_b,
         input_dtype=ttnn.bfloat16,
@@ -113,8 +161,9 @@ class TTResLayer:
                     dram_activation=dram_activation,
                     dram_input=dram_input and first,
                     dram_conv_slices=dram_conv_slices,
-                    block_sharded_downsample=block_sharded_downsample,
+                    block_sharded=block_sharded,
                     fp32_acc=fp32_acc,
+                    dcn_sharded_input=dcn_sharded_input,
                     conv2_act_block_h=conv2_act_block_h,
                     weights_dtype=weights_dtype,
                     input_dtype=input_dtype if first else self.layer[-1].output_dtype,
@@ -141,7 +190,7 @@ class TTBottleneck:
     a non-DCN conv2, conv3 and the downsample in DRAM, slicing the spatial convs into
     ``dram_conv_slices`` width slices; a DCN conv2 is unaffected. ``dram_input`` only
     covers the convs that read the block input, for a block fed by a DRAM layer whose own
-    activations fit in L1. ``block_sharded_downsample`` block-shards the downsample conv.
+    activations fit in L1. ``block_sharded`` block-shards the downsample and a non-DCN conv2.
     ``fp32_acc`` turns on fp32 destination accumulation (``fp32_dest_acc_en``) for conv1, a
     non-DCN conv2, conv3 and the downsample; a DCN conv2 always has it
     (TTModulatedDeformConv2dPack). ``conv2_act_block_h`` is a non-DCN conv2's act_block_h
@@ -163,8 +212,9 @@ class TTBottleneck:
         dram_activation=False,
         dram_input=False,
         dram_conv_slices=None,
-        block_sharded_downsample=False,
+        block_sharded=False,
         fp32_acc=False,
+        dcn_sharded_input=False,
         conv2_act_block_h=None,
         weights_dtype=ttnn.bfloat8_b,
         input_dtype=ttnn.bfloat16,
@@ -201,6 +251,7 @@ class TTBottleneck:
                 weights_dtype=weights_dtype,
                 fp32_dest_acc_en=fp32_acc,
                 activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+                is_blk=block_sharded,
                 act_block_h=conv2_act_block_h,
                 dealloc_act=True,
                 dram_activation="conv2" in dram_convs,
@@ -217,6 +268,7 @@ class TTBottleneck:
                 input_dtype=conv2_dtype,
                 relu=True,
                 weights_dtype=weights_dtype,
+                sharded_input=dcn_sharded_input,
             )
 
         self.conv3 = TTConv2D(
@@ -240,7 +292,7 @@ class TTBottleneck:
                 weights_dtype=weights_dtype,
                 fp32_dest_acc_en=fp32_acc,
                 activation=None,
-                is_blk=block_sharded_downsample,
+                is_blk=block_sharded,
                 dram_activation="downsample" in dram_convs,
                 dram_conv_slices=dram_conv_slices,
                 input_dtype=input_dtype,
@@ -271,17 +323,20 @@ class TTResNet:
     strides, the max pool, each layer's block count and which blocks are DCNv2. ``params.tt_kwargs``
     holds the memory and precision arguments below, the ones the weights were prepared for.
 
-    ``out_indices``, ``dram_activation_stages`` and ``block_sharded_downsample_stages``
-    index the four ResNet layers (0 is layer1). ``dram_activation_stages`` lists the layers
+    ``out_indices`` and every ``*_stages`` argument index the four ResNet layers (0 is layer1).
+    ``dram_activation_stages`` lists the layers
     whose activations are kept in DRAM, for layers whose convs do not fit in L1: their
     spatial convs run in ``dram_conv_slices`` width slices and their 1x1 convs as a DRAM
     matmul. A layer that follows one of them and is not listed itself reads its input from
-    DRAM the same way. ``block_sharded_downsample_stages`` lists the layers whose downsample
-    conv is block sharded, and ``fp32_acc_stages`` the layers whose convs accumulate in an fp32
-    destination register (see TTBottleneck). ``stem_act_block_h`` and ``conv2_act_block_h`` are
-    the stem conv's and the non-DCN conv2s' act_block_h overrides, None for conv2d's own, and
-    ``weights_dtype`` the convs' weight dtype. ``model_config.tt_resnet_kwargs`` gives
-    BEVFormer-base's values, and ``model_config.RESNET_KWARGS["out_indices"]`` its ``out_indices``.
+    DRAM the same way. ``block_sharded_stages`` lists the layers whose downsample and non-DCN
+    conv2s are block sharded, ``fp32_acc_stages`` the layers whose convs accumulate in an
+    fp32 destination register (see TTBottleneck), and ``dcn_sharded_input_stages`` the layers
+    whose DCNs take a height-sharded L1 input (TTModulatedDeformConv2dPack). ``stem_act_block_h``
+    and ``conv2_act_block_h`` are the stem conv's and the non-DCN conv2s' act_block_h overrides,
+    None for conv2d's own, and
+    ``weights_dtype`` the convs' weight dtype. ``model_config.tt_resnet_kwargs`` gives the
+    configured variant's values, and ``model_config.RESNET_KWARGS["out_indices"]`` its
+    ``out_indices``.
     """
 
     num_layers = 4
@@ -333,8 +388,9 @@ class TTResNet:
         i,
         dram_activation_stages=(),
         dram_conv_slices=None,
-        block_sharded_downsample_stages=(),
+        block_sharded_stages=(),
         fp32_acc_stages=(),
+        dcn_sharded_input_stages=(),
         conv2_act_block_h=None,
         weights_dtype=ttnn.bfloat8_b,
     ):
@@ -344,8 +400,9 @@ class TTResNet:
             dram_activation=i in dram_activation_stages,
             dram_input=i not in dram_activation_stages and i - 1 in dram_activation_stages,
             dram_conv_slices=dram_conv_slices,
-            block_sharded_downsample=i in block_sharded_downsample_stages,
+            block_sharded=i in block_sharded_stages,
             fp32_acc=i in fp32_acc_stages,
+            dcn_sharded_input=i in dcn_sharded_input_stages,
             conv2_act_block_h=conv2_act_block_h,
             weights_dtype=weights_dtype,
         )
@@ -375,13 +432,13 @@ class TTResNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ceil_mode=False,
         )
-        signpost(header="ResNet Stem Complete")
+        signpost(header="ResNet Stem End")
 
         outs = []
         for i, res_layer in enumerate(self.res_layers):
             signpost(header=f"ResNet Layer{i + 1} Start")
             x = res_layer(x)
-            signpost(header=f"ResNet Layer{i + 1} Complete")
+            signpost(header=f"ResNet Layer{i + 1} End")
             if i in self.out_indices:
                 outs.append(x)
         signpost(header="TTNN ResNet Forward End")

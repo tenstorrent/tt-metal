@@ -183,7 +183,7 @@ bool run_sfpu_all_same_buffer(distributed::MeshCommandQueue& cq, const SfpuConfi
     });
     std::vector<uint32_t> packed_golden = pack_vector<uint32_t, bfloat16>(golden);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*cq.device());
     distributed::MeshWorkload mesh_workload;
 
     const std::map<std::string, std::string> sfpu_defines = build_sfpu_defines(test_config);

@@ -11,7 +11,7 @@
 #include <filesystem>
 #include <optional>
 #include <tt-metalium/constants.hpp>
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 #include <vector>
 #include <xtensor-blas/xlinalg.hpp>
 #include <xtensor/containers/xadapt.hpp>
