@@ -4,11 +4,8 @@
 #pragma once
 #include <cstdint>
 namespace ckernel::sfpu {
-struct SoftshrinkBf16Config {
-    static constexpr uint32_t kThresholdBits = 0x3f000000u;
-};
+struct SoftshrinkBf16Config {};
 }  // namespace ckernel::sfpu
-#include "ckernel_sfpu_softshrink_bf16_simple_forward.h"
 
 namespace ckernel::sfpu {
 
@@ -25,11 +22,7 @@ inline bool bf16_dest_softshrink() {
     return false;
 #endif
 }
-// The Blackhole whole-tile call as tt-polynomial-fitter's scheduler issues it (ttpoly/sfpu_schedule.py
-// in tenstorrent/tt-polynomial-fitter, not in this repository): the compiled instructions of
-// ckernel::sfpu::bf16::softshrink::calculate_simple_forward<ckernel::sfpu::SoftshrinkBf16Config, 32> in a stall-filling
-// order, rows addressed by their immediates, constants held in LRegs. It stores the same word for every BF16 input;
-// other ITERATIONS run the compiled body itself.
+// calculate_simple_forward's instructions in a stall-filling order, constants held in LRegs.
 inline void calculate_softshrink_bf16_scheduled() {
     TTI_SFPLOAD(0, 0, 7, 0);
     TTI_SFPLOADI(7, 0, 0x3f00);
@@ -323,15 +316,10 @@ inline void calculate_softshrink_bf16_scheduled() {
 }
 
 template <int ITERATIONS = 32>
-inline void calculate_softshrink_bf16() {
-    if constexpr (ITERATIONS == 32) {
-        calculate_softshrink_bf16_scheduled();
-    } else {
-        ckernel::sfpu::bf16::softshrink::calculate_simple_forward<ckernel::sfpu::SoftshrinkBf16Config, ITERATIONS>();
-    }
+__attribute__((noinline)) inline void calculate_softshrink_bf16() {
+    static_assert(ITERATIONS == 32, "the BF16 kernel runs as one whole-tile call");
+    calculate_softshrink_bf16_scheduled();
 }
-inline void init_softshrink_bf16() {
-    ckernel::sfpu::bf16::softshrink::init_simple_forward<ckernel::sfpu::SoftshrinkBf16Config>();
-}
+inline void init_softshrink_bf16() {}
 
 }  // namespace ckernel::sfpu

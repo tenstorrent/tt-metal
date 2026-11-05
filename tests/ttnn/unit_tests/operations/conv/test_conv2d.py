@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import torch
 from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import run_conv, torch_tensor_map, HS, WS, BS
 import ttnn
 
@@ -256,3 +257,55 @@ def test_conv_dram(
         fast_compare=True,
         use_dram_slicing=True,
     )
+
+
+_CONV_ZERO_PARAM_CASES = [
+    ({"in_channels": 0}, "in_channels"),
+    ({"out_channels": 0}, "out_channels"),
+    ({"batch_size": 0}, "batch_size"),
+    ({"kernel_size": (0, 3)}, "kernel_size"),
+    ({"stride": (1, 0)}, "stride"),
+    ({"groups": 0}, "groups"),
+]
+_CONV_ZERO_PARAM_IDS = ["in_channels", "out_channels", "batch_size", "kernel_size", "stride", "groups"]
+
+
+def _conv_zero_param_kwargs(device, override):
+    kwargs = dict(
+        in_channels=32,
+        out_channels=32,
+        batch_size=1,
+        input_height=8,
+        input_width=8,
+        kernel_size=(3, 3),
+        stride=(1, 1),
+        padding=(1, 1),
+        dilation=(1, 1),
+        groups=1,
+        device=device,
+    )
+    kwargs.update(override)
+    return kwargs
+
+
+@pytest.mark.parametrize("override, field", _CONV_ZERO_PARAM_CASES, ids=_CONV_ZERO_PARAM_IDS)
+def test_conv2d_rejects_zero_params(device, override, field, expect_error):
+    tt_input = ttnn.from_torch(torch.randn(1, 1, 64, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, device=device)
+    tt_weight = ttnn.from_torch(torch.randn(32, 32, 3, 3, dtype=torch.bfloat16), dtype=ttnn.bfloat16)
+    with expect_error(RuntimeError, f"{field}.*must be greater than 0"):
+        ttnn.conv2d(input_tensor=tt_input, weight_tensor=tt_weight, **_conv_zero_param_kwargs(device, override))
+
+
+@pytest.mark.parametrize("override, field", _CONV_ZERO_PARAM_CASES, ids=_CONV_ZERO_PARAM_IDS)
+def test_prepare_conv_weights_rejects_zero_params(device, override, field, expect_error):
+    tt_weight = ttnn.from_torch(torch.randn(32, 32, 3, 3, dtype=torch.bfloat16), dtype=ttnn.bfloat16)
+    with expect_error(RuntimeError, f"{field}.*must be greater than 0"):
+        ttnn.prepare_conv_weights(
+            weight_tensor=tt_weight,
+            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            weights_format="OIHW",
+            has_bias=False,
+            input_dtype=ttnn.bfloat16,
+            **_conv_zero_param_kwargs(device, override),
+        )

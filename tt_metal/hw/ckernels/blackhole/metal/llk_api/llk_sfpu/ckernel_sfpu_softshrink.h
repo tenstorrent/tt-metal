@@ -12,10 +12,12 @@ namespace ckernel::sfpu {
 
 inline void softshrink_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-bool bf16_dest_softshrink();
-template <int ITERATIONS>
-void calculate_softshrink_bf16();
-void init_softshrink_bf16();
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_softshrink_bf16.h"
+
+namespace ckernel::sfpu {
+
 // The param0 the generated softshrink kernel is fitted for, as FP32 bits; any other param0 runs the stock kernel.
 inline constexpr std::uint32_t softshrink_bf16_param0_bits = 0x3f000000u;
 // Whether BF16 DEST runs the generated softshrink kernel as one call over the whole tile.
@@ -27,7 +29,6 @@ inline void softshrink_bf16_tile_init() {
         init_softshrink_bf16();
     }
 }
-
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en = true>
 inline void calculate_softshrink(uint32_t param0) {
     if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
@@ -50,5 +51,3 @@ inline void calculate_softshrink(uint32_t param0) {
 }
 
 }  // namespace ckernel::sfpu
-
-#include "ckernel_sfpu_softshrink_bf16.h"
