@@ -593,3 +593,41 @@ def test_convert_to_hwc_rejects_unsupported_output_dtype(device, expect_error):
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     with expect_error(RuntimeError, "convert_to_hwc output dtype must be BFLOAT16 or FLOAT32"):
         ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_mem_config, dtype=ttnn.uint32)
+
+
+def _largest_divisor(n, limit):
+    return max(d for d in range(1, min(n, limit) + 1) if n % d == 0)
+
+
+# One camera image per call, as BEVFormer's stem feeds it: a DRAM input whose bank shards are far
+# larger than a core's L1, converted onto most of the grid.
+@pytest.mark.parametrize("HW", [480 * 800, 736 * 1280, 928 * 1600], ids=["800x480", "1280x736", "1600x928"])
+def test_convert_to_hwc_dram_large_image(device, HW):
+    C = 3
+    dram_banks = _largest_divisor(HW, device.dram_grid_size().x)
+    grid = device.compute_with_storage_grid_size()
+    num_cores = _largest_divisor(HW // ttnn.TILE_SIZE, grid.x * grid.y)
+
+    input_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_banks - 1, 0))}),
+        (C, HW // dram_banks),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, input_shard_spec)
+    output_shard_spec = ttnn.ShardSpec(
+        ttnn.num_cores_to_corerangeset(num_cores, grid, True),
+        (HW // num_cores, round_up(C, 8)),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+
+    torch_input = torch.randn([1, 1, C, HW], dtype=torch.bfloat16)
+    input_tensor = ttnn.Tensor(
+        torch_input, ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, mem_config=input_mem_config
+    )
+    actual = ttnn.to_torch(
+        ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_mem_config, dtype=ttnn.bfloat16)
+    )
+
+    expected = torch_input.transpose(2, 3).reshape(1, 1, HW, C)
+    assert torch.equal(actual[..., :C], expected)
