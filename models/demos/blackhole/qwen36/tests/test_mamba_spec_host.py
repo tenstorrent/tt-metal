@@ -201,6 +201,33 @@ class _FakeDevice:
         return heads.pop(), self.conv.get((g, self.lay.conv_page(b)))
 
     def copy(self, src, dst):
+        """copy_kv_blocks: every byte of block src to the same offset in block dst. A state page moves with its bytes:
+        fp32 page p (pool-relative) of row p // nb lands on row p // nb + (dst - src) * S / 4096, a whole page only
+        when that is an integer (the blocks have the same phase); otherwise its bytes straddle two pages and no state
+        page of dst holds it. bf16 conv pages move by (dst - src) * S / 2048 rows (always whole)."""
+        lay, nb, S, P = self.lay, self.lay.n_banks, self.lay.block_bytes, self.lay.pool1_pages
+        shift32, shift16 = (dst - src) * S / 4096, (dst - src) * S // 2048
+        moves = []
+        for (g, p), lab in list(self.rec.items()):
+            off, q = (0, p) if p < P else (P, p - P)
+            if q // nb >= -(-src * S // 4096) and q // nb < ((src + 1) * S) // 4096:
+                moves.append(((g, p), lab, off, q))
+        for g in range(self.G):  # dst's bytes are src's now: whatever dst's layout pages held is gone
+            self.write_block(g, dst, "overwritten")
+        for (g, p), lab, off, q in moves:
+            if shift32 == int(shift32):
+                self.rec[(g, off + q + int(shift32) * nb)] = lab
+        cmoves = []
+        T16 = lay.conv_pages_total
+        for (g, c), lab in list(self.conv.items()):
+            off, q = (0, c) if c < T16 else (T16, c - T16)
+            if q // nb >= -(-src * S // 2048) and q // nb < ((src + 1) * S) // 2048:
+                cmoves.append((g, off + q + shift16 * nb, lab))
+        for g, c, lab in cmoves:
+            self.conv[(g, c)] = lab
+
+    def relayout(self, src, dst):
+        """SpecGdnBlockState._relayout: the state copied page by page with each block's own layout."""
         for g in range(self.G):
             for ps, pd in zip(self._heads(src), self._heads(dst)):
                 self.rec[(g, pd)] = self.rec.get((g, ps))
@@ -214,6 +241,8 @@ class _FakeDevice:
         for op in ops:
             if op[0] == "copy":
                 self.copy(op[1], op[2])
+            elif op[0] == "relayout":
+                self.relayout(op[1], op[2])
             else:
                 _, u, t, g, dst = op
                 self.conv[(g, self.lay.conv_page(dst))] = self.win[u][t]
@@ -644,7 +673,9 @@ def _broken(name):
         def copy_plan(self, copies):
             ops = super().copy_plan(copies)
             if name == "no_conv_on_copy":
-                ops = [op for op in ops if op[0] == "copy"]
+                ops = [op for op in ops if op[0] != "conv"]
+            if name == "byte_copy_across_phases":
+                ops = [("copy", *op[1:]) if op[0] == "relayout" else op for op in ops]
             return ops
 
         def take_pending(self):
@@ -659,7 +690,9 @@ def _broken(name):
     return Broken
 
 
-@pytest.mark.parametrize("name", ["no_conv_on_copy", "no_boundary_write", "start_at_column_0"])
+@pytest.mark.parametrize(
+    "name", ["no_conv_on_copy", "no_boundary_write", "start_at_column_0", "byte_copy_across_phases"]
+)
 def test_each_mechanism_is_needed(tmp_path, monkeypatch, name):
     monkeypatch.setitem(globals(), "_BookAsState", _broken(name))
     with pytest.raises(AssertionError):  # allow-pytest.raises: host test, runs with --noconftest (no expect_error)
@@ -675,10 +708,11 @@ def test_a_copied_block_names_the_state_of_its_source_column():
     w = torch.zeros(B, T, dtype=torch.int64)
     w[2] = torch.tensor([30, 31, 32, 33])
     book.set_step([w], torch.zeros(B, dtype=torch.int64), [2])
-    assert book.copy_plan([(33, 30)]) == [("copy", 33, 30), ("conv", 2, K, 0, 30)]
+    # at BF8 1024 odd and even blocks hold their fp32 pages at different offsets: those copies move page by page
+    assert book.copy_plan([(33, 30)]) == [("relayout", 33, 30), ("conv", 2, K, 0, 30)]
     assert book.copy_plan([(30, 40)]) == [("copy", 30, 40), ("conv", 2, K, 0, 40)]
     assert book.copy_plan([(77, 31)]) == [("copy", 77, 31)]  # an unmapped source: the block holds its full state
-    assert book.copy_plan([(31, 41)]) == [("copy", 31, 41)]  # ... and so does its copy
+    assert book.copy_plan([(31, 42)]) == [("relayout", 31, 42)]  # ... and so does its copy
 
 
 @pytest.mark.parametrize("retention", [0, None])
@@ -794,8 +828,8 @@ def test_spec_class_binds_and_routes_only_through_the_spec_layout(monkeypatch):
     made = []
 
     class Recorder:
-        def __init__(self, model, specs, kv, T, layout, cache_mode, mamba_block_size):
-            made.append((T, layout, cache_mode, mamba_block_size))
+        def __init__(self, model, specs, kv, T, layout, cache_mode, mamba_block_size, partial_prefix_hits):
+            made.append((T, layout, cache_mode, mamba_block_size, partial_prefix_hits))
             self.layout = SimpleNamespace(layout=layout, heads_in_k=8, nv=12)
             self.G, self.calls = 3, []
 
@@ -817,7 +851,7 @@ def test_spec_class_binds_and_routes_only_through_the_spec_layout(monkeypatch):
     )
     cls = Qwen36MTPContractForCausalLM
     kv = cls.allocate_kv_cache_per_layer(me, _per_layer_specs())
-    assert len(kv) == 16 and made == [(T, "two_pool", "align", 2048)]
+    assert len(kv) == 16 and made == [(T, "two_pool", "align", 2048, False)]
     assert isinstance(model._spec_blocks, Recorder) and not hasattr(model, "_paged_state")
     cls.copy_kv_cache_blocks(me, None, [(3, 4)])
     cls.zero_kv_cache_blocks(me, None, [5])

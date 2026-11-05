@@ -1430,6 +1430,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                 layout=os.environ.get("QWEN36_MAMBA_SPEC_LAYOUT", "two_pool"),
                 cache_mode=mode,
                 mamba_block_size=int(getattr(cc, "block_size", 0) or 0) if mode == "align" else 0,
+                partial_prefix_hits=0
+                < int(getattr(cc, "prefix_match_unit", None) or 0)
+                < int(getattr(cc, "block_size", 0) or 0),
             )
             logger.info(
                 f"QWEN36_MAMBA_SPEC: GDN state in vLLM blocks, mode {mode}, layout {model._spec_blocks.layout.layout} "

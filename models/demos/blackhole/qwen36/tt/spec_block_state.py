@@ -96,6 +96,12 @@ class SpecBlockLayout:
         S = int(self.block_bytes)
         return -(-b * S // FP32_PAGE), ((b + 1) * S) // FP32_PAGE
 
+    def phase(self, b):
+        """Byte offset, inside block b's range on a bank, of the first whole fp32 page: 0 for every block when a block
+        holds a whole number of fp32 pages per bank; else it depends on the block (BF8 1024 on 8 banks: 0 for even
+        blocks, 2048 for odd ones). A byte copy between blocks of different phase misplaces the state pages."""
+        return -(-int(b) * int(self.block_bytes) // FP32_PAGE) * FP32_PAGE - int(b) * int(self.block_bytes)
+
     def _first_head_page(self, b):
         lo, _ = self._fp32_rows(b)
         return -(-lo * int(self.n_banks) // HALF_PAGES) * HALF_PAGES
@@ -354,8 +360,12 @@ class SpecBlockBook:
 
     def copy_plan(self, copies):
         """The device work of vLLM's (src, dst) block copies, in list order: ("copy", src, dst) = the whole block of every
-        K and V buffer; ("conv", row, column, group, dst) = that window column's conv rows into dst, for a source that is
-        a window column of a row's latest verify (its block holds a stale history). dst then names the same state."""
+        K and V buffer, when both blocks hold their pages at the same offsets (SpecBlockLayout.phase); else
+        ("relayout", src, dst) = every head and the conv history read at src's pages and written at dst's (every copy
+        TT receives is a state copy: vLLM copies attention blocks only for partial prefix hits, which the spec class
+        refuses with such a layout); ("conv", row, column, group, dst) = that window column's conv rows into dst, for a
+        source that is a window column of a row's latest verify (its block holds a stale history). dst then names the
+        same state."""
         ops = []
         for src, dst in copies:
             src, dst = int(src), int(dst)
@@ -363,7 +373,8 @@ class SpecBlockBook:
                 continue
             if src <= 0 or dst <= 0:
                 raise ValueError(f"block copy {src} -> {dst} names the null block 0")
-            ops.append(("copy", src, dst))
+            same = self.layout.phase(src) == self.layout.phase(dst)
+            ops.append(("copy" if same else "relayout", src, dst))
             ent = self.window_map.get(src)
             self.forget_block(dst)
             if ent is not None:
@@ -426,7 +437,17 @@ class SpecGdnBlockState:
     slot's KV buffers: dn._spec_paged (rec views of K and V, conv view of V, the group's ring_page_idx tensor). The host
     state is a SpecBlockBook (``book``); this class runs its device work."""
 
-    def __init__(self, model, per_layer_specs, kv_caches, T, layout="two_pool", cache_mode="none", mamba_block_size=0):
+    def __init__(
+        self,
+        model,
+        per_layer_specs,
+        kv_caches,
+        T,
+        layout="two_pool",
+        cache_mode="none",
+        mamba_block_size=0,
+        partial_prefix_hits=False,
+    ):
         import ttnn
         from models.demos.blackhole.qwen36.tt.gdn_block_state import is_mamba_entry
 
@@ -441,6 +462,7 @@ class SpecGdnBlockState:
         self.G = max(self.layer_groups.values()) + 1 if self.layer_groups else 0
         n_banks = int(mesh.dram_grid_size().x)
         self.layers = []  # (layer index, TPGatedDeltaNet, group)
+        self._slot_layers = {}  # layer slot -> its first GDN layer
         lay = None
         for i, g in sorted(self.layer_groups.items()):
             dn = model.layers[i].attention
@@ -478,7 +500,15 @@ class SpecGdnBlockState:
                 two_pool=lay.heads_in_k < dn.Nv,
             )
             self.layers.append((i, dn, g))
+            self._slot_layers.setdefault(per_layer_specs[i][2], dn)  # its views cover the slot's K and V
         self.layout = lay
+        if partial_prefix_hits and lay.block_bytes % FP32_PAGE:
+            raise ValueError(
+                f"QWEN36_MAMBA_SPEC: a block of {lay.block_bytes} B per bank is not a whole number of fp32 pages, so "
+                "state copies move page by page, and partial prefix hits (prefix_match_unit below the block size) "
+                "make vLLM copy attention blocks too; use a block of whole fp32 pages (BF8 2048 on 8 banks) or "
+                "block-sized prefix hits"
+            )
         self.book = SpecBlockBook(lay, self.G, self.bmax, self.T, cache_mode, mamba_block_size)
         rep = ttnn.ReplicateTensorToMesh(mesh)
         self._idx_dev = [
@@ -548,8 +578,9 @@ class SpecGdnBlockState:
 
             def __exit__(self, *exc):
                 if self.on and exc[0] is None:
-                    import ttnn
                     from loguru import logger
+
+                    import ttnn
 
                     ttnn.synchronize_device(state.mesh)
                     logger.info(f"[mamba_spec] {kind}: {n} in {(time.perf_counter() - self.t0) * 1e3:.2f} ms")
@@ -606,7 +637,6 @@ class SpecGdnBlockState:
         bound B=1 scratch, the conv write from the window, the whole-block copy and zeroing), so none compiles after
         the decode traces are captured."""
         import ttnn
-
         from models.demos.blackhole.qwen36.tt.gdn_block_state import zero_kv_blocks
 
         model = self.model
@@ -628,7 +658,9 @@ class SpecGdnBlockState:
         )
         for kv in model._paged_kv_caches:  # copy_kv_blocks' programs, block 0 onto itself
             for t in kv:
-                blk = ttnn.slice(t, (0, 0, 0, 0), [1] + [int(x) for x in list(t.shape)[1:]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                blk = ttnn.slice(
+                    t, (0, 0, 0, 0), [1] + [int(x) for x in list(t.shape)[1:]], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
                 ttnn.experimental.paged_fill_cache(t, blk, pt, batch_idx=0)
                 ttnn.deallocate(blk)
         ttnn.deallocate(pt)
@@ -644,8 +676,38 @@ class SpecGdnBlockState:
             for op in ops:
                 if op[0] == "copy":
                     copy_kv_blocks(self.model, [(op[1], op[2])])
+                elif op[0] == "relayout":
+                    self._relayout(op[1], op[2])
                 else:
                     self.materialize(*op[1:])
+
+    def _relayout(self, src, dst):
+        """Copy block src's state into block dst page by page with the layout of each (the blocks hold their whole
+        fp32 pages at different offsets): in every layer slot, the head pages of each pool and the conv history."""
+        import ttnn
+
+        lay, mc = self.layout, ttnn.DRAM_MEMORY_CONFIG
+        ps, pd = lay.head_pages(torch.tensor([src]))[0], lay.head_pages(torch.tensor([dst]))[0]
+        for dn in self._slot_layers.values():
+            for view, h0, h1, off in self._pools(dn):
+                if h1 <= h0:
+                    continue
+                n = 2 * (h1 - h0)  # [Dk / 2, Dv] slices
+                s0 = (int(ps[h0]) - off) // HALF_PAGES
+                part = ttnn.slice(view, (s0, 0, 0, 0), (s0 + n, 1, dn.Dk // 2, dn.Dv), memory_config=mc)
+                x = ttnn.reshape(part, (1, 1, n * dn.Dk // 2, dn.Dv))
+                pt = self._page_table((int(pd[h0]) - off) // HALF_PAGES, n)
+                ttnn.experimental.paged_fill_cache(view, x, pt, batch_idx=0)
+                ttnn.deallocate(pt)
+                ttnn.deallocate(part)
+            vs, qs = dn._spec_paged.conv_at(lay.conv_page(src), lay.conv_pages_total)
+            vd, qd = dn._spec_paged.conv_at(lay.conv_page(dst), lay.conv_pages_total)
+            part = ttnn.slice(vs, (qs, 0, 0, 0), (qs + lay.conv_pages, 1, 32, 32), memory_config=mc)
+            x = ttnn.reshape(part, (1, 1, lay.conv_pages * 32, 32))
+            pt = self._page_table(qd, lay.conv_pages)
+            ttnn.experimental.paged_fill_cache(vd, x, pt, batch_idx=0)
+            ttnn.deallocate(pt)
+            ttnn.deallocate(part)
 
     def zero_blocks(self, block_ids):
         from models.demos.blackhole.qwen36.tt.gdn_block_state import zero_kv_blocks

@@ -190,3 +190,25 @@ def test_traced_time_ring_vs_pages(device, geo_block_layout):
         f"\n[{g.id} block {block} {layout}] gdn_spec_step B={B} T={T}: ring {r_min:.1f} us (median {r_med:.1f}), "
         f"KV-buffer pages {p_min:.1f} us (median {p_med:.1f}), {100 * (p_min - r_min) / r_min:+.2f}%"
     )
+
+
+@pytest.mark.parametrize("geo_block_layout", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}_{c[2]}")
+def test_block_copies_keep_the_state(device, geo_block_layout):
+    """SpecGdnBlockState.copy_blocks: a whole-block copy between blocks of the same phase and a page-by-page copy
+    between blocks of different phase (BF8 1024: odd and even blocks) both leave the source's state at the
+    destination's layout pages."""
+    g, block, layout = geo_block_layout
+    st, dn, k, v = _state(device, g, block, 32, layout)
+    st.model = SimpleNamespace(_paged_kv_caches=[(k, v)], mesh_device=device)
+    st._slot_layers = {0: dn}
+    st.book = sbs.SpecBlockBook(st.layout, 1, 8, T, "none")
+    torch.manual_seed(11)
+    rec = torch.randn(1, g.Nv, 128, 128)
+    carry = torch.randn(1, 3, g.C).bfloat16()
+    st._write_rec(dn, 7, ttnn.from_torch(rec, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device))
+    st._write_carry(dn, 7, ttnn.from_torch(carry, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device))
+    for dst in (9, 10, 13, 20):
+        st.copy_blocks([(7, dst)])
+        got = ttnn.to_torch(st._read_rec(dn, dst)).reshape(1, g.Nv, 128, 128).float()
+        assert torch.equal(got, rec), f"7 -> {dst} (phases {st.layout.phase(7)}, {st.layout.phase(dst)}): state"
+        assert torch.equal(ttnn.to_torch(st._read_carry(dn, dst)).reshape(1, 3, g.C), carry), f"7 -> {dst}: conv"
