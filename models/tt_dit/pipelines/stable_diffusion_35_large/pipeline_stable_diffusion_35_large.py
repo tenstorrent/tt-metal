@@ -369,12 +369,13 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
 
         latents_shape = (
             batch_size,
+            self._num_channels_latents,
             self._height // _VAE_SCALE_FACTOR,
             self._width // _VAE_SCALE_FACTOR,
-            self._num_channels_latents,
         )
 
-        latents = torch.randn(latents_shape, dtype=dtype)
+        # Draw the noise in the reference's NCHW layout, so that it matches diffusers for a given seed.
+        latents = torch.randn(latents_shape, dtype=dtype).permute(0, 2, 3, 1)
         latents = self.transformers[0].patchify(latents)
         return from_torch_to_devices(
             latents,

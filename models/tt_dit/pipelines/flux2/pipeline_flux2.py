@@ -405,8 +405,10 @@ class Flux2Pipeline:
         if seed is not None:
             torch.manual_seed(seed)
 
-        shape = [transformer_batch_size, self._num_channels_latents, latents_height, latents_width]
-        latents = self._patchify(torch.randn(shape).permute(0, 2, 3, 1))
+        # Draw the noise in the reference's packed layout, so that it matches diffusers for a given seed.
+        p = self._patch_size
+        shape = [transformer_batch_size, self._num_channels_latents * p * p, latents_height // p, latents_width // p]
+        latents = torch.randn(shape, dtype=torch.bfloat16).permute(0, 2, 3, 1).reshape(shape[0], -1, shape[1])
 
         self.ts._tt_latents_step.update(latents, traced, mesh_axes=[None, sp_axis, None], device=self._mesh_device)
         self.ts._tt_guidance.update(guidance.unsqueeze(1), traced, device=self._mesh_device)
