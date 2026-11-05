@@ -13,6 +13,7 @@
 #include <thread>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>

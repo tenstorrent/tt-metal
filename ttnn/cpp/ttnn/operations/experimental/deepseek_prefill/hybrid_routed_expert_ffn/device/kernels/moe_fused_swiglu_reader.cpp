@@ -207,12 +207,30 @@ constexpr uint32_t XMCAST_READY_SEM = get_compile_time_arg_val(CT_XMCAST + 1);
 constexpr uint32_t XMCAST_FREE_SEM = get_compile_time_arg_val(CT_XMCAST + 2);
 constexpr uint32_t XMCAST_CONSUMERS = get_compile_time_arg_val(CT_XMCAST + 3);
 constexpr bool HMCAST_ACTIVE = get_compile_time_arg_val(CT_HMCAST + 0) != 0;
-// h's descriptor has a rotating sender list of the whole grid.  The grouped
-// rectangle follows that list; only the rectangles are used by this raw path.
-constexpr uint32_t RT_HGROUP_RECT = RT_HMCAST + 4 + 2 * HGROUPS * KGROUPS;
+// h's descriptor is the whole-grid rectangle alone, and the grouped rectangle follows it. The
+// standalone kernel also takes every grid core's coordinates here; this copy rebuilds them from the
+// two short lists above instead (grid_vx / grid_vy), because per-core runtime args sit in the
+// kernel-config ring the union program is short of.
+constexpr uint32_t RT_HGROUP_RECT = RT_HMCAST + 4;
 // Per-expert weight bases, role-major: EXPERTS_PER_CHIP W_gate addresses then EXPERTS_PER_CHIP
-// W_down addresses. Appended AFTER every mcast block, so none of the offsets above moved.
+// W_down addresses. Appended AFTER every mcast block, so none of the offsets above moved. Absent
+// when the union kernel reads them from its weight table instead; see hybrid_weight_table.hpp.
 constexpr uint32_t RT_WEIGHTS = RT_HGROUP_RECT + 4;
+#ifdef HYB_WEIGHT_TABLE
+constexpr uint32_t RT_WEIGHT_EXPERTS = 0;
+inline uint32_t w_gate_addr(uint32_t e) { return hyb_weight_addr(HYB_W_GATE, EXPERTS_PER_CHIP, e); }
+inline uint32_t w_down_addr(uint32_t e) { return hyb_weight_addr(HYB_W_DOWN, EXPERTS_PER_CHIP, e); }
+#else
+constexpr uint32_t RT_WEIGHT_EXPERTS = EXPERTS_PER_CHIP;
+inline uint32_t w_gate_addr(uint32_t e) { return get_arg_val<uint32_t>(RT_WEIGHTS + e); }
+inline uint32_t w_down_addr(uint32_t e) { return get_arg_val<uint32_t>(RT_WEIGHTS + EXPERTS_PER_CHIP + e); }
+#endif
+
+// Virtual coordinates of the grid core at column x / row y. The grid's virtual coordinates are
+// separable (the factory checks), so x comes from this row's x-multicast senders and y from this
+// column's peer list.
+inline uint32_t grid_vx(uint32_t x) { return get_arg_val<uint32_t>(RT_XMCAST + 4 + 2 * x + 0); }
+inline uint32_t grid_vy(uint32_t y) { return get_arg_val<uint32_t>(RT_PEERS + 2 * y + 1); }
 
 // POSTED drops the `ndest` payload write-acks and changes nothing else: the VALID flag stays
 // non-posted and LINKED on the same VC, so it cannot overtake the payload. Keep 0 reachable — if
@@ -299,7 +317,7 @@ constexpr uint32_t cb_down_bias = get_compile_time_arg_val(BIAS_CB_OFFSET + 2);
 constexpr auto gate_bias_args = TensorAccessorArgs<BIAS_CB_OFFSET + 3>();
 constexpr auto up_bias_args = TensorAccessorArgs<gate_bias_args.next_compile_time_args_offset()>();
 constexpr auto down_bias_args = TensorAccessorArgs<up_bias_args.next_compile_time_args_offset()>();
-constexpr uint32_t RT_BIAS = RT_WEIGHTS + 2 * EXPERTS_PER_CHIP;
+constexpr uint32_t RT_BIAS = RT_WEIGHTS + 2 * RT_WEIGHT_EXPERTS;
 #endif
 
 // Three `WeightRuns` bindings, because the three tensors this kernel touches can have DIFFERENT
@@ -369,6 +387,17 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* mailbox_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_addr);
     mailbox_words[moe_fused_swiglu::MBOX_HSEND_DONE] = 0;
     mailbox_words[moe_fused_swiglu::MBOX_UP_SCATTER_DONE] = 0;
+    // Short-block row mode: the writer sends its h fragment to the diagonal aggregator of its token
+    // row, which may sit in another column. Only this kernel holds the full-grid coordinate table,
+    // so hand the diagonal's coordinates over in the mailbox page (published before the first magic).
+    static_assert(moe_fused_swiglu::MBOX_ROW_AGG + M_BLOCK <= 16, "row-agg table exceeds the 64 B mailbox");
+    for (uint32_t t = 0; t < M_BLOCK; ++t) {
+        uint32_t packed = 0;
+        if (t < KGROUPS && t < HGROUPS) {
+            packed = grid_vx(t) | (grid_vy(t) << 16);
+        }
+        mailbox_words[moe_fused_swiglu::MBOX_ROW_AGG + t] = packed;
+    }
 
     // Row multicast state.  All receivers initialize their own flag before
     // acknowledging a sender; the sender waits for every acknowledgement, so
@@ -430,6 +459,67 @@ void kernel_main() {
     constexpr uint32_t H_FAST = WD_MROW_ROUNDS ? HID_T : (M_BLOCK * HN_PAD);
     constexpr uint32_t H_CAP = DEPTH_H * H_FAST;
 
+    // COUNTS_BCAST — idx, counts and (NEED_START) start pages, once per dispatch. Every core needs
+    // them, but all of them reading the same DRAM pages at once serialises ~2-3 x NUM_CORES
+    // requests on one bank. Grid core (0, 0) reads them and multicasts them to the full grid
+    // (the common h-mcast rectangle, NOC_0 order) at the same L1 addresses; the multicasts are
+    // LINKED so the valid semaphore that terminates the chain cannot overtake the data. No NoC1
+    // read can overlap the chain: each writer waits for its reader's mailbox before reading.
+    // `start` takes the counts scratch CB's second page (the host sizes it for two), so it no
+    // longer reuses the counts page and every expert can index both.
+    const uint32_t l1_idx = get_write_ptr(cb_idx_scratch);
+    const uint32_t l1_cnt = get_write_ptr(cb_counts_scratch);
+    constexpr uint32_t START_L1_OFFSET = COUNTS_PAGE > START_PAGE ? COUNTS_PAGE : START_PAGE;
+    const uint32_t l1_start = l1_cnt + START_L1_OFFSET;
+    {
+        // The valid flag borrows SEM_XSTAGED: every id is taken in the hybrid op (fused 0..14 plus
+        // its pass barrier), and XSTAGED is otherwise a same-core word that starts at zero (launch,
+        // or the hybrid barrier's reset). Each core clears it again before publishing expert 0's
+        // mailbox, and the writer's first XSTAGED wait comes after that mailbox, so the flag can
+        // never pass for a staged x block.
+        Semaphore<> counts_valid_sem(SEM_XSTAGED);
+        if (my_col == 0 && my_row == 0) {
+            noc.async_read(idx_acc, CoreLocalMem<uint32_t>(l1_idx), IDX_PAGE, {.page_id = 0}, {});
+            noc.async_read(cnt_acc, CoreLocalMem<uint32_t>(l1_cnt), COUNTS_PAGE, {.page_id = 0}, {});
+            if constexpr (NEED_START) {
+                noc.async_read(start_acc, CoreLocalMem<uint32_t>(l1_start), START_PAGE, {.page_id = 0}, {});
+            }
+            noc.async_read_barrier();
+            constexpr uint32_t ndest = HGROUPS * KGROUPS - 1;
+            if constexpr (ndest > 0) {
+                const uint32_t mx0 = get_arg_val<uint32_t>(RT_HMCAST + 0);
+                const uint32_t my0 = get_arg_val<uint32_t>(RT_HMCAST + 1);
+                const uint32_t mx1 = get_arg_val<uint32_t>(RT_HMCAST + 2);
+                const uint32_t my1 = get_arg_val<uint32_t>(RT_HMCAST + 3);
+                const auto bcast = [&](uint32_t l1, uint32_t size) {
+                    noc.async_write_multicast(
+                        CoreLocalMem<uint32_t>(l1),
+                        MulticastEndpoint{},
+                        size,
+                        ndest,
+                        {.offset_bytes = 0},
+                        {.noc_x_start = mx0, .noc_y_start = my0, .noc_x_end = mx1, .noc_y_end = my1, .addr = l1},
+                        /*linked=*/true);
+                };
+                bcast(l1_idx, IDX_PAGE);
+                bcast(l1_cnt, COUNTS_PAGE);
+                if constexpr (NEED_START) {
+                    bcast(l1_start, START_PAGE);
+                }
+                noc.async_writes_flushed();
+                counts_valid_sem.set(1);
+                counts_valid_sem.set_multicast<NocOptions::DEFAULT>(noc, mx0, my0, mx1, my1, ndest);
+                // The multicast sources its value from this word, so clear it only once sent.
+                noc.async_writes_flushed();
+                counts_valid_sem.set(0);
+            }
+        } else {
+            counts_valid_sem.wait(1);
+            counts_valid_sem.set(0);
+        }
+        invalidate_l1_cache();
+    }
+
     // ======================= per-local-expert loop =======================
     // ONE program, every local expert. `gb` is the M-block index ACROSS experts: every monotone
     // semaphore and mailbox counter below is expressed in it, because those counters are never
@@ -437,9 +527,8 @@ void kernel_main() {
     // `block_idx` stays expert-relative — it selects token rows and the residency gate.
     uint32_t gb = 0;
     for (uint32_t local_expert_id = 0; local_expert_id < EXPERTS_PER_CHIP; ++local_expert_id) {
-        const auto wg_acc = TensorAccessor(wg_args, get_arg_val<uint32_t>(RT_WEIGHTS + local_expert_id), W_TILE);
-        const auto wd_acc =
-            TensorAccessor(wd_args, get_arg_val<uint32_t>(RT_WEIGHTS + EXPERTS_PER_CHIP + local_expert_id), W_TILE);
+        const auto wg_acc = TensorAccessor(wg_args, w_gate_addr(local_expert_id), W_TILE);
+        const auto wd_acc = TensorAccessor(wd_args, w_down_addr(local_expert_id), W_TILE);
 #ifdef FUSE_BIAS
         // This expert's bias windows, fetched once. Gate/up take the COLUMN's whole HN_PAD window
         // rather than a per-core slice: after the reduce-scatter a core's gate/up slice is a flat
@@ -492,18 +581,8 @@ void kernel_main() {
             cb_push_back(cb_down_bias, EC_MAX);
         }
 #endif
-        // Phase 0 — this expert's device-resident count. count = counts[ idx[local_expert_id] ].
-        // Two one-page reads into unpushed scratch CBs, read back through a volatile L1 pointer.
-        const uint32_t l1_idx = get_write_ptr(cb_idx_scratch);
-        const uint32_t l1_cnt = get_write_ptr(cb_counts_scratch);
-        // Both accessors fetch page zero into distinct scratch pages.  Only the L1 lookup below
-        // depends on `global_expert_id`; the counts PAGE address does not, so issue the two independent DRAM reads
-        // together and pay one completion round-trip.  The optional region-start read remains later:
-        // it deliberately reuses l1_cnt after `count` is extracted.
-        noc.async_read(idx_acc, CoreLocalMem<uint32_t>(l1_idx), IDX_PAGE, {.page_id = 0}, {});
-        noc.async_read(cnt_acc, CoreLocalMem<uint32_t>(l1_cnt), COUNTS_PAGE, {.page_id = 0}, {});
-        noc.async_read_barrier();
-        invalidate_l1_cache();
+        // Phase 0 — this expert's device-resident count. count = counts[ idx[local_expert_id] ],
+        // looked up in the scratch pages the COUNTS_BCAST above filled once for every expert.
         const uint32_t global_expert_id = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_idx)[local_expert_id];
         // The routing table lives on device, so the host can size it but never bound its VALUES. An
         // id past the counts tensor indexes outside the scratch page, which would turn whatever L1
@@ -521,19 +600,14 @@ void kernel_main() {
             m_t = M_T_MAX;
         }
 
-        // This expert's REGION BASE in a shared buffer, in token rows. Reuses cb_counts_scratch's page,
-        // dead once the count is extracted and exactly the right size (host validates equal lengths), so
-        // the fused mode costs zero extra L1. Read ahead of the M-block derivations, not after, so a
-        // rejected region can zero the count they are built from.
+        // This expert's REGION BASE in a shared buffer, in token rows, from cb_counts_scratch's second
+        // page (COUNTS_BCAST). Looked up ahead of the M-block derivations, not after, so a rejected
+        // region can zero the count they are built from.
         uint32_t start_row = 0;
         bool region_ok = true;
         if constexpr (NEED_START) {
             // Same bound as the count: this lookup is the one that becomes the writer's NOC base.
             if (expert_in_range) {
-                const uint32_t l1_start = get_write_ptr(cb_counts_scratch);
-                noc.async_read(start_acc, CoreLocalMem<uint32_t>(l1_start), START_PAGE, {.page_id = 0}, {});
-                noc.async_read_barrier();
-                invalidate_l1_cache();
                 start_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_start)[global_expert_id];
                 // The offsets are device-produced too, so the host sizes the table and cannot bound
                 // what it holds. This value becomes the x read base below and, through the mailbox,
@@ -621,17 +695,22 @@ void kernel_main() {
             // a pure function of the same mailbox words), which is what keeps the three collectives'
             // round counts and landing addresses in lockstep across the grid.
             const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, block_idx, M_BLOCK, M_EFF_MIN);
-            const bool wd_mrow = WD_MROW_ROUNDS && (m_eff == M_BLOCK);
+            const auto hrp = moe_fused_swiglu::h_row_plan(m_eff, M_BLOCK, HN_PAD, KGROUPS, HGROUPS);
+            const bool wd_mrow = WD_MROW_ROUNDS && hrp.on;
+            // Row rounds this block broadcasts: one per token tile-row (m_eff == KGROUPS on a full block).
+            const uint32_t h_rounds = wd_mgroup ? MGROUP_ROWS : m_eff;
+            const uint32_t h_pad_slots = moe_fused_swiglu::h_row_pad_slots(h_rounds, M_BLOCK, DEPTH_H, wd_mgroup);
+            // A diagonal aggregator sends this block only if its token row exists.
+            const bool row_sender = is_row_agg && (wd_mgroup || my_row < h_rounds);
             // Both running totals are advanced from GRID-UNIFORM predicates rather than from the branch
             // actually taken, so the writer reaches the identical value on the identical block.
-            if (wd_mrow ? is_row_agg : is_root) {
+            if (wd_mrow ? row_sender : is_root) {
                 hfree_seq += wd_mgroup ? MGROUP_CORES : NUM_CORES;
             }
-            if (wd_mrow && !wd_mgroup && is_row_agg && h_round_on_writer(my_row)) {
+            if (wd_mrow && !wd_mgroup && row_sender && h_round_on_writer(my_row)) {
                 ++hsend_seq;
             }
-            h_cursor += wd_mrow ? ((wd_mgroup ? MGROUP_ROWS : KGROUPS) * HROW_T + (wd_mgroup ? 0u : HROW_T))
-                                : (HGROUPS * m_eff * HN_PAD);
+            h_cursor += wd_mrow ? ((h_rounds + h_pad_slots) * HROW_T) : (HGROUPS * m_eff * HN_PAD);
             while (h_cursor >= H_CAP) {
                 h_cursor -= H_CAP;
             }
@@ -641,13 +720,15 @@ void kernel_main() {
             // The diagonal core in row r owns that row's HID_T-wide assembly slot.  Invite every
             // hidden-column worker only after the preceding block's phase 2 has consumed the slot.
             // The writer waits this monotone counter before depositing its reduced HN fragment.
-            if (wd_mrow && is_row_agg) {
+            // On a short block token row t's fragments come from workers [t * per_row, (t + 1) * per_row)
+            // of every column, so those are the cores this diagonal invites.
+            if (wd_mrow && row_sender) {
                 Semaphore<> hrow_free(SEM_HROW_FREE);
-                for (uint32_t x = 0; x < HGROUPS; ++x) {
-                    const uint32_t sidx = my_row * HGROUPS + x;
-                    const uint32_t vx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
-                    const uint32_t vy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
-                    hrow_free.up(noc, vx, vy, 1);
+                for (uint32_t j = 0; j < hrp.per_row; ++j) {
+                    const uint32_t wrow = my_row * hrp.per_row + j;
+                    for (uint32_t x = 0; x < HGROUPS; ++x) {
+                        hrow_free.up(noc, grid_vx(x), grid_vy(wrow), 1);
+                    }
                 }
                 noc.async_atomic_barrier();
             }
@@ -880,7 +961,12 @@ void kernel_main() {
                     }
                 }
             };
-            issue_wd_batch();
+            // A short row-mode block issues its whole W_down batch only after its up-scatter, so the
+            // issue loop does not sit in front of the reduce on this RISC-V.
+            const bool wd_issue_late = wd_mrow && (m_eff != M_BLOCK);
+            if (!wd_issue_late) {
+                issue_wd_batch();
+            }
 
             // Start block_idx+1's activation read before block_idx's reduce + phase 2. At the supported
             // grids HGROUPS >= M_BLOCK, so each core injects at most one row and the existing one-row
@@ -987,6 +1073,9 @@ void kernel_main() {
                         BFP8_TILE);
                 }
                 cb_pop_front(cb_up_acc, GU_FULL);
+                if (wd_issue_late) {
+                    issue_wd_batch();
+                }
             }
             if (slice_tiles) {
                 // One signal per payload by default; SCATTER_ONE_SIGNAL keeps both payloads concurrent
@@ -1022,8 +1111,8 @@ void kernel_main() {
             // counter rather than a CB front. `slice_worker_count` slices land per M-block; the counter is monotone and
             // cumulative, like every other semaphore in this op.
             if (wd_mrow) {
-                if (is_row_agg) {
-                    h_arrivals += HGROUPS;
+                if (row_sender) {
+                    h_arrivals += HGROUPS * hrp.per_row;
                 }
             } else if (is_root) {
                 h_arrivals += slice_worker_count;
@@ -1047,7 +1136,7 @@ void kernel_main() {
                     // mode runs two concurrent four-round schedules over rows 0..3 and 4..7; each
                     // receiver only ingests its group's rows and each sender waits for 44, not 88,
                     // window acks. W_down's complete resident shard is already published.
-                    const uint32_t round_count = wd_mgroup ? MGROUP_ROWS : KGROUPS;
+                    const uint32_t round_count = h_rounds;
                     const uint32_t round_base = wd_mgroup ? (my_row / MGROUP_ROWS) * MGROUP_ROWS : 0;
                     uint32_t next_ack = 0;
                     for (uint32_t lr = 0; lr < round_count; ++lr) {
@@ -1063,10 +1152,7 @@ void kernel_main() {
                         const uint32_t hdst = get_write_ptr(cb_h);
                         while (next_ack < lr + ahead && next_ack < round_count) {
                             const uint32_t gr = round_base + next_ack;
-                            const uint32_t sidx = gr * HGROUPS + gr;
-                            const uint32_t svx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
-                            const uint32_t svy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
-                            Semaphore<>(SEM_H_FREE).up(noc, svx, svy, 1);
+                            Semaphore<>(SEM_H_FREE).up(noc, grid_vx(gr), grid_vy(gr), 1);
                             ++next_ack;
                         }
 
@@ -1106,11 +1192,11 @@ void kernel_main() {
                         }
                         cb_push_back(cb_h, HROW_T);
                     }
-                    if (!wd_mgroup) {
-                        // Eight 64-tile pushes advance a 3x64-tile CB by two slots. Publish one
-                        // payload-free slot so an ordinary dispatch can switch to a smaller tail.
-                        cb_reserve_back(cb_h, HROW_T);
-                        cb_push_back(cb_h, HROW_T);
+                    if (h_pad_slots != 0) {
+                        // Eight 64-tile pushes advance a 3x64-tile CB by two slots. Publish
+                        // payload-free slots so every block restarts at the CB base.
+                        cb_reserve_back(cb_h, h_pad_slots * HROW_T);
+                        cb_push_back(cb_h, h_pad_slots * HROW_T);
                     }
                 } else {
                     bool wd_pending = false;
@@ -1157,10 +1243,7 @@ void kernel_main() {
                         // Acking first is what makes this deadlock-free: every sender's window ack comes
                         // from a core that has already reserved, so no core waits on a core waiting on it.
                         while (next_ack < r + hack_ahead && next_ack < HGROUPS) {
-                            const uint32_t sidx = (next_ack % KGROUPS) * HGROUPS + next_ack;
-                            const uint32_t svx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
-                            const uint32_t svy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
-                            Semaphore<>(SEM_H_FREE).up(noc, svx, svy, 1);
+                            Semaphore<>(SEM_H_FREE).up(noc, grid_vx(next_ack), grid_vy(next_ack % KGROUPS), 1);
                             ++next_ack;
                         }
                         const bool i_send = (is_root && r == my_col);
