@@ -27,6 +27,11 @@ import torch
 
 import ttnn
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 
 # ─── Helper ──────────────────────────────────────────────────────────────
 def _assert_cache_hit(device, op_label, fn):

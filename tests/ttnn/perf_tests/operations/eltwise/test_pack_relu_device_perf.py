@@ -13,6 +13,8 @@ of REPEATS calls.
 The route serves sharded tensors only, so the operands are height-sharded over GRID.
 """
 
+import os
+
 import pandas as pd
 import pytest
 import torch
@@ -24,6 +26,11 @@ REPEATS = 5
 # Inputs inside the range the generated kernel is fitted on.
 LOW, HIGH = -10.0, 10.0
 PATH = "tests/ttnn/perf_tests/operations/eltwise/test_pack_relu_device_perf.py"
+# The profiled calls run only inside the device profiler, which the device-perf test launches: run on their
+# own, they would hold the device that the profiler's run of them then waits for.
+IN_PROFILER = pytest.mark.skipif(
+    os.environ.get("TT_METAL_DEVICE_PROFILER") != "1", reason="runs inside the device profiler only"
+)
 GRID = ttnn.CoreGrid(y=8, x=8)
 
 
@@ -58,6 +65,7 @@ def _inputs(shape, device):
     )
 
 
+@IN_PROFILER
 def test_pack_relu_profiled_calls(device):
     """The calls the device-perf test profiles, between signposts that name each one."""
     from tracy import signpost

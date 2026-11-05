@@ -87,7 +87,7 @@ void run_launcher(
     auto scratch_buffer =
         MeshBuffer::create(ReplicatedBufferConfig{.size = cfg.page_size}, scratch_local_config, mesh_device.get());
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*mesh_device);
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_loopback.cpp",

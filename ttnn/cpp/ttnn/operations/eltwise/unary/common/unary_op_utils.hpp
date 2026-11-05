@@ -40,6 +40,16 @@ std::map<std::string, std::string> get_block_defines(
     const std::string& idst = "0",
     std::optional<DataType> input_dtype = std::nullopt);
 
+// The packer ReLU configuration that computes a lone op as its tile is packed, as a
+// ckernel::ReluConfig expression, or none when the op runs on the SFPU. `sharded`: the input and
+// the output are both sharded, so no tile crosses the NoC.
+std::optional<std::string> get_pack_relu_config(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    DataType input_dtype,
+    DataType output_dtype,
+    bool fp32_dest_acc_en,
+    bool sharded);
+
 template <typename T>
 bool is_parametrized_type(T val) {
     switch (val) {
@@ -111,16 +121,6 @@ bool is_parametrized_type(T val) {
 
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines);
 
-// The packer ReLU configuration that computes a lone op as its tile is packed, as a
-// ckernel::ReluConfig expression, or none when the op runs on the SFPU. `sharded`: the input and
-// the output are both sharded, so no tile crosses the NoC.
-std::optional<std::string> get_pack_relu_config(
-    const std::vector<EltwiseUnaryWithParam>& op_chain,
-    DataType input_dtype,
-    DataType output_dtype,
-    bool fp32_dest_acc_en,
-    bool sharded);
-
 // INP_FLOAT32 / INP_INT32 / INP_UINT32 / INP_FLOAT: the SFPU kernels select their algorithm on these. Exactly one
 // is set after the call; float32 wins over the bf16-class default when both operands of a fused op contribute.
 void add_input_dtype_defines(DataType dtype, std::map<std::string, std::string>& defines);
@@ -130,6 +130,9 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
 // True when op_type is compiled by a kernel of its own rather than the generic eltwise_sfpu_metal2.cpp chain
 // kernel. Such an op is not emitted into SFPU_OP_CHAIN_0, so it cannot share a chain with other ops.
 bool uses_dedicated_compute_kernel(UnaryOpType op_type, std::optional<DataType> input_dtype = std::nullopt);
+
+// Whether the compute kernel can take its tiles chunk by chunk, as the DRAM read work queue hands them out.
+bool compute_kernel_supports_work_queue(UnaryOpType op_type, std::optional<DataType> input_dtype);
 
 uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype);
 uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType dtype);
