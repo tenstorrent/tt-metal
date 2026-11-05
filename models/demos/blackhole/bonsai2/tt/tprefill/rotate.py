@@ -11,6 +11,7 @@ import numpy as np
 import torch
 
 import ttnn
+from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_crs
 from models.demos.blackhole.bonsai2.tt.ternary.gguf_weights import hadamard
 
 BLOCK = 1024
@@ -71,7 +72,7 @@ class PrefillRotation:
                 args.append([b, start, n])
                 start += n
         coords = [ttnn.CoreCoord(c % grid.x, c // grid.x) for c in range(len(args))]
-        crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
+        crs = row_major_crs(len(coords), grid.x)
         rd, wr, cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for cc, a in zip(coords, args):
             rd[cc.x][cc.y] = a

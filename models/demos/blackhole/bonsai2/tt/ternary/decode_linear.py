@@ -16,6 +16,7 @@ import numpy as np
 import torch
 
 import ttnn
+from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_crs
 from models.demos.blackhole.bonsai2.tt.ternary.pack import TILE, pack_ternary_tiles
 
 KBLOCK = 128  # Bonsai PQ2_0 block: one fp16 scale per 128 weights along K
@@ -117,7 +118,7 @@ class TernaryDecodeLinear:
             coords.append(ttnn.CoreCoord(c % grid.x, c // grid.x))
             spans.append((start, n))
             start += n
-        crs = ttnn.CoreRangeSet([ttnn.CoreRange(cc, cc) for cc in coords])
+        crs = row_major_crs(len(coords), grid.x)
 
         def cb(index, fmt, page, pages):
             return ttnn.CBDescriptor(

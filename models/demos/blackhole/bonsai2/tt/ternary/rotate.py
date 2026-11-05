@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 import ttnn
+from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_crs
 from models.demos.blackhole.bonsai2.tt.ternary.gguf_weights import hadamard
 
 KERNELS = "models/demos/blackhole/bonsai2/tt/ternary/kernels/"
@@ -42,7 +43,7 @@ class DecodeRotation:
         )
         grid = device.compute_with_storage_grid_size()
         coords = [ttnn.CoreCoord(b % grid.x, b // grid.x) for b in range(B)]
-        crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
+        crs = row_major_crs(len(coords), grid.x)
 
         def cb(index, fmt, page, pages):
             return ttnn.CBDescriptor(

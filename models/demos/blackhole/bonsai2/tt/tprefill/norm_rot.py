@@ -14,6 +14,7 @@ import numpy as np
 import torch
 
 import ttnn
+from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_crs
 from models.demos.blackhole.bonsai2.tt.ternary.gguf_weights import hadamard
 
 KERNELS = "models/demos/blackhole/bonsai2/tt/tprefill/kernels/"
@@ -77,7 +78,7 @@ class PrefillNormRot:
         P = 2 if 2 * Mt <= grid.x * grid.y and nb >= 2 else 1  # cores per row tile (block halves, sums exchanged)
         P = min(P, int(os.environ.get("BONSAI_NROT_P", "2")))
         coords = [ttnn.CoreCoord(c % grid.x, c // grid.x) for c in range(P * Mt)]
-        crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
+        crs = row_major_crs(len(coords), grid.x)
         rd, rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         half = -(-nb // 2)
         kmax = 32 * (half if P == 2 else nb)

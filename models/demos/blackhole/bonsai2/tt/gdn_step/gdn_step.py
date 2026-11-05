@@ -12,6 +12,7 @@ import struct
 import torch
 
 import ttnn
+from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_crs
 
 KERNELS = "models/demos/blackhole/bonsai2/tt/gdn_step/kernels/"
 TILE = 32
@@ -68,7 +69,7 @@ class GDNStep:
         out = ttnn.allocate_tensor_on_device(ttnn.Shape(lead + [nv * self.hd]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         grid = device.compute_with_storage_grid_size()
         coords = [ttnn.CoreCoord(j % grid.x, j // grid.x) for j in range(nv)]
-        crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
+        crs = row_major_crs(len(coords), grid.x)
         # One set of runtime args for all cores (each kernel finds its head from its core index): per-core args
         # cost the dispatcher one write per core per kernel.
         rd, wr, cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()

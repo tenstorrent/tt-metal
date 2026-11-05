@@ -15,6 +15,7 @@ import struct
 import torch
 
 import ttnn
+from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_crs
 
 KERNELS = "models/demos/blackhole/bonsai2/tt/gdn_prefill/kernels/"
 C = 128
@@ -62,7 +63,7 @@ class ChunkPrep:
         grid = device.compute_with_storage_grid_size()
         ncores = min(grid.x * grid.y, items)
         coords = [ttnn.CoreCoord(c % grid.x, c // grid.x) for c in range(ncores)]
-        crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
+        crs = row_major_crs(len(coords), grid.x)
         ins = [q, k, v, beta, g, self.consts]
         rd_c = [t.buffer_address() for t in ins] + [items, ncores, grid.x, NC, T // 32]
         if tm:

@@ -15,6 +15,7 @@ import numpy as np
 import torch
 
 import ttnn
+from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_crs
 from models.demos.blackhole.bonsai2.tt.ternary.pack import TILE, pack_ternary_tiles
 
 KBLOCK = 128
@@ -210,7 +211,7 @@ class TernaryDecodeLinear3:
             coords.append(ttnn.CoreCoord(c % grid.x, c // grid.x))
             spans.append((start, n))
             start += n
-        crs = ttnn.CoreRangeSet([ttnn.CoreRange(cc, cc) for cc in coords])
+        crs = row_major_crs(cores, grid.x)  # rectangles: one range per core costs ~50 us per launch
         max_n = max(n for _, n in spans)
         tiny = ttnn.TileDescriptor(1, 32, False)
 

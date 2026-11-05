@@ -12,6 +12,7 @@ import struct
 import torch
 
 import ttnn
+from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_crs
 from models.demos.blackhole.bonsai2.tt.gdn_prefill import chunk_prep
 
 C = 128
@@ -50,12 +51,7 @@ class OutputFinish:
         )
         grid = device.compute_with_storage_grid_size()
         ncores = min(grid.x * grid.y, items)
-        crs = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(c % grid.x, c // grid.x), ttnn.CoreCoord(c % grid.x, c // grid.x))
-                for c in range(ncores)
-            ]
-        )
+        crs = row_major_crs(ncores, grid.x)
         span = [items, ncores, grid.x]
         rd_ct = []
         for t in (o_bh, z, self.consts):
@@ -190,12 +186,7 @@ class ConvPrefill:
         grid = device.compute_with_storage_grid_size()
         # conv2: work units (column, time tile) split evenly; conv: whole columns per core
         ncores = min(grid.x * grid.y, Dt * Tt if v2 else Dt)
-        crs = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(c % grid.x, c // grid.x), ttnn.CoreCoord(c % grid.x, c // grid.x))
-                for c in range(ncores)
-            ]
-        )
+        crs = row_major_crs(ncores, grid.x)
         taps = self.tap_vecs if v2 else self.taps
         rd_ct = []
         for t in (x, state, taps, self.consts):
@@ -312,7 +303,7 @@ class GateTiles:
         grid = device.compute_with_storage_grid_size()
         assert Mt <= grid.x * grid.y, Mt
         coords = [ttnn.CoreCoord(c % grid.x, c // grid.x) for c in range(Mt)]
-        crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
+        crs = row_major_crs(len(coords), grid.x)
         rt = ttnn.RuntimeArgs()
         for i, c in enumerate(coords):
             rt[c.x][c.y] = [i]
