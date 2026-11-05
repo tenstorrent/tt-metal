@@ -16,6 +16,7 @@
 #include "ops/mla_q_rope/mla_q_rope.hpp"
 #include "ops/polynorm_fw/polynorm_fw.hpp"
 #include "ops/profiler_no_op/profiler_no_op.hpp"
+#include "ops/qkv_causal_conv1d_silu_bw/qkv_causal_conv1d_silu_bw.hpp"
 #include "ops/rmsnorm_bw/rmsnorm_bw.hpp"
 #include "ops/rmsnorm_fw/rmsnorm_fw.hpp"
 #include "ops/sdpa_bw/sdpa_bw.hpp"

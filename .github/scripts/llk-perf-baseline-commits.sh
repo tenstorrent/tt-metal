@@ -15,11 +15,13 @@ REF="${1:?usage: llk-perf-baseline-commits.sh <ref> [max-commits]}"
 MAX="${2:-200}"
 CLASSIFY="$(dirname "${BASH_SOURCE[0]}")/llk-perf-inputs-changed.sh"
 
+# --no-renames lists the same paths (a rename's new path is an add), and a blobless
+# clone need not fetch blobs to detect renames.
 START=$(git merge-base "$REF" HEAD)
 FOUND=0
 for C in $(git rev-list --first-parent -n "$MAX" "$START"); do
     git rev-parse -q --verify "${C}^" >/dev/null || break
-    if [ "$(git diff --name-only --diff-filter=ACMRT "${C}^" "$C" | "$CLASSIFY")" = true ]; then
+    if [ "$(git diff --no-renames --name-only --diff-filter=ACMRT "${C}^" "$C" | "$CLASSIFY")" = true ]; then
         echo "$C"
         FOUND=1
     fi
