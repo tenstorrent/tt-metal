@@ -7,8 +7,8 @@
 //   0: the counter. This core increments the peer's; the peer increments this core's.
 //   1: stage word, written as this kernel advances. A hang leaves the last stage reached.
 //   2: probe, host-initialised. 3: receives the value this core read from 2.
-// Own semaphores go through Semaphore, which uses the uncached alias on Quasar: host writes are not
-// snooped into the cache, and the host must see this core's stores.
+// Own semaphores go through Semaphore. On a CCE get_semaphore() gives the uncached alias: host writes are
+// not snooped into the cache, and the host must see this core's stores.
 //
 // Runtime args:
 //   0: mode. 0 = CPU load-add-store at the peer's global HSIO SRAM address (lo/hi in 2, 3).
@@ -45,7 +45,7 @@ void kernel_main() {
     const uint32_t peer_counter_offset = get_arg_val<uint32_t>(6);
     const uint32_t expected_stage_offset = get_arg_val<uint32_t>(7);
 
-    if (get_semaphore<kCoreType>(1) != expected_stage_offset) {
+    if (get_semaphore<kCoreType>(1) != expected_stage_offset + MEM_L1_UNCACHED_BASE) {
         // The host reads the stage word at the address it computed, so write that one.
         *reinterpret_cast<volatile uint32_t*>(expected_stage_offset + MEM_L1_UNCACHED_BASE) =
             kStageBadSemaphoreAddress;
