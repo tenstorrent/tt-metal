@@ -7,8 +7,9 @@
 #include "internal/debug/watcher_common.h"
 #include "eth_fw_api.h"
 
+// A Keraunos CCE (Quasar) has no base-firmware link status and no base firmware to exit to.
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ETH_LINK_STATUS) && !defined(FORCE_WATCHER_OFF) && \
-    defined(COMPILE_FOR_ERISC)
+    defined(COMPILE_FOR_ERISC) && !defined(ARCH_QUASAR)
 
 void hang_on_down_link() {
     debug_eth_link_t tt_l1_ptr* v = GET_MAILBOX_ADDRESS_DEV(watcher.eth_status);
