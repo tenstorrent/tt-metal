@@ -179,13 +179,12 @@ FORCE_INLINE void elementwise(DFBA& a, DFBB& b, DFBOut& output) {
 }
 
 // The summary carries the zero-seeded state B and the identity-seeded state A + B side by side: a [Kt, 2 * Vt]
-// state whose first Vt columns hold B. Publish the difference A = (A + B) - B, as its complement E = A - I with
-// Complement, or copy B, PacketRows tile rows per packet, from the FP32 carry (UnpackToDest) with SFPU subtractions,
-// so E is formed in FP32 with no TF32 truncation before its single BF16 rounding. I is subtracted on the global
-// diagonal tiles, where this value block's column v meets key tile row value_block * Vt + v (summaries require K == V).
+// state whose first Vt columns hold B. Publish the complement form E = (A + B) - B - I, or copy B, PacketRows tile
+// rows per packet, from the FP32 carry (UnpackToDest) with SFPU subtractions, so E is formed in FP32 with no TF32
+// truncation (before its single BF16 rounding, in the packed summary). I is subtracted on the global diagonal tiles,
+// where this value block's column v meets key tile row value_block * Vt + v (summaries require K == V).
 template <
     bool Difference,
-    bool Complement,
     uint32_t Kt,
     uint32_t Vt,
     uint32_t PacketRows,
@@ -194,7 +193,6 @@ template <
     typename DFBIdentity>
 FORCE_INLINE void extract_paths(DFBCarry& carry, DFBOut& output, DFBIdentity& identity, uint32_t value_block) {
     static_assert(Kt % PacketRows == 0);
-    static_assert(Difference || !Complement, "only the difference A has a complement");
     const uint32_t carry_id = carry.get_id();
     const uint32_t output_id = output.get_id();
     reconfig_data_format_srca(carry_id);
@@ -210,7 +208,7 @@ FORCE_INLINE void extract_paths(DFBCarry& carry, DFBOut& output, DFBIdentity& id
                     copy_tile(carry_id, b_tile, 1);
                     sub_binary_tile_init();
                     sub_binary_tile(0, 1, 0);
-                    if (Complement && first_row + row == value_block * Vt + value) {
+                    if (first_row + row == value_block * Vt + value) {
                         kda::a_to_complement(identity, carry_id, 0, 2, 0);
                     }
                 } else {
@@ -328,7 +326,7 @@ FORCE_INLINE void update_state(
 // operation covers both; each tile's arithmetic is the same as advancing them apart.
 // With EmitOutputs each chunk's output is evaluated on both paths too, q_decay S + intra v_new, and published in
 // FP32 as F(0) (base) and F(I) (whose difference with F(0) is the sensitivity to the segment's entry state); the last
-// segment's A and B also leave in FP32, A itself rather than its complement: FP32 needs no complement form.
+// segment's E and B also leave in FP32.
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool EmitOutputs>
 FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk, uint32_t value_block) {
     DataflowBuffer state(dfb::state);
@@ -394,8 +392,8 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk, uin
         if (split_chunk != 0 && chunk + 1 == split_chunk) {
             state_carry.wait_front(key_pair_tiles);
             pack_reconfig_data_format(summary_head_output.get_id());
-            extract_paths<true, true, Kt, Vt, 1>(state_carry, summary_head_output, identity, value_block);
-            extract_paths<false, false, Kt, Vt, 1>(state_carry, summary_head_state, identity, value_block);
+            extract_paths<true, Kt, Vt, 1>(state_carry, summary_head_output, identity, value_block);
+            extract_paths<false, Kt, Vt, 1>(state_carry, summary_head_state, identity, value_block);
             // Restart from zero and identity so the tail summary is independent
             // of the head transition just saved above.
             reseed_state<key_pair_tiles>(state, state_ring, state_carry);
@@ -409,14 +407,14 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk, uin
     state_ring.wait_front(key_pair_tiles);
     state_carry.wait_front(key_pair_tiles);
     pack_reconfig_data_format(output.get_id());
-    extract_paths<true, true, Kt, Vt, Kt>(state_carry, output, identity, value_block);
-    extract_paths<false, false, Kt, Vt, Kt>(state_carry, transport_state, identity, value_block);
+    extract_paths<true, Kt, Vt, Kt>(state_carry, output, identity, value_block);
+    extract_paths<false, Kt, Vt, Kt>(state_carry, transport_state, identity, value_block);
     if constexpr (EmitOutputs) {
-        DataflowBuffer final_a(dfb::final_a);
+        DataflowBuffer final_e(dfb::final_e);
         DataflowBuffer final_b(dfb::final_b);
-        pack_reconfig_data_format(final_a.get_id());
-        extract_paths<true, false, Kt, Vt, Kt>(state_carry, final_a, identity, value_block);
-        extract_paths<false, false, Kt, Vt, Kt>(state_carry, final_b, identity, value_block);
+        pack_reconfig_data_format(final_e.get_id());
+        extract_paths<true, Kt, Vt, Kt>(state_carry, final_e, identity, value_block);
+        extract_paths<false, Kt, Vt, Kt>(state_carry, final_b, identity, value_block);
     }
     state_ring.pop_front(key_pair_tiles);
     state_carry.pop_front(key_pair_tiles);

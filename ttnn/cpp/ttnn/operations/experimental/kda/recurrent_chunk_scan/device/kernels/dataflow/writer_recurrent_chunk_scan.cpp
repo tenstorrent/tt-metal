@@ -195,10 +195,10 @@ FORCE_INLINE void write_summary(
     if (EmitOutputs && has_valid_chunk) {
         // The last segment's transform in FP32, at this value block's columns of [BH, K, V]. Its write barrier also
         // completes the chunk rows' writes.
-        DataflowBuffer final_a(dfb::final_a);
+        DataflowBuffer final_e(dfb::final_e);
         DataflowBuffer final_b(dfb::final_b);
         const uint32_t state_row = head * Kt * VtFull;
-        write_value_slice<Kt, Vt, VtFull, Kt>(TensorAccessor(tensor::final_a), final_a, noc, state_row, a_column);
+        write_value_slice<Kt, Vt, VtFull, Kt>(TensorAccessor(tensor::final_e), final_e, noc, state_row, a_column);
         write_value_slice<Kt, Vt, VtFull, Kt>(
             TensorAccessor(tensor::final_b), final_b, noc, state_row, value_block * Vt);
     }
