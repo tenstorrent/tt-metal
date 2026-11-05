@@ -1326,7 +1326,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      uv pip install "tt-perf-report>=1.5.0"
+      uv pip install tt-perf-report
       # One Tracy session per chunk size: a shared session exceeds the 32K source-location limit of Tracy.
       # A node id, not -k: tracy re-joins the -m argument into one shell command.
       T=models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n

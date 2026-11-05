@@ -52,7 +52,7 @@ for size in 2048 4096 8192; do
   python -m tracy -p -r -v -o generated/profiler --op-support-count 20000 \
     -m "pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunkci-both-sz${size}-ctx_256k-8x4]"
 done
-pip install "tt-perf-report>=1.5.0"
+pip install tt-perf-report
 python models/demos/gemma4_d_p/scripts/layer_perf_report.py --profiler-dir generated/profiler
 ```
 

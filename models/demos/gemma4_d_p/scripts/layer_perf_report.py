@@ -180,7 +180,7 @@ def _float(value):
         return None
 
 
-# tt-perf-report >= 1.5.0 --csv headers.
+# tt-perf-report --csv headers.
 DEVICE_TIME = "Device Time [μs]"
 OP_TO_OP_GAP = "Op-to-Op Gap [μs]"
 
@@ -190,7 +190,7 @@ def summarize_cell_csv(path, top_n=None):
         reader = csv.DictReader(f)
         missing = [h for h in (DEVICE_TIME, OP_TO_OP_GAP) if h not in (reader.fieldnames or ())]
         if missing:
-            raise ValueError(f"{path} has no {', '.join(missing)} column; layer perf needs tt-perf-report>=1.5.0")
+            raise ValueError(f"{path} has no {', '.join(missing)} column; did tt-perf-report rename its CSV headers?")
         rows = [r for r in reader if _float(r.get(DEVICE_TIME)) is not None]
     # Rows are not in execution order; the lowest call count ran first and its gap precedes the replay.
     call_counts = [_float(r.get("Global Call Count")) for r in rows]
