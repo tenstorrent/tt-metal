@@ -78,6 +78,44 @@ TEST_F(ParameterDtypeTest, ReadsMasterDtypeFromTheTrainingConfig) {
     autograd::ctx().set_gradient_reduce_dtype(std::nullopt);
 }
 
+// A runner checks the block right after loading its config, so a typo stops the run before the model is built. The
+// check applies nothing: the stored reduce default and the parameters stay as they were.
+TEST_F(ParameterDtypeTest, ValidatesThePrecisionConfigWithoutApplyingIt) {
+    auto parameter = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
+    autograd::ctx().set_gradient_reduce_dtype(ttnn::DataType::BFLOAT16);
+    for (const char* training_config :
+         {"seed: 5489",
+          "precision: ~",
+          "precision: {}",
+          "precision: {master_dtype: ~}",
+          "precision: {master_dtype: float32, reduce_dtype: float32}",
+          "precision: {master_dtype: bfloat16, reduce_dtype: bfloat16}"}) {
+        EXPECT_NO_THROW(core::validate_precision_config(YAML::Load(training_config))) << training_config;
+    }
+    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::BFLOAT16);
+    EXPECT_EQ(native(parameter).dtype(), ttnn::DataType::BFLOAT16);
+    EXPECT_EQ(parameter->get_grad_accumulation_dtype(), std::nullopt);
+
+    const auto validate = [](const char* training_config) {
+        core::validate_precision_config(YAML::Load(training_config));
+    };
+    EXPECT_THAT(
+        [&] { validate("precision: {params_dtype: float32}"); },
+        ThrowsMessage<std::runtime_error>(
+            HasSubstr("Unknown key precision.params_dtype (supported: master_dtype, reduce_dtype)")));
+    EXPECT_THAT(
+        [&] { validate("precision: {master_dtype: float16}"); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(R"(precision.master_dtype must be "bfloat16" or "float32")")));
+    // The second key is checked too, not only the first.
+    EXPECT_THAT(
+        [&] { validate("precision: {master_dtype: float32, reduce_dtype: float16}"); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(R"(precision.reduce_dtype must be "bfloat16" or "float32")")));
+    EXPECT_THAT(
+        [&] { validate("precision: float32"); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("training_config.precision must be a map")));
+    autograd::ctx().set_gradient_reduce_dtype(std::nullopt);
+}
+
 TEST_F(ParameterDtypeTest, AppliesThePrecisionConfig) {
     auto parameter = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
     const serialization::NamedParameters parameters{{"parameter", parameter}};

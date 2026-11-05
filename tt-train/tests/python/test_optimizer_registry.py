@@ -457,6 +457,44 @@ def test_apply_precision_config_sets_the_grad_accumulation_dtype(gradient_reduce
     assert frozen.get_grad_accumulation_dtype() is None
 
 
+@pytest.mark.parametrize(
+    "training_config",
+    [
+        {},
+        {"precision": None},
+        {"precision": {}},
+        {"precision": {"master_dtype": None}},
+        {"precision": {"master_dtype": "float32", "reduce_dtype": "float32"}},
+        {"precision": {"master_dtype": "bfloat16", "reduce_dtype": "bfloat16"}},
+    ],
+)
+def test_validate_precision_config_accepts_a_valid_block_and_applies_nothing(gradient_reduce_default, training_config):
+    """A runner checks the block right after loading its config; the check stores nothing. No device needed."""
+    gradient_reduce_default(ttnn.DataType.BFLOAT16)
+
+    ttml.core.validate_precision_config(training_config)
+
+    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.BFLOAT16
+
+
+@pytest.mark.parametrize(
+    "precision, message",
+    [
+        ({"params_dtype": "float32"}, "Unknown key precision.params_dtype"),
+        ({"master_dtype": "float16"}, 'precision.master_dtype must be "bfloat16" or "float32"'),
+        (
+            {"master_dtype": "float32", "reduce_dtype": "float16"},
+            'precision.reduce_dtype must be "bfloat16" or "float32"',
+        ),
+        ("float32", "training_config.precision must be a map"),
+    ],
+)
+def test_validate_precision_config_rejects_what_apply_would(expect_error, precision, message):
+    """The early check raises the error apply_precision_config would, before any model is built. No device needed."""
+    with expect_error(RuntimeError, message):
+        ttml.core.validate_precision_config({"precision": precision})
+
+
 def test_create_optimizer_rejects_an_unknown_precision_key(expect_error):
     """A typo under precision stops the run instead of training in the model's dtype; checked before any parameter is
     touched, so this needs no device."""

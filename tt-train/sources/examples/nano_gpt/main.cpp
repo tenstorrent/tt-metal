@@ -377,6 +377,8 @@ int main(int argc, char **argv) {
     CLI11_PARSE(app, argc, argv);
 
     auto yaml_config = YAML::LoadFile(training_config_name);
+    // A typo under training_config.precision stops the run here rather than after the model is built.
+    ttml::core::validate_precision_config(yaml_config["training_config"]);
 
     TrainingConfig training_config = parse_config(yaml_config);
     training_config.model_config = expand_config_path(training_config.model_config);

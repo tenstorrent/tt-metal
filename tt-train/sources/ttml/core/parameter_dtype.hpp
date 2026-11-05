@@ -26,6 +26,11 @@ namespace ttml::core {
 //   they put bf16 tensors back.
 void store_trainable_parameters_as(const serialization::NamedParameters& parameters, ttnn::DataType dtype);
 
+// Checks training_config.precision without applying it: the block must be a map of known keys (or null), and each
+// dtype name "bfloat16" or "float32". Anything else is the TT_FATAL apply_precision_config() would raise. A runner
+// calls it right after loading its config, so a typo stops the run before the model is built.
+void validate_precision_config(const YAML::Node& training_config);
+
 // Applies training_config.precision. precision.master_dtype ("bfloat16" or "float32") stores the parameters in that
 // dtype with store_trainable_parameters_as(), whose contract applies; unset, or set to null, leaves them in the dtype
 // the model builds them in. precision.reduce_dtype (same names) becomes the dtype the gradient syncs sum in when a call

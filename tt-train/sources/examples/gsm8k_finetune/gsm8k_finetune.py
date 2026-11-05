@@ -335,6 +335,8 @@ def train():
         print(yaml.dump(yaml_config, sort_keys=False, default_flow_style=False))
         print("*********************************\n\n")
 
+    # A typo under training_config.precision stops the run here rather than after the model is built.
+    ttml.core.validate_precision_config(yaml_config.get("training_config") or {})
     training_config = TrainingConfig(yaml_config)
     scheduler_config = SpeedrunSchedulerConfig.from_yaml(yaml_config)
 

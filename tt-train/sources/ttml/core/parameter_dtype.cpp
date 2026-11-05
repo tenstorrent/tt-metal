@@ -82,6 +82,12 @@ void store_trainable_parameters_as(const serialization::NamedParameters& paramet
     }
 }
 
+void validate_precision_config(const YAML::Node& training_config) {
+    for (const auto key : kPrecisionKeys) {
+        (void)precision_dtype_from_config(training_config, key);
+    }
+}
+
 std::optional<ttnn::DataType> apply_precision_config(
     const YAML::Node& training_config, const serialization::NamedParameters& parameters) {
     const auto master_dtype = precision_dtype_from_config(training_config, "master_dtype");

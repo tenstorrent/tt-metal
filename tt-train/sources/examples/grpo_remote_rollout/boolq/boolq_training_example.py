@@ -113,6 +113,8 @@ def _ttml_main() -> None:
     autograd_ctx.initialize_distributed_context(*sys.argv)
 
     device_config, raw = _load_device_config()
+    # A typo under training_config.precision stops the run here rather than after the model is built.
+    ttml.core.validate_precision_config(raw.get("training_config") or {})
     mesh_device = _open_ttml_device(device_config)
 
     model_id = raw["training_config"]["model_id"]
