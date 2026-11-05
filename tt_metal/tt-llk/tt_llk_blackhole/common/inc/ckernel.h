@@ -637,15 +637,28 @@ inline void set_ttsync_enables()
     TTI_SETC16(TENSIX_TRISC_SYNC_TrackGlobalCfg_ADDR32, bitmask);
 }
 
+// Turning gathering off while fetch is on a path into code the TRISC has already gathered can hang the
+// TRISC for good. No instruction flushes fetch, and fetch runs up to 16 instructions ahead of execute, so
+// both edges of the bracket keep that distance in straight-line RISC nops:
+//  - disable: branch prediction goes off, then GATHERING_PREDICTION_DRAIN nops, then gathering goes off.
+//    Any prediction made before branch prediction was off resolves before gathering goes off.
+//  - enable: GATHERING_ENABLE_DISTANCE nops before gathering goes back on, so fetch cannot reach the
+//    gathered code after the bracket before gathering is off, however short the bracketed body is.
+#define GATHERING_PREDICTION_DRAIN ".rept 20\n nop\n .endr\n"
+#define GATHERING_ENABLE_DISTANCE  ".rept 16\n nop\n .endr\n"
+
 template <bool add_nops = true>
 inline void disable_gathering()
 {
-    asm("csrrs zero, 0x7c0, %0" : : "r"(1 << 1));
-    asm("fence");
-    // Disable gathering: set bit 18
-    asm("csrrs zero, 0x7c0, %0" : : "r"(1 << 18));
-    asm("csrrc zero, 0x7c0, %0" : : "r"(1 << 1));
-    asm("fence");
+    // Branch prediction off (bit 1), drain, gathering off (bit 18), branch prediction back on.
+    asm volatile("csrrs zero, 0x7c0, %0\n" GATHERING_PREDICTION_DRAIN
+                 "fence\n"
+                 "csrrs zero, 0x7c0, %1\n"
+                 "csrrc zero, 0x7c0, %0\n"
+                 "fence\n"
+                 :
+                 : "r"(1 << 1), "r"(1 << 18)
+                 : "memory");
 
     // Gathering is done early in the pipeline, so we need to make sure
     // the above csrrw gets processed before the load-replay instructions
@@ -659,8 +672,8 @@ inline void disable_gathering()
 
 inline void enable_gathering()
 {
-    // Enable gathering: clear bit 18
-    asm("csrrc zero, 0x7c0, %0" : : "r"(1 << 18));
+    // Gathering on: clear bit 18
+    asm volatile(GATHERING_ENABLE_DISTANCE "csrrc zero, 0x7c0, %0\n" : : "r"(1 << 18) : "memory");
 }
 
 #if defined(COMPILE_FOR_TRISC)
