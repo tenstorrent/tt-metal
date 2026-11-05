@@ -44,10 +44,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, TtSharedExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
-_GLUE_MOE_XAG_WORKERS = int(os.environ.get("GLUE_MOE_XAG_WORKERS", "8")) or None
-_GLUE_EPI_L1 = os.environ.get("GLUE_EPI_L1", "1") == "1"
-_GLUE_PCR_WEIGHTS_IN_WINDOW = os.environ.get("GLUE_PCR_WEIGHTS_IN_WINDOW", "1") == "1"
-
 # Four similarly-named dimensions, shown for Kimi-K3, the only variant where all four differ:
 #
 #   emb_dim            7168  model hidden. Gate input, shared-expert input, block in/out.
@@ -769,7 +765,7 @@ class TtMoe(LightweightModule):
             cluster_axis=1,  # TP axis for reduce-scatter
             num_links=self.col_num_links,
             topology=self.col_topology,
-            output_memory_config=ttnn.L1_MEMORY_CONFIG if _GLUE_EPI_L1 and not self.use_latent_moe else None,
+            output_memory_config=ttnn.L1_MEMORY_CONFIG if not self.use_latent_moe else None,
         )
 
         # Load debug flags from environment
@@ -1086,7 +1082,7 @@ class TtMoe(LightweightModule):
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
                 num_links=self.col_num_links,
                 topology=self.col_topology,
-                num_workers_per_link=_GLUE_MOE_XAG_WORKERS,
+                num_workers_per_link=8,
             )
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
@@ -1163,7 +1159,7 @@ class TtMoe(LightweightModule):
                 sub_core_grids=self.shared_expert.subdevice_cores if self.overlap_shared_expert_with_dispatch else None,
             )
         pcr_weights = None
-        if _GLUE_PCR_WEIGHTS_IN_WINDOW and self.overlap_shared_expert_with_dispatch and not return_intermediates:
+        if self.overlap_shared_expert_with_dispatch and not return_intermediates:
             pcr_weights = ttnn.reshape(
                 scores,
                 (1, 1, scores.shape[-2], scores.shape[-1], 1),

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -28,8 +27,6 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_co
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
-
-_GLUE_GATE_AR_HBAG = os.environ.get("GLUE_GATE_AR_HBAG", "1") == "1"
 
 # The noaux_tc correction bias only ranks experts (score + bias); the routing weights use the raw scores. Some
 # checkpoints put it on a large per-layer offset with a small spread (GLM-5.3: ~34 +- 0.14 at layer 3), and bf16's
@@ -683,7 +680,7 @@ class TtMoEGatePrefill(LightweightModule):
             packer_l1_acc=True,
         )
         self._hbag_semaphores = {}
-        if _GLUE_GATE_AR_HBAG and mesh_device.shape[config.ccl_config["TP_AXIS"]] > 1:
+        if mesh_device.shape[config.ccl_config["TP_AXIS"]] > 1:
             ready_semaphore, data_valid_semaphore = self.tt_ccl.get_mla_high_bw_gather_semaphores()
             self._hbag_semaphores = dict(ready_semaphore=ready_semaphore, data_valid_semaphore=data_valid_semaphore)
         self.fallback_mode = fallback_mode
@@ -944,7 +941,7 @@ class TtMoEGatePrefill(LightweightModule):
 
         tp_axis = self.config.ccl_config["TP_AXIS"]
         tp = self.mesh_device.shape[tp_axis]
-        hbag_ar = tp > 1 and _GLUE_GATE_AR_HBAG and len(x.shape) == 2
+        hbag_ar = tp > 1 and len(x.shape) == 2
         logits = ttnn.matmul(
             x,
             self.weight,

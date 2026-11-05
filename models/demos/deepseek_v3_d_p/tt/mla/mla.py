@@ -31,8 +31,6 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
 
-_GLUE_STEM_RS_WORKERS = int(os.environ.get("GLUE_STEM_RS_WORKERS", "8")) or None
-
 
 class ttMLA:
     MLA_WEIGHT_NAMES = [
@@ -644,8 +642,7 @@ class ttMLA:
             self.qkv_a_proj_weight = self._concat_qkv_a_weight()
 
         self._q_distnorm = (
-            os.environ.get("GLUE_Q_DISTNORM", "1") == "1"
-            and self.tp_factor > 1
+            self.tp_factor > 1
             and not kv_only
             and not self._merge_qkv_a
             and self._llama4_beta is None
@@ -1246,7 +1243,7 @@ class ttMLA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
-            num_workers_per_link=_GLUE_STEM_RS_WORKERS,
+            num_workers_per_link=8,
         )
         return self._tp_all_gather(x, gather_output, seq_len_local)
 
