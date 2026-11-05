@@ -43,6 +43,71 @@ _FUSED_GELU_VARIANTS = {
 }
 
 
+# ---------------------------------------------------------------------------------------------
+# small_m_matmul backend (opt-in per layer)
+# ---------------------------------------------------------------------------------------------
+# ttnn.experimental.small_m_matmul is a DRAM-bandwidth-bound matmul for small M / wide N (Blackhole
+# only). It streams in1 from a weight that is DRAM WIDTH_SHARDED across all G DRAM banks of the device
+# (G = 8 on P150 / Galaxy, 7 on P100), so the weight LAYOUT is part of the op's contract: it is chosen at
+# construction, laid down by Parameter at load and never resharded per forward. A layer that opts in
+# (``use_small_m_matmul=True``) routes EVERY forward through the op -- the weight is not in a layout the
+# other matmuls take -- so opt in only for layers whose M is always small (timestep / modulation /
+# adaLN projections, M = one tile). There is deliberately no silent fallback: an out-of-domain shape
+# raises from the op with the reason, rather than quietly running slower than the default path.
+#
+# Construction checks everything knowable from the weight (arch, dtype, fusions, FSDP, local-N
+# feasibility against the device's real bank count, which ttnn.create_small_m_weight_memory_config
+# derives from the device). M and the fusion-dependent L1 footprint are only known at forward, where the
+# op's own planner is the authority.
+
+
+def _small_m_weight_memory_config(
+    *, name, mesh_device, dtype, local_k, local_n, fuse_swiglu, fsdp_mesh_axis, activation_dtype=None
+):
+    """Admission check for the small_m_matmul backend; returns the weight's DRAM width-sharded MemoryConfig."""
+    if not is_blackhole():
+        msg = f"{name}: use_small_m_matmul requires Blackhole"
+        raise ValueError(msg)
+    if dtype != ttnn.bfloat16:
+        msg = f"{name}: use_small_m_matmul requires a bfloat16 weight, got {dtype}"
+        raise ValueError(msg)
+    if activation_dtype not in (None, ttnn.bfloat16):
+        msg = f"{name}: use_small_m_matmul requires a bfloat16 activation, got activation_dtype={activation_dtype}"
+        raise ValueError(msg)
+    if fuse_swiglu:
+        msg = f"{name}: use_small_m_matmul does not implement fuse_swiglu"
+        raise ValueError(msg)
+    if fsdp_mesh_axis is not None and mesh_device.shape[fsdp_mesh_axis] > 1:
+        # An FSDP-gathered weight materialises interleaved at runtime; resharding it into the all-bank
+        # width layout every forward would cost more than the matmul saves.
+        msg = f"{name}: use_small_m_matmul is incompatible with FSDP weight gathering"
+        raise ValueError(msg)
+    try:
+        # Bank-aware: the op sizes the shard (and the local-N feasibility rule) from the device's DRAM bank
+        # count, so this rejects an N the op cannot serve on THIS device before any weight is laid out.
+        return ttnn.create_small_m_weight_memory_config([local_k, local_n], dtype, mesh_device)
+    except RuntimeError as e:
+        msg = (
+            f"{name}: use_small_m_matmul cannot serve the local weight [K={local_k}, N={local_n}] on this device "
+            f"(at tensor parallelism N is the per-device width): {e}"
+        )
+        raise ValueError(msg) from e
+
+
+def _check_small_m_forward(name, dtype, x: ttnn.Tensor):
+    """small_m_matmul fixes its numerics (bf16 in/out, HiFi2, fp32 accumulation); reject what it cannot honour.
+
+    A forward ``compute_kernel_config`` is ignored: the op takes none, and the module default for a bf16
+    weight (HiFi2 + fp32 dest accumulation) already matches the op's fixed numerics.
+    """
+    if dtype is not None and dtype != ttnn.bfloat16:
+        msg = f"{name}: use_small_m_matmul fixes the output dtype to bfloat16, cannot honour dtype={dtype}"
+        raise ValueError(msg)
+    if x.get_dtype() != ttnn.bfloat16:
+        msg = f"{name}: use_small_m_matmul requires a bfloat16 input, got {x.get_dtype()}"
+        raise ValueError(msg)
+
+
 def maybe_cast_activation(x: ttnn.Tensor, activation_dtype) -> ttnn.Tensor:
     """Cast an activation that is about to cross the fabric, if a quant config asked for it.
 
@@ -90,6 +155,9 @@ class Linear(Module):
         # Branch addition kept over main: the H3 / Qwen3-VL layers pass an explicit config for
         # the sites that need more precision than the shared default.
         compute_kernel_config=None,
+        # Route every forward through ttnn.experimental.small_m_matmul with a DRAM width-sharded weight.
+        # Opt-in, Blackhole only, for layers whose M is always small; see _small_m_weight_memory_config.
+        use_small_m_matmul=False,
     ):
         super().__init__()
 
@@ -108,6 +176,20 @@ class Linear(Module):
             self.activation_fn = None
         self.mesh_device = mesh_device
 
+        self.use_small_m_matmul = use_small_m_matmul
+        weight_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        if use_small_m_matmul:
+            # Replicated weight: the local N is the full out_features.
+            weight_memory_config = _small_m_weight_memory_config(
+                name="Linear",
+                mesh_device=mesh_device,
+                dtype=dtype,
+                local_k=self.in_features,
+                local_n=self.out_features,
+                fuse_swiglu=self.fuse_swiglu,
+                fsdp_mesh_axis=None,
+            )
+
         """
         NOTE: This is the special config which attains good correctness
         HiFi2 + packer_l1_acc + bf16 acc in a fused linear (matmul + bias) with unfused non-approx activation
@@ -120,7 +202,12 @@ class Linear(Module):
             packer_l1_acc=True,
         )
 
-        self.weight = Parameter(total_shape=[self.in_features, self.out_features], device=mesh_device, dtype=dtype)
+        self.weight = Parameter(
+            total_shape=[self.in_features, self.out_features],
+            device=mesh_device,
+            dtype=dtype,
+            memory_config=weight_memory_config,
+        )
         self.bias = Parameter(total_shape=[1, self.out_features], device=mesh_device, dtype=dtype) if bias else None
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -136,6 +223,16 @@ class Linear(Module):
             state["bias"] = bias
 
     def forward(self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None, default_block_size=None) -> ttnn.Tensor:
+        if self.use_small_m_matmul:
+            _check_small_m_forward("Linear", dtype, x)
+            output = ttnn.experimental.small_m_matmul(
+                x,
+                self.weight.data,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                fused_activation=self.fused_activation_fn,
+            )
+            return _apply_activation_fn(output, self.activation_fn)
+
         output = _linear(
             x,
             self.weight.data,
@@ -188,6 +285,9 @@ class ColParallelLinear(Module):
         # the sites that need more precision than the shared default.
         compute_kernel_config=None,
         pin_output_bf16=False,
+        # Route every forward through ttnn.experimental.small_m_matmul with a DRAM width-sharded weight.
+        # Opt-in, Blackhole only, for layers whose M is always small; see _small_m_weight_memory_config.
+        use_small_m_matmul=False,
     ):
         super().__init__()
 
@@ -236,19 +336,39 @@ class ColParallelLinear(Module):
             packer_l1_acc=True,
         )
 
+        self._mesh_axis_size = self.mesh_device.shape[self.mesh_axis] if self.mesh_axis is not None else 1
+
+        self.use_small_m_matmul = use_small_m_matmul
+        weight_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        if use_small_m_matmul:
+            # Column parallel: the weight is sharded on N, so the layout is built from the LOCAL width -- a
+            # layer can be feasible at one TP factor and not at another.
+            weight_memory_config = _small_m_weight_memory_config(
+                name="ColParallelLinear",
+                mesh_device=mesh_device,
+                dtype=dtype,
+                local_k=self.in_features,
+                local_n=self.out_features // self._mesh_axis_size,
+                fuse_swiglu=self.fuse_swiglu,
+                fsdp_mesh_axis=fsdp_mesh_axis,
+                activation_dtype=activation_dtype,
+            )
+            if chunk_sizes is not None and len(set(chunk_sizes)) > 1:
+                msg = "ColParallelLinear: use_small_m_matmul supports only equal-width chunks"
+                raise ValueError(msg)
+
         self.weight = Parameter(
             total_shape=[self.in_features, self.out_features],
             mesh_axes=[fsdp_mesh_axis, mesh_axis],
             device=mesh_device,
             dtype=dtype,
+            memory_config=weight_memory_config,
         )
         self.bias = (
             Parameter(total_shape=[1, self.out_features], mesh_axes=[None, mesh_axis], device=mesh_device, dtype=dtype)
             if bias
             else None
         )
-
-        self._mesh_axis_size = self.mesh_device.shape[self.mesh_axis] if self.mesh_axis is not None else 1
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight = state.pop("weight", None)
@@ -347,6 +467,62 @@ class ColParallelLinear(Module):
             out = ttnn.reshape(out, tuple(out.shape)[-orig_rank:])
         return out
 
+    def _forward_small_m(
+        self,
+        x,
+        weight,
+        *,
+        parallel_config,
+        needs_gather,
+        dtype,
+        addcmul_a,
+        addcmul_b,
+        addcmul_scalar,
+        use_persistent_buffer,
+    ) -> ttnn.Tensor | list[ttnn.Tensor]:
+        """The ``use_small_m_matmul`` path: stand-alone K all-gather if the input is fractured, then small_m_matmul.
+
+        Return convention matches the default routing so the flag is a drop-in: a list whenever ``chunks``
+        is set, except a single chunk on the fused ring AG-matmul path, which returns a bare tensor.
+        """
+        _check_small_m_forward("ColParallelLinear", dtype, x)
+        tp = parallel_config.tensor_parallel.factor if parallel_config is not None else 1
+        ring_agmm = tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and needs_gather
+        if needs_gather:
+            # The fused AG-matmul would have gathered K internally; hoist the same gather out.
+            x = self.ccl_manager.all_gather(
+                x,
+                dim=-1,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=use_persistent_buffer,
+            )
+        bias = self.bias.data if self.bias is not None else None
+
+        if addcmul_a is not None:
+            if self.fused_activation_fn is not None or self.activation_fn is not None:
+                msg = "ColParallelLinear: use_small_m_matmul cannot apply an activation together with addcmul"
+                raise ValueError(msg)
+            return ttnn.experimental.small_m_matmul(
+                x,
+                weight,
+                bias_tensor=bias,
+                fused_ternary_scalar=addcmul_scalar,
+                fused_ternary_input_a=addcmul_a,
+                fused_ternary_input_b=addcmul_b,
+            )
+
+        if self.chunks is not None and (self.chunks > 1 or not ring_agmm):
+            outputs = ttnn.experimental.small_m_matmul_split(
+                x, weight, chunks=self.chunks, dim=-1, bias_tensor=bias, fused_activation=self.fused_activation_fn
+            )
+            return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
+
+        output = ttnn.experimental.small_m_matmul(
+            x, weight, bias_tensor=bias, fused_activation=self.fused_activation_fn
+        )
+        return _apply_activation_fn(output, self.activation_fn)
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -375,7 +551,8 @@ class ColParallelLinear(Module):
             if (addcmul_a is None) != (addcmul_b is None):
                 msg = "addcmul_a and addcmul_b must be given together"
                 raise ValueError(msg)
-            if parallel_config is None or parallel_config.tensor_parallel.factor <= 1:
+            needs_agmm = not self.use_small_m_matmul  # small_m_matmul fuses addcmul at any TP factor
+            if needs_agmm and (parallel_config is None or parallel_config.tensor_parallel.factor <= 1):
                 msg = "fused addcmul needs the all-gather-matmul path; pass parallel_config"
                 raise ValueError(msg)
             if self.chunks is not None and self.chunks > 1:
@@ -398,6 +575,18 @@ class ColParallelLinear(Module):
 
         parallel_config_tp = parallel_config.tensor_parallel.factor if parallel_config is not None else 1
         needs_gather = x.padded_shape[-1] != weight.padded_shape[-2]  # If gathered, switch to non fused AGMM
+        if self.use_small_m_matmul:
+            return self._forward_small_m(
+                x,
+                weight,
+                parallel_config=parallel_config,
+                needs_gather=needs_gather,
+                dtype=dtype,
+                addcmul_a=addcmul_a,
+                addcmul_b=addcmul_b,
+                addcmul_scalar=addcmul_scalar,
+                use_persistent_buffer=use_persistent_buffer,
+            )
         if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and needs_gather:
             if not use_persistent_buffer:
                 ttnn.synchronize_device(self.mesh_device)
