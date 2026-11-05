@@ -90,9 +90,10 @@ list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chun
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 
-# Keep the reload extension from perturbing the established unity source batches.
+# Keep these additions from perturbing the established unity source batches.
 set_source_files_properties(
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/reload_table.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/in_flight_l1_regions.cpp
     PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION
             TRUE
