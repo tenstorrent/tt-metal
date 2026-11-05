@@ -2118,6 +2118,7 @@ class TPGatedDeltaNet:
             fast_mode=True,
             fp32_state=self._decode_step_fp32_state,
             **({} if paged is None else {"state_page_idx": paged.idx}),
+            **({} if paged is None or paged.rec_pool2 is None else {"state_pool2": paged.rec_pool2}),
         )  # [1, B, Nv*Dv] bf16
         ttnn.deallocate(qkvzab)
         partial = self._row_proj(gated, tw["out"])

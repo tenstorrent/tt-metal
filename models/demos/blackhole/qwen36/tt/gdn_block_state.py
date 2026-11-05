@@ -6,24 +6,28 @@ vLLM overlays its KV cache groups: block id b names the same page in the attenti
 (``tensor_idx``) and in each GDN layer of that slot, and one group owns a block id at a time. A GDN layer keeps the
 state of a request in the K and V buffers of its slot, at the block its group owns for that request:
 
-* recurrent state: the first Nv * 16 pages of block b in a float32 alias_view of K, [N * pages / 8, 1, Dk / 2, Dv]
-  (dim-0 slices of half a head, so a block need not hold whole heads: BF8 2048 holds 136 pages, 17 slices);
-* packed conv history: the first Nv * 4 pages of block b in a bfloat16 alias_view of V, [N, pages, 32, 32].
+* recurrent state: 16 fp32 pages per value head in a float32 alias_view of K, [pages / 8, 1, Dk / 2, Dv] (dim-0
+  slices of half a head). Interleaved page p lives on bank p % nb, so block b owns bytes [b * s, (b + 1) * s) of every
+  bank (s = block bytes / nb) and the pages that lie wholly inside them: nb * ceil(b * s / 4096) and the next ones.
+  The first hk heads go to K. The others go to the same float32 view of V (gdn_decode_step's state_pool2) when K is
+  too small: BF8 [N, 1, 1024, 256] holds 8.5 fp32 pages per bank, 64 whole pages per block, 4 heads at TP=8 of 6;
+* packed conv history: 4 bf16 pages per head in a bfloat16 alias_view of V, [N, pages, 32, 32], at page t0 of the
+  block: 0 when the state is in K alone, else the last whole page rows of the block (after the state in V).
 
 Decode reads and writes them through gdn_decode_step(state_page_idx=...), one persistent [2 * Nv, Bmax] index tensor
-per GDN layer (device-row order): row h = first fp32 page of head h, row Nv + h = first bf16 page of its history. In
-this pooled mode the op keeps channel chunk c in both tile rows 2c and 2c + 1 of the packed history, so a request may
-change batch-row parity. Prefill keeps writing the model's [Bmax, ...] decode buffers (now a staging row per
-device row) and copies the row into the request's block afterwards, duplicating the history into both parities. The
-views use alias_view's default checks, so a block must hold whole fp32 and bf16 pages on every bank: BF8
-[N, 1, 2048, 256] holds 17 fp32 pages per bank (136 per block; TP=8 needs 96), BF8 4096 holds 272 (TP=4 needs 192),
-bf16 2048 holds 256.
+per GDN layer (device-row order): row h = first fp32 page of head h (plus the page count of the K view for a head in
+V), row Nv + h = first bf16 page of its history. In this pooled mode the op keeps channel chunk c in both tile rows
+2c and 2c + 1 of the packed history, so a request may change batch-row parity. Prefill keeps writing the model's
+[Bmax, ...] decode buffers (now a staging row per device row) and copies the row into the request's block afterwards,
+duplicating the history into both parities. Fits: BF8 2048 holds 136 fp32 pages per block (TP=8 needs 96, K alone),
+BF8 4096 holds 272 (TP=4 needs 192), BF8 1024 at TP=8 splits 4 + 2 heads over K and V.
 
 A prefill that starts at start_pos > 0 (a prefix hit in mode "align", or a later chunk of a prompt) first loads the
 request's block into the B=1 prefill scratch (GdnBlockState.restore). The runner's (src, dst) block copies
 (copy_kv_blocks) move whole blocks, so they carry every GDN layer's state of the block's group with them.
 """
 
+import math
 from types import SimpleNamespace
 
 import torch
@@ -31,11 +35,27 @@ import torch
 import ttnn
 
 FP32_PAGE_BYTES = 4096
+BF16_PAGE_BYTES = 2048
 HALF_HEAD_PAGES = 8  # fp32 pages of [Dk / 2, Dv] = [64, 128], one dim-0 slice of the state view
 
 
 def _tile_bytes(dtype):
     return {ttnn.bfloat16: 2048, ttnn.float32: 4096, ttnn.bfloat8_b: 1088}[dtype]
+
+
+def _dram_banks(mesh):
+    return int(mesh.dram_grid_size().x)
+
+
+def _first_row(b, s, page):
+    """First page row of a bank wholly inside block b, which owns bytes [b * s, (b + 1) * s) of the bank."""
+    return -(-b * s // page)
+
+
+def _rows_per_block(s, page):
+    """Fewest whole page rows any block holds on a bank (the count repeats every page / gcd(s, page) blocks)."""
+    period = page // math.gcd(s, page)
+    return min((b + 1) * s // page - _first_row(b, s, page) for b in range(period))
 
 
 def is_mamba_entry(entry):
@@ -73,20 +93,51 @@ class GdnBlockState:
 
     def _bind(self, dn, k, v):
         num_blocks, heads, block, hd = (int(x) for x in k.shape)
+        nb = _dram_banks(self.mesh)
         tiles = heads * block * hd // 1024
-        k_bytes = tiles * _tile_bytes(k.dtype)
-        v_bytes = tiles * _tile_bytes(v.dtype)
-        if k_bytes % (FP32_PAGE_BYTES * HALF_HEAD_PAGES):
-            raise ValueError(f"K block of {k_bytes} B is not a whole number of 8-page fp32 slices (block {block})")
-        rec_pages = k_bytes // FP32_PAGE_BYTES
-        if rec_pages < dn.Nv * 2 * HALF_HEAD_PAGES:
-            raise ValueError(f"K block holds {rec_pages} fp32 pages, layer needs {dn.Nv * 16}; use a larger block")
-        hist_tiles = v_bytes // _tile_bytes(ttnn.bfloat16)
-        if v_bytes % _tile_bytes(ttnn.bfloat16) or hist_tiles < dn.Nv * 4:
-            raise ValueError(f"V block of {v_bytes} B does not hold {dn.Nv * 4} whole bf16 tiles (block {block})")
+        if tiles % nb:
+            raise ValueError(f"block {block}: {tiles} tiles per block do not spread evenly over {nb} DRAM banks")
+        s_k = tiles // nb * _tile_bytes(k.dtype)
+        s_v = tiles // nb * _tile_bytes(v.dtype)
+        head_pages = dn.Dk * dn.Dv // 1024
+        hist_tiles = tiles * _tile_bytes(v.dtype) // BF16_PAGE_BYTES
+        hist_rows = -(-dn.Nv * 4 // nb)
+        if s_v % BF16_PAGE_BYTES or hist_tiles < dn.Nv * 4:
+            raise ValueError(f"block {block}: a V block does not hold {dn.Nv * 4} whole bf16 pages")
+        hk = min(dn.Nv, _rows_per_block(s_k, FP32_PAGE_BYTES) * nb // head_pages)
+        hv = dn.Nv - hk
+        t0 = 0
+        if hv:
+            # The heads in V take the first whole fp32 rows of the block, the history its last hist_rows bf16 rows.
+            rv = -(-hv * head_pages // nb)
+            period = FP32_PAGE_BYTES // math.gcd(s_v, FP32_PAGE_BYTES)
+            if any(
+                (_first_row(b, s_v, FP32_PAGE_BYTES) + rv) * FP32_PAGE_BYTES > (b + 1) * s_v - hist_rows * BF16_PAGE_BYTES
+                for b in range(period)
+            ):
+                raise ValueError(
+                    f"block {block}: K holds {hk} of {dn.Nv} heads and V cannot hold the other {hv} with the history"
+                )
+            t0 = hist_tiles - hist_rows * nb
+        rec_pages_k = nb * (num_blocks * s_k // FP32_PAGE_BYTES)
+        rec_pages_v = nb * (num_blocks * s_v // FP32_PAGE_BYTES)
+        # Half-head slices of the views must start on 8-page boundaries.
+        if nb % HALF_HEAD_PAGES and (s_k % (FP32_PAGE_BYTES * HALF_HEAD_PAGES) or hv):
+            raise ValueError(f"{nb} DRAM banks: block {block} needs the state view in 8-page slices")
         rec_view = ttnn.experimental.alias_view(
-            k, [num_blocks * rec_pages // HALF_HEAD_PAGES, 1, dn.Dk // 2, dn.Dv], ttnn.float32
+            k,
+            [rec_pages_k // HALF_HEAD_PAGES, 1, dn.Dk // 2, dn.Dv],
+            ttnn.float32,
+            check_slices=s_k % FP32_PAGE_BYTES == 0,
         )
+        rec_view2 = None
+        if hv:
+            rec_view2 = ttnn.experimental.alias_view(
+                v,
+                [rec_pages_v // HALF_HEAD_PAGES, 1, dn.Dk // 2, dn.Dv],
+                ttnn.float32,
+                check_slices=s_v % FP32_PAGE_BYTES == 0,
+            )
         hist_view = ttnn.experimental.alias_view(v, [num_blocks, hist_tiles, 32, 32], ttnn.bfloat16)
         idx = ttnn.from_torch(
             torch.zeros(2 * dn.Nv, self.bmax, dtype=torch.int32),
@@ -97,12 +148,27 @@ class GdnBlockState:
         )
         return SimpleNamespace(
             rec_pool=rec_view,
+            rec_pool2=rec_view2,
             hist_pool=hist_view,
             rec_view=rec_view,
+            rec_view2=rec_view2,
             hist_view=hist_view,
             idx=idx,
-            rec_pages=rec_pages,
+            banks=nb,
+            bank_bytes_k=s_k,
+            bank_bytes_v=s_v,
+            heads_k=hk,
+            rec_pages_k=rec_pages_k,
             hist_pages=hist_tiles,
+            hist_first=t0,
+        )
+
+    @staticmethod
+    def _rec_pages(ps, b):
+        """First fp32 page of block b in the K view and in the V view."""
+        return (
+            ps.banks * _first_row(b, ps.bank_bytes_k, FP32_PAGE_BYTES),
+            ps.banks * _first_row(b, ps.bank_bytes_v, FP32_PAGE_BYTES),
         )
 
     def _block_ids(self, state_block_ids_per_layer, i, n):
@@ -119,9 +185,13 @@ class GdnBlockState:
             for r, b in enumerate(ids):
                 blocks[r if row_of is None else row_of[r]] = b
             ps = dn._paged_state
-            b = torch.tensor(blocks, dtype=torch.int32)
-            h = torch.arange(dn.Nv, dtype=torch.int32).reshape(-1, 1)
-            host = torch.cat([b * ps.rec_pages + 16 * h, b * ps.hist_pages + 4 * h])  # [2 * Nv, Bmax]
+            hp = dn.Dk * dn.Dv // 1024
+            b = torch.tensor(blocks, dtype=torch.int64)
+            pk = ps.banks * (-(-b * ps.bank_bytes_k // FP32_PAGE_BYTES))
+            pv = ps.rec_pages_k + ps.banks * (-(-b * ps.bank_bytes_v // FP32_PAGE_BYTES))
+            h = torch.arange(dn.Nv, dtype=torch.int64).reshape(-1, 1)
+            rec = torch.where(h < ps.heads_k, pk + hp * h, pv + hp * (h - ps.heads_k))
+            host = torch.cat([rec, b * ps.hist_pages + ps.hist_first + 4 * h]).to(torch.int32)  # [2 * Nv, Bmax]
             prev = self._host_idx.get(i)
             if prev is not None and torch.equal(prev, host):
                 continue
@@ -144,23 +214,27 @@ class GdnBlockState:
             ids = self._block_ids(state_block_ids_per_layer, i, len(rows))
             ps = dn._paged_state
             nv, dk, dv, nr = dn.Nv, dn.Dk, dn.Dv, dn.Nv * 4
-            halves, per_blk = 2 * nv, ps.rec_pages // HALF_HEAD_PAGES
+            halves, hk2 = 2 * nv, 2 * ps.heads_k
             rec_rows = ttnn.reshape(dn.rec_state, (dn._decode_B * halves, 1, dk // 2, dv))
             packed = ttnn.reshape(dn._conv_hist_packed, (dn._decode_B, nr, 32, 32))
             for d, blk in zip(rows, ids):
                 assert blk > 0, f"layer {i}: prefill row {d} has the null block"
-                # L1-sharded sources: a DRAM source makes slice_write re-seat the destination buffer.
-                src = ttnn.slice(
-                    rec_rows,
-                    (d * halves, 0, 0, 0),
-                    ((d + 1) * halves, 1, dk // 2, dv),
-                    memory_config=dn._rec_row_shard_memcfg(),
-                )
-                s0 = blk * per_blk
-                ttnn.experimental.slice_write(
-                    src, ps.rec_view, [s0, 0, 0, 0], [s0 + halves, 1, dk // 2, dv], [1, 1, 1, 1]
-                )
-                ttnn.deallocate(src)
+                pk, pv = self._rec_pages(ps, blk)
+                parts = [(ps.rec_view, pk // HALF_HEAD_PAGES, 0, hk2)]
+                if hk2 < halves:
+                    parts.append((ps.rec_view2, pv // HALF_HEAD_PAGES, hk2, halves))
+                for view, s0, lo, hi in parts:
+                    # L1-sharded sources: a DRAM source makes slice_write re-seat the destination buffer.
+                    src = ttnn.slice(
+                        rec_rows,
+                        (d * halves + lo, 0, 0, 0),
+                        (d * halves + hi, 1, dk // 2, dv),
+                        memory_config=dn._rec_row_shard_memcfg(),
+                    )
+                    ttnn.experimental.slice_write(
+                        src, view, [s0, 0, 0, 0], [s0 + hi - lo, 1, dk // 2, dv], [1, 1, 1, 1]
+                    )
+                    ttnn.deallocate(src)
                 row = ttnn.to_layout(ttnn.slice(packed, (d, 0, 0, 0), (d + 1, nr, 32, 32)), ttnn.ROW_MAJOR_LAYOUT)
                 src = ttnn.embedding(
                     self._mirror_table(nr, d & 1),
@@ -170,7 +244,10 @@ class GdnBlockState:
                 )  # [1, nr * 32, 32]
                 ttnn.deallocate(row)
                 src = ttnn.reshape(src, (1, nr, 32, 32))
-                ttnn.experimental.slice_write(src, ps.hist_view, [blk, 0, 0, 0], [blk + 1, nr, 32, 32], [1, 1, 1, 1])
+                t0 = ps.hist_first
+                ttnn.experimental.slice_write(
+                    src, ps.hist_view, [blk, t0, 0, 0], [blk + 1, t0 + nr, 32, 32], [1, 1, 1, 1]
+                )
                 ttnn.deallocate(src)
 
     def set_prefill_blocks(self, state_block_ids_per_layer):
@@ -189,12 +266,22 @@ class GdnBlockState:
                 raise ValueError(f"layer {i}: resumed prefill of request {u} has the null block {blk}")
             ps = dn._paged_state
             nv, dk, dv, nr = dn.Nv, dn.Dk, dn.Dv, dn.Nv * 4
-            s0 = blk * (ps.rec_pages // HALF_HEAD_PAGES)
-            rec = ttnn.slice(ps.rec_view, (s0, 0, 0, 0), (s0 + 2 * nv, 1, dk // 2, dv))
+            hk2 = 2 * ps.heads_k
+            pk, pv = self._rec_pages(ps, blk)
+            s0 = pk // HALF_HEAD_PAGES
+            rec = ttnn.slice(ps.rec_view, (s0, 0, 0, 0), (s0 + hk2, 1, dk // 2, dv))
+            if hk2 < 2 * nv:
+                s1 = pv // HALF_HEAD_PAGES
+                rec2 = ttnn.slice(ps.rec_view2, (s1, 0, 0, 0), (s1 + 2 * nv - hk2, 1, dk // 2, dv))
+                both = ttnn.concat([rec, rec2], dim=0)
+                ttnn.deallocate(rec)
+                ttnn.deallocate(rec2)
+                rec = both
             ttnn.copy(ttnn.reshape(rec, (1, nv, dk, dv)), dn.rec_state)
             ttnn.deallocate(rec)
+            t0 = ps.hist_first
             hist = ttnn.to_layout(
-                ttnn.slice(ps.hist_view, (blk, 0, 0, 0), (blk + 1, nr, 32, 32)), ttnn.ROW_MAJOR_LAYOUT
+                ttnn.slice(ps.hist_view, (blk, t0, 0, 0), (blk + 1, t0 + nr, 32, 32)), ttnn.ROW_MAJOR_LAYOUT
             )
             rows = ttnn.embedding(
                 self._unpack_table(dn), ttnn.reshape(hist, (nr * 32, 32)), layout=ttnn.ROW_MAJOR_LAYOUT

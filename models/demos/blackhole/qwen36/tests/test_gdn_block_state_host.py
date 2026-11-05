@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Host-only: GdnBlockState (QWEN36_MAMBA_SPEC) page math and index updates, with ttnn stubbed out."""
 
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,7 @@ import models.demos.blackhole.qwen36.tt.gdn_block_state as gbs
 
 NV, DK, DV = 12, 128, 128  # TP=4 per-device GDN shapes of Qwen3.6-27B
 NUM_BLOCKS, HD = 10, 256
+BANKS = 8  # DRAM banks of a P150
 
 
 class _Tensor(SimpleNamespace):
@@ -21,8 +23,8 @@ class _Tensor(SimpleNamespace):
 def fake(monkeypatch):
     calls = {"views": [], "h2d": []}
 
-    def alias_view(t, shape, dtype):
-        calls["views"].append((t.name, list(shape), dtype))
+    def alias_view(t, shape, dtype, check_slices=True):
+        calls["views"].append((t.name, list(shape), dtype, check_slices))
         return _Tensor(name=f"{t.name}:view", shape=list(shape), dtype=dtype)
 
     def from_torch(x, dtype=None, layout=None, device=None, mesh_mapper=None, memory_config=None):
@@ -49,6 +51,7 @@ def fake(monkeypatch):
     stub_map = {"bf16": 2048, "fp32": 4096, "bf8": 1088}
     monkeypatch.setattr(gbs, "ttnn", stub)
     monkeypatch.setattr(gbs, "_tile_bytes", lambda dtype: stub_map[dtype])
+    monkeypatch.setattr(gbs, "_dram_banks", lambda mesh: BANKS)
     return calls
 
 
@@ -89,31 +92,78 @@ def test_is_mamba_entry():
 
 
 @pytest.mark.parametrize(
-    "dtype, block, nv, rec_pages, hist_tiles",
+    "dtype, block, nv, rec_pages, hist_tiles, heads_k, hist_first",
     [
-        ("bf8", 2048, 6, 136, 272),  # TP=8 (Galaxy shapes): 512 tiles x 1088 B = 557,056 B = 136 fp32 pages
-        ("bf8", 4096, 12, 272, 544),  # TP=4: 1,114,112 B per block
-        ("bf16", 2048, 12, 256, 512),  # 1 MiB per block
+        ("bf8", 2048, 6, 136, 272, 6, 0),  # TP=8 (Galaxy shapes): 512 tiles x 1088 B = 557,056 B = 136 fp32 pages
+        ("bf8", 4096, 12, 272, 544, 12, 0),  # TP=4: 1,114,112 B per block
+        ("bf16", 2048, 12, 256, 512, 12, 0),  # 1 MiB per block
+        # TP=8 at BF8 1024: 8.5 fp32 pages per bank, 64 whole pages per block -> 4 heads in K, 2 in V, the history in
+        # the last 3 bf16 page rows of the V block (pages 112..135)
+        ("bf8", 1024, 6, 68, 136, 4, 112),
+        ("bf8", 2048, 12, 136, 272, 8, 224),  # TP=4 at BF8 2048: 8 + 4 heads
     ],
 )
-def test_views_and_page_counts(fake, dtype, block, nv, rec_pages, hist_tiles):
+def test_views_and_page_counts(fake, dtype, block, nv, rec_pages, hist_tiles, heads_k, hist_first):
     model = _model(nv=nv)
     st = gbs.GdnBlockState(model, _specs(model, dtype, block), _kv(2, dtype, block))
     assert len(st.layers) == 6
     i, dn = st.layers[0]
     ps = dn._paged_state
-    assert ps.rec_pages == rec_pages and ps.hist_pages == hist_tiles
-    assert ps.rec_view.shape == [NUM_BLOCKS * rec_pages // 8, 1, DK // 2, DV] and ps.rec_view.dtype == "fp32"
+    assert ps.hist_pages == hist_tiles and ps.heads_k == heads_k and ps.hist_first == hist_first
+    pages = BANKS * (NUM_BLOCKS * rec_pages // BANKS)  # whole fp32 page rows of the buffer
+    assert ps.rec_pages_k == pages
+    assert ps.rec_view.shape == [pages // 8, 1, DK // 2, DV] and ps.rec_view.dtype == "fp32"
     assert ps.hist_view.shape == [NUM_BLOCKS, hist_tiles, 32, 32] and ps.hist_pool is ps.hist_view
     assert ps.hist_view.name == "v0:view"
+    split = heads_k < nv
+    assert (ps.rec_view2 is not None) == split and (ps.rec_pool2 is ps.rec_view2)
+    whole = rec_pages % BANKS == 0  # a block holds whole fp32 pages on every bank
+    layer0 = fake["views"][: 3 if split else 2]
+    assert [c for name, _, dt, c in layer0 if dt == "fp32"] == [whole] * (2 if split else 1)
 
 
-@pytest.mark.parametrize("dtype, block, nv", [("bf8", 2048, 12), ("bf8", 1024, 6), ("bf16", 1024, 12)])
+@pytest.mark.parametrize("dtype, block, nv", [("bf8", 1024, 12), ("bf8", 512, 6)])
 def test_blocks_without_room_for_the_state_are_refused(fake, dtype, block, nv):
-    # BF8 2048 at TP=4: 136 pages < 192; BF8 1024: 8.5 fp32 pages per bank; bf16 1024 at TP=4: 128 < 192.
+    # BF8 1024 at TP=4: 4 heads in K, V cannot hold 8; BF8 512 at TP=8: 3 whole fp32 rows in some blocks.
     model = _model(nv=nv)
     with pytest.raises(ValueError):
         gbs.GdnBlockState(model, _specs(model, dtype, block), _kv(2, dtype, block))
+
+
+@pytest.mark.parametrize(
+    "dtype, block, nv",
+    [("bf8", 1024, 6), ("bf8", 2048, 6), ("bf8", 2048, 12), ("bf8", 4096, 12), ("bf16", 1024, 12)],
+)
+def test_state_pages_lie_inside_their_block_on_every_bank(fake, dtype, block, nv):
+    """Interleaved page q of a view with page size p is bytes [(q // 8) * p, +p) of bank q % 8; block b owns bytes
+    [b * s, (b + 1) * s) of every bank. Every page the decode index names lies wholly inside its block, and no two
+    pages of a block overlap."""
+    model = _model(nv=nv)
+    st = gbs.GdnBlockState(model, _specs(model, dtype, block), _kv(2, dtype, block))
+    i, dn = st.layers[0]
+    ps = dn._paged_state
+    blocks = list(range(1, NUM_BLOCKS))
+    for lo in range(0, len(blocks), 8):
+        row = blocks[lo : lo + 8]
+        ids = [torch.tensor(row + [0] * (8 - len(row)), dtype=torch.int32).reshape(-1, 1) for _ in model.layers]
+        st._host_idx.clear()
+        st.set_decode_blocks(ids)
+        idx = ps.idx.data
+        for d, b in enumerate(row):
+            used = set()  # (bank, byte) granules of 2048 B owned by this block's pages
+            for h in range(2 * nv):
+                p = int(idx[h, d])
+                if h < nv:
+                    pool, q0, n, size, s = ("k", p, 16, 4096, ps.bank_bytes_k) if p < ps.rec_pages_k else (
+                        "v", p - ps.rec_pages_k, 16, 4096, ps.bank_bytes_v)
+                else:
+                    pool, q0, n, size, s = "v", p, 4, 2048, ps.bank_bytes_v
+                for q in range(q0, q0 + n):
+                    bank, start = q % BANKS, (q // BANKS) * size
+                    assert b * s <= start and start + size <= (b + 1) * s, (b, h, q)
+                    for g in range(start // 2048, (start + size) // 2048):
+                        assert (pool, bank, g) not in used, (b, h, q)
+                        used.add((pool, bank, g))
 
 
 def test_decode_index_follows_rows_and_skips_unchanged(fake):
@@ -190,8 +240,13 @@ class _TorchTTNN:
         return x.clone()
 
     @staticmethod
-    def alias_view(t, shape, dtype):
-        return t.bytes.view(_TORCH_DTYPES[dtype]).reshape(shape)
+    def alias_view(t, shape, dtype, check_slices=True):
+        flat = t.bytes.view(_TORCH_DTYPES[dtype]).reshape(-1)
+        return flat[: math.prod(shape)].reshape(shape)
+
+    @staticmethod
+    def concat(ts, dim=0):
+        return torch.cat(ts, dim=dim)
 
     @staticmethod
     def reshape(t, shape):
@@ -240,36 +295,38 @@ def torch_ttnn(monkeypatch):
     t = _TorchTTNN()
     monkeypatch.setattr(gbs, "ttnn", t)
     monkeypatch.setattr(gbs, "_tile_bytes", lambda dtype: {"bf16": 2048, "fp32": 4096, "bf8": 1088}[dtype])
+    monkeypatch.setattr(gbs, "_dram_banks", lambda mesh: BANKS)
     return t
 
 
-def _pack_tables(monkeypatch, bmax):
+def _pack_tables(monkeypatch, bmax, nv=NV, nk=NK):
     """The production RM <-> packed history tables (TPGatedDeltaNet._pack_tables) on torch."""
     from models.demos.blackhole.qwen36.tt.gdn import tp as gdn_tp
 
     monkeypatch.setattr(gdn_tp, "ttnn", _TorchTTNN())
     me = SimpleNamespace(
-        _decode_B=bmax, Nv=NV, Nk=NK, Dk=DK, Dv=DV, K=KCONV, mesh=None, _shared_const=lambda key, make: make()
+        _decode_B=bmax, Nv=nv, Nk=nk, Dk=DK, Dv=DV, K=KCONV, mesh=None, _shared_const=lambda key, make: make()
     )
     return gdn_tp.TPGatedDeltaNet._pack_tables(me)
 
 
-def _staged_model(monkeypatch, bmax=8, n_layers=8, block=4096):
+def _staged_model(monkeypatch, bmax=8, n_layers=8, block=4096, nv=NV, nk=NK):
     """A model whose GDN decode buffers hold random state: rec_state, and the packed history of a random conv carry
     per row, packed for the row's parity by the production table."""
-    tab = _pack_tables(monkeypatch, bmax)
+    tab = _pack_tables(monkeypatch, bmax, nv, nk)
     cpr = tab["cpr"]
-    model = _model(n_layers=n_layers, bmax=bmax)
+    conv_dim = 2 * nk * DK + nv * DV
+    model = _model(n_layers=n_layers, bmax=bmax, nv=nv)
     g = torch.Generator().manual_seed(7)
-    carries = torch.randn(bmax, KCONV - 1, CONV_DIM, generator=g).to(torch.bfloat16)
+    carries = torch.randn(bmax, KCONV - 1, conv_dim, generator=g).to(torch.bfloat16)
     for layer in model.layers:
         dn = layer.attention
-        dn.Nk, dn.K, dn.qkv_dim_tp, dn._decode_B = NK, KCONV, CONV_DIM, bmax
-        dn.rec_state = torch.randn(bmax, NV, DK, DV, generator=g)
+        dn.Nk, dn.K, dn.qkv_dim_tp, dn._decode_B = nk, KCONV, conv_dim, bmax
+        dn.rec_state = torch.randn(bmax, nv, DK, DV, generator=g)
         packed = []
         for b in range(bmax):
             w = torch.cat([carries[b].reshape((KCONV - 1) * cpr, 32), torch.zeros(1, 32, dtype=torch.bfloat16)])
-            packed.append(w[tab["slot_to_packed"][b & 1].long()].reshape(NV, 4, 32, 32))
+            packed.append(w[tab["slot_to_packed"][b & 1].long()].reshape(nv, 4, 32, 32))
         dn._conv_hist_packed = torch.stack(packed)
         dn._rec_row_shard_memcfg = dn._packed_row_shard_memcfg = lambda: None
     model.prepare_gdn_decode_width = lambda b: None
@@ -293,15 +350,16 @@ def _group_copies(src, dst):
     return [(src + 8 * g, dst + 8 * g) for g in range(3)]
 
 
-def test_prefill_rows_survive_block_copy_and_restore(torch_ttnn, monkeypatch):
-    model, kv, carries = _staged_model(monkeypatch)
-    st = gbs.GdnBlockState(model, _specs(model), kv)
+@pytest.mark.parametrize("block, nv, nk", [(4096, NV, NK), (1024, 6, 2)], ids=["tp4_b4096", "tp8_b1024_split"])
+def test_prefill_rows_survive_block_copy_and_restore(torch_ttnn, monkeypatch, block, nv, nk):
+    model, kv, carries = _staged_model(monkeypatch, block=block, nv=nv, nk=nk)
+    st = gbs.GdnBlockState(model, _specs(model, block=block), kv)
     rec0 = {i: dn.rec_state.clone() for i, dn in st.layers}
     st.write_prefill_rows(_ids(model, [5, 2]), rows=[3, 0])  # request 0 on device row 3, request 1 on row 0
     gbs.copy_kv_blocks(model, _group_copies(5, 7))
     for i, dn in st.layers:  # the B=1 prefill scratch, bound
-        dn.rec_state = torch.zeros(1, NV, DK, DV)
-        dn.conv_carry = torch.zeros(1, KCONV - 1, CONV_DIM, dtype=torch.bfloat16)
+        dn.rec_state = torch.zeros(1, nv, DK, DV)
+        dn.conv_carry = torch.zeros(1, KCONV - 1, dn.qkv_dim_tp, dtype=torch.bfloat16)
     st.set_prefill_blocks(_ids(model, [7, 2]))
     for u, row in ((0, 3), (1, 0)):
         st.restore(u)
