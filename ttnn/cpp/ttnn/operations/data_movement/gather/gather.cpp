@@ -305,6 +305,28 @@ Tensor gather_dispatch(
         input_tensor_rank,
         index_tensor_rank);
 
+    // Checked on the caller's tensors: the transforms below would otherwise fail on the tile first, or carry it
+    // into the native factory, whose buffers are sized for 32x32 tiles and whose output always gets one.
+    auto validate_tile_shape = [](const Tensor& tensor, const char* name) {
+        if (tensor.layout() != tt::tt_metal::Layout::TILE) {
+            return;
+        }
+        const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+        TT_FATAL(
+            tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
+            "gather supports only {}x{} tiles, but {} has a {}x{} tile",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            name,
+            tile_shape[0],
+            tile_shape[1]);
+    };
+    validate_tile_shape(input_tensor, "the input tensor");
+    validate_tile_shape(input_index_tensor, "the index tensor");
+    if (optional_output_tensor.has_value()) {
+        validate_tile_shape(*optional_output_tensor, "the output tensor");
+    }
+
     // Check for early exit for empty tensors tensors
     if (original_input_tensor_lshape == ttnn::Shape{}) {
         return input_tensor;
