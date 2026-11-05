@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -44,9 +45,10 @@ void kernel_main() {
             uint32_t l1_write_addr = dfb_dst.get_write_ptr();
             uint32_t H_curr = h == Ht - 1 ? H_per_tile_last : H_per_tile;
             for (uint32_t h_datum = 0; h_datum < H_curr; ++h_datum) {
-                auto src = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src_addr);
-                auto dst = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_addr);
-                for (uint32_t i = 0; i < stick_size_bytes; ++i) {
+                using copy_t = std::conditional_t<W_size_bytes % sizeof(uint32_t) == 0, uint32_t, uint8_t>;
+                auto src = reinterpret_cast<volatile tt_l1_ptr copy_t*>(src_addr);
+                auto dst = reinterpret_cast<volatile tt_l1_ptr copy_t*>(l1_write_addr);
+                for (uint32_t i = 0; i < stick_size_bytes / sizeof(copy_t); ++i) {
                     dst[i] = src[i];
                 }
                 l1_write_addr += l1_write_offset_bytes;
