@@ -31,19 +31,6 @@ namespace tt::tt_metal::inspector {
 
 using time_point = std::chrono::time_point<std::chrono::high_resolution_clock>;
 
-struct KernelArg {
-    std::string name;  // empty if unnamed
-    uint32_t value{};
-};
-
-// Triage reads the values from L1, since host copies go stale.
-struct RuntimeArgs {
-    // names[i] names word i, empty if unnamed. Words past the end, like varargs, are unnamed.
-    std::vector<std::string> names;
-    // Arg count -> cores with that many args.
-    std::unordered_map<uint32_t, CoreRangeSet> counts;
-};
-
 struct KernelData {
     std::weak_ptr<Kernel> kernel;
     std::string name;
@@ -54,9 +41,6 @@ struct KernelData {
     // kernel are left empty. Served to tt-triage over RPC so it doesn't have to reconstruct paths from per-processor
     // naming conventions.
     std::vector<std::string> processor_elf_paths;
-    std::vector<KernelArg> compile_time_args;  // positional, then named
-    RuntimeArgs runtime_args;
-    RuntimeArgs common_runtime_args;
 };
 
 struct ProgramData {

@@ -6,7 +6,9 @@
 #include "data.hpp"
 #include <cstdlib>
 #include <iterator>
+#include <map>
 #include <stdexcept>
+#include <unordered_map>
 #include "rpc_server_controller.hpp"
 #include "logger.hpp"
 #include <tt-metalium/experimental/inspector_config.hpp>
@@ -16,6 +18,7 @@
 #include <system_mesh.hpp>
 #include "jit_build/build_env_manager.hpp"
 #include "device/device_manager.hpp"
+#include "impl/kernels/kernel.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
@@ -455,37 +458,114 @@ rpc::BinaryStatus Data::convert_binary_status(ProgramBinaryStatus status) {
     }
 }
 
-void Data::populate_kernel(rpc::KernelData::Builder kernel, const KernelData& kernel_data, uint64_t program_id) {
+void Data::populate_kernel(rpc::KernelData::Builder out, const KernelData& kernel_data, uint64_t program_id) {
     auto fill = [](auto list, const auto& values) {
         for (size_t i = 0; i < values.size(); ++i) {
             list.set(i, values[i]);
         }
     };
-    auto populate_runtime_args = [&](rpc::RuntimeArgs::Builder runtime_args, const RuntimeArgs& args) {
-        fill(runtime_args.initNames(args.names.size()), args.names);
-        auto counts = runtime_args.initCounts(args.counts.size());
-        uint32_t i = 0;
-        for (const auto& [count, cores] : args.counts) {
-            auto runtime_arg_count = counts[i++];
-            runtime_arg_count.setCount(count);
-            populate_core_ranges(runtime_arg_count.initCoreRanges(cores.ranges().size()), cores);
+    out.setWatcherKernelId(kernel_data.watcher_kernel_id);
+    out.setName(kernel_data.name);
+    out.setPath(kernel_data.path);
+    out.setSource(kernel_data.source);
+    out.setProgramId(program_id);
+    fill(out.initProcessorElfPaths(kernel_data.processor_elf_paths.size()), kernel_data.processor_elf_paths);
+
+    // program_destroyed erases this entry before the program's kernels are destroyed.
+    const auto kernel = kernel_data.kernel.lock();
+    std::vector<std::string> compile_time_arg_names(kernel->compile_time_args().size());
+    const auto named = kernel->named_compile_time_args();
+    std::map<std::string, uint32_t> named_compile_time_args(named.begin(), named.end());
+    // Metal 2.0 names words as the kernel does: by arg name, tensor::<accessor> or scratch::<accessor>.
+    // Varargs have no name.
+    auto rta_names = kernel->get_runtime_arg_names();
+    rta_names.resize(kernel->get_rta_layout().vararg_section_offset);
+    auto crta_names = kernel->get_common_runtime_arg_names();
+    crta_names.resize(kernel->get_crta_layout().vararg_section_offset);
+    for (const auto& binding : kernel->tensor_binding_handles()) {
+        const std::string name = "tensor::" + binding.accessor_name;
+        // A tensor's CTA words run up to the next tensor's.
+        auto cta_end = static_cast<uint32_t>(compile_time_arg_names.size());
+        for (const auto& other : kernel->tensor_binding_handles()) {
+            if (other.cta_offset > binding.cta_offset) {
+                cta_end = std::min(cta_end, other.cta_offset);
+            }
         }
-    };
-    kernel.setWatcherKernelId(kernel_data.watcher_kernel_id);
-    kernel.setName(kernel_data.name);
-    kernel.setPath(kernel_data.path);
-    kernel.setSource(kernel_data.source);
-    kernel.setProgramId(program_id);
-    fill(kernel.initProcessorElfPaths(kernel_data.processor_elf_paths.size()), kernel_data.processor_elf_paths);
-    auto compile_time_args = kernel.initCompileTimeArgs(kernel_data.compile_time_args.size());
-    uint32_t i = 0;
-    for (const auto& arg : kernel_data.compile_time_args) {
-        auto compile_time_arg = compile_time_args[i++];
-        compile_time_arg.setName(arg.name);
-        compile_time_arg.setValue(arg.value);
+        for (uint32_t i = binding.cta_offset; i < cta_end; i++) {
+            compile_time_arg_names.at(i) = fmt::format("{}[{}]", name, i - binding.cta_offset);
+        }
+        if (binding.is_per_node) {
+            rta_names.at(binding.addr_rta_offset / sizeof(uint32_t)) = name;
+            continue;
+        }
+        const uint32_t word = binding.addr_crta_offset / sizeof(uint32_t);
+        crta_names.at(word) = name;
+        for (uint32_t i = 0; i < binding.num_runtime_field_crta_words; i++) {
+            crta_names.at(word + 1 + i) =
+                binding.runtime_field_is_page_size ? name + ".page_size" : fmt::format("{}.shape[{}]", name, i);
+        }
     }
-    populate_runtime_args(kernel.initRuntimeArgs(), kernel_data.runtime_args);
-    populate_runtime_args(kernel.initCommonRuntimeArgs(), kernel_data.common_runtime_args);
+    for (const auto& scratchpad : kernel->scratchpad_binding_handles()) {
+        crta_names.at(scratchpad.addr_crta_word) = "scratch::" + scratchpad.accessor_name;
+    }
+
+    // Blaze-only experimental named args (removal tracked by issue #50953)
+    for (const auto& [ns, fields] : kernel->named_ct_arg_namespaces()) {
+        for (const auto& [field, value] : fields) {
+            named_compile_time_args[ns.empty() ? field : ns + "." + field] = value;
+        }
+    }
+    for (const auto& [ns, entries] : kernel->named_runtime_arg_namespaces()) {
+        for (const auto& entry : entries) {
+            auto& names = entry.dispatch == RuntimeArgDispatch::COMMON ? crta_names : rta_names;
+            const std::string name = ns.empty() ? entry.field : ns + "." + entry.field;
+            names.resize(std::max<size_t>(names.size(), entry.index + entry.length));
+            for (uint32_t i = 0; i < entry.length; i++) {
+                names[entry.index + i] = entry.length == 1 ? name : fmt::format("{}[{}]", name, i);
+            }
+        }
+    }
+
+    auto compile_time_args = out.initCompileTimeArgs(compile_time_arg_names.size() + named_compile_time_args.size());
+    uint32_t i = 0;
+    for (const uint32_t value : kernel->compile_time_args()) {
+        auto compile_time_arg = compile_time_args[i];
+        compile_time_arg.setName(compile_time_arg_names[i]);
+        compile_time_arg.setValue(value);
+        i++;
+    }
+    for (const auto& [name, value] : named_compile_time_args) {
+        auto compile_time_arg = compile_time_args[i++];
+        compile_time_arg.setName(name);
+        compile_time_arg.setValue(value);
+    }
+
+    auto runtime_args = out.initRuntimeArgs();
+    fill(runtime_args.initNames(rta_names.size()), rta_names);
+    std::unordered_map<uint32_t, std::vector<CoreCoord>> cores_by_count;
+    for (const auto& core : kernel->cores_with_runtime_args()) {
+        if (const auto count = kernel->logical_runtime_arg_count(core); count > 0) {
+            cores_by_count[count].push_back(core);
+        }
+    }
+    auto counts = runtime_args.initCounts(cores_by_count.size());
+    i = 0;
+    for (const auto& [count, cores] : cores_by_count) {
+        const CoreRangeSet core_ranges(cores);
+        auto runtime_arg_count = counts[i++];
+        runtime_arg_count.setCount(count);
+        populate_core_ranges(runtime_arg_count.initCoreRanges(core_ranges.ranges().size()), core_ranges);
+    }
+
+    // Common args are the same list on every core of the kernel.
+    auto common_runtime_args = out.initCommonRuntimeArgs();
+    fill(common_runtime_args.initNames(crta_names.size()), crta_names);
+    if (const auto count = kernel->logical_common_runtime_arg_count(); count > 0) {
+        auto common_runtime_arg_count = common_runtime_args.initCounts(1)[0];
+        common_runtime_arg_count.setCount(count);
+        const auto& core_ranges = kernel->core_range_set();
+        populate_core_ranges(common_runtime_arg_count.initCoreRanges(core_ranges.ranges().size()), core_ranges);
+    }
 }
 
 // Helper function to populate the core info
