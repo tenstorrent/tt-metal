@@ -25,6 +25,7 @@
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"  // dfb::NUM_DFBS
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
+#include "internal/tt-2xx/quasar/trisc_isa.h"
 
 namespace {
 
@@ -412,11 +413,10 @@ public:
 
     std::string common_flags(const Params& params) const override {
         // TODO: Use correct tt-qsr cpu options #32893
-        // sfpi 7.93.0 gives tt-qsr32 zbc instead of zbb; the explicit -march restores zbb and
-        // keeps the -mcpu tuning.
+        // The explicit -march (see trisc_isa.h) sets the ISA and keeps the -mcpu tuning.
         std::string cflags = params.processor_class == HalProcessorClassType::DM
                                  ? "-mcpu=tt-qsr64-rocc "
-                                 : "-mcpu=tt-qsr32-tensix -march=rv32im_zaamo_zba_zbb_xtttensixqsr_xttzbkb ";
+                                 : "-mcpu=tt-qsr32-tensix -march=" QUASAR_TRISC_ISA " ";
         cflags += "-fno-extern-tls-init ";
         cflags += "-ftls-model=local-exec ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
@@ -440,8 +440,8 @@ public:
         //   -Warray-bounds false positives at -O3 under -Werror (also observed on Blackhole).
         // -fno-tree-vectorize -fno-tree-slp-vectorize: the vector unit is only reached through
         //   explicit intrinsics; keep the auto-vectorizers off scalar kernel/LLK code.
-        return "-march=rv32im_zmmul_zaamo_zba_zbb_zve32f_zvl128b_xtttensixqsr_xttzbkb -fno-lto "
-               "-fno-tree-vectorize -fno-tree-slp-vectorize -Wno-error=array-bounds ";
+        return "-march=" QUASAR_TRISC_ISA_BASE "_zve32f_zvl128b" QUASAR_TRISC_ISA_TT_EXT
+               " -fno-lto -fno-tree-vectorize -fno-tree-slp-vectorize -Wno-error=array-bounds ";
     }
 
     bool firmware_is_kernel_object(const Params&) const override { return true; }

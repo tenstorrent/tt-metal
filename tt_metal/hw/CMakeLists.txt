@@ -409,6 +409,25 @@ foreach(ARCH IN LISTS ARCHS)
     endforeach()
 endforeach()
 
+# Quasar TRISC scalar ISA base, shared with the JIT flags through this header.
+set(QUASAR_TRISC_ISA_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/inc/internal/tt-2xx/quasar/trisc_isa.h)
+file(STRINGS ${QUASAR_TRISC_ISA_HEADER} QUASAR_TRISC_ISA_BASE REGEX "^#define QUASAR_TRISC_ISA_BASE ")
+string(
+    REGEX
+    REPLACE
+    "^#define QUASAR_TRISC_ISA_BASE \"([^\"]+)\".*$"
+    "\\1"
+    QUASAR_TRISC_ISA_BASE
+    "${QUASAR_TRISC_ISA_BASE}"
+)
+set_property(
+    DIRECTORY
+    APPEND
+    PROPERTY
+        CMAKE_CONFIGURE_DEPENDS
+            ${QUASAR_TRISC_ISA_HEADER}
+)
+
 # TLS-style
 foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
     string(REPLACE ":" ";" CPUS ${ARCH_CPU})
@@ -464,12 +483,11 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
                 ${GPP_FLAGS_common}
             )
             if(CPU STREQUAL "tt-qsr32")
-                # sfpi 7.93.0 gives tt-qsr32 zbc instead of zbb; the explicit -march restores zbb
-                # and keeps the -mcpu tuning.
+                # The explicit -march (see trisc_isa.h) sets the ISA and keeps the -mcpu tuning.
                 list(
                     APPEND
                     GPP_FLAGS
-                    -march=rv32im_zaamo_zba_zbb_xttzbkb
+                    -march=${QUASAR_TRISC_ISA_BASE}_xttzbkb
                     -DCOMPILE_FOR_TRISC
                 )
             endif()

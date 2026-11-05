@@ -422,6 +422,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/tensor/addrgen_sequencer.h
     inc/internal/tt-2xx/quasar/tensix.h
     inc/internal/tt-2xx/quasar/tensix_types.h
+    inc/internal/tt-2xx/quasar/trisc_isa.h
     inc/internal/tt-1xx/noc_address_backend.h
     inc/internal/tt-1xx/risc_common.h
     inc/internal/tt-1xx/wormhole/c_tensix_core.h
