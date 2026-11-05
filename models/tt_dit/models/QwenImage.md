@@ -15,17 +15,18 @@ The model consists of a Qwen2.5-VL text encoder together with its tokenizer, a s
 Total time per image, with classifier-free guidance, at each model card's step count. Each time is
 the mean of 3 runs. Text-to-image and [inpainting](#inpainting) run Qwen-Image with the prompt from
 the Qwen-Image-2512 model card (142 tokens, which the pipeline pads to its 256-token sequence length
-bucket). [Editing](#image-editing) runs Edit-2511.
+bucket). [Editing](#image-editing) runs Edit-2511. Each cell is the time without → with
+[DBCache](#dbcache).
 
-| Case                           | Steps | T3K (2x4) | BH QuietBox 2 (2x2) | BH LoudBox (2x4) | BH Galaxy (4x8) |
-| ------------------------------ | ----- | --------- | ------------------- | ---------------- | --------------- |
-| 1024x1024                      | 50    | 67.0s     | 26.1s               | 19.0s            | 8.0s            |
-| 1344x1344                      | 50    | -         | 46.2s               | 30.4s            | 10.9s           |
-| 1664x928                       | 50    | -         | 39.7s               | 27.1s            | 10.0s           |
-| inpaint 1024x1024              | 50    | -         | 26.6s               | 19.1s            | 8.1s            |
-| edit 1024x1024, 1 input image  | 40    | -         | 57.3s               | 37.4s            | 12.9s           |
-| edit 1024x1024, 2 input images | 40    | -         | 91.1s               | 56.9s            | 20.2s           |
-| edit 1024x1024, 3 input images | 40    | -         | 129.6s              | 78.2s            | 26.1s           |
+| Case                           | Steps | T3K (2x4)     | BH QuietBox 2 (2x2) | BH LoudBox (2x4) | BH Galaxy (4x8) |
+| ------------------------------ | ----- | ------------- | ------------------- | ---------------- | --------------- |
+| 1024x1024                      | 50    | 64.9s → 30.8s | 26.0s → 12.6s       | 19.0s → 9.2s     | 8.0s → 4.1s     |
+| 1344x1344                      | 50    | -             | 46.2s → 22.1s       | 30.3s → 14.7s    | 10.8s → 5.4s    |
+| 1664x928                       | 50    | -             | 39.7s → 19.8s       | 27.1s → 13.7s    | 9.9s → 5.1s     |
+| inpaint 1024x1024              | 50    | 65.0s → 32.2s | 26.6s → 13.3s       | 19.1s → 9.4s     | 8.1s → 4.0s     |
+| edit 1024x1024, 1 input image  | 40    | -             | 57.2s → 31.1s       | 37.1s → 20.4s    | 12.7s → 7.1s    |
+| edit 1024x1024, 2 input images | 40    | -             | 90.8s → 49.1s       | 56.8s → 30.9s    | 19.9s → 11.2s   |
+| edit 1024x1024, 3 input images | 40    | -             | 129.4s → 69.7s      | 77.6s → 42.1s    | 25.8s → 14.1s   |
 
 Almost all of the time is the transformer's denoising steps. The stages of 1024x1024 text-to-image:
 
@@ -36,9 +37,15 @@ Almost all of the time is the transformer's denoising steps. The stages of 1024x
 | BH LoudBox (2x4)    | 0.10s    | 18.8s     | 0.08s | 19.0s |
 | BH Galaxy (4x8)     | 0.10s    | 7.8s      | 0.05s | 8.0s  |
 
-T3K only runs 1024x1024 text-to-image. The aspect ratio of an edit hardly matters, since every edit
-resolution has about the same number of pixels, and Edit and Edit-2509 take as long as Edit-2511.
+T3K only runs 1024x1024. The aspect ratio of an edit hardly matters, since every edit resolution has
+about the same number of pixels, and an edit with a mask takes as long as one without. Edit and
+Edit-2509 take as long as Edit-2511.
 The parallelism of each system is listed under [Scalability](#scalability).
+
+The DBCache times use cache-dit's Qwen-Image setting, F1B0 with threshold 0.12, 8 warm-up steps and
+at most 3 skipped steps in a row. It skips 26-27 of 50 steps for text-to-image and 19 of 40 for
+edits, the same on every system. Against the same image without it, the PSNR is 26-29 dB for
+text-to-image and 21-23 dB for edits. Edits with DBCache run out of DRAM on T3K.
 
 ## Resolutions
 
@@ -66,6 +73,14 @@ aspect ratio to the image.
 
 ```bash
 pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py::test_qwenimage_inpaint -k 2x4
+```
+
+## DBCache
+
+The pipeline supports [cache-dit](https://github.com/vipshop/cache-dit)'s DBCache.
+
+```bash
+pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py::test_qwenimage_dbcache -k 2x2
 ```
 
 ## Prerequisites
