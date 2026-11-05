@@ -171,6 +171,7 @@ void kernel_main() {
     constexpr uint32_t packed_row_bytes = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::PACKED_ROW_BYTES);
     constexpr uint32_t Sqt = H / tt::constants::TILE_HEIGHT;  // total query tile-rows (32 heads each)
     constexpr uint32_t q_groups = Sqt / qsb;                  // DST-bound work runs in this many query-row passes
+    static_assert(!split_k || qsb == Sqt, "split-K merges all query rows in one DST group");
     constexpr uint32_t KT_stride = Skt;                       // cb_qk_im physical row width
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     // sub_exp packs qsb*sbw tiles into DST: full Skt width when one group fits, else one key-tile column at a time.
@@ -598,7 +599,7 @@ void kernel_main() {
                     PACK((llk_pack_init<ckernel::PackMode::Default, false, false, false>(
                         out_prev.get_cb_id(), dst_size)));
                     pack_reconfig_l1_acc(0);
-                    salad_correct_fused<Sqt, vDHt, dst_size>(
+                    salad_correct_fused<qsb, vDHt, dst_size>(
                         out_cur.get_cb_id(),
                         sum_cur.get_cb_id(),
                         cb_corr,
@@ -609,7 +610,7 @@ void kernel_main() {
                         0);
                     pack_to_unpack_sync();  // first-term packs land before the L1-accumulated second term
                     pack_reconfig_l1_acc(1);
-                    salad_correct_fused<Sqt, vDHt, dst_size>(
+                    salad_correct_fused<qsb, vDHt, dst_size>(
                         cb_recv_out, cb_recv_sum, cb_corr2, out_prev.get_cb_id(), sum_prev.get_cb_id(), 0, 0, 0);
                     pack_reconfig_l1_acc(0);
                     out_prev.push_back(Sqt * vDHt);
