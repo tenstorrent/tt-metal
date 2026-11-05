@@ -21,7 +21,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <experimental/fabric/control_plane.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <system_mesh.hpp>
@@ -60,8 +60,9 @@ enum class EnvVarID {
     TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
-    QUASAR_ARCH_VARIANT,                      // Quasar IP variant (LLK arch/<variant> directory)
     TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
+    TT_MESH_ID,                               // Mesh this process binds to in the mesh graph descriptor
+    TT_MESH_HOST_RANK,                        // Host rank of this process within its mesh
     TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH,  // Factory System Descriptor (FSD) path
     TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE,  // Core grid override
 
@@ -98,6 +99,7 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_ENABLE_HW_CACHE_INVALIDATION,              // Enable HW cache invalidation
     TT_METAL_DISABLE_RELAXED_MEM_ORDERING,              // Disable relaxed memory ordering
+    TT_METAL_DISABLE_L1_ECC_HALT,                       // Disable the Blackhole L1 ECC halt
     TT_METAL_ENABLE_GATHERING,                          // Enable instruction gathering
     TT_METAL_FABRIC_BW_TELEMETRY,                       // Enable fabric bandwidth telemetry
     TT_METAL_FABRIC_TELEMETRY,                          // Enable fabric telemetry
@@ -122,6 +124,7 @@ enum class EnvVarID {
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
     TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS,              // Serve simulated chips over sockets
+    TT_METAL_SIMULATOR_DRAM_UNCAPPED,                   // Quasar emulator: address all the DRAM the descriptor declares
     TT_METAL_QUASAR_NOC_API_VERSION,                    // Quasar NOC API version
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
     TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
@@ -135,6 +138,7 @@ enum class EnvVarID {
     TT_METAL_STREAMING_PROFILER,                   // Enable the streaming device profiler (excludes the DRAM one)
     TT_METAL_STREAMING_PROFILER_TRACY,             // Enable Tracy output for the streaming profiler
     TT_METAL_STREAMING_PROFILER_SYNC_EVENTS,       // Enable sync events profiling
+    TT_METAL_STREAMING_PROFILER_SYNC_CHECK,        // Measure the clock sync's chip-to-chip accuracy
     TT_METAL_STREAMING_PROFILER_INLINE_ENABLED,    // Enable zone markers inlining
     TT_METAL_STREAMING_PROFILER_DRAM_MB,           // Streaming profiler per-relay GDDR spool ring, MiB
     TT_METAL_STREAMING_PROFILER_FIFO_MB,           // Streaming profiler host FIFO per D2H socket, MiB
@@ -256,6 +260,7 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS,  // Timeout for fabric router sync in milliseconds
     TT_METAL_FABRIC_OPT_LEVEL,               // Override fabric kernel compiler optimization level
+    TT_METAL_FABRIC_DISABLE_INTERMESH_VC,    // Carry inter-mesh traffic on VC0, with no VC1
     TT_TOPOLOGY_SOLVER_ENGINE,               // sat|dfs: topology mapping backend (fabric)
 
     // ========================================
@@ -393,10 +398,12 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     // TT_METAL_DISABLE_MULTI_AERISC override) intact so that HAL construction and kernel compilation match
     // what a real device would produce. Architecture gating still happens downstream (only Blackhole's HAL
     // acts on the flag). The simulator and emule backends cannot model dual-erisc, so force it off for them.
+    // ttsim exits on any access to the ECC registers, so the L1 ECC halt is forced off too.
     if (this->runtime_target_device_ == tt::TargetDevice::Simulator ||
         this->runtime_target_device_ == tt::TargetDevice::Emule) {
         log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/emule target device");
         this->enable_2_erisc_mode = false;
+        this->disable_l1_ecc_halt = true;
     }
 
     TT_FATAL(
@@ -413,6 +420,12 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_streaming_profiler_enabled()),
         "Cannot enable both debug printing and the streaming profiler");
+    // The NOC debug dump only reads the profiler's DRAM buffers, so data that trace-only or accumulate profiling keeps
+    // in L1 would never reach the host.
+    TT_FATAL(
+        !(get_experimental_noc_debug_dump_enabled() && (get_profiler_trace_only() || get_profiler_accumulate())),
+        "TT_METAL_NOC_DEBUG_DUMP cannot be combined with TT_METAL_TRACE_PROFILER or TT_METAL_PROFILER_ACCUMULATE: "
+        "the debug dump only reads the profiler DRAM buffers, and those modes keep part of their data in L1.");
 }
 
 const RunTimeOptions::TraceAllocationOptions& RunTimeOptions::get_trace_allocation_options() {
@@ -555,15 +568,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // TT_METAL_EMULE_MODE
         // Enable emulated mode: creates SWEmuleChip (with real memory-backed I/O)
         // instead of MockChip.  Requires TT_METAL_MOCK_CLUSTER_DESC_PATH to be set.
-        // Automatically forces slow dispatch mode.
+        // Dispatch follows TT_METAL_SLOW_DISPATCH_MODE as on silicon: set, slow dispatch; unset, fast dispatch,
+        // where emulated devices get tt-emule's mesh command queue.
         // Default: Disabled
         // Usage: export TT_METAL_EMULE_MODE=1
-        case EnvVarID::TT_METAL_EMULE_MODE:
-            this->runtime_target_device_ = tt::TargetDevice::Emule;
-            // Emulated mode requires slow dispatch (no HWCommandQueue)
-            this->using_slow_dispatch = true;
-            this->fast_dispatch = false;
-            break;
+        case EnvVarID::TT_METAL_EMULE_MODE: this->runtime_target_device_ = tt::TargetDevice::Emule; break;
 
         // TT_METAL_VISIBLE_DEVICES
         // Comma-separated list of device IDs to make visible to the runtime.
@@ -577,30 +586,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export ARCH_NAME=wormhole_b0
         case EnvVarID::ARCH_NAME: this->arch_name = std::string(value); break;
 
-        // QUASAR_ARCH_VARIANT
-        // Build the Quasar LLKs for an IP variant. The name is a directory under
-        // tt_metal/tt-llk/tt_llk_quasar/arch/ whose headers shadow the base Quasar ones.
-        // Default: unset (base Quasar part)
-        // Usage: export QUASAR_ARCH_VARIANT=quasar_4row
-        case EnvVarID::QUASAR_ARCH_VARIANT: {
-            const std::string variant(value);
-            if (variant.empty()) {
-                break;
-            }
-            const bool plain_name = std::all_of(variant.begin(), variant.end(), [](unsigned char c) {
-                return std::islower(c) || std::isdigit(c) || c == '_';
-            });
-            TT_FATAL(plain_name, "QUASAR_ARCH_VARIANT '{}' must be a plain lowercase name (a-z, 0-9, _)", variant);
-            const auto dir = std::filesystem::path(get_root_dir()) / "tt_metal/tt-llk/tt_llk_quasar/arch" / variant;
-            TT_FATAL(
-                std::filesystem::is_directory(dir),
-                "QUASAR_ARCH_VARIANT '{}' has no directory {}",
-                variant,
-                dir.string());
-            this->quasar_arch_variant = variant;
-            break;
-        }
-
         // TT_MESH_GRAPH_DESC_PATH
         // Custom fabric mesh graph descriptor path.
         // Default: Default fabric mesh configuration
@@ -608,6 +593,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_MESH_GRAPH_DESC_PATH:
             this->is_custom_fabric_mesh_graph_desc_path_set = true;
             this->custom_fabric_mesh_graph_desc_path = std::string(value);
+            break;
+
+        // Mesh this process binds to in the mesh graph descriptor. Set per rank by tt-run; default mesh 0.
+        case EnvVarID::TT_MESH_ID:
+            this->fabric_mesh_id = tt::tt_fabric::MeshId{static_cast<uint32_t>(std::stoul(value))};
+            break;
+
+        // Host rank of this process within its mesh. Set per rank by tt-run; default host rank 0.
+        case EnvVarID::TT_MESH_HOST_RANK:
+            this->fabric_mesh_host_rank = tt::tt_fabric::MeshHostRankId{static_cast<uint32_t>(std::stoul(value))};
             break;
 
         // TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH
@@ -745,7 +740,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Quasar: the NoC address-translation-table (ATT) map device traffic is composed against.
         // "off", "none" or "0" force plain XY addressing. When unset, XY addressing is used except
         // that MetalEnvImpl defaults the qsr.s1 emulator model to, grendel_qsr1. Unknown map names
-        // are rejected by the Quasar HAL when the JIT defines are generated.
+        // are rejected by the Quasar HAL when the JIT defines are generated. On a simulator,
+        // quasar_aether_2x3 is switched to quasar_aether_2x3_uncapped when
+        // TT_METAL_SIMULATOR_DRAM_UNCAPPED=1, and naming quasar_aether_2x3_uncapped sets that option.
         // Default: unset
         // Usage: export TT_METAL_NOC_ATT=grendel_qsr1
         case EnvVarID::TT_METAL_NOC_ATT: {
@@ -779,6 +776,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (relaxed ordering enabled)
         // Usage: export TT_METAL_DISABLE_RELAXED_MEM_ORDERING=1
         case EnvVarID::TT_METAL_DISABLE_RELAXED_MEM_ORDERING: this->disable_relaxed_memory_ordering = true; break;
+
+        // TT_METAL_DISABLE_L1_ECC_HALT
+        // Do not halt a Blackhole Tensix BRISC on an L1 ECC error.
+        // Default: false (halt enabled on Blackhole silicon)
+        // Usage: export TT_METAL_DISABLE_L1_ECC_HALT=1
+        case EnvVarID::TT_METAL_DISABLE_L1_ECC_HALT: this->disable_l1_ecc_halt = is_env_enabled(value); break;
 
         // TT_METAL_ENABLE_GATHERING
         // Enable data gathering on Blackhole.
@@ -973,6 +976,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->simulator_serve_over_sockets = is_env_enabled(value);
             break;
 
+        // TT_METAL_SIMULATOR_DRAM_UNCAPPED
+        // Skip the DRAM clamp on Quasar emulator models that back less DRAM than their soc descriptor
+        // declares, so the whole descriptor size can be addressed. Offsets above the
+        // backing wrap onto the low DRAM. Under ATT, map quasar_aether_2x3 is switched to
+        // quasar_aether_2x3_uncapped.
+        // Default: false
+        // Usage: export TT_METAL_SIMULATOR_DRAM_UNCAPPED=1
+        case EnvVarID::TT_METAL_SIMULATOR_DRAM_UNCAPPED: this->simulator_dram_uncapped = is_env_enabled(value); break;
+
         // TT_METAL_QUASAR_NOC_API_VERSION
         // Set the NOC API version for Quasar.
         // Default: 2 (use NOC API v2)
@@ -1073,6 +1085,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_STREAMING_PROFILER_SYNC_EVENTS=1
         case EnvVarID::TT_METAL_STREAMING_PROFILER_SYNC_EVENTS:
             this->streaming_profiler_sync_events_enabled = is_env_enabled(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_SYNC_CHECK
+        // Measures the chip-to-chip accuracy of the clock sync, logs it each time a profiled mesh device closes and
+        // plots it in Tracy. Uses one more idle Ethernet core per chip on top of the two the streaming profiler always
+        // uses, and costs fabric bandwidth. Requires TT_METAL_STREAMING_PROFILER.
+        // Default: false
+        // Usage: export TT_METAL_STREAMING_PROFILER_SYNC_CHECK=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_SYNC_CHECK:
+            this->streaming_profiler_sync_check_enabled = is_env_enabled(value);
             break;
 
         // TT_METAL_STREAMING_PROFILER_INLINE_ENABLED
@@ -1398,7 +1420,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_OPERATION_TIMEOUT_SECONDS=30.0
         case EnvVarID::TT_METAL_OPERATION_TIMEOUT_SECONDS: {
             float timeout_duration = std::stof(value);
-            this->timeout_duration_for_operations = std::chrono::duration<float>(timeout_duration);
+            this->set_timeout_duration_for_operations(std::chrono::duration<float>(timeout_duration));
             break;
         }
 
@@ -1939,6 +1961,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
+        // TT_METAL_FABRIC_DISABLE_INTERMESH_VC: carry inter-mesh traffic on VC0 (no VC1) and turn on
+        // the D2D stream relay. Only safe if inter-mesh traffic cannot form a buffer cycle. Default: 0
+        case EnvVarID::TT_METAL_FABRIC_DISABLE_INTERMESH_VC:
+            this->disable_fabric_intermesh_vc = is_env_enabled(value);
+            break;
+
         // TT_TOPOLOGY_SOLVER_ENGINE
         // If set to sat/1/true/yes, topology mapping uses the SAT backend when solver_engine is Auto (same rule as
         // tt::tt_fabric::topology_mapping_use_sat_engine). Value is snapshotted here at Metal init.
@@ -2064,6 +2092,21 @@ void RunTimeOptions::InitializeFromEnvVars() {
     // Validate emulated mode configuration
     if (this->runtime_target_device_ == tt::TargetDevice::Emule && this->mock_cluster_desc_path.empty()) {
         TT_THROW("TT_METAL_EMULE_MODE=1 requires TT_METAL_MOCK_CLUSTER_DESC_PATH to be set");
+    }
+
+    // On a simulator TT_METAL_SIMULATOR_DRAM_UNCAPPED and the quasar_aether_2x3_uncapped map imply each
+    // other: the option moves an ATT run of quasar_aether_2x3 to the map whose DRAM window covers the
+    // descriptor's 1 GiB, and naming that map lifts the DRAM clamp.
+    if (this->get_simulator_enabled()) {
+        if (this->simulator_dram_uncapped && this->noc_att_map_ == "quasar_aether_2x3") {
+            this->noc_att_map_ = "quasar_aether_2x3_uncapped";
+            log_info(
+                tt::LogDevice,
+                "TT_METAL_SIMULATOR_DRAM_UNCAPPED=1: TT_METAL_NOC_ATT map quasar_aether_2x3 switched to "
+                "quasar_aether_2x3_uncapped");
+        } else if (this->noc_att_map_ == "quasar_aether_2x3_uncapped") {
+            this->simulator_dram_uncapped = true;
+        }
     }
 
     // Set inspector log path
