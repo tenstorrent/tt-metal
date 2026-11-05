@@ -52,7 +52,7 @@ TensorSpec MakeNonPublicTensorSpec(DataType dtype, const Tile& tile, bool per_no
 class MxResourceTileMetadata : public ::testing::TestWithParam<MxFormatCase> {};
 
 // DFB validation rejects MX tiles that contain less than one complete scale block.
-TEST_P(MxResourceTileMetadata, DfbRejectsIncompleteBlock) {
+TEST_P(MxResourceTileMetadata, CPU_DfbRejectsIncompleteBlock) {
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
     spec.dataflow_buffers[0].data_format_metadata = GetParam().format;
     spec.dataflow_buffers[0].tile_format_metadata = Tile({1, 16});
@@ -63,7 +63,7 @@ TEST_P(MxResourceTileMetadata, DfbRejectsIncompleteBlock) {
 }
 
 // Scratchpad validation rejects MX tiles that contain less than one complete scale block.
-TEST_P(MxResourceTileMetadata, ScratchpadRejectsIncompleteBlock) {
+TEST_P(MxResourceTileMetadata, CPU_ScratchpadRejectsIncompleteBlock) {
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
     spec.scratchpads = {ScratchpadSpec{
         .unique_id = ScratchpadSpecName{"pad"},
@@ -78,7 +78,7 @@ TEST_P(MxResourceTileMetadata, ScratchpadRejectsIncompleteBlock) {
 }
 
 // Tensor parameter validation rejects MX tiles before their storage size is calculated.
-TEST_P(MxResourceTileMetadata, TensorRejectsIncompleteBlock) {
+TEST_P(MxResourceTileMetadata, CPU_TensorRejectsIncompleteBlock) {
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"tensor"}, .spec = MakeNonPublicTensorSpec(GetParam().dtype, Tile({1, 16}))}};
@@ -90,7 +90,7 @@ TEST_P(MxResourceTileMetadata, TensorRejectsIncompleteBlock) {
 }
 
 // Per-node tensor parameters have the same complete-block requirement as common tensor parameters.
-TEST_P(MxResourceTileMetadata, PerNodeTensorRejectsIncompleteBlock) {
+TEST_P(MxResourceTileMetadata, CPU_PerNodeTensorRejectsIncompleteBlock) {
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"tensor"},
@@ -103,7 +103,7 @@ TEST_P(MxResourceTileMetadata, PerNodeTensorRejectsIncompleteBlock) {
 }
 
 // DFB metadata accepts the smallest supported tile containing a complete MX block.
-TEST_P(MxResourceTileMetadata, DfbAcceptsCompleteBlock) {
+TEST_P(MxResourceTileMetadata, CPU_DfbAcceptsCompleteBlock) {
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
     spec.dataflow_buffers[0].data_format_metadata = GetParam().format;
     spec.dataflow_buffers[0].tile_format_metadata = Tile({1, 32});
@@ -111,7 +111,7 @@ TEST_P(MxResourceTileMetadata, DfbAcceptsCompleteBlock) {
 }
 
 // Scratchpad metadata accepts the smallest supported tile containing a complete MX block.
-TEST_P(MxResourceTileMetadata, ScratchpadAcceptsCompleteBlock) {
+TEST_P(MxResourceTileMetadata, CPU_ScratchpadAcceptsCompleteBlock) {
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
     spec.scratchpads = {ScratchpadSpec{
         .unique_id = ScratchpadSpecName{"pad"},
@@ -129,7 +129,7 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<MxFormatCase>& info) { return info.param.name; });
 
 // A tensor with one complete MX block passes resource validation.
-TEST(ResourceTileMetadata, TensorAcceptsCompleteBlock) {
+TEST(ResourceTileMetadata, CPU_TensorAcceptsCompleteBlock) {
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"tensor"}, .spec = MakeNonPublicTensorSpec(DataType::MXFP4, Tile({1, 32}))}};
@@ -138,7 +138,7 @@ TEST(ResourceTileMetadata, TensorAcceptsCompleteBlock) {
 }
 
 // A per-node tensor with one complete MX block passes resource validation.
-TEST(ResourceTileMetadata, PerNodeTensorAcceptsCompleteBlock) {
+TEST(ResourceTileMetadata, CPU_PerNodeTensorAcceptsCompleteBlock) {
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"tensor"},
@@ -148,7 +148,7 @@ TEST(ResourceTileMetadata, PerNodeTensorAcceptsCompleteBlock) {
 }
 
 // Omitted tile metadata uses the default full tile for MX resources.
-TEST(ResourceTileMetadata, MxDefaultTileRemainsValid) {
+TEST(ResourceTileMetadata, CPU_MxDefaultTileRemainsValid) {
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
     spec.dataflow_buffers[0].data_format_metadata = DataFormat::MxFp4;
     spec.scratchpads = {ScratchpadSpec{
@@ -158,7 +158,7 @@ TEST(ResourceTileMetadata, MxDefaultTileRemainsValid) {
 }
 
 // Sixteen-element BFP tiles remain valid for resources that do not use MX scale blocks.
-TEST(ResourceTileMetadata, SmallBfpTileRemainsValid) {
+TEST(ResourceTileMetadata, CPU_SmallBfpTileRemainsValid) {
     ProgramSpec spec = test_helpers::MakeMinimalGen1ValidProgramSpec();
     spec.dataflow_buffers[0].data_format_metadata = DataFormat::Bfp8_b;
     spec.dataflow_buffers[0].tile_format_metadata = Tile({1, 16});
@@ -175,7 +175,7 @@ TEST(ResourceTileMetadata, SmallBfpTileRemainsValid) {
 }
 
 // Sixteen-element floating-point tiles remain valid on architectures that support MX formats.
-TEST(ResourceTileMetadata, SmallFloat16TileRemainsValid) {
+TEST(ResourceTileMetadata, CPU_SmallFloat16TileRemainsValid) {
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
     spec.dataflow_buffers[0].tile_format_metadata = Tile({1, 16});
     spec.scratchpads = {ScratchpadSpec{
@@ -191,7 +191,7 @@ TEST(ResourceTileMetadata, SmallFloat16TileRemainsValid) {
 }
 
 // Invalid borrowed tensor metadata is rejected before DFB validation calculates its allocation size.
-TEST(ResourceTileMetadata, BorrowedTensorRejectsIncompleteBlockBeforeSizing) {
+TEST(ResourceTileMetadata, CPU_BorrowedTensorRejectsIncompleteBlockBeforeSizing) {
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"tensor"}, .spec = MakeNonPublicTensorSpec(DataType::MXFP4, Tile({1, 16}))}};
@@ -208,7 +208,7 @@ protected:
 };
 
 // Public program construction reports the DFB specification when MX block metadata is invalid.
-TEST_F(MxResourceProgramValidation, DfbRejectsIncompleteBlock) {
+TEST_F(MxResourceProgramValidation, CPU_DfbRejectsIncompleteBlock) {
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
     spec.dataflow_buffers[0].data_format_metadata = DataFormat::MxFp4;
     spec.dataflow_buffers[0].tile_format_metadata = Tile({1, 16});
@@ -219,7 +219,7 @@ TEST_F(MxResourceProgramValidation, DfbRejectsIncompleteBlock) {
 }
 
 // Public program construction reports the scratchpad specification when MX block metadata is invalid.
-TEST_F(MxResourceProgramValidation, ScratchpadRejectsIncompleteBlock) {
+TEST_F(MxResourceProgramValidation, CPU_ScratchpadRejectsIncompleteBlock) {
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
     spec.scratchpads = {ScratchpadSpec{
         .unique_id = ScratchpadSpecName{"pad"},
@@ -234,7 +234,7 @@ TEST_F(MxResourceProgramValidation, ScratchpadRejectsIncompleteBlock) {
 }
 
 // Public program construction reports the tensor parameter when MX block metadata is invalid.
-TEST_F(MxResourceProgramValidation, TensorRejectsIncompleteBlock) {
+TEST_F(MxResourceProgramValidation, CPU_TensorRejectsIncompleteBlock) {
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"tensor"}, .spec = MakeNonPublicTensorSpec(DataType::MXFP4, Tile({1, 16}))}};
@@ -246,7 +246,7 @@ TEST_F(MxResourceProgramValidation, TensorRejectsIncompleteBlock) {
 }
 
 // Public program construction applies the same MX block rule to per-node tensor parameters.
-TEST_F(MxResourceProgramValidation, PerNodeTensorRejectsIncompleteBlock) {
+TEST_F(MxResourceProgramValidation, CPU_PerNodeTensorRejectsIncompleteBlock) {
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"tensor"},
