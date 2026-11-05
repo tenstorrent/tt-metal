@@ -491,10 +491,10 @@ class TtCSA(TtV4AttentionBase):
         """One ``sparse_sdpa`` over the joint table, then V's RoPE undone.
 
         No mask and no causal flag: the index list already says exactly which keys each query sees. The
-        reshard keeps the thin-shard rule (``ttMLA._sparse_mla`` reshards at every TP > 1) -- when the TP head
-        shard is thinner than the op's 32-head minimum, the sharding moves head -> sequence for the duration of
-        attention, and the index
-        list follows it with a local partition rather than a collective, since it is TP-replicated."""
+        reshard uses the thin-shard rule (unlike ``ttMLA._sparse_mla``, which reshards at every TP > 1): when the TP
+        head shard is thinner than the op's 32-head minimum, the sharding moves head -> sequence for the duration
+        of attention, and the index list follows it with a local partition rather than a collective, since it is
+        TP-replicated."""
         reshard = self.needs_head_to_seq_reshard
         q_attn = self._reshard(q, in_dim=1, out_dim=2) if reshard else q
         q_rm = ttnn.to_layout(q_attn, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE

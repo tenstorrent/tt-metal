@@ -4,7 +4,7 @@
 """Sparse-attention (DSA) prefill adapters: the shared ``SparseMLAPrefillAdapter`` base, DeepSeek-V3.2-Exp and Kimi-K3.1.
 
 GLM-5.3 has its own serving adapter (``adapters/glm_5_3.py``);
-what remains here is the test-only base + DeepSeek-V3.2-Exp.
+what remains here is the test-only base + DeepSeek-V3.2-Exp and Kimi-K3.1 (both test-only).
 
 Both add a lightning indexer (DeepSeek Sparse Attention) on top of the MLA + MoE
 family. Two things set them apart from the dense ``DeepSeekV3Adapter`` / ``KimiK27Adapter``:
@@ -102,12 +102,8 @@ class KimiK31Adapter(SparseMLAPrefillAdapter):
     mla_ref_cache_env = "KIMI_K31_MLA_REF_CACHE"
     # K3 is NoPE: the KV cache's second half carries no rotation (see KimiK3Adapter.kv_pe_interleave).
     kv_pe_interleave = False
-    # None, deliberately: the only reader is conftest's pretrained_mla_layer_weights fixture, which would first
-    # resolve the whole multi-TB checkpoint. The sparse-MLA tests load real weights through --ds-layer instead
-    # (the first DSA layer is 3; layers 0-2 are KDA), which uses pretrained_attention_extract_only below.
+    # None: conftest's pretrained_mla_layer_weights fixture would resolve the whole multi-TB checkpoint.
     pretrained_mla_layer = None
-    # The K3.1 shards are tens of GB each: fetch only the requested layer's attention tensors (range reads).
-    pretrained_attention_extract_only = True
 
     @property
     def default_sparse_kv_cache_format(self):

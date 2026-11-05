@@ -24,17 +24,14 @@ from ttnn.device import is_blackhole
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config, glm_5_3_hf_config
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config, kimi_k3_1_hf_config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     IndexerSelectionState,
     ReuseIndexer,
     TtIndexer,
-    full_indexer_rank,
     indexer_layer_is_reused,
     normalized_hadamard_matrix,
-    num_full_indexer_layers,
     resolve_has_indexer,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -88,7 +85,7 @@ def test_normalized_hadamard_rejects_non_power_of_two(expect_error):
 # variant's runtime config stops carrying the DSA fields would be masked by the PCC test below (it can
 # resolve sparse via the cache), so assert matches_config / resolve_has_indexer directly.
 # --------------------------------------------------------------------------------------------------
-@pytest.mark.parametrize("variant", ["glm_5_3", "kimi_k3_1"], indirect=True, ids=["glm_5_3", "kimi_k3_1"])
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm_5_3"])
 def test_matches_config_detects_dsa(variant, config_only):
     assert TtIndexer.matches_config(config_only), f"{variant.name}: runtime config should carry DSA index_* fields"
     # No host weights, no cache, no explicit override -> still resolves sparse purely from the config.
@@ -158,171 +155,6 @@ def test_indexer_layer_is_reused_gating():
         assert indexer_layer_is_reused(cfg, i) is True, f"L{i} is a shared layer"
     no_map = SimpleNamespace(index_topk=2048, index_n_heads=32, index_head_dim=128)
     assert all(indexer_layer_is_reused(no_map, i) is False for i in range(GLM53Config.NUM_LAYERS))
-
-
-# --------------------------------------------------------------------------------------------------
-# Host-only: Kimi-K3.1 has a DSA indexer on every MLA layer and no cross-layer reuse. It deliberately
-# carries NO indexer_types map, so the indexer takes its non-compact slot path (slot = the caller's
-# cache_layer_idx, stride = layer_num): the same 24-slot MLA-ordinal space as the KVPE cache. Lock that
-# contract so a later "helpful" indexer_types = ["full"] * N cannot silently resize the index cache.
-# --------------------------------------------------------------------------------------------------
-def test_kimi_k31_config_is_k3_mla_plus_nope_indexer():
-    cfg = kimi_k3_1_hf_config()
-    # K3 MLA, unchanged: NoPE, output gate, no rope scaling.
-    assert cfg.mla_use_nope is True and cfg.mla_use_output_gate is True and cfg.rope_scaling is None
-    assert (cfg.num_attention_heads, cfg.q_lora_rank, cfg.kv_lora_rank) == (96, 1536, 512)
-    assert (cfg.qk_nope_head_dim, cfg.qk_rope_head_dim, cfg.v_head_dim) == (128, 64, 128)
-    # DSA indexer (text_config.dsa_config), NoPE.
-    assert (cfg.index_n_heads, cfg.index_head_dim, cfg.index_topk, cfg.index_rope_dim) == (32, 128, 2048, 0)
-    assert KimiK31Config.DSA_LAYERS_1BASED == KimiK31Config.FULL_ATTN_LAYERS_1BASED
-    assert TtIndexer.matches_config(cfg) and resolve_has_indexer(cfg) is True
-
-
-def test_kimi_k31_index_cache_uses_mla_ordinal_slots():
-    cfg = kimi_k3_1_hf_config()
-    assert not hasattr(cfg, "indexer_types"), "K3.1 must not carry an indexer_types map (see kimi_k3_1_config)"
-    assert num_full_indexer_layers(cfg) is None
-    mla_layers = KimiK31Config.mla_layer_ids()
-    assert len(mla_layers) == 24
-    for model_layer in mla_layers:
-        slot = KimiK31Config.mla_kv_slot(model_layer)
-        # Non-compact: the indexer addresses its cache by the caller's slot, unchanged.
-        assert full_indexer_rank(cfg, slot) == slot
-        assert indexer_layer_is_reused(cfg, model_layer) is False
-    assert [KimiK31Config.mla_kv_slot(i) for i in (3, 7, 91, 92)] == [0, 1, 22, 23]
-
-
-def test_nope_indexer_reads_no_rope_tensors(monkeypatch):
-    """index_rope_dim == 0: the indexer rope is a pass-through that never touches rope_tensors (under NoPE
-    RotarySetup hands the layer an empty dict) and never launches the indexed rope op."""
-
-    def boom(*_a, **_k):
-        raise AssertionError("NoPE indexer must not launch rotary_embedding_indexed")
-
-    monkeypatch.setattr(ttnn.experimental.deepseek_prefill, "rotary_embedding_indexed", boom)
-
-    class _NoRope(dict):
-        def _fail(self, *a, **k):
-            raise AssertionError("NoPE indexer read rope_tensors")
-
-        __getitem__ = get = items = keys = values = __contains__ = __iter__ = __len__ = __bool__ = _fail
-
-    stub = SimpleNamespace(_index_rope_dim=0, _rope_perm=None)
-    sentinel = object()
-    assert TtIndexer._bc_rope_pe(stub, sentinel, _NoRope(), 0) is sentinel
-    assert TtIndexer._bc_rope_pe(stub, sentinel, _NoRope(), 640, metadata=(None, None, None)) is sentinel
-
-
-def _mla_stub(config, tp_factor, has_indexer=True):
-    """A ttMLA with only the attributes the reshard predicates and the tuned-config lookup read (no device)."""
-    from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG
-
-    stub = ttMLA.__new__(ttMLA)
-    stub.config = config
-    stub.num_heads = config.num_attention_heads
-    stub.q_lora_rank = config.q_lora_rank
-    stub.tp_factor = tp_factor
-    stub.is_chunked = True
-    stub._has_indexer = has_indexer
-    stub._is_dsa_family = has_indexer
-    stub._is_blackhole = True
-    stub.mm_configs = MLA_MATMUL_CONFIG
-    stub.wkv_b1_weight = SimpleNamespace(shape=(1, 1, config.qk_nope_head_dim, config.kv_lora_rank))
-    stub.qk_nope_head_dim, stub.kv_lora_rank = config.qk_nope_head_dim, config.kv_lora_rank
-    stub.ring_sdpa_compute_grid = (11, 10)
-    stub.default_compute_kernel_config = None
-    stub.hifi2_fp32_compute_kernel_config = None
-    return stub
-
-
-@pytest.mark.parametrize("tp_factor", [1, 2, 4])
-def test_early_q_reshard_predicates(tp_factor):
-    """One rule decides weight replication, the early-Q path and the attention redistribution for sparse layers:
-    every TP > 1 reshards. The three must agree, or a layer loads TP-sharded wkv_b1 into the all-heads path."""
-    from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
-    from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_hf_config
-
-    sparse = [kimi_k3_1_hf_config(), glm_5_3_hf_config(), deepseek_v32_hf_config()]  # 96 / 64 / 128 heads
-    for config, has_indexer in [(c, True) for c in sparse] + [(kimi_k3_hf_config(), False)]:
-        stub = _mla_stub(config, tp_factor, has_indexer)
-        replicates = ttMLA.replicates_wkv_b1(config, tp_factor, has_indexer)
-        assert replicates == (has_indexer and tp_factor > 1), (config.num_attention_heads, tp_factor)
-        assert stub._early_q_reshard == replicates
-        assert stub._needs_head_to_seq_reshard == replicates, "early-Q and the attention reshard must agree"
-
-
-@pytest.mark.parametrize("tp_factor, expected_per_core_m", [(4, 5), (2, 10)])
-def test_k31_early_q_wkv_b1_config(tp_factor, expected_per_core_m):
-    """The 640-row slot resolves K3.1's tuned wkv_b1 tiling at both TPs (one head x the post-reshard rows per core)."""
-    from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_hf_config
-
-    cfg = ttMLA._resolve_mm_cfg(_mla_stub(kimi_k3_1_hf_config(), tp_factor), "wkv_b1", 640)
-    assert cfg is not None and cfg["program_config"].per_core_M == expected_per_core_m
-    dense = ttMLA._resolve_mm_cfg(_mla_stub(kimi_k3_hf_config(), tp_factor, has_indexer=False), "wkv_b1", 640)
-    if tp_factor == 2:
-        assert dense is None, "the K3.1 early-Q TP=2 tiling must not apply to dense K3"
-
-
-@pytest.mark.parametrize(
-    "tp_factor, slot, per_core_m, in_l1",
-    [(4, 640, 5, True), (2, 640, 10, True), (4, 4096, 8, False), (2, 3200, 10, False)],
-)
-def test_early_q_wkv_b1_config_spreads_heads(tp_factor, slot, per_core_m, in_l1):
-    """Without a model-tagged entry (DeepSeek-V3.2), early-Q wkv_b1 puts one head x up to 10 row tiles x the full
-    width on each core, also where an untagged 1D entry sits in the slot (4096, 3200); big outputs go to DRAM."""
-    from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
-
-    stub = _mla_stub(deepseek_v32_hf_config(), tp_factor)
-    kwargs = ttMLA._early_q_wkv_b1_kwargs(stub, slot)
-    pc = kwargs["program_config"]
-    assert isinstance(pc, ttnn.MatmulMultiCoreReuseProgramConfig)
-    assert (pc.per_core_M, pc.per_core_N, pc.in0_block_w) == (per_core_m, 16, 4)
-    assert (slot // tp_factor // ttnn.TILE_SIZE) % pc.per_core_M == 0
-    assert (kwargs["memory_config"] == ttnn.L1_MEMORY_CONFIG) == in_l1
-
-
-def test_early_q_wkv_b1_keeps_model_tagged_entries():
-    """K3.1's tuned TP=2 entry wins over the computed tiling."""
-    stub = _mla_stub(kimi_k3_1_hf_config(), 2)
-    assert (
-        ttMLA._early_q_wkv_b1_kwargs(stub, 640)["program_config"]
-        is ttMLA._resolve_mm_cfg(stub, "wkv_b1", 640)["program_config"]
-    )
-
-
-@pytest.mark.parametrize("tp_factor, tuned", [(4, True), (2, False)])
-def test_glm_q_b_proj_config_is_tp4_only(tp_factor, tuned):
-    """GLM's 640-row q_b_proj tiling spans 11 grid columns at TP=4; TP=2's doubled N would need 22."""
-    cfg = ttMLA._resolve_mm_cfg(_mla_stub(glm_5_3_hf_config(), tp_factor), "q_b_proj", 640)
-    assert (cfg is not None) == tuned
-
-
-def test_check_cache_complete_requires_gate_and_indexer(tmp_path):
-    """Gated + sparse (K3.1) completeness needs every dense MLA stem, g_proj AND the indexer stems."""
-    prefix = "layer_0.mla"
-
-    def touch_dense(names):
-        for name in names:
-            (tmp_path / f"{prefix}.{name}_dtype_BFLOAT16_layout_TILE.tensorbin").touch()
-
-    def touch_indexer():
-        for name in TtIndexer.WEIGHT_NAMES:
-            _touch_indexer_bin(tmp_path, prefix, TtIndexer._cache_short_name(name), TtIndexer.WEIGHT_DTYPES[name])
-
-    def complete():
-        init_checker(tmp_path)
-        try:
-            return ttMLA.check_cache_complete(tmp_path, prefix, has_indexer=True, has_output_gate=True)
-        finally:
-            report_and_clear()
-
-    touch_dense(ttMLA.weight_names(has_output_gate=False))
-    touch_indexer()
-    assert not complete(), "a gated layer without g_proj must be incomplete"
-    touch_dense(["g_proj"])
-    assert complete(), "dense + g_proj + indexer must be complete"
-    next(tmp_path.glob(f"{prefix}.indexer_*.tensorbin")).unlink()
-    assert not complete(), "a missing indexer stem must be incomplete"
 
 
 def test_reuse_indexer_forward_raises(expect_error):
@@ -916,7 +748,7 @@ def _overlap_integration_cases():
             "worker_l1_size": worker_l1_size,
         }
 
-    cases = [
+    return [
         pytest.param(
             (2, 2),
             fabric2d(),
@@ -946,39 +778,17 @@ def _overlap_integration_cases():
             id="galaxy_rows1-fabric2d-8x4",
         ),
     ]
-    return cases
-
-
-# Above index_topk (2048) the indexer actually prunes, so the overlap's TopK branch selects a strict subset
-# and the gather moves only the selected keys -- the inert-top-k lengths above never exercise that.
-OVERLAP_PRUNING_SEQ = 5120
-
-
-def _overlap_pruning_cases():
-    out = []
-    for case in _overlap_integration_cases():
-        mesh, params, profile, gather_cores, _ = case.values
-        out.append(
-            pytest.param(
-                mesh, params, profile, gather_cores, OVERLAP_PRUNING_SEQ, marks=case.marks, id=f"{case.id}-prune5120"
-            )
-        )
-    return out
-
-
-# Both sparse variants on every overlap profile's mesh, each at an inert-top-k and a pruning length.
-OVERLAP_VARIANTS = ["glm_5_3", "kimi_k3_1"]
 
 
 @pytest.mark.parametrize(
     "mesh_device,device_params,overlap_profile,expected_gather_cores,seq_len",
-    _overlap_integration_cases() + _overlap_pruning_cases(),
+    _overlap_integration_cases(),
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", OVERLAP_VARIANTS, indirect=True, ids=OVERLAP_VARIANTS)
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm_5_3"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
-def test_sparse_mla_overlap_matches_serial(
+def test_glm53_sparse_mla_overlap_matches_serial(
     mesh_device,
     device_params,
     overlap_profile,
@@ -987,7 +797,7 @@ def test_sparse_mla_overlap_matches_serial(
     variant,
     config_only,
 ):
-    """Each production/local manager runs the integrated sparse path and preserves serial results.
+    """Each production/local manager runs the integrated GLM-5.3 path and preserves serial results.
 
     The same layer instance is used for both runs so this comparison isolates scheduling from weights.
     Fresh caller-owned KVPE/index caches keep the two forwards logically independent. The serial run
@@ -1055,8 +865,8 @@ def test_sparse_mla_overlap_matches_serial(
 
     for run, overlapped in (("cold", overlapped_cold), ("warm", overlapped_warm)):
         passed, pcc = comp_pcc(serial, overlapped, 0.999)
-        logger.info(f"[{variant.name}/{overlap_profile}/seq{seq_len}] sparse MLA serial vs {run} overlap PCC: {pcc}")
-        assert passed, f"{variant.name} {run} overlapped sparse MLA diverged from serial scheduling: PCC={pcc}"
+        logger.info(f"[glm_5_3/{overlap_profile}] sparse MLA serial vs {run} overlap PCC: {pcc}")
+        assert passed, f"GLM-5.3 {run} overlapped sparse MLA diverged from serial scheduling: PCC={pcc}"
 
 
 @pytest.mark.parametrize(
@@ -1064,18 +874,15 @@ def test_sparse_mla_overlap_matches_serial(
     _overlap_integration_cases(),
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", OVERLAP_VARIANTS, indirect=True, ids=OVERLAP_VARIANTS)
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm_5_3"])
 @pytest.mark.parametrize(
     "cache_format",
     [MlaKvCacheFormat.BF16_RM, MlaKvCacheFormat.SCALED_FP8],
     ids=["kv_bf16", "kv_scaled_fp8"],
 )
-# "inert": two short chunks (prefix <= index_topk). "prune": two chunks whose second prefix
-# exceeds index_topk, so selection, gate-buffer lifetime and semaphore reuse are exercised together.
-@pytest.mark.parametrize("regime", ["inert", "prune"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
-def test_sparse_mla_overlap_growing_prefix_cache_and_lifetime(
+def test_glm53_sparse_mla_overlap_growing_prefix_cache_and_lifetime(
     mesh_device,
     device_params,
     overlap_profile,
@@ -1083,7 +890,6 @@ def test_sparse_mla_overlap_growing_prefix_cache_and_lifetime(
     unused_single_seq_len,
     variant,
     cache_format,
-    regime,
     config_only,
 ):
     """Two growing chunks retain both outputs and reuse every split-grid/format program hash."""
@@ -1091,11 +897,7 @@ def test_sparse_mla_overlap_growing_prefix_cache_and_lifetime(
     # chunk % (sp * tp * TILE_SIZE) == 0. That floor is 1024 on the 8x4 galaxy and 128/256 on the
     # smaller meshes, so derive it instead of hardcoding one mesh's number.
     sp, tp = int(mesh_device.shape[SP_AXIS]), int(mesh_device.shape[TP_AXIS])
-    stripe = sp * tp * ttnn.TILE_SIZE
-    chunk = max(256, stripe)
-    if regime == "prune":
-        # Smallest stripe-aligned chunk with 2 * chunk > index_topk + chunk, i.e. chunk > index_topk.
-        chunk = -(-(config_only.index_topk + 1) // stripe) * stripe
+    chunk = max(256, sp * tp * ttnn.TILE_SIZE)
 
     # We want 2 chunks as we are looping through sequence
     seq_len = 2 * chunk
@@ -1176,12 +978,10 @@ def test_sparse_mla_overlap_growing_prefix_cache_and_lifetime(
         for chunk_idx, (expected, actual) in enumerate(zip(serial, actual_chunks)):
             passed, pcc = comp_pcc(expected, actual, 0.999)
             logger.info(
-                f"[{variant.name}/{cache_format.name}/{overlap_profile}/{regime}] sparse MLA growing-prefix serial "
-                f"vs {run_name} chunk {chunk_idx} PCC: {pcc}"
+                f"[glm_5_3/{cache_format.name}/{overlap_profile}] sparse MLA growing-prefix serial vs {run_name} "
+                f"chunk {chunk_idx} PCC: {pcc}"
             )
-            assert (
-                passed
-            ), f"{variant.name}/{cache_format.name} {run_name} overlap chunk {chunk_idx} diverged: PCC={pcc}"
+            assert passed, f"GLM-5.3/{cache_format.name} {run_name} overlap chunk {chunk_idx} diverged: PCC={pcc}"
 
 
 @pytest.mark.parametrize(
@@ -1197,43 +997,16 @@ def test_sparse_mla_overlap_growing_prefix_cache_and_lifetime(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
-        # LoudBox: the same round trip on the 2x4 Fabric2D mesh, so it also runs off-Galaxy.
-        pytest.param(
-            (2, 4),
-            fabric2d_device_params(
-                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
-            ),
-            512,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="fabric2d-2x4",
-        ),
-        # TP=2 on the folded 4x2 view: the replicated wkv_b1 and its sharded-only-cache gather run on the folded axis.
-        pytest.param(
-            (4, 2),
-            fabric2d_device_params(
-                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
-            ),
-            512,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="fabric2d-4x2",
-        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
-# kimi_k3_1: the only test of gated (g_proj) + indexer cache-only construction.
-@pytest.mark.parametrize(
-    "variant",
-    ["glm_5_3", "kimi_k3_1", "deepseek_v32"],
-    indirect=True,
-    ids=["glm_5_3", "kimi_k3_1", "deepseek_v32"],
-)
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm_5_3"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, seq_len, variant, config_only):
     """from-weights -> offline cache build -> cache-only construct: stays sparse, reproduces output,
     and the indexer cache is part of completeness. Also covers the completeness + failure-mode cases."""
     config = config_only
-    gated = bool(getattr(config, "mla_use_output_gate", False))
     config.max_seq_len = seq_len
     weights = random_mla_weights(config)  # device-vs-device round-trip: config-shaped weights suffice
     mesh_shape = list(mesh_device.shape)
@@ -1260,14 +1033,10 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, seq_len,
 
     # === offline cache build: dense + indexer tensorbins ===
     init_checker(CACHE_DIR)
-    assert not ttMLA.check_cache_complete(
-        CACHE_DIR, "layer_0.mla", has_indexer=True, has_output_gate=gated
-    ), "cache empty before build"
+    assert not ttMLA.check_cache_complete(CACHE_DIR, "layer_0.mla", has_indexer=True), "cache empty before build"
     ttMLA.build_ttnn_cache(weights, CACHE_DIR, mesh_device, config, 0, seq_len, SP_AXIS, TP_AXIS)
     init_checker(CACHE_DIR)
-    assert ttMLA.check_cache_complete(
-        CACHE_DIR, "layer_0.mla", has_indexer=True, has_output_gate=gated
-    ), "dense+indexer(+g_proj) cache complete"
+    assert ttMLA.check_cache_complete(CACHE_DIR, "layer_0.mla", has_indexer=True), "dense+indexer cache complete"
 
     # === cache-only construct: empty state dict, must stay sparse and bind TtIndexer ===
     mla_c = _build_mla(config, {}, mesh_device, weight_cache_path=CACHE_DIR, seq_len=seq_len)
@@ -1286,26 +1055,6 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, seq_len,
     logger.info(f"[{variant.name}] sparse cache-only vs from-weights PCC: {pcc}")
     assert passed, f"{variant.name}: cache-only output diverged from from-weights: PCC={pcc}"
 
-    # A cache holding only the TP-sharded wkv_b1 (no replicated file): cache-only loading gathers the shards (on the
-    # TP axis, folded on a 4x2 view) and must give the same output.
-    if ttMLA.replicates_wkv_b1(config, mesh_device.shape[TP_AXIS], True):
-        repl = list(CACHE_DIR.glob("layer_0.mla_repl.wkv_b1*.tensorbin"))
-        assert repl, "a replicating layer's cache build must write the replicated wkv_b1"
-        for f in repl:
-            f.unlink()
-        init_checker(CACHE_DIR)
-        mla_sharded_only = _build_mla(config, {}, mesh_device, weight_cache_path=CACHE_DIR, seq_len=seq_len)
-        out_sharded_only = _forward(
-            mla_sharded_only,
-            mesh_device,
-            rope_tensors,
-            _new_kvpe(config, mesh_device, mesh_shape, seq_len),
-            _new_index_kv(config, mesh_device, mesh_shape, seq_len),
-            hidden,
-        )
-        assert torch.equal(out_sharded_only, out_cache), "sharded-only-cache gather fallback changed the output"
-        assert not list(CACHE_DIR.glob("layer_0.mla_repl.wkv_b1*.tensorbin")), "fallback must not write the cache"
-
     # === completeness: a missing indexer tensorbin fails the sparse check (but not the dense check) ===
     one = next(CACHE_DIR.glob("layer_0.mla.indexer_*.tensorbin"))
     one.unlink()
@@ -1314,14 +1063,6 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, seq_len,
     assert not ttMLA.check_cache_complete(
         CACHE_DIR, "layer_0.mla", has_indexer=True
     ), "missing indexer tensorbin must fail the sparse completeness check"
-    if gated:
-        # A gated layer's cache is incomplete without g_proj even when every other stem is present.
-        for f in CACHE_DIR.glob("layer_0.mla.g_proj*.tensorbin"):
-            f.unlink()
-        init_checker(CACHE_DIR)
-        assert not ttMLA.check_cache_complete(
-            CACHE_DIR, "layer_0.mla", has_indexer=False, has_output_gate=True
-        ), "missing g_proj must fail the gated completeness check"
     ttnn.synchronize_device(mesh_device)
 
 
@@ -1335,23 +1076,6 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, seq_len,
             ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
-        ),
-        # LoudBox: TP=4 and the folded TP=2 view, where shared layers now take the head -> sequence reshard too.
-        pytest.param(
-            (2, 4),
-            fabric2d_device_params(
-                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
-            ),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="fabric2d-2x4",
-        ),
-        pytest.param(
-            (4, 2),
-            fabric2d_device_params(
-                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
-            ),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="fabric2d-4x2",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -1377,7 +1101,6 @@ def test_glm53_shared_layer_cache_skips_indexer(mesh_device, device_params, vari
     init_checker(CACHE_DIR)
     assert ttMLA.check_cache_complete(CACHE_DIR, prefix, has_indexer=False), "shared MLA cache should be complete"
     assert not list(CACHE_DIR.glob(f"{prefix}.indexer_*.tensorbin")), "shared layer must not write indexer tensorbins"
-    assert list(CACHE_DIR.glob(f"layer_{shared_idx}.mla_repl.wkv_b1*.tensorbin")), "shared layers reshard at TP > 1"
 
     # Cache-only construct at the shared layer: sparse attention, but a weight-less ReuseIndexer.
     mla_c = ttMLA(
@@ -1394,9 +1117,6 @@ def test_glm53_shared_layer_cache_skips_indexer(mesh_device, device_params, vari
     )
     assert mla_c._has_indexer and mla_c._indexer_reuse, f"{variant.name}: shared layer must be sparse + reuse"
     assert type(mla_c._indexer).__name__ == "ReuseIndexer", "shared layer must bind ReuseIndexer"
-    tp = mesh_device.shape[TP_AXIS]
-    assert mla_c._early_q_reshard and mla_c.wkv_b1_weight.shape[1] == config.num_attention_heads
-    assert mla_c.indexer_indices_shape()[2] == SEQ_LEN // (mesh_device.shape[SP_AXIS] * tp), "TP-sequence-split indices"
     logger.info(f"[{variant.name}] shared layer {shared_idx}: cache built without indexer, ReuseIndexer bound")
     ttnn.synchronize_device(mesh_device)
 

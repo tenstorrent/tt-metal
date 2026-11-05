@@ -107,8 +107,7 @@ Knobs (env): DS_PERF_CACHE (default 51200), DS_PERF_CHUNK (default 5120), DS_PER
 512000), DS_PERF_CSV / DS_DENSE_PERF_CSV (summary filename, per-scenario suffix appended; written under
 generated/profiler/{variant}_{mode}_mla_perf/), DS_PERF_RT_TIMEOUT (realtime-profiler record drain
 ceiling in seconds, default 30). DS_PERF_CHUNK is the Galaxy-global target chunk; smaller boxes scale
-BOTH the measured chunk and the cache by SP/8; cache must stay a whole chunk multiple. DS_PERF_MESH (SPxTP,
-overrides the box default, e.g. 4x2 on LoudBox). DS_PERF_VARIANT /
+BOTH the measured chunk and the cache by SP/8; cache must stay a whole chunk multiple. DS_PERF_VARIANT /
 DS_PERF_SCENARIO / DS_PERF_ATTN_MODE remain as the module-level defaults used for mesh-shape detection,
 but the test itself sweeps the full matrix via parametrization.
 
@@ -182,8 +181,6 @@ _CONFIG_BUILDERS = {
 # wrapper stops once no new record has landed for its settle window, bounded by this ceiling. A generous
 # default covers a many-program forward across up to 32 chips; each forward is profiled as its own
 # (volume-bounded) region so this is a safety ceiling, not the expected wait.
-# SPxTP override of the box's default mesh, e.g. DS_PERF_MESH=4x2 on a LoudBox for the TP=2 split.
-PERF_MESH = os.environ.get("DS_PERF_MESH", "")
 RT_RECORD_TIMEOUT_S = float(os.environ.get("DS_PERF_RT_TIMEOUT", 30.0))
 
 # When set, also write an execution-ordered per-call CSV (the RT analog of tracy's ops_perf_results):
@@ -209,8 +206,7 @@ def _profile_case_id(mode: str, cache_format: MlaKvCacheFormat, tp_shard_kv: boo
 def _subdir(variant: str, mode: str, cache_format: MlaKvCacheFormat, tp_shard_kv: bool = False) -> str:
     """Format-specific profiler directory; matched sparse BF16/FP8 reports must never clobber each other."""
     profile_case = _profile_case_id(mode, cache_format, tp_shard_kv).replace("-", "_")
-    mesh = f"_{PERF_MESH.lower()}" if PERF_MESH else ""  # an overridden mesh must not clobber the default's
-    return f"{variant}_{profile_case}_mla_perf{mesh}"
+    return f"{variant}_{profile_case}_mla_perf"
 
 
 def _csv_name(variant: str, mode: str, cache_format: MlaKvCacheFormat, tp_shard_kv: bool = False) -> str:
@@ -337,10 +333,9 @@ def _write_run_manifest(
             else None
         )
         case_filter = _profile_case_id(attn_mode, cache_format, tp_shard_kv)
-        knobs = f"DS_PERF_MESH={PERF_MESH} " if PERF_MESH else ""
         reproducer = (
             f"DS_PERF_CACHE={CACHE_TOKENS} DS_PERF_CHUNK={CHUNK_TOKENS} DS_PERF_LONG_CACHE={LONG_CACHE_TOKENS} "
-            f"{knobs}{command} -k '{variant} and {scenario} and {case_filter}'"
+            f"{command} -k '{variant} and {scenario} and {case_filter}'"
         )
         head = _git_head()
         manifest = {
@@ -437,10 +432,6 @@ def _detect_perf_workload(variant_name: str) -> tuple[PerfWorkload, str | None]:
         )
 
     system_name, mesh_shape = system
-    if PERF_MESH:
-        mesh_shape = tuple(int(d) for d in PERF_MESH.lower().split("x"))
-        if len(mesh_shape) != 2 or mesh_shape[0] * mesh_shape[1] != num_devices:
-            raise ValueError(f"DS_PERF_MESH={PERF_MESH} must be SPxTP over the {num_devices} chips")
     sp, tp = mesh_shape
     # Head counts come from the single-source reference config for the variant (deepseek_v32: 128/64,
     # glm_5_3: 64/32) — the same builder the config_only fixture resolves, so device and harness agree.

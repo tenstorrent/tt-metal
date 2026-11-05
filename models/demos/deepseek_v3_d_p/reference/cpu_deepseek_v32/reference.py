@@ -162,16 +162,13 @@ def pretrained_mla_weights(
     layer: int,
     repo: str = DEFAULT_REPO,
     checkpoint_path: str | PathLike[str] | list[str] | None = None,
-    extract_only: bool = False,
 ) -> Weights:
     """Load layer-``layer`` pretrained MLA + indexer weights as the canonical dict (fp8 dequantized).
 
     ``checkpoint_path`` (a local shard path or list) takes precedence over HF resolution from ``repo``.
     ``config`` is accepted for symmetry / future validation; shapes come from the checkpoint.
     """
-    shards = (
-        checkpoint_path if checkpoint_path is not None else resolve_layer_shards(layer, repo, extract_only=extract_only)
-    )
+    shards = checkpoint_path if checkpoint_path is not None else resolve_layer_shards(layer, repo)
     cpu_sd = load_attention_state_dict(shards, layer)  # upstream CPU names, dequantized
     return {_CPU_TO_CANONICAL[cpu]: t for cpu, t in cpu_sd.items()}
 

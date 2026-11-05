@@ -51,12 +51,7 @@ def build_weights(variant, config, *, seed=42, layer=None, checkpoint_path=None,
     if checkpoint_path is not None:
         return pretrained_mla_weights(config, layer=layer or 0, checkpoint_path=checkpoint_path), f"ckptL{layer or 0}"
     if layer is not None:
-        # Checkpoints too large to download shard-by-shard (Kimi-K3.1) range-read just the layer's attention.
-        extract_only = bool(getattr(variant, "pretrained_attention_extract_only", False))
-        weights = pretrained_mla_weights(
-            config, layer=layer, repo=repo or variant.hf_repo_id, extract_only=extract_only
-        )
-        return weights, f"layer{layer}"
+        return pretrained_mla_weights(config, layer=layer, repo=repo or variant.hf_repo_id), f"layer{layer}"
     return random_mla_weights(config, seed=seed), f"random_seed{seed}"
 
 
