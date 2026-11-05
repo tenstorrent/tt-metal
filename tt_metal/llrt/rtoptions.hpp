@@ -993,7 +993,10 @@ public:
     const std::optional<std::string>& get_cluster_id() const { return cluster_id; }
 
     // Mock cluster accessors
-    bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
+    // True on the Mock target only. Simulator and Emule runs may also carry a mock cluster descriptor path.
+    bool get_mock_enabled() const { return runtime_target_device_ == TargetDevice::Mock; }
+    // TT_METAL_MOCK_CLUSTER_DESC_PATH, or the programmatic mock descriptor; empty when unset. The Mock and Emule
+    // targets require it, and the Simulator target uses it when set.
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
     // Set mock cluster descriptor from a filename.
     // Searches the tt-cluster-descriptors submodule first (these take precedence when
