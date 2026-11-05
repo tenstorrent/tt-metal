@@ -94,7 +94,7 @@ def _warmup_sizes(options: dict) -> list[tuple[int, int]]:
 
 def _clear_frames(error: BaseException) -> None:
     """Clear the locals of the frames that error's traceback keeps, and those of the exceptions it chains: the frames
-    of a failed load hold the encoder's device tensors. The tracebacks keep their lines, not their locals."""
+    of a failed load or encode hold the encoder's device tensors. The tracebacks keep their lines, not their locals."""
     pending, seen = [error], set()
     while pending:
         error = pending.pop()
@@ -184,8 +184,10 @@ class MiniMaxM3Media:
         """Write each item's stored value into its slot in out: the item's vision tokens, bf16 [n_tokens, hidden].
 
         Raises ValueError for a slot that is not stored_nbytes(item) bytes before it writes into any slot. The slots of
-        a call that raises hold no defined value: the caller must not use them. Raises RuntimeError before load or
-        after close; waits for a load or another encode in progress.
+        a call that raises hold no defined value: the caller must not use them. If the chip work fails, encode frees
+        that call's device tensors before it raises. The error's frames then hold none of the encoder's tensors, so
+        close frees them even while the caller still holds the error. Raises RuntimeError before load or after close;
+        waits for a load or another encode in progress.
         """
         for item, buf in zip(items, out, strict=True):
             size = self.stored_nbytes(item)
@@ -205,15 +207,20 @@ class MiniMaxM3Media:
 
     def _encode_into(self, item: M3Image, rows: np.ndarray) -> None:
         """The vision tokens of item, read from the chip straight into rows (format.embeddings of its value). The
-        caller holds the lock."""
+        caller holds the lock. If forward or the read fails, it clears the failed call's frames before it raises, as
+        load does."""
         import ttnn
         from models.demos.minimax_m3.vision.encoder import read_embeddings
 
-        tokens = self._encoder.forward(item.pixels)
         try:
-            read_embeddings(tokens, rows)
-        finally:
-            ttnn.deallocate(tokens)
+            tokens = self._encoder.forward(item.pixels)
+            try:
+                read_embeddings(tokens, rows)
+            finally:
+                ttnn.deallocate(tokens)
+        except BaseException as error:
+            _clear_frames(error)  # so that a close while the caller holds the error frees the encoder's device tensors
+            raise
 
     def close(self) -> None:
         """Free the encoder and its device tensors. The chip is the caller's: close leaves it open. Waits for a load or

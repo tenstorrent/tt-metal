@@ -239,6 +239,57 @@ def test_failed_warmup_frees_the_encoder(tmp_path, monkeypatch, expect_error):
     assert closed == [], f"load closed the caller's chip: {closed}"
 
 
+@pytest.mark.parametrize("failing", ["forward", "read"])
+def test_failed_encode_keeps_no_device_tensors_past_close(tmp_path, monkeypatch, expect_error, failing):
+    """If the encoder's forward or the read of its tokens fails, encode clears the locals of the failed call's frames
+    before it raises, as load does: a close while the caller still holds the error, in a finally for example, frees the
+    encoder and the failed call's device tensors and leaves the caller's chip open. The tokens of a failed read are
+    still freed, once."""
+    ttnn = pytest.importorskip("ttnn")
+    from models.demos.minimax_m3.vision import encoder as encoder_module
+
+    class DeviceTensor:  # stands in for a tensor on the chip
+        pass
+
+    held, closed, freed = [], [], []  # held: weak references to the encoder and to tensors only the frames hold
+
+    def all_freed():
+        return all(ref() is None for ref in held)
+
+    class Encoder:
+        def forward(self, pixels):  # this frame holds the encoder, its self
+            tensor = DeviceTensor()  # held only by this frame
+            held.append(weakref.ref(tensor))
+            if failing == "forward":
+                raise RuntimeError("the chip went away")
+            return "tokens"
+
+    def read_embeddings(tokens, out):
+        chip_tokens = DeviceTensor()  # held only by this frame, as read_embeddings' view of the tokens is
+        held.append(weakref.ref(chip_tokens))
+        raise RuntimeError("the chip went away")
+
+    def from_weights_path(mesh_device, weights_path, config):
+        encoder = Encoder()
+        held.append(weakref.ref(encoder))
+        return encoder
+
+    monkeypatch.setattr(ttnn, "close_mesh_device", closed.append)
+    monkeypatch.setattr(ttnn, "deallocate", freed.append)
+    monkeypatch.setattr(encoder_module.TtMiniMaxM3VisionEncoder, "from_weights_path", staticmethod(from_weights_path))
+    monkeypatch.setattr(encoder_module, "read_embeddings", read_embeddings)
+    media = MiniMaxM3Media(CONFIG)
+    media.load("the caller's chip", str(tmp_path), "image", {"warmup": []})
+    item = media.prepare("image", rgb(56, 56))
+    with expect_error(RuntimeError, "the chip went away") as failed:
+        media.encode([item], [memoryview(bytearray(media.stored_nbytes(item)))])
+    media.close()  # the caller still holds the error
+    assert failed.value is not None
+    assert all_freed(), "close left the encoder or the failed call's tensors alive while the caller holds the error"
+    assert closed == [], f"close closed the caller's chip: {closed}"
+    assert freed == (["tokens"] if failing == "read" else []), f"freed {freed}: the tokens of a failed read, once"
+
+
 @pytest.mark.parametrize(
     "warmup, message",
     [
