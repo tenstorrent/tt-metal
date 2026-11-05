@@ -78,18 +78,24 @@ TODO (image pre-processing, `tt/image_prep.py`):
 ## Weights
 
 The `reference` (every layer) and `shallow_reference` (the first two layers, for the CPU
-tests) fixtures in `tests/conftest.py` are parametrized `random` and `checkpoint`:
+tests) fixtures in `tests/conftest.py` build with the weights a test's marks ask for. A test with
+`@SYNTHETIC` runs with random weights, one with `@REAL` with the checkpoint, and one with both runs
+once with each (ids `synthetic` and `real`; `-m synthetic` or `-m real` selects by weights). CPU tests
+use random weights only (`test_load_checkpoint.py` reads the checkpoint itself). Device tests use the
+checkpoint only for attention, the MLP, the projector and what contains them (block, full model,
+full size); the other device tests use random weights only:
 
-- `random`: the reference initialized under `torch.manual_seed(0)`, with norm weights drawn around
+- `synthetic`: the reference initialized under `torch.manual_seed(0)`, with norm weights drawn around
   one so a norm that fails to load shows up.
-- `checkpoint`: the vision tower and projector of the checkpoint at `KIMI_K3_HF_MODEL`. The
+- `real`: the vision tower and projector of the checkpoint at `KIMI_K3_HF_MODEL`. The
   loader opens only the shards holding `vision_tower.*` and `mm_projector.*` keys, so a folder with `model.safetensors.index.json`,
   `config.json`, `model-00095-of-000096.safetensors` and `model-00096-of-000096.safetensors` is
   enough. These cases skip when the variable is unset.
 
-Per-layer tests (attention, MLP, block, encoder linears and norms) take a `layer` parameter: layer
-0 with random weights, and layers 0, 13 and 26 with the checkpoint. `MOONVIT_TEST_LAYERS=5` or
-`MOONVIT_TEST_LAYERS=0,20` sets the layers for both.
+Per-layer tests take a `layer` parameter, set apart from the weights: `@SAMPLED_LAYERS` (layers 0,
+13 and 26; attention, MLP, block, encoder linears and norms) or `@ALL_LAYERS` (the full-size layer
+test). `MOONVIT_TEST_LAYER=5` runs only layer 5 in the `@SAMPLED_LAYERS` tests; `@ALL_LAYERS`
+ignores it.
 
 ## Tests
 
@@ -101,7 +107,7 @@ pytest models/experimental/kimi_k3_moonvit_v2/tests/test_reference.py \
        models/experimental/kimi_k3_moonvit_v2/tests/test_load_checkpoint.py \
        models/experimental/kimi_k3_moonvit_v2/tests/test_module.py
 
-# Device, one P150 or a LoudBox: parts that work on each row alone
+# Device, one P150: parts that work on each row alone
 pytest models/experimental/kimi_k3_moonvit_v2/tests/test_linear.py \
        models/experimental/kimi_k3_moonvit_v2/tests/test_rms_norm.py \
        models/experimental/kimi_k3_moonvit_v2/tests/test_rope.py \
@@ -116,11 +122,12 @@ pytest models/experimental/kimi_k3_moonvit_v2/tests/test_vision_attention.py \
        models/experimental/kimi_k3_moonvit_v2/tests/test_vision_model.py
 ```
 
-Each row-wise test has a `ring1x4` case and a `p150` case, where one chip stands in for one chip of
-the ring and gets the first quarter of the padded sequence (16,384 rows);
-pytest skips the cases that need more chips than the machine has.
+Only tests with attention in them (attention, block, full model, full size) run on the ring
+(`ring1x4`); pytest skips them when the machine has fewer chips. The row-wise tests run on one P150
+(`p150`), which stands in for one chip of the ring and gets one quarter of the padded sequence
+(16,384 rows).
 
-Image sizes (`tests/common.py`): the row-wise tests (`ROW_GRIDS`) compare against a CPU golden of
+Image sizes (`tests/common.py`): the row-wise tests (`PADDING_LAYOUT_GRIDS`) compare against a CPU golden of
 the full padded length, which takes seconds since nothing there scales with the square of the
 length. Each size has one grid per mesh: `full` (256x256 on the ring, 128x128 on one chip) and
 `max_side` (512x128, 512x32) fill the padded length exactly, `partial` (250x250, 122x130) ends

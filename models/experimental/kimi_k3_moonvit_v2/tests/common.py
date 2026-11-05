@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import dataclasses
-import inspect
 import os
 import time
 
@@ -24,36 +23,40 @@ from models.experimental.kimi_k3_moonvit_v2.tt.ccl import ParallelFactor, TT_CCL
 # Depth of the shallow model that the full-model tests run (`shallow_reference`, `shallow_config`).
 TEST_LAYERS = 2
 
-# Fixtures (conftest.py), each with random weights or the checkpoint at $KIMI_K3_HF_MODEL:
-# `reference` has every layer, `shallow_reference` the first TEST_LAYERS.
-WEIGHTS = ["random", "checkpoint"]
-REFERENCE = pytest.mark.parametrize("reference", WEIGHTS, indirect=True)
-SHALLOW_REFERENCE = pytest.mark.parametrize("shallow_reference", WEIGHTS, indirect=True)
+# Weights. A test that builds `reference` or `shallow_reference` carries one or both of these marks,
+# and conftest.py runs it once per mark: SYNTHETIC with random weights, REAL with the checkpoint at
+# $KIMI_K3_HF_MODEL. `-m synthetic` or `-m real` selects by weights.
+SYNTHETIC_MARK = "synthetic"
+REAL_MARK = "real"
+WEIGHTS = [SYNTHETIC_MARK, REAL_MARK]
+SYNTHETIC = getattr(pytest.mark, SYNTHETIC_MARK)
+REAL = getattr(pytest.mark, REAL_MARK)
 
-# Layers the per-layer tests cover. With random weights every layer is alike, so one is enough;
-# with the checkpoint, the first, middle and last. MOONVIT_TEST_LAYERS (e.g. "5" or "0,20") sets
-# the layers for both.
-LAYERS_ENV = "MOONVIT_TEST_LAYERS"
+# Layers, for tests that take `layer`. Independent of the weights.
+NUM_LAYERS = MoonViTConfig().num_hidden_layers
 
 
-def _test_layers() -> dict[str, list[int]]:
+def layer_id(layer: int) -> str:
+    return f"layer{layer}"
+
+
+# MOONVIT_TEST_LAYER (e.g. "5") runs that one layer in place of SAMPLED_LAYERS.
+LAYERS_ENV = "MOONVIT_TEST_LAYER"
+
+
+def _sampled_layers() -> list[int]:
     value = os.environ.get(LAYERS_ENV)
-    if value:
-        layers = [int(layer) for layer in value.split(",")]
-        return {"random": layers, "checkpoint": layers}
-    n = MoonViTConfig().num_hidden_layers
-    return {"random": [0], "checkpoint": [0, n // 2, n - 1]}
+    if not value:
+        return [0, NUM_LAYERS // 2, NUM_LAYERS - 1]
+    if not value.isdigit() or int(value) >= NUM_LAYERS:
+        raise ValueError(f"${LAYERS_ENV} must be one layer, 0 to {NUM_LAYERS - 1}; got {value!r}")
+    return [int(value)]
 
 
-REFERENCE_LAYERS = pytest.mark.parametrize(
-    ("reference", "layer"),
-    [
-        pytest.param(weights, layer, id=f"{weights}-layer{layer}")
-        for weights, layers in _test_layers().items()
-        for layer in layers
-    ],
-    indirect=["reference"],
-)
+# The first, middle and last layer, or the one layer of $MOONVIT_TEST_LAYER.
+SAMPLED_LAYERS = pytest.mark.parametrize("layer", _sampled_layers(), ids=layer_id)
+# Every layer, whatever $MOONVIT_TEST_LAYER says.
+ALL_LAYERS = pytest.mark.parametrize("layer", range(NUM_LAYERS), ids=layer_id)
 
 # (t, h, w) in patches. h and w are even, as the processor's 28 px padding guarantees.
 GRIDS = {
@@ -69,19 +72,68 @@ GRIDS = {
 ATTENTION_GRIDS = pytest.mark.parametrize("grid", [[(1, 64, 64)], [(1, 40, 100)]], ids=["64x64", "40x100"])
 
 # Device grids for the parts that work on each row alone (everything but attention). Their CPU golden
-# grows only with the row count, so it runs at the full padded length in seconds. Both meshes run the
-# same image; one P150 runs one ring chip's quarter of it (`MeshRows`):
+# grows only with the row count, so it runs at the full padded length in seconds. One P150 runs one
+# ring chip's quarter of the image (`MeshRows`):
 #   full:     fills the padded length exactly; real rows on every ring chip, no padding
 #   max_side: also fills it, with the longest side the processor allows (512)
 #   partial:  nearly full; the real rows end inside a tile (not a multiple of 32) on the last chip
 #   small:    a small image, almost all padding; every real row is on the first chip
-ROW_GRID_SIZES = {"full": (256, 256), "max_side": (512, 128), "partial": (250, 250), "small": (40, 100)}
-ROW_GRIDS = pytest.mark.parametrize("size", list(ROW_GRID_SIZES))
+PADDING_LAYOUT_SIZES = {"full": (256, 256), "max_side": (512, 128), "partial": (250, 250), "small": (40, 100)}
+PADDING_LAYOUT_GRIDS = pytest.mark.parametrize("size", list(PADDING_LAYOUT_SIZES))
 
 
-def row_grid(size: str) -> list[tuple[int, int, int]]:
-    h, w = ROW_GRID_SIZES[size]
+def padding_layout_grid(size: str) -> list[tuple[int, int, int]]:
+    h, w = PADDING_LAYOUT_SIZES[size]
     return [(1, h, w)]
+
+
+# Full-length attention and block tests: the ring runs the production padded length (`max_patches`)
+# on a PADDING_LAYOUT_SIZES image with real rows on every chip. The CPU golden at that length is too slow for
+# every query row, so it computes SAMPLED_ROWS_PER_CHIP query rows of each chip, each against every key
+# (`goldens.use_sampled_attention`), and each chip's rows are checked on their own.
+REAL_ROWS_FROM_EACH_CHIP_ASSERTED_GRIDS = pytest.mark.parametrize("size", ["full", "max_side", "partial"])
+SAMPLED_ROWS_PER_CHIP = 256
+
+
+def sampled_rows(n: int, rows: int, per_chip: int = SAMPLED_ROWS_PER_CHIP, seed: int = 0) -> list[torch.Tensor]:
+    """Per ring chip, sorted window-order indices of `per_chip` of the real rows it holds, for `n` real
+    rows padded to `rows`: its first and last `per_chip // 4` real rows (where the image ends inside a
+    tile on the last chip, the rows before the padding) and the rest drawn between them. A chip with
+    fewer real rows gives all of them; one with none, an empty tensor."""
+    share = rows // RING_SIZE
+    edge = per_chip // 4
+    generator = torch.Generator().manual_seed(seed)
+    chips = []
+    for chip in range(RING_SIZE):
+        real = torch.arange(chip * share, min((chip + 1) * share, n))
+        if len(real) <= per_chip:
+            chips.append(real)
+            continue
+        middle = real[edge:-edge]
+        drawn = middle[torch.randperm(len(middle), generator=generator)[: per_chip - 2 * edge]]
+        chips.append(torch.cat([real[:edge], drawn, real[-edge:]]).sort().values)
+    return chips
+
+
+def assert_quality_per_chip(
+    golden: torch.Tensor,
+    actual: torch.Tensor,
+    chips: list[torch.Tensor],
+    pcc: float = 0.99,
+    relative_rmse: float | None = None,
+    label: str = "",
+) -> None:
+    """`assert_quality` on each chip's rows (`chips`, as `sampled_rows` gives them) of `golden` and
+    `actual`, both window order. Every chip is checked and logged before any failure is raised, so a
+    wrong chip cannot hide behind three right ones."""
+    label = label or os.environ.get("PYTEST_CURRENT_TEST", "quality").split(" ")[0]
+    failed = []
+    for chip, rows in enumerate(chips):
+        assert len(rows), f"{label}: chip {chip} holds no real rows"
+        q = quality(golden[rows], actual[rows])
+        logger.info(f"{label} chip {chip} ({len(rows)} rows): {format_quality(q)}")
+        failed += [f"chip {chip} {failure}" for failure in quality_failures(q, pcc, relative_rmse)]
+    assert not failed, f"{label}: {failed}"
 
 
 # The ring: 4 Blackhole chips along mesh axis 1, 2 links between neighbours. On a LoudBox (8 chips,
@@ -93,7 +145,7 @@ RING_FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X}
 RING4 = pytest.param((1, RING_SIZE), 1, 2, RING_FABRIC, id="ring1x4")
 # One P150 standing in for one chip of that ring: it runs that chip's quarter of the padded sequence
 # (`device_config`, `MeshRows`), never the whole of it.
-P150 = pytest.param((1, 1), None, 1, {}, id="p150")
+P150_CHIP = pytest.param((1, 1), None, 1, {}, id="p150")
 
 
 def mesh_params(*params):
@@ -104,9 +156,10 @@ def mesh_params(*params):
     )
 
 
-# Attention needs the ring. Parts that work on each row alone also run on one P150.
+# Attention needs the ring, so only tests with attention in them use it. Parts that work on each row
+# alone run on one P150.
 RING = mesh_params(RING4)
-P150_AND_RING = mesh_params(P150, RING4)
+P150 = mesh_params(P150_CHIP)
 
 # Traced tests (`Trace`): the ring with DRAM set aside for the captured commands.
 TRACE_REGION_SIZE = 100_000_000
@@ -130,14 +183,9 @@ SIMULATOR_GRID = [(1, 6, 20)]
 
 
 def SIMULATOR(test):
-    """Mark `test` as a sim test: the `simulator` mark, one P150, and random weights if it takes
-    `reference`."""
-    marks = [getattr(pytest.mark, SIMULATOR_MARK), mesh_params(P150)]
-    if "reference" in inspect.signature(test).parameters:
-        marks.append(pytest.mark.parametrize("reference", ["random"], indirect=True))
-    for mark in marks:
-        test = mark(test)
-    return test
+    """Mark `test` as a sim test: the `simulator` mark and one P150. Weights come from the test's
+    own SYNTHETIC or REAL."""
+    return P150(getattr(pytest.mark, SIMULATOR_MARK)(test))
 
 
 def simulator_config(config: MoonViTConfig) -> MoonViTConfig:
@@ -172,6 +220,7 @@ def quality(golden: torch.Tensor, actual: torch.Tensor) -> dict[str, float]:
     - `ccc`: concordance correlation, PCC lowered by any scale or offset difference.
     - `max_abs`, `max_rel`: the largest element differences (as `comp_allclose` reports them; `max_rel`
       over nonzero golden values), for diagnosis.
+    - `nonfinite`: NaN and Inf values in `actual`. `comp_pcc` sets them to zero, so PCC alone misses a few.
     """
     golden, actual = golden.float(), actual.float()
     _, pcc = comp_pcc(golden, actual, 0.0)
@@ -184,18 +233,28 @@ def quality(golden: torch.Tensor, actual: torch.Tensor) -> dict[str, float]:
     nonzero = golden != 0
     max_rel = (diff[nonzero] / golden[nonzero].abs()).max().item() if nonzero.any() else 0.0
     max_abs = diff.max().item()
-    return {"pcc": pcc, "relative_rmse": relative_rmse, "ccc": ccc, "max_abs": max_abs, "max_rel": max_rel}
+    nonfinite = int((~torch.isfinite(actual)).sum())
+    return {
+        "pcc": pcc,
+        "relative_rmse": relative_rmse,
+        "ccc": ccc,
+        "max_abs": max_abs,
+        "max_rel": max_rel,
+        "nonfinite": nonfinite,
+    }
 
 
 def format_quality(q: dict[str, float]) -> str:
     return (
         f"PCC {q['pcc']:.6f}, relative RMSE {q['relative_rmse']:.2%}, CCC {q['ccc']:.6f}, "
-        f"max abs {q['max_abs']:.3g}, max rel {q['max_rel']:.3g}"
+        f"max abs {q['max_abs']:.3g}, max rel {q['max_rel']:.3g}, {q['nonfinite']} NaN or Inf"
     )
 
 
 def quality_failures(q: dict[str, float], pcc: float, relative_rmse: float | None) -> list[str]:
     failures = []
+    if q["nonfinite"]:
+        failures.append(f"{q['nonfinite']} NaN or Inf values")
     if not q["pcc"] >= pcc:
         failures.append(f"PCC {q['pcc']:.6f} < {pcc}")
     if relative_rmse is not None and not q["relative_rmse"] <= relative_rmse:
@@ -206,7 +265,7 @@ def quality_failures(q: dict[str, float], pcc: float, relative_rmse: float | Non
 def assert_quality(
     golden: torch.Tensor, actual: torch.Tensor, pcc: float = 0.99, relative_rmse: float | None = None, label: str = ""
 ) -> dict[str, float]:
-    """Assert PCC >= `pcc` and relative RMSE <= `relative_rmse`; log every `quality` measure.
+    """Assert no NaN or Inf, PCC >= `pcc` and relative RMSE <= `relative_rmse`; log every `quality` measure.
 
     Thresholds follow tt_dit's `assert_quality` (PCC plus relative RMSE); CCC and the largest element
     differences are logged, not asserted. Each test's relative RMSE limit is about twice the largest

@@ -15,15 +15,22 @@ import torch
 from models.experimental.kimi_k3_moonvit_v2.reference.kimi_k3_vision import KimiK3VisionModel, load_vision_config
 from models.experimental.kimi_k3_moonvit_v2.reference.modeling_kimi_k3 import tpool_patch_merger
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    SYNTHETIC,
     GRIDS,
-    ROW_GRIDS,
-    SHALLOW_REFERENCE,
+    PADDING_LAYOUT_GRIDS,
     MeshRows,
     device_config,
     random_patches,
-    row_grid,
+    padding_layout_grid,
+    sampled_rows,
+    REAL_ROWS_FROM_EACH_CHIP_ASSERTED_GRIDS,
 )
-from models.experimental.kimi_k3_moonvit_v2.tt.model_config import MoonViTConfig, check_grid, resolve_parallel
+from models.experimental.kimi_k3_moonvit_v2.tt.model_config import (
+    RING_SIZE,
+    MoonViTConfig,
+    check_grid,
+    resolve_parallel,
+)
 
 REFERENCE_CONFIG = Path(__file__).parents[1] / "reference" / "config.json"
 
@@ -50,7 +57,7 @@ def test_from_hf_config_defaults_match_reference(tmp_path, vision_config):
     assert config.qkv_hidden_size == block.wqkv.out_features // 3
 
 
-@SHALLOW_REFERENCE
+@SYNTHETIC
 @pytest.mark.parametrize("grid", GRIDS.values(), ids=GRIDS.keys())
 @torch.no_grad()
 def test_forward_shape(shallow_config, shallow_reference, grid):
@@ -98,11 +105,11 @@ def test_rejects_unsupported_grids(config, expect_error, grid, message):
         check_grid(torch.tensor(grid), config)
 
 
-@ROW_GRIDS
-def test_row_grids(config, size):
+@PADDING_LAYOUT_GRIDS
+def test_padding_layout_grids(config, size):
     """Each row-wise device grid is a valid image, and its shape and the quarter one P150 runs of it
     are what its name promises."""
-    (grid,) = row_grid(size)
+    (grid,) = padding_layout_grid(size)
     h, w = check_grid(torch.tensor([grid]), config)
     chip = MeshRows(h * w, config.max_patches, None)
     real = chip.real.stop - chip.real.start
@@ -137,3 +144,22 @@ def test_one_device_runs_at_most_a_ring_chips_share(config, expect_error):
     resolve_parallel(None, None, None, device_config(config, None))
     with expect_error(ValueError, "one ring chip's share"):
         resolve_parallel(None, None, None, config)
+
+
+@REAL_ROWS_FROM_EACH_CHIP_ASSERTED_GRIDS
+def test_full_length_sampled_rows(config, size):
+    """The full-length grids put real rows on every ring chip, and `sampled_rows` takes
+    SAMPLED_ROWS_PER_CHIP distinct real rows of each chip, its first and last real rows among them (on
+    `partial`, the last chip's end inside a tile)."""
+    (grid,) = padding_layout_grid(size)
+    h, w = check_grid(torch.tensor([grid]), config)
+    n, share = h * w, config.max_patches // RING_SIZE
+    chips = sampled_rows(n, config.max_patches)
+    assert len(chips) == RING_SIZE
+    for chip, rows in enumerate(chips):
+        first, last = chip * share, min((chip + 1) * share, n) - 1
+        assert len(rows) == len(rows.unique()) == 256, chip
+        assert torch.equal(rows, rows.sort().values), chip
+        assert rows[0] == first and rows[-1] == last, chip
+    if size == "partial":
+        assert (n - (RING_SIZE - 1) * share) % 32

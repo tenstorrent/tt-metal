@@ -14,14 +14,14 @@ import pytest
 import torch
 
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    SYNTHETIC,
+    SAMPLED_LAYERS,
     random_tensor,
     assert_quality,
-    row_grid,
-    ROW_GRIDS,
+    padding_layout_grid,
+    PADDING_LAYOUT_GRIDS,
     MeshRows,
-    P150_AND_RING,
-    REFERENCE,
-    REFERENCE_LAYERS,
+    P150,
     SIMULATOR_GRID,
     SIMULATOR,
     simulator_config,
@@ -72,42 +72,46 @@ def check_projector_rms_norm(mesh_device, sp_axis, config, reference, grid) -> N
     check_rms_norm(mesh_device, torch_norm, config.projector_norm_eps, rows)
 
 
-@P150_AND_RING
-@REFERENCE_LAYERS
-@ROW_GRIDS
+@P150
+@SYNTHETIC
+@SAMPLED_LAYERS
+@PADDING_LAYOUT_GRIDS
 @ENCODER_NORMS
 def test_encoder_rms_norm(mesh_device, sp_axis, num_links, config, reference, size, layer, name):
-    check_encoder_rms_norm(mesh_device, sp_axis, config, reference, layer, name, row_grid(size))
+    check_encoder_rms_norm(mesh_device, sp_axis, config, reference, layer, name, padding_layout_grid(size))
 
 
 @SIMULATOR
+@SYNTHETIC
 @ENCODER_NORMS
 def test_encoder_rms_norm_small(mesh_device, sp_axis, num_links, config, reference, name):
     """Sized for ttsim: one chip's quarter of a ring padded to SIMULATOR_ROWS."""
     check_encoder_rms_norm(mesh_device, sp_axis, simulator_config(config), reference, 0, name, SIMULATOR_GRID)
 
 
-@P150_AND_RING
-@REFERENCE
-@ROW_GRIDS
+@P150
+@SYNTHETIC
+@PADDING_LAYOUT_GRIDS
 def test_final_rms_norm(mesh_device, sp_axis, num_links, config, reference, size):
-    check_final_rms_norm(mesh_device, sp_axis, config, reference, row_grid(size))
+    check_final_rms_norm(mesh_device, sp_axis, config, reference, padding_layout_grid(size))
 
 
 @SIMULATOR
+@SYNTHETIC
 def test_final_rms_norm_small(mesh_device, sp_axis, num_links, config, reference):
     """Sized for ttsim: one chip's quarter of a ring padded to SIMULATOR_ROWS."""
     check_final_rms_norm(mesh_device, sp_axis, simulator_config(config), reference, SIMULATOR_GRID)
 
 
-@P150_AND_RING
-@REFERENCE
-@ROW_GRIDS
+@P150
+@SYNTHETIC
+@PADDING_LAYOUT_GRIDS
 def test_projector_rms_norm(mesh_device, sp_axis, num_links, config, reference, size):
-    check_projector_rms_norm(mesh_device, sp_axis, config, reference, row_grid(size))
+    check_projector_rms_norm(mesh_device, sp_axis, config, reference, padding_layout_grid(size))
 
 
 @SIMULATOR
+@SYNTHETIC
 def test_projector_rms_norm_small(mesh_device, sp_axis, num_links, config, reference):
     """Sized for ttsim: one chip's quarter of a ring padded to SIMULATOR_ROWS patches."""
     check_projector_rms_norm(mesh_device, sp_axis, simulator_config(config), reference, SIMULATOR_GRID)

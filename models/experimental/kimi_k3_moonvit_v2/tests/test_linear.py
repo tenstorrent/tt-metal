@@ -10,15 +10,15 @@ import pytest
 import torch
 
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    SYNTHETIC,
+    SAMPLED_LAYERS,
     random_tensor,
     assert_quality,
     device_config,
-    row_grid,
-    ROW_GRIDS,
+    padding_layout_grid,
+    PADDING_LAYOUT_GRIDS,
     MeshRows,
-    P150_AND_RING,
-    REFERENCE,
-    REFERENCE_LAYERS,
+    P150,
     SIMULATOR_GRID,
     SIMULATOR,
     random_patches,
@@ -88,44 +88,48 @@ def check_patch_embed_linear(mesh_device, sp_axis, config, reference, grid) -> N
     assert_quality(golden, rows.gather(out, mesh_device), relative_rmse=0.004)
 
 
-@P150_AND_RING
-@REFERENCE_LAYERS
-@ROW_GRIDS
+@P150
+@SYNTHETIC
+@SAMPLED_LAYERS
+@PADDING_LAYOUT_GRIDS
 @ENCODER_LINEAR_PATHS
 def test_encoder_linear(mesh_device, sp_axis, num_links, config, reference, size, layer, path):
-    check_encoder_linear(mesh_device, sp_axis, config, reference, layer, path, row_grid(size))
+    check_encoder_linear(mesh_device, sp_axis, config, reference, layer, path, padding_layout_grid(size))
 
 
 @SIMULATOR
+@SYNTHETIC
 @ENCODER_LINEAR_PATHS
 def test_encoder_linear_small(mesh_device, sp_axis, num_links, config, reference, path):
     """Sized for ttsim: one chip's quarter of a ring padded to SIMULATOR_ROWS."""
     check_encoder_linear(mesh_device, sp_axis, simulator_config(config), reference, 0, path, SIMULATOR_GRID)
 
 
-@P150_AND_RING
-@REFERENCE
-@ROW_GRIDS
+@P150
+@SYNTHETIC
+@PADDING_LAYOUT_GRIDS
 @PROJECTOR_LINEAR_PATHS
 def test_projector_linear(mesh_device, sp_axis, num_links, config, reference, size, path):
-    check_projector_linear(mesh_device, sp_axis, config, reference, path, row_grid(size))
+    check_projector_linear(mesh_device, sp_axis, config, reference, path, padding_layout_grid(size))
 
 
 @SIMULATOR
+@SYNTHETIC
 @PROJECTOR_LINEAR_PATHS
 def test_projector_linear_small(mesh_device, sp_axis, num_links, config, reference, path):
     """Sized for ttsim: one chip's quarter of a ring padded to SIMULATOR_ROWS patches."""
     check_projector_linear(mesh_device, sp_axis, simulator_config(config), reference, path, SIMULATOR_GRID)
 
 
-@P150_AND_RING
-@REFERENCE
-@ROW_GRIDS
+@P150
+@SYNTHETIC
+@PADDING_LAYOUT_GRIDS
 def test_patch_embed_linear(mesh_device, sp_axis, num_links, config, reference, size):
-    check_patch_embed_linear(mesh_device, sp_axis, config, reference, row_grid(size))
+    check_patch_embed_linear(mesh_device, sp_axis, config, reference, padding_layout_grid(size))
 
 
 @SIMULATOR
+@SYNTHETIC
 def test_patch_embed_linear_small(mesh_device, sp_axis, num_links, config, reference):
     """Sized for ttsim: one chip's quarter of a ring padded to SIMULATOR_ROWS."""
     check_patch_embed_linear(mesh_device, sp_axis, simulator_config(config), reference, SIMULATOR_GRID)

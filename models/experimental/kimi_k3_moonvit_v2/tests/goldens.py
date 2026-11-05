@@ -40,6 +40,7 @@ made from different ones.
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import inspect
 import json
@@ -54,7 +55,7 @@ import torch
 
 from models.experimental.kimi_k3_moonvit_v2.reference import modeling_kimi_k3 as upstream
 from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import checkpoint_path
-from models.experimental.kimi_k3_moonvit_v2.tests.common import random_patches, reference_rope
+from models.experimental.kimi_k3_moonvit_v2.tests.common import REAL_MARK, random_patches, reference_rope
 
 GOLDEN_DIR_ENV = "MOONVIT_GOLDEN_DIR"
 REFERENCE_DIR = Path(__file__).resolve().parents[1] / "reference"
@@ -120,6 +121,33 @@ def use_chunked_attention():
     """Run upstream's `eager` attention path as `chunked_attention` inside the block."""
     previous = upstream.VL_VISION_ATTENTION_FUNCTIONS["eager"]
     upstream.VL_VISION_ATTENTION_FUNCTIONS["eager"] = chunked_attention
+    try:
+        yield
+    finally:
+        upstream.VL_VISION_ATTENTION_FUNCTIONS["eager"] = previous
+
+
+def sampled_attention(q, k, v, q_cu_seqlens=None, k_cu_seqlens=None, *, query_rows, chunk_size=256, **kwargs):
+    """`chunked_attention` for the query rows `query_rows` only, each against every key; the other rows
+    of the output are zero. At the full padded length this is the part of attention the CPU can afford:
+    the rows after attention (`wo`, the residual, norm1, the MLP) each depend on their own row alone, so
+    a block run with it is exact on `query_rows`."""
+    if q_cu_seqlens.tolist() != [0, q.shape[0]] or k_cu_seqlens.tolist() != [0, k.shape[0]]:
+        raise ValueError("sampled_attention handles one image (cu_seqlens [0, L]) only")
+    q, k, v = (t.transpose(0, 1) for t in (q, k, v))  # [heads, L, head_dim]
+    out = torch.zeros_like(q)
+    for start in range(0, len(query_rows), chunk_size):
+        rows = query_rows[start : start + chunk_size]
+        weight = q[:, rows] @ k.transpose(-2, -1) / math.sqrt(q.shape[-1])
+        out[:, rows] = torch.softmax(weight, dim=-1, dtype=torch.float32).to(q.dtype) @ v
+    return out.transpose(0, 1).reshape(q.shape[1], -1)
+
+
+@contextmanager
+def use_sampled_attention(query_rows: torch.Tensor):
+    """Run upstream's `eager` attention path as `sampled_attention` for `query_rows` (raster order)."""
+    previous = upstream.VL_VISION_ATTENTION_FUNCTIONS["eager"]
+    upstream.VL_VISION_ATTENTION_FUNCTIONS["eager"] = functools.partial(sampled_attention, query_rows=query_rows)
     try:
         yield
     finally:
@@ -220,7 +248,7 @@ def generate(h: int, w: int, seed: int, dtype: str, blocks: int | None) -> None:
         print(f"[goldens] {name}: {seconds:.1f} s, peak RSS so far {peak_gb:.1f} GB", flush=True)
 
     t = time.time()
-    reference = build_reference("checkpoint", None)
+    reference = build_reference(REAL_MARK, None)
     if dtype == "fp32":
         reference = to_fp32(reference)
     config = MoonViTConfig.from_hf_config(checkpoint)
