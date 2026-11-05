@@ -39,7 +39,14 @@ def qwen36_layer_names(text_config):
 
 
 def qwen36_kv_cache_spec(
-    text_config, tp, block_size, kv_bf8=True, num_speculative_blocks=0, mamba_cache_mode="none", mamba_block_size=None
+    text_config,
+    tp,
+    block_size,
+    kv_bf8=True,
+    num_speculative_blocks=0,
+    mamba_cache_mode="none",
+    mamba_block_size=None,
+    prefill_checkpoint_alignment=None,
 ):
     """dict[layer name, KVCacheSpec] for vLLM's hybrid KV cache manager. All sizes are per device at ``tp`` devices.
 
@@ -50,7 +57,9 @@ def qwen36_kv_cache_spec(
     GDN: conv history (kernel - 1, conv_dim / tp) bf16 and recurrent state (value_heads / tp, key_dim, value_dim) fp32,
     padded to the attention page. ``num_speculative_blocks`` = the MTP draft length K (state blocks per request
     beyond the running one). ``mamba_block_size`` (default ``block_size``): tokens per GDN state block; mode "none"
-    needs at least max_model_len so a request holds one state block per group."""
+    needs at least max_model_len so a request holds one state block per group. ``prefill_checkpoint_alignment``
+    (None: no checkpoints): one prefill checkpoint block per GDN group, placed only at offsets from the chunk start
+    that are multiples of it (mode align; the prefill must write the state there)."""
     from vllm.v1.attention.backends.registry import MambaAttentionBackendEnum
     from vllm.v1.kv_cache_interface import FullAttentionSpec, MambaSpec
 
@@ -83,6 +92,11 @@ def qwen36_kv_cache_spec(
             f"GDN state {gdn_bytes} B per layer does not fit the {attn.page_size_bytes} B attention page "
             f"(block_size={block_size}, tp={tp}, kv_bf8={kv_bf8}); use a larger block"
         )
+    ckpt_kw = (
+        {}
+        if prefill_checkpoint_alignment is None
+        else dict(num_prefill_checkpoint_blocks=1, prefill_checkpoint_alignment=int(prefill_checkpoint_alignment))
+    )
     gdn = MambaSpec(
         block_size=int(block_size if mamba_block_size is None else mamba_block_size),
         shapes=((kconv - 1, conv_dim_tp), (nv // tp, dk, dv)),
@@ -91,6 +105,7 @@ def qwen36_kv_cache_spec(
         mamba_type=MambaAttentionBackendEnum.GDN_ATTN,
         mamba_cache_mode=mamba_cache_mode,
         num_speculative_blocks=int(num_speculative_blocks),
+        **ckpt_kw,
     )
     attn_names, gdn_names = qwen36_layer_names(text_config)
     return {**{name: attn for name in attn_names}, **{name: gdn for name in gdn_names}}

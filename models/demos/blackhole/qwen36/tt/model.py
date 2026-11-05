@@ -25,6 +25,7 @@ from models.demos.blackhole.qwen36.tt.prefix_cache import alloc_zeros_like
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.demos.blackhole.qwen36.tt.spec_masks import MASK_NEG, MASK_ROWS, SHARD_WORDS
 from models.demos.blackhole.qwen36.tt.spec_argmax_fused import LANES as _ARGMAX_FUSED_LANES
+from models.demos.blackhole.qwen36.tt.spec_block_state import CheckpointPoints
 from models.demos.blackhole.qwen36.tt.tp_common import aliases as _tpc_aliases
 from models.demos.blackhole.qwen36.tt.tp_common import kv_block_size, kv_cache_bf8_enabled, kv_write_masked_enabled
 from models.demos.blackhole.qwen36.tt.tp_common import lm_head_kwargs as _lm_head_kwargs
@@ -2112,12 +2113,15 @@ class Qwen36Model:
                 tokens, page_table, seg_start, seg_end, on_chunk, want_logits=last and want_logits
             )
             if not last:
-                cache.save(
-                    tokens[0],
-                    seg_end,
-                    low_prio=seg_end in getattr(points, "low", ()),
-                    protect=seg_end in getattr(points, "end", ()),
-                )
+                if isinstance(points, CheckpointPoints):  # QWEN36_MAMBA_PREFILL_CKPT: into vLLM's checkpoint block
+                    points.save(seg_end)
+                else:
+                    cache.save(
+                        tokens[0],
+                        seg_end,
+                        low_prio=seg_end in getattr(points, "low", ()),
+                        protect=seg_end in getattr(points, "end", ()),
+                    )
                 saved.append(seg_end)
             seg_start = seg_end
         if save_end:  # non-final chunk, exact resume: the next chunk starts from the state after tokens[:L]

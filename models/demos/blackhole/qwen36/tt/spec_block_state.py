@@ -270,6 +270,7 @@ class SpecBlockBook:
         self.step_start = None  # int64 [B] start columns
         self.pending = []  # (engine row, column) whose conv rows are written once the staged verify ran
         self.prefill_blocks = None  # per group int64 [n]: the prefill step's running block of request u
+        self.checkpoints = {}  # request u -> [(n, [G] blocks)]: the prefill step's checkpoint states (vLLM's blocks)
         self._pages = [torch.zeros(self.B, self.T, nv, dtype=torch.int64) for _ in range(self.G)]  # head pages
         self._rows = torch.arange(self.B)
         self._map_live, self._map_dirty = None, True  # live rows the window map was built for; a copy changed it
@@ -516,6 +517,43 @@ class SpecBlockBook:
         if b <= 0:
             raise ValueError(f"prefilled request {u}: group {g} state block is the null block {b}")
         return b
+
+    def set_prefill_checkpoints(self, per_group, positions):
+        """vLLM's prefill checkpoints of this step (MambaSpec.num_prefill_checkpoint_blocks): request u must leave the
+        state after exactly n tokens in block per_group[g][u, j] of every group g, for each entry j with
+        n = positions[u, j] > 0. ``positions`` None (or no entry): none."""
+        self.checkpoints = {}
+        if positions is None:
+            return
+        pos = torch.as_tensor(positions).to(torch.int64)
+        pos = pos.reshape(pos.shape[0], -1)
+        if not bool((pos > 0).any()):
+            return
+        if per_group is None or len(per_group) != self.G:
+            raise ValueError(f"state_checkpoint_positions needs [{self.G}] groups of checkpoint blocks")
+        ids = [torch.as_tensor(t).reshape(pos.shape[0], -1) for t in per_group]
+        for u, j in (pos > 0).nonzero().tolist():
+            blocks = [int(t[u, j]) for t in ids]
+            if min(blocks) <= 0:
+                raise ValueError(f"request {u}: prefill checkpoint at {int(pos[u, j])} names the null block: {blocks}")
+            self.checkpoints.setdefault(u, []).append((int(pos[u, j]), blocks))
+
+    def prefill_checkpoints(self, u):
+        """Request u's (n, [G] blocks) of this step, in position order."""
+        return sorted(self.checkpoints.get(int(u), ()))
+
+
+class CheckpointPoints(list):
+    """The segment ends of a prefill that leaves vLLM's prefill checkpoints inside its chunk: after the segment that
+    ends at n, the bound scratch holds the state after n tokens, and ``save(n)`` writes it into vLLM's block for n."""
+
+    def __init__(self, entries, write):
+        super().__init__(n for n, _ in entries)
+        self._blocks = dict(entries)
+        self._write = write
+
+    def save(self, n):
+        self._write(self._blocks[int(n)])
 
 
 def group_windows(windows_per_layer, layer_groups, G):
@@ -890,6 +928,17 @@ class SpecGdnBlockState:
         ids = self.group_windows(state_block_ids_per_layer)
         self.book.set_prefill_blocks([t.reshape(t.shape[0], -1)[:, 0] for t in ids])
 
+    def set_prefill_checkpoints(self, ids_per_layer, positions):
+        """The plugin's state_checkpoint_ids_per_layer / state_checkpoint_positions (see
+        SpecBlockBook.set_prefill_checkpoints)."""
+        has = positions is not None and bool((torch.as_tensor(positions) > 0).any())
+        if has and ids_per_layer is None:
+            raise ValueError("state_checkpoint_positions without state_checkpoint_ids_per_layer")
+        self.book.set_prefill_checkpoints(self.group_windows(ids_per_layer) if has else None, positions)
+
+    def prefill_checkpoints(self, u):
+        return self.book.prefill_checkpoints(u)
+
     @property
     def prefill_blocks(self):
         return self.book.prefill_blocks
@@ -917,11 +966,19 @@ class SpecGdnBlockState:
 
     def write_prefill(self, u):
         """Write the bound B=1 prefill scratch (rec_state, conv_carry) of every GDN layer into request u's state block."""
+        self._write_scratch([self.book.prefill_block(g, u) for g in range(self.G)], "prefill block writes")
+
+    def write_checkpoint(self, blocks):
+        """Write the bound B=1 prefill scratch into ``blocks`` ([G] block ids, one per group): a prefill checkpoint,
+        the state after the tokens the prefill has run so far."""
+        self._write_scratch(blocks, "checkpoint block writes")
+
+    def _write_scratch(self, blocks, kind):
         import ttnn
 
-        with self._timed("prefill block writes", len(self.layers)), _PageTables(self) as pts:
+        with self._timed(kind, len(self.layers)), _PageTables(self) as pts:
             for _, dn, g in self.layers:
-                b = self.book.prefill_block(g, u)
+                b = int(blocks[g])
                 self.book.forget_block(b)
                 self._write_rec(dn, b, dn.rec_state, pts)
                 rm = ttnn.to_layout(dn.conv_carry, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
