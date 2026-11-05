@@ -35,6 +35,9 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/program/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
+#include "fabric_fixture.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -317,6 +320,73 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<uint32_t>& info) {
         return std::string(info.param == 0 ? "LoadAddStore" : "NocSemaphoreInc");
     });
+
+// A chip's master fabric router: where the host reads its EDM status, in virtual coordinates so the
+// read still works once the device is closed.
+struct MasterRouter {
+    ChipId chip;
+    CoreCoord logical;
+    CoreCoord virtual_core;
+    uint32_t edm_status_address;
+};
+
+// Reads through the cluster, so it works while the device is open or closed. Throws on a short read.
+uint32_t read_edm_status(const MasterRouter& router) {
+    std::vector<uint32_t> value;
+    MetalContext::instance().get_cluster().read_core(
+        value, sizeof(uint32_t), tt_cxy_pair(router.chip, router.virtual_core), router.edm_status_address);
+    TT_FATAL(value.size() == 1, "EDM status read on chip {} returned {} words", router.chip, value.size());
+    return value[0];
+}
+
+// Opens both chips with FABRIC_1D, checks each master router reached READY_FOR_TRAFFIC, closes them
+// (the teardown writes IMMEDIATELY_TERMINATE) and waits for TERMINATED; twice, so the second open
+// relaunches routers that terminated.
+TEST(KeraunosFabric, RouterTerminatesOnCloseAndReopens) {
+    using tt::tt_fabric::fabric_router_tests::BaseFabricFixture;
+    constexpr auto kTerminateTimeout = std::chrono::minutes(10);
+    for (int open = 0; open < 2; open++) {
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D);
+        ASSERT_EQ(BaseFabricFixture::devices_.size(), 2u) << "open " << open;
+        const auto& builder_ctx =
+            MetalContext::instance().get_control_plane().get_fabric_context().get_builder_context();
+        const auto ready = builder_ctx.get_fabric_router_ready_address_and_signal();
+        ASSERT_TRUE(ready.has_value()) << "FABRIC_1D has no READY_FOR_TRAFFIC handshake";
+        std::vector<MasterRouter> routers;
+        for (const auto& [chip, mesh] : BaseFabricFixture::devices_map_) {
+            IDevice* device = &slow_dispatch::physical_device_from_unit_mesh(*mesh);
+            const CoreCoord logical = MetalContext::instance().get_cluster().get_soc_desc(chip).get_eth_core_for_channel(
+                builder_ctx.get_fabric_master_router_chan(chip), tt::CoordSystem::LOGICAL);
+            routers.push_back(
+                {chip, logical, device->virtual_core_from_logical_core(logical, CoreType::ETH), ready->first});
+        }
+        if (is_mock()) {
+            BaseFabricFixture::DoTearDownTestSuite();
+            continue;
+        }
+        for (const auto& router : routers) {
+            EXPECT_EQ(read_edm_status(router), static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC))
+                << fmt::format("open {} chip {} router {}", open, router.chip, router.logical.str());
+        }
+        BaseFabricFixture::DoTearDownTestSuite();
+        for (const auto& router : routers) {
+            const auto deadline = std::chrono::steady_clock::now() + kTerminateTimeout;
+            uint32_t status = read_edm_status(router);
+            while (status != tt::tt_fabric::EDMStatus::TERMINATED && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                status = read_edm_status(router);
+            }
+            log_info(
+                tt::LogTest, "Open {}: chip {} router {} EDM status {:#x} after close", open, router.chip,
+                router.logical.str(), status);
+            ASSERT_EQ(status, static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED))
+                << fmt::format("open {} chip {} router {}", open, router.chip, router.logical.str());
+        }
+    }
+    if (is_mock()) {
+        GTEST_SKIP() << "Mock: opened and closed twice. MockChip reads are no-ops, so router status is not checked.";
+    }
+}
 
 }  // namespace
 }  // namespace tt::tt_metal
