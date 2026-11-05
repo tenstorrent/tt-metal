@@ -399,8 +399,6 @@ class ColParallelLinear(Module):
         parallel_config_tp = parallel_config.tensor_parallel.factor if parallel_config is not None else 1
         needs_gather = x.padded_shape[-1] != weight.padded_shape[-2]  # If gathered, switch to non fused AGMM
         if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and needs_gather:
-            if not use_persistent_buffer:
-                ttnn.synchronize_device(self.mesh_device)
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
 
@@ -412,6 +410,11 @@ class ColParallelLinear(Module):
             fabric_cfg = get_fabric_agmm_config(M, K, N, (self.chunks or 1), full_grid)
             has_unit_batch = len(x.padded_shape) <= 4 and all(d == 1 for d in list(x.padded_shape)[:-2])
             if fabric_cfg is not None and self.chunks in (None, 1) and has_unit_batch and addcmul_a is None:
+                if not use_persistent_buffer:
+                    # The strided op takes no barrier semaphore, so its op-allocated gather buffer could
+                    # take remote writes while a peer is still running an earlier op at that address.
+                    # all_gather_minimal_matmul_async below gets one when the buffer is transient.
+                    ttnn.synchronize_device(self.mesh_device)
                 return self._forward_fabric_agmm(
                     x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype, use_persistent_buffer
                 )
