@@ -314,6 +314,7 @@ class RunTimeOptions {
     std::filesystem::path simulator_path = "";
     std::string emu_server;
     std::vector<std::string> emu_soc_desc_paths;
+    std::string emu_cluster_desc_path;
     std::string grendel_jtag_server;
     std::string grendel_jtag_soc_desc_path;
     std::string grendel_jtag_transport = "jtag2axi_v2";
@@ -863,6 +864,9 @@ public:
     // chip i the i-th, so a test cluster descriptor can present the package as several chips. The Mock target uses the
     // list too, when set, so host-only runs see the same chips.
     const std::vector<std::string>& get_emu_soc_desc_paths() const { return emu_soc_desc_paths; }
+    // TT_METAL_EMU_CLUSTER_DESC: test cluster descriptor for the EmuAxi target, or empty for the single chip 0.
+    // Set only together with TT_METAL_EMU_SERVER.
+    const std::string& get_emu_cluster_desc_path() const { return emu_cluster_desc_path; }
     const std::string& get_grendel_jtag_server() const { return grendel_jtag_server; }
     const std::string& get_grendel_jtag_soc_desc_path() const { return grendel_jtag_soc_desc_path; }
     const std::string& get_grendel_jtag_transport() const { return grendel_jtag_transport; }
