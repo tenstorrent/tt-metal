@@ -307,6 +307,7 @@ class MathOperation(Enum):
     # The other two entry points of ckernel_sfpu_mask.h: calculate_mask_posinf fills +inf
     # where the float mask is zero, calculate_int_mask zeroes Int32 data where the mask is 0.
     SfpuMaskPosinf = OpSpec("MASK_POSINF", MathOpType.SFPU_BINARY)
+    SfpuGegluTanh = OpSpec("GEGLU_TANH", MathOpType.SFPU_BINARY)
     SfpuIntMask = OpSpec("INT_MASK", MathOpType.SFPU_BINARY)
     SfpuAtan2 = OpSpec("ATAN2", MathOpType.SFPU_BINARY)
     SfpuCopyDest = OpSpec("COPY_DEST", MathOpType.SFPU_BINARY)
