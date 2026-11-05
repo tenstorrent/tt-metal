@@ -2127,23 +2127,8 @@
 # Uses real-time device program records, so it runs on the plain build without ENABLE_TRACY.
 # sp/tp are auto-selected by MeshConfig.detect() on Galaxy (sp=8, tp=4).
 
-# 4-galaxy (SC4) disaggregated prefill for Kimi-K3: all 93 layers as 8 stages of [4,4], SP on mesh axis 1,
-# two ranks per galaxy (one per tray half), 12 layers each and 9 on the last, chained along the hosts'
-# cabled ring. Every boundary is a multiple of ATTN_RES_BLOCK_SIZE=12, or a rank inherits a partial
-# sealed set and its local layer 0 seals a block that is not there; the adapter's layer_split_boundaries
-# snaps the even split there, so PREFILL_PP_LAYER_COUNTS is deliberately not pinned here.
-# run_multirank_pcc.sh checks the 4x4 weight cache (kimi_k3_bh_16dev/4x4_sp1) on every host, then tt-run
-# discovery binds the ranks against the 8-mesh descriptor: it finds the ring order from the cabling, so
-# the hosts can come in any order. The stage shape, 2560-token chunks (640 tokens per chip), the TP-deduped
-# KV, tracing and the slot count all come from the kimi_k3 manifest, so this leg carries no fabric_profile
-# -- same as the Kimi-K2.7 and GLM-5.3 disagg legs beside it. 127 slots: every stage fits 129 traced at
-# the 1M window, so two slots of margin. The request runs to 1M like GLM-5.3's: only the 55k the golden
-# spans is PCC'd, the tail is timed. Its throughput lands on the run page through the "(Kimi-K3-2.8T) disaggregated
-# prefill SC4 perf" summary job. run_multirank_pcc.sh's sc4_8x4 keeps the 4 stages of 8x4 for hand
-# comparisons; no leg runs it.
-# Own test_type per rung, unlike the Kimi-K2.7 and GLM-5.3 pairs that share prefill_runner_kv_pcc:
-# four galaxies is the scarcest resource in the pool, so this leg has to be dispatchable without
-# also claiming a single-galaxy one. The `runner` and `kv_cache` tags still select both rungs.
+# SC4 Kimi-K3: 93 layers as 8 stages of [4,4], two per galaxy; stage shape, chunk, KV dedup and slots come from
+# the kimi_k3 manifest. Own test_type, so the scarce 4-galaxy leg is dispatchable without a single-galaxy one.
 - name: "(Kimi-K3-2.8T) disaggregated prefill 8x[4,4] KV accuracy 55k@2.5k + perf 1M@2.5k, SC4"
   cmd: |
     set -euo pipefail
