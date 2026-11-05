@@ -47,6 +47,7 @@ from .device import (
     KERNEL_COMPLETE,
     TRISC_CORES,
     BootMode,
+    LLKAssertException,
     RiscCore,
     commit_tensix_soft_reset,
     exalens_device_setup,
@@ -2175,6 +2176,10 @@ class TestConfig:
 
         return
 
+    def _recover_hung_core(self):
+        if not TestConfig.TEST_TARGET.run_simulator:
+            device_module.recover_tensix_core(TestConfig.TENSIX_LOCATION)
+
     def wait_for_tensix_operations_finished(self, timeout=2, poll_callback=None):
         """
         Args:
@@ -2263,16 +2268,22 @@ class TestConfig:
                     )
                 return
 
-        handle_if_assert_hit(
-            self.temp_elfs,
-            core_loc=TestConfig.TENSIX_LOCATION,
-        )
+        # A Tensix stall outlives the TRISC soft reset on Blackhole: unwedge the core, or the next launch hangs too.
+        try:
+            handle_if_assert_hit(
+                self.temp_elfs,
+                core_loc=TestConfig.TENSIX_LOCATION,
+            )
+        except LLKAssertException:
+            self._recover_hung_core()
+            raise
 
         trisc_hangs = [mailbox.name for mailbox in (mailboxes - completed_mailboxes())]
         if brisc_launch:
             trisc_hangs.append(
                 f"BRISC (soft reset 0x{soft_reset_bits(TestConfig.TENSIX_LOCATION):x})"
             )
+        self._recover_hung_core()
         raise TimeoutError(
             f"Timeout reached: waited {timeout} seconds for {', '.join(trisc_hangs)}"
         )
