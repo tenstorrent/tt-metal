@@ -327,8 +327,8 @@ class RunTimeOptions {
     // Blackhole silicon: BRISC halts on an L1 ECC error and the host reports it.
     bool disable_l1_ecc_halt = false;
 
-    // Enable instruction gathering in Tensix core.
-    bool enable_gathering = false;
+    // Blackhole: instruction gathering in the Tensix core is on unless disabled.
+    bool disable_gathering = false;
 
     // Buffer in DRAM to store various ARC processor samples. Feature not ready yet
     uint32_t arc_debug_buffer_size = 0;
@@ -833,7 +833,8 @@ public:
     bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
     // Callers also check for Blackhole; the option is arch-agnostic.
     bool get_l1_ecc_halt_enabled() const { return !this->disable_l1_ecc_halt; }
-    bool get_gathering_enabled() const { return this->enable_gathering; }
+    // Callers also check for Blackhole; the option is arch-agnostic.
+    bool get_gathering_enabled() const { return !this->disable_gathering; }
 
     std::optional<tt_metal::DispatchCoreType> get_dispatch_core_type_override() const {
         return dispatch_core_type_override;

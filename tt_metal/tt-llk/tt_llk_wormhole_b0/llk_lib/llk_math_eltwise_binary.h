@@ -814,24 +814,28 @@ inline void _llk_math_eltwise_binary_init_(std::uint32_t srca_reuse_count = 4)
 
     // Setup eltwise operation for one tile
     // TTI_REPLAY(0, 10, 0, 1);
-    lltt::record<lltt::NoExec>(0, 10);
+    load_replay_buf(
+        0,
+        10,
+        [&]
+        {
+            // Dest address is always incremented by 8 in address mode
+            eltwise_op(ADDR_MOD_0); // srca_increment -> 0 | srcb_increment -> 8
+            eltwise_op(ADDR_MOD_1); // srca_increment -> 8 | srcb_increment -> 8
 
-    // Dest address is always incremented by 8 in address mode
-    eltwise_op(ADDR_MOD_0); // srca_increment -> 0 | srcb_increment -> 8
-    eltwise_op(ADDR_MOD_1); // srca_increment -> 8 | srcb_increment -> 8
+            eltwise_op(ADDR_MOD_0); // srca_increment -> 0 | srcb_increment -> 8
+            eltwise_op(ADDR_MOD_1); // srca_increment -> 8 | srcb_increment -> 8
 
-    eltwise_op(ADDR_MOD_0); // srca_increment -> 0 | srcb_increment -> 8
-    eltwise_op(ADDR_MOD_1); // srca_increment -> 8 | srcb_increment -> 8
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_A);
 
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_A);
+            eltwise_op(ADDR_MOD_0); // srca_increment -> 0 | srcb_increment -> 8
+            eltwise_op(ADDR_MOD_1); // srca_increment -> 8 | srcb_increment -> 8
 
-    eltwise_op(ADDR_MOD_0); // srca_increment -> 0 | srcb_increment -> 8
-    eltwise_op(ADDR_MOD_1); // srca_increment -> 8 | srcb_increment -> 8
+            eltwise_op(ADDR_MOD_0); // srca_increment -> 0 | srcb_increment -> 8
+            eltwise_op(ADDR_MOD_1); // srca_increment -> 8 | srcb_increment -> 8
 
-    eltwise_op(ADDR_MOD_0); // srca_increment -> 0 | srcb_increment -> 8
-    eltwise_op(ADDR_MOD_1); // srca_increment -> 8 | srcb_increment -> 8
-
-    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_AB); // Clearing B dvalid
+            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_AB); // Clearing B dvalid
+        });
 
     eltwise_binary_configure_mop(srca_reuse_count);
 

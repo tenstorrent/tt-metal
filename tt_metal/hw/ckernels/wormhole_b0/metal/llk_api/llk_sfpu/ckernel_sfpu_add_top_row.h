@@ -87,19 +87,21 @@ inline void init_add_top_row() {
 
     // Set up integer replay buffer (index 0, 4 instructions)
     // Contains: 4 TTI_SFPIADD operations for adding top rows
-    lltt::record(0, 4);
-    TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, 4);
-    TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG1, 4);
-    TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG2, 4);
-    TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG3, 4);
+    load_replay_buf(0, 4, [] {
+        TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, 4);
+        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG1, 4);
+        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG2, 4);
+        TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG3, 4);
+    });
 
     // Set up floating-point replay buffer (index 4, 8 instructions)
     // Contains: 4 TT_SFPADD + 4 TTI_SFPNOP operations for adding top rows
-    lltt::record(4, 4);
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-    TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG1, 0);
-    TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG2, 0);
-    TTI_SFPADD(p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG3, 0);
+    load_replay_buf(4, 4, [] {
+        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+        TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG1, 0);
+        TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+        TTI_SFPADD(p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG3, 0);
+    });
 }
 
 }  // namespace ckernel::sfpu

@@ -359,8 +359,7 @@ void quant_init(const uint zero_point) {
     // rather than the generic Tensix TTI_NOP for their pipeline bubbles.
     constexpr std::uint32_t REPLAY_LEN =
         OUTPUT_FORMAT == DataFormat::Int8 ? QUANT_REPLAY_LEN_INT8_OUT : QUANT_REPLAY_LEN;
-    lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, REPLAY_LEN);
-    {
+    load_replay_buf(QUANT_REPLAY_SLOT, REPLAY_LEN, [] {
         // m = RNE(A * B + zp_hi) + RNE_MAGIC: the single rounding step of the MAD rounds to nearest even
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG0, 0 /*mod1*/);
         TTI_SFPNOP;
@@ -374,7 +373,7 @@ void quant_init(const uint zero_point) {
         if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
             TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);  // b = (n + 128) ^ 0x80
         }
-    }
+    });
 }
 
 template <
@@ -399,8 +398,7 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
 
     constexpr std::uint32_t REPLAY_LEN =
         OUTPUT_FORMAT == DataFormat::Int8 ? REQUANT_REPLAY_LEN_INT8_OUT : REQUANT_REPLAY_LEN;
-    lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REPLAY_LEN);
-    {
+    load_replay_buf(REQUANT_REPLAY_SLOT, REPLAY_LEN, [] {
         // int32 sign-magnitude (loaded that way regardless of input bit
         // representation, via SFPLOAD instr_mod0) -> fp32.
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
@@ -419,7 +417,7 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
         if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
             TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);  // b = (n + 128) ^ 0x80
         }
-    }
+    });
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT /*unused*/ = false, bool INT8_INPUT = false>
@@ -436,8 +434,7 @@ void dequant_init(const uint zero_point) {
     }
     _quant_kernels_configure_dest_incr_addrmod_();
 
-    lltt::record<lltt::NoExec>(DEQUANT_REPLAY_SLOT, DEQUANT_REPLAY_LEN);
-    {
+    load_replay_buf(DEQUANT_REPLAY_SLOT, DEQUANT_REPLAY_LEN, [] {
         // int32 sign-magnitude -> fp32.
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
         // SFPADD = VA*VB + VC ; with LCONST_1 (LREG10) = 1.0 this collapses
@@ -453,7 +450,7 @@ void dequant_init(const uint zero_point) {
         // body rather than relying on the implicit gap between the replay
         // completing and TT_SFPSTORE issuing.
         TTI_SFPNOP;
-    }
+    });
 }
 
 }  // namespace ckernel::sfpu

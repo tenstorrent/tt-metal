@@ -19,6 +19,11 @@
 // MT: This should be dissolved and moved to the appropriate place
 #include "tensix.h"
 
+// lltt is only available on trisc.
+#if defined(COMPILE_FOR_TRISC)
+#include "lltt.h"
+#endif
+
 #define UNROLL_LOOP(factor) GCC unroll factor
 
 #ifndef EN_DEST_DOUBLE_BUFFERING
@@ -238,6 +243,28 @@ inline void mop_sync()
 {
     store_blocking(&pc_buf_base[2], 0);
 }
+
+#if defined(COMPILE_FOR_TRISC)
+// Place instructions into the replay buffer. EXEC is true to execute when loading (default is
+// false). START is where to place in the replay buffer, and LEN is the number of instructions to
+// record (should match the expansion of CALLABLE). CALLABLE is a callable, to which ARGS are
+// forwarded.
+// Same signature as Blackhole's, where it also turns instruction gathering off around the record.
+// Wormhole has no gathering: this only records. Every record goes through here, never a raw
+// lltt::record / TTI_REPLAY, so kernels shared with Blackhole stay correct there.
+enum ExecBool : bool
+{
+    NoExec,
+    Exec
+};
+
+template <ExecBool Exec = NoExec, typename Callable, typename... Args>
+[[gnu::always_inline, gnu::flatten]] inline void load_replay_buf(std::uint32_t start, std::uint32_t len, Callable &&callable, Args &&...args)
+{
+    lltt::record<lltt::ExecBool(Exec)>(start, len);
+    callable(std::forward<Args>(args)...);
+}
+#endif // defined(COMPILE_FOR_TRISC)
 
 inline void sync_regfile_write(const std::uint32_t index);
 

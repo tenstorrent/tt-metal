@@ -67,23 +67,24 @@ inline void mac_init() {
     // with the auto-advancing mod set above.
     constexpr sfpi::DataLayout dst_fmt = is_fp32_dest_acc_en ? sfpi::DataLayout::F32 : sfpi::DataLayout::FSrcB;
 
-    lltt::record<lltt::NoExec>(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
-    sfpi::vFloat a0 = sfpi::dst_reg[0].mode<dst_fmt>();
-    sfpi::vFloat b0 = sfpi::dst_reg[32].mode<dst_fmt>();
-    sfpi::vFloat c0 = sfpi::dst_reg[64].mode<dst_fmt>();
-    sfpi::vFloat a1 = sfpi::dst_reg[1].mode<dst_fmt>();
-    sfpi::vFloat b1 = sfpi::dst_reg[33].mode<dst_fmt>();
-    sfpi::vFloat c1 = sfpi::dst_reg[65].mode<dst_fmt>();
-    sfpi::vFloat result0 = a0 * b0 + c0;
-    sfpi::vFloat result1 = a1 * b1 + c1;
-    if constexpr (!is_fp32_dest_acc_en) {
-        // SFPMAD accumulates in fp32; an SFPSTORE into a 16-bit DST truncates the
-        // mantissa, so round to nearest-even on the way down to bf16 instead.
-        result0 = sfpi::convert<sfpi::vFloat16b>(result0, sfpi::RoundMode::Nearest);
-        result1 = sfpi::convert<sfpi::vFloat16b>(result1, sfpi::RoundMode::Nearest);
-    }
-    sfpi::dst_reg[0].mode<dst_fmt>() = result0;
-    sfpi::dst_reg[1].mode<dst_fmt>(ADDR_MOD_2) = result1;
+    load_replay_buf(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>, [] {
+        sfpi::vFloat a0 = sfpi::dst_reg[0].mode<dst_fmt>();
+        sfpi::vFloat b0 = sfpi::dst_reg[32].mode<dst_fmt>();
+        sfpi::vFloat c0 = sfpi::dst_reg[64].mode<dst_fmt>();
+        sfpi::vFloat a1 = sfpi::dst_reg[1].mode<dst_fmt>();
+        sfpi::vFloat b1 = sfpi::dst_reg[33].mode<dst_fmt>();
+        sfpi::vFloat c1 = sfpi::dst_reg[65].mode<dst_fmt>();
+        sfpi::vFloat result0 = a0 * b0 + c0;
+        sfpi::vFloat result1 = a1 * b1 + c1;
+        if constexpr (!is_fp32_dest_acc_en) {
+            // SFPMAD accumulates in fp32; an SFPSTORE into a 16-bit DST truncates the
+            // mantissa, so round to nearest-even on the way down to bf16 instead.
+            result0 = sfpi::convert<sfpi::vFloat16b>(result0, sfpi::RoundMode::Nearest);
+            result1 = sfpi::convert<sfpi::vFloat16b>(result1, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0].mode<dst_fmt>() = result0;
+        sfpi::dst_reg[1].mode<dst_fmt>(ADDR_MOD_2) = result1;
+    });
 }
 
 // mac: out = a * b + c, computed in FP32 accumulator via SFPMAD.
