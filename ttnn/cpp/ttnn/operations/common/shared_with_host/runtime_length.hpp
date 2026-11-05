@@ -4,41 +4,66 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+
+// Compiled by both host and device: the kernel API's div_up on device, tt-metalium's on the host.
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#include "api/alignment.h"
+#else
+#include <tt-metalium/math.hpp>
+#endif
 
 // Per-core work split from one runtime length word. Host factories and device kernels derive every
 // length-dependent count from these, so a sender and its receiver can never disagree on the split.
+//
+// Three splits, by what the cores need to agree on:
+// - core_start / core_end: a clamped uniform split for cores that work independently; a core past the end at a
+//   short length gets the empty range and returns early.
+// - uniform_split: the unclamped uniform split in whole blocks that the matmul kernels share; every core walks the
+//   same block count so the in0 / in1 forwarding handshakes line up, and a trailing core clips its own reads and
+//   writes against the total.
+// - balanced_start / balanced_end: split_work_to_cores' order, for ops whose default (host-split) factory the
+//   runtime-rows path mirrors.
 namespace ttnn::runtime_length {
 
-constexpr uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
+// Ceiling division (`b` non-zero), pinned to the uint32_t the splits use: the kernel API's div_up on device,
+// tt::div_up on the host, both the quotient-plus-carry form that does not wrap where `a + b - 1` would. Explicit
+// template arguments, so a kernel's own global div_up declared earlier in the translation unit is never picked up.
+constexpr uint32_t div_up(uint32_t a, uint32_t b) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+    return ::div_up<uint32_t, uint32_t>(a, b);
+#else
+    return tt::div_up(a, b);
+#endif
+}
 
-constexpr uint32_t min_u32(uint32_t a, uint32_t b) { return a < b ? a : b; }
-
-constexpr uint32_t tiles_per_core(uint32_t total_tiles, uint32_t num_cores) { return div_up(total_tiles, num_cores); }
-
-// First tile of core `core_idx`; equals `total` (empty range) for cores past the end at short lengths.
+// First unit of core `core_idx` under a split of `per_core` units; equals `total` (empty range) for cores past
+// the end at short lengths.
 constexpr uint32_t core_start(uint32_t core_idx, uint32_t per_core, uint32_t total) {
-    return min_u32(core_idx * per_core, total);
+    return std::min(core_idx * per_core, total);
 }
 
 constexpr uint32_t core_end(uint32_t core_idx, uint32_t per_core, uint32_t total) {
-    return min_u32((core_idx + 1) * per_core, total);
+    return std::min((core_idx + 1) * per_core, total);
 }
 
-constexpr uint32_t blocks_per_core(uint32_t per_core_tiles, uint32_t block_tiles) {
-    return div_up(per_core_tiles, block_tiles);
-}
+struct UniformSplit {
+    uint32_t per_core;         // units every core walks: div_up(total, num_cores)
+    uint32_t blocks_per_core;  // whole blocks of `block` units per core
+    uint32_t padded_total;     // per_core * num_cores: the extent the uniform split spans
+    uint32_t start;            // this core's first unit (unclamped)
+    uint32_t end;              // one past this core's last unit (unclamped)
+};
 
-// Tile count after every core's share is rounded up to whole blocks.
-constexpr uint32_t padded_tiles(uint32_t total_tiles, uint32_t num_cores, uint32_t block_tiles) {
-    return blocks_per_core(tiles_per_core(total_tiles, num_cores), block_tiles) * block_tiles * num_cores;
+constexpr UniformSplit uniform_split(uint32_t total, uint32_t num_cores, uint32_t core_idx, uint32_t block) {
+    const uint32_t per_core = div_up(total, num_cores);
+    return {per_core, div_up(per_core, block), per_core * num_cores, core_idx * per_core, (core_idx + 1) * per_core};
 }
-
-constexpr uint32_t rounds(uint32_t rows, uint32_t workers) { return div_up(rows, workers); }
 
 // Balanced split in split_work_to_cores order: the first `total % num_cores` cores take one extra unit.
 constexpr uint32_t balanced_start(uint32_t core_idx, uint32_t total, uint32_t num_cores) {
-    return core_idx * (total / num_cores) + min_u32(core_idx, total % num_cores);
+    return core_idx * (total / num_cores) + std::min(core_idx, total % num_cores);
 }
 
 constexpr uint32_t balanced_end(uint32_t core_idx, uint32_t total, uint32_t num_cores) {

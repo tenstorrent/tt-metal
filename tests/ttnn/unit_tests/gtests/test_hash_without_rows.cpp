@@ -87,14 +87,13 @@ TEST(HashWithoutRowsTest, AlignmentSeparatesKeysExceptOnRows) {
     EXPECT_EQ(hash_spec_without_rows(base), hash_spec_without_rows(tall));
 }
 
-TEST(HashWithoutRowsTest, SaltAndOptionalPresenceSeparateKeys) {
+TEST(HashWithoutRowsTest, OptionalPresenceSeparatesKeys) {
     const auto spec = make_spec(ttnn::Shape({1, 1, 64, 128}));
-    EXPECT_NE(hash_spec_without_rows(spec, 1), hash_spec_without_rows(spec, 2));
     const std::optional<TensorSpec> none = std::nullopt;
     const std::optional<TensorSpec> some = spec;
     EXPECT_NE(hash_spec_without_rows(none), hash_spec_without_rows(some));
-    EXPECT_EQ(hash_spec_without_rows(some), hash_spec_without_rows(spec));
-    EXPECT_NE(hash_spec_without_rows(none, 1), hash_spec_without_rows(none, 2));
+    EXPECT_NE(hash_spec_without_rows(none), hash_spec_without_rows(spec));
+    EXPECT_EQ(hash_spec_without_rows(some), hash_spec_without_rows(some));
 }
 
 TEST(HashWithoutRowsTest, RowsDimPicksTheSkippedDim) {
@@ -102,9 +101,9 @@ TEST(HashWithoutRowsTest, RowsDimPicksTheSkippedDim) {
     const auto a = make_spec(ttnn::Shape({1, 2, 128, 256}));
     const auto longer = make_spec(ttnn::Shape({1, 2, 128, 512}));
     const auto taller = make_spec(ttnn::Shape({1, 2, 256, 256}));
-    EXPECT_EQ(hash_spec_without_rows(a, 0, -1), hash_spec_without_rows(longer, 0, -1));
-    EXPECT_NE(hash_spec_without_rows(a, 0, -1), hash_spec_without_rows(taller, 0, -1));
-    EXPECT_NE(hash_spec_without_rows(a, 0, -1), hash_spec_without_rows(a));
+    EXPECT_EQ(hash_spec_without_rows(a, -1), hash_spec_without_rows(longer, -1));
+    EXPECT_NE(hash_spec_without_rows(a, -1), hash_spec_without_rows(taller, -1));
+    EXPECT_NE(hash_spec_without_rows(a, -1), hash_spec_without_rows(a));
     // A rank-1 spec has no dim -2: nothing is skipped and the length stays in the key.
     EXPECT_NE(
         hash_spec_without_rows(make_spec(ttnn::Shape({64}))), hash_spec_without_rows(make_spec(ttnn::Shape({96}))));
@@ -121,6 +120,17 @@ TEST(HashWithoutRowsTest, FoldedRowsFoldsUpperDimsAndPadsToTiles) {
     EXPECT_EQ(folded_rows(make(ttnn::Shape({64, 128}))), 64u);
     // 33 logical rows pad to 64 per upper index, and padded widths do not leak into the row count.
     EXPECT_EQ(folded_rows(make(ttnn::Shape({2, 1, 33, 100}))), 128u);
+    // The spec overload: a ROW_MAJOR layout folds the upper dims without tile padding.
+    const auto shape = ttnn::Shape({2, 1, 70, 64});
+    EXPECT_EQ(folded_rows(make_spec(shape, DataType::BFLOAT16, Layout::ROW_MAJOR)), 140u);
+    EXPECT_EQ(folded_rows(make_spec(shape, DataType::BFLOAT16, Layout::TILE)), 192u);
+    EXPECT_EQ(folded_rows(make_spec(ttnn::Shape({64}), DataType::BFLOAT16, Layout::TILE)), 32u);
+}
+
+TEST(HashWithoutRowsTest, PositiveRowsDimIsRefused) {
+    const auto spec = make_spec(ttnn::Shape({1, 1, 64, 128}));
+    EXPECT_ANY_THROW(hash_spec_without_rows(spec, 2));
+    EXPECT_ANY_THROW(hash_spec_without_rows(spec, 0));
 }
 
 }  // namespace

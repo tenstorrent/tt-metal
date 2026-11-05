@@ -13,13 +13,14 @@
 #include <cstdint>
 
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
+#include "tt_metal/hw/inc/api/alignment.h"
 
 namespace ttnn::runtime_length {
 namespace {
 
-// Every core's [start, end) in order; they must tile [0, total) exactly.
+// Every core's clamped [start, end) in order; they must tile [0, total) exactly.
 void expect_exact_cover(uint32_t total, uint32_t num_cores) {
-    const uint32_t per_core = tiles_per_core(total, num_cores);
+    const uint32_t per_core = div_up(total, num_cores);
     uint32_t next = 0;
     for (uint32_t core = 0; core < num_cores; ++core) {
         EXPECT_EQ(core_start(core, per_core, total), next) << "total " << total << " cores " << num_cores;
@@ -47,32 +48,58 @@ void expect_balanced_cover(uint32_t total, uint32_t num_cores) {
     EXPECT_LE(largest - smallest, 1u) << "total " << total << " cores " << num_cores;
 }
 
-TEST(RuntimeLengthTest, DivUpAndMin) {
+TEST(RuntimeLengthTest, DivUpRoundsUpWithoutOverflow) {
     static_assert(div_up(0, 4) == 0);
     static_assert(div_up(1, 4) == 1);
     static_assert(div_up(4, 4) == 1);
     static_assert(div_up(5, 4) == 2);
-    static_assert(min_u32(3, 5) == 3);
-    static_assert(min_u32(5, 3) == 3);
+    // a + b - 1 would wrap here.
+    static_assert(div_up(UINT32_MAX, 1) == UINT32_MAX);
+    static_assert(div_up(UINT32_MAX, 2) == 2147483648u);
+    static_assert(div_up(UINT32_MAX - 1, UINT32_MAX) == 1);
+}
+
+TEST(RuntimeLengthTest, KernelDivUpMatchesTheHost) {
+    // Kernels resolve div_up to the kernel API's (tt_metal/hw/inc/api/alignment.h), the host to tt::div_up:
+    // the same results, including where a + b - 1 would wrap, and align() built on it matches the old formula
+    // wherever that did not wrap.
+    static_assert(::div_up(0u, 4u) == 0u);
+    static_assert(::div_up(5u, 4u) == 2u);
+    static_assert(::div_up(UINT32_MAX, 2u) == 2147483648u);
+    static_assert(::div_up(UINT32_MAX - 1, UINT32_MAX) == 1u);
+    static_assert(::div_up(-5, 4) == -1);
+    static_assert(::align(0u, 64u) == 0u);
+    static_assert(::align(1u, 64u) == 64u);
+    static_assert(::align(64u, 64u) == 64u);
+    static_assert(::align(UINT32_MAX - 1, 3u) == UINT32_MAX);  // addr + 2 would wrap to 0
+    for (uint32_t a : {0u, 1u, 7u, 31u, 32u, 33u, 1000u, 65535u, 1u << 20}) {
+        for (uint32_t b : {1u, 2u, 3u, 16u, 32u, 64u, 1024u}) {
+            EXPECT_EQ(::div_up(a, b), tt::div_up(a, b));
+            EXPECT_EQ(::align(a, b), ((a + b - 1) / b) * b);
+        }
+    }
 }
 
 TEST(RuntimeLengthTest, ZeroWorkGivesEmptyRanges) {
-    const uint32_t per_core = tiles_per_core(0, 8);
+    const uint32_t per_core = div_up(0, 8);
     EXPECT_EQ(per_core, 0u);
     for (uint32_t core = 0; core < 8; ++core) {
         EXPECT_EQ(core_start(core, per_core, 0), 0u);
         EXPECT_EQ(core_end(core, per_core, 0), 0u);
         EXPECT_EQ(balanced_start(core, 0, 8), 0u);
         EXPECT_EQ(balanced_end(core, 0, 8), 0u);
+        const auto split = uniform_split(0, 8, core, 4);
+        EXPECT_EQ(split.per_core, 0u);
+        EXPECT_EQ(split.blocks_per_core, 0u);
+        EXPECT_EQ(split.padded_total, 0u);
+        EXPECT_EQ(split.start, 0u);
+        EXPECT_EQ(split.end, 0u);
     }
-    EXPECT_EQ(blocks_per_core(0, 4), 0u);
-    EXPECT_EQ(padded_tiles(0, 8, 4), 0u);
-    EXPECT_EQ(rounds(0, 8), 0u);
 }
 
 TEST(RuntimeLengthTest, FewerTilesThanCoresLeavesTrailingCoresEmpty) {
     const uint32_t total = 3;
-    const uint32_t per_core = tiles_per_core(total, 8);
+    const uint32_t per_core = div_up(total, 8);
     EXPECT_EQ(per_core, 1u);
     expect_exact_cover(total, 8);
     // Cores past the end get the empty range [total, total).
@@ -93,37 +120,40 @@ TEST(RuntimeLengthTest, UnevenSplitsCoverExactly) {
 
 TEST(RuntimeLengthTest, LastCoreIsClampedNotOverrun) {
     // 17 tiles on 8 cores: 3 per core, the sixth core ends at 17, the seventh and eighth are empty.
-    const uint32_t per_core = tiles_per_core(17, 8);
+    const uint32_t per_core = div_up(17, 8);
     EXPECT_EQ(per_core, 3u);
     EXPECT_EQ(core_end(5, per_core, 17), 17u);
     EXPECT_EQ(core_start(6, per_core, 17), 17u);
     EXPECT_EQ(core_end(7, per_core, 17), 17u);
 }
 
-TEST(RuntimeLengthTest, PartialBlocksRoundUpPerCore) {
-    EXPECT_EQ(blocks_per_core(7, 4), 2u);
-    EXPECT_EQ(blocks_per_core(8, 4), 2u);
-    EXPECT_EQ(blocks_per_core(9, 4), 3u);
-    // 17 tiles on 8 cores in blocks of 4: 3 tiles per core round to one block, so 4 * 8 = 32 padded tiles.
-    EXPECT_EQ(padded_tiles(17, 8, 4), 32u);
+TEST(RuntimeLengthTest, UniformSplitKeepsEveryCoreOnTheSameBlockCount) {
+    // 17 tiles on 8 cores in blocks of 4: 3 tiles per core round to one block; the split spans 24 tiles, and the
+    // sixth core's range [15, 18) runs past the total, which the kernels clip themselves.
+    constexpr auto split = uniform_split(17, 8, 5, 4);
+    static_assert(split.per_core == 3);
+    static_assert(split.blocks_per_core == 1);
+    static_assert(split.padded_total == 24);
+    static_assert(split.start == 15);
+    static_assert(split.end == 18);
     for (uint32_t total : {1u, 17u, 148u, 470u, 1000u}) {
         for (uint32_t cores : {1u, 8u, 64u}) {
             for (uint32_t block : {1u, 2u, 4u, 8u}) {
-                const uint32_t padded = padded_tiles(total, cores, block);
-                EXPECT_GE(padded, total);
-                EXPECT_EQ(padded % (cores * block), 0u);
-                // Never more than one block per core of slack.
-                EXPECT_LE(padded, tiles_per_core(total, cores) * cores + (block - 1) * cores);
+                uint32_t next = 0;
+                for (uint32_t core = 0; core < cores; ++core) {
+                    const auto s = uniform_split(total, cores, core, block);
+                    EXPECT_EQ(s.per_core, div_up(total, cores));
+                    EXPECT_EQ(s.blocks_per_core, div_up(s.per_core, block));
+                    EXPECT_EQ(s.padded_total, s.per_core * cores);
+                    EXPECT_GE(s.padded_total, total);
+                    EXPECT_EQ(s.start, next);
+                    EXPECT_EQ(s.end - s.start, s.per_core);
+                    next = s.end;
+                }
+                EXPECT_EQ(next, div_up(total, cores) * cores);
             }
         }
     }
-}
-
-TEST(RuntimeLengthTest, RoundsCountWorkerPasses) {
-    EXPECT_EQ(rounds(1, 5), 1u);
-    EXPECT_EQ(rounds(5, 5), 1u);
-    EXPECT_EQ(rounds(6, 5), 2u);
-    EXPECT_EQ(rounds(4736, 5), 948u);
 }
 
 }  // namespace
