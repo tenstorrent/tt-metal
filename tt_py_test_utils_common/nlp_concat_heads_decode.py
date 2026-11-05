@@ -79,7 +79,7 @@ def run_test_concat_head(
         sub_core_grids=sub_core_grids,
     )  # seqlen, 1, batch, hidden_size
 
-    logger.info(f"concat_head_output: {concat_head_output.memory_config()}")
+    logger.debug(f"concat_head_output: {concat_head_output.memory_config()}")
 
     # Input: (1, 32, 32(8), 128)
     # Output: (1, 1, 32, 1024)
@@ -89,5 +89,5 @@ def run_test_concat_head(
     concat_head_output_tt_cpu = tt2torch_tensor(concat_head_output)
     concat_head_output_tt_unpadded = concat_head_output_tt_cpu[:, :, :batch, :]
     out_pass_q, output_pcc_q = comp_pcc(concat_head_output_tt_unpadded, concat_head_output_torch)
-    logger.info(f"PCC value: {output_pcc_q}")
+    logger.debug(f"PCC value: {output_pcc_q}")
     assert out_pass_q

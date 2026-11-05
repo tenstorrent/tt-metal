@@ -67,7 +67,7 @@ def run_reduce_scatter_impl(
     ]
 
     ### Create persistent output buffers
-    logger.info("Creating persistent buffers")
+    logger.debug("Creating persistent buffers")
     intermediate_shape = rs_input_shape[:]
     if rs_topology == ttnn.Topology.Linear:
         # Line RS requires double-sized input for forward/backward
@@ -102,15 +102,15 @@ def run_reduce_scatter_impl(
             for _ in range(num_iters)
         ]
 
-    logger.info("Done creating persistent buffers")
+    logger.debug("Done creating persistent buffers")
 
     ##### Reduce scatter input setup #####
-    logger.info(f"Reduce scatter shape: {rs_input_shape}")
-    logger.info(f"Reduce scatter dim: {dim}")
-    logger.info(f"input mem config: {mem_config_input}")
-    logger.info(f"Reduce input mem config: {mem_config_rs}")
-    logger.info(f"intermediate mem config: {mem_config_intermediate}")
-    logger.info(f"topology: {rs_topology}")
+    logger.debug(f"Reduce scatter shape: {rs_input_shape}")
+    logger.debug(f"Reduce scatter dim: {dim}")
+    logger.debug(f"input mem config: {mem_config_input}")
+    logger.debug(f"Reduce input mem config: {mem_config_rs}")
+    logger.debug(f"intermediate mem config: {mem_config_intermediate}")
+    logger.debug(f"topology: {rs_topology}")
 
     tt_input_tensor_mesh_list = []
     torch_input_tensor_list = []
@@ -155,7 +155,7 @@ def run_reduce_scatter_impl(
 
     def run_op(i):
         if use_strided:
-            logger.info(f"Using strided reduce scatter")
+            logger.debug(f"Using strided reduce scatter")
             tt_reduce_scatter_output_tensor = ttnn.experimental.strided_reduce_scatter_async(
                 tt_input_tensor_mesh_list[i],
                 persistent_output_buffers=(
@@ -180,7 +180,7 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
             )
         elif use_new:
-            logger.info(f"Using new reduce scatter")
+            logger.debug(f"Using new reduce scatter")
             tt_reduce_scatter_output_tensor = ttnn.reduce_scatter(
                 tt_input_tensor_mesh_list[i],
                 dim=dim,
@@ -191,7 +191,7 @@ def run_reduce_scatter_impl(
                 cluster_axis=cluster_axis,
             )
         else:
-            logger.info(f"Using experimental reduce scatter")
+            logger.debug(f"Using experimental reduce scatter")
             tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
                 tt_input_tensor_mesh_list[i],
                 persistent_output_buffers=(
@@ -217,20 +217,20 @@ def run_reduce_scatter_impl(
         for i in range(num_iters):
             run_op(i)
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-        logger.info("Done compiling ops")
+        logger.debug("Done compiling ops")
 
-        logger.info(f"Capturing trace")
+        logger.debug(f"Capturing trace")
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         tt_reduce_scatter_output_trace_list = []
         for i in range(num_iters):
             tt_reduce_scatter_output_tensor = run_op(i)
             tt_reduce_scatter_output_trace_list.append(tt_reduce_scatter_output_tensor)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        logger.info(f"Done capturing trace")
+        logger.debug(f"Done capturing trace")
 
         # Execute trace
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-        logger.info(f"Done executing trace")
+        logger.debug(f"Done executing trace")
 
         # Synchronize the devices
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
@@ -247,15 +247,15 @@ def run_reduce_scatter_impl(
             tt_reduce_scatter_output_tensor.deallocate(True)
             tt_reduce_scatter_output_list.append(tt_rs_out)
 
-            logger.info(f"Waiting for op")
+            logger.debug(f"Waiting for op")
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-            logger.info(f"Done op")
+            logger.debug(f"Done op")
 
-            logger.info(f"Done iteration {i}")
+            logger.debug(f"Done iteration {i}")
 
     if verify_output:
         implementation_name = "strided" if use_strided else ("new" if use_new else "experimental")
-        logger.info(f"Verifying {implementation_name} reduce scatter output")
+        logger.debug(f"Verifying {implementation_name} reduce scatter output")
 
         for i in range(num_iters):
             tt_rs_out = tt_reduce_scatter_output_list[i]
@@ -271,7 +271,7 @@ def run_reduce_scatter_impl(
                     eq, output = comp_equal(tt_output_tensor, torch_output_tensor)
                 else:
                     eq, output = comp_pcc(tt_output_tensor, torch_output_tensor)
-                logger.info(f"{output}, device {device_id}, iteration {i}")
+                logger.debug(f"{output}, device {device_id}, iteration {i}")
 
                 if verify_output_shape:
                     assert (
@@ -281,4 +281,4 @@ def run_reduce_scatter_impl(
                     assert eq, f"{i} FAILED reduce scatter: {output}"
 
     mesh_device.reset_sub_device_stall_group()
-    logger.info("Done")
+    logger.debug("Done")

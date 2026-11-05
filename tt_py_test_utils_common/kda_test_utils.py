@@ -5,6 +5,7 @@
 from __future__ import annotations
 from collections.abc import Callable, Sequence
 
+from loguru import logger
 import torch
 import torch.nn.functional as F
 import ttnn
@@ -238,11 +239,13 @@ def assert_accurate(
     max_abs = float((expected.float() - actual.float()).abs().max()) if expected.numel() else 0.0
     scale = float(expected.float().pow(2).mean().sqrt()) if expected.numel() else 0.0
     linf = max_abs / scale if scale > 0 else max_abs
-    print(expected_summary)
-    print(actual_summary)
+    logger.debug(expected_summary)
+    logger.debug(actual_summary)
     worst = "" if worst_slice is None else f" (worst slice {worst_slice} over dims {tuple(nrmse_keep_dims)})"
     pcc_worst = "" if pcc_worst_slice is None else f" (worst slice {pcc_worst_slice} over dims {tuple(pcc_keep_dims)})"
-    print(f"{name}: PCC={pcc:.6f}{pcc_worst}, NRMSE={error:.3e}{worst}, rel_Linf={linf:.3e}, max_abs={max_abs:.6e}")
+    logger.debug(
+        f"{name}: PCC={pcc:.6f}{pcc_worst}, NRMSE={error:.3e}{worst}, rel_Linf={linf:.3e}, max_abs={max_abs:.6e}"
+    )
     if pcc < pcc_threshold:
         raise AssertionError(f"{name} PCC {pcc:.6f}{pcc_worst} < {pcc_threshold}")
     if nrmse_threshold is not None and error > nrmse_threshold:

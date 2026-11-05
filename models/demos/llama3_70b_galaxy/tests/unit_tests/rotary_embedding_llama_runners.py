@@ -249,20 +249,20 @@ def run_test_rotary_embedding_llama(
         out_pass, output_pcc = comp_pcc(pytorch_out[i], tt_out[i], pcc)
         # Check each shape matches
         assert pytorch_out[i].shape == tt_out[i].shape
-        logger.info(f"PCC value: {output_pcc}")
+        logger.debug(f"PCC value: {output_pcc}")
         does_pass = does_pass and out_pass
 
         mae = torch.mean(torch.abs(pytorch_out[i] - tt_out[i]))
-        logger.info(f"MAE: {mae}")
+        logger.debug(f"MAE: {mae}")
 
         max_incorrect = torch.max(torch.abs(pytorch_out[i] - tt_out[i]))
-        logger.info(f"Max incorrect: {max_incorrect}")
+        logger.debug(f"Max incorrect: {max_incorrect}")
 
         max_gt = torch.max(torch.abs(pytorch_out[i]))
-        logger.info(f"Max ground truth: {max_gt}")
+        logger.debug(f"Max ground truth: {max_gt}")
 
     if does_pass:
-        logger.info("Llama QKV output Passed!")
+        logger.debug("Llama QKV output Passed!")
     else:
         logger.warning("Llama QKV output Failed!")
         assert does_pass, f"PCC value is lower than {pcc}"
@@ -376,20 +376,20 @@ def run_test_row_major_rotary_embedding_llama(
         out_pass, output_pcc = comp_pcc(pytorch_out[i], tt_out[i], pcc)
         # Check each shape matches
         assert pytorch_out[i].shape == tt_out[i].shape
-        logger.info(f"PCC value: {output_pcc}")
+        logger.debug(f"PCC value: {output_pcc}")
         does_pass = does_pass and out_pass
 
         mae = torch.mean(torch.abs(pytorch_out[i] - tt_out[i]))
-        logger.info(f"MAE: {mae}")
+        logger.debug(f"MAE: {mae}")
 
         max_incorrect = torch.max(torch.abs(pytorch_out[i] - tt_out[i]))
-        logger.info(f"Max incorrect: {max_incorrect}")
+        logger.debug(f"Max incorrect: {max_incorrect}")
 
         max_gt = torch.max(torch.abs(pytorch_out[i]))
-        logger.info(f"Max ground truth: {max_gt}")
+        logger.debug(f"Max ground truth: {max_gt}")
 
     if does_pass:
-        logger.info("Llama QKV output Passed!")
+        logger.debug("Llama QKV output Passed!")
     else:
         logger.warning("Llama QKV output Failed!")
         assert does_pass, f"PCC value is lower than {pcc}"

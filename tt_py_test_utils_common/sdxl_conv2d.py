@@ -98,7 +98,7 @@ def run_conv(
         ), "Expected mesh composer for output tensor when running on multiple devices"
         num_devices = len(device.get_device_ids())
         total_batch_size = num_devices * batch_size  # Batch size across all devices
-        logger.info(f"Using {num_devices} devices for this test")
+        logger.debug(f"Using {num_devices} devices for this test")
     else:
         total_batch_size = batch_size
 
@@ -334,12 +334,12 @@ def run_conv(
                 threshold = 3e-1 + 5e-3 * math.log(input_channels * filter_height * filter_width, 2)
             else:
                 threshold = 3e-1 + 1e-1 * math.log(input_channels * filter_height * filter_width, 2)
-            logger.info(f"Threshold: {threshold}")
+            logger.debug(f"Threshold: {threshold}")
             diff = torch.abs(ref - out) / ref.abs().mean()
             assert torch.all(diff < threshold), f"Max diff: {diff.max()}, Threshold: {threshold} "
         else:
             passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
-            logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
+            logger.debug(f"PCC = {pcc_msg}. Threshold = {pcc}")
             assert passing, pcc_msg
             if pcc_msg == 1:
                 # Conv2d with randomized input and weights can't legitimately return PCC of 1
@@ -349,7 +349,7 @@ def run_conv(
 
         if memory_config:
             output_memory_config = ttnn.get_memory_config(tt_output_tensor_on_device)
-            logger.info(f"Output Memory Config : {output_memory_config}")
+            logger.debug(f"Output Memory Config : {output_memory_config}")
             assert output_memory_config == memory_config
 
 

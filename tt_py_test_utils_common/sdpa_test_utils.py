@@ -167,10 +167,10 @@ def run_test_sdpa_decode_multi_pos(
         padded_layer_len = nearest_n(max_start_idx + 1, n=k_chunk_size)
 
         # Test various sequence lengths
-        logger.info(f"Testing with sequence length: {max_start_idx}")
-        logger.info(f"Using chunk size: {k_chunk_size}")
-        logger.info(f"Using padded layer length: {padded_layer_len}")
-        logger.info(f"Using padded num heads: {padded_num_heads}")
+        logger.debug(f"Testing with sequence length: {max_start_idx}")
+        logger.debug(f"Using chunk size: {k_chunk_size}")
+        logger.debug(f"Using padded layer length: {padded_layer_len}")
+        logger.debug(f"Using padded num heads: {padded_num_heads}")
 
         attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
         for i in range(b):
@@ -567,9 +567,9 @@ def run_test_sdpa_decode_paged_attention(
         logger.debug(
             f"Testing {'causal' if causal else 'non-causal'} with sequence length: {max_start_idx if causal else s}"
         )
-        logger.info(f"Using chunk size: {k_chunk_size}")
-        logger.info(f"Using padded layer length: {padded_layer_len}")
-        logger.info(f"Using padded num heads: {padded_num_heads}")
+        logger.debug(f"Using chunk size: {k_chunk_size}")
+        logger.debug(f"Using padded layer length: {padded_layer_len}")
+        logger.debug(f"Using padded num heads: {padded_num_heads}")
 
         if causal:
             if sliding_window_size is not None:
@@ -939,10 +939,10 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
         padded_layer_len = nearest_n(start_idx + 1, n=k_chunk_size)
 
         # Test various sequence lengths
-        logger.info(f"Testing with sequence length: {start_idx}")
-        logger.info(f"Using chunk size: {k_chunk_size}")
-        logger.info(f"Using padded layer length: {padded_layer_len}")
-        logger.info(f"Using padded num heads: {padded_num_heads}")
+        logger.debug(f"Testing with sequence length: {start_idx}")
+        logger.debug(f"Using chunk size: {k_chunk_size}")
+        logger.debug(f"Using padded layer length: {padded_layer_len}")
+        logger.debug(f"Using padded num heads: {padded_num_heads}")
 
         attn_mask = torch.zeros((1, b, padded_num_heads, padded_layer_len))
         # Assume all users are at same position
@@ -1002,7 +1002,8 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
 
         start_idx += 200  # if start_idx < 4096 else 3001
 
-    logger.info(f"PCC failed Start Pos: {failed_start_pos}")
+    if failed_start_pos:
+        logger.warning(f"PCC failed Start Pos: {failed_start_pos}")
 
 
 ###############################################################################
@@ -1224,7 +1225,7 @@ def run_sdpa_decode_sink_impl(
     ##########################
     ### SDPA Decode
     ##########################
-    logger.info(f"Running SDPA Decode with TT Q shape: {tt_q.shape}, TT K shape: {tt_k.shape}, dtype: {dtype}")
+    logger.debug(f"Running SDPA Decode with TT Q shape: {tt_q.shape}, TT K shape: {tt_k.shape}, dtype: {dtype}")
 
     def run_op():
         torch_out = flash_decode_sdpa(
