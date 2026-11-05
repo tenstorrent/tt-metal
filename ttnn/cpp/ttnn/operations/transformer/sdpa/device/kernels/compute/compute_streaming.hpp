@@ -256,12 +256,9 @@ struct RingStreamingMaskCtx {
 
 // Sentinel for "no CB" — beyond the valid 0-31 range.
 constexpr uint32_t INVALID_CB = 32;
-// WH keeps 8: blocked pack reconfiguration costs more than it saves at smaller widths.
-#ifdef ARCH_BLACKHOLE
+// Blocked pack from width 2 on both architectures. Wormhole used to wait for 8 tiles, so the 4-wide
+// subblocks of a q256 / k512 ring SDPA packed tile by tile; 2 and 4 measure the same there.
 constexpr uint32_t MIN_BLOCKED_PACK_TILES = 2;
-#else
-constexpr uint32_t MIN_BLOCKED_PACK_TILES = 8;
-#endif
 ALWI bool should_use_blocked_pack_width(uint32_t pack_width) { return pack_width >= MIN_BLOCKED_PACK_TILES; }
 
 template <uint32_t old_cb, uint32_t new_cb>
