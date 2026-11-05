@@ -284,7 +284,8 @@ void kernel_main() {
             (cv + TILE_HEIGHT - 1) / TILE_HEIGHT, chunk_M_max, num_chunks_max, M_tiles_full);
     };
     adaptive_chunk::WavePlanner planner;
-    uint8_t walk_perm[adaptive_chunk::kMaxPredictedExperts];
+    static_assert(experts_per_chip <= 256, "walk positions are uint8_t");
+    uint8_t walk_perm[experts_per_chip];
     auto expert_tiles_at = [&](uint32_t k) -> uint32_t { return expert_tiles(walk_perm[k]); };
 
 #ifdef URE_PREDICTED_ORDER

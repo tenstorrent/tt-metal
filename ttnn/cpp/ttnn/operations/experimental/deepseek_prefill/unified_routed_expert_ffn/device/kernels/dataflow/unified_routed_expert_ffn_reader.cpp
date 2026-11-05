@@ -484,7 +484,8 @@ void kernel_main() {
             (cv + TILE_HEIGHT - 1) / TILE_HEIGHT, chunk_M_max, num_chunks_max, M_tiles_full);
     };
     adaptive_chunk::WavePlanner planner;
-    uint8_t walk_perm[adaptive_chunk::kMaxPredictedExperts];
+    static_assert(experts_per_chip <= 256, "walk positions are uint8_t");
+    uint8_t walk_perm[experts_per_chip];
     auto expert_tiles_at = [&](uint32_t k) -> uint32_t { return expert_tiles(walk_perm[k]); };
 
     for (uint32_t walk_step = 0; walk_step < num_passes * experts_per_chip; ++walk_step) {
@@ -1041,6 +1042,10 @@ void kernel_main() {
                             in1_mcast_nx_end,
                             in1_mcast_ny_end,
                             in1_num_receivers);
+                        // The quarter layout shares the half layout's valid word, and a quarter sender can be a half
+                        // receiver in the next expert, clearing that word first (step 1). Unflushed, the NoC can read
+                        // it after the clear and send the column a 0, the same race as the in0 owner flush above.
+                        noc.async_writes_flushed();
                     }
                 }
 
@@ -1213,6 +1218,10 @@ void kernel_main() {
                             in1_mcast_nx_end,
                             in1_mcast_ny_end,
                             in1_num_receivers);
+                        // The quarter layout shares the half layout's valid word, and a quarter sender can be a half
+                        // receiver in the next expert, clearing that word first (step 1). Unflushed, the NoC can read
+                        // it after the clear and send the column a 0, the same race as the in0 owner flush above.
+                        noc.async_writes_flushed();
                     }
                 }
 

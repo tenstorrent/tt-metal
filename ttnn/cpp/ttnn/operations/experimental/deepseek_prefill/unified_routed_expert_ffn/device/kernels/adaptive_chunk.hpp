@@ -264,18 +264,18 @@ inline bool partial_eighth_on_rows(const uint32_t* c, uint32_t n, uint32_t per_c
 // WALK ORDER (EXPERIMENT URE_SORT_WALK): the order a pass walks its local experts in. With the switch, biggest
 // first, so the walk's last experts -- what combine still has to ship once the routed expert ends -- are its
 // smallest. Ties keep local order. Without it, local order. All kernels and combine's prediction build it alike.
+// `perm` holds n entries.
 template <class TilesOf>
 inline void walk_perm(uint8_t* perm, uint32_t n, const TilesOf& tiles_of) {
-    uint32_t t[32];
     for (uint32_t i = 0; i < n; ++i) {
         perm[i] = static_cast<uint8_t>(i);
-        t[i] = tiles_of(i);
     }
 #ifdef URE_SORT_WALK
     for (uint32_t i = 1; i < n; ++i) {
         const uint8_t v = perm[i];
+        const uint32_t tv = tiles_of(v);
         uint32_t j = i;
-        while (j > 0 && t[perm[j - 1]] < t[v]) {
+        while (j > 0 && tiles_of(perm[j - 1]) < tv) {
             perm[j] = perm[j - 1];
             --j;
         }

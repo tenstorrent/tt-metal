@@ -941,7 +941,8 @@ void kernel_main() {
     // Wave planner state (UNPACK only: it is the thread that can read counts/idx).
     constexpr uint32_t per_core_M_max = chunk_M_max / adaptive_chunk::kGridY;
     [[maybe_unused]] adaptive_chunk::WavePlanner planner;
-    [[maybe_unused]] uint8_t walk_perm[adaptive_chunk::kMaxPredictedExperts];
+    static_assert(experts_per_chip <= 256, "walk positions are uint8_t");
+    [[maybe_unused]] uint8_t walk_perm[experts_per_chip];
     constexpr uint32_t kHalfFlag = 0x80000000u;
     constexpr uint32_t kQuarterFlag = 0x40000000u;
     constexpr uint32_t kEighthFlag = 0x20000000u;
