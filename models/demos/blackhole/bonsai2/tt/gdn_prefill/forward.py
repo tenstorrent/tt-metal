@@ -389,57 +389,75 @@ def _to_bht(t, B, T, H):
     return ttnn.to_layout(t, ttnn.TILE_LAYOUT, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def gdn_chunk_forward(gdn, x, linear_shim):
-    """x [1, T, dim] -> the layer output; updates gdn.recurrent_state and gdn.fused_conv_state in place.
-    linear_shim: the qwen36 prefill ttnn shim (its linear() adds the swept in_proj / out_proj program configs)."""
+# ttnn.transformer.chunk_gated_delta_rule (fused path: per-chunk prep on producer cores handed to the scan cores over
+# the NoC, no DRAM intermediates; flat token-major q / k / v with the q / k L2 norm and scale in-kernel). T = 2048,
+# 16 / 48 heads: 0.71 ms vs 2.87 ms for ChunkPrep + gated_delta_attn_seq, same error vs an fp64 recurrence.
+# BONSAI_GDN_CHUNK_OP=0: the ChunkPrep path.
+_CGDN = {}
+CGDN_C = 32  # the op's flat (token-major) path takes 32-token chunks
 
-    w = gdn.weights
-    B, T = list(x.shape)[0], list(x.shape)[1]
-    Hq, H, K, V = gdn.num_heads, gdn.num_v_heads, gdn.head_k_dim, gdn.head_v_dim
-    dq, da, db = w.mega_qkv_dim, w.mega_a_dim, w.mega_b_dim
-    ckc = gdn.compute_kernel_config
-    device = gdn.device
 
-    tern = gdn.ternary if _ternary_prefill(gdn) else None
-    if tern is not None:
-        # exact ternary in_proj: [qkv | z] on the rotated input; a and b (bf16 weights) at HiFi4
-        from models.demos.blackhole.bonsai2.tt.ternary import prerot
+def _chunk_op_on(gdn, B):
+    return os.environ.get("BONSAI_GDN_CHUNK_OP", "1") == "1" and B == 1 and id(gdn) in _CGDN.get("gates", {})
 
-        xr = prerot.take(x)  # the layer's fused norm + rotation (tprefill/norm_rot.py), else rotate here
-        if xr is None:
-            xr = tern.prot_in(x)
-        mega = tern.pre_qkvz(xr)  # [1, T, qkv | z]
-        ttnn.deallocate(xr)
-        from models.demos.blackhole.bonsai2.tt.ternary.gdn import ab_prefill_config
 
-        ab = ttnn.linear(x, tern.ab_w, compute_kernel_config=tern.ab_ckc, program_config=ab_prefill_config(T))
-        na = tern.na
-        gates = getattr(gdn, "_bonsai_gates", None)
-        if gates is not None and B == 1:
-            beta_bh, g_bh = gates(ab, T)  # sigmoid / softplus gates straight into prep's layouts (GateTiles)
-            a_raw = b_raw = None
-        else:
-            a_raw = ttnn.slice(ab, [0, 0, 0], [B, T, na])
-            b_raw = ttnn.slice(ab, [0, 0, na], [B, T, 2 * na])
-        ttnn.deallocate(ab)
-        z_off = tern.split // 32
-    else:
-        mega = linear_shim.linear(x, w.mega_fused_weight, memory_config=None, compute_kernel_config=ckc)
-        a_raw = ttnn.to_layout(mega[:, :, dq : dq + da], ttnn.TILE_LAYOUT)
-        b_raw = ttnn.to_layout(mega[:, :, dq + da : dq + da + db], ttnn.TILE_LAYOUT)
-        z_off = (dq + da + db) // 32
-        assert (dq + da + db) % 32 == 0, "z must start on a tile column of the in_proj output"
+def _cgdn_consts(device):
+    """The op's constant tiles (eye / tril / ones [1, 1, C, C], quadrant masks [1, 1, 32, 96]), built outside any trace
+    capture (the op would upload them on every call otherwise)."""
+    if "consts" not in _CGDN:
+        C = CGDN_C
+        m = torch.zeros(32, 96)
+        m[:16, 0:16] = 1
+        m[16:, 48:64] = 1
+        m[16:, 64:80] = 1
 
-    qkv = gdn._bonsai_conv(mega, gdn.fused_conv_state)  # conv + SiLU of q | k | v; conv state updated in place
+        def up(t):
+            return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    if a_raw is not None:
-        beta = ttnn.sigmoid(b_raw)
-        g = ttnn.multiply(w.A_neg, ttnn.softplus(ttnn.add(a_raw, w.dt_bias)))
-        for t in (a_raw, b_raw):
-            ttnn.deallocate(t)
-        beta_bh = ttnn.reshape(_to_bht(beta, B, T, H), [B * H, T, 1])
-        g_bh = _to_bht(g, B, T, H)
+        _CGDN["consts"] = dict(
+            eye=up(torch.eye(C).reshape(1, 1, C, C)),
+            tril=up(torch.tril(torch.ones(C, C)).reshape(1, 1, C, C)),
+            ones=up(torch.ones(1, 1, C, C)),
+            masks=up(m.reshape(1, 1, 32, 96)),
+        )
+    return _CGDN["consts"]
 
+
+def _chunk_op_forward(gdn, qkv, ab, T, Hq, H, K, V, na):
+    """conv output qkv [1, T, q | k | v] bf16, ab [1, T, a | b] -> (o [H, T, V] fp32, final state [1, H, K, V] fp32)."""
+    dt_bias, a_neg = _CGDN["gates"][id(gdn)]
+    abf = ttnn.typecast(ab, ttnn.float32)
+    a = ttnn.slice(abf, [0, 0, 0], [1, T, na])
+    b = ttnn.slice(abf, [0, 0, na], [1, T, 2 * na])
+    ttnn.deallocate(abf)
+    beta = ttnn.sigmoid(b)
+    ap = ttnn.add(a, dt_bias)
+    sp = ttnn.softplus(ap)
+    g = ttnn.multiply(sp, a_neg)
+    for t in (a, b, ap, sp):
+        ttnn.deallocate(t)
+    q = ttnn.slice(qkv, [0, 0, 0], [1, T, Hq * K])
+    k = ttnn.slice(qkv, [0, 0, Hq * K], [1, T, 2 * Hq * K])
+    v = ttnn.slice(qkv, [0, 0, 2 * Hq * K], [1, T, 2 * Hq * K + H * V])
+    s0 = ttnn.typecast(gdn.recurrent_state, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    o, fs = ttnn.transformer.chunk_gated_delta_rule(
+        q, k, v, g, beta,
+        scale=K**-0.5,
+        initial_state=ttnn.reshape(s0, [1, H, K, V]),
+        output_final_state=True,
+        chunk_size=CGDN_C,
+        output_head_major=True,
+        program_config=ttnn.ChunkGdnFusedProgramConfig(),
+        num_key_heads=Hq,
+        **_cgdn_consts(gdn.device),
+    )  # fmt: skip
+    for t in (q, k, v, g, beta, s0):
+        ttnn.deallocate(t)
+    return o, fs
+
+
+def _prep_scan(gdn, qkv, beta_bh, g_bh, B, T, Hq, H, K, V, dq, device):
+    """ChunkPrep + gated_delta_attn_seq (BONSAI_GDN_CHUNK_OP=0)."""
     if "device" not in chunk_prep._PREP:
         chunk_prep._PREP["device"] = chunk_prep.ChunkPrep(device)
     tm = dict(
@@ -462,6 +480,70 @@ def gdn_chunk_forward(gdn, x, linear_shim):
     )
     for t in prep:
         ttnn.deallocate(t)
+    return o_bh, final_state
+
+
+def gdn_chunk_forward(gdn, x, linear_shim):
+    """x [1, T, dim] -> the layer output; updates gdn.recurrent_state and gdn.fused_conv_state in place.
+    linear_shim: the qwen36 prefill ttnn shim (its linear() adds the swept in_proj / out_proj program configs)."""
+
+    w = gdn.weights
+    B, T = list(x.shape)[0], list(x.shape)[1]
+    Hq, H, K, V = gdn.num_heads, gdn.num_v_heads, gdn.head_k_dim, gdn.head_v_dim
+    dq, da, db = w.mega_qkv_dim, w.mega_a_dim, w.mega_b_dim
+    ckc = gdn.compute_kernel_config
+    device = gdn.device
+
+    tern = gdn.ternary if _ternary_prefill(gdn) else None
+    use_op = tern is not None and _chunk_op_on(gdn, B)
+    if tern is not None:
+        # exact ternary in_proj: [qkv | z] on the rotated input; a and b (bf16 weights) at HiFi4
+        from models.demos.blackhole.bonsai2.tt.ternary import prerot
+
+        xr = prerot.take(x)  # the layer's fused norm + rotation (tprefill/norm_rot.py), else rotate here
+        if xr is None:
+            xr = tern.prot_in(x)
+        mega = tern.pre_qkvz(xr)  # [1, T, qkv | z]
+        ttnn.deallocate(xr)
+        from models.demos.blackhole.bonsai2.tt.ternary.gdn import ab_prefill_config
+
+        ab = ttnn.linear(x, tern.ab_w, compute_kernel_config=tern.ab_ckc, program_config=ab_prefill_config(T))
+        na = tern.na
+        gates = getattr(gdn, "_bonsai_gates", None)
+        if use_op:
+            a_raw = b_raw = None  # ab goes to the chunk op's gates (_chunk_op_forward)
+        elif gates is not None and B == 1:
+            beta_bh, g_bh = gates(ab, T)  # sigmoid / softplus gates straight into prep's layouts (GateTiles)
+            a_raw = b_raw = None
+        else:
+            a_raw = ttnn.slice(ab, [0, 0, 0], [B, T, na])
+            b_raw = ttnn.slice(ab, [0, 0, na], [B, T, 2 * na])
+        if not use_op:
+            ttnn.deallocate(ab)
+        z_off = tern.split // 32
+    else:
+        mega = linear_shim.linear(x, w.mega_fused_weight, memory_config=None, compute_kernel_config=ckc)
+        a_raw = ttnn.to_layout(mega[:, :, dq : dq + da], ttnn.TILE_LAYOUT)
+        b_raw = ttnn.to_layout(mega[:, :, dq + da : dq + da + db], ttnn.TILE_LAYOUT)
+        z_off = (dq + da + db) // 32
+        assert (dq + da + db) % 32 == 0, "z must start on a tile column of the in_proj output"
+
+    qkv = gdn._bonsai_conv(mega, gdn.fused_conv_state)  # conv + SiLU of q | k | v; conv state updated in place
+
+    if a_raw is not None:
+        beta = ttnn.sigmoid(b_raw)
+        g = ttnn.multiply(w.A_neg, ttnn.softplus(ttnn.add(a_raw, w.dt_bias)))
+        for t in (a_raw, b_raw):
+            ttnn.deallocate(t)
+        beta_bh = ttnn.reshape(_to_bht(beta, B, T, H), [B * H, T, 1])
+        g_bh = _to_bht(g, B, T, H)
+
+    if use_op:
+        o_bh, final_state = _chunk_op_forward(gdn, qkv, ab, T, Hq, H, K, V, tern.na)
+        ttnn.deallocate(ab)
+        ttnn.deallocate(qkv)
+    else:
+        o_bh, final_state = _prep_scan(gdn, qkv, beta_bh, g_bh, B, T, Hq, H, K, V, dq, device)
 
     # o [BH, T, V] -> o / rms(o) * w * silu(z), token-major [1, T, H * V]
     fin = getattr(gdn, "_bonsai_finish", None)
@@ -499,6 +581,12 @@ def prepare(model):
         gdn._bonsai_finish = OutputFinish(device, norm_w, gdn.norm_eps)
         taps = torch.cat([ttnn.to_torch(t).float().reshape(1, -1) for t in gdn.weights.fused_conv_weight_taps], 0)
         gdn._bonsai_conv = ConvPrefill(device, taps)
+        f32 = lambda t: ttnn.from_torch(  # noqa: E731
+            ttnn.to_torch(t).float().reshape(-1)[: gdn.num_v_heads].reshape(1, 1, -1),
+            dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device,
+        )  # fmt: skip
+        _CGDN.setdefault("gates", {})[id(gdn)] = (f32(gdn.weights.dt_bias), f32(gdn.weights.A_neg))
+        _cgdn_consts(device)
         if os.environ.get("BONSAI_GDN_GATES", "1") == "1" and gdn.num_v_heads == 48:
             gdn._bonsai_gates = GateTiles(
                 device,
