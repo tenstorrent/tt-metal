@@ -35,7 +35,8 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
     const auto& out_mt = output.mesh_tensor();
 
     const auto& bshape = b.padded_shape();
-    const std::uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
+    // b's tiles are ordered by N, then C, so each (n, c) is one batch of b.
+    const std::uint32_t bN = get_batch_size(bshape);
 
     MeshDevice* device = a.device();
 
