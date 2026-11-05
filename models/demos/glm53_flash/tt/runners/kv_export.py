@@ -41,6 +41,7 @@ import time
 import zlib
 from dataclasses import dataclass, field
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -128,6 +129,33 @@ class _Banks:
         return ttnn.cluster.read_from_core(
             dev, int(e["noc_x"]), int(e["noc_y"]), int(e["base_addr"]) + int(bank_addr), size
         )
+
+
+TILE_BYTES_BF16 = 32 * 32 * 2
+
+
+def read_tile_rows(banks: _Banks, dev: int, base: int, nb: int, cols: int, row0: int, row1: int) -> torch.Tensor:
+    """Rows [row0, row1) of a bf16 TILE, DRAM-interleaved tensor whose 2-D view is [rows, cols], read RAW from chip ``dev``
+    (UMD bank reads; no command queue, so a host thread can do it while the device runs the next chunk) and untilized on
+    the host: tile t (row-major over the [rows/32, cols/32] tile grid) is page t, in bank t % nb at base + (t // nb) * 2048;
+    a tile is 4 faces of 16 x 16 (faces 0 / 1 = rows 0-15, cols 0-15 / 16-31; faces 2 / 3 = rows 16-31). tt-blaze
+    G53F-0256: the export's device -> host read was 60 % of a chunk's export."""
+    tpr = cols // 32
+    r0, r1 = row0 // 32, -(-row1 // 32)
+    t0, t1 = r0 * tpr, r1 * tpr
+    n = t1 - t0
+    flat = np.empty((n, 1024), dtype=np.uint16)
+    for k in range(nb):  # every bank: a short range's pages start at bank t0 % nb, not at bank 0
+        first = t0 + ((k - t0) % nb)  # the first page of [t0, t1) that lives in bank k
+        if first >= t1:
+            continue
+        cnt = len(range(first, t1, nb))
+        raw = banks.read(dev, k, base + (first // nb) * TILE_BYTES_BF16, cnt * TILE_BYTES_BF16)
+        flat[first - t0 :: nb][:cnt] = np.frombuffer(raw, dtype=np.uint16).reshape(cnt, 1024)
+    tiles = flat.reshape(r1 - r0, tpr, 2, 2, 16, 16)  # [tile row, tile col, face row, face col, r, c]
+    rows = tiles.transpose(0, 2, 4, 1, 3, 5).reshape((r1 - r0) * 32, cols)
+    rows = rows[row0 - r0 * 32 : row1 - r0 * 32]
+    return torch.from_numpy(np.ascontiguousarray(rows)).view(torch.bfloat16)
 
 
 def _write_pages(banks: _Banks, dev: int, base: int, nb: int, page_bytes: int, first: int, pages: torch.Tensor) -> None:
@@ -258,16 +286,25 @@ class GlmRingExport:
         if n % TPP:
             pad = torch.zeros(TPP - n % TPP, LATENT_DIM, dtype=latent.dtype)
             latent = torch.cat([latent, pad])
+        t0 = time.perf_counter()
         pages = pack_latent_pages(latent, self.pow2_scale)
+        t1 = time.perf_counter()
         _write_pages(self._banks, dev, self.latent.buffer_address(), self._nb, LATENT_PAGE_BYTES, latent_first, pages)
+        t2 = time.perf_counter()
+        pack_s, write_s = t1 - t0, t2 - t1
         nbytes = pages.numel()
         if pools is not None and int(pools.shape[0]):
             m = int(pools.shape[0])
             if m % 32:
                 pools = torch.cat([pools.float(), torch.zeros(32 - m % 32, POOL_WIDTH)])
+            t3 = time.perf_counter()
             rows = pack_pool_rows(pools)
+            t4 = time.perf_counter()
             _write_pages(self._banks, dev, self.pool.buffer_address(), self._nb, POOL_ROW_BYTES, pool_first, rows)
             nbytes += rows.numel()
+            pack_s, write_s = pack_s + (t4 - t3), write_s + (time.perf_counter() - t4)
+        self.stats["pack_s"] = self.stats.get("pack_s", 0.0) + pack_s
+        self.stats["write_s"] = self.stats.get("write_s", 0.0) + write_s
         self._banks.read(
             dev, 0, self.latent.buffer_address(), 64
         )  # a read behind the posted writes on this chip's path
