@@ -122,7 +122,8 @@ inline void glu_full() {
     for (uint32_t r = 0; r < T; ++r) {
         sfpi::vFloat g = sfpi::dst_reg[r];
         sfpi::vFloat u = sfpi::dst_reg[T + r];
-        sfpi::dst_reg[T + r] = u * g * _sfpu_sigmoid_<true>(g);
+        sfpi::dst_reg[T + r] =
+            u * g * _sfpu_sigmoid_<false>(g);  // bf16-accurate exp, one Newton step: the output is bf16
     }
 }
 }  // namespace ckernel::sfpu
@@ -332,6 +333,7 @@ void kernel_main() {
                 tile_regs_acquire();
                 copy_tile(cb_acc, r * NBLK + c, 0);
                 copy_tile(cb_acc, r * NBLK + c + 1, 1);
+#ifndef T2_NOGLU
                 silu_tile_init();
                 MATH(({
                     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(0);
@@ -339,6 +341,7 @@ void kernel_main() {
                     ckernel::sfpu::glu_full();
                     math::clear_dst_reg_addr();
                 }));
+#endif
                 tile_regs_commit();
                 tile_regs_wait();
                 cb_reserve_back(cb_out, 1);
