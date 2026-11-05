@@ -186,11 +186,13 @@ def test_vision_model_forward_device_after_upload(monkeypatch):
     forward_tower makes forward's calls up to the last block. No device: ttnn.from_torch, ttnn.to_memory_config,
     ttnn.deallocate and the modules are stand-ins that log each call with its inputs. Each output is named after its
     kind of call and the number of such calls before it since the log was cleared, so the logs of two models
-    compare; an upload also has the shape of the tensor it stands for, which forward_device checks."""
+    compare; an upload also has the shape of the tensor it stands for, which forward_device checks. The stand-in
+    blocks have no weights to place activations by, so the model keeps them in DRAM; test_vision_block_placement.py
+    runs the forward with them in L1."""
     calls = []  # (kind, inputs) of each call since the log was cleared
 
     def logged(kind):
-        def call(*inputs):
+        def call(*inputs, **kwargs):
             calls.append((kind, inputs))
             return f"{kind}{sum(logged_kind == kind for logged_kind, _ in calls) - 1}"
 
@@ -205,7 +207,7 @@ def test_vision_model_forward_device_after_upload(monkeypatch):
     monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
 
     def build():
-        return M3VLVisionModel(
+        model = M3VLVisionModel(
             None,
             CONFIG,
             padded_head_dim=96,  # head_dim 80 in whole tiles
@@ -214,6 +216,8 @@ def test_vision_model_forward_device_after_upload(monkeypatch):
             blocks=[logged("block_a"), logged("block_b")],
             projector=logged("projector"),
         )
+        model.activations = "dram"
+        return model
 
     def log(run):
         calls.clear()

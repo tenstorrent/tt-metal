@@ -5,22 +5,28 @@
 
 The upload of host tensors (to_device) and the torch->ttnn Linear weight/bias
 converters built on it, the compute-kernel configs, the weight matmul (linear)
-with its program config, and the SDPA program config, kept here so the modules
-don't each copy them.
+with its program config, the SDPA program config, and where an encoder block
+keeps its activations (block_placement), kept here so the modules don't each
+copy them.
 """
 from __future__ import annotations
 
+import dataclasses
 import functools
 import math
-from typing import Callable, Optional
+import os
+from typing import Callable, NamedTuple, Optional
 
 import torch
 
 import ttnn
+from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE
 
-# Circular-buffer bytes per core, below the roughly 1.39 MiB of L1 a Blackhole core has free with no L1 tensors, less
-# the RoPE tables the blocks read from L1 (8 KiB per core at 2304 patches). The largest K block that fits is taken, so
-# this also sets K blocks: at 672x672 fc1 and QKV get 4, which ran faster than 8 in a matmul sweep on a P150.
+# Circular-buffer bytes per core, below the roughly 1.39 MiB of L1 a Blackhole core has free with no L1 tensors. The
+# largest K block that fits is taken, so this also sets K blocks: at 672x672 fc1 and QKV get 4, which ran faster than 8
+# in a matmul sweep on a P150. The buffers share L1 with the RoPE tables and, where block_placement keeps them there,
+# the blocks' activations: the host test that walks the L1 budget pins the least room left below the lowest tensor on
+# each grid, at least 108032 B in a bank of PROOF_L1_BANK_BYTES.
 LINEAR_L1_BYTES = 1_000_000
 # The largest K block (in0_block_w, in tiles): in that sweep fc2 and the out projection ran slower with 16.
 LINEAR_MAX_IN0_BLOCK_W = 8
@@ -74,45 +80,93 @@ def linear_compute_config():
     return hifi4_compute_config(packer_l1_acc=True)
 
 
+def memory_config_kwargs(memory_config: Optional[ttnn.MemoryConfig]) -> dict:
+    """An op's memory_config keyword: {"memory_config": memory_config}, or none where it is None, so that the op
+    writes its output where its default puts it."""
+    return {} if memory_config is None else {"memory_config": memory_config}
+
+
 def linear(
     x: ttnn.Tensor,
     w: ttnn.Tensor,
     b: Optional[ttnn.Tensor],
     compute_kernel_config,
-    activation: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
+    activation: Optional[Callable[..., ttnn.Tensor]] = None,
     fused_activation: Optional[ttnn.UnaryWithParam] = None,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    activation_memory_config: Optional[ttnn.MemoryConfig] = None,
 ) -> ttnn.Tensor:
-    """The encoder's weight matmul: x @ w + b into DRAM, then activation, if given, on the result.
+    """The encoder's weight matmul: x @ w + b into memory_config, then activation, if given, on the result.
 
     w is [in, out] and b [1, 1, 1, out] or None, as as_linear_weight and as_linear_bias put them on the device. The
-    program config is linear_program_config's for the tiles of x's and w's padded shapes. activation runs as an op of
-    its own on the matmul's output. fused_activation, given only with activation, is the same activation in the form a
-    program config's fused_activation takes: where linear_program_config gives a config, that config carries it and
-    activation does not run; where the helper leaves the choice to ttnn, activation runs as without it.
+    program config is linear_program_config's for the tiles of x's and w's padded shapes, and for an input or an
+    output in L1 block shards (x's memory config, or the one the matmul writes, is sharded). activation runs as an op
+    of its own on the matmul's output, as activation(out, memory_config=activation_memory_config); None writes where
+    out is. fused_activation, given only with activation, is the same activation in the form a program config's
+    fused_activation takes: where linear_program_config gives a config, that config carries it, activation does not run
+    and the matmul writes activation_memory_config (memory_config when None); where the helper leaves the choice to
+    ttnn, activation runs as without it. Raises ValueError for a sharded input or output where the helper leaves the
+    choice to ttnn.
     """
     assert fused_activation is None or activation is not None, "fused_activation needs activation"
-    program_config = linear_program_config(
-        x.device(), x.padded_shape[-2], w.padded_shape[-2], w.padded_shape[-1], compute_kernel_config
-    )
-    fused = fused_activation is not None and program_config is not None
+    in0_sharded = x.memory_config().is_sharded()
+
+    def program_config_for(out_memory_config):
+        return linear_program_config(
+            x.device(),
+            x.padded_shape[-2],
+            w.padded_shape[-2],
+            w.padded_shape[-1],
+            compute_kernel_config,
+            in0_sharded=in0_sharded,
+            out_sharded=out_memory_config.is_sharded(),
+        )
+
+    fused_memory_config = memory_config if activation_memory_config is None else activation_memory_config
+    program_config = None if fused_activation is None else program_config_for(fused_memory_config)
+    fused = program_config is not None
     if fused:
         # linear_program_config builds a new config at each call, so no other matmul gets the activation.
         program_config.fused_activation = fused_activation
+        memory_config = fused_memory_config
+    else:
+        program_config = program_config_for(memory_config)
+    if program_config is None and (in0_sharded or memory_config.is_sharded()):
+        raise ValueError(
+            f"a matmul of {x.padded_shape[-2]} rows by {tuple(w.padded_shape[-2:])} with a sharded input or output"
+            " needs linear_program_config's config, and it leaves this one to ttnn"
+        )
     out = ttnn.linear(
         x,
         w,
         bias=b,
         compute_kernel_config=compute_kernel_config,
         program_config=program_config,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
     )
-    return out if activation is None or fused else activation(out)
+    return out if activation is None or fused else activation(out, memory_config=activation_memory_config)
 
 
-def linear_program_config(mesh_device, rows: int, in_features: int, out_features: int, compute_kernel_config):
+def linear_program_config(
+    mesh_device,
+    rows: int,
+    in_features: int,
+    out_features: int,
+    compute_kernel_config,
+    *,
+    in0_sharded: bool = False,
+    out_sharded: bool = False,
+):
     """Program config for ttnn.linear of a (rows, in_features) input and an (in_features, out_features) weight, with
-    bf16 (or bfloat8_b) operands and output in DRAM, as the vision encoder runs its weight matmuls. None leaves the
+    bf16 (or bfloat8_b) operands, as the vision encoder runs its weight matmuls: the input and the output interleaved,
+    in DRAM or L1, which the matmul's checks of the config do not tell apart, or in L1 block shards. None leaves the
     choice to ttnn.
+
+    in0_sharded, for an input in block shards, sets fuse_batch, which the matmul needs for one, and which with the
+    encoder's single batch changes nothing else. out_sharded, for an output in block shards, which ttnn lays out by
+    this config (one block of per_core_M x per_core_N tiles per core of the split), takes the first output subblock
+    that is one tile high or the block's full width, as the matmul needs for one. Neither changes the split or the K
+    blocks, so each output tile is the same sum, added in the same order.
 
     A 2D multicast with one output block per core, after a sweep of the encoder's linears at 672x672 on a P150:
     - M over the grid's rows and N over its columns, or, with at least LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M
@@ -133,6 +187,7 @@ def linear_program_config(mesh_device, rows: int, in_features: int, out_features
         grid.x,
         grid.y,
         bool(compute_kernel_config.fp32_dest_acc_en),
+        out_sharded=out_sharded,
     )
     if blocking is None:
         return None
@@ -147,8 +202,19 @@ def linear_program_config(mesh_device, rows: int, in_features: int, out_features
         per_core_M=per_core_m,
         per_core_N=per_core_n,
         transpose_mcast=transpose_mcast,
-        fuse_batch=False,
+        fuse_batch=in0_sharded,
     )
+
+
+class _LinearBlocking(NamedTuple):
+    """linear_program_config's choice, in tiles."""
+
+    per_core_m: int
+    per_core_n: int
+    in0_block_w: int
+    subblock_h: int
+    subblock_w: int
+    transpose_mcast: bool
 
 
 @functools.lru_cache(maxsize=None)
@@ -160,13 +226,13 @@ def _linear_blocking(
     grid_y: int,
     fp32_dest_acc: bool,
     *,
+    out_sharded: bool = False,
     l1_bytes: int = LINEAR_L1_BYTES,
     max_in0_block_w: int = LINEAR_MAX_IN0_BLOCK_W,
     min_transposed_per_core_m: int = LINEAR_MIN_TRANSPOSED_PER_CORE_M,
 ):
-    """linear_program_config's choice, in tiles: (per_core_M, per_core_N, in0_block_w, out_subblock_h, out_subblock_w,
-    transpose_mcast), or None. The limits default to the LINEAR_* constants' values at import and, as arguments, are
-    part of the cache key."""
+    """linear_program_config's choice, in tiles (a _LinearBlocking), or None. out_sharded changes only the subblock.
+    The limits default to the LINEAR_* constants' values at import and, as arguments, are part of the cache key."""
     cores = grid_x * grid_y
     # Output tiles per core of a 1D multicast: all the rows and a slice of the columns on each core, or vice versa.
     one_d = min(m_tiles * math.ceil(n_tiles / cores), math.ceil(m_tiles / cores) * n_tiles)
@@ -191,9 +257,14 @@ def _linear_blocking(
         return None
     dest_tiles = 4 if fp32_dest_acc else 8
     subblock_h, subblock_w = next(
-        (h, w) for h, w in _SUBBLOCKS if h * w <= dest_tiles and per_core_m % h == 0 and per_core_n % w == 0
+        (h, w)
+        for h, w in _SUBBLOCKS
+        if h * w <= dest_tiles
+        and per_core_m % h == 0
+        and per_core_n % w == 0
+        and (not out_sharded or h == 1 or w == per_core_n)
     )
-    return per_core_m, per_core_n, fitting[-1], subblock_h, subblock_w, transpose
+    return _LinearBlocking(per_core_m, per_core_n, fitting[-1], subblock_h, subblock_w, transpose)
 
 
 # The q chunks sdpa_program_config picks from. Chunks below 128 are left out: on a P150 a q chunk of 64 saved 0.4 ms
@@ -230,3 +301,195 @@ def _sdpa_q_chunk_size(seq_len: int, num_heads: int, cores: int) -> int:
     # The op deals the num_heads x ceil(seq_len / q) q chunks evenly over the cores, so the slowest core runs
     # ceil(num_heads * ceil(seq_len / q) / cores) chunks of q rows.
     return min(SDPA_Q_CHUNK_SIZES, key=lambda q: (math.ceil(num_heads * math.ceil(seq_len / q) / cores) * q, -q))
+
+
+@dataclasses.dataclass(frozen=True)
+class BlockPlacement:
+    """Where an encoder block's ops write their outputs: the memory_config each passes to ttnn, or None, where it
+    passes none and the op writes where its input is. The block's LayerNorms and RoPE ops never get one, and neither
+    does SDPA, whose output stays in DRAM, ttnn's default for it. block_placement picks one per image size and grid.
+
+    - name: the placement's name, for logs.
+    - block_input: pre_layrnorm's output, the first block's input.
+    - residual: the residual stream: both adds' outputs and the out_proj and fc2 outputs they add.
+    - qkv: QKV's output and the q, k and v heads split from it.
+    - fc1_out: fc1's output, in L1 block shards in L1_SHARDED_MLP_PLACEMENT.
+    - gelu_out: GELU's output, fc2's input.
+    """
+
+    name: str
+    block_input: Optional[ttnn.MemoryConfig]
+    residual: ttnn.MemoryConfig
+    qkv: ttnn.MemoryConfig
+    fc1_out: ttnn.MemoryConfig
+    gelu_out: Optional[ttnn.MemoryConfig]
+
+
+# Every activation in DRAM: pre_layrnorm and GELU get no memory config and write where their input is.
+DRAM_PLACEMENT = BlockPlacement(
+    name="dram",
+    block_input=None,
+    residual=ttnn.DRAM_MEMORY_CONFIG,
+    qkv=ttnn.DRAM_MEMORY_CONFIG,
+    fc1_out=ttnn.DRAM_MEMORY_CONFIG,
+    gelu_out=None,
+)
+# The block's activations in L1 interleaved, except the inputs of out_proj and fc2: SDPA's and GELU's outputs stay in
+# DRAM (block_placement).
+L1_INTERLEAVED_PLACEMENT = BlockPlacement(
+    name="l1_interleaved",
+    block_input=ttnn.L1_MEMORY_CONFIG,
+    residual=ttnn.L1_MEMORY_CONFIG,
+    qkv=ttnn.L1_MEMORY_CONFIG,
+    fc1_out=ttnn.L1_MEMORY_CONFIG,
+    gelu_out=ttnn.DRAM_MEMORY_CONFIG,
+)
+# As L1_INTERLEAVED_PLACEMENT, but fc1 writes L1 block shards, the block of its program config on each core of its
+# split, GELU writes where its input is, and fc2 reads those shards (block_placement).
+L1_SHARDED_MLP_PLACEMENT = dataclasses.replace(
+    L1_INTERLEAVED_PLACEMENT,
+    name="l1_sharded_mlp",
+    fc1_out=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+    gelu_out=None,
+)
+# M3VLVisionModel.activations: "l1" keeps the blocks' activations in L1 where block_placement proves they fit, with the
+# MLP's hidden activations in block shards where they fit those, "l1_interleaved" the same without the shards, and
+# "dram" keeps every activation in DRAM.
+ACTIVATIONS = ("l1", "l1_interleaved", "dram")
+# The core grids block_placement keeps activations in L1 on, those of Blackhole chips by harvesting: the host test walks
+# the L1 budget on each.
+L1_GRIDS = ((11, 10), (12, 10), (13, 10))
+# The most rows block_placement keeps in L1, 72 tile rows: the largest image the image processor makes, 672x672. The
+# model takes larger images, which no device run has covered with activations in L1: with this limit lifted, the host
+# test's walk of the L1 budget finds sizes on 12x10 where an op's circular buffers would overlap the activations.
+L1_MAX_ROWS = 2304
+# The (in_features, out_features, fp32_dest_acc) of the QKV, out_proj, fc1 and fc2, from block_linears, that
+# block_placement keeps activations in L1 for: the checkpoint's, heads padded to 96, with fp32 accumulation, the only
+# ones the host test walks the L1 budget at. Other widths change the splits and buffers: with an MLP of 7040, fc1's
+# circular buffers would end 46592 B below the lowest tensor at 2304 patches on 12x10, under PROOF_L1_FOREIGN_BYTES.
+L1_LINEARS = ((1280, 4608, True), (1536, 1280, True), (1280, 5120, True), (5120, 1280, True))
+# A P150's L1 bank with no L1_SMALL region, as measured on one.
+P150_L1_BANK_BYTES = 1_460_864
+# Room the proof leaves for the runtime to take more of each L1 bank than when P150_L1_BANK_BYTES was measured: on the
+# encoder PR's base (main de69037d3a) a P150 had 576 B less per bank, 1_459_136 B with the L1_SMALL region, so with no
+# slack every forward kept its activations in DRAM there.
+PROOF_L1_BANK_SLACK_BYTES = 16 * 1024
+# The L1 bank block_placement is proven for: a P150's as every M3 mesh open leaves it, less the L1_SMALL region that the
+# allocator takes out of the bank and PROOF_L1_BANK_SLACK_BYTES. Each margin of the proof is the bank less the block's
+# tensors and one op's circular buffers, so a larger bank only adds room.
+PROOF_L1_BANK_BYTES = P150_L1_BANK_BYTES - L1_SMALL_SIZE - PROOF_L1_BANK_SLACK_BYTES
+# The most bytes at the top of each bank that other tensors may take when a forward starts: the proof keeps every
+# margin above it.
+PROOF_L1_FOREIGN_BYTES = 64 * 1024
+# The variable that has tt-metal open its devices with the HYBRID allocator when its value starts with 1, read once
+# per process, before the first device opens. Each core's L1 can then hold per-core tensors that ttnn.get_memory_view,
+# the lockstep allocator's view, does not show, and lockstep tensors go below them.
+HYBRID_ALLOCATOR_ENV = "TT_METAL_ALLOCATOR_MODE_HYBRID"
+
+
+def block_placement(block, rows: int, activations: str) -> BlockPlacement:
+    """The BlockPlacement of an encoder block (M3VLBlock) for an input of `rows` rows, padded or not, with activations
+    one of ACTIVATIONS: for "l1" L1_SHARDED_MLP_PLACEMENT or L1_INTERLEAVED_PLACEMENT, for "l1_interleaved" the
+    latter, where it is proven to fit; else DRAM_PLACEMENT.
+
+    L1_INTERLEAVED_PLACEMENT keeps the block's tensors in L1 interleaved, the layout every op of the block takes, but
+    for the inputs of out_proj and fc2. On a P150 (12x10) at 2304 patches, with every tensor of a block in L1
+    interleaved, the output was bit-identical and every op ran faster except out_proj and fc2, which use each input
+    tile for 4 output tiles per core: their input reads slowed down, and they ran 40.5 and 108.5 us per block slower
+    than with their input in DRAM. So SDPA's and GELU's outputs stay in DRAM. It applies
+    - to the linears of L1_LINEARS, on the grids of L1_GRIDS, up to L1_MAX_ROWS rows, where the host test walks the
+      L1 budget;
+    - where linear_program_config gives each of the block's four linears a config: ttnn's own matmul configs plan by
+      the free L1, which activations in L1 would change.
+    The interleaved LayerNorm plans by the free L1 too; the host test checks that it keeps its plan.
+
+    L1_SHARDED_MLP_PLACEMENT also keeps fc1's and GELU's outputs, fc2's input, in L1 block shards. On that P150 at
+    2304 patches, in a block that also kept its residual stream in block shards, fc1 writing block shards, GELU on
+    them and fc2 reading them ran 88.1, 6.4 and 65.7 us per block faster than with their operands in DRAM, each op's
+    output bit-identical to the DRAM op's on the same input. "l1" takes it where fc1 and fc2 both get a transposed
+    split with the same rows per core, fc1's width splits into whole blocks, fc2's K block divides fc1's block width
+    and fc1's blocks across its width are as many as fc2's: each core's block of fc1's output is then the shard of
+    fc2's input that core reads, with no partial block of K, which fc2 would add into its sums, and no shard on a core
+    without a block of fc2's output, which would take a buffer the host test does not count. Whole blocks across
+    fc1's width also keep GELU right on the last row of shards: it works on the first tiles of each shard, as many as
+    the shard holds of the tensor, and those are then whole tile rows.
+
+    The widths come from the block's weights and fp32 accumulation from their compute configs, as linear() reads
+    them, and the choice is cached on those numbers, the tile rows and the grid. "dram" reads nothing from block.
+    """
+    if activations not in ACTIVATIONS:
+        raise ValueError(f"activations must be one of {ACTIVATIONS}, got {activations!r}")
+    if activations == "dram":
+        return DRAM_PLACEMENT
+    linears = block_linears(block)
+    grid = linears[0][0].device().compute_with_storage_grid_size()
+    widths = tuple((w.padded_shape[-2], w.padded_shape[-1], bool(config.fp32_dest_acc_en)) for w, config in linears)
+    return _l1_block_placement(math.ceil(rows / ttnn.TILE_SIZE), widths, grid.x, grid.y, activations == "l1")
+
+
+def block_linears(block) -> tuple:
+    """The weight and compute config of an encoder block's (M3VLBlock) QKV, out_proj, fc1 and fc2, in that order, as
+    the block passes them to linear()."""
+    attention, mlp = block.attention, block.mlp
+    return (
+        (attention.wqkv, attention.compute_kernel_config),
+        (attention.wo, attention.compute_kernel_config),
+        (mlp.fc1_weight, mlp.compute_kernel_config),
+        (mlp.fc2_weight, mlp.compute_kernel_config),
+    )
+
+
+@functools.lru_cache(maxsize=None)
+def _l1_block_placement(
+    m_tiles: int, linears: tuple[tuple[int, int, bool], ...], grid_x: int, grid_y: int, shard_mlp: bool
+) -> BlockPlacement:
+    """block_placement's choice at m_tiles tile rows, with linears the (in_features, out_features, fp32_dest_acc) of
+    the block's QKV, out_proj, fc1 and fc2, and shard_mlp for "l1"."""
+    if linears != L1_LINEARS or (grid_x, grid_y) not in L1_GRIDS or m_tiles * ttnn.TILE_SIZE > L1_MAX_ROWS:
+        return DRAM_PLACEMENT
+    n_tiles, blockings = [], []
+    for in_features, out_features, fp32_dest_acc in linears:
+        k_tiles = math.ceil(in_features / ttnn.TILE_SIZE)
+        n_tiles.append(math.ceil(out_features / ttnn.TILE_SIZE))
+        # linear_program_config's choice: None leaves the config to ttnn.
+        blockings.append(_linear_blocking(m_tiles, k_tiles, n_tiles[-1], grid_x, grid_y, fp32_dest_acc))
+        if blockings[-1] is None:
+            return DRAM_PLACEMENT
+    if not shard_mlp:
+        return L1_INTERLEAVED_PLACEMENT
+    (fc1, fc2), (fc1_n_tiles, fc2_n_tiles) = blockings[2:], n_tiles[2:]
+    # fc2 reads fc1's output as a block-sharded input, which needs COL_MAJOR shards, so transposed splits, as high as
+    # fc2's per_core_M. With fc2's split transposed, on these grids fc1's transposed split and the equal rows per core
+    # imply each other.
+    if (
+        fc1.transpose_mcast
+        and fc2.transpose_mcast
+        and fc1.per_core_m == fc2.per_core_m
+        and fc1_n_tiles % fc1.per_core_n == 0
+        and fc1.per_core_n % fc2.in0_block_w == 0
+        and math.ceil(fc1_n_tiles / fc1.per_core_n) == math.ceil(fc2_n_tiles / fc2.per_core_n)
+    ):
+        return L1_SHARDED_MLP_PLACEMENT
+    return L1_INTERLEAVED_PLACEMENT
+
+
+def l1_free_for_activations(mesh_device) -> tuple[bool, str]:
+    """Whether mesh_device's L1 is as block_placement's proof takes it, and why not: the lockstep allocator (no
+    HYBRID_ALLOCATOR_ENV), one L1 bank per core of the compute grid, at least PROOF_L1_BANK_BYTES per bank, and no L1
+    tensor more than PROOF_L1_FOREIGN_BYTES below the top of the bank. Tensors are allocated from the top of the bank
+    down, and an op's circular buffers, which start at its bottom, must end below the lowest tensor, so a small tensor
+    low in the bank cuts every margin."""
+    if os.environ.get(HYBRID_ALLOCATOR_ENV, "").startswith("1"):
+        return False, f"{HYBRID_ALLOCATOR_ENV} is set, and the L1 memory view does not show per-core tensors"
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
+    grid = mesh_device.compute_with_storage_grid_size()
+    if view.num_banks != grid.x * grid.y:
+        return False, f"{view.num_banks} L1 banks for {grid.x * grid.y} cores"
+    if view.total_bytes_per_bank < PROOF_L1_BANK_BYTES:
+        return False, f"{view.total_bytes_per_bank} B per L1 bank, under the {PROOF_L1_BANK_BYTES} B of the proof"
+    # The block table lists the bank's free and allocated blocks, at addresses from the bottom of the bank.
+    allocated = [int(block["address"]) for block in view.block_table if block["allocated"] == "yes"]
+    taken = view.total_bytes_per_bank - min(allocated, default=view.total_bytes_per_bank)
+    if taken > PROOF_L1_FOREIGN_BYTES:
+        return False, f"an L1 tensor {taken} B below the top of each bank, over {PROOF_L1_FOREIGN_BYTES} B"
+    return True, ""
