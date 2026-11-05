@@ -122,9 +122,9 @@ void SmallMMatmulDeviceOperation::validate_on_program_cache_miss(
     const uint32_t M = a_logical[-2];
 
     // Output column-split: chunks>=1, dim==-1, N%chunks==0, per-chunk tile-aligned. The writer stores chunk
-    // base addresses in a fixed chunk_addr[kMaxChunks] array (kMaxChunks=16 in in0_ring_reduce_writer.cpp);
+    // base addresses in a fixed chunk_addr[kMaxChunks] array (kMaxChunks=32 in in0_ring_reduce_writer.cpp);
     // reject chunks beyond that to avoid an out-of-bounds runtime-arg read / write.
-    constexpr int32_t kMaxChunks = 16;
+    constexpr int32_t kMaxChunks = 32;
     const int32_t chunks = operation_attributes.chunks;
     TT_FATAL(chunks >= 1, "small_m_matmul requires chunks >= 1, got chunks={}", chunks);
     TT_FATAL(chunks <= kMaxChunks, "small_m_matmul supports at most {} chunks, got chunks={}", kMaxChunks, chunks);

@@ -245,7 +245,7 @@ void kernel_main() {
     // spec), differing only by base address. Not compiled unless OUT_CHUNKS (chunks>1); chunks==1 uses the
     // original single-buffer write below (byte-identical).
 #if defined(OUT_CHUNKS)
-    constexpr uint32_t kMaxChunks = 16u;
+    constexpr uint32_t kMaxChunks = 32u;
     const uint32_t n_chunks = get_arg_val<uint32_t>(fidx++);
     const uint32_t out_ntc = get_arg_val<uint32_t>(fidx++);  // per-chunk N tiles
     uint32_t chunk_addr[kMaxChunks];

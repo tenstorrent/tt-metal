@@ -67,7 +67,7 @@ parameters (they were previously accepted but ignored). Split `dim` is always `-
   optional unary `fused_activation` (`Y = act(A@B + bias)`); optional `addcmul`
   (`Y = residual + scalar*(A@B + bias)*gate`, residual `[M,N]` bf16, gate `[1,N]`/`[M,N]` bf16 or fp32).
   activation and addcmul are mutually exclusive. Output column-split via `small_m_matmul_split(..., chunks,
-  dim=-1)` (1..16 chunks, `N % chunks == 0`, per-chunk tile-aligned), composable with bias/activation/addcmul.
+  dim=-1)` (1..32 chunks, `N % chunks == 0`, per-chunk tile-aligned), composable with bias/activation/addcmul.
   For split-K (`Pk>1`) the epilogue is applied exactly once at the reduction root.
 - `in1` must be DRAM width-sharded across all G DRAM banks of the device. The measured auto-select lookup
   table is 8-bank (P150) only; on other bank counts `config=None` uses the G-parameterised cost model.

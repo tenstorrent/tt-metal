@@ -307,7 +307,7 @@ def test_small_m_fused_deepK_W_gt1_bias_act(device):
 
 # Chunking (output-split) composed with fusions.
 @pytest.mark.skipif(not is_blackhole(), reason="small-M matmul is Blackhole-only")
-@pytest.mark.parametrize("chunks", [2, 3])
+@pytest.mark.parametrize("chunks", [2, 3, 24])
 def test_small_m_split_no_fusion(device, chunks):
     _run_fused(device, 32, 6144, 3072, 1, 3, 1, 4, 6, chunks=chunks)
 
@@ -471,9 +471,9 @@ def test_small_m_fused_validation(device, expect_error):
     # split: N not divisible by chunks -> reject (3072/5 not integer)
     with expect_error(RuntimeError, "must be divisible by chunks"):
         ttnn.experimental.small_m_matmul_split(a, in1, 5, -1)
-    # split: chunks > 16 (writer chunk_addr[16]) -> reject even when N divides evenly (3072/32=96, tile-aligned)
-    with expect_error(RuntimeError, "supports at most 16 chunks"):
-        ttnn.experimental.small_m_matmul_split(a, in1, 32, -1)
+    # split: chunks > 32 (writer chunk_addr[32]) -> reject even when N divides evenly (3072/48=64, tile-aligned)
+    with expect_error(RuntimeError, "supports at most 32 chunks"):
+        ttnn.experimental.small_m_matmul_split(a, in1, 48, -1)
 
     # ---- Fusion operand dtype restrictions (only implemented CB formats accepted). ----
     def _bf(shape, dt):
