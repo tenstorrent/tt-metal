@@ -39,6 +39,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.blackhole.qwen36.tt.tp_common import kv_block_size
 
 
 def alloc_zeros_like(t, mesh):
@@ -252,6 +253,16 @@ class GdnPrefixStateCache:
     the GDN state currently bound on the layers (the persistent B=1 prefill scratch inside prefill_paged_slots)."""
 
     def __init__(self, model, num_slots=None, name="GDN prefix-state cache", host_slots=None):
+        kv = getattr(model, "_paged_kv_caches", None)
+        block = int(kv[0][0].shape[2]) if kv else kv_block_size()
+        if block > SPEC_PREFIX_ALIGN:
+            # A resume at a 128-aligned position inside a block would refill the block's K/V from its first row
+            # (paged_fill_cache): wrong K/V for the earlier tokens of the block.
+            raise ValueError(
+                f"{name}: resumes prefill at {SPEC_PREFIX_ALIGN}-token positions, which needs a KV block size of at "
+                f"most {SPEC_PREFIX_ALIGN}, got {block}. Turn off vLLM prefix caching / chunked prefill (or "
+                "QWEN36_PREFIX_CACHE=0), or keep the GDN state in vLLM blocks (QWEN36_MAMBA_SPEC=1)."
+            )
         self.model = model
         self.name = name
         self.num_slots = int(num_slots if num_slots is not None else os.environ.get("QWEN36_PREFIX_CACHE_SLOTS", "32"))
