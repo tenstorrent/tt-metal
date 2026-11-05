@@ -8,7 +8,6 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/common/hash_without_rows.hpp"
 
 #include <algorithm>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -198,12 +197,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     bool use_bias = bias_tensor.has_value();
     bool use_fused_ternary = fused_ternary_input_a.has_value() && fused_ternary_input_b.has_value();
-    // A gate of one folded tile row is broadcast from tile row 0; the validator admits no other [..., 1, N] gate.
-    const uint32_t broadcast_ternary_b =
-        use_fused_ternary &&
-                operations::common::folded_rows(fused_ternary_input_b.value()) == tt::constants::TILE_HEIGHT
-            ? 1u
-            : 0u;
+    // A [..., 1, N] gate is broadcast from tile row 0 (the validator admits it only with every upper dim 1); a full
+    // gate of up to 32 rows also folds to one tile row, so the flag comes from the logical rows.
+    const uint32_t broadcast_ternary_b = use_fused_ternary && fused_ternary_input_b->logical_shape()[-2] == 1 ? 1u : 0u;
 
     /**
      * Determine dataformats, compute kernel config

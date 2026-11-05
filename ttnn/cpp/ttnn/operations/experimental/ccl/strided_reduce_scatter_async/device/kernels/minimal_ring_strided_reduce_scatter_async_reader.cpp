@@ -94,8 +94,8 @@ void kernel_main() {
     const address_t intermediate_tensor_address = get_common_arg_val<address_t>(Crta::intermediate);
     const size_t out_ready_sem = get_common_arg_val<uint32_t>(Crta::semaphore_0 + direction);
     // Same split as the matmul's in0 kernels: equal rows per MM core, whole M blocks per core.
-    const uint32_t slice_Ht_per_core = ttnn::runtime_length::tiles_per_core(slice_Ht, mm_cores_y);
-    const uint32_t mm_M_unit_blocks_per_core = ttnn::runtime_length::blocks_per_core(slice_Ht_per_core, mm_block_ht);
+    const uint32_t slice_Ht_per_core = ttnn::runtime_length::div_up(slice_Ht, mm_cores_y);
+    const uint32_t mm_M_unit_blocks_per_core = ttnn::runtime_length::div_up(slice_Ht_per_core, mm_block_ht);
     const uint32_t input_batch_num_pages = slice_C * slice_Ht * input_tensor_Wt;
 
     constexpr uint32_t ct_idx = 20;  // [17]=mm_block_wt, [18]=fuse_mm_op (via FUSE_MM_OP_SIGNALER

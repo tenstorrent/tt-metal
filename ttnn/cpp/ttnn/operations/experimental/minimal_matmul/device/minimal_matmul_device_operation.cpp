@@ -19,22 +19,19 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
-constexpr uint64_t kMinimalMatmulProgramHashSalt = 0x4d4d5f6d6d5f7631ULL;  // "MM_mm_v1"
-
 // Full spec hash, for a sharded tensor: its accessor args compile the page count and the shard grid in.
 ttsl::hash::hash_t full_spec(const Tensor& tensor) {
-    return ttsl::hash::hash_objects_with_default_seed(kMinimalMatmulProgramHashSalt, tensor.tensor_spec());
+    return ttsl::hash::hash_objects_with_default_seed(tensor.tensor_spec());
 }
 
 // Spec hash of an optional tensor minus its row count (shape[-2]); presence is part of the hash. A sharded
 // tensor keeps its full spec.
 ttsl::hash::hash_t spec_without_rows(const std::optional<Tensor>& tensor) {
     if (!tensor.has_value()) {
-        return ttsl::hash::hash_objects_with_default_seed(kMinimalMatmulProgramHashSalt);
+        return ttsl::hash::hash_objects_with_default_seed(false);
     }
-    return tensor->is_sharded()
-               ? full_spec(*tensor)
-               : operations::common::hash_spec_without_rows(tensor->tensor_spec(), kMinimalMatmulProgramHashSalt);
+    return tensor->is_sharded() ? full_spec(*tensor)
+                                : operations::common::hash_spec_without_rows(tensor->tensor_spec());
 }
 
 using operations::common::folded_rows;
@@ -110,16 +107,15 @@ ttsl::hash::hash_t MinimalMatmulDeviceOperation::compute_program_hash(
     // The grid orientation (M > N) and, without an explicit config, the default subblock choice
     // (N >= M) are the only row-dependent program decisions; they enter the key as one bit.
     const bool transpose_core_grid = M > N;
-    const bool b_broadcast = b.has_value() && folded_rows(*b) == TILE_HEIGHT;
+    // A [..., 1, N] gate is broadcast (a full gate of up to 32 rows folds to one tile row too, so the logical rows
+    // decide, as in the validator).
+    const bool b_broadcast = b.has_value() && b->logical_shape()[-2] == 1;
     // A sharded output's accessor args compile its page count and shard grid in, so an op-created sharded
     // output pins M through the input's full spec.
     const bool output_sharded = operation_attributes.output_mem_config.value_or(input.memory_config()).is_sharded();
     return ttsl::hash::hash_objects_with_default_seed(
-        kMinimalMatmulProgramHashSalt,
         operation_attributes,
-        (input.is_sharded() || output_sharded)
-            ? full_spec(input)
-            : operations::common::hash_spec_without_rows(input, kMinimalMatmulProgramHashSalt),
+        (input.is_sharded() || output_sharded) ? full_spec(input) : operations::common::hash_spec_without_rows(input),
         tensor_args.weight_tensor.tensor_spec(),
         spec_without_rows(tensor_args.bias_tensor),
         spec_without_rows(tensor_args.optional_input_tensor),
