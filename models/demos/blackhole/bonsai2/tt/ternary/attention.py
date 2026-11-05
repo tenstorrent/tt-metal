@@ -80,7 +80,7 @@ class TernaryAttention:
         if self._xr is None:
             self._xr = self.rot_in(x)
         if self._hm_ok(lead):  # q head-major and the gate as their own tensors (no reshape / chunk / transpose)
-            return _QGDec(*self.q(self._xr, lead=lead, qg_heads=self.heads))
+            return _QGDec(*self.q(self._xr, lead=lead, qg_heads=self.heads, out_l1=_ROT_FUSE()))
         return self.q(self._xr, lead=lead)
 
     def project_k(self, x):
@@ -111,6 +111,12 @@ class TernaryAttention:
         return v
 
     def project_o(self, a):
+        if isinstance(a, _GatedOut) and _ROT_FUSE():  # sigmoid(gate) * attn rotated inside the o projection's op
+            lead = tuple(list(a.attn.shape)[:-1])
+            y = self.o.rotated(self.rot_out, a.gate, lead=lead, u=a.attn, sig=True, residual=prerot.take_residual())
+            ttnn.deallocate(a.attn)
+            ttnn.deallocate(a.gate)
+            return y
         if isinstance(a, _GatedOut):  # sigmoid(gate) * attn, rotated in one op
             lead = tuple(list(a.attn.shape)[:-1])
             ar = self.rot_out(a.gate, u=a.attn, sig=True)
@@ -256,12 +262,21 @@ class _GatedOut:
         self.attn, self.gate = attn, gate
 
 
+def _ROT_FUSE():
+    return os.environ.get("BONSAI_ROT_FUSE", "1") == "1"
+
+
 class _DecodeTransformer:
     """ttnn.transformer whose paged SDPA decode runs on the whole grid (BONSAI_DECODE_SDPA_GRID=0: the caller's):
     24 q / 4 kv heads, d = 256 at ~4100 positions: 8 x 8 85.3 us, 13 x 10 78.3 us (same chunks, same outputs)."""
 
     def __getattr__(self, name):
         return getattr(ttnn.transformer, name)
+
+    def concatenate_heads(self, x, *args, **kwargs):
+        if _ROT_FUSE() and not args:  # in L1: the o projection's fused rotation reads it during its weight stream
+            kwargs.setdefault("memory_config", ttnn.L1_MEMORY_CONFIG)
+        return ttnn.transformer.concatenate_heads(x, *args, **kwargs)
 
     def paged_scaled_dot_product_attention_decode(self, *args, **kwargs):
         pc = kwargs.get("program_config")
