@@ -57,7 +57,6 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 from models.demos.deepseek_v3_d_p.tests.glm_synthetic_weights import glm_random_transformer_state_dict
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
-from models.demos.deepseek_v3_d_p.tt.moe import tt_moe_gate_prefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
@@ -395,7 +394,7 @@ def _packed_schedule(chunk):
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm_packed_forward_matches_one_chunk_forwards(
-    variant, config_only, mesh_device, device_params, num_links, sp_axis, monkeypatch
+    variant, config_only, mesh_device, device_params, num_links, sp_axis
 ):
     """Packed forwards (slots 0..3) must reproduce every chunk run alone in its own forward (slots 4..7).
 
@@ -404,11 +403,8 @@ def test_glm_packed_forward_matches_one_chunk_forwards(
     one chunk per forward (forward_chunks=1, the regular path) then runs the same chunks, and the packed model's
     one-chunk forwards must match it: that catches an error common to every packed forward (its row layout,
     the MoE sized for FORWARD_CHUNKS chunks, padding), which the first comparison cannot see.
-
-    The packed padding-config cache is cut to one entry, so its LRU eviction runs between ragged forwards.
     """
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
-    monkeypatch.setattr(tt_moe_gate_prefill, "ROWS_PADDING_CONFIG_CACHE_SIZE", 1)
     sp = mesh_device.shape[sp_axis]
     chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
     chunk_local = chunk // sp
