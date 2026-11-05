@@ -758,7 +758,12 @@ inline void _llk_pack_block_dense_init_(const std::uint32_t face_r_dim, const st
     const std::uint32_t per_face = pacrs / num_faces;
     const std::uint32_t row      = pacr_word(face_r_dim, ADDR_MOD_0, 0);
     const std::uint32_t face     = pacr_word(face_r_dim, ADDR_MOD_2, 0);
+    const std::uint32_t key      = (num_faces << 8) | face_r_dim;
 
+    if (pack_dense_replay_key == key)
+    {
+        return;
+    }
     load_replay_buf(
         REPLAY_START,
         pacrs + 2,
@@ -775,6 +780,7 @@ inline void _llk_pack_block_dense_init_(const std::uint32_t face_r_dim, const st
             TTI_INCADCZW(p_setadc::PAC, 0, 0, 1, 0);
             TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);
         });
+    pack_dense_replay_key = key;
 }
 
 /**

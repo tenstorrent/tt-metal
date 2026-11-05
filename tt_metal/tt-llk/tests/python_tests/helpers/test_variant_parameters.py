@@ -1039,7 +1039,7 @@ class MATMUL_PACK_BLOCK(TemplateParameter):
 
 @dataclass
 class TINY_PACK_MODE(TemplateParameter):
-    """Tiny-tile block pack (Blackhole): 0 block-contiguous run, 1 closed run per tile, 2 _llk_pack_ per tile, 3 dense replay run"""
+    """Tiny-tile block pack (Blackhole): 0 block-contiguous run, 1 closed run per tile, 2 _llk_pack_ per tile, 3 dense replay run, 5 dense with repeated inits"""
 
     tiny_pack_mode: int = 0
 

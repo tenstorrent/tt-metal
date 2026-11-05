@@ -164,7 +164,7 @@ def _make_config(
         (32, 32),  # face_r_dim=16, num_faces=4 (baseline)
     ],
     num_tiles=[1, 2, 4, 8],
-    pack_mode=[0, 1, 2, 3, 4],
+    pack_mode=[0, 1, 2, 3, 4, 5],
 )
 def test_pack_tiny_tile_block(
     formats,
@@ -173,7 +173,7 @@ def test_pack_tiny_tile_block(
     num_tiles,
     pack_mode,
 ):
-    if pack_mode == 3 and tile_dims == (32, 32):
+    if pack_mode in (3, 5) and tile_dims == (32, 32):
         pytest.skip("The dense block pack records at most eight PACRs per tile")
     configuration, golden_tensor, _ = _make_config(
         tile_dims, num_tiles, formats, dest_acc, pack_mode
