@@ -5,6 +5,7 @@
 #include "impl/buffers/buffer_impl.hpp"
 #include <tt_stl/fmt.hpp>
 #include "fd_mesh_command_queue.hpp"
+#include "tt_metal/common/env_lib.hpp"
 
 #include <tracy/Tracy.hpp>
 
@@ -538,6 +539,16 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     const bool tag_tracy_zones = !tt::tt_metal::getDeviceProfilerState(mesh_device_->impl().metal_env());
 #endif
 
+    // TT_METAL_WORKLOAD_FAN_OUT=1: update every program first, then write all devices in one parallel_for.
+    static const bool fan_out = tt::parse_env("TT_METAL_WORKLOAD_FAN_OUT", false);
+    const bool fan_out_writes = fan_out && mesh_device_->impl().get_devices().size() > 1;
+    program_writes_.clear();
+    program_write_device_ids_.clear();
+    if (fan_out_writes && packed_programs_.size() < mesh_workload.get_programs().size()) {
+        packed_programs_.resize(mesh_workload.get_programs().size());
+    }
+    size_t program_index = 0;
+
     // Iterate over all programs. Update dispatch commands per program to reflect
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
@@ -559,8 +570,32 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
         const auto& local_devices = mesh_device_->impl().get_local_devices(device_range);
         sub_device_recorder.record(local_devices, program.get_runtime_id(), sub_device_id);
-        this->write_program_commands_to_devices(
-            local_devices, program_cmd_seq, dispatch_metadata.stall_first, dispatch_metadata.stall_before_program);
+        if (fan_out_writes) {
+            ProgramWrite write{.program_cmd_seq = &program_cmd_seq};
+            const auto size = program_cmd_seq.get_one_shot_fetch_size(
+                dispatch_metadata.stall_first, dispatch_metadata.stall_before_program, true);
+            if (local_devices.size() > 1 &&
+                size <= program_cmd_seq.ctx->dispatch_mem_map().max_prefetch_command_size()) {
+                auto& packed = packed_programs_[program_index];
+                program_dispatch::pack_program_command_sequence(
+                    program_cmd_seq,
+                    dispatch_metadata.stall_first,
+                    dispatch_metadata.stall_before_program,
+                    true,
+                    packed);
+                write.packed = &packed;
+                write.packed_size = size;
+            }
+            for (auto* device : local_devices) {
+                write.device = device;
+                program_writes_.push_back(write);
+                program_write_device_ids_.push_back(device->id());
+            }
+        } else {
+            this->write_program_commands_to_devices(
+                local_devices, program_cmd_seq, dispatch_metadata.stall_first, dispatch_metadata.stall_before_program);
+        }
+        program_index++;
         if (!covers_entire_mesh) {
             for (const auto* device : local_devices) {
                 chip_ids_in_workload.insert(device->id());
@@ -575,6 +610,26 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             TracyMessage(msg.c_str(), msg.size());
         }
 #endif
+    }
+
+    if (fan_out_writes) {
+        const bool stall_first = dispatch_metadata.stall_first;
+        const bool stall_before_program = dispatch_metadata.stall_before_program;
+        dispatch_thread_pool_->parallel_for(
+            program_write_device_ids_, [this, stall_first, stall_before_program](size_t i) {
+                const auto& write = program_writes_[i];
+                auto& manager = write.device->sysmem_manager();
+                if (write.packed != nullptr) {
+                    manager.issue_queue_reserve(write.packed_size, id_);
+                    manager.cq_write(write.packed->data(), write.packed_size, manager.get_issue_queue_write_ptr(id_));
+                    manager.issue_queue_push_back(write.packed_size, id_);
+                    manager.fetch_queue_reserve_back(id_);
+                    manager.fetch_queue_write(write.packed_size, id_);
+                } else {
+                    program_dispatch::write_program_command_sequence(
+                        *write.program_cmd_seq, manager, id_, stall_first, stall_before_program);
+                }
+            });
     }
 
     // Remember when this CrossNode launch will complete so a later re-enqueue of the
