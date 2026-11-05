@@ -1527,3 +1527,52 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   --skip-mpi-stress-test: "Recovery succeeded on attempt 1 of 1" (tt-smi -glx_reset + validation), box test PASS
   (2m19s total), 0 dirty cards. Made permanent in scripts/lib/tt_device_pool.sh. Skill: Galaxy reset = recover-hosts
   or tt-smi -glx_reset, never -r (Jacob Panasiuk, 873e0e45e54).
+- 11:05 Kartik / Nikhil's updated proposal (artifact 8shUorBkMnSC9ZnuDyxEUG): prefill never runs the decoder; it stops
+  at an even cut 128 tokens short of the end (layers 0-19 + layer 20's KV projection); decode runs the last 128 through
+  all 40 layers and builds the decoder windows; handoff = global KV + encoder windows (20 x 128 rows, fp8, ~1.35 MB);
+  short follow-ups (< 128) skip prefill. On our side = P.30's skip path with every chunk non-last.
+  OWNER: add a cut test. QUEUED (to write into tasks.yaml at P.32's decision pause, not while its agent runs): P.33
+  DECODER_CUT_TEST, test only, deps P.32, before X.3: a prompt ending at an even cut 128 short of the end, every chunk
+  last=False (DECODER_SKIP=exact): the encoder windows (layers 0-19, last 128 rows) and layer 20's compressed KV /
+  index keys at the cut vs the golden, e2e limits; X.3 deps += P.33.
+- 14:10 P.32 attempt 1 killed (rc -9) at 4 h (10:10 -> 14:10: the agent time limit) while waiting on its final
+  `orchestrator measure` (devjob p32_measure, detached: still running, now in the profiles). Attempt 2 started; its
+  brief says attempt 1 was cut off with its code in the tree. FRAMEWORK F250 (to fix): an agent only waiting on its own
+  detached devjob should not be killed into a new attempt (or the wait should survive into the next attempt). Ring
+  side so far on the final code: window ring same values, DRAM 17.21 load / 18.39 peak, ladder last PASS (0.1399).
+- 15:15 OWNER: order agreed: P.32 -> P.33 (cut test) -> X.3 -> the rebase onto a newer llk_helper_library, done in a
+  fresh session with /rebase-bringup in a separate worktree after X.3 (starting map: bringup/REBASE_OPS_20261104.md;
+  needs the 8x4 free for its verification). The overseer hands off after P.32's table (context ~75 %).
+- 15:50 P.32 final measure (ring side): position items p51200 / p512000 ended rc 1 although both pytest runs in each
+  passed (SAFE_PYTEST_RESULT PASS twice); their results hold wall / host numbers only (wall 209.9 / 232.1 ms), no device
+  metrics. Not investigated yet (timing-only items); check in the A/B table, and if it repeats on the full side it is a
+  framework issue for the next overseer.
+- 16:06 P.32 agent done; A/B now measures the full side. KNOWLEDGE CONTRADICTED DS41-206 (the agent's own entry,
+  incomplete): the position items' rc 1 = the F230 profile's op-counting run (testing/profile.py:592) re-runs the chunk
+  at the position on the same slot after the timed runs; under WINDOW_KV_KEEP=ring that slot holds later history and
+  the model refuses (correct). Wall timings valid, device metrics missing on the ring side. FRAMEWORK F251 (to fix):
+  the counting run on a fresh slot / state.
+
+## 2026-11-05 17:20 UTC HAND-OFF (overseer context ~77 %): continue with /bringup "report on deepseek_v41_flash_d_p galaxy_8x4"
+- Run: orchestrator in tmux ds41-8x4 (run_ds41_8x4.sh --until P.32), P.32 WINDOW_KV_KEEP (full | ring | none) in its A/B:
+  ring side measured (agent attempt 2 done), full side on its last timings; then WAITING FOR A PERSON. Accept P.32 as
+  a switch (owner's order: keep_default, default stays full) unless a limit misses; bring the owner the table
+  (memory: served 0.156 vs 1.41 GiB / user at 1M, peak 18.39 vs 19.63; accuracy: ring/none x exact/replay128 final
+  hidden 0.144 / 0.238 / 0.173 / 0.253 vs limit 0.256, top-5 1.0; the last / non-last chunk timings). The owner asked
+  to be pinged when the P.32 table is in.
+- Then, at P.32's decision pause (nothing running), write P.33 into tasks.yaml (queued 11:05, see that entry: the
+  decoder-cut test, deps P.32, before X.3; X.3 deps += P.33), set run_ds41_8x4.sh --until X.3, resume.
+- After X.3 passes: push dnijemcevic/model_bringup (the owner's last push before the rebase). The rebase then runs in a
+  fresh session with /rebase-bringup in a new worktree (prompt: /scratch/dnijemcevic/rebase_session_prompt.md; push
+  nothing until e2e verified, only to dnijemcevic/model_bringup_rebased; MoE as carried).
+- Defaults now: EXPERTS_IMPL bfp4_mse (FIX.22), DECODER_SKIP off (P.30 exact / P.31 replay128 as switches),
+  WINDOW_KV_KEEP full. Owner-signed waiver widened 2026-11-05 (window-KV last block, any layer).
+- Framework to fix (logged above): F250 (agent killed at 4 h while waiting on its own devjob), F251 (the position
+  profile's counting run re-runs the chunk on a slot with history: refused under ring), F243 (warm a new weight
+  format's cache before timed tests). Done this session: F241, F244, F245, F246, F247, F248, F249, safe-runner
+  recover-hosts --skip-mpi-stress-test, skill Galaxy reset text.
+- Owner items: the tt-d-gen message (scratchpad draft, owner shares it); raise with Kartik / Nikhil that prefill can
+  make the decoder windows exact for ~25 ms / request; xing40 selftest failure (server_rules.py:393 fixed threshold).
+- Host leak (tt-kmd #301): unaccounted ~130 GiB (reboot ~250). Expert caches: bfp4 / bfp4_mse / bfp8 on /scratch;
+  bfp4 + bfp4_mse backed up on /data/dnijemcevic/.../tt_cache/8x4/v1/experts-5254448103b6.
+- Overseer guard set (tmux overseer pane-died), heartbeat cron 7,37 in this session only (a new session re-creates it).
