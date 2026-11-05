@@ -46,10 +46,10 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
 {
   "manifest_version": 1,
   "file_kind": "fabric_manifest",
-  "run":        { mpi_rank, world_size, written_at,
+  "run":        { mpi_rank, world_size, host_name, written_at,
                   build: { git_sha, git_sha_short, version, build_type, git_dirty } },
   "fabric":     { config: { ... }, topology, is_2d_routing, packet_header, ... },
-  "arch":       { name, l1_areas: { ... }, core_registers: [ ... ] },
+  "arch":       { name, l1: { address, size_bytes }, l1_areas: { ... }, core_registers: [ ... ] },
   "vocabulary": { <list name>: [ <name>, ... ] },
   "meshes": {
     "M<mesh>": {
@@ -127,6 +127,7 @@ id). A field the builder doesn't emit in this configuration, such as a 2D-only f
 | Key | Value |
 | --- | --- |
 | `mpi_rank`, `world_size` | This process's MPI rank, and the number of processes |
+| `host_name` | The host this process runs on: the cluster id UMD stamps on the cluster descriptor, which is `TT_METAL_CLUSTER_ID` when set and otherwise the OS hostname |
 | `written_at` | When the manifest was written, in UTC, as ISO 8601 |
 | `build.git_sha` | The commit tt-metal was built from. Empty outside a git checkout or `git archive` export |
 | `build.git_sha_short` | The short form of `git_sha` |
@@ -158,6 +159,7 @@ id). A field the builder doesn't emit in this configuration, such as a 2D-only f
 | Key | Value |
 | --- | --- |
 | `name` | The architecture, such as `wormhole_b0` |
+| `l1` | The whole L1 of the Ethernet core a router runs on: `size_bytes` bytes from `address`. Every L1 region the manifest names lies inside it |
 | `l1_areas` | L1 regions the architecture fixes on every router core: `heartbeat` (with its `magic`, `magic_mask` and `period_iters`), `fabric_telemetry`, `routing_table`, `eth_fw_mailbox`, and base firmware's link status words `base_fw_port_status`, `base_fw_train_status`, `base_fw_retrain_count`, `base_fw_rx_link_up` and `base_fw_postcode`. An area the architecture doesn't have is null |
 | `core_registers` | An array, in read order: `soft_reset` (with `reset_masks`, each physical ERISC's reset bit), `wall_clock_low` and `wall_clock_high`, each with its `name`, `address` and `type`. Reading the low wall clock word latches the high word |
 | `fabric_telemetry_version` | `FABRIC_TELEMETRY_VERSION`: which layout of `FabricTelemetry` the `fabric_telemetry` area holds |

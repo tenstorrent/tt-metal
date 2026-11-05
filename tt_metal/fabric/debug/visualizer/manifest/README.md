@@ -17,7 +17,7 @@ The manifest is the first stage of the fabric visualizer's pipeline. Each later 
 | Stage      | Runs                            | What it takes from the manifest                                                                                     |
 | ---------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | Manifest   | Once per rank, at fabric init   | Nothing: it writes the manifest from the builders                                                                   |
-| Capture    | Once per rank, on the rank's host | Which cores to read (each router's chip and Ethernet channel), and the address of every stream register it names  |
+| Capture    | Once per rank, on the rank's host | Which cores to read (each router's chip and Ethernet channel), the L1 range on each, and the address of every register it reads |
 | Decode     | Once per rank, on the run's build | Each L1 region's and stream register's type name, which it maps back to the C++ type, and the facts it reads values against: channels, credits, fields |
 | Join       | Once per run                    | Each router's path and its link peer, which may be on another rank's chip                                           |
 | Visualizer | Once per run                    | The meshes, chips and routers, and each router's channels, fields and L1 regions                                    |
@@ -32,9 +32,9 @@ opened (its local chips) also list their routers. The top level blocks are descr
 
 | Block        | What it holds                                                                                                             |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `run`        | This process and build: host rank, MPI rank, world size, when the file was written, and the commit                        |
+| `run`        | This process and build: host name, MPI rank, world size, when the file was written, and the commit                        |
 | `fabric`     | The fabric settings the run asked for (`config`), and what fabric derived from them: topology, routing mode, packet header type, packet sizes |
-| `arch`       | What the architecture fixes on every router core: L1 areas such as telemetry and the routing table, and core registers    |
+| `arch`       | What the architecture fixes on every router core: its L1 range, L1 areas such as telemetry and the routing table, and core registers |
 | `vocabulary` | Every value each label can hold, such as every channel status                                                             |
 | `meshes`     | Each mesh's shape, its chips, and each local chip's routers: their links, channels, credits, fields and L1 regions        |
 
