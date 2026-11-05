@@ -39,6 +39,13 @@ def tokpar_out_enabled():
     return os.environ.get("QWEN36_TOKPAR_OUT", "0") == "1"
 
 
+def tokpar_a2a_bf8():
+    """QWEN36_TOKPAR_A2A_BF8=1: the two mixer all-to-alls of forward_tokpar carry bf8 (their consumers cast to bf8)."""
+    import os
+
+    return os.environ.get("QWEN36_TOKPAR_A2A_BF8", "0") == "1"
+
+
 def tokpar_a2a(x, to_tokens):
     """Hidden-sharded [1,1,S,dim/tp] <-> token-sharded [1,1,S/tp,dim] over the (1, tp) TP axis (all_to_all)."""
     in_dim, out_dim = (3, 2) if to_tokens else (2, 3)
@@ -365,7 +372,12 @@ class Qwen36DecoderLayer:
         distributed-norm CCL); the MLP is token-parallel with the full weights (no all-gather / reduce-scatter)."""
         pg = prefill_group
         out_tp = "wo" in self._tokpar
+        a2a_bf8 = tokpar_a2a_bf8()
         xn = self._tokpar_norm(x, self.attention_norm)
+        if a2a_bf8:  # the in-proj AGMM gathers bf8 anyway (QWEN36_AGMM_BF8): cast before the all-to-all
+            xn8 = ttnn.typecast(xn, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(xn)
+            xn = xn8
         xh = tokpar_a2a(xn, to_tokens=False)
         ttnn.deallocate(xn)
         if self.is_full_attention:
@@ -396,13 +408,20 @@ class Qwen36DecoderLayer:
             )
         ttnn.deallocate(xh)
         a = ttnn.reshape(a, (1, 1, a.shape[-2], a.shape[-1]))
+        if out_tp and a2a_bf8:  # the out-proj consumes bf8: cast before the all-to-all (same rounding, half the bytes)
+            a8_ = ttnn.typecast(a, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(a)
+            a = a8_
         at = tokpar_a2a(a, to_tokens=True)
         ttnn.deallocate(a)
         if out_tp:
             # token-parallel out-projection with the full weight (bf8 activation, 12x10 grid, L1 accumulation)
             M, K = at.shape[-2], at.shape[-1]
-            a8 = ttnn.typecast(at, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(at)
+            if at.dtype == ttnn.bfloat8_b:
+                a8 = at
+            else:
+                a8 = ttnn.typecast(at, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(at)
             at = ttnn.linear(
                 a8,
                 self._tokpar["wo"],
