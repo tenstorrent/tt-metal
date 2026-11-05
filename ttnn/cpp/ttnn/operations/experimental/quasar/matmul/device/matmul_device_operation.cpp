@@ -762,13 +762,22 @@ void validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
         ring_size);
 }
 
-// B over prefetcher pipes, on the cores the plan placed one C slice each (core i of plan.cores computes C slice i, the
-// i-th slice of N). The matmul declares one ring geometry for every pipe. Only the Tensor prefetcher's DRAM-sender
-// pipes carry a weight <-> matmul contract the matmul can check; a worker-sender pipe's producer is the caller's.
+// B over prefetcher pipes, checked before the op queues its prefetch request: a request whose matmul then fails leaves
+// the prefetcher blocked on a ring nothing drains. Each pipe receiver (the config's cores) computes one C slice, all of
+// M by its own slice of N (core i of plan.cores the i-th), from one pass of B's K chunks, one per pipe entry. The
+// matmul declares one ring geometry for every pipe. Only the Tensor prefetcher's DRAM-sender pipes carry a weight <->
+// matmul contract the matmul can check; a worker-sender pipe's producer is the caller's.
 void validate_unified_prefetcher_pipes(
-    const ttnn::PrefetcherPipeList& prefetcher_pipes, const Tensor& input_tensor_b, const MatmulUnifiedPlan& plan) {
+    const ttnn::PrefetcherPipeList& prefetcher_pipes,
+    const Tensor& input_tensor_b,
+    const CoreRangeSet& cores,
+    const MatmulUnifiedPlan& plan) {
     using tt::tt_metal::ShardDistributionStrategy;
     using tt::tt_metal::experimental::SenderCoreType;
+    TT_FATAL(
+        input_tensor_b.device()->arch() != tt::ARCH::QUASAR,
+        "prefetcher_pipes delivery of B has not been brought up on Quasar: the relay of a pipe into compute does not "
+        "work there yet");
     const ttnn::PrefetcherPipeRefList pipes = ttnn::prefetcher_pipe_refs(prefetcher_pipes);
     const tt::tt_metal::experimental::PrefetcherPipe& first_pipe = pipes.front();
     for (size_t p = 0; p < pipes.size(); ++p) {
@@ -783,6 +792,37 @@ void validate_unified_prefetcher_pipes(
             first_pipe.sender_core_type(),
             first_pipe.ring_size());
     }
+    const CoreRangeSet receivers = tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(pipes);
+    TT_FATAL(
+        receivers.num_cores() == cores.num_cores() && receivers.contains(cores),
+        "MatmulUnifiedProgramConfig with prefetcher_pipes needs the pipes' receivers ({}) to be exactly its cores ({})",
+        receivers.str(),
+        cores.str());
+    TT_FATAL(
+        plan.batch_size == 1 && plan.C_slice_M_tiles == plan.M_tiles &&
+            plan.C_slice_N_tiles * receivers.num_cores() == plan.N_tiles &&
+            plan.C_slice_N_padded_tiles == plan.C_slice_N_tiles,
+        "prefetcher_pipes deliver each of the {} receivers its slice of N once, so each computes all of M ({} tiles) "
+        "and N / receivers ({} / {} tiles) in one batch, unpadded; got {} batches with their own B and a {}x{}-tile C "
+        "slice padded to {} wide. Leave C_slice_M_tiles, C_slice_N_tiles and num_batch_groups unset, and give a "
+        "subblock_N_tiles that divides the C slice width.",
+        receivers.num_cores(),
+        plan.M_tiles,
+        plan.N_tiles,
+        receivers.num_cores(),
+        plan.batch_size,
+        plan.C_slice_M_tiles,
+        plan.C_slice_N_tiles,
+        plan.C_slice_N_padded_tiles);
+    const uint32_t entry_bytes = plan.K_chunk_tiles * plan.C_slice_N_tiles * plan.B_entry_bytes;
+    TT_FATAL(
+        first_pipe.ring_size() >= MIN_PIPE_RING_K_CHUNKS * entry_bytes,
+        "prefetcher_pipes ring ({} B) must hold at least {} K chunks of B ({} B each at K_chunk_tiles={}): the reader "
+        "publishes one while compute multiplies the previous one",
+        first_pipe.ring_size(),
+        MIN_PIPE_RING_K_CHUNKS,
+        entry_bytes,
+        plan.K_chunk_tiles);
     if (first_pipe.sender_core_type() != SenderCoreType::Dram) {
         return;
     }
@@ -2022,7 +2062,8 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         /*must_fit=*/true)
                         .value();
                 if (plan.B_from_pipes) {
-                    validate_unified_prefetcher_pipes(attributes.prefetcher_pipes, input_tensor_b, plan);
+                    validate_unified_prefetcher_pipes(
+                        attributes.prefetcher_pipes, input_tensor_b, program_config.cores, plan);
                 }
             } else {
                 TT_FATAL(

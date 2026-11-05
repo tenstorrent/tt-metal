@@ -533,63 +533,9 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     const uint32_t l1_ceiling = device.lowest_occupied_compute_l1_address().value_or(device.l1_size_per_core());
     const uint64_t l1_budget = l1_ceiling - l1_base;
 
-    // B over prefetcher pipes: the C slices are fixed by the pipes (every receiver gets its own slice of N for all of
-    // K, once), and a K chunk is one pipe entry, so two must fit the ring.
+    // B over prefetcher pipes: each core computes all of M for its own slice of N, and a K chunk is one pipe entry.
+    // validate_unified_prefetcher_pipes checks the plan against the pipes.
     base.B_from_pipes = !attributes.prefetcher_pipes.empty();
-    uint32_t pipe_ring_bytes = 0;
-    if (base.B_from_pipes) {
-        TT_FATAL(
-            !is_quasar,
-            "MatmulUnifiedProgramConfig with prefetcher_pipes has not been brought up on Quasar: the relay of a pipe "
-            "into compute does not work there yet");
-        const CoreRangeSet receivers = tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(
-            ttnn::prefetcher_pipe_refs(attributes.prefetcher_pipes));
-        TT_FATAL(
-            receivers.num_cores() == config.cores.num_cores() && receivers.contains(config.cores),
-            "MatmulUnifiedProgramConfig with prefetcher_pipes needs the pipes' receivers ({}) to be exactly its cores "
-            "({}): each receiver computes the C slice whose B the pipes deliver to it",
-            receivers.str(),
-            config.cores.str());
-        const uint32_t num_receivers = receivers.num_cores();
-        TT_FATAL(
-            base.batch_size == 1,
-            "MatmulUnifiedProgramConfig with prefetcher_pipes needs one B for every batch of A (got {} batches with "
-            "their own B): the pipes deliver B once",
-            base.batch_size);
-        TT_FATAL(
-            base.N_tiles % num_receivers == 0,
-            "MatmulUnifiedProgramConfig with prefetcher_pipes splits N ({} tiles) evenly over the {} pipe receivers",
-            base.N_tiles,
-            num_receivers);
-        const uint32_t C_slice_N_tiles = base.N_tiles / num_receivers;
-        TT_FATAL(
-            config.C_slice_M_tiles.value_or(base.M_tiles) == base.M_tiles &&
-                config.C_slice_N_tiles.value_or(C_slice_N_tiles) == C_slice_N_tiles &&
-                config.num_batch_groups.value_or(1) == 1,
-            "MatmulUnifiedProgramConfig with prefetcher_pipes computes one {}x{}-tile C slice (all of M, N over the "
-            "receivers) per core in one batch group; leave C_slice_M_tiles, C_slice_N_tiles and num_batch_groups unset",
-            base.M_tiles,
-            C_slice_N_tiles);
-        TT_FATAL(
-            !config.subblock_N_tiles.has_value() || C_slice_N_tiles % *config.subblock_N_tiles == 0,
-            "MatmulUnifiedProgramConfig with prefetcher_pipes needs subblock_N_tiles ({}) to divide the C slice width "
-            "({} tiles): compute reads B's K rows at the pipe entry's width",
-            *config.subblock_N_tiles,
-            C_slice_N_tiles);
-        pipe_ring_bytes = attributes.prefetcher_pipes.front()->ring_size();
-        const uint32_t B_K_row_bytes = C_slice_N_tiles * tt::tile_size(base.B_format);
-        const uint32_t smallest_K_chunk_tiles = config.K_chunk_tiles.value_or(1);
-        TT_FATAL(
-            (uint64_t)MIN_PIPE_RING_K_CHUNKS * smallest_K_chunk_tiles * B_K_row_bytes <= pipe_ring_bytes &&
-                pipe_ring_bytes <= MAX_DFB_EXTENT_BYTES,
-            "MatmulUnifiedProgramConfig with prefetcher_pipes needs a ring (here {} B) of at least {} K chunks of B "
-            "({} B each at K_chunk_tiles={}) and at most {} B",
-            pipe_ring_bytes,
-            MIN_PIPE_RING_K_CHUNKS,
-            smallest_K_chunk_tiles * B_K_row_bytes,
-            smallest_K_chunk_tiles,
-            MAX_DFB_EXTENT_BYTES);
-    }
 
     // ---- 4. C slice candidates ----
     // A C slice dim the config gives is fixed, and an auto one divides the largest C slice: M / N split over the
@@ -607,7 +553,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
                           : config.C_slice_M_tiles.value_or(
                                 batch_groups_allowed ? base.M_tiles : tt::div_up(base.M_tiles, core_rows));
     const uint32_t max_C_slice_N_tiles =
-        base.B_from_pipes ? base.N_tiles / static_cast<uint32_t>(config.cores.num_cores())
+        base.B_from_pipes ? tt::div_up(base.N_tiles, static_cast<uint32_t>(config.cores.num_cores()))
                           : config.C_slice_N_tiles.value_or(
                                 batch_groups_allowed ? base.N_tiles : tt::div_up(base.N_tiles, core_columns));
 
@@ -653,6 +599,14 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     // reports it.
     MatmulUnifiedPlan candidate;
     for (const auto& [C_slice_M_tiles, C_slice_N_tiles] : C_slice_shapes) {
+        // Over prefetcher pipes an auto K chunk is at most one MIN_PIPE_RING_K_CHUNKS of which fit the ring.
+        const uint32_t max_K_chunk_tiles =
+            base.B_from_pipes ? std::clamp<uint32_t>(
+                                    attributes.prefetcher_pipes.front()->ring_size() /
+                                        (MIN_PIPE_RING_K_CHUNKS * C_slice_N_tiles * tt::tile_size(base.B_format)),
+                                    1,
+                                    base.K_tiles)
+                              : base.K_tiles;
         // Batch groups: the config's, else one (every core takes every batch) and, with batches that have their own B,
         // the count that leaves the busiest core fewest C slices (the fewest groups on a tie), so that few C slices per
         // batch do not leave cores idle. Only one group can multicast.
@@ -682,20 +636,18 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
                      config.subblock_N_tiles.value_or(std::min(dst_capacity_tiles, C_slice_N_tiles));
                  subblock_N_tiles >= config.subblock_N_tiles.value_or(1);
                  --subblock_N_tiles) {
-                if (base.B_from_pipes && C_slice_N_tiles % subblock_N_tiles != 0) {
+                if (base.B_from_pipes && !config.subblock_N_tiles.has_value() &&
+                    C_slice_N_tiles % subblock_N_tiles != 0) {
                     continue;
                 }
                 for (uint32_t subblock_M_tiles = config.subblock_M_tiles.value_or(
                          std::min(dst_capacity_tiles / subblock_N_tiles, C_slice_M_tiles));
                      subblock_M_tiles >= config.subblock_M_tiles.value_or(1);
                      --subblock_M_tiles) {
-                    for (uint32_t K_chunk_tiles = config.K_chunk_tiles.value_or(base.K_tiles);
+                    for (uint32_t K_chunk_tiles = config.K_chunk_tiles.value_or(max_K_chunk_tiles);
                          K_chunk_tiles >= config.K_chunk_tiles.value_or(1);
                          --K_chunk_tiles) {
-                        if (base.K_tiles % K_chunk_tiles != 0 ||
-                            (base.B_from_pipes && (uint64_t)MIN_PIPE_RING_K_CHUNKS * K_chunk_tiles * C_slice_N_tiles *
-                                                          tt::tile_size(base.B_format) >
-                                                      pipe_ring_bytes)) {
+                        if (base.K_tiles % K_chunk_tiles != 0) {
                             continue;
                         }
                         candidate = make_plan(

@@ -267,3 +267,16 @@ def test_rejects_bank_pairing_of_another_distribution(device, expect_error):
     )
     with expect_error(RuntimeError, "Pair each bank with the cores whose shards it holds"):
         setup.matmul(device, qsr.MatmulUnifiedProgramConfig(cores=setup.cores, K_chunk_tiles=4))
+
+
+def test_rejects_a_subblock_that_pads_the_C_slice(device, expect_error):
+    """Compute reads B's K rows at the pipe entry's width, so the subblock may not pad the C slice."""
+    setup = _Setup(device, 4096, 4096, "recv_contig_contiguous", ttnn.bfloat8_b, ring_K_chunks=2, K_chunk_tiles=4)
+    subblock_N_tiles = next(n for n in range(2, 5) if setup.C_slice_N_tiles % n != 0)
+    with expect_error(RuntimeError, "in one batch, unpadded"):
+        setup.matmul(
+            device,
+            qsr.MatmulUnifiedProgramConfig(
+                cores=setup.cores, K_chunk_tiles=4, subblock_M_tiles=1, subblock_N_tiles=subblock_N_tiles
+            ),
+        )
