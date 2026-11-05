@@ -2,10 +2,10 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 # tt packages from test.pypi.org
-tt-exalens==0.4.1
+tt-exalens==0.4.3
 
 # tt-smi from pypi
-tt-smi==6.7.0
+tt-smi==6.8.0
 
 coverage[toml]==7.10.5
 exceptiongroup==1.3.0
