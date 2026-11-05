@@ -879,9 +879,15 @@ def test_fresh_inputs_per_call(runtime, geom):
         _check(f"call {seed} {geom}", r, _density(mask, case.geo, case.S), dense_min=None, ref_min=0.999)
 
 
-@SLOW
-@pytest.mark.parametrize("density", [KEEP_ALL, 0.15])
-@pytest.mark.parametrize("k_chunk", [256, 384])
+@pytest.mark.parametrize(
+    "k_chunk, density",
+    [
+        (256, KEEP_ALL),
+        pytest.param(256, 0.15, marks=SLOW),
+        pytest.param(384, KEEP_ALL, marks=SLOW),
+        pytest.param(384, 0.15, marks=SLOW),
+    ],
+)
 def test_production_5s(runtime, k_chunk, density):
     """MiniMax-H3 at 5 s (4736 rows per device), gated on the dense accuracy floor."""
     geo = Geometry(4736, 4736 * MESH_CONFIG.sp_size, k_chunk, dense_chunks=(320, 384))
