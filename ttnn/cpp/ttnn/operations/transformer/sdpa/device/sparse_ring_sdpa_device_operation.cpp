@@ -36,6 +36,8 @@ namespace ag_dyn = ttnn::experimental::prim::ring_attention_all_gather_async_dyn
 
 // The kernels take block_size as a compile-time arg; only 64 is implemented.
 constexpr uint32_t kSupportedBlockSize = 64;
+// dense_blocks ranges the reader takes (runtime args).
+constexpr uint32_t kMaxDenseRanges = 8;
 
 void validate_all_gather_on_program_cache_miss(
     const ttnn::experimental::prim::RingAttentionAllGatherAsyncParams& operation_attributes,
@@ -336,6 +338,34 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
         "block_mask width {} must be ring_size x a multiple of 32 blocks",
         n_blocks_pad);
     TT_FATAL(nb_pad >= tt::div_up(N_local_kv, block_size), "mask blocks per shard {} < blocks in the K shard", nb_pad);
+    const auto& dense = args.dense_blocks;
+    TT_FATAL(
+        dense.size() <= kMaxDenseRanges,
+        "SparseRingSDPA: at most {} dense_blocks ranges, got {}",
+        kMaxDenseRanges,
+        dense.size());
+    for (size_t r = 0; r < dense.size(); ++r) {
+        const auto [start, end] = dense[r];
+        TT_FATAL(start < end, "SparseRingSDPA: dense_blocks range {} is empty or reversed: [{}, {})", r, start, end);
+        TT_FATAL(
+            end <= n_blocks_pad,
+            "SparseRingSDPA: dense_blocks range {} [{}, {}) exceeds the {} global blocks (ring_size x nb_pad)",
+            r,
+            start,
+            end,
+            n_blocks_pad);
+        for (size_t o = 0; o < r; ++o) {
+            TT_FATAL(
+                end <= dense[o].first || dense[o].second <= start,
+                "SparseRingSDPA: dense_blocks ranges {} [{}, {}) and {} [{}, {}) overlap",
+                o,
+                dense[o].first,
+                dense[o].second,
+                r,
+                start,
+                end);
+        }
+    }
     const uint32_t nqb = tt::div_up(N_local_q, block_size);
     TT_FATAL(
         mask.logical_shape()[0] == 1 && mask.logical_shape()[1] == NQH && mask.logical_shape()[2] >= nqb &&
@@ -405,6 +435,8 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         args.all_gather_tensor_args,
         args.block_size,
         args.q_blocks_per_pass,
+        args.dense_blocks,
+        args.dense_keys,
         tensor_args.pooled_k.has_value(),
         tensor_args.pooled_v.has_value(),
         tensor_args.block_counts.has_value());
@@ -471,7 +503,9 @@ SparseRingSDPAResult sparse_ring_sdpa(
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     const uint32_t block_size,
     const std::optional<uint32_t> q_blocks_per_pass,
-    const std::optional<ttnn::Tensor>& block_counts) {
+    const std::optional<ttnn::Tensor>& block_counts,
+    const std::vector<std::pair<uint32_t, uint32_t>>& dense_blocks,
+    const bool dense_keys) {
     using OperationType = ttnn::prim::SparseRingSDPADeviceOperation;
     // Checked before the launch: a cache hit skips the miss-path validation.
     TT_FATAL(
@@ -535,7 +569,9 @@ SparseRingSDPAResult sparse_ring_sdpa(
         std::move(all_gather_tensor_args),
         ccl_core_grid_offset,
         block_size,
-        q_blocks_per_pass);
+        q_blocks_per_pass,
+        dense_blocks,
+        dense_keys);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

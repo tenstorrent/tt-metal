@@ -31,6 +31,7 @@ from tests.nightly.blackhole.sdpa.test_sparse_ring_sdpa import (
     MASK_STRUCTURES,
     Case,
     Geometry,
+    _block_lengths,
     _density,
     frame_block_mask,
     make_mask,
@@ -54,6 +55,8 @@ FRAME_POINTS = {11520: ("720p", 3840), 5760: ("480p", 1920)}
 FRAMES_REAL, FRAMES_PADDED = 21, 24
 DENSE_CHUNKS.update({rows: (320, 384) for rows in FRAME_POINTS})
 SHAPE_NAMES = {**WORKING_POINTS, **{rows: name for rows, (name, _) in FRAME_POINTS.items()}}
+TAIL_TOKENS = [512, 1024, 4096]
+TAIL_POINTS = {rows: WORKING_POINTS[rows] for rows in (4736, 9184)}
 
 
 @pytest.fixture(scope="module")
@@ -349,3 +352,39 @@ def test_frame_mask_perf(bench, results_file, rows, lofi):
     time_mask(
         bench, results_file, rows, make, FAMILY_K_CHUNK, False, structure="frames", logical_n=logical_n, lofi=lofi
     )
+
+
+def dense_tail_mask(geo, S, H, *, tail_tokens, position, variant, density=0.2, seed=0):
+    """make_mask at `density` with a dense tail: the first (position "start", shard 0) or last ("end", shard S - 1)
+    `tail_tokens` of the sequence. Every real Q block keeps the tail's K blocks; with variant "rows_cols" the tail's Q
+    blocks also keep every K block ("cols": they keep the random density)."""
+    nb, nb_pad = geo.nb(), geo.nb_pad()
+    n = tail_tokens // BLOCK
+    assert (
+        tail_tokens % BLOCK == 0 and n <= nb and geo.logical_n == S * geo.rows
+    ), "the tail must fill one shard's blocks"
+    s, blocks = (0, torch.arange(n)) if position == "start" else (S - 1, torch.arange(nb - n, nb))
+    mask = make_mask(geo, S, H, density=density, seed=seed)
+    full = (_block_lengths(geo, S) == BLOCK).reshape(-1).to(mask.dtype)
+    mask[:, :, :nb, s * nb_pad + blocks] = 1
+    if variant == "rows_cols":
+        mask[s, :, blocks] = 1
+    return mask * full
+
+
+@pytest.mark.parametrize("pooled", [True, False], ids=["sparse", "kept"])
+@pytest.mark.parametrize("tail_tokens", TAIL_TOKENS, ids=[f"T{t}" for t in TAIL_TOKENS])
+@pytest.mark.parametrize("variant", ["rows_cols", "cols"])
+@pytest.mark.parametrize("position", ["start", "end"])
+@pytest.mark.parametrize("rows", list(TAIL_POINTS), ids=list(TAIL_POINTS.values()))
+def test_dense_tail_perf(bench, results_file, rows, position, variant, tail_tokens, pooled):
+    """The sparse op at the production k_chunk on density-0.2 video blocks with a dense text / audio tail on one
+    device (dense_tail_mask)."""
+
+    def make(case):
+        return dense_tail_mask(
+            case.geo, case.S, case.H, tail_tokens=tail_tokens, position=position, variant=variant, seed=rows
+        )
+
+    structure = f"dense_tail_{position}_{variant}_T{tail_tokens}"
+    time_mask(bench, results_file, rows, make, FAMILY_K_CHUNK, pooled, structure=structure)

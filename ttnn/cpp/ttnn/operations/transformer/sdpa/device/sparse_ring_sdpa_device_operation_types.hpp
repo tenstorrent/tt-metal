@@ -8,6 +8,7 @@
 #include <optional>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 
@@ -34,6 +35,10 @@ struct SparseRingSDPAParams {
     uint32_t block_size = 64;
     // Q blocks per core per pass. nullopt: the largest count whose CBs fit L1.
     std::optional<uint32_t> q_blocks_per_pass = std::nullopt;
+    // [start, end) ranges of global blocks (s * nb_pad + b) whose Q blocks keep every block; with dense_keys every
+    // Q block also keeps the blocks in them. Empty: the mask alone.
+    std::vector<std::pair<uint32_t, uint32_t>> dense_blocks;
+    bool dense_keys = true;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     SparseRingSDPAParams(
@@ -47,7 +52,9 @@ struct SparseRingSDPAParams {
         experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args,
         CoreCoord ccl_core_grid_offset,
         uint32_t block_size,
-        std::optional<uint32_t> q_blocks_per_pass) :
+        std::optional<uint32_t> q_blocks_per_pass,
+        std::vector<std::pair<uint32_t, uint32_t>> dense_blocks,
+        bool dense_keys) :
         scale(scale),
         logical_n(logical_n),
         ring_size(ring_size),
@@ -58,7 +65,9 @@ struct SparseRingSDPAParams {
         all_gather_tensor_args(std::move(all_gather_tensor_args)),
         ccl_core_grid_offset(ccl_core_grid_offset),
         block_size(block_size),
-        q_blocks_per_pass(q_blocks_per_pass) {}
+        q_blocks_per_pass(q_blocks_per_pass),
+        dense_blocks(std::move(dense_blocks)),
+        dense_keys(dense_keys) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.q_chunk_size; }
 
@@ -76,7 +85,9 @@ struct SparseRingSDPAParams {
         "all_gather_operation_attributes",
         "all_gather_tensor_args",
         "block_size",
-        "q_blocks_per_pass");
+        "q_blocks_per_pass",
+        "dense_blocks",
+        "dense_keys");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(scale),
@@ -88,7 +99,9 @@ struct SparseRingSDPAParams {
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args),
             std::cref(block_size),
-            std::cref(q_blocks_per_pass));
+            std::cref(q_blocks_per_pass),
+            std::cref(dense_blocks),
+            std::cref(dense_keys));
     }
 };
 

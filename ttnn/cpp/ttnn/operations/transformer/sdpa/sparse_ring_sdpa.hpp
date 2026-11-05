@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -26,6 +28,8 @@ namespace ttnn::transformer {
 //   block_mask    [1, H, nqb_pad, ring_size * nb_pad]  uint32 ROW_MAJOR
 //   pooled_k / v  optional [1, H, ring_size * nb_pad, D]  TILE, k's dtype
 //   block_counts  optional [1, 1, 1, ring_size * nb_pad]  uint32 ROW_MAJOR, real tokens per block
+//   dense_blocks  optional, at most 8 disjoint [start, end) ranges of global blocks s * nb_pad + b: a Q block in a
+//                 range keeps every block (its mask row is ignored); with dense_keys every Q block also keeps them
 // Returns [1, H, N/ring_size, D], same layout as q.
 ttnn::Tensor sparse_ring_sdpa(
     const ttnn::Tensor& input_tensor_q,
@@ -51,6 +55,8 @@ ttnn::Tensor sparse_ring_sdpa(
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     uint32_t block_size = 64,
     std::optional<uint32_t> q_blocks_per_pass = std::nullopt,
-    const std::optional<ttnn::Tensor>& block_counts = std::nullopt);
+    const std::optional<ttnn::Tensor>& block_counts = std::nullopt,
+    const std::optional<std::vector<std::pair<uint32_t, uint32_t>>>& dense_blocks = std::nullopt,
+    bool dense_keys = true);
 
 }  // namespace ttnn::transformer

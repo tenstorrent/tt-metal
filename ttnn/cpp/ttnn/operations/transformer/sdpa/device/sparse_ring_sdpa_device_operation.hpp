@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -57,6 +58,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     uint32_t block_size = 64,
     std::optional<uint32_t> q_blocks_per_pass = std::nullopt,
-    const std::optional<ttnn::Tensor>& block_counts = std::nullopt);
+    const std::optional<ttnn::Tensor>& block_counts = std::nullopt,
+    const std::vector<std::pair<uint32_t, uint32_t>>& dense_blocks = {},
+    bool dense_keys = true);
 
 }  // namespace ttnn::prim
