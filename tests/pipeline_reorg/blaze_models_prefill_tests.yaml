@@ -523,7 +523,7 @@
       # traced vs eager packed forwards. Measured 10m39s as CI runs it.
       timeout -k 2m 15m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k3_prefill_multiuser.py -k "not pipeline" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k3_prefill_multiuser.py -k "not pipeline and not perf" -vvv --tb=short
       '
     )
 

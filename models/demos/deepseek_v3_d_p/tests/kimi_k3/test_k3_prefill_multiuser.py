@@ -602,6 +602,18 @@ def test_k3_packed_traced_matches_eager(variant, config_only, mesh_device, devic
 PERF_REPLAYS = int(os.environ.get("K3_PACKED_PERF_REPLAYS", "5"))
 
 
+def _metadata_msg(mesh_device, words):
+    """A one-chunk forward's socket record, ``(slot, start, end)`` uint32 words replicated to every chip."""
+    return ttnn.from_torch(
+        torch.tensor(list(words), dtype=torch.int64).reshape(1, 1, 1, len(words)),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
 @pytest.mark.skipif(
     os.environ.get("CI") == "true" or "TT_GH_CI_INFRA" in os.environ, reason="local measurement, no pass/fail bar"
 )
@@ -672,14 +684,18 @@ def test_k3_packed_forward_perf(
                 if packed
                 else runtime.make_chunk_input(tokens[0])
             )
+            # A traced one-chunk forward reads its (slot, start, end) from the socket record on device.
+            msg = None if packed else _metadata_msg(mesh_device, (0, 0, CHUNK))
             ttnn.synchronize_device(mesh_device)
             t0 = time.perf_counter()
             if packed:
                 runtime.prefill_forward(inp, caches, chunks)
             else:
-                runtime.prefill_chunk(inp, caches, 0, 0, CHUNK)
+                runtime.prefill_chunk(inp, caches, slot_id=0, actual_start=0, actual_end=CHUNK, metadata_msg=msg)
             ttnn.synchronize_device(mesh_device)
             times.append(time.perf_counter() - t0)
+            if msg is not None:
+                ttnn.deallocate(msg)
         median_ms = statistics.median(times[1:]) * 1e3
         logger.info(
             f"K3_PACKED_PERF forward_chunks={forward_chunks} layers={NUM_LAYERS} median_ms={median_ms:.2f} "
