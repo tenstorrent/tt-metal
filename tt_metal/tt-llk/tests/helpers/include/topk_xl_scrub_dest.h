@@ -31,5 +31,7 @@ inline __attribute__((noinline)) void topk_xl_scrub_dest()
         _llk_math_eltwise_unary_sfpu_params_(
             ckernel::sfpu::_calculate_fill_int_<false, InstrModLoadStore::INT32, 8>, tile, VectorMode::RC, 0u /* raw zero word */);
     }
-    ckernel::tensix_sync();
+    // Callers that hand Dest off to PACK stall MATH+SFPU inside their t6_semaphore_post (topk_xl_split::start_pack);
+    // the two end-of-math callers return into the kernel exit, which parks on pc_buf_base[0] and already waits for
+    // the Tensix thread to be idle. A tensix_sync() here only costs a full pipeline drain. #62391.
 }
