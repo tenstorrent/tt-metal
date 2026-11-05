@@ -370,7 +370,7 @@ class DSV41Layer:
                 and getattr(self.moe, "supports_ft_defer", False)
                 and os.environ.get("DSV41_FUSE_TAIL_MOE", "1") == "1"
                 and _FT.applies(self.mesh_device, T)
-                and int(x2.shape[0]) == 8
+                and int(x2.shape[0]) == T
                 and (_flag("DSV41_MHC_EXPAND_VALID") or _flag("DSV41_MHC_LANEPAR"))
                 and _flag("DSV41_MHC_EXPAND_V2", "1")
             )
