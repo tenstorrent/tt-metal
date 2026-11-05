@@ -756,3 +756,189 @@ def test_other_layouts(tmp_path, geo):
     h.add("a2", a[: block - 2], max_tokens=4)
     h.run()
     assert h.verifies > 5
+
+
+# --------------------------------------------------------------------------------------------------- one layout
+# Inside Qwen36MTPContractForCausalLM every block writer and reader uses SpecBlockLayout (spec_block_state.py), never
+# the non-spec prototype's GdnBlockState layout (gdn_block_state.py): the class binds only SpecGdnBlockState, its block
+# hooks and prefill go through it, and SpecGdnBlockState's own device writes land on the pages the verify reads.
+
+
+def _per_layer_specs():
+    """(shapes, dtypes, tensor_idx) of Qwen3.8's 64 layers: attention every 4th, slot = rank within its type."""
+    specs, n_attn, n_gdn = [], 0, 0
+    for i in range(64):
+        if i % 4 == 3:
+            specs.append(([1, 1, 2048, 256], "bf8", n_attn))
+            n_attn += 1
+        else:
+            specs.append((((3, 2560), (12, 128, 128)), ("bf16", "fp32"), n_gdn % 16))
+            n_gdn += 1
+    return specs
+
+
+def test_spec_class_binds_and_routes_only_through_the_spec_layout(monkeypatch):
+    from models.demos.blackhole.qwen36.tt import gdn_block_state as gbs
+    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36MTPContractForCausalLM
+
+    def non_spec(*a, **k):
+        raise AssertionError("the spec class touched the non-spec GdnBlockState layout")
+
+    monkeypatch.setattr(gbs, "GdnBlockState", non_spec)
+    monkeypatch.setattr(gbs, "copy_kv_blocks", non_spec)
+    monkeypatch.setattr(gbs, "zero_kv_blocks", non_spec)
+    made = []
+
+    class Recorder:
+        def __init__(self, model, specs, kv, T, layout, cache_mode, mamba_block_size):
+            made.append((T, layout, cache_mode, mamba_block_size))
+            self.layout = SimpleNamespace(layout=layout, heads_in_k=8, nv=12)
+            self.G, self.calls = 3, []
+
+        def copy_blocks(self, copies):
+            self.calls.append(("copy", copies))
+
+        def zero_blocks(self, ids):
+            self.calls.append(("zero", ids))
+
+    monkeypatch.setattr(sbs, "SpecGdnBlockState", Recorder)
+    model = SimpleNamespace(num_devices=4, args=SimpleNamespace(max_batch_size=8))
+    me = SimpleNamespace(
+        model=[model],
+        _SPEC_K=K,
+        allocate_kv_cache=lambda shape, dtype, n: [("k", "v")] * n,
+        _vllm_config_or_none=lambda: SimpleNamespace(
+            cache_config=SimpleNamespace(mamba_cache_mode="align", block_size=2048)
+        ),
+    )
+    cls = Qwen36MTPContractForCausalLM
+    kv = cls.allocate_kv_cache_per_layer(me, _per_layer_specs())
+    assert len(kv) == 16 and made == [(T, "two_pool", "align", 2048)]
+    assert isinstance(model._spec_blocks, Recorder) and not hasattr(model, "_paged_state")
+    cls.copy_kv_cache_blocks(me, None, [(3, 4)])
+    cls.zero_kv_cache_blocks(me, None, [5])
+    assert model._spec_blocks.calls == [("copy", [(3, 4)]), ("zero", [5])]
+
+
+class _FT:
+    """A fake device tensor: a label, or per-user rows (the conv window)."""
+
+    def __init__(self, label=None, users=None, rows=None):
+        self.label, self.users, self.rows = label, users, rows
+
+
+class _View:
+    """A flat alias view: page -> label; ``gran`` pages per dim-0 slice."""
+
+    def __init__(self, gran):
+        self.gran, self.pages = gran, {}
+
+
+def _fake_ttnn(monkeypatch):
+    import ttnn
+
+    def sl(t, start, end, memory_config=None):
+        if isinstance(t, _View):
+            labs = {t.pages.get(p) for p in range(start[0] * t.gran, end[0] * t.gran)}
+            assert len(labs) == 1, f"a read spans pages of different states: {labs}"
+            return _FT(labs.pop())
+        if t.users is not None:
+            return _FT(rows=t.users[start[0]])
+        if t.rows is not None:
+            return _FT(label=tuple(t.rows[start[1] : end[1]]))
+        return _FT(t.label)
+
+    def fill(view, src, pt, batch_idx=0):
+        for e in torch.as_tensor(pt).reshape(-1).tolist():
+            for p in range(e * view.gran, (e + 1) * view.gran):
+                view.pages[p] = src.label
+
+    def concat(parts, dim=0, memory_config=None):
+        labs = {p.label for p in parts}
+        assert len(labs) == 1, labs
+        return _FT(labs.pop())
+
+    same = lambda t, *a, **k: t if isinstance(t, _FT) and (t.rows is not None or t.users is not None) else _FT(t.label)
+    monkeypatch.setattr(ttnn, "slice", sl)
+    monkeypatch.setattr(ttnn, "reshape", same)
+    monkeypatch.setattr(ttnn, "to_layout", same)
+    monkeypatch.setattr(ttnn, "pad", same)
+    monkeypatch.setattr(ttnn, "concat", concat)
+    monkeypatch.setattr(ttnn, "copy", lambda src, dst: setattr(dst, "label", src.label))
+    monkeypatch.setattr(ttnn, "deallocate", lambda t: None)
+    monkeypatch.setattr(ttnn, "from_torch", lambda t, **k: t)
+    monkeypatch.setattr(ttnn.experimental, "paged_fill_cache", fill)
+
+
+@pytest.mark.parametrize("geo", [(4, 2048, 8, "two_pool"), (8, 1024, 8, "two_pool"), (8, 2048, 8, "k_only")])
+def test_spec_state_device_writes_land_where_the_verify_reads(monkeypatch, geo):
+    """SpecGdnBlockState's eager writes (prefill, copy materialize) and reads (restore) run with a fake ttnn that keeps
+    each view page's label; the verify's ctrl start pages (SpecBlockLayout via SpecBlockBook) must find the prefill's
+    state, a restore must return it, and a copy from a window column must carry that column's conv rows."""
+    from models.demos.blackhole.qwen36.tt import gdn_block_state as gbs
+
+    _fake_ttnn(monkeypatch)
+    tp = geo[0]
+    lay = _layout(*geo)
+    C = (2 * 16 * 128 + 48 * 128) // tp
+    views = sbs._LayerViews(
+        rec1=_View(sbs.HALF_PAGES),
+        rec2=_View(sbs.HALF_PAGES),
+        conv=_View(1),
+        conv_k=_View(1),
+        group=0,
+        two_pool=lay.heads_in_k < lay.nv,
+    )
+    win_rows = [f"x{r}" for r in range(3 + T)]
+    dn = SimpleNamespace(
+        Nv=lay.nv,
+        Dk=128,
+        Dv=128,
+        K=4,
+        qkv_dim_tp=C,
+        rec_state=_FT("rec:prompt"),
+        conv_carry=_FT("conv:prompt"),
+        _spec_paged=views,
+        verify_win_cur=lambda: _FT(users={2: win_rows}),
+    )
+    st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
+    st.model, st.mesh, st.T, st.G, st.layout = None, None, T, 1, lay
+    st.layers, st.layer_groups = [(0, dn, 0)], {0: 0}
+    st.book = sbs.SpecBlockBook(lay, 1, B, T, "align", 1024)
+
+    def heads(b):  # what the verify reads: the start pages its ctrl page names
+        w = torch.zeros(B, T, dtype=torch.int64)
+        w[2] = torch.tensor([b, b + 1, b + 2, b + 3])
+        st.book.set_step([w], torch.zeros(B, dtype=torch.int64), [2])
+        page = st.book.ctrl_rows([0] * B, 0, spec_ctrl_words(B, lay.nv))[0].to(torch.int64)
+        init = page[1 + B : 1 + B + B * lay.nv].reshape(B, lay.nv)[2].tolist()
+        return [(views.rec1 if p < lay.pool1_pages else views.rec2).pages.get(p % lay.pool1_pages) for p in init]
+
+    st.book.set_prefill_blocks([torch.tensor([7])])
+    st.write_prefill(0)  # the prefill's state into block 7
+    assert heads(7) == ["rec:prompt"] * lay.nv
+    dn.rec_state, dn.conv_carry = _FT(), _FT()
+    st.restore(0)  # a prefix hit on block 7
+    assert (dn.rec_state.label, dn.conv_carry.label) == ("rec:prompt", "conv:prompt")
+
+    def whole_block(model, pairs):  # copy_kv_blocks moves every byte of the block; here every page of the layout
+        for src, dst in pairs:
+            ps, pd = lay.head_pages(torch.tensor([src]))[0].tolist(), lay.head_pages(torch.tensor([dst]))[0].tolist()
+            for a, b in zip(ps, pd):
+                for i in range(sbs.HEAD_PAGES):
+                    va = views.rec1 if a < lay.pool1_pages else views.rec2
+                    va.pages[b % lay.pool1_pages + i] = va.pages.get(a % lay.pool1_pages + i)
+            cs, cd = lay.conv_page(src), lay.conv_page(dst)
+            for i in range(lay.conv_pages):
+                vs, ps_ = views.conv_at(cs + i, lay.conv_pages_total)
+                vd, pd_ = views.conv_at(cd + i, lay.conv_pages_total)
+                vd.pages[pd_] = vs.pages.get(ps_)
+
+    monkeypatch.setattr(gbs, "copy_kv_blocks", whole_block)
+    heads(20)  # row 2's latest verify: window blocks 20 .. 23
+    st.copy_blocks([(22, 40)])  # vLLM copies window column 2 on
+    view, q = views.conv_at(lay.conv_page(40), lay.conv_pages_total)
+    assert view.pages.get(q) == ("x3", "x4", "x5")  # the conv rows after token 2: window rows 3 .. 5
+    st.book.set_prefill_blocks([torch.tensor([40])])
+    st.restore(0)
+    assert dn.conv_carry.label == ("x3", "x4", "x5")
