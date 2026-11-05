@@ -41,6 +41,15 @@ void bind_gdn_decode_step(nb::module_& mod) {
                 output; the updated state keeps the full fp32 sum (the default path truncates it to TF32), so it
                 differs in the last bits.
             fp32_state (bool): default False. fp32_state: keep the recurrent-state decay/add in exact fp32 on the SFPU (fast_mode only); avoids per-token state truncation.
+            state_page_idx (ttnn.Tensor, optional): fused-conv mode only. ``[2, >= B]`` ROW_MAJOR INT32 or UINT32 device
+                tensor that makes ``state`` and ``conv_hist`` page pools (for example views of vLLM-owned cache blocks).
+                Column ``b`` holds the first page of batch row ``b``: row 0 indexes the FLOAT32 tiles of ``state``
+                (row ``b``, value head ``h`` uses pages ``[idx[0][b] + h*KV, idx[0][b] + (h+1)*KV)``, KV = Dk*Dv/1024,
+                tile order as in ``[Nv, Dk, Dv]``), row 1 indexes the BFLOAT16 tiles of ``conv_hist`` (pages
+                ``idx[1][b] + 4*h + slot``). ``state`` and ``conv_hist`` may then have any tiled shape. The rows' page
+                ranges must not overlap. The values are read on device on every call, so a captured trace follows
+                new pages when only the contents of ``state_page_idx`` change. Default None: row ``b`` uses rows ``b``
+                of ``state`` ``[Bmax, Nv, Dk, Dv]`` and ``conv_hist`` ``[Bmax, Nv, 4, 32, 32]``.
         Returns:
             ttnn.Tensor: ``[1, 1, Nv*Dv]`` normalized output (row 0 valid, padding rows zero).
         )doc",
@@ -65,7 +74,8 @@ void bind_gdn_decode_step(nb::module_& mod) {
         nb::arg("conv_taps") = nb::none(),
         nb::arg("qkvz_dim") = 0,
         nb::arg("fast_mode") = false,
-        nb::arg("fp32_state") = false);
+        nb::arg("fp32_state") = false,
+        nb::arg("state_page_idx") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::gdn_decode_step::detail

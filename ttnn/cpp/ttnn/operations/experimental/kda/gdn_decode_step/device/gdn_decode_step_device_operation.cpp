@@ -71,6 +71,8 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
     TT_FATAL(std::isfinite(a.scale) && a.l2_epsilon > 0.0f && a.norm_epsilon > 0.0f, "{}: bad scale/epsilon", kOp);
     const auto& qs = in.qkv.logical_shape();
     const uint32_t C = 2 * Nk * Dk + Nv * Dv;
+    const bool paged = in.state_page_idx.has_value();
+    TT_FATAL(!paged || a.fuse_conv, "{}: state_page_idx needs the fused-conv mode (conv_hist)", kOp);
     if (a.fuse_conv) {
         TT_FATAL(
             qs.rank() == 3 && qs[0] == 1 && qs[1] >= 1 && qs[1] <= tt::constants::TILE_HEIGHT &&
@@ -91,12 +93,20 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
         check_same_device(in.qkv, *in.conv_taps, kOp, "conv_taps");
         const auto& hs = in.conv_hist->logical_shape();
         const auto& ts = in.conv_taps->logical_shape();
-        TT_FATAL(
-            hs.rank() == 5 && hs[0] >= qs[1] && hs[1] == Nv && hs[2] == 4 && hs[3] == tt::constants::TILE_HEIGHT &&
-                hs[4] == tt::constants::TILE_WIDTH,
-            "{}: conv_hist must be packed [Bmax >= B, Nv, 4, 32, 32] (got {})",
-            kOp,
-            hs);
+        if (paged) {
+            TT_FATAL(
+                in.conv_hist->buffer()->num_pages() >= Nv * 4,
+                "{}: conv_hist pool must hold at least Nv * 4 tiles (got {})",
+                kOp,
+                in.conv_hist->buffer()->num_pages());
+        } else {
+            TT_FATAL(
+                hs.rank() == 5 && hs[0] >= qs[1] && hs[1] == Nv && hs[2] == 4 && hs[3] == tt::constants::TILE_HEIGHT &&
+                    hs[4] == tt::constants::TILE_WIDTH,
+                "{}: conv_hist must be packed [Bmax >= B, Nv, 4, 32, 32] (got {})",
+                kOp,
+                hs);
+        }
         TT_FATAL(
             ts.rank() == 4 && ts[0] == Nv && ts[1] == 4 && ts[2] == tt::constants::TILE_HEIGHT &&
                 ts[3] == tt::constants::TILE_WIDTH,
@@ -129,12 +139,37 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
     }
     const auto& ss = in.state.logical_shape();
     const uint32_t rows = static_cast<uint32_t>(in.qkv.logical_shape()[-2]);
-    TT_FATAL(
-        ss.rank() == 4 && ss[0] >= rows && (a.fuse_conv || ss[0] == 1) && ss[1] == Nv && ss[2] == Dk && ss[3] == Dv,
-        "{}: state must be [Bmax >= B, Nv, Dk, Dv] (got {}, B = {})",
-        kOp,
-        ss,
-        rows);
+    if (paged) {
+        const Tensor& idx = *in.state_page_idx;
+        check_allocated_device_tensor(idx, kOp, "state_page_idx");
+        check_layout(idx, Layout::ROW_MAJOR, kOp, "state_page_idx");
+        check_interleaved(idx, kOp, "state_page_idx");
+        check_same_device(in.qkv, idx, kOp, "state_page_idx");
+        TT_FATAL(
+            idx.dtype() == DataType::INT32 || idx.dtype() == DataType::UINT32,
+            "{}: state_page_idx must be INT32 or UINT32 (got {})",
+            kOp,
+            idx.dtype());
+        const auto& is = idx.logical_shape();
+        TT_FATAL(
+            is.rank() == 2 && is[0] == 2 && is[1] >= rows,
+            "{}: state_page_idx must be [2, >= B] (got {}, B = {})",
+            kOp,
+            is,
+            rows);
+        TT_FATAL(
+            in.state.buffer()->num_pages() >= Nv * (Dk / tt::constants::TILE_HEIGHT) * (Dv / tt::constants::TILE_WIDTH),
+            "{}: state pool must hold at least Nv * Dk * Dv / 1024 tiles (got {})",
+            kOp,
+            in.state.buffer()->num_pages());
+    } else {
+        TT_FATAL(
+            ss.rank() == 4 && ss[0] >= rows && (a.fuse_conv || ss[0] == 1) && ss[1] == Nv && ss[2] == Dk && ss[3] == Dv,
+            "{}: state must be [Bmax >= B, Nv, Dk, Dv] (got {}, B = {})",
+            kOp,
+            ss,
+            rows);
+    }
     TT_FATAL(in.weight.logical_volume() == Dv, "{}: weight volume must equal value_dim", kOp);
 }
 
@@ -170,7 +205,8 @@ Tensor gdn_decode_step(
     const std::optional<Tensor>& conv_taps,
     uint32_t qkvz_dim,
     bool fast_mode,
-    bool fp32_state) {
+    bool fp32_state,
+    const std::optional<Tensor>& state_page_idx) {
     TT_FATAL(!fast_mode || conv_hist.has_value(), "{}: fast_mode needs the fused-conv mode (conv_hist)", kOp);
     TT_FATAL(!fp32_state || fast_mode, "{}: fp32_state needs fast_mode", kOp);
     return ttnn::device_operation::launch<GdnDecodeStepOperation>(
@@ -197,7 +233,8 @@ Tensor gdn_decode_step(
             .state = state,
             .weight = weight,
             .conv_hist = conv_hist,
-            .conv_taps = conv_taps});
+            .conv_taps = conv_taps,
+            .state_page_idx = state_page_idx});
 }
 
 }  // namespace ttnn::experimental::prim

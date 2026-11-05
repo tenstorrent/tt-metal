@@ -28,6 +28,10 @@ TT_KERNEL void reader(uint32_t head, uint32_t u0, uint32_t nu) {
     const auto w_acc = TensorAccessor(tensor::weight);
     const auto hist_acc = TensorAccessor(tensor::hist);
     const auto taps_acc = TensorAccessor(tensor::taps);
+#ifdef GDN_STATE_PAGE_IDX
+    const auto pidx_acc = TensorAccessor(tensor::pidx);
+    DataflowBuffer pidx(dfb::pidx_r);
+#endif
     DataflowBuffer hist(dfb::hist);
     DataflowBuffer taps(dfb::taps);
     DataflowBuffer cur(dfb::cur);
@@ -49,6 +53,11 @@ TT_KERNEL void reader(uint32_t head, uint32_t u0, uint32_t nu) {
     const uint32_t h = head;
     const uint32_t hk = h / rf;
 
+#ifdef GDN_STATE_PAGE_IDX
+    // issued before the constant-tile fills so its latency (every core reads the same two pages) is hidden; the
+    // weight read barrier completes it
+    read_state_page_idx(pidx_acc, pidx, noc);
+#endif
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     generate_bcast_col_scalar(eps_l2, l2_eps_bits);
@@ -61,9 +70,15 @@ TT_KERNEL void reader(uint32_t head, uint32_t u0, uint32_t nu) {
 
     for (uint32_t ui = 0; ui < nu; ++ui) {
         const uint32_t b = u0 + ui;
-        const uint32_t bh = b * Nv + h;
+#ifdef GDN_STATE_PAGE_IDX
+        const uint32_t state_page = state_page_idx_at(pidx, 0, b) + h * KV;
+        const uint32_t hist_page = state_page_idx_at(pidx, 1, b) + h * 4;
+#else
+        const uint32_t state_page = (b * Nv + h) * KV;
+        const uint32_t hist_page = (b * Nv + h) * 4;
+#endif
         build_user_selectors(sel, mask, noc, b, Ct);
-        read_tiles(hist_acc, hist, noc, bh * 4 + 1, 3);  // slots 1..3
+        read_tiles(hist_acc, hist, noc, hist_page + 1, 3);  // slots 1..3
         cur.reserve_back(1);
         zero_reserved(cur, noc, 1);
         pack_head_tile_user<Kt, Vt, Nk>(qkv_acc, cur, noc, hk, h, b, 0);
@@ -85,6 +100,6 @@ TT_KERNEL void reader(uint32_t head, uint32_t u0, uint32_t nu) {
         b_s.reserve_back(1);
         fill_scalar_tile(b_s, b_bits);
         b_s.push_back(1);
-        read_tiles(state_acc, state_in, noc, bh * KV, KV);
+        read_tiles(state_acc, state_in, noc, state_page, KV);
     }
 }

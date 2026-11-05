@@ -133,6 +133,23 @@ inline void write_row0_at(const Accessor& acc, DataflowBuffer& dfb, Noc& noc, ui
     noc.async_write(dfb, acc, seg, {.offset_bytes = base + entry / 4}, {.page_id = page, .offset_bytes = entry / 4});
 }
 
+// state_page_idx ([2, >= B] ROW_MAJOR, one page per row): issue the reads of both pages into `dfb` (2 entries,
+// reserved and never pushed). The caller's next read barrier completes them.
+template <typename Accessor>
+inline void read_state_page_idx(const Accessor& acc, DataflowBuffer& dfb, Noc& noc) {
+    dfb.reserve_back(2);
+    const uint32_t entry = dfb.get_entry_size();
+    noc.async_read(acc, dfb, entry, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read(acc, dfb, entry, {.page_id = 1}, {.offset_bytes = entry});
+}
+
+// First page of batch row b: which = 0 -> state (fp32 tiles), which = 1 -> conv_hist (bf16 tiles).
+inline uint32_t state_page_idx_at(DataflowBuffer& dfb, uint32_t which, uint32_t b) {
+    auto lock = dfb.scoped_write_lock(2);
+    auto p = lock.template get_ptr<volatile uint32_t>();
+    return p[which * (dfb.get_entry_size() / 4) + b];
+}
+
 inline void zero_reserved(DataflowBuffer& dfb, Noc& noc, uint32_t tiles) {
     noc.async_write_zeros(dfb, tiles * dfb.get_entry_size());
     noc.write_zeros_l1_barrier();
