@@ -274,6 +274,10 @@ struct RingSemaphores {
 
 // tt::tt_metal::NUM_SEMAPHORES, which no public header exposes to a ttnn op.
 constexpr uint32_t kSemaphoresPerCore = 16;
+// A sender core's fabric connection takes the lowest two ids still free there (teardown and buffer index), after
+// every id combine declares on it.
+constexpr uint32_t kFabricConnectionSemaphores = 2;
+constexpr uint32_t kCombineSemaphoresPerCore = kSemaphoresPerCore - kFabricConnectionSemaphores;
 
 // credit_done, then arrived / freed / outbox a channel. Named off the channel count rather than the ring so
 // the public entry point and the allocation below are the same arithmetic.
@@ -339,15 +343,27 @@ RingSemaphores allocate_ring_semaphores(
         sems.vc_freed.push_back(channel());
         sems.vc_outbox.push_back(channel());
     }
+    // The published release order is an optimisation: without it combine walks the predicted order, which is as
+    // correct. So when its words leave no room for the fabric connection (16 experts a chip at the default
+    // untilizer count and two links), drop them rather than fail.
+    if (sems.order_words != 0 && sems.num_program_semaphores() > kCombineSemaphoresPerCore) {
+        log_warning(
+            tt::LogOp,
+            "combine_fabric2d: {} release-order words leave no room for the fabric connection ({} ids of {}); "
+            "walking the predicted order",
+            sems.order_words,
+            sems.num_program_semaphores(),
+            kCombineSemaphoresPerCore);
+        sems.order_words = 0;
+    }
     TT_FATAL(
-        sems.num_program_semaphores() <= kSemaphoresPerCore,
-        "combine_fabric2d: {} program semaphores per combine core exceed the {} a core has ({} untilizers per "
-        "group, {} links, {} release-order words)",
+        sems.num_program_semaphores() <= kCombineSemaphoresPerCore,
+        "combine_fabric2d: {} program semaphores per combine core exceed the {} a core has beside its fabric "
+        "connection ({} untilizers per group, {} links)",
         sems.num_program_semaphores(),
-        kSemaphoresPerCore,
+        kCombineSemaphoresPerCore,
         untilizers_per_group,
-        num_links,
-        order_words);
+        num_links);
     tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
     return sems;
 }
