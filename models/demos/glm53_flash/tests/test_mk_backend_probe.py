@@ -42,7 +42,10 @@ SEQ = int(os.environ.get("GLM53_MK_SEQ", "2048"))
 POS = int(os.environ.get("GLM53_MK_POS", "0"))  # decode position of every row (ISL: the DSA indexer scores 0..POS)
 N_REPLAY = int(os.environ.get("GLM53_MK_N", "20"))
 TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
-WORKER_L1 = int(os.environ.get("GLM53_MK_WORKER_L1", "1264512"))
+# the reference's SERVED worker L1 (pmk_layer WORKER_L1_SERVED): 16 KB more allocatable L1 than the mk_dense note's
+# 1,264,512 -- the 45-layer stack sits at that floor (the sharded pool / the attached TP prefill clashed by 1 KB,
+# 2026-11-05: "static circular buffers clash with L1 buffers ... 1269248 ... 1270272")
+WORKER_L1 = int(os.environ.get("GLM53_MK_WORKER_L1", "1280896"))
 DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 

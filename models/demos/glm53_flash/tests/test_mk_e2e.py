@@ -30,7 +30,10 @@ ISL = int(os.environ.get("GLM53_MK_ISL", "128"))
 OSL = int(os.environ.get("GLM53_MK_OSL", "128"))
 SEQ = int(os.environ.get("GLM53_MK_SEQ", str(max(2048, 1 << (ISL + OSL + 64).bit_length()))))
 TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
-WORKER_L1 = int(os.environ.get("GLM53_MK_WORKER_L1", "1264512"))
+# the reference's SERVED worker L1 (pmk_layer WORKER_L1_SERVED): 16 KB more allocatable L1 than the mk_dense note's
+# 1,264,512 -- the 45-layer stack sits at that floor (the sharded pool / the attached TP prefill clashed by 1 KB,
+# 2026-11-05: "static circular buffers clash with L1 buffers ... 1269248 ... 1270272")
+WORKER_L1 = int(os.environ.get("GLM53_MK_WORKER_L1", "1280896"))
 FILLER = (
     "The Blackhole Galaxy is a 32-chip system; its chips talk over an Ethernet fabric and each one holds its own DRAM. "
     "A decoder layer of a mixture-of-experts model routes every token to a few experts, and the shared expert sees "
