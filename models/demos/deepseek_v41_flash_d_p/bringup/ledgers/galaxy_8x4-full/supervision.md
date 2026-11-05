@@ -1602,3 +1602,24 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   --commit-only` -> cf8ec00a404, nothing re-run. F252's defaults.yaml applied (agents.timeout_s 0, stall_s 5400).
   PUSHED (the owner's last push before the rebase). Run stopped at --until X.3. Next: the rebase in a fresh session
   (prompt /scratch/dnijemcevic/rebase_session_prompt.md), from this commit.
+
+## 2026-11-05 22:55 UTC HAND-OFF (supersedes the 17:20 one): run stopped after X.3, pushed; the rebase is next
+- State: X.3 PASS (cf8ec00a404); origin/dnijemcevic/model_bringup = d9400d93613 (the owner's last push before the
+  rebase). Orchestrator stopped (run_ds41_8x4.sh --until X.3); box free; no device jobs.
+- Since the 17:20 hand-off: P.32 accepted as a switch (WINDOW_KV_KEEP full | ring | none, default full; ring at 1M:
+  served 0.156 vs 1.41 GiB a chip per user, peak 18.39 vs 19.63; non-last chunk ~114 / 124 ms wall, last chunk under
+  replay128 ~213 ms: the 128-row tail's host overhead). P.33 (cut test) PASS: prefill to an even cut 128 short of the
+  end with every chunk non-last, encoder windows and layer 20's KV within limits (Kartik / Nikhil's updated proposal
+  needs no model change). P.1 / P.2 / P.3 old gates fixed (BRINGUP_PROFILE_WALL with device_ms gated). F252 (no fixed
+  agent limit, stall rule) live; F253 (metrics in state_metrics.json) committed.
+- Next: the rebase onto the latest llk_helper_library in a fresh session, owner-started, with
+  /scratch/dnijemcevic/rebase_session_prompt.md (new worktree, branch dnijemcevic/model_bringup_rebased from
+  d9400d93613, MoE as carried, push nothing until e2e verified, never touch dnijemcevic/model_bringup).
+- Open for the next overseer: F250 (superseded in part by F252: check), F251 (the position profile's counting run on a
+  slot with history), A/B reuse of every unit an agent's measure finished on the same code (owner rule: checkpoint per
+  unit), F243 (warm a new weight format's cache before timed tests); the xing40 selftest failure (server_rules.py:393);
+  the owner's tt-d-gen message (scratchpad draft); raising with Kartik / Nikhil that prefill could make decoder windows
+  exact (~25 ms device a request; note the measured last-chunk tail costs ~100 ms wall today).
+- Defaults: EXPERTS_IMPL bfp4_mse, DECODER_SKIP off, WINDOW_KV_KEEP full, WINDOW_KV_FORMAT bfp8_tiles, CKV_FORMAT
+  bfp4_rows. Host leak (tt-kmd #301): unaccounted ~130 GiB (reboot ~250). Expert caches on /scratch (bfp4, bfp4_mse, bfp8),
+  bfp4 + bfp4_mse backed up on /data.
