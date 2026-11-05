@@ -2981,14 +2981,15 @@ class MTPSpecEngine:
     def _paged_plan(self, start_pos, Tp, vision_tokens, final, gdn_req):
         """The prefill_for_spec plan with the GDN state in vLLM blocks: (s, (state, gdn_req) | None, []) resumes at
         s = vLLM's start_pos from the request's block, with no snapshot saves; None = the unchanged from-0 prefill.
-        Recompute from 0 when start_pos is 0, off the 128 grid, or leaves fewer than 3 tokens (_prefill_range cannot
-        resume there): the cached KV is rewritten with the same values. A multimodal prompt always recomputes."""
+        Recompute from 0 when start_pos is 0, off the 128 grid or off a KV block boundary (paged_fill_cache writes a
+        segment from the first row of its first block), or leaves fewer than 3 tokens: the cached KV is rewritten with
+        the same values. A multimodal prompt always recomputes."""
         if vision_tokens is not None:
             return None
         s = int(start_pos or 0)
         from models.demos.blackhole.qwen36.tt.prefix_cache import SPEC_PREFIX_ALIGN
 
-        if s <= 0 or s % SPEC_PREFIX_ALIGN or Tp - s < 3:
+        if s <= 0 or s % SPEC_PREFIX_ALIGN or s % self.block_size or Tp - s < 3:
             s = 0
         if s == 0 and final:
             return None

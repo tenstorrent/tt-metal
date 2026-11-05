@@ -250,8 +250,9 @@ class _EngineStub:
     _stage_gdn_windows = MTPSpecEngine._stage_gdn_windows
     _paged_plan = MTPSpecEngine._paged_plan
 
-    def __init__(self, book):
+    def __init__(self, book, block_size):
         self.B, self.T = B, T
+        self.block_size = block_size
         self.book = book
         self.model = SimpleNamespace(_spec_blocks=None)
         self._paged_step_rows = None
@@ -355,7 +356,7 @@ class _Harness:
         lay = _layout(tp, block, n_banks, layout, num_blocks)
         self.book = _BookAsState(lay, len(self.mamba), B, T, mode, block if mode == "align" else 0)
         self.dev = _FakeDevice(lay, len(self.mamba))
-        self.eng = _EngineStub(self.book)
+        self.eng = _EngineStub(self.book, block)
         self.req_states = {}
         self.row_of = {}  # request id -> engine row
         self.contract_counts = (
@@ -706,6 +707,16 @@ def test_chunked_prefill_mode_none(tmp_path):
     h.add("b", _prompt(8, 700), max_tokens=20)
     h.run()
     assert [s for r, s, _ in h.resumes if r == "a"] == [1024, 2048]
+
+
+def test_a_chunk_that_ends_inside_a_block_is_recomputed(tmp_path):
+    # mode none with a 768-token budget: chunk ends fall inside 1024-token blocks; paged_fill_cache would overwrite the
+    # block's earlier rows, so only block-aligned starts resume, the others recompute from 0
+    h = _Harness(tmp_path, "none", budget=768)
+    h.accept = _rotate
+    h.add("a", _prompt(12, 2600), max_tokens=8)
+    h.run()
+    assert all(s % 1024 == 0 for r, s, _ in h.resumes if r == "a"), h.resumes
 
 
 @pytest.mark.parametrize("mode", ["none", "align"])
