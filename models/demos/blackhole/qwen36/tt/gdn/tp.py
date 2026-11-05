@@ -2261,7 +2261,7 @@ class TPGatedDeltaNet:
             conv=[z((1, Bg, self.qkv_dim_tp), ttnn.bfloat16) for _ in range(self.K)],
         )
 
-    def _kda_conv_group(self, qkv, conv_sel, zeros_pad):
+    def _kda_conv_group(self, qkv, conv_sel, zeros_pad, hist_first=False):
         """KDA conv + SiLU + q/k/v split for Bg users, each its own from-scratch (zero-history) sequence.
 
         The KDA op is batch-1, so the rows are laid out back to back with a zero block after each user (pad
@@ -2285,7 +2285,13 @@ class TPGatedDeltaNet:
         Tp = Tb + 32
         kd, vd = self.key_dim_tp, self.value_dim_tp
         qkv_d = qkv if qkv.memory_config().buffer_type == ttnn.BufferType.DRAM else ttnn.to_memory_config(qkv, _dram)
-        padded = ttnn.concat([qkv_d, zeros_pad], dim=1, memory_config=_dram)  # [Bg, Tb+32, C]
+        # hist_first (resumed rows): the 32-row block goes BEFORE each user, so every user (user 0 too) reads its
+        # K-1 history rows from its own block (the prefix's conv carry in rows 32-(K-1).. 31); zero blocks give the
+        # same zero history as the default layout.
+        if hist_first:
+            padded = ttnn.concat([zeros_pad, qkv_d], dim=1, memory_config=_dram)  # [Bg, 32+Tb, C]
+        else:
+            padded = ttnn.concat([qkv_d, zeros_pad], dim=1, memory_config=_dram)  # [Bg, Tb+32, C]
         flat = ttnn.reshape(padded, (1, Bg * Tp, C))
         q, k, v, _ = kda_conv_prefill(
             flat,
@@ -2301,7 +2307,8 @@ class TPGatedDeltaNet:
         for t in (q, k, v):
             w = t.shape[-1]
             t3 = ttnn.reshape(t, (Bg, Tp, w))
-            outs.append(ttnn.slice(t3, (0, 0, 0), (Bg, Tb, w), memory_config=_dram))
+            r0 = 32 if hist_first else 0
+            outs.append(ttnn.slice(t3, (0, r0, 0), (Bg, r0 + Tb, w), memory_config=_dram))
             ttnn.deallocate(t)
         new_state = ttnn.matmul(
             conv_sel, qkv_d, memory_config=_dram, compute_kernel_config=exact_select_cfg(), dtype=ttnn.bfloat16
@@ -2310,7 +2317,7 @@ class TPGatedDeltaNet:
             ttnn.deallocate(qkv_d)
         return outs[0], outs[1], outs[2], new_state
 
-    def forward_prefill_group(self, x, Bg, Tb, masks, scratch, chunk_size=128):
+    def forward_prefill_group(self, x, Bg, Tb, masks, scratch, chunk_size=128, init=None):
         """Prefill Bg users (each right-padded to the bucket Tb, from scratch) in ONE pass.
 
         x:       [1, 1, Bg*Tb, dim/tp] K-sharded like forward_prefill's (row u*Tb + t = user u, token t).
@@ -2338,7 +2345,10 @@ class TPGatedDeltaNet:
         # Projection is per token: run it over all M rows, then split the user dim back out (DRAM outputs).
         qkv_f, z, a, b = self._project_qkvzab(x, M)
         qkv = ttnn.reshape(qkv_f, (Bg, Tb, C))
-        q, k, v, conv_new_state = self._kda_conv_group(qkv, masks["conv_sel"], masks["zeros_pad"])
+        # init (resumed rows): {"rec": [Bg,Nv,Dk,Dv] fp32 initial state, "pad": [Bg,32,C] conv-history block}
+        q, k, v, conv_new_state = self._kda_conv_group(
+            qkv, masks["conv_sel"], init["pad"] if init is not None else masks["zeros_pad"], hist_first=init is not None
+        )
         ttnn.deallocate(qkv)
         if self._gdn_flat_qkv:
             _qkv_head_dims = (Nk, Dk, Nv, Dv)
@@ -2360,7 +2370,7 @@ class TPGatedDeltaNet:
             g,
             chunk_size=chunk_size,
             scale=self.scale,
-            initial_state=scratch.zero_rec,
+            initial_state=init["rec"] if init is not None else scratch.zero_rec,
             device=self.mesh,
             valid_len=None,
             qkv_head_dims=_qkv_head_dims,

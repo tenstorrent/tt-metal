@@ -318,8 +318,8 @@ class Qwen36DecoderLayer:
                         xi = ttnn.slice(attn_input, (0, 0, i * Tb, 0), (1, 1, (i + 1) * Tb, D))
                         oi = self.attention.forward_prefill_paged(
                             xi,
-                            pg["cos"],
-                            pg["sin"],
+                            pg["cos"][i] if isinstance(pg["cos"], (list, tuple)) else pg["cos"],
+                            pg["sin"][i] if isinstance(pg["sin"], (list, tuple)) else pg["sin"],
                             pg["full_pts"][i],
                             chunk_page_table=pg["chunk_pts"][i],
                             chunk_start_idx=0,
@@ -377,6 +377,7 @@ class Qwen36DecoderLayer:
                         pg["gdn_masks"],
                         pg["gdn_scratch"][id(self.attention)],
                         chunk_size=chunk_size,
+                        init=(pg.get("gdn_init") or {}).get(id(self.attention)),
                     )
                 elif mode == "prefill":
                     if gdn_recurrent and gdn_seed:
