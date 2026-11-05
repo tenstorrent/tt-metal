@@ -1019,6 +1019,11 @@ _PROCESSED_ELEMS = MAX_TILE_ELEMENTS
 _QUANT_INT8_MIN = -127
 _QUANT_INT8_MAX = 127
 
+# Pinned lanes per tile (two per face) that discriminate the SFPCAST SM<->2's-comp mod1 values.
+_QUANT_PINNED_LANES = 8
+# A*scale+zp target that STOCH_RND rounds to sign-magnitude -0 (0x80000000).
+_QUANT_NEG_ZERO_PROD = -0.25
+
 
 _QUANT_OPS = ["QUANT", "REQUANT", "DEQUANT"]
 
@@ -1055,10 +1060,10 @@ def _run_quant(
     zero_point = 3.0
 
     # Pinned lanes: SFPCAST SM<->2's-comp differs from plain negation only at 0x80000000.
-    # Even ones give A*scale+zp = -0.25 (STOCH_RND -0); odd ones hold INT32_MIN (int, 2's-comp only).
-    pinned = torch.arange(0, n, n // 8)
+    # Even ones give A*scale+zp = _QUANT_NEG_ZERO_PROD; odd ones hold INT32_MIN (int, 2's-comp only).
+    pinned = torch.arange(0, n, n // _QUANT_PINNED_LANES)
     neg_zero_lanes, int32_min_lanes = pinned[0::2], pinned[1::2]
-    neg_zero_a = -(zero_point + 0.25) / scale[neg_zero_lanes]
+    neg_zero_a = (_QUANT_NEG_ZERO_PROD - zero_point) / scale[neg_zero_lanes]
 
     if a_is_int:
         # int32 operand A in a modest range so int*scale stays well within int8.
