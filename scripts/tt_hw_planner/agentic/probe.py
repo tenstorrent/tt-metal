@@ -125,12 +125,25 @@ def _tensor_stats(t: Any, *, name: str, cls: str, step: int) -> Optional[HFModul
     )
 
 
+def _load_one(model_id: str, loader: str, dtype: Any, needed_paths: Sequence[str]) -> Any:
+    """One ``transformers.<loader>`` load through the shared host-RAM-aware loader: whole when the
+    model fits host RAM (the same ``from_pretrained`` call as before), otherwise only the repeated
+    blocks ``needed_paths`` need. Raises the loader's own error on failure."""
+    from models.common.hf_reference_loading import load_hf_reference
+
+    model, err, _ = load_hf_reference(model_id, (loader,), needed_paths, dtype=dtype)
+    if model is None:
+        raise err or RuntimeError(f"{loader} could not load {model_id}")
+    return model
+
+
 def load_hf_model_cascade(
     model_id: str,
     *,
     torch_dtype: str = "bfloat16",
     timeout_s: float = 300.0,
     verbose: bool = False,
+    needed_paths: Sequence[str] = (),
 ) -> Tuple[Optional[Any], Optional[str]]:
     """Universal HF model loader: cascades through every reasonable
     ``transformers.AutoModelFor*`` class until one succeeds.
@@ -140,6 +153,10 @@ def load_hf_model_cascade(
     :mod:`capture_inputs` can reuse the cascade without duplicating
     the loader-class list. Adding a new modality (e.g. TTS) means
     appending one string here -- every caller benefits.
+
+    ``needed_paths`` (submodule paths the caller will use) only matter for a model whose weights do
+    not fit host RAM: it then loads just the repeated blocks those paths need. A model that fits
+    loads whole, exactly as without them.
     """
     import time as _t
 
@@ -172,15 +189,9 @@ def load_hf_model_cascade(
         if _t.monotonic() - start > timeout_s - 5:
             break
         try:
-            cls = getattr(transformers, loader, None)
-            if cls is None:
+            if getattr(transformers, loader, None) is None:
                 continue
-            hf_model = cls.from_pretrained(
-                model_id,
-                torch_dtype=dtype,
-                trust_remote_code=True,
-                low_cpu_mem_usage=True,
-            )
+            hf_model = _load_one(model_id, loader, dtype, needed_paths)
             used_loader = loader
             if verbose:
                 print(f"  [hf-loader] {model_id} via {loader}", file=sys.stderr, flush=True)
@@ -213,6 +224,7 @@ def iter_hf_model_variants(
     torch_dtype: str = "float32",
     timeout_s: float = 900.0,
     verbose: bool = False,
+    needed_paths: Sequence[str] = (),
 ):
     """Yield ``(model, loader_name)`` for EACH ``transformers.AutoModelFor*``
     class that can load ``model_id`` — lazily, one at a time.
@@ -226,7 +238,8 @@ def iter_hf_model_variants(
     / spectrogram classes the plain cascade omits.
 
     The caller should drop its reference to each yielded model before
-    requesting the next, so only one is resident at a time.
+    requesting the next, so only one is resident at a time. ``needed_paths``: as in
+    :func:`load_hf_model_cascade`.
     """
     import time as _t
 
@@ -263,7 +276,7 @@ def iter_hf_model_variants(
         if cls is None:
             continue
         try:
-            model = cls.from_pretrained(model_id, torch_dtype=dtype, trust_remote_code=True, low_cpu_mem_usage=True)
+            model = _load_one(model_id, loader, dtype, needed_paths)
         except Exception as exc:
             if verbose:
                 print(f"  [hf-variants] {loader} failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)

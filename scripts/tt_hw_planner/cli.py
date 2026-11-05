@@ -7256,9 +7256,12 @@ def _resolve_torch_submodule_for_component(model_id: str, demo_dir: Path, compon
     try:
         import transformers
 
-        model = transformers.AutoModel.from_pretrained(
-            model_id, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True
-        )
+        from models.common.hf_reference_loading import load_hf_reference
+
+        # Whole model when it fits host RAM (as before); otherwise only the blocks these paths reach.
+        model, _load_err, _ = load_hf_reference(model_id, ("AutoModel",), candidate_paths)
+        if model is None:
+            raise _load_err
         model.eval()
     except Exception:
         model = None

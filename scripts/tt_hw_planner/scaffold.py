@@ -162,6 +162,14 @@ def _build_table_insert(file_path: Path, sibling_key: str, new_key: str) -> Opti
     )
 
 
+def _manifest_component_count(text: str) -> Optional[int]:
+    """How many components a ``bringup_status.json`` lists; None when it cannot be parsed."""
+    try:
+        return len(json.loads(text).get("components", []) or [])
+    except Exception:
+        return None
+
+
 def _resolve_demo_dir_rel(new_model_id: str, backend) -> Path:
     """Demo directory for ``new_model_id``, relative to ``BRINGUP_ROOT()``.
 
@@ -261,7 +269,15 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
 
         _root = BRINGUP_ROOT()
         _done_dir = _find_demo_dir_idem(new_model_id, repo_root=_root)
-        if _done_dir is not None and (_done_dir / BRINGUP_STATUS_FILENAME).is_file():
+        _done_status = _done_dir / BRINGUP_STATUS_FILENAME if _done_dir is not None else None
+        # A manifest that lists NO components is a failed earlier attempt (the model could not be
+        # read then), not a finished scaffold: re-plan so discovery runs again. One with
+        # components, or one that cannot be parsed, is kept exactly as before.
+        if (
+            _done_status is not None
+            and _done_status.is_file()
+            and _manifest_component_count(_done_status.read_text(errors="ignore")) != 0
+        ):
             try:
                 _done_rel = _done_dir.relative_to(_root)
             except Exception:
@@ -716,10 +732,10 @@ def apply_scaffold(plan: ScaffoldPlan) -> List[str]:
         # in place and let the caller see the failure.
         if target.name == "bringup_status.json" and target.exists():
             try:
-                _existing = json.loads(target.read_text())
-                _existing_n = len(_existing.get("components", []) or [])
-                _new = json.loads(ch.new_content.decode("utf-8"))
-                _new_n = len(_new.get("components", []) or [])
+                _existing_n = _manifest_component_count(target.read_text())
+                _new_n = _manifest_component_count(ch.new_content.decode("utf-8"))
+                if _existing_n is None or _new_n is None:
+                    raise ValueError("unparsable manifest")
                 if _existing_n > 0 and _new_n == 0:
                     import sys as _sys
 

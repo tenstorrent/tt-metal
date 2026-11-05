@@ -139,7 +139,9 @@ def reconcile_alias_duplicates(
 
     best_resolved: Dict[str, str] = {}
     try:
-        for cand_model, _loader in iter_hf_model_variants(model_id, torch_dtype="float32"):
+        # Only consulted when the model does not fit host RAM: then just the blocks these paths reach load.
+        _needed = [p for n in names for p in [recorded.get(n) or "", *candidates.get(n, [])] if p]
+        for cand_model, _loader in iter_hf_model_variants(model_id, torch_dtype="float32", needed_paths=_needed):
             res = _coverage(cand_model)
             del cand_model
             if len(res) > len(best_resolved):

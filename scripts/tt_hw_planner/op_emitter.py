@@ -585,10 +585,14 @@ def emit_partial_stub(
     parts.append(f"def {mod_name}(*args, **kwargs):\n")
     parts.append("    global _instance\n")
     parts.append("    if _instance is None:\n")
+    # Whole model when it fits host RAM (the same from_pretrained as before); otherwise only the
+    # repeated blocks the candidate paths reach.
+    parts.append("        from models.common.hf_reference_loading import load_hf_reference\n")
     parts.append(
-        "        model = transformers.AutoModel.from_pretrained("
-        'HF_MODEL_ID, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True)\n'
+        '        model, _err, _ = load_hf_reference(HF_MODEL_ID, ("AutoModel",), _CANDIDATE_SUBMODULE_PATHS)\n'
     )
+    parts.append("        if model is None:\n")
+    parts.append("            raise _err\n")
     parts.append("        model.eval()\n")
     parts.append("        torch_sub = None\n")
     parts.append("        for path in _CANDIDATE_SUBMODULE_PATHS:\n")

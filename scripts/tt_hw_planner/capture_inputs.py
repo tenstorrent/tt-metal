@@ -256,6 +256,21 @@ def _summarize_value(v: Any) -> Dict[str, Any]:
     return {"kind": "scalar", "type": type(v).__name__, "repr": repr(v)[:120]}
 
 
+def _candidate_paths(component_name: str, *, demo_dir: Path) -> List[str]:
+    """The submodule paths tried for `component_name`, in order: the test's and stub's
+    `_CANDIDATE_SUBMODULE_PATHS`, then the name's own spellings."""
+    safe = _safe_id(component_name)
+    candidates: List[str] = []
+    for source in (demo_dir / "tests" / "pcc" / f"test_{safe}.py", demo_dir / "_stubs" / f"{safe}.py"):
+        for c in _read_candidates_from_test(source):
+            if c and c not in candidates:
+                candidates.append(c)
+    for variant in (component_name, safe, safe.replace("_", ".")):
+        if variant and variant not in candidates:
+            candidates.append(variant)
+    return candidates
+
+
 def _resolve_submodule(model: Any, component_name: str, *, demo_dir: Path) -> Optional[Tuple[Any, str]]:
     """Try the same candidate paths the test scaffold uses, then a few
     auto-derived ones, to find the torch submodule for `component_name`.
@@ -264,17 +279,7 @@ def _resolve_submodule(model: Any, component_name: str, *, demo_dir: Path) -> Op
     the stub file — whichever one has it. (Phase-1 SMOKE test files do
     NOT carry the candidate list, but the stub always does.)"""
     safe = _safe_id(component_name)
-    test_path = demo_dir / "tests" / "pcc" / f"test_{safe}.py"
-    stub_path = demo_dir / "_stubs" / f"{safe}.py"
-    candidates: List[str] = []
-    for source in (test_path, stub_path):
-        for c in _read_candidates_from_test(source):
-            if c and c not in candidates:
-                candidates.append(c)
-
-    for variant in (component_name, safe, safe.replace("_", ".")):
-        if variant and variant not in candidates:
-            candidates.append(variant)
+    candidates = _candidate_paths(component_name, demo_dir=demo_dir)
     seen: set = set()
     for path in candidates:
         if not path or path in seen:
@@ -411,10 +416,14 @@ def capture_real_inputs(
 
     from scripts.tt_hw_planner.agentic.probe import iter_hf_model_variants, load_hf_model_cascade
 
+    # Only consulted when the model does not fit host RAM: then just the blocks these paths reach load.
+    needed_paths = [p for c in components for p in _candidate_paths(c, demo_dir=demo_dir)]
     model = None
     best_loader = None
     best_count = -1
-    for _cand_model, _cand_loader in iter_hf_model_variants(model_id, torch_dtype="bfloat16", verbose=verbose):
+    for _cand_model, _cand_loader in iter_hf_model_variants(
+        model_id, torch_dtype="bfloat16", verbose=verbose, needed_paths=needed_paths
+    ):
         _cnt = sum(1 for _c in components if _resolve_submodule(_cand_model, _c, demo_dir=demo_dir) is not None)
         if _cnt > best_count:
             if model is not None:
@@ -425,7 +434,9 @@ def capture_real_inputs(
         if best_count >= len(components):
             break
     if model is None:
-        _m, loader_or_err = load_hf_model_cascade(model_id, torch_dtype="float32", verbose=verbose)
+        _m, loader_or_err = load_hf_model_cascade(
+            model_id, torch_dtype="float32", verbose=verbose, needed_paths=needed_paths
+        )
         if _m is None:
             try:
                 from .module_tree import _load_reference_module
