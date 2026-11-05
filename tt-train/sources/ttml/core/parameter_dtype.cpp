@@ -42,14 +42,9 @@ void validate_precision_block(const YAML::Node& precision) {
     }
 }
 
-// The dtype training_config.precision.<key> names: "bfloat16" or "float32", any other name is a TT_FATAL. Unset, or set
-// to null, gives nullopt. The whole block is validated first.
-std::optional<ttnn::DataType> precision_dtype_from_config(const YAML::Node& training_config, std::string_view key) {
-    if (!training_config || !training_config["precision"]) {
-        return std::nullopt;
-    }
-    const auto precision = training_config["precision"];
-    validate_precision_block(precision);
+// The dtype precision.<key> names in a validated block: "bfloat16" or "float32", any other name is a TT_FATAL. Unset,
+// or set to null, gives nullopt.
+std::optional<ttnn::DataType> dtype_from_precision_block(const YAML::Node& precision, std::string_view key) {
     const auto node = precision[std::string(key)];
     if (!node || node.IsNull()) {
         return std::nullopt;
@@ -60,6 +55,37 @@ std::optional<ttnn::DataType> precision_dtype_from_config(const YAML::Node& trai
     }
     TT_FATAL(name == "float32", "precision.{} must be \"bfloat16\" or \"float32\", got \"{}\"", key, name);
     return ttnn::DataType::FLOAT32;
+}
+
+struct PrecisionDtypes {
+    std::optional<ttnn::DataType> master_dtype;
+    std::optional<ttnn::DataType> reduce_dtype;
+};
+
+// training_config.precision read once: the block is validated, then both keys are read, before any caller changes
+// anything.
+PrecisionDtypes read_precision_config(const YAML::Node& training_config) {
+    if (!training_config || !training_config["precision"]) {
+        return {};
+    }
+    const auto precision = training_config["precision"];
+    validate_precision_block(precision);
+    auto master_dtype = dtype_from_precision_block(precision, "master_dtype");
+    auto reduce_dtype = dtype_from_precision_block(precision, "reduce_dtype");
+    return {master_dtype, reduce_dtype};
+}
+
+// Stores reduce_dtype as the gradient syncs' default and sets FLOAT32 gradient accumulation on the trainable parameters
+// when it is FLOAT32, clearing it otherwise.
+void apply_reduce_dtype(std::optional<ttnn::DataType> reduce_dtype, const serialization::NamedParameters& parameters) {
+    autograd::ctx().set_gradient_reduce_dtype(reduce_dtype);
+    const auto accumulation_dtype =
+        reduce_dtype == ttnn::DataType::FLOAT32 ? std::optional{ttnn::DataType::FLOAT32} : std::nullopt;
+    for (const auto& [name, parameter] : parameters) {
+        if (parameter->get_requires_grad()) {
+            parameter->set_grad_accumulation_dtype(accumulation_dtype);
+        }
+    }
 }
 
 }  // namespace
@@ -83,36 +109,24 @@ void store_trainable_parameters_as(const serialization::NamedParameters& paramet
 }
 
 void validate_precision_config(const YAML::Node& training_config) {
-    for (const auto key : kPrecisionKeys) {
-        (void)precision_dtype_from_config(training_config, key);
-    }
+    (void)read_precision_config(training_config);
 }
 
 std::optional<ttnn::DataType> apply_precision_config(
     const YAML::Node& training_config, const serialization::NamedParameters& parameters) {
-    // Both keys are read, and so the whole block validated, before anything changes.
-    validate_precision_config(training_config);
-    const auto master_dtype = precision_dtype_from_config(training_config, "master_dtype");
-    if (master_dtype) {
-        store_trainable_parameters_as(parameters, *master_dtype);
+    const auto dtypes = read_precision_config(training_config);
+    if (dtypes.master_dtype) {
+        store_trainable_parameters_as(parameters, *dtypes.master_dtype);
     }
-    (void)apply_reduce_dtype_config(training_config, parameters);
-    return master_dtype;
+    apply_reduce_dtype(dtypes.reduce_dtype, parameters);
+    return dtypes.master_dtype;
 }
 
 std::optional<ttnn::DataType> apply_reduce_dtype_config(
     const YAML::Node& training_config, const serialization::NamedParameters& parameters) {
-    validate_precision_config(training_config);
-    const auto reduce_dtype = precision_dtype_from_config(training_config, "reduce_dtype");
-    autograd::ctx().set_gradient_reduce_dtype(reduce_dtype);
-    const auto accumulation_dtype =
-        reduce_dtype == ttnn::DataType::FLOAT32 ? std::optional{ttnn::DataType::FLOAT32} : std::nullopt;
-    for (const auto& [name, parameter] : parameters) {
-        if (parameter->get_requires_grad()) {
-            parameter->set_grad_accumulation_dtype(accumulation_dtype);
-        }
-    }
-    return reduce_dtype;
+    const auto dtypes = read_precision_config(training_config);
+    apply_reduce_dtype(dtypes.reduce_dtype, parameters);
+    return dtypes.reduce_dtype;
 }
 
 void cast_fp32_gradients_to_bf16(const serialization::NamedParameters& parameters) {

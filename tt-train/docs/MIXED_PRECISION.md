@@ -264,7 +264,8 @@ embedding and LM head.
   gradients only install a bf16 copy first with `core::cast_fp32_gradients_to_bf16()`, which frees the fp32 gradient:
   `SGD`, `SGDComposite`, `MorehAdamW`, `AdamWComposite` and `MuonComposite` at the start of their step,
   `clip_grad_norm()`, and `RemoteOptimizer` before it sends. With clipping on, fused `AdamW` therefore gets the
-  clipped bf16 gradient.
+  clipped bf16 gradient. The call is each optimizer's own (see `OptimizerBase::step()`), so a new optimizer whose
+  kernels take bf16 gradients makes it too.
 - **Memory.** An fp32 gradient takes 2 bytes per parameter more than a bf16 one while gradients are held. With fp32
   master weights and fused `AdamW` that is 18 instead of 16 bytes per parameter (4 for the master, 2 for its bf16
   view, 8 for the moments, 4 for the gradient); with bf16 parameters, 10 instead of 8. FSDP's fp32 shard is twice a

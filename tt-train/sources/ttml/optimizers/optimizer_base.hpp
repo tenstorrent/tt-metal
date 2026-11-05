@@ -57,6 +57,9 @@ public:
 
     virtual void zero_grad() = 0;
 
+    // With precision.reduce_dtype float32 a trainable parameter's gradient can arrive in fp32 (accumulated in fp32). An
+    // optimizer whose kernels take bf16 gradients calls core::cast_fp32_gradients_to_bf16() on its parameters at the
+    // start of step(); one that reads fp32 gradients, as fused AdamW does, doesn't.
     virtual void step() = 0;
 
     [[nodiscard]] virtual serialization::StateDict get_state_dict() const = 0;
