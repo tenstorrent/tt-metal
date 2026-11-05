@@ -92,7 +92,33 @@ enum DataType : ubyte {
     MxFp4 = 14,
     MxInt8 = 15,
     MxInt4 = 16,
-    MxInt2 = 17
+    MxInt2 = 17,
+    // One per GGUF format, in the order and at the numbers of tt::tt_metal::DataType::GGUF_*.
+    GgufQ8_0 = 18,
+    GgufQ4_0 = 19,
+    GgufIQ4_NL = 20,
+    GgufMXFP4 = 21,
+    GgufNVFP4 = 22,
+    GgufQ6_K = 23,
+    GgufQ4_K = 24,
+    GgufQ5_K = 25,
+    GgufQ3_K = 26,
+    GgufQ2_K = 27,
+    GgufIQ4_XS = 28,
+    GgufTQ2_0 = 29,
+    GgufQ2_0 = 30,
+    GgufQ1_0 = 31,
+    GgufIQ2_XXS = 32,
+    GgufIQ1_S = 33,
+    GgufIQ2_S = 34,
+    GgufIQ3_S = 35,
+    GgufIQ3_XXS = 36,
+    GgufIQ2_XS = 37,
+    GgufIQ1_M = 38,
+    GgufQ4_1 = 39,
+    GgufQ5_0 = 40,
+    GgufQ5_1 = 41,
+    GgufTQ1_0 = 42
 }
 
 table RowMajorPageConfig {}

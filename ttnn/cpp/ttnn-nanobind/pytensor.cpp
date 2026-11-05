@@ -309,7 +309,8 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
                 return dispatch_to_concrete.template operator()<float>(
                     unpack_block_float_tiles_to_float(buffer, tensor_spec));
             }
-            case DataType::INVALID: TT_THROW("Unsupported DataType: {}", tt_dtype);
+            case DataType::INVALID:
+            default: TT_THROW("Unsupported DataType: {}", tt_dtype);
         }
         TT_THROW("Unreachable");
     };
@@ -361,7 +362,8 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
         case DataType::MXINT4:
         case DataType::MXINT2:
         case DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(tt_tensor);
-        case DataType::INVALID: TT_THROW("Unsupported DataType: {}", tt_tensor.dtype());
+        case DataType::INVALID:
+        default: TT_THROW("Unsupported DataType: {}", tt_tensor.dtype());
     }
     TT_THROW("Unreachable");
 }
@@ -991,7 +993,8 @@ void pytensor_module(nb::module_& mod) {
                         case DataType::UINT16: return self.to_vector<uint16_t>()[0];
                         case DataType::UINT8: return self.to_vector<uint8_t>()[0];
                         case DataType::FP8_E4M3: TT_THROW("FP8_E4M3 item() is not supported");
-                        case DataType::INVALID: TT_THROW("Unsupported DataType");
+                        case DataType::INVALID:
+                        default: TT_THROW("Unsupported DataType: {}", dtype);
                     }
                     TT_THROW("Unreachable");
                 };

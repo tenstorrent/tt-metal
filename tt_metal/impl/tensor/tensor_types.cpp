@@ -1,11 +1,62 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
 #include <cstdint>
+#include <string_view>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal {
+
+namespace {
+
+constexpr int kFirstGguf = static_cast<int>(DataType::GGUF_Q8_0);
+
+struct GgufFormat {
+    std::string_view name;
+    GgufTraits traits;
+};
+
+// In DataType order. The numbers match the decoder's page_layout (ckernel_gguf_page.h).
+// clang-format off
+constexpr std::array<GgufFormat, 25> kGgufFormats{{
+    // name                   id  blk  bytes G  page code  scale
+    {"DataType::GGUF_Q8_0",    {1, 32, 34, 1, 1, 1024, 1}},
+    {"DataType::GGUF_Q4_0",    {2, 32, 18, 1, 1, 512, 1}},
+    {"DataType::GGUF_IQ4_NL",  {3, 32, 18, 1, 1, 512, 1}},
+    {"DataType::GGUF_MXFP4",   {4, 32, 17, 2, 1, 512, 1}},
+    {"DataType::GGUF_NVFP4",   {5, 64, 36, 1, 1, 512, 1}},
+    {"DataType::GGUF_Q6_K",    {6, 256, 210, 8, 1, 768, 9}},
+    {"DataType::GGUF_Q4_K",    {7, 256, 144, 8, 1, 512, 8}},
+    {"DataType::GGUF_Q5_K",    {8, 256, 176, 8, 2, 1280, 8}},
+    {"DataType::GGUF_Q3_K",    {9, 256, 110, 8, 2, 768, 7}},
+    {"DataType::GGUF_Q2_K",    {10, 256, 84, 8, 1, 256, 10}},
+    {"DataType::GGUF_IQ4_XS",  {11, 256, 136, 8, 1, 512, 4}},
+    {"DataType::GGUF_TQ2_0",   {12, 256, 66, 8, 1, 256, 1}},
+    {"DataType::GGUF_Q2_0",    {13, 64, 18, 2, 1, 256, 1}},
+    {"DataType::GGUF_Q1_0",    {14, 128, 18, 4, 2, 256, 1}},
+    {"DataType::GGUF_IQ2_XXS", {15, 256, 66, 8, 1, 256, 1}},
+    {"DataType::GGUF_IQ1_S",   {16, 256, 50, 8, 1, 192, 1}},
+    {"DataType::GGUF_IQ2_S",   {17, 256, 82, 8, 1, 320, 1}},
+    {"DataType::GGUF_IQ3_S",   {18, 256, 110, 8, 1, 432, 1}},
+    {"DataType::GGUF_IQ3_XXS", {19, 256, 98, 8, 1, 384, 1}},
+    {"DataType::GGUF_IQ2_XS",  {20, 256, 74, 8, 1, 256, 5}},
+    {"DataType::GGUF_IQ1_M",   {21, 256, 56, 8, 1, 192, 4}},
+    {"DataType::GGUF_Q4_1",    {22, 32, 20, 1, 1, 512, 2}},
+    {"DataType::GGUF_Q5_0",    {23, 32, 22, 2, 2, 1280, 2}},
+    {"DataType::GGUF_Q5_1",    {24, 32, 24, 2, 2, 1280, 4}},
+    {"DataType::GGUF_TQ1_0",   {25, 256, 54, 8, 8, 1536, 3}},
+}};
+// clang-format on
+static_assert(kFirstGguf + static_cast<int>(kGgufFormats.size()) == static_cast<int>(DataType::INVALID));
+
+const GgufFormat& gguf_format(DataType dtype) {
+    TT_FATAL(is_gguf(dtype), "{} is not a GGUF dtype", dtype);
+    return kGgufFormats[static_cast<int>(dtype) - kFirstGguf];
+}
+
+}  // namespace
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type) {
     switch (data_type) {
@@ -27,8 +78,8 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_ty
         case DataType::MXINT8: return os << "DataType::MXINT8";
         case DataType::MXINT4: return os << "DataType::MXINT4";
         case DataType::MXINT2: return os << "DataType::MXINT2";
-        case DataType::INVALID:
-        default: return os << "Invalid";
+        case DataType::INVALID: return os << "Invalid";
+        default: return os << (is_gguf(data_type) ? gguf_format(data_type).name : "Invalid");
     }
 }
 
@@ -107,6 +158,10 @@ bool is_block_float(DataType dtype) {
     }
 }
 
+bool is_gguf(DataType dtype) { return static_cast<int>(dtype) >= kFirstGguf && dtype < DataType::INVALID; }
+
+const GgufTraits& gguf_traits(DataType dtype) { return gguf_format(dtype).traits; }
+
 bool is_mx(DataType dtype) {
     switch (dtype) {
         case DataType::MXFP8_E4M3:
@@ -142,7 +197,13 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
         case tt::tt_metal::DataType::MXINT8: return tt::DataFormat::MxInt8;
         case tt::tt_metal::DataType::MXINT4: return tt::DataFormat::MxInt4;
         case tt::tt_metal::DataType::MXINT2: return tt::DataFormat::MxInt2;
-        default: TT_THROW("Unsupported DataType"); return tt::DataFormat::Float16_b;  // for clang-tidy
+        default:
+            // GGUF pages are records, not values that any unpacker can read.
+            if (is_gguf(datatype)) {
+                return tt::DataFormat::Invalid;
+            }
+            TT_THROW("Unsupported DataType");
+            return tt::DataFormat::Float16_b;  // for clang-tidy
     }
 }
 
@@ -204,8 +265,8 @@ auto fmt::formatter<tt::tt_metal::DataType>::format(tt::tt_metal::DataType dt, f
         case tt::tt_metal::DataType::MXINT8: name = "DataType::MXINT8"; break;
         case tt::tt_metal::DataType::MXINT4: name = "DataType::MXINT4"; break;
         case tt::tt_metal::DataType::MXINT2: name = "DataType::MXINT2"; break;
-        case tt::tt_metal::DataType::INVALID:
-        default: name = "Invalid"; break;
+        case tt::tt_metal::DataType::INVALID: name = "Invalid"; break;
+        default: name = tt::tt_metal::is_gguf(dt) ? tt::tt_metal::gguf_format(dt).name : "Invalid"; break;
     }
     return formatter<string_view>::format(name, ctx);
 }

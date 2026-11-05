@@ -99,7 +99,8 @@ ttnn::Tensor make_borrowed_host_tensor(ttsl::Span<const std::byte> bytes, const 
         case DataType::MXINT8:
         case DataType::MXINT4:
         case DataType::MXINT2: TT_THROW("H2DStreamService: {} is not supported", spec.data_type());
-        case DataType::INVALID: TT_THROW("H2DStreamService: invalid global_spec data type");
+        case DataType::INVALID:
+        default: TT_THROW("H2DStreamService: unsupported global_spec data type {}", spec.data_type());
     }
     TT_THROW("Unreachable");
 }
