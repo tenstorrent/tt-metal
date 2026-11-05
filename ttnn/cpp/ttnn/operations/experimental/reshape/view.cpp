@@ -31,7 +31,8 @@ ttnn::Tensor view(const ttnn::Tensor& tensor, const ttsl::SmallVector<int32_t>& 
     return ttnn::experimental::view(tensor, ttsl::Span<const int32_t>(shape_vector.data(), shape_vector.size()));
 }
 
-ttnn::Tensor alias_view(const ttnn::Tensor& tensor, const ttnn::Shape& shape, tt::tt_metal::DataType dtype) {
+ttnn::Tensor alias_view(
+    const ttnn::Tensor& tensor, const ttnn::Shape& shape, tt::tt_metal::DataType dtype, bool check_slices) {
     using namespace tt::tt_metal;
     TT_FATAL(
         tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated(),
@@ -60,6 +61,10 @@ ttnn::Tensor alias_view(const ttnn::Tensor& tensor, const ttnn::Shape& shape, tt
     // the bank count. When that range also holds a whole number of view pages, view pages
     // [i * per_slice, (i + 1) * per_slice) cover exactly slice i, with per_slice = banks * range / view page. A dim-0
     // slice of the view must then nest inside one input slice or cover whole input slices.
+    //
+    // With check_slices false, only the first rule is kept: input slice i still owns bytes [i * range, (i + 1) * range)
+    // on every bank, but a view page may straddle two slices. The caller then writes only the view pages that lie
+    // wholly inside the slice it owns.
     const uint32_t slices = tensor.padded_shape()[0];
     const uint64_t pages_per_slice = owner.num_pages() / slices;
     TT_FATAL(
@@ -69,22 +74,25 @@ ttnn::Tensor alias_view(const ttnn::Tensor& tensor, const ttnn::Shape& shape, tt
         pages_per_slice,
         banks);
     const DeviceAddr slice_bytes_per_bank = pages_per_slice / banks * owner_page;
-    TT_FATAL(
-        slice_bytes_per_bank % view_aligned_page == 0,
-        "alias_view: a dim-0 slice of the input holds {} bytes per bank, not a multiple of the view's {} byte page",
-        slice_bytes_per_bank,
-        view_aligned_page);
-
-    TT_FATAL(shape.rank() >= 3, "alias_view: view rank must be at least 3, got {}", shape.rank());
     const uint64_t view_pages = view_spec.compute_packed_buffer_size_bytes() / view_page;
-    const uint64_t per_input_slice = banks * (slice_bytes_per_bank / view_aligned_page);
-    const uint64_t per_view_slice = view_pages / view_spec.padded_shape()[0];
-    TT_FATAL(
-        per_input_slice % per_view_slice == 0 || per_view_slice % per_input_slice == 0,
-        "alias_view: a dim-0 slice of the view ({} pages) would straddle dim-0 slices of the input ({} view pages "
-        "each)",
-        per_view_slice,
-        per_input_slice);
+    if (check_slices) {
+        TT_FATAL(
+            slice_bytes_per_bank % view_aligned_page == 0,
+            "alias_view: a dim-0 slice of the input holds {} bytes per bank, not a multiple of the view's {} byte "
+            "page",
+            slice_bytes_per_bank,
+            view_aligned_page);
+
+        TT_FATAL(shape.rank() >= 3, "alias_view: view rank must be at least 3, got {}", shape.rank());
+        const uint64_t per_input_slice = banks * (slice_bytes_per_bank / view_aligned_page);
+        const uint64_t per_view_slice = view_pages / view_spec.padded_shape()[0];
+        TT_FATAL(
+            per_input_slice % per_view_slice == 0 || per_view_slice % per_input_slice == 0,
+            "alias_view: a dim-0 slice of the view ({} pages) would straddle dim-0 slices of the input ({} view pages "
+            "each)",
+            per_view_slice,
+            per_input_slice);
+    }
     const DeviceAddr view_bytes_per_bank = tt::div_up(view_pages, banks) * view_aligned_page;
     TT_FATAL(
         view_bytes_per_bank <= owner.aligned_size_per_bank(),
