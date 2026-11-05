@@ -5239,10 +5239,8 @@ class Qwen36Model:
         use_qkv_mask = masked and self.short_prefill_trace_qkv_mask_enabled()
         for bucket in buckets:
             assert bucket % 128 == 0, f"bucket {bucket} must be a multiple of 128 (GDN sub-chunk)"
-            assert bucket % block_size == 0
-            assert (
-                page_table.shape[-1] >= bucket // block_size
-            ), f"page_table has {page_table.shape[-1]} blocks, bucket {bucket} needs {bucket // block_size}"
+            nb = -(-bucket // block_size)
+            assert page_table.shape[-1] >= nb, f"page_table has {page_table.shape[-1]} blocks, bucket {bucket} needs {nb}"
         n_hist = None
         for layer in self.layers:
             if not layer.is_full_attention:
@@ -5284,7 +5282,9 @@ class Qwen36Model:
         # Persistent inputs of ALL buckets, allocated BEFORE any warm pass/capture.
         trs = {}
         for bucket in buckets:
-            bpb = bucket // block_size
+            # Ceil: a bucket shorter than a block fills the first rows of one block. The segment starts on a block
+            # boundary (_replay_short_trace asserts it), and paged_fill_cache writes from the first row of the block.
+            bpb = -(-bucket // block_size)
             tr = _ShortPrefillTrace(bucket, buf_blocks, bpb)
             tr.block_size = block_size
             tr.masked = masked
@@ -5481,7 +5481,7 @@ class Qwen36Model:
         also returns None when the trash block collides with the request's real blocks).
 
         spec_inputs (required for a spec trace, see capture_prefill_traces_short(spec=True)): host int32 torch tensors
-        (mtp_tokens [1, bucket], mtp_full_table [1, buf_blocks], mtp_chunk_table [1, bucket/block]) staged into the
+        (mtp_tokens [1, bucket], mtp_full_table [1, buf_blocks], mtp_chunk_table [1, ceil(bucket/block)]) staged into the
         MTP inputs; MTPSpecEngine builds them with mtp_prefill_inputs.
 
         chunk_start (default 0; a multiple of 128): the segment's ABSOLUTE start position, for a prefix-cached /
@@ -5987,7 +5987,7 @@ class Qwen36Model:
         assert self._paged_kv_caches is not None, "Call allocate_kv_caches first"
         assert bucket % 128 == 0, f"bucket {bucket} must be a multiple of 128 (GDN sub-chunk)"
         block_size = get_block_size(self._paged_kv_caches)
-        blocks_per_bucket = bucket // block_size
+        blocks_per_bucket = -(-bucket // block_size)
 
         if getattr(self, "_bucket_trace_id", None) is not None:
             ttnn.release_trace(device, self._bucket_trace_id)
@@ -6139,7 +6139,7 @@ class Qwen36Model:
         assert getattr(self, "_bucket_trace_id", None) is not None, "Call capture_prefill_trace_bucket first"
         bucket = self._bucket_size
         block_size = get_block_size(self._paged_kv_caches)
-        blocks_per_bucket = bucket // block_size
+        blocks_per_bucket = -(-bucket // block_size)
         rep = ttnn.ReplicateTensorToMesh(self.device)
 
         B = len(token_ids_list)
@@ -6381,6 +6381,10 @@ class Qwen36Model:
                     start = int(start_positions[u]) if start_positions is not None else 0
                     if gdn_resume is not None:
                         plan = self._plan_block_resume(actual, start, (gdn_resume, u))
+                        if os.environ.get("QWEN36_PREFIX_CACHE_DEBUG", "0") == "1":
+                            logger.info(
+                                f"[mamba-resume] len={actual} vllm_start={start} gdn_hit={plan[0] if plan else 0}"
+                            )
                     else:
                         cont = self._maybe_partial_chunk(step_tokens, actual - max(start, 0), actual)
                         plan = self._plan_prefix_prefill(toks[:, :actual], actual, start, cont=cont)
@@ -6490,18 +6494,22 @@ class Qwen36Model:
     def _plan_block_resume(self, L, start, src):
         """QWEN36_MAMBA_SPEC: the _prefill_with_prefix_cache plan that resumes at vLLM's start from
         src = (GdnBlockState, request index), with no snapshot saves; None = recompute from 0. Recompute when there is
-        nothing to resume (start 0), when _prefill_range cannot resume there (start not 128-aligned, fewer than 3
-        tokens after it), or without the chunk trace. Recomputing a prefix whose KV is cached rewrites the same
-        values."""
+        nothing to resume (start 0), when _prefill_range cannot resume there (start not 128-aligned or not on a KV
+        block boundary, fewer than 3 tokens after it), or without the chunk trace. Recomputing a prefix whose KV is
+        cached rewrites the same values."""
         if self._prefix_cache is not None or self._chunk_state_cache is not None:
             raise RuntimeError("QWEN36_MAMBA_SPEC keeps GDN state in vLLM blocks; the GDN snapshot stores must be off")
         A = self._PREFIX_ALIGN
-        if start <= 0 or start % A or L - start < 3 or self._chunked_trace_id is None:
+        block = paged_block_size(self)
+        if start <= 0 or start % A or start % block or L - start < 3 or self._chunked_trace_id is None:
             return None
         chunk = self._chunked_chunk_size or 2048
         n = L - start
-        # As _plan_prefix_prefill: a 1-2 token tail after the last full chunk would run eagerly; split 128 earlier.
-        points = [start + (n // chunk) * chunk - A] if n > chunk and 0 < n % chunk < 3 else []
+        # A 1-2 token tail after the last full chunk runs eagerly. Splitting one block earlier lets the last segment
+        # (one block plus the tail) replay the short trace. Every segment must start on a block boundary:
+        # paged_fill_cache writes from the first row of the segment's first block.
+        split = n > chunk and 0 < n % chunk < 3 and block < chunk
+        points = [start + (n // chunk) * chunk - max(A, block)] if split else []
         return start, src, points, 1 << 62, start, set(), False
 
     def _prefill_with_prefix_cache(self, toks, pt_row, L, plan):
