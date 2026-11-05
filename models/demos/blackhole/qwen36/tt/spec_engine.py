@@ -109,6 +109,7 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     engine_spec_buckets,
     join_logits_one_copy_enabled,
     kv_block_size,
+    mamba_spec_enabled,
     pack_u32_rows,
     prefill_host_tolist_enabled,
     prefill_masked_big_enabled,
@@ -750,7 +751,8 @@ def spec_memory_costs(
     n_gdn = sum(1 for i in range(L) if types[i % len(types)] != "full_attention")
     bf, f32, i32 = 2, 4, 4
 
-    ring = n_gdn * B * _tile_bytes([T * nv_tp, dk, dv], f32)  # [T*B*Nv, Dk, Dv]
+    # [T*B*Nv, Dk, Dv]; QWEN36_MAMBA_SPEC: the per-token states live in the request's vLLM spec blocks, no ring
+    ring = 0 if mamba_spec_enabled() else n_gdn * B * _tile_bytes([T * nv_tp, dk, dv], f32)
     win_rows = [kconv - 1 + T, kconv] + ([T - 1] if T > 1 else [])  # _verify_win_buf, _conv_win_buf, _spec_win_pad
     if os.environ.get("QWEN36_VERIFY_SPEC_STEP", "1") == "1":  # gdn_spec_step keeps E_prev as a ping-pong pair
         win_rows.append(kconv - 1 + T)
