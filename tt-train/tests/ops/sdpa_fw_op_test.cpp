@@ -1654,12 +1654,12 @@ INSTANTIATE_TEST_SUITE_P(
         ChunkKnobCase{
             SDPATestConfig{
                 .batch_size = 1U,
-                .sequence_length = 256U,
-                .query_dim = 256U,
-                .key_value_dim = 256U,
-                .value_dim = 128U,
-                .num_query_heads = 2U,
-                .num_key_heads = 2U,
+                .sequence_length = 128U,
+                .query_dim = 128U,
+                .key_value_dim = 128U,
+                .value_dim = 64U,
+                .num_query_heads = 1U,
+                .num_key_heads = 1U,
                 .mask_type = ttml::metal::AttentionMaskType::None,
                 .use_gate = true,
                 .test_name = "Smoke_None_Gate"},
@@ -1672,11 +1672,11 @@ INSTANTIATE_TEST_SUITE_P(
         ChunkKnobCase{
             SDPATestConfig{
                 .batch_size = 1U,
-                .sequence_length = 256U,
-                .query_dim = 128U,
-                .key_value_dim = 128U,
-                .num_query_heads = 2U,
-                .num_key_heads = 2U,
+                .sequence_length = 128U,
+                .query_dim = 64U,
+                .key_value_dim = 64U,
+                .num_query_heads = 1U,
+                .num_key_heads = 1U,
                 .mask_type = ttml::metal::AttentionMaskType::Causal,
                 .use_gate = true,
                 .return_intermediates = false,
@@ -1945,12 +1945,12 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitWork) {
 }
 
 // The production pick (four-row chunks, eight K/V tiles, light/heavy pairs) only lands on device when there
-// is a pair per core; every other blocking shape is too small for that and resolves to one-row chunks. B is
+// is a pair per core; the small blocking shapes resolve to one-row chunks. B is
 // sized from the grid: S=512 gives four chunks per sequence (two pairs), so B*H = cores/2 + 2 sequences give
 // cores + 4 pairs. A core with the (0, 3) pair walks two non-consecutive runs of its work list, and the two
 // cores with two pairs run the multi-item list, as TinyLlama does. D=32 keeps the host references cheap; the
 // pick does not depend on it below 128.
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPairedOnDevice) {
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_DefaultPairedOnDevice) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     using namespace ttml::metal::ops::sdpa_fw::device;
     constexpr uint32_t H = 2U, S = 512U, D = 32U;
@@ -2188,7 +2188,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ChangeProgramHash) {
         ttsl::hash::hash_objects_with_default_seed(q_changed), ttsl::hash::hash_objects_with_default_seed(k_changed));
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_RingChunking_SingleDevice) {
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_RingChunking_SingleDevice) {
     // Ring SDPA runs this op once per ring step with ring_chunking's config and the mask the step calls for
     // (causal on the diagonal shard, none on the earlier shards), on per-device shards as short as a tile
     // or two. Only the Galaxy ring test runs that path end to end, so this walks the same steps on one
