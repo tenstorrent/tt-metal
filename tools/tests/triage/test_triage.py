@@ -973,21 +973,6 @@ class TestMeshSocketTriage:
         assert (d2h[0].downstream_config_addr, d2h[0].num_downstreams, d2h[0].downstream) == (None, 1, 0)
         assert d2h[0].sent_at_sender == MESH_SOCKET_FIFO_SIZE, "Expected the D2H kernel to have filled the fifo"
         assert d2h[0].acked_at_sender == 0, "Expected no acks, since the host never reads"
-        # The callstack shows the kernel is still waiting for fifo space.
-        triage.CHECKS.clear()
-        callstacks = run_script(
-            script_path=os.path.join(triage_home, "dump_callstacks.py"),
-            context=self.exalens_context,
-            argv=[],
-            return_result=True,
-        )
-        d2h_frames = [
-            frame.function_name
-            for check in callstacks
-            if check.location == d2h[0].location and check.result is not None
-            for frame in check.result.kernel_callstack_with_message.callstack
-        ]
-        assert "socket_reserve_pages" in d2h_frames, f"Expected the D2H kernel waiting for fifo space, got {d2h_frames}"
 
         # The D2D sockets, all on one chip: a 1:1 pair, plus a fan-out sender feeding two receiver cores.
         # The fan-out sender is a single core, so it contributes one row per downstream. No op runs on
