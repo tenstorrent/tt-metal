@@ -160,6 +160,9 @@ class TtMiniMaxM3VisionEncoder(LightweightModule):
         TypeError or ValueError for pixels that no image resizes to (check_pixels) before any device work.
         """
         pixel_values, grid_thw = patch_rows(pixels)
+        # TODO: pad the patch rows to a few patch-count buckets and mask the padded keys in SDPA, so that the first
+        # image of an uncommon patch count does not compile the chip's programs while other images wait (see
+        # Compilation in the module docstring). Pad whole tokens, for the 2 x 2 merge, and drop the padded ones.
         tokens = self.model(pixel_values, grid_thw)  # (1, 1, n_tokens, out_dim) in tiles
         rows = ttnn.to_layout(tokens, ttnn.ROW_MAJOR_LAYOUT)  # untilized on the chip, without the tiles' padding
         ttnn.deallocate(tokens)
