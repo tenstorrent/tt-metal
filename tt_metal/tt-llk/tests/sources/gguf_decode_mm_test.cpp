@@ -147,6 +147,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(OUT_FORMAT, IN0_FORMAT);
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    sfpu::sfpu_gguf_decode_init<GGUF_FMT>();
     _llk_math_dest_srca_mm_init_<MATH_FIDELITY, GGUF_IN0_ROWS>();
 
     for (std::uint32_t nt = 0; nt < GGUF_NT; nt++)
