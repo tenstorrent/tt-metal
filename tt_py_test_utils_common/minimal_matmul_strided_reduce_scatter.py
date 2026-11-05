@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import torch
 from loguru import logger
 import ttnn
+from tt_py_test_utils_common.ccl_semaphores import create_global_semaphores
 from tt_py_test_utils_common.comparison_funcs import comp_pcc
 from tracy import signpost
 
@@ -40,12 +41,6 @@ class MinimalMatmulStridedReduceScatterTestConfig:
             self.layout = ttnn.TILE_LAYOUT
         if self.input_dtype is None:
             self.input_dtype = ttnn.bfloat16
-
-
-def create_global_semaphores(mesh_device, cores, initial_value):
-    """Create 3 global semaphores needed by strided reduce-scatter."""
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(3)]
-    return ccl_semaphore_handles
 
 
 def run_minimal_matmul_strided_reduce_scatter_impl(

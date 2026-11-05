@@ -12,6 +12,7 @@ from ttnn.operations.ccl import MoEActivationFunction
 
 import ttnn
 from tt_py_test_utils_common.all_to_all_combine_ref import get_batch_cluster_idxr, get_cluster_dims
+from tt_py_test_utils_common.all_to_all_dispatch import tt_to_torch_dtype
 from tt_py_test_utils_common.selective_combine import device_mesh_iterator
 from tt_py_test_utils_common.utility_functions import comp_pcc
 
@@ -472,17 +473,6 @@ def create_torch_w2(L, E, N, K):
         logger.debug(f"[WEIGHT_INIT] w2: RANDOM - mode={mode}")
 
     return torch_w2
-
-
-def tt_to_torch_dtype(tt_dtype):
-    if tt_dtype == ttnn.bfloat16:
-        return torch.bfloat16
-    elif tt_dtype == ttnn.bfloat8_b:
-        return torch.bfloat16
-    elif tt_dtype == ttnn.float32:
-        return torch.float32
-    else:
-        raise ValueError(f"Invalid dtype: {tt_dtype}")
 
 
 def get_linearized_mesh_coord(num_replicated_devices, cluster_axis, expert_id, experts_per_cluster, experts_per_device):

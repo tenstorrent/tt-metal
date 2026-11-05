@@ -355,7 +355,7 @@ def run_conv(
             assert output_memory_config == memory_config
 
 
-def test_conv2d_sdxl(
+def run_sdxl_conv2d(
     device,
     torch_tensor_map,
     batch,
@@ -441,7 +441,7 @@ def test_conv2d_sdxl(
     )
 
 
-def test_conv2d_vae_sdxl(
+def run_sdxl_conv2d_vae(
     device,
     torch_tensor_map,
     batch,

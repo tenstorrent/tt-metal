@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.demos.stable_diffusion_xl_base.tests.sdxl_matmul import test_sdxl_matmul as _shared_test_sdxl_matmul
+from models.demos.stable_diffusion_xl_base.tests.sdxl_matmul import run_sdxl_matmul
 
 import pytest
 import torch
@@ -160,7 +160,7 @@ def test_sdxl_matmul(
     has_gelu,
     perf_test_mode=False,
 ):
-    return _shared_test_sdxl_matmul(
+    return run_sdxl_matmul(
         device,
         core_grid,
         M,

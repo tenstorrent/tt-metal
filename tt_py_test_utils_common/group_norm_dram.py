@@ -143,7 +143,7 @@ def run_group_norm_DRAM(
         )
 
 
-def test_group_norm_DRAM(
+def run_group_norm_DRAM_with_input_mask(
     device,
     N,
     C,
