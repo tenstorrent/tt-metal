@@ -198,26 +198,16 @@ def create_ttnn_tilized_tensor(torch_tensor, device, dtype, pad_value=float("nan
 
 
 def merge_gate_subset(cases, keep, ids=None):
-    """Mark only the tuples in keep.
+    """Wrap cases as pytest params and mark the tuples in keep with merge_gate.
 
-    keep is a list of argument tuples; wrap a single tuple in a list.
-    ids is an optional list aligned with cases, or a callable from the tuple to its pytest id.
+    keep is a collection of argument tuples; wrap a single tuple in a list.
+    ids, if given, is a list of pytest ids aligned with cases.
     """
+    cases = [tuple(case) for case in cases]
     chosen = {tuple(case) for case in keep}
-
-    params = []
-    for index, case in enumerate(cases):
-        case = tuple(case)
-        if ids is None:
-            param_id = None
-        elif callable(ids):
-            param_id = ids(case)
-        else:
-            param_id = ids[index]
-        kwargs = {}
-        if case in chosen:
-            kwargs["marks"] = pytest.mark.merge_gate
-        if param_id is not None:
-            kwargs["id"] = param_id
-        params.append(pytest.param(*case, **kwargs) if kwargs else case)
-    return params
+    assert chosen <= set(cases), f"merge_gate rows not in cases: {chosen - set(cases)}"
+    ids = ids or [None] * len(cases)
+    return [
+        pytest.param(*case, id=param_id, marks=pytest.mark.merge_gate if case in chosen else ())
+        for case, param_id in zip(cases, ids, strict=True)
+    ]
