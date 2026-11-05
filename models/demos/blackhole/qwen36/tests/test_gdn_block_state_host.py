@@ -52,11 +52,11 @@ def fake(monkeypatch):
     return calls
 
 
-def _model(n_layers=8, bmax=8):
+def _model(n_layers=8, bmax=8, nv=NV):
     attn_idx = [i for i in range(n_layers) if i % 4 == 3]
     layers = []
     for i in range(n_layers):
-        dn = SimpleNamespace(Nv=NV, Dk=DK, Dv=DV, _decode_op=True, use_fused_recurrent_decode=False)
+        dn = SimpleNamespace(Nv=nv, Dk=DK, Dv=DV, _decode_op=True, use_fused_recurrent_decode=False)
         layers.append(SimpleNamespace(is_full_attention=i in attn_idx, attention=dn))
     return SimpleNamespace(
         mesh_device="mesh", args=SimpleNamespace(max_batch_size=bmax), _attention_layer_indices=attn_idx, layers=layers
@@ -89,28 +89,29 @@ def test_is_mamba_entry():
 
 
 @pytest.mark.parametrize(
-    "dtype, block, rec_heads, hist_tiles",
+    "dtype, block, nv, rec_pages, hist_tiles",
     [
-        ("bf8", 4096, 17, 544),  # 1024 tiles x 1088 B = 1,114,112 B = 272 fp32 / 544 bf16 pages per block
-        ("bf16", 2048, 16, 512),  # 512 tiles x 2048 B = 1 MiB = 256 fp32 / 512 bf16 pages per block
+        ("bf8", 2048, 6, 136, 272),  # TP=8 (Galaxy shapes): 512 tiles x 1088 B = 557,056 B = 136 fp32 pages
+        ("bf8", 4096, 12, 272, 544),  # TP=4: 1,114,112 B per block
+        ("bf16", 2048, 12, 256, 512),  # 1 MiB per block
     ],
 )
-def test_views_and_page_counts(fake, dtype, block, rec_heads, hist_tiles):
-    model = _model()
+def test_views_and_page_counts(fake, dtype, block, nv, rec_pages, hist_tiles):
+    model = _model(nv=nv)
     st = gbs.GdnBlockState(model, _specs(model, dtype, block), _kv(2, dtype, block))
     assert len(st.layers) == 6
     i, dn = st.layers[0]
     ps = dn._paged_state
-    assert ps.rec_pages == rec_heads * 16 and ps.hist_pages == hist_tiles
-    assert ps.rec_view.shape == [NUM_BLOCKS, rec_heads, DK, DV] and ps.rec_view.dtype == "fp32"
+    assert ps.rec_pages == rec_pages and ps.hist_pages == hist_tiles
+    assert ps.rec_view.shape == [NUM_BLOCKS * rec_pages // 8, 1, DK // 2, DV] and ps.rec_view.dtype == "fp32"
     assert ps.hist_view.shape == [NUM_BLOCKS, hist_tiles, 32, 32] and ps.hist_pool is ps.hist_view
     assert ps.hist_view.name == "v0:view"
 
 
-@pytest.mark.parametrize("dtype, block", [("bf8", 2048), ("bf8", 1024), ("bf16", 1024)])
-def test_blocks_without_room_for_the_state_are_refused(fake, dtype, block):
-    # BF8 2048: 136 fp32 pages (not whole 16-page heads); BF8 1024: 8.5 pages per bank; bf16 1024: 8 heads < 12.
-    model = _model()
+@pytest.mark.parametrize("dtype, block, nv", [("bf8", 2048, 12), ("bf8", 1024, 6), ("bf16", 1024, 12)])
+def test_blocks_without_room_for_the_state_are_refused(fake, dtype, block, nv):
+    # BF8 2048 at TP=4: 136 pages < 192; BF8 1024: 8.5 fp32 pages per bank; bf16 1024 at TP=4: 128 < 192.
+    model = _model(nv=nv)
     with pytest.raises(ValueError):
         gbs.GdnBlockState(model, _specs(model, dtype, block), _kv(2, dtype, block))
 

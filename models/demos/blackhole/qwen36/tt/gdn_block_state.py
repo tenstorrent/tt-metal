@@ -6,14 +6,15 @@ vLLM overlays its KV cache groups: block id b names the same page in the attenti
 (``tensor_idx``) and in each GDN layer of that slot, and one group owns a block id at a time. A GDN layer keeps the
 state of a request in the K and V buffers of its slot, at the block its group owns for that request:
 
-* recurrent state: the first Nv * 16 pages of block b in a float32 alias_view of K, [N, pages / 16, Dk, Dv];
+* recurrent state: the first Nv * 16 pages of block b in a float32 alias_view of K, [N * pages / 8, 1, Dk / 2, Dv]
+  (dim-0 slices of half a head, so a block need not hold whole heads: BF8 2048 holds 136 pages, 17 slices);
 * packed conv history: the first Nv * 4 pages of block b in a bfloat16 alias_view of V, [N, pages, 32, 32].
 
 Decode reads and writes them through gdn_decode_step(state_page_idx=...), one persistent [2, Bmax] index tensor per
 GDN layer (device-row order). Prefill keeps writing the model's [Bmax, ...] decode buffers (now a staging row per
 device row) and copies the row into the request's block afterwards. The views use alias_view's default checks, so a
-block must hold whole fp32 and bf16 pages on every bank: BF8 [N, 1, 4096, 256] holds 34 fp32 pages per bank (272 per
-block, 17 heads of state), bf16 [N, 1, 2048, 256] holds 32 (256 per block).
+block must hold whole fp32 and bf16 pages on every bank: BF8 [N, 1, 2048, 256] holds 17 fp32 pages per bank (136 per
+block; TP=8 needs 96), BF8 4096 holds 272 (TP=4 needs 192), bf16 2048 holds 256.
 """
 
 from types import SimpleNamespace
@@ -23,6 +24,7 @@ import torch
 import ttnn
 
 FP32_PAGE_BYTES = 4096
+HALF_HEAD_PAGES = 8  # fp32 pages of [Dk / 2, Dv] = [64, 128], one dim-0 slice of the state view
 
 
 def _tile_bytes(dtype):
@@ -67,15 +69,17 @@ class GdnBlockState:
         tiles = heads * block * hd // 1024
         k_bytes = tiles * _tile_bytes(k.dtype)
         v_bytes = tiles * _tile_bytes(v.dtype)
-        if k_bytes % FP32_PAGE_BYTES or (k_bytes // FP32_PAGE_BYTES) % 16:
-            raise ValueError(f"K block of {k_bytes} B is not a whole number of 16-page fp32 heads (block {block})")
-        rec_heads = k_bytes // FP32_PAGE_BYTES // 16
-        if rec_heads < dn.Nv:
-            raise ValueError(f"K block holds {rec_heads} fp32 heads of state, layer needs {dn.Nv}; use a larger block")
+        if k_bytes % (FP32_PAGE_BYTES * HALF_HEAD_PAGES):
+            raise ValueError(f"K block of {k_bytes} B is not a whole number of 8-page fp32 slices (block {block})")
+        rec_pages = k_bytes // FP32_PAGE_BYTES
+        if rec_pages < dn.Nv * 2 * HALF_HEAD_PAGES:
+            raise ValueError(f"K block holds {rec_pages} fp32 pages, layer needs {dn.Nv * 16}; use a larger block")
         hist_tiles = v_bytes // _tile_bytes(ttnn.bfloat16)
         if v_bytes % _tile_bytes(ttnn.bfloat16) or hist_tiles < dn.Nv * 4:
             raise ValueError(f"V block of {v_bytes} B does not hold {dn.Nv * 4} whole bf16 tiles (block {block})")
-        rec_view = ttnn.experimental.alias_view(k, [num_blocks, rec_heads, dn.Dk, dn.Dv], ttnn.float32)
+        rec_view = ttnn.experimental.alias_view(
+            k, [num_blocks * rec_pages // HALF_HEAD_PAGES, 1, dn.Dk // 2, dn.Dv], ttnn.float32
+        )
         hist_view = ttnn.experimental.alias_view(v, [num_blocks, hist_tiles, 32, 32], ttnn.bfloat16)
         idx = ttnn.from_torch(
             torch.zeros(2, self.bmax, dtype=torch.int32),
@@ -90,7 +94,7 @@ class GdnBlockState:
             rec_view=rec_view,
             hist_view=hist_view,
             idx=idx,
-            rec_pages=rec_heads * 16,
+            rec_pages=rec_pages,
             hist_pages=hist_tiles,
         )
 
@@ -133,14 +137,22 @@ class GdnBlockState:
             ids = self._block_ids(state_block_ids_per_layer, i, len(rows))
             ps = dn._paged_state
             nv, dk, dv, nr = dn.Nv, dn.Dk, dn.Dv, dn.Nv * 4
+            halves, per_blk = 2 * nv, ps.rec_pages // HALF_HEAD_PAGES
+            rec_rows = ttnn.reshape(dn.rec_state, (dn._decode_B * halves, 1, dk // 2, dv))
             packed = ttnn.reshape(dn._conv_hist_packed, (dn._decode_B, nr, 32, 32))
             for d, blk in zip(rows, ids):
                 assert blk > 0, f"layer {i}: prefill row {d} has the null block"
                 # L1-sharded sources: a DRAM source makes slice_write re-seat the destination buffer.
                 src = ttnn.slice(
-                    dn.rec_state, (d, 0, 0, 0), (d + 1, nv, dk, dv), memory_config=dn._rec_row_shard_memcfg()
+                    rec_rows,
+                    (d * halves, 0, 0, 0),
+                    ((d + 1) * halves, 1, dk // 2, dv),
+                    memory_config=dn._rec_row_shard_memcfg(),
                 )
-                ttnn.experimental.slice_write(src, ps.rec_view, [blk, 0, 0, 0], [blk + 1, nv, dk, dv], [1, 1, 1, 1])
+                s0 = blk * per_blk
+                ttnn.experimental.slice_write(
+                    src, ps.rec_view, [s0, 0, 0, 0], [s0 + halves, 1, dk // 2, dv], [1, 1, 1, 1]
+                )
                 ttnn.deallocate(src)
                 src = ttnn.slice(packed, (d, 0, 0, 0), (d + 1, nr, 32, 32), memory_config=dn._packed_row_shard_memcfg())
                 ttnn.experimental.slice_write(src, ps.hist_view, [blk, 0, 0, 0], [blk + 1, nr, 32, 32], [1, 1, 1, 1])
