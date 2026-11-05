@@ -87,13 +87,11 @@ void store_trainable_parameters_as(const serialization::NamedParameters& paramet
 
 std::optional<ttnn::DataType> apply_precision_config(
     const YAML::Node& training_config, const serialization::NamedParameters& parameters) {
-    // Both names are read before anything changes, so a wrong one leaves the parameters and the default as they were.
     const auto master_dtype = precision_dtype_from_config(training_config, "master_dtype");
     const auto reduce_dtype = reduce_dtype_from_config(training_config);
     if (master_dtype) {
         store_trainable_parameters_as(parameters, *master_dtype);
     }
-    // Stored every time, an unset one too: the default describes this config, not one applied earlier in the process.
     autograd::ctx().set_gradient_reduce_dtype(reduce_dtype);
     return master_dtype;
 }

@@ -25,30 +25,28 @@ namespace {
 // a quarter fewer bytes because the all-gather carries the bf16 result.
 constexpr uint64_t kFp32ReduceScatterMinElements = 1ULL << 19U;
 
-// Whether `tensor`'s topology splits tensor dim `dim` across the devices of some mesh axis (a tensor-parallel weight's
-// gradient, say).
-bool is_split_by_a_mesh_axis(const ttnn::Tensor& tensor, int dim) {
-    const auto& topology = tensor.tensor_topology();
-    const auto& placements = topology.placements();
-    const auto& axis_sizes = topology.distribution_shape();
-    const int rank = static_cast<int>(tensor.logical_shape().rank());
+// Whether one of `placements` (one per mesh axis) splits tensor dim `dim` across the devices of its axis (a
+// tensor-parallel weight's gradient, say).
+bool is_split_by_a_mesh_axis(
+    const ttnn::operations::ccl::common::TopologyPlacements& placements,
+    const tt::tt_metal::distributed::MeshShape& mesh_shape,
+    const ttnn::Shape& shape,
+    uint32_t dim) {
     for (size_t axis = 0; axis < placements.size(); ++axis) {
         const auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&placements[axis]);
-        if (shard == nullptr || (axis < axis_sizes.dims() && axis_sizes[axis] == 1U)) {
-            continue;
-        }
-        if ((shard->dim < 0 ? shard->dim + rank : shard->dim) == dim) {
+        if (shard != nullptr && mesh_shape[axis] > 1U && shape.get_normalized_index(shard->dim) == dim) {
             return true;
         }
     }
     return false;
 }
 
-// The innermost dim that a reduce-scatter can split into `num_devices` whole-tile slices, if any. A dim another mesh
-// axis already splits is skipped: scattering it again leaves no topology label that describes the result. ttnn's
-// all_reduce over a cluster axis scatters the innermost dim that splits evenly by that axis's size, the same dim, so
-// both routes add the same values in the same order and give the same bits (checked on 8 devices). Only for a dim
-// another mesh axis splits do they differ: all_reduce still scatters it, so the last bit can differ.
+// The innermost dim that a reduce-scatter can split into `num_devices` whole-tile slices, if any. A dim that a mesh
+// axis already splits, the reduced one included, is skipped: scattering it again leaves no topology label that
+// describes the result. So is every dim of a tensor whose label can't be read per mesh axis, which then takes the
+// all-reduce. ttnn's all_reduce over a cluster axis scatters the innermost dim that splits evenly by that axis's size,
+// the same dim, so both routes add the same values in the same order and give the same bits (checked on 8 devices).
+// Only for a dim another mesh axis splits do they differ: all_reduce still scatters it, so the last bit can differ.
 std::optional<int> whole_tile_scatter_dim(const ttnn::Tensor& tensor, uint32_t num_devices) {
     const auto& shape = tensor.logical_shape();
     const int rank = static_cast<int>(shape.rank());
@@ -62,10 +60,17 @@ std::optional<int> whole_tile_scatter_dim(const ttnn::Tensor& tensor, uint32_t n
     if (shape[-1] % tile_width != 0 || shape[-2] % tile_height != 0) {
         return std::nullopt;
     }
-    if (shape[-1] % (tile_width * num_devices) == 0 && !is_split_by_a_mesh_axis(tensor, rank - 1)) {
+    const auto mesh_shape = tensor.device()->shape();
+    const auto placements = ttnn::operations::ccl::common::uncollapse_placements(tensor.tensor_topology(), mesh_shape);
+    if (!placements.has_value()) {
+        return std::nullopt;
+    }
+    if (shape[-1] % (tile_width * num_devices) == 0 &&
+        !is_split_by_a_mesh_axis(*placements, mesh_shape, shape, static_cast<uint32_t>(rank - 1))) {
         return rank - 1;
     }
-    if (shape[-2] % (tile_height * num_devices) == 0 && !is_split_by_a_mesh_axis(tensor, rank - 2)) {
+    if (shape[-2] % (tile_height * num_devices) == 0 &&
+        !is_split_by_a_mesh_axis(*placements, mesh_shape, shape, static_cast<uint32_t>(rank - 2))) {
         return rank - 2;
     }
     return std::nullopt;
@@ -144,11 +149,15 @@ bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
 
 namespace {
 
-// Averages each gradient along the axes in `cluster_axes` that its parameter is not sharded on.
+// Averages each gradient along the axes in `cluster_axes` that its parameter is not sharded on, in the reduce dtype
+// the call passes, else the training config's default.
 void synchronize_gradients_along(
     const serialization::NamedParameters& parameters,
     const ttsl::SmallVector<uint32_t>& cluster_axes,
     std::optional<ttnn::DataType> reduce_dtype) {
+    if (!reduce_dtype.has_value()) {
+        reduce_dtype = autograd::ctx().get_gradient_reduce_dtype();
+    }
     for (auto& [name, tensor] : parameters) {
         if (!tensor->is_grad_initialized()) {
             continue;
@@ -167,11 +176,6 @@ void synchronize_gradients_along(
     }
 }
 
-// The dtype a gradient sync sums in: the one the call passes, else the training config's default.
-std::optional<ttnn::DataType> gradient_reduce_dtype(std::optional<ttnn::DataType> reduce_dtype) {
-    return reduce_dtype.has_value() ? reduce_dtype : autograd::ctx().get_gradient_reduce_dtype();
-}
-
 }  // namespace
 
 void synchronize_gradients(
@@ -187,7 +191,7 @@ void synchronize_gradients(
     if (pctx.is_ddp_enabled()) {
         cluster_axes.push_back(pctx.get_ddp_axis().value());
     }
-    synchronize_gradients_along(parameters, cluster_axes, gradient_reduce_dtype(reduce_dtype));
+    synchronize_gradients_along(parameters, cluster_axes, reduce_dtype);
 }
 
 void synchronize_gradients(
@@ -195,9 +199,7 @@ void synchronize_gradients(
     const std::vector<uint32_t>& cluster_axes,
     std::optional<ttnn::DataType> reduce_dtype) {
     synchronize_gradients_along(
-        parameters,
-        ttsl::SmallVector<uint32_t>(cluster_axes.begin(), cluster_axes.end()),
-        gradient_reduce_dtype(reduce_dtype));
+        parameters, ttsl::SmallVector<uint32_t>(cluster_axes.begin(), cluster_axes.end()), reduce_dtype);
 }
 
 }  // namespace ttml::core::distributed

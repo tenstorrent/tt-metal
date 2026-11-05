@@ -124,7 +124,7 @@ class FSDPState:
         module: AbstractModuleBase,
         mesh_axis: str,
         reshard_after_forward: bool,
-        reduce_dtype: Optional[ttnn.DataType] = None,
+        reduce_dtype: Optional[ttnn.DataType],
     ) -> None:
         self.module = module
         self.mesh_axis_name = mesh_axis
@@ -213,10 +213,10 @@ class FSDPState:
         """Called after all of the module's internal backward closures have run.
 
         At this point every managed parameter has its ``.grad`` populated at
-        gathered shape. We reduce-scatter each grad into a shard-shaped grad,
-        explicitly deallocate the gathered value and gathered grad, and
-        restore the sharded m_value (in that order, so ``set_grad``'s shape
-        check sees the shard-shaped m_value).
+        gathered shape. We restore the sharded m_value and free the gathered
+        weight first, then reduce-scatter each grad into a shard-shaped grad,
+        free the gathered grad, and install the shard (``set_grad``'s shape
+        check then sees the shard-shaped m_value).
 
         Without a ``reduce_dtype`` from ``fully_shard``, the sum takes the one
         ``create_optimizer`` stored from the training config, read here as the
@@ -230,44 +230,37 @@ class FSDPState:
             param_tensor = parameter.tensor
             if not param_tensor.is_grad_initialized():
                 continue
-            # Pull a Python-side handle to the gathered grad before we reduce
-            # it, so its full-size buffer can be freed explicitly: right after
-            # the cast when the sum runs in fp32, otherwise after set_grad.
+            # Swap m_value back to the cached shard and free the gathered
+            # weight before the grad's reduce-scatter, the peak of this hook:
+            # nothing reads the weight from here on, and set_value doesn't
+            # check shapes. Freed explicitly, since Python GC may keep the
+            # full-size buffer around for too long.
+            gathered_value = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
+            shard = self._cached_shards.get(id(param_tensor))
+            if shard is not None:
+                param_tensor.set_value(shard)
+            ttnn.deallocate(gathered_value)
+
+            # The gathered grad is still installed until set_grad below, but
+            # nothing reads it after the reduce-scatter's input is made: the
+            # fp32 cast when the sum runs in fp32 (the scatter half of
+            # core::distributed::synchronize_tensor's fp32 route, written here
+            # because FSDP keeps the shard), the grad itself otherwise.
             gathered_grad = param_tensor.get_grad()
             grad_dtype = gathered_grad.dtype
             to_reduce = gathered_grad
             if reduce_dtype == ttnn.DataType.FLOAT32 and grad_dtype != ttnn.DataType.FLOAT32:
-                # The scatter half of core::distributed::synchronize_tensor's fp32 route, written here because FSDP
-                # keeps the shard. Nothing reads the gathered grad after the cast, so it is freed before the
-                # reduce-scatter, the peak of this hook.
                 to_reduce = ttnn.typecast(gathered_grad, ttnn.DataType.FLOAT32)
                 ttnn.deallocate(gathered_grad)
             summed = ttml.core.distributed.reduce_scatter(to_reduce, shard_dim, self.axis_index)
-            if to_reduce is not gathered_grad:
-                ttnn.deallocate(to_reduce)
+            ttnn.deallocate(to_reduce)
             # Mean-reduction: reduce_scatter sums one shard's contribution
             # per DP rank; divide by axis_size to get the per-shard average,
             # matching the implicit averaging a DDP all-reduce would do. The
             # multiply writes the grad's own dtype.
             reduced = ttnn.multiply(summed, 1.0 / float(self.axis_size), dtype=grad_dtype)
             ttnn.deallocate(summed)
-
-            # Swap m_value to the cached shard and free the gathered weight,
-            # then set_grad to the reduced shard. Order matters: set_grad
-            # shape-checks against m_value, so m_value must be shard-shape
-            # before we install a shard-shape grad.
-            gathered_value = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
-            shard = self._cached_shards.get(id(param_tensor))
-            if shard is not None:
-                param_tensor.set_value(shard)
             param_tensor.set_grad(reduced)
-
-            # Explicit deallocate of the now-unreferenced full-size buffers.
-            # Without this, Python GC may keep them around for too long. After
-            # an fp32 sum the gathered grad is already freed, and freeing it
-            # again does nothing.
-            ttnn.deallocate(gathered_value)
-            ttnn.deallocate(gathered_grad)
 
         self.sharded_state = _ShardedState.SHARDED
 

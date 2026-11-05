@@ -136,9 +136,10 @@ public:
     // Describes the open mesh's axes; close_device drops it, so each mesh initializes its own.
     void initialize_parallelism_context(const DistributedConfig& config);
 
-    // The dtype the gradient syncs (core::distributed::synchronize_gradients, ttml.sync_gradients) sum in when a call
-    // passes none: BFLOAT16 or FLOAT32, or unset to sum in each gradient's own dtype. core::apply_precision_config sets
-    // it when training_config.precision.reduce_dtype is set; close_device clears it with the rest of the run's state.
+    // The dtype the gradient syncs (core::distributed::synchronize_gradients, ttml.sync_gradients, and FSDP's
+    // backward_post) sum in when a call passes none: BFLOAT16 or FLOAT32, or unset to sum in each gradient's own dtype.
+    // core::apply_precision_config stores it from every config it applies, an unset or null
+    // training_config.precision.reduce_dtype clearing it; close_device clears it with the rest of the run's state.
     void set_gradient_reduce_dtype(std::optional<ttnn::DataType> dtype);
     [[nodiscard]] std::optional<ttnn::DataType> get_gradient_reduce_dtype() const;
 

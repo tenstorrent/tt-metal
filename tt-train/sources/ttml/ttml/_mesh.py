@@ -266,7 +266,9 @@ def sync_gradients(
     if m is None or not axis_names:
         return
 
+    # An axis of one device has nothing to average over.
     axes = tuple(m.axis_index(name) for name in axis_names if m.has_axis(name))
+    axes = tuple(a for a in axes if m.shape[a] > 1)
     if not axes:
         return
     if reduce_dtype is None:
@@ -281,11 +283,8 @@ def sync_gradients(
         if not axes_for_param:
             continue
 
-        if prod(m.shape[axis] for axis in axes_for_param) == 1:
-            continue
-
         param.set_grad(
-            ttml.core.distributed.synchronize_tensor(param.get_grad(), list(axes_for_param), reduce_dtype=reduce_dtype)
+            ttml.core.distributed.synchronize_tensor(param.get_grad(), axes_for_param, reduce_dtype=reduce_dtype)
         )
 
 
