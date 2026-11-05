@@ -299,6 +299,7 @@ def torch_ttnn(monkeypatch):
     monkeypatch.setattr(gbs, "ttnn", t)
     monkeypatch.setattr(gbs, "_tile_bytes", lambda dtype: {"bf16": 2048, "fp32": 4096, "bf8": 1088}[dtype])
     monkeypatch.setattr(gbs, "_dram_banks", lambda mesh: BANKS)
+    monkeypatch.setattr(gbs.GdnBlockState, "_halves_shard_memcfg", lambda self, dn, halves: None)
     return t
 
 

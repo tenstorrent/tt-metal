@@ -238,7 +238,7 @@ class GdnBlockState:
                         rec_rows,
                         (d * halves + lo, 0, 0, 0),
                         (d * halves + hi, 1, dk // 2, dv),
-                        memory_config=dn._rec_row_shard_memcfg(),
+                        memory_config=self._halves_shard_memcfg(dn, hi - lo),
                     )
                     ttnn.experimental.slice_write(
                         src, view, [s0, 0, 0, 0], [s0 + hi - lo, 1, dk // 2, dv], [1, 1, 1, 1]
@@ -300,6 +300,28 @@ class GdnBlockState:
             ttnn.deallocate(rows)
             ttnn.copy(carry, dn.conv_carry)
             ttnn.deallocate(carry)
+
+    def _halves_shard_memcfg(self, dn, halves):
+        """L1 height-sharded config for `halves` half-head slices [halves, 1, Dk / 2, Dv], with the core choice of
+        TPGatedDeltaNet._rec_row_shard_memcfg for that row count (the same config for a whole row). slice_write writes
+        into the destination view in place only from an L1-sharded source whose shards it fills exactly."""
+        cfgs = self.__dict__.setdefault("_halves_shard_cfgs", {})
+        key = (halves, dn.Dk, dn.Dv)
+        if key not in cfgs:
+            grid_size = self.mesh.compute_with_storage_grid_size()
+            rows = halves * dn.Dk // 2
+            n_tiles = rows // ttnn.TILE_SIZE
+            num_cores = max(c for c in range(1, min(48, grid_size.x * grid_size.y) + 1) if n_tiles % c == 0)
+            cfgs[key] = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.num_cores_to_corerangeset(num_cores, grid_size, row_wise=True),
+                    (rows // num_cores, dn.Dv),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+        return cfgs[key]
 
     def _unpack_table(self, dn):
         """uint32 [1, (K - 1) * C / 32] gather table: 32-channel row (j, ch) of conv_carry <- packed row
