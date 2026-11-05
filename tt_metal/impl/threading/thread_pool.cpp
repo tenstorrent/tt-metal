@@ -340,6 +340,9 @@ public:
 
     uint32_t index() const { return index_; }
 
+    // Published word of the job this worker holds, or 0 when it holds none.
+    uint64_t holding() const noexcept { return holding_.load(std::memory_order_seq_cst); }
+
     // Returns the first exception thrown by a task since the last call, once the pool has joined.
     std::exception_ptr take_exception() { return std::exchange(stored_exception_, nullptr); }
 
@@ -386,6 +389,9 @@ private:
     const std::unique_ptr<ParallelJob>* const pool_jobs_;
     const std::chrono::nanoseconds spin_window_;
     uint64_t last_seen_job_ = 0;
+    // Written by this worker only, on a line of its own, so that taking part in a job is not an exchange on a line
+    // every worker writes.
+    alignas(64) std::atomic<uint64_t> holding_ = 0;
     std::exception_ptr stored_exception_;
 };
 
@@ -415,28 +421,33 @@ public:
     ParallelJob& operator=(ParallelJob&&) = delete;
     ~ParallelJob() = default;
 
-    // Caller: takes the job if nobody holds it, starting its next generation in the same step.
-    bool try_acquire() noexcept {
+    // Caller: takes the job if no caller holds it, starting its next generation in the same step, then waits for
+    // any worker still holding its last use.
+    bool try_acquire(const std::vector<std::unique_ptr<NumaAwareExecutor>>& workers) noexcept {
         uint64_t state = state_.load(std::memory_order_relaxed);
         if ((state & LOW_HALF) != 0) {
             return false;
         }
         const uint64_t next = pack(generation_of(state) + 1, 1);  // The caller becomes the only holder.
-        if (!state_.compare_exchange_strong(state, next, std::memory_order_acquire, std::memory_order_relaxed)) {
+        // seq_cst pairs with a worker's hold: either it sees this next use and lets go, or the scan below sees it.
+        if (!state_.compare_exchange_strong(state, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
             return false;
+        }
+        for (const auto& worker : workers) {
+            uint64_t held = worker->holding();
+            while (held != 0 && slot_of(held) == slot_) {
+                ttsl::pause();
+                held = worker->holding();
+            }
         }
         generation_ = generation_of(next);
         use_++;
         return true;
     }
 
-    // Worker: holds the job if `generation` is still its current use; a held job is not reused.
-    bool hold(uint32_t generation) noexcept {
-        if (generation_of(state_.fetch_add(1, std::memory_order_acq_rel)) == generation) {
-            return true;
-        }
-        release();
-        return false;
+    // Worker, holding this job's published word: whether `generation` is still the job's current use.
+    bool is_use(uint32_t generation) const noexcept {
+        return generation_of(state_.load(std::memory_order_seq_cst)) == generation;
     }
 
     void release() noexcept { state_.fetch_sub(1, std::memory_order_acq_rel); }
@@ -493,15 +504,14 @@ public:
     // What the pool publishes for this use of the job.
     uint64_t published() const { return pack(generation_, slot_); }
 
-    // Worker, holding the job: wakes its children, runs its calls and releases the job. A finished job is only
-    // released: its executors may be stopping.
+    // Worker, holding the job: wakes its children and runs its calls. A finished job is left alone: its executors may
+    // be stopping.
     void participate(NumaAwareExecutor* executor) noexcept {
         const uint32_t node = remaining_.finished() ? NO_INDEX : participant_of_worker_[executor->index()];
         if (node != NO_INDEX) {
             for_each_child(node, [this](size_t child) { wake_subtree(child); });
             run_if_unclaimed(node);
         }
-        release();
     }
 
     // Runs all calls of participant `node` in order, so that calls for one worker never overlap.
@@ -559,7 +569,7 @@ private:
     static constexpr unsigned GENERATION_SHIFT = 32;
     static constexpr uint64_t LOW_HALF = (uint64_t{1} << GENERATION_SHIFT) - 1;
 
-    std::atomic<uint64_t> state_ = 0;  // (generation << 32) | holders: the acquiring caller and workers taking part.
+    std::atomic<uint64_t> state_ = 0;  // (generation << 32) | 1 while a caller holds it; workers hold it on their own.
     uint32_t generation_ = 0;  // Of the current use, as published; set by the caller on acquire, read by holders.
     uint64_t use_ = 0;         // Counts the job's uses, for claims; set by the caller on acquire, read by holders.
     const uint32_t slot_;
@@ -604,9 +614,12 @@ inline void NumaAwareExecutor::worker_loop() {
             published != last_seen_job_) {
             last_seen_job_ = published;
             auto* job = pool_jobs_[ParallelJob::slot_of(published)].get();
-            if (job->hold(ParallelJob::generation_of(published))) {
+            // seq_cst pairs with try_acquire(): either the caller sees this hold, or this sees the job's next use.
+            holding_.store(published, std::memory_order_seq_cst);
+            if (job->is_use(ParallelJob::generation_of(published))) {
                 job->participate(this);
             }
+            holding_.store(0, std::memory_order_release);
             continue;
         }
         if (shutdown_.load(std::memory_order_acquire)) {
@@ -808,7 +821,7 @@ private:
         const auto size = static_cast<uint32_t>(jobs_.size());
         uint32_t slot = last_job_.load(std::memory_order_relaxed);
         for (uint32_t probe = 0; probe < size; probe++) {
-            if (jobs_[slot]->try_acquire()) {
+            if (jobs_[slot]->try_acquire(workers_)) {
                 last_job_.store(slot, std::memory_order_relaxed);
                 return jobs_[slot].get();
             }
