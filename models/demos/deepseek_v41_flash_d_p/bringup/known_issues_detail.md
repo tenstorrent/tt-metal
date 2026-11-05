@@ -1091,3 +1091,121 @@ host (trace), not the tail's device time.
 - OV-3: nothing padded. OV-23: no Python-built op added or touched. OV-25: no fork suite run.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.22 --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
+
+## P.32 WINDOW_KV_KEEP: full | ring | none, the window KV a slot keeps
+
+Owner pick 2026-11-04 / 11-05 (the memory half of DeepSeek-V4.1-Flash's bounded window, arXiv 2609.19969). Switch
+`WINDOW_KV_KEEP` (tt/settings.py, full | ring | none; default full until the owner decides; the A/B sets it).
+
+What changed (tt/ only; no fork, no Python-built op):
+- `tt/attention.WindowRing`: [1, 1, 192, 512] bf16 ROW_MAJOR a layer on every chip, position p at row p mod 192
+  (32-row blocks), host bookkeeping per block (first position, valid end, owner chip or every chip). Written with
+  `ttnn.slice` + `ttnn.bringup.slice_write` (one or two pieces: the wrap).
+- `TtWindowCache(keep=, ring=)`: ring = a ring of its own, no served slab; none = the model's working ring of the layer
+  (`WindowTables.shared_ring`, shared by every slot of the model), readable only by the chunk right after this cache's
+  own last write. Writes: `write` (replicated rows: every chip), `write_local` (P.11: the SP row's block, owner = the
+  row's chip (r, 0)), `write_own` (new, the bfp8_tiles / bf16_tiles region path: each chip its own rows, owner = the
+  chip; the served write's TP all_gather and update_padded_kv_cache are gone on that path). A chunk writes
+  [max(start, b - 192), b), b = ceil32(end): a follow-up at align_down(end, 64) finds [start - 128, start) there.
+  The chunk's write comes before its carry read in every path, so the write first takes the carry from the ring when
+  the chunk will read it (`_before_ring_write` -> `_pending`, handed out by `carry`); blocks held by one chip are
+  gathered from it (the same local rows of every chip, all_gather over the mesh, the owner's kept). Kept tails (rtail,
+  P.11 blocks, GLUE_FOLD rows) still carry whole consecutive chunks (no ring read). `carry_owner` is None (no slab).
+  `load_host` / `load_ring` / `to_host` / `ring_host` / `served_bytes` read or write the ring alone.
+- `TtDS41Model.begin_chunk` -> `_window_policy` (ring / none, host only): every layer whose window the chunk reads
+  (not the decoder on a skipped chunk or replay128's tail chunk) must have its carry kept (`carry_ready`: position 0,
+  a P.30 `missing` mask, a kept tail, the ring); else DECODER_SKIP=exact / replay128 truncate that window at the start
+  (P.31's `truncate`: start class 0) and off raises ValueError, except on a slot that never held a window row
+  (DS41-206). `replay=True` under replay128 or none truncates every read window (a request on a cached prefix keeps
+  nothing under none). The decoder tail state (P.31) takes `none` (its windows are truncated at every tail chunk).
+- `DS41DeviceState(keep=)` / `new_state(keep=)`, `window_bytes()`; `TtDS41Model.skip_mode`, `use_decoder_skip(mode)`
+  (tests: a model loaded with replay128 runs exact / off too). `tt/runners/kv_contract.DS41ContractKV` holds no
+  0_window_kv under ring / none (`served_configs(window=False)`); `tt/runners/adapter.py` refuses ring / none
+  (tt-d-gen reads every position; its change is pending).
+
+Accuracy (tests/bringup/test_window_ring.py, s10240's tokens: prompt [0, 5120) last=False + [5120, 8021) last=True,
+follow-up to 10240 from align_down(8021, 64) = 8000 (ring) or pulled back (none: exact 5312, replay128 7872, replay);
+full beside it as P.30 / P.31 run it; limits calib x the s10240 drift):
+
+| | final hidden (limit 0.25615) | top-5 (>= 0.9943) | worst gated window KV / its limit |
+|---|---|---|---|
+| exact, rows [8000, 10240): full | 0.14427 | 1.0 | L39 0.596 |
+| exact: ring | 0.14427 | 1.0 | L39 0.596 (every layer = full to 5 digits) |
+| exact: none (truncated at 5312) | 0.17330 | 1.0 | L19 0.694 |
+| replay128, last position: full (replay from 7872) | 0.25290 | 1 | L9 0.550 |
+| replay128: ring (from 8000, the encoder's carry kept) | 0.23748 | 1 | L17 0.557 |
+| replay128: none (= full's path) | 0.25290 | 1 | L9 0.550 |
+
+Window KV a chip a slot: full 1.251 GiB at 1M (29.5 MB at the test's 15360 with replay128's tail caches), ring 7.50 MiB
+(40 x 192 KiB), none 0 (the model's working rings: 11.25 MiB, 60 layers incl. the tail model's, once per model).
+Refusal under off: ring at 2048 (older than the ring) and none at 4992 (a follow-up) raise in begin_chunk; ring at 5056
+(held) is accepted. Ladder rung last via measure (ring): rc 0, final hidden 0.1399 / 0.2422 (= full, FIX.22), top-5 1.0.
+
+Timing (8x4, test_profile through measure / gate --check --unit, ring on unless said; wall = clean median of 10 warm
+runs, device = rt profiler; the timed runs take the kept tail, so the ring's cost there is its write):
+| chunk | ring, 110-core copies | ring, WINDOW_RING_CORES=8 | full, same code (gate unit, DS41_WINDOW_KV_KEEP=full) |
+|---|---|---|---|
+| plain [51200, 56320) | 210.6 / 163 ms | 206.4 / 161 ms | wall median 282.2 (disturbed: runs 191.7-204.9 plus four of 282-371) / 161 ms |
+| p51200 last (replay128) | 218.3 / 136 | (final measure) | |
+| p51200 nonlast (exact) | 120 / 87 | (final measure) | |
+| p512000 last / nonlast | 230 / 157, 123 / 97 | (final measure) | |
+Device time is the full path's (161 vs 161 ms): the region path drops the served write's TP all_gather and
+update_padded_kv_cache and adds the ring's untilize + 2-4 small copies a layer. The host pays ~80 us a stock copy
+on 32 chips at 110 cores (cProfile, p51200 last: WindowRing.put 100 calls a chunk); one row of 8 cores cut 4 ms of
+wall. Each layer's steady write is the last chip's 160 own rows (one or two pieces: the ring's wrap) and the 32 rows
+before them (the previous chip's): a single-op write needs one chip holding the 192 rows (e.g. the bfp8 region of
+the last chip, a bfp8 ring: 40 x 6 x 18496 B = 4.4 MB, the owner's ~5 MB) - not done here (a format change of the kept
+rows; the ring keeps the served cache's bf16).
+
+DRAM per chip, test_dram (1M, one slot), ring via measure vs P.27's full (bfp4; P.28-29 left the window caches as they
+were): after load 17.210 vs 18.454 GiB (served caches 0.156 vs 1.408: 0_window_kv gone; slot state 0.794 vs 0.786:
++7.5 MiB of rings), peak 18.389 vs 19.634 GiB, routed experts 8.899 (bfp4_mse, same bytes).
+
+Gotchas: a chunk at start s writes a whole chunk's table rows, so a test state needs max_seq >= s + chunk (K-69).
+Re-run: `DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile
+models/demos/deepseek_v41_flash_d_p/tests/bringup/test_window_ring.py`; host check of the ring bookkeeping (fake ttnn,
+every write path, 4 meshes): /tmp/p32/sim_ring.py; `measure --task P.32`.
+OV-3: nothing padded. OV-23: no Python-built op added or touched. OV-25: no fork suite run.
+
+## A window keep mode that refuses missing carries must let a never-written slot start anywhere
+
+DS41-206 (P.32). The frozen test_dram runs one chunk at 1,039,360 on a fresh slot and the F230 position profiles one
+at 51200 / 512000 on a fresh state; under full they read the never-written served cache (zeros). Under ring / none
+with DECODER_SKIP=off the owner's rule refuses a start whose carry is not kept, which would fail them.
+`TtWindowCache.history` (set by a write or a load) tells a slot that never held a window row: begin_chunk truncates
+its window at the chunk (no row read, start class 0) under every DECODER_SKIP value, and refuses only a slot that held
+rows but not this carry. The profiles' timed runs (steady_state) take the kept tail as under full.
+
+## replay128's decoder-tail window KV exceeds the e2e limits from layer 26-28 on, equally under full
+
+DS41-207 (P.32, test_window_ring, replay128, the window KV of rows [10112, 10240) at 10240 vs the s10240 golden):
+full / ring / none L26 0.145 / 0.144 / 0.145 (limit 0.158), L28 0.181 / 0.181 / 0.181 (0.180), L31 0.194 / 0.193 /
+0.194 (0.148), L35 0.336 / 0.345 / 0.336 (0.304), L39 0.322 / 0.323 / 0.322 (0.221). The decoder tail's windows are
+truncated to its own 128 rows (P.31, approximate by design; window KV not gated for replay128, owner): recorded as
+ring_diag_window_kv_L<i>_<keep>_replay128 beside full's; layers 0-19 are gated (worst 0.56 of the limit).
+
+## P.32 attempt 2: the final measure, and the position profiles' re-run (DS41-208)
+
+Attempt 1 was cut short (rc -9) during its final `measure --task P.32` (code stamp 3a6db08f5e44f5e3, ring on); the
+measure ran to the end. On that code: ladder rung last rc 0 (final hidden 0.1399 / 0.2422, top-5 1.0);
+test_window_ring rc 0 (final hidden ring_exact 0.1443, ring_replay128 0.2375, none_exact 0.1733, none_replay128 0.2529,
+limit 0.2561; top-5 1.0 in all four; 120 gated window-KV values, worst 0.69 of its limit (L19 none_exact); served
+window bytes a chip: full 1.343 GB at 1M, ring 7.86 MB, none 0 (+ 11.8 MB working rings a model)); test_dram rc 0
+(load 17.210 GiB, peak 18.389 GiB, served caches 0.156 GiB); profile rc 0 (plain [51200, 56320): wall 215.9 ms,
+device 158.8 ms; p51200 last 223.5 / 134.4, nonlast 120.6 / 87.2; p512000 last 209.0 / 155.5, nonlast 117.6 / 95.8).
+The A/B report's F230 rungs p51200 / p512000 (DECODER_SKIP=off) failed: their first command (the wall) passed, the
+WALL_CLEAN command raised in begin_chunk ("the chunk at 51200 needs the window rows [51072, 51200) ... not kept
+(layer 0 keeps positions [56128, 56320])") at testing/profile.py:592, the counting run after
+`accurate_reload()` = `steady_state(None)`. A position profile's state is fresh (load_prefix does nothing) and every
+run repeats the same chunk on it: under full the re-run reads the same never-written zeros; under ring the slot now
+holds rows (history), so DS41-206's exemption no longer applied.
+Fix: `TtWindowCache.origin`, the start of a fresh slot's first chunk (set in `TtDS41Model._window_policy` while
+`history` is False; cleared by `load_host` (a loaded prefix existed before) and `free`). Under DECODER_SKIP=off a chunk
+whose carry is not kept is refused unless start <= origin: a restart of the slot's window where it began (truncated
+there, as its first run). A slot from position 0 has origin 0, so another request's prefix, a resume older than the
+ring and a none follow-up are refused as before (test_window_ring's refusal cases start at 0). Host check:
+/tmp/p32/sim_policy.py (fresh 51200 ok, re-run 51200 ok, kept 56320 ok, 60000 refused; from 0 then 2048 refused under
+off, truncated under exact).
+On the fixed code (measure, ring on): p51200 rc 0 (wall 209.3 ms), p512000 rc 0 (wall 231.6 ms), test_window_ring rc 0
+(refusal ring: 2048 refused, 5056 accepted; none: 4992 refused). last, test_dram and profile were measured on the code
+before this host-only change (rc 0, above); the orchestrator's A/B re-runs them.

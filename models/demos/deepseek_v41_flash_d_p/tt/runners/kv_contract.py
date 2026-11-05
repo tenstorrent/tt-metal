@@ -45,11 +45,15 @@ RECORD = 32  # tokens per record (tools/launch_harness/tables.py: chunk_n_tokens
 CONFIG_ORDER = ("0_window_kv", "1_compress_kv_r2", "2_index_k_r2", "3_compress_kv_r1", "4_index_k_r1")
 
 
-def served_configs(cfg, layer_ids: list[int]) -> list[dict]:
-    """The table configs of these served model layers (engine index k = position in ``layer_ids``), table order."""
-    out = [
-        dict(name=CONFIG_ORDER[0], kind="window_kv", ratio=1, width=cfg.head_dim, dedup=True, layers=list(layer_ids))
-    ]
+def served_configs(cfg, layer_ids: list[int], window: bool = True) -> list[dict]:
+    """The table configs of these served model layers (engine index k = position in ``layer_ids``), table order.
+    ``window`` False (WINDOW_KV_KEEP=ring | none, P.32): no 0_window_kv (the slot's window rows are its state's ring,
+    not an engine cache of every position; tt-d-gen's reading of it is pending)."""
+    out = (
+        [dict(name=CONFIG_ORDER[0], kind="window_kv", ratio=1, width=cfg.head_dim, dedup=True, layers=list(layer_ids))]
+        if window
+        else []
+    )
     for r, (cn, ik) in ((2, CONFIG_ORDER[1:3]), (1, CONFIG_ORDER[3:5])):
         src = [i for i in layer_ids if cfg.is_kv_source(i) and cfg.ratio(i) == r]
         if src:
@@ -73,7 +77,10 @@ class DS41ContractKV:
         self.geo = g = WindowGeometry(mesh, chunk)
         assert self.max_seq % self.chunk == 0, (max_seq, chunk)
         self.num_banks = get_num_dram_banks(mesh)
-        self.configs = served_configs(cfg, self.layer_ids)
+        from ..attention import window_keep
+
+        self.window_keep = window_keep()  # (P.32: ring | none hold no 0_window_kv here)
+        self.configs = served_configs(cfg, self.layer_ids, window=self.window_keep == "full")
         self.by_config = {}
         for c in self.configs:
             stripe = g.stripe if (c["dedup"] and g.tp > 1) else g.w
@@ -95,7 +102,7 @@ class DS41ContractKV:
         return out
 
     def base_address(self) -> int:
-        return int(self.by_config[CONFIG_ORDER[0]].buffer_address())
+        return int(self.by_config[self.configs[0]["name"]].buffer_address())
 
     def stage_bases(self) -> list[int]:
         return [int(self.by_config[c["name"]].buffer_address()) for c in self.configs]

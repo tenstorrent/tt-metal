@@ -878,6 +878,33 @@ TABLE = {
         "tokens, begin_chunk(.., replay=True): every layer's window truncated at that start. last=None (not told: "
         "the harness, the engine) runs every layer in both values",
     ),
+    "WINDOW_KV_KEEP": Setting(
+        "full",
+        ("full", "ring", "none"),
+        "P.32 (owner 2026-11-04 / 11-05, the memory half of DeepSeek-V4.1-Flash's bounded window, arXiv 2609.19969: "
+        "SWA KV is not persisted; default full until the owner decides). What a slot keeps of every layer's window KV. "
+        "full = every position of every layer (the served 0_window_kv cache, 1.25 GiB a chip a slot at 1M on 8x4; the "
+        "path before P.32). ring = per slot and layer only the last 192 window rows (128 the window reads + 64, the "
+        "server's kv_block_size: a follow-up starts at align_down(prev_end, 64), so its 128-row carry is still there), "
+        "bf16 rows written in place as a ring (slot = position mod 192; tt/attention.WindowRing, 192 KiB a layer a chip); "
+        "every window read (the 128-row carry, load_host / load_ring / to_host / ring_host) reads it; the compressed KV "
+        "and index keys unchanged. none = no window rows kept between requests: one working ring a layer per model "
+        "(not per slot) holds the running request's rows, readable only by the chunk right after (same slot, start = the "
+        "last write's end); every follow-up and prefix hit replays. A start whose carry is not kept (another request's "
+        "prefix, a resume older than the ring, a pulled-back chunk) has its window truncated there (TtWindowCache.truncate, "
+        "start class 0) under DECODER_SKIP=exact / replay128 (the caller pulls back: exact >= 2688 tokens, replay128 128) "
+        "and is refused (ValueError) under DECODER_SKIP=off, never computed from missing rows (a slot that never held a "
+        "window row starts its window at the chunk: the timing harnesses). The serving runtime (tt/runners) refuses ring "
+        "and none until tt-d-gen reads the ring (its 0_window_kv contract is every position)",
+    ),
+    "WINDOW_RING_CORES": Setting(
+        8,
+        None,
+        "P.32 (WINDOW_KV_KEEP=ring | none): Tensix cores a chip (one row from (0, 0)) of the ring's small copies "
+        "(ttnn.slice / ttnn.bringup.slice_write of <= 192 rows of 1 KiB, the untilize of a chip's own 160 rows): a "
+        "dispatch's host cost on 32 chips grows with its per-core runtime args (DS41-145), and these copies move a few "
+        "hundred KiB; within every box's grid and the Galaxy cap (MAX_WORKER_CORES)",
+    ),
     "HOST_GLUE": Setting(
         "on",
         ("on", "off"),

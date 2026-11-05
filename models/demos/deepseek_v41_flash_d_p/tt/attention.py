@@ -214,6 +214,7 @@ class WindowTables:
         )
         self.zero_carry = _upload(mesh, torch.zeros(1, 1, WINDOW, 512), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
         self._scalars = {}
+        self._rings = {}  # WINDOW_KV_KEEP=none (P.32): {layer: the working WindowRing every slot's cache shares}
         # GLUE_FOLD=on (P.19): the server-order index row of the latest start, sliced once for every cache write of
         # the chunk (window caches, compressed caches); the device scalars memoized likewise (tt/served.DeviceScalars)
         self.fold = settings.get("GLUE_FOLD") == "on"
@@ -396,6 +397,13 @@ class WindowTables:
             out[cls] = _upload(self.mesh, ids.to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, (0, 1))
         return out
 
+    def shared_ring(self, layer: int) -> "WindowRing":
+        """WINDOW_KV_KEEP=none (P.32): layer's working ring (made at the first slot's state, then shared): what the
+        running request's next chunk reads; no slot keeps window rows of its own."""
+        if layer not in self._rings:
+            self._rings[layer] = WindowRing(self.mesh)
+        return self._rings[layer]
+
     def scalars(self, step: int, n: int) -> DeviceScalars:
         """Load-time device values 0, step, .., (n - 1) step (tt/served.DeviceScalars), shared by every cache."""
         if (step, n) not in self._scalars:
@@ -422,6 +430,98 @@ class WindowTables:
             dealloc(idx)
 
 
+RING = WINDOW + 64  # WINDOW_KV_KEEP=ring (P.32): rows kept a layer, the window + the server's kv_block_size
+
+
+def window_keep() -> str:
+    """WINDOW_KV_KEEP (P.32): full | ring | none."""
+    return settings.get("WINDOW_KV_KEEP")
+
+
+def ring_cores() -> tuple:
+    """WINDOW_RING_CORES (P.32): (max_grid CoreCoord, sub_core_grids CoreRangeSet) of one row of that many cores, the
+    grid of the ring's small copies (<= 192 rows of 1 KiB a chip): a dispatch's host cost on 32 chips is its per-core
+    runtime args (DS41-145); a row of cores is inside every box's grid and the Galaxy cap."""
+    n = int(settings.get("WINDOW_RING_CORES"))
+    return ttnn.CoreCoord(n, 1), ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n - 1, 0))})
+
+
+class WindowRing:
+    """WINDOW_KV_KEEP=ring | none (P.32): the last RING (192) window rows of one layer, [1, 1, 192, 512] bf16 ROW_MAJOR
+    on every chip (load time, written in place): position p at row p mod 192, in 32-row blocks. Who holds a block is
+    host bookkeeping: ``pos[j]`` the first position of block j (None: none), ``vend[j]`` the end of its valid rows (the
+    rows past a chunk's actual end are the pad's zeros), ``own[j]`` the chip (chip-linear r TP + c) whose ring holds
+    it, None = every chip. A write from a chip's own rows (``TtWindowCache.write_own``) leaves the other chips' copies
+    of those rows stale (they wrote their own rows there, same op): a read of an owned block gathers it from the owner.
+    ``writer``: the cache that wrote it last (WINDOW_KV_KEEP=none: one ring a layer shared by the model's slots), ``end``
+    the last write's actual end."""
+
+    BLOCKS = RING // 32
+
+    def __init__(self, mesh, width: int = 512):
+        self.mesh, self.width = mesh, width
+        self.t = ttnn.zeros(
+            [1, 1, RING, width], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=DRAM
+        )
+        self.grid, self.cores = ring_cores()
+        self.reset()
+
+    def reset(self) -> None:
+        self.pos, self.vend, self.own = [None] * self.BLOCKS, [0] * self.BLOCKS, [None] * self.BLOCKS
+        self.end, self.writer = None, None
+
+    @property
+    def nbytes(self) -> int:
+        """Bytes a chip."""
+        return RING * self.width * 2
+
+    def holds(self, p0: int, p1: int) -> bool:
+        """Every row of positions [p0, p1) (p0 32-aligned) is in the ring."""
+        for p in range(p0, p1, 32):
+            j = (p // 32) % self.BLOCKS
+            if self.pos[j] != p or self.vend[j] < min(p + 32, p1):
+                return False
+        return True
+
+    def put(self, src: ttnn.Tensor, row0: int, p0: int, n: int, valid: int, owner: int | None) -> None:
+        """src [1, 1, R, 512] bf16 ROW_MAJOR (every chip the same op, not consumed): its rows [row0, row0 + n) are
+        positions [p0, p0 + n) (32-aligned), valid below ``valid`` (zeros past it) -> ring rows p mod 192 (one or two
+        pieces: the wrap), held by ``owner``."""
+        assert p0 % 32 == 0 and n % 32 == 0 and row0 % 32 == 0, (p0, n, row0)
+        rows = int(src.shape[-2])
+        p, r = p0, row0
+        while p < p0 + n:
+            slot = p % RING
+            take = min(RING - slot, p0 + n - p)
+            whole = r == 0 and take == rows  # (a full-range slice returns src's own buffer, K-1)
+            piece = (
+                src
+                if whole
+                else ttnn.slice(
+                    src, [0, 0, r, 0], [1, 1, r + take, self.width], memory_config=DRAM, sub_core_grids=self.cores
+                )
+            )
+            ttnn.bringup.slice_write(
+                piece, self.t, [0, 0, slot, 0], [1, 1, slot + take, self.width], [1, 1, 1, 1], max_grid=self.grid
+            )
+            if not whole:
+                dealloc(piece)
+            for q in range(p, p + take, 32):
+                j = (q // 32) % self.BLOCKS
+                self.pos[j], self.vend[j], self.own[j] = q, max(q, min(q + 32, valid)), owner
+            p += take
+            r += take
+
+    def host_rows(self) -> list[torch.Tensor]:
+        """Every chip's ring [192, 512] (chip-linear), host."""
+        return [ttnn.to_torch(t).reshape(RING, self.width) for t in ttnn.get_device_tensors(self.t)]
+
+    def free(self) -> None:
+        if self.t is not None and self.t.is_allocated():
+            dealloc(self.t)
+        self.t = None
+
+
 class TtWindowCache:
     """The served 0_window_kv cache of one layer and slot: a slab [1, 1, rows, 512] bf16 ROW_MAJOR per chip of a
     served-cache tensor (tt/served.py: ND-sharded one 32-token record per shard, round-robin over the DRAM banks),
@@ -431,15 +531,39 @@ class TtWindowCache:
 
     WIDTH = 512
 
-    def __init__(self, mesh, tables: WindowTables, max_seq: int, slab: CacheSlab | None = None):
+    def __init__(
+        self,
+        mesh,
+        tables: WindowTables,
+        max_seq: int,
+        slab: CacheSlab | None = None,
+        keep: str | None = None,
+        ring: WindowRing | None = None,
+    ):
+        """``keep`` (WINDOW_KV_KEEP, P.32; None: the setting): full = the served slab of every position; ring = a
+        WindowRing of this cache's own (no slab); none = ``ring``, the model's working ring of this layer shared by
+        its slots (WindowTables.shared_ring; a ring of its own when not given)."""
         self.mesh, self.tables, self.geo = mesh, tables, tables.geo
         g = self.geo
         self.rows = g.cache_rows(max_seq)
         self.max_seq = self.rows * g.n
         self.tp_axis = TP_AXIS if g.tp > 1 else None
-        if slab is None:
-            slab = CacheSlab(alloc_served(mesh, self.WIDTH, self.rows, 32, 1, dedup=True), owned=True)
-        assert (slab.rows, slab.width) == (self.rows, self.WIDTH), (slab.rows, slab.width, self.rows)
+        self.keep = keep = keep or window_keep()
+        assert keep in ("full", "ring", "none"), keep
+        # WINDOW_KV_KEEP=ring | none (P.32): the ring (``ring_owned``: freed with this cache), the carry it took before
+        # this chunk's write overwrote it ((start, [1, 1, 128, 512]) handed to ``carry``), and whether this cache ever
+        # held a row (a slot that never did starts its window at its first chunk: TtDS41Model.begin_chunk), and where
+        # that first chunk started (``origin``, DS41-208: a chunk at or before it restarts the slot's window there)
+        self.ring, self.ring_owned, self._pending, self.history = None, False, None, False
+        self.origin = None
+        if keep == "full":
+            if slab is None:
+                slab = CacheSlab(alloc_served(mesh, self.WIDTH, self.rows, 32, 1, dedup=True), owned=True)
+            assert (slab.rows, slab.width) == (self.rows, self.WIDTH), (slab.rows, slab.width, self.rows)
+        else:
+            assert slab is None, f"WINDOW_KV_KEEP={keep}: no served 0_window_kv slab (the engine's is every position)"
+            self.ring_owned = keep == "ring" or ring is None
+            self.ring = WindowRing(mesh, self.WIDTH) if self.ring_owned else ring
         self.slab = slab
         # GLUE_FOLD=on (P.19): the previous chunk's kv rows (next start, [1, 1, S, 512] bf16 ROW_MAJOR) when it was
         # whole: the next chunk's carry is their last 128 rows (one slice instead of the cache read). Dropped by any
@@ -546,9 +670,9 @@ class TtWindowCache:
 
     def carry_owner(self, start: int) -> tuple[int, int] | None:
         """(owner chip q (chip-linear), its local row) when the carry rows [start - 128, start) are 128 rows of ONE
-        owner stripe (``carry``'s single-piece case), else None."""
+        owner stripe (``carry``'s single-piece case), else None. WINDOW_KV_KEEP=ring | none: None (no served slab)."""
         g = self.geo
-        if start < WINDOW or self.carry_masked(start):
+        if self.ring is not None or start < WINDOW or self.carry_masked(start):
             return None
         s_idx, u = divmod(start - WINDOW, g.stripe)
         if g.stripe - u < WINDOW:
@@ -566,6 +690,15 @@ class TtWindowCache:
             self._drop_tail()
         if self._tail is not None:  # (a bf16 tail is never this path's carry)
             self._drop_tail()
+        if self.ring is not None:  # WINDOW_KV_KEEP=ring | none (P.32): the last 192 rows, owner = their SP row
+            lo, hi = self._ring_span(start, end)
+            self._before_ring_write(start)
+            for r in range(g.sp):
+                a, b = max(lo - start, r * g.w), min(hi - start, (r + 1) * g.w)
+                if a < b:
+                    self.ring.put(rows_rm, a - r * g.w, start + a, b - a, end, r * g.tp)
+            self._after_ring_write(end)
+            return
         ttnn.bringup.update_padded_kv_cache(
             self.slab.tensor,
             rows_rm,
@@ -624,6 +757,12 @@ class TtWindowCache:
             self._drop_tail()
         if self._tail_blocks is not None:  # (P.11: kept blocks are never this path's carry)
             self._drop_tail()
+        if self.ring is not None:  # WINDOW_KV_KEEP=ring | none (P.32): the chunk's last 192 rows, every chip
+            lo, hi = self._ring_span(start, end)
+            self._before_ring_write(start)
+            self.ring.put(kv_rm, lo - start, lo, hi - lo, end, None)
+            self._after_ring_write(end)
+            return
         idx = self.tables.srv_row(k)
         rows = ttnn.bringup.embedding(
             ttnn.reshape(idx, [1, g.w], sub_core_grids=sub_cores(idx)),
@@ -649,6 +788,181 @@ class TtWindowCache:
         )
         dealloc(rows)
 
+    # ------------------------------------------------------------------ WINDOW_KV_KEEP=ring | none (P.32)
+    def write_own(self, own_rm: ttnn.Tensor, start: int, end: int) -> None:
+        """WINDOW_KV_KEEP=ring | none: own_rm [1, 1, q_rows, 512] bf16 ROW_MAJOR, each chip its own rows of the chunk
+        (chip-linear q: chunk offsets [q q_rows, (q + 1) q_rows), WindowGeometry.query_offsets), rows at or past end
+        zero: the chunk's last 192 rows into the ring, each block held by the chip whose rows they are (no gather)."""
+        g = self.geo
+        assert self.ring is not None and start % 32 == 0 and start < end <= start + g.chunk, (start, end)
+        assert own_rm.shape[-2] == g.q_rows, (own_rm.shape, g.q_rows)
+        lo, hi = self._ring_span(start, end)
+        self._before_ring_write(start)
+        q_rows = g.q_rows
+        for q in range(g.n):
+            a, b = max(lo - start, q * q_rows), min(hi - start, (q + 1) * q_rows)
+            if a < b:
+                self.ring.put(own_rm, a - q * q_rows, start + a, b - a, end, q)
+        self._after_ring_write(end)
+
+    @staticmethod
+    def _ring_span(start: int, end: int) -> tuple[int, int]:
+        """The positions a chunk [start, end) writes into the ring: its last whole blocks, [max(start, b - 192), b),
+        b = ceil32(end) (the pad rows of the last block as zeros: the rows a follow-up at align_down(end, 64) carries,
+        [align_down(end, 64) - 128, align_down(end, 64)), all lie in [b - 192, end))."""
+        b = -(-int(end) // 32) * 32
+        return max(int(start), b - RING), b
+
+    def _kept(self, start: int) -> bool:
+        """A kept tail is this chunk's carry (the paths read it, not the cache): bfp8_tiles' ``rtail``, P.11's carry
+        blocks, GLUE_FOLD's rows (each only when it is the tail of a whole chunk ending at ``start``)."""
+        if self.rtail is not None and self.rtail_end == start:
+            return True
+        if start < WINDOW:
+            return False
+        tb, tr = self._tail_blocks, self._tail
+        return (tb is not None and tb[0] == start) or (tr is not None and tr[0] == start)
+
+    def _before_ring_write(self, start: int) -> None:
+        """The chunk's write comes before its carry read in every path (``_window_rows`` / ``_window_packed`` /
+        ``_window_region``), and its rows may overwrite the carry's (positions 192 apart share a ring row): the carry
+        is taken first (``_pending``, what ``carry`` hands out) when the chunk will read it from the ring."""
+        self._free_pending()
+        if start > 0 and not self.carry_masked(start) and not self._kept(start):
+            self._pending = (start, self._ring_carry(start))
+
+    def _after_ring_write(self, end: int) -> None:
+        self.ring.end, self.ring.writer, self.history = int(end), self, True
+
+    def _free_pending(self) -> None:
+        if self._pending is not None:
+            t = self._pending[1]
+            if t is not self.tables.zero_carry and t.is_allocated():
+                dealloc(t)
+            self._pending = None
+
+    def carry_ready(self, start: int) -> bool:
+        """Host only (TtDS41Model.begin_chunk, before the chunk): the carry of a chunk at ``start`` needs no row this
+        cache does not keep: position 0, a carry masked by DECODER_SKIP's skipped rows (``missing``; a truncation is
+        the caller's decision, not counted), a kept tail, or (ring) the ring holding [start - 128, start); none: only the
+        chunk right after this cache's own last write (the running request)."""
+        if start <= 0 or self.keep == "full":
+            return True
+        m = self.missing
+        if m is not None and m[0] < start and m[1] > start - WINDOW:
+            return True
+        if self._kept(start):
+            return True
+        ring = self.ring
+        if self.keep == "none" and (ring.writer is not self or ring.end != start):
+            return False
+        return self.history and ring.holds(start - min(WINDOW, start), start)
+
+    def _ring_carry(self, start: int) -> ttnn.Tensor:
+        """The carry [start - 128, start) from the ring ([1, 1, 128, 512] bf16 ROW_MAJOR, replicated; zeros before
+        position 0): the ring rows in order on every chip; blocks held by one chip gathered from it (the same local rows
+        of every chip gathered over the mesh, the owner's kept). Refuses rows the ring does not hold."""
+        g, ring = self.geo, self.ring
+        n = min(WINDOW, start)
+        p0 = start - n
+        if not ring.holds(p0, start) or (self.keep == "none" and ring.writer is not self):
+            raise ValueError(
+                f"WINDOW_KV_KEEP={self.keep}: the window carry [{p0}, {start}) is not kept (ring of positions "
+                f"{[p for p in ring.pos if p is not None]}, last write ending at {ring.end}); begin_chunk truncates the "
+                "window at such a start under DECODER_SKIP=exact / replay128 and refuses it under off"
+            )
+        pieces, p = [], p0
+        while p < start:  # (the ring rows in position order: one or two slices, the wrap)
+            slot = p % RING
+            take = min(RING - slot, start - p)
+            pieces.append(
+                ttnn.slice(
+                    ring.t,
+                    [0, 0, slot, 0],
+                    [1, 1, slot + take, self.WIDTH],
+                    memory_config=DRAM,
+                    sub_core_grids=sub_cores(),
+                )
+            )
+            p += take
+        local = (
+            pieces[0]
+            if len(pieces) == 1
+            else ttnn.concat(pieces, dim=2, memory_config=DRAM, sub_core_grids=sub_cores())
+        )
+        if len(pieces) > 1:
+            for t in pieces:
+                dealloc(t)
+        owners = [ring.own[(q // 32) % ring.BLOCKS] for q in range(p0, start, 32)]
+        out = local
+        if any(o is not None for o in owners):
+            tl = ttnn.to_layout(local, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(local))
+            dealloc(local)
+            gat = self._gather_all(tl)  # [1, 1, N n, 512], chip-linear
+            if gat is not tl:
+                dealloc(tl)
+            runs, k = [], 0
+            while k < len(owners):  # runs of blocks held by the same chip (None: every chip, chip 0's copy)
+                e = k
+                while e + 1 < len(owners) and owners[e + 1] == owners[k]:
+                    e += 1
+                q = owners[k] or 0
+                runs.append(
+                    ttnn.slice(
+                        gat,
+                        [0, 0, q * n + 32 * k, 0],
+                        [1, 1, q * n + 32 * (e + 1), self.WIDTH],
+                        memory_config=DRAM,
+                        sub_core_grids=sub_cores(gat),
+                    )
+                )
+                k = e + 1
+            dealloc(gat)
+            mine = (
+                runs[0] if len(runs) == 1 else ttnn.concat(runs, dim=2, memory_config=DRAM, sub_core_grids=sub_cores())
+            )
+            if len(runs) > 1:
+                for t in runs:
+                    dealloc(t)
+            out = to_rm(mine, memory_config=DRAM)
+            dealloc(mine)
+        if n == WINDOW:
+            return out
+        zeros = ttnn.slice(
+            self.tables.zero_carry,
+            [0, 0, 0, 0],
+            [1, 1, WINDOW - n, 512],
+            sub_core_grids=sub_cores(self.tables.zero_carry),
+        )
+        res = ttnn.concat([zeros, out], dim=2, memory_config=DRAM, sub_core_grids=sub_cores())
+        dealloc(zeros)
+        dealloc(out)
+        return res
+
+    def served_bytes(self) -> int:
+        """Window KV bytes a chip this slot keeps (WINDOW_KV_KEEP: full the served slab, ring its ring, none 0: the
+        shared working ring is the model's, not the slot's)."""
+        if self.keep == "full":
+            return self.rows * self.WIDTH * 2
+        return self.ring.nbytes if self.ring_owned else 0
+
+    def _ring_natural(self, p0: int, p1: int) -> torch.Tensor:
+        """Host: positions [p0, p1) of the ring (each block from its owner's copy), zeros where it holds none."""
+        out = torch.zeros(max(0, p1 - p0), self.WIDTH, dtype=torch.bfloat16)
+        ring = self.ring
+        if p1 <= p0 or ring.writer is not self and self.keep == "none" or not self.history:
+            return out
+        shards = ring.host_rows()
+        for j in range(ring.BLOCKS):
+            q = ring.pos[j]
+            if q is None:
+                continue
+            lo, hi = max(q, p0), min(ring.vend[j], p1)
+            if lo < hi:
+                src = shards[ring.own[j] or 0]
+                out[lo - p0 : hi - p0] = src[q % RING + lo - q : q % RING + hi - q]
+        return out
+
     def _gather_all(self, t: ttnn.Tensor) -> ttnn.Tensor:
         """[1, 1, n, 512] TILE per chip -> [1, 1, N n, 512] on every chip, chip-linear order r TP + c."""
         out = t
@@ -670,12 +984,18 @@ class TtWindowCache:
         n = min(WINDOW, start)
         if n == 0 or self.carry_masked(start):  # (DECODER_SKIP=exact: skipped rows are never read; masked anyway)
             return self.tables.zero_carry
+        pend = self._pending  # WINDOW_KV_KEEP=ring | none (P.32): taken before this chunk's write
+        if pend is not None and pend[0] == start:
+            self._pending = None
+            return pend[1]
         tail = self._tail
         if tail is not None and tail[0] == start and n == WINDOW:  # GLUE_FOLD=on: the previous chunk's last rows
             s = tail[1].shape[-2]
             return ttnn.slice(
                 tail[1], [0, 0, s - WINDOW, 0], [1, 1, s, self.WIDTH], memory_config=DRAM, sub_core_grids=sub_cores()
             )
+        if self.ring is not None:  # (no write of this chunk came first: the ring as it is)
+            return self._ring_carry(start)
         pieces = (
             []
             if n == WINDOW
@@ -727,6 +1047,25 @@ class TtWindowCache:
         self._drop_tail()
         self.computed(p0, p0 + rows.shape[0])  # (host rows of those positions: they exist)
         n = rows.shape[0]
+        if self.ring is not None:  # WINDOW_KV_KEEP=ring | none (P.32): the ring = the rows' last <= 192 positions
+            self._free_pending()
+            self.origin = None  # (a loaded prefix: its rows existed before p0)
+            ring = self.ring
+            lo, hi = self._ring_span(p0, p0 + n)
+            host = torch.zeros(RING, self.WIDTH)
+            ring.reset()
+            for q in range(lo, hi, 32):
+                m = max(0, min(32, p0 + n - q))
+                host[q % RING : q % RING + m] = rows[q - p0 : q - p0 + m].float()
+                j = (q // 32) % ring.BLOCKS
+                ring.pos[j], ring.vend[j] = q, q + m
+            up = _upload(self.mesh, host.view(1, 1, RING, self.WIDTH), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.bringup.slice_write(
+                up, ring.t, [0, 0, 0, 0], [1, 1, RING, self.WIDTH], [1, 1, 1, 1], max_grid=max_grid()
+            )
+            dealloc(up)
+            self._after_ring_write(p0 + n)
+            return
         for a in range(0, n, g.chunk):
             m = min(g.chunk, n - a)
             nat = torch.zeros(g.chunk, self.WIDTH)
@@ -748,8 +1087,11 @@ class TtWindowCache:
             dealloc(slab)
 
     def to_host(self, length: int) -> torch.Tensor:
-        """Natural-order rows of positions [0, ceil32(length)) as host bf16 [ceil32(length), 512]."""
+        """Natural-order rows of positions [0, ceil32(length)) as host bf16 [ceil32(length), 512] (WINDOW_KV_KEEP=ring |
+        none: the ring's rows, zeros at every position it does not hold)."""
         g = self.geo
+        if self.ring is not None:
+            return self._ring_natural(0, -(-length // 32) * 32)
         shards = self.slab.host_rows()
         blocks = self.rows // g.stripe
         stacked = torch.stack([s.view(blocks, g.stripe, self.WIDTH) for s in shards], dim=1)  # [blocks, N, stripe]
@@ -760,7 +1102,10 @@ class TtWindowCache:
         """The reference's window_kv state: the ring [window, 512], slot p % window = position p of the last window
         positions before ``length`` (zeros elsewhere)."""
         ring = torch.zeros(window, self.WIDTH)
-        if length:
+        if length and self.ring is not None:  # (WINDOW_KV_KEEP=ring | none: from the ring alone)
+            p0 = max(0, length - window)
+            ring[torch.arange(p0, length) % window] = self._ring_natural(p0, length).float()
+        elif length:
             nat = self.to_host(length).float()
             pos = torch.arange(max(0, length - window), length)
             ring[pos % window] = nat[pos]
@@ -786,6 +1131,14 @@ class TtWindowCache:
         if self.rtail is not None and self.rtail.is_allocated():
             dealloc(self.rtail)
         self.rtail = None
+        self._free_pending()
+        if self.ring is not None:  # WINDOW_KV_KEEP=ring | none (P.32): its own ring, or the model's left to it
+            if self.ring_owned:
+                self.ring.free()
+            elif self.ring.writer is self:
+                self.ring.reset()
+            self.history, self.origin = False, None
+            return
         self.slab.free()
 
 
@@ -1059,8 +1412,11 @@ class TtWindowAttention:
         own = kv
         if g.tp > 1 and kv.shape[-2] != g.q_rows:  # (ATTN_SP32=off: the SP row's block, TP-replicated)
             own = ttnn.mesh_partition(kv, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
-        # 1. the served cache, as before (its TP gather and write)
-        if start % g.chunk == 0 and g.w in tables._sp_iota:
+        # 1. the served cache, as before (its TP gather and write); WINDOW_KV_KEEP=ring | none (P.32): no served cache,
+        # the ring takes each chip's own rows below (no gather)
+        if cache.ring is not None:
+            pass
+        elif start % g.chunk == 0 and g.w in tables._sp_iota:
             full = kv
             if g.tp > 1 and kv.shape[-2] == g.q_rows:
                 full = ccl.all_gather(kv, 2, TP_AXIS, site="attn.kv_tp")  # [1, 1, W, 512] bf16
@@ -1093,11 +1449,24 @@ class TtWindowAttention:
         # 2. the chip's own rows -> region rows [128, 128 + q_rows) (pad rows zero, as the served rows)
         om = tables.mask_chip(own, end - start)
         bf = self.region.dtype == ttnn.bfloat16
-        if bf:  # WINDOW_KV_FORMAT=bf16_tiles (P.26): the bf16 rows as they are (no rounding step)
+        if cache.ring is not None:  # (P.32: the chip's own bf16 rows into the ring, before the carry is read: the
+            # ring takes the carry first when the write would overwrite it, TtWindowCache._before_ring_write)
+            if bf:
+                orm = to_rm(om, memory_config=DRAM)
+            else:  # (the ring's rows alone: untilized on its small grid, WINDOW_RING_CORES)
+                end_ix = [int(d) - 1 for d in om.shape]
+                orm = ttnn.untilize_with_unpadding(
+                    om, output_tensor_end=end_ix, memory_config=DRAM, sub_core_grids=cache.ring.cores
+                )
+            cache.write_own(orm, start, end)
+            if bf:
+                self._put_rows(orm, self.region, WINDOW)
+            dealloc(orm)
+        elif bf:  # WINDOW_KV_FORMAT=bf16_tiles (P.26): the bf16 rows as they are (no rounding step)
             orm = to_rm(om, memory_config=DRAM)
             self._put_rows(orm, self.region, WINDOW)
             dealloc(orm)
-        else:
+        if not bf:
             ttnn.bringup.ckv_bfp4(
                 om,
                 self.region,
