@@ -740,6 +740,14 @@ class MlaPrefill:
         return out
 
 
+def _ccl_sem_kw() -> dict:
+    """GLM53_PF_CCL_SEM_L1_SMALL=1 (default): the prefill's CCL global semaphores in L1_SMALL. In plain L1 they live
+    for the program cache's lifetime (4 per cached reduce-scatter / all-reduce entry, every worker core) and sat
+    at the decode stack's L1 floor: the 45-layer TP32 e2e died in 'static circular buffers clash with L1 buffers'
+    (1 KB over) at the first sparse_dsa MoE program, 2026-11-05 08:12; all_gather already prefers L1_SMALL."""
+    return {"use_l1_small_for_semaphores": True} if os.environ.get("GLM53_PF_CCL_SEM_L1_SMALL", "1") == "1" else {}
+
+
 def _mfs_interleaved() -> bool:
     """whether this tree's moe_fused_swiglu takes ``gate_up_interleaved`` (the reference's op; tenstorrent/tt-metal's
     rejects the keyword -> EpMoe runs the EP layers through the xffn kernels)"""
@@ -2287,7 +2295,7 @@ class TPPrefill:
         if self.ndev == 1:
             return x
         for i, ax in enumerate(self._axes()[::-1]):
-            y = ttnn.reduce_scatter(x, dim=dim, cluster_axis=ax, memory_config=DRAM)
+            y = ttnn.reduce_scatter(x, dim=dim, cluster_axis=ax, memory_config=DRAM, **_ccl_sem_kw())
             ttnn.deallocate(x)
             x = y
         return x
@@ -2331,7 +2339,12 @@ class TPPrefill:
             x = ttnn.typecast(x, FP32)
         for i, ax in enumerate(axes):
             if sp:
-                y = ttnn.reduce_scatter(x, dim=2, cluster_axis=ax, memory_config=DRAM)
+                y = ttnn.reduce_scatter(x, dim=2, cluster_axis=ax, memory_config=DRAM, **_ccl_sem_kw())
+            elif _ccl_sem_kw():  # the all-reduce as reduce-scatter + all-gather on the hidden dim (all_reduce has no
+                # L1_SMALL semaphore option; the same sum, the gather is a copy)
+                part = ttnn.reduce_scatter(x, dim=3, cluster_axis=ax, memory_config=DRAM, **_ccl_sem_kw())
+                y = ttnn.all_gather(part, dim=3, cluster_axis=ax, memory_config=DRAM)
+                ttnn.deallocate(part)
             else:
                 y = ttnn.all_reduce(x, cluster_axis=ax, memory_config=DRAM)
             if i or cast:

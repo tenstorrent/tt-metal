@@ -60,7 +60,7 @@ KNOB_KEYS = ("GLM53_MK_KB_QKV", "GLM53_MK_KB_O", "GLM53_MK_RING_KB_QKV", "GLM53_
              "GLM53_MK_DEFER_INV", "GLM53_MHC_POST_ROWWRITE", "GLM53_MK_W_DELAY_US", "GLM53_MHC_PRE_EARLY",
              "GLM53_MHC_HN_FIRST", "GLM53_TP_SHARED", "GLM53_MK_FOLD_Y2", "GLM53_REC_EARLY_SIGNAL", "GLM53_REC_MODE",
              "GLM53_MHC_MODE", "GLM53_MHC_ROWREAD", "GLM53_REC_V2_UG", "GLM53_REC_UGROUPS", "GLM53_MK_ROUTER_KSPLIT",
-             "GLM53_KDA_RSPLIT",
+             "GLM53_KDA_RSPLIT", "GLM53_MLA_DSA_QFIRST",
              # merged MRs' knobs (Stage 14 boundary prefetch; 7a MR3): popped per kind like the rest (A/B via
              # GLM53_STACK_KNOB_SET, e.g. "s:GLM53_MK_SPARSE_DEFER_INV=1")
              "GLM53_MK_PRE_PREFETCH", "GLM53_STACK_P1_PREFETCH", "GLM53_MHC_FPU_COLLAPSE", "GLM53_MHC_PRE_SPLIT", "GLM53_MK_SPARSE_DEFER_INV", "GLM53_MHC_DIAG",
@@ -92,7 +92,7 @@ _TRIMS = {"GLM53_MHC_POST_ROWWRITE": "1", "GLM53_MK_W_DELAY_US": "10", "GLM53_MH
 # kda_rec v2 asserts rec_spread 1 (the stack's TP layers are built with 1)
 _GEN7A = {
     "GLM53_REC_MODE": "v2",
-    "GLM53_MHC_MODE": "dz,pv2,cp",
+    "GLM53_MHC_MODE": "dz,pv2,cp,fr",  # + fr (2026-11-05 W5 A/B: 19.3 -> 19.2 ms per 45-layer step, ids identical)
     "GLM53_MHC_ROWREAD": "1",
     "GLM53_REC_EARLY_SIGNAL": "1",
 }
@@ -107,17 +107,30 @@ KNOBS_TP = {
         **_GEN7A,
     },
     True: {"GLM53_MK_READERS": "3", "GLM53_TP_SHARED": "1", **_TRIMS},
-    "dsa": _S7A_SPARSE,
+    # sparse_dsa (2026-11-05 W5, TP8 block, 45 layers, B = 4, ISL 127, ids identical throughout): the mhc_pre trims the
+    # other kinds had (PRE_EARLY, POST_ROWWRITE, W_DELAY, dz + fr, ROWREAD) -0.3 ms per step, GLM53_MLA_DSA_QFIRST=1
+    # (W_uk before the I3 fold the dense regime never waits on) -0.3: 19.9 -> 19.3 ms = 51.9 tok/s/u
+    "dsa": {**_S7A_SPARSE, **_TRIMS, "GLM53_MHC_MODE": "dz,fr", "GLM53_MHC_ROWREAD": "1", "GLM53_MLA_DSA_QFIRST": "1"},
 }
 
 
 # Stage 7a's 283-us TP8 sparse_kda knob set (GLM53_STACK_KNOBS=s7a283, the served profile): stack-checked
 # by review (tests/s14b notes: fold_y2's CB_Y2 now rewound per layer; DEFER_INV / ROWWRITE inert in sparse_kda stacks;
 # pv2 / cp only at t > 4; MKX_XROWS not in this tree); B > 4 adds 7a's user groups
-KNOBS_7A283 = {"GLM53_MK_READERS": "3", "GLM53_MK_KB_QKV": "4", "GLM53_MK_FOLD_Y2": "1", "GLM53_MK_DEFER_INV": "1",
-               "GLM53_REC_EARLY_SIGNAL": "1", "GLM53_MK_W_DELAY_US": "10", "GLM53_MHC_POST_ROWWRITE": "1",
-               "GLM53_MHC_PRE_EARLY": "1", "GLM53_REC_MODE": "v2", "GLM53_MHC_MODE": "dz,pv2,cp", "GLM53_TP_SHARED": "1",
-               "GLM53_MHC_ROWREAD": "1"}  # fmt: skip
+KNOBS_7A283 = {
+    "GLM53_MK_READERS": "3",
+    "GLM53_MK_KB_QKV": "4",
+    "GLM53_MK_FOLD_Y2": "1",
+    "GLM53_MK_DEFER_INV": "1",
+    "GLM53_REC_EARLY_SIGNAL": "1",
+    "GLM53_MK_W_DELAY_US": "10",
+    "GLM53_MHC_POST_ROWWRITE": "1",
+    "GLM53_MHC_PRE_EARLY": "1",
+    "GLM53_REC_MODE": "v2",
+    "GLM53_MHC_MODE": "dz,pv2,cp,fr",
+    "GLM53_TP_SHARED": "1",
+    "GLM53_MHC_ROWREAD": "1",
+}  # fmt: skip  (+ fr: 2026-11-05 W5 A/B)
 
 
 def _live_device_tensors() -> dict:
@@ -2070,6 +2083,9 @@ class StackBackend(ModelBackend):
     def prepare_decode(self, io: DecodeIO, kv: StackCache, widths: Sequence[int]) -> None:
         """compile every program (one eager step) before any capture, then restore the request state it touched"""
         self._kv = kv
+        if os.environ.get("GLM53_L1_REPORT") == "1":  # the L1 floor before the first decode program (the 45-layer
+            # TP32 clash 2026-11-05: the attached TP prefill's CCL semaphores + the stack's per-layer persistent L1)
+            l1_report(self.mesh, "prepare_decode (before the eager step)", root=self)
         tok = self.read(io.tokens)
         pos = self.read(io.cur_pos)
         self._step(kv)
