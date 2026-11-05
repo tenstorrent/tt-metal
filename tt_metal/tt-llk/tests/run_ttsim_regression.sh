@@ -481,7 +481,7 @@ collected_count=0
 collect_exit=0
 (
     cd "$TESTS_DIR"
-    CHIP_ARCH="$COLLECT_CHIP_ARCH" "${COLLECT_CMD[@]}"
+    PYTEST_ADDOPTS= CHIP_ARCH="$COLLECT_CHIP_ARCH" "${COLLECT_CMD[@]}"
 ) 2>/dev/null | grep -E '\.py::' >"$COLLECTED_PATH" || collect_exit=$?
 # `grep` returns 1 when it matches nothing; only treat a missing/empty file as
 # a real failure so the run still proceeds (gap analysis is best-effort).

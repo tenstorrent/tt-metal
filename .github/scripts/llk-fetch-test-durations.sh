@@ -26,7 +26,7 @@ from pathlib import Path
 download, out = Path(sys.argv[1]), Path(sys.argv[2])
 out.mkdir(parents=True, exist_ok=True)
 found = False
-for arch in ("wormhole", "blackhole"):
+for arch in ("wormhole", "blackhole", "quasar"):
     summed = {}
     for leg in sorted(download.glob(f"test-durations-{arch}-*/.test_durations")):
         for test, seconds in json.loads(leg.read_text()).items():
