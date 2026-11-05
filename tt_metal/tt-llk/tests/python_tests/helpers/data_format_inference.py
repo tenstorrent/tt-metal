@@ -340,7 +340,7 @@ def infer_pack_in(
         is_fp32_dest_acc_en: Flag indicating if FP32 accumulation is enabled
         unpacking_to_dest: Whether unpacking targets the destination register
         chip_arch: The chip architecture (Wormhole or Blackhole). If None, will be detected automatically.
-        pack_src_from_output: Take the packer input of a block float input from a 16-bit DEST from the output format family, as production does.
+        pack_src_from_output: Blackhole only: take the packer input of a block float input from a 16-bit DEST from the output format family, as production does.
 
     Returns:
         The inferred packer input format
@@ -350,6 +350,10 @@ def infer_pack_in(
 
     is_wormhole = chip_arch == ChipArchitecture.WORMHOLE
     is_quasar = chip_arch == ChipArchitecture.QUASAR
+    # The production packer input is a Blackhole change; the other architectures keep their measured configurations.
+    pack_src_from_output = (
+        pack_src_from_output and chip_arch == ChipArchitecture.BLACKHOLE
+    )
 
     # Packer operates on register data, so use unpack_out (what's in registers) not input_format (what's in L1).
     # For MX formats, unpack_out is already Float16_b (handled in infer_unpack_out).
