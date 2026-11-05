@@ -4,7 +4,24 @@
 
 #include "impl/metal2_host_api/program_spec/validation/resource/resource.hpp"
 
+#include "jit_build/data_format.hpp"
+
 namespace tt::tt_metal::experimental {
+
+void ValidateResourceTileMetadata(
+    std::string_view resource_kind, std::string_view resource_name, DataFormat format, const Tile& tile) {
+    constexpr uint32_t kMxBlockSize = 32;
+    TT_FATAL(
+        !tt::is_mx_format(format) || tile.get_tile_hw() % kMxBlockSize == 0,
+        "{} '{}' has format '{}' and tile shape ({}x{}) with {} elements; "
+        "MX tiles must contain a multiple of 32 elements",
+        resource_kind,
+        resource_name,
+        format,
+        tile.get_height(),
+        tile.get_width(),
+        tile.get_tile_hw());
+}
 
 void ValidateResourceBindings(const KernelSpec& kernel, const ValidationContext& ctx, tt::ARCH arch) {
     ValidateDFBBindings(kernel, ctx);
@@ -23,6 +40,10 @@ void ValidateResourceSpecs(
     const CollectedSpecData& collected = ctx.collected;
     for (const auto& parameter : spec.advanced_options.sram_arena_parameters) {
         ValidateSRAMArenaParameter(parameter);
+    }
+    // Borrowed DFB validation can calculate tensor allocation sizes.
+    for (const auto& tensor_parameter : spec.tensor_parameters) {
+        ValidateTensorParameterSpec(tensor_parameter);
     }
     for (const auto& dfb : spec.dataflow_buffers) {
         ValidateDFBSpec(dfb, collected, l1_alignment, arch, num_banks_from_buffer_type);

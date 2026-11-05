@@ -146,6 +146,8 @@ void ValidateDFBSpec(
             dfb.unique_id,
             dfb.data_format_metadata.value(),
             arch);
+        ValidateResourceTileMetadata(
+            "DFB", dfb.unique_id.get(), *dfb.data_format_metadata, dfb.tile_format_metadata.value_or(Tile{}));
     }
 
     // The allow_instance_multi_binding escape hatch is Gen1-only. On Gen2 the DFB's per-RISC
