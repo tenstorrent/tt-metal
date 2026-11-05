@@ -14,6 +14,7 @@ Production implementations for the three injectable boundaries M3 left mocked:
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -352,12 +353,37 @@ def _work_probe_once(timeout_s: float):
 _TT_SMI_FALLBACK = "~/.tenstorrent-venv/bin/tt-smi"
 
 
+# How deep under $HOME a tt-smi install is looked for (<dir>/bin/tt-smi up to this many dirs down):
+# covers pipx/venv layouts like ~/<venv>/bin and ~/<tools>/<venv>/bin without walking whole trees.
+_TT_SMI_DISCOVER_DEPTH = 3
+
+
+@functools.lru_cache(maxsize=1)
+def _discovered_tt_smi() -> str:
+    """An executable ``.../bin/tt-smi`` under $HOME, or "". Asked only when PERF_MCP_TT_SMI, PATH and
+    the historical location all miss -- a box whose tt-smi lives in some other venv was otherwise
+    handed a path that does not exist, and every reset/temperature read failed."""
+    home = Path.home()
+    for depth in range(1, _TT_SMI_DISCOVER_DEPTH + 1):
+        pattern = "/".join(["*"] * depth) + "/bin/tt-smi"
+        try:
+            hits = sorted(p for p in home.glob(pattern) if p.is_file() and os.access(p, os.X_OK))
+        except OSError:
+            hits = []
+        if hits:
+            return str(hits[0])
+    return ""
+
+
 def tt_smi_bin() -> str:
     """The tt-smi to run. Never a bare name: PATH is not guaranteed to a non-interactive launch."""
+    fallback = Path(_TT_SMI_FALLBACK).expanduser()
     return (
         (os.environ.get("PERF_MCP_TT_SMI") or "").strip()
         or shutil.which("tt-smi")
-        or str(Path(_TT_SMI_FALLBACK).expanduser())
+        or (str(fallback) if fallback.exists() else "")
+        or _discovered_tt_smi()
+        or str(fallback)
     )
 
 

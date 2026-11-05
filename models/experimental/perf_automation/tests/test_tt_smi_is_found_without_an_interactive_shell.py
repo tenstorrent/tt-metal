@@ -93,3 +93,38 @@ def test_the_fallback_is_expanded_not_left_literal():
     assert _TT_SMI_FALLBACK.startswith("~"), "the fallback should be written host-independently"
     i = _PROBES.index("def tt_smi_bin")
     assert "expanduser()" in _PROBES[i : i + 600], "the ~ reaches a subprocess unexpanded"
+
+
+def test_a_tt_smi_elsewhere_under_home_is_discovered(monkeypatch, tmp_path):
+    """PATH and the historical location both miss, but tt-smi IS installed, in another venv under
+    $HOME (seen on a Galaxy: ~/<tools>/bin/tt-smi). It must be found, not replaced by a dead path."""
+    from agent import probes
+
+    tool = tmp_path / "tools" / "venv" / "bin" / "tt-smi"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    monkeypatch.delenv("PERF_MCP_TT_SMI", raising=False)
+    monkeypatch.setattr(shutil, "which", lambda _n: None)
+    monkeypatch.setattr(probes.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(probes, "_TT_SMI_FALLBACK", str(tmp_path / ".tenstorrent-venv" / "bin" / "tt-smi"))
+    probes._discovered_tt_smi.cache_clear()
+    try:
+        assert probes.tt_smi_bin() == str(tool)
+    finally:
+        probes._discovered_tt_smi.cache_clear()
+
+
+def test_the_historical_location_still_wins_over_discovery(monkeypatch, tmp_path):
+    """Nothing that works today changes: when the historical location exists, it is used as before."""
+    from agent import probes
+
+    hist = tmp_path / ".tenstorrent-venv" / "bin" / "tt-smi"
+    hist.parent.mkdir(parents=True)
+    hist.write_text("#!/bin/sh\n")
+    hist.chmod(0o755)
+    monkeypatch.delenv("PERF_MCP_TT_SMI", raising=False)
+    monkeypatch.setattr(shutil, "which", lambda _n: None)
+    monkeypatch.setattr(probes, "_TT_SMI_FALLBACK", str(hist))
+    monkeypatch.setattr(probes, "_discovered_tt_smi", lambda: "/should/not/be/used")
+    assert probes.tt_smi_bin() == str(hist)
