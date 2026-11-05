@@ -2365,3 +2365,36 @@ def test_slice_nd_sharded_tensor_args_inherited_vs_explicit(device):
     explicit = ttnn.slice(tt_input, start, end, slice_dim=2, num_devices=2, memory_config=mem_config)
     assert list(explicit.memory_config().nd_shard_spec.shard_shape) == [1, 1, 64, 64]
     assert torch.equal(ttnn.to_torch(explicit), torch_expected)
+
+
+# ttnn.slice already rejects step <= 0 at its entry; these cases guard that and
+# cover quasar slice, whose host path used to cast a negative step to a huge uint32 (silent empty tensor)
+# and divide by a zero step (SIGFPE). The moved device-op check is not reachable from here.
+@pytest.mark.parametrize("slice_fn", [ttnn.slice, ttnn.experimental.quasar.slice], ids=["slice", "quasar_slice"])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "shape, ends, step",
+    [
+        ((1, 1, 32, 32), (1, 1, 32, 32), (1, 1, 1, -1)),
+        ((1, 1, 32, 32), (1, 1, 32, 32), (1, 1, 1, -2)),
+        ((1, 1, 32, 32), (1, 1, 32, 32), (1, 1, 1, 0)),
+        ((1, 1, 2, 32), (1, 1, 2, 32), (1, 1, -2, 1)),
+    ],
+    ids=["step_neg1", "step_neg2", "step_zero", "extent_le_abs_step"],
+)
+def test_slice_non_positive_step_raises(device, expect_error, slice_fn, layout, shape, ends, step):
+    tt_input = ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16), layout=layout, device=device)
+    with expect_error(RuntimeError, "Slice step must be greater than 0"):
+        slice_fn(tt_input, [0, 0, 0, 0], list(ends), list(step))
+
+
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "step, message",
+    [(-1, "step must be greater than zero"), (-2, "step must be greater than zero"), (0, "slice step cannot be zero")],
+    ids=["step_neg1", "step_neg2", "step_zero"],
+)
+def test_getitem_non_positive_step_raises(device, expect_error, layout, step, message):
+    tt_input = ttnn.from_torch(torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=layout, device=device)
+    with expect_error(ValueError, message):
+        tt_input[..., ::step]

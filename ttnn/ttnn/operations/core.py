@@ -128,6 +128,10 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
                 stop = shape[dim_idx]
             if step is None:
                 step = 1
+            elif step == 0:
+                raise ValueError("slice step cannot be zero")
+            elif step < 0:
+                raise ValueError("step must be greater than zero")
 
             final_slices.append(slice(start, stop, step))
         else:
