@@ -8,9 +8,13 @@
 // the folder it lives in. The stage that writes a file and the stage that reads it both use these, so they can't
 // drift. Header-only, with no dependencies, so every stage can include it whatever it links.
 //
-// Each fabric run's files sit in one folder, named by the run id rank 0 made at fabric init:
+// Each fabric run's files sit in one folder, named by the run id rank 0 made at fabric init, and each capture of the
+// run in a folder of its own, named by its capture id:
 //   <logs_dir>/generated/fabric/runs/<run_id>/
 //       fabric_manifest_rank_<r>_of_<n>.json    one per rank on this host
+//       captures/<capture_id>/
+//           fabric_capture_rank_<r>_of_<n>.json  the capture record
+//           fabric_capture_rank_<r>_of_<n>.bin   the bytes it read
 
 #include <cstdint>
 #include <filesystem>
@@ -60,10 +64,16 @@ inline std::optional<std::filesystem::path> find_latest_run_directory(
     return latest;
 }
 
-// One capture's file name without its file extension.
-inline std::string make_capture_file_stem(uint32_t mpi_rank, uint32_t world_size, std::string_view capture_id) {
-    return "fabric_capture_rank_" + std::to_string(mpi_rank + 1) + "_of_" + std::to_string(world_size) + "_" +
-           std::string(capture_id);
+// One capture's folder in its run's folder. A run can be captured many times, and each capture's files sit in a
+// folder named by its capture id.
+inline std::filesystem::path make_capture_directory(
+    const std::filesystem::path& run_directory, std::string_view capture_id) {
+    return run_directory / "captures" / capture_id;
+}
+
+// One rank's capture file name without its extension, by its rank in the whole job.
+inline std::string make_capture_file_stem(uint32_t mpi_rank, uint32_t world_size) {
+    return "fabric_capture_rank_" + std::to_string(mpi_rank + 1) + "_of_" + std::to_string(world_size);
 }
 
 }  // namespace tt::tt_fabric::visualizer

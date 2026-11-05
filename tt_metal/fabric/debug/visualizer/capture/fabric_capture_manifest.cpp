@@ -150,6 +150,7 @@ ManifestIdentity collect_manifest_identity(const ManifestFile& manifest) {
     return ManifestIdentity{
         .path = manifest.path,
         .blake3 = manifest.blake3,
+        .run_id = manifest_reader.read_string(json_pointer("/run/run_id")),
         .mpi_rank = manifest_reader.read_uint32(json_pointer("/run/mpi_rank")),
         .world_size = manifest_reader.read_uint32(json_pointer("/run/world_size")),
         .host_name = manifest_reader.read_string(json_pointer("/run/host_name")),

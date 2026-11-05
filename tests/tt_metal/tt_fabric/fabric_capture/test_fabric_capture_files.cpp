@@ -95,21 +95,23 @@ TEST_F(CaptureFilesTest, EachReadsOffsetFindsItsBytes) {
 }
 
 TEST_F(CaptureFilesTest, NeverReplacesACaptureOrLeavesAHalfOne) {
-    const CaptureFilePaths paths = make_capture_file_paths(directory_, 0, 1, "first");
+    // directory_ stands in for a run's folder; the capture's files go in its captures/first/.
+    const CaptureFilePaths paths = make_capture_file_paths(directory_, "first", 0, 1);
+    EXPECT_EQ(paths.bin_path, directory_ / "captures" / "first" / "fabric_capture_rank_1_of_1.bin");
 
-    // A writer that isn't finished leaves nothing behind.
+    // A writer that isn't finished leaves no file behind.
     {
         CaptureBinWriter writer(paths.bin_path);
         writer.append_core(
             {.router = {.path = "M0/C0/E0"}, .location = CoreLocation::FOUND},
             {.reads = {{.step = ReadStep::L1, .size_bytes = 2, .bytes = make_bytes({1, 2})}}});
     }
-    EXPECT_TRUE(std::filesystem::is_empty(directory_));
+    EXPECT_TRUE(std::filesystem::is_empty(paths.bin_path.parent_path()));
 
     // A .bin already under the name isn't replaced, by a new capture or by a writer that started before it appeared.
     CaptureBinWriter writer(paths.bin_path);
     std::ofstream(paths.bin_path) << "an earlier capture";
-    EXPECT_THROW(make_capture_file_paths(directory_, 0, 1, "first"), std::exception);
+    EXPECT_THROW(make_capture_file_paths(directory_, "first", 0, 1), std::exception);
     EXPECT_THROW(writer.finish(), std::exception);
     EXPECT_EQ(read_file(paths.bin_path).size(), std::string("an earlier capture").size());
 }
