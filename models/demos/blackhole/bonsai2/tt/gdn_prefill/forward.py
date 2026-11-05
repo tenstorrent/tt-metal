@@ -169,14 +169,24 @@ class ConvPrefill:
         self.v2 = os.environ.get("BONSAI_CONV2", "1") == "1"
         self.device = device
 
-    def __call__(self, x, state):
+    def __call__(self, x, state, split=None):
+        """split = (w0, w1) channels (conv2 only): three outputs [1, T, w0], [1, T, w1], [1, T, D - w0 - w1] (q, k, v)
+        instead of one [1, T, D]."""
         device, D = self.device, self.D
         T, W = list(x.shape)[1], list(x.shape)[2]
         Dt, Tt = D // 32, T // 32
-        out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, T, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
-        )
         v2 = self.v2
+        assert split is None or v2
+        widths = [D] if split is None else [split[0], split[1], D - split[0] - split[1]]
+        outs = [
+            ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, T, w]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+            )
+            for w in widths
+        ]
+        out = outs[0]
+        ob, oc = (outs[1], outs[2]) if split is not None else (out, out)
+        W0, W1 = (widths[0] // 32, widths[1] // 32) if split is not None else (Dt, 0)
         grid = device.compute_with_storage_grid_size()
         # conv2: work units (column, time tile) split evenly; conv: whole columns per core
         ncores = min(grid.x * grid.y, Dt * Tt if v2 else Dt)
@@ -194,6 +204,11 @@ class ConvPrefill:
             ttnn.TensorAccessorArgs(out).get_compile_time_args()
             + ttnn.TensorAccessorArgs(state).get_compile_time_args()
         )
+        if v2:
+            wr_ct += (
+                ttnn.TensorAccessorArgs(ob).get_compile_time_args()
+                + ttnn.TensorAccessorArgs(oc).get_compile_time_args()
+            )
 
         def cbd(i, fmt, page, pages):
             return ttnn.CBDescriptor(
@@ -217,7 +232,8 @@ class ConvPrefill:
                     kernel_source=KERNELS + ("conv2_writer.cpp" if v2 else "conv_writer.cpp"),
                     core_ranges=crs,
                     compile_time_args=wr_ct,
-                    common_runtime_args=[out.buffer_address(), state.buffer_address(), Dt, ncores, grid.x, Tt],
+                    common_runtime_args=[out.buffer_address(), state.buffer_address(), Dt, ncores, grid.x, Tt]
+                    + ([ob.buffer_address(), oc.buffer_address(), W0, W1] if v2 else []),
                     config=ttnn.WriterConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
@@ -245,8 +261,8 @@ class ConvPrefill:
             ]
             + ([cbd(6, bf, 2048, 2), cbd(7, bf, 2048, 1)] if v2 else []),
         )
-        ttnn.generic_op([x, state, taps, self.consts, out], program)
-        return out
+        ttnn.generic_op([x, state, taps, self.consts] + outs[1:] + [out], program)  # returns the last: out
+        return out if split is None else tuple(outs)
 
 
 class GateTiles:
@@ -424,7 +440,7 @@ def _cgdn_consts(device):
 
 
 def _chunk_op_forward(gdn, qkv, ab, T, Hq, H, K, V, na):
-    """conv output qkv [1, T, q | k | v] bf16, ab [1, T, a | b] -> (o [H, T, V] fp32, final state [1, H, K, V] fp32)."""
+    """conv outputs qkv = (q, k, v) [1, T, *] bf16, ab [1, T, a | b] -> (o [H, T, V] fp32, final state [1, H, K, V] fp32)."""
     dt_bias, a_neg = _CGDN["gates"][id(gdn)]
     abf = ttnn.typecast(ab, ttnn.float32)
     a = ttnn.slice(abf, [0, 0, 0], [1, T, na])
@@ -436,9 +452,7 @@ def _chunk_op_forward(gdn, qkv, ab, T, Hq, H, K, V, na):
     g = ttnn.multiply(sp, a_neg)
     for t in (a, b, ap, sp):
         ttnn.deallocate(t)
-    q = ttnn.slice(qkv, [0, 0, 0], [1, T, Hq * K])
-    k = ttnn.slice(qkv, [0, 0, Hq * K], [1, T, 2 * Hq * K])
-    v = ttnn.slice(qkv, [0, 0, 2 * Hq * K], [1, T, 2 * Hq * K + H * V])
+    q, k, v = qkv
     s0 = ttnn.typecast(gdn.recurrent_state, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     o, fs = ttnn.transformer.chunk_gated_delta_rule(
         q, k, v, g, beta,
@@ -528,7 +542,10 @@ def gdn_chunk_forward(gdn, x, linear_shim):
         z_off = (dq + da + db) // 32
         assert (dq + da + db) % 32 == 0, "z must start on a tile column of the in_proj output"
 
-    qkv = gdn._bonsai_conv(mega, gdn.fused_conv_state)  # conv + SiLU of q | k | v; conv state updated in place
+    if use_op:  # conv + SiLU straight into separate q, k, v (the chunk op's inputs)
+        qkv = gdn._bonsai_conv(mega, gdn.fused_conv_state, split=(Hq * K, Hq * K))
+    else:
+        qkv = gdn._bonsai_conv(mega, gdn.fused_conv_state)  # conv + SiLU of q | k | v; conv state updated in place
 
     if a_raw is not None:
         beta = ttnn.sigmoid(b_raw)
@@ -541,7 +558,6 @@ def gdn_chunk_forward(gdn, x, linear_shim):
     if use_op:
         o_bh, final_state = _chunk_op_forward(gdn, qkv, ab, T, Hq, H, K, V, tern.na)
         ttnn.deallocate(ab)
-        ttnn.deallocate(qkv)
     else:
         o_bh, final_state = _prep_scan(gdn, qkv, beta_bh, g_bh, B, T, Hq, H, K, V, dq, device)
 
