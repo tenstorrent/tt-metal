@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.utils import precom
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.weights import (
     CANONICAL_TO_CPU,
     DEFAULT_REPO,
+    canonical_to_cpu,
     load_attention_state_dict,
     resolve_layer_shards,
 )
@@ -45,7 +46,8 @@ class SparseMLAConfig(Protocol):
     qk_rope_head_dim: int
     v_head_dim: int
     rope_theta: float
-    rope_scaling: dict  # factor, mscale, beta_fast, beta_slow, original_max_position_embeddings
+    # factor, mscale, beta_fast, beta_slow, original_max_position_embeddings; None for NoPE (Kimi-K3.1).
+    rope_scaling: dict | None
     index_n_heads: int
     index_head_dim: int
     index_topk: int
@@ -55,7 +57,12 @@ class SparseMLAConfig(Protocol):
 # Canonical (HF/checkpoint) <-> CPU-port name maps. The correspondence is owned by weights.py
 # (CANONICAL_TO_CPU); here we just take it and its inverse so device weights and the CPU truth agree.
 _CANONICAL_TO_CPU = CANONICAL_TO_CPU
-_CPU_TO_CANONICAL: dict[str, str] = {cpu: canon for canon, cpu in _CANONICAL_TO_CPU.items()}
+_CPU_TO_CANONICAL: dict[str, str] = {cpu: canon for canon, cpu in canonical_to_cpu(gated=True).items()}
+
+
+def _is_gated(config) -> bool:
+    return bool(getattr(config, "mla_use_output_gate", False))
+
 
 # Canonical key set, for callers that want to validate against the ttnn contract.
 CANONICAL_WEIGHT_NAMES: tuple[str, ...] = tuple(_CANONICAL_TO_CPU)
@@ -68,8 +75,18 @@ def _model_args_from_hf(config: SparseMLAConfig, seq_len: int) -> ModelArgs:
     ``rope_scaling.factor`` (not from ``config.max_seq_len``, which tests mutate to the device rope-table
     length). ``seq_len`` sizes the RoPE table + the internal KV/PE cache. Fields the config doesn't
     carry (``scale_fmt``) keep the ModelArgs defaults.
+
+    Kimi-K3.1 is NoPE (``mla_use_nope``, ``rope_scaling=None``): no YaRN, so the gate is closed
+    (max == original) and MLACPU additionally skips the mscale under NoPE. Its indexer is NoPE too
+    (``index_rope_dim=0``).
     """
-    rs = config.rope_scaling
+    rs = config.rope_scaling or {
+        "original_max_position_embeddings": int(seq_len),
+        "factor": 1.0,
+        "beta_fast": 32,
+        "beta_slow": 1,
+        "mscale": 1.0,
+    }
     original = int(rs["original_max_position_embeddings"])
     factor = float(rs["factor"])
     if factor > 1.0:  # YaRN active (V3.2): gate must be True
@@ -97,6 +114,9 @@ def _model_args_from_hf(config: SparseMLAConfig, seq_len: int) -> ModelArgs:
         index_head_dim=config.index_head_dim,
         index_topk=config.index_topk,
         index_rope_interleave=config.index_rope_interleave,
+        index_rope_dim=getattr(config, "index_rope_dim", None),
+        mla_use_nope=bool(getattr(config, "mla_use_nope", False)),
+        mla_use_output_gate=_is_gated(config),
     )
 
 
@@ -131,6 +151,8 @@ def random_mla_weights(config: SparseMLAConfig, *, seed: int = 42) -> Weights:
         "indexer.k_norm.weight": torch.ones(idx_dim, dtype=torch.float32),
         "indexer.k_norm_bias.weight": torch.zeros(idx_dim, dtype=torch.float32),
         "indexer.weights_proj.weight": (torch.randn(idx_heads, h, generator=g) * std).to(torch.float32),
+        # Drawn last, so the other tensors' random streams do not depend on whether the model is gated.
+        **({"g_proj.weight": lin(n_heads * config.v_head_dim, h)} if _is_gated(config) else {}),
     }
 
 
@@ -140,13 +162,16 @@ def pretrained_mla_weights(
     layer: int,
     repo: str = DEFAULT_REPO,
     checkpoint_path: str | PathLike[str] | list[str] | None = None,
+    extract_only: bool = False,
 ) -> Weights:
     """Load layer-``layer`` pretrained MLA + indexer weights as the canonical dict (fp8 dequantized).
 
     ``checkpoint_path`` (a local shard path or list) takes precedence over HF resolution from ``repo``.
     ``config`` is accepted for symmetry / future validation; shapes come from the checkpoint.
     """
-    shards = checkpoint_path if checkpoint_path is not None else resolve_layer_shards(layer, repo)
+    shards = (
+        checkpoint_path if checkpoint_path is not None else resolve_layer_shards(layer, repo, extract_only=extract_only)
+    )
     cpu_sd = load_attention_state_dict(shards, layer)  # upstream CPU names, dequantized
     return {_CPU_TO_CANONICAL[cpu]: t for cpu, t in cpu_sd.items()}
 
@@ -168,10 +193,12 @@ class SparseMLAReference:
         self._mla = MLACPU(self._args, simulate_fp8=simulate_fp8).eval()
         self._mla.indexer.use_fp8_path = simulate_fp8
 
-        missing_canon = [c for c in _CANONICAL_TO_CPU if c not in weights]
+        # The required key set follows the config: a gated (Kimi-K3) layer additionally needs g_proj.
+        name_map = canonical_to_cpu(gated=_is_gated(config))
+        missing_canon = [c for c in name_map if c not in weights]
         if missing_canon:
             raise KeyError(f"weights missing canonical keys: {missing_canon}")
-        cpu_weights = {_CANONICAL_TO_CPU[c]: t for c, t in weights.items() if c in _CANONICAL_TO_CPU}
+        cpu_weights = {name_map[c]: t for c, t in weights.items() if c in name_map}
         self._mla.load_state_dict(cpu_weights, strict=True)
 
         self._freqs = precompute_freqs_cis(self._args)

@@ -47,6 +47,16 @@ CANONICAL_TO_CPU = {
     "indexer.weights_proj.weight": "indexer.weights_proj.weight",
 }
 
+# Kimi-K3 gated MLA only: the output gate. Kept OUT of CANONICAL_TO_CPU so ungated variants (DS-V3.2, GLM)
+# never require it; callers pick the key set for a config with canonical_to_cpu(gated=...).
+GATE_CANONICAL_TO_CPU = {"g_proj.weight": "g_proj.weight"}
+
+
+def canonical_to_cpu(gated: bool = False) -> dict[str, str]:
+    """Canonical -> CPU-port name map for one MLA flavour: ``CANONICAL_TO_CPU`` plus ``g_proj`` when gated."""
+    return {**CANONICAL_TO_CPU, **GATE_CANONICAL_TO_CPU} if gated else dict(CANONICAL_TO_CPU)
+
+
 # HF (transformers-style) submodule name -> CPU param prefix, derived from CANONICAL_TO_CPU (mirrors
 # inference/convert.py). The HF-checkpoint key equals the canonical key for every tensor except the
 # indexer LayerNorm bias, which rides under the ``indexer.k_norm`` submodule (so it's excluded here —
@@ -54,7 +64,7 @@ CANONICAL_TO_CPU = {
 # ``*.weight_scale_inv``.
 _HF_TO_MLA = {
     canon[: -len(".weight")]: cpu[: -len(".weight")]
-    for canon, cpu in CANONICAL_TO_CPU.items()
+    for canon, cpu in canonical_to_cpu(gated=True).items()
     if canon != "indexer.k_norm_bias.weight"
 }
 
@@ -68,6 +78,12 @@ def _dequant_fp8(weight: torch.Tensor, scale_inv: torch.Tensor, block: int = BLO
     w = weight.float()
     s = scale_inv.repeat_interleave(block, 0)[: w.shape[0]].repeat_interleave(block, 1)[:, : w.shape[1]]
     return (w * s).to(torch.bfloat16)
+
+
+def _attention_prefixes(layer: int) -> tuple[str, ...]:
+    """Checkpoint key roots for one layer's attention: text-only models use ``model.layers.N``; multimodal
+    wrappers (Kimi-K3 / K3.1: ``KimiK3ForConditionalGeneration``) nest the LM under ``language_model.``."""
+    return (f"model.layers.{layer}.self_attn.", f"language_model.model.layers.{layer}.self_attn.")
 
 
 def load_attention_state_dict(shard_paths, layer: int) -> dict:
@@ -84,11 +100,14 @@ def load_attention_state_dict(shard_paths, layer: int) -> dict:
 
     if isinstance(shard_paths, str):
         shard_paths = [shard_paths]
-    prefix = f"model.layers.{layer}.self_attn."
+    prefixes = _attention_prefixes(layer)
     state = {}
     for path in shard_paths:
         with safe_open(path, framework="pt", device="cpu") as f:
-            for k in (k for k in f.keys() if k.startswith(prefix)):
+            for k in f.keys():
+                prefix = next((p for p in prefixes if k.startswith(p)), None)
+                if prefix is None:
+                    continue
                 if k.endswith(".weight_scale_inv"):
                     continue
                 sub, field = k[len(prefix) :].rsplit(".", 1)  # ("q_a_proj","weight") / ("indexer.wk","weight")
@@ -172,22 +191,145 @@ def initialize_weights(
         init_random(module)
 
 
-def resolve_layer_shards(layer: int = 0, repo: str = DEFAULT_REPO, token: str = None, local_files_only: bool = False):
+def _layer_cache_path(repo: str, revision: str, layer: int):
+    from pathlib import Path
+
+    from huggingface_hub.constants import HF_HUB_CACHE
+
+    # Keyed by the checkpoint REVISION too, so a repo update never reuses an older extract.
+    root = Path(HF_HUB_CACHE) / "tt_attention_extracts" / repo.replace("/", "--") / revision
+    return root / f"layer{layer}_self_attn.safetensors"
+
+
+_SAFETENSORS_DTYPES = {
+    "BF16": torch.bfloat16,
+    "F16": torch.float16,
+    "F32": torch.float32,
+    "F8_E4M3": torch.float8_e4m3fn,
+}
+
+
+def _wanted_attention_key(key: str, prefix: str) -> bool:
+    """Only the tensors the loader consumes: mapped MLA / indexer submodules and their fp8 scales."""
+    sub = key[len(prefix) :].rsplit(".", 1)[0]
+    return sub in _HF_TO_MLA
+
+
+def _read_safetensors_subset(f, keys) -> dict:
+    """Read `keys` from an open (seekable) safetensors file object using the header's byte offsets."""
+    import json
+    import struct
+
+    (header_len,) = struct.unpack("<Q", f.read(8))
+    header = json.loads(f.read(header_len))
+    base = 8 + header_len  # data_offsets are relative to the end of the header
+    out = {}
+    for k in keys:
+        meta = header[k]
+        dtype = _SAFETENSORS_DTYPES.get(meta["dtype"])
+        if dtype is None:
+            raise ValueError(f"{k}: unsupported safetensors dtype {meta['dtype']} for an attention extract")
+        begin, end = meta["data_offsets"]
+        f.seek(base + begin)
+        raw = bytearray(f.read(end - begin))
+        out[k] = torch.frombuffer(raw, dtype=dtype).reshape(meta["shape"]).clone()
+    return out
+
+
+def extract_layer_attention(repo: str, layer: int, token: str = None, local_files_only: bool = False, fs=None):
+    """Fetch ONLY ``layer``'s attention (MLA + indexer) tensors from ``repo`` into one small local safetensors file.
+
+    Range-reads each tensor's bytes from the remote shards (safetensors headers carry byte offsets), so a
+    multi-TB checkpoint whose shards are tens of GB each (Kimi-K3.1: 96 shards) costs only the layer's
+    attention bytes (~0.5 GB for a K3.1 DSA layer). Cached under the HF cache, per checkpoint revision;
+    returns the local path. ``fs`` overrides the remote filesystem (tests).
+    """
+    import json
+    import os
+    import uuid
+    from pathlib import Path
+
+    from huggingface_hub import HfFileSystem, hf_hub_download
+    from safetensors.torch import save_file
+
+    # The (small) index pins the revision; with local_files_only it must already be cached too.
+    index = hf_hub_download(repo, _INDEX_FILE, token=token, local_files_only=local_files_only)
+    revision = Path(index).parent.name  # .../snapshots/<revision>/model.safetensors.index.json
+    out = _layer_cache_path(repo, revision, layer)
+    if out.exists():
+        return str(out)
+    if local_files_only:
+        from huggingface_hub.errors import LocalEntryNotFoundError
+
+        raise LocalEntryNotFoundError(f"no cached layer-{layer} attention extract for {repo}@{revision} at {out}")
+
+    weight_map = json.load(open(index))["weight_map"]
+    by_shard = {}
+    for k, shard in weight_map.items():
+        prefix = next((p for p in _attention_prefixes(layer) if k.startswith(p)), None)
+        if prefix is not None and _wanted_attention_key(k, prefix):
+            by_shard.setdefault(shard, []).append(k)
+    found = {k for keys in by_shard.values() for k in keys}
+    if not any(k.endswith("self_attn.q_a_proj.weight") for k in found):
+        raise ValueError(f"layer {layer} of {repo} has no MLA attention tensors (a non-MLA layer, e.g. KDA?)")
+
+    fs = fs or HfFileSystem(token=token)
+    tensors = {}
+    logger.info(f"Range-reading {len(found)} layer-{layer} attention tensors of {repo} from {len(by_shard)} shard(s)")
+    for shard, keys in sorted(by_shard.items()):
+        # Pinned to the index's revision, so a repo update mid-extract cannot mix revisions under one cache key.
+        # Buffered random access (block_size=0 would stream and could not seek).
+        with fs.open(f"{repo}@{revision}/{shard}" if isinstance(fs, HfFileSystem) else shard, "rb") as f:
+            tensors.update(_read_safetensors_subset(f, keys))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    # A unique temp file per writer + atomic replace: concurrent extractors never expose a partial file and
+    # never rename each other's temp away.
+    # O_EXCL on a unique name (no shared state); mode 0o666 lets the kernel apply the umask, so a shared HF cache
+    # stays readable by other users (mkstemp would create 0600) without touching the process-wide umask.
+    tmp = str(out.parent / f".{out.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+    try:
+        try:
+            publish_mode = os.fstat(fd).st_mode & 0o777  # umask/ACL-derived; the process umask is untouched
+        finally:
+            os.close(fd)
+        save_file(tensors, tmp)
+        os.chmod(tmp, publish_mode)  # save_file re-creates the file 0600; restore the shareable mode
+        os.replace(tmp, out)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    logger.info(f"Saved {len(tensors)} layer-{layer} attention tensors to {out}")
+    return str(out)
+
+
+def resolve_layer_shards(
+    layer: int = 0,
+    repo: str = DEFAULT_REPO,
+    token: str = None,
+    local_files_only: bool = False,
+    extract_only: bool = False,
+):
     """
     Return local path(s) to the safetensors shard(s) that hold ``layer``'s attention
     (MLA + indexer) weights. Missing files are downloaded just-in-time, in full, via
     ``hf_hub_download`` (cached, atomic) — a warning is emitted first since the shards
     are multi-GB. With ``local_files_only=True`` only cached files are used and
-    ``LocalEntryNotFoundError`` is raised if a shard is absent.
+    ``LocalEntryNotFoundError`` is raised if a shard is absent. ``extract_only=True`` fetches just the
+    layer's attention tensors instead (``extract_layer_attention``), for checkpoints whose shards are too
+    large to download whole.
     """
     import json
+
+    if extract_only:
+        return [extract_layer_attention(repo, layer, token=token, local_files_only=local_files_only)]
 
     from huggingface_hub import hf_hub_download, try_to_load_from_cache
 
     index = hf_hub_download(repo, _INDEX_FILE, token=token, local_files_only=local_files_only)
     weight_map = json.load(open(index))["weight_map"]
-    prefix = f"model.layers.{layer}.self_attn."
-    shards = sorted({weight_map[k] for k in weight_map if k.startswith(prefix)})
+    prefixes = _attention_prefixes(layer)
+    shards = sorted({weight_map[k] for k in weight_map if k.startswith(prefixes)})
     if not shards:
         raise ValueError(f"No attention tensors for layer {layer} in {repo} index.")
 

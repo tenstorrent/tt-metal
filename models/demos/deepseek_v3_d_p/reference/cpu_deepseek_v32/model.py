@@ -76,6 +76,14 @@ class ModelArgs:
     # Indexer RoPE convention: DeepSeek-V3.2 = non-interleaved (rotate_half);
     # GLM-5.3 = interleaved. (MLA RoPE is always interleaved.)
     index_rope_interleave: bool = False
+    # Indexer rope width. None -> qk_rope_head_dim (DS-V3.2 / GLM, 64); 0 -> NoPE indexer (Kimi-K3.1).
+    index_rope_dim: Optional[int] = None
+    # Kimi-K3 MLA deltas; both off for DS-V3.2 / GLM.
+    # NoPE: q_pe / k_pe are never rotated (the 64 columns still exist and are still cached) and the
+    # softmax scale is plain qk_head_dim**-0.5, with no YaRN mscale.
+    mla_use_nope: bool = False
+    # Output gate: sigmoid(g_proj(x)) multiplies the per-head attention output before wo.
+    mla_use_output_gate: bool = False
 
     @property
     def qk_head_dim(self) -> int:
@@ -169,7 +177,7 @@ class IndexerCPU(nn.Module):
         self.dim = args.dim
         self.n_heads = args.index_n_heads
         self.head_dim = args.index_head_dim
-        self.rope_head_dim = args.qk_rope_head_dim
+        self.rope_head_dim = args.qk_rope_head_dim if args.index_rope_dim is None else args.index_rope_dim
         self.index_topk = args.index_topk
         self.rope_interleave = args.index_rope_interleave  # GLM: True; DS: False
         self.q_lora_rank = args.q_lora_rank
@@ -231,23 +239,22 @@ class IndexerCPU(nn.Module):
         q = self.wq_b(qr)  # [B, L, n_heads * head_dim]
         q = q.view(bsz, seqlen, self.n_heads, self.head_dim)  # [B, L, H, D]
 
-        # Split RoPE and non-RoPE parts
-        q_pe, q_nope = torch.split(q, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
-
-        # Apply RoPE (DS: non-interleaved / GLM: interleaved — ModelArgs.index_rope_interleave)
-        q_pe = apply_rotary_emb(q_pe, freqs_cis, interleaved=self.rope_interleave)
-
-        # Concatenate back
-        q = torch.cat([q_pe, q_nope], dim=-1)  # [B, L, H, D]
-
         # Key projection
         k = self.wk(x)  # [B, L, D]
         k = self.k_norm(k)  # [B, L, D]
 
-        # Split and apply RoPE to key
-        k_pe, k_nope = torch.split(k, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
-        k_pe = apply_rotary_emb(k_pe.unsqueeze(2), freqs_cis, interleaved=self.rope_interleave).squeeze(2)
-        k = torch.cat([k_pe, k_nope], dim=-1)  # [B, L, D]
+        if self.rope_head_dim > 0:
+            # Split RoPE and non-RoPE parts
+            q_pe, q_nope = torch.split(q, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
+            # Apply RoPE (DS: non-interleaved / GLM: interleaved — ModelArgs.index_rope_interleave)
+            q_pe = apply_rotary_emb(q_pe, freqs_cis, interleaved=self.rope_interleave)
+            q = torch.cat([q_pe, q_nope], dim=-1)  # [B, L, H, D]
+
+            # Split and apply RoPE to key
+            k_pe, k_nope = torch.split(k, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
+            k_pe = apply_rotary_emb(k_pe.unsqueeze(2), freqs_cis, interleaved=self.rope_interleave).squeeze(2)
+            k = torch.cat([k_pe, k_nope], dim=-1)  # [B, L, D]
+        # else: NoPE indexer (index_rope_dim == 0, Kimi-K3.1) -- q/k are scored unrotated.
 
         if self.use_fp8_path:
             # Hadamard transform
@@ -349,10 +356,15 @@ class MLACPU(nn.Module):
         self.kv_norm = RMSNorm(self.kv_lora_rank)
         self.wkv_b = Linear(self.kv_lora_rank, self.n_heads * (self.qk_nope_head_dim + self.v_head_dim))
         self.wo = Linear(self.n_heads * self.v_head_dim, self.dim)
+        self.use_nope = args.mla_use_nope
+        self.use_output_gate = args.mla_use_output_gate
+        # Kimi-K3 output gate: full-rank hidden -> H * v, sigmoid, applied before wo.
+        self.g_proj = Linear(self.dim, self.n_heads * self.v_head_dim) if self.use_output_gate else None
 
-        # softmax scale with YaRN mscale correction (max_seq_len > original_seq_len).
+        # softmax scale with YaRN mscale correction (max_seq_len > original_seq_len). NoPE has no
+        # rotary embedding at all, hence no YaRN and no mscale.
         self.softmax_scale = self.qk_head_dim**-0.5
-        if args.max_seq_len > args.original_seq_len:
+        if not self.use_nope and args.max_seq_len > args.original_seq_len:
             mscale = 0.1 * args.mscale * math.log(args.rope_factor) + 1.0
             self.softmax_scale = self.softmax_scale * mscale * mscale
 
@@ -412,13 +424,14 @@ class MLACPU(nn.Module):
         q = self.wq_b(qr)  # [B, S, H * qk_head_dim]
         q = q.view(bsz, seqlen, self.n_heads, self.qk_head_dim)
         q_nope, q_pe = torch.split(q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
-        # MLA RoPE is interleaved (the indexer's is not).
-        q_pe = apply_rotary_emb(q_pe, freqs_cis, interleaved=True)
-
         kv = self.wkv_a(x)  # [B, S, kv_lora_rank + rope]
         kv, k_pe = torch.split(kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
         kv = self.kv_norm(kv)  # latent kv [B, S, 512]
-        k_pe = apply_rotary_emb(k_pe.unsqueeze(2), freqs_cis, interleaved=True)  # [B, S, 1, 64]
+        k_pe = k_pe.unsqueeze(2)  # [B, S, 1, 64]
+        if not self.use_nope:
+            # MLA RoPE is interleaved (the indexer's is not). NoPE leaves q_pe / k_pe unrotated.
+            q_pe = apply_rotary_emb(q_pe, freqs_cis, interleaved=True)
+            k_pe = apply_rotary_emb(k_pe, freqs_cis, interleaved=True)
 
         # fp8 KV-cache precision simulation (consistent on every write path).
         if self.simulate_fp8:
@@ -473,6 +486,11 @@ class MLACPU(nn.Module):
             # Absorb the value half of wkv_b at the very end (-> width v).
             x_attn = torch.einsum("bshc,hdc->bshd", x_attn, wkv_b[:, -self.v_head_dim :])  # [B, S, H, v]
 
-        out = self.wo(x_attn.flatten(2))  # [B, S, dim]
+        x_attn = x_attn.flatten(2)  # [B, S, H * v], head-major
+        if self.use_output_gate:
+            # Kimi-K3 output gate, per head before wo. Cannot move before the wkv_b value absorb:
+            # g * (attn @ W_b2) != (g * attn) @ W_b2.
+            x_attn = x_attn * self.g_proj(x).sigmoid()
+        out = self.wo(x_attn)  # [B, S, dim]
         logger.info(f"MLA output shape: {tuple(out.shape)}")
         return out
