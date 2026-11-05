@@ -83,8 +83,9 @@ ALWI void gelu_tanh_tile_init_pack() {
  *
  * fast = false evaluates it in FP32 with the accurate tanh on Wormhole and with FP32 DEST. On Blackhole with BF16
  * DEST (is_fp32_dest_acc_en false) it runs a fitted kernel instead (ckernel_sfpu_gelu_tanh_bf16.h): the same
- * function as x / (1 + exp(-2u)), below 1 BF16 ULP of the exact value wherever that is a normal BF16 value
- * (max 0.51 ULP). Wormhole and Blackhole give different bits there.
+ * function as x / (1 + exp(-2u)), below 1 BF16 ULP of the exact value (max 0.51 ULP) except at inputs at or
+ * below -10.0625 and results within 2^-12 above the smallest normal, where it may give 0. Wormhole and Blackhole
+ * give different bits there.
  *
  * fast = true, for BF16 outputs, computes the same function as x / (1 + exp(-2u)) with a polynomial exp and
  * two Newton steps on the reciprocal: within 1 BF16 ULP of the FP32 tanh form where |GELU| >= 1e-3, and

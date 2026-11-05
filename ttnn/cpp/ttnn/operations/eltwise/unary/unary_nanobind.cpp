@@ -923,7 +923,7 @@ void bind_gelu(nb::module_& mod) {
             variant (ttnn.GeluVariant, optional): Select GELU implementation. Defaults to `GeluVariant.Accurate`.
                 - `Accurate`: piecewise CDF (BF16) or FP32 erf — matches torch.nn.functional.gelu (exact).
                 - `FastLut`: 6-segment piecewise-linear LUT — fastest, ~1% absolute error.
-                - `Tanh`: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))), as torch.nn.functional.gelu(approximate="tanh"); FP32 on Wormhole and with FP32 DEST accumulation, a fitted BF16 kernel (below 1 BF16 ULP) on Blackhole with BF16 DEST, so Wormhole and Blackhole give different bits there.
+                - `Tanh`: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))), as torch.nn.functional.gelu(approximate="tanh"); FP32 on Wormhole and with FP32 DEST accumulation, a fitted BF16 kernel (below 1 BF16 ULP, except 0 at inputs at or below -10.0625 and results within 2^-12 above the smallest normal) on Blackhole with BF16 DEST, so Wormhole and Blackhole give different bits there.
             fast_and_approximate_mode (bool, optional): Legacy alias. `True` maps to `variant=FastLut`, `False` to `variant=Accurate`. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
@@ -957,7 +957,9 @@ void bind_gelu(nb::module_& mod) {
                 "Tanh",
                 GeluVariant::TANH,
                 "Hendrycks tanh approximation, as torch.nn.functional.gelu(approximate=\"tanh\"). FP32 on Wormhole and "
-                "with FP32 DEST accumulation; a fitted BF16 kernel (below 1 BF16 ULP) on Blackhole with BF16 DEST, so "
+                "with FP32 DEST accumulation; a fitted BF16 kernel (below 1 BF16 ULP, except 0 at inputs at or below "
+                "-10.0625 "
+                "and results within 2^-12 above the smallest normal) on Blackhole with BF16 DEST, so "
                 "the two boards give different bits there.");
 
     ttnn::bind_function<"gelu">(
@@ -1016,7 +1018,8 @@ void bind_geglu(nb::module_& mod) {
                   -3 returns exactly 0.
                 - `Tanh`: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))), evaluated in FP32 on Wormhole and with FP32
                   DEST accumulation. On Blackhole with BF16 DEST a fitted BF16 kernel computes it, below 1 BF16 ULP
-                  of the exact value, so Wormhole and Blackhole give different bits there.
+                  of the exact value except 0 at inputs at or below -10.0625 and results within 2^-12 above the
+                  smallest normal, so Wormhole and Blackhole give different bits there.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1961,10 +1964,10 @@ void py_module(nb::module_& mod) {
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_composite_2param<"var_hw", &ttnn::var_hw>(
         mod,
-        R"doc(Computes the variance across the height (H) and width (W) dimensions for each batch and channel. The variance is calculated as :math:`\mathrm{Var}[X] = E[(X - \mu)^2]` where :math:`\mu` is the mean over H and W dimensions. Output shape: [N, C, 1, 1].)doc");
+        R"doc(Computes the population variance over the last two dimensions, height (H) and width (W), for every index of the leading dimensions. The variance is calculated as :math:`\mathrm{Var}[X] = E[(X - \mu)^2]` where :math:`\mu` is the mean over H and W. Both means divide by the logical H x W, so tile padding is not counted. The output keeps the input's rank with H and W reduced to 1, e.g. [N, C, 1, 1] for an [N, C, H, W] input and [1, 1] for an [H, W] input.)doc");
     bind_unary_composite_2param<"std_hw", &ttnn::std_hw>(
         mod,
-        R"doc(Computes the standard deviation across the height (H) and width (W) dimensions for each batch and channel. The standard deviation is calculated as :math:`\sigma = \sqrt{\mathrm{Var}[X]}` where the variance is computed over H and W dimensions. Output shape: [N, C, 1, 1].)doc");
+        R"doc(Computes the population standard deviation over the last two dimensions, height (H) and width (W), for every index of the leading dimensions. The standard deviation is calculated as :math:`\sigma = \sqrt{\mathrm{Var}[X]}` where the variance is computed over H and W, dividing by the logical H x W, so tile padding is not counted. The output keeps the input's rank with H and W reduced to 1, e.g. [N, C, 1, 1] for an [N, C, H, W] input and [1, 1] for an [H, W] input.)doc");
     bind_unary_composite_2param<"normalize_hw", &ttnn::normalize_hw>(
         mod,
         R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc",
