@@ -449,7 +449,11 @@ def pick_backend_with_quality(
     # a wrong-architecture skeleton, which is the failure that rule exists to
     # prevent (the real fix there is writing that demo). A TEMPLATE backend with
     # no folder can only produce nothing, so prefer any backend that does exist.
-    if is_generic(backend):
+    # The same holds for a backend that decomposes the model by walking it: scaffold writes its demo
+    # folder from the walk when the folder is absent (`collect_demo_folder_changes`), so a missing
+    # folder is where it will write, not a dead route. Skipping it routed a freshly onboarded
+    # architecture onto an unrelated template and ended the run as cold-start.
+    if prefers_module_tree(backend):
         return backend, quality
     alt, alt_quality = _pick_backend_impl(
         category=category, model_type=model_type, pipeline_tag=pipeline_tag, require_demo=True

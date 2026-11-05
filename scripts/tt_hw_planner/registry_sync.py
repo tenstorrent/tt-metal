@@ -243,19 +243,21 @@ def prunable_backends() -> List[tuple]:
     """``[(name, demo_path)]`` for registry entries that cannot ever work.
 
     A ``template`` backend copies its demo folder; if that folder is absent the
-    entry can only produce an empty bring-up, so it is dead weight. ``generic``
-    backends are excluded -- they have no source folder by design.
+    entry can only produce an empty bring-up, so it is dead weight. ``generic`` and
+    module-tree backends are excluded -- scaffold writes their folder, so they have no
+    source folder by design.
 
     Reported rather than deleted: an entry may be deliberately registered ahead of
     the demo landing (a test can pin one, as XTTS-v2 does), and only a human knows
     which. Routing already skips these, so a stale entry is inert either way."""
     import os
 
-    from .family_backends import all_backends, is_generic
+    from .family_backends import all_backends, prefers_module_tree
 
     out: List[tuple] = []
     for b in all_backends():
-        if is_generic(b):
+        # Generic and module-tree backends write their demo folder rather than copy it.
+        if prefers_module_tree(b):
             continue
         path = _extract_path(getattr(b, "demo_path", None))
         if path and not os.path.exists(path):

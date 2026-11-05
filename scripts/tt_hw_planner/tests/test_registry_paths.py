@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 
-from scripts.tt_hw_planner.family_backends import all_backends, demo_path_exists
+from scripts.tt_hw_planner.family_backends import all_backends, demo_path_exists, prefers_module_tree
 from scripts.tt_hw_planner.registry_sync import prunable_backends
 
 # Entries deliberately registered before their demo has landed. Every name here is
@@ -62,7 +62,7 @@ def test_generic_backends_are_exempt_from_the_folder_rule() -> None:
 
 def test_every_routable_backend_either_exists_or_is_generic() -> None:
     for b in all_backends():
-        if (b.routing_mode or "") == "generic" or b.name in KNOWN_ABSENT_DEMOS:
+        if prefers_module_tree(b) or b.name in KNOWN_ABSENT_DEMOS:
             continue
         assert demo_path_exists(b), f"{b.name}: demo_path {b.demo_path!r} does not exist"
 
@@ -76,3 +76,28 @@ def test_demo_path_exists_reads_the_filesystem_not_the_string() -> None:
         name = "synthetic"
 
     assert demo_path_exists(_B()) is False
+
+
+def test_a_module_tree_backend_whose_folder_is_not_written_yet_is_still_routed(monkeypatch) -> None:
+    """A freshly onboarded architecture walks its model and scaffold writes its folder, so the
+    folder being absent must not reroute it onto an unrelated template (which ended the run as
+    cold-start) nor mark it prunable."""
+    from scripts.tt_hw_planner import family_backends as fb
+
+    probe = fb.all_backends()[0]
+    fresh = type(probe)(
+        **{
+            **{f: getattr(probe, f) for f in probe.__dataclass_fields__},
+            "name": "synthetic-onboarded",
+            "category": "SYNTHETIC",
+            "routing_mode": "template",
+            "use_module_tree": True,
+            "demo_path": os.path.join("definitely", "not", "written", "yet"),
+            "model_type_keys": ["synthetic_arch"],
+            "pipeline_tags": [],
+        }
+    )
+    monkeypatch.setattr(fb, "_BACKENDS", [*fb._BACKENDS, fresh])
+    picked, _ = fb.pick_backend_with_quality(category="SYNTHETIC", model_type="synthetic_arch")
+    assert picked is fresh
+    assert fresh.name not in {name for name, _ in prunable_backends()}
