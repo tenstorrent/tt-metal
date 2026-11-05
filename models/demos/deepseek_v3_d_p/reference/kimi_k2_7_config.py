@@ -31,6 +31,9 @@ class KimiK27Config:
     # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced only). Every
     # config that does not name it runs the routed expert then combine as separate ops.
     ROUTED_EXPERT_COMBINE_OVERLAP = True
+    # Inside that overlap, run every expert as unified_routed_expert_moe's planned waves, released to combine in the
+    # order they finish, instead of the hybrid threshold split. Every config that does not name it keeps the split.
+    ROUTED_EXPERT_COMBINE_OVERLAP_UNIFIED_WAVES = True
     # Opts this model into TtMoe's fabric2d transport (dispatch_fabric2d / combine_fabric2d) wherever the mesh can
     # run it (Blackhole, axis 0 wired into a ring). Every other config runs dispatch and combine.
     # Off while the GLM 5.3 SC4 prefill regression is bisected: it runs dispatch and combine again. Set True to

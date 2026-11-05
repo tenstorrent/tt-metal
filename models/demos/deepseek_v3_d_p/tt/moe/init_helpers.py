@@ -59,6 +59,13 @@ def routed_expert_combine_overlap_arg(model_cfg):
     return None if routed_expert_combine_overlap_enabled(model_cfg) else False
 
 
+def routed_expert_combine_overlap_unified_waves(model_cfg) -> bool:
+    """TtMoe's overlap_routed_expert_unified_waves for ``model_cfg``: whether the overlap runs the routed expert as
+    unified waves rather than the hybrid split. Off unless the config names
+    ROUTED_EXPERT_COMBINE_OVERLAP_UNIFIED_WAVES = True (Kimi K2.7 and GLM 5.3 today)."""
+    return getattr(model_cfg, "ROUTED_EXPERT_COMBINE_OVERLAP_UNIFIED_WAVES", False)
+
+
 def moe_fabric2d_transport_enabled(model_cfg) -> bool:
     """Whether the model opts into TtMoe's fabric2d transport (dispatch_fabric2d / combine_fabric2d). Off unless the
     config names MOE_FABRIC2D_TRANSPORT = True (Kimi K2.7 and GLM 5.3 today)."""

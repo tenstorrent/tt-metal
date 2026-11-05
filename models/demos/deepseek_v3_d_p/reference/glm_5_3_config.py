@@ -33,6 +33,9 @@ class GLM53Config:
     # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced only). Every
     # config that does not name it runs the routed expert then combine as separate ops.
     ROUTED_EXPERT_COMBINE_OVERLAP = True
+    # Inside that overlap, run every expert as unified_routed_expert_moe's planned waves, released to combine in the
+    # order they finish, instead of the hybrid threshold split. Every config that does not name it keeps the split.
+    ROUTED_EXPERT_COMBINE_OVERLAP_UNIFIED_WAVES = True
     # Whether to use the fabric2d-optimized dispatch and combine ops in MoE
     # True = use them if the mesh allows, False = use older ops
     MOE_FABRIC2D_TRANSPORT = True

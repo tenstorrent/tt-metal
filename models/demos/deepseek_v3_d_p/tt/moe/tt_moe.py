@@ -249,7 +249,7 @@ class TtMoe(LightweightModule):
         combine_fwd_reduction: Optional[int] = None,
         dispatch_fwd_vc_pages: Optional[int] = None,
         gate_bias_centered: bool = False,
-        overlap_routed_expert_unified_waves: bool = True,
+        overlap_routed_expert_unified_waves: bool = False,
     ):
         """
         Initialize TtMoe module.
@@ -372,7 +372,8 @@ class TtMoe(LightweightModule):
             overlap_routed_expert_unified_waves: when the routed expert overlaps combine, run every expert on
                 unified_routed_expert_moe's wave-planned program (hybrid_routed_expert_moe unified_waves) instead of the
                 threshold split: the experts above routed_expert_hybrid_token_threshold go first, and combine takes each
-                expert as it finishes. On by default; False keeps the hybrid split inside the overlap.
+                expert as it finishes. Off by default, keeping the hybrid split inside the overlap; a model opts in
+                with ROUTED_EXPERT_COMBINE_OVERLAP_UNIFIED_WAVES (routed_expert_combine_overlap_unified_waves).
         """
         super().__init__()
         self.mesh_device = mesh_device

@@ -20,6 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     extract_mesh_config,
     moe_transport_arg,
     routed_expert_combine_overlap_arg,
+    routed_expert_combine_overlap_unified_waves,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, gate_bias_centered
@@ -520,6 +521,8 @@ class TtPrefillBlock(LightweightModule):
             # Only configs that opt in (Kimi K2.7, GLM 5.3, Mistral Small 4) overlap the routed expert with
             # combine_fabric2d.
             overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(model_cfg),
+            # Kimi K2.7 and GLM 5.3 run that overlap as unified waves; the others keep the hybrid split.
+            overlap_routed_expert_unified_waves=routed_expert_combine_overlap_unified_waves(model_cfg),
             # Likewise only configs that opt in (Kimi K2.7, GLM 5.3) run dispatch_fabric2d / combine_fabric2d.
             moe_transport=moe_transport_arg(model_cfg),
             combine_fwd_reduction=getattr(model_cfg, "COMBINE_FWD_REDUCTION", None),
