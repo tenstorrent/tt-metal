@@ -12,7 +12,7 @@
 //
 // With the device profiler on (TT_METAL_DEVICE_PROFILER=1, which makes the JIT build define
 // PROFILE_KERNEL), each kernel records <KERNEL>_KERNEL_START and <KERNEL>_KERNEL_END once per
-// invocation, and just before the end the total cycles it spent blocked on its circular buffers
+// invocation, and just before the end the total cycles it spent blocked on its dataflow buffers
 // (<KERNEL>_WAIT_CYCLES) and doing its real work (<KERNEL>_TRANSFER_CYCLES or
 // COMPUTE_COMPUTE_CYCLES). Everything else is "overhead", which parser.py derives on the host.
 //

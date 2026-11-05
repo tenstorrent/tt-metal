@@ -4,26 +4,27 @@
 
 #include "api/debug/dprint.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     ////////// RUNTIME ARGS & VARS //////////
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t tile_offset = get_arg_val<uint32_t>(1);
+    uint32_t tile_offset = get_arg(args::tile_offset);
 
     ////////// BUFFER SETUP //////////
-    constexpr uint32_t cb_id_out0 = tt::CB::c_out0;  // CBIndex::c_16
-    constexpr auto dram_writer_args = TensorAccessorArgs<0>();
-    const auto dram_writer = TensorAccessor(dram_writer_args, dst_addr);
+    DataflowBuffer dfb_out0(dfb::out0);
+    // The output tensor is bound to this kernel by name in the host code.
+    const auto dram_writer = TensorAccessor(tensor::dst);
 
-    cb_wait_front(cb_id_out0, 1);
-    uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+    dfb_out0.wait_front(1);
+    uint32_t l1_read_addr = dfb_out0.get_read_ptr();
 
     ////////// CALCULATE OFFSET AND WRITE TO DRAM //////////
     uint32_t dram_tile_id = tile_offset;
     noc_async_write_page(dram_tile_id, dram_writer, l1_read_addr);
     noc_async_write_barrier();
 
-    cb_pop_front(cb_id_out0, 1);
+    dfb_out0.pop_front(1);
 
     DPRINT(
         "Core ({},{}): Outbound kernel has written tile to DRAM index {}.\n",

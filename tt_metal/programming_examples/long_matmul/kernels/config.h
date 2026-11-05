@@ -18,7 +18,7 @@ constexpr uint32_t kBlockM = BLOCK_M;
 constexpr uint32_t kBlockN = BLOCK_N;
 constexpr uint32_t kBlockTiles = kBlockM * kBlockN;
 
-// Every circular buffer holds this many slices or blocks, so the producer can fill the next one
+// Every dataflow buffer holds this many slices or blocks, so the producer can fill the next one
 // while the consumer works on the current one. Must match kCbBufferDepth in long_matmul.cpp.
 constexpr uint32_t kCbBufferDepth = 2;
 
@@ -32,7 +32,7 @@ constexpr bool kLegacyMode = false;
 
 // In updated mode an idle reader still reads its first kCbBufferDepth slices of A and of B, and
 // idle compute still computes and packs its first kCbBufferDepth output blocks, so every slot of
-// their circular buffers holds real data that the idle loop then recycles. (An idle writer has no
+// their dataflow buffers holds real data that the idle loop then recycles. (An idle writer has no
 // such path: it never writes.) In legacy mode idle kernels never do real work, and the buffers
 // keep whatever L1 held before.
 constexpr uint32_t kRealStepsWhenIdle = kLegacyMode ? 0 : kCbBufferDepth;

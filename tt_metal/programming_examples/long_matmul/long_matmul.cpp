@@ -24,7 +24,9 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/work_split.hpp>
 
@@ -129,9 +131,9 @@ static std::vector<GridCandidate> build_test_grids(uint32_t max_x, uint32_t max_
 }
 
 // Power-experiment configuration. Each kernel can be switched to "idle" mode, in which it still
-// performs its full circular-buffer handshake (so the other kernels never deadlock) but skips its
+// performs its full dataflow-buffer handshake (so the other kernels never deadlock) but skips its
 // real NoC transfer / FPU work. This isolates which part of the pipeline actually costs power,
-// versus merely keeping a core alive and cycling its CBs.
+// versus merely keeping a core alive and cycling its DFBs.
 struct PowerExperimentConfig {
     bool disable_reader = false;
     bool disable_compute = false;
@@ -168,7 +170,7 @@ static uint32_t env_u32(const char* name, uint32_t fallback) {
     return (v == nullptr || *v == '\0') ? fallback : parse_u32(name, v);
 }
 
-// Every circular buffer holds this many slices or blocks, so the producer can fill the next one
+// Every dataflow buffer holds this many slices or blocks, so the producer can fill the next one
 // while the consumer works on the current one. Must match kCbBufferDepth in kernels/config.h,
 // which idle kernels in updated mode rely on to fill every slot with real data.
 static constexpr uint32_t kCbBufferDepth = 2;
@@ -473,33 +475,50 @@ int main(int argc, char* argv[]) {
                 work_per_core1 = wpc1; work_per_core2 = wpc2;
             }
 
-            Program program{};
             constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
 
-            distributed::DeviceLocalBufferConfig dram_config{
-                .page_size = single_tile_size,
-                .buffer_type = BufferType::DRAM};
-
-            // Sizes in 64 bits: a 32-bit product would wrap for operands of 4 GiB or more.
-            const DeviceAddr tile_bytes = single_tile_size;
-            auto src0_dram = distributed::MeshBuffer::create(
-                distributed::ReplicatedBufferConfig{.size = tile_bytes * Mt * Kt}, dram_config, mesh_device.get());
-
-            auto src1_dram = distributed::MeshBuffer::create(
-                distributed::ReplicatedBufferConfig{.size = tile_bytes * Kt * Nt}, dram_config, mesh_device.get());
-
-            auto dst_dram = distributed::MeshBuffer::create(
-                distributed::ReplicatedBufferConfig{.size = tile_bytes * Mt * Nt}, dram_config, mesh_device.get());
-
-            // Each CB holds kCbBufferDepth slices of A or B, or output blocks.
-            auto make_cb_config = [&](CBIndex cb_index, uint32_t tiles_per_slot) {
-                return CircularBufferConfig(
-                           kCbBufferDepth * tiles_per_slot * single_tile_size, {{cb_index, tt::DataFormat::Float16_b}})
-                    .set_page_size(cb_index, single_tile_size);
+            // Row-major DRAM tensors with one tile's worth of elements per row: each row is one page,
+            // so the page size is one tile.
+            auto make_dram_tensor_spec = [](uint32_t num_tiles) {
+                return TensorSpec(
+                    Shape({num_tiles, TILE_HEIGHT * TILE_WIDTH}),
+                    TensorLayout(
+                        DataType::BFLOAT16,
+                        PageConfig(Layout::ROW_MAJOR),
+                        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
             };
-            tt_metal::CreateCircularBuffer(program, all_cores, make_cb_config(CBIndex::c_0, block_m));
-            tt_metal::CreateCircularBuffer(program, all_cores, make_cb_config(CBIndex::c_1, block_n));
-            tt_metal::CreateCircularBuffer(program, all_cores, make_cb_config(CBIndex::c_16, block_m * block_n));
+
+            // Shapes count tiles; the tensor computes its byte size in 64 bits, so operands of 4 GiB or
+            // more do not wrap.
+            const TensorSpec src0_spec = make_dram_tensor_spec(Mt * Kt);
+            const TensorSpec src1_spec = make_dram_tensor_spec(Kt * Nt);
+            const TensorSpec dst_spec = make_dram_tensor_spec(Mt * Nt);
+            MeshTensor src0_dram = MeshTensor::allocate_on_device(*mesh_device, src0_spec);
+
+            MeshTensor src1_dram = MeshTensor::allocate_on_device(*mesh_device, src1_spec);
+
+            MeshTensor dst_dram = MeshTensor::allocate_on_device(*mesh_device, dst_spec);
+
+            // Names identify the kernels, the dataflow buffers and the tensor parameters within the program spec.
+            const experimental::KernelSpecName reader_kernel{"reader"};
+            const experimental::KernelSpecName writer_kernel{"writer"};
+            const experimental::KernelSpecName compute_kernel{"compute"};
+            const experimental::DFBSpecName in0_dfb{"in0"};
+            const experimental::DFBSpecName in1_dfb{"in1"};
+            const experimental::DFBSpecName out_dfb{"out"};
+            const experimental::TensorParamName src0_param{"src0"};
+            const experimental::TensorParamName src1_param{"src1"};
+            const experimental::TensorParamName dst_param{"dst"};
+
+            // Each DFB holds kCbBufferDepth slices of A or B, or output blocks.
+            auto make_dfb_spec = [&](const experimental::DFBSpecName& dfb_name, uint32_t tiles_per_slot) {
+                return experimental::DataflowBufferSpec{
+                    .unique_id = dfb_name,
+                    .entry_size = single_tile_size,
+                    .num_entries = kCbBufferDepth * tiles_per_slot,
+                    .data_format_metadata = tt::DataFormat::Float16_b,
+                };
+            };
 
             // Passed as JIT defines so the kernels compile only the selected op and leave out an
             // idle writer's writes. An idle reader or idle compute keeps its code, because in
@@ -524,38 +543,94 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            std::vector<uint32_t> reader_ct_args;
-            TensorAccessorArgs(*src0_dram).append_to(reader_ct_args);
-            TensorAccessorArgs(*src1_dram).append_to(reader_ct_args);
+            using Defines = experimental::KernelSpec::CompilerOptions::Defines;
 
-            auto reader_id = tt_metal::CreateKernel(
-                program,
-                OVERRIDE_KERNEL_PREFIX "long_matmul/kernels/dataflow/reader.cpp",
-                all_cores,
-                DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_1,
-                    .noc = NOC::RISCV_1_default,
-                    .compile_args = reader_ct_args,
-                    .defines = reader_defines});
+            experimental::KernelSpec reader_spec{
+                .unique_id = reader_kernel,
+                .source = OVERRIDE_KERNEL_PREFIX "long_matmul/kernels/dataflow/reader.cpp",
+                .compiler_options = {.defines = Defines(reader_defines)},
+                .dfb_bindings = {experimental::ProducerOf(in0_dfb, "in0"), experimental::ProducerOf(in1_dfb, "in1")},
+                .tensor_bindings =
+                    {{.tensor_parameter_name = src0_param, .accessor_name = "a"},
+                     {.tensor_parameter_name = src1_param, .accessor_name = "b"}},
+                .runtime_arg_schema =
+                    {.runtime_arg_names =
+                         {"Kt",
+                          "Nt",
+                          "block_start_id",
+                          "num_output_blocks",
+                          "num_iterations",
+                          "blocks_per_row",
+                          "total_output_blocks"}},
+                .hw_config =
+                    experimental::DataMovementHardwareConfig{
+                        .config_1xx =
+                            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
+                    },
+            };
 
-            std::vector<uint32_t> writer_ct_args;
-            TensorAccessorArgs(*dst_dram).append_to(writer_ct_args);
+            experimental::KernelSpec writer_spec{
+                .unique_id = writer_kernel,
+                .source = OVERRIDE_KERNEL_PREFIX "long_matmul/kernels/dataflow/writer.cpp",
+                .compiler_options = {.defines = Defines(writer_defines)},
+                .dfb_bindings = {experimental::ConsumerOf(out_dfb, "out")},
+                .tensor_bindings = {{.tensor_parameter_name = dst_param, .accessor_name = "c"}},
+                .runtime_arg_schema =
+                    {.runtime_arg_names =
+                         {"num_output_blocks",
+                          "block_start_id",
+                          "num_iterations",
+                          "write_repeats",
+                          "blocks_per_row",
+                          "Nt",
+                          "total_output_blocks"}},
+                .hw_config =
+                    experimental::DataMovementHardwareConfig{
+                        .config_1xx =
+                            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+                    },
+            };
 
-            auto writer_id = tt_metal::CreateKernel(
-                program,
-                OVERRIDE_KERNEL_PREFIX "long_matmul/kernels/dataflow/writer.cpp",
-                all_cores,
-                DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_0,
-                    .noc = NOC::RISCV_0_default,
-                    .compile_args = writer_ct_args,
-                    .defines = writer_defines});
+            experimental::KernelSpec compute_spec{
+                .unique_id = compute_kernel,
+                .source = OVERRIDE_KERNEL_PREFIX "long_matmul/kernels/compute/compute.cpp",
+                .compiler_options = {.defines = Defines(compute_defines), .opt_level = KernelBuildOptLevel::O3},
+                .dfb_bindings =
+                    {experimental::ConsumerOf(in0_dfb, "in0"),
+                     experimental::ConsumerOf(in1_dfb, "in1"),
+                     experimental::ProducerOf(out_dfb, "out")},
+                .runtime_arg_schema = {.runtime_arg_names = {"num_output_blocks", "Kt", "num_iterations"}},
+                .hw_config =
+                    experimental::ComputeHardwareConfig{
+                        .fpu_math_fidelity = MathFidelity::HiFi4,
+                        .sfpu_precision_mode = Precision::Precise,
+                    },
+            };
 
-            auto compute_id = tt_metal::CreateKernel(
-                program,
-                OVERRIDE_KERNEL_PREFIX "long_matmul/kernels/compute/compute.cpp",
-                all_cores,
-                ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .defines = compute_defines});
+            // The kernels compile here, when the program is made from its spec.
+            experimental::ProgramSpec program_spec{
+                .name = "long_matmul",
+                .kernels = {reader_spec, writer_spec, compute_spec},
+                .dataflow_buffers =
+                    {make_dfb_spec(in0_dfb, block_m),
+                     make_dfb_spec(in1_dfb, block_n),
+                     make_dfb_spec(out_dfb, block_m * block_n)},
+                .tensor_parameters =
+                    {{.unique_id = src0_param, .spec = src0_spec},
+                     {.unique_id = src1_param, .spec = src1_spec},
+                     {.unique_id = dst_param, .spec = dst_spec}},
+                .work_units =
+                    {{.name = "long_matmul",
+                      .kernels = {reader_kernel, writer_kernel, compute_kernel},
+                      .target_nodes = all_cores}},
+            };
+            Program program = experimental::MakeProgramFromSpec(*mesh_device, program_spec);
+
+            experimental::KernelRunArgs reader_run_args{.kernel = reader_kernel};
+            experimental::KernelRunArgs writer_run_args{.kernel = writer_kernel};
+            experimental::KernelRunArgs compute_run_args{.kernel = compute_kernel};
 
             uint32_t work_offset = 0;
             uint32_t core_linear_idx = 0;
@@ -576,28 +651,32 @@ int main(int argc, char* argv[]) {
                                 ? static_cast<uint32_t>(uint64_t{core_linear_idx} * total_output_blocks / num_cores)
                                 : work_offset;
 
-                        tt_metal::SetRuntimeArgs(
-                            program,
-                            reader_id,
+                        experimental::AddRuntimeArgsForNode(
+                            reader_run_args.runtime_arg_values,
                             core,
-                            {src0_dram->address(),
-                             src1_dram->address(),
-                             Kt,
-                             Nt,
-                             effective_offset,
-                             work_per_core,
-                             num_iterations,
-                             blocks_per_row,
-                             total_output_blocks});
+                            {{"Kt", Kt},
+                             {"Nt", Nt},
+                             {"block_start_id", effective_offset},
+                             {"num_output_blocks", work_per_core},
+                             {"num_iterations", num_iterations},
+                             {"blocks_per_row", blocks_per_row},
+                             {"total_output_blocks", total_output_blocks}});
 
-                        tt_metal::SetRuntimeArgs(
-                            program, writer_id, core,
-                            {dst_dram->address(), work_per_core, effective_offset, num_iterations,
-                             write_repeats, blocks_per_row, Nt, total_output_blocks});
+                        experimental::AddRuntimeArgsForNode(
+                            writer_run_args.runtime_arg_values,
+                            core,
+                            {{"num_output_blocks", work_per_core},
+                             {"block_start_id", effective_offset},
+                             {"num_iterations", num_iterations},
+                             {"write_repeats", write_repeats},
+                             {"blocks_per_row", blocks_per_row},
+                             {"Nt", Nt},
+                             {"total_output_blocks", total_output_blocks}});
 
-                        tt_metal::SetRuntimeArgs(
-                            program, compute_id, core,
-                            {work_per_core, Kt, num_iterations});
+                        experimental::AddRuntimeArgsForNode(
+                            compute_run_args.runtime_arg_values,
+                            core,
+                            {{"num_output_blocks", work_per_core}, {"Kt", Kt}, {"num_iterations", num_iterations}});
 
                         if (fixed_blocks_per_core == 0) {
                             work_offset += work_per_core;
@@ -607,8 +686,20 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            distributed::EnqueueWriteMeshBuffer(cq, src0_dram, src0_vec, /*blocking=*/false);
-            distributed::EnqueueWriteMeshBuffer(cq, src1_dram, src1_vec, /*blocking=*/false);
+            experimental::ProgramRunArgs run_args{
+                .kernel_run_args = {reader_run_args, writer_run_args, compute_run_args},
+                .tensor_args =
+                    {{src0_param, experimental::TensorArgument{src0_dram}},
+                     {src1_param, experimental::TensorArgument{src1_dram}},
+                     {dst_param, experimental::TensorArgument{dst_dram}}},
+            };
+            experimental::SetProgramRunArgs(program, run_args);
+
+            // The host tensors must stay alive until the uploads complete.
+            HostTensor src0_host = HostTensor::from_vector(src0_vec, src0_spec);
+            HostTensor src1_host = HostTensor::from_vector(src1_vec, src1_spec);
+            cq.enqueue_write_tensor(src0_host, src0_dram);
+            cq.enqueue_write_tensor(src1_host, src1_dram);
             if (!legacy_mode) {
                 // Updated mode waits for the uploads here, so none of them lands in the measured
                 // interval. Legacy mode, like the published measurements, does not wait.
@@ -640,11 +731,10 @@ int main(int argc, char* argv[]) {
             distributed::MeshCoordinateRange device_range(mesh_device->shape());
             workload.add_program(device_range, std::move(program));
 
-            // With a cold kernel cache the kernels are JIT-compiled inside EnqueueMeshWorkload
-            // (0.75 s for the first grid on n150), before any of the program's commands reach the
-            // device. Updated mode starts the clock after it returns, so the compile stays out of
-            // the measured interval; legacy mode starts it before, as the published measurements
-            // did.
+            // With a cold kernel cache the kernels are JIT-compiled in MakeProgramFromSpec
+            // (0.75 s for the first grid on n150), before the clock starts in either mode. Updated
+            // mode starts the clock after EnqueueMeshWorkload returns; legacy mode starts it before,
+            // as the published measurements did.
             auto sys_start = std::chrono::system_clock::now();
             auto t_start = std::chrono::high_resolution_clock::now();
 
@@ -655,11 +745,12 @@ int main(int argc, char* argv[]) {
                 t_start = std::chrono::high_resolution_clock::now();
             }
 
-            std::vector<bfloat16> result_vec(Mt * Nt * TILE_HW);
-            distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram, /*blocking=*/true);
+            HostTensor result_host = cq.enqueue_read_tensor(dst_dram, /*blocking=*/true);
 
             auto t_end = std::chrono::high_resolution_clock::now();
             auto sys_end = std::chrono::system_clock::now();
+
+            std::vector<bfloat16> result_vec = result_host.to_vector<bfloat16>();
 
             // Cheap correctness signal. The workload never verifies its output, so with the
             // blocked path this is the only way to notice a tile-indexing mistake: the inputs

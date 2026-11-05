@@ -5,21 +5,22 @@
 #include <stdint.h>
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 // export TT_METAL_DPRINT_CORES='(0,0)-(0,3)' in order to see DPRINT messages
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t stick_size = get_arg_val<uint32_t>(1);
-    const uint32_t padded_offset_bytes = get_arg_val<uint32_t>(2);
-    const uint32_t start_id = get_arg_val<uint32_t>(3);
+    const uint32_t stick_size = get_arg(args::stick_size);
+    const uint32_t padded_offset_bytes = get_arg(args::padded_offset_bytes);
+    const uint32_t start_id = get_arg(args::start_id);
 
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr auto s0_args = TensorAccessorArgs<1>();
-    const auto s0 = TensorAccessor(s0_args, src_addr);
+    DataflowBuffer dfb_in0(dfb::in0);
+    // The source tensor is bound to this kernel by name in the host code.
+    const auto s0 = TensorAccessor(tensor::src);
     uint32_t stick_id = start_id;
-    cb_reserve_back(cb_id_in0, stick_size);
-    uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+    dfb_in0.reserve_back(stick_size);
+    uint32_t l1_write_addr = dfb_in0.get_write_ptr();
 
     DPRINT("Core ({},{}): ", get_absolute_logical_x(), get_absolute_logical_y());
     constexpr uint32_t element_per_stick = 2;  // Each stick contains two bfloat16 values
@@ -36,8 +37,8 @@ void kernel_main() {
         l1_write_addr += padded_offset_bytes;
     }
     DPRINT("\n");
-    cb_push_back(cb_id_in0, stick_size);
+    dfb_in0.push_back(stick_size);
 
-    // At this point we have read all the sticks into the circular buffer. Computation and proceed knowing
-    // that it has data in circular buffer and in a specific format.
+    // At this point we have read all the sticks into the dataflow buffer. Computation and proceed knowing
+    // that it has data in dataflow buffer and in a specific format.
 }

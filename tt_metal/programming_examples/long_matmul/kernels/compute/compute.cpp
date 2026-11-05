@@ -13,6 +13,8 @@
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/debug/dprint.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "../profile_markers.h"
 #include "../config.h"
 
@@ -22,17 +24,17 @@ using std::uint32_t;
 // Exactly one LONG_MATMUL_OP_* is defined; matmul is the default when the host passes none.
 //
 // The point of the switch is a controlled comparison: the reader and writer kernels are
-// untouched, so every op streams byte-identical DRAM traffic through the same circular buffers,
+// untouched, so every op streams byte-identical DRAM traffic through the same dataflow buffers,
 // and the only thing that varies is what the math unit does with each tile pair. Every variant
-// issues kBlockTiles math operations per step of the shared dimension and pops both input CBs.
+// issues kBlockTiles math operations per step of the shared dimension and pops both input DFBs.
 // The rate is the same only while the reader sets the pace, which it does for the shapes tt-ember
 // uses (on n150 at 1024x2048x2048, 1x1 and 2x4, matmul/add/exp have the same reader time and
 // per-iteration time). A compute-bound shape would let the cheaper ops (add runs at LoFi, the
-// unary ones are a copy plus one SFPU op) drain the CBs faster, and then the energy difference
+// unary ones are a copy plus one SFPU op) drain the DFBs faster, and then the energy difference
 // is no longer only the instruction.
 //
-// The binary ops (matmul, add) consume a tile from each CB. The unary SFPU ops have no second
-// operand, so they copy from cb_in0 into the destination register and operate in place; cb_in1
+// The binary ops (matmul, add) consume a tile from each DFB. The unary SFPU ops have no second
+// operand, so they copy from dfb::in0 into the destination register and operate in place; dfb::in1
 // is still waited on and popped, so the reader's traffic and the pipeline's back-pressure are
 // unchanged. Unary variants overwrite the destination register each step rather than
 // accumulating into it, which matmul does -- that is a real difference, but it is a property of
@@ -55,27 +57,27 @@ constexpr bool kComputeIdle = false;
 #endif
 
 void kernel_main() {
-    uint32_t num_output_blocks = get_arg_val<uint32_t>(0);
-    uint32_t Kt = get_arg_val<uint32_t>(1);
-    uint32_t num_iterations = get_arg_val<uint32_t>(2);
+    uint32_t num_output_blocks = get_arg(args::num_output_blocks);
+    uint32_t Kt = get_arg(args::Kt);
+    uint32_t num_iterations = get_arg(args::num_iterations);
 
-    constexpr tt::CBIndex cb_in0 = tt::CBIndex::c_0;
-    constexpr tt::CBIndex cb_in1 = tt::CBIndex::c_1;
-    constexpr tt::CBIndex cb_out = tt::CBIndex::c_16;
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
+    DataflowBuffer dfb_out(dfb::out);
 
     // Each op has its own hardware configuration. compute_kernel_hw_startup configures the
-    // unpacker/packer for the CBs involved; the op-specific *_init then sets up the math unit.
+    // unpacker/packer for the DFBs involved; the op-specific *_init then sets up the math unit.
     // Without the startup call pack_tile() produces nothing, the writer blocks forever and the
     // device hangs, so it must stay in every branch.
 #if defined(LONG_MATMUL_OP_MATMUL)
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out);
-    matmul_init(cb_in0, cb_in1);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::in0, dfb::in1, dfb::out);
+    matmul_init(dfb::in0, dfb::in1);
 #elif defined(LONG_MATMUL_OP_ADD)
-    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out);
-    add_init(cb_in0, cb_in1);
+    compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
+    add_init(dfb::in0, dfb::in1);
 #else
-    compute_kernel_hw_startup(cb_in0, cb_out);
-    copy_init(cb_in0);
+    compute_kernel_hw_startup(dfb::in0, dfb::out);
+    copy_init(dfb::in0);
 #if defined(LONG_MATMUL_OP_SILU)
     silu_tile_init();
 #elif defined(LONG_MATMUL_OP_EXP)
@@ -90,9 +92,9 @@ void kernel_main() {
 #endif
 
     // All three TRISCs run this code, so every marker below is recorded three times per core, once
-    // per TRISC. Each TRISC times only the calls it actually executes: wait is cb_wait_front on
+    // per TRISC. Each TRISC times only the calls it actually executes: wait is wait_front on
     // TRISC0 (unpack), tile_regs_acquire on TRISC1 (math), and tile_regs_wait plus
-    // cb_reserve_back(cb_out) on TRISC2 (pack); compute is the math loop on TRISC1 and pack_tile on
+    // dfb_out.reserve_back on TRISC2 (pack); compute is the math loop on TRISC1 and pack_tile on
     // TRISC2. TRISC0's compute time is the unpacker blocking inside matmul_tiles / copy_tile.
     namespace prof = long_matmul_profile;
     DeviceTimestampedData("COMPUTE_KERNEL_START", /*data=*/0);
@@ -124,14 +126,14 @@ void kernel_main() {
                 // The reader delivers a column slice of A (kBlockM tiles) and a row slice of B
                 // (kBlockN tiles) for this step of the shared dimension.
                 uint32_t t = prof::now();
-                cb_wait_front(cb_in0, kBlockM);
-                cb_wait_front(cb_in1, kBlockN);
+                dfb_in0.wait_front(kBlockM);
+                dfb_in1.wait_front(kBlockN);
                 prof::add_since(wait_cycles, t);
                 // For matmul and add every A tile is combined with every B tile in the slice, so
                 // the two slices are reused kBlockN and kBlockM times respectively before being
                 // popped; this is where the DRAM traffic reduction comes from. The unary ops only
                 // read A and pop B unread.
-                // LONG_MATMUL_DISABLE_COMPUTE skips the real math while keeping every CB and
+                // LONG_MATMUL_DISABLE_COMPUTE skips the real math while keeping every DFB and
                 // tile-register handshake, so the reader and writer move the same data and
                 // neither deadlocks. Without the math, unpack no longer feeds math, so the reader
                 // and writer pace each other a little differently (case 2 vs case 1 on n150: a
@@ -142,13 +144,13 @@ void kernel_main() {
                         for (uint32_t n = 0; n < kBlockN; n++) {
                             const uint32_t idst = m * kBlockN + n;
 #if defined(LONG_MATMUL_OP_MATMUL)
-                        matmul_tiles(cb_in0, cb_in1, m, n, idst);
+                            matmul_tiles(dfb::in0, dfb::in1, m, n, idst);
 #elif defined(LONG_MATMUL_OP_ADD)
-                        add_tiles(cb_in0, cb_in1, m, n, idst);
+                            add_tiles(dfb::in0, dfb::in1, m, n, idst);
 #else
                         // No second operand: bring a tile into the destination register and
                         // transform it in place.
-                        copy_tile(cb_in0, m, idst);
+                            copy_tile(dfb::in0, m, idst);
 #if defined(LONG_MATMUL_OP_SILU)
                         silu_tile(idst);
 #elif defined(LONG_MATMUL_OP_EXP)
@@ -165,27 +167,27 @@ void kernel_main() {
                     }
                 prof::add_since(compute_cycles, t);
                 }
-                cb_pop_front(cb_in0, kBlockM);
-                cb_pop_front(cb_in1, kBlockN);
+                dfb_in0.pop_front(kBlockM);
+                dfb_in1.pop_front(kBlockN);
             }
             // TRISC1 commits the results, transferring ownership of the tile registers to the packer (TRISC2)
             tile_regs_commit();
             // TRISC2 waits for the FPU (TRISC1) to be ready, then reserves space in the output
-            // circular buffer for the whole block. Both are where the writer's back-pressure shows.
+            // dataflow buffer for the whole block. Both are where the writer's back-pressure shows.
             t_block = prof::now();
             tile_regs_wait();
-            cb_reserve_back(cb_out, kBlockTiles);
+            dfb_out.reserve_back(kBlockTiles);
             prof::add_since(wait_cycles, t_block);
             if (compute) {
                 const uint32_t t = prof::now();
                 for (uint32_t i = 0; i < kBlockTiles; i++) {
-                    pack_tile(i, cb_out);
+                    pack_tile(i, dfb::out);
                 }
                 prof::add_since(compute_cycles, t);
             }
             // TRISC2 marks the result tiles as used by pushing them to the back of the output
-            // circular buffer (writer kernel can read them now)
-            cb_push_back(cb_out, kBlockTiles);
+            // dataflow buffer (writer kernel can read them now)
+            dfb_out.push_back(kBlockTiles);
             // TRISC2 releases the tile registers, allowing TRISC1 to acquire them again
             tile_regs_release();
         }
