@@ -83,7 +83,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          for run in $(gh run list -w pr-gate.yaml -b main -e push -s success -L 5 --json databaseId --jq '.[].databaseId'); do
+          for run in $(gh run list -w pr-gate.yaml -b nstojictt/qsr-ttsim-durations -e workflow_dispatch -L 5 --json databaseId --jq '.[].databaseId'); do
             gh run download "$run" -p 'test-durations-*' -D durations && break
           done
           python3 - << 'PY'
