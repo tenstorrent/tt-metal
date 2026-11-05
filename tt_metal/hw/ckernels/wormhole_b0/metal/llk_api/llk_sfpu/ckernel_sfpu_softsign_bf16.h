@@ -35,17 +35,17 @@ inline void calculate_softsign_bf16_body() {
     ckernel::sfpu::bf16::softsign::calculate_abs_denominator<ckernel::sfpu::SoftsignBf16Config, ITERATIONS>();
 }
 // The constants stock's init also sets hold the kernel's own values for its call only.
-// Each call records replay slots 0-19, overwriting what an init recorded there (matmul and reduce
-// record from replay_buf_offset = 16).
+// Each call records replay slots 0-13, below replay_buf_offset = 16, where matmul and
+// reduce record.
 template <int ITERATIONS = 32>
-inline void calculate_softsign_bf16() {
+__attribute__((noinline)) inline void calculate_softsign_bf16() {
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x000080ffu);
     calculate_softsign_bf16_body<ITERATIONS>();
-    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x3ea57ebbu);
+    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0xbd257ebbu);
 }
 inline void init_softsign_bf16() {
     ckernel::sfpu::bf16::softsign::init_abs_denominator<ckernel::sfpu::SoftsignBf16Config>();
-    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x3ea57ebbu);
+    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0xbd257ebbu);
 }
 
 }  // namespace ckernel::sfpu

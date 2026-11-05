@@ -227,7 +227,7 @@ BENCHMARK_DEFINE_F(H2DLegFixture, Bandwidth)(benchmark::State& state) {
     init_counters(state);
 
     for ([[maybe_unused]] auto _ : state) {
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_);
         auto receiver = CreateKernel(
             program,
             TT_DIRECT_KERNEL_DIR "/kernels/test_kernel_signal.cpp",
