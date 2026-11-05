@@ -1,39 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <stdint.h>
-#include <cstddef>
-#include <unordered_set>
+// DEPRECATED-FORWARDING-HEADER: <tt-metalium/circular_buffer.hpp> moved to <tt-metalium/workload/dataflow/circular_buffer.hpp>.
+// This header only forwards to the new location; it is deprecated, with a warning and a removal date, in a follow-up change.
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-
-// Intentional header leakage for convenience
-
-namespace tt::tt_metal {
-
-using CBHandle = uintptr_t;
-
-class CircularBufferImpl;
-// Note: this class shares the lifetime of it's associated program.
-class CircularBuffer {
-public:
-    explicit CircularBuffer(const CircularBufferImpl* impl);
-    CBHandle id() const;
-    const CoreRangeSet& core_ranges() const;
-    std::size_t size() const;
-    bool globally_allocated() const;
-    const std::unordered_set<uint8_t>& buffer_indices() const;
-
-    uint32_t page_size(uint32_t buffer_index) const;
-    uint32_t num_pages(uint32_t buffer_index) const;
-    DataFormat data_format(uint32_t buffer_index) const;
-
-private:
-    const CircularBufferImpl* impl_;
-};
-
-}  // namespace tt::tt_metal
+#include <tt-metalium/workload/dataflow/circular_buffer.hpp>  // IWYU pragma: export

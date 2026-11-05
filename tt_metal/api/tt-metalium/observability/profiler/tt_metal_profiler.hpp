@@ -1,0 +1,69 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+
+#include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/profiler_types.hpp>
+
+namespace tt::tt_metal {
+class IDevice;
+
+namespace detail {
+
+/**
+ * Initialize device profiling data buffers
+ *
+ * Return value: void
+ *
+ * | Argument      | Description                                       | Type            | Valid Range               |
+ * Required |
+ * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
+ * | device        | The device holding the program being profiled.    | IDevice*        |                           |
+ * True     |
+ * */
+[[deprecated(
+    "InitDeviceProfiler is an internal API: the profiler is initialized when the device is opened, so remove the "
+    "call. It will be removed after 2026-11-14.")]]
+void InitDeviceProfiler(IDevice* device);
+
+/**
+ * Sync TT devices with host
+ *
+ * Return value: void
+ *
+ * | Argument      | Description                                       | Type            | Valid Range               |
+ * Required |
+ * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
+ * */
+[[deprecated(
+    "ProfilerSync is an internal API: profiler sync runs automatically when devices are opened and closed, so remove "
+    "the call. It will be removed after 2026-11-14.")]]
+void ProfilerSync(ProfilerSyncState state);
+
+// clang-format off
+/**
+ * Read device side profiler data for the device
+ *
+ * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
+ *
+ * Return value: void
+ *
+ * | Argument      | Description                                           | Type                     | Valid Range               | Required |
+ * |---------------|-------------------------------------------------------|--------------------------|---------------------------|----------|
+ * | device        | The device to be profiled                             | IDevice*                 |                           | Yes      |
+ * | state         | The state to use for this profiler read               | ProfilerReadState        |                           | No       |
+ * | metadata      | Metadata to include in the profiler results           | ProfilerOptionalMetadata |                           | No       |
+ * */
+// clang-format on
+[[deprecated("Use ReadMeshDeviceProfilerResults instead. This API will be removed after 2026-11-14.")]]
+void ReadDeviceProfilerResults(
+    IDevice* device,
+    ProfilerReadState = ProfilerReadState::NORMAL,
+    const std::optional<ProfilerOptionalMetadata>& metadata = {});
+
+}  // namespace detail
+}  // namespace tt::tt_metal

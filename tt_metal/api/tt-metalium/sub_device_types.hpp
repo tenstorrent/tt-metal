@@ -1,16 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <cstdint>
+// DEPRECATED-FORWARDING-HEADER: <tt-metalium/sub_device_types.hpp> moved to <tt-metalium/mesh/sub_device_types.hpp>.
+// This header only forwards to the new location; it is deprecated, with a warning and a removal date, in a follow-up change.
 
-#include <tt_stl/strong_type.hpp>
-
-namespace tt::tt_metal {
-
-using SubDeviceId = ttsl::StrongType<uint8_t, struct SubDeviceIdTag>;
-using SubDeviceManagerId = ttsl::StrongType<uint64_t, struct SubDeviceManagerIdTag>;
-
-}  // namespace tt::tt_metal
+#include <tt-metalium/mesh/sub_device_types.hpp>  // IWYU pragma: export

@@ -1,12 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-namespace tt::tt_metal {
+// DEPRECATED-FORWARDING-HEADER: <tt-metalium/profiler_types.hpp> moved to <tt-metalium/observability/profiler/profiler_types.hpp>.
+// This header only forwards to the new location; it is deprecated, with a warning and a removal date, in a follow-up change.
 
-enum class ProfilerReadState { NORMAL, ONLY_DISPATCH_CORES, LAST_FD_READ };
-enum class ProfilerSyncState { INIT, CLOSE_DEVICE };
-
-}  // namespace tt::tt_metal
+#include <tt-metalium/observability/profiler/profiler_types.hpp>  // IWYU pragma: export

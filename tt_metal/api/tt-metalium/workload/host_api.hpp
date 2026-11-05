@@ -1,0 +1,525 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <initializer_list>
+#include <memory>
+#include <optional>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/profiler_types.hpp>
+#include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device_types.hpp>
+
+/** @file */
+
+/** \mainpage tt-metal Internal C++ Documentation
+ *
+ * Welcome. Please navigate using the Files menu. All APIs are documented
+ * under the files listed in the Files menu.
+ *
+ * If you want to contribute to the documentation and are looking for a good
+ * resource for generating Markdown tables, refer to
+ * https://www.tablesgenerator.com/markdown_tables
+ * */
+
+namespace tt::tt_metal {
+
+struct TraceDescriptor;
+
+class Program;
+class IDevice;
+class Trace;
+class Buffer;
+class GlobalSemaphore;
+class CoreRange;
+class CoreRangeSet;
+class MeshTensor;
+
+// ==================================================
+//                  HOST API: Device management
+// ==================================================
+
+// clang-format off
+/**
+ * Sets the root directory for TT Metal meta data files like kernel sources.
+ *
+ * Return value: void
+ *
+ * | Argument  | Description                                 | Type                | Valid range | Required |
+ * |-----------|---------------------------------------------|---------------------|-------------|----------|
+ * | root_dir  | Path to the root directory                  | const std::string & |             | No       |
+ */
+// clang-format on
+void SetRootDir(const std::string& root_dir);
+
+/**
+ * Returns number of Tenstorrent devices that can be targeted
+ *
+ * Return value: size_t
+ */
+size_t GetNumAvailableDevices();
+
+/**
+ * Returns whether Tenstorrent devices are in a Galaxy cluster.
+ *
+ * @deprecated This API always returns false and will be removed.
+ *
+ * Return value: bool
+ */
+[[deprecated("This API always returns false and will be removed after 2026-11-13.")]]
+bool IsGalaxyCluster();
+
+/**
+ * Returns number of Tenstorrent devices that are connected to host via PCIe and can be targeted
+ *
+ * Return value: size_t
+ */
+size_t GetNumPCIeDevices();
+
+ChipId GetPCIeDeviceID(ChipId device_id);
+
+// ==================================================
+//                  HOST API: program & kernels
+// ==================================================
+
+// clang-format off
+/**
+ * Creates a Program object which is the main container that bundles kernels, circular buffers, and/or semaphores for execution on device
+ *
+ * The Program is bound to the default MetalContext, so this overload cannot be used with a MeshDevice that belongs to a
+ * different MetalEnv. Prefer the overload that takes a MeshDevice.
+ *
+ * Return value: Program
+ */
+// clang-format on
+Program CreateProgram();
+
+// clang-format off
+/**
+ * Creates a Program object which is the main container that bundles kernels, circular buffers, and/or semaphores for execution on device
+ *
+ * The Program is bound to the MetalEnv that owns `mesh_device`. All later operations on the Program (CreateKernel,
+ * CreateCircularBuffer, ...) resolve their hardware description, runtime options, and build environment from that env.
+ * The Program can only be compiled and enqueued on devices from the same MetalEnv.
+ *
+ * Return value: Program
+ *
+ * | Argument    | Description                                                | Type                       | Valid Range | Required |
+ * |-------------|------------------------------------------------------------|----------------------------|-------------|----------|
+ * | mesh_device | The mesh device whose MetalEnv the Program will be bound to | distributed::MeshDevice &  |             | Yes      |
+ */
+// clang-format on
+Program CreateProgram(distributed::MeshDevice& mesh_device);
+
+// clang-format off
+/**
+ * Creates a data movement or compute kernel with the given config and adds it to the program.
+ *
+ * Return value: Kernel ID (uintptr_t)
+ *
+ * | Argument     | Description                                                                                                                                 | Type                                                                     | Valid Range | Required |
+ * |--------------|---------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------|-------------|----------|
+ * | program      | The program to which this kernel will be added to                                                                                           | Program &                                                                |             | Yes      |
+ * | file_name    | Path to kernel src. Assumed to be absolute/relative to CWD, but will fall back to relative path from TT_METAL_HOME/TT_METAL_KERNEL_PATH.    | const std::string &                                                      |             | Yes      |
+ * | core_spec    | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on        | const std::variant<CoreCoord, CoreRange, CoreRangeSet> &                 |             | Yes      |
+ * | config       | Config for data movement or compute kernel                                                                                                  | const std::variant<DataMovementConfig, ComputeConfig> &                  |             | Yes      |
+ */
+// clang-format on
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig>& config);
+
+// clang-format off
+/**
+ * Creates a data movement or compute kernel from source code with the given config and adds it to the program.
+ *
+ * Return value: Kernel ID (uintptr_t)
+ *
+ * | Argument           | Description                                                                                                                          | Type                                                                    | Valid Range | Required |
+ * |--------------------|--------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|-------------|----------|
+ * | program            | The program to which this kernel will be added to                                                                                    | Program &                                                               |             | Yes      |
+ * | kernel_src_code    | Source code for kernel                                                                                                               | const std::string &                                                     |             | Yes      |
+ * | core_spec          | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on | const std::variant<CoreCoord, CoreRange, CoreRangeSet> &                |             | Yes      |
+ * | config             | Config for data movement or compute kernel                                                                                           | const std::variant<DataMovementConfig, ComputeConfig> &                 |             | Yes      |
+ */
+// clang-format on
+KernelHandle CreateKernelFromString(
+    Program& program,
+    const std::string& kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig>& config);
+
+// clang-format off
+// ==================================================
+//                  HOST API: buffers
+// ==================================================
+/**
+ * Creates a Circular Buffer (CB) in L1 memory of all cores within core ranges (inclusive) and adds it to the program. The number of CBs is architecture-specific.
+ * Circular buffers hold data and have an associated config which indicates usage of the address space.
+ * If the config is specified for multiple buffer indices, the circular buffer address space is shared and each buffer index can potentially have a unique view of the shared space.
+ *
+ * Circular buffers can be dynamically allocated or program-local allocated. If the config is created with an L1 buffer or sets a globally allocated address it is dynamic and shares the same address space as the L1 buffer.
+ * Otherwise, the circular buffer address space is managed by the program. Address space for program-local circular buffers does not persist across programs.
+ *
+ * Return value: Circular Buffer ID (uintptr_t)
+ *
+ * | Argument  | Description                                                                                                                                       | Type                                                     | Valid Range | Required |
+ * |-----------|---------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|-------------|----------|
+ * | program   | The program to which buffer will be added to                                                                                                      | Program &                                                |             | Yes      |
+ * | core_spec | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate where the circular buffer will be configured | const std::variant<CoreCoord, CoreRange, CoreRangeSet> & |             | Yes      |
+ * | config    | Config for circular buffer                                                                                                                        | const CircularBufferConfig &                             |             | Yes      |
+ */
+// clang-format on
+CBHandle CreateCircularBuffer(
+    Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const CircularBufferConfig& config);
+
+// clang-format off
+/**
+ * Gets a reference to the config owned by circular buffer at the given circular buffer ID.
+ *
+ * Return value: const CircularBufferConfig &
+ *
+ * | Argument  | Description                                                    | Type                         | Valid Range | Required |
+ * |-----------|----------------------------------------------------------------|------------------------------|-------------|----------|
+ * | program   | The program containing the circular buffer                     | Program &                    |             | Yes      |
+ * | cb_handle | ID of the circular buffer, returned by `CreateCircularBuffers` | CBHandle (uintptr_t) |       |    Yes      |
+*/
+// clang-format on
+const CircularBufferConfig& GetCircularBufferConfig(Program& program, CBHandle cb_handle);
+
+// clang-format off
+/**
+ * Update the total size of the circular buffer at the given circular buffer handle. Updating a program-local circular buffer requires all circular buffers in the program to be reallocated.
+ * If it is required to update the address and total size of a dynamic circular buffer, use `UpdateDynamicCircularBufferAddressAndTotalSize`.
+ *
+ * Return value: void
+ *
+ * | Argument   | Description                                                    | Type                         | Valid Range | Required |
+ * |------------|----------------------------------------------------------------|------------------------------|-------------|----------|
+ * | program    | The program containing the circular buffer                     | Program &                    |             | Yes      |
+ * | cb_handle  | ID of the circular buffer, returned by `CreateCircularBuffers` | CBHandle (uintptr_t) |       | Yes         |          |
+ * | total_size | New size of the circular buffer in bytes                       | uint32_t                     |             | Yes      |
+*/
+// clang-format on
+void UpdateCircularBufferTotalSize(Program& program, CBHandle cb_handle, uint32_t total_size);
+
+// clang-format off
+/**
+ * Update the page size at specified `buffer_index` of the circular buffer at the given circular buffer handle.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                                                                                | Type                         | Valid Range                   | Required |
+ * |--------------|----------------------------------------------------------------------------------------------------------------------------|------------------------------|-------------------------------|----------|
+ * | program      | The program containing the circular buffer                                                                                 | Program &                    |                               | Yes      |
+ * | cb_handle    | ID of the circular buffer, returned by `CreateCircularBuffers`                                                             | CBHandle (uintptr_t) |                               | Yes      |
+ * | buffer_index | Circular buffer index to update page size. `cb_handle` must be a circular buffer that had previously programmed this index | uint8_t                      | 0 to NUM_CIRCULAR_BUFFERS - 1 | Yes      |
+ * | page_size    | Updated page size in bytes                                                                                                 | uint32_t                     |                               | Yes      |
+*/
+// clang-format on
+void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t buffer_index, uint32_t page_size);
+
+// clang-format off
+/**
+ * Update the address of a dynamic circular buffer. Dynamic circular buffers share the same address space as L1 buffers.
+ * If it is required to update the address and total size of a dynamic circular buffer, use `UpdateDynamicCircularBufferAddressAndTotalSize`.
+ *
+ * Return value: void
+ *
+ * | Argument  | Description                                                                              | Type                         | Valid Range | Required |
+ * |-----------|------------------------------------------------------------------------------------------|------------------------------|-------------|----------|
+ * | program   | The program containing the circular buffer                                               | Program &                    |             | Yes      |
+ * | cb_handle | ID of the circular buffer, returned by `CreateCircularBuffers`                           | CBHandle (uintptr_t) |       | Yes         |          |
+ * | buffer    | Dynamically allocated L1 buffer that shares address space of circular buffer `cb_handle` | const Buffer &               | L1 buffer   | Yes      |
+ */
+// clang-format on
+void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer);
+void UpdateDynamicCircularBufferAddress(
+    Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t address_offset);
+void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const MeshTensor& tensor);
+
+// clang-format off
+/**
+ * Update the address and total size of a dynamic circular buffer. Dynamic circular buffers share the same address space as L1 buffers.
+ *
+ * Return value: void
+ *
+ * | Argument   | Description                                                                              | Type                         | Valid Range | Required |
+ * |------------|------------------------------------------------------------------------------------------|------------------------------|-------------|----------|
+ * | program    | The program containing the circular buffer                                               | Program &                    |             | Yes      |
+ * | cb_handle  | ID of the circular buffer, returned by `CreateCircularBuffers`                           | CBHandle (uintptr_t) |       | Yes         |          |
+ * | buffer     | Dynamically allocated L1 buffer that shares address space of circular buffer `cb_handle` | const Buffer &               | L1 buffer   | Yes      |
+ * | total_size | New size of the circular buffer in bytes                                                 | uint32_t                     |             | Yes      |
+ */
+// clang-format on
+void UpdateDynamicCircularBufferAddressAndTotalSize(
+    Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
+
+void UpdateDynamicCircularBufferAddressAndTotalSize(
+    Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size);
+
+// clang-format off
+/**
+ * Initializes semaphore on all cores within core range (inclusive). Each core can have up to eight 4B semaphores aligned to L1_ALIGNMENT.
+ *
+ * Return value: Semaphore id (uint32_t). This can be used inside a kernel to extract the address using get_semaphore
+ *
+ * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
+ * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
+ * | program       | The program to which semaphore will be added to      | Program &                                                 |              | Yes      |
+ * | core_spec     | Range of the Tensix coordinates using the semaphore  | const std::variant<CoreRange,CoreRangeSet> &              |              | Yes      |
+ * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
+ */
+// clang-format on
+uint32_t CreateSemaphore(
+    Program& program, const std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t initial_value);
+
+// clang-format off
+/**
+ * Initializes a global semaphore on all cores within the specified CoreRangeSet.
+ * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
+ *
+ * Return value: GlobalSemaphore
+ *
+ * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
+ * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
+ * | device         | The mesh device to create the semaphore on             | distributed::MeshDevice&                                  |              | Yes      |
+ * | cores          | Range of the Tensix coordinates using the semaphore    | CoreRangeSet &&                                           |              | Yes      |
+ * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
+ * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
+ */
+// clang-format on
+GlobalSemaphore CreateGlobalSemaphore(
+    distributed::MeshDevice& device,
+    CoreRangeSet cores,
+    uint32_t initial_value,
+    BufferType buffer_type = BufferType::L1);
+
+// clang-format off
+/**
+*  Gives the specified program ownership of the buffer: the buffer will remain on device at least until the program is enqueued. This is required for asynchronous Command Queues.
+*
+*  Return value: void
+*
+*  | Argument | Description                                  | Type                           | Valid Range | Required |
+*  |----------|----------------------------------------------|--------------------------------|-------------|----------|
+*  | buffer   | The buffer that will be owned by the program | std::shared_ptr<Buffer> buffer |             | Yes      |
+*  | program  | The program getting ownership of the buffer  | Program &                      |             | Yes      |
+*/
+// clang-format on
+void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program);
+
+// clang-format off
+// ==================================================
+//           COMPILE & EXECUTE KENRNELS
+// ==================================================
+/**
+ * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
+ * The number of runtime args per core (unique and common runtime args count toward the same limit) is bounded by the
+ * available L1 kernel-config space for the target core type; max_runtime_args is a conservative portable floor.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
+ * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
+ * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
+ * | runtime_args | The runtime args to be written                                         | ttsl::Span<const uint32_t>                              |                                                                     | Yes      |
+ */
+// clang-format on
+void SetRuntimeArgs(
+    const Program& program,
+    KernelHandle kernel,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    ttsl::Span<const uint32_t> runtime_args);
+
+// clang-format off
+/**
+ * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
+ * The number of runtime args per core (unique and common runtime args count toward the same limit) is bounded by the
+ * available L1 kernel-config space for the target core type; max_runtime_args is a conservative portable floor.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
+ * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
+ * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
+ * | runtime_args | The runtime args to be written                                         | initializer_list<uint32_t>                       |                                                                     | Yes      |
+ */
+// clang-format on
+void SetRuntimeArgs(
+    const Program& program,
+    KernelHandle kernel,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    std::initializer_list<uint32_t> runtime_args);
+
+// clang-format off
+/**
+ * Set multiple runtime arguments of a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
+ * The number of runtime args per core (unique and common runtime args count toward the same limit) is bounded by the
+ * available L1 kernel-config space for the target core type; max_runtime_args is a conservative portable floor.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
+ * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                            | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                            | Yes      |
+ * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::vector<CoreCoord> &                         | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
+ * | runtime_args | The runtime args to be written                                         | const std::vector< vector<uint32_t> > &                | Outer vector size must be equal to size of core_spec vector                | Yes      |
+ */
+// clang-format on
+void SetRuntimeArgs(
+    const Program& program,
+    KernelHandle kernel,
+    const std::vector<CoreCoord>& core_spec,
+    const std::vector<std::vector<uint32_t>>& runtime_args);
+
+// clang-format off
+/**
+ * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
+ * The number of runtime args per core (unique and common runtime args count toward the same limit) is bounded by the
+ * available L1 kernel-config space for the target core type; max_runtime_args is a conservative portable floor.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
+ * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | ttsl::Span<const uint32_t>                              |                                                                     | Yes      |
+ */
+// clang-format on
+void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, ttsl::Span<const uint32_t> runtime_args);
+
+// clang-format off
+/**
+ * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
+ * The number of runtime args per core (unique and common runtime args count toward the same limit) is bounded by the
+ * available L1 kernel-config space for the target core type; max_runtime_args is a conservative portable floor.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
+ * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | std::initializer_list<uint32_t>                  |                                                                     | Yes      |
+ */
+// clang-format on
+void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, std::initializer_list<uint32_t> runtime_args);
+
+// clang-format off
+/**
+ * Get the runtime args for a kernel.
+ *
+ * Return value: uint32_t *
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
+ * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate | Yes      |
+ */
+// clang-format on
+RuntimeArgsData& GetRuntimeArgs(const Program& program, KernelHandle kernel_id, const CoreCoord& logical_core);
+
+// clang-format off
+/**
+ * Get the runtime args for a kernel.
+ *
+ * Return value: std::vector< std::vector< RuntimeArgsData > > &
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
+ */
+// clang-format on
+std::vector<std::vector<RuntimeArgsData>>& GetRuntimeArgs(const Program& program, KernelHandle kernel_id);
+
+// clang-format off
+/**
+ * Get the common runtime args for a kernel.
+ *
+ * Return value: RuntimeArgsData &
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
+ */
+// clang-format on
+RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id);
+
+// clang-format off
+/**
+ * Read device side profiler data for all devices in the mesh device
+ *
+ * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
+ *
+ * Return value: void
+ *
+ * | Argument      | Description                                           | Type                     | Valid Range               | Required |
+ * |---------------|-------------------------------------------------------|--------------------------|---------------------------|----------|
+ * | mesh_device   | The mesh device containing the devices to be profiled | MeshDevice&              |                           | Yes      |
+ * | state         | The state to use for this profiler read               | ProfilerReadState        |                           | No       |
+ * | metadata      | Metadata to include in the profiler results           | ProfilerOptionalMetadata |                           | No       |
+ * */
+// clang-format on
+void ReadMeshDeviceProfilerResults(
+    distributed::MeshDevice& mesh_device,
+    ProfilerReadState state = ProfilerReadState::NORMAL,
+    const std::optional<ProfilerOptionalMetadata>& metadata = {});
+
+// clang-format off
+/**
+ * Push the current command queue id to the stack.
+ * Return value: void
+ * | Argument     | Description                                                                       | Type                          | Valid Range                        | Required |
+ * |--------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | cq_id        | The command queue id to push.                                                     | uint8_t                       |                                    | Yes      |
+ */
+// clang-format on
+void PushCurrentCommandQueueIdForThread(uint8_t cq_id);
+
+// clang-format off
+/**
+ * Pop the current command queue id from the stack.
+ * Return value: uint8_t
+ */
+// clang-format on
+uint8_t PopCurrentCommandQueueIdForThread();
+
+// clang-format off
+/**
+ * Get the current command queue id.
+ * Return value: uint8_t
+ */
+// clang-format on
+uint8_t GetCurrentCommandQueueIdForThread();
+
+}  // namespace tt::tt_metal
