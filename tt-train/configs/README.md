@@ -57,10 +57,10 @@ Optimizer is configured inline under `training_config.optimizer`. See [Optimizer
 ### Precision Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `precision.master_dtype` | str | unset | Dtype trainable parameters (the master weights) are stored in: `"bfloat16"` or `"float32"`. `"float32"` gives fp32 master weights with fused `AdamW`; forward and backward still run in bf16. Not PyTorch FSDP2's `param_dtype`, which is the compute dtype. See [fp32 master weights](../docs/MIXED_PRECISION.md#fp32-master-weights). Unset keeps the model's dtype (bf16) |
-| `precision.reduce_dtype` | str | unset | Dtype gradients are summed in when they are averaged across devices: `"bfloat16"` or `"float32"`. `"float32"` sums and averages each gradient in fp32 and casts the mean back to the gradient's dtype, in the DDP sync (`ttml.sync_gradients`, `synchronize_gradients`) and in FSDP's reduce-scatter. It is stored when the optimizer is created from the whole config, as with `precision.master_dtype`. `"bfloat16"` and unset both keep today's bf16 sum, unset also when an earlier config in the same process set the key. See [Gradient reduction in fp32](../docs/MIXED_PRECISION.md#gradient-reduction-in-fp32) |
+| `precision.master_dtype` | str | unset | Dtype trainable parameters (the master weights) are stored in: `"bfloat16"` or `"float32"`. `"float32"` gives fp32 master weights with fused `AdamW`; the other optimizers, `MuonWithAdamW` included, take bf16 parameters only. Forward and backward still run in bf16. Not PyTorch FSDP2's `param_dtype`, which is the compute dtype. See [fp32 master weights](../docs/MIXED_PRECISION.md#fp32-master-weights). Unset keeps the model's dtype (bf16) |
+| `precision.reduce_dtype` | str | unset | Dtype gradients are summed in: `"bfloat16"` or `"float32"`. `"float32"` sums each gradient in fp32 when it is averaged across devices, in the DDP sync (`ttml.sync_gradients`, `synchronize_gradients`) and in FSDP's reduce-scatter, and when a trainable parameter's gradient is added up over micro-batches: it becomes fp32 at its second add and stays fp32 until fused `AdamW` reads it or another optimizer rounds it to bf16, which costs 2 bytes per parameter while gradients are held. A sum runs in this dtype or in the gradient's own, whichever is wider, so `"bfloat16"` never narrows an fp32 gradient. It is applied by the same runners as `precision.master_dtype`, and by the 3-tier workers and aggregator (see below). `"bfloat16"` and unset both keep the bf16 sum, unset also when an earlier config in the same process set the key. See [Gradient reduction in fp32](../docs/MIXED_PRECISION.md#gradient-reduction-in-fp32) and [fp32 gradient accumulation](../docs/MIXED_PRECISION.md#fp32-gradient-accumulation) |
 
-Any other key under `precision`, or a `precision` that isn't a map, stops the run with an error. GRPO, and `SFTTrainer` given an optimizer dict, don't apply `precision` yet: they keep the model's dtype and the bf16 sum. In 2- and 3-tier training, the aggregators sum the workers' gradients in bf16 whatever `reduce_dtype` says.
+Any other key under `precision`, or a `precision` that isn't a map, stops the run with an error; the runners check the block right after loading the config (`ttml.core.validate_precision_config`), before building the model. The block is applied by `create_optimizer` given the whole config (`train.py`), by `SFTTrainer` and `GRPOTrainer` given it as `precision=` (and by the GRPO completers, before they load weights), by the `nano_gpt` runner and by the 3-tier optimizer worker; 3-tier workers and the aggregator apply only `reduce_dtype`. The aggregators of the Python hierarchical example sum the workers' gradients in bf16 whatever `reduce_dtype` says.
 
 ### Example
 ```yaml
@@ -253,7 +253,7 @@ The optimizer is configured inline under `training_config.optimizer`.
 
 | Type | Description |
 |------|-------------|
-| `AdamW` | Fused AdamW, a single custom kernel per step (default, recommended). Its state takes the parameters' dtype: bf16, or fp32 with `precision.master_dtype: float32` for fp32 master weights (use when bf16 accumulation causes training instability). Supports stochastic rounding for bf16 parameters. |
+| `AdamW` | Fused AdamW, a single custom kernel per step (default, recommended). Its state takes the parameters' dtype: bf16, or fp32 with `precision.master_dtype: float32` for fp32 master weights (use when bf16 accumulation causes training instability). Reads bf16 or fp32 gradients. Supports stochastic rounding for bf16 parameters. |
 | `MorehAdamW` | AdamW via `ttnn::moreh_adamw` — uses the Moreh team's kernel implementation. |
 | `AdamWComposite` | AdamW built from individual TTNN ops (no custom kernel). Supports Kahan summation. |
 | `SGD` | Fused SGD — bf16 state, single custom kernel per step (default, recommended). |
@@ -271,7 +271,7 @@ The optimizer is configured inline under `training_config.optimizer`.
 | `epsilon` | float | 1e-8 | Numerical stability constant |
 | `weight_decay` | float | 1e-2 | Weight decay coefficient |
 | `amsgrad` | bool | false | Use AMSGrad variant |
-| `stochastic_rounding` | bool | false | Enable stochastic rounding (AdamW only) |
+| `stochastic_rounding` | bool | false | Enable stochastic rounding (AdamW only). Applies to bf16 parameters; fp32 parameters ignore it, with a warning |
 | `param_groups` | list[dict] | [] | Parameter groups, see [Param groups](#param-groups) |
 | `kahan_summation` | bool | false | Enable Kahan summation (AdamWComposite only) |
 

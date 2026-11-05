@@ -83,6 +83,7 @@ SFTTrainer(
     attention_mask=None,
     *,
     lr_lambda=None,
+    precision=None,
 )
 ```
 
@@ -100,6 +101,7 @@ SFTTrainer(
 | `loss_composer` | `Any \| None` | Mesh composer for multi-device loss aggregation. Defaults to `concat_mesh_to_tensor_composer(device, 0)` which works for both single-device and DDP. Pass a custom composer to override. |
 | `attention_mask` | `Any \| None` | Attention mask passed as the second argument to `model(input_ids, mask)`. `None` (default) lets the model generate a causal mask on the fly. |
 | `lr_lambda` | `Callable[[int], float] \| None` | Keyword argument. Custom `step -> factor` schedule: every step, each param group's LR is set to `factor` times its initial LR, so param groups keep their ratios. Overrides the default linear-warmup-then-constant. |
+| `precision` | `dict \| None` | Keyword argument. The YAML's `training_config.precision` block as a dict (`master_dtype`, `reduce_dtype`; see [Precision](#precision)). Applied to the model after the LoRA wrapping and before the optimizer is built from a dict or the default. Raises `ValueError` together with a ready optimizer instance, whose state is already sized. `None` (default) applies nothing. |
 
 ### Methods
 
@@ -127,6 +129,28 @@ SFTTrainer(..., optimizer=None)
 
 Any optimizer registered with `ttml.optimizers.register_optimizer` can be used via the dict form.
 See [TTML Onboarding — Optimizers](TTML_ONBOARDING.md) for the full list of built-in optimizers.
+
+### Precision
+
+Pass the config's precision block as `precision=` to get fp32 master weights or fp32 gradient sums (see
+[Mixed Precision](MIXED_PRECISION.md)):
+
+```python
+ttml.core.validate_precision_config(yaml_config["training_config"])  # right after loading: a typo fails here
+SFTTrainer(
+    ...,
+    optimizer={"type": "AdamW", "lr": 1e-4},
+    # e.g. {"master_dtype": "float32", "reduce_dtype": "float32"}
+    precision=yaml_config["training_config"].get("precision"),
+)
+```
+
+The trainer applies it before it builds the optimizer, so the optimizer state follows the stored dtype. With LoRA,
+only the trainable adapters are converted; the frozen base model keeps its dtype. Weights loaded before the trainer
+is built went into the model's dtype: if they come from an fp32 file, apply the block right after building the
+model, before loading (`ttml.core.apply_precision_config({"precision": block}, model.parameters())`); applying it
+again in the trainer changes nothing. A ready optimizer instance can't be combined with `precision=`: apply the block
+before creating it, as `ttml.common.utils.create_optimizer` does when it is given the whole config.
 
 ---
 

@@ -228,6 +228,8 @@ GRPOTrainer(
     optimizer_dict,
     callbacks=None,
     model_source=None,
+    *,
+    precision=None,
 )
 ```
 
@@ -240,6 +242,7 @@ GRPOTrainer(
 | `optimizer_dict` | `dict` | Optimizer config dict passed to the [ttml optimizer registry](TTML_ONBOARDING.md). Must include a `"type"` key. |
 | `callbacks` | `list[TrainerCallback] \| None` | Hooks into the training loop (see [Callbacks](#callbacks)). |
 | `model_source` | `str \| None` | HuggingFace model ID or local path. Used only for saving HF config in checkpoints. |
+| `precision` | `dict \| None` | Keyword argument. The YAML's `training_config.precision` block as a dict, applied to the model right before the optimizer is created (see [Precision](#precision)). `None` (default) applies nothing. |
 
 ### Methods
 
@@ -485,6 +488,29 @@ built-in optimizers.
 
 ---
 
+## Precision
+
+`precision=` takes the YAML's `training_config.precision` block as a dict (see
+[Mixed Precision](MIXED_PRECISION.md)). Pass the same block to the completer, which applies it right after building
+the model and before loading weights or a checkpoint, and to the trainer, which applies it again right before it
+creates the optimizer:
+
+```python
+raw = load_config(config_path)
+ttml.core.validate_precision_config(raw["training_config"])  # a typo stops here, before the model is built
+precision = raw["training_config"].get("precision")
+completer = LlamaGRPOCompleter(..., precision=precision)
+trainer = GRPOTrainer(..., optimizer_dict=optimizer_dict, precision=precision)
+```
+
+Applied before the load, fp32 master weights get the loaded values unrounded, which a resume from a GRPO checkpoint
+relies on; the trainer's second pass converts nothing and only stores the same reduce settings again. A completer
+that doesn't apply it leaves the conversion to the trainer, after its weights loaded. fp32 master weights
+(`master_dtype: float32`) need `"type": "AdamW"`, because `MorehAdamW` takes bf16 parameters only.
+`reduce_dtype: float32` works with either optimizer and also adds up the micro-batches' gradients in fp32.
+
+---
+
 ## Device Config
 
 The abstract `GRPOCompleter` and `GRPOTrainer` impose no
@@ -608,6 +634,8 @@ the architecture from `config.json` and the tokenizer from its files, and requir
 `model.safetensors` to hold every parameter of the model. Only `LlamaGRPOCompleter`
 resumes: `Qwen3GRPOCompleter` and `LlamaCompleterRemoteRollout` read `model_source` as a
 HuggingFace checkpoint, and the trainer saves its weights under TTML's parameter names.
+`load_checkpoint` loads each value in the dtype its parameter is stored in, so with the same `precision` block
+passed to the completer, fp32 master weights resume bit for bit.
 
 ---
 
