@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Matching a plan's routers to the chips a reader found, one router per way it can turn out. No device.
+// Matching a plan's chips and routers to what a reader found, one chip or router per way it can turn out. No device.
 
 #include <gtest/gtest.h>
 
@@ -56,40 +56,53 @@ ClusterFacts make_facts() {
     };
 }
 
-TEST(CaptureTargets, PutsEachRouterInTheRightCase) {
+TEST(CaptureTargets, PutsEachChipAndRouterInTheRightCase) {
+    const std::vector<ChipTarget> targets = resolve_capture_targets(make_plan(), make_facts());
+    ASSERT_EQ(targets.size(), 3u);
+
+    // M0/C0 was found, and each of its routers meets a different case.
+    const ChipTarget& found = targets[0];
+    EXPECT_EQ(found.location, ChipLocation::FOUND);
+    EXPECT_EQ(found.chip, 0);
     struct Expected {
         std::string router_path;
-        CoreLocation location;
-        std::optional<int32_t> chip;
         std::optional<CoreXY> reader_core;
+        CoreLocation location;
         bool discovery_skipped;
         bool is_read;
     };
     const std::vector<Expected> expected = {
-        {"M0/C0/E0", CoreLocation::FOUND, 0, CoreXY{1, 1}, false, true},
+        {"M0/C0/E0", CoreXY{1, 1}, CoreLocation::FOUND, false, true},
         // Channel 1 is at (3, 1), but the manifest's (2, 1) is channel 2's core, so the manifest's core is read.
-        {"M0/C0/E1", CoreLocation::CORE_MISMATCH, 0, CoreXY{3, 1}, false, true},
-        {"M0/C0/E2", CoreLocation::CHANNEL_NOT_FOUND, 0, std::nullopt, false, false},
+        {"M0/C0/E1", CoreXY{3, 1}, CoreLocation::CORE_MISMATCH, false, true},
+        {"M0/C0/E2", std::nullopt, CoreLocation::CHANNEL_NOT_FOUND, false, false},
         // Channel 3 is at (4, 1), and the manifest's (9, 9) is no Ethernet core of the chip.
-        {"M0/C0/E3", CoreLocation::CORE_NOT_FOUND, 0, CoreXY{4, 1}, false, false},
-        {"M0/C0/E4", CoreLocation::FOUND, 0, CoreXY{6, 1}, true, true},
-        {"M0/C1/E0", CoreLocation::CHIP_MISSING, std::nullopt, std::nullopt, false, false},
-        {"M0/C2/E0", CoreLocation::ARCH_MISMATCH, 1, CoreXY{1, 1}, false, false},
+        {"M0/C0/E3", CoreXY{4, 1}, CoreLocation::CORE_NOT_FOUND, false, false},
+        {"M0/C0/E4", CoreXY{6, 1}, CoreLocation::FOUND, true, true},
     };
-
-    const CaptureTargets targets = resolve_capture_targets(make_plan(), make_facts());
-    ASSERT_EQ(targets.cores.size(), expected.size());
+    ASSERT_EQ(found.routers.size(), expected.size());
     for (size_t i = 0; i < expected.size(); ++i) {
-        const CaptureTarget& target = targets.cores[i];
+        const RouterTarget& router = found.routers[i];
         SCOPED_TRACE(expected[i].router_path);
-        EXPECT_EQ(target.router.path, expected[i].router_path);
-        EXPECT_EQ(target.location, expected[i].location);
-        EXPECT_EQ(target.chip, expected[i].chip);
-        EXPECT_EQ(target.reader_core, expected[i].reader_core);
-        EXPECT_EQ(target.discovery_skipped, expected[i].discovery_skipped);
-        EXPECT_EQ(target.is_read(), expected[i].is_read);
+        EXPECT_EQ(router.router.path, expected[i].router_path);
+        EXPECT_EQ(router.reader_core, expected[i].reader_core);
+        EXPECT_EQ(router.location, expected[i].location);
+        EXPECT_EQ(router.discovery_skipped, expected[i].discovery_skipped);
+        EXPECT_EQ(router.is_read(), expected[i].is_read);
     }
-    EXPECT_EQ(targets.missing_chips, std::vector<std::string>{"M0/C1"});
+
+    // M0/C1 wasn't found, and M0/C2 is a Wormhole: their routers' cores aren't looked for, so none is read.
+    const ChipTarget& missing = targets[1];
+    EXPECT_EQ(missing.location, ChipLocation::MISSING);
+    EXPECT_EQ(missing.chip, std::nullopt);
+    const ChipTarget& other_arch = targets[2];
+    EXPECT_EQ(other_arch.location, ChipLocation::ARCH_MISMATCH);
+    EXPECT_EQ(other_arch.chip, 1);
+    for (const ChipTarget* chip : {&missing, &other_arch}) {
+        ASSERT_EQ(chip->routers.size(), 1u);
+        EXPECT_EQ(chip->routers[0].location, std::nullopt);
+        EXPECT_FALSE(chip->routers[0].is_read());
+    }
 }
 
 }  // namespace

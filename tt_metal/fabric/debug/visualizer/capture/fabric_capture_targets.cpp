@@ -5,6 +5,7 @@
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_targets.hpp"
 
 #include <algorithm>
+#include <utility>
 
 namespace tt::tt_fabric::capture {
 
@@ -33,19 +34,21 @@ bool was_skipped_by_discovery(const ClusterFacts& facts, uint64_t asic_id, const
     });
 }
 
-// Where the reader found the router's core, checked in order: the chip, its architecture, the channel, then the core.
-CoreLocation locate_core(const CapturePlan& plan, const FoundChip* chip, const PlannedRouter& router) {
+// Where the reader found a planned chip: by its asic_id, then its architecture.
+ChipLocation locate_chip(const CapturePlan& plan, const FoundChip* chip) {
     if (chip == nullptr) {
-        return CoreLocation::CHIP_MISSING;
+        return ChipLocation::MISSING;
     }
-    if (chip->arch != plan.arch) {
-        return CoreLocation::ARCH_MISMATCH;
-    }
-    const std::optional<CoreXY> channel_core = find_channel_core(*chip, router.eth_chan);
+    return chip->arch == plan.arch ? ChipLocation::FOUND : ChipLocation::ARCH_MISMATCH;
+}
+
+// Where the reader found a router's core on its chip, checked in order: the channel, then the core.
+CoreLocation locate_core(const FoundChip& chip, const PlannedRouter& router) {
+    const std::optional<CoreXY> channel_core = find_channel_core(chip, router.eth_chan);
     if (!channel_core.has_value()) {
         return CoreLocation::CHANNEL_NOT_FOUND;
     }
-    if (!is_eth_core(*chip, router.virtual_core)) {
+    if (!is_eth_core(chip, router.virtual_core)) {
         return CoreLocation::CORE_NOT_FOUND;
     }
     return *channel_core == router.virtual_core ? CoreLocation::FOUND : CoreLocation::CORE_MISMATCH;
@@ -53,26 +56,30 @@ CoreLocation locate_core(const CapturePlan& plan, const FoundChip* chip, const P
 
 }  // namespace
 
-CaptureTargets resolve_capture_targets(const CapturePlan& plan, const ClusterFacts& facts) {
-    CaptureTargets targets;
+std::vector<ChipTarget> resolve_capture_targets(const CapturePlan& plan, const ClusterFacts& facts) {
+    std::vector<ChipTarget> targets;
+    targets.reserve(plan.chips.size());
     for (const PlannedChip& planned_chip : plan.chips) {
         // Locate chip via asic_id from cluster facts
         const FoundChip* chip = find_chip(facts, planned_chip.asic_id);
-        if (chip == nullptr) {
-            targets.missing_chips.push_back(planned_chip.path);
-        }
+        ChipTarget chip_target{
+            .path = planned_chip.path,
+            .asic_id = planned_chip.asic_id,
+            .chip = chip == nullptr ? std::nullopt : std::optional(chip->chip),
+            .location = locate_chip(plan, chip),
+        };
 
         // For each router, find information about the core from the cluster facts
         for (const PlannedRouter& router : planned_chip.routers) {
-            targets.cores.push_back(CaptureTarget{
+            chip_target.routers.push_back(RouterTarget{
                 .router = router,
-                .asic_id = planned_chip.asic_id,
-                .chip = chip == nullptr ? std::nullopt : std::optional(chip->chip),
                 .reader_core = chip == nullptr ? std::nullopt : find_channel_core(*chip, router.eth_chan),
-                .location = locate_core(plan, chip, router),
+                .location = chip_target.location == ChipLocation::FOUND ? std::optional(locate_core(*chip, router))
+                                                                        : std::nullopt,
                 .discovery_skipped = was_skipped_by_discovery(facts, planned_chip.asic_id, router.virtual_core),
             });
         }
+        targets.push_back(std::move(chip_target));
     }
     return targets;
 }

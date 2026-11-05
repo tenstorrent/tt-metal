@@ -33,6 +33,8 @@ struct DiscoverySkippedCore {
     uint64_t asic_id = 0;
     CoreXY core;
     std::string reason;
+
+    bool operator==(const DiscoverySkippedCore&) const = default;
 };
 
 // What a reader knows about the chips it can reach, as plain data.

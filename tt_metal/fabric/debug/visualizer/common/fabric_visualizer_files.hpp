@@ -25,6 +25,10 @@ namespace tt::tt_fabric::visualizer {
 inline constexpr std::string_view k_manifest_file_kind = "fabric_manifest";
 inline constexpr uint32_t k_manifest_version = 1;
 
+// A capture index's file_kind and capture_version. The version changes as the manifest's does.
+inline constexpr std::string_view k_capture_file_kind = "fabric_capture";
+inline constexpr uint32_t k_capture_version = 1;
+
 // One rank's manifest file name, by its rank in the whole job:
 // fabric_manifest_rank_<mpi_rank + 1>_of_<world_size>.json.
 inline std::string make_manifest_file_name(uint32_t mpi_rank, uint32_t world_size) {

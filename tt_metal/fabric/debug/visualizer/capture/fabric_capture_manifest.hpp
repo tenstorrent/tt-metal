@@ -38,6 +38,8 @@ struct ManifestIdentity {
     uint32_t world_size = 1;
     std::string host_name;
     std::string git_sha;
+
+    bool operator==(const ManifestIdentity&) const = default;
 };
 
 // Collects which run a manifest is from.

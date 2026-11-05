@@ -988,11 +988,12 @@ void check_capture_plan(
 
     // Collect cluster facts is using the mock cluster to find physical chips and cores, so we should never see
     // any missing chips
-    const capture::CaptureTargets targets = capture::resolve_capture_targets(plan, collect_cluster_facts(manifest));
-    EXPECT_TRUE(targets.missing_chips.empty());
-    for (const capture::CaptureTarget& target : targets.cores) {
-        EXPECT_EQ(target.location, capture::CoreLocation::FOUND)
-            << target.router.path << " at " << target.router.virtual_core.x << "," << target.router.virtual_core.y;
+    for (const capture::ChipTarget& chip : capture::resolve_capture_targets(plan, collect_cluster_facts(manifest))) {
+        EXPECT_EQ(chip.location, capture::ChipLocation::FOUND) << chip.path;
+        for (const capture::RouterTarget& target : chip.routers) {
+            EXPECT_EQ(target.location, capture::CoreLocation::FOUND)
+                << target.router.path << " at " << target.router.virtual_core.x << "," << target.router.virtual_core.y;
+        }
     }
 }
 
