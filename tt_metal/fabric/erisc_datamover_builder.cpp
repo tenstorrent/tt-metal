@@ -241,8 +241,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
     size_t next_l1_addr = erisc_l1_unreserved_base;
 
     // https://github.com/tenstorrent/tt-metal/issues/26354 to track fix for this hack where we always set aside the
-    // memory for the telemetry buffer in Blackhole
-    if (rtoptions.get_enable_fabric_bw_telemetry() || this->arch == tt::ARCH::BLACKHOLE) {
+    // memory for the telemetry buffer in Blackhole. Quasar does the same: the router clears this buffer whether or not
+    // telemetry is on, and at address 0 that clear lands on a Keraunos CCE's reset vector (CM-095).
+    if (rtoptions.get_enable_fabric_bw_telemetry() || this->arch == tt::ARCH::BLACKHOLE ||
+        this->arch == tt::ARCH::QUASAR) {
         // Avoid a bug on BH, always allocate the space for the telemetry buffer
         this->perf_telemetry_buffer_address = next_l1_addr;
         next_l1_addr += perf_telemetry_buffer_size;
