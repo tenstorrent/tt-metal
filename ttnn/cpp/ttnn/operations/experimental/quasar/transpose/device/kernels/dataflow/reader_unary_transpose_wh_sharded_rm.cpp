@@ -10,18 +10,17 @@
 // QSR: the input shard is read with a plain CPU LOCAL COPY, not a self/loopback NOC read. On Quasar a
 // NOC read addressed to the core's own (my_x,my_y) never drains its async_read_barrier — the reader
 // pins at RBW and fold deadlocks (and the bytes never land, so the transpose output reads all-zero).
-// The byte-wise local copy mirrors the width-only pad reader (reader_pad_dims_rm_sharded_stickwise.cpp),
+// The local copy mirrors the width-only pad reader (reader_pad_dims_rm_sharded_stickwise.cpp),
 // the proven Quasar local-copy idiom.
 
 #include <stdint.h>
+#include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
-
-#define u8_l1_ptr volatile tt_l1_ptr uint8_t*
 
 // get_arg lives in `namespace experimental` and is normally found via ADL on the args:: accessor
 // type. The includes this kernel pulls in change the lookup context enough that ADL doesn't resolve it
@@ -57,9 +56,10 @@ void kernel_main() {
             uint32_t H_curr = h == Ht - 1 ? H_per_tile_last : H_per_tile;
             for (uint32_t h_datum = 0; h_datum < H_curr; ++h_datum) {
                 // Local L1->L1 copy of one input stick into the staging buffer (no NOC; see file header).
-                auto src = reinterpret_cast<u8_l1_ptr>(src_addr);
-                auto dst = reinterpret_cast<u8_l1_ptr>(l1_write_addr);
-                for (uint32_t i = 0; i < stick_size_bytes; ++i) {
+                using copy_t = std::conditional_t<W_size_bytes % sizeof(uint32_t) == 0, uint32_t, uint8_t>;
+                auto src = reinterpret_cast<volatile tt_l1_ptr copy_t*>(src_addr);
+                auto dst = reinterpret_cast<volatile tt_l1_ptr copy_t*>(l1_write_addr);
+                for (uint32_t i = 0; i < stick_size_bytes / sizeof(copy_t); ++i) {
                     dst[i] = src[i];
                 }
                 l1_write_addr += l1_write_offset_bytes;
