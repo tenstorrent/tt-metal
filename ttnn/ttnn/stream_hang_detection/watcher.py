@@ -249,6 +249,16 @@ class StreamHangWatcher:
         dev00 = self.devices[0]
         frozen_since: float | None = None
         left_out: list[str] = []
+        # DO NOT MERGE -- hang-injection experiment: say the watcher is up, show device (0,0)'s counts once a minute
+        # and what each still read found when it blamed no one, and say when it killed the rank.
+        print(
+            f"HANG WATCHER DEBUG {self.label()}: up, {len(self.devices)} devices, {len(dev00.words())} words on "
+            f"device (0,0), timeout {self.settings.timeout_s}s, first chunk {self.settings.first_chunk_timeout_s}s",
+            file=sys.stderr,
+            flush=True,
+        )
+        shown = 0.0
+        quiet = ""
         while True:
             try:
                 # kill 0 is just a liveness probe badly named
@@ -267,6 +277,9 @@ class StreamHangWatcher:
                 return 1
 
             now = time.monotonic()
+            if now - shown >= 60:
+                print(f"HANG WATCHER DEBUG {self.label()}: progress\n{self.counts(dev00)}", file=sys.stderr, flush=True)
+                shown = now
             if moved:
                 frozen_since = None
             elif frozen_since is None:
@@ -318,7 +331,25 @@ class StreamHangWatcher:
                         os.killpg(command.pid, signal.SIGKILL)
                     with contextlib.suppress(ProcessLookupError):
                         os.kill(self.pid, signal.SIGKILL)
+                    print(
+                        f"HANG WATCHER DEBUG {self.label()}: command exited {command.returncode}, SIGKILLed rank "
+                        f"pid {self.pid}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                     return 1
+                others = " ".join(
+                    f"({d.r},{d.c})={self.state(d).name}"
+                    for d in self.devices
+                    if self.state(d) is not self.state(dev00)
+                )
+                line = (
+                    f"HANG WATCHER DEBUG {self.label()}: still, not the culprit, device (0,0) waits on "
+                    f"{self.state(dev00).name}{' (others: ' + others + ')' if others else ''}\n{self.counts(dev00)}"
+                )
+                if line != quiet:
+                    print(line, file=sys.stderr, flush=True)
+                    quiet = line
 
             time.sleep(self.settings.poll_s)
 

@@ -7,6 +7,7 @@ import contextlib
 import json
 import os
 import signal
+import sys
 import time
 from dataclasses import dataclass, fields
 from typing import Optional
@@ -644,6 +645,19 @@ def _lease_reclaim(inbound: D2DBoundary, outbound: D2DBoundary) -> None:
         inbound.activation.release_fabric_links()
 
 
+def _inject_stall(rank: int, c: int, at: str) -> None:
+    # DO NOT MERGE -- hang-injection experiment: rank TT_INJECT_STALL_RANK stops for good at TT_INJECT_STALL_AT
+    # (recv, compute, release or indices) before real chunk TT_INJECT_STALL_CHUNK.
+    if (
+        os.environ.get("TT_INJECT_STALL_AT") == at
+        and int(os.environ.get("TT_INJECT_STALL_RANK", "-1")) == rank
+        and c == int(os.environ.get("TT_INJECT_STALL_CHUNK", "2"))
+    ):
+        print(f"HANG INJECTION: rank {rank} stalls at {at} before chunk {c}", file=sys.stderr, flush=True)
+        while True:
+            time.sleep(3600)
+
+
 class SocketBuffers:
     def __init__(self, metadata, tokens=None, overhang=None, send_record=None):
         self.metadata = metadata
@@ -883,8 +897,10 @@ def _compute_and_send(
             metadata_msg=forward_md,
             trace=sockets.send_trace,
         )
+    _inject_stall(rank, c, "release")
     if d2d_out is not None:
         d2d_out.release_fabric_links()
+    _inject_stall(rank, c, "indices")
     if idx_out is not None:
         _d2d_send_indices(d2d_out, idx_out, runtime.outbound_indexer_indices, rank, meta, metadata_msg=forward_md)
         idx_out.release_fabric_links()
@@ -932,6 +948,13 @@ def run_request_loop(
     t0 = time.perf_counter()
     c = 0
     first = None
+    if os.environ.get("TT_INJECT_STALL_AT"):  # DO NOT MERGE -- hang-injection experiment
+        print(
+            f"HANG INJECTION ARMED: rank {rank} of {num_ranks}; rank {os.environ.get('TT_INJECT_STALL_RANK')} stalls at "
+            f"{os.environ['TT_INJECT_STALL_AT']} before chunk {os.environ.get('TT_INJECT_STALL_CHUNK', '2')}",
+            file=sys.stderr,
+            flush=True,
+        )
 
     def forward_shutdown():
         if outbound.activation is not None:
@@ -947,6 +970,7 @@ def run_request_loop(
     while not _shutdown:
         _lease_reclaim(inbound, outbound)
         inp = mtp_tokens = None
+        _inject_stall(rank, c, "recv")
         try:
             if cfg.is_first_rank:
                 inp, mtp_tokens, meta = _socket_next(h2d_service, sockets, NUM_MTP_TOKENS)
@@ -1002,6 +1026,7 @@ def run_request_loop(
             before_first_chunk = None
         if warmup:
             continue
+        _inject_stall(rank, c, "compute")
         try:
             t = _compute_and_send(
                 runtime,

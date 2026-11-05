@@ -2268,3 +2268,145 @@
   team: ttnn
   budget_type: demo
   sp_config: sc1
+
+# ===== DO NOT MERGE -- prefill stage hang watcher scenarios: one injected stall per leg, plus a healthy control =====
+- name: "DO NOT MERGE hang scenario 1: GLM-5.3 rank 2 stalls before its D2D receive, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export TT_PREFILL_STAGE_HANG_DETECTION_ENABLED=1
+    export TT_PREFILL_STAGE_HANG_COMMAND_TO_EXECUTE="pkill -f 'prefill[_]producer'"
+    export TT_INJECT_STALL_RANK=2 TT_INJECT_STALL_AT=recv TT_INJECT_STALL_CHUNK=2
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53
+  test_type: prefill_hang_scenarios
+  test_tags: [prefill_hang_scenarios]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      timeout: 60
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+- name: "DO NOT MERGE hang scenario 2: GLM-5.3 rank 1 stalls before releasing its sender, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export TT_PREFILL_STAGE_HANG_DETECTION_ENABLED=1
+    export TT_PREFILL_STAGE_HANG_COMMAND_TO_EXECUTE="pkill -f 'prefill[_]producer'"
+    export TT_INJECT_STALL_RANK=1 TT_INJECT_STALL_AT=release TT_INJECT_STALL_CHUNK=2
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53
+  test_type: prefill_hang_scenarios
+  test_tags: [prefill_hang_scenarios]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      timeout: 60
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+- name: "DO NOT MERGE hang scenario 3: GLM-5.3 rank 1 stalls before sending its indices, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export TT_PREFILL_STAGE_HANG_DETECTION_ENABLED=1
+    export TT_PREFILL_STAGE_HANG_COMMAND_TO_EXECUTE="pkill -f 'prefill[_]producer'"
+    export TT_INJECT_STALL_RANK=1 TT_INJECT_STALL_AT=indices TT_INJECT_STALL_CHUNK=2
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53
+  test_type: prefill_hang_scenarios
+  test_tags: [prefill_hang_scenarios]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      timeout: 60
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+- name: "DO NOT MERGE hang scenario 4: Mistral-Small-4 PP4 rank 3 stalls before compute, SC1"
+  fabric_profile: torus_xy
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_EXPECTED_TPS=36900
+    export PREFILL_PERF_MARGIN=0.25
+    export TT_PREFILL_STAGE_HANG_DETECTION_ENABLED=1
+    export TT_PREFILL_STAGE_HANG_COMMAND_TO_EXECUTE="pkill -f 'prefill[_]producer'"
+    export TT_INJECT_STALL_RANK=3 TT_INJECT_STALL_AT=compute TT_INJECT_STALL_CHUNK=2
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh mistral4
+  test_type: prefill_hang_scenarios
+  test_tags: [prefill_hang_scenarios]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 30
+  owner_id: U0AQ3FGS9MG # Alina Khan
+  team: models
+  budget_type: demo
+  sp_config: sc1
+- name: "DO NOT MERGE hang scenario 5: Mistral-Small-4 PP4 rank 0 stalls before its H2D receive, SC1"
+  fabric_profile: torus_xy
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_EXPECTED_TPS=36900
+    export PREFILL_PERF_MARGIN=0.25
+    export TT_PREFILL_STAGE_HANG_DETECTION_ENABLED=1
+    export TT_PREFILL_STAGE_HANG_COMMAND_TO_EXECUTE="pkill -f 'prefill[_]producer'"
+    export TT_INJECT_STALL_RANK=0 TT_INJECT_STALL_AT=recv TT_INJECT_STALL_CHUNK=2
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh mistral4
+  test_type: prefill_hang_scenarios
+  test_tags: [prefill_hang_scenarios]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 30
+  owner_id: U0AQ3FGS9MG # Alina Khan
+  team: models
+  budget_type: demo
+  sp_config: sc1
+- name: "DO NOT MERGE hang scenario 6: Mistral-Small-4 PP4 healthy control with the watcher on, SC1"
+  fabric_profile: torus_xy
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_EXPECTED_TPS=36900
+    export PREFILL_PERF_MARGIN=0.25
+    export TT_PREFILL_STAGE_HANG_DETECTION_ENABLED=1
+    export TT_PREFILL_STAGE_HANG_COMMAND_TO_EXECUTE="pkill -f 'prefill[_]producer'"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh mistral4
+  test_type: prefill_hang_scenarios
+  test_tags: [prefill_hang_scenarios]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 30
+  owner_id: U0AQ3FGS9MG # Alina Khan
+  team: models
+  budget_type: demo
+  sp_config: sc1
