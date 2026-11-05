@@ -23,7 +23,7 @@ void kernel_main() {
 
     // Read core ID from message
     const uint32_t message_core_id = kernel_communication_dfb.read_tile_value(/*tile_index=*/0, /*element_offset=*/0);
-    const bool is_core_id = (message_core_id != 0) ? true : false;
+    const bool is_core_id = message_core_id != 0;
 
     if (is_core_id) {
         // Read seed from message

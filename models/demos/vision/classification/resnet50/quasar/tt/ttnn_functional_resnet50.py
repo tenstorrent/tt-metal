@@ -169,6 +169,15 @@ _CONV_ON_DEVICE = {"stem": True, "conv1": True, "conv2": True, "conv3": True, "d
 _MAXPOOL_ON_DEVICE = True
 
 
+# Free each conv's prepared (device) weights/bias right after the conv. Opt-in for eager runs only: the model's bf16
+# conv weights total ~47 MB (+4 MB fc), which does not fit the emulator's single 43 MB DRAM bank, so keeping them all
+# resident OOMs partway through layer4 (layer4_module2.conv2's 4.5 MB weights). With it on, each conv uploads its
+# weights, runs, and frees them, at the cost of a weight re-prepare on every forward. Leave it off for traced runs:
+# trace capture cannot upload the host weights again. Read per call so a test can set it after import.
+def _free_device_conv_weights():
+    return os.environ.get("TT_METAL_QSR_RESNET_FREE_CONV_WEIGHTS", "0") == "1"
+
+
 def _host_conv2d(
     input_tensor,
     weight_tensor,
@@ -232,7 +241,7 @@ def _conv2d_or_host(
     is the per-conv conv_kwargs dict (in_channels/out_channels/batch_size/input_height/input_width/
     kernel_size/stride/padding/dilation/groups/device/conv_config)."""
     if on_device:
-        return ttnn.experimental.quasar.conv2d(
+        out, out_dims, [dev_weight, dev_bias] = ttnn.experimental.quasar.conv2d(
             input_tensor=input_tensor,
             weight_tensor=weight_tensor,
             bias_tensor=bias_tensor,
@@ -242,6 +251,13 @@ def _conv2d_or_host(
             return_weights_and_bias=True,
             **conv2d_kwargs,
         )
+        if not _free_device_conv_weights():
+            return out, out_dims, [dev_weight, dev_bias]
+        # Free the prepared device copies and hand back the caller's tensors, so the next forward prepares again.
+        for dev_t, orig_t in ((dev_weight, weight_tensor), (dev_bias, bias_tensor)):
+            if dev_t is not None and dev_t is not orig_t and ttnn.is_tensor_storage_on_device(dev_t):
+                ttnn.deallocate(dev_t)
+        return out, out_dims, [weight_tensor, bias_tensor]
     logger.warning(f"[QSR] conv '{name}' HOST bypass (on_device=False)")
     return _host_conv2d(
         input_tensor,
@@ -288,31 +304,16 @@ def fit_fc_grid(device, n_tiles, k_tiles):
 
     Returns (grid_x, grid_y, num_cores, per_core_N, in0_block_w). The stock config is an 8x4=32
     grid with per_core_N=1 (N=1024/32=32 tiles, one tile/core) and in0_block_w=2 (K=2048/32=64
-    tiles -> 2 tiles/core). On Quasar (32 cores) this is unchanged; on a smaller part (emulator)
-    we pick the largest rectangle that fits the device AND divides n_tiles, then raise per_core_N
+    tiles -> 2 tiles/core). On Quasar the activation stays on one core (the unified matmul places the
+    fc); elsewhere we pick the largest rectangle that fits the device AND divides n_tiles, then raise per_core_N
     so every N tile is still covered (num_cores * per_core_N == n_tiles). A rectangle (not a
     row-wise core set) is required because both the matmul config and the activation width-shard
     feeding it take a (grid_x, grid_y) and must agree.
     """
     if is_quasar():
-        # [#48552] Quasar fc: single core, K-SPILLED. The old no-spill config (in0_block_w == full K, then
-        # out_block_w shrunk to fit the weights ring) sized cb_intermed0 (= out_block_w) DIFFERENTLY from cb_out
-        # (= per_core_N) while they ALIAS -> "Aliased DFBs cb_out and cb_intermed0 different total sizes" FATAL.
-        # Instead K-spill: stream the weights per small K-block (in0_block_w << full K, num_blocks > 1) so
-        # out_block_w can be the FULL per_core_N -> cb_intermed0 == cb_out (same size), and the in1 ring
-        # (out_block_w * in0_block_w) stays small via the K-block. This is the same DRAM-weights K-spill path as
-        # layer4 (DPRINT-masked until the copy_tile real fix lands); mcast_in0 on a single core degenerates to a
-        # plain single-core matmul, so there's no cross-core K-reduction.
-        per_core_N = n_tiles
-        k_blk = 8
-        while k_blk > 1 and (k_tiles % k_blk) != 0:
-            k_blk -= 1
-        in0_block_w = k_blk
-        out_block_w = per_core_N
-        out_subblock_w = per_core_N
-        while out_subblock_w > 8 or (per_core_N % out_subblock_w) != 0:
-            out_subblock_w -= 1
-        return 1, 1, 1, per_core_N, in0_block_w, out_block_w, out_subblock_w
+        # The fc activation stays on one core; ResnetLinear passes no program config on Quasar, so the
+        # unified matmul places the fc itself.
+        return 1, 1, 1, n_tiles, k_tiles
 
     grid = device.compute_with_storage_grid_size()
     best_gx, best_gy, best_nc = 1, 1, 1
@@ -324,9 +325,7 @@ def fit_fc_grid(device, n_tiles, k_tiles):
     per_core_N = n_tiles // best_nc
     kt_per_core = k_tiles // best_nc  # best_nc | n_tiles | k_tiles, so this is exact
     in0_block_w = 2 if kt_per_core % 2 == 0 else kt_per_core
-    # WH/BH keep the full per-core N as one output block (out_block_w=None -> ResnetLinear leaves the
-    # config's out_block_* to normalize_program_config, i.e. unchanged from before).
-    return best_gx, best_gy, best_nc, per_core_N, in0_block_w, None, 1
+    return best_gx, best_gy, best_nc, per_core_N, in0_block_w
 
 
 def ResnetLinear(
@@ -338,29 +337,14 @@ def ResnetLinear(
     matmul_grid=(8, 4),
     per_core_N=1,
     in0_block_w=2,
-    out_block_w=None,
-    out_subblock_w=1,
 ):
     """
     Returns a function for linear operation in resnet with bias.
     """
 
-    if out_block_w is not None:
-        # Quasar no-spill config: explicit out_block_h/out_block_w so in0_block_w==full K gives
-        # num_blocks==1 (no interm0/mm_partials K-spill) while the in1 ring stays within the uint16 limit.
-        matmul_config = ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=matmul_grid,
-            in0_block_w=in0_block_w,
-            out_subblock_h=1,
-            out_subblock_w=out_subblock_w,
-            out_block_h=1,
-            out_block_w=out_block_w,
-            per_core_M=1,
-            per_core_N=per_core_N,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=True,
-        )
+    if is_quasar():
+        # Quasar runs the unified matmul, which picks the fc's placement, C slice and K chunk.
+        matmul_config = None
     else:
         matmul_config = ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=matmul_grid,
@@ -807,13 +791,11 @@ class resnet50:
         self.layer4_module3 = self.layer4[2]
 
         # Tie the fc 1D-mcast matmul grid to the device. resnet50 fc: N=1000 -> padded 1024 = 32
-        # tiles, K=2048 = 64 tiles. On Quasar (32 cores) this stays the stock 8x4 grid /
-        # per_core_N=1; on a smaller part it shrinks the grid and raises per_core_N so all N tiles
+        # tiles, K=2048 = 64 tiles. On Quasar the activation stays on one core (no program config);
+        # elsewhere a smaller part shrinks the grid and raises per_core_N so all N tiles
         # are covered. The same (grid_x, grid_y) is reused for the activation width-shard feeding
         # fc (see run()), since mcast_in0 requires the input sharding to match the matmul grid.
-        fc_gx, fc_gy, self.fc_num_cores, fc_per_core_N, fc_in0_block_w, fc_out_block_w, fc_out_subblock_w = fit_fc_grid(
-            device, n_tiles=32, k_tiles=64
-        )
+        fc_gx, fc_gy, self.fc_num_cores, fc_per_core_N, fc_in0_block_w = fit_fc_grid(device, n_tiles=32, k_tiles=64)
         self.fc_matmul_grid = (fc_gx, fc_gy)
         self.fc = ResnetLinear(
             weight=ttnn.experimental.quasar.to_device(parameters.fc.weight, device),
@@ -824,8 +806,6 @@ class resnet50:
             matmul_grid=self.fc_matmul_grid,
             per_core_N=fc_per_core_N,
             in0_block_w=fc_in0_block_w,
-            out_block_w=fc_out_block_w,
-            out_subblock_w=fc_out_subblock_w,
         )  # num_classes = 1000
 
         act_block_h_override = 0
