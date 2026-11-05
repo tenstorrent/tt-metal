@@ -52,6 +52,7 @@ NO_MEASURE = tuple(
 ) + ("*.md",)
 RECORDS = (  # F105; F234: a seeded run's ledger (bringup/ledgers/<box>-<mode>/tasks.yaml) is a record too
     "*state.json",
+    "*state_metrics.json",  # F253: the gate metrics beside state.json
     "*/results/*",
     "*BREADCRUMBS.md",
     "*supervision.md",

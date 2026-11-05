@@ -2581,3 +2581,10 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
 - Owner rule with it (skill): measurements are checkpointed per unit; a failed or cut unit never voids the others. Still
   to do: F251 (the position profile's counting run on a slot with history) and making an A/B side reuse every unit an
   agent's `measure` finished on the same code (P.32's ring side re-ran its DRAM, ladder and profiles).
+
+## F253: gate metrics in their own committed file beside state.json (DeepSeek-V4.1 X.3, 2026-11-05)
+- Problem: X.3 passed and git refused its commit again: state.json 503 KB (> the repo's 500 KB hook) after F246;
+  metrics were 384 KB of it.
+- Fix: Ledger._save_state writes every task's metrics to state_metrics.json (committed, staged by stage_paths);
+  state() merges them back. *state_metrics.json is a record (stamps RECORDS) and ignored by the agent path check.
+- Selftest: test_core.py::test_metrics_live_in_their_own_committed_file.

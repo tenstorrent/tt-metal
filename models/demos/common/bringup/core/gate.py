@@ -384,6 +384,7 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
     repo = spec.repo
     rel = lambda p: str(Path(p).resolve().relative_to(repo)) if Path(p).is_absolute() else p  # noqa: E731
     paths = [rel(ledger.state_path), rel(ledger.results_dir / f"{task['id']}.json"), rel(ledger.tasks_path)]
+    paths.append(rel(ledger.metrics_path))  # F253
     paths.append(rel(ledger.dir / ".gitignore"))
     # F183: the run's own files are in its ledger; the model's shared files in bringup_dir (the same dir unless seeded)
     for d, extras in (
