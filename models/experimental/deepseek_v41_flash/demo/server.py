@@ -51,7 +51,7 @@ What V4.1 imposes on the serving side:
   most 131072 tokens, see :class:`_V41Prefiller`) and decode replays the rest.
 * Engram layers 1 and 14 read host n-gram tables (~101 GB each); the model refuses to build without that RAM free,
   unless ``tools/stage_engram_tables.py`` has already put them in RAM.
-* Images (``--vision``, on by default). A request's messages may carry up to 64 distinct images, as long as their rows
+* Images (``--vision``, on by default). A request's messages may carry up to 256 distinct images, as long as their rows
   fit ``--image-rows`` together (up to 1024 an image, fewer for a small one): an uploaded file (a
   ``file`` part with a ``file_id``) or inline base64 (a ``file`` part's ``file_data`` or an ``image_url``, holding a
   ``data:`` URL, or an Anthropic ``image`` with a base64 ``source``); a URL or path is refused.
@@ -90,9 +90,10 @@ Then talk to it as to the V4 server (``models/experimental/deepseek_v4_flash/dem
         -d '{"messages": [{"role": "user", "content": [{"type": "file", "file_id": "file-api-..."},
                                                        {"type": "text", "text": "What is this?"}]}]}'
 
-With ``DEEPSEEK_V41_RUST_HOST=1`` the decode step's host work runs on the Rust host runtime (``tt/host_rs.py``), and
-the live console gives way to a web monitor in a process of its own, so watching costs the server nothing but a
-raw snapshot a second (``DEEPSEEK_V41_MONITOR_PERIOD``) and the counters the runtime keeps anyway (see
+With ``DEEPSEEK_V41_RUST_HOST=0`` the decode step's host work runs on Python threads (the live console stays).
+By default, or with ``DEEPSEEK_V41_RUST_HOST=1``, it runs on the Rust host runtime (``tt/host_rs.py``), and the
+live console gives way to a web monitor in a process of its own, so watching costs the server nothing but a raw
+snapshot a second (``DEEPSEEK_V41_MONITOR_PERIOD``) and the counters the runtime keeps anyway (see
 ``demo/monitor.py``)::
 
     python models/experimental/deepseek_v41_flash/demo/monitor.py --port 8090    # then open http://<host>:8090
@@ -209,7 +210,7 @@ V41_CHAT_FORMAT = ChatFormat(
 # The prefill's semaphores also land in the holes the released prefetch pipes leave, so at 8192 their restore finds
 # no contiguous 432 B. Every byte comes out of L1 too, where 12288 leaves the decode fused_experts CBs 256 B short.
 _L1_SMALL_SIZE = 10240
-_PREPARED_IMAGES = 64  # decoded images (their ViT patches, ~11 MB at most each) kept for admission
+_PREPARED_IMAGES = 256  # decoded images (their ViT patches, ~11 MB at most each) kept for admission
 # Distinct images per request, across its whole history (a repeated image shares one span). Past the decoded images
 # kept, a request would evict its own before its admission; its rows must also fit --image-rows (ImageBook.rows_of).
 _MAX_IMAGES = _PREPARED_IMAGES

@@ -150,6 +150,8 @@ void bind_fused_experts(nb::module_& mod) {
             persistent_h2d_socket_addresses: Each chip's H2D socket config buffer address, mesh
                 row-major.
             persistent_d2h_socket_address: The D2H socket config buffer address on (0, 0).
+            persistent_h2d_device_pull: The H2D sockets are DEVICE_PULL (the host stages each page in
+                pinned host RAM and the control core reads it over PCIe) rather than HOST_PUSH.
         )doc",
         &ttnn::experimental::deepseek::moe::fused_experts,
         nb::arg("input_tensor"),
@@ -179,7 +181,8 @@ void bind_fused_experts(nb::module_& mod) {
         nb::arg("persistent_layer_table") = std::nullopt,
         nb::arg("persistent_socket_core") = std::nullopt,
         nb::arg("persistent_h2d_socket_addresses") = std::nullopt,
-        nb::arg("persistent_d2h_socket_address") = std::nullopt);
+        nb::arg("persistent_d2h_socket_address") = std::nullopt,
+        nb::arg("persistent_h2d_device_pull") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts::detail

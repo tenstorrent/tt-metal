@@ -13,7 +13,8 @@
 //
 // It preloads the first kFeHdrWords words of every layer's row of the layer table -- which is laid out
 // as the header itself: [layer id, shared gate_up, shared down, router gate, router bias, 0...] --
-// and then, per page of this chip's H2D socket (HOST_PUSH, so the page is already in its L1 FIFO):
+// and then, per page of this chip's H2D socket (in its L1 FIFO under HOST_PUSH; under FE_H2D_PULL --
+// DEVICE_PULL, no L1 FIFO -- this kernel first reads it from the pinned host page into cb_ctrl):
 //   1. waits until all num_ready participants are done with the previous iteration (and, on the root,
 //      until the D2H kernel has pushed the page whose staging half this iteration reuses);
 //   2. multicasts the layer's header to every worker core's FE_HDR_ADDR, and the hidden row straight
@@ -70,6 +71,13 @@ void kernel_main() {
 
     SocketReceiverInterface h2d = create_receiver_socket_interface(h2d_config_addr);
     set_receiver_socket_page_size(h2d, page_bytes);
+#if defined(FE_H2D_PULL)
+    // The socket has no L1 FIFO here (read_ptr only offsets the pinned host ring), so pages land in cb_ctrl.
+    const uint64_t pcie_page_base =
+        ((static_cast<uint64_t>(h2d.h2d.data_addr_hi) << 32) | static_cast<uint64_t>(h2d.h2d.data_addr_lo)) -
+        h2d.fifo_addr;
+    const uint32_t pull_l1 = (go_l1 + kHdrBytes + 63u) & ~63u;
+#endif
 
     auto* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_SEM_READY));
     auto* d2h_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_d2h_done_id));
@@ -90,12 +98,34 @@ void kernel_main() {
     };
 
     for (uint32_t iter = 0;; ++iter) {
-        socket_wait_for_pages(h2d, 1);
-        invalidate_l1_cache();
+        {
+            DeviceZoneScopedN("FE_CTRL_PAGE_WAIT");
+            socket_wait_for_pages(h2d, 1);
+        }
+#if defined(FE_H2D_PULL)
+        const uint32_t page = pull_l1;
+        {
+            DeviceZoneScopedN("FE_CTRL_PAGE_PULL");
+            uint64_t src = pcie_page_base + h2d.read_ptr;
+            uint32_t dst = page;
+            for (uint32_t left = page_bytes; left > 0;) {
+                const uint32_t chunk = left > NOC_MAX_BURST_SIZE ? NOC_MAX_BURST_SIZE : left;
+                noc_read_with_state<noc_mode, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
+                    NOC_INDEX, h2d.h2d.pcie_xy_enc, src, dst, chunk);
+                src += chunk;
+                dst += chunk;
+                left -= chunk;
+            }
+            noc_async_read_barrier();
+        }
+#else
         const uint32_t page = h2d.read_ptr;
+#endif
+        invalidate_l1_cache();
         const uint32_t layer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page)[kFeHdrLayer];
 
         if (iter > 0u) {
+            DeviceZoneScopedN("FE_CTRL_READY_WAIT");
             noc_semaphore_wait_min(ready, num_ready * iter);
         }
         if (layer >= num_layers) {
@@ -109,10 +139,12 @@ void kernel_main() {
         }
         if constexpr (is_root) {
             if (iter >= 2u) {
+                DeviceZoneScopedN("FE_CTRL_D2H_WAIT");
                 noc_semaphore_wait_min(d2h_done, iter - 1u);
             }
         }
 
+        DeviceZoneScopedN("FE_CTRL_MCAST");
         noc_async_write_multicast(headers_l1 + layer * kHdrBytes, hdr_mcast, kHdrBytes, mcast_cores);
         noc_async_write_multicast(page + kHdrBytes, row_mcast, row_bytes, mcast_cores);
         noc_async_write_barrier();
@@ -122,6 +154,10 @@ void kernel_main() {
         send_go(iter + 1u);
     }
 
+#if defined(FE_H2D_PULL)
+    // The PCIe reads leave the read command buffer routed to the host, which firmware does not reset.
+    noc_async_read_clear_pcie_state(NOC_INDEX, read_cmd_buf);
+#endif
     update_socket_config(h2d);
     noc_async_write_barrier();
 }

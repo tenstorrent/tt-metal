@@ -762,6 +762,7 @@ tt::tt_metal::operation::Hash FusedExpertsDeviceOperation::compute_program_hash(
         attributes.persistent.has_value() ? attributes.persistent->h2d_socket_config_addresses
                                           : std::vector<uint32_t>{},
         attributes.persistent.has_value() ? attributes.persistent->d2h_socket_config_address : 0u,
+        attributes.persistent.has_value() && attributes.persistent->h2d_device_pull,
         tensor_args.layer_table);
     return hash;
 }
@@ -826,7 +827,8 @@ FusedExpertsDeviceOperation::invoke(
     const std::optional<Tensor>& persistent_layer_table,
     const std::optional<tt::tt_metal::CoreCoord>& persistent_socket_core,
     const std::optional<std::vector<uint32_t>>& persistent_h2d_socket_addresses,
-    std::optional<uint32_t> persistent_d2h_socket_address) {
+    std::optional<uint32_t> persistent_d2h_socket_address,
+    bool persistent_h2d_device_pull) {
     operation_attributes_t attributes{
         .num_experts = num_experts,
         .intermediate_size = intermediate_size,
@@ -884,6 +886,7 @@ FusedExpertsDeviceOperation::invoke(
             .socket_core = *persistent_socket_core,
             .h2d_socket_config_addresses = *persistent_h2d_socket_addresses,
             .d2h_socket_config_address = *persistent_d2h_socket_address,
+            .h2d_device_pull = persistent_h2d_device_pull,
         };
     }
     tensor_args_t tensor_args{
@@ -933,7 +936,8 @@ fused_experts(
     const std::optional<Tensor>& persistent_layer_table,
     const std::optional<tt::tt_metal::CoreCoord>& persistent_socket_core,
     const std::optional<std::vector<uint32_t>>& persistent_h2d_socket_addresses,
-    std::optional<uint32_t> persistent_d2h_socket_address) {
+    std::optional<uint32_t> persistent_d2h_socket_address,
+    bool persistent_h2d_device_pull) {
     using OperationType = ttnn::operations::experimental::deepseek::moe::fused_experts::FusedExpertsDeviceOperation;
     auto [operation_attributes, tensor_args] = OperationType::invoke(
         input_tensor,
@@ -962,7 +966,8 @@ fused_experts(
         persistent_layer_table,
         persistent_socket_core,
         persistent_h2d_socket_addresses,
-        persistent_d2h_socket_address);
+        persistent_d2h_socket_address,
+        persistent_h2d_device_pull);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

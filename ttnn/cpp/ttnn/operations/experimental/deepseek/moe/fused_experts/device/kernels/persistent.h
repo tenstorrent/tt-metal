@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "api/debug/kernel_profiler.hpp"
+
 // The persistent op (FE_PERSISTENT): every kernel loops, one iteration per token row the host sends.
 //
 // The control core (fe_h2d_ctrl.cpp) takes a page off this chip's H2D socket -- a header whose first
@@ -54,6 +56,7 @@ FORCE_INLINE uint32_t fe_header(uint32_t word) {
 
 // Waits for the go of iteration `iter`; false when it is the stop, after clearing this RISC's go word.
 FORCE_INLINE bool fe_wait_go(uint32_t iter) {
+    DeviceZoneScopedN("FE_GO_WAIT");
     volatile tt_l1_ptr uint32_t* go =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(FE_HDR_ADDR) + kFeHdrWords + kFeMyGoWord;
     uint32_t v;
