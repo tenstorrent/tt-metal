@@ -2655,7 +2655,8 @@ TRAY_POWER_HINT = "bus bar / tray 12 V feed"
 TRAY_POWER_CALL_S = 15
 # Whole-phase bound: an unresponsive BMC must not eat the run's own timeout.
 TRAY_POWER_PHASE_S = 120
-# Timeouts before any read succeeded that mean no route: stop there.
+# Timeouts on one tray's bus before any read of it succeeded: skip the rest of
+# that tray. Every tray's bus doing so (no read ok) means no route: stop.
 TRAY_POWER_NO_ROUTE_TIMEOUTS = 2
 TRAY_POWER_MAX_READS = 4
 
@@ -2746,6 +2747,8 @@ class TrayPowerReader:
         self.runner = runner or self._run
         self.reads_ok = 0
         self.timeouts = 0
+        self.bus_ok: dict[int, int] = {}
+        self.bus_timeouts: dict[int, int] = {}
         self.errors: list[str] = []
         self.stopped = ""
 
@@ -2762,19 +2765,30 @@ class TrayPowerReader:
             self.stopped = f"phase time limit of {self.budget_s:g} s spent"
         if self.stopped:
             return None
+        if self.bus_timeouts.get(bus, 0) >= TRAY_POWER_NO_ROUTE_TIMEOUTS and not self.bus_ok.get(bus):
+            return None  # this tray's bus hangs: the next tray gets its own first reads
         try:
             cp = self.runner(argv)
         except subprocess.TimeoutExpired as e:
             self.timeouts += 1
+            self.bus_timeouts[bus] = self.bus_timeouts.get(bus, 0) + 1
             self.errors.append(f"ipmitool: no reply in {e.timeout:g} s")
-            if self.reads_ok == 0 and self.timeouts >= TRAY_POWER_NO_ROUTE_TIMEOUTS:
+            hung = [b for b in TRAY_POWER_BUS.values() if self.bus_timeouts.get(b, 0) >= TRAY_POWER_NO_ROUTE_TIMEOUTS]
+            if self.reads_ok == 0 and len(hung) == len(TRAY_POWER_BUS):
                 self.stopped = "no route: ipmitool timed out"
+            return None
+        except FileNotFoundError as e:
+            self.errors.append(repr(e))
+            self.stopped = "no route: ipmitool not found"
             return None
         except (OSError, subprocess.SubprocessError) as e:
             self.errors.append(repr(e))
             return None
         if cp.returncode != 0:
-            self.errors.append(((cp.stderr or cp.stdout or "").strip().splitlines() or [f"rc {cp.returncode}"])[0])
+            err = ((cp.stderr or cp.stdout or "").strip().splitlines() or [f"rc {cp.returncode}"])[0]
+            self.errors.append(err)
+            if "sudo" in err.lower() or "password is required" in err.lower():
+                self.stopped = f"no route: {err}"
             return None
         if nbytes == 0:
             return []
@@ -2783,6 +2797,7 @@ class TrayPowerReader:
             self.errors.append(f"unparsed reply {cp.stdout!r}")
         else:
             self.reads_ok += 1
+            self.bus_ok[bus] = self.bus_ok.get(bus, 0) + 1
         return got
 
     def hsc(self, bus: int, addr: int) -> dict:

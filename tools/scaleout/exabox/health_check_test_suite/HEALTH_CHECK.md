@@ -393,8 +393,11 @@ The phase is bounded at 120 s in all, and each ipmitool call at 15 s (less
 when the phase has less left). Once the limit is spent it sends nothing more,
 and the reads still missing are WARN "not read". Every tray is tried: a tray
 whose reads all fail (a dead tray) is WARN "not read" and the other trays are
-still judged. Two timeouts before any read succeeded count as no route, so an
-unresponsive BMC costs about 30 s and one SKIP.
+still judged. Two timeouts on a tray's bus before any read of it succeeded skip the rest
+of that tray (WARN "not read") and the next tray's first reads are still
+tried. Only when every tray's first reads time out is it no route: one SKIP,
+within the 120 s limit. A missing ipmitool or a sudo refusal is no route at
+once, after one call.
 
 Reads only. Every transaction is checked against a fixed list before ipmitool
 runs; nothing is written to an HSC (no CLEAR_FAULTS, no limits, no peak

@@ -273,8 +273,40 @@ class TestTrayPowerPhase(unittest.TestCase):
         def runner(argv):
             raise FileNotFoundError("ipmitool")
 
+        calls = []
+
+        def counting(argv):
+            calls.append(argv)
+            return runner(argv)
+
+        phase = run_phase(counting)
+        self.assertEqual([c.status for c in phase.checks], [SKIP])
+        self.assertEqual(len(calls), 1)
+
+    def test_sudo_refusal_is_one_skip(self):
+        calls = []
+
+        def runner(argv):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="sudo: a password is required\n")
+
         phase = run_phase(runner)
         self.assertEqual([c.status for c in phase.checks], [SKIP])
+        self.assertEqual(len(calls), 1)
+
+    def test_hung_tray_1_does_not_hide_tray_3_fault(self):
+        clock = FakeClock()
+        bmc = FakeBmc(hsc={(3, 0x40): dict(CLEAN_HSC, word=0x2000, input=0x20)})
+
+        def runner(argv):
+            if txn_of(argv)[0] == TRAY_POWER_BUS[1]:
+                clock.t += TRAY_POWER_CALL_S
+                raise subprocess.TimeoutExpired(argv, TRAY_POWER_CALL_S)
+            return bmc(argv)
+
+        checks = by_tray(run_phase(runner, clock=clock))
+        self.assertEqual([checks[t].status for t in (1, 2, 3, 4)], [WARN, PASS, FAIL, PASS])
+        self.assertIn("not read", checks[1].details)
 
     def test_other_tiers_and_dry_run_send_nothing(self):
         for tier in ("light", "medium", "deploy"):
