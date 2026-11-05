@@ -15,6 +15,8 @@ struct InterleavedToShardedProgramFactory {
         const InterleavedToShardedParams& operation_attributes,
         const InterleavedToShardedInputs& tensor_args,
         Tensor& output_tensor);
+
+    static bool uses_bank_segments(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
 };
 
 }  // namespace ttnn::prim
