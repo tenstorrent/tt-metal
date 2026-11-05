@@ -127,12 +127,12 @@ std::optional<uint32_t> dram_channel_for_translated_core(const metal_SocDescript
 
 // The Ethernet-link slot (HalL1MemAddrType::ETH_LINK) of linked Quasar Ethernet core `logical_eth` on `chip`, laid out
 // as internal_::cce_eth::EthLink in tt-2xx/quasar/eth_cce_send.h. When the cluster's link table has no peer for the
-// core, the valid word stays 0 and a warning is logged. Fatal when either end has no keraunos.cores entry.
+// core, the valid word stays 0 and a warning is logged. Fatal when the peer has no keraunos.cores entry.
 std::array<uint32_t, 4> quasar_eth_link_slot(const Cluster& cluster, ChipId chip, const CoreCoord& logical_eth) {
     constexpr uint32_t k_eth_link_valid = 0x4B4E494C;  // kEthLinkValid in eth_cce_send.h
     const auto& soc = cluster.get_soc_desc(chip);
     const uint32_t chan = soc.logical_eth_core_to_chan_map.at(logical_eth);
-    std::array<uint32_t, 4> slot{soc.get_keraunos_core_for_channel(chan).hsio, 0, 0, 0};
+    std::array<uint32_t, 4> slot{};
     const auto& connections = cluster.get_ethernet_connections();
     const auto chip_links = connections.find(chip);
     if (chip_links == connections.end() || !chip_links->second.contains(chan)) {
@@ -144,8 +144,8 @@ std::array<uint32_t, 4> quasar_eth_link_slot(const Cluster& cluster, ChipId chip
         return slot;
     }
     const auto& [peer_chip, peer_chan] = chip_links->second.at(chan);
-    slot[1] = cluster.get_soc_desc(peer_chip).get_keraunos_core_for_channel(peer_chan).hsio;
-    slot[2] = k_eth_link_valid;
+    slot[0] = cluster.get_soc_desc(peer_chip).get_keraunos_core_for_channel(peer_chan).hsio;
+    slot[1] = k_eth_link_valid;
     return slot;
 }
 
