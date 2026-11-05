@@ -1658,20 +1658,22 @@ void ControlPlane::configure_routing_tables_for_fabric_over_noc() {
             const uint32_t dst_chip = dst_phys;
 
             if (dst_phys == src_phys) {
-                // For Horizon x2: the physical chip hosts one logical device per NOC column.
-                // Logical device id = physical NOC column (x). Device-local core (0, y) -> physical (dev_id, y).
-                for (uint32_t dev_id = 0; dev_id < tt::tt_fabric::MAX_HORIZON_NOC_X; dev_id++) {
-                    for (uint32_t local_y = 0; local_y < tt::tt_fabric::MAX_HORIZON_NOC_Y; local_y++) {
-                        const uint32_t phys_x = dev_id;
-                        const uint32_t phys_y = local_y;
-                        const uint32_t selector = phys_x + phys_y * tt::tt_fabric::HORIZON_ATT_WORKER_GRID_X;
-                        const bool is_self = (phys_x == info.my_noc_x && phys_y == info.my_noc_y);
-                        const uint64_t addr =
-                            is_self ? tt::tt_fabric::HORIZON_LOCAL_WINDOW_COMPARE
-                                    : tt::tt_fabric::HORIZON_REMOTE_WINDOW_COMPARE |
-                                          (uint64_t(selector) << tt::tt_fabric::HORIZON_REMOTE_ENDPOINT_SHIFT);
-                        info.flat_addr[0][dev_id][phys_x][phys_y] = addr;
-                    }
+                // For Horizon x2: fill LOCAL/REMOTE window entries for this device's own NOC
+                // column only.  Cross-column entries (reaching the other device on the same
+                // physical chip) are left to the cross-device AP-selection code below so that
+                // the correct access point is used.  Filling them here with REMOTE_WINDOW
+                // would clobber the AP-selected address and break the reverse direction.
+                const uint32_t dev_id = info.my_noc_x;
+                for (uint32_t local_y = 0; local_y < tt::tt_fabric::MAX_HORIZON_NOC_Y; local_y++) {
+                    const uint32_t phys_x = dev_id;
+                    const uint32_t phys_y = local_y;
+                    const uint32_t selector = phys_x + phys_y * tt::tt_fabric::HORIZON_ATT_WORKER_GRID_X;
+                    const bool is_self = (phys_x == info.my_noc_x && phys_y == info.my_noc_y);
+                    const uint64_t addr =
+                        is_self ? tt::tt_fabric::HORIZON_LOCAL_WINDOW_COMPARE
+                                : tt::tt_fabric::HORIZON_REMOTE_WINDOW_COMPARE |
+                                      (uint64_t(selector) << tt::tt_fabric::HORIZON_REMOTE_ENDPOINT_SHIFT);
+                    info.flat_addr[0][dev_id][phys_x][phys_y] = addr;
                 }
                 continue;
             }

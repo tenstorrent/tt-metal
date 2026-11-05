@@ -31,23 +31,6 @@ static constexpr uint64_t HORIZON_ATT_OFFSET_MASK = (uint64_t(1) << HORIZON_ATT_
 
 // FABRIC_MAX_PACKET_SIZE is available via macro from addrgen_api.h
 
-// clang-format off
-/**
- * Issues a unicast write from local L1 memory to a destination NOC address.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*            | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                                       | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                      | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
- * | size                                  | Payload size in bytes                   | uint32_t                                      | True     |
- * | noc_unicast_command_header            | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader        | True     |
- */
-// clang-format on
 template <typename FabricSenderType, bool SetRoute>
 FORCE_INLINE void fabric_unicast_noc_unicast_write(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -85,134 +68,46 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     noc_async_write(src_addr, remote_addr, size);
 }
 
-// clang-format off
-/**
- * Issues a unicast write for all headers in a route via a connection manager.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                | True     |
- * | route_id                              | Route containing packet headers         | uint8_t                                       | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
- * | size                                  | Payload size in bytes                   | uint32_t                                      | True     |
- * | noc_unicast_command_header            | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader        | True     |
- */
-// clang-format on
 template <bool SetRoute>
 FORCE_INLINE void fabric_unicast_noc_unicast_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     uint32_t size,
-    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) { /* TODO: To be implemented */ }
+    tt::tt_fabric::NocUnicastCommandHeader
+        noc_unicast_command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Unicast write (stateful): updates only fields selected by UpdateMask on the packet header then submits the payload.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*            | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
- * | noc_unicast_command_header            | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader        | False    |
- * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
- */
-// clang-format on
 template <UnicastWriteUpdateMask UpdateMask, typename FabricSenderType, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Unicast write (stateful, route variant): updates only fields selected by UpdateMask for all headers in the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                | True     |
- * | route_id                              | Route containing packet headers         | uint8_t                                       | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
- * | noc_unicast_command_header            | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader        | False    |
- * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
- */
-// clang-format on
 template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Unicast write (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                   | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                                        | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                       | True     |
- * | command_header                        | Template command header                 | CommandHeaderT                                 | False    |
- * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                       | False    |
- */
-// clang-format on
 template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Unicast write (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                 | True     |
- * | route_id                              | Route whose headers will be updated     | uint8_t                                        | True     |
- * | command_header                        | Template command header                 | CommandHeaderT                                 | False    |
- * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                       | False    |
- */
-// clang-format on
 template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Issues a unicast atomic increment to a destination semaphore address.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*             | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                   | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                                        | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                       | True     |
- * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| True     |
- */
-// clang-format on
 template <typename FabricSenderType>
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -220,122 +115,39 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader
-        noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented */ }
+        noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Issues a unicast atomic increment for all headers in a route via a connection manager.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                 | True     |
- * | route_id                              | Route containing packet headers         | uint8_t                                        | True     |
- * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| True     |
- */
-// clang-format on
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader
-        noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented */ }
+        noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Unicast atomic increment (stateful): updates only fields selected by UpdateMask, then submits the packet header.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*             | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                   | True     |
- * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| False    |
- */
-// clang-format on
 template <UnicastAtomicIncUpdateMask UpdateMask, typename FabricSenderType, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    CommandHeaderT noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented */ }
+    CommandHeaderT noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Unicast atomic increment (stateful, route variant): updates only fields selected by UpdateMask for all headers.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                 | True     |
- * | route_id                              | Route containing packet headers         | uint8_t                                        | True     |
- * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| False    |
- */
-// clang-format on
 template <UnicastAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    CommandHeaderT noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented */ }
+    CommandHeaderT noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Unicast atomic increment (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                   | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                                        | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                       | True     |
- * | command_header                        | Template command header                 | CommandHeaderT                                 | False    |
- */
-// clang-format on
 template <UnicastAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
-    CommandHeaderT command_header) { /* TODO: To be implemented */ }
+    CommandHeaderT command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Unicast atomic increment (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                 | True     |
- * | route_id                              | Route whose headers will be updated     | uint8_t                                        | True     |
- * | command_header                        | Template command header                 | CommandHeaderT                                 | False    |
- */
-// clang-format on
 template <UnicastAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    CommandHeaderT command_header) { /* TODO: To be implemented */ }
+    CommandHeaderT command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Issues a unicast scatter write from local L1 to destination chunks (split into up to four chunks).
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*             | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                   | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                                        | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                       | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                       | True     |
- * | size                                  | Payload size in bytes                   | uint32_t                                       | True     |
- * | noc_unicast_scatter_command_header    | Scatter write command header            | tt::tt_fabric::NocUnicastScatterCommandHeader  | True     |
- */
-// clang-format on
 template <typename FabricSenderType, bool SetRoute>
 FORCE_INLINE void fabric_unicast_noc_scatter_write(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -344,48 +156,18 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     uint16_t dst_mesh_id,
     uint32_t src_addr,
     uint32_t size,
-    tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header) { /* TODO: To be implemented */ }
+    tt::tt_fabric::NocUnicastScatterCommandHeader
+        noc_unicast_scatter_command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Issues a unicast scatter write for all headers in a route via a connection manager.
- *
- * Return value: None
- *
- * | Argument                              | Description                              | Type                                           | Required |
- * |---------------------------------------|------------------------------------------|------------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager         | RoutingPlaneConnectionManager&                 | True     |
- * | route_id                              | Route containing packet headers          | uint8_t                                        | True     |
- * | src_addr                              | Source L1 address                        | uint32_t                                       | True     |
- * | size                                  | Payload size in bytes                    | uint32_t                                       | True     |
- * | noc_unicast_scatter_command_header    | Scatter write command header             | tt::tt_fabric::NocUnicastScatterCommandHeader  | True     |
- */
-// clang-format on
 template <bool SetRoute>
 FORCE_INLINE void fabric_unicast_noc_scatter_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     uint32_t size,
-    tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header) { /* TODO: To be implemented */ }
+    tt::tt_fabric::NocUnicastScatterCommandHeader
+        noc_unicast_scatter_command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Issues a unicast fused scatter write + atomic increment (2 scatter chunks + semaphore inc).
- *
- * Return value: None
- *
- * | Argument                                          | Description                       | Type                                                       | Required |
- * |---------------------------------------------------|-----------------------------------|------------------------------------------------------------|----------|
- * | client_interface                                  | Fabric sender interface           | tt_l1_ptr WorkerToFabricEdmSender*                         | True     |
- * | packet_header                                     | Packet header to use              | volatile PACKET_HEADER_TYPE*                               | True     |
- * | dst_dev_id                                        | Destination device id             | uint8_t                                                    | True     |
- * | dst_mesh_id                                       | Destination mesh id               | uint16_t                                                   | True     |
- * | src_addr                                          | Source L1 address                 | uint32_t                                                   | True     |
- * | size                                              | Payload size in bytes              | uint32_t                                                   | True     |
- * | noc_unicast_scatter_atomic_inc_fused_command_header | Fused scatter+atomic inc header  | tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader | True   |
- */
-// clang-format on
 template <typename FabricSenderType, bool SetRoute>
 FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -395,23 +177,8 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader
-        noc_unicast_scatter_atomic_inc_fused_command_header) { /* TODO: To be implemented */ }
+        noc_unicast_scatter_atomic_inc_fused_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Issues a unicast fused scatter write + atomic increment for all headers in a route via a connection manager.
- *
- * Return value: None
- *
- * | Argument                                          | Description                       | Type                                                       | Required |
- * |---------------------------------------------------|-----------------------------------|------------------------------------------------------------|----------|
- * | connection_manager                                | Routing plane connection manager | RoutingPlaneConnectionManager&                             | True     |
- * | route_id                                          | Route containing packet headers   | uint8_t                                                    | True     |
- * | src_addr                                          | Source L1 address                 | uint32_t                                                   | True     |
- * | size                                              | Payload size in bytes              | uint32_t                                                   | True     |
- * | noc_unicast_scatter_atomic_inc_fused_command_header | Fused scatter+atomic inc header | tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader | True   |
- */
-// clang-format on
 template <bool SetRoute>
 FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
@@ -419,203 +186,70 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader
-        noc_unicast_scatter_atomic_inc_fused_command_header) { /* TODO: To be implemented */ }
+        noc_unicast_scatter_atomic_inc_fused_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Fused scatter write + atomic increment (stateful): updates only masked fields, then submits the payload.
- *
- * Return value: None
- *
- * | Argument                                          | Description                       | Type                                                       | Required |
- * |---------------------------------------------------|-----------------------------------|------------------------------------------------------------|----------|
- * | client_interface                                  | Fabric sender interface           | tt_l1_ptr WorkerToFabricEdmSender*                          | True     |
- * | packet_header                                     | Packet header to use              | volatile PACKET_HEADER_TYPE*                               | True     |
- * | src_addr                                          | Source L1 address                 | uint32_t                                                   | True     |
- * | noc_unicast_scatter_atomic_inc_fused_command_header | Fused scatter+atomic inc header  | tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader | False  |
- * | packet_size_bytes                                 | Payload size override if masked   | uint16_t                                                   | False    |
- */
-// clang-format on
 template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename FabricSenderType, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_atomic_inc_fused_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Fused scatter write + atomic increment (stateful, route variant): updates only masked fields for all headers.
- *
- * Return value: None
- *
- * | Argument                                          | Description                       | Type                                                       | Required |
- * |---------------------------------------------------|-----------------------------------|------------------------------------------------------------|----------|
- * | connection_manager                                | Routing plane connection manager  | RoutingPlaneConnectionManager&                             | True     |
- * | route_id                                          | Route containing packet headers   | uint8_t                                                    | True     |
- * | src_addr                                          | Source L1 address                 | uint32_t                                                   | True     |
- * | noc_unicast_scatter_atomic_inc_fused_command_header | Fused scatter+atomic inc header | tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader | False  |
- * | packet_size_bytes                                 | Payload size override if masked   | uint16_t                                                   | False    |
- */
-// clang-format on
 template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_atomic_inc_fused_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Fused scatter write + atomic increment (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                       | Description                             | Type                             | Required |
- * |--------------------------------|-----------------------------------------|----------------------------------|----------|
- * | packet_header                  | Packet header to use                    | volatile PACKET_HEADER_TYPE*     | True     |
- * | dst_dev_id                     | Destination device id                   | uint8_t                          | True     |
- * | dst_mesh_id                    | Destination mesh id                     | uint16_t                         | True     |
- * | command_header                 | Template fused command header           | CommandHeaderT                   | False    |
- * | packet_size_bytes              | Payload size override if masked         | uint16_t                         | False    |
- */
-// clang-format on
 template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Fused scatter write + atomic increment (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                       | Description                             | Type                             | Required |
- * |--------------------------------|-----------------------------------------|----------------------------------|----------|
- * | connection_manager             | Routing plane connection manager        | RoutingPlaneConnectionManager&   | True     |
- * | route_id                       | Route whose headers will be updated     | uint8_t                          | True     |
- * | command_header                 | Template fused command header           | CommandHeaderT                   | False    |
- * | packet_size_bytes              | Payload size override if masked         | uint16_t                         | False    |
- */
-// clang-format on
 template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Unicast scatter write (stateful): updates only fields selected by UpdateMask, then submits the payload.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*             | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                   | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                       | True     |
- * | noc_unicast_scatter_command_header    | Scatter write command header            | tt::tt_fabric::NocUnicastScatterCommandHeader  | False    |
- * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                       | False    |
- */
-// clang-format on
 template <UnicastScatterWriteUpdateMask UpdateMask, typename FabricSenderType, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Unicast scatter write (stateful, route variant): updates only fields selected by UpdateMask for all headers.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                | True     |
- * | route_id                              | Route containing packet headers         | uint8_t                                       | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
- * | noc_unicast_scatter_command_header    | Scatter write command header            | tt::tt_fabric::NocUnicastScatterCommandHeader | False    |
- * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
- */
-// clang-format on
 template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Unicast scatter write (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                          | Required |
- * |---------------------------------------|-----------------------------------------|-------------------------------|----------|
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*  | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                      | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                     | True     |
- * | command_header                        | Template command header                 | CommandHeaderT                | False    |
- * | packet_size_bytes                     | Payload size override if masked         | uint16_t                      | False    |
- */
-// clang-format on
 template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Unicast scatter write (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                 | True     |
- * | route_id                              | Route whose headers will be updated     | uint8_t                                        | True     |
- * | command_header                        | Template command header                 | CommandHeaderT                                 | False    |
- * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                       | False    |
- */
-// clang-format on
 template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Issues a unicast inline write (32-bit) to a destination NOC address.
- *
- * Return value: None
- *
- * | Argument                           | Description                      | Type                                          | Required |
- * |------------------------------------|----------------------------------|-----------------------------------------------|----------|
- * | client_interface                   | Fabric sender interface          | tt_l1_ptr WorkerToFabricEdmSender*            | True     |
- * | packet_header                      | Packet header to use             | volatile PACKET_HEADER_TYPE*                  | True     |
- * | dst_dev_id                         | Destination device id            | uint8_t                                       | True     |
- * | dst_mesh_id                        | Destination mesh id              | uint16_t                                      | True     |
- * | noc_unicast_inline_write_command_header | Inline write command header | tt::tt_fabric::NocUnicastInlineWriteCommandHeader | True |
- */
-// clang-format on
 template <typename FabricSenderType>
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -623,122 +257,39 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader
-        noc_unicast_inline_write_command_header) { /* TODO: To be implemented */ }
+        noc_unicast_inline_write_command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Issues a unicast inline write for all headers in a route via a connection manager.
- *
- * Return value: None
- *
- * | Argument                           | Description                         | Type                                          | Required |
- * |------------------------------------|-------------------------------------|-----------------------------------------------|----------|
- * | connection_manager                 | Routing plane connection manager    | RoutingPlaneConnectionManager&                | True     |
- * | route_id                           | Route containing packet headers     | uint8_t                                       | True     |
- * | noc_unicast_inline_write_command_header | Inline write command header    | tt::tt_fabric::NocUnicastInlineWriteCommandHeader | True |
- */
-// clang-format on
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader
-        noc_unicast_inline_write_command_header) { /* TODO: To be implemented */ }
+        noc_unicast_inline_write_command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Unicast inline write (stateful): updates only fields selected by UpdateMask, then submits the packet header.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*     　　　   | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*           　　　   | True     |
- * | noc_unicast_inline_write_command_header | Inline write command header           | tt::tt_fabric::NocUnicastInlineWriteCommandHeader | False |
- */
-// clang-format on
 template <UnicastInlineWriteUpdateMask UpdateMask, typename FabricSenderType, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    CommandHeaderT noc_unicast_inline_write_command_header) { /* TODO: To be implemented */ }
+    CommandHeaderT noc_unicast_inline_write_command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Unicast inline write (stateful, route variant): updates only fields selected by UpdateMask for all headers.
- *
- * Return value: None
- *
- * | Argument                              | Description                          | Type                                            | Required |
- * |---------------------------------------|--------------------------------------|-------------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager     | RoutingPlaneConnectionManager&                  | True     |
- * | route_id                              | Route containing packet headers      | uint8_t                                         | True     |
- * | noc_unicast_inline_write_command_header | Inline write command header        | tt::tt_fabric::NocUnicastInlineWriteCommandHeader  | False |
- */
-// clang-format on
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    CommandHeaderT noc_unicast_inline_write_command_header) { /* TODO: To be implemented */ }
+    CommandHeaderT noc_unicast_inline_write_command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Unicast inline write (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                         | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------|----------|
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*  | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                      | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                     | True     |
- * | command_header                        | Template command header                 | CommandHeaderT               | False    |
- */
-// clang-format on
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
-    CommandHeaderT command_header) { /* TODO: To be implemented */ }
+    CommandHeaderT command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Unicast inline write (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                 | True     |
- * | route_id                              | Route whose headers will be updated     | uint8_t                                        | True     |
- * | command_header                        | Template command header                 | CommandHeaderT                                 | False    |
- */
-// clang-format on
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    CommandHeaderT command_header) { /* TODO: To be implemented */ }
+    CommandHeaderT command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Issues a fused unicast write + atomic increment to a destination and a semaphore address.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                              | Required |
- * |---------------------------------------|-----------------------------------------|---------------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*                | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                      | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                                           | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                          | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                          | True     |
- * | size                                  | Payload size in bytes                   | uint32_t                                          | True     |
- * | noc_fused_unicast_atomic_inc_command_header | Fused command header              | tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader | True  |
- */
-// clang-format on
 template <typename FabricSenderType, bool SetRoute>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -748,23 +299,8 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader
-        noc_fused_unicast_atomic_inc_command_header) { /* TODO: To be implemented */ }
+        noc_fused_unicast_atomic_inc_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Issues a fused unicast write + atomic increment for all headers in a route via a connection manager.
- *
- * Return value: None
- *
- * | Argument                                  | Description                             | Type                                              | Required |
- * |-------------------------------------------|-----------------------------------------|---------------------------------------------------|----------|
- * | connection_manager                        | Routing plane connection manager        | RoutingPlaneConnectionManager&                    | True     |
- * | route_id                                  | Route containing packet headers         | uint8_t                                           | True     |
- * | src_addr                                  | Source L1 address                       | uint32_t                                          | True     |
- * | size                                      | Payload size in bytes                   | uint32_t                                          | True     |
- * | noc_fused_unicast_atomic_inc_command_header | Fused command header                  | tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader | True  |
- */
-// clang-format on
 template <bool SetRoute>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
@@ -772,116 +308,39 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader
-        noc_fused_unicast_atomic_inc_command_header) { /* TODO: To be implemented */ }
+        noc_fused_unicast_atomic_inc_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Fused unicast write + atomic increment (stateful): updates only masked fields, then submits the payload.
- *
- * Return value: None
- *
- * | Argument                                  | Description                            | Type                                              | Required |
- * |-------------------------------------------|----------------------------------------|---------------------------------------------------|----------|
- * | client_interface                          | Fabric sender interface                | tt_l1_ptr WorkerToFabricEdmSender*                | True     |
- * | packet_header                             | Packet header to use                   | volatile PACKET_HEADER_TYPE*                      | True     |
- * | src_addr                                  | Source L1 address                      | uint32_t                                          | True     |
- * | noc_fused_unicast_atomic_inc_command_header | Fused command header                 | tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader | False |
- * | packet_size_bytes                         | Payload size override if masked        | uint16_t                                          | False    |
- */
-// clang-format on
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename FabricSenderType, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_fused_unicast_atomic_inc_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Fused unicast write + atomic increment (stateful, route variant): updates only masked fields for all headers.
- *
- * Return value: None
- *
- * | Argument                                  | Description                            | Type                                              | Required |
- * |-------------------------------------------|----------------------------------------|---------------------------------------------------|----------|
- * | connection_manager                        | Routing plane connection manager       | RoutingPlaneConnectionManager&                    | True     |
- * | route_id                                  | Route containing packet headers        | uint8_t                                           | True     |
- * | src_addr                                  | Source L1 address                      | uint32_t                                          | True     |
- * | noc_fused_unicast_atomic_inc_command_header | Fused command header                 | tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader | False |
- * | packet_size_bytes                         | Payload size override if masked        | uint16_t                                          | False    |
- */
-// clang-format on
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_fused_unicast_atomic_inc_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Fused unicast write + atomic increment (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                       | Description                             | Type                             | Required |
- * |--------------------------------|-----------------------------------------|----------------------------------|----------|
- * | packet_header                  | Packet header to use                    | volatile PACKET_HEADER_TYPE*     | True     |
- * | dst_dev_id                     | Destination device id                   | uint8_t                          | True     |
- * | dst_mesh_id                    | Destination mesh id                     | uint16_t                         | True     |
- * | command_header                 | Template fused command header           | CommandHeaderT                   | False    |
- * | packet_size_bytes              | Payload size override if masked         | uint16_t                         | False    |
- */
-// clang-format on
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Fused unicast write + atomic increment (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                       | Description                             | Type                             | Required |
- * |--------------------------------|-----------------------------------------|----------------------------------|----------|
- * | connection_manager             | Routing plane connection manager        | RoutingPlaneConnectionManager&   | True     |
- * | route_id                       | Route whose headers will be updated     | uint8_t                          | True     |
- * | command_header                 | Template fused command header           | CommandHeaderT                   | False    |
- * | packet_size_bytes              | Payload size override if masked         | uint16_t                         | False    |
- */
-// clang-format on
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast unicast write: issues a unicast write with chip-level multicast routing metadata.
- *
- * Return value: None
- *
- * | Argument                   | Description                             | Type                                       | Required |
- * |----------------------------|-----------------------------------------|--------------------------------------------|----------|
- * | client_interface           | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*         | True     |
- * | packet_header              | Packet header to use                    | volatile PACKET_HEADER_TYPE*               | True     |
- * | dst_dev_id                 | Destination device id                   | uint8_t                                    | True     |
- * | dst_mesh_id                | Destination mesh id                     | uint16_t                                   | True     |
- * | ranges                     | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                      | True     |
- * | src_addr                   | Source L1 address                       | uint32_t                                   | True     |
- * | size                       | Payload size in bytes                   | uint32_t                                   | True     |
- * | noc_unicast_command_header | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader     | True     |
- */
-// clang-format on
 template <typename FabricSenderType, bool SetRoute>
 FORCE_INLINE void fabric_multicast_noc_unicast_write(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -891,31 +350,17 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     const MeshMcastRange& ranges,
     uint32_t src_addr,
     uint32_t size,
-    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) { /* TODO: To be implemented */ }
+    tt::tt_fabric::NocUnicastCommandHeader
+        noc_unicast_command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast write (route variant): issues writes for all headers in the route using multicast routing metadata.
- *
- * Return value: None
- *
- * | Argument                   | Description                             | Type                                       | Required |
- * |----------------------------|-----------------------------------------|--------------------------------------------|----------|
- * | connection_manager         | Routing plane connection manager        | RoutingPlaneConnectionManager&             | True     |
- * | route_id                   | Route containing packet headers         | uint8_t                                    | True     |
- * | ranges                     | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                     | True     |
- * | src_addr                   | Source L1 address                       | uint32_t                                   | True     |
- * | size                       | Payload size in bytes                   | uint32_t                                   | True     |
- * | noc_unicast_command_header | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader     | True     |
- */
-// clang-format on
 FORCE_INLINE void fabric_multicast_noc_unicast_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     const MeshMcastRange* ranges,
     uint32_t src_addr,
     uint32_t size,
-    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) { /* TODO: To be implemented */ }
+    tt::tt_fabric::NocUnicastCommandHeader
+        noc_unicast_command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
 #if defined(FABRIC_2D)
 namespace mcast_detail {
@@ -977,108 +422,36 @@ FORCE_INLINE void submit_multicast_branch_fanout_impl(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     const PreparedMulticastBranchFanout& fanout,
     [[maybe_unused]] uint32_t src_addr,
-    [[maybe_unused]] uint32_t size) { /* TODO: To be implemented */ }
+    [[maybe_unused]] uint32_t size) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
 FORCE_INLINE void submit_multicast_branch_fanout_with_payload(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     const PreparedMulticastBranchFanout& fanout,
     uint32_t src_addr,
-    uint32_t size) { /* TODO: To be implemented */ }
+    uint32_t size) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
 FORCE_INLINE void submit_multicast_branch_fanout_header_only(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
-    const PreparedMulticastBranchFanout& fanout) { /* TODO: To be implemented */ }
+    const PreparedMulticastBranchFanout& fanout) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
 }  // namespace mcast_detail
 
-// clang-format off
-/**
- * Issues one branch of a client-split multicast. The branch tree is encoded once into one shared
- * header, then that immutable header is submitted through every root output selected by the reverse
- * tree, including an express Z output when needed. The operation is same-mesh and anchored at the
- * manager's source chip.
- *
- * Requires one direction-tagged connection per root output and exactly one header in the route.
- * Missing connections fail-stop rather than delivering to only part of the range.
- *
- * Source-local delivery is not part of this API: the operation bypasses the source RX, and only the
- * Ethernet outputs in the root action are used.
- *
- * Return value: None
- *
- * | Argument                   | Description                             | Type                                       | Required |
- * |----------------------------|-----------------------------------------|--------------------------------------------|----------|
- * | connection_manager         | Routing plane connection manager        | RoutingPlaneConnectionManager&             | True     |
- * | route_id                   | Route holding the shared packet header  | uint8_t                                    | True     |
- * | branch                     | One E, W, N-with-teeth, or S-with-teeth branch | const MeshMcastRange&                | True     |
- * | src_addr                   | Source L1 address                       | uint32_t                                   | True     |
- * | size                       | Payload size in bytes                   | uint32_t                                   | True     |
- * | noc_unicast_command_header | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader     | True     |
- */
-// clang-format on
 FORCE_INLINE void fabric_multicast_source_inject_noc_unicast_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     const MeshMcastRange& branch,
     uint32_t src_addr,
     uint32_t size,
-    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) { /* TODO: To be implemented */ }
+    tt::tt_fabric::NocUnicastCommandHeader
+        noc_unicast_command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Issues an atomic increment for one branch of a client-split multicast. The branch tree and command
- * are populated once in one shared header, then submitted through every root output selected by the
- * reverse tree, including an express Z output when needed. The operation is same-mesh and anchored at
- * the manager's source chip.
- *
- * Requires one direction-tagged connection per root output and exactly one header in the route.
- * Missing connections fail-stop rather than delivering to only part of the range.
- *
- * Source-local delivery is not part of this API: the operation bypasses the source RX, and only the
- * Ethernet outputs in the root action are used.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                 | True     |
- * | route_id                              | Route holding the shared packet header  | uint8_t                                        | True     |
- * | branch                                | One E, W, N-with-teeth, or S-with-teeth branch | const MeshMcastRange&                    | True     |
- * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| True     |
- */
-// clang-format on
 FORCE_INLINE void fabric_multicast_source_inject_noc_unicast_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     const MeshMcastRange& branch,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader
-        noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented */ }
+        noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Issues a fused write and atomic increment for one branch of a client-split multicast. The branch
- * tree and command are populated once in one shared header, then submitted through every root output
- * selected by the reverse tree, including an express Z output when needed. The operation is same-mesh
- * and anchored at the manager's source chip.
- *
- * Requires one direction-tagged connection per root output and exactly one header in the route.
- * Missing connections fail-stop rather than delivering to only part of the range.
- *
- * Source-local delivery is not part of this API: the operation bypasses the source RX, and only the
- * Ethernet outputs in the root action are used.
- *
- * Return value: None
- *
- * | Argument                                    | Description                            | Type                                                   | Required |
- * |---------------------------------------------|----------------------------------------|--------------------------------------------------------|----------|
- * | connection_manager                          | Routing plane connection manager       | RoutingPlaneConnectionManager&                         | True     |
- * | route_id                                    | Route holding the shared packet header | uint8_t                                                | True     |
- * | branch                                      | One E, W, N-with-teeth, or S-with-teeth branch | const MeshMcastRange&                            | True     |
- * | src_addr                                    | Source L1 address                      | uint32_t                                               | True     |
- * | size                                        | Payload size in bytes                  | uint32_t                                               | True     |
- * | noc_fused_unicast_atomic_inc_command_header | Fused command header                   | tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader  | True     |
- */
-// clang-format on
 FORCE_INLINE void fabric_multicast_source_inject_noc_fused_unicast_with_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
@@ -1086,33 +459,8 @@ FORCE_INLINE void fabric_multicast_source_inject_noc_fused_unicast_with_atomic_i
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader
-        noc_fused_unicast_atomic_inc_command_header) { /* TODO: To be implemented */ }
+        noc_fused_unicast_atomic_inc_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Issues a fused two-chunk scatter write and atomic increment for one branch of a client-split
- * multicast. The branch tree and command are populated once in one shared header, then submitted
- * through every root output selected by the reverse tree, including an express Z output when needed.
- * The operation is same-mesh and anchored at the manager's source chip.
- *
- * Requires one direction-tagged connection per root output and exactly one header in the route.
- * Missing connections fail-stop rather than delivering to only part of the range.
- *
- * Source-local delivery is not part of this API: the operation bypasses the source RX, and only the
- * Ethernet outputs in the root action are used.
- *
- * Return value: None
- *
- * | Argument                                          | Description                            | Type                                                          | Required |
- * |---------------------------------------------------|----------------------------------------|---------------------------------------------------------------|----------|
- * | connection_manager                                | Routing plane connection manager       | RoutingPlaneConnectionManager&                                | True     |
- * | route_id                                          | Route holding the shared packet header | uint8_t                                                       | True     |
- * | branch                                            | One E, W, N-with-teeth, or S-with-teeth branch | const MeshMcastRange&                                   | True     |
- * | src_addr                                          | Source L1 address                      | uint32_t                                                      | True     |
- * | size                                              | Payload size in bytes                  | uint32_t                                                      | True     |
- * | noc_unicast_scatter_atomic_inc_fused_command_header | Fused scatter and atomic header       | tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader   | True     |
- */
-// clang-format on
 FORCE_INLINE void fabric_multicast_source_inject_noc_fused_scatter_write_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
@@ -1120,71 +468,25 @@ FORCE_INLINE void fabric_multicast_source_inject_noc_fused_scatter_write_atomic_
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader
-        noc_unicast_scatter_atomic_inc_fused_command_header) { /* TODO: To be implemented */ }
+        noc_unicast_scatter_atomic_inc_fused_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 #endif
 
-// clang-format off
-/**
- * Multicast unicast write (stateful): updates only fields selected by UpdateMask, then submits the payload.
- *
- * Return value: None
- *
- * | Argument                   | Description                             | Type                                       | Required |
- * |----------------------------|-----------------------------------------|--------------------------------------------|----------|
- * | client_interface           | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*         | True     |
- * | packet_header              | Packet header to use                    | volatile PACKET_HEADER_TYPE*               | True     |
- * | src_addr                   | Source L1 address                       | uint32_t                                   | True     |
- * | noc_unicast_command_header | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader     | False    |
- * | packet_size_bytes          | Payload size override if masked         | uint16_t                                   | False    |
- */
-// clang-format on
 template <UnicastWriteUpdateMask UpdateMask, typename FabricSenderType, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast write (stateful, route variant): updates only fields selected by UpdateMask for all headers.
- *
- * Return value: None
- *
- * | Argument                   | Description                             | Type                                      | Required |
- * |----------------------------|-----------------------------------------|-------------------------------------------|----------|
- * | connection_manager         | Routing plane connection manager        | RoutingPlaneConnectionManager&            | True     |
- * | route_id                   | Route containing packet headers         | uint8_t                                   | True     |
- * | src_addr                   | Source L1 address                       | uint32_t                                  | True     |
- * | noc_unicast_command_header | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader    | False    |
- * | packet_size_bytes          | Payload size override if masked         | uint16_t                                  | False    |
- */
-// clang-format on
 template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast write (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                 | Required |
- * |---------------------------------------|-----------------------------------------|--------------------------------------|----------|
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*         | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                              | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                             | True     |
- * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                | True     |
- * | command_header                        | Template command header                 | CommandHeaderT                       | False    |
- * | packet_size_bytes                     | Payload size override if masked         | uint16_t                             | False    |
- */
-// clang-format on
 template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -1192,47 +494,16 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
     uint16_t dst_mesh_id,
     const MeshMcastRange& ranges,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast write (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                 | Required |
- * |---------------------------------------|-----------------------------------------|--------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&       | True     |
- * | route_id                              | Route whose headers will be updated     | uint8_t                              | True     |
- * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*               | True     |
- * | command_header                        | Template command header                 | CommandHeaderT                       | False    |
- * | packet_size_bytes                     | Payload size override if masked         | uint16_t                             | False    |
- */
-// clang-format on
 template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     const MeshMcastRange* ranges,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast atomic increment: issues a unicast atomic inc with chip-level multicast routing metadata.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*             | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                   | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                                        | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                       | True     |
- * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                          | True     |
- * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| True     |
- */
-// clang-format on
 template <typename FabricSenderType>
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -1241,129 +512,42 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
     uint16_t dst_mesh_id,
     const MeshMcastRange& ranges,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader
-        noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented */ }
+        noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast unicast atomic increment (route variant): issues atomic inc for all headers using multicast metadata.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                 | True     |
- * | route_id                              | Route containing packet headers         | uint8_t                                        | True     |
- * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                          | True     |
- * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| True     |
- */
-// clang-format on
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     const MeshMcastRange* ranges,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader
-        noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented */ }
+        noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast unicast atomic inc (stateful): updates only fields selected by UpdateMask, then submits the packet header.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*             | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                   | True     |
- * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| False    |
- */
-// clang-format on
 template <UnicastAtomicIncUpdateMask UpdateMask, typename FabricSenderType, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    CommandHeaderT noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented */ }
+    CommandHeaderT noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast unicast atomic inc (stateful, route variant): updates only masked fields for all headers.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                 | True     |
- * | route_id                              | Route containing packet headers         | uint8_t                                        | True     |
- * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| False    |
- */
-// clang-format on
 template <UnicastAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    CommandHeaderT noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented */ }
+    CommandHeaderT noc_unicast_atomic_inc_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast unicast atomic inc (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                                       | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                      | True     |
- * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                         | True     |
- * | command_header                        | Template command header                 | CommandHeaderT                                | False    |
- */
-// clang-format on
 template <UnicastAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
     const MeshMcastRange& ranges,
-    CommandHeaderT command_header) { /* TODO: To be implemented */ }
+    CommandHeaderT command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast unicast atomic inc (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                | True     |
- * | route_id                              | Route whose headers will be updated     | uint8_t                                       | True     |
- * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                         | True     |
- * | command_header                        | Template command header                 | CommandHeaderT                                | False    |
- */
-// clang-format on
 template <UnicastAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     const MeshMcastRange* ranges,
-    CommandHeaderT command_header) { /* TODO: To be implemented */ }
+    CommandHeaderT command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast unicast scatter write: issues a unicast scatter write with multicast routing metadata.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*             | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                   | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                                        | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                       | True     |
- * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                          | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                       | True     |
- * | size                                  | Payload size in bytes                   | uint32_t                                       | True     |
- * | noc_unicast_scatter_command_header    | Scatter write command header            | tt::tt_fabric::NocUnicastScatterCommandHeader  | True     |
- */
-// clang-format on
 template <typename FabricSenderType>
 FORCE_INLINE void fabric_multicast_noc_scatter_write(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -1373,94 +557,34 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     const MeshMcastRange& ranges,
     uint32_t src_addr,
     uint32_t size,
-    tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header) { /* TODO: To be implemented */ }
+    tt::tt_fabric::NocUnicastScatterCommandHeader
+        noc_unicast_scatter_command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast scatter write (route variant): issues writes for all headers using multicast metadata.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                | True     |
- * | route_id                              | Route containing packet headers         | uint8_t                                       | True     |
- * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                         | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
- * | size                                  | Payload size in bytes                   | uint32_t                                      | True     |
- * | noc_unicast_scatter_command_header    | Scatter write command header            | tt::tt_fabric::NocUnicastScatterCommandHeader | True     |
- */
-// clang-format on
 FORCE_INLINE void fabric_multicast_noc_scatter_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     const MeshMcastRange* ranges,
     uint32_t src_addr,
     uint32_t size,
-    tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header) { /* TODO: To be implemented */ }
+    tt::tt_fabric::NocUnicastScatterCommandHeader
+        noc_unicast_scatter_command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast scatter write (stateful): updates only masked fields, then submits the payload.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*            | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
- * | noc_unicast_scatter_command_header    | Scatter write command header            | tt::tt_fabric::NocUnicastScatterCommandHeader | False    |
- * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
- */
-// clang-format on
 template <UnicastScatterWriteUpdateMask UpdateMask, typename FabricSenderType, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast scatter write (stateful, route variant): updates only masked fields for all headers.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                | True     |
- * | route_id                              | Route containing packet headers         | uint8_t                                       | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
- * | noc_unicast_scatter_command_header    | Scatter write command header            | tt::tt_fabric::NocUnicastScatterCommandHeader | False    |
- * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
- */
-// clang-format on
 template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast scatter write (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                                       | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                      | True     |
- * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                         | True     |
- * | command_header                        | Template command header                  | CommandHeaderT                                | False    |
- * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
- */
-// clang-format on
 template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -1468,47 +592,16 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     uint16_t dst_mesh_id,
     const MeshMcastRange& ranges,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast scatter write (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                | True     |
- * | route_id                              | Route whose headers will be updated     | uint8_t                                       | True     |
- * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                         | True     |
- * | command_header                        | Template command header                 | CommandHeaderT                                | False    |
- * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
- */
-// clang-format on
 template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     const MeshMcastRange* ranges,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast inline write: issues a 32-bit inline write with multicast routing metadata.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*             | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                   | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                                        | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                       | True     |
- * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                          | True     |
- * | noc_unicast_inline_write_command_header | Inline write command header           | tt::tt_fabric::NocUnicastInlineWriteCommandHeader | True  |
- */
-// clang-format on
 template <typename FabricSenderType>
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -1517,129 +610,42 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
     uint16_t dst_mesh_id,
     const MeshMcastRange& ranges,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader
-        noc_unicast_inline_write_command_header) { /* TODO: To be implemented */ }
+        noc_unicast_inline_write_command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast inline write (route variant): issues inline writes for all headers using multicast metadata.
- *
- * Return value: None
- *
- * | Argument                              | Description                          | Type                                           | Required |
- * |---------------------------------------|--------------------------------------|------------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager     | RoutingPlaneConnectionManager&                 | True     |
- * | route_id                              | Route containing packet headers      | uint8_t                                        | True     |
- * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                         | True     |
- * | noc_unicast_inline_write_command_header | Inline write command header        | tt::tt_fabric::NocUnicastInlineWriteCommandHeader | True  |
- */
-// clang-format on
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     const MeshMcastRange* ranges,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader
-        noc_unicast_inline_write_command_header) { /* TODO: To be implemented */ }
+        noc_unicast_inline_write_command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast inline write (stateful): updates only masked fields, then submits the packet header.
- *
- * Return value: None
- *
- * | Argument                              | Description                     | Type                                           | Required |
- * |---------------------------------------|---------------------------------|------------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface         | tt_l1_ptr WorkerToFabricEdmSender*             | True     |
- * | packet_header                         | Packet header to use            | volatile PACKET_HEADER_TYPE*                   | True     |
- * | noc_unicast_inline_write_command_header | Inline write command header   | tt::tt_fabric::NocUnicastInlineWriteCommandHeader | False |
- */
-// clang-format on
 template <UnicastInlineWriteUpdateMask UpdateMask, typename FabricSenderType, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    CommandHeaderT noc_unicast_inline_write_command_header) { /* TODO: To be implemented */ }
+    CommandHeaderT noc_unicast_inline_write_command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast inline write (stateful, route variant): updates only masked fields for all headers.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                 | True     |
- * | route_id                              | Route containing packet headers         | uint8_t                                        | True     |
- * | noc_unicast_inline_write_command_header | Inline write command header           | tt::tt_fabric::NocUnicastInlineWriteCommandHeader | False |
- */
-// clang-format on
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    CommandHeaderT noc_unicast_inline_write_command_header) { /* TODO: To be implemented */ }
+    CommandHeaderT noc_unicast_inline_write_command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast inline write (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                                       | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                      | True     |
- * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                         | True     |
- * | command_header                        | Template command header                 | CommandHeaderT                                 | False    |
- */
-// clang-format on
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
     const MeshMcastRange& ranges,
-    CommandHeaderT command_header) { /* TODO: To be implemented */ }
+    CommandHeaderT command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast inline write (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                           | Required |
- * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                 | True     |
- * | route_id                              | Route whose headers will be updated     | uint8_t                                        | True     |
- * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                          | True     |
- * | command_header                        | Template command header                 | CommandHeaderT                                 | False    |
- */
-// clang-format on
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     const MeshMcastRange* ranges,
-    CommandHeaderT command_header) { /* TODO: To be implemented */ }
+    CommandHeaderT command_header) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast fused unicast write + atomic increment: issues fused op with multicast routing metadata.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                             | Required |
- * |---------------------------------------|-----------------------------------------|--------------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*               | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                     | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                                          | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                         | True     |
- * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                            | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                         | True     |
- * | size                                  | Payload size in bytes                   | uint32_t                                         | True     |
- * | noc_fused_unicast_atomic_inc_command_header | Fused command header              | tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader | True |
- */
-// clang-format on
 template <typename FabricSenderType, bool SetRoute>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -1650,24 +656,8 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader
-        noc_fused_unicast_atomic_inc_command_header) { /* TODO: To be implemented */ }
+        noc_fused_unicast_atomic_inc_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast fused unicast write + atomic increment (route variant): issues fused ops for all headers.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager     | RoutingPlaneConnectionManager&                   | True     |
- * | route_id                              | Route containing packet headers      | uint8_t                                          | True     |
- * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                           | True     |
- * | src_addr                              | Source L1 address                    | uint32_t                                         | True     |
- * | size                                  | Payload size in bytes                | uint32_t                                         | True     |
- * | noc_fused_unicast_atomic_inc_command_header | Fused command header           | tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader | True |
- */
-// clang-format on
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
@@ -1675,26 +665,8 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader
-        noc_fused_unicast_atomic_inc_command_header) { /* TODO: To be implemented */ }
+        noc_fused_unicast_atomic_inc_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast fused scatter write + atomic increment (2 scatter chunks + semaphore inc).
- *
- * Return value: None
- *
- * | Argument                                          | Description                       | Type                                                       | Required |
- * |---------------------------------------------------|-----------------------------------|------------------------------------------------------------|----------|
- * | client_interface                                  | Fabric sender interface           | tt_l1_ptr WorkerToFabricEdmSender*                         | True     |
- * | packet_header                                     | Packet header to use              | volatile PACKET_HEADER_TYPE*                               | True     |
- * | dst_dev_id                                        | Destination device id             | uint8_t                                                    | True     |
- * | dst_mesh_id                                       | Destination mesh id              | uint16_t                                                   | True     |
- * | ranges                                            | Multicast hop counts (E/W/N/S)    | const MeshMcastRange&                                      | True     |
- * | src_addr                                          | Source L1 address                 | uint32_t                                                   | True     |
- * | size                                              | Payload size in bytes             | uint32_t                                                   | True     |
- * | noc_unicast_scatter_atomic_inc_fused_command_header | Fused scatter+atomic inc header | tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader | True   |
- */
-// clang-format on
 template <typename FabricSenderType, bool SetRoute>
 FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -1705,24 +677,8 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader
-        noc_unicast_scatter_atomic_inc_fused_command_header) { /* TODO: To be implemented */ }
+        noc_unicast_scatter_atomic_inc_fused_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast fused scatter write + atomic increment (route variant): issues for all headers.
- *
- * Return value: None
- *
- * | Argument                                          | Description                       | Type                                                       | Required |
- * |---------------------------------------------------|-----------------------------------|------------------------------------------------------------|----------|
- * | connection_manager                                | Routing plane connection manager | RoutingPlaneConnectionManager&                             | True     |
- * | route_id                                          | Route containing packet headers   | uint8_t                                                    | True     |
- * | ranges                                            | Per-header multicast hop counts (E/W/N/S) | const MeshMcastRange*                            | True     |
- * | src_addr                                          | Source L1 address                 | uint32_t                                                   | True     |
- * | size                                              | Payload size in bytes             | uint32_t                                                   | True     |
- * | noc_unicast_scatter_atomic_inc_fused_command_header | Fused scatter+atomic inc header | tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader | True   |
- */
-// clang-format on
 FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
@@ -1730,70 +686,24 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader
-        noc_unicast_scatter_atomic_inc_fused_command_header) { /* TODO: To be implemented */ }
+        noc_unicast_scatter_atomic_inc_fused_command_header) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast fused scatter write + atomic increment (stateful): updates only masked fields, then submits payload.
- *
- * Return value: None
- *
- * | Argument                                          | Description                       | Type                                                       | Required |
- * |---------------------------------------------------|-----------------------------------|------------------------------------------------------------|----------|
- * | client_interface                                  | Fabric sender interface           | tt_l1_ptr WorkerToFabricEdmSender*                         | True     |
- * | packet_header                                     | Packet header to use              | volatile PACKET_HEADER_TYPE*                               | True     |
- * | src_addr                                          | Source L1 address                 | uint32_t                                                   | True     |
- * | noc_unicast_scatter_atomic_inc_fused_command_header | Fused scatter+atomic inc header | tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader | False  |
- * | packet_size_bytes                                 | Payload size override if masked   | uint16_t                                                   | False    |
- */
-// clang-format on
 template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename FabricSenderType, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_atomic_inc_fused_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast fused scatter write + atomic increment (stateful, route variant): updates only masked fields for all headers.
- *
- * Return value: None
- *
- * | Argument                                          | Description                       | Type                                                       | Required |
- * |---------------------------------------------------|-----------------------------------|------------------------------------------------------------|----------|
- * | connection_manager                                | Routing plane connection manager  | RoutingPlaneConnectionManager&                             | True     |
- * | route_id                                          | Route containing packet headers   | uint8_t                                                    | True     |
- * | src_addr                                          | Source L1 address                 | uint32_t                                                   | True     |
- * | noc_unicast_scatter_atomic_inc_fused_command_header | Fused scatter+atomic inc header | tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader | False  |
- * | packet_size_bytes                                 | Payload size override if masked   | uint16_t                                                   | False    |
- */
-// clang-format on
 template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_atomic_inc_fused_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast fused scatter write + atomic increment (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                       | Description                             | Type                             | Required |
- * |--------------------------------|-----------------------------------------|----------------------------------|----------|
- * | packet_header                  | Packet header to use                    | volatile PACKET_HEADER_TYPE*     | True     |
- * | dst_dev_id                     | Destination device id                   | uint8_t                          | True     |
- * | dst_mesh_id                    | Destination mesh id                     | uint16_t                         | True     |
- * | ranges                         | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&            | True     |
- * | command_header                 | Template fused command header           | CommandHeaderT                   | False    |
- * | packet_size_bytes              | Payload size override if masked         | uint16_t                         | False    |
- */
-// clang-format on
 template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -1801,93 +711,32 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_set_state(
     uint16_t dst_mesh_id,
     const MeshMcastRange& ranges,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast fused scatter write + atomic increment (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                       | Description                             | Type                             | Required |
- * |--------------------------------|-----------------------------------------|----------------------------------|----------|
- * | connection_manager             | Routing plane connection manager        | RoutingPlaneConnectionManager&   | True     |
- * | route_id                       | Route whose headers will be updated     | uint8_t                          | True     |
- * | ranges                         | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*          | True     |
- * | command_header                 | Template fused command header           | CommandHeaderT                   | False    |
- * | packet_size_bytes              | Payload size override if masked         | uint16_t                         | False    |
- */
-// clang-format on
 template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     const MeshMcastRange* ranges,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast fused unicast write + atomic increment (stateful): updates only masked fields, then submits payload.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                       | Required |
- * |---------------------------------------|----------------------------------|---------------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface          | tt_l1_ptr WorkerToFabricEdmSender*                | True     |
- * | packet_header                         | Packet header to use             | volatile PACKET_HEADER_TYPE*                      | True     |
- * | src_addr                              | Source L1 address                | uint32_t                                          | True     |
- * | noc_fused_unicast_atomic_inc_command_header | Fused command header       | tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader | False |
- * | packet_size_bytes                     | Payload size override if masked  | uint16_t                                          | False    |
- */
-// clang-format on
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename FabricSenderType, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_fused_unicast_atomic_inc_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast fused unicast write + atomic increment (stateful, route variant): updates only masked fields for all headers.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                | True     |
- * | route_id                              | Route containing packet headers         | uint8_t                                       | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
- * | noc_fused_unicast_atomic_inc_command_header | Fused command header       | tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader | False    |
- * | packet_size_bytes                     | Payload size override if masked          | uint16_t                                     | False    |
- */
-// clang-format on
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_fused_unicast_atomic_inc_command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast fused unicast write + atomic increment (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                                       | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                      | True     |
- * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                         | True     |
- * | command_header                        | Template fused command header           | CommandHeaderT                                | False    |
- * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
- */
-// clang-format on
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -1895,54 +744,21 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     uint16_t dst_mesh_id,
     const MeshMcastRange& ranges,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast fused unicast write + atomic increment (set-state): pre-configures headers for repeated use across the route.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                | True     |
- * | route_id                              | Route whose headers will be updated     | uint8_t                                       | True     |
- * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                         | True     |
- * | command_header                        | Template fused command header           | CommandHeaderT                                | False    |
- * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
- */
-// clang-format on
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     const MeshMcastRange* ranges,
     CommandHeaderT command_header,
-    uint16_t packet_size_bytes) { /* TODO: To be implemented */ }
+    uint16_t packet_size_bytes) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
 // ============================================================================
 // Addrgen API Overloads
 // ============================================================================
 
 // Unicast Write Addrgen Overloads
-// clang-format off
-/**
- * Unicast write (addrgen overload): sends payload to destination computed from address generator.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*            | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
- * | dst_dev_id                            | Destination device ID                   | uint8_t                                       | True     |
- * | dst_mesh_id                           | Destination mesh ID                     | uint16_t                                      | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
- * | addrgen                               | Address generator (e.g. TensorAccessor) | const AddrGenType&                            | True     |
- * | page_id                               | Page ID to compute NOC address          | uint32_t                                      | True     |
- * | offset                                | Offset within page                      | uint32_t                                      | False    |
- */
-// clang-format on
 template <typename FabricSenderType, typename AddrGenType>
 FORCE_INLINE void fabric_unicast_noc_unicast_write(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -1952,27 +768,8 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     uint32_t src_addr,
     const AddrGenType& addrgen,
     uint32_t page_id,
-    uint32_t offset) { /* TODO: To be implemented */ }
+    uint32_t offset) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Unicast write (stateful, addrgen overload): updates only fields selected by UpdateMask on the packet header then submits the payload, with destination computed from address generator.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | UpdateMask                            | Template parameter: which fields to update | UnicastWriteUpdateMask                     | False    |
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*            | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
- * | dst_dev_id                            | Destination device ID                   | uint8_t                                       | True     |
- * | dst_mesh_id                           | Destination mesh ID                     | uint16_t                                      | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
- * | addrgen                               | Address generator (e.g. TensorAccessor) | const AddrGenType&                            | True     |
- * | page_id                               | Page ID to compute NOC address          | uint32_t                                      | True     |
- * | offset                                | Offset within page                      | uint32_t                                      | False    |
- */
-// clang-format on
 template <UnicastWriteUpdateMask UpdateMask, typename FabricSenderType, typename AddrGenType, typename>
 FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -1982,25 +779,8 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     uint32_t src_addr,
     const AddrGenType& addrgen,
     uint32_t page_id,
-    uint32_t offset) { /* TODO: To be implemented */ }
+    uint32_t offset) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Unicast write (set-state, addrgen overload): pre-configures headers for repeated use, with destination computed from address generator.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | UpdateMask                            | Template parameter: which fields to update | UnicastWriteUpdateMask                     | False    |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                                       | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                      | True     |
- * | addrgen                               | Address generator (e.g. TensorAccessor) | const AddrGenType&                            | True     |
- * | page_id                               | Page ID to compute NOC address          | uint32_t                                      | True     |
- * | offset                                | Offset within page                      | uint32_t                                      | False    |
- */
-// clang-format on
 template <UnicastWriteUpdateMask UpdateMask, typename AddrGenType, typename>
 FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -2008,30 +788,9 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     uint16_t dst_mesh_id,
     const AddrGenType& addrgen,
     uint32_t page_id,
-    uint32_t offset) { /* TODO: To be implemented */ }
+    uint32_t offset) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
 // Fused Unicast Write + Atomic Inc Addrgen Overloads
-// clang-format off
-/**
- * Fused unicast write with atomic increment (addrgen overload): sends payload and increments semaphore, with destination computed from address generator.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*            | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
- * | dst_dev_id                            | Destination device ID                   | uint8_t                                       | True     |
- * | dst_mesh_id                           | Destination mesh ID                     | uint16_t                                      | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
- * | addrgen                               | Address generator (e.g. TensorAccessor) | const AddrGenType&                            | True     |
- * | page_id                               | Page ID to compute NOC address          | uint32_t                                      | True     |
- * | semaphore_noc_address                 | NOC address of semaphore to increment   | uint64_t                                      | True     |
- * | val                                   | Increment value                         | uint16_t                                      | True     |
- * | offset                                | Offset within page                      | uint32_t                                      | False    |
- * | flush                                 | Flush data cache after write            | bool                                          | False    |
- */
-// clang-format on
 template <typename FabricSenderType, typename AddrGenType>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -2044,30 +803,8 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     uint64_t semaphore_noc_address,
     uint16_t val,
     uint32_t offset,
-    bool flush) { /* TODO: To be implemented */ }
+    bool flush) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Fused unicast write with atomic increment (stateful, addrgen overload): updates only fields selected by UpdateMask on the packet header then submits the payload and increments semaphore, with destination computed from address generator.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | UpdateMask                            | Template parameter: which fields to update | UnicastFusedAtomicIncUpdateMask            | False    |
- * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*            | True     |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
- * | dst_dev_id                            | Destination device ID                   | uint8_t                                       | True     |
- * | dst_mesh_id                           | Destination mesh ID                     | uint16_t                                      | True     |
- * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
- * | addrgen                               | Address generator (e.g. TensorAccessor) | const AddrGenType&                            | True     |
- * | page_id                               | Page ID to compute NOC address          | uint32_t                                      | True     |
- * | semaphore_noc_address                 | NOC address of semaphore to increment   | uint64_t                                      | True     |
- * | val                                   | Increment value                         | uint16_t                                      | True     |
- * | offset                                | Offset within page                      | uint32_t                                      | False    |
- * | flush                                 | Flush data cache after write            | bool                                          | False    |
- */
-// clang-format on
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename FabricSenderType, typename AddrGenType, typename>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -2080,28 +817,8 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     uint64_t semaphore_noc_address,
     uint16_t val,
     uint32_t offset,
-    bool flush) { /* TODO: To be implemented */ }
+    bool flush) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Fused unicast write with atomic increment (set-state, addrgen overload): pre-configures headers for repeated use, with destination computed from address generator.
- *
- * Return value: None
- *
- * | Argument                              | Description                             | Type                                          | Required |
- * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
- * | UpdateMask                            | Template parameter: which fields to update | UnicastFusedAtomicIncUpdateMask            | False    |
- * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
- * | dst_dev_id                            | Destination device id                   | uint8_t                                       | True     |
- * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                      | True     |
- * | addrgen                               | Address generator (e.g. TensorAccessor) | const AddrGenType&                            | True     |
- * | page_id                               | Page ID to compute NOC address          | uint32_t                                      | True     |
- * | semaphore_noc_address                 | NOC address of semaphore to increment   | uint64_t                                      | True     |
- * | val                                   | Increment value                         | uint16_t                                      | True     |
- * | offset                                | Offset within page                      | uint32_t                                      | False    |
- * | flush                                 | Flush data cache after write            | bool                                          | False    |
- */
-// clang-format on
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename AddrGenType, typename>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -2112,28 +829,8 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
     uint64_t semaphore_noc_address,
     uint16_t val,
     uint32_t offset,
-    bool flush) { /* TODO: To be implemented */ }
+    bool flush) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Unicast scatter write (TensorAccessor overload): computes NOC addresses from addrgen for two pages.
- *
- * Return value: None
- *
- * | Argument           | Description                             | Type                                       | Required |
- * |--------------------|-----------------------------------------|--------------------------------------------|----------|
- * | client_interface   | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*         | True     |
- * | packet_header      | Packet header to use                    | volatile PACKET_HEADER_TYPE*               | True     |
- * | dst_dev_id         | Destination device ID                   | uint8_t                                    | True     |
- * | dst_mesh_id        | Destination mesh ID                     | uint16_t                                   | True     |
- * | src_addr           | Source L1 address                       | uint32_t                                   | True     |
- * | addrgen            | Address generator (e.g., TensorAccessor)| AddrGenType                                | True     |
- * | page_id0           | First page index                        | uint32_t                                   | True     |
- * | page_id1           | Second page index                       | uint32_t                                   | True     |
- * | offset0            | Offset within first page                | uint32_t                                   | False    |
- * | offset1            | Offset within second page               | uint32_t                                   | False    |
- */
-// clang-format on
 template <typename FabricSenderType, typename AddrGenType>
 FORCE_INLINE void fabric_unicast_noc_scatter_write(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -2145,29 +842,8 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     uint32_t page_id0,
     uint32_t page_id1,
     uint32_t offset0,
-    uint32_t offset1) { /* TODO: To be implemented */ }
+    uint32_t offset1) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Unicast scatter write (stateful, TensorAccessor overload): updates only masked fields, computes NOC addresses from addrgen for two pages.
- *
- * Return value: None
- *
- * | Argument           | Description                             | Type                                       | Required |
- * |--------------------|-----------------------------------------|--------------------------------------------|----------|
- * | UpdateMask         | Template parameter: which fields to update | UnicastScatterWriteUpdateMask           | False    |
- * | client_interface   | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*         | True     |
- * | packet_header      | Packet header to use                    | volatile PACKET_HEADER_TYPE*               | True     |
- * | dst_dev_id         | Destination device ID                   | uint8_t                                    | True     |
- * | dst_mesh_id        | Destination mesh ID                     | uint16_t                                   | True     |
- * | src_addr           | Source L1 address                       | uint32_t                                   | True     |
- * | addrgen            | Address generator (e.g., TensorAccessor)| AddrGenType                                | True     |
- * | page_id0           | First page index                        | uint32_t                                   | True     |
- * | page_id1           | Second page index                       | uint32_t                                   | True     |
- * | offset0            | Offset within first page                | uint32_t                                   | False    |
- * | offset1            | Offset within second page               | uint32_t                                   | False    |
- */
-// clang-format on
 template <UnicastScatterWriteUpdateMask UpdateMask, typename FabricSenderType, typename AddrGenType, typename>
 FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -2179,27 +855,8 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     uint32_t page_id0,
     uint32_t page_id1,
     uint32_t offset0,
-    uint32_t offset1) { /* TODO: To be implemented */ }
+    uint32_t offset1) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Unicast scatter write (set-state, TensorAccessor overload): pre-configures headers for repeated use, computes NOC addresses from addrgen for two pages.
- *
- * Return value: None
- *
- * | Argument           | Description                             | Type                                       | Required |
- * |--------------------|-----------------------------------------|--------------------------------------------|----------|
- * | UpdateMask         | Template parameter: which fields to update | UnicastScatterWriteUpdateMask           | False    |
- * | packet_header      | Packet header to use                    | volatile PACKET_HEADER_TYPE*               | True     |
- * | dst_dev_id         | Destination device ID                   | uint8_t                                    | True     |
- * | dst_mesh_id        | Destination mesh ID                     | uint16_t                                   | True     |
- * | addrgen            | Address generator (e.g., TensorAccessor)| AddrGenType                                | True     |
- * | page_id0           | First page index                        | uint32_t                                   | True     |
- * | page_id1           | Second page index                       | uint32_t                                   | True     |
- * | offset0            | Offset within first page                | uint32_t                                   | False    |
- * | offset1            | Offset within second page               | uint32_t                                   | False    |
- */
-// clang-format on
 template <UnicastScatterWriteUpdateMask UpdateMask, typename AddrGenType, typename>
 FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -2209,27 +866,8 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
     uint32_t page_id0,
     uint32_t page_id1,
     uint32_t offset0,
-    uint32_t offset1) { /* TODO: To be implemented */ }
+    uint32_t offset1) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast write (TensorAccessor overload): computes NOC address and page size from addrgen.
- *
- * Return value: None
- *
- * | Argument           | Description                             | Type                                       | Required |
- * |--------------------|-----------------------------------------|--------------------------------------------|----------|
- * | client_interface   | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*         | True     |
- * | packet_header      | Packet header to use                    | volatile PACKET_HEADER_TYPE*               | True     |
- * | dst_dev_id         | Destination device id                   | uint8_t                                    | True     |
- * | dst_mesh_id        | Destination mesh id                     | uint16_t                                   | True     |
- * | ranges             | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                      | True     |
- * | src_addr           | Source L1 address                       | uint32_t                                   | True     |
- * | addrgen            | Address generator (e.g., TensorAccessor)| AddrGenType                                | True     |
- * | page_id            | Page index                              | uint32_t                                   | True     |
- * | offset             | Offset within page                      | uint32_t                                   | False    |
- */
-// clang-format on
 template <typename FabricSenderType, typename AddrGenType>
 FORCE_INLINE void fabric_multicast_noc_unicast_write(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -2240,28 +878,8 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     uint32_t src_addr,
     const AddrGenType& addrgen,
     uint32_t page_id,
-    uint32_t offset) { /* TODO: To be implemented */ }
+    uint32_t offset) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast write (stateful, TensorAccessor overload): updates only masked fields, computes NOC address from addrgen.
- *
- * Return value: None
- *
- * | Argument           | Description                             | Type                                       | Required |
- * |--------------------|-----------------------------------------|--------------------------------------------|----------|
- * | UpdateMask         | Template parameter: which fields to update | UnicastWriteUpdateMask                  | False    |
- * | client_interface   | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*         | True     |
- * | packet_header      | Packet header to use                    | volatile PACKET_HEADER_TYPE*               | True     |
- * | dst_dev_id         | Destination device id                   | uint8_t                                    | True     |
- * | dst_mesh_id        | Destination mesh id                     | uint16_t                                   | True     |
- * | ranges             | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                      | True     |
- * | src_addr           | Source L1 address                       | uint32_t                                   | True     |
- * | addrgen            | Address generator (e.g., TensorAccessor)| AddrGenType                                | True     |
- * | page_id            | Page index                              | uint32_t                                   | True     |
- * | offset             | Offset within page                      | uint32_t                                   | False    |
- */
-// clang-format on
 template <UnicastWriteUpdateMask UpdateMask, typename FabricSenderType, typename AddrGenType, typename>
 FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -2272,26 +890,8 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
     uint32_t src_addr,
     const AddrGenType& addrgen,
     uint32_t page_id,
-    uint32_t offset) { /* TODO: To be implemented */ }
+    uint32_t offset) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast unicast write (set-state, TensorAccessor overload): pre-configures headers for repeated use, computes NOC address from addrgen.
- *
- * Return value: None
- *
- * | Argument           | Description                             | Type                                       | Required |
- * |--------------------|-----------------------------------------|--------------------------------------------|----------|
- * | UpdateMask         | Template parameter: which fields to update | UnicastWriteUpdateMask                  | False    |
- * | packet_header      | Packet header to use                    | volatile PACKET_HEADER_TYPE*               | True     |
- * | dst_dev_id         | Destination device id                   | uint8_t                                    | True     |
- * | dst_mesh_id        | Destination mesh id                     | uint16_t                                   | True     |
- * | ranges             | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                      | True     |
- * | addrgen            | Address generator (e.g., TensorAccessor)| AddrGenType                                | True     |
- * | page_id            | Page index                              | uint32_t                                   | True     |
- * | offset             | Offset within page                      | uint32_t                                   | False    |
- */
-// clang-format on
 template <UnicastWriteUpdateMask UpdateMask, typename AddrGenType, typename>
 FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -2300,29 +900,8 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
     const MeshMcastRange& ranges,
     const AddrGenType& addrgen,
     uint32_t page_id,
-    uint32_t offset) { /* TODO: To be implemented */ }
+    uint32_t offset) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast scatter write (TensorAccessor overload): computes NOC addresses from addrgen for two pages with multicast routing.
- *
- * Return value: None
- *
- * | Argument           | Description                             | Type                                       | Required |
- * |--------------------|-----------------------------------------|--------------------------------------------|----------|
- * | client_interface   | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*         | True     |
- * | packet_header      | Packet header to use                    | volatile PACKET_HEADER_TYPE*               | True     |
- * | dst_dev_id         | Destination device id                   | uint8_t                                    | True     |
- * | dst_mesh_id        | Destination mesh id                     | uint16_t                                   | True     |
- * | ranges             | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                      | True     |
- * | src_addr           | Source L1 address                       | uint32_t                                   | True     |
- * | addrgen            | Address generator (e.g., TensorAccessor)| AddrGenType                                | True     |
- * | page_id0           | First page index                        | uint32_t                                   | True     |
- * | page_id1           | Second page index                       | uint32_t                                   | True     |
- * | offset0            | Offset within first page                | uint32_t                                   | False    |
- * | offset1            | Offset within second page               | uint32_t                                   | False    |
- */
-// clang-format on
 template <typename FabricSenderType, typename AddrGenType>
 FORCE_INLINE void fabric_multicast_noc_scatter_write(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -2335,30 +914,8 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     uint32_t page_id0,
     uint32_t page_id1,
     uint32_t offset0,
-    uint32_t offset1) { /* TODO: To be implemented */ }
+    uint32_t offset1) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast scatter write (stateful, TensorAccessor overload): updates only masked fields, computes NOC addresses from addrgen for two pages with multicast routing.
- *
- * Return value: None
- *
- * | Argument           | Description                             | Type                                       | Required |
- * |--------------------|-----------------------------------------|--------------------------------------------|----------|
- * | UpdateMask         | Template parameter: which fields to update | UnicastScatterWriteUpdateMask           | False    |
- * | client_interface   | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*         | True     |
- * | packet_header      | Packet header to use                    | volatile PACKET_HEADER_TYPE*               | True     |
- * | dst_dev_id         | Destination device id                   | uint8_t                                    | True     |
- * | dst_mesh_id        | Destination mesh id                     | uint16_t                                   | True     |
- * | ranges             | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                      | True     |
- * | src_addr           | Source L1 address                       | uint32_t                                   | True     |
- * | addrgen            | Address generator (e.g., TensorAccessor)| AddrGenType                                | True     |
- * | page_id0           | First page index                        | uint32_t                                   | True     |
- * | page_id1           | Second page index                       | uint32_t                                   | True     |
- * | offset0            | Offset within first page                | uint32_t                                   | False    |
- * | offset1            | Offset within second page               | uint32_t                                   | False    |
- */
-// clang-format on
 template <UnicastScatterWriteUpdateMask UpdateMask, typename FabricSenderType, typename AddrGenType, typename>
 FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -2371,28 +928,8 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
     uint32_t page_id0,
     uint32_t page_id1,
     uint32_t offset0,
-    uint32_t offset1) { /* TODO: To be implemented */ }
+    uint32_t offset1) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast scatter write (set-state, TensorAccessor overload): pre-configures headers for repeated use, computes NOC addresses from addrgen for two pages with multicast routing.
- *
- * Return value: None
- *
- * | Argument           | Description                             | Type                                       | Required |
- * |--------------------|-----------------------------------------|--------------------------------------------|----------|
- * | UpdateMask         | Template parameter: which fields to update | UnicastScatterWriteUpdateMask           | False    |
- * | packet_header      | Packet header to use                    | volatile PACKET_HEADER_TYPE*               | True     |
- * | dst_dev_id         | Destination device id                   | uint8_t                                    | True     |
- * | dst_mesh_id        | Destination mesh id                     | uint16_t                                   | True     |
- * | ranges             | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                      | True     |
- * | addrgen            | Address generator (e.g., TensorAccessor)| AddrGenType                                | True     |
- * | page_id0           | First page index                        | uint32_t                                   | True     |
- * | page_id1           | Second page index                       | uint32_t                                   | True     |
- * | offset0            | Offset within first page                | uint32_t                                   | False    |
- * | offset1            | Offset within second page               | uint32_t                                   | False    |
- */
-// clang-format on
 template <UnicastScatterWriteUpdateMask UpdateMask, typename AddrGenType, typename>
 FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -2403,30 +940,8 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     uint32_t page_id0,
     uint32_t page_id1,
     uint32_t offset0,
-    uint32_t offset1) { /* TODO: To be implemented */ }
+    uint32_t offset1) { /* TODO: To be implemented (tracked in issue #61516) */ }
 
-// clang-format off
-/**
- * Multicast fused unicast write + atomic increment (TensorAccessor overload): computes NOC address from addrgen, sends payload with multicast routing and increments semaphore.
- *
- * Return value: None
- *
- * | Argument               | Description                             | Type                                       | Required |
- * |------------------------|-----------------------------------------|--------------------------------------------|----------|
- * | client_interface       | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*         | True     |
- * | packet_header          | Packet header to use                    | volatile PACKET_HEADER_TYPE*               | True     |
- * | dst_dev_id             | Destination device id                   | uint8_t                                    | True     |
- * | dst_mesh_id            | Destination mesh id                     | uint16_t                                   | True     |
- * | ranges                 | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                      | True     |
- * | src_addr               | Source L1 address                       | uint32_t                                   | True     |
- * | addrgen                | Address generator (e.g., TensorAccessor)| AddrGenType                                | True     |
- * | page_id                | Page index                              | uint32_t                                   | True     |
- * | semaphore_noc_address  | NOC address of semaphore to increment   | uint64_t                                   | True     |
- * | val                    | Increment value                         | uint16_t                                   | True     |
- * | offset                 | Offset within page                      | uint32_t                                   | False    |
- * | flush                  | Flush data cache after write            | bool                                       | False    |
- */
-// clang-format on
 template <typename FabricSenderType, typename AddrGenType>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -2440,28 +955,8 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     uint64_t semaphore_noc_address,
     uint16_t val,
     uint32_t offset,
-    bool flush) { /* TODO: To be implemented */ }
+    bool flush) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast fused unicast write + atomic increment (stateful, TensorAccessor overload): updates only masked fields, computes NOC address from addrgen.
- *
- * Return value: None
- *
- * | Argument               | Description                             | Type                                       | Required |
- * |------------------------|-----------------------------------------|--------------------------------------------|----------|
- * | UpdateMask             | Template parameter: which fields to update | UnicastFusedAtomicIncUpdateMask         | False    |
- * | client_interface       | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*         | True     |
- * | packet_header          | Packet header to use                    | volatile PACKET_HEADER_TYPE*               | True     |
- * | src_addr               | Source L1 address                       | uint32_t                                   | True     |
- * | addrgen                | Address generator (e.g., TensorAccessor)| AddrGenType                                | True     |
- * | page_id                | Page index                              | uint32_t                                   | True     |
- * | semaphore_noc_address  | NOC address of semaphore to increment   | uint64_t                                   | True     |
- * | val                    | Increment value                         | uint16_t                                   | True     |
- * | offset                 | Offset within page                      | uint32_t                                   | False    |
- * | flush                  | Flush data cache after write            | bool                                       | False    |
- */
-// clang-format on
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename FabricSenderType, typename AddrGenType, typename>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -2472,29 +967,8 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     uint64_t semaphore_noc_address,
     uint16_t val,
     uint32_t offset,
-    bool flush) { /* TODO: To be implemented */ }
+    bool flush) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
-// clang-format off
-/**
- * Multicast fused unicast write + atomic increment (set-state, TensorAccessor overload): pre-configures headers for repeated use, computes NOC address from addrgen.
- *
- * Return value: None
- *
- * | Argument               | Description                             | Type                                       | Required |
- * |------------------------|-----------------------------------------|--------------------------------------------|----------|
- * | UpdateMask             | Template parameter: which fields to update | UnicastFusedAtomicIncUpdateMask         | False    |
- * | packet_header          | Packet header to use                    | volatile PACKET_HEADER_TYPE*               | True     |
- * | dst_dev_id             | Destination device id                   | uint8_t                                    | True     |
- * | dst_mesh_id            | Destination mesh id                     | uint16_t                                   | True     |
- * | ranges                 | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                      | True     |
- * | addrgen                | Address generator (e.g., TensorAccessor)| AddrGenType                                | True     |
- * | page_id                | Page index                              | uint32_t                                   | True     |
- * | semaphore_noc_address  | NOC address of semaphore to increment   | uint64_t                                   | True     |
- * | val                    | Increment value                         | uint16_t                                   | True     |
- * | offset                 | Offset within page                      | uint32_t                                   | False    |
- * | flush                  | Flush data cache after write            | bool                                       | False    |
- */
-// clang-format on
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename AddrGenType, typename>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -2506,6 +980,6 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     uint64_t semaphore_noc_address,
     uint16_t val,
     uint32_t offset,
-    bool flush) { /* TODO: To be implemented */ }
+    bool flush) { /* TODO: To be implemented (tracked in issue #63264) */ }
 
 }  // namespace tt::tt_fabric::mesh::experimental
