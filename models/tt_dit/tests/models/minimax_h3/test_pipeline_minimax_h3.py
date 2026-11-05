@@ -36,6 +36,7 @@ from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
     _resolve_audio_t_shard,
     _resolve_denoise_path,
     _resolve_dit_fsdp,
+    _resolve_max_sequence_length,
     validate_bucket_ladder,
 )
 from ....pipelines.minimax_h3.policy import align_num_frames, get_num_frames
@@ -149,11 +150,11 @@ def test_requested_dynamic_length_precedence(monkeypatch, expect_error):
 
 
 # Pure (no-device) coverage of which denoise path the constructor kwargs select on each preset.
-def _denoise_path(preset, *, coresident=None, **kwargs):
+def _denoise_path(preset, *, coresident=None, topology=ttnn.Topology.Ring, **kwargs):
     """(trace_denoise, bucket_denoise, dynamic_length) for the kwargs given; the rest default to None."""
     kwargs = dict(trace_denoise=None, bucket_denoise=None, bucket_ladder=None, dynamic_length=None) | kwargs
     coresident = preset.get("coresident", True) if coresident is None else coresident
-    path = _resolve_denoise_path(preset, coresident=coresident, **kwargs)
+    path = _resolve_denoise_path(preset, coresident=coresident, topology=topology, **kwargs)
     return path.trace_denoise, path.bucket_denoise, path.dynamic_length
 
 
@@ -186,6 +187,52 @@ def test_resolve_denoise_path_bh_4x8(monkeypatch, expect_error):
     assert _denoise_path(preset, dynamic_length=False) == bucketed
     with expect_error(ValueError, "eager-only"):
         _denoise_path(preset, trace_denoise=True)
+
+
+def test_resolve_denoise_path_line_topology(monkeypatch, expect_error):
+    """The AGMM / MMRS pins behind the length classes are Ring-only: the preset's dynamic default yields to a
+    line topology, an explicit dynamic request on one is refused."""
+    monkeypatch.delenv(_DYNAMIC_LENGTH_ENV, raising=False)
+    preset, line = _PRESETS_BH[(4, 8)], ttnn.Topology.Linear
+    path = _resolve_denoise_path(
+        preset,
+        trace_denoise=None,
+        bucket_denoise=None,
+        bucket_ladder=None,
+        dynamic_length=None,
+        coresident=True,
+        topology=line,
+    )
+    assert (path.trace_denoise, path.bucket_denoise, path.dynamic_length, path.line_fallback) == (
+        False,
+        True,
+        False,
+        True,
+    )
+    assert "line topology" in path.name
+    with expect_error(ValueError, "Ring topology"):
+        _denoise_path(preset, dynamic_length=True, topology=line)
+    monkeypatch.setenv(_DYNAMIC_LENGTH_ENV, "1")
+    with expect_error(ValueError, "Ring topology"):
+        _denoise_path(preset, topology=line)
+    monkeypatch.delenv(_DYNAMIC_LENGTH_ENV, raising=False)
+    assert _denoise_path(preset, dynamic_length=False, topology=line) == (False, True, False)
+    assert _denoise_path(preset, topology=ttnn.Topology.Ring) == (False, False, True)
+
+
+def test_resolve_max_sequence_length(expect_error):
+    """Both paths size the K/V gather pair from the cap; the bucketed path serves every rung, so the cap may not
+    sit below the top one."""
+    ladder = _PRESETS_BH[(4, 8)]["bucket_ladder"]["t2va"]
+    kw = dict(sp_alignment=256)
+    assert _resolve_max_sequence_length(ladder, None, bucket_denoise=True, dynamic_length=False, **kw) == ladder[-1]
+    assert _resolve_max_sequence_length(ladder, None, bucket_denoise=False, dynamic_length=True, **kw) == ladder[-1]
+    assert _resolve_max_sequence_length(ladder, 37888, bucket_denoise=False, dynamic_length=True, **kw) == 37888
+    assert _resolve_max_sequence_length(ladder, 37888, bucket_denoise=False, dynamic_length=False, **kw) == 37888
+    with expect_error(ValueError, "below the top rung"):
+        _resolve_max_sequence_length(ladder, ladder[-1] - 256, bucket_denoise=True, dynamic_length=False, **kw)
+    with expect_error(ValueError, "multiple"):
+        _resolve_max_sequence_length(ladder, 37889, bucket_denoise=False, dynamic_length=True, **kw)
 
 
 def test_resolve_denoise_path_quad_and_wormhole(monkeypatch, expect_error):
@@ -258,6 +305,7 @@ def test_denoise_path_name():
     assert _DenoisePath(True, True, False, False).name == "bucketed, traced"
     assert _DenoisePath(False, True, False, False).name == "bucketed"
     assert _DenoisePath(False, False, False, False).name == "unbucketed"
+    assert _DenoisePath(False, True, False, False, line_fallback=True).name.startswith("bucketed (line topology")
 
 
 # Pure (no-device) coverage of the dynamic-length padding and admission rule.
