@@ -1240,6 +1240,63 @@ def _mesh_tp(default=4):
 @MULTIMODAL_REGISTRY.register_processor(
     Qwen3VLMultiModalProcessor, info=TT_Qwen3_5SpecProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
 )
+class _SpecStepClock:
+    """QWEN36_SPEC_STEP_TIMING=1: mean host wall time per spec decode step spent inside the model (decode_forward and
+    propose_draft_tokens) and between those calls (the plugin runner and the scheduler), logged every 256 steps. A
+    gap over one second (an idle server) is not counted."""
+
+    def __init__(self):
+        self.on = os.environ.get("QWEN36_SPEC_STEP_TIMING", "0") == "1"
+        self.inside = self.outside = 0.0
+        self.n = 0
+        self.t0 = self.last_exit = None
+
+    def enter(self):
+        import time
+
+        self.t0 = time.perf_counter()
+        if self.last_exit is not None and self.t0 - self.last_exit < 1.0:
+            self.outside += self.t0 - self.last_exit
+
+    def exit(self, step_end):
+        import time
+
+        t = time.perf_counter()
+        self.inside += t - self.t0
+        self.last_exit = t
+        if step_end:
+            self.n += 1
+            if self.n % 256 == 0:
+                logger.info(
+                    f"[spec step timing] {self.n} steps: inside the model {1e3 * self.inside / 256:.2f} ms/step, "
+                    f"runner and scheduler {1e3 * self.outside / 256:.2f} ms/step"
+                )
+                self.inside = self.outside = 0.0
+
+
+_SPEC_STEP_CLOCK = _SpecStepClock()
+
+
+def _spec_step_timed(step_end):
+    def deco(fn):
+        import functools
+
+        @functools.wraps(fn)
+        def wrap(self, *a, **k):
+            clk = _SPEC_STEP_CLOCK
+            if not clk.on:
+                return fn(self, *a, **k)
+            clk.enter()
+            try:
+                return fn(self, *a, **k)
+            finally:
+                clk.exit(step_end)
+
+        return wrap
+
+    return deco
+
+
 class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     """Plugin spec-decode contract adapter (B * (K+1) <= 32) over the MTP engine in tt/spec_engine.py."""
 
@@ -1696,6 +1753,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                 "supports_spec_device_mask is False: the engine has no mask traces (see the [spec_engine] mask trace log)"
             )
 
+    @_spec_step_timed(step_end=False)
     def decode_forward(self, *args, **kwargs):
         from vllm_tt_plugin.spec_decode import VerifyOutput, check_spec_side_tensors
 
@@ -2020,6 +2078,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         )
         return res.logits[:, :1].float()
 
+    @_spec_step_timed(step_end=True)
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
         from vllm_tt_plugin.spec_decode import DraftOutput, check_spec_side_tensors
 
