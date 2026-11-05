@@ -27,6 +27,10 @@ namespace tt::umd {
 class IoWindow;
 }
 
+namespace tt::tt_metal {
+class HostTransferStats;
+}
+
 namespace tt::tt_metal::distributed {
 
 class NamedShm;
@@ -143,6 +147,8 @@ private:
     void reserve_bytes(uint32_t num_bytes);
     void push_bytes(uint32_t num_bytes);
     void notify_receiver();
+    // DEVICE_PULL: bytes copied into the host FIFO, which the device reads later.
+    void count_staged_bytes(uint32_t num_bytes);
 
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
     std::shared_ptr<MeshBuffer> data_buffer_ = nullptr;
@@ -171,6 +177,8 @@ private:
     std::unique_ptr<NamedShm> shm_;
     std::unique_ptr<PCIeCoreWriter> pcie_writer_instance_;
     MeshDevice* mesh_device_ = nullptr;
+    // The owner's MetalContext stats; null for connectors, which have no MetalContext.
+    HostTransferStats* transfer_stats_ = nullptr;
     // Resolved once at construction so I/O never reads the mesh view; see validate_host_socket_access.
     bool rank_owns_endpoint_ = true;
     bool is_owner_ = true;
