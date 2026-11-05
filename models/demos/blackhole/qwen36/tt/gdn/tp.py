@@ -2244,11 +2244,13 @@ class TPGatedDeltaNet:
             # Column-parallel out-proj: the gate multiply emits the AGMM input directly as bf16 (the
             # only numerics change vs the fp32 MMRS arm: activation quantized to bf16 before the
             # matmul, as every other projection in the model already does).
-            gated = _silu_mul(out_f, z, _L1, dtype=ttnn.bfloat16)
+            _bf8 = getattr(self.args, "prefill_agmm_bf8", False)
+            # QWEN36_GDN_GATED_BF8=1 (with the bf8 AGMM): the gate multiply emits the bf8 the gather sends (no cast op)
+            _gdt = ttnn.bfloat8_b if (_bf8 and os.environ.get("QWEN36_GDN_GATED_BF8", "0") == "1") else ttnn.bfloat16
+            gated = _silu_mul(out_f, z, _L1, dtype=_gdt)
             ttnn.deallocate(out_f)
             ttnn.deallocate(z)
             # TODO(#57458): switch to the op's barrier_semaphore once it is wired up (see tpc.agmm_gather_buffer).
-            _bf8 = getattr(self.args, "prefill_agmm_bf8", False)
             out = tpc.all_gather_matmul_prefill(
                 gated,
                 tw["out_colpar"],
