@@ -24,7 +24,9 @@ def load_module():
 MOD = load_module()
 
 
-def findings(text, rel="tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_x.h"):
+def findings(
+    text, rel="tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_x.h"
+):
     return [msg for _, _, msg in MOD.check_text(rel, text)]
 
 

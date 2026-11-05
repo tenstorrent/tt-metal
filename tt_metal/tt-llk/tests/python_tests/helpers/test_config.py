@@ -461,7 +461,8 @@ class TestConfig:
     @staticmethod
     def gathering_build() -> bool:
         """tt-metal's JIT switch: Blackhole builds with instruction gathering on unless
-        TT_METAL_DISABLE_GATHERING is "1" (only "1", like TT_METAL_DISABLE_SFPLOADMACRO)."""
+        TT_METAL_DISABLE_GATHERING is "1" (only "1", like TT_METAL_DISABLE_SFPLOADMACRO).
+        """
         return (
             TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
             and os.environ.get("TT_METAL_DISABLE_GATHERING") != "1"
