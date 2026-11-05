@@ -3513,7 +3513,8 @@ def test_untilize_multi_core_dynamic_rows_flat_cache(device, width):
 
     device.disable_and_clear_program_cache()
     device.enable_program_cache()
-    assert_program_cache_flat(device, run, _h3_untilize_rows())
+    # ... down to one tile row, where every core but the first returns before its compute start-up.
+    assert_program_cache_flat(device, run, _h3_untilize_rows() + [32])
     assert device.num_program_cache_entries() == 1
 
 
