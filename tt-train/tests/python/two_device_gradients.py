@@ -25,12 +25,12 @@ def make_gradients(rows: int, cols: int, seed: int, devices: int = 2) -> np.ndar
     """``devices`` bf16 gradients, stacked on dim 0, scattered around a per-element mean by as much as the mean."""
     rng = np.random.default_rng(seed)
     mean = rng.choice([-1.0, 1.0], size=(1, 1, rows, cols)) * 10.0 ** rng.uniform(-3, 0, size=(1, 1, rows, cols))
-    return to_bf16((mean + np.abs(mean) * rng.standard_normal((devices, 1, rows, cols))).astype(np.float32))
+    return to_bf16(mean + np.abs(mean) * rng.standard_normal((devices, 1, rows, cols)))
 
 
 def exact_mean(values: np.ndarray) -> np.ndarray:
     """bf16 of the exact mean of the devices' values (stacked on dim 0): what a perfect reduction returns."""
-    return to_bf16(values.astype(np.float64).mean(axis=0, keepdims=True).astype(np.float32))
+    return to_bf16(values.astype(np.float64).mean(axis=0, keepdims=True))
 
 
 def device():
@@ -49,12 +49,34 @@ def one_parameter(gradient):
     return parameters, parameter
 
 
+def upload(values: np.ndarray, placements: list):
+    """``values`` as a bf16 tensor laid out on the mesh by ``placements``, one per mesh axis."""
+    mapper = ttnn.create_mesh_mapper(device(), ttnn.MeshMapperConfig(placements))
+    return ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
+
+
 def per_device_tensor(values: np.ndarray):
     """A bf16 tensor on a ``[1, N]`` mesh whose copy on device i is ``values[i]``."""
-    mapper = ttnn.create_mesh_mapper(
-        device(), ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(0)])
-    )
-    return ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
+    return upload(values, [ttnn.PlacementReplicate(), ttnn.PlacementShard(0)])
+
+
+def placements(tensor) -> list:
+    """``tensor``'s topology label as ``("Shard", dim)`` / ``("Replicate",)`` tuples, one per mesh axis."""
+    return [
+        ("Shard", p.dim) if isinstance(p, ttnn.PlacementShard) else ("Replicate",)
+        for p in tensor.tensor_topology().placements()
+    ]
+
+
+def fp32_all_reduce_mean(tensor, axes: list):
+    """The fp32 mean over ``axes`` written out with public ops, an fp32 all-reduce per axis and then the division, to
+    check the sync's routes against."""
+    total = ttnn.typecast(tensor, ttnn.DataType.FLOAT32)
+    devices = 1
+    for axis in axes:
+        total = ttml.core.distributed.all_reduce(total, cluster_axis=axis)
+        devices *= device().shape[axis]
+    return ttnn.typecast(ttnn.multiply(total, 1.0 / devices), ttnn.DataType.BFLOAT16)
 
 
 def per_device(tensor) -> np.ndarray:
@@ -63,14 +85,14 @@ def per_device(tensor) -> np.ndarray:
     return ttml.autograd.create_tensor(tensor).to_numpy(ttnn.DataType.FLOAT32, composer=composer)
 
 
-def device_operations(call) -> list:
-    """The device operations ``call`` runs, in order, recorded with ttnn's graph capture."""
+def device_operations(call) -> tuple:
+    """``call``'s result and the device operations it runs, in order, recorded with ttnn's graph capture."""
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
     try:
-        call()
+        result = call()
     finally:
         captured = ttnn.graph.end_graph_capture()
-    return [name for name in ttnn.graph.extract_calltrace(captured) if name.endswith("DeviceOperation")]
+    return result, [name for name in ttnn.graph.extract_calltrace(captured) if name.endswith("DeviceOperation")]
 
 
 def divides_before_gathering(operations: list) -> bool:

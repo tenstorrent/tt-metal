@@ -21,6 +21,7 @@
 #include "core/parameter_dtype.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "test_utils/mesh_utils.hpp"
+#include "test_utils/program_cache.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
@@ -133,8 +134,18 @@ protected:
         const auto expected_values = per_device(expected);
         ASSERT_EQ(actual_values.size(), expected_values.size());
         for (size_t device = 0; device < actual_values.size(); ++device) {
-            EXPECT_TRUE(actual_values[device] == expected_values[device]) << "device " << device;
+            EXPECT_EQ(test_utils::count_bit_mismatches(expected_values[device], actual_values[device]), 0U)
+                << "device " << device;
         }
+    }
+
+    // A data-parallel parameter holding `gradients`: its value is replicated, as such a parameter's is, and only its
+    // gradient differs per device.
+    static autograd::TensorPtr ddp_parameter(const ttnn::Tensor& gradients) {
+        auto parameter = autograd::create_tensor(
+            core::zeros(gradients.logical_shape(), &autograd::ctx().get_device()), /* requires_grad */ true);
+        parameter->set_grad(gradients);
+        return parameter;
     }
 };
 
@@ -204,19 +215,9 @@ TEST_F(SynchronizeTensorTest, RejectsReduceDtypesOtherThanBf16AndFp32) {
 // The C++ runners call this overload, which takes the DDP axis from the parallelism context.
 TEST_F(SynchronizeTensorTest, SynchronizeGradientsOverTheDdpAxisUsesTheReduceDtype) {
     autograd::ctx().initialize_parallelism_context({.enable_ddp = true});
-    auto* device = &autograd::ctx().get_device();
-    const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
-    // The value is replicated, as a data-parallel parameter's is; only its gradient differs per device.
-    auto parameter = autograd::create_tensor(
-        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
-            xt::zeros<float>(std::array<std::size_t, 4>{1U, 1U, 64U, 128U}),
-            device,
-            ttnn::Layout::TILE,
-            replicate.get()),
-        /* requires_grad */ true);
     const auto gradients = upload(make_gradients(64, 128, 8));
     const auto fp32 = core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::FLOAT32);
-    parameter->set_grad(gradients);
+    auto parameter = ddp_parameter(gradients);
 
     core::distributed::synchronize_gradients({{"parameter", parameter}}, ttnn::DataType::FLOAT32);
     expect_same_on_every_device(parameter->get_grad(), fp32);
@@ -235,18 +236,8 @@ TEST_F(SynchronizeTensorTest, SynchronizeGradientsTakesTheConfiguredReduceDtypeU
     const auto fp32 = core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::FLOAT32);
     const auto bf16 = core::distributed::synchronize_tensor(gradients, {kDdpAxis});
     ASSERT_FALSE(per_device(fp32)[0] == per_device(bf16)[0]);
-    auto* device = &autograd::ctx().get_device();
-    const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     const auto synchronize = [&](std::optional<ttnn::DataType> reduce_dtype) {
-        // A data-parallel parameter: a replicated value, a gradient that differs per device.
-        auto parameter = autograd::create_tensor(
-            core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
-                xt::zeros<float>(std::array<std::size_t, 4>{1U, 1U, 64U, 128U}),
-                device,
-                ttnn::Layout::TILE,
-                replicate.get()),
-            /* requires_grad */ true);
-        parameter->set_grad(gradients);
+        auto parameter = ddp_parameter(gradients);
         core::distributed::synchronize_gradients({{"parameter", parameter}}, {kDdpAxis}, reduce_dtype);
         return parameter->get_grad();
     };
@@ -291,15 +282,7 @@ namespace {
 
 // One device: its [1, 1] mesh takes the line-topology branch of the parallelism context with DDP enabled, so the merge
 // gate's single-chip runners run these too.
-class ParallelismContextTest : public ::testing::Test {
-protected:
-    static void SetUpTestSuite() {
-        autograd::ctx().open_device();
-    }
-    static void TearDownTestSuite() {
-        autograd::ctx().close_device();
-    }
-};
+class ParallelismContextTest : public test_utils::DeviceSuiteTest {};
 
 }  // namespace
 
