@@ -203,8 +203,13 @@ MINIMAX_H3_BUCKET_LADDER = (22528, 31744, 44032, 61440, 86016, 120832)
 MINIMAX_H3_REF2VA_BUCKET_LADDER = (32768, 61440, 86016, 118784, 176128, 245760, 326656)
 
 # 4x8 ladders: SP=8 aligns to 256, so rungs sit at most ~15% apart. Same top-rung rule as above. #N
+# 110592 is the 15 s / 768P rung: 13824 rows per device, so a 15 s request with a prompt of up to ~1500
+# tokens (109062 rows + prompt) lands on it rather than on 111616 (13952 rows). 13952 is 436 tiles, 4 x
+# the prime 109: on the WH 8-wide matmul grids its 55 M tiles per core miss the blockings swept at 54
+# (13664 rows), and its ring SDPA takes 55 q chunks of 256 a head, 770 on 63 cores, 13 rounds where 54
+# chunks fill 12 exactly. 13824 keeps both: 54 M tiles per core and 54 q chunks.
 MINIMAX_H3_BUCKET_LADDER_4X8 = (
-18944, 20224, 21760, 23296, 25088, 26880, 28928, 31232, 33536, 36096, 38912, 41984, 45312, 48896, 52736, 56832, 61184, 66048, 71168, 76800, 82688, 89088, 96000, 103424, 111616, 120320
+18944, 20224, 21760, 23296, 25088, 26880, 28928, 31232, 33536, 36096, 38912, 41984, 45312, 48896, 52736, 56832, 61184, 66048, 71168, 76800, 82688, 89088, 96000, 103424, 110592, 111616, 120320
 )  # fmt: skip
 MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8 = (
     24064, 28416, 33536, 39680, 46848, 55296, 65280, 76800, 90368, 106496, 125440, 147712, 173824,
