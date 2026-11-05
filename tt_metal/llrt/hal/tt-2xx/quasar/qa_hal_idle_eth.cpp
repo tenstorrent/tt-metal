@@ -59,8 +59,7 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = GET_IERISC_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_IERISC_KERNEL_CONFIG_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] = tt::align(
-        linked ? MEM_IERISC_ROUTER_UNRESERVED_BASE
-               : MEM_IERISC_KERNEL_BASE + MEM_IERISC_KERNEL_SIZE * MEM_IERISC_LOCAL_HARTS,
+        linked ? MEM_IERISC_ROUTER_UNRESERVED_BASE : MEM_IERISC_ROUTING_TABLE_BASE + MEM_IERISC_ROUTING_TABLE_SIZE,
         max_alignment);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_IERISC_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_IERISC_MAILBOX_ADDRESS_HOST(go_messages);
@@ -69,14 +68,8 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] =
         GET_IERISC_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SCRATCH;
-    if (linked) {
-        mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_IERISC_ROUTING_TABLE_BASE;
-        mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_IERISC_FABRIC_TELEMETRY_BASE;
-        mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_STATE)] = MEM_IERISC_FABRIC_ROUTER_STATE_BASE;
-        mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_COMMAND)] =
-            MEM_IERISC_FABRIC_ROUTER_COMMAND_BASE;
-        mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_LINK)] = MEM_IERISC_FABRIC_ETH_LINK_BASE;
-    }
+    // The control plane writes routing info to every Ethernet core, linked or not, as on Blackhole.
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_IERISC_ROUTING_TABLE_BASE;
 
     std::vector<std::uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
@@ -94,14 +87,7 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SIZE;
-    if (linked) {
-        static_assert(sizeof(::tt::tt_fabric::fabric_telemetry::FabricTelemetry) <= MEM_IERISC_FABRIC_TELEMETRY_SIZE);
-        mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_IERISC_ROUTING_TABLE_SIZE;
-        mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_IERISC_FABRIC_TELEMETRY_SIZE;
-        mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_STATE)] = sizeof(std::uint32_t);
-        mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_COMMAND)] = sizeof(std::uint32_t);
-        mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ETH_LINK)] = MEM_IERISC_FABRIC_ETH_LINK_SIZE;
-    }
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_IERISC_ROUTING_TABLE_SIZE;
 
     assert_kernel_config_no_overlap(mem_map_bases, mem_map_sizes, HalL1MemAddrType::UNRESERVED, "ethernet");
 
