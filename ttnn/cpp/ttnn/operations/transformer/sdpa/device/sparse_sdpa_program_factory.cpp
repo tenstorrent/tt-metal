@@ -194,16 +194,16 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     // (makespan 2 tokens); split-K gives every core 26-27 of the 2560 chunk units (1.67 tokens). Merges are pairwise
     // between neighbouring cores, at most one per core (needs Sqt <= 4 so a merge fits DST once).
     const uint32_t n_chunks = topk / k_chunk;
-    const bool split_k_ok = scaled_kv && !use_attention_sink && Sqt <= 4 && ::sparse_sdpa::split_k_enabled();
+    const bool split_k_ok = scaled_kv && !use_attention_sink && Sqt <= 4;
     bool split_k = split_k_ok && S > num_cores && (S % num_cores) != 0;
     // Small S (fewer query rows than cores, e.g. GLM chunk 1024/2048: 32/64 rows per chip on 96 cores): the
     // whole-token split leaves most cores idle at one token-time (~330 us, compute-bound). Deal the (token, chunk)
     // units over `num_used` <= min(num_cores, 2S) cores instead, so every token straddles at most two neighbouring
     // cores and the existing pairwise HEAD -> TAIL merge applies unchanged: every core range must start at a token
     // boundary or run to one (no range strictly inside a token). num_used is the largest such count; S=32 -> 64
-    // cores (half a token each), S=64 on 96 cores -> 96 (2/3). SPARSE_SDPA_SPLITK_SMALL=0 keeps the whole-token split.
+    // cores (half a token each), S=64 on 96 cores -> 96 (2/3).
     uint32_t num_used = num_cores;
-    if (split_k_ok && S < num_cores && ::sparse_sdpa::split_k_small_enabled()) {
+    if (split_k_ok && S < num_cores) {
         const uint64_t units = static_cast<uint64_t>(S) * n_chunks;
         const auto valid = [&](uint32_t m) {
             for (uint32_t i = 0; i < m; ++i) {

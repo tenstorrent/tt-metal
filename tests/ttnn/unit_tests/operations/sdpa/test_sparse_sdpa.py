@@ -742,7 +742,6 @@ def test_sparse_sdpa_deepseek_attention_sink(device, scale):
 
 # ---- split-K work distribution (S > cores, S % cores != 0): tokens straddling two cores are merged ----
 @run_for_blackhole()
-@pytest.mark.parametrize("split_k", ["1", "0"], ids=["splitk", "token_split"])
 @pytest.mark.parametrize(
     "H,S,T,TOPK,kc,nv_id",
     [
@@ -752,14 +751,13 @@ def test_sparse_sdpa_deepseek_attention_sink(device, scale):
         (64, None, 1024, 256, 64, "mixed"),  # 1 token + a sliver per core: S = cores + 10
     ],
 )
-def test_sparse_sdpa_scaled_fp8_split_k(device, monkeypatch, split_k, H, S, T, TOPK, kc, nv_id):
-    """Split-K must match the whole-token split and the torch golden (PCC), incl. sentinel tails."""
+def test_sparse_sdpa_scaled_fp8_split_k(device, H, S, T, TOPK, kc, nv_id):
+    """Split-K must match the torch golden (PCC), incl. sentinel tails."""
     grid = device.compute_with_storage_grid_size()
     cores = grid.x * grid.y
     S = cores + 10 if S is None else S
     if S <= cores:
         pytest.skip(f"split-K needs S > cores ({cores})")
-    monkeypatch.setenv("SPARSE_SDPA_SPLITK", split_k)  # split-K is the default; "0" = whole-token split
     nv_fn = {
         "all": lambda s: TOPK,
         "mixed": lambda s: 1 + (s * 37) % TOPK,
@@ -780,12 +778,11 @@ def test_sparse_sdpa_scaled_fp8_split_k(device, monkeypatch, split_k, H, S, T, T
     actual = ttnn.to_torch(out)
     score = pcc(actual, expected)
     worst = min(pcc(actual[:, :, s], expected[:, :, s]) for s in range(S))
-    assert score >= 0.999 and worst >= 0.995, f"split_k={split_k} PCC {score:.5f}, worst token {worst:.5f}"
+    assert score >= 0.999 and worst >= 0.995, f"PCC {score:.5f}, worst token {worst:.5f}"
 
 
 # ---- split-K for S < cores (small chunks, e.g. GLM chunk 1024/2048 -> 32/64 rows per chip): <= 2 cores per token ----
 @run_for_blackhole()
-@pytest.mark.parametrize("small", ["1", "0"], ids=["splitk_small", "token_split"])
 @pytest.mark.parametrize(
     "H,S,T,TOPK,kc,nv_id",
     [
@@ -796,13 +793,11 @@ def test_sparse_sdpa_scaled_fp8_split_k(device, monkeypatch, split_k, H, S, T, T
         (32, 40, 1024, 256, 64, "mixed"),  # 4 chunks/token, odd S
     ],
 )
-def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, monkeypatch, small, H, S, T, TOPK, kc, nv_id):
-    """Small-S split-K must match the torch golden (PCC) like the whole-token split, incl. sentinel tails."""
+def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, H, S, T, TOPK, kc, nv_id):
+    """Small-S split-K must match the torch golden (PCC), incl. sentinel tails."""
     grid = device.compute_with_storage_grid_size()
     if S >= grid.x * grid.y:
         pytest.skip("needs S < cores")
-    monkeypatch.setenv("SPARSE_SDPA_SPLITK", "1")
-    monkeypatch.setenv("SPARSE_SDPA_SPLITK_SMALL", small)
     nv_fn = {
         "all": lambda s: TOPK,
         "mixed": lambda s: 1 + (s * 37) % TOPK,
@@ -823,4 +818,4 @@ def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, monkeypatch, small, H, S
     actual = ttnn.to_torch(out)
     score = pcc(actual, expected)
     worst = min(pcc(actual[:, :, s], expected[:, :, s]) for s in range(S))
-    assert score >= 0.999 and worst >= 0.995, f"small={small} PCC {score:.5f}, worst token {worst:.5f}"
+    assert score >= 0.999 and worst >= 0.995, f"PCC {score:.5f}, worst token {worst:.5f}"
