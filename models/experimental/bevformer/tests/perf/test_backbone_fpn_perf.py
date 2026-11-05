@@ -25,6 +25,7 @@ from models.experimental.bevformer.tests.common import (
     build_reference_fpn,
     from_conv_layout,
     random_image_batch,
+    to_image_layout,
 )
 from models.experimental.bevformer.tt.model_preprocessing import (
     create_fpn_parameters,
@@ -60,7 +61,7 @@ def test_backbone_fpn_perf(device, reset_seeds):
     tt_fpn = TTFPN(fpn_parameters, device, input_dtypes=tt_backbone.output_dtypes)
 
     # Uploaded once so the profiled replay measures the backbone and FPN, not the transfer.
-    tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_input = to_image_layout(torch_input, device)
 
     def op_fn():
         return tt_fpn(list(tt_backbone(tt_input)))

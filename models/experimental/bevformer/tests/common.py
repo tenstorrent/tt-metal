@@ -399,6 +399,13 @@ def to_conv_layout(nchw, device, dtype, layout=ttnn.TILE_LAYOUT):
     return ttnn.from_torch(nhwc, device=device, dtype=dtype, layout=layout)
 
 
+def to_image_layout(nchw, device):
+    """NCHW images -> the (N, 3, H, W) bfloat16 ROW_MAJOR ttnn tensor TTResNet reads (``device`` None
+    keeps it on the host). torch rounds float32 to bfloat16 bit for bit as from_torch does, several
+    times faster."""
+    return ttnn.from_torch(nchw.to(torch.bfloat16), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+
 def from_conv_layout(tt_tensor, nchw_shape):
     """(1, 1, N*H*W, C) device tensor -> NCHW torch tensor of ``nchw_shape``."""
     n, c, h, w = nchw_shape
