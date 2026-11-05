@@ -758,11 +758,12 @@ def _select_node_list(config, items):
 def _split_by_cost(config, items):
     """Cut the tests, in collection order, into --perf-splits chunks of equal estimated time.
 
-    A test weighs its module's cost from perf_split_costs.json (perf_split_costs_sol.json with
-    --speed-of-light, which compiles every variant) divided by the module's test count. The
-    chunks are contiguous, so a module's tests, and the ELFs they share, stay in one shard
-    except at a cut point. build_perf_split_costs.py rebuilds both tables. This runs before
-    _collapse_runtime_only_variants, so the compile and run passes cut the same list.
+    A test weighs its own time from LLK_SPLIT_DURATIONS, when set (see _store_split_durations);
+    a test it does not know weighs the mean of the known ones. Else a test weighs its module's
+    cost from perf_split_costs.json (perf_split_costs_sol.json with --speed-of-light, which
+    compiles every variant) divided by the module's test count. The chunks are contiguous, so a
+    module's tests, and the ELFs they share, stay in one shard except at a cut point. This runs
+    before _collapse_runtime_only_variants, so the compile and run passes cut the same list.
     """
     splits = config.getoption("--perf-splits")
     group = config.getoption("--perf-group")
@@ -793,6 +794,7 @@ def _split_by_cost(config, items):
         )
     tests_in = collections.Counter(modules)
     weights = [module_cost.get(m, 1.0) / tests_in[m] for m in modules]
+    weights = _weights_from_durations(items) or weights
     total = sum(weights)
     if total == 0:
         weights, total = [1.0] * len(items), float(len(items))
@@ -806,6 +808,48 @@ def _split_by_cost(config, items):
         before += weight
     config.hook.pytest_deselected(items=deselected)
     items[:] = selected
+
+
+def _weights_from_durations(items):
+    path = os.environ.get("LLK_SPLIT_DURATIONS")
+    if not path or not Path(path).is_file():
+        return None
+    durations = json.loads(Path(path).read_text())
+    known = [durations[item.nodeid] for item in items if item.nodeid in durations]
+    if not known:
+        return None
+    mean = sum(known) / len(known)
+    logger.info(
+        f"--perf-splits: {path} has durations for {len(known)} of {len(items)} tests"
+    )
+    return [durations.get(item.nodeid, mean) for item in items]
+
+
+def _store_split_durations(session):
+    """Write this leg's per-test leg seconds (duration / xdist workers) to .test_durations.
+
+    The run pass (--compile-consumer) adds to the compile pass's file; any other pass starts
+    a new file. CI uploads it, and later runs cut with it through LLK_SPLIT_DURATIONS.
+    """
+    config = session.config
+    if config.getoption("--perf-splits") is None:
+        return
+    workers = config.getoption("numprocesses", None)
+    workers = workers if isinstance(workers, int) and workers > 0 else 1
+    path = Path(".test_durations")
+    durations = (
+        json.loads(path.read_text())
+        if TestConfig.BUILD_MODE == BuildMode.CONSUME and path.is_file()
+        else {}
+    )
+    reporter = config.pluginmanager.get_plugin("terminalreporter")
+    for reports in reporter.stats.values():
+        for report in reports:
+            if isinstance(report, pytest.TestReport):
+                durations[report.nodeid] = (
+                    durations.get(report.nodeid, 0.0) + report.duration / workers
+                )
+    path.write_text(json.dumps(durations))
 
 
 def _restore_test_order(config, items):
@@ -1281,6 +1325,7 @@ def pytest_sessionfinish(session):
         return
 
     _finish_ulp_emit(session)
+    _store_split_durations(session)
 
     if not _HARDWARE_FREE and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         combine_perf_reports()
