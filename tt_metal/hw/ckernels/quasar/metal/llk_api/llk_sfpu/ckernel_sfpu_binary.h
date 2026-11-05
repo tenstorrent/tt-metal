@@ -25,13 +25,15 @@ template <
     DstRoundingMode dst_rounding_mode,
     sfpi::DataLayout LAYOUT,
     int ITERATIONS = SFPU_ITERATIONS,
-    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32,
+    SfpuImpl IMPL = SfpuImpl::Sfpi>
 using AddDest = DestBinary<
     AddFloatMath,
     LAYOUT,
     DestBf16RneFormat<!EN_32BIT_DEST && dst_rounding_mode == DstRoundingMode::NearestEven, LAYOUT>,
     ITERATIONS,
-    TILE_SHAPE>;
+    TILE_SHAPE,
+    resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
 
 /**
  * @brief LLK caller for binary SFPU operations, currently supports ADD, SUB, MUL and DIV.

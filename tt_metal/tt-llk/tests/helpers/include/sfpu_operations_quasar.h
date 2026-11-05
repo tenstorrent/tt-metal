@@ -1745,7 +1745,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
         if (math_format == DataFormat::Int32)
         {
             ::ckernel::_sfpu_binary_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(src0_tile, src1_tile, dst_tile, vector_mode);
-            ckernel::sfpu::AddIntDest<SIGN_MAGNITUDE_FORMAT, ITERATIONS, TILE_SHAPE>::template run<TILE_SHAPE>(src0_tile, src1_tile, dst_tile, vector_mode);
+            ckernel::sfpu::AddIntDest<SIGN_MAGNITUDE_FORMAT, ITERATIONS, TILE_SHAPE>::run(src0_tile, src1_tile, dst_tile, vector_mode);
         }
         else
         {
@@ -1754,7 +1754,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
                 math_format,
                 [&](auto l)
                 {
-                    ckernel::sfpu::AddDest<is_fp32_dest_acc_en, dst_rounding_mode, decltype(l)::value, ITERATIONS, TILE_SHAPE>::template run<TILE_SHAPE>(
+                    ckernel::sfpu::AddDest<is_fp32_dest_acc_en, dst_rounding_mode, decltype(l)::value, ITERATIONS, TILE_SHAPE>::run(
                         src0_tile, src1_tile, dst_tile, vector_mode);
                 });
         }

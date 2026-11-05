@@ -57,6 +57,21 @@ struct SrcsLayout {
                                                                                : p_sfpu::sfpmem::FP16B;
 };
 
+/** @brief SFPLOAD/SFPSTORE layout of a SrcS register holding tiles of @p FMT. There is no implied fallback. */
+template <DataFormat FMT>
+constexpr sfpi::DataLayout srcs_layout() {
+    if constexpr (FMT == DataFormat::Int32) {
+        return sfpi::DataLayout::I32;
+    } else if constexpr (FMT == DataFormat::Float32) {
+        return sfpi::DataLayout::F32;
+    } else if constexpr (FMT == DataFormat::Float16) {
+        return sfpi::DataLayout::F16a;
+    } else {
+        static_assert(FMT == DataFormat::Float16_b, "SrcS holds Float16, Float16_b, Float32 or Int32 tiles");
+        return sfpi::DataLayout::F16b;
+    }
+}
+
 /**
  * @brief CRTP base for unary SrcS ops; Op supplies calculate().
  *

@@ -320,9 +320,22 @@ struct ExpFp32Accurate {
 template <bool APPROXIMATION_MODE, bool FP32_RESULT>
 using ExpAlgo = std::conditional_t<(!FP32_RESULT || APPROXIMATION_MODE), ExpHwLut, ExpFp32Accurate>;
 
-/** @brief Dest EXP op type; the fp32 accurate path runs only for a 32-bit Dest without APPROXIMATION_MODE. */
-template <bool APPROXIMATION_MODE, bool EN_32BIT_DEST, sfpi::DataLayout LAYOUT, int ITERATIONS = SFPU_ITERATIONS>
-using ExpDest = DestUnary<ExpAlgo<APPROXIMATION_MODE, EN_32BIT_DEST>, LAYOUT, ITERATIONS>;
+/**
+ * @brief Dest EXP op type; the fp32 accurate path runs only for a 32-bit Dest without APPROXIMATION_MODE.
+ *
+ * @tparam IMPL: Sfpi only today; a LoadMacro version is a DestUnary specialization next to the SrcS one.
+ */
+template <
+    bool APPROXIMATION_MODE,
+    bool EN_32BIT_DEST,
+    sfpi::DataLayout LAYOUT,
+    int ITERATIONS = SFPU_ITERATIONS,
+    SfpuImpl IMPL = SfpuImpl::Sfpi>
+using ExpDest = DestUnary<
+    ExpAlgo<APPROXIMATION_MODE, EN_32BIT_DEST>,
+    LAYOUT,
+    ITERATIONS,
+    resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
 
 /** @brief EXP over a Dest span; macro-path entry, HW-implied layout. */
 template <

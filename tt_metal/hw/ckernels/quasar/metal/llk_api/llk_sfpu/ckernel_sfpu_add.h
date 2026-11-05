@@ -80,6 +80,8 @@ template <
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 struct AddIntDest : SfpuDestBinaryOp<AddIntDest<SIGN_MAGNITUDE_FORMAT, ITERATIONS, TILE_SHAPE>> {
+    static constexpr trisc::DstTileShape tile_shape = TILE_SHAPE;
+
     static void calculate(
         const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
         calculate_add_int<
@@ -100,16 +102,6 @@ using AddMath =
 /** @brief SrcS ADD op type (float or Int32 by LAYOUT); Sfpi only. */
 template <sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
 using AddSrcs = SrcsBinary<AddMath<LAYOUT>, LAYOUT, resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
-
-/** @brief Float ADD on SrcS only: a non-float layout is rejected by srcs_op_supports, so the dispatch never picks it.
- */
-template <sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
-using AddFloatSrcs = SrcsBinary<AddFloatMath, LAYOUT, resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
-
-/** @brief Int32 ADD on SrcS only (sign-magnitude, as SrcS holds Int32); float layouts are never picked. */
-template <sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
-using AddIntSrcs =
-    SrcsBinary<AddIntMath<true /*SIGN_MAGNITUDE_FORMAT*/>, LAYOUT, resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
 
 }  // namespace sfpu
 }  // namespace ckernel

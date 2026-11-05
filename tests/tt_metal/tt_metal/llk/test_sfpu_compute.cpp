@@ -4343,6 +4343,49 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarSfpuUnpackToDest16b) {
     }
 }
 
+// The op-type compute API (api/compute/experimental/sfpu.h): the exp pipeline of QuasarSfpuUnpackToDest16b and the
+// fp32 driver above, with sfpu_exp_dest_quasar.cpp in place of eltwise_sfpu_2_0.cpp. Covers sfpu_init / sfpu_tile on
+// Dest with the tile format taken from the DFB, on a 16-bit and a 32-bit Dest.
+void run_quasar_sfpu_op_type_exp_dest(
+    distributed::MeshDevice& dev, size_t num_tiles, bool en_32bit_dest, bool dst_full_sync_en) {
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+    const tt::DataFormat fmt = en_32bit_dest ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    unit_tests::compute::sfpu::SfpuConfig cfg{
+        .num_tiles = num_tiles,
+        .tile_byte_size = (en_32bit_dest ? 4u : 2u) * 32 * 32,
+        .l1_input_data_format = fmt,
+        .l1_output_data_format = fmt,
+        .cores = core_range_set,
+        .sfpu_op = "exponential",
+        .approx_mode = false,
+        .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest = true,
+        .en_32bit_dest = en_32bit_dest,
+        .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/sfpu_exp_dest_quasar.cpp",
+    };
+    log_info(
+        tt::LogTest,
+        "Quasar SFPU op type exp on Dest: {} num_tiles={} {}",
+        en_32bit_dest ? "Float32" : "Float16_b",
+        num_tiles,
+        dst_full_sync_en ? "SyncFull" : "SyncHalf");
+    EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_all_same_buffer(dev, cfg));
+}
+
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarSfpuOpTypeExpDest) {
+    for (const bool en_32bit_dest : {false, true}) {
+        for (const bool dst_full_sync_en : {true, false}) {
+            for (const uint32_t num_tiles : {1u, 4u}) {
+                SCOPED_TRACE(
+                    std::string(en_32bit_dest ? "Float32" : "Float16_b") + " num_tiles=" + std::to_string(num_tiles) +
+                    (dst_full_sync_en ? " SyncFull" : " SyncHalf"));
+                run_quasar_sfpu_op_type_exp_dest(this->device(), num_tiles, en_32bit_dest, dst_full_sync_en);
+            }
+        }
+    }
+}
+
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUnpackToDestDestIndex) {
     // Under unpack-to-dest the unpacker places the tiles, so the DEST index has to survive copy_tile / copy_block and
     // the packer has to read the tiles back from the same indices. Per DEST width and sync mode, within the section

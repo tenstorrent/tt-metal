@@ -13,6 +13,7 @@
 #include "llk_math_eltwise_binary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
+#include "sfpu_impl.h"
 
 // Dest op types, the Dest twin of ckernel_sfpu_srcs.h: an op supplies calculate() and optionally init_op().
 
@@ -48,6 +49,7 @@ inline void check_vector_mode([[maybe_unused]] const VectorMode vector_mode) {
 template <DataFormat FAMILY, bool EN_32BIT_DEST>
 constexpr sfpi::DataLayout dest_layout() {
     if constexpr (FAMILY == DataFormat::Int32) {
+        static_assert(EN_32BIT_DEST, "Int32 tiles need a 32-bit Dest");
         return sfpi::DataLayout::I32;
     } else if constexpr (EN_32BIT_DEST) {
         return sfpi::DataLayout::F32;
@@ -88,7 +90,7 @@ struct SfpuDestBinaryOp {
         Op::init_op();
     }
 
-    template <trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+    template <trisc::DstTileShape SLOT = Op::tile_shape>
     static void run(
         const std::uint32_t dst_index_in0,
         const std::uint32_t dst_index_in1,
@@ -106,10 +108,19 @@ struct SfpuDestBinaryOp {
 /**
  * @brief Generic unary Dest op: ITERATIONS SFPI passes of MATH over one face, in place.
  *
+ * Sfpi serves every MATH; LoadMacro versions are specialized next to the op.
+ *
  * @tparam LAYOUT: SFPLOAD/SFPSTORE format; the caller names it, there is no default.
+ * @tparam IMPL: Sfpi or LoadMacro, see @ref resolve_sfpu_impl.
  */
-template <typename MATH, sfpi::DataLayout LAYOUT, int ITERATIONS = SFPU_ITERATIONS>
-struct DestUnary : SfpuDestUnaryOp<DestUnary<MATH, LAYOUT, ITERATIONS>> {
+template <typename MATH, sfpi::DataLayout LAYOUT, int ITERATIONS = SFPU_ITERATIONS, SfpuImpl IMPL = SfpuImpl::Sfpi>
+struct DestUnary {
+    static_assert(sizeof(MATH) == 0, "This SFPU op has no Dest implementation for the requested SfpuImpl");
+};
+
+template <typename MATH, sfpi::DataLayout LAYOUT, int ITERATIONS>
+struct DestUnary<MATH, LAYOUT, ITERATIONS, SfpuImpl::Sfpi>
+    : SfpuDestUnaryOp<DestUnary<MATH, LAYOUT, ITERATIONS, SfpuImpl::Sfpi>> {
     static void calculate() {
         using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<LAYOUT, typename MATH::value_type>>;
 #pragma GCC unroll 8
@@ -123,17 +134,29 @@ struct DestUnary : SfpuDestUnaryOp<DestUnary<MATH, LAYOUT, ITERATIONS>> {
 /**
  * @brief Generic binary Dest op: out = MATH(in0, in1) over one face of each tile.
  *
+ * Sfpi serves every MATH; LoadMacro versions are specialized next to the op.
+ *
  * @tparam LAYOUT: SFPLOAD/SFPSTORE format; the caller names it, there is no default.
  * @tparam OUT: Store policy of the output (rounding lives here, see DestBf16RneFormat).
- * @tparam TILE_SHAPE: Dest tile shape the indices are measured in; pass the same shape to run<>().
+ * @tparam TILE_SHAPE: Dest tile shape the indices are measured in; run<>() defaults to it.
+ * @tparam IMPL: Sfpi or LoadMacro, see @ref resolve_sfpu_impl.
  */
 template <
     typename MATH,
     sfpi::DataLayout LAYOUT,
     typename OUT = SfpiFormat<LAYOUT, typename MATH::value_type>,
     int ITERATIONS = SFPU_ITERATIONS,
-    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
-struct DestBinary : SfpuDestBinaryOp<DestBinary<MATH, LAYOUT, OUT, ITERATIONS, TILE_SHAPE>> {
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32,
+    SfpuImpl IMPL = SfpuImpl::Sfpi>
+struct DestBinary {
+    static_assert(sizeof(MATH) == 0, "This SFPU op has no Dest implementation for the requested SfpuImpl");
+};
+
+template <typename MATH, sfpi::DataLayout LAYOUT, typename OUT, int ITERATIONS, trisc::DstTileShape TILE_SHAPE>
+struct DestBinary<MATH, LAYOUT, OUT, ITERATIONS, TILE_SHAPE, SfpuImpl::Sfpi>
+    : SfpuDestBinaryOp<DestBinary<MATH, LAYOUT, OUT, ITERATIONS, TILE_SHAPE, SfpuImpl::Sfpi>> {
+    static constexpr trisc::DstTileShape tile_shape = TILE_SHAPE;
+
     static void calculate(
         const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
         using Input = SfpuOperand<SfpuReg::Dest, SfpiFormat<LAYOUT, typename MATH::value_type>>;
