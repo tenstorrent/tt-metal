@@ -1,3 +1,4 @@
+ 
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -8,6 +9,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <string>
@@ -860,6 +862,18 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     };
     tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
 
+    // Paged K and V are separate tensors: the writer RISC reads V (on its own NoC) while the reader reads K, instead
+    // of the reader reading K then V of every chunk. The writer is otherwise idle until a head's chunks are done, so
+    // it reads that head's V chunks at the top of its head loop, before the reduction. Batch-32 Phi-3.5-mini decode
+    // (32 users x 32 heads, ND-sharded KV) on a P150: the KV reads alone go from 143 to 117 us at position 227.
+    // Opt-in only (TT_SDPA_V_ON_WRITER=1) until validated beyond Phi-3.5-mini batch-32 decode.
+    const char* v_on_writer_env = std::getenv("TT_SDPA_V_ON_WRITER");
+    const bool v_on_writer = is_paged_attention && !reuse_k && !is_page_table_sharded &&
+                             (v_on_writer_env != nullptr && std::string(v_on_writer_env) == "1");
+    if (v_on_writer) {
+        tt_metal::TensorAccessorArgs(input_tensor_v.buffer()).append_to(writer_compile_time_args_common);
+    }
+
     std::vector<uint32_t> compute_compile_time_args_common = {
         St,
         DHt,
@@ -936,12 +950,36 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = std::move(writer_compile_time_args_common);
     writer_desc.config = WriterConfigDescriptor{};
+    if (v_on_writer) {
+        reader_desc.defines = {{"SDPA_V_ON_WRITER", "1"}};
+        writer_desc.defines = {
+            {"SDPA_V_ON_WRITER", "1"},
+            {"SDPA_V_BLOCK_SIZE_T", std::to_string(page_block_size_t)},
+            {"SDPA_V_CAPACITY_T", std::to_string(capacity_t)}};
+    }
+    // Dynamic chunk size by a read + per-chunk cost model instead of the next power of 2 of the sequence
+    // (rt_args_common.hpp). Every kernel computes it, so all three get the define. Opt-in only
+    // (TT_SDPA_CHUNK_COST=1) until validated beyond Phi-3.5-mini batch-32 decode.
+    const char* chunk_cost_env = std::getenv("TT_SDPA_CHUNK_COST");
+    if (Sk_chunk_t == 0 && !spec_multi_pos && (chunk_cost_env != nullptr && std::string(chunk_cost_env) == "1")) {
+        reader_desc.defines.emplace_back("SDPA_CHUNK_COST_MODEL", "1");
+        writer_desc.defines.emplace_back("SDPA_CHUNK_COST_MODEL", "1");
+        compute_defines_vec.emplace_back("SDPA_CHUNK_COST_MODEL", "1");
+    }
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = kernel_path + "compute/sdpa_flash_decode.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_grid;
     compute_desc.compile_time_args = std::move(compute_compile_time_args_common);
+    // Fused per-chunk lazy-softmax rescale (compute kernel SDPA_FUSED_RESCALE): one Dest pass of PNHt sum tiles and
+    // PNHt x vDHt output tiles, so it needs them within the 4-tile Dest of half-sync fp32 accumulation. P150, batch 32,
+    // 32 heads, head_dim 96: 121.9 -> 117.0 us at position 180, 197.3 -> 181.8 us at 280 (pcc 0.99999).
+    // Opt-in only (TT_SDPA_FUSED_RESCALE=1) until validated beyond Phi-3.5-mini batch-32 decode.
+    const char* fused_rescale_env = std::getenv("TT_SDPA_FUSED_RESCALE");
+    if (PNHt * (1 + vDHt) <= 4 && (fused_rescale_env != nullptr && std::string(fused_rescale_env) == "1")) {
+        compute_defines_vec.emplace_back("SDPA_FUSED_RESCALE", "1");
+    }
     compute_desc.defines = std::move(compute_defines_vec);
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
@@ -1063,6 +1101,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         // cache-hit path.  cur_pos and tree_params are functions of hashed attributes (see the
         // reader note above), so they never go stale on a hit.
         KernelDescriptor::RTArgList writer_rt_args;
+        if (v_on_writer) {
+            writer_rt_args.push_back(v_buffer);  // first, ahead of the output address (see writer_decode_all.cpp)
+        }
         writer_rt_args.push_back(out_buffer);
         writer_rt_args.push_back(static_cast<uint32_t>(do_output));
         writer_rt_args.push_back(cur_head);
@@ -1121,7 +1162,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             // (2*num_cores_per_head)
             // + reducer coords + output coords
             KernelDescriptor::CoreRuntimeArgs writer_rt_args(
-                6 + 3 + MAX_TREE_REDUCTION_ROUNDS + (2 * num_cores_per_head), 0);
+                (v_on_writer ? 1 : 0) + 6 + 3 + MAX_TREE_REDUCTION_ROUNDS + (2 * num_cores_per_head), 0);
 
             // Compute runtime args - 65 indicates idle core
             // Base args (4) + tree params (2) + children_per_round (MAX_TREE_REDUCTION_ROUNDS)

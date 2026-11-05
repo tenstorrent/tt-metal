@@ -1,3 +1,4 @@
+ 
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -1293,7 +1294,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     const tt::tt_metal::Tile& output_tile,
     tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format,
-    tt::DataFormat output_data_format) {
+    tt::DataFormat output_data_format,
+    bool fuse_swiglu) {
     const auto arch = device.arch();
     // Blackhole: both data-movement RISCs read the weight. Wormhole: one NOC_0 stream (a second stream
     // over NOC_1 from the same core lowers the bank's bandwidth there).
@@ -1348,6 +1350,23 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         Nbt,
         P);
     TT_FATAL(k_block >= 1, "num_workers_per_dram_bank: in0_block_w must be at least 1");
+    // fuse_swiglu: a core applies SiLU(gate) * up to each gate / up tile pair of a column pass in Dest, so every
+    // core's columns and every pass must start on a pair, and the partial sums must not be split over K.
+    const uint32_t out_div = fuse_swiglu ? 2 : 1;
+    if (fuse_swiglu) {
+        TT_FATAL(CK == 1, "fuse_swiglu: num_workers_per_dram_bank {} splits K; use at most {}", cores_per_bank, Nbt);
+        for (uint32_t cn = 0; cn < CN; ++cn) {
+            const uint32_t n0 = Nbt * cn / CN, nc = (Nbt * (cn + 1) / CN) - n0;
+            for (uint32_t q = 0; q <= P; ++q) {
+                TT_FATAL(
+                    (n0 + (nc * q / P)) % 2 == 0,
+                    "fuse_swiglu: {} cores per bank over {} columns per bank put a column pass boundary inside a gate / "
+                    "up pair",
+                    CN,
+                    Nbt);
+            }
+        }
+    }
     const uint32_t KB = std::min(k_block, div_up(Kt, CK));
     const uint32_t max_rows = div_up(Kt, CK);
     const uint32_t max_blocks = div_up(max_rows, KB);
@@ -1452,7 +1471,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = OUT_DFB,
         .entry_size = out_tile_size,
-        .num_entries = max_own,
+        .num_entries = max_own / out_div,
         .data_format_metadata = output_data_format,
         .tile_format_metadata = output_tile,
     });
@@ -1500,6 +1519,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         {"ROT", 1u},
         {"GX", static_cast<uint32_t>(grid.x)},
         {"MAXOWN", max_own},
+        {"OD", out_div},  // output tiles per owned column tile: 2 with fuse_swiglu
     };
     const std::string role_table = join(role);
 
@@ -1539,6 +1559,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         }
         if (stream1) {
             defines["DSMC_STREAM1"] = "1";
+            if (fuse_swiglu) {
+                defines["DSMC_SWIGLU"] = "1";
+            }
             defines["DSMC_XC"] = join(x_cores);
             defines["DSMC_OC"] = join(out_cores);
             k.compile_time_args.insert({"XT", x_tile_size});
@@ -1605,6 +1628,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     }
     if (two_streams) {
         compute.compiler_options.defines["DSMC_TWO_STREAMS"] = "1";
+    }
+    if (fuse_swiglu) {
+        compute.compiler_options.defines["DSMC_SWIGLU"] = "1";
+        // A block-float output's 7-bit mantissas hide the cheaper sigmoid's error (minimal_matmul's swiglu_sfpu.hpp).
+        compute.compile_time_args.insert(
+            {"SWIGLU_BF",
+             output_data_format == tt::DataFormat::Bfp8_b || output_data_format == tt::DataFormat::Bfp4_b ? 1u : 0u});
     }
     if (!fp32_dest) {
         compute.compiler_options.defines["DSMC_L1ACC"] = "1";
@@ -1679,6 +1709,376 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
 }
 
 }  // namespace reuse_dram_sharded_optimized_helpers
+
+// Multi-row DRAM-streamed matmul (MatmulMultiCoreReuseMultiCast1DProgramConfig::dram_stream_workers_per_bank > 0).
+//
+// A prefill matmul of a few tile rows (128 rows: Mt = 4) against a DRAM width-sharded weight is a weight read: the
+// 1D multicast matmul reaches ~380 GB/s on it because three limits stack (its row-major cores read the banks across
+// the grid at ~330 GB/s even alone, one core reads and multicasts every activation block in a per-block handshake,
+// and a per-K-block pack of the partial sums). This program removes all three:
+//   - cores_per_bank work cores next to each bank's NOC-optimal worker stream that bank's weight columns over K, on
+//     both data-movement RISCs on Blackhole (the decode multi-core pipeline's weight streaming);
+//   - up to four idle cores read the activation once from its interleaved tensor and multicast it in K chunks into
+//     every core of the grid, where it stays resident (one handshake per program, not per block);
+//   - a work core takes its columns in passes of Dest-tiles / Mt columns, each pass accumulating its Mt rows over the
+//     whole K in Dest, then packs once and writes the tiles straight into the interleaved output.
+ttnn::device_operation::ProgramArtifacts create_program_dram_stream_mrows(
+    tt::tt_metal::distributed::MeshDevice& device,
+    const tt::tt_metal::MeshTensor& in0_tensor,
+    const tt::tt_metal::MeshTensor& in1_tensor,
+    const tt::tt_metal::MeshTensor& out_tensor,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    uint32_t Mt,
+    uint32_t Kt,
+    uint32_t Nt,
+    uint32_t k_block,
+    uint32_t cores_per_bank,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const tt::tt_metal::Tile& output_tile,
+    tt::DataFormat in0_data_format,
+    tt::DataFormat in1_data_format,
+    tt::DataFormat output_data_format,
+    bool fuse_swiglu,
+    uint32_t max_dist,
+    uint32_t x_chunk) {
+    using tt::tt_metal::NOC;
+    TT_FATAL(max_dist >= 1 && max_dist <= 4, "dram_stream_distributors must be 1..4, got {}", max_dist);
+    TT_FATAL(x_chunk >= 1, "dram_stream_chunk must be at least 1");
+    const auto arch = device.arch();
+    // Both data-movement RISCs stream the weight (alternate K blocks), as the decode pipeline does on Blackhole.
+    TT_FATAL(arch == tt::ARCH::BLACKHOLE, "dram_stream_workers_per_bank is supported on Blackhole only");
+    const bool two_streams = true;  // both data-movement RISCs stream the weight, alternating K blocks
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
+    // fp32 accumulation asked for: in fp32 Dest when Mt rows of a core's columns fit its 8 tiles in one pass;
+    // otherwise (l1acc) 16-bit Dest takes l1acc_k_tiles K tiles at a time and the packer adds them into a Float32
+    // accumulator in L1, so the core still takes its columns in one pass.
+    constexpr uint32_t l1acc_k_tiles = 8;
+    const bool l1acc = compute_hw.enable_32_bit_dest &&
+                       Mt * div_up(in1_tensor.shard_spec().value().shape[1] / in1_tile.get_tile_shape()[1],
+                                   std::min<uint32_t>(cores_per_bank,
+                                                      in1_tensor.shard_spec().value().shape[1] /
+                                                          in1_tile.get_tile_shape()[1])) > 8;
+    if (l1acc) {
+        compute_hw.enable_32_bit_dest = false;
+    }
+    const bool fp32_dest = compute_hw.enable_32_bit_dest;
+    const uint32_t dst_tiles = fp32_dest ? 8 : 16;  // full-sync Dest
+    const uint32_t out_div = fuse_swiglu ? 2 : 1;
+    const uint32_t depth = 3;  // weight blocks in flight per stream
+
+    TT_FATAL(Mt >= 1 && Mt <= dst_tiles, "dram_stream: {} tile rows exceed {} Dest tiles", Mt, dst_tiles);
+    uint32_t cw_max = dst_tiles / Mt;  // columns per pass
+    if (fuse_swiglu) {
+        cw_max -= cw_max % 2;
+    }
+    TT_FATAL(cw_max >= out_div, "dram_stream: {} tile rows leave no {}-column pass in Dest", Mt, out_div);
+
+    const auto in1_shard_spec = in1_tensor.shard_spec().value();
+    TT_FATAL(in1_shard_spec.orientation == ShardOrientation::ROW_MAJOR, "dram_stream: ROW_MAJOR weight shards only");
+    const uint32_t Nbt = in1_shard_spec.shape[1] / in1_tile.get_tile_shape()[1];
+    TT_FATAL(
+        in1_shard_spec.shape[0] == Kt * in1_tile.get_tile_shape()[0],
+        "dram_stream: the weight shard must hold the whole K ({} rows), got {}",
+        Kt * in1_tile.get_tile_shape()[0],
+        in1_shard_spec.shape[0]);
+    const auto anchors = device.get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0);
+    TT_FATAL(
+        in1_shard_spec.grid.num_cores() == anchors.size(),
+        "dram_stream: the weight must be width-sharded over all {} DRAM banks, got {} shards",
+        anchors.size(),
+        in1_shard_spec.grid.num_cores());
+    const uint32_t num_banks = div_up(Nt, Nbt);
+    TT_FATAL(num_banks <= anchors.size(), "dram_stream: N ({} tiles) exceeds the DRAM shards", Nt);
+
+    const uint32_t CN = std::min(cores_per_bank, Nbt);
+    const uint32_t ncmax = div_up(Nbt, CN);
+    const uint32_t P = div_up(ncmax, cw_max);
+    const uint32_t ncp = div_up(ncmax, P);
+    TT_FATAL(Nbt / CN >= P, "dram_stream: {} cores per bank leave a core with fewer columns than its {} passes", CN, P);
+    for (uint32_t cn = 0; cn < CN; ++cn) {
+        const uint32_t n0 = Nbt * cn / CN, nc = (Nbt * (cn + 1) / CN) - n0;
+        TT_FATAL(div_up(nc, P) <= cw_max, "dram_stream: a pass of core {} exceeds {} columns", cn, cw_max);
+        for (uint32_t q = 0; q <= P; ++q) {
+            TT_FATAL(
+                ((n0 + (nc * q / P)) % out_div) == 0 && (Nbt % out_div) == 0,
+                "dram_stream: fuse_swiglu needs every pass to start on a gate / up pair");
+        }
+    }
+    const uint32_t KB = std::min<uint32_t>(std::max<uint32_t>(k_block, 1), Kt);
+
+    // Roles: wi = bank * CN + cn -> role wi + 1; distributor d -> role NW + 1 + d; 0 idle.
+    const auto grid = device.compute_with_storage_grid_size();
+    const auto cores = dram_sharded_helpers::get_dram_bank_adjacent_workers(device, NOC::NOC_0, CN, num_banks);
+    std::vector<uint32_t> role(grid.x * grid.y, 0);
+    const uint32_t NW = num_banks * CN;
+    for (uint32_t bank = 0; bank < num_banks; ++bank) {
+        for (uint32_t cn = 0; cn < CN; ++cn) {
+            const CoreCoord c = cores[bank][cn];
+            role[(c.y * grid.x) + c.x] = (bank * CN) + cn + 1;
+        }
+    }
+    std::vector<CoreCoord> idle;
+    for (uint32_t y = 0; y < grid.y; ++y) {
+        for (uint32_t x = 0; x < grid.x; ++x) {
+            if (role[(y * grid.x) + x] == 0) {
+                idle.push_back(CoreCoord(x, y));
+            }
+        }
+    }
+    const uint32_t NX = std::min<uint32_t>(max_dist, idle.size());
+    TT_FATAL(NX >= 1, "dram_stream: no idle core left to distribute the activation");
+    TT_FATAL(NW + NX < 256, "dram_stream: {} roles exceed the one-byte role table", NW + NX);
+    std::vector<uint32_t> dist_xy;
+    for (uint32_t d = 0; d < NX; ++d) {
+        const CoreCoord c = idle[(d * idle.size()) / NX];
+        role[(c.y * grid.x) + c.x] = NW + 1 + d;
+        const auto v = device.worker_core_from_logical_core(c);
+        dist_xy.push_back(static_cast<uint32_t>((v.y << 16) | v.x));
+    }
+    const CoreRange rect_range(CoreCoord(0, 0), CoreCoord(grid.x - 1, grid.y - 1));
+    const CoreRangeSet rect(rect_range);
+    // Stream 1 multicasts on NOC_1: the rectangle goes from the far corner to the near one.
+    auto mc_start = device.worker_core_from_logical_core(rect_range.end_coord);
+    auto mc_end = device.worker_core_from_logical_core(rect_range.start_coord);
+    const uint32_t mnum = (grid.x * grid.y) - 1;
+
+    auto join = [](const std::vector<uint32_t>& v) {
+        std::string s;
+        for (std::size_t i = 0; i < v.size(); ++i) {
+            s += (i ? "," : "") + std::to_string(v[i]);
+        }
+        return s;
+    };
+    const std::string role_table = join(role);
+
+    const uint32_t x_tile_size = in0_tile.get_tile_size(in0_data_format);
+    const uint32_t w_tile_size =
+        tt::align(in1_tile.get_tile_size(in1_data_format), tt::tt_metal::hal::get_dram_alignment());
+    const uint32_t out_tile_size = output_tile.get_tile_size(output_data_format);
+
+    const KernelSpecName STREAM0{"stream0"};
+    const KernelSpecName STREAM1{"stream1"};
+    const KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName X_DFB{"x"};
+    const DFBSpecName W0_DFB{"w0"};
+    const DFBSpecName W1_DFB{"w1"};
+    const DFBSpecName OUT_DFB{"out"};
+    const SemaphoreSpecName READY_SEM{"ready"};
+    const std::vector<SemaphoreSpecName> XS_SEMS{
+        SemaphoreSpecName{"xs0"}, SemaphoreSpecName{"xs1"}, SemaphoreSpecName{"xs2"}, SemaphoreSpecName{"xs3"}};
+    const TensorParamName IN0{"in0"};
+    const TensorParamName IN1{"in1"};
+    const TensorParamName OUTPUT{"output"};
+
+    Group<DataflowBufferSpec> dataflow_buffers;
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = X_DFB,
+        .entry_size = x_tile_size,
+        .num_entries = Kt * Mt,
+        .data_format_metadata = in0_data_format,
+        .tile_format_metadata = in0_tile,
+    });
+    for (const auto& name : two_streams ? std::vector<DFBSpecName>{W0_DFB, W1_DFB} : std::vector<DFBSpecName>{W0_DFB}) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = name,
+            .entry_size = w_tile_size,
+            .num_entries = depth * KB * ncp,
+            .data_format_metadata = in1_data_format,
+            .tile_format_metadata = in1_tile,
+        });
+    }
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = OUT_DFB,
+        .entry_size = out_tile_size,
+        .num_entries = Mt * ncmax / out_div,
+        .data_format_metadata = output_data_format,
+        .tile_format_metadata = output_tile,
+    });
+    const DFBSpecName ACC_DFB{"acc"};
+    if (l1acc) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = ACC_DFB,
+            .entry_size = output_tile.get_tile_size(tt::DataFormat::Float32),
+            .num_entries = Mt * ncmax,
+            .data_format_metadata = tt::DataFormat::Float32,
+            .tile_format_metadata = output_tile,
+        });
+    }
+
+    Group<SemaphoreSpec> semaphores;
+    semaphores.push_back(SemaphoreSpec{.unique_id = READY_SEM, .target_nodes = rect});
+    for (const auto& s : XS_SEMS) {
+        semaphores.push_back(SemaphoreSpec{.unique_id = s, .target_nodes = rect});
+    }
+
+    const std::vector<std::pair<std::string, uint32_t>> layout_args = {
+        {"Nbt", Nbt},
+        {"KT", Kt},
+        {"KB", KB},
+        {"CN", CN},
+        {"P", P},
+        {"NCP", ncp},
+        {"GX", static_cast<uint32_t>(grid.x)},
+        {"NW", NW},
+    };
+
+    auto make_stream = [&](const KernelSpecName& name, uint32_t par) {
+        const bool stream1 = par == 1;
+        KernelSpec k{
+            .unique_id = name,
+            .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_dram_stream_mrows.cpp",
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .config_1xx =
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = stream1 ? tt_metal::DataMovementProcessor::RISCV_0
+                                                 : tt_metal::DataMovementProcessor::RISCV_1,
+                            .noc = stream1 ? NOC::NOC_1 : NOC::NOC_0,
+                        },
+                },
+        };
+        auto& defines = k.compiler_options.defines;
+        defines["DSMC_ROLE"] = role_table;
+        for (const auto& [arg, value] : layout_args) {
+            k.compile_time_args.insert({arg, value});
+        }
+        k.compile_time_args.insert({"D", depth});
+        k.compile_time_args.insert({"WT", w_tile_size});
+        k.compile_time_args.insert({"PAR", par});
+        k.compile_time_args.insert({"WSINGLE", two_streams ? 0u : 1u});
+        if (!stream1 || two_streams) {
+            defines["MR_STREAMS_W"] = "1";
+            k.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = stream1 ? W1_DFB : W0_DFB,
+                .accessor_name = "w",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            k.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = IN1, .accessor_name = "in1"});
+        }
+        if (stream1) {
+            defines["MR_STREAM1"] = "1";
+            defines["MR_DIST"] = join(dist_xy);
+            k.compile_time_args.insert({"MT", Mt});
+            k.compile_time_args.insert({"XT", x_tile_size});
+            k.compile_time_args.insert({"NX", NX});
+            k.compile_time_args.insert({"XC", x_chunk});
+            k.compile_time_args.insert({"OT", out_tile_size});
+            k.compile_time_args.insert({"OD", out_div});
+            k.compile_time_args.insert({"NOUT", Nt / out_div});
+            k.compile_time_args.insert({"MX0", static_cast<uint32_t>(mc_start.x)});
+            k.compile_time_args.insert({"MY0", static_cast<uint32_t>(mc_start.y)});
+            k.compile_time_args.insert({"MX1", static_cast<uint32_t>(mc_end.x)});
+            k.compile_time_args.insert({"MY1", static_cast<uint32_t>(mc_end.y)});
+            k.compile_time_args.insert({"MNUM", mnum});
+            k.dfb_bindings.push_back(
+                DFBBinding{.dfb_spec_name = X_DFB, .accessor_name = "x", .endpoint_type = DFBEndpointType::PRODUCER});
+            k.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER});
+            k.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = IN0, .accessor_name = "in0"});
+            k.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"});
+            k.semaphore_bindings.push_back(SemaphoreBinding{.semaphore_spec_name = READY_SEM, .accessor_name = "ready"});
+            for (uint32_t i = 0; i < XS_SEMS.size(); ++i) {
+                k.semaphore_bindings.push_back(
+                    SemaphoreBinding{.semaphore_spec_name = XS_SEMS[i], .accessor_name = "xs" + std::to_string(i)});
+            }
+        }
+        return k;
+    };
+
+    compute_hw.double_buffer_dest = false;
+    compute_hw.unpack_modes = {
+        {X_DFB, UnpackMode::UnpackToSrc},
+        {W0_DFB, UnpackMode::UnpackToSrc},
+    };
+    if (two_streams) {
+        compute_hw.unpack_modes.insert({W1_DFB, UnpackMode::UnpackToSrc});
+    }
+    if (l1acc) {
+        compute_hw.unpack_modes.insert({ACC_DFB, UnpackMode::UnpackToSrc});
+    }
+    KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_dram_stream_mrows.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .hw_config = std::move(compute_hw),
+    };
+    compute.compiler_options.defines["DSMC_ROLE"] = role_table;
+    if (two_streams) {
+        compute.compiler_options.defines["MR_TWO_STREAMS"] = "1";
+    }
+    if (l1acc) {
+        compute.compiler_options.defines["MR_L1ACC"] = "1";
+        compute.compile_time_args.insert({"G", div_up(l1acc_k_tiles, KB)});
+        compute.compile_time_args.insert({"MAXACC", Mt * ncmax});
+        compute.dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = ACC_DFB, .accessor_name = "acc", .endpoint_type = DFBEndpointType::PRODUCER});
+        compute.dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = ACC_DFB, .accessor_name = "acc", .endpoint_type = DFBEndpointType::CONSUMER});
+    }
+    if (fuse_swiglu) {
+        compute.compiler_options.defines["MR_SWIGLU"] = "1";
+        compute.compile_time_args.insert(
+            {"SWIGLU_BF",
+             output_data_format == tt::DataFormat::Bfp8_b || output_data_format == tt::DataFormat::Bfp4_b ? 1u : 0u});
+    }
+    for (const auto& [arg, value] : layout_args) {
+        compute.compile_time_args.insert({arg, value});
+    }
+    compute.compile_time_args.insert({"MT", Mt});
+    compute.compile_time_args.insert({"OD", out_div});
+    compute.dfb_bindings.push_back(
+        DFBBinding{.dfb_spec_name = X_DFB, .accessor_name = "x", .endpoint_type = DFBEndpointType::CONSUMER});
+    compute.dfb_bindings.push_back(
+        DFBBinding{.dfb_spec_name = W0_DFB, .accessor_name = "w0", .endpoint_type = DFBEndpointType::CONSUMER});
+    if (two_streams) {
+        compute.dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = W1_DFB, .accessor_name = "w1", .endpoint_type = DFBEndpointType::CONSUMER});
+    }
+    compute.dfb_bindings.push_back(
+        DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER});
+
+    Group<KernelSpec> kernels;
+    kernels.push_back(make_stream(STREAM0, 0));
+    kernels.push_back(make_stream(STREAM1, 1));
+    kernels.push_back(std::move(compute));
+
+    Group<TensorParameter> tensor_parameters;
+    tensor_parameters.push_back(TensorParameter{.unique_id = IN0, .spec = in0_tensor.tensor_spec()});
+    tensor_parameters.push_back(TensorParameter{.unique_id = IN1, .spec = in1_tensor.tensor_spec()});
+    tensor_parameters.push_back(TensorParameter{.unique_id = OUTPUT, .spec = out_tensor.tensor_spec()});
+
+    ProgramSpec spec{
+        .name = "matmul_dram_stream_mrows",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .semaphores = std::move(semaphores),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "grid",
+                    .kernels = {STREAM0, STREAM1, COMPUTE},
+                    .target_nodes = rect,
+                },
+            },
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(KernelRunArgs{.kernel = STREAM0});
+    run_args.kernel_run_args.push_back(KernelRunArgs{.kernel = STREAM1});
+    run_args.kernel_run_args.push_back(KernelRunArgs{.kernel = COMPUTE});
+    run_args.tensor_args = {
+        {IN0, in0_tensor},
+        {IN1, in1_tensor},
+        {OUTPUT, out_tensor},
+    };
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
+}
+
 
 ttnn::device_operation::ProgramArtifacts
 MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts(
@@ -1821,7 +2221,8 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
             output_tile,
             in0_data_format,
             in1_data_format,
-            output_data_format);
+            output_data_format,
+            program_config.fuse_swiglu);
     }
 
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);

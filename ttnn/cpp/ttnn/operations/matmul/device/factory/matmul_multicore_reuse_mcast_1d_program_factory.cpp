@@ -1,11 +1,15 @@
+ 
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include <algorithm>
 #include <map>
+#include <numeric>
+#include <tuple>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -3357,8 +3361,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0},
-    const ttnn::PrefetcherPipeList& prefetcher_pipes = {}) {
+    const ttnn::PrefetcherPipeList& prefetcher_pipes = {},
+    bool fuse_swiglu = false) {
     using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
+    // fuse_swiglu: the weight's column tiles are gate / up pairs; the output (and everything the writer sees of it) is
+    // half as wide: out_div output columns per weight column.
+    const uint32_t out_div = fuse_swiglu ? 2 : 1;
 
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
@@ -3378,6 +3386,25 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             !transpose_b,
             "matmul mcast_in0 over prefetcher_pipes does not support transpose_b: the pipes deliver the weight's "
             "K-blocks in its DRAM layout");
+    }
+
+    // A DRAM width-sharded in1 is read bank by bank (each core's per_core_N columns sit contiguously in one or two
+    // banks) instead of tile by tile through the interleaved page map. Its L1 buffer is an ordinary FIFO like the
+    // interleaved path, so in1_is_sharded (the resident-L1-shard path) is turned off for it.
+    const bool in1_is_dram_width_sharded =
+        in1_is_sharded && !use_prefetcher_pipes && in1_tensor.memory_config().is_dram() &&
+        in1_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
+    uint32_t in1_dram_shard_width_tiles = 0;
+    if (in1_is_dram_width_sharded) {
+        in1_is_sharded = false;
+        TT_FATAL(!transpose_b, "matmul mcast_in0 with a DRAM width-sharded in1 does not support transpose_b");
+        TT_FATAL(
+            out_block_w == per_core_N,
+            "matmul mcast_in0 with a DRAM width-sharded in1 needs out_block_w == per_core_N, got {} and {}",
+            out_block_w,
+            per_core_N);
+        TT_FATAL(in0_B == 1, "matmul mcast_in0 with a DRAM width-sharded in1 needs one batch, got {}", in0_B);
+        in1_dram_shard_width_tiles = in1_tensor.shard_spec()->shape[1] / in1_tile.get_width();
     }
 
     uint32_t num_blocks = K / in0_block_w;
@@ -3453,12 +3480,21 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         uint32_t in1_shard_height_in_tiles = in1_tensor.shard_spec()->shape[0] / in1_tile.get_height();
         in1_dfb_tiles = per_core_N * in1_shard_height_in_tiles;
     }
+    // A DRAM width-sharded in1 read as one block per core (one output block, one batch, no bias) keeps two K-blocks
+    // in flight on transaction IDs, which needs a third block of buffer for the one compute is reading. Each K row
+    // of a core's block is one NOC packet, so it must fit one.
+    const bool in1_dram_pipeline = in1_is_dram_width_sharded && num_blocks > 1 && per_core_M == out_block_h &&
+                                   !bias_tensor.has_value() && per_core_N * in1_single_tile_size <= 8192;
+    const uint32_t in1_pipe_depth = 3;  // weight blocks in flight for the DRAM-width-sharded in1 pipeline
+    if (in1_dram_pipeline) {
+        in1_dfb_tiles = in1_block_tiles * in1_pipe_depth;
+    }
 
     uint32_t in1_dfb_size = in1_dfb_tiles * in1_aligned_tile_size;
 
     uint32_t out_block_tiles = out_block_h * out_block_w;
     uint32_t out_shard_tiles = per_core_M * per_core_N;
-    uint32_t out_dfb_tiles = out_block_tiles;  // No double buffer
+    uint32_t out_dfb_tiles = out_block_tiles / out_div;  // No double buffer
     if (output_is_sharded) {
         out_dfb_tiles = out_shard_tiles;
     }
@@ -3687,6 +3723,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
+    if (fuse_swiglu) {
+        mm_kernel_defines["MM_SWIGLU"] = "1";
+    }
     if (in1_transpose_tile) {
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
@@ -3708,6 +3747,17 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
 
     if (in1_is_sharded) {
         mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
+    }
+    if (in1_is_dram_width_sharded) {
+        TT_FATAL(
+            in1_single_tile_size % dram_alignment == 0,
+            "matmul mcast_in0 with a DRAM width-sharded in1 needs DRAM-aligned in1 tiles, got {} bytes",
+            in1_single_tile_size);
+        mm_kernel_in1_sender_writer_defines["IN1_DRAM_WIDTH_SHARDED"] = "1";
+        if (in1_dram_pipeline) {
+            mm_kernel_in1_sender_writer_defines["IN1_DRAM_PIPELINE"] = "1";
+            mm_kernel_in1_sender_writer_defines["IN1_PIPE_DEPTH"] = std::to_string(in1_pipe_depth);
+        }
     }
 
     if (bias_is_sharded) {
@@ -3735,7 +3785,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     ////////////////////////////////////////////////////////////////////////////
     // The output and partials buffers share one L1 region unless the shapes or formats force them
     // apart; when they share, they are aliases of each other rather than independent buffers.
-    const bool separate_out_and_interm0 = do_not_inplace_interm0_out_dfb ||
+    const bool separate_out_and_interm0 = fuse_swiglu || do_not_inplace_interm0_out_dfb ||
                                           (interm0_data_format != output_data_format) ||
                                           (untilize_out && (in1_num_subblocks > 1));
     // Every member of an alias group must have the same total backing size, so the partials buffer
@@ -4236,15 +4286,15 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                     {"bcast_B", static_cast<uint32_t>(bcast_batch)},
                     {"batchB", 0u},
                     {"out_tensor_stride_w", 1u},
-                    {"out_tensor_stride_h", N},
-                    {"out_tensor_next_subblock_stride_w", out_subblock_w},
-                    {"out_tensor_next_subblock_stride_h", out_subblock_h * N},
-                    {"out_tensor_next_w_dim_block_stride", out_block_w},
-                    {"out_tensor_next_h_dim_block_stride", out_block_h * N},
-                    {"out_subblock_w", out_subblock_w},
+                    {"out_tensor_stride_h", N / out_div},
+                    {"out_tensor_next_subblock_stride_w", out_subblock_w / out_div},
+                    {"out_tensor_next_subblock_stride_h", out_subblock_h * N / out_div},
+                    {"out_tensor_next_w_dim_block_stride", out_block_w / out_div},
+                    {"out_tensor_next_h_dim_block_stride", out_block_h * N / out_div},
+                    {"out_subblock_w", out_subblock_w / out_div},
                     {"out_subblock_h", out_subblock_h},
-                    {"out_subblock_tile_count", out_subblock_w * out_subblock_h},
-                    {"MtNt", M * N},
+                    {"out_subblock_tile_count", out_subblock_w * out_subblock_h / out_div},
+                    {"MtNt", M * N / out_div},
                     {"compact_output", 0u},
                     {"num_active", 0u},
                 },
@@ -4286,6 +4336,18 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         }
         if (!output_is_sharded) {
             in1_sender_rta_names.push_back("last_num_blocks_w_dim");
+        }
+        if (in1_is_dram_width_sharded) {
+            in1_sender.compile_time_args.insert(
+                {"in1_dram_block_num_tiles", in1_dram_shard_width_tiles * in0_block_w});
+            in1_sender.compile_time_args.insert(
+                {"in1_block_w_dram_bytes", in1_dram_shard_width_tiles * in1_single_tile_size});
+            in1_sender_rta_names.push_back("vc");
+            in1_sender_rta_names.push_back("num_dram_shards_to_read");
+            in1_sender_rta_names.push_back("dram_tensor_start_offset");
+            // (stride bytes, bank id) per bank a core's columns touch: at most ceil(per_core_N / shard width) + 1.
+            in1_sender.advanced_options.num_runtime_varargs =
+                2 * ((per_core_N + in1_dram_shard_width_tiles - 1) / in1_dram_shard_width_tiles + 1);
         }
         in1_sender.runtime_arg_schema = {.runtime_arg_names = std::move(in1_sender_rta_names)};
         kernels.push_back(std::move(in1_sender));
@@ -4424,6 +4486,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             {"get_batch_from_reader", 0u},
             {"bias_ntiles", in1_per_core_w},
         };
+        if (fuse_swiglu) {
+            // A block-float output's 7-bit mantissas hide the cheaper sigmoid's error (minimal_matmul's swiglu_sfpu.hpp).
+            compute_cta.insert(
+                {"SWIGLU_BF",
+                 output_data_format == tt::DataFormat::Bfp8_b || output_data_format == tt::DataFormat::Bfp4_b ? 1u
+                                                                                                              : 0u});
+        }
         if (bias_tensor.has_value()) {
             // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles.
             compute_cta.insert({"row_broadcast_bias", static_cast<uint32_t>(row_broadcast_bias ? 1u : 0u)});
@@ -4547,6 +4616,51 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     KernelRunArgs in1_sender_run_args{.kernel = IN1_SENDER_WRITER};
 
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
+
+    // Column block each working core computes. By default core i takes block i. With a DRAM width-sharded in1 whose
+    // banks hold whole column blocks, each core instead takes a block from the bank nearest to it (by NOC distance to
+    // the bank's reader-optimal worker): every core then streams its weight from one nearby bank, as the DRAM-sharded
+    // decode matmul's workers do, rather than over NOC paths that cross the grid. The output is interleaved, so any
+    // core can write any column block.
+    std::vector<uint32_t> in1_block_of_core(num_cores_with_work);
+    std::iota(in1_block_of_core.begin(), in1_block_of_core.end(), 0u);
+    if (in1_is_dram_width_sharded && !output_is_sharded && in1_dram_shard_width_tiles % per_core_N == 0) {
+        const auto anchors = static_cast<const tt::tt_metal::IDevice&>(device)
+                                 .get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
+        const uint32_t num_banks = anchors.size();
+        const uint32_t blocks_per_bank = in1_dram_shard_width_tiles / per_core_N;
+        if (blocks_per_bank * num_banks == num_blocks_x && num_cores_with_work == num_blocks_x &&
+            num_cores >= num_cores_with_work) {
+            std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> pairs;  // (distance, core index, bank)
+            pairs.reserve(num_cores_with_work * num_banks);
+            for (uint32_t c = 0; c < num_cores_with_work; ++c) {
+                const auto p = device.worker_core_from_logical_core(cores[c]);
+                for (uint32_t b = 0; b < num_banks; ++b) {
+                    const auto a = device.worker_core_from_logical_core(anchors[b]);
+                    const uint32_t dx = p.x > a.x ? p.x - a.x : a.x - p.x;
+                    const uint32_t dy = p.y > a.y ? p.y - a.y : a.y - p.y;
+                    pairs.emplace_back(dx + dy, c, b);
+                }
+            }
+            std::sort(pairs.begin(), pairs.end());
+            std::vector<int32_t> bank_of_core(num_cores_with_work, -1);
+            std::vector<uint32_t> bank_free(num_banks, blocks_per_bank);
+            for (const auto& [dist, c, b] : pairs) {
+                if (bank_of_core[c] < 0 && bank_free[b] > 0) {
+                    bank_of_core[c] = static_cast<int32_t>(b);
+                    bank_free[b] -= 1;
+                }
+            }
+            std::vector<uint32_t> next_block(num_banks);
+            for (uint32_t b = 0; b < num_banks; ++b) {
+                next_block[b] = b * blocks_per_bank;
+            }
+            for (uint32_t c = 0; c < num_cores_with_work; ++c) {
+                in1_block_of_core[c] = next_block[bank_of_core[c]]++;
+            }
+        }
+    }
+
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
         uint32_t output_idx_x = i % num_blocks_x;
@@ -4593,6 +4707,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         }
 
         if (i < num_cores_with_work) {
+            output_idx_x = in1_block_of_core[i];
             const bool last_x = (output_idx_x == num_blocks_x - 1);
             AddRuntimeArgsForNode(
                 in1_sender_run_args.runtime_arg_values,
@@ -4602,7 +4717,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                  {"in1_mcast_dest_noc_start_y", 0u},
                  {"in1_mcast_dest_noc_end_x", 0u},
                  {"in1_mcast_dest_noc_end_y", 0u},
-                 {"out_tensor_start_tile_id", (output_idx_x * per_core_N) + (output_idx_y * per_core_M * N)},
+                 {"out_tensor_start_tile_id",
+                  (output_idx_x * per_core_N / out_div) + (output_idx_y * per_core_M * N / out_div)},
                  // padding args (READER)
                  {"last_block_w", last_x ? last_out_block_w : out_block_w},
                  // padding args (WRITER)
@@ -4612,7 +4728,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                  {"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
                  {"out_last_num_nonzero_subblocks_w",
                   last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w},
-                 {"out_last_subblock_w", last_x ? last_subblock_of_last_block_w : out_subblock_w},
+                 {"out_last_subblock_w", (last_x ? last_subblock_of_last_block_w : out_subblock_w) / out_div},
                  {"padded_subblock_tiles_addr_skip", last_x ? last_block_padded_subblock_tiles_addr_skip : 0u},
                  {"padded_block_tiles_w_skip", last_x ? last_block_padded_block_tiles_w_skip : 0u}});
             if (bias_tensor.has_value()) {
@@ -4621,6 +4737,30 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             if (!output_is_sharded) {
                 in1_sender_run_args.runtime_arg_values["last_num_blocks_w_dim"][core] =
                     last_x ? last_out_num_blocks_w : out_num_blocks_x;
+            }
+            if (in1_is_dram_width_sharded) {
+                // This core's columns [col, col + per_core_N) run across banks of in1_dram_shard_width_tiles
+                // columns each; list every bank segment as (stride bytes, bank id).
+                const uint32_t num_varargs =
+                    2 * ((per_core_N + in1_dram_shard_width_tiles - 1) / in1_dram_shard_width_tiles + 1);
+                std::vector<uint32_t> bank_varargs;
+                uint32_t col = output_idx_x * per_core_N;
+                const uint32_t col_end = std::min(col + per_core_N, N);
+                const uint32_t start_offset = (col % in1_dram_shard_width_tiles) * in1_single_tile_size;
+                while (col < col_end) {
+                    const uint32_t bank = col / in1_dram_shard_width_tiles;
+                    const uint32_t seg = std::min(col_end, (bank + 1) * in1_dram_shard_width_tiles) - col;
+                    bank_varargs.push_back(seg * in1_single_tile_size);
+                    bank_varargs.push_back(bank);
+                    col += seg;
+                }
+                const uint32_t num_shards = bank_varargs.size() / 2;
+                TT_FATAL(bank_varargs.size() <= num_varargs, "in1 bank list overflow");
+                bank_varargs.resize(num_varargs, 0u);
+                in1_sender_run_args.runtime_arg_values["vc"][core] = i & 3;
+                in1_sender_run_args.runtime_arg_values["num_dram_shards_to_read"][core] = num_shards;
+                in1_sender_run_args.runtime_arg_values["dram_tensor_start_offset"][core] = start_offset;
+                in1_sender_run_args.advanced_options.runtime_varargs[core] = std::move(bank_varargs);
             }
         }
     }
@@ -6705,6 +6845,38 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
     const auto Kt = get_K_dim(a_shape_padded, in0_tile);
     const auto Nt = get_N_dim(b_shape_padded, in1_tile);
 
+    if (program_config.dram_stream_workers_per_bank > 0) {
+        TT_FATAL(
+            mcast_in0 && !bias.has_value() && !program_config.fused_activation.has_value() && !untilize_out &&
+                !transpose_a && !transpose_b && in0_B == 1 && !in0_tensor.memory_config().is_sharded() &&
+                in1_tensor.memory_config().is_dram() &&
+                in1_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED &&
+                in0_tile.get_height() == 32 && in0_tile.get_width() == 32 && in1_tile.get_height() == 32 &&
+                in1_tile.get_width() == 32,
+            "dram_stream_workers_per_bank needs mcast_in0, no bias / fused activation / untilize_out / transposes, one "
+            "batch, an interleaved A and a DRAM width-sharded B of 32x32 tiles");
+        return create_program_dram_stream_mrows(
+            const_cast<tt_metal::distributed::MeshDevice&>(device),
+            in0_tensor,
+            in1_tensor,
+            output,
+            compute_kernel_config,
+            Mt,
+            Kt,
+            Nt,
+            in0_block_w,
+            program_config.dram_stream_workers_per_bank,
+            in0_tile,
+            in1_tile,
+            output_tile,
+            in0_data_format,
+            in1_data_format,
+            output_data_format,
+            program_config.fuse_swiglu,
+            program_config.dram_stream_distributors,
+            program_config.dram_stream_chunk);
+    }
+
     // The 1D mcast matmul only supports rectangular sub-device worker grids, because the in0/in1
     // multicast targets a single bounding-box rectangle and the per-core index math assumes a
     // contiguous row-major rectangle of width `grid_size.x`.
@@ -6794,7 +6966,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
             fused_op_signaler,
             fused_matmul_bias_row_broadcastable(bias),
             sub_device_start_core,
-            operation_attributes.prefetcher_pipes);
+            operation_attributes.prefetcher_pipes,
+            program_config.fuse_swiglu);
     }
     return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1_artifacts(
         a,
