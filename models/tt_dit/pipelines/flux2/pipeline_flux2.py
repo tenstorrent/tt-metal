@@ -82,7 +82,8 @@ class Flux2Pipeline:
         dynamic_load: bool = False,
         trace_warmup: bool = False,
         vae_use_conv3d: bool = False,
-        shard_prompt: bool = False,
+        # A replicated prompt breaks single-block attention for sp > 2, so shard it by default.
+        shard_prompt: bool = True,
     ) -> None:
         self._mesh_device = mesh_device
         self._parallel_config = parallel_config
@@ -316,7 +317,7 @@ class Flux2Pipeline:
         trace_warmup: bool = False,
         checkpoint_name: str = "black-forest-labs/FLUX.2-dev",
         vae_use_conv3d: bool = False,
-        shard_prompt: bool = False,
+        shard_prompt: bool = True,
     ) -> Flux2Pipeline:
         dit_parallel_config = DiTGParallelConfigNoCFG(
             tensor_parallel=ParallelFactor(factor=int(mesh_device.shape[tp_axis]), mesh_axis=tp_axis),
