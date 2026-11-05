@@ -199,3 +199,32 @@ def test_convert_keeps_quasar_sfpu_where_vector_mode(tmp_path):
     names = pq.read_table(tmp_path / "out.parquet").schema.names
     assert "vector_mode" in names
     assert names == [c.name for c in QSR_SCHEMA]
+
+
+def test_convert_stores_legacy_columns_under_current_names(tmp_path):
+    # CSV written before mathop -> op and formats.sfpu_math -> formats.sfpu_src.
+    df = pd.DataFrame(
+        {
+            "marker": ["INIT"],
+            "tile_cnt": [4],
+            "mathop": ["ADD"],
+            "formats.sfpu_math": ["Float16_b"],
+        }
+    )
+    p = _write_csv(tmp_path, "perf_eltwise_binary_sfpu_quasar.csv", df)
+
+    diag = convert_csvs_to_parquet(
+        [p], tmp_path / "out.parquet", strict=True, **_QSR_PROV
+    )
+
+    table = pq.read_table(tmp_path / "out.parquet").to_pandas()
+    assert table["op"].tolist() == ["ADD"]
+    assert table["formats.sfpu_src"].tolist() == ["Float16_b"]
+    assert table["mathop"].isna().all()
+    assert diag["unknown_columns"] == {}
+    assert diag["renamed_columns"] == {
+        "perf_eltwise_binary_sfpu_quasar": {
+            "formats.sfpu_math": "formats.sfpu_src",
+            "mathop": "op",
+        }
+    }

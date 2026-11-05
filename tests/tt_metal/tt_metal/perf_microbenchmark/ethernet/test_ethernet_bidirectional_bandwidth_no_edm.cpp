@@ -30,8 +30,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -86,8 +86,8 @@ struct ChipSenderReceiverEthCore {
 };
 
 std::tuple<tt_metal::Program, tt_metal::Program> build(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& /*device0*/,
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& /*device1*/,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device0,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device1,
     tt::tt_metal::CoreCoord eth_sender_core,
     tt::tt_metal::CoreCoord eth_receiver_core,
     std::size_t /*num_samples*/,
@@ -95,8 +95,8 @@ std::tuple<tt_metal::Program, tt_metal::Program> build(
     std::size_t /*max_channels_per_direction*/,
     tt_metal::KernelHandle& local_kernel,
     tt_metal::KernelHandle& remote_kernel) {
-    tt_metal::Program program0;
-    tt_metal::Program program1;
+    tt_metal::Program program0 = tt_metal::CreateProgram(*device0);
+    tt_metal::Program program1 = tt_metal::CreateProgram(*device1);
 
     const std::vector<uint32_t>& ct_args = {};
 

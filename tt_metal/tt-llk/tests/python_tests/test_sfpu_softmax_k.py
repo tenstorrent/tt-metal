@@ -70,7 +70,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import SOFTMAX_K, TILE_COUNT
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
 
@@ -161,7 +161,7 @@ def test_sfpu_softmax_k(formats, dest_acc, k):
     )
 
     res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tile = untilize_block(
         res_tensor, formats.output_format, [TILE_DIM, TILE_DIM]
     ).reshape(TILE_DIM, TILE_DIM)
