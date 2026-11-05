@@ -4,7 +4,8 @@
 
 """Decide whether CI jobs marked `ci-no-retry` should be re-run. See ../classify-failure/README.md.
 
-  job-check --job-id ID                    run by a job on a re-run attempt: exit 3 if this job's previous
+  job-check --job-id ID --run-id ID --attempt N
+                                           run by a job on a re-run attempt: exit 3 if this job's previous
                                            attempt was marked (it emits the marker again), else 0
   run-decision --run-id ID --attempt N     run by auto-retry: prints "skip" if every unsuccessful job of
                                            attempt N is marked, else "rerun"; also sets the step output
@@ -24,6 +25,8 @@ MARKER = "ci-no-retry"
 SKIP_EXIT = 3
 # Conclusions rerun-failed-jobs would not re-run; anything else (failure, timed_out, cancelled, ...) would be.
 SETTLED = {"success", "skipped", "neutral"}
+SHORT_CIRCUIT_PREFIX = " failed deterministically: "
+SHORT_CIRCUIT_SUFFIX = " -- a re-run of this run cannot change that; start a new run to measure again"
 
 
 def api(url):
@@ -71,10 +74,9 @@ def escape(msg):
 
 
 def job_check(args):
-    attempt = int(os.environ.get("GITHUB_RUN_ATTEMPT", "1"))
+    repo, run_id, attempt = args.repo, args.run_id, args.attempt
     if attempt <= 1:
         return 0
-    repo, run_id = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_RUN_ID"]
     name = api(f"repos/{repo}/actions/jobs/{args.job_id}")["name"]
     prev = [j for j in attempt_jobs(repo, run_id, attempt - 1) if j["name"] == name]
     if len(prev) != 1:
@@ -87,14 +89,11 @@ def job_check(args):
     if msg is None:
         print(f"attempt {attempt - 1} of '{name}' is not marked {MARKER}; running it")
         return 0
-    # Strip a prefix added by an earlier short-circuit so the reason does not nest attempt after attempt.
-    reason = msg.split(" failed deterministically: ", 1)[-1]
+    # Strip what an earlier short-circuit added so the reason does not nest attempt after attempt.
+    reason = msg.split(SHORT_CIRCUIT_PREFIX, 1)[-1].removesuffix(SHORT_CIRCUIT_SUFFIX)
     print(
         f"::error title={MARKER}::"
-        + escape(
-            f"Not re-run: attempt {attempt - 1} failed deterministically: {reason} "
-            f"-- a re-run of this run cannot change that; start a new run to measure again"
-        )
+        + escape(f"Not re-run: attempt {attempt - 1}{SHORT_CIRCUIT_PREFIX}{reason}{SHORT_CIRCUIT_SUFFIX}")
     )
     return SKIP_EXIT
 
@@ -120,9 +119,10 @@ def main():
     jc = sub.add_parser("job-check")
     jc.add_argument("--job-id", required=True)
     rd = sub.add_parser("run-decision")
-    rd.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "tenstorrent/tt-metal"))
-    rd.add_argument("--run-id", required=True)
-    rd.add_argument("--attempt", required=True, type=int)
+    for p in (jc, rd):
+        p.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "tenstorrent/tt-metal"))
+        p.add_argument("--run-id", required=True)
+        p.add_argument("--attempt", required=True, type=int)
     args = parser.parse_args()
     try:
         return job_check(args) if args.cmd == "job-check" else run_decision(args)
