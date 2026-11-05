@@ -1301,9 +1301,20 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
  * | posted (template parameter)         | Whether the transaction is posted (i.e. no ack required) | bool      | true or false                                            | False    |
  * | update_counter (template parameter) | Whether to increment write counters                      | bool      | true or false                                            | False    |
  * | one_packet (template parameter)     | Whether transaction size is <= NOC_MAX_BURST_SIZE        | bool      | true or false                                            | False    |
+ * | skip_cmdbuf_chk (template param)    | Skip the cmd buf ready poll (see note)                   | bool      | true or false                                            | False    |
+ *
+ * Only set skip_cmdbuf_chk on the first issue after ncrisc_noc_write_set_state. That function waits for the
+ * command buffer and then writes registers that do not make it busy again, so the poll here is guaranteed
+ * to pass. Every later issue must poll, because the one before it wrote NOC_CMD_CTRL. Setting this anywhere
+ * else corrupts the transaction already in flight.
  */
 // clang-format on
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool posted = false, bool update_counter = true, bool one_packet = false>
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    bool posted = false,
+    bool update_counter = true,
+    bool one_packet = false,
+    bool skip_cmdbuf_chk = false>
 inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
     if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
@@ -1315,7 +1326,9 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
         }
     }
 
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (!skip_cmdbuf_chk) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    }
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
