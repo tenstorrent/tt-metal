@@ -823,10 +823,24 @@ def _golden_function_assign(
 ttnn.attach_golden_function(ttnn.assign, golden_function=_golden_function_assign)
 
 
-def _golden_function(a, b, *args, fast_and_approximate_mode=False, **kwargs):
+def _golden_function(
+    a,
+    b,
+    *args,
+    activations=None,
+    input_tensor_a_activations=None,
+    input_tensor_b_activations=None,
+    fast_and_approximate_mode=False,
+    **kwargs,
+):
     import torch
 
+    # Operand activations first, result activations last. apply_activations widens a scalar
+    # operand to a tensor so the same code serves the scalar overload.
+    a = apply_activations(a, input_tensor_a_activations, b)
+    b = apply_activations(b, input_tensor_b_activations, a)
     output_tensor = torch.nn.functional.gelu(torch.add(a, b))
+    output_tensor = apply_activations(output_tensor, activations)
     if fast_and_approximate_mode:
         # The device runs the lookup-table gelu here, which is deliberately outside the accurate
         # reference's numerical contract, so comparing it against torch would always fail.
@@ -975,10 +989,8 @@ def _make_extremum_golden(torch_name):
         import torch
 
         torch_function = getattr(torch, torch_name)
-        if not torch.is_tensor(input_tensor_b):
-            # The scalar overload runs on the unary path, which accepts activations but never applies them.
-            activations = input_tensor_a_activations = input_tensor_b_activations = None
-        # The tensor overload shares the binary kernel contract: operand activations first, result activations last.
+        # Operand activations first, result activations last. apply_activations widens a scalar
+        # operand to a tensor so the same code serves the scalar overload.
         input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations, input_tensor_b)
         input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
         if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):

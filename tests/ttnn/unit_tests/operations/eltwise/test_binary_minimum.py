@@ -6,6 +6,8 @@ import torch
 import pytest
 import ttnn
 
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
 pytestmark = pytest.mark.use_module_device
 
 
@@ -249,3 +251,85 @@ def test_binary_min_int32_opt(input_shapes, low_a, high_a, low_b, high_b, ttnn_d
     ttnn.minimum(tt_in_a, tt_in_b, output_tensor=tt_out, queue_id=cq_id)
     output_tensor = ttnn.to_torch(tt_out).to(torch.int32)
     assert torch.equal(golden, output_tensor)
+
+
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("input_shape", [torch.Size([1, 1, 32, 64]), torch.Size([1, 1, 32, 40])])
+def test_binary_min_scalar_activations(input_shape, ttnn_dtype, device):
+    torch_input_a = (torch.rand(input_shape) * 4.0 - 2.0).to(torch.float32)
+
+    tt_in_a = ttnn.from_torch(
+        torch_input_a,
+        dtype=ttnn_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ttnn_scalar = 0.5
+    torch_scalar = torch.tensor(ttnn_scalar, dtype=torch.float32)
+
+    # No activation: control.
+    tt_result = ttnn.minimum(tt_in_a, ttnn_scalar)
+    assert_with_pcc(torch.minimum(torch_input_a, torch_scalar), ttnn.to_torch(tt_result), 0.999)
+
+    # activations=[relu] must be applied to the compare result.
+    tt_result = ttnn.minimum(tt_in_a, ttnn_scalar, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
+    assert_with_pcc(
+        torch.nn.functional.relu(torch.minimum(torch_input_a, torch_scalar)),
+        ttnn.to_torch(tt_result),
+        0.999,
+    )
+
+
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("input_shape", [torch.Size([1, 1, 32, 64]), torch.Size([1, 1, 32, 40])])
+def test_binary_min_scalar_input_a_activations(input_shape, ttnn_dtype, device):
+    torch_input_a = (torch.rand(input_shape) * 4.0 - 2.0).to(torch.float32)
+
+    tt_in_a = ttnn.from_torch(
+        torch_input_a,
+        dtype=ttnn_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ttnn_scalar = 0.5
+    torch_scalar = torch.tensor(ttnn_scalar, dtype=torch.float32)
+
+    # input_tensor_a_activations=[abs] must be applied to the LHS operand before the compare.
+    tt_result = ttnn.minimum(
+        tt_in_a, ttnn_scalar, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.ABS)]
+    )
+    assert_with_pcc(torch.minimum(torch.abs(torch_input_a), torch_scalar), ttnn.to_torch(tt_result), 0.999)
+
+
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("input_shape", [torch.Size([1, 1, 32, 64]), torch.Size([1, 1, 32, 40])])
+def test_binary_min_scalar_activations_chained(input_shape, ttnn_dtype, device):
+    torch_input_a = (torch.rand(input_shape) * 4.0 - 2.0).to(torch.float32)
+
+    tt_in_a = ttnn.from_torch(
+        torch_input_a,
+        dtype=ttnn_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ttnn_scalar = 0.5
+    torch_scalar = torch.tensor(ttnn_scalar, dtype=torch.float32)
+
+    # Both: operand activation first, result activation last.
+    tt_result = ttnn.minimum(
+        tt_in_a,
+        ttnn_scalar,
+        activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
+        input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.ABS)],
+    )
+    assert_with_pcc(
+        torch.nn.functional.relu(torch.minimum(torch.abs(torch_input_a), torch_scalar)),
+        ttnn.to_torch(tt_result),
+        0.999,
+    )
