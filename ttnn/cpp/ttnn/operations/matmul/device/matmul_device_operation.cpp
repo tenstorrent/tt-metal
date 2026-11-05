@@ -3416,6 +3416,21 @@ MatmulParams create_matmul_attributes(
         parameters.in0_column_offset};
 }
 
+namespace {
+
+// A gather_in0 matmul over prefetcher_pipes runs its ring's kernels on boxes around the ring within the
+// sub-device that holds it. Recording the active sub-device manager, which lays the sub-devices out, puts
+// that layout in the program-cache key.
+void record_gather_in0_sub_device_manager(MatmulParams& attributes, const Tensor& input_tensor_a) {
+    const auto* program_config = std::get_if<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+        &attributes.program_config.value());
+    if (program_config != nullptr && program_config->gather_in0 && !attributes.prefetcher_pipes.empty()) {
+        attributes.gather_in0_sub_device_manager_id = input_tensor_a.device()->get_active_sub_device_manager_id();
+    }
+}
+
+}  // namespace
+
 MatmulDeviceOperation::tensor_return_value_t matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -3440,6 +3455,7 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     }
     operations::matmul::normalize_program_config(
         normalized_attributes.program_config.value(), input_tensor_a.device()->compute_with_storage_grid_size());
+    record_gather_in0_sub_device_manager(normalized_attributes, input_tensor_a);
     return ttnn::device_operation::launch<MatmulDeviceOperation>(
         normalized_attributes, {{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}});
 }
@@ -3462,6 +3478,7 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     }
     operations::matmul::normalize_program_config(
         normalized_attributes.program_config.value(), input_tensors.at(0).device()->compute_with_storage_grid_size());
+    record_gather_in0_sub_device_manager(normalized_attributes, input_tensors.at(0));
     // validate requires optional_input_tensors.size() == 1; this path has no bias.
     return ttnn::device_operation::launch<MatmulDeviceOperation>(
         normalized_attributes, {input_tensors, {std::nullopt}, {optional_output_tensor}});
