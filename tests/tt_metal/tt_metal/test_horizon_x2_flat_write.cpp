@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// LOCAL horizon_x2 spike (not for upstream): a kernel on one chip writes to another chip's Tensix
-// L1 through that chip's flat address (UMD TTDevice::get_flat_address), and the host checks that it
-// landed there and not on the writer's own chip. Needs a horizon_x2 run dir with both chips visible
-// (TT_VISIBLE_DEVICES unset), TT_UMD_NOC_ATT=horizon_x2, TT_METAL_NOC_ATT=horizon_2x3, and ATT
-// tables with the cross-chip tile routes (tt-umd-simulators emu/horizon_x2/horizon_x2_att.yaml).
+// A kernel on one chip writes to another chip's Tensix L1 through that chip's flat address (UMD
+// TTDevice::get_flat_address), and the host checks that it landed there and not on the writer's own chip. Needs a
+// horizon_x2 run dir with both chips visible (TT_VISIBLE_DEVICES unset), TT_UMD_NOC_ATT=horizon_x2,
+// TT_METAL_NOC_ATT=horizon_2x3, and ATT tables with the cross-chip tile routes (tt-umd-simulators
+// emu/horizon_x2/horizon_x2_att.yaml).
 
 #include "common/device_fixture.hpp"
 #include "context/metal_context.hpp"
@@ -86,10 +86,11 @@ void expect_flat_write_lands(
     const experimental::NodeCoord node{0, 0};
     const experimental::KernelSpecName KERNEL{"flat_write"};
     experimental::ProgramSpec spec{
-        .name = "flat_address_write",
+        .name = "horizon_x2_flat_address_write",
         .kernels = {experimental::KernelSpec{
             .unique_id = KERNEL,
-            .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/flat_address_write.cpp",
+            .source = OVERRIDE_KERNEL_PREFIX
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/horizon_x2_flat_address_write.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"src", "dst_lo", "dst_hi", "size", "posted"}},
             .hw_config = experimental::DataMovementHardwareConfig{},

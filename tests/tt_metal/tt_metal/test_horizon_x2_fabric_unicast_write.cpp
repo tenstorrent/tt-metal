@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Horizon x2 fabric unicast write test — two separate MeshDevices.
-//
 // SetFabricConfig(FABRIC_1D) is called before device open so that control_plane writes
 // fabric_over_noc_routing_l1_info_t to ROUTING_TABLE_BASE on every Tensix core.  No EDM
 // or mux kernels are needed: Horizon uses an always-on AXI crossbar, not ERISC routers.
@@ -171,14 +170,14 @@ void expect_fabric_unicast_write_with_checker(
 
 }  // namespace
 
-TEST_F(FabricUnicastWrite2DevBothChipsFixture, FabricUnicastWrite) {
+TEST_F(FabricUnicastWrite2DevBothChipsFixture, HorizonX2FabricUnicastWrite) {
     if (!fabric_unicast_2dev_available()) {
         GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
     }
     expect_fabric_unicast_write_with_checker(*devices_[0], *devices_[1], 0, 1);
 }
 
-TEST_F(FabricUnicastWrite2DevBothChipsFixture, FabricUnicastWriteReverse) {
+TEST_F(FabricUnicastWrite2DevBothChipsFixture, HorizonX2FabricUnicastWriteReverse) {
     if (!fabric_unicast_2dev_available()) {
         GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
     }

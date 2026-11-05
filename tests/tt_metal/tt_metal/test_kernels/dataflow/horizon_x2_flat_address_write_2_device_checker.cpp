@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Horizon fabric unicast write — checker side (runs on chip 1).
-//
+// Horizon 2-device flat address write test — checker side (runs on chip 1).
 // 1. Spins on recv_l1_addr[0] until non-zero (the sender first word arrives).
 // 2. Verifies all num_words words match base_value+i.
 // 3. Writes 1u (pass) or 0xDEAD0000|i (fail at word i) to result_l1_addr.

@@ -1073,11 +1073,11 @@ static_assert(
     "routing_l1_info_t must be 2704 bytes: base(516) + union(1160) + exit(1024) + coords(2) + shape(2)");
 
 // ============================================================
-// Horizon-specific L1 routing table
+// Fabric-over-NoC L1 routing table
 // ============================================================
-// Horizon uses a flat (global) AXI address scheme: Tensix cores write directly
-// to a remote device's L1 via noc_async_write with a flat 64-bit address.
-// No ERISC hop-by-hop routing is required.
+// Designed to be used for architectures that use NoC for inter-device communication and a flat (global) AXI address
+// scheme: Tensix cores write directly to a remote device's L1 via noc_async_write with a flat 64-bit address. No ERISC
+// hop-by-hop routing is required.
 //
 // flat_addr[mesh][device][noc_x][noc_y] holds the full 64-bit flat address for core
 // (noc_x, noc_y) on device `device` in mesh `mesh` at offset 0.  Callers add the
@@ -1104,8 +1104,8 @@ struct fabric_over_noc_routing_l1_info_t {
 
 static_assert(
     sizeof(fabric_over_noc_routing_l1_info_t) == 2704, "fabric_over_noc_routing_l1_info_t must be 2704 bytes");
-// Multi-mesh not currently supported on Horizon
-static_assert(MAX_HORIZON_MESHES == 1, "Multi-mesh not currently supported on Horizon");
+// Multi-mesh not currently supported on Fabric-over-NoC
+static_assert(MAX_HORIZON_MESHES == 1, "Multi-mesh not currently supported on Fabric-over-NoC");
 
 static_assert(offsetof(fabric_over_noc_routing_l1_info_t, flat_addr) == 16);
 static_assert(sizeof(fabric_over_noc_routing_l1_info_t) % 16 == 0);

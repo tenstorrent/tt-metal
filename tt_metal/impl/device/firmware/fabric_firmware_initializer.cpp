@@ -355,7 +355,7 @@ void FabricFirmwareInitializer::configure() {
     }
 
     if (control_plane_.is_fabric_over_noc()) {
-        // Horizon fabric runs over NOC — no ERISC routers to sync.
+        // No ERISC routers to sync.
         initialized_.test_and_set();
         return;
     }

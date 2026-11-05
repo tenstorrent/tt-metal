@@ -504,7 +504,7 @@ private:
         intra_mesh_routing_tables_;  // table that will be written to each ethernet core
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
-    // Horizon (fabric-over-NOC): pre-built routing structs keyed by physical chip id.
+    // Fabric-over-NOC architectures: pre-built routing structs keyed by physical chip id.
     // Populated by configure_routing_tables_for_fabric_over_noc() during discovery phase.
     std::map<uint32_t, tt::tt_fabric::fabric_over_noc_routing_l1_info_t> fabric_over_noc_routing_tables_;
     // Store the logical direction assigned to each exit node (an exit node is fully specified by

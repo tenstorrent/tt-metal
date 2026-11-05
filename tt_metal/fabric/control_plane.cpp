@@ -682,9 +682,10 @@ void ControlPlane::init_control_plane_auto_discovery() {
         this->physical_system_descriptor_.get());
     this->load_physical_chip_mapping(topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
 
-    // Horizon x2: AXI crossbar is invisible to UMD ethernet APIs.
-    // Override the ethernet-based solver's 1x1 mapping with a direct enumeration of all chips.
-    // cluster.user_exposed_chip_ids() is populated from the cluster descriptor YAML, not ethernet.
+    // Horizon x2: AXI crossbar is invisible to Topology Mapper and will not be detected in auto-discovery
+    // Current workaround is to force users to supply a custom Horizon MGD file and chip mapping (see
+    // FabricUnicastWrite2DevBothChipsFixture::SetUp() in test_horizon_x2_fabric_unicast_write.cpp for details). Issue
+    // tracked in #64515
     TT_FATAL(
         !(this->is_fabric_over_noc()),
         "Auto-discovery does not work for Fabric over NoC-based topologies, supply an MGD file and chip mapping "
@@ -951,6 +952,7 @@ void ControlPlane::initialize_fabric_context() {
 void ControlPlane::load_physical_chip_mapping(
     const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
+    // Fabric-over-NoC architectures have no ethernet links, so skip checking their connections
     if (!this->is_fabric_over_noc()) {
         this->validate_mesh_connections();
     }
@@ -1660,12 +1662,12 @@ void ControlPlane::configure_routing_tables_for_fabric_over_noc() {
             if (dst_phys == src_phys) {
                 // For Horizon x2: fill LOCAL/REMOTE window entries for this device's own NOC
                 // column only.  Cross-column entries (reaching the other device on the same
-                // physical chip) are left to the cross-device AP-selection code below so that
+                // physical chip) are left to the cross-device Access Point (AP) selection code below so that
                 // the correct access point is used.  Filling them here with REMOTE_WINDOW
                 // would clobber the AP-selected address and break the reverse direction.
-                const uint32_t dev_id = info.my_noc_x;
+                const uint32_t dev_id = src_phys;
                 for (uint32_t local_y = 0; local_y < tt::tt_fabric::MAX_HORIZON_NOC_Y; local_y++) {
-                    const uint32_t phys_x = dev_id;
+                    const uint32_t phys_x = info.my_noc_x;
                     const uint32_t phys_y = local_y;
                     const uint32_t selector = phys_x + phys_y * tt::tt_fabric::HORIZON_ATT_WORKER_GRID_X;
                     const bool is_self = (phys_x == info.my_noc_x && phys_y == info.my_noc_y);
@@ -1680,7 +1682,7 @@ void ControlPlane::configure_routing_tables_for_fabric_over_noc() {
             if (dst_chip >= tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH) {
                 log_warning(
                     tt::LogFabric,
-                    "Horizon routing table: dst chip {} >= MAX_HORIZON_DEVS_PER_MESH ({}), skipping",
+                    "Fabric-over-NoC routing table: dst chip {} >= MAX_HORIZON_DEVS_PER_MESH ({}), skipping",
                     dst_chip,
                     tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH);
                 continue;
@@ -1694,7 +1696,7 @@ void ControlPlane::configure_routing_tables_for_fabric_over_noc() {
             if (access_points.empty()) {
                 continue;
             }
-            // Select the first AP whose flat address falls outside LOCAL and REMOTE windows.
+            // Select the first Access Point whose flat address falls outside LOCAL and REMOTE windows.
             // APs inside those windows loop back to the local chip rather than crossing the crossbar.
             size_t selected_ap_idx = access_points.size();
             {
@@ -1727,7 +1729,7 @@ void ControlPlane::configure_routing_tables_for_fabric_over_noc() {
             }
             TT_FATAL(
                 selected_ap_idx < access_points.size(),
-                "Horizon routing table: no valid cross-chip AP for src={} dst={}: "
+                "Fabric-over-NoC routing table: no valid cross-chip AP for src={} dst={}: "
                 "all {} APs fall within LOCAL or REMOTE window",
                 src_phys,
                 dst_phys,
@@ -1753,7 +1755,7 @@ void ControlPlane::configure_routing_tables_for_fabric_over_noc() {
         this->fabric_over_noc_routing_tables_[src_phys] = info;
         log_info(
             tt::LogFabric,
-            "Horizon routing table built for chip {} (my_mesh={} my_device={})",
+            "Fabric-over-NoC routing table built for chip {} (my_mesh={} my_device={})",
             src_phys,
             info.my_mesh_id,
             info.my_device_id);
@@ -3109,7 +3111,7 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
 
 void ControlPlane::write_routing_tables_to_all_chips() const {
     if (this->is_fabric_over_noc()) {
-        // Horizon: write pre-built flat-address routing tables (populated during discovery phase).
+        // Fabric-over-NoC: write pre-built flat-address routing tables (populated during discovery phase).
         for (const auto& [phys_chip_id, info] : this->fabric_over_noc_routing_tables_) {
             write_to_all_cores(
                 *this,

@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// LOCAL horizon_x2 spike (not for upstream): tests flat-address writes between two chips,
-// each opened as a separate MeshDevice. A sender kernel on the source chip writes via flat
-// address to the target chip's L1; a checker kernel on the target spins until the data arrives,
+// Tests flat-address writes between two chips, each opened as a separate MeshDevice. A sender kernel on the source chip
+// writes via flat address to the target chip's L1; a checker kernel on the target spins until the data arrives,
 // verifies all words, and writes pass/fail to a result buffer. Host asserts result == 1u.
 
 #include "common/device_fixture.hpp"
@@ -100,11 +99,11 @@ void expect_flat_write_2dev_with_checker(
     const experimental::NodeCoord src_node{0, 0};
     const experimental::KernelSpecName SENDER{"flat_write_2dev"};
     experimental::ProgramSpec sender_spec{
-        .name = "flat_address_write_2_device",
+        .name = "horizon_x2_flat_address_write_2_device",
         .kernels = {experimental::KernelSpec{
             .unique_id = SENDER,
-            .source =
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/flat_address_write_2_device.cpp",
+            .source = OVERRIDE_KERNEL_PREFIX
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/horizon_x2_flat_address_write_2_device.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"src", "dst_lo", "dst_hi", "size", "posted"}},
             .hw_config = experimental::DataMovementHardwareConfig{},
@@ -132,11 +131,11 @@ void expect_flat_write_2dev_with_checker(
     const experimental::NodeCoord tgt_node{0, 0};
     const experimental::KernelSpecName CHECKER{"flat_write_2dev_checker"};
     experimental::ProgramSpec checker_spec{
-        .name = "flat_address_write_2_device_checker",
+        .name = "horizon_x2_flat_address_write_2_device_checker",
         .kernels = {experimental::KernelSpec{
             .unique_id = CHECKER,
             .source = OVERRIDE_KERNEL_PREFIX
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/flat_address_write_2_device_checker.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/horizon_x2_flat_address_write_2_device_checker.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"recv_l1_addr", "num_words", "base_value", "result_l1_addr"}},
             .hw_config = experimental::DataMovementHardwareConfig{},
@@ -166,14 +165,14 @@ void expect_flat_write_2dev_with_checker(
 
 }  // namespace
 
-TEST_F(FlatWrite2DevBothChipsFixture, FlatWrite2DevPosted) {
+TEST_F(FlatWrite2DevBothChipsFixture, HorizonX2FlatWrite2DevPosted) {
     if (!flat_write_2dev_two_chips()) {
         GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
     }
     expect_flat_write_2dev_with_checker(*devices_[0], *devices_[1], 0, 1, 0, true);
 }
 
-TEST_F(FlatWrite2DevBothChipsFixture, FlatWrite2DevNonPosted) {
+TEST_F(FlatWrite2DevBothChipsFixture, HorizonX2FlatWrite2DevNonPosted) {
     if (!flat_write_2dev_two_chips()) {
         GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
     }
@@ -182,7 +181,7 @@ TEST_F(FlatWrite2DevBothChipsFixture, FlatWrite2DevNonPosted) {
 
 // Chip 0's second access point, NOC2AXI 1 at 0x11_...: chip 1's kernels can't use 0x10_...,
 // which is tt-metal's own REMOTE window.
-TEST_F(FlatWrite2DevBothChipsFixture, FlatWrite2DevReversePosted) {
+TEST_F(FlatWrite2DevBothChipsFixture, HorizonX2FlatWrite2DevReversePosted) {
     if (!flat_write_2dev_two_chips()) {
         GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
     }
