@@ -63,6 +63,7 @@ enum class EnvVarID {
     TT_METAL_GRENDEL_JTAG_TRANSPORT,          // jtag2axi_v1 or jtag2axi_v2
     TT_METAL_GRENDEL_JTAG_CHIPLET,            // 0-based TAP/chiplet index
     TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
+    TT_METAL_QUASAR_MOCK_JIT,                 // Build firmware and JIT kernels on a Quasar Mock device
     TT_METAL_CLUSTER_ID,                      // Cluster id to stamp on the discovered cluster descriptor
     TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
@@ -625,6 +626,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: Disabled
         // Usage: export TT_METAL_EMULE_MODE=1
         case EnvVarID::TT_METAL_EMULE_MODE: this->runtime_target_device_ = tt::TargetDevice::Emule; break;
+
+        // TT_METAL_QUASAR_MOCK_JIT
+        // Set (to any value): a Quasar Mock device builds its firmware and JIT-compiles program kernels.
+        // Default: Quasar Mock skips both.
+        case EnvVarID::TT_METAL_QUASAR_MOCK_JIT: this->quasar_mock_jit = true; break;
 
         // TT_METAL_VISIBLE_DEVICES
         // Comma-separated list of device IDs to make visible to the runtime.
