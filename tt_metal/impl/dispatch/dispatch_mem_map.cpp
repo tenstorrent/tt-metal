@@ -15,21 +15,7 @@
 #include <hostdevcommon/dispatch_telemetry_types.hpp>
 #include <tt_stl/enum.hpp>
 
-#include <filesystem>
-
 namespace tt::tt_metal {
-
-namespace {
-
-// Only validated on the RTL simulator so far. UMD picks the RTL simulator when TT_METAL_SIMULATOR names a directory
-// rather than a TTSim .so.
-bool use_prefetch_q_cached(const Hal& hal, const CoreType& core_type, const tt::llrt::RunTimeOptions& rtoptions) {
-    const std::filesystem::path& simulator = rtoptions.get_simulator_path();
-    const bool rtl_simulator = !simulator.empty() && simulator.extension() != ".so";
-    return hal.get_arch() == tt::ARCH::QUASAR && core_type != CoreType::ETH && rtl_simulator;
-}
-
-}  // namespace
 
 DispatchMemMap::DispatchMemMap(
     const CoreType& core_type,
@@ -57,7 +43,7 @@ DispatchMemMap::DispatchMemMap(
         // observed to fail on Quasar, and using one width everywhere keeps host/kernel code simple. WH ETH
         // stays at 2 bytes because of tighter memory constraints.
         (hal.get_arch() == tt::ARCH::WORMHOLE_B0 && core_type == CoreType::ETH) ? 2u : 4u)),
-    prefetch_q_cached_(use_prefetch_q_cached(hal, core_type, rtoptions)),
+    prefetch_q_cached_(hal.get_arch() == tt::ARCH::QUASAR && core_type != CoreType::ETH),
     num_cqs_per_core_(cq_layout.num_cqs_per_core),
     host_alignment_(hal.get_alignment(HalMemType::HOST)),
     l1_alignment_(hal.get_alignment(HalMemType::L1)),
