@@ -346,17 +346,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_lrelu_<false>, DST_INDEX + sfpu_tile, VectorMode::RC, 8, 0u);
                     }
 #endif
-                    #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && defined(MATMUL_UNFUSED_POST)
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && !defined(MATMUL_UNFUSED_POST)
+#else
+                    [[maybe_unused]] constexpr bool matmul_main_math_form = false;
+#endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && defined(MATMUL_UNFUSED_POST)
                     [[maybe_unused]] constexpr bool fused_post_flip = false;
-                    #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
-                    [[maybe_unused]] constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b;
-                    #else
+#elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+                    // main's form ends its section as main does: the fused post and the skipped base write are for the cells the table gives another form
+                    [[maybe_unused]] constexpr bool matmul_main_math_form =
+                        ckernel::matmul_default_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>() == '.';
+                    [[maybe_unused]] constexpr bool fused_post_flip =
+                        !matmul_main_math_form && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b);
+#else
                     [[maybe_unused]] constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3;
-                    #endif
-                    #if defined(MATMUL_KEEP_FLIP_WRITE)
+#endif
+#if defined(MATMUL_KEEP_FLIP_WRITE)
                     [[maybe_unused]] constexpr bool next_op_sets_base = false;
 #else
-                    [[maybe_unused]] constexpr bool next_op_sets_base = !is_fp32_dest_acc_en;
+                    [[maybe_unused]] constexpr bool next_op_sets_base = !is_fp32_dest_acc_en && !matmul_main_math_form;
 #endif
                     _llk_math_dest_section_done_<MATMUL_DEST_DONE_ARGS>();
                 }
