@@ -5,6 +5,7 @@
 #include "serialization/safetensors.hpp"
 
 #include <fmt/format.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -23,6 +24,7 @@
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
 #include "serialization/serialization.hpp"
+#include "test_utils/program_cache.hpp"
 
 std::string get_test_data_dir() {
     const char* env_var = std::getenv("TEST_LOCAL_DATA_DIR");
@@ -146,15 +148,7 @@ TEST(SafeTensorsTest, F16DecodeSubnormals) {
 // The C++ safetensors loaders install each value in the dtype its parameter is stored in: fp32 parameters, converted
 // before the load as precision.master_dtype: float32 does, get the file's fp32 values exactly; bf16 parameters get the
 // same bits the loaders installed before they kept the stored dtype (the host rounding of core::from_vector()).
-class SafetensorsLoaderTest : public ::testing::Test {
-public:
-    static void SetUpTestSuite() {
-        ttml::autograd::ctx().open_device();
-    }
-    static void TearDownTestSuite() {
-        ttml::autograd::ctx().close_device();
-    }
-};
+class SafetensorsLoaderTest : public ttml::test_utils::DeviceSuiteTest {};
 
 namespace {
 
@@ -352,6 +346,8 @@ TEST_F(SafetensorsLoaderTest, AssignFromFloatsRejectsNonFloatTensors) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
         std::vector<uint32_t>(32 * 32, 1U), ttnn::Shape({1, 1, 32, 32}), device));
-    EXPECT_THROW(
-        ttml::serialization::assign_from_floats(tensor, std::vector<float>(32 * 32, 0.5F)), std::invalid_argument);
+    EXPECT_THAT(
+        [&] { ttml::serialization::assign_from_floats(tensor, std::vector<float>(32 * 32, 0.5F)); },
+        ::testing::ThrowsMessage<std::invalid_argument>(
+            ::testing::HasSubstr("assign_from_floats loads into bf16 or fp32 tensors")));
 }

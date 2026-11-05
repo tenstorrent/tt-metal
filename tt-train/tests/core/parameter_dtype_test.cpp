@@ -266,7 +266,9 @@ TEST_F(ParameterDtypeTest, AppliesOnlyTheReduceDtypeToParametersKeptInBf16) {
 
     // A wrong master_dtype name is still an error, raised before anything changes.
     (void)apply("precision: {reduce_dtype: float32}", parameters);
-    EXPECT_ANY_THROW(apply("precision: {master_dtype: float16, reduce_dtype: bfloat16}", parameters));
+    EXPECT_THAT(
+        [&] { (void)apply("precision: {master_dtype: float16, reduce_dtype: bfloat16}", parameters); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(R"(precision.master_dtype must be "bfloat16" or "float32")")));
     EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::FLOAT32);
     EXPECT_EQ(trainable->get_grad_accumulation_dtype(), ttnn::DataType::FLOAT32);
 

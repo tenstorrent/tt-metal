@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -408,8 +409,12 @@ TEST_F(AverageGradientsTest, TakesEachGradientOnceInOrder) {
     EXPECT_EQ(asked, (std::vector<uint32_t>{0U, 1U, 2U, 3U}));
 
     const auto first = [&](uint32_t) { return gradients.front(); };
-    EXPECT_ANY_THROW((void)core::distributed::average_gradients(0U, first, ttnn::DataType::FLOAT32));
-    EXPECT_ANY_THROW((void)core::distributed::average_gradients(kWorkers, first, ttnn::DataType::UINT32));
+    EXPECT_THAT(
+        [&] { (void)core::distributed::average_gradients(0U, first, ttnn::DataType::FLOAT32); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("needs at least one gradient")));
+    EXPECT_THAT(
+        [&] { (void)core::distributed::average_gradients(kWorkers, first, ttnn::DataType::UINT32); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("reduce_dtype must be BFLOAT16 or FLOAT32")));
 }
 
 namespace {

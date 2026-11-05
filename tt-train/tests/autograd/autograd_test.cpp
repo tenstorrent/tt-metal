@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -247,7 +248,10 @@ TEST_F(AutogradTest, AddsBf16GradientsIntoAnFp32GradientExactly) {
 
 TEST_F(AutogradTest, GradAccumulationDtypeIsFp32OrUnset) {
     auto tensor = trainable_tensor();
-    EXPECT_ANY_THROW(tensor->set_grad_accumulation_dtype(ttnn::DataType::BFLOAT16));
+    EXPECT_THAT(
+        [&] { tensor->set_grad_accumulation_dtype(ttnn::DataType::BFLOAT16); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("The gradient accumulation dtype is FLOAT32 or unset")));
     tensor->set_grad_accumulation_dtype(ttnn::DataType::FLOAT32);
     EXPECT_EQ(tensor->get_grad_accumulation_dtype(), ttnn::DataType::FLOAT32);
     tensor->set_grad_accumulation_dtype(std::nullopt);
