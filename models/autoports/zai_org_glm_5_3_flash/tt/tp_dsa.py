@@ -116,6 +116,12 @@ class TPMoE:
         self.e_all = int(moe.num_experts)
         assert self.e_all % ndev == 0, (self.e_all, ndev)
         self.e_loc = self.e_all // ndev
+        # GLM53_TP_XSL_GROUP = g (tt/tp8_sparse.py): EP over the ndev / g chip groups x XSL inside a group
+        self.xsl_group = int(os.environ.get("GLM53_TP_XSL_GROUP", "0") or 0)
+        if self.xsl_group:
+            assert ndev % self.xsl_group == 0 and self.e_all % (ndev // self.xsl_group) == 0, (ndev, self.xsl_group)
+            self.e_loc = self.e_all // (ndev // self.xsl_group)
+            mk_kwargs = dict(mk_kwargs, xsl=0, xsl_tp=self.xsl_group, xsl_sliced=True)
         self.mlp = moe
         self.mk = MKM.MkMoE(mesh, mhc_args, _LocalExperts(moe, 0, self.e_loc), e_lo=0, num_experts=self.e_all,
                             **mk_kwargs)  # fmt: skip
@@ -128,7 +134,7 @@ class TPMoE:
             ex = self.mk.experts
             rows = []
             for r in range(ndev):
-                lo = self.e_loc * r
+                lo = self.e_loc * (r // self.xsl_group if self.xsl_group else r)
                 rows.append([g.buffer_address() for g in moe.gate_up[lo : lo + self.e_loc]]
                             + [d.buffer_address() for d in moe.down[lo : lo + self.e_loc]])  # fmt: skip
             tab = torch.tensor(rows, dtype=torch.int64).to(torch.int32).reshape(ndev, 1, 1, -1)
@@ -197,7 +203,7 @@ class TPMoE:
                 if rank:  # a fresh copy of the weight streamer with this chip's e_lo
                     kw = desc.kernels[wdesc]
                     ct = list(kw.compile_time_args)
-                    ct[e_lo_idx] = self.e_loc * rank
+                    ct[e_lo_idx] = self.e_loc * (rank // self.xsl_group if self.xsl_group else rank)
                     kw.compile_time_args = ct
                     kernels[wkern] = kw
                 lk, lcbs = fab.lane_parts(r, c, 1, nr, self.owner_noc, cons_sem=MKM.SEM_Y)

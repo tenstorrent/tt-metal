@@ -4003,6 +4003,39 @@ def swiglu_prefill(mlp, x):
     return out
 
 
+def _conv_history(qkv_tile, carry, rows, end_f):
+    """ChronologicalSelections.select_local_final_history on this tree's ops (2026-11-05: the fork's
+    ``chronological_selections`` op / helper are absent here): the causal-conv history after the valid end = the 3
+    pre-conv rows ending at ``end`` -- rows end - 3 .. end - 1 of the chunk's qkv [1, 1, C, 3W] (TILE, bf16), a row
+    before the chunk start (end < 3) taken from the predecessor carry [1, 3, 3W] ROW_MAJOR (its row end + j). Exact
+    one-hot selections (a 0 / 1 matmul: 1.0 x v accumulated in fp32), trace-safe (``end_f`` [1, 1, 1, 1] fp32 and
+    ``rows`` [1, 1, C, 1] fp32 are device tensors). -> [1, 3, 3W] bf16 ROW_MAJOR."""
+    c = int(qkv_tile.shape[-2])
+    w3 = int(qkv_tile.shape[-1])
+    rows_t = ttnn.reshape(ttnn.slice(rows, (0, 0, 0, 0), (1, 1, c, 1)), (1, 1, 1, c))  # row positions 0 .. C-1
+    idx3 = ttnn.reshape(ttnn.slice(rows, (0, 0, 0, 0), (1, 1, 3, 1)), (1, 1, 1, 3))  # 0, 1, 2
+    sel = ttnn.concat([ttnn.eq(rows_t, ttnn.add(end_f, float(j - 3))) for j in range(3)], dim=2)  # [1,1,3,C]
+    osel = ttnn.concat([ttnn.eq(idx3, ttnn.add(end_f, float(j))) for j in range(3)], dim=2)  # [1,1,3,3]
+    new = ttnn.matmul(ttnn.typecast(sel, BF16), qkv_tile, memory_config=DRAM, dtype=BF16)  # [1,1,3,3W]
+    old_t = ttnn.to_layout(ttnn.reshape(carry, (1, 1, 3, w3)), ttnn.TILE_LAYOUT)
+    kept = ttnn.matmul(ttnn.typecast(osel, BF16), old_t, memory_config=DRAM, dtype=BF16)
+    out = ttnn.add(new, kept)
+    for t_ in (rows_t, idx3, sel, osel, new, old_t, kept):
+        ttnn.deallocate(t_)
+    return ttnn.reshape(ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM), (1, 3, w3))
+
+
+def _beta_logits(b, rows, end_f):
+    """this tree's prepare_chunk_recurrence takes the PRE-sigmoid beta logits [1, T, H] (bf16, sigmoid in fp32 inside)
+    instead of the fork's post-sigmoid [H, N, 32, 1]: rows at / past the valid end get a logit of -1e4 (sigmoid 0: no
+    state update), so a bounded prefill needs no actual_end"""
+    c = int(b.shape[-2])
+    keep = ttnn.lt(ttnn.slice(rows, (0, 0, 0, 0), (1, 1, c, 1)), end_f)  # [1, 1, C, 1] fp32 0 / 1
+    bm = ttnn.where(keep, ttnn.typecast(b, FP32), -1e4)
+    ttnn.deallocate(keep)
+    return ttnn.reshape(ttnn.typecast(bm, BF16), (1, c, int(b.shape[-1])))
+
+
 def kda_prefill_tp(kda, x, state, actual_end, valid_end_f, *, scan: str = "op", row_ids=None, snap=None):
     """OptimizedKDA.prefill (Stage 1 / 3's exact chunked path through slot 0 of `state`) for the TP prefill: the same
     resident weights (the chip's head shard), every KDA op told the chunk is not sequence-split (KDA_NO_SP), and the
@@ -4016,8 +4049,8 @@ def kda_prefill_tp(kda, x, state, actual_end, valid_end_f, *, scan: str = "op", 
     rows past the cut are unspecified, so its y is dropped) and the conv history at snap_end (chronological_selections)
     -- written into the cut scratch; the served scan and every output are unchanged."""
     from models.autoports.zai_org_glm_5_3_flash.tt.kda import CHUNK, chunk_live_masks, keep_if_dead
-    from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 
+    assert snap is None, "GLM53_PF_KDA_SNAPSHOT needs the fork's bounded (actual_end) chunk scan"
     c = int(x.shape[-2])
     h, d, width = kda.h, kda.d, kda.width
     qkv = pf_mm(kda.ds_qkv, x)
@@ -4029,45 +4062,28 @@ def kda_prefill_tp(kda, x, state, actual_end, valid_end_f, *, scan: str = "op", 
     gate_out = kda._pf("ds_gb", g_a, kda.w_gb, kda.ckc_fp32, BF16)
     g32 = kda._decay(f_a)
     g = ttnn.typecast(g32, BF16)
-    beta = ttnn.sigmoid(ttnn.typecast(b, FP32))
     carry, s0 = kda.read_slot(state, 0)
-    selections = ChronologicalSelections(
-        ttnn.experimental.kda.chronological_selections(kda.zero_u32, KDA_NO_SP, c, h, d, d, actual_end=actual_end)
-    )
+    rows = ttnn.slice(kda.row_ids if row_ids is None else row_ids, (0, 0, 0, 0), (1, 1, c, 1))
+    new_carry = _conv_history(qkv, carry, rows, valid_end_f)
+    beta_logits = _beta_logits(b, rows, valid_end_f)  # [1, C, H] bf16: no update at / past the valid end
     qkv_rm = ttnn.to_layout(ttnn.reshape(qkv, (1, c, 3 * width)), ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
     ttnn.deallocate(qkv)
-    new_carry = selections.select_local_final_history(qkv_rm, carry)
-    carry_cut = None
-    if snap is not None:  # the conv history (pre-conv rows) ending at the cut
-        carry_cut = ChronologicalSelections(
-            ttnn.experimental.kda.chronological_selections(kda.zero_u32, KDA_NO_SP, c, h, d, d, actual_end=snap[0])
-        ).select_local_final_history(qkv_rm, carry)
     q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
         qkv_rm, carry, *kda.taps_prefill, width, width, width, program_config=kda.conv_program,
-        actual_start=kda.zero_u32, sequence_parallel_axis=KDA_NO_SP, predecessor_carry=carry, memory_config=DRAM)  # fmt: skip
+        actual_start=kda.zero_u32, predecessor_carry=carry, memory_config=DRAM)  # fmt: skip
     ttnn.deallocate(qkv_rm)
     n_chunks = c // CHUNK
-    beta_by_chunk = ttnn.reshape(ttnn.permute(ttnn.reshape(beta, (1, c, h)), (0, 2, 1)), (h, n_chunks, CHUNK, 1))
     v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv = ttnn.experimental.kda.prepare_chunk_recurrence(
-        q, k, v, ttnn.reshape(g, (1, c, width)), beta_by_chunk, h, memory_config=DRAM,
-        compute_kernel_config=kda.ckc_kda, output_bf16_mask=0, actual_start=kda.zero_u32, actual_end=actual_end,
-        sequence_parallel_axis=KDA_NO_SP)  # fmt: skip
+        q, k, v, ttnn.reshape(g, (1, c, width)), beta_logits, h, memory_config=DRAM,
+        compute_kernel_config=kda.ckc_kda, output_bf16_mask=0)  # fmt: skip
     ttnn.deallocate(final_decay)  # recomputed in fp32 (Stage 1: the op's value is biased for slow channels)
-    for t_ in (q, k, v):
+    for t_ in (q, k, v, beta_logits):
         ttnn.deallocate(t_)
-    rows = ttnn.slice(kda.row_ids if row_ids is None else row_ids, (0, 0, 0, 0), (1, 1, c, 1))
     g_valid = ttnn.multiply(g32, ttnn.lt(rows, valid_end_f))  # padded rows are identity steps
     g_sum = ttnn.sum(ttnn.reshape(g_valid, (n_chunks, CHUNK, h * d)), dim=1, keepdim=True)  # [N, 1, HD]
     chunk_decay = ttnn.exp(ttnn.reshape(ttnn.permute(ttnn.reshape(g_sum, (n_chunks, h, d)), (1, 0, 2)),
                                         (h, n_chunks, d, 1)))  # fmt: skip
     state0 = ttnn.reshape(s0, (h, d, d))
-    if snap is not None:  # the state at the cut: the plain scan over the same prepared inputs, stopped at snap_end
-        y_cut, s_cut = ttnn.experimental.kda.recurrent_chunk_scan(
-            v_beta, kd, q_decay, intra, k_dec_t, chunk_decay, t_inv, state0, actual_start=kda.zero_u32,
-            tail_entry_states=state0, groups_per_head=1, memory_config=DRAM, compute_kernel_config=kda.ckc_fp32,
-            sequence_parallel_axis=KDA_NO_SP, actual_end=snap[0])  # fmt: skip
-        ttnn.deallocate(y_cut)  # rows past the cut unspecified; rows before it == the served scan's
-        kda.write_slot(snap[1], 0, carry_cut, ttnn.reshape(s_cut, (1, h, d, d)))
     groups = 1
     if scan == "grouped":  # the largest G <= KDA_GROUPS dividing the chunk count with one summary owner per core
         cores = x.device().compute_with_storage_grid_size()
@@ -4093,19 +4109,17 @@ def kda_prefill_tp(kda, x, state, actual_end, valid_end_f, *, scan: str = "op", 
                                                         use_height_and_width_as_shard_shape=True) if l1 else DRAM  # fmt: skip
         a_, b_, ta, tb = ttnn.experimental.kda.summarize_chunk_recurrence(
             *grouped, groups_per_head=groups, memory_config=summary_mem, compute_kernel_config=kda.ckc_fp32,
-            actual_start=kda.zero_u32, actual_end=actual_end, sequence_parallel_axis=KDA_NO_SP)  # fmt: skip
+            actual_start=kda.zero_u32)  # fmt: skip
         ttnn.deallocate(ta)
         ttnn.deallocate(tb)
         entry = ttnn.experimental.kda.affine_exclusive_scan(
             a_, b_, state0, groups, memory_config=ttnn.L1_MEMORY_CONFIG if l1 else DRAM, compute_kernel_config=kda.ckc_fp32,
-            actual_start=kda.zero_u32, actual_end=actual_end, tail_a=a_, tail_b=b_, tail_entry_states=state0,
-            local_rows=c, sequence_parallel_axis=KDA_NO_SP)  # fmt: skip
+            actual_start=kda.zero_u32, tail_entry_states=state0, local_rows=c)  # fmt: skip
         ttnn.deallocate(a_)
         ttnn.deallocate(b_)
         y, s_all = ttnn.experimental.kda.recurrent_chunk_scan(
             *grouped, entry, actual_start=kda.zero_u32, tail_entry_states=state0, groups_per_head=groups,
-            memory_config=DRAM, compute_kernel_config=kda.ckc_fp32, sequence_parallel_axis=KDA_NO_SP,
-            actual_end=actual_end)  # fmt: skip
+            memory_config=DRAM, compute_kernel_config=kda.ckc_fp32)  # fmt: skip
         ttnn.deallocate(entry)
         y = ttnn.reshape(y, (h, c, d))
         s_all = ttnn.reshape(s_all, (h, groups, d, d))
@@ -4113,8 +4127,7 @@ def kda_prefill_tp(kda, x, state, actual_end, valid_end_f, *, scan: str = "op", 
     elif scan in ("op", "grouped"):
         y, s_fin = ttnn.experimental.kda.recurrent_chunk_scan(
             v_beta, kd, q_decay, intra, k_dec_t, chunk_decay, t_inv, state0, actual_start=kda.zero_u32,
-            tail_entry_states=state0, groups_per_head=1, memory_config=DRAM, compute_kernel_config=kda.ckc_fp32,
-            sequence_parallel_axis=KDA_NO_SP, actual_end=actual_end)  # fmt: skip
+            tail_entry_states=state0, groups_per_head=1, memory_config=DRAM, compute_kernel_config=kda.ckc_fp32)  # fmt: skip
         y = ttnn.reshape(y, (h, c, d))
         final_state = ttnn.reshape(s_fin, (1, h, d, d))
     else:
@@ -4168,7 +4181,6 @@ def kda_prefill_packed(kda, x, states, masks, ends, *, scan: str = "op", carry_i
     carry (a CONTINUATION segment's causal-conv history = its slot's last 3 rows, not the zeroed rows before o_k;
     0xFFFFFFFF = skip: fresh segments, and o_k = 0 where predecessor_carry already supplies it)."""
     from models.autoports.zai_org_glm_5_3_flash.tt.kda import CHUNK
-    from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 
     assert scan in ("op", "grouped"), f"packed KDA prefill: scan {scan} (op / grouped run as one recurrent_chunk_scan)"
     c = int(x.shape[-2])
@@ -4182,32 +4194,33 @@ def kda_prefill_packed(kda, x, states, masks, ends, *, scan: str = "op", carry_i
     ttnn.deallocate(lr)
     gate_out = kda._pf("ds_gb", g_a, kda.w_gb, kda.ckc_fp32, BF16)
     g32 = kda._decay(f_a)
-    beta = ttnn.sigmoid(ttnn.typecast(b, FP32))
+    rows = ttnn.slice(kda.row_ids, (0, 0, 0, 0), (1, 1, c, 1))
     y_acc = None
     for si, (state, m, end) in enumerate(zip(states, masks, ends)):
         carry, s0 = kda.read_slot(state, 0)
-        selections = ChronologicalSelections(
-            ttnn.experimental.kda.chronological_selections(kda.zero_u32, KDA_NO_SP, c, h, d, d, actual_end=end)
-        )
+        # the segment's exclusive end as fp32 [1, 1, 1, 1] (the row mask's last position + 1: this tree's KDA ops take
+        # no actual_end; the history / beta-logit selections are one-hot on row positions)
+        end_f = ttnn.add(ttnn.max(ttnn.multiply(rows, m), dim=2, keepdim=True), 1.0)
         qkv_k = ttnn.multiply(qkv, ttnn.typecast(m, qkv.dtype))  # this segment's rows only
         qkv_rm = ttnn.to_layout(ttnn.reshape(qkv_k, (1, c, 3 * width)), ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
-        ttnn.deallocate(qkv_k)
         if carry_idx is not None:  # a continuation segment's conv history: its carry rows just before o_k
             rows_to(carry, carry_idx[si], qkv_rm)
-        new_carry = selections.select_local_final_history(qkv_rm, carry)
+        new_carry = _conv_history(qkv_k, carry, rows, end_f)
+        ttnn.deallocate(qkv_k)
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             qkv_rm, carry, *kda.taps_prefill, width, width, width, program_config=kda.conv_program,
-            actual_start=kda.zero_u32, sequence_parallel_axis=KDA_NO_SP, predecessor_carry=carry, memory_config=DRAM)  # fmt: skip
+            actual_start=kda.zero_u32, predecessor_carry=carry, memory_config=DRAM)  # fmt: skip
         ttnn.deallocate(qkv_rm)
         g32_k = ttnn.multiply(g32, m)  # identity (log-decay 0) outside the segment
-        beta_k = ttnn.multiply(beta, m)  # no update outside the segment
-        beta_by_chunk = ttnn.reshape(ttnn.permute(ttnn.reshape(beta_k, (1, c, h)), (0, 2, 1)), (h, n_chunks, CHUNK, 1))
+        # beta logits: -1e4 (sigmoid 0, no update) outside the segment and at / past its end
+        b_seg = ttnn.where(ttnn.typecast(m, FP32), ttnn.typecast(b, FP32), -1e4)
+        beta_logits = _beta_logits(b_seg, rows, end_f)
+        ttnn.deallocate(b_seg)
         v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv = ttnn.experimental.kda.prepare_chunk_recurrence(
-            q, k, v, ttnn.reshape(ttnn.typecast(g32_k, BF16), (1, c, width)), beta_by_chunk, h, memory_config=DRAM,
-            compute_kernel_config=kda.ckc_kda, output_bf16_mask=0, actual_start=kda.zero_u32, actual_end=end,
-            sequence_parallel_axis=KDA_NO_SP)  # fmt: skip
+            q, k, v, ttnn.reshape(ttnn.typecast(g32_k, BF16), (1, c, width)), beta_logits, h, memory_config=DRAM,
+            compute_kernel_config=kda.ckc_kda, output_bf16_mask=0)  # fmt: skip
         ttnn.deallocate(final_decay)
-        for t_ in (q, k, v, beta_k, beta_by_chunk):
+        for t_ in (q, k, v, beta_logits, end_f):
             ttnn.deallocate(t_)
         g_sum = ttnn.sum(ttnn.reshape(g32_k, (n_chunks, CHUNK, h * d)), dim=1, keepdim=True)
         ttnn.deallocate(g32_k)
@@ -4217,8 +4230,7 @@ def kda_prefill_packed(kda, x, states, masks, ends, *, scan: str = "op", carry_i
         state0 = ttnn.reshape(s0, (h, d, d))
         y, s_fin = ttnn.experimental.kda.recurrent_chunk_scan(
             v_beta, kd, q_decay, intra, k_dec_t, chunk_decay, t_inv, state0, actual_start=kda.zero_u32,
-            tail_entry_states=state0, groups_per_head=1, memory_config=DRAM, compute_kernel_config=kda.ckc_fp32,
-            sequence_parallel_axis=KDA_NO_SP, actual_end=end)  # fmt: skip
+            tail_entry_states=state0, groups_per_head=1, memory_config=DRAM, compute_kernel_config=kda.ckc_fp32)  # fmt: skip
         for t_ in (v_beta, kd, q_decay, intra, k_dec_t, t_inv, chunk_decay):
             ttnn.deallocate(t_)
         # the segment's rows of y by SELECTION (where), never by multiplying: the scan leaves the rows past actual_end
@@ -4232,7 +4244,7 @@ def kda_prefill_packed(kda, x, states, masks, ends, *, scan: str = "op", carry_i
             ttnn.deallocate(y_acc)
         y_acc = y_new
         kda.write_slot(state, 0, new_carry, ttnn.reshape(s_fin, (1, h, d, d)))
-    for t_ in (qkv, g32, beta):
+    for t_ in (qkv, g32, b):
         ttnn.deallocate(t_)
     o = ttnn.experimental.kda.sigmoid_gated_rms_norm(
         y_acc, ttnn.reshape(gate_out, (1, c, width)), kda.o_norm, h, epsilon=kda.eps, memory_config=DRAM,

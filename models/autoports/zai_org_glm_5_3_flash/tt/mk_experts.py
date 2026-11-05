@@ -106,7 +106,9 @@ class ReaderExperts:
         self.xsl, self.xsl_tp = xsl, xsl_tp
         if xsl is not None:
             assert xtp is None and xsl_tp in (2, 4, 8) and 0 <= xsl < xsl_tp, (xsl, xsl_tp)
-            assert self.e_loc == self.e and local_experts is None, (
+            # (e_loc < e with sliced tensors: EP over chip groups x XSL inside a group, GLM53_TP_XSL_GROUP; the union
+            # keeps this chip's experts [e_lo, e_lo + e_loc) and the table has their slots)
+            assert local_experts is None and (self.e_loc == self.e or xsl_sliced), (
                 xsl,
                 xtp,
                 self.e_loc,

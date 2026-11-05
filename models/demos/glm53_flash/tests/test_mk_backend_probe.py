@@ -187,7 +187,16 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
     assert POS + N_REPLAY + 4 < SEQ, (POS, SEQ)
     # the physical page table (row b = blocks b * bps .. ; the sequence-sharded pool maps it to every chip's local
     # table) and the rows' positions: the step decodes at POS over the (zero) cache of positions 0 .. POS - 1
-    backend.write(io.page_table, torch.arange(B * kv.blocks_per_seq, dtype=torch.int32).reshape(B, kv.blocks_per_seq))
+    bps = kv.blocks_per_seq
+    spec = backend.dsa_shard_owners(kv) if hasattr(backend, "dsa_shard_owners") else None
+    if spec is None:
+        backend.write(io.page_table, torch.arange(B * bps, dtype=torch.int32).reshape(B, bps))
+    else:  # the sequence-sharded pool: owner-aware PHYSICAL blocks (tt/owner_blocks.py), as the generator writes them
+        from models.autoports.zai_org_glm_5_3_flash.tt.owner_blocks import OwnerBlockMap
+
+        obm = OwnerBlockMap(*spec)
+        rows = [obm.set_row(s, list(range(s * bps, (s + 1) * bps)), bps) for s in range(B)]
+        backend.write(io.page_table, torch.tensor(rows, dtype=torch.int32))
     backend.write(io.cur_pos, torch.full((B,), POS, dtype=torch.int32))
     t0 = time.perf_counter()
     backend.decode(io, kv, B)  # one eager step (compiles)

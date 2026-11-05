@@ -53,8 +53,15 @@ def load_ep_experts(source, layer: int, num_experts: int, mesh, cache_dir: str, 
     from models.autoports.zai_org_glm_5_3_flash.tt.fused_decoder import FE_CORES, _nd_dram, _permuted_gate_up_file
 
     ndev = int(mesh.get_num_devices())
-    assert num_experts % ndev == 0, (num_experts, ndev)
-    e_loc = num_experts // ndev
+    # GLM53_TP_XSL_GROUP = g (2026-11-05, the 32-chip replica): EP over the ndev / g groups of g chips x batched expert
+    # TP (Stage 7a MKX_XSL, 8-tile slices) inside a group -- slot i on chip k = slice k % g of expert e_loc (k // g) + i,
+    # e_loc = E / (ndev / g). Every chip of the busiest group streams 1 / g of each of its experts: the EP imbalance
+    # at distinct prompts (3-4 of 32 selections on one chip: +2.5 ms per step at B = 4) becomes ~12 / 8 expert-
+    # equivalents, balanced. Same bytes per chip as EP.
+    group = int(os.environ.get("GLM53_TP_XSL_GROUP", "0") or 0)
+    ngroups = ndev // group if group else ndev
+    assert ndev % max(group, 1) == 0 and num_experts % ngroups == 0, (num_experts, ndev, group)
+    e_loc = num_experts // ngroups
     if not hasattr(source, "_entry"):  # a HOST source (state dict / raw HF): permuted and packed in torch, as
         # fused_decoder.load_fused_experts does for one chip, then EP-sharded with from_host_shards
         import torch
@@ -70,18 +77,23 @@ def load_ep_experts(source, layer: int, num_experts: int, mesh, cache_dir: str, 
         for i in range(e_loc):
             gus, dns = [], []
             for r in range(ndev):
-                e = e_loc * r + i
+                g, c = divmod(r, group) if group else (r, 0)
+                e = e_loc * g + i
                 gu = source.host(layer, f"mlp.experts.{e}.gate_up_proj")  # [H, 2I] = [gate | up]
                 dn = source.host(layer, f"mlp.experts.{e}.down_proj")  # [I, H]
                 if cols is None:
                     cols = gate_up_column_perm(gu.shape[-1])
-                    gu_cfg = _nd_dram(gu.shape[-2], gu.shape[-1] // FE_CORES)
-                    dn_cfg = _nd_dram(dn.shape[-2], dn.shape[-1] // FE_CORES)
-                gus.append(pack(gu[:, cols]))
-                dns.append(pack(dn))
+                    w2 = gu.shape[-1] // max(group, 1)  # a slice: the permuted [gate_c | up_c] tile columns of its
+                    w1 = dn.shape[-2] // max(group, 1)  # intermediate range, the down rows of the same range
+                    gu_cfg = _nd_dram(gu.shape[-2], w2 // FE_CORES if not group else 64)
+                    dn_cfg = _nd_dram(w1, dn.shape[-1] // FE_CORES if not group else 64)
+                gup = gu[:, cols]
+                gus.append(pack(gup[:, w2 * c : w2 * (c + 1)] if group else gup))
+                dns.append(pack(dn[w1 * c : w1 * (c + 1)] if group else dn))
             gu_slots.append(ttnn.to_device(ttnn.from_host_shards(gus, mesh.shape), mesh, memory_config=gu_cfg))
             dn_slots.append(ttnn.to_device(ttnn.from_host_shards(dns, mesh.shape), mesh, memory_config=dn_cfg))
         return EpList(gu_slots, num_experts), EpList(dn_slots, num_experts)
+    assert not group, "GLM53_TP_XSL_GROUP: host sources only (the tile-cache path keeps whole experts)"
     gu_cfg = dn_cfg = None
     gu_slots, dn_slots = [], []
     for i in range(e_loc):

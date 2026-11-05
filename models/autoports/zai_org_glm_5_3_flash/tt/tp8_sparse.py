@@ -181,6 +181,14 @@ class TPSparseKDALayer(TPDenseKDALayer):
         self.e_all = int(moe.num_experts)
         assert self.e_all % sh.tp == 0, (self.e_all, sh.tp)
         self.e_loc = self.e_all // sh.tp
+        # GLM53_TP_XSL_GROUP = g: EP over the ndev / g chip groups x XSL (8-tile slices) inside a group (tt/ep_experts.py
+        # loads slot i on chip k = slice k % g of expert e_loc (k // g) + i); the weight streamer runs the XSL branch
+        # with e_lo = e_loc (rank // g) patched per chip and the sliced tensors (XSL_C = 0)
+        self.xsl_group = int(os.environ.get("GLM53_TP_XSL_GROUP", "0") or 0)
+        if self.xsl_group:
+            assert sh.ndev % self.xsl_group == 0 and self.xsl_group in (2, 4, 8), (sh.ndev, self.xsl_group)
+            assert self.e_all % (sh.ndev // self.xsl_group) == 0, (self.e_all, sh.ndev, self.xsl_group)
+            self.e_loc = self.e_all // (sh.ndev // self.xsl_group)
         lins = dict(kda_qkv=attn.ds_qkv, kda_lowrank=attn.ds_lowrank, kda_o=attn.ds_o)
         # M5 lever 2 (GLM53_EP_PLACEMENT=1 or a path): Stage 7a's load-aware EP8 placement (doc/ttnn/07a-fused-streaming-
         # layer/ep_placement.json: per sparse layer 8 x 36 expert ids, equal expected touched experts per chip) instead
@@ -192,6 +200,7 @@ class TPSparseKDALayer(TPDenseKDALayer):
         # program is captured for slice 0 and the slice is patched per chip like EP's e_lo
         self.xsl = os.environ.get("GLM53_TP_XSL") == "1"
         assert not (self.xsl and self.placement), "GLM53_TP_XSL and GLM53_EP_PLACEMENT are exclusive"
+        assert not (self.xsl_group and (self.xsl or self.placement)), "GLM53_TP_XSL_GROUP vs GLM53_TP_XSL / placement"
         view = _LocalExperts(moe, 0, self.e_all if self.xsl else self.e_loc,
                              ids=self.placement[0] if self.placement else None)  # fmt: skip
         # GLM53_TP_XSL_SLICED=1 (with GLM53_TP_XSL=1): the production layout — per expert one mesh tensor, chip k = slice
@@ -223,13 +232,16 @@ class TPSparseKDALayer(TPDenseKDALayer):
         self.mk = MkSparseLayer(mesh, self.attn_args, self.ffn_args, attn, lins, view, e_lo=0, num_experts=self.e_all,
                                 fold_y2=True if self.tp_shared else None, probe=probe,
                                 local_experts=self.placement[0] if self.placement else None,
-                                xsl=0 if self.xsl else None, xsl_tp=sh.tp, xsl_sliced=self.xsl_sliced)  # fmt: skip
+                                xsl=0 if (self.xsl or self.xsl_group) else None,
+                                xsl_tp=self.xsl_group or sh.tp,
+                                xsl_sliced=self.xsl_sliced or bool(self.xsl_group))  # fmt: skip
         # the per-chip expert address table: chip r = experts [E_loc r, E_loc (r + 1)) — or its placed ids + loc[e]
         # (slot, E_loc = not on this chip) — at the same buffer address everywhere
         ex = self.mk.experts
         rows = []
         for r in range(sh.ndev):
-            ids = self.placement[r] if self.placement else list(range(self.e_loc * r, self.e_loc * (r + 1)))
+            gr = r // self.xsl_group if self.xsl_group else r  # the chip's EP group (its slots: the group's experts)
+            ids = self.placement[r] if self.placement else list(range(self.e_loc * gr, self.e_loc * (gr + 1)))
             if self.xsl:  # every expert on every chip
                 ids = list(range(self.e_all))
             src_gu, src_dn = (view.gate_up, view.down) if self.xsl_sliced else (moe.gate_up, moe.down)
@@ -326,7 +338,8 @@ class TPSparseKDALayer(TPDenseKDALayer):
                     # XSL: its slice)
                     kw = _kernel(desc.kernels[wdesc], defines=list(base[wkern].defines))
                     ct = list(kw.compile_time_args)
-                    ct[e_lo_idx] = (0 if self.xsl_sliced else rank) if self.xsl else self.e_loc * rank
+                    ct[e_lo_idx] = ((0 if self.xsl_sliced else rank) if self.xsl
+                                    else self.e_loc * (rank // self.xsl_group if self.xsl_group else rank))  # fmt: skip
                     kw.compile_time_args = ct
                     kernels[wkern] = kw
                 lk, lcbs = fab.lane_parts(r, c, 2, nr, self.owner_noc, cons_sem=SEM_A)
