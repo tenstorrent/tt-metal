@@ -961,6 +961,89 @@ PERF_TEST_SCHEMAS = {
 
 
 PERF_TEST_SCHEMAS_QSR = {
+    "perf_dest_preload_matmul_quasar": {
+        "version": 4,
+        "columns": [
+            "dest_acc",
+            "dest_sync",
+            "dwp_producer_gap",
+            "dwp_consumer_gap",
+            "dwp_input_stride",
+            "dwp_math_depth",
+            "dwp_stamp_every",
+            "dwp_pack1",
+            "dwp_kernel",
+            "dwp_kt_dim",
+            "dwp_loop_factor",
+            "dwp_num_blocks",
+            "dwp_pack_l1_acc",
+            "dwp_path",
+            "dwp_srcs_addr_mod_step",
+            "dwp_srcs_bank_unpack",
+            "dwp_srcs_multi_bank_unpack",
+            "dwp_stamp_sync",
+            "dwp_tiles_per_bank",
+            "dwp_widen_to_fp32",
+            "dwp_writer_only",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "loop_factor",
+            "marker",
+            "math_fidelity",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {
+            "perf_dest_preload_matmul_quasar": "perf_dest_preload_matmul_quasar"
+        },
+    },
+    "perf_dest_write_path_quasar": {
+        "version": 4,
+        "columns": [
+            "dest_acc",
+            "dest_sync",
+            "dwp_producer_gap",
+            "dwp_consumer_gap",
+            "dwp_input_stride",
+            "dwp_math_depth",
+            "dwp_stamp_every",
+            "dwp_pack1",
+            "dwp_kernel",
+            "dwp_kt_dim",
+            "dwp_loop_factor",
+            "dwp_num_blocks",
+            "dwp_pack_l1_acc",
+            "dwp_path",
+            "dwp_srcs_addr_mod_step",
+            "dwp_srcs_bank_unpack",
+            "dwp_srcs_multi_bank_unpack",
+            "dwp_stamp_sync",
+            "dwp_tiles_per_bank",
+            "dwp_widen_to_fp32",
+            "dwp_writer_only",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "loop_factor",
+            "marker",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {
+            "perf_dest_write_path_quasar": "perf_dest_write_path_quasar"
+        },
+    },
     "perf_eltwise_binary_broadcast_quasar": {
         "version": 7,
         "columns": [
@@ -1827,5 +1910,28 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {
             "perf_unpack_unary_operand_quasar": "perf_unpack_unary_operand_quasar"
         },
+    },
+}
+
+# Test-only source variants share the same parameter contract.
+for _dwp_name in ("perf_dest_write_experiments_quasar", "perf_dest_write_pack1_quasar"):
+    PERF_TEST_SCHEMAS_QSR[_dwp_name] = {
+        **PERF_TEST_SCHEMAS_QSR["perf_dest_write_path_quasar"],
+        "test_name_aliases": {_dwp_name: _dwp_name},
+    }
+
+PERF_TEST_SCHEMAS_QSR["perf_dest_write_srcs_slots_quasar"] = {
+    **PERF_TEST_SCHEMAS_QSR["perf_dest_write_path_quasar"],
+    "columns": [
+        *PERF_TEST_SCHEMAS_QSR["perf_dest_write_path_quasar"]["columns"],
+        "slot_count",
+        "slot_two_pass",
+        "slot_per_instr",
+        "slot_stream_once",
+        "slot_sfpu_only",
+        "slot_copy_mode",
+    ],
+    "test_name_aliases": {
+        "perf_dest_write_srcs_slots_quasar": "perf_dest_write_srcs_slots_quasar"
     },
 }
