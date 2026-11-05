@@ -31,7 +31,7 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_in, cb_mid);
 
     // All three CBs share one data format, so neither phase reconfigures. Lossless keeps fp32 off fast tilize, which
-    // truncates to tf32; the untilize fast path takes only bf16 and block floats.
+    // truncates to tf32; 16-bit data arrives as UInt16, which neither fast path takes.
     namespace ckl = compute_kernel_lib;
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         ckl::untilize<

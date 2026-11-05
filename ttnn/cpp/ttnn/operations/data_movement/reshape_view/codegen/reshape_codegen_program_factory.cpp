@@ -267,11 +267,15 @@ ProgramDescriptor build_rm_arbitrary(
 ProgramDescriptor build_lcm(const rcg::LcmPlan& p, const Tensor& input, Tensor& output, const rcg::WorkSplit& split) {
     ProgramDescriptor desc;
     const CoreRangeSet& all_cores = split.all_cores;
-    const auto fmt = datatype_to_dataformat_converter(input.dtype());
+    // 16-bit data runs as UInt16 through a 16-bit DEST: unpack, MOVA2D and pack then copy the bits, where as bf16 or
+    // through fp32 DEST they would convert them. UInt16 also keeps both phases off their fast paths.
+    const bool is_16bit = input.element_size() == 2;
+    const auto fmt = is_16bit ? tt::DataFormat::UInt16 : datatype_to_dataformat_converter(input.dtype());
     Buffer* in_buf = input.buffer();
     Buffer* out_buf = output.buffer();
-    // The compute config below round-trips only 32-bit datums unchanged (lcm_bit_exact).
-    TT_FATAL(rcg::lcm_bit_exact(input.dtype()), "ReshapeCodegen: the LCM program takes only 32-bit dtypes");
+    TT_FATAL(
+        rcg::lcm_bit_exact(input.dtype()),
+        "ReshapeCodegen: the LCM program takes only bfloat16, uint16, float32, int32 and uint32");
 
     desc.cbs.push_back(make_cb(kCbIn, fmt, p.tile_bytes, p.chunk_tiles, all_cores));
     desc.cbs.push_back(make_cb(kCbMid, fmt, p.tile_bytes, p.chunk_tiles, all_cores));
@@ -311,11 +315,14 @@ ProgramDescriptor build_lcm(const rcg::LcmPlan& p, const Tensor& input, Tensor& 
         {"in_tile_rows", p.in_tile_rows},
         {"out_tile_rows", p.out_tile_rows},
     };
-    ComputeConfigDescriptor compute_config{.fp32_dest_acc_en = true};
-    // Untilize reads cb_in and tilize reads cb_mid; both must unpack 32-bit data straight to DEST.
+    ComputeConfigDescriptor compute_config{.fp32_dest_acc_en = !is_16bit};
+    // Untilize reads cb_in and tilize reads cb_mid; both must unpack 32-bit data straight to DEST. On Wormhole UInt16
+    // through fp32 DEST with UnpackToDestFp32 comes back as zeros, so 16-bit keeps the default.
     compute_config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    compute_config.unpack_to_dest_mode[kCbIn] = UnpackToDestMode::UnpackToDestFp32;
-    compute_config.unpack_to_dest_mode[kCbMid] = UnpackToDestMode::UnpackToDestFp32;
+    if (!is_16bit) {
+        compute_config.unpack_to_dest_mode[kCbIn] = UnpackToDestMode::UnpackToDestFp32;
+        compute_config.unpack_to_dest_mode[kCbMid] = UnpackToDestMode::UnpackToDestFp32;
+    }
     compute.config = compute_config;
 
     const auto cores = corerange_to_cores(split.all_cores, split.num_cores, false);

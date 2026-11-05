@@ -179,7 +179,7 @@ WorkSplit split_units(const tt::tt_metal::CoreRangeSet& grid, uint32_t units);
 
 // The TILE program a call runs.
 // - Tile rows: both widths multiples of 32.
-// - LCM: both widths and both heights multiples of 32 (no tile padding), 32-bit dtypes only (lcm_bit_exact).
+// - LCM: both widths and both heights multiples of 32 (no tile padding), 16- and 32-bit dtypes (lcm_bit_exact).
 // - Segment map: any widths.
 enum class TileRoute : uint32_t { TileRows = 0, Lcm = 1, TileMapped = 2 };
 
@@ -235,8 +235,9 @@ std::optional<TileRowsChoice> live_tile_rows_choice(
 std::optional<TileChoice> live_tile_choice(
     const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t grid_cores, const LaunchPlan& planned);
 
-// The LCM program round-trips only 32-bit datums unchanged: bf16 NaN comes back as Inf. It holds because build_lcm
-// runs the compute engine with fp32 DEST and UnpackToDestFp32 on its input and middle CBs; the two change together.
+// Whether the LCM program round-trips every bit pattern of the dtype. build_lcm moves 32-bit data with fp32 DEST and
+// UnpackToDestFp32, and 16-bit data as UInt16 with a 16-bit DEST; as bf16 or through fp32 DEST, bf16 NaN comes back as
+// Inf and subnormals as zero. This list and that config change together.
 bool lcm_bit_exact(tt::tt_metal::DataType dtype);
 
 // The LCM program's unfitted geometry; nullopt for a dtype lcm_bit_exact refuses, a rank below 2, equal widths, or a

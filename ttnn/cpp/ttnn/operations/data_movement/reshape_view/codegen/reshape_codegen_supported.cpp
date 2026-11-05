@@ -133,7 +133,7 @@ bool lcm_beats_native(const LcmPlan& plan, uint32_t num_cores) {
 constexpr const char* kTileCapsViolation = "no TILE program takes these shapes within its size caps";
 constexpr const char* kTileStaticFitViolation = "no TILE program fits the static L1 budget even at its smallest plan";
 constexpr const char* kLcmGeometryViolation = "the LCM route was planned without its geometry";
-constexpr const char* kLcmDtypeViolation = "the LCM program takes only 32-bit dtypes (float32, int32, uint32)";
+constexpr const char* kLcmDtypeViolation = "the LCM program takes only bfloat16, uint16, float32, int32 and uint32";
 
 // Native's row-major factory treats a stick as NOC-aligned at this multiple.
 constexpr uint32_t kNativeNocAlignment = 16;

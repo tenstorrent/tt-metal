@@ -157,7 +157,8 @@ std::optional<TileRowsChoice> live_tile_rows_choice(
 
 bool lcm_bit_exact(tt::tt_metal::DataType dtype) {
     using tt::tt_metal::DataType;
-    return dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32;
+    return dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32 ||
+           dtype == DataType::BFLOAT16 || dtype == DataType::UINT16;
 }
 
 std::optional<LcmPlan> lcm_tile_geometry(

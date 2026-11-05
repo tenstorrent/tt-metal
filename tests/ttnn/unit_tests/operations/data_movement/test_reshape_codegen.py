@@ -87,9 +87,11 @@ _PATHS = [
     # Sliced segment map: 4 output tiles on a grid of 21 or more cores, each reading 32 source tiles, so every output
     # tile is cut into ranges written by different cores.
     ("tile_mapped_sliced", [1, 1, 4, 1000], [1, 1, 125, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    # LCM: a width change tile rows loses on, run through the compute engine, which round-trips 32-bit data unchanged.
-    # 64 two-tile chunks against 128 native output tiles: LCM wins by the 5x margin on any grid.
+    # LCM: a width change tile rows loses on, run through the compute engine, which copies the bits of every dtype it
+    # takes. 64 two-tile chunks against 128 native output tiles: LCM wins by the 5x margin on any grid.
     ("lcm_fp32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.float32, ttnn.TILE_LAYOUT),
+    ("lcm_bf16", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ("lcm_uint16", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.uint16, ttnn.TILE_LAYOUT),
     ("lcm_int32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.int32, ttnn.TILE_LAYOUT),
     ("lcm_uint32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.uint32, ttnn.TILE_LAYOUT),
     # Row-major stick program: dividing widths.
@@ -212,7 +214,7 @@ _ROUTES = [
     ("tile_rows", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
     # 4-head merge: the cut is only 4x, but each output tile reads 24 fewer padded source tiles.
     ("tile_head_merge", [1, 512, 4, 256], [1, 512, 1024], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
-    # Width change: tile rows saves only 2x the reads on far fewer cores, and bf16 cannot take the LCM kernel.
+    # Width change: tile rows saves only 2x the reads on far fewer cores, and LCM loses as in fp32 below.
     ("tile_width_native", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.bfloat16, ttnn.TILE_LAYOUT, "native"),
     ("tile_width_uint16", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.uint16, ttnn.TILE_LAYOUT, "codegen"),
     # The same width change in fp32: LCM runs its one six-tile chunk on one core while native spreads its six output
@@ -220,6 +222,7 @@ _ROUTES = [
     ("tile_width_lcm_native", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.float32, ttnn.TILE_LAYOUT, "native"),
     # A width split in fp32: 64 two-tile chunks against 128 native output tiles, so LCM wins by the 5x margin.
     ("tile_split_lcm", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.float32, ttnn.TILE_LAYOUT, "codegen"),
+    ("tile_split_lcm_bf16", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
     # A width that is not a multiple of 32 takes the segment map.
     ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
 ]
@@ -255,7 +258,10 @@ _LCM_EDGE = [
     ("chunk_spans_batches", [144, 32, 64], [3072, 96]),
 ]
 _LCM_EDGE_CASES = [(*e, ttnn.float32) for e in _LCM_EDGE] + [
-    (*e, dtype) for e in _LCM_EDGE if e[0] == "batched" for dtype in (ttnn.int32, ttnn.uint32)
+    (*e, dtype)
+    for e in _LCM_EDGE
+    if e[0] == "batched"
+    for dtype in (ttnn.int32, ttnn.uint32, ttnn.bfloat16, ttnn.uint16)
 ]
 
 
@@ -456,32 +462,41 @@ def test_reshape_codegen_falls_back_to_segment_map_when_no_tile_row_plan_fits_l1
         ttnn.deallocate(hog)
 
 
-def test_reshape_codegen_bf16_never_takes_lcm(device):
-    # The LCM kernel turns bf16 NaN into Inf. This width split takes it in fp32; in bf16 both the forced and the
-    # routed call must keep every NaN payload.
-    in_shape, out_shape, dtype = [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.bfloat16
-    source = _make(in_shape, dtype)
-    assert torch.isnan(source).any()
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint16], ids=["bf16", "uint16"])
+def test_reshape_codegen_lcm_16bit_every_bit_pattern(device, dtype):
+    # Every 16-bit pattern twice, shuffled over tile positions: bf16 NaN payloads, Inf and subnormals included, which
+    # a float conversion in unpack, DEST or pack would change.
+    in_shape, out_shape = [1, 1, 2048, 64], [1, 1, 4096, 32]
+    g = torch.Generator().manual_seed(0)
+    patterns = torch.cat([torch.randperm(1 << 16, generator=g) for _ in range(2)]).reshape(in_shape)
+    if dtype == ttnn.bfloat16:
+        source = (patterns - (1 << 15)).to(torch.int16).view(torch.bfloat16)
+    else:
+        source = patterns.to(torch.int32)
     x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
     _assert_bits(source.reshape(out_shape), ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+    entries = device.num_program_cache_entries()
     _assert_bits(source.reshape(out_shape), ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+    assert device.num_program_cache_entries() == entries, "auto did not take the LCM program"
 
 
-# fp32 LCM cases on one core, so each runs several chunks through the same CBs.
+# LCM cases on one core, so each runs several chunks through the same CBs.
 _LCM_ONE_CORE = [
     # 96 -> 160: 15-tile chunks, compute tilizes 5 tiles at a time and the writer drains batches of 8. fit_lcm needs
     # depth >= 2 * 8 + 5 - 1 = 20 and rounds it up to lcm(5, 8) = 40; 8 chunks put 120 tiles through it, three passes.
     # Rounding to 8 (24) would split a tilize write and rounding to 5 (20) a writer batch at the wrap.
-    ("wrap", [1, 1, 1280, 96], [1, 1, 768, 160]),
+    ("wrap", [1, 1, 1280, 96], [1, 1, 768, 160], ttnn.float32),
+    ("wrap_bf16", [1, 1, 1280, 96], [1, 1, 768, 160], ttnn.bfloat16),
     # 256 -> 128: 8 input tiles per row exceed the 4 fp32 tiles DEST holds, so each row untilizes in two blocks; 4
     # chunks of 8 tiles.
-    ("multi_block", [1, 1, 128, 256], [1, 1, 256, 128]),
+    ("multi_block", [1, 1, 128, 256], [1, 1, 256, 128], ttnn.float32),
+    # 512 -> 256 in 16-bit: 16 input tiles per row exceed the 8 a 16-bit DEST holds; 8 chunks of 16 tiles.
+    ("multi_block_uint16", [1, 1, 256, 512], [1, 1, 512, 256], ttnn.uint16),
 ]
 
 
-@pytest.mark.parametrize("case,in_shape,out_shape", _LCM_ONE_CORE, ids=[c[0] for c in _LCM_ONE_CORE])
-def test_reshape_codegen_lcm_multi_chunk_one_core(device, case, in_shape, out_shape):
-    dtype = ttnn.float32
+@pytest.mark.parametrize("case,in_shape,out_shape,dtype", _LCM_ONE_CORE, ids=[c[0] for c in _LCM_ONE_CORE])
+def test_reshape_codegen_lcm_multi_chunk_one_core(device, case, in_shape, out_shape, dtype):
     one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
     source = _make(in_shape, dtype)
     expected = source.reshape(out_shape)
