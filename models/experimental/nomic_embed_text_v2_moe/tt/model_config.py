@@ -130,6 +130,10 @@ ROUTED_FAST_GELU = True
 LAYOUT = ttnn.TILE_LAYOUT
 MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
+# The most computed tokens (B x ceil32(S)) one backbone pass takes; a larger input runs as chunks of whole
+# sequences (tt/chunking.py).
+MAX_CHUNK_TOKENS = 8192
+
 
 class OpGroup(Enum):
     """The sets of ops that share one compute kernel config.
@@ -222,6 +226,7 @@ class TtModelConfig:
     dense_gelu: ttnn.GeluVariant = DENSE_GELU
     routed_fast_gelu: bool = ROUTED_FAST_GELU
     attention_l1: bool = True  # the head tensors and SDPA's output in L1 where they fit, tt/attention.py
+    max_chunk_tokens: int = MAX_CHUNK_TOKENS  # the largest chunk a forward runs at once, tt/chunking.py
     layout: ttnn.Layout = LAYOUT
 
     def compute_kernel_config(self, group: OpGroup) -> ttnn.DeviceComputeKernelConfig:

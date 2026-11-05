@@ -11,8 +11,8 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.experimental.bevformer.model_config import BEV_H, BEV_W, IMAGE_HEIGHT, IMAGE_WIDTH
 from models.experimental.bevformer.tests.common import (
-    BEV_SHAPES,
     assert_finite,
     build_reference_bevformer,
     check_detector_outputs,
@@ -22,21 +22,23 @@ from models.experimental.bevformer.tests.common import (
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
 from models.experimental.bevformer.tt.tt_bevformer import TTBEVFormer
+from models.experimental.bevformer.tt.tt_head import box_preds_to_torch
 
 NUM_FRAMES = 2
 PCC_THRESHOLD = 0.99
 
 
 @torch.no_grad()
-# The reference runs the backbone on six 928x1600 images on the CPU three times: once to record
-# the conv shapes and once per frame.
+# The reference runs the backbone on six images on the CPU three times, once to record the conv
+# shapes and once per frame: base's 928x1600 take most of this.
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
 def test_bevformer(device, reset_seeds):
     """Each frame's BEV, class logits and boxes; the second frame takes each side's own first-frame
     BEV as its previous BEV, with the ego's rotation and shift."""
     generator = torch.Generator().manual_seed(0)
-    torch_model = build_reference_bevformer(BEV_SHAPES["base"])
+    logger.info(f"{IMAGE_WIDTH}x{IMAGE_HEIGHT} images, {BEV_H}x{BEV_W} BEV")
+    torch_model = build_reference_bevformer((BEV_H, BEV_W))
     img = random_image_batch()[None]
     frames = frame_metas(1, NUM_FRAMES, generator)
 
@@ -54,7 +56,8 @@ def test_bevformer(device, reset_seeds):
         logger.info(f"frame {i}")
         # The outputs and the detections on device against the reference's, then the host compaction.
         scores, labels, query_index, boxes, valid = tt_detections
-        tt_bev, tt_cls_scores, tt_bbox_preds = (ttnn.to_torch(t).float() for t in (tt_prev, *tt_outputs[:2]))
+        tt_bev, tt_cls_scores = (ttnn.to_torch(t).float() for t in (tt_prev, tt_outputs[0]))
+        tt_bbox_preds = box_preds_to_torch(tt_outputs[1]).float()
         tt_topk = tuple(ttnn.to_torch(t) for t in (scores, labels, query_index, boxes))
         check_detector_outputs(
             (cls_scores, bbox_preds, torch_prev), (tt_cls_scores, tt_bbox_preds, tt_bev, tt_topk), PCC_THRESHOLD

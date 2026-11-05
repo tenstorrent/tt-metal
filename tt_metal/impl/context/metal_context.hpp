@@ -5,12 +5,12 @@
 #pragma once
 
 #include <tt_stl/indestructible.hpp>
+#include <atomic>
 #include <optional>
 #include <vector>
 #include <llrt/hal.hpp>  // Hal — full definition needed to call hal().get_*() via MetalContext
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
-#include <tt-metalium/allocator.hpp>
 #include "impl/device/firmware/firmware_initializer.hpp"
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "context_types.hpp"
@@ -39,6 +39,7 @@ namespace inspector {
 class Data;
 }
 
+class BuildEnvManager;
 class ContextDescriptor;
 class DataCollector;
 class DeviceManager;
@@ -150,6 +151,8 @@ public:
 
     std::unique_ptr<NOCDebugState>& noc_debug_state() { return noc_debug_state_; }
 
+    BuildEnvManager& build_env_manager() { return *build_env_manager_; }
+
     void initialize_device_manager(
         const std::vector<ChipId>& device_ids,
         uint8_t num_hw_cqs,
@@ -222,6 +225,11 @@ public:
     // Hang detection
     void on_dispatch_timeout_detected();
 
+    // Set when a Tensix BRISC is found with a halt record. Until the next init, halt checks throw at once and device
+    // close skips dispatch teardown.
+    bool l1_ecc_halt_detected() const { return l1_ecc_halt_detected_.load(std::memory_order_acquire); }
+    void set_l1_ecc_halt_detected(bool detected) { l1_ecc_halt_detected_.store(detected, std::memory_order_release); }
+
 private:
     friend class ttsl::Indestructible<MetalContext>;
 
@@ -263,12 +271,18 @@ private:
     std::mutex dispatch_timeout_detection_mutex_;
     bool dispatch_timeout_detection_processed_ = false;
 
+    std::atomic<bool> l1_ecc_halt_detected_{false};
+
     // The MetalEnv is normally owned by the user
     // For the legacy code, we will initialize it in the MetalContext constructor and own the env
     // This means MetalContext will delete the env in the MetalContext destructor.
     tt::tt_metal::MetalEnv* env_;
     bool env_owned_ = false;
     ContextId context_id_;
+
+    // Declared before the other components so it is destroyed after them: their teardown may still read build envs.
+    // Not reset by teardown(); build envs persist across re-initialization of this context.
+    std::unique_ptr<BuildEnvManager> build_env_manager_;
 
     std::unique_ptr<internal::ServiceCoreManager> service_core_manager_;
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;

@@ -33,8 +33,8 @@ class GLM53Config:
     # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced only). Every
     # config that does not name it runs the routed expert then combine as separate ops.
     ROUTED_EXPERT_COMBINE_OVERLAP = True
-    # Opts this model into TtMoe's fabric2d transport (dispatch_fabric2d / combine_fabric2d) wherever the mesh can
-    # run it (Blackhole, axis 0 wired into a ring). Every other config runs dispatch and combine.
+    # Whether to use the fabric2d-optimized dispatch and combine ops in MoE
+    # True = use them if the mesh allows, False = use older ops
     MOE_FABRIC2D_TRANSPORT = True
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
@@ -55,6 +55,10 @@ class GLM53Config:
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1
+    # Cache the noaux_tc correction bias mean-centred (see centre_gate_bias). The checkpoint biases sit on
+    # per-layer offsets of ~8-34 with a spread of only ~0.06-0.15, so bf16 keeps just 3-9 distinct values a
+    # layer; centred it keeps 78-173. Every config that does not name it keeps the uncentred cache file.
+    MOE_GATE_BIAS_CENTERED = True
 
     # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
     # selected-weight distribution rather than slot alignment; 160 experts, top-8 floors at

@@ -41,7 +41,7 @@ TEST_F(UnitMeshFixture, MatmulSingleTileOutputInL1) {
     auto l1_dst_noc_xy = this->device().virtual_core_from_logical_core(
         this->device().allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 1;

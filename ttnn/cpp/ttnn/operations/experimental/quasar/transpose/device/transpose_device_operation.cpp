@@ -97,7 +97,8 @@ MemoryConfig derive_effective_output_memory_config(
         output_padded_shape,
         output_mem_config.memory_layout(),
         std::nullopt,
-        OutputTiling::Default);
+        OutputTiling::Default,
+        output_mem_config.buffer_type());
     return MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), shard_spec);
 }
 

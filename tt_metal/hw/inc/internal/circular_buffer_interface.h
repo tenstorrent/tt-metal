@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "tt-metalium/circular_buffer_constants.h"
+#include "api/circular_buffer_constants.h"
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 
