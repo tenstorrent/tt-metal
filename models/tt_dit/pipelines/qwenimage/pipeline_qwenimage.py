@@ -40,7 +40,7 @@ from models.tt_dit.pipelines.qwenimage.text_encoder import (
 from models.tt_dit.solvers import EulerSolver, calculate_shift
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.dbcache import DBCacheConfig
-from models.tt_dit.utils.dbcache_runner import DBCache
+from models.tt_dit.utils.dbcache_runner import DBCache, ResidualForecaster
 from models.tt_dit.utils.padding import torch_pad
 from models.tt_dit.utils.tracing import Tracer
 
@@ -476,6 +476,23 @@ class QwenImagePipeline(PipelineAPIMixin):
             if config.dbcache is not None
             else None
         )
+        # The warm-up computes its first steps and, with DBCache, caches the last one whatever its
+        # difference, so that the difference and the cached path are compiled too. TaylorSeer needs
+        # more computed steps before it, to form each of its derivatives.
+        order = config.dbcache.taylorseer_order if config.dbcache is not None else 0
+        self._warm_up_computed_steps = ResidualForecaster.steps_to_fill(order)
+        self._warm_up_dbcache = (
+            DBCacheConfig(
+                Fn_compute_blocks=config.dbcache.Fn_compute_blocks,
+                Bn_compute_blocks=config.dbcache.Bn_compute_blocks,
+                taylorseer_order=order,
+                residual_diff_threshold=math.inf,
+                max_warmup_steps=self._warm_up_computed_steps,
+                max_continuous_cached_steps=-1,
+            )
+            if config.dbcache is not None
+            else None
+        )
 
         logger.info("creating VAE decoder...")
         self._vae = WanVaeDecoder2DAdapter(
@@ -546,18 +563,13 @@ class QwenImagePipeline(PipelineAPIMixin):
                     # six more, so this comes to two tokens short of the bucket, which the 32-token
                     # spacing keeps above the next-smaller one.
                     prompt = "a " * (bucket - 8)
-                    self(
+                    self._warm_up_call(
                         prompts=[prompt],
-                        negative_prompts=[prompt],
-                        num_inference_steps=2,
-                        cfg_scale=2 if self._cfg_enabled else 1,
                         width=size.width,
                         height=size.height,
                         traced=traced,
-                        encoder_traced=traced,
                         image=image,
                         mask_image=mask_image,
-                        strength=1.0,
                     )
 
         # The VAE needs each resolution.
@@ -596,20 +608,47 @@ class QwenImagePipeline(PipelineAPIMixin):
                         word_count -= 1
                         prompt = "a " * word_count
 
-                    self(
+                    self._warm_up_call(
                         prompts=[prompt],
-                        negative_prompts=[prompt],
-                        num_inference_steps=2,
-                        cfg_scale=2 if self._cfg_enabled else 1,
                         width=size.width,
                         height=size.height,
                         traced=traced,
-                        encoder_traced=traced,
                         image=images,
                         # Edit inpainting takes a single image.
                         mask_image=Image.new("L", (size.width, size.height), 255) if image_count == 1 else None,
-                        strength=1.0,
                     )
+
+    def _warm_up_call(
+        self,
+        *,
+        prompts: list[str],
+        width: int,
+        height: int,
+        traced: bool,
+        image: Image.Image | list[Image.Image],
+        mask_image: Image.Image | None,
+    ) -> None:
+        """One warm-up generation, its last step cached with DBCache."""
+        cached_step = self._warm_up_computed_steps
+        self(
+            prompts=prompts,
+            negative_prompts=prompts,
+            num_inference_steps=cached_step + 1,
+            cfg_scale=2 if self._cfg_enabled else 1,
+            width=width,
+            height=height,
+            traced=traced,
+            encoder_traced=traced,
+            image=image,
+            mask_image=mask_image,
+            strength=1.0,
+            dbcache=self._warm_up_dbcache,
+        )
+        if self._dbcache is not None and self._dbcache.cached_steps != [cached_step]:
+            # A difference that is not finite computes the step: infinite when the previous step's
+            # first block residual is all zero, NaN when the sums overflow.
+            msg = f"the DBCache warm-up cached steps {self._dbcache.cached_steps}, not step {cached_step}"
+            raise RuntimeError(msg)
 
     def __call__(
         self,

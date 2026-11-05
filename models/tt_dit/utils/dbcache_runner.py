@@ -78,6 +78,14 @@ class ResidualForecaster:
     def has_data(self) -> bool:
         return self.valid_cur > 0
 
+    @staticmethod
+    def steps_to_fill(order: int) -> int:
+        """How many computed steps from step 0 form every derivative of ``order``.
+
+        ``update`` forms the first derivative on step 2 and each further one a step later.
+        """
+        return 1 if order == 0 else order + 2
+
     def update(self, residual: ttnn.Tensor, step: int) -> None:
         """Record the residual of a computed step and refresh the derivative ladder."""
         self.cur, self.prev = self.prev, self.cur
