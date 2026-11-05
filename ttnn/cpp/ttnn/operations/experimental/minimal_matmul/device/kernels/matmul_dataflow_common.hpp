@@ -18,11 +18,10 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
-// in0's K is read from TWO source buffers via the in3 path: either the AG local pre-gather slice
-// (READ_FROM_LOCAL_INPUT) or a plain fused concatenation of two operands (IN0_VIRTUAL_CONCAT).
-// IN0_HAS_SECOND_SOURCE gates the shared read plumbing; the two cases differ only in how the
-// local K-range / widths are derived (see dm_in0_sender.cpp).
-#if defined(READ_FROM_LOCAL_INPUT) || defined(IN0_VIRTUAL_CONCAT)
+// in0's K is read from TWO source buffers via the in3 path for a fused concatenation of two
+// operands (IN0_VIRTUAL_CONCAT). IN0_HAS_SECOND_SOURCE gates the read plumbing (see
+// dm_in0_sender.cpp for how the local K-range / widths are derived).
+#if defined(IN0_VIRTUAL_CONCAT)
 #define IN0_HAS_SECOND_SOURCE 1
 #endif
 
