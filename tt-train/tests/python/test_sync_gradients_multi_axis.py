@@ -17,9 +17,12 @@ from two_device_gradients import (
     device,
     device_operations,
     divides_before_gathering,
+    fp32_all_reduce_mean,
     make_gradients,
     one_parameter,
+    placements,
     to_bf16,
+    upload,
 )
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.usefixtures("strict_ccl_topology")]
@@ -30,19 +33,6 @@ _TP_AXIS = 1
 _FP32 = ttnn.DataType.FLOAT32
 
 
-@pytest.fixture(scope="module")
-def dp_tp_mesh(fresh_device_mesh):
-    with fresh_device_mesh(
-        _MESH_SHAPE, ("dp", "tp"), what="fp32 gradient sync on a 2x2 mesh", require_mgd=True
-    ) as mesh:
-        yield mesh
-
-
-def _upload(values: np.ndarray, placements: list):
-    mapper = ttnn.create_mesh_mapper(device(), ttnn.MeshMapperConfig(placements))
-    return ttml.autograd.Tensor.from_numpy(values.astype(np.float32), ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
-
-
 def _per_device(tensor) -> np.ndarray:
     """``tensor`` read back as ``[device row, device column, ...]``."""
     composer = ttnn.create_mesh_composer(device(), ttnn.MeshComposerConfig([0, 1]))
@@ -50,25 +40,10 @@ def _per_device(tensor) -> np.ndarray:
     return values.reshape(_MESH_SHAPE + values.shape[2:])
 
 
-def _placements(tensor) -> list:
-    return [
-        ("Shard", p.dim) if isinstance(p, ttnn.PlacementShard) else ("Replicate",)
-        for p in tensor.tensor_topology().placements()
-    ]
-
-
-def _fp32_all_reduce_mean(tensor, axes: list):
-    """The fp32 mean written out with public ops, to check the sync against."""
-    total = ttnn.typecast(tensor, _FP32)
-    for axis in axes:
-        total = ttml.core.distributed.all_reduce(total, cluster_axis=axis)
-    return ttnn.typecast(ttnn.multiply(total, 1.0 / (2 ** len(axes))), ttnn.DataType.BFLOAT16)
-
-
 # Each of the four devices holds a different gradient, as data-parallel ranks do; both axes are summed.
 def test_fp32_sum_over_two_axes(dp_tp_mesh):
     values = make_gradients(64, 128, seed=1, devices=4).reshape(2, 2, 64, 128)
-    gradient = _upload(values, [ttnn.PlacementShard(0), ttnn.PlacementShard(1)]).get_value()
+    gradient = upload(values, [ttnn.PlacementShard(0), ttnn.PlacementShard(1)]).get_value()
     expected = to_bf16(values.astype(np.float64).mean(axis=(0, 1)))
 
     fp32_parameters, fp32_parameter = one_parameter(gradient)
@@ -78,11 +53,11 @@ def test_fp32_sum_over_two_axes(dp_tp_mesh):
     bf16 = _per_device(ttml.core.distributed.synchronize_tensor(gradient, [_DP_AXIS, _TP_AXIS]))
 
     fp32 = _per_device(fp32_parameter.get_grad())
-    np.testing.assert_array_equal(fp32, _per_device(_fp32_all_reduce_mean(gradient, [_DP_AXIS, _TP_AXIS])))
+    np.testing.assert_array_equal(fp32, _per_device(fp32_all_reduce_mean(gradient, [_DP_AXIS, _TP_AXIS])))
     np.testing.assert_array_equal(_per_device(cpp_parameter.get_grad()), fp32)
     assert np.mean(fp32[0, 0] == expected) > np.mean(bf16[0, 0] == expected)
-    assert _placements(fp32_parameter.get_grad()) == [("Replicate",), ("Replicate",)]
-    assert _placements(cpp_parameter.get_grad()) == [("Replicate",), ("Replicate",)]
+    assert placements(fp32_parameter.get_grad()) == [("Replicate",), ("Replicate",)]
+    assert placements(cpp_parameter.get_grad()) == [("Replicate",), ("Replicate",)]
 
 
 # A large gradient takes the reduce-scatter route. When the tp axis already shards the last dim, the route scatters the
@@ -94,17 +69,17 @@ def test_fp32_sum_over_two_axes(dp_tp_mesh):
 @pytest.mark.parametrize("rows", [1024, 32 * 33], ids=["scatters_dim_2", "falls_back_to_all_reduce"])
 def test_tp_sharded_gradient_over_the_dp_axis(dp_tp_mesh, rows, tp_dim):
     values = make_gradients(rows, 2048, seed=2)
-    gradient = _upload(values, [ttnn.PlacementShard(0), ttnn.PlacementShard(tp_dim)]).get_value()
+    gradient = upload(values, [ttnn.PlacementShard(0), ttnn.PlacementShard(tp_dim)]).get_value()
 
     parameters, parameter = one_parameter(gradient)
-    operations = device_operations(lambda: ttml.sync_gradients(parameters, axis_names=("dp",), reduce_dtype=_FP32))
+    _, operations = device_operations(lambda: ttml.sync_gradients(parameters, axis_names=("dp",), reduce_dtype=_FP32))
 
     # Two devices make each element a single add, so the values match on either route; the operations tell them apart.
     assert divides_before_gathering(operations) == (rows == 1024)
     np.testing.assert_array_equal(
-        _per_device(parameter.get_grad()), _per_device(_fp32_all_reduce_mean(gradient, [_DP_AXIS]))
+        _per_device(parameter.get_grad()), _per_device(fp32_all_reduce_mean(gradient, [_DP_AXIS]))
     )
-    assert _placements(parameter.get_grad()) == [("Replicate",), ("Shard", tp_dim)]
+    assert placements(parameter.get_grad()) == [("Replicate",), ("Shard", tp_dim)]
 
 
 # The reduced axis reads Replicate after either route without synchronize_gradients relabelling it, and the other
@@ -112,15 +87,13 @@ def test_tp_sharded_gradient_over_the_dp_axis(dp_tp_mesh, rows, tp_dim):
 @pytest.mark.parametrize("rows", [64, 1024], ids=["all_reduce_route", "reduce_scatter_route"])
 def test_fp32_sum_labels_the_reduced_axis_replicate(dp_tp_mesh, rows):
     values = make_gradients(rows, 1024, seed=3)
-    gradient = _upload(values, [ttnn.PlacementShard(0), ttnn.PlacementReplicate()]).get_value()
+    gradient = upload(values, [ttnn.PlacementShard(0), ttnn.PlacementReplicate()]).get_value()
 
-    results = []
-    operations = device_operations(
-        lambda: results.append(ttml.core.distributed.synchronize_tensor(gradient, [_DP_AXIS], reduce_dtype=_FP32))
+    fp32, operations = device_operations(
+        lambda: ttml.core.distributed.synchronize_tensor(gradient, [_DP_AXIS], reduce_dtype=_FP32)
     )
-    (fp32,) = results
     bf16 = ttml.core.distributed.synchronize_tensor(gradient, [_DP_AXIS])
 
     assert divides_before_gathering(operations) == (rows == 1024)
-    assert _placements(fp32) == [("Replicate",), ("Replicate",)]
-    assert _placements(fp32) == _placements(bf16)
+    assert placements(fp32) == [("Replicate",), ("Replicate",)]
+    assert placements(fp32) == placements(bf16)

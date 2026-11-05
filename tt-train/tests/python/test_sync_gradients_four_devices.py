@@ -18,9 +18,11 @@ from two_device_gradients import (
     device_operations,
     divides_before_gathering,
     exact_mean,
+    fp32_all_reduce_mean,
     make_gradients,
     per_device,
     per_device_tensor,
+    placements,
 )
 
 pytestmark = pytest.mark.requires_device
@@ -38,26 +40,16 @@ def four_device_mesh(fresh_device_mesh):
         yield mesh
 
 
-def _placements(tensor) -> list:
-    return [
-        ("Shard", p.dim) if isinstance(p, ttnn.PlacementShard) else ("Replicate",)
-        for p in tensor.tensor_topology().placements()
-    ]
-
-
 # 512 x 1024 values per device is 2^19 elements, the reduce-scatter route's threshold, and the last dim splits into
 # four whole-tile slices.
 def test_reduce_scatter_route_matches_the_fp32_all_reduce_over_four_devices(four_device_mesh):
     values = make_gradients(512, 1024, seed=11, devices=4)
     gradients = per_device_tensor(values).get_value()
 
-    results = []
-    operations = device_operations(
-        lambda: results.append(ttml.core.distributed.synchronize_tensor(gradients, [_DP_AXIS], reduce_dtype=_FP32))
+    fp32, operations = device_operations(
+        lambda: ttml.core.distributed.synchronize_tensor(gradients, [_DP_AXIS], reduce_dtype=_FP32)
     )
-    (fp32,) = results
-    total = ttml.core.distributed.all_reduce(ttnn.typecast(gradients, _FP32), cluster_axis=_DP_AXIS)
-    all_reduce = ttnn.typecast(ttnn.multiply(total, 0.25), ttnn.DataType.BFLOAT16)
+    all_reduce = fp32_all_reduce_mean(gradients, [_DP_AXIS])
     bf16 = ttml.core.distributed.synchronize_tensor(gradients, [_DP_AXIS])
 
     assert divides_before_gathering(operations)
@@ -69,4 +61,4 @@ def test_reduce_scatter_route_matches_the_fp32_all_reduce_over_four_devices(four
     fp32_share = np.mean(fp32_values[0] == expected)
     assert fp32_share >= 0.95
     assert fp32_share > np.mean(per_device(bf16)[0] == expected)
-    assert _placements(fp32)[_DP_AXIS] == ("Replicate",)
+    assert placements(fp32)[_DP_AXIS] == ("Replicate",)

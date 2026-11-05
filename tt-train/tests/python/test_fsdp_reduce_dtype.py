@@ -21,16 +21,14 @@ _FSDP_AXIS = 1
 
 
 def _replicated_tensor(values: np.ndarray):
-    mapper = ttnn.create_mesh_mapper(
-        device(), ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementReplicate()])
-    )
+    mapper = ttml.core.distributed.replicate_to_mesh_mapper(device())
     return ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
 
-def _gathered(shard, shard_dim: int) -> np.ndarray:
-    """The full tensor of an FSDP shard: the two devices' shards concatenated on ``shard_dim``."""
-    composer = ttnn.create_mesh_composer(device(), ttnn.MeshComposerConfig([1 if shard_dim == 0 else 0, shard_dim]))
-    return ttml.autograd.create_tensor(shard).to_numpy(ttnn.DataType.FLOAT32, composer=composer)
+def _gathered(shard) -> np.ndarray:
+    """The full tensor of an FSDP shard, composed from the devices' shards by its own topology label."""
+    tensor = ttml.autograd.create_tensor(shard)
+    return ttml.Sharding.from_tensor(tensor).gather(tensor).astype(np.float32)
 
 
 def _reduce_with_backward_post(values: np.ndarray, reduce_dtype) -> tuple:
@@ -48,7 +46,7 @@ def _reduce_with_backward_post(values: np.ndarray, reduce_dtype) -> tuple:
 
     grad = parameter.tensor.get_grad()
     assert grad.dtype == ttnn.DataType.BFLOAT16
-    return _gathered(grad, shard_dim), shard_dim
+    return _gathered(grad), shard_dim
 
 
 @pytest.mark.requires_device
@@ -60,7 +58,7 @@ def test_unset_and_bf16_reduce_dtype_reduce_as_before(fsdp_mesh, reduce_dtype):
 
     gradients = per_device_tensor(values).get_value()
     before = ttnn.multiply(ttml.core.distributed.reduce_scatter(gradients, shard_dim, _FSDP_AXIS), 0.5)
-    np.testing.assert_array_equal(reduced, _gathered(before, shard_dim))
+    np.testing.assert_array_equal(reduced, _gathered(before))
 
 
 # With two devices and this spread, the fp32 sum gets about 99.5% of the elements exact and the bf16 sum about 86%.
@@ -138,7 +136,7 @@ def _model_gradients(reduce_dtype, *, fsdp: bool) -> dict:
 
     # Per device without FSDP; with FSDP, the reduced gradient gathered from its shards.
     return {
-        name: _gathered(tensor.get_grad(), tensor._fsdp_shard_dim) if fsdp else per_device(tensor.get_grad())
+        name: _gathered(tensor.get_grad()) if fsdp else per_device(tensor.get_grad())
         for name, tensor in model.parameters().items()
     }
 
