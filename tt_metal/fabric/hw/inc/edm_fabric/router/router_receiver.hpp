@@ -39,7 +39,11 @@ namespace fabric_router::receiver {
 // Tuning
 // ---------------------------------------------------------------------------------------------------------------------
 
-// Passes without a packet after which a partial completion group is credited.
+// When traffic stops with a completion group part full (say 3 of 4 slots retired), only the next packet would complete
+// it, so its slots stay held from the remote sender meanwhile, and a sender with a small window may need them to send
+// that packet. After this many passes in a row without a packet, the partial group is credited as it is. Fewer passes
+// split groups in the short gaps of a steady stream (more credit frames, a cost on both ERISCs; 1 or 2 cost 2D 3-hop
+// writes up to 7 cycles per packet on Blackhole P150); more hold the slots longer after a burst. Groups of 2 or 4 only.
 constexpr uint32_t IDLE_PASSES_BEFORE_PARTIAL_CREDIT = 4;
 // Status reads a completion group's proof waits for, at most; then its credit is left to a later pass. A safety bound:
 // on Blackhole P150 proofs finish within 8 reads (large-write deliverers mostly 5-8); the cap is for slower cases, such
@@ -426,8 +430,8 @@ FORCE_INLINE bool receive(
 // - Proof: each slot's NoC commands carry its group's transaction ID and the NIU counts each ID's outgoing writes, so
 //   one status read proves a group free. Two groups sharing an ID only make a proof wait longer, never wrong.
 // - Due: while packets arrive, once more than a group waits (never the slot retired this pass); on an idle pass, a full
-//   group at once, a partial one after IDLE_PASSES_BEFORE_PARTIAL_CREDIT idle passes. So a channel holds back at most
-//   a group minus one slot, and not for long.
+//   group at once, a partial one (traffic stopped mid-group) after IDLE_PASSES_BEFORE_PARTIAL_CREDIT idle passes in a
+//   row. So a channel holds back at most a group minus one slot, and not for long.
 // - A group waits for its proof (bounded): left to the next pass, which under load takes the next packet first, its
 //   credit would come a packet later. A single slot is checked once: on rings and tori waiting costs more than it
 //   saves.
