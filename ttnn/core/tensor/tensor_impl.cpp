@@ -39,6 +39,7 @@
 
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <internal/mesh_device.hpp>
 
 namespace ttnn::tensor_impl {
 
@@ -341,7 +342,8 @@ std::string to_string_impl(const ttnn::Tensor& tensor) {
             ss << std::endl;
         }
         first = false;
-        ss << "device_id: " << mesh_device.get_device(coord)->id() << ", " << coord << std::endl;
+        ss << "device_id: " << tt::tt_metal::internal::get_device(mesh_device, coord)->id() << ", " << coord
+           << std::endl;
         detail::to_string(ss, shard->view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
     }
     return ss.str();

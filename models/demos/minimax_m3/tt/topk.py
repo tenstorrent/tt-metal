@@ -20,7 +20,13 @@ HF reference (MiniMaxM3SparseMoeBlock.route_tokens_to_experts):
 
 Implemented as ONE device op: `deepseek_prefill.moe_grouped_topk`. Its single-group path
 (n_groups=1) IS this rule — activation -> +bias -> top-k -> gather the UNBIASED activation output
--> normalize -> * route_scale — computed in fp32 with bf16 only at the inputs.
+-> normalize -> * route_scale — computed in fp32. Ties go to the lowest expert id (stable_sort), as in
+the vendor's fp32 router.
+
+Precision (the vendor runs the router fully in fp32):
+  * gate GEMM: bf16 weight (exact bf16 x bf16 products at HiFi4), fp32 accumulation, fp32 logits;
+  * correction bias: fp32 and mean-centered on the host (``centered_correction_bias``), so the biased
+    sort keys stay small enough for the op's 10-bit-mantissa key resolution.
 
 There is deliberately no second implementation: the earlier multi-op bf16 chain resolved top-k
 near-ties arbitrarily (sigmoid and the bias add in bf16) and did not sentinel-mark pad rows, so it
@@ -36,7 +42,8 @@ from loguru import logger
 import ttnn
 from models.demos.minimax_m3.tt.packed_rows import packed_real_rows
 from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
-from models.demos.minimax_m3.utils.general_utils import cache_file_exists, get_cache_file_name
+from models.demos.minimax_m3.utils.checkpoint import centered_correction_bias
+from models.demos.minimax_m3.utils.general_utils import ROUTER_BIAS_CACHE_NAME, cache_file_exists, get_cache_file_name
 
 
 def route_tokens_to_experts_fused(
@@ -68,6 +75,7 @@ def route_tokens_to_experts_fused(
         topk_groups=1,
         n_activated_experts=experts_per_token,
         route_scale=routed_scaling_factor,
+        stable_sort=True,
         epsilon=1e-20,
         padding_config=padding_config,
     )
@@ -88,12 +96,13 @@ class TopKRouter:
         self.hidden_dim = hf_config.hidden_size
         self.num_tokens = num_tokens
         self.mesh_config = mesh_config
-        # M3: routed-expert output is scaled by routed_scaling_factor (2.0, from config; 1.0 if absent).
-        self.routed_scaling_factor = getattr(hf_config, "routed_scaling_factor", 1.0)
+        # Routed-expert output is scaled by routed_scaling_factor.
+        self.routed_scaling_factor = hf_config.routed_scaling_factor
         self.tensor_cache_path = tensor_cache_path
 
         # MiniMax-M3 gate Linear has no bias; weight is [num_experts, hidden] -> [hidden, num_experts].
-        torch_weight = state_dict["weight"].transpose(0, 1) if state_dict else None
+        # The host weight is fp32; round it to bf16 here (never bfp8: that moves ~3-4% of tokens' top-4).
+        torch_weight = state_dict["weight"].transpose(0, 1).to(torch.bfloat16) if state_dict else None
         self.weight = ttnn.as_tensor(
             torch_weight,
             device=mesh_device,
@@ -104,23 +113,26 @@ class TopKRouter:
             cache_dump_mode=CACHE_DUMP_MODE,
         )
 
-        # e_score_correction_bias [num_experts] -> [1, num_experts], replicated; added to
-        # selection scores only. Absent in some checkpoints -> no correction.
+        # e_score_correction_bias [num_experts] -> [1, num_experts] fp32, mean-centered, replicated; added
+        # to selection scores only (use_routing_bias is always set: check_supported_config).
         score_bias_torch = None
         if state_dict and "e_score_correction_bias" in state_dict:
-            score_bias_torch = state_dict["e_score_correction_bias"].reshape(1, -1)
-        bias_cache_file = get_cache_file_name(tensor_cache_path, "e_score_correction_bias")
-        # Build the bias tensor when we have the source weight, OR (cache-only loading, empty
-        # state_dict) when it was previously cached — torch=None then loads it straight from disk.
-        # Whether the checkpoint HAS a correction bias can't be known without the source, so the
-        # cached file's existence is the signal.
-        build_bias = score_bias_torch is not None or (not state_dict and cache_file_exists(bias_cache_file))
+            score_bias_torch = centered_correction_bias(state_dict["e_score_correction_bias"]).reshape(1, -1)
+        bias_cache_file = get_cache_file_name(tensor_cache_path, ROUTER_BIAS_CACHE_NAME)
+        # Cache-only loading (empty state_dict): the bias loads from its cache file. A missing one is a
+        # stale or partial cache, not a bias-free model.
+        if not state_dict and not cache_file_exists(bias_cache_file):
+            raise RuntimeError(
+                f"[TopKRouter] cache-only load but {bias_cache_file}* is missing. Load from the source weights "
+                f"once (unset M3_WEIGHTS_FROM_CACHE, or M3_FORCE_LOAD_WEIGHTS=1) to write it."
+            )
+        build_bias = score_bias_torch is not None or not state_dict
         self.score_bias = (
             ttnn.as_tensor(
                 score_bias_torch,
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.float32,
                 cache_file_name=bias_cache_file,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=(
@@ -135,20 +147,19 @@ class TopKRouter:
         # The fused gate requires bias.logical_shape() == scores.logical_shape(), so the bias is
         # materialized once here at the full [num_tokens, num_experts] width — one ttnn.repeat off the
         # narrow device bias, since the production path is cache-only (empty state_dict, no torch
-        # source to expand on the host). A checkpoint with no correction bias gets a ZERO bias rather
-        # than a different code path: same selection semantics, still fp32, still one op.
+        # source to expand on the host). A state_dict without the correction bias gets a ZERO bias rather
+        # than a different code path: same selection semantics, still one op.
         assert num_tokens, "TopKRouter needs num_tokens: the fused gate's bias is built at that width"
         if self.score_bias is not None:
             self.score_bias_wide = ttnn.repeat(self.score_bias, ttnn.Shape([num_tokens, 1]))
         else:
             logger.warning(
-                "[TopKRouter] no e_score_correction_bias for this checkpoint — routing on unbiased "
-                "scores. M3 ships one for every MoE layer, so this usually means a weight-loading "
-                "problem rather than a bias-free model."
+                "[TopKRouter] no e_score_correction_bias in the state_dict — routing on unbiased scores. This "
+                "usually means a weight-loading problem rather than a bias-free model."
             )
             self.score_bias_wide = ttnn.zeros(
                 [num_tokens, self.num_experts],
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -159,8 +170,17 @@ class TopKRouter:
         self.mesh_device = mesh_device
         self._padding_config_cache = OrderedDict()
 
-        # Custom compute configs can degrade routing quality; keep the default.
-        self.compute_config = None
+        # The matmul default for bf16 inputs is HiFi2 with bf16 accumulation, which alone changes the top-4
+        # set on 3-12% of tokens. HiFi4 makes bf16 x bf16 products exact (HiFi3 on Wormhole: HiFi4 + fp32
+        # accumulation is unreliable there); accumulate and emit the logits in fp32.
+        is_wormhole = mesh_device.arch() == ttnn.device.Arch.WORMHOLE_B0
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi3 if is_wormhole else ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
     def build_padding_config(self, chunks):
         """Per-device ``[num_real_tokens, pad_side]`` for a forward over ``chunks`` (common/prefill/prefill_chunk.py), or
@@ -224,6 +244,7 @@ class TopKRouter:
         router_logits = ttnn.linear(
             hidden_states,
             self.weight,  # no bias (MiniMax-M3)
+            dtype=ttnn.float32,
             memory_config=mem_config,
             compute_kernel_config=self.compute_config,
         )

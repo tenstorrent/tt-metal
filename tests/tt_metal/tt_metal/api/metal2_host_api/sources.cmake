@@ -59,8 +59,10 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/graph_tracking.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/kernel_args_layout.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/kernel_config.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/per_node_tensor_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/prefetcher_pipe_slots.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/semaphore_scope.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/array_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/borrowed_dfb_attach.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/dfb_run_overrides.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/kernel_run_args.cpp
@@ -76,8 +78,10 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/utility/table.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/get_token_if_present.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/llk_operand.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/per_node_tensor_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/scratchpad_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/tensor_bindings.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/kernel_args/array_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/kernel_args/compile_time_varargs.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/kernel_args/tt_kernel_shim.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/fabric/fabric_kernel_defines.cpp

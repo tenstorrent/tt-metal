@@ -23,7 +23,7 @@ namespace ttnn::operations::experimental::paged_cache::detail {
 void bind_experimental_paged_cache_operations(nb::module_& mod) {
     const auto* paged_update_cache_doc =
         R"doc(
-         Paged update cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, B, 1[32], head_dim] where input_tensor is height sharded on B cores. update_idxs will specify for each batch element which token to update in the cache.
+         Paged update cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, B, 1[32], head_dim] where input_tensor is height sharded on B cores. update_idxs will specify for each batch element which token to update in the cache. Without a page table, each position in ``update_idxs`` must be less than kv_len.
 
          ``head_dim`` is read from ``input_tensor.padded_shape[-1]``. ``block_size``
          defaults to ``cache_tensor.padded_shape[2]``; pass the kwarg to override it for

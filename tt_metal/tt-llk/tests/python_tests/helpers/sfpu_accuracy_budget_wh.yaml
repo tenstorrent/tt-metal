@@ -86,15 +86,15 @@ Asin:
 - {input: Float16, output: Float32, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 32768}, {low: 1.0, high: .inf}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 2}, {low: 1.0, high: .inf}]}
 - {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
-- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 0}, {low: 1.0, high: .inf}]}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 0}, {low: 1.0, high: .inf}]}
-- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 0}, {low: 1.0, high: .inf}]}
 - {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 2}, {low: 1.0, high: .inf}]}
 - {input: Float32, output: Float16, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: -6.103515625e-05, ulp: 4}, {low: -6.103515625e-05, high: 6.103515625e-05}, {low: 6.103515625e-05, high: 1.0, ulp: 4}, {low: 1.0, high: .inf}]}
 - {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
-- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 0}, {low: 1.0, high: .inf}]}
 - {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
-- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 0}, {low: 1.0, high: .inf}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 2}, {low: 1.0, high: .inf}]}
 Asinh:
 - {input: Float16, output: Float16, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 5}]}
@@ -122,15 +122,15 @@ Atan:
 - {input: Float16, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 32768}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
 - {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
 - {input: Float32, output: Float16, dest: 'No', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: -6.103515625e-05, ulp: 4}, {low: -6.103515625e-05, high: 6.103515625e-05}, {low: 6.103515625e-05, high: 65536.0, ulp: 4}, {low: 65536.0, high: .inf}]}
 - {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
 Atanh:
 - {input: Float16, output: Float16, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 7}, {low: 1.0, high: .inf}]}

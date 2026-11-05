@@ -12,9 +12,7 @@
 #include <tt-metalium/buffer.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <enchantum/enchantum.hpp>
-#include <functional>
 #include <algorithm>
-#include <string>
 #include <mutex>
 
 #include <tt_stl/assert.hpp>
@@ -24,7 +22,6 @@
 #include "impl/trace/trace_buffer.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/xy_pair.hpp>
 #include "impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal {
