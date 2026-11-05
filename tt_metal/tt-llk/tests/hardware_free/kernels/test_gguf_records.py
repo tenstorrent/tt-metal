@@ -47,7 +47,7 @@ def test_layouts_match_header():
     }
     assert set(layouts) == set(FORMATS) == set(ids)
     for name, f in FORMATS.items():
-        args = layouts[name] + (0,) * (7 - len(layouts[name]))
+        args = layouts[name] + (0,) * (6 - len(layouts[name]))
         python = (
             f.group_tiles,
             f.page_tiles,
@@ -55,7 +55,6 @@ def test_layouts_match_header():
             f.scale_rows,
             f.fp16_rows,
             f.code_offset,
-            f.table_entries,
         )
         assert (ids[name], args) == (f.id, python), name
 

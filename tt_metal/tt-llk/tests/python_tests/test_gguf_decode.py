@@ -3,9 +3,9 @@
 
 """GGUF weight decoders on the SFPU and the DEST-fed matmul (Blackhole).
 
-Covers sfpu/experimental/ckernel_sfpu_gguf_decode.h (all 25 formats), experimental/ckernel_gguf_page.h (the fp32 scale
-copies and the codebook grid lookups, which the kernel runs on the pack thread) and
-experimental/llk_{math,unpack}_dest_srca_mm.h, through sources/gguf_decode_mm_test.cpp:
+Covers sfpu/experimental/ckernel_sfpu_gguf_decode.h (all 25 formats, on pages laid out by
+experimental/ckernel_gguf_page.h) and experimental/llk_{math,unpack}_dest_srca_mm.h, through
+sources/gguf_decode_mm_test.cpp:
   - test_gguf_decode: random ggml blocks -> records -> pages -> decoded Float32 [K][N] tiles, equal to ggml's
     dequantization (gguf-py) value for value;
   - test_gguf_decode_mm: the same weights decoded in DEST and multiplied with bf16 in0 rows;
@@ -22,7 +22,6 @@ from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.gguf_records import (
     FORMATS,
     dequantize,
-    level_table,
     pages,
     random_blocks,
     records,
@@ -96,7 +95,6 @@ def _run(
     nt,
     a_image,
     a_format,
-    c_image,
     output_tiles,
     matmul=False,
     in0_rows=32,
@@ -128,9 +126,6 @@ def _run(
             buffer_B=in0_image,
             stimuli_B_format=DataFormat.Float16_b,
             tile_count_B=len(in0_image) // TILE_BYTES_BF16,
-            buffer_C=c_image,
-            stimuli_C_format=DataFormat.UInt32,
-            tile_count_C=-(-len(c_image) // TILE_BYTES_32BIT),
             stimuli_res_format=DataFormat.Float32,
             tile_count_res=output_tiles,
         ),
@@ -139,10 +134,6 @@ def _run(
     )
     result = torch.tensor(configuration.run().result, dtype=torch.float32)
     return _untilize(result, output_tiles)
-
-
-def _table_image(fmt) -> bytes:
-    return level_table(fmt).tobytes() if fmt.codebook else bytes(16)
 
 
 def _src_fields(x: torch.Tensor):
@@ -238,7 +229,6 @@ def test_gguf_decode(fmt, shape):
         nt,
         _weight_pages(f, blocks),
         DataFormat.UInt32,
-        _table_image(f),
         nt * kt,
     )
 
@@ -271,7 +261,6 @@ def test_gguf_decode_mm(fmt, rows):
         nt,
         _weight_pages(f, blocks),
         DataFormat.UInt32,
-        _table_image(f),
         nt,
         matmul=True,
         in0_rows=in0_rows,
@@ -310,7 +299,6 @@ def test_dest_srca_mm(fidelity, rows, kt):
         nt,
         image,
         DataFormat.Float32,
-        bytes(16),
         nt,
         matmul=True,
         in0_rows=in0_rows,

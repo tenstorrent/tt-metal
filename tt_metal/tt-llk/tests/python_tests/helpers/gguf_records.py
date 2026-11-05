@@ -8,7 +8,7 @@ sfpu/experimental/ckernel_sfpu_gguf_decode.h each format's rows. This module bui
   - random ggml blocks (random code bits, finite scale fields);
   - its records: the GGUF bytes regrouped per 32-column N tile and group of K tiles, the size of the GGUF tensor;
   - the L1 pages a reader assembles from the records (code bytes at code_offset, the group's scale fields at
-    scale_offset), before the RISC-side steps (fp32 scale copies, grid lookups) the kernel runs on them;
+    scale_offset), completed with the fp32 copies of their fp16 scale fields and the codebook formats' level codes;
   - the codebook formats' level tables, and ggml's dequantization (gguf-py) as the golden.
 
 SFPU output o of lane (r, c) is element k = 16 (o / 16) + 4 ((o / 2) % 4) + r, n = 16 ((o / 8) % 2) + 2c + o % 2 of a
@@ -696,9 +696,68 @@ def records(fmt: GgufFormat, blocks: np.ndarray) -> list[list[list[bytes]]]:
     return out
 
 
+def _fp16_to_fp32(h: np.ndarray) -> np.ndarray:
+    """fp16 bits to fp32 bits, exact for every value (subnormals normalized, inf and NaN payloads kept)."""
+    h = h.astype(np.uint32)
+    sign, mag = (h & 0x8000) << 16, h & 0x7FFF
+    special = 0x7F800000 | (mag & 0x3FF) << 13
+    subnormal = (mag.astype(np.float32) * np.float32(2.0**-24)).view(np.uint32)
+    bits = np.where(mag >= 0x7C00, special, (mag << 13) + 0x38000000)
+    return (sign | np.where(mag < 0x400, subnormal, bits)).astype(np.uint32)
+
+
+def _grid_indices(fmt: GgufFormat, w: np.ndarray) -> np.ndarray:
+    """[index word m][byte k]: a codebook page's grid indices with their high bits (ckernel_sfpu_gguf_decode_iq.h):
+    IQ3_S bit 8k + m % 8 of word m / 8 after the index words; IQ1_S, IQ1_M, IQ2_S bits 8 (1 - m % 2) + 16 (k / 2) +
+    w (k % 2) of word m / 2 after them; IQ2_XS bit 8k + 7 of sign word 16 (m / 16) + 2 (m % 8) + (m / 8) % 2.
+    """
+    base = fmt.code_offset // 4 + (0 if fmt.name in ("IQ1_S", "IQ1_M") else 32)
+    n = 64 if fmt.name in ("IQ3_S", "IQ3_XXS") else 32
+    m, k = np.arange(n)[:, None], np.arange(4)[None]
+    high = 0
+    if fmt.name == "IQ3_S":
+        high = w[base + 64 + m // 8] >> 8 * k + m % 8 & 1
+    elif fmt.name in ("IQ1_S", "IQ1_M", "IQ2_S"):
+        bits = 2 if fmt.name == "IQ2_S" else 3
+        shift = 8 * (1 - m % 2) + 16 * (k // 2) + bits * (k % 2)
+        high = w[base + 32 + m // 2] >> shift & (1 << bits) - 1
+    elif fmt.name == "IQ2_XS":
+        sign_word = base - 32 + 16 * (m // 16) + 2 * (m % 8) + m // 8 % 2
+        high = w[sign_word] >> 8 * k + 7 & 1
+    return w[base : base + n, None] >> 8 * k & 0xFF | high << 8
+
+
+def prepare_page(fmt: GgufFormat, page: bytes, table: np.ndarray = None) -> bytes:
+    """A page completed for the decoder: the fp32 copies of its fp16 scale rows (row scale_rows - fp16_rows + f, half b
+    to rows R + 8f + 4b .. + 3, R = scale_rows rounded up to 4) and, for a codebook format, two 16-bit level codes per
+    word from byte 0: word 2m + j holds the table entries of index word m's bytes 2j and 2j + 1 (IQ3_S: each column's
+    4-bit scale ORed into bits 12..15 of the codes of index words m, (m / 8) % 4 == 0).
+    """
+    w = np.frombuffer(page, dtype=np.uint32).copy()
+    s, r = fmt.scale_offset // 4, -(-fmt.scale_rows // 4) * 4
+    for f in range(fmt.fp16_rows):
+        row = w[s + 16 * (fmt.scale_rows - fmt.fp16_rows + f) :][:16].copy()
+        for b, half in enumerate((row & 0xFFFF, row >> 16)):
+            w[s + 16 * (r + 8 * f + 4 * b) :][:64] = np.tile(_fp16_to_fp32(half), 4)
+    if fmt.codebook:
+        table = level_table(fmt) if table is None else table
+        g = table[_grid_indices(fmt, w)].astype(np.uint32)
+        if fmt.name == "IQ3_S":
+            m = np.arange(64)
+            scales = w[fmt.code_offset // 4 + 104 :][:4].view(np.uint8)
+            sc = np.where(m // 8 % 4 == 0, scales[8 * (m // 32) + m % 8], 0)
+            sc = sc.astype(np.uint32)
+            g[:, 0] |= (sc & 15) << 12
+            g[:, 1] |= (sc >> 4) << 12
+        w[: 2 * len(g)] = (g[:, 0::2] | g[:, 1::2] << 16).reshape(-1)
+    return w.tobytes()
+
+
 def pages(fmt: GgufFormat, recs) -> list[list[bytes]]:
-    """pages[nt][p]: page p of N tile nt (K tiles page_tiles * p ..), as a reader assembles it in L1: the codes at
-    code_offset, the group's scale fields at scale_offset, the rest zero."""
+    """pages[nt][p]: page p of N tile nt (K tiles page_tiles * p ..), as the decoder reads it in L1: the codes at
+    code_offset, the group's scale fields at scale_offset, completed by prepare_page, the rest zero.
+    """
+    table = level_table(fmt) if fmt.codebook else None
     out = []
     for groups in recs:
         tile_pages = []
@@ -711,7 +770,7 @@ def pages(fmt: GgufFormat, recs) -> list[list[bytes]]:
                 page = bytearray(fmt.page_bytes)
                 page[fmt.code_offset : fmt.code_offset + len(c)] = c
                 page[fmt.scale_offset : fmt.scale_offset + len(scale)] = scale
-                tile_pages.append(bytes(page))
+                tile_pages.append(prepare_page(fmt, bytes(page), table))
         out.append(tile_pages)
     return out
 
