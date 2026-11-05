@@ -6,10 +6,12 @@
 
 #include <algorithm>
 #include <array>
+#include <set>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
+#include "d2d_routes.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -651,11 +653,7 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
             tensor_args.shared_gate_up_weights.has_value(),
             "fused_experts: the persistent op needs the fused shared expert");
         TT_FATAL(persistent.num_layers >= 1, "fused_experts: the persistent op needs at least one layer");
-        TT_FATAL(
-            persistent.h2d_socket_config_addresses.size() == mesh.shape().mesh_size(),
-            "fused_experts: the persistent op needs one H2D socket per chip ({}), got {}",
-            mesh.shape().mesh_size(),
-            persistent.h2d_socket_config_addresses.size());
+        TT_FATAL(mesh.shape().dims() == 2, "fused_experts: the persistent op runs on a 2D mesh, got {}", mesh.shape());
         const uint32_t table_width = 16u + 2u * static_cast<uint32_t>(tensor_args.gate_up_weights.size());
         TT_FATAL(
             table.dtype() == tt::tt_metal::DataType::UINT32 && table.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
@@ -753,16 +751,20 @@ tt::tt_metal::operation::Hash FusedExpertsDeviceOperation::compute_program_hash(
         attributes.all_reduce.has_value() ? attributes.all_reduce->ring_size : 0u,
         attributes.all_reduce.has_value() ? attributes.all_reduce->num_links : 0u,
         attributes.all_reduce.has_value() ? static_cast<uint32_t>(attributes.all_reduce->topology) : 0u,
-        // The persistent op's socket addresses and layer count are compile-time args, and its control
-        // core places kernels.
+        // The persistent op's socket addresses, output route and layer count are compile-time args, and
+        // its control core places kernels.
         attributes.persistent.has_value(),
         attributes.persistent.has_value() ? attributes.persistent->num_layers : 0u,
         attributes.persistent.has_value() ? attributes.persistent->socket_core.x : 0u,
         attributes.persistent.has_value() ? attributes.persistent->socket_core.y : 0u,
-        attributes.persistent.has_value() ? attributes.persistent->h2d_socket_config_addresses
+        attributes.persistent.has_value() ? attributes.persistent->input_socket_config_addresses
                                           : std::vector<uint32_t>{},
-        attributes.persistent.has_value() ? attributes.persistent->d2h_socket_config_address : 0u,
-        attributes.persistent.has_value() && attributes.persistent->h2d_device_pull,
+        attributes.persistent.has_value() ? attributes.persistent->output_socket_config_addresses
+                                          : std::vector<uint32_t>{},
+        attributes.persistent.has_value() ? attributes.persistent->output_route_args
+                                          : std::vector<std::vector<uint32_t>>{},
+        attributes.persistent.has_value() ? attributes.persistent->output_connection_mesh_id : 0u,
+        attributes.persistent.has_value() ? attributes.persistent->output_connection_chip_id : 0u,
         tensor_args.layer_table);
     return hash;
 }
@@ -826,9 +828,8 @@ FusedExpertsDeviceOperation::invoke(
     tt::tt_fabric::Topology all_reduce_topology,
     const std::optional<Tensor>& persistent_layer_table,
     const std::optional<tt::tt_metal::CoreCoord>& persistent_socket_core,
-    const std::optional<std::vector<uint32_t>>& persistent_h2d_socket_addresses,
-    std::optional<uint32_t> persistent_d2h_socket_address,
-    bool persistent_h2d_device_pull) {
+    const std::optional<std::vector<tt::tt_metal::distributed::MeshSocket>>& persistent_input_sockets,
+    const std::optional<std::vector<tt::tt_metal::distributed::MeshSocket>>& persistent_output_sockets) {
     operation_attributes_t attributes{
         .num_experts = num_experts,
         .intermediate_size = intermediate_size,
@@ -876,18 +877,94 @@ FusedExpertsDeviceOperation::invoke(
         };
     }
     if (persistent_layer_table.has_value()) {
+        using tt::tt_metal::distributed::SocketEndpoint;
         TT_FATAL(
-            persistent_socket_core.has_value() && persistent_h2d_socket_addresses.has_value() &&
-                persistent_d2h_socket_address.has_value(),
-            "fused_experts: the persistent op needs the socket core and the H2D and D2H socket config addresses "
-            "along with persistent_layer_table");
-        attributes.persistent = FusedPersistentParams{
+            persistent_socket_core.has_value() && persistent_input_sockets.has_value() &&
+                persistent_output_sockets.has_value() && !persistent_input_sockets->empty() &&
+                persistent_input_sockets->size() == persistent_output_sockets->size() &&
+                persistent_input_sockets->size() <= kMaxPersistentRequesters,
+            "fused_experts: the persistent op needs the socket core and 1 to {} pairs of input and output sockets "
+            "along with persistent_layer_table",
+            kMaxPersistentRequesters);
+        const auto& socket_core = *persistent_socket_core;
+        auto* mesh = input_tensor.device();
+        const ttnn::MeshCoordinate root(0, 0);
+        const auto root_node = mesh->get_fabric_node_id(root);
+        FusedPersistentParams persistent{
             .num_layers = static_cast<uint32_t>(persistent_layer_table->logical_shape()[-2]),
-            .socket_core = *persistent_socket_core,
-            .h2d_socket_config_addresses = *persistent_h2d_socket_addresses,
-            .d2h_socket_config_address = *persistent_d2h_socket_address,
-            .h2d_device_pull = persistent_h2d_device_pull,
+            .socket_core = socket_core,
         };
+        std::optional<tt::tt_fabric::FabricNodeId> connection;
+        for (size_t k = 0; k < persistent_input_sockets->size(); ++k) {
+            const auto& input_socket = (*persistent_input_sockets)[k];
+            const auto& output_socket = (*persistent_output_sockets)[k];
+            TT_FATAL(
+                input_socket.get_socket_endpoint_type() == SocketEndpoint::RECEIVER &&
+                    output_socket.get_socket_endpoint_type() == SocketEndpoint::SENDER &&
+                    input_socket.get_mesh_device() == mesh && output_socket.get_mesh_device() == mesh,
+                "fused_experts: requester {} must receive on its input socket and send on its output socket, both "
+                "endpoints on the op's mesh",
+                k);
+            // Every chip's control core receives the rows.
+            std::set<ttnn::MeshCoordinate> receivers;
+            for (const auto& c : input_socket.get_config().socket_connection_config) {
+                TT_FATAL(
+                    c.receiver_core.core_coord == socket_core,
+                    "fused_experts: requester {}'s input socket must receive on the socket core {}, not {}",
+                    k,
+                    socket_core.str(),
+                    c.receiver_core.core_coord.str());
+                receivers.insert(c.receiver_core.device_coord);
+            }
+            TT_FATAL(
+                receivers.size() == mesh->shape().mesh_size(),
+                "fused_experts: requester {}'s input socket must reach every chip of the {} mesh, it reaches {}",
+                k,
+                mesh->shape(),
+                receivers.size());
+            // The root's control core sends the reduced row to receivers that share a core.
+            const auto& out_connections = output_socket.get_config().socket_connection_config;
+            std::vector<tt::tt_fabric::FabricNodeId> out_receivers;
+            for (const auto& c : out_connections) {
+                TT_FATAL(
+                    c.sender_core == tt::tt_metal::distributed::MeshCoreCoord(root, socket_core) &&
+                        c.receiver_core.core_coord == out_connections.front().receiver_core.core_coord,
+                    "fused_experts: requester {}'s output socket must send from the socket core {} of {} to one core "
+                    "on every receiving chip",
+                    k,
+                    socket_core.str(),
+                    root);
+                out_receivers.push_back(
+                    output_socket.get_fabric_node_id(SocketEndpoint::RECEIVER, c.receiver_core.device_coord));
+            }
+            const auto routes = d2d_routes(root_node, out_receivers);
+            TT_FATAL(
+                routes.size() <= kMaxPersistentRoutes,
+                "fused_experts: requester {}'s output takes {} sends, more than the kernel's {}",
+                k,
+                routes.size(),
+                kMaxPersistentRoutes);
+            if (!connection.has_value()) {
+                connection = routes.front().next;
+            }
+            TT_FATAL(
+                routes.front().next == *connection,
+                "fused_experts: every output must leave the root in one direction, which its one fabric connection "
+                "holds; requester {}'s does not",
+                k);
+            std::vector<uint32_t> route_args;
+            for (const auto& route : routes) {
+                append_d2d_route_args(route, route_args);
+            }
+            persistent.input_socket_config_addresses.push_back(
+                static_cast<uint32_t>(input_socket.get_config_buffer_address()));
+            persistent.output_socket_config_addresses.push_back(
+                static_cast<uint32_t>(output_socket.get_config_buffer_address()));
+            persistent.output_route_args.push_back(std::move(route_args));
+        }
+        persistent.output_connection_mesh_id = *connection->mesh_id;
+        persistent.output_connection_chip_id = connection->chip_id;
+        attributes.persistent = std::move(persistent);
     }
     tensor_args_t tensor_args{
         .input_tensor = input_tensor,
@@ -935,9 +1012,8 @@ fused_experts(
     tt::tt_fabric::Topology all_reduce_topology,
     const std::optional<Tensor>& persistent_layer_table,
     const std::optional<tt::tt_metal::CoreCoord>& persistent_socket_core,
-    const std::optional<std::vector<uint32_t>>& persistent_h2d_socket_addresses,
-    std::optional<uint32_t> persistent_d2h_socket_address,
-    bool persistent_h2d_device_pull) {
+    const std::optional<std::vector<tt::tt_metal::distributed::MeshSocket>>& persistent_input_sockets,
+    const std::optional<std::vector<tt::tt_metal::distributed::MeshSocket>>& persistent_output_sockets) {
     using OperationType = ttnn::operations::experimental::deepseek::moe::fused_experts::FusedExpertsDeviceOperation;
     auto [operation_attributes, tensor_args] = OperationType::invoke(
         input_tensor,
@@ -965,9 +1041,8 @@ fused_experts(
         all_reduce_topology,
         persistent_layer_table,
         persistent_socket_core,
-        persistent_h2d_socket_addresses,
-        persistent_d2h_socket_address,
-        persistent_h2d_device_pull);
+        persistent_input_sockets,
+        persistent_output_sockets);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

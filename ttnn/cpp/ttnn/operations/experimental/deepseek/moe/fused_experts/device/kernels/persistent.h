@@ -8,25 +8,34 @@
 
 #include "api/debug/kernel_profiler.hpp"
 
-// The persistent op (FE_PERSISTENT): every kernel loops, one iteration per token row the host sends.
+// The persistent op (FE_PERSISTENT): every kernel loops, one iteration per token row the requesters'
+// input sockets bring.
 //
-// The control core (fe_h2d_ctrl.cpp) takes a page off this chip's H2D socket -- a header whose first
-// word is the layer id, then the hidden row -- and waits until every participant has reported ready,
-// i.e. finished the previous iteration. It then multicasts the header words and the row (into the
-// input replica) to the worker grid and, once those have landed, the go words: one per RISC of a
-// worker core, set to iteration + 1 (kFeStopBit set when the layer id is the stop id). Each worker
-// core's header sits at FE_HDR_ADDR, a workload tensor -- the TRISCs cannot address program
-// semaphores, and a RISC that clears only its own go word at stop leaves no stale go behind for the
-// next launch. The reduce senders, outside the grid, take the go on program semaphore FE_SEM_GO.
+// The control core (fe_ctrl.cpp) takes a page off the next requester's input D2D socket -- a header whose first
+// word is the layer id, then the hidden row -- and runs three stages, each with its own go and its own
+// ready count, so up to three rows are in flight:
+//   1. the router row (router scores, top-k, the expert-id merge), counted on the control core's
+//      sem_route_ready: the merge core holds the ids until the grid's go (FE_SEM_EXPERT_GO);
+//   2. the worker grid (gate/up, down, the within-chip reduce), counted on the control core's
+//      sem_ready;
+//   3. the reduce senders (the cross-chip reduce), a row behind the grid, counted on sem_reduce_ready;
+//      their staging is double buffered, so the grid's go for iteration i waits for row i - 2.
+// Each stage's go is the header words and the row (into the input replica) multicast to the stage's
+// cores and, once those have landed, the go words: one per RISC of a worker core, set to iteration + 1
+// (kFeStopBit set when the layer id is the stop id). Each worker core's header sits at FE_HDR_ADDR, a
+// workload tensor -- the TRISCs cannot address program semaphores, and a RISC that clears only its own
+// go word at stop leaves no stale go behind for the next launch. The reduce senders take the grid's go
+// on program semaphore FE_SEM_GO.
 //
-// Because the go of iteration i + 1 needs every participant done with iteration i, every CB is empty
-// at the top of an iteration, so each RISC rewinds its CB pointers there (fe_rewind_cbs) and every
+// Because a stage's go of iteration i + 1 needs that stage done with iteration i, every CB is empty at
+// the top of an iteration, so each RISC rewinds its CB pointers there (fe_rewind_cbs) and every
 // semaphore that counts up within an iteration counts up by the same amount per iteration (the
 // kernels wait for cumulative targets).
 //
-// A core reports ready (FE_SEM_READY on the control core, one NoC atomic increment) from its reader:
-// once its compute has popped the input -- the compute's last CB operation of an iteration -- and its
-// writer has set FE_SEM_WRITER_DONE, so all five RISCs are past the iteration.
+// A core reports ready (FE_SEM_READY, which the factory points at its stage's count on the control
+// core, one NoC atomic increment) from its reader: once its compute has popped the input -- the
+// compute's last CB operation of an iteration -- and its writer has set FE_SEM_WRITER_DONE, so all five
+// RISCs are past the iteration.
 
 constexpr uint32_t kFeStopBit = 0x80000000u;
 
@@ -39,6 +48,9 @@ constexpr uint32_t kFeHdrRouterBias = 4;
 constexpr uint32_t kFeHdrWords = 16;
 // Then the go words, one per RISC of a worker core: BRISC, NCRISC, TRISC0-2.
 constexpr uint32_t kFeGoWords = 5;
+// Then, on the control core, each iteration's requester, for the root's output kernel. The control core
+// runs at most a few iterations ahead of it.
+constexpr uint32_t kFeSourceRing = 16;
 
 #if defined(FE_PERSISTENT)
 

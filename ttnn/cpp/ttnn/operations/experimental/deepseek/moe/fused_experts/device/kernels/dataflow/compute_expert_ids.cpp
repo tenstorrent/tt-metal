@@ -132,6 +132,11 @@
 // header; its row of the layer table -- [16 header words][E gate_up addresses][E down addresses] --
 // supplies the experts' weight addresses, and the hits' addresses are broadcast after their weights
 // in cb_bcast (gate_up at num_weights + num_active * batch, down num_active past it).
+//
+// FE_ROUTE_STAGE (persistent, in-op router): the route merge of the router stage, on a router core's
+// free DM processor -- 1.-3. only, a row ahead of the worker grid, which runs every reader loop (core
+// {0,0} as a plain hub0). The grid still reads the previous row's cb_bcast, so the broadcast waits for
+// the control core's FE_SEM_EXPERT_GO bump, one per row that it has started the grid on.
 
 namespace {
 
@@ -297,9 +302,14 @@ void kernel_main() {
     // {0,0} is hub0 of its group (and the only core that also carries the routing computation).
     const ActGatherConfig gather{/*role=*/1u, hub0_noc_x, hub0_noc_y, hub1_noc_x, hub1_noc_y, split_col, num_hubs};
 
+#if defined(FE_ROUTE_STAGE)
+    // The router core's other DM processor, router_topk, has the other NoC.
+    Noc noc;
+#else
     // Pin the expert-id sender to NoC 0; the input broadcaster on {1,0} uses NoC 1. Hub1 of every
     // group runs its reader on NoC 1 so the two hubs' activation multicasts never share a NoC.
     Noc noc(0);
+#endif
     const auto routing = TensorAccessor(routing_args, routing_addr);
     (void)routing;    // compiled out of the ranking path
     (void)rank_addr;  // unused in the ids path
@@ -604,6 +614,16 @@ void kernel_main() {
                 ids[kHitDownAddrs + i] = layer_addrs[num_weights + ids[i]];
             }
 #endif
+#if defined(FE_ROUTE_STAGE)
+        }
+        {
+            DeviceZoneScopedN("FE_ROUTE_HOLD");
+            noc_semaphore_wait_min(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_SEM_EXPERT_GO)), iter + 1u);
+        }
+        {
+            DeviceZoneScopedN("FE_ROUTE_IDS_MCAST");
+#endif
 
             // ---- 2. Broadcast the ids to all other cores' L1 (same cb_bcast address). ----
             noc.async_write_multicast(
@@ -626,6 +646,7 @@ void kernel_main() {
             sem.set_multicast(noc, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, num_dests, /*linked=*/false);
         }
 
+#if !defined(FE_ROUTE_STAGE)
         // ---- 4. Publish the activation to this core's compute kernel. ----
 #if defined(INPUT_RM_ROWS)
         // Several ROW_MAJOR rows: this core's writer restripes them into cb_input and publishes it.
@@ -699,9 +720,23 @@ void kernel_main() {
             gate_up_col_shards,
             sem_id,
             iter);
+#endif
     };
 
-#if defined(FE_PERSISTENT)
+#if defined(FE_ROUTE_STAGE)
+    // No input to consume and no writer: this kernel is past a row once its broadcast is out.
+    for (uint32_t iter = 0;; ++iter) {
+        if (iter > 0u) {
+            noc_semaphore_inc(get_noc_addr(FE_CTRL_X, FE_CTRL_Y, get_semaphore(FE_SEM_READY)), 1);
+            noc_async_atomic_barrier();
+        }
+        if (!fe_wait_go(iter)) {
+            break;
+        }
+        fe_rewind_cbs();
+        iteration(iter);
+    }
+#elif defined(FE_PERSISTENT)
     for (uint32_t iter = 0; fe_begin_iteration(iter, cb_input_id, k_tiles, /*has_writer=*/true); ++iter) {
         iteration(iter);
     }

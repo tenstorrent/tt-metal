@@ -9,6 +9,7 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/fused_experts/fused_experts.hpp"
+#include "ttnn/operations/experimental/deepseek/moe/fused_experts/persistent_moe_request.hpp"
 
 namespace ttnn::operations::experimental::deepseek::moe::fused_experts::detail {
 
@@ -140,18 +141,21 @@ void bind_fused_experts(nb::module_& mod) {
             persistent_layer_table: Run the op persistently (launched once, looping on device) over
                 the layers of this [num_layers, 16 + 2E] uint32 ROW_MAJOR DRAM table, one row per
                 layer: [layer id, shared gate_up, shared down, router gate, router bias, 0 x 11,
-                E gate_up, E down] buffer addresses. Each chip reads [64-byte header (layer id in
-                word 0) | bf16 token row] pages from its H2D socket and the MoE output, reduced onto
-                mesh coordinate (0, 0), comes back on that chip's D2H socket. A layer id >=
-                num_layers (0xFFFFFFFF) stops the kernels. Needs the whole-mesh all-reduce, the router
-                with a DRAM gate, the shared expert and the one-row replica; the returned tensor is
-                the op's scratch, and results arrive only on the D2H socket.
-            persistent_socket_core: Logical core every socket lives on, outside the worker grid.
-            persistent_h2d_socket_addresses: Each chip's H2D socket config buffer address, mesh
-                row-major.
-            persistent_d2h_socket_address: The D2H socket config buffer address on (0, 0).
-            persistent_h2d_device_pull: The H2D sockets are DEVICE_PULL (the host stages each page in
-                pinned host RAM and the control core reads it over PCIe) rather than HOST_PUSH.
+                E gate_up, E down] buffer addresses. Every chip receives [64-byte header (layer id in
+                word 0) | bf16 token row] pages on each requester's input socket, taken round robin
+                through the op's pipeline, and the MoE output, reduced onto mesh coordinate (0, 0), is
+                sent from there on that requester's output socket. A layer id >= num_layers
+                (0xFFFFFFFF) closes a requester's input; once all are closed the kernels stop. Needs
+                the whole-mesh all-reduce, the router with a DRAM gate, the shared expert and the
+                one-row replica; the returned tensor is the op's scratch, and results arrive only on
+                the output sockets.
+            persistent_socket_core: Logical core every socket endpoint on this mesh lives on,
+                outside the worker grid.
+            persistent_input_sockets: Per requester (at most 8), the receiving end of a D2D socket
+                with a page-sized FIFO, received at ``persistent_socket_core`` on every chip.
+            persistent_output_sockets: Per requester, paired with its input, the sending end of a
+                D2D socket from ``persistent_socket_core`` on (0, 0), whose receivers (one core) each
+                hold a [1, H] bf16 page. All of them must leave (0, 0) in one fabric direction.
         )doc",
         &ttnn::experimental::deepseek::moe::fused_experts,
         nb::arg("input_tensor"),
@@ -180,9 +184,39 @@ void bind_fused_experts(nb::module_& mod) {
         nb::arg("all_reduce_topology") = tt::tt_fabric::Topology::Linear,
         nb::arg("persistent_layer_table") = std::nullopt,
         nb::arg("persistent_socket_core") = std::nullopt,
-        nb::arg("persistent_h2d_socket_addresses") = std::nullopt,
-        nb::arg("persistent_d2h_socket_address") = std::nullopt,
-        nb::arg("persistent_h2d_device_pull") = false);
+        nb::arg("persistent_input_sockets") = std::nullopt,
+        nb::arg("persistent_output_sockets") = std::nullopt);
+
+    ttnn::bind_function<"persistent_moe_request", "ttnn.experimental.deepseek.moe.">(
+        mod,
+        R"doc(
+        One request to a persistent ``fused_experts`` op, from every chip of the input's mesh that
+        sends on ``request_socket``.
+
+        Each such chip multicasts one page -- a 64-byte header with ``layer`` in word 0, then the input
+        row -- to its request receivers (which must share one core), and then, unless ``layer`` is the
+        stop id 0xFFFFFFFF, waits for the op's reduced row on ``response_socket`` and returns it. The
+        persistent op does not ack request pages: the response proves every receiver is past the page,
+        so this op credits the request socket itself when the response arrives.
+
+        Args:
+            input_tensor: The token row, [1, 1, 1, H] bfloat16 ROW_MAJOR, interleaved.
+            layer: The layer to run, a row index of the persistent op's layer table, or 0xFFFFFFFF to
+                stop it (no response then).
+            request_socket: The sending end of the persistent op's input socket; its FIFO holds one
+                page, 64 + 2H bytes.
+            response_socket: The receiving end of the persistent op's output socket, on each sending
+                chip's request core.
+
+        Returns:
+            ttnn.Tensor: the reduced row, in the input's spec (unwritten after a stop).
+        )doc",
+        &ttnn::experimental::deepseek::moe::persistent_moe_request,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("layer"),
+        nb::arg("request_socket"),
+        nb::arg("response_socket"));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts::detail
