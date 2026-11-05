@@ -38,6 +38,8 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
+#include "tt_metal/distributed/host_h2h_socket.hpp"
+
 extern char** environ;
 
 namespace tt::tt_metal::distributed {
@@ -284,6 +286,16 @@ TEST_F(MpiResourceCleanupTest, DeviceOpenWithoutLauncherLeavesNoMpiFiles) {
     expect_no_mpi_leftovers();
 }
 
+// Socket bringup runs MPI collectives, which abort the process when no launcher started MPI. It must report an
+// error instead.
+TEST_F(MpiResourceCleanupTest, H2HSocketWithoutLauncherReportsError) {
+    constexpr auto timeout = std::chrono::seconds(120);
+    const auto result = run_child("CreateH2HSocketWithoutMpi", timeout);
+    expect_clean_exit(result, timeout);
+    expect_child_ran();
+    expect_no_mpi_leftovers();
+}
+
 // A real multi-rank job must still get an MPI world (no false negative in launcher detection) and the launcher must
 // clean up after it.
 TEST_F(MpiResourceCleanupTest, MpirunJobGetsMpiWorldAndLeavesNoMpiFiles) {
@@ -356,6 +368,21 @@ TEST(MpiResourceCleanupChild, OpenAndCloseUnitMesh) {
     ASSERT_NE(mesh_device, nullptr);
     mesh_device->close();
     mesh_device.reset();
+    mark_child_ran(*scratch);
+}
+
+TEST(MpiResourceCleanupChild, CreateH2HSocketWithoutMpi) {
+    const auto scratch = child_scratch_dir();
+    if (!scratch.has_value()) {
+        GTEST_SKIP() << "runs only as a child of MpiResourceCleanupTest";
+    }
+    // A default config fails the local checks, so create() goes straight to the agreement collective.
+    std::string err;
+    EXPECT_EQ(experimental::H2HSocket::create({}, err), nullptr);
+    EXPECT_NE(err.find("MPI is not initialized"), std::string::npos) << "unexpected error: " << err;
+    int mpi_initialized = 0;
+    MPI_Initialized(&mpi_initialized);
+    EXPECT_EQ(mpi_initialized, 0) << "socket bringup started MPI";
     mark_child_ran(*scratch);
 }
 
