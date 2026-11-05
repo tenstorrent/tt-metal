@@ -35,7 +35,7 @@ ScratchpadBindingsForKernel MakeNonPublicScratchpadBindingHandles(const Scratchp
 }
 
 // DFB binding construction returns its tile storage bytes without a later kernel-lowering pass.
-TEST(ResourceBindingMetadata, DfbStorageBytesReady) {
+TEST(ResourceBindingMetadata, CPU_DfbStorageBytesReady) {
     DataflowBufferSpec spec = test_helpers::MakeMinimalGen1ValidProgramSpec().dataflow_buffers.front();
     spec.data_format_metadata = DataFormat::Float16_b;
     spec.tile_format_metadata = Tile({16, 32});
@@ -45,7 +45,7 @@ TEST(ResourceBindingMetadata, DfbStorageBytesReady) {
 }
 
 // Scratchpad binding construction returns its tile storage bytes without a later kernel-lowering pass.
-TEST(ResourceBindingMetadata, ScratchpadStorageBytesReady) {
+TEST(ResourceBindingMetadata, CPU_ScratchpadStorageBytesReady) {
     const ScratchpadSpec spec{
         .unique_id = ScratchpadSpecName{"pad"},
         .size_per_node = 4096,
@@ -58,7 +58,7 @@ TEST(ResourceBindingMetadata, ScratchpadStorageBytesReady) {
 }
 
 // DFB metadata uses the supplied target alignment for block-float exponent storage.
-TEST(ResourceBindingMetadata, DfbUsesTargetAlignment) {
+TEST(ResourceBindingMetadata, CPU_DfbUsesTargetAlignment) {
     DataflowBufferSpec spec = test_helpers::MakeMinimalGen1ValidProgramSpec().dataflow_buffers.front();
     spec.data_format_metadata = DataFormat::Bfp8_b;
     spec.tile_format_metadata = Tile({1, 16});
@@ -68,7 +68,7 @@ TEST(ResourceBindingMetadata, DfbUsesTargetAlignment) {
 }
 
 // Scratchpad metadata uses the supplied target alignment for block-float exponent storage.
-TEST(ResourceBindingMetadata, ScratchpadUsesTargetAlignment) {
+TEST(ResourceBindingMetadata, CPU_ScratchpadUsesTargetAlignment) {
     const ScratchpadSpec spec{
         .unique_id = ScratchpadSpecName{"pad"},
         .size_per_node = 4096,
@@ -81,7 +81,7 @@ TEST(ResourceBindingMetadata, ScratchpadUsesTargetAlignment) {
 }
 
 // DFB binding construction preserves the absence of optional format metadata.
-TEST(ResourceBindingMetadata, DfbWithoutFormatHasNoMetadata) {
+TEST(ResourceBindingMetadata, CPU_DfbWithoutFormatHasNoMetadata) {
     DataflowBufferSpec spec = test_helpers::MakeMinimalGen1ValidProgramSpec().dataflow_buffers.front();
     spec.data_format_metadata.reset();
     spec.tile_format_metadata.reset();
@@ -90,14 +90,14 @@ TEST(ResourceBindingMetadata, DfbWithoutFormatHasNoMetadata) {
 }
 
 // Scratchpad binding construction preserves the absence of optional format metadata.
-TEST(ResourceBindingMetadata, ScratchpadWithoutFormatHasNoMetadata) {
+TEST(ResourceBindingMetadata, CPU_ScratchpadWithoutFormatHasNoMetadata) {
     const ScratchpadSpec spec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 4096};
     const auto bindings = MakeNonPublicScratchpadBindingHandles(spec, 64);
     EXPECT_EQ(bindings.handles.front().llk_metadata, std::nullopt);
 }
 
 // TF32 metadata retains its format while reporting no supported tile storage encoding.
-TEST(ResourceBindingMetadata, Tf32HasNoStorageSize) {
+TEST(ResourceBindingMetadata, CPU_Tf32HasNoStorageSize) {
     const ScratchpadSpec spec{
         .unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 4096, .data_format_metadata = DataFormat::Tf32};
     const auto bindings = MakeNonPublicScratchpadBindingHandles(spec, 64);
@@ -117,7 +117,7 @@ protected:
 };
 
 // Tensor parameter registration returns storage bytes before any kernel binding is lowered.
-TEST_F(TensorBindingMetadata, StorageBytesReady) {
+TEST_F(TensorBindingMetadata, CPU_StorageBytesReady) {
     distributed::MeshDevice& device = fixture_device();
     detail::ProgramImpl program_impl(device.impl().get_context_id());
     ProgramSpec spec = test_helpers::MakeMinimalGen1ValidProgramSpec();
@@ -129,7 +129,7 @@ TEST_F(TensorBindingMetadata, StorageBytesReady) {
 }
 
 // Per-node tensor registration returns storage bytes before any kernel binding is lowered.
-TEST_F(TensorBindingMetadata, PerNodeStorageBytesReady) {
+TEST_F(TensorBindingMetadata, CPU_PerNodeStorageBytesReady) {
     distributed::MeshDevice& device = fixture_device();
     detail::ProgramImpl program_impl(device.impl().get_context_id());
     ProgramSpec spec = test_helpers::MakeMinimalGen1ValidProgramSpec();

@@ -11,7 +11,7 @@ namespace tt::tt_metal {
 namespace {
 
 // Resource metadata preserves an eight-wide face and its one-row, two-column grid.
-TEST(BindingTokenFaceMetadata, EightWideFaces) {
+TEST(BindingTokenFaceMetadata, CPU_EightWideFaces) {
     const LLKMetadata metadata = make_llk_metadata(DataFormat::Float16_b, Tile({16, 16}, {16, 8}), 16);
     EXPECT_THAT(
         serialize_llk_metadata(metadata),
@@ -23,7 +23,7 @@ TEST(BindingTokenFaceMetadata, EightWideFaces) {
 }
 
 // Resource metadata preserves an eight-wide face in a two-row, two-column grid.
-TEST(BindingTokenFaceMetadata, SquareEightWideFaces) {
+TEST(BindingTokenFaceMetadata, CPU_SquareEightWideFaces) {
     const LLKMetadata metadata = make_llk_metadata(DataFormat::Float16_b, Tile({16, 16}, {8, 8}), 16);
     EXPECT_THAT(
         serialize_llk_metadata(metadata),
@@ -35,7 +35,7 @@ TEST(BindingTokenFaceMetadata, SquareEightWideFaces) {
 }
 
 // Resource metadata preserves the existing geometry for sixteen-wide faces.
-TEST(BindingTokenFaceMetadata, SixteenWideFaces) {
+TEST(BindingTokenFaceMetadata, CPU_SixteenWideFaces) {
     const LLKMetadata metadata = make_llk_metadata(DataFormat::Float16_b, Tile({16, 32}, {8, 16}), 16);
     EXPECT_THAT(
         serialize_llk_metadata(metadata),
