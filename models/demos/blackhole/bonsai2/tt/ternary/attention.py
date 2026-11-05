@@ -256,6 +256,25 @@ class _GatedOut:
         self.attn, self.gate = attn, gate
 
 
+class _DecodeTransformer:
+    """ttnn.transformer whose paged SDPA decode runs on the whole grid (BONSAI_DECODE_SDPA_GRID=0: the caller's):
+    24 q / 4 kv heads, d = 256 at ~4100 positions: 8 x 8 85.3 us, 13 x 10 78.3 us (same chunks, same outputs)."""
+
+    def __getattr__(self, name):
+        return getattr(ttnn.transformer, name)
+
+    def paged_scaled_dot_product_attention_decode(self, *args, **kwargs):
+        pc = kwargs.get("program_config")
+        if pc is not None and os.environ.get("BONSAI_DECODE_SDPA_GRID", "1") == "1":
+            kwargs["program_config"] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=kwargs["page_table_tensor"].device().compute_with_storage_grid_size(),
+                q_chunk_size=pc.q_chunk_size,
+                k_chunk_size=pc.k_chunk_size,
+                exp_approx_mode=pc.exp_approx_mode,
+            )
+        return ttnn.transformer.paged_scaled_dot_product_attention_decode(*args, **kwargs)
+
+
 class TernaryAttentionTtnn:
     """ttnn stand-in for gated_attention_forward_ttnn's module (decode only): its four projections go to the
     TernaryAttention; the q / k norms run fused with the RoPE (apply_rope, BONSAI_DECODE_QKR=0: off); everything else
@@ -266,6 +285,10 @@ class TernaryAttentionTtnn:
 
     def __getattr__(self, name):
         return getattr(ttnn, name)
+
+    @property
+    def transformer(self):
+        return _DecodeTransformer()
 
     def rms_norm(self, t, *args, **kwargs):
         qkr = getattr(self._t, "pre_qkr", None) or {}
