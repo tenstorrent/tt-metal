@@ -31,7 +31,8 @@ inline void _llk_math_fast_tilize_init_([[maybe_unused]] const std::uint32_t unp
     {
         // DEST remap (remap_addrs + swizzle_32b) is enabled here to mirror
         // pack_untilize_dest_init's BH workaround (see tt-metal#17132 / tt-llk#989).
-        // No uninit - leaving the bits set is benign for subsequent ops.
+        // The uninit leaves the bits set. A later kernel whose FPU and SFPU write Dst
+        // concurrently must clear them in its own init (see topk_xl_split::init_tokens).
         _llk_math_reconfig_remap_(true);
     }
 

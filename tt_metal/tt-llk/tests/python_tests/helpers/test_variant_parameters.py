@@ -1330,6 +1330,8 @@ class TOPK_XL(TemplateParameter):
     lsb_row_major: bool = False
     reinit_after_copy: bool = False
     blaze_compat: bool = False
+    # Start with the Dst remap that fast tilize / pack_untilize leave behind, which the kernel must clear.
+    preset_dest_remap: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1353,6 +1355,8 @@ class TOPK_XL(TemplateParameter):
         ]
         if self.blaze_compat:
             lines.append("#define TOPK_XL_BLAZE_COMPAT 1")
+        if self.preset_dest_remap:
+            lines.append("#define TOPK_XL_PRESET_DEST_REMAP 1")
         return "\n".join(lines)
 
 
