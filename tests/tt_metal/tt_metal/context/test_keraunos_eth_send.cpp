@@ -39,6 +39,7 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "dev_mem_map.h"
+#include "env_lib.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -58,12 +59,6 @@ constexpr uint32_t kSenderHsio = 0;
 constexpr uint32_t kReceiverHsio = 1;
 // Global HSIO 0 CCE SRAM window; tile j is tile_stride above it (as in KeraunosEmu.EthernetKernelWritesOtherTileSram).
 constexpr uint64_t kHsioGlobalSramBase = 0x1206800000ULL;
-constexpr uint32_t kEthLinkValid = 0x4B4E494C;  // kEthLinkValid in eth_cce_send.h
-
-uint32_t env_u32(const char* name, uint32_t fallback) {
-    const char* value = std::getenv(name);
-    return value == nullptr ? fallback : static_cast<uint32_t>(std::stoul(value, nullptr, 0));
-}
 
 struct KeraunosCore {
     CoreCoord logical;
@@ -127,7 +122,7 @@ public:
 
     // eth_cce_send.h's EthLink: the link peer's HSIO tile, then the valid word.
     void write_eth_link(const KeraunosCore& core, const KeraunosCore& peer) {
-        write(core, MEM_IERISC_FABRIC_ETH_LINK_BASE, {peer.hsio, kEthLinkValid, 0, 0});
+        write(core, MEM_IERISC_FABRIC_ETH_LINK_BASE, {peer.hsio, MEM_IERISC_FABRIC_ETH_LINK_VALID, 0, 0});
     }
 
     // Launches without blocking, polls each core's status word until it leaves kStatusRunning or the host timeout
@@ -139,7 +134,7 @@ public:
         distributed::EnqueueMeshWorkload(mesh_->mesh_command_queue(), workload, /*blocking=*/false);
 
         const auto deadline = std::chrono::steady_clock::now() +
-                              std::chrono::seconds(env_u32("KERAUNOS_ETH_HOST_TIMEOUT_S", 1800));
+                              std::chrono::seconds(tt::parse_env<uint32_t>("KERAUNOS_ETH_HOST_TIMEOUT_S", 1800));
         for (const KeraunosCore& core : watched) {
             for (uint32_t status = read(core, base_ + kResultOffset, 1)[0];
                  status == kStatusRunning || status == 0;
@@ -206,10 +201,10 @@ TEST_P(Ordering, Run) {
     }
 
     const uint32_t base = s.base();
-    const uint32_t iterations = env_u32("KERAUNOS_E6_ITERATIONS", 1000);
-    const uint32_t payload_bytes = env_u32("KERAUNOS_E6_PAYLOAD_BYTES", 4096);
-    const uint32_t txq = env_u32("KERAUNOS_ETH_TXQ", 0);
-    const uint32_t polls = env_u32("KERAUNOS_ETH_POLLS", 2'000'000);
+    const uint32_t iterations = tt::parse_env<uint32_t>("KERAUNOS_E6_ITERATIONS", 1000);
+    const uint32_t payload_bytes = tt::parse_env<uint32_t>("KERAUNOS_E6_PAYLOAD_BYTES", 4096);
+    const uint32_t txq = tt::parse_env<uint32_t>("KERAUNOS_ETH_TXQ", 0);
+    const uint32_t polls = tt::parse_env<uint32_t>("KERAUNOS_ETH_POLLS", 2'000'000);
     ASSERT_TRUE(payload_bytes > 0 && payload_bytes % 16 == 0 && payload_bytes <= kMaxPayloadBytes)
         << "KERAUNOS_E6_PAYLOAD_BYTES " << payload_bytes << " must be a non-zero multiple of 16 up to "
         << kMaxPayloadBytes;
