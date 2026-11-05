@@ -418,9 +418,8 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
 #endif
     }
 
-    // A Keraunos CCE (Quasar) has no base firmware to exit to, and disable_erisc_app() would store to its reset
-    // vector, so it hangs.
-#if defined(COMPILE_FOR_ERISC) && !defined(ARCH_QUASAR)
+    // Without base firmware to exit to (ETH_NO_BASE_FIRMWARE) it hangs.
+#if defined(COMPILE_FOR_ERISC) && !defined(ETH_NO_BASE_FIRMWARE)
     // Update launch msg to show that we've exited. This is required so that the next run doesn't think there's a kernel
     // still running and try to make it exit.
     volatile tt_l1_ptr go_msg_t* go_message_ptr = GET_MAILBOX_ADDRESS_DEV(go_messages[0].slot[0]);
