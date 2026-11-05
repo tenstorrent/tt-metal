@@ -23,6 +23,7 @@ Tensor high_bw_all_gather(
     uint32_t batch_slot_layer_idx,
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
+    uint32_t gathered_active_below,
     const std::optional<GlobalSemaphore>& ready_semaphore,
     const std::optional<GlobalSemaphore>& data_valid_semaphore) {
     return ttnn::prim::high_bw_all_gather(
@@ -40,6 +41,7 @@ Tensor high_bw_all_gather(
         batch_slot_layer_idx,
         gathered_prefix_tensor,
         gathered_slab_global,
+        gathered_active_below,
         ready_semaphore,
         data_valid_semaphore);
 }

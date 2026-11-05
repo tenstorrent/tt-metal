@@ -51,6 +51,7 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     uint32_t batch_slot_layer_idx,
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
+    uint32_t gathered_active_below,
     const std::optional<GlobalSemaphore>& ready_semaphore,
     const std::optional<GlobalSemaphore>& data_valid_semaphore);
 
@@ -77,6 +78,7 @@ Tensor high_bw_all_gather(
     // gathered dim; the reader derives the extent from it. Mutually exclusive with gathered_dim_size.
     const std::optional<Tensor>& gathered_prefix_tensor = std::nullopt,
     uint32_t gathered_slab_global = 0,
+    uint32_t gathered_active_below = 0,
     const std::optional<GlobalSemaphore>& ready_semaphore = std::nullopt,
     const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt);
 

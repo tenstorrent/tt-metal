@@ -598,6 +598,12 @@ ChipShardPageGeometry derive_shard_page_geometry(
             num_kv_slabs);
         geometry.pages_per_kv_slab = geometry.pages_per_outer_slice / num_kv_slabs;
     }
+    // A rank's output slot: the input shard, or with gathered_active_below the largest extent's whole slabs per rank.
+    geometry.output_pages_per_outer_slice = geometry.pages_per_outer_slice;
+    if (args.gathered_active_below > 0) {
+        const uint64_t slabs = gathered_active_extent(args) / args.gathered_slab_global;
+        geometry.output_pages_per_outer_slice = static_cast<uint32_t>(slabs * geometry.pages_per_kv_slab);
+    }
     return geometry;
 }
 
@@ -649,8 +655,9 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> common_args(
     std::vector<uint32_t> sender{
         output.buffer()->address(), shards_arrived_counter_address, downstream_started_counter_address};
     // the chip shard geometry: [0] prefix tensor address [1] valid pages per outer slice (host) [2] outer slices [3]
-    // pages per outer slice [4] ranks [5] KV slab [6] full gathered length [7] pages per KV slab
-    const std::array<uint32_t, 8> geometry_block{
+    // pages per outer slice [4] ranks [5] KV slab [6] full gathered length [7] pages per KV slab [8] output pages per
+    // outer slice [9] active below
+    const std::array<uint32_t, 10> geometry_block{
         tensor_args.has_gathered_prefix_metadata() ? tensor_args.gathered_prefix_tensor->buffer()->address() : 0u,
         host_valid_pages_per_outer_slice(args, geometry),
         geometry.num_outer_slices,
@@ -658,7 +665,9 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> common_args(
         geometry.num_ranks,
         args.gathered_slab_global,
         tensor_args.input_tensor.padded_shape()[args.dim] * args.num_devices,
-        geometry.pages_per_kv_slab};
+        geometry.pages_per_kv_slab,
+        geometry.output_pages_per_outer_slice,
+        args.gathered_active_below};
     reader.insert(reader.end(), geometry_block.begin(), geometry_block.end());
     sender.insert(sender.end(), geometry_block.begin(), geometry_block.end());
     return {std::move(reader), std::move(sender)};

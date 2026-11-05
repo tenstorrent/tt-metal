@@ -79,7 +79,21 @@ struct HighBwAllGatherParams {
     // `gathered_slab_global` is the block-cyclic slab width in gathered-dim elements (chunk_local * sp).
     // It is structural -- identical for every chunk and every layer -- so it is hashed.
     uint32_t gathered_slab_global = 0;
+
+    // Optional switch-off and short slots for the metadata path. With gathered_active_below > 0 the op copies
+    // nothing when this chunk's start is at or above it (every kernel exits before its fence; every chip reads the same
+    // start, so all of them skip). Each rank's rows then land in a slot sized for the largest extent it can copy
+    // (gathered_active_extent / num_devices) instead of the input length, so a short prefix fits a small buffer, and
+    // the slot depends only on the threshold, never on the output. Structural and hashed.
+    uint32_t gathered_active_below = 0;
 };
+
+// The most the op copies with gathered_active_below: a chunk starting just below the threshold, plus that chunk,
+// rounded up to whole slabs.
+inline uint64_t gathered_active_extent(const HighBwAllGatherParams& args) {
+    const uint64_t slab = args.gathered_slab_global;
+    return (args.gathered_active_below - 1 + slab + slab - 1) / slab * slab;
+}
 
 struct HighBwAllGatherInputs {
     Tensor input_tensor;

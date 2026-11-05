@@ -154,6 +154,7 @@ std::vector<uint32_t> reader_compile_args(
 }
 
 std::vector<uint32_t> writer_compile_args(
+    const SparseKvPushParams& params,
     const SparseKvPushInputs& tensor_args,
     uint32_t num_devices,
     const PacketShape& shape,
@@ -161,8 +162,14 @@ std::vector<uint32_t> writer_compile_args(
     const tt::tt_fabric::FabricMuxConfig& mux) {
     const uint32_t page_bytes = tensor_args.output_tensor.buffer()->aligned_page_size();
     std::vector<uint32_t> ct = {
-        page_bytes, num_devices, layout.num_senders(), shape.pages_per_packet * page_bytes, layout.links};
+        page_bytes,
+        num_devices,
+        layout.num_senders(),
+        shape.pages_per_packet * page_bytes,
+        layout.links,
+        PlanTableLayout::make(params.max_rows, params.stripe_chunk).pages};
     tt::tt_metal::TensorAccessorArgs(tensor_args.output_tensor.buffer()).append_to(ct);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.table.buffer()).append_to(ct);
     ttnn::ccl::fabric_mux_connection_ct_args(
         kSendersPerChannel, tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL, mux, ct);
     return ct;
@@ -302,13 +309,14 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     auto writer = data_movement_kernel(
         kdir + "sparse_push_writer.cpp",
         layout.sender_range,
-        writer_compile_args(tensor_args, num_devices, shape, layout, mux),
+        writer_compile_args(params, tensor_args, num_devices, shape, layout, mux),
         defines,
         tt::tt_metal::WriterConfigDescriptor{});
     tt::tt_metal::KernelDescriptor::RTArgList writer_common;
     writer_common.push_back(tensor_args.output_tensor.buffer());
     writer_common.push_back(static_cast<uint32_t>(params.ready_semaphore->address()));  // smuggled-rta-ok: semaphore
     writer_common.push_back(static_cast<uint32_t>(params.done_semaphore->address()));   // smuggled-rta-ok: same
+    writer_common.push_back(tensor_args.table.buffer());
     writer.emplace_common_runtime_args(writer_common);
 
     auto mux_kernel = data_movement_kernel(
@@ -367,6 +375,7 @@ void SparseKvPushProgramFactory::override_runtime_arguments(
     }
     writer[1] = params.ready_semaphore->address();
     writer[2] = params.done_semaphore->address();
+    writer[3] = tensor_args.table.buffer()->address();
 }
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push

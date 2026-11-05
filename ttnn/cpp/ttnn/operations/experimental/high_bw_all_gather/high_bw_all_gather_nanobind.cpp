@@ -95,6 +95,10 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 gathered_slab_global: Block-cyclic slab width in gathered-dim elements
                     (``chunk_local * num_devices``). Required with ``gathered_prefix_tensor`` and hashed,
                     being structural rather than per-chunk.
+                gathered_active_below: With ``gathered_prefix_tensor``: copy nothing when the chunk start is at
+                    or above this (0: always copy). Each rank's rows then land at ``rank * slot``, where the slot is
+                    the largest extent below the threshold (whole slabs) / num_devices, and ``output_tensor`` may be
+                    any length that holds every slot. Hashed.
                 ready_semaphore: Optional caller-owned persistent startup semaphore. Must be
                     supplied together with ``data_valid_semaphore`` and initialized to zero on
                     the complete worker-core restriction before the first call.
@@ -118,6 +122,7 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("batch_slot_layer_idx") = 0,
         nb::arg("gathered_prefix_tensor") = nb::none(),
         nb::arg("gathered_slab_global") = 0,
+        nb::arg("gathered_active_below") = 0,
         nb::arg("ready_semaphore") = nb::none(),
         nb::arg("data_valid_semaphore") = nb::none());
 }
