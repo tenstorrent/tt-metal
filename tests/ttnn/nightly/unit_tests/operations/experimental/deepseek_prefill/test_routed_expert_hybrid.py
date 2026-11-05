@@ -14,8 +14,6 @@ ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD, read the way tt_prefill_block reads it, so
 band the shipped config actually routes that token count to -- `count <= threshold` to
 moe_fused_swiglu, the rest to unified_routed_expert_moe. Models that ship no threshold are absent:
 with none, TtRoutedExpert is single-op and test_single_routed_expert already covers it.
-
-The measured crossover the thresholds encode is gated in test_routed_expert_crossover_perf.py.
 """
 
 from typing import Optional

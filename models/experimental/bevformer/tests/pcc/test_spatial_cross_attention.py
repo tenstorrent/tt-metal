@@ -8,6 +8,8 @@ import torch
 import ttnn
 import pytest
 
+from models.experimental.bevformer.tt import tt_common
+from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention
 from models.experimental.bevformer.tt.tt_spatial_cross_attention import (
     SCARebatchPlanner,
     TTSpatialCrossAttention,
@@ -54,8 +56,11 @@ pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
         # across cameras differently and pads the rebatch differently.
         ("carla_base", 1, 100, 100, 0.998, 0.04, 1.3, 0.5, (), None),  # CARLA base model
         ("nuscenes_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 1),), None),  # bs=2, blind cam in one item
+        # BEVFormer-small's camera level and BEV grid at bs=2: the grouped softmax.
+        ("nuscenes_small_upstream", 2, 150, 150, 0.998, 0.04, 1.3, 0.5, (), None),
         ("nuscenes_base", 1, 30, 30, 0.998, 0.04, 1.3, 0.5, "all", None),  # max_len == 0: residual-only return
-        ("nuscenes_base", 1, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 0),), 32),  # max_len == rebatch_len: no padding
+        # max_len at the tile edge: the extra row still leaves the padding row unfilled slots read.
+        ("nuscenes_base", 1, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 0),), 32),
         # Off: a grid size between the 30x30 and 100x100 cases, no distinct path.
         # ("nuscenes_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5, (), None),  # NuScenes base model - 50x50 BEV grid
     ],
@@ -339,16 +344,15 @@ def upload_frame(mask, device, generator):
 
 def check_plan(plan, mask, points):
     """Assert ``plan`` routes every row as the host build at the plan's own ``rebatch_len``; padded
-    rows may hold anything a mask selects away."""
+    rows may hold anything, except the last of each camera, which the attention zeroes."""
     num_cams, bs, num_queries, _ = mask.shape
     rebatch_len = plan.rebatch_len
     expected = host_plan(mask, rebatch_len)
     assert int(expected["num_valid"].max()) < rebatch_len, "the plan holds fewer rows than a camera sees"
-    assert plan.num_valid_queries == tuple(expected["num_valid"].tolist())
+    assert plan.num_valid_queries.dtype == ttnn.uint32
+    assert ttnn.to_torch(plan.num_valid_queries).tolist() == expected["num_valid"].flatten().tolist()
 
-    row_mask = ttnn.to_torch(plan.row_mask).flatten().view(bs * num_cams, rebatch_len)
     expected_rows = torch.arange(rebatch_len) < expected["num_valid"].view(-1, 1)
-    assert torch.equal(row_mask.bool(), expected_rows)
 
     # Padded rows gather some query of their own sample; which one is not part of the plan.
     query_index = ttnn.to_torch(plan.query_index).flatten().to(torch.int64).view(bs * num_cams, rebatch_len)
@@ -362,15 +366,22 @@ def check_plan(plan, mask, points):
     assert torch.equal(ttnn.to_torch(plan.count).flatten().to(torch.int64), expected["count"].flatten())
 
     # Filled slots point at exactly the host's row; unfilled ones, including slots past this frame's
-    # most cameras per query, at a padded row.
+    # most cameras per query, at the last row of camera q % num_cams of their own sample.
     assert len(plan.inverse_index) >= expected["max_cameras"]
-    padded = ~row_mask.flatten().bool()
+    unfilled_row = (
+        (torch.arange(bs).view(bs, 1) * num_cams + torch.arange(num_queries).view(1, num_queries) % num_cams)
+        * rebatch_len
+        + rebatch_len
+        - 1
+    )
     for slot, index in enumerate(plan.inverse_index):
         rows = ttnn.to_torch(index).flatten().to(torch.int64).view(bs, num_queries)
         want = expected["inverse"][slot] if slot < expected["max_cameras"] else torch.full_like(rows, -1)
         filled = want >= 0
         assert torch.equal(rows[filled], want[filled]), f"slot {slot} routes a contribution to the wrong row"
-        assert torch.all(padded[rows[~filled]]), f"slot {slot} reads a computed row for an unfilled slot"
+        assert torch.equal(
+            rows[~filled], unfilled_row[~filled]
+        ), f"slot {slot} reads the wrong row for an unfilled slot"
 
     # The gathered reference points are the compacted queries' own, clamped as upstream.
     gathered = ttnn.to_torch(plan.reference_points_batched).float()
@@ -453,3 +464,59 @@ def test_rebatch_plan_over_a_sequence(device, bs):
     # 607 outgrows ceil(600 * 1.01) = 606, and 650 outgrows ceil(607 * 1.01) = 614.
     assert capacity == math.ceil(650 * 1.01)
     assert reallocations >= 2
+
+
+@pytest.mark.parametrize("config_name", ["nuscenes_base", "nuscenes_small_upstream"])
+def test_spatial_cross_attention_glue_intermediates_in_dram(device, monkeypatch, config_name):
+    """The 100x100 case with every group of intermediates around the fused op in DRAM, as
+    ``tt_common.l1_if_fits`` places them when they do not fit L1; for small's camera level, the
+    grouped softmax in DRAM. Where the fused op stages its own value is decided apart, by
+    ``value_memory`` (``test_fused_msda.py``)."""
+    monkeypatch.setattr(tt_common, "L1_INTERMEDIATE_SHARE", 0.0)
+    test_spatial_cross_attention_forward(
+        device, config_name, 1, 100, 100, 0.999, 0.04, 1.3, 0.5, blank_cams=(), valid_per_pair=None, seed=0
+    )
+
+
+@pytest.mark.parametrize(
+    "config_name, batch_size, bev_h, bev_w, blank_cams",
+    [
+        ("nuscenes_base", 1, 100, 100, ()),
+        ("nuscenes_base", 2, 30, 30, ((2, 1),)),
+        ("nuscenes_small_upstream", 1, 100, 100, ()),
+    ],
+)
+def test_spatial_cross_attention_ignores_unwritten_padding(
+    device, monkeypatch, config_name, batch_size, bev_h, bev_w, blank_cams
+):
+    """MSDA leaves each camera's rows past its valid count unwritten. Fill them with NaN: the
+    aggregation zeroes every camera's last row and routes every unfilled slot there, so no NaN may
+    reach the output, for each sample of the batch."""
+    original = TTMSDeformableAttention.forward
+
+    def poisoned(self, *args, **kwargs):
+        out = original(self, *args, **kwargs)
+        counts = ttnn.to_torch(kwargs["num_valid_queries_tensor"]).flatten().to(torch.int64)
+        rows = ttnn.to_torch(out)
+        assert rows.shape[0] == counts.numel(), "one valid count per camera row block"
+        for block, count in enumerate(counts.tolist()):
+            rows[block, count:] = float("nan")
+        return ttnn.from_torch(
+            rows, dtype=out.dtype, layout=out.layout, device=self.device, memory_config=out.memory_config()
+        )
+
+    monkeypatch.setattr(TTMSDeformableAttention, "forward", poisoned)
+    test_spatial_cross_attention_forward(
+        device,
+        config_name,
+        batch_size,
+        bev_h,
+        bev_w,
+        0.998,
+        0.04,
+        1.3,
+        0.5,
+        blank_cams=blank_cams,
+        valid_per_pair=None,
+        seed=0,
+    )
