@@ -53,6 +53,23 @@ CQ_OPS = 0
 CQ_INPUT = 1
 
 
+# The images are one tensor per camera; each step below goes over all of them.
+
+
+def _to_device(host_images, device):
+    return [ttnn.to_device(image, device, memory_config=image.memory_config()) for image in host_images]
+
+
+def _write(host_images, images, cq_id):
+    for host, image in zip(host_images, images, strict=True):
+        ttnn.copy_host_to_device_tensor(host, image, cq_id=cq_id)
+
+
+def _copy(sources, images):
+    for source, image in zip(sources, images, strict=True):
+        ttnn.copy(source, image)
+
+
 class TTBEVFormerTrace:
     """Runs a :class:`TTBEVFormer` frame by frame from traces, taking over a live run's state.
 
@@ -70,8 +87,9 @@ class TTBEVFormerTrace:
                 previous BEV, so that every program the traces record is compiled (the first frame
                 skips the temporal path) and the planner is sized.
             device: The device the model runs on, opened with a trace region.
-            host_image: A host tensor shaped like the model's image input, uploaded once to make
-                the image buffer, and with two command queues the staging buffer.
+            host_image: Host tensors laid out like the model's image input, one per camera,
+                uploaded once to make the image buffers, and with two command queues the staging
+                buffers.
             frame: The live run's :class:`PerceptionFrame`, whose buffers the traces read.
             prev_bev: The BEV the next frame reads as its previous one. The traces read and refill
                 this buffer.
@@ -86,9 +104,9 @@ class TTBEVFormerTrace:
         self.device = device
         self.planner = model.planner
         self.score_threshold = score_threshold
-        self.image = ttnn.to_device(host_image, device)
-        # Allocated before any capture, so no trace's intermediates can sit on it.
-        self.staging = ttnn.to_device(host_image, device) if num_command_queues == 2 else None
+        self.image = _to_device(host_image, device)
+        # Allocated before any capture, so no trace's intermediates can sit on them.
+        self.staging = _to_device(host_image, device) if num_command_queues == 2 else None
         # Whether an upload() awaits its frame, and with two queues its write's event.
         self._image_pending = False
         self._image_written = None
@@ -99,7 +117,7 @@ class TTBEVFormerTrace:
             except RuntimeError as error:
                 raise ValueError("num_command_queues=2 needs a device opened with num_command_queues=2") from error
             # Compiled outside the captures, as every frame runs it live.
-            ttnn.copy(self.staging, self.image)
+            _copy(self.staging, self.image)
             self._image_read = ttnn.record_event(device, CQ_OPS)
         self.frame = frame
         self.prev_bev = prev_bev
@@ -128,17 +146,17 @@ class TTBEVFormerTrace:
         return self._generation != self.planner.generation
 
     def upload(self, host_image):
-        """Write a frame's images, a host tensor in the image buffer's layout: exactly once per
+        """Write a frame's images, host tensors in the image buffers' layout: exactly once per
         frame, before its :meth:`__call__` and after the previous frame's. With two command queues
         the write goes to queue 1 and overlaps whatever the device still runs, so a pipelined
         caller uploads the next frame's images right after queuing this frame."""
         assert not self._image_pending, "run the uploaded frame before uploading the next"
         self._image_pending = True
         if self.staging is None:
-            ttnn.copy_host_to_device_tensor(host_image, self.image, cq_id=CQ_OPS)
+            _write(host_image, self.image, CQ_OPS)
             return
         ttnn.wait_for_event(CQ_INPUT, self._image_read)
-        ttnn.copy_host_to_device_tensor(host_image, self.staging, cq_id=CQ_INPUT)
+        _write(host_image, self.staging, CQ_INPUT)
         self._image_written = ttnn.record_event(self.device, CQ_INPUT)
 
     def _take_image(self):
@@ -149,7 +167,7 @@ class TTBEVFormerTrace:
         if self.staging is None:
             return
         ttnn.wait_for_event(CQ_OPS, self._image_written)
-        ttnn.copy(self.staging, self.image)
+        _copy(self.staging, self.image)
         self._image_read = ttnn.record_event(self.device, CQ_OPS)
 
     def __call__(self, img_metas, host_frame=None):

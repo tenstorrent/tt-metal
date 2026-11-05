@@ -7,6 +7,8 @@ layer3 and layer4, or ResNet50 without one, as ``model_config`` selects.
 Each BatchNorm is already folded into the conv before it.
 """
 
+import math
+
 import ttnn
 from models.experimental.bevformer.tt.tt_common import (
     TTConv2D,
@@ -270,9 +272,9 @@ class TTResLayer:
         """Consecutive per-camera ``layers`` with one group size on the DRAM batch ``x``, a group of
         cameras at a time: its rows go into L1, pass through every block of every layer there, and
         the last layer's output is written back into one DRAM batch. ``group_input``, given a group's
-        index, returns its input already in L1 instead. Apart from that output, DRAM sees only a
-        whole first block, a group whose rows start inside a tile row (``slice_group``) and a DCN
-        without a sharded input.
+        index, returns its input already in L1 instead, and ``x`` is then None. Apart from that
+        output, DRAM sees only a whole first block, a group whose rows start inside a tile row
+        (``slice_group``) and a DCN without a sharded input.
 
         Each group writes its rows straight into the batch (``slice_write``) rather than the groups
         being concatenated afterwards, which would copy the whole batch once more. A group whose rows
@@ -904,11 +906,12 @@ class TTResNet:
     ``block_sharded_stages`` lists the layers whose non-DCN conv2s, and conv2d downsamples, are
     block sharded, ``fp32_acc_stages`` the layers whose convs accumulate in an
     fp32 destination register (see TTBottleneck), and ``dcn_sharded_input_stages`` the layers
-    whose DCNs take a height-sharded L1 input (TTModulatedDeformConv2dPack). The stem conv reads its
-    DRAM input in ``stem_conv_height_slices`` height slices, and the max pool after it, when layer1
-    runs on the whole batch, in ``stem_maxpool_height_slices``. ``stem_act_block_h`` and
-    ``conv2_act_block_h`` are the stem conv's and the whole-batch non-DCN conv2s' act_block_h
-    overrides, None for conv2d's own (a per-camera conv2 sizes its own,
+    whose DCNs take a height-sharded L1 input (TTModulatedDeformConv2dPack). The stem runs in L1 one
+    camera at a time, each camera straight into layer1, so layer1 runs one camera at a time
+    (``camera_groups[0] == 1``); each camera's image is its own DRAM tensor
+    (``camera_memory_config``).
+    ``stem_act_block_h`` and ``conv2_act_block_h`` are the stem conv's and the whole-batch non-DCN
+    conv2s' act_block_h overrides, None for conv2d's own (a per-camera conv2 sizes its own,
     TTCameraBottleneck.conv2_act_block_h), and ``weights_dtype`` the convs' weight dtype.
     ``model_config.tt_resnet_kwargs`` gives the configured variant's values, and
     ``model_config.RESNET_KWARGS["out_indices"]`` its ``out_indices``.
@@ -920,29 +923,9 @@ class TTResNet:
         conv_args, conv_pth = params.conv_args, params["res_model"]
         stage_config = dict(params.tt_kwargs)
         stem_act_block_h = stage_config.pop("stem_act_block_h")
-        stem_conv_height_slices = stage_config.pop("stem_conv_height_slices")
-        stem_maxpool_height_slices = stage_config.pop("stem_maxpool_height_slices")
         weights_dtype = stage_config["weights_dtype"]
         self.out_indices = out_indices
         self.maxpool_args = conv_args.maxpool
-
-        self.conv1 = TTConv2D(
-            conv_args.conv1,
-            conv_pth.conv1,
-            device=device,
-            weights_dtype=weights_dtype,
-            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-            act_block_h=stem_act_block_h,
-            dealloc_act=True,
-            dram_activation=True,
-            dram_conv_slices=stem_conv_height_slices,
-            dram_height_slices=True,
-            input_dtype=ttnn.bfloat16,
-            input_layout=ttnn.TILE_LAYOUT,
-        )
-        self.maxpool_slice_config = ttnn.Op2DSliceConfig(
-            slice_type=ttnn.Op2DDRAMSliceHeight, num_slices=stem_maxpool_height_slices
-        )
 
         # The max pool emits TILE: layer1's first block feeds its input to two linears, conv1 and
         # the downsample, which would each tilize a ROW_MAJOR one. Each layer then takes the layout
@@ -966,6 +949,27 @@ class TTResNet:
             layer_input_layout = res_layer.output_layout
             if i in out_indices:
                 self.output_dtypes.append(layer_input_dtype)
+
+        first = self.res_layers[0]
+        assert first.cameras == 1 and first.whole_first_block is None, "the stem runs with layer1, one camera at a time"
+        self.stem_input_memory_config = self.stem_hwc_memory_config(conv_args.conv1, device)
+        stem_conv = _for_cameras(conv_args.conv1, 1)
+        stem_conv["in_channels"] = self.stem_hwc_channels(stem_conv.in_channels)
+        self.conv1 = TTConv2D(
+            stem_conv,
+            conv_pth.conv1,
+            device=device,
+            weights_dtype=weights_dtype,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            act_block_h=stem_act_block_h,
+            dealloc_act=True,
+            input_dtype=ttnn.bfloat16,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            input_memory_config=self.stem_input_memory_config,
+            # conv2d would reshard convert_to_hwc's shards to its own split of the output; on
+            # these, it skips the copy.
+            reshard_input=False,
+        )
 
     @staticmethod
     def layer_kwargs(
@@ -1002,69 +1006,70 @@ class TTResNet:
         layer = TTResNet.layer_kwargs(i, dram_activation_stages)
         return TTBottleneck.dram_convs(layer["dram_activation"], layer["dram_input"] and j == 0)
 
-    def __call__(self, x):
-        """``x`` the images, ``(N, 3, H, W)`` bfloat16 ROW_MAJOR in DRAM, as torch lays them out."""
-        signpost(header="TTNN ResNet Forward Start")
-        signpost(header="ResNet Stem Start")
-        # The stem conv reads its input through conv2d's DRAM slicing, which fetches a ROW_MAJOR
-        # tensor one pixel at a time, millions of reads whatever the channel count; a TILE input is
-        # read in tiles. Tilizing NCHW, whose rows are image rows, is cheap; NCHW goes to NHWC
-        # already tiled, by two transposes, NHCW then NHWC, and its (1, 1, N*H*W, 3) view is free as
-        # W is a tile multiple.
-        n, c, h, w = x.shape
-        assert x.layout == ttnn.ROW_MAJOR_LAYOUT, f"the images come ROW_MAJOR, got {x.layout}"
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        nhcw = ttnn.transpose(x, 1, 2)
-        ttnn.deallocate(x)
-        nhwc = ttnn.transpose(nhcw, 2, 3)
-        ttnn.deallocate(nhcw)
-        x = ttnn.reshape(nhwc, (1, 1, n * h * w, c))
-        x, out_h, out_w = self.conv1(x)
-        first = self.res_layers[0]
-        if first.cameras == 1 and first.whole_first_block is None:
-            # layer1 runs per camera: each camera's conv output is pooled in L1 and goes straight
-            # into layer1's first block, so the pooled batch never reaches DRAM.
-            x = ttnn.reshape(x, (1, 1, n * out_h * out_w, x.shape[-1]))
-            signpost(header="ResNet Stem End")
-            return self._run_layers(x, group_input=lambda camera: self._pool_camera(x, camera, out_h, out_w))
-        pool = self.maxpool_args
-        x = ttnn.max_pool2d(
-            input_tensor=x,
-            batch_size=self.conv1.batch_size,
-            input_h=out_h,
-            input_w=out_w,
-            channels=x.shape[3],
-            kernel_size=[pool.kernel_size, pool.kernel_size],
-            stride=[pool.stride, pool.stride],
-            padding=[pool.padding, pool.padding],
-            dilation=[pool.dilation, pool.dilation],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ceil_mode=False,
-            dram_slice_config=self.maxpool_slice_config,
-            output_layout=ttnn.TILE_LAYOUT,
-        )
-        # The pool writes NHWC tiles with its rows padded to whole tiles; flattening them copies, so it
-        # happens once here rather than in both of layer1's first linears.
-        x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[-1]))
-        signpost(header="ResNet Stem End")
-        return self._run_layers(x)
+    @staticmethod
+    def stem_hwc_channels(channels):
+        """The images' ``channels`` as convert_to_hwc pads each bfloat16 pixel's: to the L1
+        alignment. The stem conv's weights are zero-padded to as many (``create_resnet_parameters``)."""
+        per_row = ttnn.get_l1_alignment() // 2
+        return math.ceil(channels / per_row) * per_row
 
-    def _pool_camera(self, x, camera, height, width):
-        """Camera ``camera`` of the stem conv's ``height x width`` DRAM output ``x``, max pooled in L1
-        into layer1's first block's layout."""
+    @staticmethod
+    def camera_memory_config(device, channels, height, width):
+        """One camera's ``(1, 1, channels, height * width)`` image as TTResNet reads it: width
+        sharded over the most DRAM banks that split it evenly, as convert_to_hwc takes it and as
+        the host writes a sharded tensor correctly."""
+        pixels = height * width
+        banks = largest_divisor(pixels, device.dram_grid_size().x)
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))}),
+                [channels, pixels // banks],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+    @classmethod
+    def stem_hwc_memory_config(cls, conv, device):
+        """convert_to_hwc's output for one camera of the stem conv ``conv``'s input: height sharded
+        in L1 over the most cores that split it evenly in whole tiles, as convert_to_hwc takes it."""
+        rows = conv.input_height * conv.input_width
+        grid = device.compute_with_storage_grid_size()
+        assert rows % ttnn.TILE_SIZE == 0, f"convert_to_hwc shards {rows} pixels in whole tiles"
+        cores = largest_divisor(rows // ttnn.TILE_SIZE, grid.x * grid.y)
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.num_cores_to_corerangeset(cores, grid, True),
+                (rows // cores, cls.stem_hwc_channels(conv.in_channels)),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+    def __call__(self, images):
+        """``images`` one tensor per camera, each ``(1, 1, 3, H * W)`` bfloat16 ROW_MAJOR in DRAM as
+        ``camera_memory_config`` lays it out; they stay the caller's."""
+        signpost(header="TTNN ResNet Forward Start")
+        assert len(images) == self.res_layers[0].batch_size, f"one image per camera, got {len(images)}"
+        return self._run_layers(None, group_input=lambda camera: self._stem_camera(images[camera]))
+
+    def _stem_camera(self, image):
+        """One camera's ``image`` through the stem in L1, into layer1's first block's layout."""
+        hwc = ttnn.experimental.convert_to_hwc(image, memory_config=self.stem_input_memory_config, dtype=ttnn.bfloat16)
+        y, height, width = self.conv1(hwc)
+        # The conv's output sits wherever L1 had room among its buffers; at the top of the freed L1
+        # it leaves the pool's halo room below it.
+        y = ttnn.reallocate(y)
         pool = self.maxpool_args
-        channels = x.shape[-1]
-        rows = height * width
-        device = self.conv1.device
-        sharded = grid_height_sharded(device, grid_shard_tiles(device, rows), channels)
-        image = ttnn.slice(x, [0, 0, camera * rows, 0], [1, 1, (camera + 1) * rows, channels], memory_config=sharded)
         # The input is freed once the halo has read it, which leaves the pool room for its output.
         pooled = ttnn.max_pool2d(
-            input_tensor=pool_rows(image),
+            input_tensor=pool_rows(y),
             batch_size=1,
             input_h=height,
             input_w=width,
-            channels=channels,
+            channels=y.shape[-1],
             kernel_size=[pool.kernel_size, pool.kernel_size],
             stride=[pool.stride, pool.stride],
             padding=[pool.padding, pool.padding],
@@ -1089,9 +1094,9 @@ class TTResNet:
         block = layer.whole_first_block if layer.cameras is not None else layer.layer[0]
         return block.conv1 if isinstance(block, TTBottleneck) and block.shared_subsample else None
 
-    def _run_layers(self, x, group_input=None):
-        """The layers on the stem's output ``x``; ``group_input`` feeds the first per-camera run
-        instead (TTResLayer.run_per_camera)."""
+    def _run_layers(self, x, group_input):
+        """The layers, ``group_input`` feeding the first, per-camera, run (TTResLayer.run_per_camera)
+        in place of a DRAM input ``x``."""
         outs = []
         subsample = None
         i = 0
@@ -1108,8 +1113,10 @@ class TTResNet:
                 and self.res_layers[j + 1].whole_first_block is None
             ):
                 j += 1
-            # A run of chained layers is one region, named by its span.
-            region = f"ResNet Layer{i + 1}" if i == j else f"ResNet Layer{i + 1}-{j + 1}"
+            # A run of chained layers is one region, named by its span; the stem runs per camera
+            # inside the first.
+            span = f"Layer{i + 1}" if i == j else f"Layer{i + 1}-{j + 1}"
+            region = f"ResNet {'Stem-' if i == 0 else ''}{span}"
             signpost(header=f"{region} Start")
             next_conv1 = self._shared_subsample_conv1(j + 1) if cameras is not None else None
             if cameras is not None:
