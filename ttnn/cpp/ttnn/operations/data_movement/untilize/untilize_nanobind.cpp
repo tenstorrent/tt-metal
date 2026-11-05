@@ -64,6 +64,10 @@ void bind_untilize(nb::module_& mod) {
             Verification only: runs the native untilize prim unconditionally. Not part of the ttnn API;
             use ttnn.untilize, which selects a prim on its own. `runtime_rows` makes the multi-core
             interleaved program derive its per-core rows on device, so one program serves every height.
+            It has no effect on the other prims (a padded input goes through untilize_with_unpadding, a
+            sharded input and a height the single-core / L1 rules route elsewhere keep their own programs),
+            and a rank-4 input whose upper dims change still compiles per shape: extra programs, never a
+            wrong result.
         )doc");
 
     mod.def(
