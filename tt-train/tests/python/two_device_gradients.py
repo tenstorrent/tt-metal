@@ -29,8 +29,8 @@ def make_gradients(rows: int, cols: int, seed: int, devices: int = 2) -> np.ndar
 
 
 def exact_mean(values: np.ndarray) -> np.ndarray:
-    """bf16 of the exact mean of the two devices' values: what a perfect reduction returns."""
-    return to_bf16((values.astype(np.float64).sum(axis=0, keepdims=True) / 2.0).astype(np.float32))
+    """bf16 of the exact mean of the devices' values (stacked on dim 0): what a perfect reduction returns."""
+    return to_bf16(values.astype(np.float64).mean(axis=0, keepdims=True).astype(np.float32))
 
 
 def device():
@@ -50,7 +50,7 @@ def one_parameter(gradient):
 
 
 def per_device_tensor(values: np.ndarray):
-    """A bf16 tensor on a ``[1, 2]`` mesh whose copy on device i is ``values[i]``."""
+    """A bf16 tensor on a ``[1, N]`` mesh whose copy on device i is ``values[i]``."""
     mapper = ttnn.create_mesh_mapper(
         device(), ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(0)])
     )
@@ -61,3 +61,21 @@ def per_device(tensor) -> np.ndarray:
     """``tensor`` read back with device i's copy at index i."""
     composer = ttnn.create_mesh_composer(device(), ttnn.MeshComposerConfig([1, 0]))
     return ttml.autograd.create_tensor(tensor).to_numpy(ttnn.DataType.FLOAT32, composer=composer)
+
+
+def device_operations(call) -> list:
+    """The device operations ``call`` runs, in order, recorded with ttnn's graph capture."""
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        call()
+    finally:
+        captured = ttnn.graph.end_graph_capture()
+    return [name for name in ttnn.graph.extract_calltrace(captured) if name.endswith("DeviceOperation")]
+
+
+def divides_before_gathering(operations: list) -> bool:
+    """Whether a sum divides by the device count before an all-gather, as the fp32 reduce-scatter route does so that its
+    all-gather carries bf16; ttnn's all_reduce divides after its sum is complete (as the C++ route test checks)."""
+    if "BinaryNgDeviceOperation" not in operations or "AllGatherAsyncDeviceOperation" not in operations:
+        return False
+    return operations.index("BinaryNgDeviceOperation") < operations.index("AllGatherAsyncDeviceOperation")

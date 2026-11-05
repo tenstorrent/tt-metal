@@ -90,6 +90,8 @@ _MGD_DIR = os.path.join(_TTML_ROOT, "configs", "mgd")
 _BUNDLED_MGD = {
     ("blackhole", (1, 2)): "bh_1_2_line_line.textproto",
     ("blackhole", (2, 2)): "bh_2_2_line_line.textproto",
+    # A ring in X: the (1, 4) fabric the 4-chip QuietBox runs a reduce-scatter on.
+    ("blackhole", (1, 4)): "bh_1_4_line_ring.textproto",
     # The galaxy fabric is a torus in X; a LINE/LINE descriptor faults with SIGBUS.
     ("blackhole", (8, 4)): "bh_galaxy_8_4_torus_x.textproto",
 }
