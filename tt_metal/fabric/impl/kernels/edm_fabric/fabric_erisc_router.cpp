@@ -2657,7 +2657,9 @@ __attribute__((optimize("Os"))) void initialize_state_for_txq1_active_mode() {
         reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)[i] = 0;
         reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counters_base_address)[i] = 0;
     }
+#if !defined(ARCH_QUASAR)  // Keraunos has no TX-queue accept-ahead setting (CM-061).
     eth_txq_reg_write(receiver_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+#endif
 }
 __attribute__((optimize("Os"))) void initialize_state_for_txq1_active_mode_sender_side() {
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
@@ -2727,7 +2729,9 @@ void kernel_main() {
     // Initialize fabric telemetry early to ensure valid values before router starts
     initialize_fabric_telemetry();
 
+#if !defined(ARCH_QUASAR)  // Keraunos has no TX-queue accept-ahead setting (CM-061).
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+#endif
     asm volatile("nop");
     static_assert(
         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,
