@@ -14,8 +14,10 @@
 
 #include <array>
 #include <core/xtensor_utils.hpp>
+#include <optional>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-umd-workload/cluster.hpp>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/socket_manager.hpp"
@@ -209,16 +211,18 @@ TEST_F(GalaxyRingShiftTest, BackwardBig) {
         16, 1024, 8192, /*cluster_axis=*/1, /*shard_dim=*/3, RingShiftDirection::Forward, /*test_backward_grad=*/true);
 }
 
-// Back-to-back shifts of two tensors in opposite directions with no host synchronization in between, the way the
-// ring attention loop issues them: the socket FIFO state has to carry over from one shift to the next on device,
-// and both directions (separate sockets) are in flight at once. Only the final values are read back.
+// Back-to-back shifts with no host synchronization in between, the way the ring attention loop issues them: the
+// socket FIFO state has to carry over from one shift to the next on device. With both_directions a second tensor is
+// shifted the other way at the same time, so both directions (separate sockets) are in flight at once. Only the
+// final values are read back.
 static void TestChainedRingShifts(
     const size_t batch,
     const size_t seq,
     const size_t hidden,
     const uint32_t cluster_axis,
     const uint32_t shard_dim,
-    const uint32_t num_shifts) {
+    const uint32_t num_shifts,
+    const bool both_directions = true) {
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
@@ -235,19 +239,28 @@ static void TestChainedRingShifts(
         return core::from_xtensor<float, ttnn::DataType::BFLOAT16>(data, device, ttnn::Layout::TILE, mapper.get());
     };
     const ttnn::Tensor a_in = make_input();
-    const ttnn::Tensor b_in = make_input();
     const auto a_orig = core::to_xtensor<float>(a_in, core::IdentityComposer{});
-    const auto b_orig = core::to_xtensor<float>(b_in, core::IdentityComposer{});
+    std::optional<ttnn::Tensor> b_in;
+    std::vector<xt::xarray<float>> b_orig;
+    if (both_directions) {
+        b_in = make_input();
+        b_orig = core::to_xtensor<float>(*b_in, core::IdentityComposer{});
+    }
 
     ttnn::Tensor a = a_in;
-    ttnn::Tensor b = b_in;
+    std::optional<ttnn::Tensor> b = b_in;
     for (uint32_t i = 0; i < num_shifts; ++i) {
         a = ttnn_fixed::distributed::ring_shift(a, cluster_axis, RingShiftDirection::Backward);
-        b = ttnn_fixed::distributed::ring_shift(b, cluster_axis, RingShiftDirection::Forward);
+        if (b) {
+            b = ttnn_fixed::distributed::ring_shift(*b, cluster_axis, RingShiftDirection::Forward);
+        }
     }
 
     const auto a_out = core::to_xtensor<float>(a, core::IdentityComposer{});
-    const auto b_out = core::to_xtensor<float>(b, core::IdentityComposer{});
+    std::vector<xt::xarray<float>> b_out;
+    if (b) {
+        b_out = core::to_xtensor<float>(*b, core::IdentityComposer{});
+    }
     const uint32_t k = num_shifts % ring_size;
     for (uint32_t row = 0; row < mesh_rows; ++row) {
         for (uint32_t col = 0; col < mesh_cols; ++col) {
@@ -261,8 +274,10 @@ static void TestChainedRingShifts(
             // A shift only moves data, so the values must match exactly.
             EXPECT_TRUE(xt::allclose(a_orig[source(true)], a_out[device_idx], 0.0F, 0.0F))
                 << "Backward chain mismatch on device " << device_idx;
-            EXPECT_TRUE(xt::allclose(b_orig[source(false)], b_out[device_idx], 0.0F, 0.0F))
-                << "Forward chain mismatch on device " << device_idx;
+            if (both_directions) {
+                EXPECT_TRUE(xt::allclose(b_orig[source(false)], b_out[device_idx], 0.0F, 0.0F))
+                    << "Forward chain mismatch on device " << device_idx;
+            }
         }
     }
 }
@@ -276,4 +291,18 @@ TEST_F(GalaxyRingShiftTest, ChainedShiftsAlongRowsNoHostSync) {
 TEST_F(GalaxyRingShiftTest, ChainedShiftsAlongColumnsNoHostSync) {
     // Ring of 4 on axis 1, again 4 MiB per device per tensor.
     TestChainedRingShifts(1, 8192, 1024, /*cluster_axis=*/1, /*shard_dim=*/2, /*num_shifts=*/11);
+}
+
+// The intra-mesh sockets ring_shift uses have an 80 MiB FIFO per receiver (core/distributed/socket_manager.cpp). With a
+// shard larger than that, every send fills the FIFO and has to wait inside the op until its receiver frees space,
+// the case the two-phase order in ring_shift has to keep deadlock-free now that no host sync separates the shifts.
+// 45056 x 1024 bf16 = 88 MiB per device; 3 shifts so the data ends 3 hops away and each FIFO wraps several times.
+TEST_F(GalaxyRingShiftTest, ChainedShiftsLargerThanSocketFifoAlongRows) {
+    TestChainedRingShifts(
+        1, 8 * 45056, 1024, /*cluster_axis=*/0, /*shard_dim=*/2, /*num_shifts=*/3, /*both_directions=*/false);
+}
+
+TEST_F(GalaxyRingShiftTest, ChainedShiftsLargerThanSocketFifoAlongColumns) {
+    TestChainedRingShifts(
+        1, 4 * 45056, 1024, /*cluster_axis=*/1, /*shard_dim=*/2, /*num_shifts=*/3, /*both_directions=*/false);
 }
