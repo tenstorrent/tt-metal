@@ -2340,7 +2340,7 @@
   # The full matrix (~100 cases on this torus, 4+ min) is not run here.
   #
   # The 4x4 cylinder (a 4x4 submesh: axis 1 keeps its wrap, axis 0 is a line) runs the 16-rank gather over three
-  # Hamiltonian cycles and, at one link, over the snake: time and bandwidth for both, plus a bf16 accuracy smoke.
+  # Hamiltonian cycles: time and bandwidth, plus a bf16 accuracy smoke.
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG

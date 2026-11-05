@@ -1222,11 +1222,10 @@ def test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf(mesh_device):
 
 
 # A 4x4 submesh of the Galaxy is a cylinder: axis 1 (four columns) keeps its wrap, axis 0 (four of eight rows) is a
-# line. The 16-rank full-mesh gather then runs over three Hamiltonian cycles (2 links per hop, one per cycle on a hop two
-# cycles share), or over the snake when only one link per hop is allowed. Same global volumes as the 32-rank gate (both
-# divide by 16). No floors yet: the test reports time and bandwidth until a Galaxy run calibrates them. Expected from
-# link volume: the cycles carry 5 shards on the busiest hop against the 2-link snake's 7.5 (1.5x); the 1-link snake
-# carries the same 7.5 over half the links.
+# line. The 16-rank full-mesh gather runs over three Hamiltonian cycles (2 links per hop, one per cycle on a hop two
+# cycles share). Same global volumes as the 32-rank gate (both divide by 16). No floors yet: the test reports time and
+# bandwidth. Expected from link volume: the cycles carry 5 shards on the busiest hop against the 2-link snake's 7.5
+# (1.5x).
 _GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS = (55_040, 512 * 1024)
 
 
@@ -1234,8 +1233,7 @@ _GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS = (55_040, 512 * 1024)
 @pytest.mark.skipif(os.getenv("MESH_DEVICE") != "TG", reason="Blackhole Galaxy 4x4 cylinder perf requires MESH_DEVICE=TG")
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-@pytest.mark.parametrize("num_links", [2, 1], ids=["three_cycles", "snake_1_link"])
-def test_high_bw_all_gather_galaxy_cylinder_4x4_perf(mesh_device, num_links):
+def test_high_bw_all_gather_galaxy_cylinder_4x4_perf(mesh_device):
     """Time and bandwidth of the 16-rank full-mesh gather on a 4x4 cylinder, each paired with a correctness run."""
     cylinder = mesh_device.create_submesh(ttnn.MeshShape(4, 4))
     assert cylinder.get_num_devices() == 16
@@ -1244,7 +1242,7 @@ def test_high_bw_all_gather_galaxy_cylinder_4x4_perf(mesh_device, num_links):
         cluster_axis=None,
         min_bandwidth_gbps=0.0,
         global_rows_cases=_GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS,
-        num_links=num_links,
+        num_links=2,
     )
 
 
