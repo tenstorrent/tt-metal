@@ -5,7 +5,6 @@
 
 import pytest
 from helpers.bf16_sweep import bf16_exhaustive_sweep
-from helpers.chip_architecture import ChipArchitecture
 from helpers.llk_params import ApproximationMode, MathOperation
 
 # (operation, approximation mode of the replaced instance, max ULP); max ULP 0 is an exact fit.
@@ -14,22 +13,8 @@ _BF16_EXHAUSTIVE_OPS = [
 ]
 # Boards where the op keeps its stock kernel, which this sweep does not test.
 _BF16_STOCK_BOARDS = {}
-# The stored word, per board, at each special input class where the kernel returns its stock
-# kernel's result instead of torch's; the sweep expects that word's class there.
-_BF16_STOCK_SPECIALS = {
-    MathOperation.Erfinv: {
-        ChipArchitecture.BLACKHOLE: {
-            "neg_subnormal": 0x0000,
-            "neg_zero": 0x0000,
-            "pos_subnormal": 0x0000,
-        },
-        ChipArchitecture.WORMHOLE: {
-            "neg_subnormal": 0x0000,
-            "neg_zero": 0x0000,
-            "pos_subnormal": 0x0000,
-        },
-    },
-}
+# Per board, the word stored at each special input class where the kernel returns stock's result.
+_BF16_STOCK_SPECIALS = {}
 
 
 @pytest.mark.parametrize("mathop,approx_mode,max_ulp", _BF16_EXHAUSTIVE_OPS)

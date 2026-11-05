@@ -45,9 +45,13 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
     return result;
 }
 
-bool bf16_dest_erfinv();
-template <int ITERATIONS>
-void calculate_erfinv_bf16();
+}  // namespace sfpu
+}  // namespace ckernel
+
+#include "ckernel_sfpu_erfinv_bf16.h"
+
+namespace ckernel {
+namespace sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 inline void calculate_erfinv() {
@@ -75,5 +79,3 @@ void erfinv_init() {
 
 }  // namespace sfpu
 }  // namespace ckernel
-
-#include "ckernel_sfpu_erfinv_bf16.h"

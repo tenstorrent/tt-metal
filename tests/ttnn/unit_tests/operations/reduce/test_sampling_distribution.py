@@ -191,8 +191,12 @@ def test_sampling_low_digit_reaches_the_tail(device):
     high digit alone (max 255/256) can never land there and draws the second token 0 times, and a
     low digit that merely copies the high one lands there only when hi = 255 (1/256, twice the
     expected rate). Only an independent 16-bit lattice gives the expected count, asserted within
-    4 sigma over USERS * N draws. (On Wormhole element 1 of this kernel's random tile is not a
-    draw, which is why the writer reads element 2.)"""
+    4 sigma over USERS * N draws. The writer's low digit is element 1 of the random tile, written
+    by the compute kernel's second SFPU store, so this test also catches a random tile stored under
+    a stale dest address mode (only the first store lands): on Wormhole nothing in this kernel after
+    top_k restores that mode, so a seedless draw after ttnn.manual_seed depends on rand_tile
+    programming it; on Blackhole recip_tile_init re-programs it before the next draw, so the
+    same defect would not show there."""
     gap = 6.25  # bf16-exact; P(second) = 1 / (1 + e^6.25) = 0.00193
     values = torch.full((1, 1, USERS, W), -30.0)
     values[..., 0] = 0.0

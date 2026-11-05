@@ -128,9 +128,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
     };
 
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_defines.insert({"DST_ACCUM_MODE", "1"});
-    }
     // One KernelSpec per legacy compute KernelDescriptor (full + cliff), preserving the per-group
     // block-count multiplicity across disjoint WorkUnitSpecs.
     auto make_compute = [&](const KernelSpecName& id, uint32_t per_core_block_cnt) {

@@ -44,10 +44,7 @@ struct CollectedSpecData {
     std::unordered_map<PrefetcherPipeParamName, std::vector<const DataflowBufferSpec*>> prefetcher_pipe_relays;
 
     // Scratchpad binders (derived from kernel scratchpad bindings).
-    // Tracks which kernels bind a given ScratchpadSpec. More than one may, provided their node sets
-    // are disjoint; the per-node placement census in ValidateProgramSpec enforces that (it needs the
-    // kernel node sets, derived below). A kernel binds a given scratchpad at most once (enforced
-    // during collection), so each kernel appears at most once in a spec's binder list.
+    // Tracks which kernels bind a given ScratchpadSpec.
     //
     // Invariants:
     // - Every key is a key in scratchpad_by_name.
