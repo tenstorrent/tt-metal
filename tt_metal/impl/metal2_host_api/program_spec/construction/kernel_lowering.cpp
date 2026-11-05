@@ -339,8 +339,9 @@ LoweredKernel LowerKernel(
     const NodeRangeSet& node_ranges = collected.kernel_node_set.at(kernel_spec.unique_id);
 
     // Make the local accessor name -> DFB device slot map for this kernel
-    KernelResourceBindings resource_bindings = ResolveKernelResourceBindings(kernel_spec, collected, resources);
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+    KernelResourceBindings resource_bindings =
+        ResolveKernelResourceBindings(kernel_spec, collected, resources, l1_alignment);
     for (auto& [name, handle] : resource_bindings.dfbs) {
         if (handle.llk_metadata) {
             handle.llk_metadata = resolve_llk_metadata_tile_size(*handle.llk_metadata, l1_alignment);
@@ -398,7 +399,8 @@ LoweredKernel LowerKernel(
     ScratchpadBindingsForKernel sp_bindings = ResolveScratchpadBindingsForKernel(
         kernel_spec,
         collected.scratchpad_by_name,
-        /*scratchpad_base_crta_word=*/ta_bindings.crta_layout.vararg_section_offset);
+        /*scratchpad_base_crta_word=*/ta_bindings.crta_layout.vararg_section_offset,
+        l1_alignment);
     for (auto& handle : sp_bindings.handles) {
         if (handle.llk_metadata) {
             handle.llk_metadata = resolve_llk_metadata_tile_size(*handle.llk_metadata, l1_alignment);
