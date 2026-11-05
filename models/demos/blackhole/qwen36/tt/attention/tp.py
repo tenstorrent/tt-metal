@@ -1234,7 +1234,9 @@ class TPAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def forward_prefill_paged_group(self, x, cos_cat, sin_cat, Bg, Tb, full_pts, chunk_pts, chunk_start_idx_tensor):
+    def forward_prefill_paged_group(
+        self, x, cos_cat, sin_cat, Bg, Tb, full_pts, chunk_pts, chunk_start_idx_tensor, return_gated=False
+    ):
         """Grouped short prefill of Bg rows x Tb tokens (row u = rows [u*Tb, (u+1)*Tb) of x, its own page table).
 
         Same math as Bg calls of forward_prefill_paged(x_u, cos_u, sin_u, full_pts[u], chunk_pts[u], csi) but the
@@ -1305,6 +1307,8 @@ class TPAttention:
         gated = ttnn.multiply(attn, ttnn.sigmoid(gate_flat, memory_config=_mc), memory_config=_mc)
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
+        if return_gated:  # token-parallel wo (layer.forward_tokpar): the caller all-to-alls [1, 1, S, NH*HD/tp]
+            return gated
         partial = self._wo_proj(gated, tw["wo"])
         ttnn.deallocate(gated)
         return tpc.tp_reduce_scatter(partial, self.mesh, self.tt_ccl, self.args, dim=3, memory_config=_mc)
