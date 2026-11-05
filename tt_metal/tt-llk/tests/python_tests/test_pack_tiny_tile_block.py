@@ -175,6 +175,8 @@ def test_pack_tiny_tile_block(
 ):
     if pack_mode in (3, 5) and tile_dims == (32, 32):
         pytest.skip("The dense block pack records at most eight PACRs per tile")
+    if pack_mode in (3, 5) and num_tiles < 2:
+        pytest.skip("The dense block pack takes two or more tiles")
     configuration, golden_tensor, _ = _make_config(
         tile_dims, num_tiles, formats, dest_acc, pack_mode
     )

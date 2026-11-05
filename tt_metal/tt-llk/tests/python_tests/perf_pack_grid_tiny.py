@@ -70,7 +70,7 @@ def _tiny_modes(formats, tile_dims, block_tiles, dest_index):
         and tile_dims in TINY_OLD_DIMS
     ):
         return []
-    return [1, 2, 3, 4]
+    return [1, 2, 3, 4] if block_tiles >= 2 else [1, 2, 4]
 
 
 @pytest.mark.perf
