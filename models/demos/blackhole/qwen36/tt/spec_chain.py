@@ -300,11 +300,13 @@ class ChainDevice:
         vaux_out=None,
         ring_pages=None,
         ring_windows=None,
+        ring_pages_rm=None,
     ):
         """Persistent buffers; every ``*_in`` / ``*_out`` argument binds a LIVE engine tensor (shape / dtype / layout
         checked), None allocates a standalone one. ``ring_pages`` = (fp32 TILE [B, T * G * Nv] table, G);
         ``ring_windows`` = (fp32 TILE [B, T * G * T * Nv] table, [G] uint32 RM [B, T * Nv] ring_page_idx outputs), needs
-        ``ring_pages``: see the class docstring."""
+        ``ring_pages``: see the class docstring. ``ring_pages_rm``: the same start pages as ``ring_pages`` in uint32 RM
+        [B, T * G * Nv], which QWEN36_SPEC_CHAIN_KERNEL reads."""
         import ttnn
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_words
 
@@ -317,6 +319,7 @@ class ChainDevice:
             want = ((B, (K + 1) * self.G * Nv), ttnn.float32, ttnn.TILE_LAYOUT)
             assert got == want, f"bound ring_pages: {got} != {want}"
         self.ring_windows, self.ring_idx_outs = (None, []) if ring_windows is None else ring_windows
+        self.ring_pages_rm = ring_pages_rm
         if self.ring_windows is not None:
             T = K + 1
             assert self.ring_pages is not None, "ring_windows needs ring_pages"
@@ -362,10 +365,6 @@ class ChainDevice:
         self.c_iota_h = f(torch.arange(Nv).reshape(1, Nv))
         self.c_u = f(torch.arange(B).reshape(B, 1))
         if spec_chain_kernel_enabled():
-            if self.ring_pages is not None:
-                raise ValueError(
-                    "QWEN36_SPEC_CHAIN_KERNEL=1 does not build the per-group ctrl pages of QWEN36_MAMBA_SPEC"
-                )
             from models.demos.blackhole.qwen36.tt.spec_fused_kernels import attach_chain_kernel
 
             self._kernel = attach_chain_kernel(self)

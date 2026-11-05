@@ -2228,6 +2228,8 @@ class MTPSpecEngine:
                     "chain body's exact fp32 range (2^24)"
                 )
             kw["ring_pages"] = (paged.pages_dev, paged.G)
+            if paged.pages_rm_dev is not None:  # QWEN36_SPEC_CHAIN_KERNEL
+                kw["ring_pages_rm"] = paged.pages_rm_dev
             if paged.windows_dev is not None:  # QWEN36_MAMBA_CHAIN_MOVES
                 kw["ring_windows"] = (paged.windows_dev, list(paged._idx_dev))
         Nv = int(model._vfy_Nv)
@@ -2492,7 +2494,8 @@ class MTPSpecEngine:
         self._seed_trace = self._seed_trace_bufs = None
         if not spec_join_trace_enabled():
             return
-        if not self._gdn or self._fj_mask is None or not self.fast_join:
+        paged = self._paged_state() is not None  # QWEN36_MAMBA_SPEC: the window-only seed needs no mask
+        if not self._gdn or (self._fj_mask is None and not paged) or not self.fast_join:
             logger.info("[spec_engine] join seed trace not captured: no GDN layers / mask buffer / fast join")
             return
         bad = [i for i, dn in enumerate(self._gdn) if not dn.seed_masked_ok()]
@@ -3343,12 +3346,13 @@ class MTPSpecEngine:
         logits_dev = None
         # QWEN36_MAMBA_SPEC: the eager path, which hands the bound B=1 scratch to gdn_write before it is unbound
         gkw = {} if paged is None else dict(gdn_write=lambda: paged.write_prefill(gdn_req))
-        if self.fast_prefill and self.prefill_recorded and self.recorded_prefill and paged is None:
+        if self.fast_prefill and self.prefill_recorded and self.recorded_prefill and (paged is None or self.B > 1):
             fast_kw = {} if plan is None else dict(plan=plan, mtp_prompt=mtp_prompt)
             fast_kw.update(vis_kw)
+            fast_kw.update(gkw)
             if not final:
                 fast_kw["final_row"] = False
-                fast_kw["save_end"] = save_end
+                fast_kw["save_end"] = save_end and paged is None  # the chunk end state goes to the request's block
             logits_dev = self._prefill_fast(slot, prompt_list, prompt, pt_row, Tp, _on_chunk, captured_row, **fast_kw)
         if logits_dev is None and self.B == 1 and self.prefill_recorded and self.recorded_prefill and paged is None:
             pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)  # MTP chunk fill keeps the nb-wide pt_row
@@ -3413,6 +3417,7 @@ class MTPSpecEngine:
         vision_tokens=None,
         final_row=True,
         save_end=False,
+        gdn_write=None,
     ):
         """QWEN36_SPEC_FAST_PREFILL=1 body of _prefill_row: traced prefill of one prompt on the GDN binding the traces
         were captured against (the B=1 scratch at B > 1, the decode buffers at B == 1), then the scratch -> slot write.
@@ -3432,7 +3437,10 @@ class MTPSpecEngine:
 
         ``final_row`` False (non-final chunk): the scratch is not written to the row's GDN slot and no host logits are read
         (the returned value is meaningless). ``save_end`` (with final_row False; Option B): the state after tokens[:Tp]
-        is also snapshotted into the prefix cache (no extra segment: Tp is the last segment's end)."""
+        is also snapshotted into the prefix cache (no extra segment: Tp is the last segment's end).
+
+        ``gdn_write`` (QWEN36_MAMBA_SPEC): called with the scratch still bound after the last segment, to write the state
+        into the request's vLLM block; ``plan`` then resumes from that block (its restore) and saves nothing."""
         model = self.model
         batched = self.B > 1
         if plan is None:
@@ -3494,7 +3502,9 @@ class MTPSpecEngine:
                 assert plan is not None
                 model._prefix_cache.save(prompt[0], Tp)  # the bound scratch = the state after tokens[:Tp]
                 saved.append(Tp)
-            if plan is not None:
+            if gdn_write is not None:
+                gdn_write()
+            if plan is not None and getattr(model, "_prefix_cache", None) is not None:
                 model._prefix_cache.log(Tp, -1, s0, saved)
         finally:
             self._skip_logits_read = False
@@ -4369,9 +4379,10 @@ class MTPSpecEngine:
                 # one trace replay for all layers: the mask (engine rows, as fresh_row_select) selects the fresh rows
                 # only, equal to the eager partial path (also when every active row is fresh)
                 p = self._gdn[0]._spec_win_par
-                self._stage(
-                    fresh_row_mask(fresh, B, *self._fj_mask_dims), self._fj_mask, ttnn.float32, ttnn.TILE_LAYOUT
-                )
+                if self._fj_mask is not None:
+                    self._stage(
+                        fresh_row_mask(fresh, B, *self._fj_mask_dims), self._fj_mask, ttnn.float32, ttnn.TILE_LAYOUT
+                    )
                 ttnn.execute_trace(self.mesh, self._seed_trace[p], cq_id=0, blocking=False)
                 self.join_trace_replays += 1
             else:

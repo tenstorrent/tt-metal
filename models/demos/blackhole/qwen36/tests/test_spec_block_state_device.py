@@ -82,13 +82,24 @@ def _dev_u32(device, t):
 CASES = [(op.GEOS[1], 2048, "two_pool"), (op.GEOS[0], 1024, "two_pool"), (op.GEOS[0], 2048, "k_only")]
 
 
+# the deployment's gdn_spec_step options: QWEN36_SPEC_STEP_VALUE_BLOCKS=4, QWEN36_SPEC_STEP_OPT=250 and
+# QWEN36_SPEC_STEP_NARROW_GR=1 (kernel_opts bit 1024)
+STEP_OPTS = {
+    "default": {},
+    "vb4_opt250": dict(value_blocks=4, kernel_opts=250),
+    "vb4_opt1274": dict(value_blocks=4, kernel_opts=1274),
+}
+
+
+@pytest.mark.parametrize("step_opts", list(STEP_OPTS))
 @pytest.mark.parametrize("geo_block_layout", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}_{c[2]}")
 @pytest.mark.parametrize("B,hold", [(1, ()), (4, (2,)), (8, ())])
-def test_pages_match_ring(device, geo_block_layout, B, hold):
+def test_pages_match_ring(device, geo_block_layout, B, hold, step_opts):
     g, block, layout = geo_block_layout
+    so = STEP_OPTS[step_opts]
     num_blocks = 48
     c = op.Case(device, g, B, T, seed=7 + B, hold=hold, par=B & 1, R=op.round_up32(B * T), mode=op.MODES[2])
-    out_ref, ring_ref, _, win_ref = c.snapshot(c.run())
+    out_ref, ring_ref, _, win_ref = c.snapshot(c.run(**so))
     c.reseed()
     st, dn, k, v = _state(device, g, block, num_blocks, layout)
     win = _windows(B, num_blocks, seed=B)
@@ -106,7 +117,7 @@ def test_pages_match_ring(device, geo_block_layout, B, hold):
     c.ring = dn._spec_paged.rec1
     c.ctrl = _dev_u32(device, book.ctrl_rows(c.mi, c.par, words, hold=c.hold))
     idx = _dev_u32(device, book.idx_host[0])
-    kw = {"ring_page_idx": idx}
+    kw = {"ring_page_idx": idx, **so}
     if dn._spec_paged.two_pool:
         kw["ring_pool2"] = dn._spec_paged.rec2
     o = c.run(**kw)

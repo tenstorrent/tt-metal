@@ -3978,7 +3978,7 @@ class TPGatedDeltaNet:
         nothing eager has to run first (no unpack of a packed history, no stale taps, the decode binding). The engine
         calls seed_spec_rows_select when this is False."""
         return (
-            self._spec_ring is not None
+            (self._spec_ring is not None or getattr(self, "_spec_paged", None) is not None)
             and self._rec_row_layout_ok()
             and self._conv_hist_rm is not None
             and self.B == self._decode_B
@@ -4005,8 +4005,24 @@ class TPGatedDeltaNet:
     def _seed_masked_impl(self, mask, sel):
         """The op sequence of seed_spec_rows_masked, without the host predicate (warmup compiles it with it unmet).
         Per layer, fp32 rec_state: slice, where, to_memory_config, slice_write, to_layout (taps), concat, matmul,
-        copy = 8 ops (bf16 rec_state adds one typecast)."""
-        assert self._spec_ring is not None, "seed_spec_rows_masked before prepare_spec_verify"
+        copy = 8 ops (bf16 rec_state adds one typecast). QWEN36_MAMBA_SPEC (no ring; ``mask`` None): the conv window
+        part only, 4 ops: the prefill wrote the recurrent state into the row's block."""
+        paged = getattr(self, "_spec_paged", None) is not None
+        assert paged or self._spec_ring is not None, "seed_spec_rows_masked before prepare_spec_verify"
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        if not paged:
+            self._seed_ring_masked(mask)
+        taps = self._fresh_taps_tile(route="hist")  # [B, K-1, C]
+        win = self.verify_win_cur()
+        cat = ttnn.concat([win, taps], dim=1, memory_config=mc)
+        ttnn.deallocate(taps)
+        new_win = ttnn.matmul(sel, cat, compute_kernel_config=self._cfg_onehot, memory_config=mc)
+        ttnn.deallocate(cat)
+        ttnn.copy(new_win, win)  # in place: the window buffer keeps its address
+        ttnn.deallocate(new_win)
+
+    def _seed_ring_masked(self, mask):
+        """The ring half of _seed_masked_impl: rec_state -> ring token slot 0 of the rows ``mask`` selects."""
         B, Nv, Dk, Dv = self.B, self.Nv, self.Dk, self.Dv
         T = self._spec_shape[1]
         mc = ttnn.DRAM_MEMORY_CONFIG
@@ -4025,14 +4041,6 @@ class TPGatedDeltaNet:
         ttnn.deallocate(new)
         ttnn.experimental.slice_write(sharded, ring4, [0, 0, 0, 0], [1, B * Nv, Dk, Dv], [1, 1, 1, 1])
         ttnn.deallocate(sharded)
-        taps = self._fresh_taps_tile(route="hist")  # [B, K-1, C]
-        win = self.verify_win_cur()
-        cat = ttnn.concat([win, taps], dim=1, memory_config=mc)
-        ttnn.deallocate(taps)
-        new_win = ttnn.matmul(sel, cat, compute_kernel_config=self._cfg_onehot, memory_config=mc)
-        ttnn.deallocate(cat)
-        ttnn.copy(new_win, win)  # in place: the window buffer keeps its address
-        ttnn.deallocate(new_win)
 
     def warmup_fast_seed(self, sel, mask=None):
         """Warmup only (spec engine, after prepare_spec_verify, before any capture): run seed_spec_rows_select for every
@@ -4043,7 +4051,8 @@ class TPGatedDeltaNet:
         for u in range(self.B):
             self.seed_spec_rows_select([u], sel)
         self.seed_spec_rows_select(range(self.B), sel)
-        if mask is not None and self._conv_hist_rm is not None:
+        paged = getattr(self, "_spec_paged", None) is not None
+        if (mask is not None or paged) and self._conv_hist_rm is not None:
             par = self._spec_win_par
             try:
                 for p in (0, 1) if self._spec_fused else (par,):

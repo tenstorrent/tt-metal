@@ -616,12 +616,22 @@ class SpecGdnBlockState:
             self.book.pages_cat(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
         )
         # QWEN36_MAMBA_CHAIN_MOVES: the chain body's window-page table (SpecBlockBook.windows_cat), selected by count
-        from models.demos.blackhole.qwen36.tt.tp_common import mamba_chain_moves_enabled
+        from models.demos.blackhole.qwen36.tt.tp_common import mamba_chain_moves_enabled, spec_chain_kernel_enabled
 
         self.windows_dev = None
         if mamba_chain_moves_enabled():
             self.windows_dev = ttnn.from_torch(
                 self.book.windows_cat(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
+            )
+        # QWEN36_SPEC_CHAIN_KERNEL: pages_dev's words as uint32 RM [B, T * G * Nv], the chain kernel's start-page table
+        self.pages_rm_dev = None
+        if spec_chain_kernel_enabled():
+            self.pages_rm_dev = ttnn.from_torch(
+                as_u32_words(self.book.pages_cat().to(torch.int64)),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                mesh_mapper=rep,
             )
         self._up = {}  # host copy of the last upload of pages_dev / windows_dev
         self._tables_moved = False  # the last upload held a row's chained state moves
@@ -667,6 +677,12 @@ class SpecGdnBlockState:
             ttnn.copy_host_to_device_tensor(
                 ttnn.from_torch(host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep), dev
             )
+            if name == "pages" and self.pages_rm_dev is not None:
+                words = as_u32_words(host.to(torch.int64))
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(words, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep),
+                    self.pages_rm_dev,
+                )
             self._up[name] = host
         self._tables_moved = bool(self.book.moves)
 
