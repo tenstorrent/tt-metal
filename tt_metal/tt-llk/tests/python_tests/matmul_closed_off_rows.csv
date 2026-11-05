@@ -171,3 +171,16 @@ LoFi,Float32,Float32,Float32,2,1,8,0,False,True,1,perf_matmul_grid,-1.559,-1.387
 LoFi,Float32,Bfp4_b,Bfp4_b,1,5,32,0,False,False,1,perf_matmul_grid2,0.69,-1.23,True,False,pt
 LoFi,Float32,Bfp8_b,Float32,2,2,4,0,False,False,1,perf_matmul_mix,9.25,0.5,True,False,pt
 LoFi,Float32,Bfp8_b,Float32,1,6,32,0,False,False,1,perf_matmul_mix,5.25,0.0,True,False,pt
+LoFi,Float16_b,Float16_b,Float16_b,2,1,1,0,False,True,1,perf_matmul,189.0,189.0,True,True,main
+LoFi,Float32,Float32,Float16_b,1,2,1,0,False,True,1,perf_matmul,16.5,16.5,True,True,main
+LoFi,Bfp8_b,Bfp8_b,Float16_b,2,1,1,0,False,True,1,perf_matmul,42.0,42.0,True,True,main
+LoFi,Bfp8_b,Bfp4_b,Float16_b,2,1,1,0,False,True,1,perf_matmul,40.8,40.8,True,True,main
+LoFi,Bfp4_b,Bfp8_b,Float16_b,2,1,1,0,False,True,1,perf_matmul,42.0,42.0,True,True,main
+LoFi,Bfp4_b,Bfp4_b,Float16_b,2,1,1,0,False,True,1,perf_matmul,54.0,54.0,True,True,main
+LoFi,Float32,Bfp8_b,Float16_b,2,1,1,0,False,True,1,perf_matmul,23.0,23.0,True,True,main
+LoFi,Float32,Bfp4_b,Float16_b,2,1,1,0,False,True,1,perf_matmul,43.0,43.0,True,True,main
+LoFi,Float32,Bfp4_b,Float16_b,3,2,1,0,False,True,1,perf_matmul,74.5,74.5,True,True,main
+LoFi,Float32,Bfp4_b,Bfp4_b,3,2,1,0,False,True,1,perf_matmul,55.0,55.0,True,True,main
+LoFi,Float32,Bfp4_b,Bfp4_b,5,1,1,0,False,True,1,perf_matmul,29.0,29.0,True,True,main
+LoFi,Float16_b,Bfp8_b,Float16_b,2,1,1,0,False,True,1,perf_matmul,23.0,23.0,True,True,main
+LoFi,Float16_b,Bfp4_b,Float16_b,2,1,1,0,False,True,1,perf_matmul,44.0,44.0,True,True,main
