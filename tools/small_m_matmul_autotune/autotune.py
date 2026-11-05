@@ -4,10 +4,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """AUTOTUNER for ttnn.experimental.small_m_matmul: rank a shortlist, MEASURE it, cache the winner.
 
-USER-FACING DOCUMENTATION lives at the top of the entry point that wraps this script:
-tests/ttnn/unit_tests/operations/matmul/test_small_m_matmul_autotune.py -- how to run it, the env vars, what it
-guarantees, why measuring beats a better cost formula, and a worked example. Kept in ONE place so the two
-cannot drift; what follows is only this script's own internals.
+USER-FACING DOCUMENTATION (how to run it, the flags, a worked example) lives in this directory's README.md;
+what follows is only this script's own internals.
 
 WHAT THE CACHE IS
     kTable in small_m_matmul_config.cpp. This tool emits ready-to-apply entries; apply_table.py writes them.
