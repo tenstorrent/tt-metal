@@ -5604,7 +5604,7 @@ class MTPSpecEngine:
         chain = dict(chain, lo=lo, hi=hi)
         paged = self._paged_state()
         moved = paged is not None and bool(paged.book.moves)
-        if moved:  # QWEN36_MAMBA_CHAIN_MOVES: the boundary conv write of the count that starts at a block's last position
+        if moved:  # QWEN36_MAMBA_CHAIN_MOVES: conv write of the count that starts at a block's last position
             paged.chain_boundaries(lo)
         h = self._def_enqueue(
             "s" if sampling is not None else "g", clean, start_hi, pt, active, nv_rows, args, kw, sampling, aux, chain
@@ -5790,6 +5790,9 @@ class MTPSpecEngine:
             event = ttnn.record_event(self.mesh, 0)
             if h is None:
                 h = FusedHandle(self, self._def_next_tip(), kind)
+            if audit is not None and self._paged_state() is not None:
+                # the audit runs at read time (reader thread), after later steps restaged the windows
+                audit["gdn_pages"] = self._paged_state().book.start_pages_snapshot()
             h.event, h.res_t, h.aux_t, h.dr_ts, h.ids_t, h.union, h.audit = (
                 event,
                 res_t,
@@ -6003,12 +6006,15 @@ class MTPSpecEngine:
         min_ = torch.where(cm, pd["counts"] - 1, h.mi_host) * act
         exp_tok = self._def_tokens(h, pd).reshape(-1)
         delta = aux_row_deltas(h.aux, B)  # the per-row deltas this step's fused aux carries (row AUX_DELTA)
+        twin = self._paged_chain_twin()
+        if twin:
+            twin["gdn_pages"] = h.audit["gdn_pages"]
         exp_aux = model._vfy_aux_host(
             model._vfy_row_positions(p0n.tolist()),
             min_.tolist(),
             parity=h.parity,
             rope_delta=delta,
-            **self._paged_chain_twin(),
+            **twin,
         )
         exp_fa = h.aux.clone().to(torch.int64)
         exp_fa[AUX_P0, :B] = p0n

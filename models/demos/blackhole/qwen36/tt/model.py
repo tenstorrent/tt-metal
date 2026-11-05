@@ -2521,14 +2521,18 @@ class Qwen36Model:
         assert len(d) * T == int(n_pos), (len(d), T, n_pos)
         return [x for x in d for _ in range(T)]
 
-    def _vfy_aux_host(self, row_positions, mi_prev, parity=None, rope_delta=None, predict=False, hold=None):
+    def _vfy_aux_host(
+        self, row_positions, mi_prev, parity=None, rope_delta=None, predict=False, hold=None, gdn_pages=None
+    ):
         """Host form of ``_vfy_aux_buf``: torch.int32 [3 (2 without the fused GDN op), W]. ``parity`` (default: the layers'
         current GDN window parity): the parity word of the ctrl page, for a step whose replay was enqueued earlier.
         ``rope_delta`` (default: each row's own delta): an int = every row the same; a list of one delta per engine row
         (each repeated for the row's T positions, user-major), as the fused / chain device bodies build it.
         ``predict`` (QWEN36_MAMBA_SPEC, the next verify's prestage): start pages at window column mi_prev of the staged
         windows, the next step's start column when its window does not move and no copy resets its count. ``hold``
-        (QWEN36_MAMBA_SPEC): the held rows (default: the step's, every row before the first step).
+        (QWEN36_MAMBA_SPEC): the held rows (default: the step's, every row before the first step). ``gdn_pages``
+        (QWEN36_MAMBA_SPEC, with ``predict``): the start-page tables to read (SpecBlockBook.start_pages_snapshot of an
+        earlier staging) instead of the live ones.
         """
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_page
 
@@ -2562,6 +2566,7 @@ class Qwen36Model:
                     self._vfy_ctrl_words,
                     hold=range(self._vfy_B) if hold is None else hold,
                     start_col=mi_prev if predict else None,
+                    pages=gdn_pages,
                 )
                 segs.extend(r.to(torch.int64) & 0xFFFFFFFF for r in rows)
         return pack_u32_rows(segs)

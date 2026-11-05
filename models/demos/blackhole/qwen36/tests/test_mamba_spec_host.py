@@ -859,44 +859,18 @@ def test_spec_class_binds_and_routes_only_through_the_spec_layout(monkeypatch):
     assert model._spec_blocks.calls == [("copy", [(3, 4)]), ("zero", [5])]
 
 
-def test_whole_blocks_written_by_a_prefill():
-    from models.demos.blackhole.qwen36.tt.qwen36_vllm import _whole_blocks_written
-
-    pt = torch.tensor([[10, 11, 12, 13], [20, 21, 22, 23], [30, 31, 32, 33]])
-    # row 0: positions [0, 2500) of 1024-token blocks: 10 and 11 whole, 12 partial
-    # row 1: [1024, 3072): 21 and 22 whole (21 starts at its first position)
-    # row 2: [1000, 2047): no whole block (30 starts before 1000, 31 ends after 2047)
-    got = _whole_blocks_written(pt, [0, 1024, 1000], [2500, 3072, 2047], 1024)
-    assert got == {10, 11, 21, 22}
-
-
-def test_zeroing_waits_for_the_forward_and_skips_written_blocks(monkeypatch):
-    """zero_blocks only records; flush_zero zeroes the recorded blocks minus the ones the prefill writes whole and the
-    ones a block copy wrote since; a flush with nothing pending runs no device work."""
+def test_zeroing_runs_at_once_and_skips_copied_blocks_never(monkeypatch):
+    """zero_blocks zeroes every listed block before the hook returns (vLLM applies its block copies after the zeroing);
+    an empty list runs no device work."""
     st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
-    st._zero_pending = {}
-    st.book = SimpleNamespace(
-        forget_block=lambda b: None, copy_plan=lambda copies: [("copy", s, d) for s, d in copies], moves={}
-    )
-    st.moves_counts = None
-    zeroed = []
+    forgotten, zeroed = [], []
+    st.book = SimpleNamespace(forget_block=forgotten.append)
     st._zero_now = lambda ids: zeroed.append(list(ids))
     monkeypatch.setattr(sbs.SpecGdnBlockState, "_timed", lambda self, kind, n: contextlib.nullcontext())
-    monkeypatch.setattr(sbs, "_PageTables", lambda state: contextlib.nullcontext())
-    from models.demos.blackhole.qwen36.tt import gdn_block_state as gbs
-
-    monkeypatch.setattr(gbs, "copy_kv_blocks", lambda model, pairs: None)
-    st.model = None
-    st.zero_blocks([5, 6, 7, 8])
-    assert zeroed == []
-    st.copy_blocks([(3, 8)])
-    st.flush_zero(written={6})
-    assert zeroed == [[5, 7]]
-    st.flush_zero()
-    assert zeroed == [[5, 7]]
-    st.zero_blocks([9])
-    st.flush_zero()
-    assert zeroed == [[5, 7], [9]]
+    st.zero_blocks([5, 6, 7])
+    assert zeroed == [[5, 6, 7]] and forgotten == [5, 6, 7]
+    st.zero_blocks([])
+    assert zeroed == [[5, 6, 7]]
 
 
 class _FT:
@@ -983,7 +957,6 @@ def test_spec_state_device_writes_land_where_the_verify_reads(monkeypatch, geo):
     st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
     st.model, st.mesh, st.T, st.G, st.layout = None, None, T, 1, lay
     st.layers, st.layer_groups = [(0, dn, 0)], {0: 0}
-    st._zero_pending = {}
     st.book = sbs.SpecBlockBook(lay, 1, B, T, "align", 1024)
 
     def heads(b):  # what the verify reads: the start pages its ctrl page names
@@ -1146,3 +1119,21 @@ def test_chain_moves_keywords_are_grouped_and_copies_refused(monkeypatch):
     assert [tuple(w.shape) for w in moves[1]] == [(4, T, T)] * 3 and int(moves[1][2][0, 1, 2]) == 32
     with pytest.raises(NotImplementedError):  # allow-pytest.raises: host test without the device conftest
         Qwen36MTPContractForCausalLM._gdn_windows(me, kwargs(copy_src=7), 4)
+
+
+def test_chain_audit_twin_reads_the_pages_of_its_own_staging():
+    """The chain audit runs when the reader thread reads the step, after the engine staged later steps. Its expected
+    ctrl words must come from the start pages the step was staged with (start_pages_snapshot), not from the live book:
+    a row that finished since then holds the null block in the live book."""
+    lay = _layout(8, 1024, 8, "two_pool")
+    book = sbs.SpecBlockBook(lay, 1, B, T, "none")
+    words = spec_ctrl_words(B, lay.nv)
+    w = torch.arange(1, B * T + 1).reshape(B, T) + 20
+    book.set_step([w], torch.zeros(B, dtype=torch.int64), range(B))
+    snap = book.start_pages_snapshot()
+    staged = book.ctrl_rows([1] * B, 0, words, start_col=[1] * B)
+    later = w.clone()
+    later[3] = 0  # row 3 finished: padding holds block 0
+    book.set_step([later], torch.zeros(B, dtype=torch.int64), [u for u in range(B) if u != 3])
+    assert torch.equal(book.ctrl_rows([1] * B, 0, words, start_col=[1] * B, pages=snap), staged)
+    assert not torch.equal(book.ctrl_rows([1] * B, 0, words, start_col=[1] * B), staged)

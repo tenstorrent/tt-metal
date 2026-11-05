@@ -63,7 +63,7 @@ def _state(device, g, block, num_blocks, layout):
     st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
     st.model, st.mesh, st.T, st.G, st.layout = None, device, T, 1, lay
     st.layers, st.layer_groups = [(0, dn, 0)], {0: 0}
-    st.kv_block_size, st._zero_pending, st._zeros = block, {}, None
+    st.kv_block_size, st._zeros = block, None
     return st, dn, k, v
 
 
@@ -221,9 +221,9 @@ def test_block_copies_keep_the_state(device, geo_block_layout):
 
 
 @pytest.mark.parametrize("block", [2048, 1024])
-def test_zero_only_the_pending_unwritten_blocks(device, block):
-    """flush_zero: the pending blocks minus the ones the prefill writes whole are zeroed, in fills of several blocks
-    (11 blocks: more than one fill), and every other block keeps its bytes."""
+def test_zero_blocks_zeroes_only_the_listed_blocks(device, block):
+    """zero_blocks: every listed block is zeroed, in fills of several blocks (11 blocks: more than one fill), and every
+    other block keeps its bytes."""
     num_blocks = 40
     k = ttnn.from_torch(
         torch.ones(num_blocks, 1, block, 256),
@@ -235,17 +235,14 @@ def test_zero_only_the_pending_unwritten_blocks(device, block):
     v = ttnn.clone(k)
     st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
     st.model = SimpleNamespace(_paged_kv_caches=[(k, v)], mesh_device=device)
-    st.mesh, st.kv_block_size, st._zero_pending, st._zeros = device, block, {}, None
+    st.mesh, st.kv_block_size, st._zeros = device, block, None
     st.book = SimpleNamespace(forget_block=lambda b: None)
-    pending = [3, 4, 5, 9, 11, 12, 13, 20, 21, 22, 30, 31, 33]
-    st.zero_blocks(pending)
-    st.flush_zero(written=(9, 33))
-    zeroed = set(pending) - {9, 33}
+    listed = [3, 4, 5, 11, 12, 13, 20, 21, 22, 30, 31]
+    st.zero_blocks(listed)
     for name, t in (("K", k), ("V", v)):
         host = ttnn.to_torch(t).float()
         for b in range(num_blocks):
-            if b in zeroed:
+            if b in listed:
                 assert not host[b].any(), f"{name} block {b} was not zeroed"
             else:
                 assert torch.equal(host[b], torch.ones_like(host[b])), f"{name} block {b} changed"
-    assert not st._zero_pending

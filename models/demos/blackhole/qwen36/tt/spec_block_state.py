@@ -316,13 +316,13 @@ class SpecBlockBook:
             self._map_live, self._map_dirty = live, False
         return changed
 
-    def ctrl_rows(self, mi, parity, words, hold=(), start_col=None):
+    def ctrl_rows(self, mi, parity, words, hold=(), start_col=None, pages=None):
         """int32 [G, words]: the ctrl page of each group (same parity and mi, the group's start pages; see
         ctrl_page_paged). ``start_col`` (int [B]): start pages at these columns of the staged windows instead of the
-        staged start columns."""
-        if start_col is not None and self.step_blocks is not None:
+        staged start columns; ``pages`` (with ``start_col``): a start_pages_snapshot to read them from."""
+        if start_col is not None and (self.step_blocks is not None or pages is not None):
             cols = torch.as_tensor(start_col, dtype=torch.int64).reshape(-1)
-            init = torch.stack([p[self._rows, cols] for p in self._start_pages()])
+            init = torch.stack([p[self._rows, cols] for p in (self._start_pages() if pages is None else pages)])
         else:
             init = torch.stack(self.init)  # [G, B, Nv]
         B, nv = self.B, self.layout.nv
@@ -404,6 +404,10 @@ class SpecBlockBook:
         + h = the first page of head h of the block a row starts from for start column t, its window column t, or, on
         a row with chained state moves, its start block for accepted count t + 1."""
         return torch.stack(self._start_pages(), dim=2).reshape(self.B, -1).to(torch.float32)
+
+    def start_pages_snapshot(self):
+        """A copy of the start-page tables (_start_pages) that later stagings do not change."""
+        return [p.clone() for p in self._start_pages()]
 
     def _start_pages(self):
         """[G] int64 [B, T, Nv]: head pages of the start block per start column (column c - 1 for accepted count c)."""
@@ -598,7 +602,6 @@ class SpecGdnBlockState:
             )
         self.book = SpecBlockBook(lay, self.G, self.bmax, self.T, cache_mode, mamba_block_size)
         self.kv_block_size = int(kv_caches[0][0].shape[2])
-        self._zero_pending = {}  # attention blocks vLLM asked to zero, in order (flush_zero)
         self._zeros = None  # [1, H, n * kv_block_size, D] zero source of _zero_now
         rep = ttnn.ReplicateTensorToMesh(mesh)
         self._idx_dev = [
@@ -817,8 +820,6 @@ class SpecGdnBlockState:
 
         self.resolve_moves()
         ops = self.book.copy_plan(copies)
-        for op in ops:
-            self._zero_pending.pop(int(op[-1]), None)  # the copy writes the destination's state
         n_conv = sum(1 for op in ops if op[0] == "conv")
         with self._timed(f"block copies ({n_conv} with conv writes)", len(ops) - n_conv), _PageTables(self) as pts:
             for op in ops:
@@ -854,21 +855,13 @@ class SpecGdnBlockState:
             ttnn.deallocate(part)
 
     def zero_blocks(self, block_ids):
-        """vLLM's new_block_ids_to_zero. vLLM lists only blocks new to an attention group (it records new block ids
-        for AttentionSpec managers), so these never hold a GDN state this class reads: a GDN block is written whole by
-        the prefill or a copy, or holds a valid state on a prefix hit. The zeroing waits for the next forward
-        (flush_zero), which skips the blocks its prefill writes from the first to the last position."""
-        for b in block_ids:
-            self.book.forget_block(int(b))
-            self._zero_pending[int(b)] = None
-
-    def flush_zero(self, written=()):
-        """Zero the pending attention blocks except ``written`` (blocks the coming prefill writes whole: SDPA reads
-        none of their bytes before that). The others are read before they are written: the decode SDPA reads the tail
-        of a sequence's last block (masked), and stale GDN state bytes there decode as NaN / Inf."""
-        written = {int(b) for b in written}
-        ids = [b for b in self._zero_pending if b not in written]
-        self._zero_pending.clear()
+        """vLLM's new_block_ids_to_zero, zeroed now (vLLM applies its block copies after the zeroing, and a copy can
+        write one of these blocks). vLLM lists only blocks new to an attention group (it records new block ids for
+        AttentionSpec managers), so a GDN state block is never zeroed: the prefill or a copy writes it whole, or it
+        holds a valid state on a prefix hit."""
+        ids = [int(b) for b in block_ids]
+        for b in ids:
+            self.book.forget_block(b)
         if ids:
             with self._timed("zeroed attention blocks", len(ids)):
                 self._zero_now(ids)
