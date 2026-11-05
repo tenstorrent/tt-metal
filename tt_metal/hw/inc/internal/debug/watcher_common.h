@@ -14,11 +14,15 @@
 // sanitize.h.
 namespace internal_ {
 void risc_context_switch(bool);
+#if !defined(ARCH_QUASAR)
 void disable_erisc_app();
+#endif
 }  // namespace internal_
 
+#if !defined(ARCH_QUASAR)
 // Pointer to exit routine, (so it may be called from a kernel).
 [[gnu::noreturn]] extern void (*erisc_exit)();
+#endif
 
 #endif
 

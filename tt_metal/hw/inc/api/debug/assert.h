@@ -118,8 +118,7 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type) 
 #endif
     }
 
-    // Hang, or in the case of erisc, early exit. A Keraunos CCE (Quasar) has no base firmware to exit to, and
-    // disable_erisc_app() would store to its reset vector, so it hangs.
+    // Hang, or in the case of erisc, early exit. A Keraunos CCE (Quasar) has no base firmware to exit to, so it hangs.
 #if defined(COMPILE_FOR_ERISC) && !defined(ARCH_QUASAR)
     // Update launch msg to show that we've exited. This is required so that the next run doesn't think there's a kernel
     // still running and try to make it exit.
