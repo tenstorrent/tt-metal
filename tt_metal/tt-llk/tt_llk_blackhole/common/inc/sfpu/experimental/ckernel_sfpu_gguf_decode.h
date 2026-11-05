@@ -1152,8 +1152,38 @@ constexpr bool macro_q4 = FMT == Q4_0 || FMT == Q4_1 || FMT == Q4_K;
 template <int FMT>
 constexpr bool macro_body = LOADMACRO && traits<FMT>::linear && FMT != Q8_0 && FMT != TQ1_0;
 
+// MXFP4 and NVFP4 through SFPLOADMACRO (body_macro_fp4).
+template <int FMT>
+constexpr bool fp4_macro_body = LOADMACRO && (FMT == MXFP4 || FMT == NVFP4);
+
 constexpr std::uint32_t LOAD_NONE      = 11; // SFPLOAD mode that loads nothing: the macro only takes the row
 constexpr std::uint32_t SHIFT_IMM_OF_C = 5;  // SFPSHFT: VD = LReg[VC] shifted by the immediate
+
+// MXFP4 / NVFP4 instruction templates: 0 = E2M1_TABLE (LReg12) << x, 1 = x with the sign of S (LReg4) replaced by z's,
+// 2 / 3 = L0 / L1 times z. Macro 0 (v) runs the table shift 2 instructions after it; macro 1 / 2 (z, v = L0 / L1) the
+// sign 4, the product into LReg16 5 and its store 7 instructions after it.
+inline void macro_init_fp4()
+{
+    TTI_SFPSHFT2(12, 0, 12, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+    TTI_SFPSETSGN(0, 4, 13, 0);
+    TTI_SFPMAD(0, 0, 9, 14, sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    TTI_SFPMAD(1, 0, 9, 15, sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    constexpr std::uint32_t table = (1 << 3) | 4;
+    constexpr std::uint32_t sign  = 0x80 | (3 << 3) | 5;
+    constexpr std::uint32_t mul0  = 0xC0 | (4 << 3) | 6;
+    constexpr std::uint32_t store = 0x40 | (6 << 3) | 3;
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, table);
+    TTI_SFPCONFIG(0, 4, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mul0 << 8) | sign);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, store << 8);
+    TTI_SFPCONFIG(0, 5, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, ((mul0 + 1) << 8) | sign);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, store << 8);
+    TTI_SFPCONFIG(0, 6, 0);
+    TTI_SFPCONFIG(0xF00, 8, sfpi::SFPCONFIG_MOD1_ARG_IMM);
+    TTI_SFPNOP;
+}
 
 // Instruction templates: 0 = x >> (32 - B) (amount in LReg14), 1 = int to fp32, 2 / 3 = S x + M with S, M in L4, L5 /
 // L6, L7. Macro b (column half b) runs the shift, cast, MAD (into LReg16) and store of LReg16 1, 2, 3 and 5
@@ -1161,6 +1191,10 @@ constexpr std::uint32_t SHIFT_IMM_OF_C = 5;  // SFPSHFT: VD = LReg[VC] shifted b
 template <int FMT>
 inline void macro_init()
 {
+    if constexpr (fp4_macro_body<FMT>)
+    {
+        macro_init_fp4();
+    }
     if constexpr (macro_body<FMT>)
     {
         sfpi::vConstIntPrgm2 = mfield<FMT>::B - 32;
@@ -1227,6 +1261,52 @@ sfpi_inline void body_macro_q4()
     }
 #pragma GCC unroll 4
     for (int n = 0; n < 4; n++)
+    {
+        TTI_SFPNOP;
+    }
+}
+
+// MXFP4 / NVFP4: body()'s arithmetic, copysgn(kv, s) S + 0 as kv (+-S) + 0 (equal bits, also for zeros). Groups
+// (a, h, b) of four outputs o = 16h + 8a + 2j + b read nibbles i = 2j + b of code word 2h + a, masked to their parity
+// (x, L3) so that x >> (4i - 2) is 4 code3 below zero bits: the table shift amount. Per output six instructions: macro
+// 0 on v (table shift), x >> (4i - 2) into v, macro 1 / 2 on z (sign, product, store), v >> 28, x << (28 - 4i) into z
+// (the sign at bit 31), the cast of v. Between groups: the code word, its mask, S (L4), after the last reads of x / S.
+template <int FMT>
+sfpi_inline void body_macro_fp4()
+{
+    sfpi::vConstIntPrgm0 = static_cast<int>(E2M1_TABLE);
+    sfpi::vConstIntPrgm1 = 0x0F0F0F0F;
+    sfpi::vConstIntPrgm2 = static_cast<int>(0xF0F0F0F0u);
+#pragma GCC unroll 2
+    for (int a = 0; a < 2; a++)
+    {
+#pragma GCC unroll 2
+        for (int h = 0; h < 2; h++)
+        {
+#pragma GCC unroll 2
+            for (int b = 0; b < 2; b++)
+            {
+                TTI_SFPLOAD(3, sfpi::SFPLOAD_MOD0_FMT_INT32, ADDR_MOD_7, 2 * (CO + 2 * h + a));
+                TTI_SFPAND(0, 13 + b, 3, 0);
+                TTI_SFPLOAD(4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (PS + pidx(a, b, traits<FMT>::has_h ? h : 0)));
+#pragma GCC unroll 4
+                for (int j = 0; j < 4; j++)
+                {
+                    const int i = 2 * j + b;
+                    const int o = 16 * h + 8 * a + i;
+                    const int v = j % 2;
+                    TTI_SFPLOADMACRO(v, LOAD_NONE, ADDR_MOD_7, 2 * o);
+                    TTI_SFPSHFT((2 - 4 * i) & 0xFFF, 3, v, SHIFT_IMM_OF_C);
+                    TTI_SFPLOADMACRO(((1 + v) << 2) | 2, LOAD_NONE, ADDR_MOD_7, 2 * o);
+                    TTI_SFPSHFT(-28 & 0xFFF, v, v, SHIFT_IMM_OF_C);
+                    TTI_SFPSHFT(28 - 4 * i, 3, 2, SHIFT_IMM_OF_C);
+                    TTI_SFPCAST(v, v, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
+                }
+            }
+        }
+    }
+#pragma GCC unroll 5
+    for (int n = 0; n < 5; n++)
     {
         TTI_SFPNOP;
     }
@@ -1640,6 +1720,10 @@ inline void _calculate_gguf_decode_body_()
     else if constexpr (macro_body<FMT> && macro_q4<FMT>)
     {
         body_macro_q4();
+    }
+    else if constexpr (fp4_macro_body<FMT>)
+    {
+        body_macro_fp4<FMT>();
     }
     else if constexpr (macro_body<FMT>)
     {
