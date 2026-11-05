@@ -188,32 +188,38 @@ class GdnBlockState:
     def set_decode_blocks(self, state_block_ids_per_layer, row_of=None):
         """Point device row d of every GDN layer at its request's block. ``row_of[i]`` = device row of submitted row i
         (None = identity); rows no request occupies point at block 0, vLLM's null block. Copies only changed indices."""
+        built = {}  # the layers of one KV cache group share block ids and page geometry: one host index for all
         for i, dn in self.layers:
             ids = self._block_ids(state_block_ids_per_layer, i, self.bmax)
             blocks = [0] * self.bmax
             for r, b in enumerate(ids):
                 blocks[r if row_of is None else row_of[r]] = b
-            ps = dn._paged_state
-            hp = dn.Dk * dn.Dv // 1024
-            b = torch.tensor(blocks, dtype=torch.int64)
-            pk = ps.banks * (-(-b * ps.bank_bytes_k // FP32_PAGE_BYTES))
-            pv = ps.rec_pages_k + ps.banks * (-(-b * ps.bank_bytes_v // FP32_PAGE_BYTES))
-            h = torch.arange(dn.Nv, dtype=torch.int64).reshape(-1, 1)
-            rec = torch.where(h < ps.heads_k, pk + hp * h, pv + hp * (h - ps.heads_k))
-            host = torch.cat([rec, b * ps.hist_pages + ps.hist_first + 4 * h]).to(torch.int32)  # [2 * Nv, Bmax]
+            key = tuple(blocks)
             prev = self._host_idx.get(i)
-            if prev is not None and torch.equal(prev, host):
+            if prev is not None and prev[0] == key:
                 continue
-            ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(
-                    host,
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-                ),
-                ps.idx,
-            )
-            self._host_idx[i] = host
+            ps = dn._paged_state
+            geom = (ps.banks, ps.bank_bytes_k, ps.bank_bytes_v, ps.heads_k, ps.rec_pages_k, ps.hist_pages)
+            geom += (ps.hist_first, dn.Nv, dn.Dk * dn.Dv // 1024, key)
+            host = built.get(geom)
+            if host is None:
+                host = built[geom] = self._index_host(ps, dn, blocks)
+            ttnn.copy_host_to_device_tensor(host, ps.idx)
+            # Held until the index changes again: the copy may read the host tensor after this call returns.
+            self._host_idx[i] = (key, host)
+
+    def _index_host(self, ps, dn, blocks):
+        """Host uint32 [2 * Nv, Bmax] gdn_decode_step state_page_idx for device rows holding `blocks`."""
+        hp = dn.Dk * dn.Dv // 1024
+        b = torch.tensor(blocks, dtype=torch.int64)
+        pk = ps.banks * (-(-b * ps.bank_bytes_k // FP32_PAGE_BYTES))
+        pv = ps.rec_pages_k + ps.banks * (-(-b * ps.bank_bytes_v // FP32_PAGE_BYTES))
+        h = torch.arange(dn.Nv, dtype=torch.int64).reshape(-1, 1)
+        rec = torch.where(h < ps.heads_k, pk + hp * h, pv + hp * (h - ps.heads_k))
+        host = torch.cat([rec, b * ps.hist_pages + ps.hist_first + 4 * h]).to(torch.int32)
+        return ttnn.from_torch(
+            host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh)
+        )
 
     def write_prefill_rows(self, state_block_ids_per_layer, rows):
         """Copy device row rows[u] of every GDN layer's decode buffers (the state prefill just wrote, packed for the
