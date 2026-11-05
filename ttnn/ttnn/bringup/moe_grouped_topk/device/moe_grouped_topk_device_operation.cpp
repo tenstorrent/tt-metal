@@ -26,8 +26,8 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(scores.storage_type() == ttnn::StorageType::DEVICE, "Scores tensor must be on device");
     TT_FATAL(bias.storage_type() == ttnn::StorageType::DEVICE, "Bias tensor must be on device");
-    TT_FATAL(scores.buffer() != nullptr, "Scores tensor must be allocated");
-    TT_FATAL(bias.buffer() != nullptr, "Bias tensor must be allocated");
+    TT_FATAL(scores.is_allocated(), "Scores tensor must be allocated");
+    TT_FATAL(bias.is_allocated(), "Bias tensor must be allocated");
 
     // Inputs may be FLOAT32 or BFLOAT16: the op computes internally in fp32 for precision and the
     // unpacker upcasts bf16 tiles for free.
@@ -45,7 +45,7 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
     if (padding_config.has_value()) {
         TT_FATAL(
             padding_config->storage_type() == ttnn::StorageType::DEVICE, "Padding config tensor must be on device");
-        TT_FATAL(padding_config->buffer() != nullptr, "Padding config tensor must be allocated");
+        TT_FATAL(padding_config->is_allocated(), "Padding config tensor must be allocated");
         TT_FATAL(padding_config->dtype() == tt::tt_metal::DataType::UINT32, "Padding config tensor must be UINT32");
         TT_FATAL(
             padding_config->layout() == tt::tt_metal::Layout::ROW_MAJOR,
@@ -59,7 +59,7 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
     // fp32 compute pipeline). Must be a device-allocated FLOAT32 TILE tensor matching the scores shape.
     if (biased_scores.has_value()) {
         TT_FATAL(biased_scores->storage_type() == ttnn::StorageType::DEVICE, "biased_scores tensor must be on device");
-        TT_FATAL(biased_scores->buffer() != nullptr, "biased_scores tensor must be allocated");
+        TT_FATAL(biased_scores->is_allocated(), "biased_scores tensor must be allocated");
         TT_FATAL(biased_scores->dtype() == tt::tt_metal::DataType::FLOAT32, "biased_scores tensor must be FLOAT32");
         TT_FATAL(biased_scores->layout() == tt::tt_metal::Layout::TILE, "biased_scores tensor must be TILE layout");
         TT_FATAL(

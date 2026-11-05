@@ -57,3 +57,21 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Why: P.13 asked for the 8x4 sizes and a fork-vs-stock selection check.
 - Needed by: deepseek_v41_flash_d_p P.13 (galaxy 8x4)
 - Files: tests/unit/test_stock_identity.py, README.md
+
+### Upstream sync to source @ `107f838f379` (2026-11-05): full sync, is_allocated(), the split LLK race fix (#62675)
+- What: the fork already carried #62035 / #62488 / #62435 / #62411 (`416ff2dfd8e`), which are now upstream; so the
+  base is fork_op.py's mechanical copy of the source @ `416ff2dfd8e` (= the code the fork carried), upstream the same
+  copy @ `107f838f379`, ours this fork. For the fork's LLK copies (`device/kernels/llk/`) the same 3-way merge of each
+  upstream header @ `416ff2dfd8e` -> `107f838f379`. Everything merged clean, no conflicts. Taken:
+  - `19da1202a49` #62567: `buffer() != nullptr` -> `is_allocated()` in validation (device/topk_large_indices_device_operation.cpp);
+  - `19443882604` #62675 (bug fix, #62561) into `llk/ckernel_sfpu_topk_xl_split.h`: in the MATH / PACK row split, the
+    stage-6 merge of chunk c - 1 stores into the survivor bank that MATH's next step (chunk c's stage-2 transposes, or
+    chunk 2's copy after the paired head) works in; the merge now takes MATH's next token first (`take_next`), so a late
+    MATH can no longer race it (upstream: 12 wrong K' 512 cases under TT-NOP delays; K' 1024 with longer delays);
+  - `ab31699e992` #60881: comment only in `llk/topk_xl.h` (`copy_tile_init` -> `copy_init`).
+  The fork's K' 512 segmented-body extension (templated `_topk_large_indices_move_segment_result_`, compute.cpp's
+  segmented path) merged clean; it goes through the same `pack_slot` / `sfpu_step` paths the fix changes.
+- Behaviour: a correctness fix of a timing race (results change only where MATH ran late, which gave wrong top-k ids);
+  one more MATH token wait per merge, expected to cost little. To re-check: tests/unit (incl. test_upstream_split.py
+  perf band) and the DeepSeek-V4.1 model cases (index top-k k 512, candidate blocks k 2048).
+- Files: device/topk_large_indices_device_operation.cpp, device/kernels/llk/ckernel_sfpu_topk_xl_split.h, device/kernels/llk/topk_xl.h

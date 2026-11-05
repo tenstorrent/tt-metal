@@ -16,3 +16,8 @@ Mechanical fork changes (fork_op.py, finished by hand in FIX.15 where the tool s
 - Measured: 8x4 Galaxy, one 5120-token chunk: 120 -> 110 cores a chip (deepseek_v41_flash_d_p tests/perf/test_core_audit.py); device time in that model's BREADCRUMBS FIX.15.
 - Needed by: deepseek_v41_flash_d_p FIX.15
 - Files: device/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads.cpp, device/kernels/dataflow/reader_tm_tile_layout_nlp_create_qkv_heads_sharded.cpp, device/kernels/dataflow/writer_tm_tile_layout_nlp_create_qkv_heads.cpp, device/nlp_create_qkv_heads_device_operation.cpp, device/nlp_create_qkv_heads_device_operation.hpp, device/nlp_create_qkv_heads_program_factory.cpp, nlp_create_qkv_heads.cpp, nlp_create_qkv_heads.hpp, nlp_create_qkv_heads_nanobind.cpp, nlp_create_qkv_heads_nanobind.hpp
+
+### Upstream sync to source @ `107f838f379` (2026-11-05): full sync, is_allocated()
+- What: a 3-way merge per file (base = fork_op.py's mechanical copy of the source @ `6b80daf43e3`, the fork's last sync / fork point, no skipped commits; upstream = the same copy @ `107f838f379` (origin/llk_helper_library); ours = this fork) (the fork was taken @ `222c8142326`, a bring-up branch commit whose source equals `6b80daf43e3`'s). Merged clean, no conflicts. Taken (1 commit): `19da1202a49` #62567 (`tensor.buffer() != nullptr` -> `tensor.is_allocated()` in validation / asserts).
+- Behaviour: none. The fork's max_grid merged clean.
+- Files: device/nlp_create_qkv_heads_device_operation.cpp, device/nlp_create_qkv_heads_program_factory.cpp

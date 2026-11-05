@@ -60,7 +60,8 @@ ttnn::Tensor rotary_embedding_indexed(
     uint32_t input_heads = 0,
     const std::optional<tt::tt_metal::Layout>& output_layout = std::nullopt,
     const std::optional<tt::tt_metal::DataType>& output_dtype = std::nullopt,
-    uint32_t group_heads = 0);
+    uint32_t group_heads = 0,
+    bool row_major_output = false);
 
 // (2) Tensor form (traceable): `kv_actual_global` is its OWN 1-element uint32 DRAM tensor that the reader
 //     reads on-device (element [0]). Off the host dispatch path, so one captured program replays across
@@ -77,7 +78,8 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<uint32_t>& seq_subshard_axis = std::nullopt,
     const std::optional<uint32_t>& rotary_dim = std::nullopt,
     uint32_t rotary_offset = 0,
-    const std::optional<ttnn::Tensor>& concat_prefix = std::nullopt);
+    const std::optional<ttnn::Tensor>& concat_prefix = std::nullopt,
+    bool row_major_output = false);
 
 }  // namespace ttnn::operations::bringup::rotary_embedding_indexed
 

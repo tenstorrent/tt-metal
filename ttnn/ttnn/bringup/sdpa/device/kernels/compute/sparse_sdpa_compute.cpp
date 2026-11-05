@@ -701,7 +701,7 @@ void kernel_main() {
                     // Row-sum partial from the packed bf16 probs (the ones PV multiplies), exact in the Float32
                     // DEST and L1-accumulated into the Float32 sum_cur: sum_cur[r] = sum_kt probs[r, kt].
                     qk_cb.wait_front((qg + 1) * qsb * KT_stride);
-                    copy_tile_to_dst_init_short(cb_qk_im);
+                    copy_init(cb_qk_im);
                     pack_reconfig_data_format(sum_cur.get_cb_id());
                     configure_single_tile_pack(sum_cur.get_cb_id());
 #ifdef SPARSE_SDPA_FP32_SCORES

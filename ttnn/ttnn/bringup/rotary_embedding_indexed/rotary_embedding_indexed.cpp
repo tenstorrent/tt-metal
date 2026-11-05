@@ -29,14 +29,16 @@ ttnn::Tensor rotary_embedding_indexed(
     uint32_t input_heads,
     const std::optional<tt::tt_metal::Layout>& output_layout,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
-    uint32_t group_heads) {
+    uint32_t group_heads,
+    bool row_major_output) {
     const bool chain = input_heads > 0 || output_layout.has_value() || output_dtype.has_value() || group_heads > 1 ||
                        input.layout() == tt::tt_metal::Layout::ROW_MAJOR;
     if (chain) {  // bring-up chain mode (P.22): one fused program, device/rope_chain_device_operation.hpp
         TT_FATAL(
-            kv_actual_global == 0 && !seq_subshard_axis.has_value() && !concat_prefix.has_value(),
+            kv_actual_global == 0 && !seq_subshard_axis.has_value() && !concat_prefix.has_value() && !row_major_output,
             "rotary_embedding_indexed chain mode (input_heads / output_layout / output_dtype / group_heads / a "
-            "ROW_MAJOR input) needs kv_actual_global 0, no seq_subshard_axis and no concat_prefix");
+            "ROW_MAJOR input) needs kv_actual_global 0, no seq_subshard_axis, no concat_prefix and no "
+            "row_major_output (chain mode's output_layout=ROW_MAJOR is its row-major output)");
         TT_FATAL(rotary_dim.has_value(), "rotary_embedding_indexed chain mode needs rotary_dim");
         return ttnn::prim::bringup::rotary_embedding_indexed_chain(
             input,
@@ -68,6 +70,7 @@ ttnn::Tensor rotary_embedding_indexed(
         rotary_dim,
         rotary_offset,
         concat_prefix,
+        row_major_output,
         uniform,
         output_tensor,
         max_grid);
@@ -87,7 +90,8 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<uint32_t>& seq_subshard_axis,
     const std::optional<uint32_t>& rotary_dim,
     uint32_t rotary_offset,
-    const std::optional<ttnn::Tensor>& concat_prefix) {
+    const std::optional<ttnn::Tensor>& concat_prefix,
+    bool row_major_output) {
     return ttnn::prim::bringup::rotary_embedding_indexed(
         input,
         cos,
@@ -101,7 +105,8 @@ ttnn::Tensor rotary_embedding_indexed(
         seq_subshard_axis,
         rotary_dim,
         rotary_offset,
-        concat_prefix);
+        concat_prefix,
+        row_major_output);
 }
 
 }  // namespace ttnn::operations::bringup::rotary_embedding_indexed

@@ -498,3 +498,37 @@ Build fixes after fork_op.py (no behaviour change):
 - Measured: 8x4 Galaxy, one 5120-token chunk (sparse_sdpa): 120 -> 110 cores a chip (tests/perf/test_core_audit.py in deepseek_v41_flash_d_p); per-op device time in that model's BREADCRUMBS FIX.15.
 - Needed by: deepseek_v41_flash_d_p FIX.15
 - Files: device/sparse_sdpa_device_operation.cpp, device/sparse_sdpa_device_operation.hpp, device/sparse_sdpa_device_operation_types.hpp, device/sparse_sdpa_program_factory.cpp, sdpa_nanobind.cpp, sparse_sdpa.cpp, sparse_sdpa.hpp
+
+### Upstream sync to source @ `107f838f379` (2026-11-05): full sync, GQA K/V sharing (#60493), ring-joint fixes
+- What: a 3-way merge per file (base = fork_op.py's mechanical copy of the source @ `6b80daf43e3`, the fork's last
+  sync, no skipped commits; upstream = the same copy @ `107f838f379`; ours = this fork). The fork is now the source @
+  `107f838f379` plus its own changes. 21 files merged clean, no conflicts, no new files. Taken (9 commits):
+  - perf, on by default (claimed bit-identical except where noted upstream): `4ab2bc99e26` #60493 SDPA GQA K/V sharing
+    (`scaled_dot_product_attention` / chunked): K/V chains keyed by KV head, multicast only on chains of >= 4 cores,
+    mask reads no longer serialize unicast chains, Q-head crossing (non-causal GQA, no mask / sink / chunk / window /
+    MLA, NKH == NVH, unpadded Sq), K/V retention with one K chunk on the streaming kernel (non-MLA, not chunked;
+    reader CT arg 38 and writer arg 29 added, the accessor args move up one); `sdpa_program_factory.cpp` largely rewritten;
+  - bug fixes (behaviour changes where they apply): `8ae013e871b` #62434 (attention sink in the streaming normalize:
+    the unpacker reconfigured to the sink's format; a bfloat8_b sink was unpacked with the matmul formats);
+    `eab863d54f2` #63298 (ring joint SDPA and its fused all-gather patch the call's global semaphores on a program-cache
+    hit: a hang with pooled semaphores, #62923); `5d9628a8bf9` #61759 (ring_joint / exp_ring_joint program hash now
+    covers the metadata tensors' specs, slot_id / kv_actual_isl / kv_valid_end, topology and
+    num_buffers_per_channel: no more fake cache hits); `e1447a0d743` #61955 (exp_ring_joint fabric muxes in
+    program-local L1: no overwrite of persistent L1);
+  - API / cleanup: `7060deaa01f` #61503 (`get_forwarding_link_indices` takes the MeshDevice), `19da1202a49` #62567
+    (`is_allocated()`), `15a3e2ce379` #60814 (`math.hpp`), `69bd2d415cb` #58929 (comments in compute_common.hpp).
+- Conflicts: none. Checked by hand: the fork's narrow non-MLA V (`vDHt` from V's width, reader flag `use_mla || vDHt
+  != DHt`) and the `transformer::` spellings of the shared types survived in sdpa_program_factory.cpp; #60493's
+  crossing excludes MLA, but K/V retention and the KV-head chains apply to non-MLA calls and so to a narrow V (V CBs are
+  sized by vDHt throughout). After the merge, no spelling the fork fixed by hand came back (`bringup::bringup`, a nested
+  `sdpa::bringup` / `sdpa_cb::bringup` / `detail::bringup`, `ttnn::operations::bringup::{SDPAProgramConfig,
+  PagedCacheGeometryOverride}`); the new `ttnn::prim::bringup::RingJointSDPA{Params,Inputs}` are the fork's own types.
+- API port (not upstream's text, the new base removed the shim, #60881): `sparse_sdpa_compute.cpp`'s fork-only
+  high_precision row-sum `copy_tile_to_dst_init_short(cb_qk_im)` -> `copy_init(cb_qk_im)` (what the shim forwarded to;
+  the kernel would not JIT-compile otherwise).
+- Behaviour: sparse_sdpa (the only SDPA op DeepSeek-V4.1 calls) gets only #62567 and the shim port: unchanged.
+  The regular / chunked SDPA paths get #60493's schedules (other models: gemma4, mimo, xing40, glm53). Untested
+  combinations to re-run: #60493 retention / KV-head chains with a narrow V (`test_sdpa_narrow_v.py`), #63298 on the
+  fork's fp32-DEST ring_mla (`test_ring_mla_fp32_dest.py`, `test_ring_mla_single_chunk.py`).
+- Files: 21 merged files under `device/` and `sdpa_nanobind.cpp`; `device/kernels/compute/sparse_sdpa_compute.cpp`
+  (shim port); README.md (sync SHA)

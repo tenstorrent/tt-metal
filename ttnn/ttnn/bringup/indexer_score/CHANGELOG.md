@@ -217,3 +217,8 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Files: device/indexer_score_device_operation.cpp, device/indexer_score_device_operation.hpp,
   device/indexer_score_device_operation_types.hpp, device/indexer_score_host_common.hpp, indexer_score_nanobind.cpp,
   tests/unit/test_natural_query_rows.py, README.md
+
+### Upstream sync to source @ `107f838f379` (2026-11-05): full sync, is_allocated()
+- What: a 3-way merge per file (base = fork_op.py's mechanical copy of the source @ `6b80daf43e3`, the fork's last sync / fork point, no skipped commits; upstream = the same copy @ `107f838f379` (origin/llk_helper_library); ours = this fork). 1 file merged clean. Taken (1 commit): `19da1202a49` #62567 (`tensor.buffer() != nullptr` -> `tensor.is_allocated()` in validation).
+- Behaviour: none.
+- Files: device/indexer_score_device_operation.cpp; README.md (sync SHA)

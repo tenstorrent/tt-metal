@@ -246,8 +246,7 @@ void validate_runtime_args(
             "scaled split inputs must be 4D single-batch, single-head");
         const auto validate_field = [&](const Tensor& field, DataType dtype, uint32_t width, Layout layout) {
             TT_FATAL(
-                field.storage_type() == StorageType::DEVICE && field.device() == cache.device() &&
-                    field.buffer() != nullptr,
+                field.storage_type() == StorageType::DEVICE && field.device() == cache.device() && field.is_allocated(),
                 "scaled split inputs must be allocated on the cache device");
             TT_FATAL(
                 field.layout() == layout && field.dtype() == dtype && !field.is_sharded(),

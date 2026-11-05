@@ -35,6 +35,12 @@ per chip) with `kv_actual_global` 0. That is the natural-block layout, where eve
   The rotary arithmetic is rotary_embedding_llama's compute step for step (matmul by trans -> bf16, x sin -> bf16,
   x cos -> bf16, sum -> bf16; HiFi4 fp32 DEST by default), so every output equals the unfused chain's bit for bit.
 
+- `row_major_output` (bool, both forms, default False; upstream #63498, taken with the 107f838f379 sync): the
+  stock op's row-major output, `[concat_prefix | rotated]` rows untilized by the shared rotary_embedding_llama compute
+  kernel. Needs concat_prefix, rotary_offset 0 with the rotation over the whole input, a prefix width a multiple of
+  rotary_dim, bfloat16, an unpadded input and prefix, an interleaved output; not with chain mode (chain mode's
+  `output_layout=ROW_MAJOR` is the no-prefix equivalent). Unused by our models.
+
 ## Measured
 - Chain mode (P.22, 8x4 Galaxy, 110 cores, `tests/unit/test_chain.py`): bit-identical on every chip, miss and hit, to
   split -> rope -> to_layout (attention q, [1, 1, 160, 64 x 512] -> [1, 64, 160, 512] RM; indexer-shaped 32 x 128),

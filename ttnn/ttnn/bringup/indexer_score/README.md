@@ -3,7 +3,7 @@
 ## What it does
 Fork of `ttnn.experimental.indexer_score_dsa` / `ring_indexer_score_dsa` / `indexer_score_msa` and
 `ttnn.IndexerScoreProgramConfig` (`ttnn/cpp/ttnn/operations/experimental/indexer_score`), synced to source @
-`bdc576fa652`. The fork adds:
+`107f838f379`. The fork adds:
 - fp32 DEST for DSA scoring: `compute_kernel_config.fp32_dest_acc_en=True` accepted by `indexer_score_dsa` /
   `ring_indexer_score_dsa` (num_groups 1, block_size 0, learned gates), with the mask srcA reconfig it needs. MSA and
   block pooling still refuse it.

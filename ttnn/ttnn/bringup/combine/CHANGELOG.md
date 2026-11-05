@@ -68,3 +68,11 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   (combine.cpp, `expert_token_counts.logical_shape()[-1] == experts_per_chip`); the factory keeps the fork's use_fabric
   neighbour gating (local-only implies no links, so no fabric).
 - Behaviour: the two hang fixes apply to every caller. To report upstream: #60445's condition is too wide for EP.
+
+### Upstream sync to source @ `107f838f379` (2026-11-05): full sync, fabric API on the MeshDevice, zero experts_per_chip refused
+- What: a 3-way merge per file (base = fork_op.py's mechanical copy of the source @ `6b80daf43e3`, the fork's last sync / fork point, no skipped commits; upstream = the same copy @ `107f838f379` (origin/llk_helper_library); ours = this fork). 2 files merged clean, no conflicts. Taken (2 commits):
+  - `f932c0893c2` #62473 (bug fix, #58123 audit): validation refuses `experts_per_chip == 0` before `counter_shape[-1] % experts_per_chip` (was a division by zero);
+  - `7060deaa01f` #61503 (API): `get_forwarding_link_indices` takes the MeshDevice; the file-local `compute_per_neighbor_forwarding_links` passes it through (the fabric is resolved in the mesh device's context).
+- Conflicts: none. The fork's 1-device dispatch axis, the owner's #60445 local-only rule and the use_fabric neighbour gating are unchanged.
+- Behaviour: none for valid calls (experts_per_chip 0 was never valid). The fork does not build without #61503.
+- Files: device/combine_device_operation.cpp, device/combine_program_factory.cpp; README.md (sync SHA)

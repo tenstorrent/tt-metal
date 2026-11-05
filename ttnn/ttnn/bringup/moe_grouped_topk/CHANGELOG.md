@@ -47,3 +47,22 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: deepseek_v41_flash_d_p O.1
 - Files: tests/cases.py, tests/reference.py, tests/test_moe_grouped_topk.py
+
+### Upstream sync to source @ `107f838f379` (2026-11-05): partial, #60550 left out (needs a decision)
+- What: a 3-way merge per file (base = fork_op.py's mechanical copy of the source @ `6b80daf43e3`: the fork point
+  `f3149480fb1` is a bring-up branch commit whose source is upstream plus Marko Staletovic's fp32_selection commits,
+  so those count as this fork's changes, not upstream's; upstream = the same copy @ `107f838f379`; ours = this fork).
+  Taken: `19da1202a49` #62567 (`is_allocated()`, device/moe_grouped_topk_device_operation.cpp, merged clean).
+- Not taken: `e5e853c3cd1` #60550 (fix the low-bit sort comparisons). It conflicts in
+  `device/kernels/compute/moe_gate_common_compute.hpp`, `device/kernels/compute/moe_grouped_topk.cpp` and
+  `device/moe_grouped_topk_program_factory.cpp`, which stay as before the sync. #60550 is upstream's own answer to
+  the problem this fork's `fp32_selection` (Marko) and `fp32_activation` solve: always-on fp32 sort keys (score CBs
+  unpacked to DEST, SFPU bias add and group sums), activation + bias in one pass with no fp32 upcast pass, a new
+  accurate `sqrt(softplus)` SFPU routine for sqrtsoftplus, and the rank-tag sort kept at 17 compared mantissa bits;
+  the fork's fp32_selection instead turns the rank-tag engine off (23-bit compare) and fp32_activation uses
+  softplus's INP_FLOAT32 branch. Merging needs a decision: keep the fork's options on top of #60550's pipeline
+  (fp32_selection then only adds the full 23-bit compare; fp32_activation vs upstream's sqrt_softplus, which is not
+  bit-identical to stock ttnn.sqrt(ttnn.softplus) that the model's golden check compares to), or retire them. The
+  stock op is being reworked on this rebase in parallel (owner / parent).
+- Behaviour: unchanged (the fork's kernels and factory are as before).
+- Files: device/moe_grouped_topk_device_operation.cpp
