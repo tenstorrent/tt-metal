@@ -28,9 +28,6 @@ namespace {
 constexpr uint32_t kRecordStrideU32 = 72U;  // 66 used, padded to 288 bytes
 constexpr uint32_t kRecordBytes = kRecordStrideU32 * sizeof(uint32_t);
 
-// Each staged output value gets its own NOC-aligned slot.
-constexpr uint32_t kOutputSlotBytes = 32U;
-
 }  // namespace
 
 void kernel_main() {
@@ -66,6 +63,11 @@ void kernel_main() {
     constexpr auto positions_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     // Appended past the accessor chain so the hand-numbered offsets above never move.
     constexpr bool do_positions = get_compile_time_arg_val(positions_args.next_compile_time_args_offset()) != 0;
+    // Each staged output value gets its own slot, sized by the host along with the ring. noc_async_write_page
+    // sends a whole aligned output page (64 B in Blackhole DRAM), so a smaller slot would read past the ring.
+    constexpr uint32_t output_slot_bytes = get_compile_time_arg_val(positions_args.next_compile_time_args_offset() + 1);
+    static_assert(
+        output_slot_bytes >= output_args.get_aligned_page_size(), "An output slot must hold one aligned output page");
     const auto output_address_generator = TensorAccessor(output_args, output_address);
 
     const uint32_t staging_address = get_write_ptr(cb_output_staging_idx);
@@ -101,15 +103,15 @@ void kernel_main() {
         return (remaining < TILE_HEIGHT) ? remaining : TILE_HEIGHT;
     };
 
-    // Output writes are staged through 32 NOC-aligned slots used as a ring and left in flight: a
-    // barrier is paid only when a slot is recycled and once at kernel end, never per row.
+    // Output writes are staged through 32 slots used as a ring and left in flight: a barrier is paid
+    // only when a slot is recycled and once at kernel end, never per row.
     uint32_t staging_cursor = 0U;
     auto stage_and_write = [&](uint32_t page, uint32_t value) {
         if (staging_cursor == TILE_HEIGHT) {
             noc_async_write_barrier();
             staging_cursor = 0U;
         }
-        const uint32_t slot = staging_address + staging_cursor * kOutputSlotBytes;
+        const uint32_t slot = staging_address + staging_cursor * output_slot_bytes;
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot) = value;
         noc_async_write_page(page, output_address_generator, slot);
         ++staging_cursor;
@@ -273,6 +275,8 @@ void kernel_main() {
         }
     }
 
-    // Drain the write ring; the kernel must not return with NOC writes outbound.
+    // Drain the write ring and send_shard's semaphore increment: the kernel must not return with NOC
+    // writes or atomics outbound.
     noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }

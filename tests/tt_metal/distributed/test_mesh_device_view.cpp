@@ -236,7 +236,7 @@ TEST_F(MeshDeviceView2x4Test, ViewGetFabricNodeId) {
 TEST_F(MeshDeviceView2x4Test, ViewGetDevices) {
     const auto& view = mesh_device_->get_view();
 
-    auto all_devices = view.get_devices();
+    auto all_devices = view.impl().get_devices();
     EXPECT_THAT(all_devices, SizeIs(8));
 
     // Verify all devices are unique
@@ -286,27 +286,27 @@ TEST_F(MeshDeviceView2x4Test, ViewGetFabricNodeIdsInRange) {
 TEST_F(MeshDeviceView2x4Test, ViewGetDevicesOnRow) {
     const auto& view = mesh_device_->get_view();
 
-    auto row_0_devices = view.get_devices_on_row(0);
+    auto row_0_devices = view.impl().get_devices_on_row(0);
     EXPECT_THAT(row_0_devices, SizeIs(4));
 
-    auto row_1_devices = view.get_devices_on_row(1);
+    auto row_1_devices = view.impl().get_devices_on_row(1);
     EXPECT_THAT(row_1_devices, SizeIs(4));
 
     // Out of bounds throws
-    EXPECT_ANY_THROW((void)view.get_devices_on_row(2));
+    EXPECT_ANY_THROW((void)view.impl().get_devices_on_row(2));
 }
 
 TEST_F(MeshDeviceView2x4Test, ViewGetDevicesOnColumn) {
     const auto& view = mesh_device_->get_view();
 
-    auto col_0_devices = view.get_devices_on_column(0);
+    auto col_0_devices = view.impl().get_devices_on_column(0);
     EXPECT_THAT(col_0_devices, SizeIs(2));
 
-    auto col_3_devices = view.get_devices_on_column(3);
+    auto col_3_devices = view.impl().get_devices_on_column(3);
     EXPECT_THAT(col_3_devices, SizeIs(2));
 
     // Out of bounds throws
-    EXPECT_ANY_THROW((void)view.get_devices_on_column(4));
+    EXPECT_ANY_THROW((void)view.impl().get_devices_on_column(4));
 }
 
 TEST_F(MeshDeviceView2x4Test, ViewGetFabricNodeIdsOnRow) {
@@ -396,15 +396,15 @@ TEST_F(MeshDeviceView2x4Test, ViewIsLocal) {
 TEST_F(MeshDeviceView2x4Test, ViewIterator) {
     const auto& view = mesh_device_->get_view();
 
-    std::vector<IDevice*> iterated_devices;
-    for (auto device : view) {
+    std::vector<Device*> iterated_devices;
+    for (auto device : view.impl()) {
         iterated_devices.push_back(*device);
     }
 
     EXPECT_THAT(iterated_devices, SizeIs(8));
 
     // Should match get_devices()
-    auto all_devices = view.get_devices();
+    auto all_devices = view.impl().get_devices();
     EXPECT_EQ(iterated_devices, all_devices);
 }
 
@@ -420,25 +420,25 @@ TEST_F(MeshDeviceView2x4Test, ViewMeshId) {
 }
 
 TEST_F(MeshDeviceView2x4Test, View2DMethodsThrowOnNon2DMesh) {
-    std::vector<IDevice*> devices;
+    std::vector<Device*> devices;
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
         devices.push_back(mesh_device_->get_view().impl().get_device(coord));
         fabric_node_ids.push_back(mesh_device_->get_view().get_fabric_node_id(coord));
     }
 
-    MeshDeviceView view_1d(MeshShape(8), devices, fabric_node_ids);
+    MeshDeviceView view_1d(std::make_unique<MeshDeviceViewImpl>(MeshShape(8), devices, fabric_node_ids));
 
     EXPECT_ANY_THROW((void)view_1d.num_rows());
     EXPECT_ANY_THROW((void)view_1d.num_cols());
-    EXPECT_ANY_THROW((void)view_1d.get_devices_on_row(0));
-    EXPECT_ANY_THROW((void)view_1d.get_devices_on_column(0));
+    EXPECT_ANY_THROW((void)view_1d.impl().get_devices_on_row(0));
+    EXPECT_ANY_THROW((void)view_1d.impl().get_devices_on_column(0));
     EXPECT_ANY_THROW((void)view_1d.get_fabric_node_ids_on_row(0));
     EXPECT_ANY_THROW((void)view_1d.get_fabric_node_ids_on_column(0));
     EXPECT_ANY_THROW((void)view_1d.get_line_coordinates());
     EXPECT_ANY_THROW((void)view_1d.get_ring_coordinates());
-    EXPECT_ANY_THROW((void)view_1d.get_line_devices());
-    EXPECT_ANY_THROW((void)view_1d.get_ring_devices());
+    EXPECT_ANY_THROW((void)view_1d.impl().get_line_devices());
+    EXPECT_ANY_THROW((void)view_1d.impl().get_ring_devices());
     EXPECT_ANY_THROW((void)view_1d.get_line_fabric_node_ids());
     EXPECT_ANY_THROW((void)view_1d.get_ring_fabric_node_ids());
 }

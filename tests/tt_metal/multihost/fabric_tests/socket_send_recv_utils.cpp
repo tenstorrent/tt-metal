@@ -169,7 +169,7 @@ bool test_socket_send_recv(
                 auto recv_fabric_node_id =
                     socket.get_fabric_node_id(SocketEndpoint::RECEIVER, connection.receiver_core.device_coord);
 
-                auto sender_program = CreateProgram();
+                auto sender_program = CreateProgram(*mesh_device_);
 
                 auto sender_kernel = CreateKernel(
                     sender_program,
@@ -194,7 +194,13 @@ bool test_socket_send_recv(
 
                 std::vector<uint32_t> sender_rtas;
                 tt_fabric::append_fabric_connection_rt_args(
-                    sender_fabric_node_id, recv_fabric_node_id, 0, sender_program, {sender_core}, sender_rtas);
+                    *mesh_device_,
+                    sender_fabric_node_id,
+                    recv_fabric_node_id,
+                    0,
+                    sender_program,
+                    {sender_core},
+                    sender_rtas);
 
                 tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_core, sender_rtas);
                 sender_mesh_workload.add_program(
@@ -223,7 +229,7 @@ bool test_socket_send_recv(
                     socket.get_fabric_node_id(SocketEndpoint::SENDER, connection.sender_core.device_coord);
                 auto recv_fabric_node_id = mesh_device_->get_fabric_node_id(connection.receiver_core.device_coord);
 
-                auto recv_program = CreateProgram();
+                auto recv_program = CreateProgram(*mesh_device_);
 
                 auto recv_virtual_coord = recv_data_buffer->device()->worker_core_from_logical_core(recv_core);
 
@@ -244,7 +250,7 @@ bool test_socket_send_recv(
 
                 std::vector<uint32_t> recv_rtas;
                 tt_fabric::append_fabric_connection_rt_args(
-                    recv_fabric_node_id, sender_fabric_node_id, 0, recv_program, {recv_core}, recv_rtas);
+                    *mesh_device_, recv_fabric_node_id, sender_fabric_node_id, 0, recv_program, {recv_core}, recv_rtas);
                 tt_metal::SetRuntimeArgs(recv_program, recv_kernel, recv_core, recv_rtas);
                 recv_mesh_workload.add_program(
                     MeshCoordinateRange(connection.receiver_core.device_coord), std::move(recv_program));

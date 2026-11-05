@@ -247,20 +247,29 @@ def test_typecast_zero_fp_to_int(device, pt_input_dtype, tt_input_dtype, tt_outp
     assert torch.all(result == 0), f"0.0 -> {tt_output_dtype} produced non-zero values: {result.unique().tolist()}"
 
 
+@pytest.mark.parametrize(
+    "tt_output_dtype, torch_output_dtype", [(ttnn.int32, torch.int32), (ttnn.uint32, torch.uint32)]
+)
 @pytest.mark.parametrize("tt_input_dtype", [ttnn.float32, ttnn.bfloat16])
-def test_typecast_fp_to_int32_saturates_out_of_range(device, tt_input_dtype):
-    """Regression for #55933: out-of-range floats saturate to the int32 limit of their own sign.
+def test_typecast_fp_to_int_saturates_out_of_range(device, tt_input_dtype, tt_output_dtype, torch_output_dtype):
+    """Regression for #55933: out-of-range floats saturate to the output limit of their own sign.
 
     calculate_typecast_fp32_to_int32 loads INT32_MIN as the saturation constant for every
     overflowing lane and only negates negative inputs, so positive overflow used to come
-    out as INT32_MIN. The random inputs in test_run_eltwise_typecast_op stay far inside the
-    int32 range, so this test covers both overflow directions and the values either side of
-    the boundary. NaN is left out: SFPSETCC is unspecified for it.
+    out as INT32_MIN. The random inputs in test_run_eltwise_typecast_op stay below 80000, so
+    this test covers both overflow directions and the values either side of each boundary,
+    including the upper half of the uint32 range (#61736). NaN is left out: it saturates by
+    its sign bit like +-inf, but torch's NaN conversion is platform-dependent.
     """
     values = [
-        # positive overflow, starting at the first float32 at 2^31
+        # int32 positive overflow starting at the first float32 at 2^31; in range for uint32
         2.0**31,
+        1.25 * 2.0**31,
         3e9,
+        4294901760.0,
+        # largest float32 below 2^32, then uint32 positive overflow
+        4294967040.0,
+        2.0**32,
         1e38,
         float("inf"),
         # negative overflow, starting at the first float32 below -2^31
@@ -284,13 +293,13 @@ def test_typecast_fp_to_int32_saturates_out_of_range(device, tt_input_dtype):
 
     # Expected values come from what the device holds, because bfloat16 packing rounds some inputs.
     held = ttnn.to_torch(tt_input).to(torch.float64)
-    int32_info = torch.iinfo(torch.int32)
-    expected = held.trunc().clamp(int32_info.min, int32_info.max).to(torch.int32)
+    output_info = torch.iinfo(torch_output_dtype)
+    expected = held.trunc().clamp(output_info.min, output_info.max).to(torch.int64)
 
-    tt_output = ttnn.typecast(tt_input, tt_input_dtype, ttnn.int32)
-    assert tt_output.dtype == ttnn.int32
-    # Compared in int64 so a mis-saturated lane reports its real distance instead of an int32 wrap.
-    assert_equal(expected.to(torch.int64), ttnn.to_torch(tt_output).to(torch.int64))
+    tt_output = ttnn.typecast(tt_input, tt_input_dtype, tt_output_dtype)
+    assert tt_output.dtype == tt_output_dtype
+    # Compared in int64 so a mis-saturated lane reports its real distance instead of a 32-bit wrap.
+    assert_equal(expected, ttnn.to_torch(tt_output).to(torch.int64))
 
 
 @pytest.mark.skip("Issue #17237: Does not work with new mantissa rounding")
