@@ -3731,8 +3731,8 @@ class UnarySFPUGolden:
     _REMAINDER_DIVISOR = 2.0
     _UNARY_COMP_THRESHOLD = UNARY_COMP_THRESHOLD
     _UNARY_MAX_MIN_VALUE = UNARY_MAX_MIN_VALUE
-    _XIELU_ALPHA_P = 1.0
-    _XIELU_ALPHA_N = 1.0
+    _XIELU_ALPHA_P = 0.800000011920929
+    _XIELU_ALPHA_N = 0.800000011920929
     _XIELU_BETA = 0.5
     _HARDSHRINK_LAMBDA = HARDSHRINK_LAMBDA
     _SOFTPLUS_BETA = SOFTPLUS_BETA
@@ -3816,11 +3816,52 @@ class UnarySFPUGolden:
         return self._torch_unary(x, lambda t: torch.polygamma(self._polygamma_order, t))
 
     def _xielu(self, x):
-        # Mirrors calculate_xielu: beta = 0.5, alpha_p/alpha_n learnable params.
-        beta_mul_x = self._XIELU_BETA * x
-        if x > 0.0:
-            return self._XIELU_ALPHA_P * x * x + beta_mul_x
-        return self._XIELU_ALPHA_N * (math.expm1(x) - x) + beta_mul_x
+        # Generated from activations/xielu.json and torch 2.11's recorded results: torch's own result at its
+        # special inputs, the exact 0.800000011920929*(exp(x) - 1) - 0.30000001192092896*x where x <= -9.999999974752427e-07; 0.800000011920929*(exp(-9.999999974752427e-07) - 1) - 0.30000001192092896*x where x < 1.401298464324817e-45; 0.800000011920929*x^2 + 0.5*x elsewhere, evaluated at
+        # 320 bits and rounded once onto Dest's grid. The golden this replaces disagreed with torch on
+        # 13,703 of the 65,536 BF16 inputs.
+        if math.isnan(x):
+            return math.nan
+        if math.isinf(x):
+            return math.inf if x > 0 else math.nan
+        if x == 0.0:
+            return (
+                -8.009374141693115e-07
+                if math.copysign(1.0, x) > 0
+                else -8.009374141693115e-07
+            )
+        fast = None
+        bits = struct.unpack("<I", struct.pack("<f", x))[0]
+        if bits & 0xFFFF == 0 and struct.unpack("<f", struct.pack("<f", x))[0] == x:
+            try:
+                if x <= -9.999999974752427e-07:
+                    fast = (
+                        0.800000011920929 * (math.exp(x) - 1) - 0.30000001192092896 * x
+                    )
+                elif x < 1.401298464324817e-45:
+                    fast = (
+                        0.800000011920929 * (math.exp(-9.999999974752427e-07) - 1)
+                        - 0.30000001192092896 * x
+                    )
+                else:
+                    fast = 0.800000011920929 * x**2 + 0.5 * x
+            except (ArithmeticError, ValueError):
+                fast = None
+        rounded = self._round_fast(fast, 2.8257046260539585e-09)
+        if rounded is not None:
+            return rounded
+        with mpmath.workprec(320):
+            x = mpmath.mpf(x)
+            if x <= -9.999999974752427e-07:
+                return self._round_once_to_dest(
+                    0.800000011920929 * (mpmath.exp(x) - 1) - 0.30000001192092896 * x
+                )
+            if x < 1.401298464324817e-45:
+                return self._round_once_to_dest(
+                    0.800000011920929 * (mpmath.exp(-9.999999974752427e-07) - 1)
+                    - 0.30000001192092896 * x
+                )
+            return self._round_once_to_dest(0.800000011920929 * x**2 + 0.5 * x)
 
     def _hardshrink(self, x):
         # hardshrink(x) = x when |x| > lambda, else 0. NaN propagates rather than falling into

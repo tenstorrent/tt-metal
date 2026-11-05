@@ -111,6 +111,13 @@ sfpi_inline void _xielu_mad_(sfpi::vFloat mul_a, sfpi::vFloat mul_b, sfpi::vFloa
     sfpi::dst_reg[0] = result;
 }
 
+// The param0 the generated xielu kernel is fitted for, as FP32 bits; any other param0 runs the stock kernel.
+inline constexpr std::uint32_t xielu_bf16_param0_bits = 0x3f4ccccdu;
+// The param1 the generated xielu kernel is fitted for, as FP32 bits; any other param1 runs the stock kernel.
+inline constexpr std::uint32_t xielu_bf16_param1_bits = 0x3f4ccccdu;
+// Whether BF16 DEST runs the generated xielu kernel as one call over the whole tile.
+inline constexpr bool xielu_bf16_whole_tile = false;
+
 /*
  * This function implements the xIELU (Expanded Integral of ELU) activation function,
  * a trainable piecewise function with learnable alpha_p and alpha_n parameters.
