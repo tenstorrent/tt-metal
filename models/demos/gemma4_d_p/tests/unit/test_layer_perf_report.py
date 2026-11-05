@@ -4,6 +4,7 @@
 import csv
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,17 +20,24 @@ PERF_REPORT_HEADERS = [
     "Op-to-Op Gap",
     "Global Call Count",
 ]
+# tt-perf-report 1.5.0's report_csv_column_labels, for the columns above.
+PERF_REPORT_1_5_LABELS = {
+    "Total %": "Total [%]",
+    "Device Time": "Device Time [μs]",
+    "Op-to-Op Gap": "Op-to-Op Gap [μs]",
+}
 
 
-def _write_cell_csv(path, rows):
+def _write_cell_csv(path, rows, labels=None):
+    labels = labels or {}
     with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=PERF_REPORT_HEADERS)
+        writer = csv.DictWriter(f, fieldnames=[labels.get(h, h) for h in PERF_REPORT_HEADERS])
         writer.writeheader()
         for op, device_us, gap_us, *call_count in rows:
             row = {"OP Code": op, "Device Time": device_us, "Op-to-Op Gap": gap_us}
             if call_count:
                 row["Global Call Count"] = call_count[0]
-            writer.writerow(row)
+            writer.writerow({labels.get(k, k): v for k, v in row.items()})
 
 
 def _cell(layer_type, chunk_idx, layer_idx, measured_ms, chunk_size=8192):
@@ -78,6 +86,33 @@ def test_summarize_ignores_non_device_rows(tmp_path):
     assert summary["kernel_us"] == 1000.0
     assert summary["span_us"] == 1015.0
     assert summary["top_ops"] == [{"op": "MatmulDeviceOperation", "device_us": 500.0, "count": 2}]
+
+
+def test_summarize_reads_the_installed_tt_perf_report_headers(tmp_path, monkeypatch):
+    monkeypatch.setattr(lpr, "_perf_report", lambda: SimpleNamespace(report_csv_column_labels=PERF_REPORT_1_5_LABELS))
+    path = tmp_path / "cell.csv"
+    _write_cell_csv(
+        path,
+        [
+            ("MatmulDeviceOperation", "300.0", "5.0", "11"),
+            ("RingJointSDPADeviceOperation", "500.0", "10.0", "12"),
+            ("MatmulDeviceOperation", "200.0", "1000000.0", "10"),
+            ("to_torch (torch)", "", "", ""),
+        ],
+        labels=PERF_REPORT_1_5_LABELS,
+    )
+    summary = lpr.summarize_cell_csv(path)
+    assert summary["n_ops"] == 3
+    assert summary["kernel_us"] == 1000.0
+    assert summary["span_us"] == 1015.0
+
+
+def test_summarize_rejects_a_csv_without_device_time(tmp_path, monkeypatch, expect_error):
+    monkeypatch.setattr(lpr, "_perf_report", lambda: SimpleNamespace(report_csv_column_labels=PERF_REPORT_1_5_LABELS))
+    path = tmp_path / "cell.csv"
+    _write_cell_csv(path, [("MatmulDeviceOperation", "300.0", "5.0", "11")], labels={"Device Time": "Device Time [ns]"})
+    with expect_error(ValueError, "tt-perf-report CSV has no 'Device Time"):
+        lpr.summarize_cell_csv(path)
 
 
 def test_summarize_includes_all_ops(tmp_path):
