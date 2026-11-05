@@ -161,9 +161,9 @@ default_profile: multi-user              # user decision 2026-11-02
 card:
   description: >-
     [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) on a P300x2 (4 Blackhole chips) with vLLM, on the
-    resident decode engine: one persistent program per chip per decode step, about 12 ms per token for one user.
-    Profiles: up to 16 users with a shared KV pool (the default), and one user with lossless
-    [DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) speculative decoding (up to 256K context).
+    resident decode engine: one persistent program per chip per decode step. Profiles: up to 16 users with a shared KV
+    pool (the default), and one user with lossless [DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2)
+    speculative decoding (up to 256K context).
   quickstart: |
     ### At a glance
     - Weights: [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) @ `1d4bf0f`; drafter
@@ -173,13 +173,10 @@ card:
     - `single-user` is **greedy only**: every request is decoded greedily (the server logs one warning for a request with
       temperature > 0). Speculation is lossless against the model's own greedy output; tokens can differ from plain
       decoding at bf16 near-ties.
-    - DFlash2 helps most on short and medium prompts. On long, hard-to-predict text the gain shrinks to about 1.3x over
-      plain decoding; it stayed faster at every length measured (32K to 250K).
 
     ### Which profile
     - One user, greedy (temperature 0): `single-user`.
-    - Sampling, or 2 to 16 users: `multi-user`. One user on it gets about 70 t/s/u (plain decode in a launch of 8
-      rows).
+    - Sampling, or 2 to 16 users: `multi-user`.
     - 17 to 32 users: `batch`.
     - If the time to the first token matters more than decode speed: `multi-user` with the TTFT-first option below.
 
@@ -205,7 +202,7 @@ card:
     ```
 
     ### Users x context (`multi-user`)
-    The users share one KV pool: 1,884,160 tokens on `multi-user` (29,440 blocks of 64 tokens); 8.7 KB per token per chip. A request can use up to `max_model_len` (262,144), and any mix of requests fits while their contexts add up to the pool. The table gives the context each user gets when all of them are equally long. Up to 8 users decode together in one launch. With 9 to 16 users a second launch runs as well: the aggregate stays at the 8-user level and each user's speed halves.
+    The users share one KV pool: 1,884,160 tokens on `multi-user` (29,440 blocks of 64 tokens); 8.7 KB per token per chip. A request can use up to `max_model_len` (262,144), and any mix of requests fits while their contexts add up to the pool. The table gives the context each user gets when all of them are equally long. Up to 8 users decode together in one launch. With 9 to 16 users a second launch runs as well.
 
     | users | context per user, `multi-user` |
     |---|---|
@@ -213,89 +210,75 @@ card:
     | 8 | 235,456 |
     | 16 | 117,696 |
 
-    ### Rows decode, users x context (`multi-user`)
-    Decode speed from the device step time with every user at the given context (no host or HTTP overhead); each cell is t/s/u / aggregate t/s:
-
-    | users | context 128 | context 4K | context 32K | context 64K | context 128K |
-    |---|---|---|---|---|---|
-    | 1 | 70 / 70 | 69 / 69 | 65 / 65 | 62 / 62 | 55 / 55 |
-    | 2 | 67 / 134 | 66 / 133 | 59 / 118 | 53 / 107 | 44 / 88 |
-    | 4 | 61 / 243 | 60 / 241 | 49 / 196 | 41 / 165 | 31 / 124 |
-    | 8 | 50 / 401 | 50 / 398 | 36 / 285 | 28 / 222 | 19 / 156 |
-
-    One user on `multi-user` gets about 70 t/s/u at short context: its 8-row launch costs about 2.7 ms more per step than a one-user build of plain decoding (86 t/s/u); for one greedy user, `single-user` (DFlash2) is faster still. From 2 concurrent users on, `multi-user` gives more total throughput than that one-user build at every context: 1.3-1.6x at 2 users and 2.4-4.7x at 8 users (device step time, 128 to 128K context).
-
-    ### Prefill and decode on `multi-user`, and the TTFT-first option
-    A step on this engine either prefills or decodes, never both, so prefill time that runs while a user decodes is a
-    pause in that user's tokens. `multi-user` prefills the prompts that are waiting together, in one pipelined pass,
-    before their decodes start: when many requests arrive together, each user then decodes at the decode-step speed,
-    and the first tokens of the whole group come out after its prefill. With the TTFT-first option a long prompt is
-    split into 1024-token pieces between decode steps instead: first tokens come sooner, and every user's decode pauses
-    while the others' prompts prefill. `multi-user` prefills in chunks of at least 256 tokens, which costs about +49 ms
-    TTFT on prompts of up to 128 tokens (+20 ms at 512, none from about 768; about +0.2 s for a burst of 16 such
-    prompts): the price of its larger KV pool.
-    Turn the TTFT-first option on by passing the profile's tt config with `prefill_gang_tokens` 0:
+    ### TTFT-first option (`multi-user`)
+    Instead of prefilling waiting prompts together before their decodes start, the TTFT-first option prefills them in
+    1024-token pieces between decode steps: first tokens come sooner, and every user's decode pauses while the others'
+    prompts prefill. Turn it on by passing the profile's tt config again with `prefill_gang_tokens` 0:
 
     ```bash
     tt-model serve changh95/qwen3.8-27b-p300x2 --additional-config '{"tt": {"fabric_config": "FABRIC_1D", "trace_region_size": 134217728, "sample_on_device_mode": "decode_only", "prefill_chunk_tokens": 1024, "prefill_gang_tokens": 0}}'
     ```
 
-    16 concurrent users, 128 or 1024 new tokens (tt-inference-server; each cell t/s/u / TTFT; the TTFT-first column is
-    an earlier run of that scheduling, before the pipelined prefill pass); total throughput is +56 % to +84 %
-    higher on the default:
-
-    | prompt / new tokens | `multi-user` | TTFT-first option |
-    |---|---|---|
-    | 2,048 / 128 | 24.7 / 4.0 s | 10.3 / 2.0 s |
-    | 8,192 / 128 | 22.9 / 12.5 s | 5.0 / 7.2 s |
-    | 16,384 / 128 | 15.4 / 28.9 s | 2.8 / 15.6 s |
-    | 8,192 / 1,024 | 22.1 / 12.5 s | 11.7 / 8.8 s |
-    | 10,000 / 1,024 | 20.6 / 15.6 s | 11.0 / 10.6 s |
-
     ### More than 16 users (`batch`)
     `batch` serves up to 32 concurrent requests on a different engine: the ttnn decode path of the previous package, all
-    users in one decode batch, full sampling. 32 concurrent users (tt-inference-server; each cell t/s / t/s/u / TTFT).
-    The run on this image had chip 1 throttling (800-900 MHz) from 4K-token prompts on; the 2026-09-12 run of the same
-    profile on the previous package did not:
-
-    | prompt / new tokens | this image | previous package, 2026-09-12 |
-    |---|---|---|
-    | 128 / 128 | 376 / 20.8 / 4.8 s | 492 / 22.7 / 2.7 s |
-    | 2,048 / 128 | 252 / 19.6 / 9.8 s | 298 / 21.4 / 7.8 s |
-    | 8,192 / 128 | 74 / 11.5 / 44.4 s | 107 / 17.7 / 31.0 s |
-    | 8,192 / 1,024 | 268 / 13.7 / 47.3 s | 413 / 21.1 / 30.9 s |
-    | 10,000 / 1,024 | 238 / 11.9 / 51.5 s | 361 / 18.4 / 35.0 s |
+    users in one decode batch, full sampling.
 
     Known issue: on the test machine, one card dropped off PCIe about once per 20 heavy waves of 32 requests with
     8K-token prompts, on the previous package as well; `tt-smi -r` or a reboot brings it back.
 
-    ### Benchmarks (tt-inference-server `--workflow benchmarks`)
-    | profile | users | ISL / OSL | t/s | t/s/u | TTFT |
-    |---|---|---|---|---|---|
-    | `single-user` | 1 | 128 / 128 | 116.8 | 132.6 | 0.14 s |
-    | `single-user` | 1 | 2048 / 128 | 89.3 | 123.7 | 0.41 s |
-    | `single-user` | 1 | 8192 / 128 | 59.1 | 111.3 | 1.02 s |
-    | `single-user` | 1 | 8192 / 1024 | 118.8 | 134.5 | 1.02 s |
-    | `single-user` | 1 | 32768 / 128 | 27.2 | 132.3 | 3.74 s |
-    | `multi-user` | 1 | 128 / 128 | 63.6 | 69.2 | 0.18 s |
-    | `multi-user` | 1 | 2048 / 128 | 56.9 | 68.7 | 0.40 s |
-    | `multi-user` | 1 | 8192 / 128 | 44.5 | 68.0 | 1.01 s |
-    | `multi-user` | 1 | 8192 / 1024 | 51.4 | 54.2 | 1.03 s |
-    | `multi-user` | 1 | 32768 / 128 | 18.3 | 46.1 | 4.24 s |
-    | `multi-user` | 16 | 128 / 128 | 332.0 | 24.7 | 1.03 s |
-    | `multi-user` | 16 | 2048 / 128 | 222.8 | 24.7 | 4.05 s |
-    | `multi-user` | 16 | 8192 / 128 | 113.5 | 22.9 | 12.50 s |
-    | `multi-user` | 16 | 8192 / 1024 | 278.4 | 22.1 | 12.51 s |
-    | `multi-user` | 16 | 32768 / 128 | 21.8 | 3.3 | 52.88 s |
+    ### Results (tt-inference-server `--workflow benchmarks`)
 
-    DFlash2 at long context (one user, 128 new tokens, one prose prompt per length):
+    #### `single-user`
+    | ISL | OSL | Concurrency | Num Requests | TTFT (ms) | TPOT (ms) | Tput User (t/s/u = 1000/TPOT) | Tput Output (t/s) |
+    |---|---|---|---|---|---|---|---|
+    | 128 | 128 | 1 | 8 | 138.6 | 7.5 | 132.6 | 116.8 |
+    | 128 | 1024 | 1 | 4 | 138.4 | 7.5 | 132.9 | 130.7 |
+    | 1024 | 128 | 1 | 4 | 299.3 | 7.7 | 129.6 | 100.0 |
+    | 2048 | 128 | 1 | 4 | 406.3 | 8.1 | 123.7 | 89.3 |
+    | 4096 | 128 | 1 | 4 | 625.7 | 8.3 | 120.4 | 76.2 |
+    | 8192 | 128 | 1 | 2 | 1023.0 | 9.0 | 111.3 | 59.1 |
+    | 8192 | 1024 | 1 | 2 | 1016.0 | 7.4 | 134.5 | 118.8 |
+    | 10000 | 1024 | 1 | 2 | 1215.1 | 7.4 | 134.8 | 116.3 |
+    | 16384 | 128 | 1 | 2 | 1842.4 | 9.2 | 108.1 | 42.4 |
+    | 32768 | 128 | 1 | 1 | 3739.4 | 7.6 | 132.3 | 27.2 |
+    | 65536 | 128 | 1 | 1 | 8537.4 | 8.5 | 118.0 | 13.3 |
+    | 131072 | 128 | 1 | 1 | 24649.4 | 12.7 | 78.6 | 4.9 |
 
-    | prompt | `single-user` (DFlash2) t/s/u | plain decode t/s/u |
-    |---|---|---|
-    | 32K | ~120 | ~79 |
-    | 64K | ~207 | ~74 |
-    | 128K | ~106 | ~66 |
-    | 250K | ~160 | ~49 |
+    Run 2026-11-02, tt-inference-server 0.21.0 `--workflow benchmarks`; greedy (the profile decodes every request greedily).
+
+    #### `multi-user`
+    | ISL | OSL | Concurrency | Num Requests | TTFT (ms) | TPOT (ms) | Tput User (t/s/u = 1000/TPOT) | Tput Output (t/s) |
+    |---|---|---|---|---|---|---|---|
+    | 128 | 128 | 1 | 8 | 177.6 | 14.4 | 69.2 | 63.6 |
+    | 128 | 128 | 16 | 128 | 1027.5 | 40.5 | 24.7 | 332.0 |
+    | 128 | 1024 | 1 | 4 | 188.7 | 14.5 | 69.1 | 68.3 |
+    | 128 | 1024 | 16 | 64 | 1034.8 | 40.5 | 24.7 | 385.5 |
+    | 1024 | 128 | 1 | 4 | 295.9 | 14.5 | 68.9 | 59.8 |
+    | 1024 | 128 | 16 | 64 | 2262.2 | 40.5 | 24.7 | 276.4 |
+    | 2048 | 128 | 1 | 4 | 401.4 | 14.6 | 68.7 | 56.9 |
+    | 2048 | 128 | 16 | 64 | 4048.6 | 40.5 | 24.7 | 222.8 |
+    | 4096 | 128 | 1 | 4 | 619.7 | 14.6 | 68.6 | 51.8 |
+    | 4096 | 128 | 16 | 64 | 7546.5 | 40.5 | 24.7 | 161.3 |
+    | 8192 | 128 | 1 | 2 | 1008.1 | 14.7 | 68.0 | 44.5 |
+    | 8192 | 128 | 16 | 32 | 12496.3 | 43.6 | 22.9 | 113.5 |
+    | 8192 | 1024 | 1 | 2 | 1029.7 | 18.5 | 54.2 | 51.4 |
+    | 8192 | 1024 | 16 | 32 | 12512.2 | 45.3 | 22.1 | 278.4 |
+    | 10000 | 1024 | 1 | 2 | 1268.8 | 20.2 | 49.4 | 46.6 |
+    | 10000 | 1024 | 16 | 32 | 15597.1 | 48.4 | 20.6 | 251.5 |
+    | 16384 | 128 | 1 | 2 | 1835.2 | 15.0 | 66.6 | 34.2 |
+    | 16384 | 128 | 16 | 32 | 28887.2 | 64.8 | 15.4 | 55.2 |
+    | 32768 | 128 | 1 | 1 | 4238.5 | 21.7 | 46.1 | 18.3 |
+    | 32768 | 128 | 16 | 16 | 52883.6 | 302.8 | 3.3 | 21.8 |
+    | 65536 | 128 | 1 | 1 | 12290.4 | 24.5 | 40.8 | 8.3 |
+    | 65536 | 128 | 16 | 16 | 123070.1 | 399.4 | 2.5 | 8.9 |
+    | 131072 | 128 | 1 | 1 | 32602.4 | 28.4 | 35.2 | 3.5 |
+    | 131072 | 128 | 14 | 14 | 272246.0 | 509.3 | 2.0 | 3.5 |
+
+    Run 2026-11-02, tt-inference-server 0.21.0 `--workflow benchmarks`; the model's default sampling (temperature 1.0, top_k 20, top_p 0.95).
+
+    #### `batch`
+
+    (pending: the tt-inference-server run of this profile)
 
 verify:
   - "from qwen36_resident.generator_vllm import Qwen36ResidentForCausalLM, Qwen36ResidentDFlashForCausalLM; assert Qwen36ResidentDFlashForCausalLM"
