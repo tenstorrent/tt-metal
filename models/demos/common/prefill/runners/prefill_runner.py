@@ -330,9 +330,11 @@ def _h2d_drain_op(h2d_service, sockets, n_mtp: int):
     )
 
 
-def _socket_next(h2d_service, sockets, n_mtp: int = 0) -> tuple:
+def _socket_next(h2d_service, sockets, n_mtp: int = 0, stage_metadata=None) -> tuple:
     if sockets.drain_trace is not None:
         sockets.drain_trace.replay()
+        if stage_metadata is not None:
+            stage_metadata(sockets.metadata)
         return sockets.tokens, sockets.overhang, _decode_metadata(sockets.metadata)
     outs = _h2d_drain_op(h2d_service, sockets, n_mtp)
     tokens, overhang = (outs[0], outs[1]) if n_mtp else (outs[0], None)
@@ -457,14 +459,15 @@ def _d2d_drain_op(inbound, sockets):
 def _d2d_recv(inbound, sockets, stage_metadata=None) -> tuple:
     """Return ``(activation, extra segments, decoded metadata)``. The extras are the persistent
     ``sockets.extras`` when set, freshly allocated otherwise; the list itself is always the caller's.
-    ``stage_metadata`` is handed the drained metadata before the blocking host read of it."""
+    ``stage_metadata`` is handed the drained metadata before the blocking host read of it, once the
+    drain is traced (the runtime's capture exists by then)."""
     t0 = time.perf_counter()
     if sockets.drain_trace is not None:
         sockets.drain_trace.replay()
         act, extras = sockets.tokens, list(sockets.extras or [])
     else:
         act, *extras, sockets.metadata = _d2d_drain_op(inbound, sockets)
-    if stage_metadata is not None:
+    if stage_metadata is not None and sockets.drain_trace is not None:
         stage_metadata(sockets.metadata)
     meta = _decode_metadata(sockets.metadata, with_provided_levels=bool(MTP_LEVELS))
     where = f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}{_chunks_str(meta)}"
@@ -947,7 +950,7 @@ def run_request_loop(
         mtp_id_segments = []
         try:
             if cfg.is_first_rank:
-                inp, mtp_tokens, meta = _socket_next(h2d_service, sockets, NUM_MTP_TOKENS)
+                inp, mtp_tokens, meta = _socket_next(h2d_service, sockets, NUM_MTP_TOKENS, stage_metadata)
                 meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
                 if FORWARD_CHUNKS > 1 and not meta["chunks"][0].is_sentinel:
                     validate_chunks(
@@ -958,9 +961,7 @@ def run_request_loop(
                         max_seq_len=MAX_SEQ_LEN,
                     )
             else:
-                inp, mtp_id_segments, meta = _d2d_recv(
-                    inbound.activation, sockets, stage_metadata if sockets.drain_trace is not None else None
-                )
+                inp, mtp_id_segments, meta = _d2d_recv(inbound.activation, sockets, stage_metadata)
                 mtp_tokens = None
         except BaseException:
             # Release the downstream ranks before failing, whatever stopped this one.
