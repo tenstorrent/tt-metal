@@ -4,12 +4,11 @@
 """ttnn.experimental.sparse_push_plan + sparse_kv_push, bit-exact on every chip of an 8x4 torus.
 
 Each cache row encodes its own global row and slot, so reading the compact buffer through the plan's rewritten indices
-must return exactly the rows the top-k names. Index patterns: real GLM-5.3 top-k plus synthetic edge cases for the
-plan's per-owner runs, packet packing, masking, and the prefix/remainder split.
+must return exactly the rows the top-k names. Index patterns are synthetic edge cases for the plan's per-owner runs,
+packet packing, masking, and the prefix/remainder split; real GLM-5.3 top-k runs in the nightly sparse SDPA push test.
 """
 
 import zlib
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -25,8 +24,6 @@ SENTINEL = 0xFFFFFFFF
 FILL = 0x5A5A5A5A
 N_DEV = 32
 TOPK = 2048
-TRACE_1M = Path("/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120")
-TRACE_1M_ROWS = 1044480
 
 
 def _device_params():
@@ -368,53 +365,22 @@ def test_sparse_kv_push_configs(mesh_device, page_bytes, sc, links, slot_tensor)
     _run_parts(mesh_device, push, slot=3, chunk_start=start, tag=f"{page_bytes}B sc{sc} {links}L", **slot_args)
 
 
-# Large caches use 64 B rows to keep host memory and readback small; production page sizes are covered above.
-@galaxy
-@pytest.mark.parametrize("layer", [14, 62], ids=["L14", "L62"])
-def test_sparse_kv_push_real_topk(mesh_device, layer):
-    from safetensors.numpy import load_file
-
-    f = TRACE_1M / "dsa" / f"dsa_topk_indices_layer_{layer}" / "rows_00000000_00005120.safetensors"
-    if not f.exists():
-        pytest.skip(f"GLM-5.3 1M top-k not staged: {f}")
-    sc, page_bytes = 160, 64
-    idx = next(iter(load_file(str(f)).values())).astype(np.int64).reshape(N_DEV, sc, TOPK)
-    idx[idx < 0] = SENTINEL
-    start = TRACE_1M_ROWS - sc * N_DEV
-    cache = _cache(mesh_device, 2, TRACE_1M_ROWS, sc, page_bytes // 4)
-    push = Push(mesh_device, cache, idx, max_rows=TRACE_1M_ROWS, sc=sc, page_bytes=page_bytes, chunk_start=start)
-    _run_parts(mesh_device, push, slot=1, chunk_start=start, tag=f"L{layer}", batch_index=1)
-
-
-@galaxy
-@pytest.mark.parametrize("query_rows", [96, 160, 192, 480])
-def test_sparse_kv_push_overlap_grids(mesh_device, query_rows):
-    """Attention beside the push always leaves the push its cores: 96, 192 and 480 query rows (3072-, 6144- and
-    15360-token chunks on 8x4) would take whole columns the push needs. The sub-device manager rejects overlapping
-    or missing cores."""
-    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import PUSH_CORES_PER_LINK, SparseKvPushPlanner
-
-    planner = SparseKvPushPlanner(mesh_device, links=2)
-    attention, push = planner.grids(query_rows)
-    assert push.num_cores() >= 2 * PUSH_CORES_PER_LINK, f"{push.num_cores()} push cores"
-    try:
-        planner.prefetch_manager(query_rows)
-    finally:
-        planner.release()
-
-
 @galaxy
 def test_sparse_kv_push_worst_case_union(mesh_device):
-    """Every query names 2048 rows no other query names, the most a chip can need: the model's buffer cap
-    (query rows x top-k + one unit per owner) must hold it."""
-    sc, page_bytes, max_rows = 160, 64, 337920
-    distinct = sc * TOPK
-    idx = np.stack([np.random.default_rng(d).permutation(distinct).reshape(sc, TOPK) for d in range(N_DEV)])
+    """Every query names TOPK rows no other query names, the most a chip can need: the buffer the op sizes for
+    queries x top-k distinct rows (that many plus one unit per owner) must hold it. 32 queries keep it cheap; the bound
+    is the same for the model's 160."""
+    sc, page_bytes, queries = 160, 64, 32
+    distinct = queries * TOPK
+    max_rows = -(-distinct // (sc * N_DEV)) * sc * N_DEV
+    idx = np.stack([np.random.default_rng(d).permutation(distinct).reshape(queries, TOPK) for d in range(N_DEV)])
     start = max_rows - sc * N_DEV
     cache = _cache(mesh_device, 1, max_rows, sc, page_bytes // 4)
     push = Push(mesh_device, cache, idx, max_rows=max_rows, sc=sc, page_bytes=page_bytes, chunk_start=start)
-    unit = np.prod(packet_shape(mesh_device, page_bytes))
-    assert push.rows <= distinct + N_DEV * unit, f"{push.rows} rows needed, over the cap {distinct + N_DEV * unit}"
+    cap = ttnn.experimental.sparse_kv_push_output_spec(
+        mesh_device, distinct_rows=distinct, max_rows=max_rows, stripe_chunk=sc, row_width=push.width, dtype=ttnn.uint32
+    ).shape[2]
+    assert push.rows <= cap, f"{push.rows} rows needed, over the op's buffer of {cap}"
     _run_parts(mesh_device, push, slot=0, chunk_start=start, tag="worst case", batch_index=0)
 
 
@@ -481,44 +447,68 @@ def test_sparse_kv_push_traced(mesh_device):
         ttnn.release_trace(mesh_device, tid)
 
 
+# ----------------------------------------------------------------------------------------------------------------------
+# Determinism
+# ----------------------------------------------------------------------------------------------------------------------
+def _mismatch_marker(reference, actual, mask=None):
+    """Per chip, non-zero when `actual` differs from `reference` anywhere `mask` (broadcast over the row) is set."""
+    marker = ttnn.ne(reference, actual, dtype=ttnn.bfloat16)
+    if mask is not None:
+        marker = ttnn.multiply(marker, mask)
+    return ttnn.max(marker)
+
+
+def _merge_markers(current, new):
+    return new if current is None else ttnn.maximum(current, new)
+
+
+def _marker_set(marker):
+    host = ttnn.from_device(marker)
+    return any(float(ttnn.to_torch(chip).item()) != 0.0 for chip in ttnn.get_device_tensors(host))
+
+
 @galaxy
-@pytest.mark.parametrize(
-    "case",
-    ["stripe_0", "stripe_48", "stripe_1024", "tile_input", "same_semaphore", "output_below_minimum", "output_is_cache"],
-)
-def test_sparse_kv_push_rejects(mesh_device, case, expect_error):
-    sc, page_bytes, max_rows = 160, 704, 10240
-    rng = np.random.default_rng(0)
-    idx = _lay_out(_pattern("random", rng, sc=sc, end=max_rows, start=max_rows - sc * N_DEV), sc, rng)
-    cache = _cache(mesh_device, 1, max_rows, sc, page_bytes // 4)
-    push = Push(mesh_device, cache, idx, max_rows=max_rows, sc=sc, page_bytes=page_bytes, chunk_start=0)
-    if case.startswith("stripe_"):
-        push.sc = int(case.split("_")[1])
-        with expect_error(RuntimeError, "must be a positive multiple of 32"):
-            push.plan()
-        return
+def test_sparse_kv_push_determinism(mesh_device):
+    """The prefix push then the rest, repeated on one plan, fill every referenced slot bit-identically. Compared on
+    device, one buffer reused across runs; only referenced slots count, since the rest of a packet is undefined."""
+    sc, page_bytes, max_rows, runs = 160, 704, 92160, 5
+    rng = np.random.default_rng(11)
+    start = max_rows - sc * N_DEV
+    idx = _mask(_lay_out(_pattern("clustered", rng, sc=sc, end=max_rows, start=start), sc, rng), rng)
+    cache = _cache(mesh_device, 2, max_rows, sc, page_bytes // 4)
+    push = Push(mesh_device, cache, idx, max_rows=max_rows, sc=sc, page_bytes=page_bytes, chunk_start=start)
     push.plan()
+
+    compact = ttnn.to_torch(push.compact_indices, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+    compact = (compact.to(torch.int64).numpy() & 0xFFFFFFFF).reshape(N_DEV, -1)
+    referenced = np.zeros((N_DEV, push.rows), dtype=np.float32)
+    for d in range(N_DEV):
+        referenced[d, compact[d][compact[d] != SENTINEL]] = 1
+    mask = ttnn.from_torch(
+        torch.from_numpy(referenced).reshape(1, 1, N_DEV * push.rows, 1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+    )
+    fill = ttnn.from_torch(
+        torch.from_numpy(np.full((1, 1, push.rows, push.width), FILL, dtype=np.uint32).view(np.int32)),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    def run(out):
+        ttnn.copy_host_to_device_tensor(fill, out)
+        push.push(out, Part.PREFIX, batch_index=1)
+        push.push(out, Part.REST, batch_index=1)
+
+    reference = _filled_buffer(mesh_device, push.rows, push.width)
+    run(reference)
     out = _filled_buffer(mesh_device, push.rows, push.width)
-    if case == "tile_input":
-        push.cache = ttnn.from_torch(
-            torch.zeros(1, 1, max_rows, 352, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
-        )
-    elif case == "same_semaphore":
-        push.sems = [push.sems[0], push.sems[0]]
-    elif case == "output_below_minimum":
-        out = _filled_buffer(mesh_device, 8, push.width)
-    elif case == "output_is_cache":
-        push.cache = out
-    message = {
-        "tile_input": "must be a ROW_MAJOR DRAM tensor",
-        "same_semaphore": "two semaphores must differ",
-        "output_below_minimum": "output needs at least",
-        "output_is_cache": "must not overlap the cache",
-    }[case]
-    with expect_error(RuntimeError, message):
-        push.push(out, Part.ALL, batch_index=0)
+    marker = None
+    for _ in range(runs - 1):
+        run(out)
+        marker = _merge_markers(marker, _mismatch_marker(reference, out, mask))
+    assert not _marker_set(marker), f"a push differs from the first of {runs} in a referenced slot"

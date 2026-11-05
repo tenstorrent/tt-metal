@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""sparse_sdpa on a restricted core grid, and the sparse KV push beside it on a sub-device (GLM shared layers).
+"""The sparse KV push beside sparse_sdpa on a sub-device (GLM shared layers): exactness and per-step perf.
 
 GLM-5.3 prefill shape on the 8x4 Galaxy (SP8 x TP4, 64 heads resharded head->seq, TOPK 2048, latent 512 +
 rope 64). Timings come from back-to-back trace replays, measured on the host.
@@ -18,7 +18,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_test_utils import golden, make_inputs, pcc
 
 K_DIM, V_DIM, TOPK, H = 576, 512, 2048, 64
 SP, TP = 8, 4
@@ -40,7 +39,6 @@ _KV_FORMATS = {
     "fp8": (ttnn.transformer.SparseKVFormat.SCALED_FP8, ttnn.fp8_e4m3, 656),
     "bf16": (ttnn.transformer.SparseKVFormat.BF16, ttnn.bfloat16, K_DIM),
 }
-_KV_FMT = pytest.mark.parametrize("kv_fmt", list(_KV_FORMATS))
 
 
 def _kv_cache(mesh_device, batch, tokens, kv_fmt, mesh_mapper, seed=0):
@@ -89,86 +87,6 @@ def _sparse_sdpa(q, kv, idx, chunk_local, kv_fmt, k_chunk=128, **grid):
         block_cyclic_cache_tp_sharded=True,
         **grid,
     )
-
-
-@run_for_blackhole()
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("cols", [(0, 7), (2, 9), (0, 0)], ids=["80core", "offset80", "10core"])
-def test_sparse_sdpa_sub_core_grids_matches_golden(mesh_device, cols):
-    """A restricted grid only changes which core owns which tokens; results must not change."""
-    Hs, S, T, topk, kc = 32, 96, 1024, 128, 64
-    q, kv, indices = make_inputs(Hs, S, T, topk, K_DIM, lambda s: 1 + (s * 7) % topk, seed=3)
-    ref = golden(q, kv, indices, K_DIM**-0.5, V_DIM)
-    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    tt_q = ttnn.from_torch(q.to(torch.bfloat16), dtype=ttnn.bfloat16, **common)
-    tt_kv = ttnn.from_torch(kv.to(torch.bfloat16), dtype=ttnn.bfloat16, **common)
-    tt_idx = ttnn.from_torch(indices.to(torch.int32), dtype=ttnn.uint32, **common)
-    run = lambda **grid: ttnn.to_torch(
-        ttnn.transformer.sparse_sdpa(
-            tt_q, tt_kv, tt_idx, V_DIM, kv_format=ttnn.transformer.SparseKVFormat.BF16, k_chunk_size=kc, **grid
-        )
-    )
-    full = run()
-    restricted = run(sub_core_grids=_cols(*cols))
-    assert torch.equal(full, restricted), "restricted grid changed the output"
-    assert pcc(restricted, ref) >= 0.99
-
-
-def _glm_inputs(mesh_device, chunk_global, cache_tokens, kv_fmt):
-    """Per-chip GLM shapes after the head->seq reshard: q [1,64,chunk/(sp*tp),576], natural-position
-    indices into a populated prefix, and a replicated block-cyclic gather buffer of cache_tokens rows."""
-    s_local = chunk_global // (SP * TP)
-    gen = torch.Generator().manual_seed(0)
-    q = torch.randn(1, H, s_local * SP * TP, K_DIM, generator=gen).to(torch.bfloat16)
-    idx = torch.randint(0, cache_tokens, (1, 1, s_local * SP * TP, TOPK), generator=gen, dtype=torch.int32)
-    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    shard_seq = ttnn.ShardTensorToMesh(mesh_device, dim=2)  # 32-way, matches the post-reshard sharding
-    tt_q = ttnn.from_torch(q, dtype=ttnn.bfloat16, mesh_mapper=shard_seq, **common)
-    tt_idx = ttnn.from_torch(idx, dtype=ttnn.uint32, mesh_mapper=shard_seq, **common)
-    tt_kv = _kv_cache(mesh_device, 1, cache_tokens, kv_fmt, ttnn.ReplicateTensorToMesh(mesh_device), seed=1)
-    return tt_q, tt_kv, tt_idx, s_local * TP  # chunk_local = per-SP-row chunk
-
-
-def _traced_us(mesh_device, fn, n=10):
-    """Mean wall time of one traced replay of fn, over n back-to-back replays."""
-    fn()
-    ttnn.synchronize_device(mesh_device)
-    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    fn()
-    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
-    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
-    t0 = time.perf_counter()
-    for _ in range(n):
-        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
-    ttnn.synchronize_device(mesh_device)
-    us = (time.perf_counter() - t0) / n * 1e6
-    ttnn.release_trace(mesh_device, tid)
-    return us
-
-
-_PERF = pytest.mark.skipif(os.environ.get("CI") == "true", reason="local production-shape perf qualification")
-_CHUNKS = pytest.mark.parametrize("chunk_global", [5120, 2048], ids=["5k", "2k"])
-
-
-@run_for_blackhole()
-@_PERF
-@pytest.mark.timeout(0)
-@pytest.mark.parametrize("device_params", [_TORUS_XY], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-@_CHUNKS
-@_KV_FMT
-def test_sparse_sdpa_glm_core_count_perf(mesh_device, chunk_global, kv_fmt):
-    """sparse_sdpa alone on all cores and on 96- and 80-core subsets, at the GLM shape (traced)."""
-    grid = mesh_device.compute_with_storage_grid_size()
-    tt_q, tt_kv, tt_idx, chunk_local = _glm_inputs(mesh_device, chunk_global, chunk_global * 51, kv_fmt)
-    rows_2_on = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
-    rows = []
-    for name, sub in [("all", None), ("rows 2+", rows_2_on), ("cols 0-7", _cols(0, 7, grid.y))]:
-        kw = {} if sub is None else {"sub_core_grids": sub}
-        rows.append(
-            (name, _traced_us(mesh_device, lambda: _sparse_sdpa(tt_q, tt_kv, tt_idx, chunk_local, kv_fmt, **kw)))
-        )
-    logger.info(f"sparse_sdpa GLM {chunk_global} {kv_fmt} traced us per call (grid, us): {rows}")
 
 
 _TORUS_XY_GLM = {**_TORUS_XY}
@@ -287,7 +205,8 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
     manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([sdpa_grid]), ttnn.SubDevice([push_grid])], 0)
     mesh_device.load_sub_device_manager(manager)
     push(compact_next, 1, Part.PREFIX, core_grid=push_grid)
-    ttnn.transformer.sparse_sdpa(q, compact_l, compact_idx, V_DIM, **sdpa_kw)
+    # Attention on sub-device 0's cores only: a restricted grid must not change the result.
+    beside_prefix = ttnn.transformer.sparse_sdpa(q, compact_l, compact_idx, V_DIM, **sdpa_kw)
     mesh_device.clear_loaded_sub_device_manager()
     mesh_device.remove_sub_device_manager(manager)
     push(compact_next, 1, Part.REST)
@@ -300,11 +219,13 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
         return _sparse_sdpa(q, out, idx_natural, s_local * TP, kv_fmt)
 
     host = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+    want = {slot: host(dense(slot)) for slot in (0, 1)}
+    assert torch.equal(
+        want[0], host(beside_prefix)
+    ), f"layer {layer}: attention on the sub-device, beside the prefix push, differs from the dense gather"
     for slot, buf in ((0, compact_l), (1, compact_next)):
         got = host(ttnn.transformer.sparse_sdpa(q, buf, compact_idx, V_DIM, **sdpa_kw))
-        assert torch.equal(
-            host(dense(slot)), got
-        ), f"layer {layer} slot {slot}: push path differs from the dense gather"
+        assert torch.equal(want[slot], got), f"layer {layer} slot {slot}: push path differs from the dense gather"
 
 
 def _segmented_traced_us(mesh_device, fn, n=20):

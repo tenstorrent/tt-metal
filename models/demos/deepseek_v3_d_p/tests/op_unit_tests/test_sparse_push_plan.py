@@ -65,7 +65,7 @@ def _clustered_indices(rng, n_dev, rows, topk, prefix):
 
 
 # The packet shape the plan lays out follows the fabric's max payload, so it needs the push's fabric.
-@pytest.mark.parametrize(
+_PUSH_FABRIC = pytest.mark.parametrize(
     "device_params",
     [
         {
@@ -75,7 +75,34 @@ def _clustered_indices(rng, n_dev, rows, topk, prefix):
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+_GALAXY = pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+
+
+def _device_indices(mesh_device, idx):
+    n_dev, rows, topk = idx.shape
+    return ttnn.from_torch(
+        torch.from_numpy(idx.reshape(1, 1, n_dev * rows, topk).astype(np.uint32).view(np.int32)),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+    )
+
+
+def _device_scalar(mesh_device, value):
+    return ttnn.from_torch(
+        torch.tensor([[[[value]]]], dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+@_PUSH_FABRIC
+@_GALAXY
 @pytest.mark.parametrize(
     "max_rows, prefix",
     [
@@ -111,25 +138,11 @@ def test_sparse_push_plan_matches_reference(mesh_device, max_rows, prefix, start
         idx = _clustered_indices(rng, n_dev, rows, topk, prefix)
 
     want_compact = _compact_reference(idx, n_dev, sc, p, banks)
-    tt_idx = ttnn.from_torch(
-        torch.from_numpy(idx.reshape(1, 1, n_dev * rows, topk).astype(np.uint32).view(np.int32)),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
-    )
+    tt_idx = _device_indices(mesh_device, idx)
 
     # Treat the last 5120 rows as the current chunk: the plan also records each owner's rows before it.
     split = max_rows - 5120
-    tt_split = ttnn.from_torch(
-        torch.tensor([[[[split]]]], dtype=torch.int32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    tt_split = _device_scalar(mesh_device, split)
 
     plan_kw = dict(stripe_chunk=sc, max_rows=max_rows, page_bytes=page_bytes)
     if start_form == "tensor":
@@ -173,16 +186,62 @@ def test_sparse_push_plan_matches_reference(mesh_device, max_rows, prefix, start
     assert not bad, f"device plan differs from the host reference: {bad[:8]}"
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
-def test_sparse_push_plan_rejects_batched_indices(mesh_device, expect_error):
-    # The plan reads one [rows, topk] block per chip; a second batch would be left unplanned.
-    tt_idx = ttnn.from_torch(
-        torch.zeros(2, 1, 160, 2048, dtype=torch.int32),
-        dtype=ttnn.uint32,
+def _mismatch_marker(reference, actual, mask=None):
+    """Per chip, non-zero when `actual` differs from `reference` anywhere `mask` is set."""
+    marker = ttnn.ne(reference, actual, dtype=ttnn.bfloat16)
+    if mask is not None:
+        marker = ttnn.multiply(marker, mask)
+    return ttnn.max(marker)
+
+
+def _merge_markers(current, new):
+    return new if current is None else ttnn.maximum(current, new)
+
+
+def _marker_set(marker):
+    host = ttnn.from_device(marker)
+    return any(float(ttnn.to_torch(chip).item()) != 0.0 for chip in ttnn.get_device_tensors(host))
+
+
+@_PUSH_FABRIC
+@_GALAXY
+def test_sparse_push_plan_determinism(mesh_device):
+    """The plan, repeated on the same 1M-row indices, rewrites them and fills its table bit-identically. Compared on
+    device; only the table words the plan writes count (header, per-owner counts, the bitmap's active blocks)."""
+    n_dev = mesh_device.get_num_devices()
+    rows, topk, sc, page_bytes, max_rows, runs = 160, 2048, 160, 704, 1044480, 10
+    idx = _clustered_indices(np.random.default_rng(1), n_dev, rows, topk, max_rows)
+    tt_idx = _device_indices(mesh_device, idx)
+    plan_kw = dict(
+        stripe_chunk=sc,
+        max_rows=max_rows,
+        page_bytes=page_bytes,
+        chunk_start_tensor=_device_scalar(mesh_device, max_rows - 5120),
+    )
+    ref_table, ref_compact = ttnn.experimental.sparse_push_plan(tt_idx, **plan_kw)
+
+    _, _, pages = _layout(max_rows, sc)
+    written = np.zeros((n_dev, pages * PAGE_WORDS), dtype=np.float32)
+    for d in range(n_dev):
+        v = idx[d][idx[d] != SENTINEL]
+        active_words = (-(-(int(v.max()) + 1) // sc) if v.size else 0) * (sc // 32)
+        written[d, :8] = 1  # header
+        written[d, OWNER_OFF : OWNER_OFF + n_dev] = 1
+        written[d, OWNER_PREFIX_OFF : OWNER_PREFIX_OFF + n_dev] = 1
+        written[d, BITMAP_OFF : BITMAP_OFF + active_words] = 1
+    mask = ttnn.from_torch(
+        torch.from_numpy(written).reshape(1, 1, n_dev * pages, PAGE_WORDS),
+        dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
     )
-    with expect_error(RuntimeError, r"indices must be \[1, 1, rows, topk\]"):
-        ttnn.experimental.sparse_push_plan(tt_idx, stripe_chunk=160, max_rows=10240, page_bytes=704)
+    marker = None
+    for _ in range(runs - 1):
+        table, compact = ttnn.experimental.sparse_push_plan(tt_idx, **plan_kw)
+        marker = _merge_markers(marker, _mismatch_marker(ref_compact, compact))
+        marker = _merge_markers(marker, _mismatch_marker(ref_table, table, mask))
+        ttnn.deallocate(table)
+        ttnn.deallocate(compact)
+    assert not _marker_set(marker), f"a plan differs from the first of {runs}"

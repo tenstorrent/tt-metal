@@ -612,7 +612,8 @@
     glm_sparse_kv_push() (
       export MESH_DEVICE=TG
       # ttnn.experimental.sparse_push_plan + sparse_kv_push on the 8x4 TorusXY mesh: op checks against a host
-      # reference, then the real GLM-5.3 1M top-k push (L14/L62) against the dense gather.
+      # reference and determinism (repeated runs, bit-exact, compared on device), then the real GLM-5.3 1M top-k push
+      # (L14/L62) against the dense gather, with attention beside the prefix push on a sub-device.
       timeout -k 2m 20m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_sparse_push_plan.py -vvv --tb=short &&
@@ -2255,10 +2256,13 @@
   sp_config: sc1
 
 
-- name: "high_bw_all_gather CCL perf + accuracy"
+- name: "high_bw_all_gather + sparse_kv_push CCL perf + accuracy"
   # A full 8x4 Blackhole-Galaxy Fabric2D XY-torus gate. Runs the 8-rank axis ring at
   # 55K and 512K global rows, then the 32-rank snake ring: exact-output accuracy plus
   # perf at matched per-device and matched global volume.
+  #
+  # The GLM-5.3 sparse KV push perf gate shares the fabric bring-up: plan, table gather and each push step at the
+  # 1M request with real top-k, each against a CI-derived ceiling.
   #
   # The traced gate measures the 8-rank axis-ring shapes again through a captured ttnn trace, with the
   # cache slot and active gather extent read from metadata tensors on-device rather than from host
@@ -2287,8 +2291,8 @@
       python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_glm_perf -q -s || rc=1
       exit $rc
     '
-  test_type: high_bw_all_gather_perf
-  test_tags: [ccl]
+  test_type: high_bw_all_gather_sparse_kv_push_perf
+  test_tags: [ccl, sparse_kv_push]
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
