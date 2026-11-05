@@ -57,6 +57,7 @@ enum class EnvVarID {
     TT_METAL_SIMULATOR,                       // Path to simulator executable
     TT_METAL_EMU_SERVER,                      // Chippy emu_axi endpoint (host:port)
     TT_METAL_EMU_SOC_DESC,                    // SoC descriptor for the emulated package
+    TT_METAL_EMU_CLUSTER_DESC,                // Test cluster descriptor for the emulated package
     TT_METAL_GRENDEL_JTAG_SERVER,             // OpenOCD TCL endpoint (host:port)
     TT_METAL_GRENDEL_JTAG_SOC_DESC,           // SoC descriptor for the attached package
     TT_METAL_GRENDEL_JTAG_TRANSPORT,          // jtag2axi_v1 or jtag2axi_v2
@@ -564,6 +565,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
+        case EnvVarID::TT_METAL_EMU_CLUSTER_DESC: this->emu_cluster_desc_path = value; break;
+
         case EnvVarID::TT_METAL_GRENDEL_JTAG_SERVER:
             this->grendel_jtag_server = std::string(value);
             this->runtime_target_device_ = tt::TargetDevice::GrendelJtag;
@@ -588,13 +591,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_MOCK_CLUSTER_DESC_PATH
         // Path to mock cluster descriptor for testing without hardware.
-        // Note: If MOCK and SIMULATOR or EMU_SERVER are set, SIMULATOR or EMU_SERVER takes precedence
+        // Note: If MOCK and SIMULATOR are set, SIMULATOR takes precedence. MOCK and EMU_SERVER together are rejected.
         // Default: Hardware mode (no mock cluster)
         // Usage: export TT_METAL_MOCK_CLUSTER_DESC_PATH=/path/to/mock_cluster_desc.yaml
         case EnvVarID::TT_METAL_MOCK_CLUSTER_DESC_PATH:
             this->mock_cluster_desc_path = std::string(value);
-            // Only set Mock target if Simulator or the emulator hasn't been set already
-            if (this->simulator_path.empty() && this->emu_server.empty()) {
+            // Only set Mock target if Simulator hasn't been set already
+            if (this->simulator_path.empty()) {
                 this->runtime_target_device_ = tt::TargetDevice::Mock;
             }
             break;
@@ -2144,6 +2147,16 @@ void RunTimeOptions::InitializeFromEnvVars() {
     }
     if (this->runtime_target_device_ == tt::TargetDevice::EmuAxi && this->emu_soc_desc_paths.empty()) {
         TT_THROW("TT_METAL_EMU_SERVER requires TT_METAL_EMU_SOC_DESC to be set");
+    }
+    if (!this->emu_server.empty() && !this->mock_cluster_desc_path.empty()) {
+        TT_THROW(
+            "TT_METAL_EMU_SERVER and TT_METAL_MOCK_CLUSTER_DESC_PATH are both set: an emulator run takes its test "
+            "cluster descriptor from TT_METAL_EMU_CLUSTER_DESC");
+    }
+    if (this->runtime_target_device_ != tt::TargetDevice::EmuAxi && !this->emu_cluster_desc_path.empty()) {
+        TT_THROW(
+            "TT_METAL_EMU_CLUSTER_DESC requires TT_METAL_EMU_SERVER; a Mock run takes its cluster descriptor from "
+            "TT_METAL_MOCK_CLUSTER_DESC_PATH");
     }
     if (this->runtime_target_device_ == tt::TargetDevice::GrendelJtag && this->grendel_jtag_soc_desc_path.empty()) {
         TT_THROW("TT_METAL_GRENDEL_JTAG_SERVER requires TT_METAL_GRENDEL_JTAG_SOC_DESC to be set");
