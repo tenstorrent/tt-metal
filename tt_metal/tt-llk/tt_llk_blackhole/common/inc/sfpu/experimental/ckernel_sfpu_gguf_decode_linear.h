@@ -22,12 +22,68 @@ using namespace ckernel::gguf;
 template <int FMT>
 constexpr bool q40_params = FMT == Q8_0 || FMT == Q4_0 || FMT == Q5_0 || FMT == Q4_1 || FMT == Q5_1;
 
+// Q4_K and Q5_K: k4_group (sfpu_gguf_decode_group) unpacks a group's 6-bit scales and mins once, from the scale rows
+// (0..5: 12 bytes per column), into scratch entries K4 .. K4 + 15. Word K4 + 4 (2a + b) + 2v + u, byte t: field v
+// (0 scale, 1 min) of tile 4u + t, column half b, word parity a; the bytes of tiles 0..3 keep their native top two bits
+// (bits() drops them). Q4_K's page holds rows 6, 7 (fp16 d, dmin) as stored: k4_group converts them and stores them
+// where pf32 reads prepared copies, past the 1 KB page.
+constexpr int K4 = 2 * TILE;
+
+// f16_at with the fp16 rebias as an immediate (the body owns the programmable constants).
+template <int HALF>
+sfpi_inline vFloat k4_f16(const vUInt w)
+{
+    const vUInt m13 = HALF == 0 ? (w << 17u) >> 4u : ((w >> 16u) << 17u) >> 4u;
+    const vFloat b  = sfpi::as<vFloat>(m13 + vUInt(0x38000000u));
+    const vFloat a  = sfpi::addexp(b, 1) + -6.103515625e-05f;
+    const vInt sgn  = sfpi::as<vInt>(HALF == 0 ? w << 16u : w);
+    return sfpi::copysgn(sfpi::min_max(a, b).first, sgn);
+}
+
+template <int FMT>
+sfpi_inline void k4_group()
+{
+    constexpr int src = CO + scale_row<FMT>() / 2;
+#pragma GCC unroll 2
+    for (int a = 0; a < 2; a++)
+    {
+        const int w0 = K4 + 8 * a, w1 = w0 + 4;
+        // Scale bytes 0..15 (rows 0..3): column half 0's scales of tiles 0..3, mins of 0..3, low / high nibbles of
+        // tiles 4..7; column half 1's scales of tiles 0..3.
+        vUInt r0 = ldu(src + a), r1 = r0, r2 = r0, r3 = r0;
+        transp4(r0, r1, r2, r3);
+        sfpi::dst_reg[w0 + 0].mode<sfpi::DataLayout::U32>() = r0;
+        sfpi::dst_reg[w0 + 2].mode<sfpi::DataLayout::U32>() = r1;
+        sfpi::dst_reg[w0 + 1].mode<sfpi::DataLayout::U32>() = (r2 & vUInt(0x0F0F0F0Fu)) | ((r0 >> 2u) & vUInt(0x30303030u));
+        sfpi::dst_reg[w0 + 3].mode<sfpi::DataLayout::U32>() = ((r2 >> 4u) & vUInt(0x0F0F0F0Fu)) | ((r1 >> 2u) & vUInt(0x30303030u));
+        sfpi::dst_reg[w1 + 0].mode<sfpi::DataLayout::U32>() = r3;
+        sfpi::dst_reg[w1 + 1].mode<sfpi::DataLayout::U32>() = (r3 >> 2u) & vUInt(0x30303030u);
+        // Bytes 16..23 (rows 4, 5): column half 1's mins of tiles 0..3, nibbles of tiles 4..7.
+        vUInt q0 = ldu(src + 2 + a), q1 = q0, q2 = q0, q3 = q0;
+        transp4(q0, q1, q2, q3);
+        sfpi::dst_reg[w1 + 2].mode<sfpi::DataLayout::U32>() = q0;
+        sfpi::dst_reg[w1 + 1].mode<sfpi::DataLayout::U32>() = ldu(w1 + 1) | (q1 & vUInt(0x0F0F0F0Fu));
+        sfpi::dst_reg[w1 + 3].mode<sfpi::DataLayout::U32>() = ((q1 >> 4u) & vUInt(0x0F0F0F0Fu)) | ((q0 >> 2u) & vUInt(0x30303030u));
+        if constexpr (FMT == Q4_K)
+        {
+            // Rows 6, 7 (q2, q3): fp16 d and dmin, column half b in bits 16b.
+#pragma GCC unroll 2
+            for (int F = 0; F < 2; F++)
+            {
+                const vUInt w                         = F ? q3 : q2;
+                sfpi::dst_reg[pf32_idx<FMT>(F, 0, a)] = k4_f16<0>(w);
+                sfpi::dst_reg[pf32_idx<FMT>(F, 1, a)] = k4_f16<1>(w);
+            }
+        }
+    }
+}
+
 // Phase 1 of the linear formats and of IQ4_NL (Q4_0's scale rows). TI = tile index inside the scale page's group of
 // K-tiles.
 template <int FMT, int TI>
 sfpi_inline void linear_params()
 {
-    if constexpr (page_layout<static_cast<Format>(FMT)>().fp16_rows == 0)
+    if constexpr (page_layout<static_cast<Format>(FMT)>().fp16_rows == 0 && FMT != Q4_K)
     {
         params_init<!q40_params<FMT>>();
     }
@@ -112,25 +168,13 @@ sfpi_inline void linear_params()
         }
         else if constexpr (FMT == Q4_K || FMT == Q5_K)
         {
-            // Rows 0..5: 12 scale bytes per column; fields 0 / 1: d / dmin.
-            rep4_to<FMT>(0, a, 0);
-            rep4_to<FMT>(1, a, 4);
-            constexpr int j = TI;
+            // Tile TI's 6-bit scale and min of each column half, from k4_group's words; d / dmin as fp32.
 #pragma GCC unroll 2
             for (int b = 0; b < 2; b++)
             {
-                const int o = 12 * b;
-                vUInt sc, mn;
-                if constexpr (j < 4)
-                {
-                    sc = byte_bits(0, o + j, 0, 6);
-                    mn = byte_bits(0, o + j + 4, 0, 6);
-                }
-                else
-                {
-                    sc = byte_bits(0, o + j + 4, 0, 4) | (byte_bits(0, o + j - 4, 6, 2) << 4);
-                    mn = byte_bits(0, o + j + 4, 4, 4) | (byte_bits(0, o + j, 6, 2) << 4);
-                }
+                const int w                       = K4 + 4 * (2 * a + b) + TI / 4;
+                const vUInt sc                    = bits(ldu(w), 8 * (TI % 4), 6);
+                const vUInt mn                    = bits(ldu(w + 2), 8 * (TI % 4), 6);
                 sfpi::dst_reg[PS + pidx(a, b, 0)] = pf32<FMT>(0, b, a) * ufloat(sc);
                 sfpi::dst_reg[PM + pidx(a, b, 0)] = -(pf32<FMT>(1, b, a) * ufloat(mn));
             }
@@ -212,15 +256,111 @@ sfpi_inline void macro_init_linear()
     TTI_SFPNOP;
 }
 
+// Q4_K with both phases in one call: phase 1's operations (same operands) in a fixed register plan. Column (a, b): the
+// 6-bit scale / min of byte TI % 4 of words w, w + 2 (two shifts), cast, S = d sc, M = (-m) mn. a = 0 first: codes in
+// L0..L3, d / m into L4 + 2b, L5 + 2b, which keep S / M for body_macro_q4<true>. Then a = 1 in L0..L3, stored.
+template <int FMT>
+constexpr bool k4_regs = macro_body<FMT> && FMT == Q4_K;
+
+template <int TI>
+sfpi_inline void k4_ld(const unsigned r, const int a, const int b, const int v)
+{
+    TTI_SFPLOAD(r, sfpi::SFPLOAD_MOD0_FMT_INT32, ADDR_MOD_7, 2 * (K4 + 4 * (2 * a + b) + TI / 4 + 2 * v));
+}
+
+sfpi_inline void k4_ldf(const unsigned r, const int a, const int b, const int F)
+{
+    TTI_SFPLOAD(r, 0, ADDR_MOD_7, 2 * pf32_idx<Q4_K>(F, b, a));
+}
+
+template <int TI>
+sfpi_inline void k4_codes(const unsigned r0, const unsigned n)
+{
+    constexpr unsigned shl = 26 - 8 * (TI % 4), shr = static_cast<unsigned>(-26) & 0xFFFu;
+#pragma GCC unroll 4
+    for (unsigned r = r0; r < r0 + n; r++)
+    {
+        TTI_SFPSHFT(shl, r, r, SHIFT_IMM_OF_C);
+    }
+#pragma GCC unroll 4
+    for (unsigned r = r0; r < r0 + n; r++)
+    {
+        TTI_SFPSHFT(shr, r, r, SHIFT_IMM_OF_C);
+    }
+#pragma GCC unroll 4
+    for (unsigned r = r0; r < r0 + n; r++)
+    {
+        TTI_SFPCAST(r, r, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
+    }
+}
+
+// The body's first macro must start six instructions after the last SFPMUL (with four, some Blackhole dies decoded
+// wrong tiles): three stores and two NOPs here, then the body's first load.
+template <int TI>
+sfpi_inline void k4_params_regs()
+{
+#pragma GCC unroll 2
+    for (int b = 0; b < 2; b++)
+    {
+        k4_ld<TI>(2 * b, 0, b, 0);
+        k4_ld<TI>(2 * b + 1, 0, b, 1);
+    }
+    k4_codes<TI>(0, 4);
+#pragma GCC unroll 2
+    for (int b = 0; b < 2; b++)
+    {
+        k4_ldf(4 + 2 * b, 0, b, 0);
+        k4_ldf(5 + 2 * b, 0, b, 1);
+    }
+#pragma GCC unroll 2
+    for (unsigned b = 0; b < 2; b++)
+    {
+        TTI_SFPMUL(4 + 2 * b, 2 * b, p_sfpu::LCONST_0, 4 + 2 * b, 0);
+        TTI_SFPMUL(5 + 2 * b, 2 * b + 1, p_sfpu::LCONST_0, 5 + 2 * b, 1);
+    }
+    // a = 1, b = 0 in L0, L1 (d / m in L2, L3). b = 1's codes in L2, L3, its d and m in turn in L0 (freed by b = 0's
+    // S store).
+    k4_ld<TI>(0, 1, 0, 0);
+    k4_ld<TI>(1, 1, 0, 1);
+    k4_codes<TI>(0, 2);
+    k4_ldf(2, 1, 0, 0);
+    k4_ldf(3, 1, 0, 1);
+    TTI_SFPMUL(2, 0, p_sfpu::LCONST_0, 0, 0);
+    TTI_SFPMUL(3, 1, p_sfpu::LCONST_0, 1, 1);
+    k4_ld<TI>(2, 1, 1, 0);
+    k4_ld<TI>(3, 1, 1, 1);
+    constexpr unsigned shl = 26 - 8 * (TI % 4), shr = static_cast<unsigned>(-26) & 0xFFFu;
+    TTI_SFPSHFT(shl, 2, 2, SHIFT_IMM_OF_C);
+    TTI_SFPSHFT(shl, 3, 3, SHIFT_IMM_OF_C);
+    TTI_SFPSTORE(0, 0, ADDR_MOD_7, 2 * (PS + pidx(1, 0, 0)));
+    TTI_SFPSHFT(shr, 2, 2, SHIFT_IMM_OF_C);
+    TTI_SFPSHFT(shr, 3, 3, SHIFT_IMM_OF_C);
+    k4_ldf(0, 1, 1, 0);
+    TTI_SFPCAST(2, 2, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
+    TTI_SFPMUL(0, 2, p_sfpu::LCONST_0, 2, 0);
+    k4_ldf(0, 1, 1, 1);
+    TTI_SFPCAST(3, 3, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
+    TTI_SFPMUL(0, 3, p_sfpu::LCONST_0, 3, 1);
+    TTI_SFPSTORE(1, 0, ADDR_MOD_7, 2 * (PM + pidx(1, 0, 0)));
+    TTI_SFPSTORE(2, 0, ADDR_MOD_7, 2 * (PS + pidx(1, 1, 0)));
+    TTI_SFPSTORE(3, 0, ADDR_MOD_7, 2 * (PM + pidx(1, 1, 0)));
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
 // Q4_0, Q4_1 and Q4_K: field i of code word 2h + a (L3) through macro i % 2, v in L0..L2 in turn; third slots load
-// the next code word or S, M.
+// the next code word or S, M. IN_REGS: a = 0's S / M are already in L4..L7 (k4_params_regs).
+template <bool IN_REGS = false>
 sfpi_inline void body_macro_q4()
 {
     TTI_SFPLOAD(3, sfpi::SFPLOAD_MOD0_FMT_INT32, ADDR_MOD_7, 2 * CO);
-    TTI_SFPLOAD(4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (PS + pidx(0, 0, 0)));
-    TTI_SFPLOAD(5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (PM + pidx(0, 0, 0)));
-    TTI_SFPLOAD(6, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (PS + pidx(0, 1, 0)));
-    TTI_SFPLOAD(7, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (PM + pidx(0, 1, 0)));
+    if constexpr (!IN_REGS)
+    {
+        TTI_SFPLOAD(4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (PS + pidx(0, 0, 0)));
+        TTI_SFPLOAD(5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (PM + pidx(0, 0, 0)));
+        TTI_SFPLOAD(6, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (PS + pidx(0, 1, 0)));
+        TTI_SFPLOAD(7, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * (PM + pidx(0, 1, 0)));
+    }
 #pragma GCC unroll 2
     for (int a = 0; a < 2; a++)
     {

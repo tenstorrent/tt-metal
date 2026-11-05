@@ -133,11 +133,16 @@ inline void zero_tile(const std::uint32_t dst_index)
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
+// group: the first tile of its group decoded at dst_index (sfpu_gguf_decode_group).
 template <bool decode>
-inline void decode_tile(const std::uint32_t dst_index, const std::uint32_t kt)
+inline void decode_tile(const std::uint32_t dst_index, const std::uint32_t kt, const bool group)
 {
     if constexpr (decode)
     {
+        if (group)
+        {
+            sfpu::sfpu_gguf_decode_group<GGUF_FMT>(dst_index);
+        }
         sfpu::sfpu_gguf_decode_tile<GGUF_FMT>(dst_index, kt % LAYOUT.group_tiles);
     }
 }
@@ -168,7 +173,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_math_dest_srca_mm_unpack_post_(next_page);
                 }
-                decode_tile<GGUF_FMT != 0>(out, kt);
+                decode_tile<GGUF_FMT != 0>(out, kt, kt % LAYOUT.group_tiles < 2); // a group starts in both sets
                 if (next)
                 {
                     _llk_math_dest_srca_mm_unpack_wait_(next_page, PAGE_FACES);
@@ -185,7 +190,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_math_wait_for_dest_available_<dest_sync>();
                 _llk_math_dest_srca_mm_unpack_post_(1);
                 _llk_math_dest_srca_mm_unpack_wait_(1, PAGE_FACES);
-                decode_tile<GGUF_FMT != 0>(0, kt);
+                decode_tile<GGUF_FMT != 0>(0, kt, true); // each tile is a DEST section of its own
                 _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }
