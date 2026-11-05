@@ -118,7 +118,7 @@ void kernel_main() {
     const uint32_t tile_row_map_addr = get_common_arg_val<uint32_t>(7);
 #endif
     const uint32_t worker_index = get_arg_val<uint32_t>(0);
-    const uint32_t rows_per_worker = ttnn::runtime_length::tiles_per_core(total_tile_rows, num_workers);
+    const uint32_t rows_per_worker = ttnn::runtime_length::div_up(total_tile_rows, num_workers);
     const uint32_t tile_row_start = ttnn::runtime_length::core_start(worker_index, rows_per_worker, total_tile_rows);
     const uint32_t tile_row_end = ttnn::runtime_length::core_end(worker_index, rows_per_worker, total_tile_rows);
     // Per-batch tile rows: the cos/sin seq length (validate pins it to the input's N) and the

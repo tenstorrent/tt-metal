@@ -88,7 +88,7 @@ void kernel_main() {
     const uint32_t stats_dram_addr = get_common_arg_val<uint32_t>(2);
     const uint32_t total_num_tile_rows = get_common_arg_val<uint32_t>(3);
     const uint32_t worker_index = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t rows_per_worker = ttnn::runtime_length::tiles_per_core(total_num_tile_rows, num_workers);
+    const uint32_t rows_per_worker = ttnn::runtime_length::div_up(total_num_tile_rows, num_workers);
     const uint32_t tile_row_start =
         ttnn::runtime_length::core_start(worker_index, rows_per_worker, total_num_tile_rows);
     const uint32_t tile_row_end = ttnn::runtime_length::core_end(worker_index, rows_per_worker, total_num_tile_rows);

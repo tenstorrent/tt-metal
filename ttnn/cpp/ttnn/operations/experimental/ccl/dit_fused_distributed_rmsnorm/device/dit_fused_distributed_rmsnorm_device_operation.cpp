@@ -85,6 +85,15 @@ void validate_rows(
     uint32_t stats_min_pages) {
     const auto& input = tensor_args.input;
     const auto& shape = input.logical_shape();
+    // The hash carries no buffer identity: every operand the kernels address is re-checked for a live buffer on
+    // the input's mesh, as the miss validator checks it.
+    TT_FATAL(
+        input.storage_type() == StorageType::DEVICE && input.is_allocated(),
+        "dit_fused_distributed_rmsnorm: the input must be an allocated device tensor");
+    const auto on_input_mesh = [&input](const Tensor& operand) {
+        return operand.storage_type() == StorageType::DEVICE && operand.is_allocated() &&
+               operand.device() == input.device();
+    };
     for (const auto* operand :
          {&tensor_args.weight,
           &tensor_args.bias,
@@ -94,10 +103,13 @@ void validate_rows(
           &tensor_args.reciprocals,
           &tensor_args.affine_tile_row_map}) {
         TT_FATAL(
-            !operand->has_value() ||
-                ((*operand)->storage_type() == StorageType::DEVICE && (*operand)->device() == input.device()),
-            "dit_fused_distributed_rmsnorm: every operand must be on the same mesh device as the input");
+            !operand->has_value() || on_input_mesh(**operand),
+            "dit_fused_distributed_rmsnorm: every operand must be an allocated tensor on the input's mesh device");
     }
+    TT_FATAL(
+        !tensor_args.persistent_output_buffer.has_value() || on_input_mesh(*tensor_args.persistent_output_buffer),
+        "dit_fused_distributed_rmsnorm: persistent_output_buffer must be an allocated tensor on the input's mesh "
+        "device");
     TT_FATAL(
         sizing.num_tile_rows <= sizing.capacity_tile_rows,
         "input has {} rows per device, more than row_capacity ({})",
@@ -471,7 +483,6 @@ DitFusedDistributedRmsnormDeviceOperation::create_output_tensors(
 ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using ttnn::operations::common::hash_spec_without_rows;
-    constexpr uint64_t kSalt = 0x4449544e4f524d31ull;  // "DITNORM1"
     const auto& input = tensor_args.input;
     const auto& weight = tensor_args.weight;
     const auto& bias = tensor_args.bias;
@@ -486,8 +497,8 @@ ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_ha
         weight.has_value() && !per_token_weight && batch > 1 && affine_tile_rows(*weight) == batch;
     const bool per_batch_bias = bias.has_value() && !per_token_bias && batch > 1 && affine_tile_rows(*bias) == batch;
     const auto map_hash = map.has_value() ? ttsl::hash::hash_objects_with_default_seed(
-                                                kSalt + 8, map->dtype(), map->layout(), map->memory_config())
-                                          : ttsl::hash::hash_objects_with_default_seed(kSalt + 8);
+                                                true, map->dtype(), map->layout(), map->memory_config())
+                                          : ttsl::hash::hash_objects_with_default_seed(false);
     // multi_device_global_semaphore is excluded: callers ping-pong it per launch, and
     // DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments re-applies it on every hit.
     return tt::tt_metal::operation::hash_operation<DitFusedDistributedRmsnormDeviceOperation>(
@@ -503,7 +514,6 @@ ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_ha
         args.compute_kernel_config,
         static_cast<uint8_t>(args.norm_type),
         args.sub_device_id,
-        args.row_capacity,
         sizing.capacity_tile_rows,
         sizing.num_workers,
         sizing.num_forwarders,
@@ -513,12 +523,12 @@ ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_ha
         per_token_bias,
         per_batch_weight,
         per_batch_bias,
-        hash_spec_without_rows(input, kSalt),
-        hash_spec_without_rows(weight, kSalt + 1),
-        hash_spec_without_rows(bias, kSalt + 2),
-        hash_spec_without_rows(tensor_args.rope_cos, kSalt + 3),
-        hash_spec_without_rows(tensor_args.rope_sin, kSalt + 4),
-        hash_spec_without_rows(tensor_args.persistent_output_buffer, kSalt + 5),
+        hash_spec_without_rows(input),
+        hash_spec_without_rows(weight),
+        hash_spec_without_rows(bias),
+        hash_spec_without_rows(tensor_args.rope_cos),
+        hash_spec_without_rows(tensor_args.rope_sin),
+        hash_spec_without_rows(tensor_args.persistent_output_buffer),
         tensor_args.transformation_mat.has_value() ? std::optional(tensor_args.transformation_mat->tensor_spec())
                                                    : std::nullopt,
         tensor_args.reciprocals.has_value() ? std::optional(tensor_args.reciprocals->tensor_spec()) : std::nullopt,

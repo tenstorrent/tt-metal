@@ -153,7 +153,7 @@ void kernel_main() {
 
     const uint32_t total_tile_rows = get_common_arg_val<uint32_t>(0);
     const uint32_t worker_index = get_arg_val<uint32_t>(0);
-    const uint32_t rows_per_worker = ttnn::runtime_length::tiles_per_core(total_tile_rows, num_workers);
+    const uint32_t rows_per_worker = ttnn::runtime_length::div_up(total_tile_rows, num_workers);
     const uint32_t num_tile_rows = ttnn::runtime_length::core_end(worker_index, rows_per_worker, total_tile_rows) -
                                    ttnn::runtime_length::core_start(worker_index, rows_per_worker, total_tile_rows);
 
