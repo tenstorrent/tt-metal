@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <concepts>
 #include <functional>
 #include <optional>
+#include <type_traits>
 #include <utility>
 
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
@@ -506,6 +508,18 @@ Tensor launch_through_interleaved(
 
 }  // namespace detail
 
+// compute_output_spec() returns the spec the operation gives its output.
+template <typename F>
+concept OutputSpecFn = std::invocable<F&> && std::convertible_to<std::invoke_result_t<F&>, tt::tt_metal::TensorSpec>;
+
+// launch(input, explicit_output_config) launches the operation and returns its output.
+template <typename F>
+concept ShardRowLaunchFn =
+    std::invocable<F&, const Tensor&, const std::optional<tt::tt_metal::MemoryConfig>&> &&
+    std::convertible_to<
+        std::invoke_result_t<F&, const Tensor&, const std::optional<tt::tt_metal::MemoryConfig>&>,
+        Tensor>;
+
 // Launches a device operation whose kernels move ROW_MAJOR rows with `noc_async_{read,write}_sharded` so that
 // it never gets a tensor with a sub-aligned split row (has_subaligned_split_row). Those helpers move a full
 // aligned page per shard row, so for such a tensor they drop or misplace part of every row (#58402 item 17).
@@ -517,7 +531,7 @@ Tensor launch_through_interleaved(
 //   `preallocated_output`.
 // - `launch(input, std::nullopt)` launches the operation as requested. `launch(input, config)` launches it with
 //   `config` as its explicit output config and without the preallocated output.
-template <typename ComputeOutputSpec, typename Launch>
+template <OutputSpecFn ComputeOutputSpec, ShardRowLaunchFn Launch>
 Tensor launch_with_aligned_shard_rows(
     const Tensor& input,
     const tt::tt_metal::MemoryConfig& output_memory_config,

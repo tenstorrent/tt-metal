@@ -2552,3 +2552,79 @@ def test_slice_rm_wide_row_after_l1_fills(device):
         assert torch.equal(ttnn.to_torch(output), torch_expected)
     finally:
         ttnn.deallocate(resident)
+
+
+# Row-major tensors whose rows span several shards, with a shard row that is not a multiple of the buffer alignment.
+# The sharded reads and writes cannot split such rows, so slice stages these tensors through interleaved memory.
+def _ramp_bf16(shape):
+    # Multiples of 1/8 in [-6, 6], exact in bfloat16, with a period that does not divide the row lengths used here.
+    return ((torch.arange(torch.Size(shape).numel()) % 97 - 48) / 8).reshape(shape).to(torch.bfloat16)
+
+
+def _core_grid(*ranges):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*a), ttnn.CoreCoord(*b)) for a, b in ranges})
+
+
+def _width_shards(num_shards, shard_shape):
+    # L1 shards in rows of 8 cores.
+    cores = (
+        _core_grid(((0, 0), (7, num_shards // 8 - 1))) if num_shards > 8 else _core_grid(((0, 0), (num_shards - 1, 0)))
+    )
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(cores, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def _nd_shards(shard_shape, cores):
+    spec = ttnn.NdShardSpec(
+        ttnn.Shape(shard_shape), cores, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    )
+    return ttnn.MemoryConfig(ttnn.BufferType.L1, spec)
+
+
+def test_slice_rm_nd_sharded_subaligned_output_rows(device):
+    # The output slice derives from the [1, 1, 5, 64] input shards has shard rows that are not 16-byte aligned.
+    x = _ramp_bf16([1, 1, 32, 224])
+    config = _nd_shards([1, 1, 5, 64], _core_grid(((0, 0), (7, 2)), ((0, 3), (3, 3))))
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=config)
+
+    output = ttnn.slice(t, [0, 0, 16, 0], [1, 1, 32, 32], [1, 1, 2, 2])
+
+    nd_spec = output.memory_config().nd_shard_spec
+    assert nd_spec is not None and (nd_spec.shard_shape[-1] * 2) % 16 != 0, output.memory_config()
+    assert_equal(x[:, :, 16:32:2, 0:32:2], ttnn.to_torch(output))
+
+
+def test_slice_rm_into_preallocated_nd_sharded_subaligned_rows(device):
+    # The preallocated output has 8-byte ND shard rows: slice writes it interleaved, then copies it in.
+    x = _ramp_bf16([1, 1, 32, 64])
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.from_torch(
+        torch.zeros(1, 1, 16, 32, dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_nd_shards([1, 1, 16, 4], _core_grid(((0, 0), (7, 0)))),
+    )
+
+    ttnn.slice(t, [0, 0, 8, 16], [1, 1, 24, 48], [1, 1, 1, 1], output_tensor=out)
+
+    assert_equal(x[:, :, 8:24, 16:48], ttnn.to_torch(out))
+
+
+def test_slice_rm_width_sharded_subaligned_input_into_preallocated(device):
+    # Only the input's 8-byte shard rows are sub-aligned: it moves to interleaved memory, and slice writes straight
+    # into the preallocated output, whose 32-byte shard rows are aligned.
+    x = _ramp_bf16([1, 1, 64, 64])
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=_width_shards(16, [64, 4]))
+    out = ttnn.from_torch(
+        torch.zeros(1, 1, 32, 64, dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_width_shards(4, [32, 16]),
+    )
+
+    ttnn.slice(t, [0, 0, 16, 0], [1, 1, 48, 64], [1, 1, 1, 1], output_tensor=out)
+
+    assert_equal(x[:, :, 16:48, :], ttnn.to_torch(out))
