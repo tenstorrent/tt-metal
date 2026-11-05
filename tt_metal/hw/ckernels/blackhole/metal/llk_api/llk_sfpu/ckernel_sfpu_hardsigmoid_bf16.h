@@ -5,6 +5,7 @@
 #include <cstdint>
 namespace ckernel::sfpu {
 struct HardsigmoidBf16Config {
+    static constexpr uint32_t kRoute = 0x00000001u;
     static constexpr uint32_t kBodySlots = 0x0000001bu;
     static constexpr uint32_t kSlopeBits = 0x3e2aaaabu;
     static constexpr uint32_t kInterceptBits = 0x3f000000u;
@@ -29,8 +30,10 @@ inline bool bf16_dest_hardsigmoid() {
     return false;
 #endif
 }
+// Each call records replay slots 0-7, below replay_buf_offset = 16, where matmul and
+// reduce record.
 template <int ITERATIONS = 32>
-inline void calculate_hardsigmoid_bf16() {
+__attribute__((noinline)) inline void calculate_hardsigmoid_bf16() {
     ckernel::sfpu::bf16::hardsigmoid::calculate_clamped_affine<ckernel::sfpu::HardsigmoidBf16Config, ITERATIONS>();
 }
 inline void init_hardsigmoid_bf16() {

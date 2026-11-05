@@ -7,7 +7,7 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_relu.h"
+#include "ckernel_sfpu_relu.h"
 
 namespace ckernel::sfpu {
 
@@ -30,10 +30,12 @@ inline void apply_activation(sfpi::vFloat& v) {
     ActivationImpl<APPROXIMATION_MODE, ACTIVATION_TYPE>::apply(v);
 }
 
-bool bf16_dest_hardsigmoid();
-template <int ITERATIONS>
-void calculate_hardsigmoid_bf16();
-void init_hardsigmoid_bf16();
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_hardsigmoid_bf16.h"
+
+namespace ckernel::sfpu {
+
 // Whether BF16 DEST runs the generated hardsigmoid kernel as one call over the whole tile.
 inline constexpr bool hardsigmoid_bf16_whole_tile = true;
 // Sets up the generated BF16 hardsigmoid kernel for the instance it serves.
@@ -43,7 +45,6 @@ inline void hardsigmoid_bf16_tile_init() {
         init_hardsigmoid_bf16();
     }
 }
-
 template <bool APPROXIMATION_MODE, ActivationType ACTIVATION_TYPE, int ITERATIONS, bool is_fp32_dest_acc_en = true>
 inline void calculate_activation() {
     if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
@@ -70,5 +71,3 @@ void hardsigmoid_init() {
 }
 
 }  // namespace ckernel::sfpu
-
-#include "ckernel_sfpu_hardsigmoid_bf16.h"
