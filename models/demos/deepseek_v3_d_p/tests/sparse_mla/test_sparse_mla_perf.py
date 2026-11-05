@@ -135,6 +135,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import kimi_k3_1_hf_config
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_plugin import is_marker_explicitly_selected
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import make_hidden
@@ -163,11 +164,15 @@ ATTN_MODE = os.environ.get("DS_PERF_ATTN_MODE", "sparse")  # module-level defaul
 # GLM's thin TP=4 head shard is handled by the head→sequence reshard in ttMLA._sparse_mla (#48727).
 # Every model dimension comes from the single-source reference config, never hardcoded here. GLM-5.3
 # additionally exercises a nonzero slot of its compact full-indexer cache below.
-VARIANTS = ("deepseek_v32", "glm_5_3")
+# kimi_k3_1 (96 / 32, NoPE MLA + NoPE indexer, gated): its main KVPE cache is scaled FP8, so only
+# sparse-kv_scaled_fp8 runs every scenario; sparse-kv_bf16 (quantization cost) and dense (sparse-vs-dense)
+# run in `long` only -- dense K3.1 is otherwise just dense K3 again (see PERF_VARIANT_CASES).
+VARIANTS = ("deepseek_v32", "glm_5_3", "kimi_k3_1")
 VARIANT = os.environ.get("DS_PERF_VARIANT", "deepseek_v32")
 _CONFIG_BUILDERS = {
     "deepseek_v32": deepseek_v32_hf_config,
     "glm_5_3": glm_5_3_hf_config,
+    "kimi_k3_1": kimi_k3_1_hf_config,
 }
 
 # Fabric transport is selected after workload detection below: production Galaxy uses Fabric2D with
@@ -510,6 +515,10 @@ _OP_CODE_RULES = (
     ("/ring_attention_all_gather", "RingJointSDPA"),
     ("/transformer/sdpa/", "SDPA"),
     ("/topk_large_indices/", "TopkLargeIndices"),
+    # Thin-head-shard reshards (GLM TP=4; Kimi-K3.1 at TP=2 and TP=4) and the persistent-buffer gathers
+    # (Kimi-K3.1's g_proj input, the q/kv latents). Before the generic all_gather rule.
+    ("/ccl/all_to_all_async_generic/", "AllToAllAsyncGeneric"),
+    ("/high_bw_all_gather/", "HighBwAllGather"),
     ("/ccl/all_gather_async/", "AllGatherAsync"),
     ("/ccl/reduce_scatter_minimal_async/", "ReduceScatterMinimalAsync"),
     ("/ccl/broadcast/", "AllBroadcast"),
@@ -697,6 +706,23 @@ PERF_CASES = [
 ]
 
 
+def _perf_case_runs(variant: str, scenario: str, case_id: str) -> bool:
+    """Kimi-K3.1 profiles its production cache (scaled FP8) everywhere; its comparison points only in long."""
+    if variant == "kimi_k3_1":
+        return case_id == "sparse-kv_scaled_fp8" or scenario == "long"
+    return True
+
+
+# variant x scenario x case, flattened so only the runs that matter are collected; ids read variant-scenario-case.
+PERF_VARIANT_CASES = [
+    pytest.param(variant, scenario, *case.values, id=f"{variant}-{scenario}-{case.id}")
+    for variant in VARIANTS
+    for scenario in SCENARIOS
+    for case in PERF_CASES
+    if _perf_case_runs(variant, scenario, case.id)
+]
+
+
 @pytest.mark.parametrize("mesh_device", [PERF_WORKLOAD.mesh_shape], ids=[PERF_WORKLOAD.id], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -712,9 +738,9 @@ PERF_CASES = [
     ids=["torus-xy" if PERF_FABRIC == ttnn.FabricConfig.FABRIC_2D_TORUS_XY else "fabric2d"],
     indirect=True,
 )
-@pytest.mark.parametrize("attn_mode,kv_cache_format,tp_shard_kv", PERF_CASES)
-@pytest.mark.parametrize("scenario", list(SCENARIOS), ids=list(SCENARIOS))
-@pytest.mark.parametrize("variant", list(VARIANTS), indirect=True, ids=list(VARIANTS))
+@pytest.mark.parametrize(
+    "variant,scenario,attn_mode,kv_cache_format,tp_shard_kv", PERF_VARIANT_CASES, indirect=["variant"]
+)
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test — skip on CI")
 @pytest.mark.timeout(0)
 def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_format, tp_shard_kv, config_only):
@@ -780,6 +806,15 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         mla_layer_idx = full_layer_indices[-1]
     else:
         mla_layer_idx = 0
+    # Kimi-K3.1 has no reuse map; its index and KVPE caches share the 24-slot MLA-ordinal space
+    # (KimiK31Config.mla_kv_slot), so profile the LAST DSA layer (model 92 -> slot 23) of a 24-slot cache
+    # for the same reason GLM profiles its last compact slot: slot 0 would never exercise the selection.
+    mla_layer_num, cache_layer_idx = 1, 0
+    if variant.name == "kimi_k3_1" and has_indexer:
+        mla_layer_ids = variant.model_config.mla_layer_ids()
+        mla_layer_num, mla_layer_idx = len(mla_layer_ids), mla_layer_ids[-1]
+        cache_layer_idx = variant.model_config.mla_kv_slot(mla_layer_idx)
+        index_cache_layers = mla_layer_num
 
     # Indexer rope now scales from config.max_seq_len (set above) — no manual bump needed.
     mla = ttMLA(
@@ -794,7 +829,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         tp_axis=tp_axis,
         is_chunked=True,
         active_seq_len=chunk,
-        layer_num=1,
+        layer_num=mla_layer_num,
         has_indexer=has_indexer,  # sparse: DSA indexer + sparse_sdpa; dense: NullIndexer + ring MLA
         sparse_kv_cache_format=kv_cache_format if has_indexer else MlaKvCacheFormat.BF16_RM,
     )
@@ -810,7 +845,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
             seq_len=total,
             mesh_shape=list(mesh_device.shape),
             sp_axis=sp_axis,
-            num_kvpe_cache_layers=1,
+            num_kvpe_cache_layers=mla_layer_num,
             tp_axis=kv_tp_axis,
         )
     else:
@@ -871,14 +906,16 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         f"local MLA heads={config.num_attention_heads // tp}"
         + (
             f", local indexer heads={config.index_n_heads // tp}, index-cache slots={index_cache_layers}, "
-            f"selected slot={getattr(mla._indexer, '_index_layer_idx', 0)}"
+            f"selected slot={mla._indexer._cache_slot(cache_layer_idx)}"
             if has_indexer
             else " (dense: no indexer)"
         )
     )
 
     def _one_forward(start):
-        return mla.forward(tt_x, rope, kvpe_cache, actual_start=start, index_kv_cache=index_kv_cache)
+        return mla.forward(
+            tt_x, rope, kvpe_cache, actual_start=start, cache_layer_idx=cache_layer_idx, index_kv_cache=index_kv_cache
+        )
 
     forwards = []  # per-forward host e2e duration plus max-per-chip device duration for each program
     for start in starts:

@@ -24,6 +24,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import kimi_k3_1_hf_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_xy_device_params,
@@ -596,8 +597,8 @@ def _scenario_id(scenario):
     return f"{scenario}_{SCENARIOS[scenario]['cache'] // 1024}k_cache"
 
 
-def _workload(scenario):
-    config = glm_5_3_hf_config()
+def _workload(scenario, config_builder=glm_5_3_hf_config):
+    config = config_builder()
     return Workload(
         chunk_tokens=CHUNK_TOKENS,
         cache_tokens=SCENARIOS[scenario]["cache"],
@@ -607,9 +608,9 @@ def _workload(scenario):
     )
 
 
-def _run(mesh_device, device_params, path, scenario):
+def _run(mesh_device, device_params, path, scenario, config_builder=glm_5_3_hf_config):
     assert mesh_device.arch() == ttnn.Arch.BLACKHOLE, "bandwidth assumptions apply to Blackhole only"
-    workload = _workload(scenario)
+    workload = _workload(scenario, config_builder)
     system = resolve_runtime_system(mesh_device, path, device_params["fabric_config"])
     measurement = run_collective(mesh_device, path, workload, system)
     traffic = collective_roofline(path, workload, mesh_device, system)
@@ -647,3 +648,28 @@ def test_glm_head_to_sequence_reshard_perf(mesh_device, device_params, scenario)
 def test_glm_sequence_to_head_reshard_perf(mesh_device, device_params, scenario):
     """Profile GLM's sequence-sharded to head-sharded TP redistribution."""
     _run(mesh_device, device_params, GLM_SEQUENCE_TO_HEAD, scenario)
+
+
+# Kimi-K3.1: 96 heads, so its head<->sequence reshards move 1.5x GLM's head volume per token. These benchmarks
+# model the absorbed 576-wide q and the 512-wide return; the model's early-Q path sends q_nope / q_pe separately
+# instead (128 + 64 wide). The KVPE prefix gather is head-independent, so it is not repeated for K3.1.
+@pytest.mark.parametrize("scenario", _NON_LOOP_SCENARIOS, ids=_scenario_id)
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [ccl_mesh_param(TP_AXIS)],
+    indirect=["mesh_device", "device_params"],
+)
+def test_kimi_k3_1_head_to_sequence_reshard_perf(mesh_device, device_params, scenario):
+    """Profile Kimi-K3.1's head-sharded to sequence-sharded TP redistribution."""
+    _run(mesh_device, device_params, GLM_HEAD_TO_SEQUENCE, scenario, kimi_k3_1_hf_config)
+
+
+@pytest.mark.parametrize("scenario", _NON_LOOP_SCENARIOS, ids=_scenario_id)
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [ccl_mesh_param(TP_AXIS)],
+    indirect=["mesh_device", "device_params"],
+)
+def test_kimi_k3_1_sequence_to_head_reshard_perf(mesh_device, device_params, scenario):
+    """Profile Kimi-K3.1's sequence-sharded to head-sharded TP redistribution."""
+    _run(mesh_device, device_params, GLM_SEQUENCE_TO_HEAD, scenario, kimi_k3_1_hf_config)
