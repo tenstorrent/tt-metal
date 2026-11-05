@@ -8,7 +8,6 @@
 
 #include <cmath>
 #include <limits>
-#include <tt-metalium/distributed.hpp>
 #include <tt-umd-workload/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -76,7 +75,6 @@ autograd::TensorPtr ring_attention_sdpa(
     TT_FATAL(
         mask_type != ttml::metal::AttentionMaskType::Arbitrary,
         "Arbitrary attention mask is not supported in CP mode, use None or Causal");
-    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
 
     auto [batch_num, heads, seq_len_local, dim] = query_tensor.logical_shape().to_array_4D();
     // Initialize current K and V (will be ring-shifted each step)
@@ -195,9 +193,7 @@ autograd::TensorPtr ring_attention_sdpa(
                                       v_current,  // V at end of forward (position v1)
                                       ring_size,
                                       cp_axis_value,
-                                      mask_type,
-                                      mesh_device]() mutable {
-        tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
+                                      mask_type]() mutable {
         const auto& grad_output = out->get_grad();
         const auto& attn_output = out->get_value();
         const auto& query_tensor = query->get_value();

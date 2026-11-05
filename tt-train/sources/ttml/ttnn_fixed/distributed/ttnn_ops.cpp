@@ -246,7 +246,12 @@ ttnn::Tensor ring_shift(
     // For intra-mesh, we use same distributed context and rank (same host)
     const core::distributed::InterHostParameters inter_host_params{distributed_ctx, distributed_ctx->rank()};
 
-    tt::tt_metal::distributed::Synchronize(*mesh_device_ptr, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
+    // No host synchronization around the transfer. The sockets keep their FIFO state (write/read pointers,
+    // bytes_sent/bytes_acked) in device L1 across ops, and each send/recv waits only on its peer through that
+    // state, so a device waits for its ring neighbours rather than for the whole mesh, and the host keeps
+    // enqueuing while the data moves. The two phases are what keep this deadlock-free when a send has to block
+    // on FIFO space: in phase 1 the recv it waits for is the odd receiver's first op of this shift, and in phase 2
+    // the even receiver's recv only follows its own phase-1 send, which in turn only waits on such a first op.
     // Phase 1: Even positions send, odd positions receive
     const core::distributed::IntraMeshParameters even_to_odd_params{even_to_odd_connections};
     socket_manager.send(tensor, inter_host_params, even_to_odd_params);
@@ -256,8 +261,6 @@ ttnn::Tensor ring_shift(
     const core::distributed::IntraMeshParameters odd_to_even_params{odd_to_even_connections};
     socket_manager.send(tensor, inter_host_params, odd_to_even_params);
     output_tensor = socket_manager.recv(output_tensor, inter_host_params, odd_to_even_params);
-
-    tt::tt_metal::distributed::Synchronize(*mesh_device_ptr, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
 
     return output_tensor;
 }
