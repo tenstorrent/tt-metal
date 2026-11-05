@@ -51,9 +51,24 @@ void kernel_main() {
     const auto xs = TensorAccessor(x_args, x_addr, X_BYTES);
     cb_reserve_back(cb_x, Kt);
     noc_async_read(xs.get_noc_addr(x_copy), get_write_ptr(cb_x), X_BYTES);
+#ifdef RESIDUAL
+    {
+        // RESIDUAL: this core's residual tiles (same layout as the output) into c_3; the compute adds them to the
+        // accumulators before the one bf16 rounding (decode_linear3.py residual=)
+        constexpr auto r_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+        const auto rs = TensorAccessor(r_args, get_common_arg_val<uint32_t>(8), 2048);
+        cb_reserve_back(tt::CBIndex::c_3, num_nt);
+        for (uint32_t i = 0; i < num_nt; ++i) {
+            noc_async_read(rs.get_noc_addr(first_nt + i), get_write_ptr(tt::CBIndex::c_3) + i * 2048, 2048);
+        }
+    }
+#endif
 #ifdef INLINE_SCALES
     noc_async_read_barrier();
     cb_push_back(cb_x, Kt);
+#ifdef RESIDUAL
+    cb_push_back(tt::CBIndex::c_3, num_nt);
+#endif
 #else
     const auto ss = TensorAccessor(s_args, s_addr, S_BYTES);
     cb_reserve_back(cb_s, num_nt * S_PAGES);

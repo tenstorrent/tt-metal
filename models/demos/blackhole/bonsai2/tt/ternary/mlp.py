@@ -84,7 +84,7 @@ class TernaryMLP:
             ttnn.deallocate(xr)
             hr = self.rot_hidden(h)
             ttnn.deallocate(h)
-            y = self.down(hr, lead=lead)
+            y = self.down(hr, lead=lead, residual=prerot.take_residual())  # the layer's residual add, if registered
             ttnn.deallocate(hr)
             return y
         g = self.gate(xr, lead=lead)

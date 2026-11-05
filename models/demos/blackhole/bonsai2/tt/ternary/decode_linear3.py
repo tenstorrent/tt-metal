@@ -166,10 +166,12 @@ class TernaryDecodeLinear3:
         dm_defines=(),
         lead=(1, 1, TILE),
         split=0,
+        residual=None,
     ):
         """split > 0: return two tensors, output columns [0, split) and [split, N) (split a multiple of 32).
         x_rot: [C, K] bf16 ROW_MAJOR, C copies of the rotated activation (one per DRAM bank: page c is in bank
-        c mod 8) -> [32, N] bf16 TILE, row 0 = y."""
+        c mod 8) -> [32, N] bf16 TILE, row 0 = y.
+        residual: a tensor of the output's shape added before the bf16 rounding (out = residual + y)."""
         device = x_rot.device()
         K, N = self.K, self.N
         if getattr(self, "page_split", PAGE_SPLIT) and self.inline_scales and self.group16:
@@ -180,6 +182,10 @@ class TernaryDecodeLinear3:
             # 4 kbs per SFPU pass (kernels/tdec3_compute.cpp scale_acc4)
             extra_defines = list(extra_defines) + [("BATCH4", "1")]
         glu = getattr(self, "glu", False)
+        if residual is not None:
+            assert COMMON_ARGS and not glu and not split and self.inline_scales and self.group16
+            dm_defines = list(dm_defines) + [("RESIDUAL", "1")]
+            extra_defines = list(extra_defines) + [("RESIDUAL", "1")]
         if glu:
             # (gate, up) record pairs -> silu(gate) * up, one output tile per pair (pack_glu_records).
             assert self.inline_scales and self.group16 and not split, "GLU needs inline group16 records"
@@ -249,6 +255,8 @@ class TernaryDecodeLinear3:
             s_addr = 0 if self.inline_scales else self.s.buffer_address()
             span = [Nt, cores, grid.x, unit]
             rd_c = [x_rot.buffer_address(), s_addr, self.w.buffer_address()] + span + [x_rot.shape[0]]
+            if residual is not None:
+                rd_c.append(residual.buffer_address())  # tdec3_reader.cpp RESIDUAL
             wr_c = [self.w.buffer_address(), out.buffer_address()] + span + [out2.buffer_address() if split else 0]
             cp_c = span
             rd, wr, cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -257,6 +265,8 @@ class TernaryDecodeLinear3:
         rd_ct = [Kt, KB, ppr, inflight]
         for t in (x_rot, self.w if self.inline_scales else self.s, self.w):
             rd_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        if residual is not None:
+            rd_ct += ttnn.TensorAccessorArgs(residual).get_compile_time_args()
         wr_ct = [ppr, inflight] + ttnn.TensorAccessorArgs(self.w).get_compile_time_args()
         wr_ct += ttnn.TensorAccessorArgs(out).get_compile_time_args()
         if split:
@@ -313,10 +323,18 @@ class TernaryDecodeLinear3:
                 if self.group16
                 else cb(2, ttnn.float32, 128 if self.scale_fp32 else 64, max_n * KB, tiny),
                 cb(6, ttnn.bfloat8_b, 256, 2 * ppr * 16),
+            ]
+            + ([cb(3, ttnn.bfloat16, 2048, max_n)] if residual is not None else [])
+            + [
                 cb(16, ttnn.float32 if dbg else ttnn.bfloat16, 4096 if dbg else 2048, max_n * (3 if dbg else 1)),
             ],
         )
         res = ttnn.generic_op(
-            [x_rot] + ([] if self.inline_scales else [self.s]) + [self.w, out] + ([out2] if split else []), program
+            [x_rot]
+            + ([] if self.inline_scales else [self.s])
+            + ([residual] if residual is not None else [])
+            + [self.w, out]
+            + ([out2] if split else []),
+            program,
         )
         return (out, out2) if split else res  # generic_op returns the last tensor of its list

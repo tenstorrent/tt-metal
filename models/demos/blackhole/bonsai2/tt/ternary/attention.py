@@ -93,7 +93,7 @@ class TernaryAttention:
     def project_o(self, a):
         lead = tuple(list(a.shape)[:-1])
         ar = self.rot_out(a)
-        y = self.o(ar, lead=lead)
+        y = self.o(ar, lead=lead, residual=prerot.take_residual())  # the layer's residual add, if registered
         ttnn.deallocate(ar)
         return y
 

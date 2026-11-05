@@ -2,7 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Hand-off of a pre-rotated decode activation: the layer's fused norm + rotation (rotate.NormRotation) registers the
 rotated copies x' under the normalised tensor it returns; the ternary module that receives that tensor takes x'
-instead of rotating it again."""
+instead of rotating it again.
+
+Residual hand-off (decode): the layer registers the residual of its next add (put_residual); the output projection
+that produces the add's other operand takes it (take_residual) and adds it in its output stage
+(decode_linear3.py residual=); the layer then asks residual_added() and skips its own add."""
 
 _PENDING = {}
 
@@ -15,3 +19,29 @@ def take(x):
     """x' for x, or None (removed: each x' is used once)."""
     hit = _PENDING.pop(id(x), None)
     return hit[1] if hit is not None and hit[0] is x else None
+
+
+_RESID = []
+
+
+def put_residual(r):
+    import ttnn
+
+    _RESID.clear()
+    if r.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:  # the reader's accessor: interleaved
+        _RESID.extend([r, False])
+
+
+def take_residual():
+    """The pending residual (once), or None."""
+    if _RESID and not _RESID[1]:
+        _RESID[1] = True
+        return _RESID[0]
+    return None
+
+
+def residual_added():
+    """True if an output projection took the pending residual; clears it either way."""
+    added = bool(_RESID) and _RESID[1]
+    _RESID.clear()
+    return added

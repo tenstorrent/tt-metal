@@ -59,6 +59,13 @@ def sharded_decode_rms_norm(norm, x, dim, out_memory_config=ttnn.L1_MEMORY_CONFI
     return inter
 
 
+def _bonsai_resid_added():
+    """Bonsai: whether a ternary output projection took the layer's registered residual (bonsai2/tt/ternary/prerot.py)."""
+    from models.demos.blackhole.bonsai2.tt.ternary import prerot
+
+    return prerot.residual_added()
+
+
 class _FusedDistRMSNorm(RMSNorm):
     """RMSNorm whose PREFILL distributed path is the single fused dit_fused_distributed_rmsnorm op
     (args.prefill_fused_dist_norm, see tpc.fused_distributed_rmsnorm). Decode keeps the replicated-weight rms_norm."""
@@ -337,6 +344,7 @@ class Qwen36DecoderLayer:
 
             attn_input, _xr = self._bonsai_attn_nrot(x)
             prerot.put(attn_input, _xr)
+            prerot.put_residual(x)  # Bonsai: the output projection adds x in its output stage (residual_added below)
         elif single_decode:
             attn_input = sharded_decode_rms_norm(self.attention_norm, x, self.args.dim)
         elif pre_attn is not None:
@@ -450,9 +458,12 @@ class Qwen36DecoderLayer:
             # Prefill residual stays DRAM interleaved even when attn_output arrives L1-sharded
             # (GDN o_proj), so the L1 shard is freed before ffn_norm's CBs are allocated.
             h = ttnn.add(x, attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        elif single_decode and getattr(self, "_bonsai_attn_nrot", None) is not None and _bonsai_resid_added():
+            h = attn_output  # Bonsai: the output projection added x
         else:
             h = ttnn.add(x, attn_output)
-        ttnn.deallocate(attn_output)
+        if h is not attn_output:
+            ttnn.deallocate(attn_output)
 
         if pre_ff is not None:
             pass  # ff_input from the fused op above
@@ -461,6 +472,7 @@ class Qwen36DecoderLayer:
 
             ff_input, _xr = self._bonsai_ff_nrot(h)
             prerot.put(ff_input, _xr)
+            prerot.put_residual(h)  # Bonsai: the down projection adds h (residual_added below)
         elif single_decode:
             # Interleaved L1: the single-device MLP's decode matmuls mcast an interleaved in0.
             ff_input = sharded_decode_rms_norm(self.ffn_norm, h, self.args.dim)
@@ -476,6 +488,9 @@ class Qwen36DecoderLayer:
         if pre_ff is None:  # else the ternary MLP took ff_input as its rotated input and freed it
             ttnn.deallocate(ff_input)
 
+        if single_decode and getattr(self, "_bonsai_ff_nrot", None) is not None and _bonsai_resid_added():
+            ttnn.deallocate(h)  # Bonsai: the down projection added h
+            return ff_output
         output = ttnn.add(h, ff_output)
         ttnn.deallocate(h)
         ttnn.deallocate(ff_output)

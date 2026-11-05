@@ -168,7 +168,7 @@ class TernaryGDN:
     def out_proj(self, o):
         lead = tuple(list(o.shape)[:-1])
         orr = self.rot_out(o)
-        y = self.out(orr, lead=lead)
+        y = self.out(orr, lead=lead, residual=prerot.take_residual())  # the layer's residual add, if registered
         ttnn.deallocate(orr)
         return y
 

@@ -88,6 +88,16 @@ inline void glu_row0(uint32_t, uint32_t, uint32_t, uint32_t) {
         sfpi::dst_reg[OFF[h]] = u * g * _sfpu_sigmoid_<true>(g);
     }
 }
+// RESIDUAL: DEST tile 0 (the accumulator) += DEST tile 1 (the residual tile) on row 0 (SFPU rows 0, 1, 8, 9).
+inline void add_row0(uint32_t, uint32_t, uint32_t, uint32_t) {
+    constexpr uint32_t T = 32;
+    constexpr uint32_t OFF[4] = {0, 1, 8, 9};
+#pragma GCC unroll 4
+    for (int h = 0; h < 4; ++h) {
+        sfpi::vFloat r = sfpi::dst_reg[T + OFF[h]];
+        sfpi::dst_reg[OFF[h]] = sfpi::dst_reg[OFF[h]] + r;
+    }
+}
 // Four kbs at once (BATCH4): their products P sit in DEST tiles p..p+3 (custom_mm dst 4..7); their scales are the 4
 // subvectors of one scale row (kbs J0..J0+3, J0 % 4 == 0), so one load + one subvec_transp serves all four.
 template <int J0, bool FIRST>
@@ -458,6 +468,22 @@ void kernel_main() {
         MATH((
             SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, glu_row0, 0, 1, 3, 0, VectorMode::None)));
         addcmul_tile_init();
+#endif
+#ifdef RESIDUAL
+        // the residual tile of this column into DEST tile 1 (bf16, no forced exponent), then acc += it
+        if (i == 0) {
+            cb_wait_front(tt::CBIndex::c_3, num_nt);
+        }
+        UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG2_Force_shared_exp_RMW>(0)));
+        reconfig_data_format_srca(tt::CBIndex::c_3);
+        copy_init(tt::CBIndex::c_3);
+        copy_tile(tt::CBIndex::c_3, i, 1);
+        MATH((
+            SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, add_row0, 0, 1, 0, 0, VectorMode::None)));
+        addcmul_tile_init();
+        if (i + 1 == num_nt) {
+            cb_pop_front(tt::CBIndex::c_3, num_nt);
+        }
 #endif
         tile_regs_commit();
         tile_regs_wait();
