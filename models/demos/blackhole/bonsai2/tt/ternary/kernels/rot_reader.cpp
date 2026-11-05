@@ -7,6 +7,17 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "core_span.hpp"
+#ifndef ROT_CB_X  // CB indices (the fused form inside a ternary decode linear moves them off the linear's)
+#define ROT_CB_X 0
+#define ROT_CB_M 1
+#define ROT_CB_H 2
+#define ROT_CB_SCR 3
+#define ROT_CB_U 4
+#define ROT_CB_Y 16
+#endif
+#ifndef ROT_FIRST  // the fused form's rotation cores start after the linear's
+#define ROT_FIRST 0
+#endif
 
 void kernel_main() {
 #ifdef ROT_COMMON
@@ -14,7 +25,7 @@ void kernel_main() {
     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t m_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t h_addr = get_common_arg_val<uint32_t>(2);
-    const uint32_t b = core_index(get_common_arg_val<uint32_t>(3));
+    const uint32_t b = core_index(get_common_arg_val<uint32_t>(3)) - ROT_FIRST;
 #define SRC_TILE(jh) (32 * b + (jh))
 #define U_ADDR get_common_arg_val<uint32_t>(4)
 #else
@@ -35,7 +46,7 @@ void kernel_main() {
     constexpr auto u_args = TensorAccessorArgs<h_args.next_compile_time_args_offset()>();
     const auto us = TensorAccessor(u_args, U_ADDR, 2048);
 #endif
-    constexpr uint32_t cb_x = tt::CBIndex::c_0, cb_m = tt::CBIndex::c_1, cb_h = tt::CBIndex::c_2;
+    constexpr uint32_t cb_x = ROT_CB_X, cb_m = ROT_CB_M, cb_h = ROT_CB_H;
     const auto xs = TensorAccessor(x_args, x_addr, 2048);
     const auto ms = TensorAccessor(m_args, m_addr, 2048);
     const auto hs = TensorAccessor(h_args, h_addr, 2048);
@@ -49,7 +60,7 @@ void kernel_main() {
     cb_push_back(cb_m, 1);
     // 64-B reads (face row 0 and row 1) into scratch: DRAM reads must be 64-B aligned and sized on Blackhole, and a
     // 32-B read of a DRAM-resident activation returned other data. Row 1 is dropped by the local copies.
-    constexpr uint32_t cb_scratch = tt::CBIndex::c_3;
+    constexpr uint32_t cb_scratch = ROT_CB_SCR;
     cb_reserve_back(cb_scratch, 1);
     const uint32_t sc = get_write_ptr(cb_scratch);
     auto gather = [&](const auto& src, uint32_t dst) {
@@ -68,7 +79,7 @@ void kernel_main() {
     cb_reserve_back(cb_x, 1);
     gather(xs, get_write_ptr(cb_x));
 #ifdef ROT_GLU
-    constexpr uint32_t cb_u = tt::CBIndex::c_4;
+    constexpr uint32_t cb_u = ROT_CB_U;
     cb_reserve_back(cb_u, 1);
     gather(us, get_write_ptr(cb_u));
     cb_push_back(cb_u, 1);

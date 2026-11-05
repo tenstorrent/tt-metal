@@ -80,8 +80,13 @@ class TernaryMLP:
         if xr is None:
             xr = self.rot_in(x)
         if self.gateup is not None:
-            h = self.gateup(xr, lead=lead)
+            fuse = os.environ.get("BONSAI_ROT_FUSE", "1") == "1"
+            h = self.gateup(xr, lead=lead, out_l1=fuse)
             ttnn.deallocate(xr)
+            if fuse:  # the hidden rotation inside the down projection's op (decode_linear3 rotated())
+                y = self.down.rotated(self.rot_hidden, h, lead=lead, residual=prerot.take_residual())
+                ttnn.deallocate(h)
+                return y
             hr = self.rot_hidden(h)
             ttnn.deallocate(h)
             y = self.down(hr, lead=lead, residual=prerot.take_residual())  # the layer's residual add, if registered

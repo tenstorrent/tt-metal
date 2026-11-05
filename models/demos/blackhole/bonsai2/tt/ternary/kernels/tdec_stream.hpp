@@ -9,6 +9,49 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
+// X_HUB (decode_linear3.py rotated()): x' arrives from the fused rotation's cores. They write their blocks into the
+// hub's (core 0's) L1 buffer and bump its counter; the hub multicasts the whole x' and a flag to every core (loopback);
+// every core then copies its buffer into c_0. Polled between weight-page reads so the stream never waits for it.
+struct XHub {
+    uint32_t buf, xbytes, nblk, is_hub, nrect, rect_arg0, cb_x, x_pages, r_cb, r_pages;
+    bool sent, done;
+};
+FORCE_INLINE void xhub_poll(XHub& h, bool block) {
+    volatile tt_l1_ptr uint32_t* flag = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h.buf + h.xbytes);
+    volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h.buf + h.xbytes + 16);
+    volatile tt_l1_ptr uint32_t* one = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h.buf + h.xbytes + 32);
+    do {
+        invalidate_l1_cache();
+        if (h.is_hub && !h.sent && *cnt >= h.nblk) {
+            *cnt = 0;
+            *one = 1;
+            for (uint32_t q = 0; q < h.nrect; ++q) {
+                const uint32_t a = h.rect_arg0 + 5 * q;
+                const uint32_t x0 = get_common_arg_val<uint32_t>(a), y0 = get_common_arg_val<uint32_t>(a + 1);
+                const uint32_t x1 = get_common_arg_val<uint32_t>(a + 2), y1 = get_common_arg_val<uint32_t>(a + 3);
+                const uint32_t nd = get_common_arg_val<uint32_t>(a + 4);
+                const uint64_t d = noc_index == 0 ? get_noc_multicast_addr(x0, y0, x1, y1, h.buf)
+                                                  : get_noc_multicast_addr(x1, y1, x0, y0, h.buf);
+                const uint64_t f = noc_index == 0 ? get_noc_multicast_addr(x0, y0, x1, y1, h.buf + h.xbytes)
+                                                  : get_noc_multicast_addr(x1, y1, x0, y0, h.buf + h.xbytes);
+                noc_async_write_multicast_loopback_src(h.buf, d, h.xbytes, nd);
+                noc_semaphore_set_multicast_loopback_src(h.buf + h.xbytes + 32, f, nd);
+            }
+            h.sent = true;
+        }
+        if (!h.done && (!h.is_hub || h.sent) && *flag != 0) {
+            *flag = 0;
+            noc_async_read(get_noc_addr(h.buf), get_write_ptr(h.cb_x), h.xbytes);
+            noc_async_read_barrier();  // (also the weight pages in flight)
+            cb_push_back(h.cb_x, h.x_pages);
+            if (h.r_cb != 0xFFFFFFFFu) {
+                cb_push_back(h.r_cb, h.r_pages);
+            }
+            h.done = true;
+        }
+    } while (block && !h.done);
+}
+
 template <uint32_t ppr, uint32_t NB, typename Accessor>
 FORCE_INLINE void stream_records(
     uint32_t cb,
@@ -20,7 +63,8 @@ FORCE_INLINE void stream_records(
     uint32_t x_cb = 0xFFFFFFFFu,
     uint32_t x_pages = 0,
     uint32_t r_cb = 0xFFFFFFFFu,
-    uint32_t r_pages = 0) {
+    uint32_t r_pages = 0,
+    XHub* hub = nullptr) {
     // x_cb (X_PAGED early start): the caller issued its x' (and residual, r_cb) reads from L1 without waiting; once
     // the first weight pages are in flight, a barrier lands them and they are pushed
     constexpr uint32_t PAGE = 4096;
@@ -54,6 +98,9 @@ FORCE_INLINE void stream_records(
             if (l1 >= cb_end) {
                 l1 = cb_base;
             }
+            if (hub != nullptr && !hub->done) {
+                xhub_poll(*hub, false);
+            }
             if (x_cb != 0xFFFFFFFFu && count == NB) {
                 noc_async_read_barrier();
                 cb_push_back(x_cb, x_pages);
@@ -63,6 +110,9 @@ FORCE_INLINE void stream_records(
                 x_cb = 0xFFFFFFFFu;
             }
         }
+    }
+    if (hub != nullptr) {
+        xhub_poll(*hub, true);
     }
     if (x_cb != 0xFFFFFFFFu) {
         noc_async_read_barrier();

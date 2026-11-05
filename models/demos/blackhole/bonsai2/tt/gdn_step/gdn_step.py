@@ -72,7 +72,9 @@ class GDNStep:
             ab = xnt
         device, nv, ht = self.device, self.nv, self.ht
         lead = list(z.shape)[:-1]
-        out = ttnn.allocate_tensor_on_device(ttnn.Shape(lead + [nv * self.hd]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(lead + [nv * self.hd]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+        )  # L1: the out projection's fused rotation reads it while that op streams its weights
         grid = device.compute_with_storage_grid_size()
         coords = [ttnn.CoreCoord(j % grid.x, j // grid.x) for j in range(nv)]
         crs = row_major_crs(len(coords), grid.x)

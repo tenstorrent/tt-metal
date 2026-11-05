@@ -15,10 +15,21 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/reconfig_data_format.h"
+#ifndef ROT_CB_X  // CB indices (the fused form inside a ternary decode linear moves them off the linear's)
+#define ROT_CB_X 0
+#define ROT_CB_M 1
+#define ROT_CB_H 2
+#define ROT_CB_SCR 3
+#define ROT_CB_U 4
+#define ROT_CB_Y 16
+#endif
+#ifndef ROT_FIRST  // the fused form's rotation cores start after the linear's
+#define ROT_FIRST 0
+#endif
 
 void kernel_main() {
-    constexpr uint32_t cb_x = tt::CBIndex::c_0, cb_h = tt::CBIndex::c_2;
-    constexpr uint32_t cb_xt = tt::CBIndex::c_24, cb_t = tt::CBIndex::c_25, cb_y = tt::CBIndex::c_16;
+    constexpr uint32_t cb_x = ROT_CB_X, cb_h = ROT_CB_H;
+    constexpr uint32_t cb_xt = tt::CBIndex::c_24, cb_t = tt::CBIndex::c_25, cb_y = ROT_CB_Y;
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_h, cb_xt, cb_xt);
 
     tilize_init(cb_x, 1, cb_xt);
@@ -30,7 +41,7 @@ void kernel_main() {
     tilize_uninit(cb_x, cb_xt);
 #ifdef ROT_GLU
     // silu(x) * (D u) into cb_g, which then takes x's place in the rotation.
-    constexpr uint32_t cb_u = tt::CBIndex::c_4, cb_ut = tt::CBIndex::c_26, cb_g = tt::CBIndex::c_27;
+    constexpr uint32_t cb_u = ROT_CB_U, cb_ut = tt::CBIndex::c_26, cb_g = tt::CBIndex::c_27;
     tilize_init(cb_u, 1, cb_ut);
     cb_wait_front(cb_u, 1);
     cb_reserve_back(cb_ut, 1);
@@ -68,7 +79,7 @@ void kernel_main() {
     constexpr uint32_t cb_in = cb_xt;
 #endif
     // D: the block's signs (a +-1 tile, tiled like the block; the reader no longer flips sign bits word by word)
-    constexpr uint32_t cb_m = tt::CBIndex::c_1, cb_d = tt::CBIndex::c_28;
+    constexpr uint32_t cb_m = ROT_CB_M, cb_d = tt::CBIndex::c_28;
     cb_wait_front(cb_m, 1);
     cb_wait_front(cb_in, 1);
     reconfig_data_format(cb_in, cb_m);

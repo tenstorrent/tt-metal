@@ -6,6 +6,11 @@
 // c_2, then streams the even output-tile weight records into c_1 (tdec_stream.hpp).
 #include "tdec_stream.hpp"
 #include "core_span.hpp"
+#ifdef RESIDUAL
+#define RES_ARGS 1  // common arg 8: the residual
+#else
+#define RES_ARGS 0
+#endif
 
 void kernel_main() {
 #ifdef COMMON_ARGS
@@ -48,7 +53,11 @@ void kernel_main() {
     constexpr uint32_t S_PAGES = KB;
 #endif
 
-#ifdef X_PAGED
+#if defined(X_HUB)
+    // x' comes from the fused rotation via the hub (tdec_stream.hpp XHub), polled during the weight stream
+    cb_reserve_back(cb_x, Kt);
+    (void)x_copy;
+#elif defined(X_PAGED)
     // x' as a [K / 1024, 1024] L1 tensor: its 2-KB pages from the cores' L1 (no DRAM bank queue, one copy)
     const auto xs = TensorAccessor(x_args, x_addr, 2048);
     cb_reserve_back(cb_x, Kt);
@@ -74,7 +83,7 @@ void kernel_main() {
     }
 #endif
 #ifdef INLINE_SCALES
-#ifndef X_PAGED
+#if !defined(X_PAGED) && !defined(X_HUB)
     noc_async_read_barrier();
     cb_push_back(cb_x, Kt);
 #ifdef RESIDUAL
@@ -98,7 +107,32 @@ void kernel_main() {
 #ifdef PAGE_SPLIT
     stream_pages<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0);
 #else
-#if defined(X_PAGED) && defined(INLINE_SCALES)
+#if defined(X_HUB)
+    // common args after the span (and the residual): nblk, nrect, then nrect x (x0, y0, x1, y1, cores) of the linear's
+    // cores; core 0 is the hub
+    {
+        const uint32_t a0 = 8 + RES_ARGS;
+        XHub hub{
+            x_addr,
+            X_BYTES,
+            get_common_arg_val<uint32_t>(a0),
+            core_index(get_common_arg_val<uint32_t>(5)) == 0,
+            get_common_arg_val<uint32_t>(a0 + 1),
+            a0 + 2,
+            cb_x,
+            Kt,
+#ifdef RESIDUAL
+            tt::CBIndex::c_3,
+            num_nt,
+#else
+            0xFFFFFFFFu,
+            0,
+#endif
+            false,
+            false};
+        stream_records<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0, x_copy, 0xFFFFFFFFu, 0, 0xFFFFFFFFu, 0, &hub);
+    }
+#elif defined(X_PAGED) && defined(INLINE_SCALES)
     // x' (and the residual) come from L1: start the weight stream at once, push them when they land
 #ifdef RESIDUAL
     stream_records<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0, x_copy, cb_x, Kt, tt::CBIndex::c_3, num_nt);

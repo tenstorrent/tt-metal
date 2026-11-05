@@ -134,6 +134,88 @@ class DecodeRotation:
         )
         return ttnn.generic_op([x, self.m, self.h] + ([u] if u is not None else []) + [out], program)
 
+    # CB indices of the fused form (off the ternary decode linear's c_0, c_1, c_2, c_3, c_6, c_16)
+    FUSED_CBS = {"ROT_CB_X": 8, "ROT_CB_M": 9, "ROT_CB_H": 10, "ROT_CB_SCR": 11, "ROT_CB_U": 12, "ROT_CB_Y": 17}
+
+    def fused_parts(self, x, u, sig, first: int, grid_x: int, hub_xy, xl1_addr: int):
+        """The rotation inside a ternary decode linear's program (decode_linear3.TernaryDecodeLinear3.rotated): on cores
+        first .. first + B - 1 (row-major, grid_x wide); each writes its block into the hub's (the linear's core 0,
+        NOC hub_xy) x' buffer and bumps its counter (rot_writer.cpp ROT_TO_HUB). -> (kernels, cbs, input tensors)."""
+        from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_range_crs
+
+        B, K = self.B, self.K
+        crs = row_major_range_crs(first, first + B, grid_x)
+        coords = [ttnn.CoreCoord(c % grid_x, c // grid_x) for c in range(first, first + B)]
+        cbm = self.FUSED_CBS
+
+        def cb(index, fmt, page, pages):
+            return ttnn.CBDescriptor(
+                total_size=page * pages,
+                core_ranges=crs,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=page)],
+            )
+
+        defs = [(k, str(v)) for k, v in cbm.items()] + [("ROT_FIRST", str(first))]
+        common = self.chunk_src == list(range(K // 32))
+        rd, rd_c = ttnn.RuntimeArgs(), []
+        if common:
+            rd_c = [x.buffer_address(), self.m.buffer_address(), self.h.buffer_address(), grid_x] + (
+                [u.buffer_address()] if u is not None else [0]
+            )
+            defs_rd = defs + [("ROT_COMMON", "1")]
+        else:
+            for b, c in enumerate(coords):
+                rd[c.x][c.y] = (
+                    [x.buffer_address(), self.m.buffer_address(), self.h.buffer_address(), b]
+                    + self.chunk_src[32 * b : 32 * b + 32]
+                    + ([u.buffer_address()] if u is not None else [])
+                )
+            defs_rd = defs
+        rd_ct = []
+        for t in (x, self.m, self.h) + ((u,) if u is not None else ()):
+            rd_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        glu = [("ROT_GLU", "1")] if u is not None else []
+        kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=KERNELS + "rot_reader.cpp",
+                core_ranges=crs,
+                compile_time_args=rd_ct,
+                runtime_args=rd,
+                common_runtime_args=rd_c,
+                defines=glu + defs_rd,
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=KERNELS + "rot_writer.cpp",
+                core_ranges=crs,
+                compile_time_args=[],
+                common_runtime_args=[hub_xy[0], hub_xy[1], xl1_addr, xl1_addr + 2 * K + 16, grid_x],
+                defines=defs + [("ROT_TO_HUB", "1")],
+                config=ttnn.WriterConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=KERNELS + "rot_compute.cpp",
+                core_ranges=crs,
+                compile_time_args=[],
+                defines=glu + ([("ROT_SIGMUL", "1")] if sig else []) + defs,
+                config=ttnn.ComputeConfigDescriptor(
+                    math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False
+                ),
+            ),
+        ]
+        bf = ttnn.bfloat16
+        cbs = [
+            cb(cbm["ROT_CB_X"], bf, 2048, 1),
+            cb(cbm["ROT_CB_M"], bf, 2048, 1),
+            cb(28, bf, 2048, 1),
+            cb(cbm["ROT_CB_SCR"], bf, 4096, 1),
+            cb(cbm["ROT_CB_H"], bf, 2048, 2),
+            cb(24, bf, 2048, 1),
+            cb(25, bf, 2048, 1),
+            cb(cbm["ROT_CB_Y"], bf, 2048, 1),
+        ] + ([cb(cbm["ROT_CB_U"], bf, 2048, 1), cb(26, bf, 2048, 1), cb(27, bf, 2048, 1)] if u is not None else [])
+        return kernels, cbs, [x, self.m, self.h] + ([u] if u is not None else [])
+
 
 class NormRotation:
     """RMSNorm + rotation in one op (kernels/nrot_*.cpp) for a decode activation of width K: returns the normalised

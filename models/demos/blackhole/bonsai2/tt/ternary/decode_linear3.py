@@ -15,7 +15,7 @@ import numpy as np
 import torch
 
 import ttnn
-from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_crs
+from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_crs, virtual_rects
 from models.demos.blackhole.bonsai2.tt.ternary.pack import TILE, pack_ternary_tiles
 
 KBLOCK = 128
@@ -97,6 +97,29 @@ COMMON_ARGS = os.environ.get("BONSAI_COMMON_ARGS", "1") == "1"  # one set of run
 BATCH4 = os.environ.get("BONSAI_BATCH4", "1") == "1"  # 4 kbs per SFPU pass: 17408 x 5120 89.7 -> 78.2 us
 
 
+_XL1 = {}
+
+
+def _xl1_buffer(device, K, crs, cores):
+    """A fused rotation's x' buffer (one per K and core count, shared by every layer): per linear core K bf16, then
+    the flag (16 B), the hub's counter (16 B) and its "1" word; zeroed once, the reader clears the flag after use."""
+    key = (K, cores)
+    if key not in _XL1:
+        mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(crs, [1, K + 256], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        _XL1[key] = ttnn.from_torch(
+            torch.zeros(cores, K + 256, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=mc,
+        )
+    return _XL1[key]
+
+
 @dataclass
 class TernaryDecodeLinear3:
     K: int
@@ -169,6 +192,8 @@ class TernaryDecodeLinear3:
         residual=None,
         shapes=None,
         qg_heads=0,
+        rot=None,
+        out_l1=False,
     ):
         """split > 0: return two tensors, output columns [0, split) and [split, N) (split a multiple of 32).
         x_rot: [C, K] bf16 ROW_MAJOR, C copies of the rotated activation (one per DRAM bank: page c is in bank
@@ -177,7 +202,7 @@ class TernaryDecodeLinear3:
         shapes: the output shape(s) instead of lead + [N] (one tile row: e.g. head-major [1, heads, 1, D], whose pages
         are the token-major ones). qg_heads: per head [q | gate] columns -> (q [1, heads, 1, D], gate [1, 1, heads D]).
         """
-        device = x_rot.device()
+        device = (x_rot if x_rot is not None else rot[1]).device()
         K, N = self.K, self.N
         if getattr(self, "page_split", PAGE_SPLIT) and self.inline_scales and self.group16:
             # Both RISCs stream alternate 4-KB pages (kernels/tdec_stream.hpp stream_pages).
@@ -187,7 +212,10 @@ class TernaryDecodeLinear3:
             # 4 kbs per SFPU pass (kernels/tdec3_compute.cpp scale_acc4)
             extra_defines = list(extra_defines) + [("BATCH4", "1")]
         glu = getattr(self, "glu", False)
-        if x_rot is not None and list(x_rot.shape) == [K // 1024, 1024]:
+        if rot is not None:
+            assert COMMON_ARGS and not glu and not split and not qg_heads and self.inline_scales and self.group16
+            dm_defines = list(dm_defines) + [("X_HUB", "1")]  # x' from the fused rotation (tdec_stream.hpp XHub)
+        elif x_rot is not None and list(x_rot.shape) == [K // 1024, 1024]:
             dm_defines = list(dm_defines) + [("X_PAGED", "1")]  # x' as 2-KB pages in L1 (rotate.py XPAGED)
         if residual is not None:
             assert COMMON_ARGS and not glu and not split and self.inline_scales and self.group16
@@ -212,6 +240,7 @@ class TernaryDecodeLinear3:
             ttnn.float32 if dbg else ttnn.bfloat16,
             ttnn.TILE_LAYOUT,
             device,
+            ttnn.L1_MEMORY_CONFIG if out_l1 else ttnn.DRAM_MEMORY_CONFIG,
         )
         out2 = (
             ttnn.allocate_tensor_on_device(
@@ -251,28 +280,36 @@ class TernaryDecodeLinear3:
             )
 
         rd, wr, cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for cc, (s, n) in zip(coords, spans):
-            s_addr = 0 if self.inline_scales else self.s.buffer_address()
-            rd[cc.x][cc.y] = [
-                x_rot.buffer_address(),
-                s_addr,
-                self.w.buffer_address(),
-                s,
-                n,
-                (cc.x + cc.y * grid.x) % x_rot.shape[0],
-            ]
-            wr[cc.x][cc.y] = [self.w.buffer_address(), out.buffer_address(), s, n, 0] + (
-                [out2.buffer_address()] if split else []
-            )
-            cp[cc.x][cc.y] = [n]
+        if not COMMON_ARGS:  # per-core args (COMMON_ARGS replaces them below)
+            for cc, (s, n) in zip(coords, spans):
+                s_addr = 0 if self.inline_scales else self.s.buffer_address()
+                rd[cc.x][cc.y] = [
+                    x_rot.buffer_address(),
+                    s_addr,
+                    self.w.buffer_address(),
+                    s,
+                    n,
+                    (cc.x + cc.y * grid.x) % x_rot.shape[0],
+                ]
+                wr[cc.x][cc.y] = [self.w.buffer_address(), out.buffer_address(), s, n, 0] + (
+                    [out2.buffer_address()] if split else []
+                )
+                cp[cc.x][cc.y] = [n]
         rd_c, wr_c, cp_c = [], [], []
         if COMMON_ARGS:
             # Same args on every core (kernels/core_span.hpp): the dispatcher writes them once, not once per core.
             s_addr = 0 if self.inline_scales else self.s.buffer_address()
             span = [Nt, cores, grid.x, unit]
-            rd_c = [x_rot.buffer_address(), s_addr, self.w.buffer_address()] + span + [x_rot.shape[0]]
+            if rot is not None:
+                xl1 = _xl1_buffer(device, K, crs, cores)
+                rd_c = [xl1.buffer_address(), s_addr, self.w.buffer_address()] + span + [1]
+            else:
+                rd_c = [x_rot.buffer_address(), s_addr, self.w.buffer_address()] + span + [x_rot.shape[0]]
             if residual is not None:
                 rd_c.append(residual.buffer_address())  # tdec3_reader.cpp RESIDUAL
+            if rot is not None:
+                rects = virtual_rects(device, crs)
+                rd_c += [rot[0].B, len(rects)] + [v for r in rects for v in r]  # tdec3_reader.cpp X_HUB
             wr_c = (
                 [self.w.buffer_address(), out.buffer_address()]
                 + span
@@ -283,7 +320,7 @@ class TernaryDecodeLinear3:
             dm_defines = list(dm_defines) + [("COMMON_ARGS", "1")]
             extra_defines = list(extra_defines) + [("COMMON_ARGS", "1")]
         rd_ct = [Kt, KB, ppr, inflight]
-        for t in (x_rot, self.w if self.inline_scales else self.s, self.w):
+        for t in (x_rot if x_rot is not None else self.w, self.w if self.inline_scales else self.s, self.w):
             rd_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         if residual is not None:
             rd_ct += ttnn.TensorAccessorArgs(residual).get_compile_time_args()
@@ -292,8 +329,15 @@ class TernaryDecodeLinear3:
         if split or qg_heads:
             assert split % TILE == 0, split
             wr_ct += ttnn.TensorAccessorArgs(out2).get_compile_time_args()
+        rkern, rcbs, rins = [], [], []
+        if rot is not None:
+            rotation, rx, ru, rsig = rot
+            assert cores + rotation.B <= grid.x * grid.y, (cores, rotation.B)
+            hub = device.worker_core_from_logical_core(ttnn.CoreCoord(0, 0))
+            rkern, rcbs, rins = rotation.fused_parts(rx, ru, rsig, cores, grid.x, (hub.x, hub.y), xl1.buffer_address())
         program = ttnn.ProgramDescriptor(
-            kernels=[
+            kernels=rkern
+            + [
                 ttnn.KernelDescriptor(
                     kernel_source=KERNELS + "tdec3_reader.cpp",
                     core_ranges=crs,
@@ -336,7 +380,8 @@ class TernaryDecodeLinear3:
                 ),
             ],
             semaphores=[],
-            cbs=[
+            cbs=rcbs
+            + [
                 cb(0, ttnn.bfloat16, 64, Kt, tiny),
                 cb(1, ttnn.bfloat8_b, 256, 2 * ppr * 16),
                 cb(2, ttnn.float32, 2048, max_n * -(-KB // 32))
@@ -350,7 +395,7 @@ class TernaryDecodeLinear3:
             ],
         )
         res = ttnn.generic_op(
-            [x_rot]
+            (rins + [xl1] if rot is not None else [x_rot])
             + ([] if self.inline_scales else [self.s])
             + ([residual] if residual is not None else [])
             + [self.w, out]
@@ -358,3 +403,9 @@ class TernaryDecodeLinear3:
             program,
         )
         return (out, out2) if out2 is not None else res  # generic_op returns the last tensor of its list
+
+    def rotated(self, rotation, x, lead=(1, 1, TILE), u=None, sig=False, residual=None):
+        """This linear on rotation(x) (rotation(x, u=u, sig=sig)) in one op: the rotation runs on the cores after this
+        linear's and hands x' over through core 0 (no rotation op, no x' round trip; the weight stream starts at
+        once). x (and u) should be in L1: the rotation's reads then do not queue behind the weight streams."""
+        return self(None, lead=lead, rot=(rotation, x, u, sig), residual=residual)
