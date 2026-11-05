@@ -82,7 +82,7 @@ TEST(CaptureTargets, PutsEachRouterInTheRightCase) {
     for (size_t i = 0; i < expected.size(); ++i) {
         const CaptureTarget& target = targets.cores[i];
         SCOPED_TRACE(expected[i].router_path);
-        EXPECT_EQ(target.router_path, expected[i].router_path);
+        EXPECT_EQ(target.router.path, expected[i].router_path);
         EXPECT_EQ(target.location, expected[i].location);
         EXPECT_EQ(target.chip, expected[i].chip);
         EXPECT_EQ(target.reader_core, expected[i].reader_core);

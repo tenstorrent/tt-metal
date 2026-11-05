@@ -35,10 +35,10 @@ enum class CoreLocation {
 
 // A router's core, matched to what the reader found.
 struct CaptureTarget {
-    std::string router_path;
+    // The router as the plan has it: its path, channel, manifest core and stream registers, which is what a read of
+    // its core needs.
+    PlannedRouter router;
     uint64_t asic_id = 0;
-    uint32_t eth_chan = 0;
-    CoreXY manifest_core;
     // The reader's id for the chip, when it found the chip.
     std::optional<int32_t> chip;
     // The reader's core for the channel, when the chip has one.
@@ -48,11 +48,11 @@ struct CaptureTarget {
     bool discovery_skipped = false;
 
     bool operator==(const CaptureTarget&) const = default;
-    // Whether capture reads the core, at manifest_core.
+    // Whether capture reads the core.
     bool is_read() const { return location == CoreLocation::FOUND || location == CoreLocation::CORE_MISMATCH; }
 };
 
-// Every router a plan names, matched to what the reader found. The cores here are the ones that will be read from.
+// Every router a plan names, matched to what the reader found.
 struct CaptureTargets {
     // One per planned router, in the plan's order.
     std::vector<CaptureTarget> cores;

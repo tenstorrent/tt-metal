@@ -65,10 +65,8 @@ CaptureTargets resolve_capture_targets(const CapturePlan& plan, const ClusterFac
         // For each router, find information about the core from the cluster facts
         for (const PlannedRouter& router : planned_chip.routers) {
             targets.cores.push_back(CaptureTarget{
-                .router_path = router.path,
+                .router = router,
                 .asic_id = planned_chip.asic_id,
-                .eth_chan = router.eth_chan,
-                .manifest_core = router.virtual_core,
                 .chip = chip == nullptr ? std::nullopt : std::optional(chip->chip),
                 .reader_core = chip == nullptr ? std::nullopt : find_channel_core(*chip, router.eth_chan),
                 .location = locate_core(plan, chip, router),
