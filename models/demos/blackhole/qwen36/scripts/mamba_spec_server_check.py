@@ -95,6 +95,52 @@ def cmd_run(a):
     print(f"wrote {a.out}; concurrent {res['concurrent_seconds']} s; spec counters {res['spec']}")
 
 
+def cmd_perf(a):
+    """Decode speed: ``n`` short prompts at once, ``max_tokens`` each, greedy. Step time = wall time of the slowest
+    request / its verify steps, steps = output tokens / mean tokens per step (vLLM's spec counters)."""
+    model = a.model or _model(a.url)
+    words = _words()
+    prompts = [" ".join(words[97 * i : 97 * i + a.words]) + "\n\nContinue the text." for i in range(a.n)]
+    names = (
+        "vllm:spec_decode_num_accepted_tokens_total",
+        "vllm:spec_decode_num_draft_tokens_total",
+        "vllm:spec_decode_num_drafts_total",
+    )
+    m0 = {n: _metric(a.url, n) for n in names}
+    res = [None] * a.n
+
+    def one(i):
+        res[i] = _complete(a.url, model, prompts[i], a.max_tokens)
+
+    t0 = time.time()
+    threads = [threading.Thread(target=one, args=(i,)) for i in range(a.n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    wall = time.time() - t0
+    d = {n: (None if m0[n] is None else _metric(a.url, n) - m0[n]) for n in names}
+    out_tok = sum(r["usage"]["completion_tokens"] for r in res)
+    acc, drafts = d[names[0]], d[names[2]]
+    per_step = None if not drafts else 1 + acc / drafts  # tokens per verify step (accepted drafts + the bonus)
+    slow = max(r["seconds"] for r in res)
+    steps = a.max_tokens / per_step if per_step else None
+    out = {
+        "n": a.n,
+        "max_tokens": a.max_tokens,
+        "wall_s": round(wall, 3),
+        "output_tokens": out_tok,
+        "tok_per_s": round(out_tok / wall, 2),
+        "tokens_per_step": per_step,
+        "draft_acceptance": None if not d[names[1]] else acc / d[names[1]],
+        "step_ms_slowest_request": None if not steps else round(1000 * slow / steps, 2),
+        "requests_s": [r["seconds"] for r in res],
+        "spec_counters": d,
+    }
+    pathlib.Path(a.out).write_text(json.dumps(out, indent=1))
+    print(json.dumps({k: v for k, v in out.items() if k != "requests_s"}))
+
+
 def cmd_prefix(a):
     model = a.model or _model(a.url)
     words = _words()
@@ -161,11 +207,18 @@ def main():
     p.add_argument("--block", type=int, default=2048)
     p.add_argument("--blocks", type=int, default=2)
     p.add_argument("--max-tokens", type=int, default=96)
+    f = sub.add_parser("perf")
+    f.add_argument("--url", default="http://localhost:8000")
+    f.add_argument("--model", default=None)
+    f.add_argument("--out", required=True)
+    f.add_argument("--n", type=int, default=8)
+    f.add_argument("--words", type=int, default=300)
+    f.add_argument("--max-tokens", type=int, default=512)
     c = sub.add_parser("compare")
     c.add_argument("a")
     c.add_argument("b")
     a = ap.parse_args()
-    return {"run": cmd_run, "prefix": cmd_prefix, "compare": cmd_compare}[a.cmd](a) or 0
+    return {"run": cmd_run, "perf": cmd_perf, "prefix": cmd_prefix, "compare": cmd_compare}[a.cmd](a) or 0
 
 
 if __name__ == "__main__":
