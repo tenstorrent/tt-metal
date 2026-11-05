@@ -232,6 +232,105 @@ inline void reduce_col_group() {
     TTI_SFPSTORE(p_sfpu::LREG0, MODE, ADDR_MOD_7, 0 /* done */, TOP);
 }
 
+// ----------------------------------------------------------------------------
+// Float SUM/AVG column reduce, software-pipelined across column groups
+// ----------------------------------------------------------------------------
+//
+// reduce_col_group runs one group at a time. Each group ends in a chain where every instruction needs
+// the result of the one before it (fold -> SFPTRANSP -> fold -> fold -> [SFPMULI] -> SFPSTORE), and
+// on Quasar an instruction that reads the result of an SFPADD/SFPMULI issued in the cycle before it
+// waits one cycle. The SFPSTORE of one group is also followed straight away by the SFPLOAD of the
+// next, which costs another cycle. That is about five empty cycles per group.
+//
+// After SFPTRANSP, the group's values sit in LREG0-3 and LREG4-7 are free. So the pipelined version
+// loads the next group's bottom face into LREG4-7 in the empty cycles of the current group's tail,
+// and folds those registers in the empty cycles around the next group's top-face loads. The two
+// trailing folds use a tree, (0+1) + (2+3), instead of a chain, so two of them are independent.
+// The root of each group's fold tree, and the SFPTRANSP right after it, have nothing independent left
+// to fill their slots, so they can still wait.
+
+/** @brief Load rows 4K..4K+3 of the face column at @p ADDR (one SFPLOAD) into LREG BASE+K. */
+template <std::uint32_t MODE, std::uint32_t BASE, std::uint32_t ADDR, std::uint32_t K>
+inline void reduce_col_load_row_block() {
+    TTI_SFPLOAD(BASE + K, MODE, ADDR_MOD_7, 0 /* done */, ADDR + K * REDUCE_ROWS_PER_LOAD);
+}
+
+/** @brief Dest address of the top face of column group G (G = 0..3: face 0 even/odd, face 1 even/odd). */
+template <std::uint32_t G>
+inline constexpr std::uint32_t reduce_col_group_top() {
+    return (G / 2 == 0 ? 0 : REDUCE_FACE_STRIDE) +
+           (G % 2 == 0 ? p_sfpu::col_offset::EVEN_COL : p_sfpu::col_offset::ODD_COL);
+}
+
+/**
+ * @brief Pipelined column group G (float SUM/AVG). On entry LREG4-7 hold G's bottom face and, if
+ *        G > 0, LREG0 holds group G-1's finished total. On exit LREG0 holds G's finished total and,
+ *        if G < 3, LREG4-7 hold group G+1's bottom face.
+ */
+template <PoolType POOL_TYPE, std::uint32_t MODE, std::uint32_t G>
+inline void reduce_col_group_pipelined() {
+    constexpr std::uint32_t TOP = reduce_col_group_top<G>();
+    constexpr bool HAS_NEXT = G + 1 < 4;
+    constexpr std::uint32_t NEXT_BOT = reduce_col_group_top<HAS_NEXT ? G + 1 : G>() + REDUCE_FACE_PAIR_STRIDE;
+
+    // Head: store the previous group, load this group's top face, fold both faces to LREG0.
+    if constexpr (G > 0) {
+        TTI_SFPSTORE(p_sfpu::LREG0, MODE, ADDR_MOD_7, 0 /* done */, reduce_col_group_top<G - 1>());
+    }
+    reduce_combine<POOL_TYPE, false, p_sfpu::LREG4, p_sfpu::LREG5>();  // not a load: keeps SFPSTORE off SFPLOAD
+    reduce_col_load_row_block<MODE, p_sfpu::LREG0, TOP, 0>();
+    reduce_col_load_row_block<MODE, p_sfpu::LREG0, TOP, 1>();
+    reduce_combine<POOL_TYPE, false, p_sfpu::LREG6, p_sfpu::LREG7>();
+    reduce_col_load_row_block<MODE, p_sfpu::LREG0, TOP, 2>();
+    reduce_col_load_row_block<MODE, p_sfpu::LREG0, TOP, 3>();
+    reduce_combine<POOL_TYPE, false, p_sfpu::LREG0, p_sfpu::LREG1>();
+    reduce_combine<POOL_TYPE, false, p_sfpu::LREG2, p_sfpu::LREG3>();
+    reduce_combine<POOL_TYPE, false, p_sfpu::LREG4, p_sfpu::LREG6>();
+    reduce_combine<POOL_TYPE, false, p_sfpu::LREG0, p_sfpu::LREG2>();
+    reduce_combine<POOL_TYPE, false, p_sfpu::LREG0, p_sfpu::LREG4>();  // root of the tree
+
+    // Same transpose as reduce_col_group: LREG0's four row quarters go to row 0 of LREG0-3.
+    TTI_SFPTRANSP;
+
+    // Tail: fold LREG0-3 to LREG0 as a tree, loading the next group's bottom face into the free
+    // LREG4-7 in the cycles the folds would otherwise wait.
+    if constexpr (HAS_NEXT) {
+        reduce_col_load_row_block<MODE, p_sfpu::LREG4, NEXT_BOT, 0>();
+    }
+    reduce_combine<POOL_TYPE, false, p_sfpu::LREG0, p_sfpu::LREG1>();
+    reduce_combine<POOL_TYPE, false, p_sfpu::LREG2, p_sfpu::LREG3>();
+    if constexpr (HAS_NEXT) {
+        reduce_col_load_row_block<MODE, p_sfpu::LREG4, NEXT_BOT, 1>();
+    }
+    reduce_combine<POOL_TYPE, false, p_sfpu::LREG0, p_sfpu::LREG2>();
+    if constexpr (HAS_NEXT) {
+        reduce_col_load_row_block<MODE, p_sfpu::LREG4, NEXT_BOT, 2>();
+    }
+    if constexpr (POOL_TYPE == PoolType::AVG) {
+        TTI_SFPMULI(REDUCE_RECIP_COL_EXTENT_FP16B, p_sfpu::LREG0, 0 /* instr_mod1 */);
+    }
+    if constexpr (HAS_NEXT) {
+        reduce_col_load_row_block<MODE, p_sfpu::LREG4, NEXT_BOT, 3>();
+    }
+}
+
+/** @brief Column-reduce one 32x32 Dest tile in place, float SUM/AVG, pipelined across its four groups. */
+template <PoolType POOL_TYPE, std::uint32_t MODE>
+inline void reduce_col_tile_pipelined() {
+    static_assert(
+        POOL_TYPE == PoolType::SUM || POOL_TYPE == PoolType::AVG, "pipelined column reduce is float SUM/AVG only");
+    constexpr std::uint32_t FIRST_BOT = reduce_col_group_top<0>() + REDUCE_FACE_PAIR_STRIDE;
+    reduce_col_load_row_block<MODE, p_sfpu::LREG4, FIRST_BOT, 0>();
+    reduce_col_load_row_block<MODE, p_sfpu::LREG4, FIRST_BOT, 1>();
+    reduce_col_load_row_block<MODE, p_sfpu::LREG4, FIRST_BOT, 2>();
+    reduce_col_load_row_block<MODE, p_sfpu::LREG4, FIRST_BOT, 3>();
+    reduce_col_group_pipelined<POOL_TYPE, MODE, 0>();
+    reduce_col_group_pipelined<POOL_TYPE, MODE, 1>();
+    reduce_col_group_pipelined<POOL_TYPE, MODE, 2>();
+    reduce_col_group_pipelined<POOL_TYPE, MODE, 3>();
+    TTI_SFPSTORE(p_sfpu::LREG0, MODE, ADDR_MOD_7, 0 /* done */, reduce_col_group_top<3>());
+}
+
 /**
  * @brief Column-reduce one whole 32x32 Dest tile in place.
  *
@@ -248,10 +347,14 @@ inline void reduce_col_tile() {
     constexpr std::uint32_t FACE_0 = 0;
     constexpr std::uint32_t FACE_1 = REDUCE_FACE_STRIDE;
 
-    reduce_col_group<POOL_TYPE, MODE, IS_INT, FACE_0, p_sfpu::col_offset::EVEN_COL>();
-    reduce_col_group<POOL_TYPE, MODE, IS_INT, FACE_0, p_sfpu::col_offset::ODD_COL>();
-    reduce_col_group<POOL_TYPE, MODE, IS_INT, FACE_1, p_sfpu::col_offset::EVEN_COL>();
-    reduce_col_group<POOL_TYPE, MODE, IS_INT, FACE_1, p_sfpu::col_offset::ODD_COL>();
+    if constexpr (!IS_INT && (POOL_TYPE == PoolType::SUM || POOL_TYPE == PoolType::AVG)) {
+        reduce_col_tile_pipelined<POOL_TYPE, MODE>();
+    } else {
+        reduce_col_group<POOL_TYPE, MODE, IS_INT, FACE_0, p_sfpu::col_offset::EVEN_COL>();
+        reduce_col_group<POOL_TYPE, MODE, IS_INT, FACE_0, p_sfpu::col_offset::ODD_COL>();
+        reduce_col_group<POOL_TYPE, MODE, IS_INT, FACE_1, p_sfpu::col_offset::EVEN_COL>();
+        reduce_col_group<POOL_TYPE, MODE, IS_INT, FACE_1, p_sfpu::col_offset::ODD_COL>();
+    }
 }
 
 // ============================================================================
