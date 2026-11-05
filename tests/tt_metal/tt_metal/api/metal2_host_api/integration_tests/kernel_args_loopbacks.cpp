@@ -2,22 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// End-to-end kernel arguments on WH/BH silicon: named args, varargs, TT_KERNEL shims and CRTA sections.
+// End-to-end kernel arguments on WH/BH silicon: named args, array args, varargs, TT_KERNEL shims and CRTA sections.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <cstdint>
+#include <cstring>
 #include <utility>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/buffer.hpp>
 
+#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -422,11 +426,12 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
 // binding is the crux: every downstream section (scratchpad, varargs) must shift by the binding's true
 // WIDTH, not by binding COUNT — the `.size()` trap where an offset bug hides and only bites once a
 // relaxation makes a binding wider than one word. The producer reads one value from each section and
-// stages seven into a DFB entry (w0=named0, w1=named1, w2=tensor base, w3=scratch base, w4=vararg0,
-// w5=vararg1, w6=page size); an NCRISC consumer drains it to DRAM. The named/vararg sentinels and the
-// page size are exact-checked; the tensor base and scratchpad base are real addresses (checked nonzero
-// and mutually distinct from every sentinel and each other — a mis-offset read of an address region
-// surfaces as a known value or the other base).
+// stages seven into a DFB entry (w0=named0, w1=named1, w2=first word of the tensor's page 0, w3=scratch
+// base, w4=vararg0, w5=vararg1, w6=page size); an NCRISC consumer drains it to DRAM. The named/vararg
+// sentinels, the page size and the tensor word are exact-checked: the host writes known data to the
+// tensor and the producer reads page 0 through the binding, so a wrong base word fetches the wrong data.
+// The scratchpad base is a real address (checked nonzero and distinct from every sentinel — a mis-offset
+// read surfaces as a known value).
 //
 // Two phases:
 //   SET    — SetProgramRunArgs installs all four sections; verify every region reads its own value
@@ -464,40 +469,58 @@ TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
         mesh_device.get());
     auto& cq = mesh_device->mesh_command_queue();
 
-    // Input tensor for the tensor-binding section (interleaved DRAM; only its base address is read here).
+    // Input tensor for the tensor-binding section (interleaved DRAM). The producer reads its page 0 through
+    // the binding and reports the first word, so the host fills it with known data.
     auto tensor_layout = TensorLayout(
         DataType::BFLOAT16,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
     auto tensor_spec = TensorSpec(Shape{1, 512}, tensor_layout);
     MeshTensor io_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    std::vector<bfloat16> io_data(io_tensor.logical_volume());
+    for (size_t i = 0; i < io_data.size(); i++) {
+        io_data[i] = bfloat16(static_cast<float>(i + 1));
+    }
+    // The first two bf16 elements, as the kernel's uint32 load sees them.
+    uint32_t io_word0 = 0;
+    std::memcpy(&io_word0, io_data.data(), sizeof(io_word0));
+    cq.enqueue_write_tensor(HostTensor::from_vector(std::move(io_data), tensor_spec), io_tensor);
 
     ProgramSpec spec;
     spec.name = "crta_all_four_sections";
 
     // Producer (BRISC): read one value from each CRTA section, stage seven into the DFB entry:
-    //   w[0]=named0 w[1]=named1 w[2]=tensor base w[3]=scratch base w[4]=vararg0 w[5]=vararg1 w[6]=page size
+    //   w[0]=named0 w[1]=named1 w[2]=tensor page-0 word w[3]=scratch base w[4]=vararg0 w[5]=vararg1
+    //   w[6]=page size
     // The page size is the binding's SECOND CRTA word (dynamic_tensor_shape); reading it exercises the
-    // extra binding word directly, and its presence shifts the scratchpad + vararg offsets.
+    // extra binding word directly, and its presence shifts the scratchpad + vararg offsets. The tensor word
+    // comes from a NoC read of page 0 through the binding, which exercises the binding's base word.
     auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer.source = KernelSpec::SourceCode{R"(
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 void kernel_main() {
     const uint32_t named0 = get_arg(args::named0);
     const uint32_t named1 = get_arg(args::named1);
     TensorAccessor acc(tensor::io);
-    const uint32_t tensor_base = acc.get_bank_base_address();
     const uint32_t page_size = acc.get_aligned_page_size();  // binding's 2nd CRTA word (dynamic_tensor_shape)
     Scratchpad<uint32_t> pad(scratch::pad);
-    const uint32_t scratch_base = pad.get_base_address();
+    // Raw address: the base is reported to the host for comparison.
+    const uint32_t scratch_base = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(pad.local_mem()));
     const uint32_t vararg0 = get_common_vararg(0);
     const uint32_t vararg1 = get_common_vararg(1);
     DataflowBuffer buf(dfb::stage);
     buf.reserve_back(1);
+    // Land page 0 in the entry first (page size == entry size), then keep its first word.
+    Noc noc;
+    noc.async_read(acc, buf, page_size, {.page_id = 0}, {});
+    noc.async_read_barrier();
     volatile tt_l1_ptr uint32_t* w = (volatile tt_l1_ptr uint32_t*)buf.get_write_ptr();
-    w[0] = named0; w[1] = named1; w[2] = tensor_base; w[3] = scratch_base; w[4] = vararg0; w[5] = vararg1;
+    const uint32_t tensor_word0 = w[0];
+    w[0] = named0; w[1] = named1; w[2] = tensor_word0; w[3] = scratch_base; w[4] = vararg0; w[5] = vararg1;
     w[6] = page_size;
     buf.push_back(1);
 }
@@ -516,6 +539,7 @@ void kernel_main() {
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 void kernel_main() {
     auto dst_addr = get_arg(args::dst_addr);
     auto bank_id = get_arg(args::bank_id);
@@ -585,24 +609,22 @@ void kernel_main() {
     SetProgramRunArgs(program, set_params);
 
     std::vector<uint32_t> s = launch_and_read();
-    const uint32_t tensor_base = s[2];
     const uint32_t scratch_base = s[3];
     EXPECT_EQ(s[0], kNamed0Set) << "named CRTA 0 read the wrong offset";
     EXPECT_EQ(s[1], kNamed1Set) << "named CRTA 1 read the wrong offset";
+    // The binding's base word: page 0 read through the binding must return the data the host wrote.
+    EXPECT_EQ(s[2], io_word0) << "tensor binding's base word is wrong — page 0 read through it returned other data";
     // The binding's 2nd word: a wrong value here means the extra binding CRTA word was not delivered.
     EXPECT_EQ(s[6], kExpectedPageSize) << "tensor binding's aligned_page_size (2nd binding word) is wrong";
     EXPECT_EQ(s[4], kVararg0Set)
         << "common vararg 0 read the wrong offset — vararg base must be named + binding(2 words) + scratchpad";
     EXPECT_EQ(s[5], kVararg1Set) << "common vararg 1 read the wrong offset";
-    // The two address regions must be real and distinct from every sentinel and each other — a mis-offset
-    // read of either would surface here as a known sentinel or as the other base.
+    // The scratchpad region must be real and distinct from every sentinel — a mis-offset read would surface
+    // here as a known sentinel.
     for (uint32_t sentinel : {kNamed0Set, kNamed1Set, kVararg0Set, kVararg1Set}) {
-        EXPECT_NE(tensor_base, sentinel) << "tensor-binding slot read a CRTA sentinel — section offset wrong";
         EXPECT_NE(scratch_base, sentinel) << "scratchpad slot read a CRTA sentinel — section offset wrong";
     }
-    EXPECT_NE(tensor_base, 0u);
     EXPECT_NE(scratch_base, 0u);
-    EXPECT_NE(tensor_base, scratch_base) << "tensor-binding and scratchpad slots collided — section offset wrong";
 
     // ---- UPDATE phase: partial-update named CRTAs + varargs; bindings/scratchpad must be untouched. ----
     ProgramRunArgs upd_params;
@@ -624,9 +646,182 @@ void kernel_main() {
            "named + tensor-binding(2 words) + scratchpad section words (the A1 sum with a multi-word binding).";
     EXPECT_EQ(u[5], kVararg1Upd) << "partial update: vararg 1 landed at the wrong offset";
     // Not touched by this update — the omitted tensor's binding (both words) and the scratchpad must survive.
-    EXPECT_EQ(u[2], tensor_base) << "tensor-binding base slot was clobbered by the named/vararg partial update";
+    EXPECT_EQ(u[2], io_word0) << "tensor-binding base slot was clobbered by the named/vararg partial update";
     EXPECT_EQ(u[6], kExpectedPageSize) << "tensor-binding page-size slot was clobbered by the partial update";
     EXPECT_EQ(u[3], scratch_base) << "scratchpad slot was clobbered by the named/vararg partial update";
+}
+
+// ============================================================================
+// Array args: readback from a DM and a compute kernel — set + partial update
+// ============================================================================
+//
+// A DM kernel and a compute kernel on one node each copy every array element, in order, into their own
+// report scratchpad, next to a scalar and a vararg of each runtime kind:
+//     [ x0 x1 x2 | d0 d1 | p0 p1 p2 | count | vararg0 | common vararg0 ]
+// x is an RTA array, d a CRTA array and p a CTA array. Every value is a distinct sentinel, so an offset
+// error on either the host or the device side shows up as one slot reading another's value. The host
+// reads each scratchpad back at its allocated address.
+//
+// Two phases:
+//   SET    — SetProgramRunArgs installs everything; every slot must read its own value.
+//   UPDATE — UpdateProgramRunArgs replaces x and d whole; the new values must land and the scalars and
+//            varargs around them must be untouched.
+
+constexpr const char* kArrayArgsReadbackSource = R"(
+#include "experimental/kernel_args.h"
+void kernel_main() {
+#if !defined(COMPILE_FOR_TRISC) || defined(TRISC_PACK)
+    auto report = Scratchpad<uint32_t>(scratch::report);
+    uint32_t i = 0;
+    auto x = get_arg(args::x);
+    for (uint32_t k = 0; k < x.size(); ++k) {
+        report[i++] = x[k];
+    }
+    for (uint32_t d : get_arg(args::d)) {
+        report[i++] = d;
+    }
+    for (uint32_t p : get_arg(args::p)) {
+        report[i++] = p;
+    }
+    report[i++] = get_arg(args::count);
+    report[i++] = get_vararg(0);
+    report[i++] = get_common_vararg(0);
+#endif
+}
+)";
+
+TEST_F(ProgramSpecHWTest, ArrayArgsReadbackSetAndPartialUpdate) {
+    auto mesh_device = devices_.at(0);
+    const NodeCoord node{0, 0};
+    constexpr uint32_t kReportWords = 11;
+
+    // Same schema on both kernels; `tag` makes every value distinct per kernel. Each kernel writes into
+    // its own scratchpad, named after the kernel.
+    struct Reader {
+        const char* name;
+        uint32_t tag;
+    };
+    const Reader readers[] = {{.name = "dm", .tag = 0xD0000000u}, {.name = "compute", .tag = 0xC0000000u}};
+    auto declare = [](KernelSpec& kernel, const Reader& reader) {
+        kernel.source = KernelSpec::SourceCode{kArrayArgsReadbackSource};
+        kernel.scratchpad_bindings = {
+            {.scratchpad_spec_name = ScratchpadSpecName{reader.name}, .accessor_name = "report"}};
+        kernel.compile_time_array_args = {{"p", {reader.tag + 0x700, reader.tag + 0x701, reader.tag + 0x702}}};
+        kernel.runtime_arg_schema = {
+            .runtime_arg_names = {"count"},
+            .runtime_array_args = {{.name = "x", .size = 3}},
+            .common_runtime_array_args = {{.name = "d", .size = 2}},
+        };
+        kernel.advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 1, .num_common_runtime_varargs = 1};
+    };
+
+    auto dm = MakeMinimalGen1DMKernel("dm", DataMovementProcessor::RISCV_0);
+    declare(dm, readers[0]);
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+    declare(compute, readers[1]);
+
+    ProgramSpec spec;
+    spec.name = "array_args_readback";
+    spec.kernels = {dm, compute};
+    for (const Reader& reader : readers) {
+        spec.scratchpads.push_back(ScratchpadSpec{
+            .unique_id = ScratchpadSpecName{reader.name},
+            .size_per_node = kReportWords * sizeof(uint32_t),
+        });
+    }
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"dm", "compute"})};
+
+    distributed::MeshCoordinateRange device_range(mesh_device->shape());
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, MakeProgramFromSpec(*mesh_device, spec));
+    Program& program = workload.get_programs().at(device_range);
+
+    // A kernel's report scratchpad, allocated by MakeProgramFromSpec.
+    auto report_address = [&](const Reader& reader) {
+        return program.impl()
+            .get_kernel_by_spec_name(reader.name)
+            ->scratchpad_binding_handles()
+            .at(0)
+            .allocated_address;
+    };
+    // Clear both report scratchpads, then launch, blocking.
+    auto launch = [&]() {
+        for (const Reader& reader : readers) {
+            std::vector<uint32_t> zeros(kReportWords, 0u);
+            slow_dispatch::WriteToL1(*mesh_device, node, report_address(reader), zeros);
+        }
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
+    };
+    auto read_report = [&](const Reader& reader) {
+        std::vector<uint32_t> report;
+        slow_dispatch::ReadFromL1(*mesh_device, node, report_address(reader), kReportWords * sizeof(uint32_t), report);
+        return report;
+    };
+
+    // ---- SET phase ----
+    ProgramRunArgs set_params;
+    for (const Reader& reader : readers) {
+        ProgramRunArgs::KernelRunArgs args{
+            .kernel = KernelSpecName{reader.name},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"count", reader.tag + 0x800}}),
+        };
+        args.runtime_array_arg_values["x"][node] = {reader.tag + 0x100, reader.tag + 0x101, reader.tag + 0x102};
+        args.common_runtime_array_arg_values["d"] = {reader.tag + 0x200, reader.tag + 0x201};
+        args.advanced_options = AdvancedKernelRunArgs{
+            .runtime_varargs = {{node, {reader.tag + 0x900}}},
+            .common_runtime_varargs = {reader.tag + 0xA00},
+        };
+        set_params.kernel_run_args.push_back(std::move(args));
+    }
+    SetProgramRunArgs(program, set_params);
+    launch();
+    for (const Reader& reader : readers) {
+        const uint32_t t = reader.tag;
+        EXPECT_THAT(
+            read_report(reader),
+            ::testing::ElementsAre(
+                t + 0x100,
+                t + 0x101,
+                t + 0x102,  // x
+                t + 0x200,
+                t + 0x201,  // d
+                t + 0x700,
+                t + 0x701,
+                t + 0x702,   // p
+                t + 0x800,   // count
+                t + 0x900,   // vararg 0
+                t + 0xA00))  // common vararg 0
+            << "SET phase, " << reader.name << " kernel";
+    }
+
+    // ---- UPDATE phase: replace x and d whole ----
+    ProgramRunArgs upd_params;
+    for (const Reader& reader : readers) {
+        ProgramRunArgs::KernelRunArgs args{.kernel = KernelSpecName{reader.name}};
+        args.runtime_array_arg_values["x"][node] = {reader.tag + 0x110, reader.tag + 0x111, reader.tag + 0x112};
+        args.common_runtime_array_arg_values["d"] = {reader.tag + 0x210, reader.tag + 0x211};
+        upd_params.kernel_run_args.push_back(std::move(args));
+    }
+    UpdateProgramRunArgs(program, upd_params);
+    launch();
+    for (const Reader& reader : readers) {
+        const uint32_t t = reader.tag;
+        EXPECT_THAT(
+            read_report(reader),
+            ::testing::ElementsAre(
+                t + 0x110,
+                t + 0x111,
+                t + 0x112,  // x, updated
+                t + 0x210,
+                t + 0x211,  // d, updated
+                t + 0x700,
+                t + 0x701,
+                t + 0x702,   // p
+                t + 0x800,   // count, retained
+                t + 0x900,   // vararg 0, retained
+                t + 0xA00))  // common vararg 0, retained
+            << "UPDATE phase, " << reader.name << " kernel";
+    }
 }
 
 }  // namespace

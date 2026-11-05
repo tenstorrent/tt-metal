@@ -36,8 +36,10 @@ inline void calculate_cosh_bf16_body() {
     ckernel::sfpu::bf16::cosh::calculate_hyperbolic_exp<ckernel::sfpu::CoshBf16Config, ITERATIONS>();
 }
 // The constants stock's init also sets hold the kernel's own values for its call only.
+// Each call records replay slots 0-15, below replay_buf_offset = 16, where matmul and
+// reduce record.
 template <int ITERATIONS = 32>
-inline void calculate_cosh_bf16() {
+__attribute__((noinline)) inline void calculate_cosh_bf16() {
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x40000000u);
     sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0x0e5dc2acu);
     sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0x1ad514a6u);
@@ -46,11 +48,7 @@ inline void calculate_cosh_bf16() {
     sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0xbf317218u);
     sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0x3f0007ffu);
 }
-inline void init_cosh_bf16() {
-    ckernel::sfpu::bf16::cosh::init_hyperbolic_exp<ckernel::sfpu::CoshBf16Config>();
-    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x3fb8aa3bu);
-    sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0xbf317218u);
-    sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0x3f0007ffu);
-}
+// The call sets the constants it holds and puts stock's back, so the init leaves them to stock's.
+inline void init_cosh_bf16() {}
 
 }  // namespace ckernel::sfpu
