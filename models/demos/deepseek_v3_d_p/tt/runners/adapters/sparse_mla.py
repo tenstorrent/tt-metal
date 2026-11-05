@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-"""Sparse-attention (DSA) prefill adapters: the shared ``SparseMLAPrefillAdapter`` base + DeepSeek-V3.2-Exp.
+"""Sparse-attention (DSA) prefill adapters: the shared ``SparseMLAPrefillAdapter`` base, DeepSeek-V3.2-Exp and Kimi-K3.1.
 
 GLM-5.3 has its own serving adapter (``adapters/glm_5_3.py``);
 what remains here is the test-only base + DeepSeek-V3.2-Exp.
@@ -28,6 +28,7 @@ from typing import Callable
 
 from models.demos.common.prefill.adapter import PrefillRunParams
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapter
 
 
@@ -81,3 +82,42 @@ class DeepSeekV32Adapter(SparseMLAPrefillAdapter):
         from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
 
         return deepseek_v32_hf_config
+
+
+class KimiK31Adapter(SparseMLAPrefillAdapter):
+    """Kimi-K3.1 sparse-MLA (DSA) test variant: K3's gated NoPE MLA plus a NoPE lightning indexer.
+
+    Test-only, like ``DeepSeekV32Adapter``: it feeds the sparse-MLA module tests. Serving the 93-layer
+    KDA + DSA hybrid is out of scope here (``KimiK3Adapter`` owns the K3 runtime).
+    """
+
+    # --- identity ---
+    name = "kimi_k3_1"
+
+    model_config = KimiK31Config
+
+    # --- test metadata ---
+    hf_repo_id = "moonshotai/Kimi-K3.1-Pro"
+    env_var = "KIMI_K31_HF_MODEL"
+    mla_ref_cache_env = "KIMI_K31_MLA_REF_CACHE"
+    # K3 is NoPE: the KV cache's second half carries no rotation (see KimiK3Adapter.kv_pe_interleave).
+    kv_pe_interleave = False
+    # None, deliberately: the only reader is conftest's pretrained_mla_layer_weights fixture, which would first
+    # resolve the whole multi-TB checkpoint. The sparse-MLA tests load real weights through --ds-layer instead
+    # (the first DSA layer is 3; layers 0-2 are KDA), which uses pretrained_attention_extract_only below.
+    pretrained_mla_layer = None
+    # The K3.1 shards are tens of GB each: fetch only the requested layer's attention tensors (range reads).
+    pretrained_attention_extract_only = True
+
+    @property
+    def default_sparse_kv_cache_format(self):
+        """Scaled-FP8 main KVPE cache (production format, as GLM-5.3); BF16 is a diagnostic only."""
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+
+        return MlaKvCacheFormat.SCALED_FP8
+
+    @property
+    def config_builder(self) -> Callable:
+        from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import kimi_k3_1_hf_config
+
+        return kimi_k3_1_hf_config
