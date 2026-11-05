@@ -159,7 +159,15 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
         //.def(nb::init<const std::shared_ptr<std::vector<std::byte>>>()) // broke unity build
         .def(nb::init<std::vector<std::byte>&&>())
         .def(nb::init<const std::vector<std::byte>&>())
-        .def("__getitem__", [](const HostBuffer& self, std::size_t index) { return self.view_bytes()[index]; })
+        .def(
+            "__getitem__",
+            [](const HostBuffer& self, std::size_t index) {
+                const auto bytes = self.view_bytes();
+                if (index >= bytes.size()) {
+                    throw nb::index_error("HostBuffer index out of range");
+                }
+                return static_cast<uint8_t>(bytes[index]);
+            })
         .def("__len__", [](const HostBuffer& self) { return self.view_bytes().size(); })
         .def(
             "__iter__",
