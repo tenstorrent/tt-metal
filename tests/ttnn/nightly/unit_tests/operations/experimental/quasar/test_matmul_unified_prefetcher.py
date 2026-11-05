@@ -183,11 +183,12 @@ def test_weight_layouts_and_rings(device, weight_layout, ring_K_chunks):
     _run_twice(device, setup, qsr.MatmulUnifiedProgramConfig(cores=setup.cores, K_chunk_tiles=4))
 
 
-def test_auto_placement_and_K_chunk(device):
-    """Without a program config the op places the matmul on the pipes' receivers and picks a K chunk two of which
-    fit the ring."""
+@pytest.mark.parametrize("with_config", [False, True], ids=["no_config", "config_without_cores"])
+def test_auto_placement_and_K_chunk(device, with_config):
+    """Without a program config, or with one without cores, the op places the matmul on the pipes' receivers and
+    picks a K chunk two of which fit the ring."""
     setup = _Setup(device, 4096, 14336, "recv_contig_contiguous", ttnn.bfloat8_b, ring_K_chunks=2, K_chunk_tiles=8)
-    _run_twice(device, setup, program_config=None)
+    _run_twice(device, setup, program_config=qsr.MatmulUnifiedProgramConfig() if with_config else None)
 
 
 def test_fused_bias_and_activation(device):
