@@ -21,6 +21,7 @@ import os
 import time
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt import dram_levers as _DL
 from models.demos.blackhole.deepseek_v41_flash.tt import fuse_tail_ar as _FT
 from models.demos.blackhole.deepseek_v41_flash.tt import mhc_collapse as _MC
 from models.demos.blackhole.deepseek_v41_flash.tt import mhc_stream_pool
@@ -121,9 +122,11 @@ class DSV41Layer:
             )
         # DSV41_SKINNY_ARM=1 / DSV41_SKINNY_SHARED=1 (init): build the bank-sharded shared-expert chain weights (tt/skinny_shared.py); DSV41_SKINNY_SHARED=1 at call time uses it (replaces linear, slice, slice, multiply, linear)
         self.skin_sh = None
-        if self.shared_tp is not None and (
-            os.environ.get("DSV41_SKINNY_ARM") == "1" or os.environ.get("DSV41_SKINNY_SHARED") == "1"
-        ):
+        if (
+            self.shared_tp is not None
+            and (os.environ.get("DSV41_SKINNY_ARM") == "1" or os.environ.get("DSV41_SKINNY_SHARED") == "1")
+            and _DL.want_skinny_shared_copy(users_per_row)
+        ):  # DSV41_COPY_GUARD=1 (tt/dram_levers.py)
             from models.demos.blackhole.deepseek_v41_flash.tt.skinny_shared import SkinnyShared
 
             self.skin_sh = SkinnyShared(

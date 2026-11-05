@@ -24,6 +24,7 @@ import torch
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM, NH, WINDOW, DSV41Attention
 from models.demos.blackhole.deepseek_v41_flash.tt.ckpt_stamp import ensure_stamp
+from models.demos.blackhole.deepseek_v41_flash.tt.device_head import embed_lookup as _embed_lookup
 from models.demos.blackhole.deepseek_v41_flash.tt.layer import DSV41Layer
 from models.demos.blackhole.deepseek_v41_flash.tt.loader import _fp8, rope_freqs
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc import DSV41MHC, _odd_t
@@ -889,24 +890,24 @@ class DSparkDrafter:
                 os.environ.get("DSV41_DRAFT_X_RM", "1") == "1"
             ):  # 4 streams = 4 copies of the row, built in row-major (copy) and tilized once as fp32
                 e = ttnn.reshape(
-                    ttnn.embedding(tok8, self.embed_w, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16),
+                    _embed_lookup(self.embed_w, tok8, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16),
                     [Tp, 1, 1, 5120],
                 )
                 x = ttnn.to_layout(ttnn.concat([e, e, e, e], dim=2), ttnn.TILE_LAYOUT, dtype=ttnn.float32)
             else:
-                emb = ttnn.embedding(tok8, self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [Tp,1,5120]
+                emb = _embed_lookup(self.embed_w, tok8, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [Tp,1,5120]
                 x = ttnn.repeat(ttnn.typecast(ttnn.reshape(emb, [Tp, 1, 1, 5120]), ttnn.float32), [1, 1, 4, 1])
             pre = self.pre0p
         elif os.environ.get("DSV41_DRAFT_X_RM2", "0") == "1":
             # bit-identical to the branch below: the 4 stream copies are built in row-major (bf16 table rows are exact in fp32) and tilized once as fp32 (the typecast + 3 repeats of the tile path are ~130 us)
             e = ttnn.reshape(
-                ttnn.embedding(tok_rows, self.embed_w, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16),
+                _embed_lookup(self.embed_w, tok_rows, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16),
                 [T, 1, 1, 5120],
             )
             x = ttnn.to_layout(ttnn.concat([e, e, e, e], dim=2), ttnn.TILE_LAYOUT, dtype=ttnn.float32)
             pre = self.pre0
         else:
-            emb = ttnn.embedding(tok_rows, self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [T,1,5120]
+            emb = _embed_lookup(self.embed_w, tok_rows, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [T,1,5120]
             x = ttnn.repeat(ttnn.typecast(ttnn.reshape(emb, [T, 1, 1, 5120]), ttnn.float32), [1, 1, 4, 1])
             pre = self.pre0
         if self.stop == "embed":

@@ -53,8 +53,22 @@ B16_DROP = (
 )
 
 
-def b16_env(base_env, extra=None):
+# ALL-ON variant (--all-on, impl deepseek_v41_flash_b16_1m_allon): every stack5 optimization stays ON as in the B=8 entry; DRAM is freed by the default-off levers of
+# tt/dram_levers.py instead (dsv4-logs/unified_stack/DRAM_LEDGER.md): copy guard (no attention-front / skinny shared copy when no verify row count T = 4 x (1 + k) can use it),
+# embedding table sharded over the columns, trace region 1.0e9; only the paged device APC (unsupported at Up < U) is off.
+NEW_IMPL_ALLON = "deepseek_v41_flash_b16_1m_allon"
+ALLON_ENV = {"DSV41_COPY_GUARD": "1", "DSV41_EMBED_SHARD": "1", "DSV41_TRACE_REGION": "1000000000"}
+ALLON_OFF = ("DSV41_APC_PAGED", "DSV41_APC_PAGED_XROW", "DSV41_APC_IMAGES")
+
+
+def b16_env(base_env, extra=None, all_on=False):
     env = dict(base_env)
+    if all_on:
+        env.update({k: "0" for k in ALLON_OFF})
+        env.update(B16_ENV)
+        env.update(ALLON_ENV)
+        env.update(extra or {})
+        return env
     for k in B16_DROP:
         env.pop(k, None)
     env.update({k: "0" for k in B16_OFF})
@@ -63,13 +77,14 @@ def b16_env(base_env, extra=None):
     return env
 
 
-def add_b16_entry(full, extra=None):
+def add_b16_entry(full, extra=None, all_on=False):
     """full: catalog dict (schema_version / release_version / model_specs). Returns the same dict with the B=16 entry added (not default)."""
     v = full["model_specs"]["deepseek-ai/DeepSeek-V4.1-Flash"]["BLACKHOLE_GALAXY"]["vLLM"]
     e = copy.deepcopy(v[SRC_IMPL])
+    new = NEW_IMPL_ALLON if all_on else NEW_IMPL
     e["model_id"] = e["model_id"].replace("b8-1m", "b16-1m")
-    e["impl"]["impl_id"] = NEW_IMPL
-    e["impl"]["impl_name"] = "deepseek-v41-flash-b16-1m"
+    e["impl"]["impl_id"] = new
+    e["impl"]["impl_name"] = new.replace("_", "-")
     d = e["device_model_spec"]
     d["default_impl"] = False
     d["max_concurrency"] = BATCH
@@ -77,19 +92,21 @@ def add_b16_entry(full, extra=None):
     d["max_tokens_all_users_override"] = BATCH * MAX_LEN
     d["vllm_args"]["max_num_seqs"] = str(BATCH)
     d["vllm_args"]["max_model_len"] = str(MAX_LEN)
-    env = b16_env(e["env_vars"], extra)
+    env = b16_env(e["env_vars"], extra, all_on)
     e["env_vars"] = env
-    d["env_vars"] = b16_env(d.get("env_vars", e["env_vars"]), extra)
-    v[NEW_IMPL] = e
+    d["env_vars"] = b16_env(d.get("env_vars", e["env_vars"]), extra, all_on)
+    v[new] = e
     return full
 
 
 def main():
-    src, out = sys.argv[1], sys.argv[2]
-    extra = dict(a.split("=", 1) for a in sys.argv[3:])
-    full = add_b16_entry(json.load(open(src)), extra)
+    args = [a for a in sys.argv[1:] if a != "--all-on"]
+    all_on = "--all-on" in sys.argv
+    src, out = args[0], args[1]
+    extra = dict(a.split("=", 1) for a in args[2:])
+    full = add_b16_entry(json.load(open(src)), extra, all_on)
     json.dump(full, open(out, "w"), indent=1)
-    print(out, NEW_IMPL, sorted(extra))
+    print(out, NEW_IMPL_ALLON if all_on else NEW_IMPL, sorted(extra))
 
 
 if __name__ == "__main__":

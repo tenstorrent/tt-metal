@@ -161,3 +161,25 @@ def test_real_stack5_catalog_if_present():
     assert sum(1 for x in v.values() if x["device_model_spec"]["default_impl"]) == 1
     assert v[M.SRC_IMPL]["device_model_spec"]["default_impl"] is True
     assert v[M.NEW_IMPL]["env_vars"]["DSV41_APC_PAGED"] == "0"
+
+
+def test_allon_entry_keeps_every_optimization_and_adds_the_dram_levers():
+    full = M.add_b16_entry(catalog(), all_on=True)
+    e = full["model_specs"]["deepseek-ai/DeepSeek-V4.1-Flash"]["BLACKHOLE_GALAXY"]["vLLM"][M.NEW_IMPL_ALLON]
+    assert e["impl"]["impl_id"] == "deepseek_v41_flash_b16_1m_allon" and e["device_model_spec"]["default_impl"] is False
+    for env in (e["env_vars"], e["device_model_spec"]["env_vars"]):
+        for k in (
+            "DSV41_ATTN_FRONT",
+            "DSV41_SKINNY_ARM",
+            "DSV41_SKINNY_WOAB",
+            "DSV41_SKINNY_SHARED",
+            "DSV41_FUSE_TAIL",
+            "DSV41_ATTN_FRONT_RING",
+        ):
+            assert env[k] != "0"  # all B=8 optimizations stay on
+        assert (
+            env["DSV41_COPY_GUARD"] == "1"
+            and env["DSV41_EMBED_SHARD"] == "1"
+            and env["DSV41_TRACE_REGION"] == "1000000000"
+        )
+        assert env["DSV41_APC_PAGED"] == "0" and env["DSV41_MHC_PRE24"] == "0" and env["MAX_NUM_SEQS"] == "16"

@@ -36,6 +36,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import attn_fused as AF
+from models.demos.blackhole.deepseek_v41_flash.tt import dram_levers as _DL
 from models.demos.blackhole.deepseek_v41_flash.tt.qk_norm import qk_norm
 
 HEAD_DIM = 512
@@ -198,7 +199,11 @@ class DSV41Attention:
         self.wq_b = up(w["wq_b"].T.reshape(1, 1, Q_LORA, N_HEADS * HEAD_DIM), dtype=wdt, mapper=col_shard(3))
         # DSV41_ATTN_FRONT / DSV41_ATTN_FRONT_ARM = 1: blaze-layout copies (DRAM width-sharded over the 8 banks, tiles shuffled column-major per shard) of wqkv and wq_b for the
         # persistent attention-front kernel (tt/attn_front.py); the interleaved ones stay (prefill, other row counts)
-        if os.environ.get("DSV41_ATTN_FRONT") == "1" or os.environ.get("DSV41_ATTN_FRONT_ARM") == "1":
+        if (
+            os.environ.get("DSV41_ATTN_FRONT") == "1" or os.environ.get("DSV41_ATTN_FRONT_ARM") == "1"
+        ) and _DL.want_attn_front_copy(
+            self.T
+        ):  # DSV41_COPY_GUARD=1: no copy when no spec verify row count can use it (tt/dram_levers.py)
             from models.demos.blackhole.deepseek_v41_flash.tt.attn_front import blaze_weight
 
             self.af_split = int(os.environ.get("DSV41_ATTN_FRONT_SPLIT", "1"))
@@ -228,7 +233,9 @@ class DSV41Attention:
         # DSV41_SKINNY_ARM=1 / DSV41_SKINNY_WOAB=1 (init-time: build the weights; DSV41_SKINNY_WOAB=1 at call time: use them): the attention tail wo_a -> wo_b as ONE program on the 8 DRAM-bank cores
         # (tt/skinny.py SkinnyWoAB; extra bank-sharded bfp8 copies of wo_a (without the 512 zero rows) and wo_b: 10 MB per chip per layer, call-time switch only)
         self._skin = None
-        if os.environ.get("DSV41_SKINNY_ARM") == "1" or os.environ.get("DSV41_SKINNY_WOAB") == "1":
+        if (
+            os.environ.get("DSV41_SKINNY_ARM") == "1" or os.environ.get("DSV41_SKINNY_WOAB") == "1"
+        ) and _DL.want_skinny_wo_copy(self.T):
             from models.demos.blackhole.deepseek_v41_flash.tt.skinny import SkinnyWoAB
 
             self._skin = SkinnyWoAB(md, wo_a.float(), w["wo_b"].T.reshape(N_GROUPS * O_LORA, DIM).float())

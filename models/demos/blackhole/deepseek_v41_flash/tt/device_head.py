@@ -35,19 +35,61 @@ def _cache(name):
     return str(Path(WEIGHT_CACHE) / name)
 
 
-class DSV41DeviceEmbedding:
-    def __init__(self, mesh_device, embed_weight=None, users_per_row=4):
-        """``embed_weight``: [vocab, dim] torch tensor; may be None when the cache file already exists."""
-        self.md = mesh_device
+class ShardedEmbeddingTable:
+    """DSV41_EMBED_SHARD=1 (default off): the embedding table split over the 8 mesh columns along the hidden dim ([vocab, 5120/8] bf16 per chip, 19.7 instead of 157.8 MiB/bank,
+    -138 MiB/bank; measured in tests/test_embedding_shard.py of wt/embed_shard). Every column looks the same token ids up in its slice, then ONE all_gather over the
+    columns restores the full row (a copy, bit-identical to the replicated lookup). Used wherever the replicated table was passed to ttnn.embedding (``embed_lookup``).
+    """
+
+    def __init__(self, mesh_device, embed_weight=None):
+        rows, cols = tuple(mesh_device.shape)
+        assert DIM % (cols * 32) == 0
+        self.md, self.cols = mesh_device, cols
         self.weight = ttnn.as_tensor(
             embed_weight.to(torch.bfloat16) if embed_weight is not None else None,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            cache_file_name=_cache("embed_bf16_rm"),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 1), mesh_shape=(rows, cols)),
+            cache_file_name=_cache(f"embed_bf16_rm_dshard{cols}"),
         )
+
+    def lookup(self, tokens, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
+        e = ttnn.embedding(tokens, self.weight, layout=ttnn.TILE_LAYOUT, dtype=dtype)  # [T, 1, D / cols]
+        g = ttnn.all_gather(e, dim=len(e.shape) - 1, cluster_axis=1, num_links=1, topology=ttnn.Topology.Ring)
+        if layout != ttnn.TILE_LAYOUT:
+            g = ttnn.to_layout(g, layout)
+        return g
+
+
+def embed_shard_on():
+    return os.environ.get("DSV41_EMBED_SHARD", "0") == "1"
+
+
+def embed_lookup(table, tokens, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
+    """ttnn.embedding on a replicated table, or the sharded lookup (+ all_gather) of a ``ShardedEmbeddingTable``."""
+    if isinstance(table, ShardedEmbeddingTable):
+        return table.lookup(tokens, layout, dtype)
+    return ttnn.embedding(tokens, table, layout=layout, dtype=dtype)
+
+
+class DSV41DeviceEmbedding:
+    def __init__(self, mesh_device, embed_weight=None, users_per_row=4):
+        """``embed_weight``: [vocab, dim] torch tensor; may be None when the cache file already exists."""
+        self.md = mesh_device
+        if embed_shard_on():
+            self.weight = ShardedEmbeddingTable(mesh_device, embed_weight)
+        else:
+            self.weight = ttnn.as_tensor(
+                embed_weight.to(torch.bfloat16) if embed_weight is not None else None,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                cache_file_name=_cache("embed_bf16_rm"),
+            )
         # the one-hot pre-mix is a constant: upload it once (host writes are not allowed inside a trace)
         self.pre = ttnn.from_torch(
             torch.tensor([1.0, 0.0, 0.0, 0.0]).repeat(users_per_row, 1, 1, 1),
@@ -91,7 +133,7 @@ class DSV41DeviceEmbedding:
         of a prompt take the vision encoder's rows instead of the table row of the image token id (``emb * keep + override`` is exact: keep is 0 / 1).
         """
         T = tokens.shape[0]
-        emb = ttnn.embedding(tokens, self.weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [T,1,D]
+        emb = embed_lookup(self.weight, tokens, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [T,1,D]
         if override is not None:
             e2 = ttnn.add(ttnn.multiply(ttnn.reshape(emb, [1, 1, T, emb.shape[-1]]), keep), override)
             emb = ttnn.reshape(e2, [T, 1, emb.shape[-1]])
