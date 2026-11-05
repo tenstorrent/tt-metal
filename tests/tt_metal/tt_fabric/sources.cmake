@@ -59,6 +59,7 @@ set(UNIT_TESTS_FABRIC_SRC
 set(UNIT_TESTS_PHYSICAL_DISCOVERY_SRC physical_discovery/test_physical_system_descriptor.cpp)
 
 set(UNIT_TESTS_FABRIC_CAPTURE_SRC
+    fabric_capture/test_fabric_capture_files.cpp
     fabric_capture/test_fabric_capture_targets.cpp
 )
 
