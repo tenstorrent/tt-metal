@@ -445,7 +445,11 @@ FORCE_INLINE void noc_async_write_sharded(
         uint32_t num_pages = div_up(size + sharded_offset, page_size);
         // Explicit counter; a derived `size - i*page_size` would underflow because iter 0 is a partial page.
         uint32_t remaining = size;
-        for (uint32_t i = 0; i < num_pages && sharded_dest_id < dspec.tensor_volume(); i++) {
+        for (uint32_t i = 0; i < num_pages; i++) {
+            // Stop at the last page of the tensor.
+            if (sharded_dest_id >= dspec.tensor_volume()) {
+                break;
+            }
             uint32_t write_size = std::min(remaining, page_size - sharded_offset);
             noc.async_write(
                 CoreLocalMem<uint32_t>(l1_addr),
@@ -511,7 +515,11 @@ FORCE_INLINE void noc_async_read_sharded(
         uint32_t num_pages = div_up(size + sharded_offset, page_size);
         // Explicit counter; a derived `size - i*page_size` would underflow because iter 0 is a partial page.
         uint32_t remaining = size;
-        for (uint32_t i = 0; i < num_pages && sharded_src_id < dspec.tensor_volume(); i++) {
+        for (uint32_t i = 0; i < num_pages; i++) {
+            // Stop at the last page of the tensor.
+            if (sharded_src_id >= dspec.tensor_volume()) {
+                break;
+            }
             uint32_t read_size = std::min(remaining, page_size - sharded_offset);
             noc.async_read(
                 tensor,
