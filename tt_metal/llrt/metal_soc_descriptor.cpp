@@ -237,6 +237,24 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_logical_ethernet_core_from_phys
     return {logical_coord.x, logical_coord.y};
 }
 
+const tt::umd::KeraunosCore* metal_SocDescriptor::find_keraunos_core(const tt_xy_pair& noc0) const {
+    for (const auto& core : get_arch_descriptor().get_keraunos().cores) {
+        if (core.coord == noc0) {
+            return &core;
+        }
+    }
+    return nullptr;
+}
+
+const tt::umd::KeraunosCore& metal_SocDescriptor::get_keraunos_core_for_channel(uint32_t eth_chan) const {
+    const tt::umd::CoreCoord noc0 = get_eth_core_for_channel(eth_chan, tt::CoordSystem::NOC0);
+    if (const auto* core = find_keraunos_core(tt_xy_pair(noc0.x, noc0.y))) {
+        return *core;
+    }
+    TT_THROW(
+        "Ethernet channel {} (NOC0 {}-{}) has no keraunos.cores entry in the SoC descriptor", eth_chan, noc0.x, noc0.y);
+}
+
 tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const {
     tt::umd::CoreCoord physical_coord =
         translate_coord_to({logical_coord, tt::CoreType::TENSIX, tt::CoordSystem::LOGICAL}, tt::CoordSystem::NOC0);
