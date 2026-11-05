@@ -952,20 +952,26 @@ class TTResNet:
 
         first = self.res_layers[0]
         assert first.cameras == 1 and first.whole_first_block is None, "the stem runs with layer1, one camera at a time"
-        self.stem_input_memory_config = self.stem_hwc_memory_config(conv_args.conv1, device)
-        stem_conv = _for_cameras(conv_args.conv1, 1)
-        stem_conv["in_channels"] = self.stem_hwc_channels(stem_conv.in_channels)
-        self.conv1 = TTConv2D(
+        self.conv1 = self.stem_conv(conv_args.conv1, conv_pth.conv1, device, weights_dtype, stem_act_block_h)
+        self.stem_input_memory_config = self.conv1.input_memory_config
+
+    @classmethod
+    def stem_conv(cls, conv, conv_pth, device, weights_dtype, act_block_h):
+        """The stem conv ``conv`` with its weights ``conv_pth`` on one camera, ReLU fused: it reads
+        convert_to_hwc's output as ``stem_hwc_memory_config`` lays it out, its channels padded."""
+        stem_conv = _for_cameras(conv, 1)
+        stem_conv["in_channels"] = cls.stem_hwc_channels(stem_conv.in_channels)
+        return TTConv2D(
             stem_conv,
-            conv_pth.conv1,
+            conv_pth,
             device=device,
             weights_dtype=weights_dtype,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-            act_block_h=stem_act_block_h,
+            act_block_h=act_block_h,
             dealloc_act=True,
             input_dtype=ttnn.bfloat16,
             input_layout=ttnn.ROW_MAJOR_LAYOUT,
-            input_memory_config=self.stem_input_memory_config,
+            input_memory_config=cls.stem_hwc_memory_config(conv, device),
             # conv2d would reshard convert_to_hwc's shards to its own split of the output; on
             # these, it skips the copy.
             reshard_input=False,
