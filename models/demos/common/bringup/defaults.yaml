@@ -6,7 +6,8 @@
 agents:
   component_review: none   # all | none | [block types]: test-role review of component tests (F56; none since 2026-10-01)
   swap_review: none        # all | none | [block types]: test-role review of swap tests (F49)
-  timeout_s: 14400         # one agent attempt, seconds
+  timeout_s: 0             # F252 (owner 2026-11-05): no fixed limit on an agent attempt; only a stall ends it
+  stall_s: 5400            # F252: an agent is stalled after this long with no transcript activity and no test of its own running
   policy:                  # per role: attempts, escalate (debugger | stop), debugger_attempts
     implement: {attempts: 3, escalate: debugger, debugger_attempts: 3, defer_after_debugger: true}
     fix: {attempts: 3, escalate: debugger, debugger_attempts: 3}
