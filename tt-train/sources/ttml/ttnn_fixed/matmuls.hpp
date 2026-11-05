@@ -13,10 +13,16 @@ ttnn::Tensor matmul(
     bool transpose_b = false,
     std::optional<ttnn::Tensor> output_tensor = std::nullopt);
 
-std::pair<ttnn::Tensor, ttnn::Tensor> matmul_backward(
+struct MatmulBackwardGrads {
+    bool a = true;
+    bool b = true;
+};
+
+std::pair<std::optional<ttnn::Tensor>, std::optional<ttnn::Tensor>> matmul_backward(
     const ttnn::Tensor& a,
     const ttnn::Tensor& b,
     const ttnn::Tensor& out_grad,
     bool transpose_a = false,
-    bool transpose_b = false);
+    bool transpose_b = false,
+    MatmulBackwardGrads grads = {});
 }  // namespace ttml::ttnn_fixed

@@ -25,6 +25,14 @@ constexpr bool do_mask_w = true;
 constexpr bool do_mask_w = false;
 #endif
 
+// Gamma, the scaler and mask tiles, and the two passes that feed the row sums when not everything fits in L1, are only
+// needed for dx.
+#ifdef COMPUTE_GRAD_INPUT
+constexpr bool compute_grad_input = true;
+#else
+constexpr bool compute_grad_input = false;
+#endif
+
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
     uint32_t gamma_address = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -37,14 +45,16 @@ void kernel_main() {
 
     constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
     constexpr uint16_t zero = 0x0;
-    // Generate mask tile.
-    if constexpr (do_mask_w) {
-        generate_mask_tile(cb_mask_w_idx, one, zero, mask_w);
+    if constexpr (compute_grad_input) {
+        // Generate mask tile.
+        if constexpr (do_mask_w) {
+            generate_mask_tile(cb_mask_w_idx, one, zero, mask_w);
+        }
+        // Generate tile with scalar (1/N).
+        generate_tile_with_packed_bfloat16_value(cb_scaler_idx, packed_scaler);
     }
-    // Generate tile with scalar (1/N).
-    generate_tile_with_packed_bfloat16_value(cb_scaler_idx, packed_scaler);
 
-    const uint32_t tile_bytes = get_tile_size(cb_scaler_idx);
+    const uint32_t tile_bytes = get_tile_size(cb_input_idx);
     constexpr auto gamma_args = TensorAccessorArgs<4>();
     constexpr auto input_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     constexpr auto mean_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
@@ -73,7 +83,7 @@ void kernel_main() {
         read_tiles_by_row(cb_dL_out_idx, dL_out_address_generator, r * Wt, Wt, tile_bytes, Wt);
         // Barrier called by read_tiles_by_row with UseBarrier=true above
         cb_push_back(cb_input_idx, Wt);
-        if (r == start_row) {
+        if (compute_grad_input && r == start_row) {
             // Read gamma only once for all rows when everything fits in L1
             read_tiles_by_row(cb_gamma_idx, gamma_address_generator, 0, Wt, tile_bytes, Wt);
         }
@@ -81,47 +91,53 @@ void kernel_main() {
 #else
         // If not everything fits in L1, we need to read data multiple times per row
 
-        // First pass: for computing sum(dy * gamma)
-        for (uint32_t c = 0; c < Wt; c += block_size) {
-            const uint32_t current_block_size = std::min(block_size, Wt - c);
-            uint32_t row_tile_idx = (r * Wt) + c;
+        if constexpr (compute_grad_input) {
+            // First pass: for computing sum(dy * gamma)
+            for (uint32_t c = 0; c < Wt; c += block_size) {
+                const uint32_t current_block_size = std::min(block_size, Wt - c);
+                uint32_t row_tile_idx = (r * Wt) + c;
 
-            read_tiles_by_row</* UseBarrier = */ false>(
-                cb_dL_out_idx, dL_out_address_generator, row_tile_idx, current_block_size, tile_bytes, block_size);
-            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes, block_size);
-            // Barrier called by read_tiles_by_row with UseBarrier=true above
-            cb_push_back(cb_dL_out_idx, block_size);
+                read_tiles_by_row</* UseBarrier = */ false>(
+                    cb_dL_out_idx, dL_out_address_generator, row_tile_idx, current_block_size, tile_bytes, block_size);
+                read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes, block_size);
+                // Barrier called by read_tiles_by_row with UseBarrier=true above
+                cb_push_back(cb_dL_out_idx, block_size);
+            }
+
+            // Second pass: for computing sum(dy * gamma * x_normalized)
+            for (uint32_t c = 0; c < Wt; c += block_size) {
+                uint32_t row_tile_idx = (r * Wt) + c;
+                const uint32_t current_block_size = std::min(block_size, Wt - c);
+
+                read_tiles_by_row</* UseBarrier = */ false>(
+                    cb_input_idx, input_address_generator, row_tile_idx, current_block_size, tile_bytes, block_size);
+                read_tiles_by_row</* UseBarrier = */ false>(
+                    cb_dL_out_idx, dL_out_address_generator, row_tile_idx, current_block_size, tile_bytes, block_size);
+                read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes, block_size);
+                // Barrier called by read_tiles_by_row with UseBarrier=true above
+                cb_push_back(cb_input_idx, block_size);
+                cb_push_back(cb_dL_out_idx, block_size);
+            }
         }
 
-        // Second pass: for computing sum(dy * gamma * x_normalized)
+        // Final pass: one read of each block feeds dx and dgamma_components
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t row_tile_idx = (r * Wt) + c;
             const uint32_t current_block_size = std::min(block_size, Wt - c);
 
             read_tiles_by_row</* UseBarrier = */ false>(
                 cb_input_idx, input_address_generator, row_tile_idx, current_block_size, tile_bytes, block_size);
-            read_tiles_by_row</* UseBarrier = */ false>(
-                cb_dL_out_idx, dL_out_address_generator, row_tile_idx, current_block_size, tile_bytes, block_size);
-            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes, block_size);
-            // Barrier called by read_tiles_by_row with UseBarrier=true above
-            cb_push_back(cb_input_idx, block_size);
-            cb_push_back(cb_dL_out_idx, block_size);
-        }
-
-        // Three passes: for computing dx, dgamma_components, and dbeta_components
-        for (uint32_t c = 0; c < Wt; c += block_size) {
-            uint32_t row_tile_idx = (r * Wt) + c;
-            const uint32_t current_block_size = std::min(block_size, Wt - c);
-
-            read_tiles_by_row</* UseBarrier = */ false>(
-                cb_input_idx, input_address_generator, row_tile_idx, current_block_size, tile_bytes, block_size);
-            read_tiles_by_row</* UseBarrier = */ false>(
-                cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes, block_size);
+            if constexpr (compute_grad_input) {
+                read_tiles_by_row</* UseBarrier = */ false>(
+                    cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes, block_size);
+            }
             read_tiles_by_row(
                 cb_dL_out_idx, dL_out_address_generator, row_tile_idx, current_block_size, tile_bytes, block_size);
             // Barrier called by read_tiles_by_row with UseBarrier=true above
             cb_push_back(cb_input_idx, block_size);
-            cb_push_back(cb_gamma_idx, block_size);
+            if constexpr (compute_grad_input) {
+                cb_push_back(cb_gamma_idx, block_size);
+            }
         }
 #endif
     }

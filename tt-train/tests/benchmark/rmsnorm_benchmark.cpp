@@ -127,7 +127,7 @@ UngatedRow run_ungated_case(const UngatedCase& c) {
         backward_us.push_back(time_device_avg_us(
             *device, kNumWarmup, kNumMeasure, [&]() { (void)ttml::metal::rmsnorm_bw(x, gamma, rms, dL_dout); }));
         backward_frozen_us.push_back(time_device_avg_us(*device, kNumWarmup, kNumMeasure, [&]() {
-            (void)ttml::metal::rmsnorm_bw(x, gamma, rms, dL_dout, /* compute_dgamma */ false);
+            (void)ttml::metal::rmsnorm_bw(x, gamma, rms, dL_dout, std::nullopt, {.gamma = false});
         }));
     }
     return UngatedRow{
@@ -276,7 +276,7 @@ Grads composite_backward(const Case& c, const Inputs& in, Saved saved) {
         du, std::nullopt, c.heads, /* num_kv_heads */ 0U, /* transpose_k_heads */ false));
     du.deallocate();
     auto grads = ttml::metal::rmsnorm_bw(
-        saved.x, in.gamma, saved.rms, ttnn::reshape(du_heads, c.head_major()), /* compute_dgamma */ c.train_gamma);
+        saved.x, in.gamma, saved.rms, ttnn::reshape(du_heads, c.head_major()), std::nullopt, {.gamma = c.train_gamma});
     return Grads{.dx = grads[0].value(), .dgate = dgate, .dgamma = grads[1]};
 }
 
@@ -286,8 +286,7 @@ Forward fused_forward(const Inputs& in) {
 }
 
 Grads fused_backward(const Case& c, const Inputs& in, const Saved& saved) {
-    auto grads =
-        ttml::metal::rmsnorm_bw(saved.x, in.gamma, saved.rms, in.dL_dout, /* compute_dgamma */ c.train_gamma, in.gate);
+    auto grads = ttml::metal::rmsnorm_bw(saved.x, in.gamma, saved.rms, in.dL_dout, in.gate, {.gamma = c.train_gamma});
     return Grads{.dx = grads[0].value(), .dgate = grads[2].value(), .dgamma = grads[1]};
 }
 

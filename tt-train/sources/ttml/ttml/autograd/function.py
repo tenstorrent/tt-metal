@@ -9,7 +9,7 @@ custom TTML operations in Python with both forward and backward passes,
 integrating with the existing C++ autograd system.
 """
 
-from typing import Any, List, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 # Import C++ bindings
 # Note: _ttml is a top-level module, not a subpackage of ttml
@@ -34,10 +34,25 @@ class FunctionContext:
             input, = ctx.saved_tensors
             scale = ctx.scale  # Retrieve non-tensor value
             ...
+
+    ctx.needs_input_grad holds one bool per input to forward(), True for each tensor that requires grad (always
+    False for non-tensors), as in PyTorch. backward() can use it to skip the grads nobody needs. Unlike PyTorch,
+    backward() returns one grad per tensor input only, so needs_input_grad[i] and backward()'s i-th grad refer to the
+    same input only while the tensor inputs come first in forward(); reading needs_input_grad raises otherwise.
     """
 
     def __init__(self):
         self._saved_tensors: List[Any] = []
+        self._needs_input_grad: Tuple[bool, ...] = ()
+        # Set by Function.apply() when a tensor input follows a non-tensor one.
+        self._needs_input_grad_error: Optional[str] = None
+
+    @property
+    def needs_input_grad(self) -> Tuple[bool, ...]:
+        """One bool per input to forward(): True for each tensor that requires grad."""
+        if self._needs_input_grad_error is not None:
+            raise RuntimeError(self._needs_input_grad_error)
+        return self._needs_input_grad
 
     def save_for_backward(self, *tensors) -> None:
         """Save tensors for use in backward pass.
@@ -174,7 +189,8 @@ class Function:
         Returns:
             Gradient(s) w.r.t. tensor inputs. Must return same number of
             gradients as there were tensor inputs to forward().
-            Use None for inputs that don't need gradients.
+            Use None for inputs that don't need gradients; ctx.needs_input_grad
+            tells which those are.
         """
         raise NotImplementedError("Subclasses must implement backward()")
 
@@ -186,12 +202,26 @@ class Function:
         in the autograd graph.
 
         Args:
-            *inputs: Inputs to pass to forward(). Tensor inputs should come first.
+            *inputs: Inputs to pass to forward(). Tensor inputs should come first; ctx.needs_input_grad
+                raises otherwise.
 
         Returns:
             Output tensor(s) from forward().
         """
+        is_tensor = [hasattr(inp, "get_requires_grad") for inp in inputs]
         ctx = FunctionContext()
+        ctx._needs_input_grad = tuple(tensor and inp.get_requires_grad() for tensor, inp in zip(is_tensor, inputs))
+        # backward() returns one grad per tensor input while needs_input_grad has one flag per input, so their indices
+        # only agree while no non-tensor input precedes a tensor input. Only code that reads needs_input_grad is
+        # affected, so the mismatch is reported there.
+        for position in range(1, len(inputs)):
+            if is_tensor[position] and not is_tensor[position - 1]:
+                ctx._needs_input_grad_error = (
+                    f"{cls.__name__}.apply() got a tensor input at position {position} after a non-tensor input, so "
+                    f"ctx.needs_input_grad[i] and backward()'s i-th gradient refer to different inputs. Pass the "
+                    f"tensor inputs first to use needs_input_grad."
+                )
+                break
 
         # Get the AutoContext instance
         auto_context = cpp.autograd.AutoContext.get_instance()
@@ -241,7 +271,7 @@ class Function:
                 return outputs
 
         # Collect input tensors (objects with get_requires_grad method)
-        input_tensors = [inp for inp in inputs if hasattr(inp, "get_requires_grad")]
+        input_tensors = [inp for tensor, inp in zip(is_tensor, inputs) if tensor]
 
         # Extract links from input tensors (for graph dependencies)
         links = get_links(input_tensors)
