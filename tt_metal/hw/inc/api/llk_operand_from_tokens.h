@@ -7,12 +7,11 @@
 // Metal 2 binding-token geometry queries and LLKOperand type extraction.
 
 #include <cstdint>
-#include <type_traits>
 
-#include "api/compute/experimental/2_0/llk_operand.h"
 #include "api/dataflow/dfb_binding_token.h"
 #include "api/scratchpad_binding_token.h"
 #include "api/tensor/tensor_binding_token.h"
+#include "tensor_shape.h"
 
 namespace binding_details {
 
@@ -50,6 +49,10 @@ constexpr ckernel::TensorShape get_tensor_shape(const PerNodeTensorBindingToken<
 }
 
 }  // namespace tensor_accessor
+
+#include <type_traits>
+
+#include "api/compute/experimental/2_0/llk_operand.h"
 
 namespace binding_details {
 
