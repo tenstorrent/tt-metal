@@ -121,6 +121,16 @@ class GLM53FlashPrefillRuntime:
             )
 
     def prefill_chunk(self, input_tensor, kv_caches, *, slot_id, actual_start, actual_end, request_id=0, **_):
+        if not isinstance(input_tensor, torch.Tensor) and actual_end <= actual_start:
+            ttnn.deallocate(input_tensor)
+        if actual_end <= actual_start:
+            # tt-d-gen prefill_wait_for_arm_us: a request the decode side declined before its first chunk sends one
+            # EMPTY chunk only to retire its burst -- nothing to compute or export, every layer acknowledged
+            logger.info(f"[glm53f-runtime] chunk {request_id} slot {slot_id} empty (declined before compute)")
+            if self._sink is not None:
+                for layer in range(TABLE_LAYERS):
+                    self._sink(layer, request_id)
+            return None
         ids = self._ids_host(input_tensor)[: actual_end - actual_start]
         if not isinstance(input_tensor, torch.Tensor):
             ttnn.deallocate(input_tensor)
