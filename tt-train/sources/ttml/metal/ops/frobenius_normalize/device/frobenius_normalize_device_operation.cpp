@@ -46,11 +46,15 @@ FrobeniusNormalizeTensorReturn FrobeniusNormalizeDeviceOperation::create_output_
     return {ttnn::create_device_tensor(output_specs[0], tensor_args.input.device())};
 }
 
+// epsilon is left out of the key: it reaches the kernels only through a compute runtime arg, which
+// FrobeniusNormalizeProgramFactory::override_runtime_arguments re-applies on every cache hit. The rest of the default
+// key stays: the full spec of the input and of preallocated_output, including whether one is passed (TensorAccessorArgs
+// bake each buffer's placement into the compile-time args).
 ttsl::hash::hash_t FrobeniusNormalizeDeviceOperation::compute_program_hash(
     const FrobeniusNormalizeAttributes& args, const FrobeniusNormalizeTensorArgs& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    return tt::tt_metal::operation::hash_operation<FrobeniusNormalizeDeviceOperation>(
-        input_tensor.dtype(), input_tensor.logical_shape());
+    FrobeniusNormalizeAttributes keyed_args = args;
+    keyed_args.epsilon = 0.0F;
+    return tt::tt_metal::operation::hash_operation<FrobeniusNormalizeDeviceOperation>(keyed_args, tensor_args);
 }
 
 }  // namespace ttml::metal::ops::frobenius_normalize::device
