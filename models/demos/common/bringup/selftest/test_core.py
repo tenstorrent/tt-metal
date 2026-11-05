@@ -36,6 +36,7 @@ def test_pass_commits_only_declared_paths(sandbox):
     committed = set(sandbox.git("show", "--name-only", "--format=", "HEAD").split())
     assert committed == {
         "bringup/state.json",
+        "bringup/state_metrics.json",
         "bringup/results/A.1.json",
         "bringup/tasks.yaml",
         "bringup/.gitignore",
@@ -470,7 +471,8 @@ def test_a_refused_commit_record_and_long_floats_stay_out_of_state_json(sandbox)
     led = sandbox.tasks(task("A.1", "true"))
     led.update("A.1", commit_pending={"files": ["x"] * 3}, metrics={"err_x": 0.01756252724938108, "n": 3}, status="X")
     raw = json.loads(led.state_path.read_text())["A.1"]
-    assert "commit_pending" not in raw and raw["metrics"] == {"err_x": 0.0175625, "n": 3}
+    assert "commit_pending" not in raw and "metrics" not in raw  # F253: metrics in state_metrics.json
+    assert json.loads(led.metrics_path.read_text())["A.1"] == {"err_x": 0.0175625, "n": 3}
     assert led.state()["A.1"]["commit_pending"] == {"files": ["x"] * 3}
     led.update("A.1", commit_pending=None)
     assert led.state()["A.1"].get("commit_pending") is None
@@ -564,3 +566,15 @@ def test_an_owner_unit_waiver_passes_only_the_named_contract_failures():
     assert waived_failures(one + "ERROR models/x/test_adapter_acks.py::u - RuntimeError\n", uw) is None
     assert waived_failures("Segmentation fault\n", uw) is None  # no pytest failure lines: never waived
     assert waived_failures(one, []) is None
+
+
+def test_metrics_live_in_their_own_committed_file(sandbox):
+    """F253: DeepSeek-V4.1 X.3's commit was refused at 503 KB (metrics 384 KB of state.json): metrics go to
+    state_metrics.json beside it; state() merges them back."""
+    led = sandbox.tasks(task("A.1", "true"))
+    led.update("A.1", metrics={"err_x": 0.5}, status="PASS")
+    assert "metrics" not in json.loads(led.state_path.read_text())["A.1"]
+    assert json.loads(led.metrics_path.read_text())["A.1"] == {"err_x": 0.5}
+    assert led.state()["A.1"]["metrics"] == {"err_x": 0.5}
+    led.update("A.1", status="PASS")
+    assert led.state()["A.1"]["metrics"] == {"err_x": 0.5}
