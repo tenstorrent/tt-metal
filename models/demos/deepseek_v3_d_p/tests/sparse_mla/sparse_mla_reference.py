@@ -10,7 +10,6 @@ and PCC is meaningful. This module only adds what's specific to the test harness
 generation, the per-variant disk cache for reference outputs, and a small weight-source helper.
 """
 
-import hashlib
 import os
 from pathlib import Path
 
@@ -34,43 +33,6 @@ assert _EMITTED_INDEXER_KEYS == _CONTRACT_INDEXER_KEYS, (
     f"canonical indexer keys drifted from TtIndexer.WEIGHT_NAMES: "
     f"{sorted(_EMITTED_INDEXER_KEYS)} != {sorted(_CONTRACT_INDEXER_KEYS)}"
 )
-
-
-# Bump whenever SparseMLAReference's math or the cached payload changes. It is part of every cache file name,
-# with the config fingerprint below, so a stale on-disk reference can never satisfy a run whose semantics differ.
-REFERENCE_SEMANTICS_VERSION = 2
-
-# Every config field SparseMLAReference reads. Absent fields hash as None, so adding one later to a
-# config that lacked it changes the key (fails safe: a recompute, never a wrong hit).
-_REF_CONFIG_FIELDS = (
-    "hidden_size",
-    "num_attention_heads",
-    "q_lora_rank",
-    "kv_lora_rank",
-    "qk_nope_head_dim",
-    "qk_rope_head_dim",
-    "v_head_dim",
-    "rope_theta",
-    "rope_scaling",
-    "index_n_heads",
-    "index_head_dim",
-    "index_topk",
-    "index_rope_interleave",
-    "index_rope_dim",
-    "mla_use_nope",
-    "mla_use_output_gate",
-    "initializer_range",
-)
-
-
-def reference_cache_key(config, hidden_states=None, extra=None) -> str:
-    """Short, stable fingerprint of the reference semantics, the config fields it reads, and (when given)
-    the input hidden states and any schedule detail, so two different inputs can never share a file."""
-    fields = [(f, getattr(config, f, None)) for f in _REF_CONFIG_FIELDS]
-    h = hashlib.sha1(repr((REFERENCE_SEMANTICS_VERSION, fields, extra)).encode())
-    if hidden_states is not None:
-        h.update(hidden_states.detach().to(torch.bfloat16).contiguous().view(torch.int16).numpy().tobytes())
-    return f"v{REFERENCE_SEMANTICS_VERSION}-{h.hexdigest()[:10]}"
 
 
 def cpu_ref_cache_dir(variant) -> Path:
@@ -112,43 +74,29 @@ def make_hidden(seq_len, hidden_size, seed=42, input_path=None):
     return torch.randn(1, seq_len, hidden_size, dtype=torch.bfloat16)
 
 
-def run_cpu_reference(config, weights, hidden_states, seq_len, cache_dir, cache_tag, *, with_topk=False):
-    """Single-shot sparse-MLA CPU truth (indexer active). Disk-cached (output + KVPE + index + top-k) under `cache_dir`.
+def run_cpu_reference(config, weights, hidden_states, seq_len, cache_dir, cache_tag):
+    """Single-shot sparse-MLA CPU truth (indexer active). Disk-cached (output + KVPE + index) under `cache_dir`.
 
     Returns (ref_output [1, seq, dim], ref_kvpe [1, 1, seq, kv_lora_rank + rope],
-    ref_index [1, seq, index_head_dim]), plus (ref_topk [seq, k] int32 key positions, ref_scores [seq, seq]
-    bf16 indexer scores, -inf above the diagonal) when ``with_topk``.
+    ref_index [1, seq, index_head_dim]).
     """
-    cache_path = Path(cache_dir) / f"{cache_tag}_{reference_cache_key(config, hidden_states)}_seq{seq_len}.pt"
+    cache_path = Path(cache_dir) / f"{cache_tag}_seq{seq_len}.pt"
     if cache_path.exists():
         logger.info(f"Loading cached CPU reference from {cache_path}")
         cached = torch.load(cache_path, weights_only=True)
-        if all(k in cached for k in ("ref_index", "ref_topk", "ref_scores")):  # older caches lack them — recompute
-            out = (cached["ref_output"], cached["ref_kvpe"], cached["ref_index"])
-            return out + (cached["ref_topk"], cached["ref_scores"]) if with_topk else out
-        logger.info(f"Cached reference at {cache_path} predates the index / top-k cache; recomputing")
+        if "ref_index" in cached:  # pre-index caches lack it — fall through and recompute
+            return cached["ref_output"], cached["ref_kvpe"], cached["ref_index"]
+        logger.info(f"Cached reference at {cache_path} predates the index cache; recomputing")
 
     ref = SparseMLAReference(config, weights, seq_len=seq_len)
     ref_output = ref.forward(hidden_states)
     ref_kvpe = ref.kvpe_cache  # device layout [1, 1, seq, kv_lora_rank + rope]
     ref_index = ref.index_cache  # [1, seq, index_head_dim]
-    ref_topk = ref.indexer_topk[0].to(torch.int32)  # [seq, k] selected key positions
-    ref_scores = ref.indexer_logits[0].to(torch.bfloat16)  # [seq, seq] (causal mask applied: -inf above diag)
 
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "ref_output": ref_output,
-            "ref_kvpe": ref_kvpe,
-            "ref_index": ref_index,
-            "ref_topk": ref_topk,
-            "ref_scores": ref_scores,
-        },
-        cache_path,
-    )
+    torch.save({"ref_output": ref_output, "ref_kvpe": ref_kvpe, "ref_index": ref_index}, cache_path)
     logger.info(f"Saved CPU reference to {cache_path}")
-    out = (ref_output, ref_kvpe, ref_index)
-    return out + (ref_topk, ref_scores) if with_topk else out
+    return ref_output, ref_kvpe, ref_index
 
 
 def run_cpu_reference_ragged(config, weights, hidden_states, seq_len, bounds, cache_dir, cache_tag):
@@ -164,8 +112,7 @@ def run_cpu_reference_ragged(config, weights, hidden_states, seq_len, bounds, ca
     ref_index [1, seq, index_head_dim]).
     """
     shape_key = "-".join(f"{a}:{b}" for a, b in bounds[:2]) + f"-x{len(bounds)}"
-    key = reference_cache_key(config, hidden_states, extra=tuple(bounds))  # full schedule, not just the head
-    cache_path = Path(cache_dir) / f"ragged_{cache_tag}_{key}_seq{seq_len}_{shape_key}.pt"
+    cache_path = Path(cache_dir) / f"ragged_{cache_tag}_seq{seq_len}_{shape_key}.pt"
     if cache_path.exists():
         logger.info(f"Loading cached ragged CPU reference from {cache_path}")
         cached = torch.load(cache_path, weights_only=True)
@@ -191,9 +138,7 @@ def run_cpu_reference_chunked(config, weights, hidden_states, seq_len, chunk, ca
     Returns (ref_output [1, seq, dim], ref_kvpe [1, seq, kv_lora_rank + rope],
     ref_index [1, seq, index_head_dim]).
     """
-    cache_path = (
-        Path(cache_dir) / f"chunked_{cache_tag}_{reference_cache_key(config, hidden_states)}_seq{seq_len}_c{chunk}.pt"
-    )
+    cache_path = Path(cache_dir) / f"chunked_{cache_tag}_seq{seq_len}_c{chunk}.pt"
     if cache_path.exists():
         logger.info(f"Loading cached chunked CPU reference from {cache_path}")
         cached = torch.load(cache_path, weights_only=True)

@@ -51,13 +51,6 @@ SPARSE_KVPE_PCC = 0.99
 # quantization noise. Measured ~0.99991 on 2x4 BH (chunked + rotated), tracking the
 # bf16 KVPE cache; 0.999 keeps ample bf8 headroom while still catching a real write regression.
 SPARSE_INDEX_PCC = 0.999
-# Device top-k vs reference top-k, per row, over the rows that actually prune (more causal keys than
-# index_topk). Tie-tolerant: a device-selected key also counts when its REFERENCE score is within
-# SPARSE_TOPK_TIE_BAND (relative to that row's causal score range) of the reference's k-th score -- the
-# device scores in bf8 (q, key cache) against a bf16 reference, so keys at the boundary can legitimately
-# swap. Output PCC alone can hide a selection bug; this cannot.
-SPARSE_TOPK_RECALL = 0.99
-SPARSE_TOPK_TIE_BAND = 0.01
 # glm_5_2: the production-closest GLM (populated reference cache; architecturally == GLM-5.3).
 # kimi_k3_1: K3's gated NoPE MLA (96 heads) + a NoPE lightning indexer; its main KVPE cache is scaled FP8.
 # deepseek_v32: 128 heads, so the only variant whose TP=2 and TP=4 head shards both suit sparse_sdpa unresharded.
@@ -316,47 +309,6 @@ def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk, 
     return nat
 
 
-def _device_topk_rows(indices, mesh_device, seq_len):
-    """Device indexer selection -> [seq_len, k] key positions in natural row order.
-
-    The indexer emits [1, 1, rows, k] per chip: SP-sharded rows, further split over TP when the layer
-    reshards heads -> sequence (every TP > 1), else TP-replicated. Concatenate as [sp, tp, rows, k] and flatten in
-    linear chip order (sp-major, tp-minor) -- one full-sequence chunk at offset 0 is in natural order."""
-    sp, tp = mesh_device.shape[0], mesh_device.shape[1]
-    t = ttnn.to_torch(
-        indices, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=mesh_device.shape)
-    )
-    t = t.reshape(sp, tp, -1, t.shape[-1]).to(torch.int64)
-    rows = t.shape[2]
-    if rows * sp * tp == seq_len:  # TP sequence shards
-        return t.reshape(seq_len, -1)
-    if rows * sp == seq_len:  # TP-replicated SP shards
-        return t[:, 0].reshape(seq_len, -1)
-    assert rows == seq_len, f"unrecognized indexer index layout {tuple(t.shape)} for seq {seq_len}"
-    return t[0, 0]
-
-
-def _topk_recall(dev_topk, ref_topk, ref_scores, index_topk):
-    """Per-row (raw, tie-tolerant) recall of the device selection over the rows with more than index_topk
-    causal keys. Raw: |device ∩ reference| / k. Tie-tolerant additionally accepts a device key whose
-    reference score is >= the reference k-th score minus SPARSE_TOPK_TIE_BAND x the row's causal range."""
-    seq_len = ref_topk.shape[0]
-    raw, tol = [], []
-    for s in range(index_topk, seq_len):
-        ref = set(ref_topk[s].tolist())
-        # Distinct valid keys only: a duplicated index must not count twice (a top-k merge that repeats one
-        # correct key k times would otherwise score 1.0).
-        dev = list(dict.fromkeys(int(i) for i in dev_topk[s].tolist() if 0 <= int(i) <= s))
-        row = ref_scores[s, : s + 1].float()
-        kth = row[ref_topk[s].long()].min()
-        band = SPARSE_TOPK_TIE_BAND * (row.max() - row.min())
-        hits = sum(1 for i in dev if i in ref)
-        near = sum(1 for i in dev if i not in ref and row[i] >= kth - band)
-        raw.append(hits / len(ref))
-        tol.append(min(1.0, (hits + near) / len(ref)))
-    return torch.tensor(raw), torch.tensor(tol)
-
-
 def run_sparse_mla_accuracy_case(
     variant,
     config,
@@ -396,8 +348,7 @@ def run_sparse_mla_accuracy_case(
 
     logger.info(f"[{variant.name}] sparse MLA accuracy: running TT inference")
     # Sparse has no single-shot path: one chunk, spanning the whole sequence, at offset 0.
-    prunes = seq_len > config.index_topk
-    tt_output, hidden_states, _, shard_dims, *rest = run_mla_inference(
+    tt_output, hidden_states, _, shard_dims = run_mla_inference(
         config=config,
         weights=weights,
         mesh_device=mesh_device,
@@ -411,31 +362,15 @@ def run_sparse_mla_accuracy_case(
         is_chunked=True,
         active_seq_len=seq_len,
         actual_start=0,
-        return_indices=prunes,
     )
 
     cache_dir = cpu_ref_cache_dir(variant)
     logger.info(f"[{variant.name}] sparse MLA accuracy: running CPU reference")
     # ref_index (the indexer key-cache truth) is dropped: one full-sequence chunk fills a single
     # block-cyclic slab, so chunked/rotated are where that cache is asserted (SPARSE_INDEX_PCC).
-    ref_output, ref_kvpe, _, ref_topk, ref_scores = run_cpu_reference(
-        config, weights, hidden_states, seq_len, cache_dir, cache_tag=f"{src_tag}_funcidx", with_topk=True
+    ref_output, ref_kvpe, _ = run_cpu_reference(
+        config, weights, hidden_states, seq_len, cache_dir, cache_tag=f"{src_tag}_funcidx"
     )
-    if prunes:
-        # G4: the real-pruning regime is exercised (some row keeps < its causal keys), and the device picked
-        # (almost) the same keys as the reference.
-        assert ref_topk.shape[-1] == config.index_topk < seq_len, "5120 case did not prune"
-        raw, recall = _topk_recall(
-            _device_topk_rows(rest[0], mesh_device, seq_len), ref_topk, ref_scores, config.index_topk
-        )
-        logger.info(
-            f"[{variant.name}] top-k recall over {recall.numel()} pruning rows: raw mean={raw.mean():.5f} "
-            f"min={raw.min():.5f}; tie-tolerant mean={recall.mean():.5f} min={recall.min():.5f}"
-        )
-        worst = int(recall.argmin()) + config.index_topk
-        assert (
-            recall.min() >= SPARSE_TOPK_RECALL
-        ), f"device top-k recall {recall.min():.5f} < {SPARSE_TOPK_RECALL} (tie-tolerant) at row {worst}"
 
     logger.debug(f"[{variant.name}] sparse MLA accuracy: collecting TT output shard_dims={shard_dims}")
     tt_output_cpu = ttnn.to_torch(

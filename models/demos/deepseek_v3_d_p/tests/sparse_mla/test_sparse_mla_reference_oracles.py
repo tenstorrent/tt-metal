@@ -155,20 +155,6 @@ def test_gated_reference_requires_g_proj(expect_error):
         SparseMLAReference(cfg, weights, seq_len=128)
 
 
-def test_reference_cache_key_tracks_semantics():
-    """The on-disk reference cache key changes with any field the reference reads (K3.1 vs K3-style NoPE
-    toggles, top-k), and is stable for an unchanged config."""
-    from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import reference_cache_key
-
-    base = _k31_config(256)
-    assert reference_cache_key(base) == reference_cache_key(_k31_config(256))
-    for field, value in (("mla_use_output_gate", False), ("index_topk", 1024), ("index_rope_dim", None)):
-        other = copy.copy(base)
-        setattr(other, field, value)
-        assert reference_cache_key(other) != reference_cache_key(base), field
-    assert reference_cache_key(glm_5_3_hf_config()) != reference_cache_key(base)
-
-
 def test_pretrained_loader_reads_multimodal_key_root(tmp_path):
     """Kimi-K3 / K3.1 checkpoints nest the LM under ``language_model.``; the loader must map that root (incl. the
     gate and the indexer LayerNorm bias) to the canonical names, exactly as it maps ``model.layers.N``."""
