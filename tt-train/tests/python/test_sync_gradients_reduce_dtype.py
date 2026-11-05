@@ -85,3 +85,16 @@ def test_configured_reduce_dtype_applies_unless_the_call_passes_one(dp_mesh, gra
 def test_reduce_dtype_from_config_returns_the_dtype_or_none():
     assert ttml.core.reduce_dtype_from_config({"precision": {"reduce_dtype": "float32"}}) == ttnn.DataType.FLOAT32
     assert ttml.core.reduce_dtype_from_config({}) is None
+
+
+# close_device frees the parallelism context, so Python gets a copy of it: a handle kept across a close can't point at
+# freed memory. Each call makes its own copy.
+@pytest.mark.requires_device
+def test_parallelism_context_is_returned_as_a_copy(dp_mesh):
+    ctx = ttml.autograd.AutoContext.get_instance()
+    ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=True, enable_tp=False))
+
+    first, second = ctx.get_parallelism_context(), ctx.get_parallelism_context()
+
+    assert first is not second
+    assert (first.get_ddp_size(), first.get_tp_size()) == (2, 1)

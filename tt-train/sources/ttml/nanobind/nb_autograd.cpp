@@ -334,8 +334,9 @@ void py_module(nb::module_& m) {
         py_auto_context.def(
             "get_parallelism_context",
             [](AutoContext& self) -> const ParallelismContext& { return self.get_parallelism_context(); },
-            nb::rv_policy::reference,
-            "Get parallelism context");
+            // A copy: close_device() frees the context, and it only holds axes and counts.
+            nb::rv_policy::copy,
+            "Get a copy of the parallelism context");
         py_auto_context.def(
             "is_parallelism_context_initialized",
             &AutoContext::is_parallelism_context_initialized,

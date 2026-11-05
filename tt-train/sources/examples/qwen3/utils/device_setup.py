@@ -62,27 +62,12 @@ def setup_device(dp_size: int, tp_size: int, seed: int = 42):
             f"({total_devices} devices, mesh [{dp_size}, {tp_size}])"
         )
         ttml.open_device_mesh(ttml.Mesh((dp_size, tp_size), ("dp", "tp")))
-        # ParallelismContext is a one-shot snapshot on the AutoContext singleton:
-        # ``initialize_parallelism_context`` throws if one already exists and there is
-        # no reset hook, so ``teardown_device`` cannot clear it. It stores only axis
-        # indices and device counts taken from the mesh shape (no device handle), so an
-        # existing context is still accurate for a mesh of the same shape -- which is
-        # what a repeated setup_device() in one process (tests, notebooks) opens. Reuse
-        # it in that case; a different shape genuinely cannot be served in-process.
-        if ctx.is_parallelism_context_initialized():
-            pctx = ctx.get_parallelism_context()
-            existing = (pctx.get_ddp_size(), pctx.get_tp_size())
-            if existing != (dp_size, tp_size):
-                raise RuntimeError(
-                    f"This process already initialized a ParallelismContext for "
-                    f"DP={existing[0]}, TP={existing[1]}, and it cannot be reset, so "
-                    f"DP={dp_size}, TP={tp_size} cannot be served. Use a fresh process "
-                    f"for a different mesh shape."
-                )
-        else:
-            ctx.initialize_parallelism_context(
-                ttml.autograd.DistributedConfig(enable_ddp=dp_size > 1, enable_tp=tp_size > 1)
-            )
+        # open_device_mesh only succeeds when no device is open, so an earlier mesh was closed (teardown_device), and
+        # closing it dropped its ParallelismContext. This mesh gets a fresh one for its own shape, so a repeated
+        # setup_device() in one process (tests, notebooks) can open any shape.
+        ctx.initialize_parallelism_context(
+            ttml.autograd.DistributedConfig(enable_ddp=dp_size > 1, enable_tp=tp_size > 1)
+        )
     else:
         ctx.open_device()
     ctx.set_seed(seed)
@@ -105,9 +90,7 @@ def teardown_device():
     to call when nothing is open and safe to call twice, so callers can put it in a
     ``finally`` on top of a normal-path call without guarding.
 
-    Does NOT reset the AutoContext's ParallelismContext: that is a one-shot snapshot
-    with no reset hook exposed (see ``setup_device``, which reuses a matching one).
-    So a process can reopen the *same* mesh shape after teardown, but not a
-    different one.
+    Closing the device also drops the AutoContext's ParallelismContext, so a process
+    can call ``setup_device`` again afterwards for any mesh shape.
     """
     ttml.close_device_mesh()

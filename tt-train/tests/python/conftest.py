@@ -228,24 +228,11 @@ def tp_mesh():
     not skipped. The parallelism context is initialised here too, since the qwen3
     model paths resolve their TP size through it.
     """
-    dp_expected, tp_expected = TP_MESH_SHAPE
     with _fresh_device_mesh(TP_MESH_SHAPE, ("dp", "tp"), what="tp") as mesh:
+        # Opening the mesh first closed the previous one, and close_device drops its ParallelismContext, so none is
+        # installed here; initialize_parallelism_context would throw if one were.
         ctx = ttml.autograd.AutoContext.get_instance()
-        if ctx.is_parallelism_context_initialized():
-            # close_device clears the ParallelismContext, so one is only installed here
-            # if something initialized it on this mesh already. It is only usable if it
-            # describes this same shape -- reusing a mismatched one (a dp-enabled GRPO
-            # context, say) silently shards the model for the wrong device count
-            # instead of failing.
-            pctx = ctx.get_parallelism_context()
-            actual = (pctx.get_ddp_size(), pctx.get_tp_size())
-            if actual != (dp_expected, tp_expected):
-                raise RuntimeError(
-                    f"this process already installed a ParallelismContext for DP={actual[0]}, "
-                    f"TP={actual[1]} on the open mesh; needed DP={dp_expected}, TP={tp_expected}"
-                )
-        else:
-            ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
+        ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
         yield mesh
 
 
