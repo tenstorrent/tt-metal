@@ -1,0 +1,376 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Shared parts of the GGUF SFPU decoders (ckernel_sfpu_gguf_decode.h): DEST layout constants, bit and scale-field
+// helpers, the code-word layout of the linear formats and the generic phase 2 (body).
+
+#pragma once
+
+#include <cstdint>
+
+#include "ckernel.h"
+#include "experimental/ckernel_gguf_page.h"
+#include "sfpi.h"
+
+namespace ckernel::sfpu
+{
+namespace gguf
+{
+
+using namespace ckernel::gguf;
+
+// SFPTRANSP transposes LRegs 0..3 and 4..7 as two 4x4 blocks; the second block is scratch here. It uses all eight
+// LRegs, so no other value stays in an LReg across it.
+template <typename V>
+sfpi_inline void transp4(V& a, V& b, V& c, V& d)
+{
+    V e = a, f = a, g = a, h = a;
+    sfpi::subvec_transp(a, b, c, d, e, f, g, h);
+}
+
+constexpr int TILE = 32;            // dst_reg entries per Float32 DEST tile
+constexpr int CO   = TILE;          // the page
+constexpr int PS   = 2 * TILE + 16; // S[(a * 2 + b) * 2 + h]
+constexpr int PM   = 2 * TILE + 24; // M[(a * 2 + b) * 2 + h]
+
+using sfpi::vFloat;
+using sfpi::vInt;
+using sfpi::vUInt;
+
+sfpi_inline vUInt ldu(const int i)
+{
+    return sfpi::dst_reg[i].mode<sfpi::DataLayout::U32>();
+}
+
+sfpi_inline vFloat ufloat(const vUInt v)
+{
+    return sfpi::convert<vFloat>(sfpi::as<sfpi::vMag>(v), sfpi::RoundMode::Nearest);
+}
+
+template <int FMT>
+struct traits; // ckernel_sfpu_gguf_decode.h
+
+// The page's code rows, before the scale fields.
+template <int FMT>
+constexpr int scale_row()
+{
+    return page_layout<static_cast<Format>(FMT)>().scale_offset / 64;
+}
+
+// Rows 4g..4g+3 of the scale fields, word parity p, each replicated to all SFPU row groups.
+template <int FMT>
+sfpi_inline void rep4(const int g, const int p, vUInt& r0, vUInt& r1, vUInt& r2, vUInt& r3)
+{
+    r0 = ldu(CO + scale_row<FMT>() / 2 + 2 * g + p);
+    r1 = r0;
+    r2 = r0;
+    r3 = r0;
+    transp4(r0, r1, r2, r3);
+}
+
+// Replicated copies of scale rows 4g..4g+3, parity p, into scratch dst_reg[base + 0..3] of the output tile (phase 2
+// overwrites the output tile afterwards).
+template <int FMT>
+sfpi_inline void rep4_to(const int g, const int p, const int base)
+{
+    vUInt r0, r1, r2, r3;
+    rep4<FMT>(g, p, r0, r1, r2, r3);
+    sfpi::dst_reg[base + 0].mode<sfpi::DataLayout::U32>() = r0;
+    sfpi::dst_reg[base + 1].mode<sfpi::DataLayout::U32>() = r1;
+    sfpi::dst_reg[base + 2].mode<sfpi::DataLayout::U32>() = r2;
+    sfpi::dst_reg[base + 3].mode<sfpi::DataLayout::U32>() = r3;
+}
+
+// Bit field [lsb, lsb + width) of w, unsigned: at most two shifts, no mask constant.
+sfpi_inline vUInt bits(const vUInt w, const int lsb, const int width)
+{
+    if (lsb + width == 32)
+    {
+        return lsb == 0 ? w : w >> static_cast<unsigned>(lsb);
+    }
+    return (w << static_cast<unsigned>(32 - lsb - width)) >> static_cast<unsigned>(32 - width);
+}
+
+// Prepared formats (fp16_rows > 0): fp32 field F (fp16 row F after the raw rows) of column 16a + 2c + b, from rows
+// R + 4 (2F + b) .. + 3 of the scale fields, R = scale rows rounded up to 4 (ckernel_gguf_page.h prepare_scales): one
+// load gives every lane its value without an fp16 conversion.
+template <int FMT>
+sfpi_inline vFloat pf32(const int F, const int b, const int a)
+{
+    constexpr int fb = round_up(page_layout<static_cast<Format>(FMT)>().scale_rows, 4);
+    return sfpi::dst_reg[CO + scale_row<FMT>() / 2 + 2 * (fb / 4 + 2 * F + b) + a];
+}
+
+// Byte B (0..23) of a lane's scale bytes in scratch rows base + B / 4 (rep4_to copies): field [lsb, lsb + width).
+sfpi_inline vUInt byte_bits(const int base, const int B, const int lsb, const int width)
+{
+    return bits(ldu(base + B / 4), 8 * (B % 4) + lsb, width);
+}
+
+// Scale conversions without branches on the value class. B rebias-adds the field's bits into the fp32 exponent: exact
+// for normal values, larger than the true value for subnormal ones. A = 2 B - (smallest normal): exact for subnormal
+// values, not smaller than the true value for normal ones. The minimum is the value. Only normal fp32 values occur.
+// Constants (params_init): programmable constant 0 = 112 << 23 (fp16), 1 = 119 << 23 (UE4M3 halved).
+sfpi_inline void params_init()
+{
+    sfpi::vConstIntPrgm0 = 0x38000000;
+    sfpi::vConstIntPrgm1 = 0x3B800000;
+}
+
+// fp16 in bits [16 HALF, 16 HALF + 16) of w to fp32, exact for every finite value.
+template <int HALF>
+sfpi_inline vFloat f16_at(const vUInt w)
+{
+    const vUInt m13 = HALF == 0 ? (w << 17u) >> 4u : ((w >> 16u) << 17u) >> 4u;
+    const vFloat b  = sfpi::as<vFloat>(m13 + sfpi::as<vUInt>(sfpi::vConstIntPrgm0));
+    const vFloat a  = sfpi::addexp(b, 1) + -6.103515625e-05f;
+    const vInt sgn  = sfpi::as<vInt>(HALF == 0 ? w << 16u : w);
+    return sfpi::copysgn(sfpi::min_max(a, b).first, sgn);
+}
+
+constexpr int pidx(const int a, const int b, const int h)
+{
+    return (a * 2 + b) * 2 + h;
+}
+
+// No per-lane value stays in an LReg across transp4: the shift amounts are reloaded from DEST after each transpose.
+sfpi_inline vUInt shift_after_transp(const vUInt w, const int amount)
+{
+    return w << ldu(amount);
+}
+
+// Row r of each SFPU lane (r, c): vConstTileId = 2 lane, lane = 8r + c.
+sfpi_inline vInt lane_row()
+{
+    return sfpi::as<vInt>(sfpi::as<vUInt>(sfpi::vConstTileId) >> 4u);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Phase 2: codes. A linear format's code is one B-bit field (Q8_0 8; Q6_K 6, ql | qh << 4; Q5_K, Q5_0, Q5_1 5; Q4_* 4;
+// Q3_K 3; Q2_K, TQ2_0, Q2_0 2; Q1_0 1) in the tile's B code word-vectors (pair pages Q5_K, Q3_K, Q1_0, Q5_0, Q5_1: tile
+// CP's from word-vector B CP). Stream position k is row o = mrow(k) = 16 h + 8 a + i, with (a, h, i) = (k / 16,
+// k / 8 % 2, k % 8); mrow is its own inverse. When B divides 32, row o is field o % F of word o / F (F = 32 / B fields
+// a word). Otherwise (B = 6, 5, 3) stream position k < F B is field k % F of word k / F, and the last two rows take the
+// words' top 32 - F B = 2 bits: bit j of that string (word 0 bits 30, 31, word 1 bits 30, 31, ..) is bit j % B of
+// stream position F B + j / B.
+
+template <int FMT>
+struct mfield
+{
+    static constexpr int B     = traits<FMT>::lo + traits<FMT>::hi;
+    static constexpr int F     = 32 / B;
+    static constexpr int clean = 32 % B == 0 ? 32 : F * B; // stream positions with their field in one word
+};
+
+constexpr int mrow(const int k)
+{
+    return 16 * (k / 8 % 2) + 8 * (k / 16) + k % 8;
+}
+
+template <int FMT, int CP>
+constexpr int mbase()
+{
+    return traits<FMT>::pair ? CP * mfield<FMT>::B : 0;
+}
+
+template <int FMT, int CP>
+constexpr int mword(const int k)
+{
+    using M = mfield<FMT>;
+    return mbase<FMT, CP>() + (32 % M::B == 0 ? mrow(k) / M::F : k / M::F);
+}
+
+template <int FMT>
+constexpr int mlsb(const int k)
+{
+    using M = mfield<FMT>;
+    return M::B * (32 % M::B == 0 ? mrow(k) % M::F : k % M::F);
+}
+
+// Field f (LO bits wide) of word w, as an unsigned value: two shifts, one for the top field (no mask constant).
+template <int LO>
+sfpi_inline vUInt field(const vUInt w, const int f)
+{
+    constexpr int per = 32 / LO;
+    if (f == per - 1)
+    {
+        return w >> static_cast<unsigned>(32 - LO);
+    }
+    return (w << static_cast<unsigned>(32 - LO - LO * f)) >> static_cast<unsigned>(32 - LO);
+}
+
+// Code of row o, unsigned, from DEST (B not dividing 32).
+template <int FMT, int CP>
+sfpi_inline vUInt code_of(const int o)
+{
+    using M     = mfield<FMT>;
+    const int k = mrow(o);
+    if (k < M::clean)
+    {
+        return bits(ldu(CO + mword<FMT, CP>(k)), mlsb<FMT>(k), M::B);
+    }
+    const int j0 = M::B * (k - M::clean);
+    vUInt q      = 0;
+#pragma GCC unroll 4
+    for (int j = j0; j < j0 + M::B; j = j / 2 * 2 + 2)
+    {
+        const int n       = (j / 2 * 2 + 2 < j0 + M::B ? j / 2 * 2 + 2 : j0 + M::B) - j;
+        const vUInt piece = bits(ldu(CO + mbase<FMT, CP>() + j / 2), M::F * M::B + j % 2, n);
+        q                 = q | (j == j0 ? piece : piece << static_cast<unsigned>(j - j0));
+    }
+    return q;
+}
+
+// Code of row o, unsigned; w holds the row's code word when B divides 32. Q8_0: offset binary (M = -128 S) through
+// programmable constant 1 = 0x80.
+template <int FMT, int CP>
+sfpi_inline vUInt code_at(const int o, const vUInt w)
+{
+    using M = mfield<FMT>;
+    if constexpr (32 % M::B != 0)
+    {
+        return code_of<FMT, CP>(o);
+    }
+    else if constexpr (FMT == Q8_0)
+    {
+        return field<M::B>(w, o % M::F) ^ sfpi::as<vUInt>(sfpi::vConstIntPrgm1);
+    }
+    else
+    {
+        return field<M::B>(w, o % M::F);
+    }
+}
+
+// IQ4_NL value table: round(P4(q)) with P4 = minimax fit whose constant term is the integer -127 (max error 0.4397,
+// exact for q = 0..15 under fp32 Horner, fused or not). The constant term is folded into the rounding constant
+// 1.5 * 2^23, which keeps it exact; c4..c2 live in the three programmable constant registers (set in iq4_init).
+constexpr float IQ4_C4  = 0.0014480184763669968f;
+constexpr float IQ4_C3  = 0.03627324849367142f;
+constexpr float IQ4_C2  = -1.4385637044906616f;
+constexpr float IQ4_C1  = 24.500598907470703f;
+constexpr float IQ4_C0R = 12582785.0f; // -127 + 1.5 * 2^23
+
+// E2M1 magnitudes kv = {0, 1, 2, 3, 4, 6, 8, 12} (doubled values) as nibbles, kv(e) at bits 28 - 4e .. 31 - 4e, so
+// that shifting left by 4e brings it to the top nibble.
+constexpr unsigned E2M1_TABLE = 0x0123468Cu;
+
+// E2M1 code in field f of w (sign in the field's bit 3): +-kv as fp32.
+sfpi_inline vFloat e2m1_value(const vUInt w, const int f)
+{
+    // 4 * (code & 7); the mask (programmable constant 1) drops the neighbouring field's bits.
+    const vUInt e4 = (f == 0 ? w << 2u : w >> static_cast<unsigned>(4 * f - 2)) & sfpi::as<vUInt>(sfpi::vConstIntPrgm1);
+    vUInt t        = sfpi::as<vUInt>(sfpi::vConstIntPrgm0);
+    t              = t << e4;
+    const vFloat m = ufloat(t >> 28u);
+    const vInt sgn = sfpi::as<vInt>(f == 7 ? w : w << static_cast<unsigned>(28 - 4 * f));
+    return sfpi::copysgn(m, sgn);
+}
+
+template <int FMT, int CP>
+sfpi_inline void body()
+{
+    using T = traits<FMT>;
+    using M = mfield<FMT>;
+    if constexpr (FMT == Q8_0)
+    {
+        sfpi::vConstIntPrgm1 = 0x80;
+    }
+    vFloat c1  = 0.0f;
+    vFloat c0r = 0.0f;
+    if constexpr (FMT == IQ4_NL || FMT == IQ4_XS)
+    {
+        c1  = IQ4_C1;
+        c0r = IQ4_C0R;
+    }
+#pragma GCC unroll 2
+    for (int a = 0; a < 2; a++)
+    {
+#pragma GCC unroll 2
+        for (int h = 0; h < 2; h++)
+        {
+            // When B divides 32, the 8 outputs of (a, h) read one code word (two for 8-bit codes); otherwise code_of
+            // reads each output's code from DEST.
+            const int o0 = 16 * h + 8 * a;
+            vUInt l0, l1;
+            if constexpr (32 % M::B == 0)
+            {
+                l0 = ldu(CO + mbase<FMT, CP>() + o0 / M::F);
+                l1 = M::B == 8 ? ldu(CO + mbase<FMT, CP>() + (o0 + 4) / M::F) : l0;
+            }
+#pragma GCC unroll 2
+            for (int b = 0; b < 2; b++)
+            {
+                const int pi   = pidx(a, b, T::has_h ? h : 0);
+                const vFloat S = sfpi::dst_reg[PS + pi];
+                vFloat M       = 0.0f;
+                if constexpr (T::linear)
+                {
+                    M = sfpi::dst_reg[PM + pi];
+                }
+// Two outputs per step, interleaved: SFPMAD results are consumed two instructions later instead of at once.
+#pragma GCC unroll 2
+                for (int s = 0; s < 4; s += 2)
+                {
+                    const int oa = o0 + 2 * s + b;
+                    const int ob = oa + 2;
+                    if constexpr (T::linear)
+                    {
+                        const vFloat xa   = ufloat(code_at<FMT, CP>(oa, s < 2 ? l0 : l1));
+                        const vFloat xb   = ufloat(code_at<FMT, CP>(ob, s < 2 ? l0 : l1));
+                        const vFloat va   = xa * S + M;
+                        const vFloat vb   = xb * S + M;
+                        sfpi::dst_reg[oa] = va;
+                        sfpi::dst_reg[ob] = vb;
+                    }
+                    else if constexpr (FMT == IQ4_NL || FMT == IQ4_XS)
+                    {
+                        const vFloat xa = ufloat(field<4>(l0, oa % 8));
+                        const vFloat xb = ufloat(field<4>(l0, ob % 8));
+                        vFloat pa       = xa * sfpi::vConstFloatPrgm0 + sfpi::vConstFloatPrgm1;
+                        vFloat pb       = xb * sfpi::vConstFloatPrgm0 + sfpi::vConstFloatPrgm1;
+                        pa              = pa * xa + sfpi::vConstFloatPrgm2;
+                        pb              = pb * xb + sfpi::vConstFloatPrgm2;
+                        pa              = pa * xa + c1;
+                        pb              = pb * xb + c1;
+                        pa              = pa * xa + c0r;
+                        pb              = pb * xb + c0r;
+                        pa              = pa + -12582912.0f;
+                        pb              = pb + -12582912.0f;
+                        // Both products before either store: a store right after its SFPMUL stalls a cycle.
+                        const vFloat ra   = pa * S;
+                        const vFloat rb   = pb * S;
+                        sfpi::dst_reg[oa] = ra;
+                        sfpi::dst_reg[ob] = rb;
+                    }
+                    else
+                    {
+                        const vFloat va   = e2m1_value(l0, oa % 8);
+                        const vFloat vb   = e2m1_value(l0, ob % 8);
+                        sfpi::dst_reg[oa] = va * S;
+                        sfpi::dst_reg[ob] = vb * S;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// SFPLOADMACRO bodies (linear, FP4 and IQ4 families).
+
+#ifdef DISABLE_SFPLOADMACRO
+constexpr bool LOADMACRO = false;
+#else
+constexpr bool LOADMACRO = true;
+#endif
+
+constexpr std::uint32_t LOAD_NONE      = 11; // SFPLOAD mode that loads nothing: the macro only takes the row
+constexpr std::uint32_t SHIFT_IMM_OF_C = 5;  // SFPSHFT: VD = LReg[VC] shifted by the immediate
+
+struct mslot
+{
+    int kind, x, y, z;
+};
+
+} // namespace gguf
+} // namespace ckernel::sfpu
