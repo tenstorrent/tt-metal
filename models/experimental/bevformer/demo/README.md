@@ -53,17 +53,16 @@ on Blackhole only.
 
 These runs used the commands above:
 
-| Variant | BEV size | Encoder layers | p100a Device FPS | p150b Device FPS | p150b 13x10 Device FPS |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| tiny | 50 | 3 | 52.44 | 52.47 | 53.49 |
-| small | 150 | 3 | 13.93 | 14.15 | 15.26 |
-| base | 200 | 6 | 5.21 | 5.30 | 5.74 |
+| Variant | BEV size | Encoder layers | p150b Device FPS | p150b 13x10 Device FPS |
+| --- | ---: | ---: | ---: | ---: |
+| tiny | 50 | 3 | 53.46 | 54.58 |
+| small | 150 | 3 | 14.69 | 15.70 |
+| base | 200 | 6 | 6.04 | 6.44 |
 
 | Card | Enabled Tensix cores | Compute grid | DRAM channels | Commit |
 | --- | ---: | ---: | ---: | --- |
-| p100a | 120 | 11x10 | 7 | [`db2aaa185fd`](https://github.com/tenstorrent/tt-metal/commit/db2aaa185fd74cfc81676ce1fc829b6bcf894b68) |
-| p150b | 120 | 11x10 | 8 | [`a96dcdcef8a`](https://github.com/tenstorrent/tt-metal/commit/a96dcdcef8a3d77d1ea1b44f5be75f7e9442f53a) |
-| p150b 13x10 | 140 | 13x10 | 8 | [`a72479ddd1b`](https://github.com/tenstorrent/tt-metal/commit/a72479ddd1bda1650c17c22cdbdf1ed5d50d06c7) |
+| p150b | 120 | 11x10 | 8 | [`7c65f14a237`](https://github.com/tenstorrent/tt-metal/commit/7c65f14a23715e8ef85bfba537f088f30bf7a969) |
+| p150b 13x10 | 140 | 13x10 | 8 | [`7c65f14a237`](https://github.com/tenstorrent/tt-metal/commit/7c65f14a23715e8ef85bfba537f088f30bf7a969) |
 
 The p150b 13x10 runs used firmware 19.12.0 with the Tensix column disable count patched from 2 to 0,
 which enables all 14 columns. One column goes to dispatch, which leaves a 13x10 compute grid.
