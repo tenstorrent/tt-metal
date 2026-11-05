@@ -6198,7 +6198,7 @@ class MoeOp:
                             break
                     fabric_rt_args_ref = program.kernels[fc_kernel_idx].runtime_args[fc.x][fc.y]
                     fabric_conn_args = ttnn.setup_fabric_connection(
-                        fabric_node_id, dest_fabric_node_id, link_idx, program, fc
+                        mesh_device, fabric_node_id, dest_fabric_node_id, link_idx, program, fc
                     )
                     fabric_rt_args_ref.extend(fabric_conn_args)
 
@@ -6219,7 +6219,7 @@ class MoeOp:
                     break
             if fc_kernel_idx is not None:
                 persistent_fabric_rt_args = ttnn.setup_fabric_connection(
-                    src_fabric_node_id, dst_fabric_node_id, 0, program, fc_core
+                    mesh_device, src_fabric_node_id, dst_fabric_node_id, 0, program, fc_core
                 )
                 program.kernels[fc_kernel_idx].runtime_args[fc_core.x][fc_core.y].extend(persistent_fabric_rt_args)
 
@@ -6239,7 +6239,7 @@ class MoeOp:
                     payload = []
                     for dst_node in self.bcast_dst_nodes:
                         setup_args = ttnn.setup_fabric_connection(
-                            self.bcast_fabric_node_id, dst_node, 0, program, bcast_worker_core
+                            ctx.mesh_device, self.bcast_fabric_node_id, dst_node, 0, program, bcast_worker_core
                         )
                         payload.extend(setup_args)
                     for dst_node in self.bcast_dst_nodes:
