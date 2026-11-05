@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Q/K-norm gamma tests for ``TransformerBlock.update_weights`` on Qwen3 (real weights).
 
+Distinct, nonuniform Q/K gammas must read back independently after an update.
 Zero gammas must change the tokens; the read-back gammas must bring them back, in the same buffers.
 """
 
@@ -68,6 +69,14 @@ def test_qk_norm_update_round_trip(sampler):
     addresses = _qk_norm_addresses(layers)
 
     for layer, w in zip(layers, weights):
+        q_gamma = torch.linspace(0.5, 1.5, layer.attention.head_dim, dtype=torch.bfloat16)
+        k_gamma = -q_gamma
+        _push(layer, {**w, "self_attn.q_norm.weight": q_gamma, "self_attn.k_norm.weight": k_gamma})
+        torch.testing.assert_close(_gamma(layer.attention._q_norm_module), q_gamma, rtol=0, atol=0)
+        torch.testing.assert_close(_gamma(layer.attention._k_norm_module), k_gamma, rtol=0, atol=0)
+    assert _qk_norm_addresses(layers) == addresses
+
+    for layer, w in zip(layers, weights):
         zeros = torch.zeros(layer.attention.head_dim)
         _push(layer, {**w, "self_attn.q_norm.weight": zeros, "self_attn.k_norm.weight": zeros})
     zeroed_tokens = generate_one(sampler, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
@@ -75,6 +84,8 @@ def test_qk_norm_update_round_trip(sampler):
 
     for layer, w in zip(layers, weights):
         _push(layer, w)
+        torch.testing.assert_close(_gamma(layer.attention._q_norm_module), w["self_attn.q_norm.weight"], rtol=0, atol=0)
+        torch.testing.assert_close(_gamma(layer.attention._k_norm_module), w["self_attn.k_norm.weight"], rtol=0, atol=0)
     assert generate_one(sampler, prompt_ids, max_new_tokens=MAX_NEW_TOKENS) == tokens
     assert _qk_norm_addresses(layers) == addresses
 
