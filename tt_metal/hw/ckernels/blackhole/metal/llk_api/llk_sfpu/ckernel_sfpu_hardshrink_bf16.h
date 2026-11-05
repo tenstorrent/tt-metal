@@ -4,15 +4,8 @@
 #pragma once
 #include <cstdint>
 namespace ckernel::sfpu {
-struct HardshrinkBf16Config {
-    static constexpr uint32_t kKind = 0x00000001u;
-    static constexpr uint32_t kThresholdBits = 0x3f000000u;
-    static constexpr uint32_t kComparatorBf16 = 0x00003f01u;
-    static constexpr uint32_t kBodySlots = 0x0000000bu;
-    static constexpr uint32_t kRowsPerReplay = 0x00000002u;
-};
+struct HardshrinkBf16Config {};
 }  // namespace ckernel::sfpu
-#include "ckernel_sfpu_hardshrink_bf16_simple_forward.h"
 
 namespace ckernel::sfpu {
 
@@ -29,11 +22,7 @@ inline bool bf16_dest_hardshrink() {
     return false;
 #endif
 }
-// The Blackhole whole-tile call as tt-polynomial-fitter's scheduler issues it (ttpoly/sfpu_schedule.py
-// in tenstorrent/tt-polynomial-fitter, not in this repository): the compiled instructions of
-// ckernel::sfpu::bf16::hardshrink::calculate_simple_forward<ckernel::sfpu::HardshrinkBf16Config, 32> in a stall-filling
-// order, rows addressed by their immediates, constants held in LRegs. It stores the same word for every BF16 input;
-// other ITERATIONS run the compiled body itself.
+// calculate_simple_forward's instructions in a stall-filling order, constants held in LRegs.
 inline void calculate_hardshrink_bf16_scheduled() {
     TTI_SFPLOADI(7, 8, 0x3f00);
     TTI_SFPLOAD(0, 0, 7, 0);
@@ -200,15 +189,10 @@ inline void calculate_hardshrink_bf16_scheduled() {
 }
 
 template <int ITERATIONS = 32>
-inline void calculate_hardshrink_bf16() {
-    if constexpr (ITERATIONS == 32) {
-        calculate_hardshrink_bf16_scheduled();
-    } else {
-        ckernel::sfpu::bf16::hardshrink::calculate_simple_forward<ckernel::sfpu::HardshrinkBf16Config, ITERATIONS>();
-    }
+__attribute__((noinline)) inline void calculate_hardshrink_bf16() {
+    static_assert(ITERATIONS == 32, "the BF16 kernel runs as one whole-tile call");
+    calculate_hardshrink_bf16_scheduled();
 }
-inline void init_hardshrink_bf16() {
-    ckernel::sfpu::bf16::hardshrink::init_simple_forward<ckernel::sfpu::HardshrinkBf16Config>();
-}
+inline void init_hardshrink_bf16() {}
 
 }  // namespace ckernel::sfpu

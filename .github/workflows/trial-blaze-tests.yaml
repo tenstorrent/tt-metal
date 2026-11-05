@@ -1,0 +1,74 @@
+name: "Trial blaze tests"
+
+# Standalone version of the blaze merge gate that "Package and release" runs:
+# builds the tt-metal profiler (tracy) artifact for the dispatched ref, then
+# dispatches tt-blaze's ci.yaml against it and waits for it to finish. Nothing
+# is tagged, packaged, or published.
+
+on:
+  workflow_dispatch:
+    inputs:
+      blaze-ref:
+        description: "tt-blaze branch/tag/SHA to run the gate from."
+        required: false
+        default: main
+        type: string
+      selected-buckets:
+        description: >-
+          Comma-separated tt-blaze BH Loudbox bucket ids, e.g. "router,infra-cb".
+          Empty runs tt-blaze's full merge gate (ci.yaml). Set, it runs tt-blaze's
+          BH Loudbox Intermittent workflow with only these buckets.
+        required: false
+        default: ""
+        type: string
+  schedule:
+    - cron: "0 4,8,16,20 * * *"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  build-artifact-profiler:
+    needs: [check-harbor]
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      platform: "Ubuntu 22.04"
+      tracy: true
+      publish-package: false
+      # Needed to ensure the profiler build produces a wheel for blaze to consume.
+      build-wheel: true
+      fetch-depth: 0
+      skip-tt-train: false
+      enable-lto: false
+      wheel-ref: ${{ github.sha }}
+      use-system-sfpi: false
+
+  blaze-merge-gate:
+    needs: [build-artifact-profiler]
+    if: ${{ !cancelled() && needs.build-artifact-profiler.result == 'success' }}
+    permissions:
+      contents: read
+    # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
+    secrets:
+      TT_BLAZE_PAT: ${{ secrets.TT_BLAZE_PAT }}
+    uses: ./.github/workflows/blaze-merge-gate.yaml
+    with:
+      # Artifacts belong to the TOP-LEVEL run, which is this workflow.
+      metal-run-id: ${{ github.run_id }}
+      # tt-blaze checks its tt-metal submodule out here so its JIT-compiled kernels
+      # match the libraries it links against.
+      metal-ref: ${{ github.sha }}
+      dev-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      # Scheduled runs use blaze main with metal main.
+      blaze-ref: ${{ inputs.blaze-ref || 'main' }}
+      # Scheduled runs have no inputs, so they always run the full merge gate.
+      selected-buckets: ${{ inputs.selected-buckets || '' }}

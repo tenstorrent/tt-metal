@@ -131,11 +131,12 @@ def index_golden_present(trace_dir, layer_idx: int | None = None) -> bool:
     return dsa_dir.is_dir() and any(dsa_dir.glob(pattern))
 
 
-def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config) -> "torch.Tensor":
+def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config, position0: int = 0) -> "torch.Tensor":
     """A half-split-roped indexer-key golden re-based onto the device's interleaved rope pairing.
 
     GLM-5.3 is rope-asymmetric: MLA ropes k_pe half-split while the DSA indexer ropes interleaved, so
     a uniformly-roped trace has to be un-roped, re-paired and re-roped -- not column-permuted.
+    Row r was roped at prompt position ``position0 + r``.
     """
     from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
 
@@ -145,9 +146,9 @@ def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config) -> "torch.Tensor"
     pe, nope = golden_ik[:, :rope_dim].float(), golden_ik[:, rope_dim:]
 
     def tables(interleave):
-        cos, sin = get_cos_sin_matrix(hf_config, interleave=interleave, num_positions=n)
+        cos, sin = get_cos_sin_matrix(hf_config, interleave=interleave, num_positions=position0 + n)
         assert cos.shape[-1] == rope_dim, f"rope table is {cos.shape[-1]} wide, expected {rope_dim}"
-        return cos[0, 0].float(), sin[0, 0].float()
+        return cos[0, 0, position0:].float(), sin[0, 0, position0:].float()
 
     def rot_half_split(x):  # rotate_half: [a, b] -> [-b, a]
         h = rope_dim // 2
@@ -177,27 +178,24 @@ def _load_golden_index_k(
     *,
     rope_layout: str = "interleaved",
     hf_config=None,
+    position0: int | None = None,
 ) -> "torch.Tensor":
     """[total_len, index_head_dim] golden indexer key for one layer, from the vLLM trace's row-sharded
     dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards (concatenated by start row). Mirrors
     _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key. ``rope_layout`` is
-    the pairing the TRACE stored; ``interleaved`` is the device's own, ``half_split`` is re-based."""
+    the pairing the TRACE stored; ``interleaved`` is the device's own, ``half_split`` is re-based.
+    ``position0`` is the prompt position of the first returned row, which re-basing rotates by. It
+    defaults to ``start``; a windowed (tail) trace stores position ``capture_start + r`` at row r, so
+    pass the absolute position there."""
     key = f"indexer_k_layer_{layer_idx}"
     golden = _load_sharded_rows(Path(trace_dir) / "dsa" / key, key, start, total_len)
     if rope_layout == "interleaved":
         return golden
     if rope_layout != "half_split":
         raise ValueError(f"unknown index rope layout {rope_layout!r} (expected 'interleaved' or 'half_split')")
-    if start:
-        raise NotImplementedError(
-            f"{key}: a {rope_layout!r} golden cannot be read at start={start}. Re-basing rotates by "
-            f"absolute position, and the rope table is built from position 0, so a windowed read would "
-            f"be re-based by the wrong angles. Score this layer from row 0, or capture the trace with "
-            f"the device's interleaved pairing."
-        )
     if hf_config is None:
         hf_config = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL)).load_hf_config()
-    return _rebase_index_k_rope(golden, hf_config)
+    return _rebase_index_k_rope(golden, hf_config, start if position0 is None else position0)
 
 
 def kv_cache_pcc_check(

@@ -285,7 +285,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
     const tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     const tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());

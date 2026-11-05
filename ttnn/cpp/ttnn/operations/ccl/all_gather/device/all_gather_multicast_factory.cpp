@@ -29,8 +29,8 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     uint32_t num_available_cores) {
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::ProgramDescriptor desc;
-    TT_FATAL(input_tensor.buffer() != nullptr, "all_gather multicast requires an allocated input buffer");
-    TT_FATAL(output_tensor.buffer() != nullptr, "all_gather multicast requires an allocated output buffer");
+    TT_FATAL(input_tensor.is_allocated(), "all_gather multicast requires an allocated input buffer");
+    TT_FATAL(output_tensor.is_allocated(), "all_gather multicast requires an allocated output buffer");
 
     ////////////////////////////////////////////////////////////////
     // Fabric setup
