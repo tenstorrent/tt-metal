@@ -54,25 +54,27 @@ _WARMUP = 3
 _ITERATIONS = 20
 # Set to report without gating, e.g. while re-baselining.
 _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
-_MARGIN = 0.05
+# Band around each op's reference. block_stats' window runs until the slowest peer's statistics land, so it also
+# times how far the chips are apart, and that differs by machine: two CI Galaxies put its median at 139.0 and 119.0
+# us, each tight on its own. Its band covers both and still catches a regression of more than ~15%.
+_MARGIN = {"attn_res_block_stats": 0.15, "attn_res_block_mix": 0.05, "attn_res_gather_softmax": 0.05}
 # Each op's program, by the kernel directory it is built from.
 OPS = ("attn_res_block_stats", "attn_res_block_mix", "attn_res_gather_softmax")
 
-# Device kernel duration (us) per op, as CI hardware (bh_sc1_high_power) measures it. SP8xTP4 is from CI run
-# 41962421284, medians of 20 synced blocks: block_stats 139.0 (19 of 20 samples within 133.5-144.9), block_mix 275.5,
-# gather_softmax 67.5 (64.4-71.7). block_mix keeps the off-pool estimate below, which that run read 0.4% under.
+# Device kernel duration (us) per op, as CI hardware (bh_sc1_high_power) measures it. SP8xTP4 is the mean of two CI
+# Galaxies' medians over 20 synced blocks, runs 41962421284 and 42058182913: block_stats 139.0 / 119.0, block_mix
+# 275.5 / 275.6, gather_softmax 67.5 / 68.2.
 #
 # SP4xTP4 has no CI job: it was measured on a Galaxy off the CI pool (bh-glx-120-b07u02, 2026-11-05), which runs the
 # end-to-end boundary layer of `test_attn_res_perf.py` at ~416 us against its 394 us CI reference, and is scaled by
-# 394 / 416. Local medians: SP8xTP4 block_mix 292.4 / 292.2 / 291.8; SP4xTP4, synced, block_stats 209.9 / 218.4 /
-# 208.4, block_mix 568.4 / 570.2 / 570.2, gather_softmax 120.2 / 121.2 / 123.4. Locally, run with
-# ATTN_RES_PERF_REPORT_ONLY=1.
+# 394 / 416. Local medians, synced: block_stats 209.9 / 218.4 / 208.4, block_mix 568.4 / 570.2 / 570.2,
+# gather_softmax 120.2 / 121.2 / 123.4. Locally, run with ATTN_RES_PERF_REPORT_ONLY=1.
 _CI_OVER_LOCAL = 394.0 / 416.0
 _REFERENCE_US = {
     "SP8xTP4": {
-        "attn_res_block_stats": 139.0,
-        "attn_res_block_mix": round(292.2 * _CI_OVER_LOCAL, 1),
-        "attn_res_gather_softmax": 67.5,
+        "attn_res_block_stats": 129.0,
+        "attn_res_block_mix": 275.6,
+        "attn_res_gather_softmax": 67.9,
     },
     "SP4xTP4": {
         "attn_res_block_stats": round(209.9 * _CI_OVER_LOCAL, 1),
@@ -235,8 +237,8 @@ def test_attn_res_op_perf(mesh_device, device_params):
             f"  {op:26s} {device_us[op]:8.1f} us   (min {min(durations_us[op]):.1f}, max {max(durations_us[op]):.1f})"
         )
         if references[op] is not None:
-            within_band[op] = abs(device_us[op] - references[op]) <= references[op] * _MARGIN
-            line += f"   ref {references[op]:8.1f} ±{_MARGIN:.0%}  {'ok' if within_band[op] else 'OUT OF BAND'}"
+            within_band[op] = abs(device_us[op] - references[op]) <= references[op] * _MARGIN[op]
+            line += f"   ref {references[op]:8.1f} ±{_MARGIN[op]:.0%}  {'ok' if within_band[op] else 'OUT OF BAND'}"
         logger.info(line)
 
     result = {
@@ -250,7 +252,7 @@ def test_attn_res_op_perf(mesh_device, device_params):
         "device_us": device_us,
         "device_samples_us": durations_us,
         "reference_us": references,
-        "margin_pct": _MARGIN * 100.0,
+        "margin_pct": {op: margin * 100.0 for op, margin in _MARGIN.items()},
     }
     print("ATTN_RES_OP_PERF=" + json.dumps(result, sort_keys=True))
     tp_wrapped = tp_axis_is_wrapped(mesh_device)
@@ -266,4 +268,4 @@ def test_attn_res_op_perf(mesh_device, device_params):
     if not tp_wrapped:
         pytest.skip(f"TP axis not wrapped: the {layout} references assume the TP ring")
     for op in gated_ops:
-        _assert_within_margin(f"{layout} {op}", device_us[op], references[op], _MARGIN)
+        _assert_within_margin(f"{layout} {op}", device_us[op], references[op], _MARGIN[op])
