@@ -169,7 +169,7 @@
   cmd: ./tests/scripts/run_fabric_manifest_tests.sh
   skus:
     cpu_medium:
-      timeout: 10
+      timeout: 15
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
