@@ -455,7 +455,7 @@ class Profiler:
                 marker=groups["marker"],
                 file=groups["file"],
                 line=int(groups["line"]),
-                id=Profiler._hash_meta(groups["full_marker"]),
+                id=(Profiler._hash_meta(groups["file"]) + int(groups["line"])) & 0xFFFF,
             )
         else:
             return None
