@@ -19,6 +19,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     resolve_has_indexer,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
+from models.demos.deepseek_v3_d_p.tt.mla.rope import identity_rope_tensors_indexed
 from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
@@ -54,10 +55,11 @@ class ttMLA:
     @staticmethod
     def replicates_wkv_b1(config, tp_factor: int, has_indexer: bool) -> bool:
         """True for the layers that take _early_q_reshard: they run wkv_b1 over every head after the all-to-all
-        to sequence sharding, so they load all heads' wkv_b1 on every chip instead of the TP shard."""
+        to sequence sharding, so they load all heads' wkv_b1 on every chip instead of the TP shard. Must agree with
+        _needs_head_to_seq_reshard for sparse layers."""
         heads_local = config.num_attention_heads // tp_factor
         thin_head_shard = tp_factor > 1 and (heads_local < 32 or heads_local % 32 != 0)
-        return has_indexer and not getattr(config, "mla_use_nope", False) and thin_head_shard
+        return has_indexer and thin_head_shard
 
     @staticmethod
     def check_cache_complete(
@@ -183,7 +185,7 @@ class ttMLA:
                     # A cache build keeps the TP-sharded file too: check_cache_complete looks for it.
                     _wkv_b1_as(mapper_tp1, _cache_name("wkv_b1"))
                 return _wkv_b1_as(ttnn.ReplicateTensorToMesh(mesh_device), repl_name)
-            # A cache built before the replicated file existed: gather the TP shards once, at load. Loading
+            # A cache holding only the TP-sharded file: gather the TP shards once, at load. Loading
             # the placeholder through as_tensor would write it to the cache as the weights.
             shard = _wkv_b1_as(mapper_tp1, _cache_name("wkv_b1"))
             full = ttnn.all_gather(shard, dim=1, cluster_axis=tp_axis, memory_config=mem)
@@ -483,6 +485,14 @@ class ttMLA:
             packer_l1_acc=True,
         )
 
+        # The NoPE identity rope (x * 1 + rot(x) * 0) is exact only at HiFi4; pinned rather than inherited.
+        self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
         self.hifi4_fp32_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -688,6 +698,10 @@ class ttMLA:
         requested_overlap_profile = sparse_mla_overlap_profile
         if requested_overlap_profile is None:
             requested_overlap_profile = os.getenv("TT_SPARSE_MLA_OVERLAP_PROFILE")
+        # The config value is the MODEL's default, not a caller request: "auto" there means "overlap where
+        # the mesh can", so an SP=1 mesh (QuietBox 1x4) runs the serial schedule instead of raising. An
+        # explicit argument / env request on SP=1 still fails loudly below.
+        overlap_from_model_default = requested_overlap_profile is None
         if requested_overlap_profile is None:
             requested_overlap_profile = getattr(config, "sparse_mla_overlap_profile", None)
         if requested_overlap_profile is not None and requested_overlap_profile.lower() in ("", "0", "off", "none"):
@@ -701,8 +715,10 @@ class ttMLA:
                 pass
             else:
                 if self.sp_factor == 1:
-                    raise ValueError("sparse MLA overlap requires SP > 1; SP=1 uses an unconstrained slice path")
-                self._sparse_mla_overlap = self.tt_ccl.get_sparse_mla_overlap_resources(requested_overlap_profile)
+                    if not (overlap_from_model_default and requested_overlap_profile.lower() == "auto"):
+                        raise ValueError("sparse MLA overlap requires SP > 1; SP=1 uses an unconstrained slice path")
+                else:
+                    self._sparse_mla_overlap = self.tt_ccl.get_sparse_mla_overlap_resources(requested_overlap_profile)
         if self._has_indexer:
             # The indexer assumes natural-order SP sharding (contiguous per-chip query blocks: its
             # device RoPE and the indexer_score per-device causal offset both index positions as
@@ -744,14 +760,29 @@ class ttMLA:
         # offset 0 — so its key cache persists layer-stacked (migratable to decode). Dense: chunked ->
         # indexed, single-shot -> rotary_embedding_llama.
         # NoPE (Kimi-K3) binds a pass-through: the op is dropped but the nope/rope slices stay (they
-        # are dimension-driven), so the cached latent is still 576 wide and rope_tensors goes unused.
+        # are dimension-driven), so the cached latent is still 576 wide. The forward's rope_tensors ({} under
+        # NoPE) go unused; the early-Q path uses this layer's own identity tables.
         self._use_indexed_rope = not self._use_nope and (self.is_chunked or self._has_indexer)
         if self._use_nope:
-            assert not self._has_indexer, (
-                "mla_use_nope with a DSA indexer is not supported: TtIndexer applies its own rope to "
-                "the indexer queries/keys, so the rope tensors cannot be dropped wholesale"
+            # NoPE + DSA (Kimi-K3.1) needs a NoPE indexer too: RotarySetup returns no rope tables under
+            # mla_use_nope, so an indexer that ropes its q/k (index_rope_dim 64) would have nothing to read.
+            assert not self._has_indexer or getattr(config, "index_rope_dim", None) == 0, (
+                "mla_use_nope with a DSA indexer requires index_rope_dim == 0: under NoPE there are no rope "
+                "tables for the indexer's q/k"
             )
             self._apply_rope = self._apply_rope_none
+            # The early-Q path still needs rotary_embedding_indexed for its fused prefix concat + row-major write;
+            # identity tables (one chunk slab) make it a pure layout op under NoPE.
+            self._identity_rope_tensors = (
+                identity_rope_tensors_indexed(
+                    mesh_device,
+                    sp_axis=self.sp_axis,
+                    chunk_size_global=self.active_seq_len,
+                    rope_dim=self.qk_rope_head_dim,
+                )
+                if self._early_q_reshard and not self.kv_only
+                else None
+            )
         else:
             self._apply_rope = self._apply_rope_padded if self._use_indexed_rope else self._apply_rope_one_shot
 
@@ -925,7 +956,7 @@ class ttMLA:
         cfg = self._resolve_mm_cfg(weight_name, seq_len_local)
         return cfg["act_mem_config"] if cfg is not None else ttnn.DRAM_MEMORY_CONFIG
 
-    def _get_mm_kwargs(self, weight_name: str, seq_len_local: int) -> dict:
+    def _get_mm_kwargs(self, weight_name: str, seq_len_local: int, rows_local: Optional[int] = None) -> dict:
         """Get matmul kwargs from config, falling back to defaults.
 
         Always carries compute_kernel_config: HiFi2 by default, or HiFi2 with an fp32 dest when the
@@ -935,7 +966,8 @@ class ttMLA:
         cfg = self._resolve_mm_cfg(weight_name, seq_len_local)
         if cfg is None:
             if weight_name in self._BATCHED_MM_DIMS:
-                return self._make_batched_mm_kwargs(weight_name, seq_len_local)
+                # rows_local: the matmul's real M when it differs from the lookup slot (early-Q reshard).
+                return self._make_batched_mm_kwargs(weight_name, rows_local or seq_len_local)
             return {
                 "memory_config": ttnn.DRAM_MEMORY_CONFIG,
                 "dtype": self.MM_DEFAULT_DTYPES[weight_name],
@@ -1026,9 +1058,11 @@ class ttMLA:
         concat_prefix: Optional[ttnn.Tensor] = None,
         seq_subshard_axis: Optional[int] = None,
         row_major_output: bool = False,
+        compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
     ) -> ttnn.Tensor:
-        """Chunked rotated RoPE via the indexed op. rope_tensors carry the whole-cache,
-        block-cyclic-sharded cos/sin (built once via RotarySetup.get_rope_tensors_indexed); the op
+        """Chunked rotated RoPE via the indexed op. rope_tensors carry the block-cyclic-sharded cos/sin: the
+        whole cache (RotarySetup.get_rope_tensors_indexed), or one slab of identity tables for NoPE's early-Q
+        layout write (rope.identity_rope_tensors_indexed, which the op reads with start 0 and no metadata); the op
         derives this chunk's per-chip shard offset on-device from kv_actual_global -- the same
         update_idxt math the KV-cache writer uses, keeping rotation and cache write consistent.
 
@@ -1045,6 +1079,7 @@ class ttMLA:
             concat_prefix=concat_prefix,
             seq_subshard_axis=seq_subshard_axis,
             row_major_output=row_major_output,
+            compute_kernel_config=compute_kernel_config,
         )
 
     def _apply_rope_none(
@@ -1360,7 +1395,8 @@ class ttMLA:
     @property
     def _early_q_reshard(self) -> bool:
         """Sparse layers whose head shard is too thin for sparse_sdpa move q to sequence sharding before the wkv_b1
-        absorption, where it is 256 channels wide instead of 576, and RoPE writes it row-major for sparse_sdpa, so
+        absorption, where it is qk_nope + qk_rope wide (192 for K3.1, 256 for GLM) instead of 576, and RoPE (an identity
+        under NoPE) writes it row-major for sparse_sdpa, so
         no untilize follows; sparse_sdpa's row-major output then goes to the all-to-all back to heads, which tilizes
         it on the way. Costs all heads' wkv_b1 on every chip, which __init__ loads replicated for these layers."""
         return ttMLA.replicates_wkv_b1(self.config, self.tp_factor, self._has_indexer)
@@ -1379,18 +1415,30 @@ class ttMLA:
         nope_seq, rope_seq = a2a(tt_q_nope), a2a(tt_q_rope)
         ttnn.deallocate(tt_q_nope)
         ttnn.deallocate(tt_q_rope)
-        # wkv_b1 holds every head here (replicate_wkv_b1). The tuned config's blocks are one head x 5 row tiles x
-        # the full width: the same blocks at either shape.
-        prefix = ttnn.linear(nope_seq, self.wkv_b1_weight, **self._get_mm_kwargs("wkv_b1", seq_len_local))
+        # wkv_b1 holds every head here (replicate_wkv_b1). Tuned configs are looked up by the pre-reshard slot; the
+        # default factory gets the rows actually on this chip.
+        prefix = ttnn.linear(
+            nope_seq,
+            self.wkv_b1_weight,
+            **self._get_mm_kwargs("wkv_b1", seq_len_local, rows_local=seq_len_local // self.tp_factor),
+        )
         ttnn.deallocate(nope_seq)
+        if self._use_nope:
+            # Identity rotation: the scalar start 0 indexes the one-slab table on every chunk, so no metadata.
+            rope_kwargs = dict(
+                rope_tensors=self._identity_rope_tensors,
+                kv_actual_isl=0,
+                metadata=None,
+                compute_kernel_config=self.hifi4_compute_kernel_config,
+            )
+        else:
+            rope_kwargs = dict(rope_tensors=rope_tensors, kv_actual_isl=kv_actual_isl, metadata=metadata)
         tt_q = self._apply_rope_padded(
             rope_seq,
-            rope_tensors,
-            kv_actual_isl,
-            metadata=metadata,
             concat_prefix=prefix,
             seq_subshard_axis=self.tp_axis,
             row_major_output=True,
+            **rope_kwargs,
         )
         ttnn.deallocate(prefix)
         ttnn.deallocate(rope_seq)
