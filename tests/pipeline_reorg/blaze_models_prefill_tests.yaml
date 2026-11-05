@@ -2018,9 +2018,8 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # 20 on the 8x4 layout. The 4x4 trunk leg's job takes 19 min, and the drafter adds its own load and KV,
-      # so 30 until a 4x4 run measures it.
-      timeout: 30
+      # The test step takes about 14 min warm (run 41911365787); 25 leaves 1.7x for a slower Weka cache.
+      timeout: 25
       tier: 1
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
@@ -2160,7 +2159,7 @@
   skus:
     bh_sc4:
       # The job takes about 19 min warm; 90 leaves room for a cold Weka cache of the 1.5 TB of weights.
-      # shield/demo bh_sc4 is a SUM over the team's legs on that SKU: 60 (GLM-5.3) + 30 (DSpark) + 90 of 380.
+      # shield/demo bh_sc4 is a SUM over the team's legs on that SKU: 60 (GLM-5.3) + 25 (DSpark) + 90 of 380.
       timeout: 90
       tier: 1
       release_ready: false
