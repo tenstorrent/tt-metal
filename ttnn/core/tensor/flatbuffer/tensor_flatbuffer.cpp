@@ -62,6 +62,10 @@ tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
     const tt::tt_metal::TensorSpec& spec,
     ttsl::Span<std::byte> data,
     const tt::tt_metal::MemoryPin& memory_pin) {
+    if (tt::tt_metal::is_gguf(spec.data_type())) {
+        ttsl::Span<uint32_t> typed_span(reinterpret_cast<uint32_t*>(data.data()), size_bytes / sizeof(uint32_t));
+        return tt::tt_metal::HostBuffer(typed_span, memory_pin);
+    }
     switch (spec.data_type()) {
         case tt::tt_metal::DataType::UINT32:
         case tt::tt_metal::DataType::BFLOAT8_B:
@@ -103,7 +107,8 @@ tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
             ttsl::Span<bfloat16> typed_span(reinterpret_cast<bfloat16*>(data.data()), size_bytes / sizeof(bfloat16));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
-        case tt::tt_metal::DataType::INVALID: TT_THROW("Unsupported DataType");
+        case tt::tt_metal::DataType::INVALID:
+        default: TT_THROW("Unsupported DataType");
     }
     TT_THROW("Unreachable");
 }

@@ -48,7 +48,22 @@ size_t rm_element_size_bytes(DataType dtype) {
 // Maximum possible device memory alignment for all devices and buffer types.
 constexpr uint32_t RECOMMENDED_MEMORY_ALIGNMENT_BYTES = 64;
 
-Alignment create_default_alignment_tile(const TilePageConfig& config, DataType, const MemoryConfig&) {
+// A GGUF page is one record: 32 columns by 32 * group_tiles rows of the default tile's 32x32 tiles.
+Shape2D gguf_page_shape(const TilePageConfig& config, DataType dtype) {
+    TT_FATAL(
+        config.tile == Tile(),
+        "{} needs the default 32x32 tile, got {}x{}",
+        dtype,
+        config.tile.get_height(),
+        config.tile.get_width());
+    return Shape2D(gguf_traits(dtype).page_height(), config.tile.get_width());
+}
+
+Alignment create_default_alignment_tile(const TilePageConfig& config, DataType dtype, const MemoryConfig&) {
+    if (is_gguf(dtype)) {
+        const auto page_shape = gguf_page_shape(config, dtype);
+        return Alignment({static_cast<uint32_t>(page_shape.height()), static_cast<uint32_t>(page_shape.width())});
+    }
     return Alignment({config.tile.get_height(), config.tile.get_width()});
 }
 
@@ -64,7 +79,8 @@ Alignment create_default_alignment_rm(const RowMajorPageConfig&, DataType, const
     return Alignment({1});
 }
 
-void validate_alignment_tile(const TilePageConfig& config, const Alignment& alignment, DataType, const MemoryConfig&) {
+void validate_alignment_tile(
+    const TilePageConfig& config, const Alignment& alignment, DataType dtype, const MemoryConfig&) {
     TT_FATAL(alignment.size() >= 2, "Alignment should have at least 2 dimensions for Tile layout");
     const auto widthAlignment = alignment[-1];
     TT_FATAL(
@@ -80,6 +96,16 @@ void validate_alignment_tile(const TilePageConfig& config, const Alignment& alig
         "tile height {}.",
         alignment,
         config.tile.get_height());
+    if (is_gguf(dtype)) {
+        const auto page_height = gguf_page_shape(config, dtype).height();
+        TT_FATAL(
+            heightAlignment % page_height == 0,
+            "Wrong custom Tensor Layout alignment {}. For {} the second innermost dimension should be a multiple of "
+            "the page height {}.",
+            alignment,
+            dtype,
+            page_height);
+    }
 }
 
 void validate_alignment_rm(
@@ -106,7 +132,10 @@ void validate_alignment_rm(
 }
 
 Shape2D get_page_shape_tile(
-    const TilePageConfig& config, const Shape2D&, DataType, const MemoryConfig&, const std::optional<Shape2D>&) {
+    const TilePageConfig& config, const Shape2D&, DataType dtype, const MemoryConfig&, const std::optional<Shape2D>&) {
+    if (is_gguf(dtype)) {
+        return gguf_page_shape(config, dtype);
+    }
     return Shape2D(config.tile.get_height(), config.tile.get_width());
 }
 
@@ -138,6 +167,9 @@ Shape2D get_page_shape_rm(
 }
 
 size_t get_page_size_bytes_tile(const TilePageConfig& config, const Shape2D& page_shape, DataType dtype) {
+    if (is_gguf(dtype)) {
+        return gguf_traits(dtype).page_bytes();
+    }
     const auto tiles_count =
         page_shape.height() / config.tile.get_height() * page_shape.width() / config.tile.get_width();
     return tiles_count * config.tile.get_tile_size(datatype_to_dataformat_converter(dtype));
