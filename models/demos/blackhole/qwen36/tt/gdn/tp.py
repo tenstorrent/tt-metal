@@ -111,6 +111,38 @@ def _softplus_add(a, bias):
     return ttnn.add(a, bias, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)])
 
 
+def gdn_g_fp32_enabled():
+    """QWEN36_GDN_G_FP32 (default "1"): the prefill decay gate g = -exp(A_log) * softplus(a + dt_bias) in fp32.
+
+    The bf16 path (``_softplus_add`` on bf16 a) runs the SFPU softplus's bf16 variant, which drops the residual
+    ln(1 + exp(-|x|)) for |x| > 5 -- harmless for x > 5 but it makes softplus(x) = 0 for every x < -5, i.e. NO decay
+    (g = 0) on every (token, value head) whose a + dt_bias < -5 (30-45% of them in Qwen3.5-9B / the Klein pup). The
+    GDN states then hold on to old tokens they should forget: S pcc 0.95-0.97 vs HF after a 512-token prefix, and the
+    decode from such a state loses ~8% of the greedy ids on image requests (IMG_ACC_LOG.md). The fp32 variant
+    (INP_FLOAT32: degree-8 polynomial + exp tail, as the fused decode already uses) is accurate everywhere.
+    "0" restores the bf16 path."""
+    return os.environ.get("QWEN36_GDN_G_FP32", "1") != "0"
+
+
+def _gdn_gate(tw, a, memory_config=None):
+    """Prefill g-gate [.., Nv]: -exp(A_log) * softplus(a + dt_bias); fp32 (see gdn_g_fp32_enabled) or the old bf16."""
+    mc = {} if memory_config is None else {"memory_config": memory_config}
+    if gdn_g_fp32_enabled() and "dt_bias_fp32" in tw and "neg_exp_A_fp32" in tw:
+        a32 = a if a.dtype == ttnn.float32 else ttnn.typecast(a, ttnn.float32, **mc)
+        x = ttnn.add(a32, tw["dt_bias_fp32"], **mc)
+        if a32 is not a:
+            ttnn.deallocate(a32)
+        g = ttnn.multiply(
+            tw["neg_exp_A_fp32"],
+            x,
+            input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)],
+            **mc,
+        )
+        ttnn.deallocate(x)
+        return g
+    return ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"]), **mc)
+
+
 def _silu_mul(x, z, memory_config, dtype=None):
     """out-gate: x * silu(z). NOT fused into one op: fusing silu via input_tensor_b_activations
     overflows to NaN in the real layer for large-magnitude z (op-level PCC hid it — small inputs).
@@ -476,6 +508,10 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
                 mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+    if gdn_g_fp32_enabled() and "dt_bias_fp32" not in tw:
+        # fp32 prefill decay-gate constants (gdn_g_fp32_enabled); the fused decode builds the same two above.
+        tw["dt_bias_fp32"] = _shard_small_fp32(sd[P + "dt_bias"], mesh, c("dt_bias_fp32"))
+        tw["neg_exp_A_fp32"] = _shard_small_fp32(-torch.exp(sd[P + "A_log"].float()), mesh, c("neg_exp_A_fp32"))
     return tw
 
 
@@ -2040,7 +2076,7 @@ class TPGatedDeltaNet:
         # GQA late-expand: adapter L2-norms at Nk, expands to Nv after
         beta = ttnn.reshape(ttnn.sigmoid(b), (1, T, Nv))
         ttnn.deallocate(b)
-        g = ttnn.reshape(ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"])), (1, T, Nv))
+        g = ttnn.reshape(_gdn_gate(tw, a), (1, T, Nv))
         ttnn.deallocate(a)
 
         _init_state = self.rec_state if carry else (None if return_state else self._zero_rec_f32)
@@ -2359,7 +2395,7 @@ class TPGatedDeltaNet:
             _qkv_head_dims = None
         beta = ttnn.reshape(ttnn.sigmoid(b), (Bg, Tb, Nv))
         ttnn.deallocate(b)
-        g = ttnn.reshape(ttnn.multiply(self.tw["neg_exp_A"], _softplus_add(a, self.tw["dt_bias"])), (Bg, Tb, Nv))
+        g = ttnn.reshape(_gdn_gate(self.tw, a), (Bg, Tb, Nv))
         ttnn.deallocate(a)
 
         o, final_state = chunk_gated_delta_rule_fused_adapter(
@@ -2877,7 +2913,7 @@ class TPGatedDeltaNet:
 
         beta = ttnn.reshape(ttnn.sigmoid(b), (B, T, Nv))
         ttnn.deallocate(b)
-        g = ttnn.reshape(ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"])), (B, T, Nv))
+        g = ttnn.reshape(_gdn_gate(tw, a), (B, T, Nv))
         ttnn.deallocate(a)
 
         # Chunk-parallel recurrence over the BH = B*Nv batch (each row an independent scan). Fused
