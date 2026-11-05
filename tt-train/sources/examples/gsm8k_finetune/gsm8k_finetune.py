@@ -372,6 +372,9 @@ def train():
 
     print("Creating model...")
     tt_model = tt_model_factory.create_model()
+    # Before the weights load, so they load in the stored dtype: an fp32 file keeps its bits in fp32 master weights.
+    # SFTTrainer applies the same block again below, which then changes nothing.
+    ttml.core.apply_precision_config(yaml_config["training_config"], tt_model.parameters())
     print("Loading from safetensors...")
     tt_model.load_from_safetensors(safetensors_path)
 
