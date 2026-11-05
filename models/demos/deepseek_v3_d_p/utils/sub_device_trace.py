@@ -176,7 +176,7 @@ class SubDeviceTraceController:
         self._current_tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
 
     # ------------------------------------------------------------------ replay
-    def replay(self, variant=None):
+    def replay(self, variant=None, sync=True):
         """Run the whole segmented forward: execute each trace, load/clear between segments.
 
         Segments are enqueued NON-blocking on one CQ: the device runs them in enqueue order, and the
@@ -193,7 +193,8 @@ class SubDeviceTraceController:
         REPLAY_TS["rep0"] = time.time()
         self._replay_steps(self._program, variant)
         REPLAY_TS["rep1"] = time.time()
-        ttnn.synchronize_device(self.mesh_device)
+        if sync:
+            ttnn.synchronize_device(self.mesh_device)
         REPLAY_TS["sync"] = time.time()
 
     def _replay_steps(self, program, variant):

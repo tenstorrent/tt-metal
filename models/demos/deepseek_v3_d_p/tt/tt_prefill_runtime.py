@@ -200,6 +200,9 @@ class TtPrefillRuntime:
         self._trace_metadata = None
         self._trace_metadata_msg = None
         self._metadata_staged = False
+        # A caller whose next device work is ordered behind the replay on cq 0 clears this, so the host
+        # enqueues that work while the replay runs instead of after it.
+        self.replay_sync = True
         self._trace_d2h_service = None
         self._trace_output = None
         self._trace_partial_in = None  # DFlash, non-first rank: persistent home of the imported drafter partial
@@ -1299,7 +1302,7 @@ class TtPrefillRuntime:
             if indexer_indices is not None and not self._extras_are_caller_filled:
                 ttnn.copy(indexer_indices, self._trace_indices_in)
                 ttnn.deallocate(indexer_indices)
-            self._controller.replay(variant=mtp_variant)
+            self._controller.replay(variant=mtp_variant, sync=self.replay_sync)
 
             # Non-last rank: return the persistent output activation (replay just refreshed it) for the
             # driver to forward downstream over D2D. Last/single rank: the populated KV cache is the output.

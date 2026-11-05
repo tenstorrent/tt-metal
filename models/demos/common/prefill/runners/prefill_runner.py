@@ -928,6 +928,10 @@ def run_request_loop(
     # Staging the traced runtime's metadata ahead of the host read puts its dispatch in the wait for
     # the upstream rank instead of between the read and the replay.
     stage_metadata = getattr(runtime, "stage_metadata", None) if FORWARD_CHUNKS == 1 else None
+    # The send, the next drain and its metadata read all follow the replay on cq 0, and the blocking read
+    # is where the host waits for it.
+    if stage_metadata is not None:
+        runtime.replay_sync = False
 
     def forward_shutdown():
         if outbound.activation is not None:
