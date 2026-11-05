@@ -5,12 +5,10 @@
 // GGUF weight decode on the SFPU (sfpu/experimental/ckernel_sfpu_gguf_decode.h) and the DEST-fed matmul
 // (experimental/llk_math_dest_srca_mm.h), Blackhole, 32-bit DEST, full sync.
 //
-// buffer_A: the weight pages, page p of N tile nt at p + nt * (GGUF_KT / page_tiles), each page_bytes long; with
+// buffer_A: the weight pages, page p of N tile nt at p + nt * (GGUF_KT / page_tiles), each page_bytes long and complete
+//           (fp32 scale copies and level codes written by the host, experimental/ckernel_gguf_page.h); with
 //           GGUF_FMT == 0 each page is a Float32 [K][N] weight tile.
 // buffer_B: the in0 tiles (bf16, GGUF_IN0_FACES faces), K tile kt at kt (GGUF_MM).
-// buffer_C: the level table of a codebook format.
-// Pack thread first: the RISC-side steps of every page (fp32 scale copies, grid lookups, experimental/
-// ckernel_gguf_page.h), then it releases the unpack thread through its mailbox.
 // GGUF_MM = false: one decoded Float32 [K][N] tile out per (nt, kt).
 // GGUF_MM = true: one Float32 output tile per N tile, D += in0[kt] * W[kt][nt] over the K tiles. DEST tile 0 is the
 // accumulator; the K tiles alternate between two slot sets (decoded tile, page, decoder scratch) 1..3 and 4..6, so the
@@ -43,7 +41,6 @@ constexpr ckernel::gguf::PageLayout LAYOUT = test_layout();
 constexpr std::uint32_t PAGE_BYTES         = LAYOUT.rows * 64;
 constexpr std::uint32_t PAGE_FACES         = LAYOUT.rows / 16;
 constexpr std::uint32_t PAGES_PER_N_TILE   = GGUF_KT / LAYOUT.page_tiles;
-constexpr bool PREPARE_PAGES               = GGUF_FMT != 0 && (LAYOUT.fp16_rows > 0 || LAYOUT.table_entries > 0);
 constexpr std::uint32_t OUTPUT_TILES       = GGUF_MM ? GGUF_NT : GGUF_NT * GGUF_KT;
 
 // The formats are the LLKs': pages unpacked to DEST as 32-bit words, in0 bf16, Float32 out.
@@ -72,10 +69,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (GGUF_MM)
     {
         _llk_unpack_dest_srca_mm_init_(GGUF_IN0_FACES);
-    }
-    if constexpr (PREPARE_PAGES)
-    {
-        (void)mailbox_read(ThreadId::PackThreadId);
     }
 
     const std::uint32_t pages_base = params.buffer_A[0];
@@ -208,17 +201,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    if constexpr (PREPARE_PAGES)
-    {
-        const auto* table = reinterpret_cast<const std::uint16_t*>(params.buffer_C[0]);
-        for (std::uint32_t page = 0; page < GGUF_NT * PAGES_PER_N_TILE; page++)
-        {
-            ckernel::gguf::prepare_page<static_cast<ckernel::gguf::Format>(GGUF_FMT)>(params.buffer_A[0] + page * PAGE_BYTES, table);
-        }
-        asm volatile("fence" ::: "memory"); // the pages are in L1 before the unpacker reads them
-        mailbox_write(ThreadId::UnpackThreadId, 1);
-    }
-
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(OUT_FORMAT, OUT_FORMAT, FACE_R_DIM * FACE_C_DIM * 4);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(OUT_FORMAT, FACE_R_DIM, TILE_C_DIM, 4);
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();

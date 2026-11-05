@@ -15,7 +15,7 @@ namespace gguf
 
 using namespace ckernel::gguf;
 
-// IQ2_XXS page after lookup_grid: word-vectors 0 / 1 hold level words (lane (r, c) of word-vector a: entry l = r of
+// IQ2_XXS page with its level codes: word-vectors 0 / 1 hold level words (lane (r, c) of word-vector a: entry l = r of
 // columns 16a + 2c + b, element i at bits 16b + 2i, an index into (8, 25, 43)); rows 4..5 word n hold column n's sign
 // word (byte l: entry l's 7 sign bits, scale bit l in bit 7); then d. Output o of lane (r, c) is element
 // 4 ((o / 2) % 2) + r of entry 2h + (o / 4) % 2. The eighth sign bit is the parity of the seven. Value =
@@ -457,7 +457,7 @@ sfpi_inline void iq2_xs_params()
     i2_half_scales<IQ2_XS, TI / 2, 16 * (TI % 2), 8, 4>();
 }
 
-// IQ3_S: entries of 4 elements with 3-bit indices into (1, 3, .., 15). lookup_grid writes entry e of columns
+// IQ3_S: entries of 4 elements with 3-bit indices into (1, 3, .., 15). The level codes hold entry e of columns
 // 16a + 2c + b in the halves of word-vector 2a + e / 4, row group e % 4, element i at bits 3i, and each column's 4-bit
 // scale in bits 12..15 of its entry 0. Rows 8..9 hold each column's 32 sign bits. Value = (2q + 1) d (1 + 2 ls), signed.
 constexpr int LV3 = 2 * TILE; // level words of entry e, columns (a, b): LV3 + 8a + e (IQ3_S: pre-shifted)
