@@ -1596,3 +1596,9 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   device_ms_total is gated: F114 / F212 refuse it). Fixed P.2's gate cmd in tasks.yaml (dropped the flag; the gate adds
   the clean wall run itself); classified framework; resumed.
 - 21:52 P.2 PASS 9da91feb347 (reused). P.1 failed the same way; fixed the same flag in P.1 and P.3 (the only other tasks with it); P.1 classified framework; resumed.
+- 22:35 X.3 PASS (ladder s56320 492 s, full prefill profile 838 s, positions 418 s; the pre-pass of quick-accepted picks'
+  full gates passed: P.23, P.5, P.10, P.7, P.2, P.1, ...). Its commit was refused again: state.json 503 KB. FRAMEWORK F253
+  (bfe0171cc28): metrics in state_metrics.json beside state.json (state.json 109 KB, metrics 395 KB); `gate X.3
+  --commit-only` -> cf8ec00a404, nothing re-run. F252's defaults.yaml applied (agents.timeout_s 0, stall_s 5400).
+  PUSHED (the owner's last push before the rebase). Run stopped at --until X.3. Next: the rebase in a fresh session
+  (prompt /scratch/dnijemcevic/rebase_session_prompt.md), from this commit.
