@@ -331,31 +331,33 @@ def _retag_tensor(tensor, *, reference, shard_dim: int | None) -> None:
     )
 
 
-def _canonicalize_flat_replicated_topology(tensor, mesh_contract: Qwen38MeshContract) -> None:
-    """Retag the flat mesh returned by device-side zero allocation.
+def _canonicalize_zero_allocation_topology(tensor, mesh_contract: Qwen38MeshContract) -> None:
+    """Give a ``ttnn.zeros`` result the canonical replicated ``(1, 4)`` topology without moving bytes.
 
-    ``ttnn.zeros`` reports the four workers as one distribution axis while keeping their 2-D mesh coordinates; accept
-    only that exact representation and relabel it as the canonical ``(1, 4)`` topology without moving bytes.
+    The host fill reports the four workers as one distribution axis while keeping their 2-D mesh coordinates: accept
+    only that exact flat representation and relabel it. The device fill (TILE bfloat16/float32 of at least 128 KiB
+    per device) already reports the canonical form, which the replicated contract checks exactly.
     """
 
     topology = tensor.tensor_topology()
     raw_coordinates = tuple(topology.mesh_coords())
     distribution = tuple(int(value) for value in topology.distribution_shape())
-    coordinates = tuple(tuple(int(value) for value in coordinate) for coordinate in raw_coordinates)
-    placements = tuple(type(value).__name__ for value in topology.placements())
-    expected_coordinates = tuple((0, column) for column in range(TP_SIZE))
-    if distribution != (TP_SIZE,) or coordinates != expected_coordinates or placements != ("PlacementReplicate",):
-        raise RuntimeError(
-            "device zero allocation topology is not the exact flat replicated TP4 form: "
-            f"distribution={distribution} coordinates={coordinates} placements={placements}"
+    if distribution == (TP_SIZE,):
+        coordinates = tuple(tuple(int(value) for value in coordinate) for coordinate in raw_coordinates)
+        placements = tuple(type(value).__name__ for value in topology.placements())
+        expected_coordinates = tuple((0, column) for column in range(TP_SIZE))
+        if coordinates != expected_coordinates or placements != ("PlacementReplicate",):
+            raise RuntimeError(
+                "device zero allocation topology is not the exact flat replicated TP4 form: "
+                f"distribution={distribution} coordinates={coordinates} placements={placements}"
+            )
+        tensor.update_tensor_topology(
+            ttnn.TensorTopology(
+                ttnn.MeshShape(*mesh_contract.mesh_shape),
+                [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()],
+                raw_coordinates,
+            )
         )
-    tensor.update_tensor_topology(
-        ttnn.TensorTopology(
-            ttnn.MeshShape(*mesh_contract.mesh_shape),
-            [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()],
-            raw_coordinates,
-        )
-    )
     mesh_contract.validate_tensor(tensor, placement=TensorPlacement.REPLICATED)
 
 
@@ -3422,7 +3424,7 @@ class Qwen38TTNNQSA:
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        _canonicalize_flat_replicated_topology(value, self.mesh_contract)
+        _canonicalize_zero_allocation_topology(value, self.mesh_contract)
         _retag_tensor(value, reference=value, shard_dim=1)
         self.mesh_contract.validate_tensor(value, placement=TensorPlacement.KV_PAIR_GROUPED, shard_dim=1)
         return value
@@ -3445,7 +3447,7 @@ class Qwen38TTNNQSA:
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        _canonicalize_flat_replicated_topology(value, self.mesh_contract)
+        _canonicalize_zero_allocation_topology(value, self.mesh_contract)
         return value
 
     def allocate_state(self) -> Qwen38TTNNQSAState:
