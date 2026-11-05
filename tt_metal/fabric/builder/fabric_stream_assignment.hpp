@@ -13,7 +13,6 @@
 #include <tt_stl/small_vector.hpp>
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
-#include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 
 namespace tt::tt_fabric {
 

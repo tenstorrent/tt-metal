@@ -583,7 +583,8 @@ MeshWorkload make_remote_gate_opener_workload(
         *dst_node.mesh_id,
         static_cast<uint32_t>(ttnn::d2d_stream::GateState::Open),
     };
-    tt::tt_fabric::append_fabric_connection_rt_args(src_node, dst_node, links.front(), program, opener_core, rt);
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        *opener_mesh, src_node, dst_node, links.front(), program, opener_core, rt);
     SetRuntimeArgs(program, kernel, opener_core, rt);
 
     MeshWorkload workload;
@@ -2914,10 +2915,13 @@ void verify_pipeline_descriptor_export(
     const std::shared_ptr<MeshDevice>& receiver_mesh,
     const std::shared_ptr<MeshDevice>& second_sender_mesh = nullptr,
     const std::shared_ptr<MeshDevice>& second_receiver_mesh = nullptr) {
-    // Both pairs on these chips share the fabric links (lease mode), like the prefill runner. Two
-    // pairs that each own the link hang.
+    // Both pairs on these chips share the fabric routers in one lease group, like the prefill
+    // runner's streams across one boundary. Without the group, the second sender finds every
+    // router held by the first.
+    const std::string link_group = "export-test";
     auto gated_cfg = make_stage_gate_config(sender_mesh);
     gated_cfg.share_fabric_links = true;
+    gated_cfg.fabric_link_group = link_group;
     auto [sender, receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(gated_cfg));
     const auto rd = receiver->describe();
     EXPECT_EQ(rd.metadata_size_bytes, kGateMetadataBytes);
@@ -2958,10 +2962,9 @@ void verify_pipeline_descriptor_export(
             EXPECT_EQ(rc.stage_gate_base_addr, 0u);
         }
     };
-    auto [side_sender, side_receiver] = D2DStreamService::create_pair(
-        sender_mesh,
-        receiver_mesh,
-        make_config(sender_mesh, ttnn::Shape({1, 1, 32, 512}), /*share_fabric_links=*/true));
+    auto side_cfg = make_config(sender_mesh, ttnn::Shape({1, 1, 32, 512}), /*share_fabric_links=*/true);
+    side_cfg.fabric_link_group = link_group;
+    auto [side_sender, side_receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(side_cfg));
     const auto side = side_receiver->describe();
     expect_plain(side);
     EXPECT_NE(side.coords.at(0).service_core, rd.coords.at(0).service_core);

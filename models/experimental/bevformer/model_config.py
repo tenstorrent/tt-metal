@@ -157,10 +157,11 @@ INVERSE_SIGMOID_EPS = 1e-5
 
 # --- Box code and coder -------------------------------------------------------------------------
 
-# The box code: (cx, cy, w, l, cz, h, sin, cos, vx, vy), the sizes as logs. In the box codes, the
-# reg branches' raw output, cx, cy and cz are logit offsets, which the decoder adds to its reference
-# points' logits; in the box predictions, the head's output, they are the refined centers in metres.
-# The other channels are the same in both.
+# The reference's box code: (cx, cy, w, l, cz, h, sin, cos, vx, vy), the sizes as logs, which the
+# CODE_* slices index. In the box codes, the reg branches' raw output, cx, cy and cz are logit
+# offsets, which the decoder adds to its reference points' logits; in the box predictions, the
+# head's output, they are the refined centers in metres. The other channels are the same in both.
+# The TTNN head's device tensors hold the channels in CENTERS_FIRST order instead (see CODE_ORDER).
 CODE_SIZE = 10
 CODE_XY = slice(0, 2)
 CODE_WL = slice(2, 4)
@@ -179,23 +180,10 @@ CENTERS_FIRST = CODE_CENTERS + [channel for channel in range(CODE_SIZE) if chann
 CENTERS_FIRST_CENTERS = slice(0, len(CODE_CENTERS))
 
 
-def _box_pred_pieces():
-    """The TTNN head's box predictions, in box code order, as one concat of slices of its refined
-    centers ``"centers"`` (x, y, z) and its centers-first codes ``"codes"``."""
-    pieces = []
-    for channel in range(CODE_SIZE):
-        if channel in CODE_CENTERS:
-            source, index = "centers", CODE_CENTERS.index(channel)
-        else:
-            source, index = "codes", CENTERS_FIRST.index(channel)
-        if pieces and pieces[-1][0] == source and pieces[-1][1].stop == index:
-            pieces[-1] = (source, slice(pieces[-1][1].start, index + 1))
-        else:
-            pieces.append((source, slice(index, index + 1)))
-    return tuple(pieces)
-
-
-BOX_PRED_PIECES = _box_pred_pieces()
+# The TTNN head's box predictions stay in CENTERS_FIRST order, the refined centers in metres in
+# its first channels, which needs no slicing on device; CODE_ORDER takes them to the box code
+# order on the host (tt_head.box_preds_to_torch).
+CODE_ORDER = [CENTERS_FIRST.index(channel) for channel in range(CODE_SIZE)]
 
 # The coder's decoded box: (cx, cy, cz, w, l, h, yaw, vx, vy), cz at the box's gravity center.
 BOX_CENTER = slice(0, 3)
@@ -253,10 +241,10 @@ _TTNN_DTYPES = {
 # The head's box predictions: their centers are the decoder's refined reference points.
 _TTNN_DTYPES["BOX_DTYPE"] = _TTNN_DTYPES["GRID_DTYPE"]
 
-# Bisection steps of the coder's exact top-k (TTNMSFreeCoder.topk), which narrow the k-th logit's
-# bracket around the bfloat16 pivot, 2^-5 of the pivot wide, down to one float32 value; 19
-# suffice, the rest is margin.
-CODER_BISECTION_STEPS = 22
+# Rounds of the coder's exact top-k search (TTNMSFreeCoder.topk), each of which splits the k-th
+# logit's bracket around the bfloat16 pivot, 2^-5 of the pivot wide, into 32, a tile row of
+# thresholds: four take it down to one float32 value, the fifth is margin.
+CODER_SEARCH_ROUNDS = 5
 
 
 # The backbone and FPN. Their choices below are sized for base's 6 cameras at 1600x928; small and
@@ -265,9 +253,10 @@ CODER_BISECTION_STEPS = 22
 # backbone output.
 
 # Layers whose convs accumulate in an fp32 destination register (layer3 and layer4; a DCN conv2
-# always does): with bfloat16 accumulation, activations with outlier channels lose precision
-# through base's 26 blocks there until C5 falls below PCC 0.99. The tests' dummy weights have no
-# such channels and do not show it.
+# accumulates each pass, at most 256 channels of one kernel position, in fp32 and sums the passes
+# in bfloat16 whatever this says): with bfloat16 accumulation, activations with outlier channels
+# lose precision through base's 26 blocks there until C5 falls below PCC 0.99. The tests' dummy
+# weights have no such channels and do not show it.
 FP32_ACC_STAGES = (2, 3)
 
 # Layers whose activations are kept in DRAM: all four. layer1, layer2 and layer4 do not fit in
@@ -299,6 +288,12 @@ DRAM_CONV_SLICES = 8
 BLOCK_SHARDED_STAGES = (2, 3)
 BLOCK_SHARDED_LEVELS = _C3_C4_LEVELS
 
+# Layers whose DCNs take their input height-sharded rather than interleaved in L1: most bilinear
+# corners then lie in the core's own shard or a neighbour's. Sharding pays where each core owns many
+# blocks of a single channel pass, as in layer3; layer4's few blocks per core and two channel passes
+# do not amortize it.
+DCN_SHARDED_INPUT_STAGES = (2,)
+
 # conv2d's act_block_h overrides: the stem conv's, the non-DCN 3x3 conv2's of the bottlenecks and
 # the block-sharded FPN output convs'. None of these, nor the sharding above, is tuned for 928x1600.
 STEM_ACT_BLOCK_H = 64
@@ -315,6 +310,7 @@ def tt_resnet_kwargs():
         dram_conv_slices=DRAM_CONV_SLICES,
         block_sharded_stages=BLOCK_SHARDED_STAGES,
         fp32_acc_stages=FP32_ACC_STAGES,
+        dcn_sharded_input_stages=DCN_SHARDED_INPUT_STAGES,
         stem_act_block_h=STEM_ACT_BLOCK_H,
         conv2_act_block_h=CONV2_ACT_BLOCK_H,
         weights_dtype=_ttnn_dtype("CONV_WEIGHT_DTYPE"),

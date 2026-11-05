@@ -10,7 +10,7 @@ Key features:
   - Joint low-rank KV compression: wkv_a -> split(kv_latent, k_pe)
   - RoPE applied only to the rope portion of Q/K heads
   - k_pe shared across all heads (broadcast)
-  - Composite SDPA (supports v_head_dim != qk_head_dim)
+  - Fused causal SDPA (supports v_head_dim != qk_head_dim)
 """
 
 from __future__ import annotations
