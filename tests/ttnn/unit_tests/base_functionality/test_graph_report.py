@@ -11,13 +11,14 @@ This tests the decoupled workflow:
 """
 
 import contextlib
+import fcntl
 import gc
 import hashlib
 import json
 import os
 import socket
 import sqlite3
-import subprocess
+import stat
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -863,17 +864,30 @@ class TestImportReportFreshDatabase:
 
     @_parametrize_stored_schema
     def test_import_replaces_whatever_db_was_there(self, tmp_path, stored_schema):
-        """On main an older schema or a file that isn't SQLite was deleted first, but a newer schema or a DB without a
-        schema_version row was kept and appended to."""
-        report_dir = tmp_path / "reports_in"
-        _write_reports(report_dir, [_rank_capture(0, 1)])
-        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        """Before tenstorrent/ttnn-visualizer#2148 a DB with an older schema or no schema_version row, or a file that
+        isn't SQLite, was deleted first, but one with the current or a newer schema was kept and appended to. A row
+        only the earlier DB had, and the row counts of a single import, tell the two apart."""
+        report_path = tmp_path / "report.json"
+        report = _make_report(TestResNet50Patterns.MOCK_RESNET_GRAPH, devices=TestResNet50Patterns.MOCK_DEVICE_INFO)
+        report_path.write_text(json.dumps(report))
+        db_path = graph_report.import_report(report_path, tmp_path / "output")
+        once = self._row_counts(db_path)
+        if not isinstance(stored_schema, bytes):
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute("INSERT INTO report_metadata (key, value) VALUES ('left_from_earlier_import', 'yes')")
+                conn.commit()
+            finally:
+                conn.close()
         _set_stored_schema(db_path, stored_schema)
-        graph_report.import_report(report_dir, tmp_path / "output")
+        graph_report.import_report(report_path, tmp_path / "output")
         assert _query_db(db_path, "SELECT value FROM report_metadata WHERE key = 'schema_version'") == [
             (graph_report.DATABASE_SCHEMA_VERSION,)
         ]
-        assert _query_db(db_path, "SELECT COUNT(*) FROM operations") == [(1,)]
+        assert _query_db(db_path, "SELECT COUNT(*) FROM report_metadata WHERE key = 'left_from_earlier_import'") == [
+            (0,)
+        ]
+        assert self._row_counts(db_path) == once
 
     def test_late_runtime_error_leaves_the_existing_db_unchanged(self, tmp_path, monkeypatch, expect_error):
         """Any exception from anywhere in the import, not only the ValueErrors raised as a capture is read: here after
@@ -914,7 +928,8 @@ class TestImportReportFreshDatabase:
         assert self._importing_files(output_dir) == []
 
     def test_db_name_in_a_subdirectory(self, tmp_path):
-        """The CLI passes --db-name straight through; a name with a directory part worked on main if it existed."""
+        """The CLI passes --db-name straight through; a name with a directory part worked before
+        tenstorrent/ttnn-visualizer#2148 if the directory existed."""
         report_dir = tmp_path / "reports_in"
         output_dir = tmp_path / "output"
         _write_reports(report_dir, [_rank_capture(0, 1)])
@@ -925,30 +940,182 @@ class TestImportReportFreshDatabase:
         assert _query_db(db_path, "SELECT COUNT(*) FROM operations") == [(1,)]
         assert self._importing_files(output_dir / "sub") == []
 
-    def test_files_orphaned_by_a_killed_import_are_removed(self, tmp_path):
+    _DEAD_PID = 999999
+
+    @pytest.fixture
+    def only_this_process_is_alive(self, monkeypatch):
+        monkeypatch.setattr(graph_report, "_pid_is_alive", lambda pid: pid == os.getpid())
+
+    @pytest.mark.parametrize("in_subdirectory", [False, True], ids=["output_dir", "db_subdirectory"])
+    def test_files_orphaned_by_a_killed_import_are_removed(self, tmp_path, only_this_process_is_alive, in_subdirectory):
         """A killed process never runs its clean-up. Only files of a dead process on this host are removed: a live
         process may still be importing, and a pid from another host sharing the directory says nothing here."""
         output_dir = tmp_path / "output"
-        output_dir.mkdir()
-        exited = subprocess.Popen([sys.executable, "-c", ""])
-        exited.wait()
+        directory = output_dir / "sub" if in_subdirectory else output_dir
+        directory.mkdir(parents=True)
         host = socket.gethostname()
+        dead = f"{host}-{self._DEAD_PID}"
         orphaned = [
-            f".db.sqlite.importing-{host}-{exited.pid}-0123abcd",
-            f".db.sqlite.importing-{host}-{exited.pid}-0123abcd-journal",
-            f".cluster_descriptor.yaml.importing-{host}-{exited.pid}-89ef0123",
+            f".db.sqlite.importing-{dead}-0123abcd",
+            f".db.sqlite.importing-{dead}-0123abcd-journal",
+            f".db.sqlite.importing-{dead}-4567abcd-wal",  # Its database is already gone.
+            f".db.sqlite.importing-{dead}-4567abcd-shm",
+            f".cluster_descriptor.yaml.importing-{dead}-89ef0123",
+            # A pid os.kill can't take is no live process's.
+            f".db.sqlite.importing-{host}-99999999999999999999-0123abcd",
         ]
         kept = [
             f".db.sqlite.importing-{host}-{os.getpid()}-0123abcd",
-            f".db.sqlite.importing-other-{host}-{exited.pid}-0123abcd",
+            f".db.sqlite.importing-other-{dead}-0123abcd",
+            f".db.sqlite.importing-{dead}-notahexpart",
+            f".db.sqlite.importing-{dead}-0123abcd-backup",
         ]
         for name in orphaned + kept:
-            (output_dir / name).write_bytes(b"partial")
+            (directory / name).write_bytes(b"partial")
         _write_reports(tmp_path / "reports_in", [_rank_capture(0, 1)])
-        graph_report.import_report(tmp_path / "reports_in", output_dir)
+        db_name = "sub/db.sqlite" if in_subdirectory else "db.sqlite"
+        graph_report.import_report(tmp_path / "reports_in", output_dir, db_name=db_name)
+        assert self._importing_files(directory) == sorted(kept)
+
+    def test_a_locked_file_is_kept_although_its_pid_is_not_alive(self, tmp_path, only_this_process_is_alive):
+        """A process in another PID namespace on the same host (a container sharing the host's network and this
+        directory) is alive although its pid isn't here; the lock it holds on its file, and so on that file's journal,
+        says so."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        live = f".db.sqlite.importing-{socket.gethostname()}-{self._DEAD_PID}-0123abcd"
+        kept = [live, f"{live}-journal"]
+        for name in kept:
+            (output_dir / name).write_bytes(b"partial")
+        fd = os.open(output_dir / live, os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            _write_reports(tmp_path / "reports_in", [_rank_capture(0, 1)])
+            graph_report.import_report(tmp_path / "reports_in", output_dir)
+        finally:
+            os.close(fd)
         assert self._importing_files(output_dir) == sorted(kept)
 
-    def test_flushed_comparison_records_come_back_once_from_their_sidecar(self, tmp_path):
+    def test_pid_is_alive(self, monkeypatch):
+        assert graph_report._pid_is_alive(os.getpid())
+        assert not graph_report._pid_is_alive(2**70)
+
+        def kill_owned_by_another_user(pid, sig):
+            raise PermissionError
+
+        monkeypatch.setattr(os, "kill", kill_owned_by_another_user)
+        assert graph_report._pid_is_alive(1) is True
+
+    def test_importing_file_never_follows_a_planted_link(self, tmp_path, monkeypatch):
+        """A name already taken, by a link here, is skipped for a new one; the link and its target are untouched."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        target = tmp_path / "elsewhere.txt"
+        target.write_text("not yours")
+        hex_parts = iter(["0123abcd", "0123abcd", "4567abcd"])
+        monkeypatch.setattr(graph_report.secrets, "token_hex", lambda n: next(hex_parts))
+        prefix = f".db.sqlite.importing-{socket.gethostname()}-{os.getpid()}"
+        link = output_dir / f"{prefix}-0123abcd"
+        link.symlink_to(target)
+        path, fd = graph_report._create_importing_file(output_dir / "db.sqlite")
+        os.close(fd)
+        assert path == output_dir / f"{prefix}-4567abcd"
+        assert link.is_symlink() and target.read_text() == "not yours"
+
+    def test_permissions_are_kept(self, tmp_path, monkeypatch):
+        """A replaced database and YAML keep their permission bits, and the database's temporary copy has them for the
+        whole import, so a locked-down database is never readable through it."""
+        report_dir = tmp_path / "reports_in"
+        output_dir = tmp_path / "output"
+        name, report = _rank_capture(0, 1)
+        report["cluster_descriptor"] = "cluster: first"
+        _write_reports(report_dir, [(name, report)])
+        db_path = graph_report.import_report(report_dir, output_dir)
+        yaml_path = output_dir / "cluster_descriptor.yaml"
+        for path in (db_path, yaml_path):
+            path.chmod(0o640)
+        importing_modes = []
+        real_import_metadata = graph_report.import_metadata
+
+        def recording_import_metadata(cursor, metadata):
+            importing_modes.extend(
+                stat.S_IMODE(p.stat().st_mode) for p in output_dir.glob(f".db.sqlite{graph_report._IMPORTING_INFIX}*")
+            )
+            real_import_metadata(cursor, metadata)
+
+        monkeypatch.setattr(graph_report, "import_metadata", recording_import_metadata)
+        graph_report.import_report(report_dir, output_dir)
+        # The database's, and any journal SQLite opened beside it, which takes the database's bits.
+        assert importing_modes and set(importing_modes) == {0o640}
+        assert [stat.S_IMODE(p.stat().st_mode) for p in (db_path, yaml_path)] == [0o640, 0o640]
+
+    def test_a_stale_journal_beside_the_db_is_removed(self, tmp_path):
+        """A journal a crashed reader or writer left beside the old file would be taken for the new one's."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 1)])
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        journal = db_path.with_name(db_path.name + "-journal")
+        journal.write_bytes(b"junk")
+        graph_report.import_report(report_dir, tmp_path / "output")
+        assert not journal.exists()
+        assert _query_db(db_path, "SELECT COUNT(*) FROM operations") == [(1,)]
+
+    def test_yamls_an_earlier_import_left_are_removed(self, tmp_path):
+        """Captures without YAMLs, or from a run of a different size (another rank suffix), must not be paired with an
+        earlier run's cluster description. Other YAMLs in the directory are not the import's."""
+        output_dir = tmp_path / "output"
+        name, report = _rank_capture(0, 2)
+        report["cluster_descriptor"] = "cluster: two ranks"
+        report["mesh_coordinate_mapping"] = "mesh: two ranks"
+        _write_reports(tmp_path / "two_ranks", [(name, report), _rank_capture(1, 2)])
+        graph_report.import_report(tmp_path / "two_ranks", output_dir)
+        (output_dir / "cluster_descriptor_backup.yaml").write_text("mine")
+        name, report = _rank_capture(0, 1)
+        report["cluster_descriptor"] = "cluster: one rank"
+        _write_reports(tmp_path / "one_rank", [(name, report)])
+        graph_report.import_report(tmp_path / "one_rank", output_dir)
+        assert sorted(p.name for p in output_dir.glob("*.yaml")) == [
+            "cluster_descriptor.yaml",
+            "cluster_descriptor_backup.yaml",
+        ]
+        _write_reports(tmp_path / "no_yamls", [_rank_capture(0, 1)])
+        graph_report.import_report(tmp_path / "no_yamls", output_dir)
+        assert sorted(p.name for p in output_dir.glob("*.yaml")) == ["cluster_descriptor_backup.yaml"]
+
+    def test_failure_while_publishing(self, tmp_path, monkeypatch, expect_error):
+        """Each move is atomic but the set isn't: if the second move fails, the YAML already moved stays beside the
+        earlier database, and nothing staged is left behind."""
+        report_dir = tmp_path / "reports_in"
+        output_dir = tmp_path / "output"
+
+        def write_run(text):
+            name, report = _rank_capture(0, 1)
+            report["cluster_descriptor"] = f"cluster: {text}"
+            report["mesh_coordinate_mapping"] = f"mesh: {text}"
+            _write_reports(report_dir, [(name, report)])
+
+        write_run("first")
+        db_path = graph_report.import_report(report_dir, output_dir)
+        before = db_path.read_bytes()
+        write_run("second")
+        real_publish = graph_report._publish_staged_file
+        calls = []
+
+        def publish_failing_second_time(staged, path):
+            calls.append(path)
+            if len(calls) == 2:
+                raise OSError("disk went away")
+            real_publish(staged, path)
+
+        monkeypatch.setattr(graph_report, "_publish_staged_file", publish_failing_second_time)
+        with expect_error(OSError, "disk went away"):
+            graph_report.import_report(report_dir, output_dir)
+        assert (output_dir / "cluster_descriptor.yaml").read_text() == "cluster: second"
+        assert (output_dir / "physical_chip_mesh_coordinate_mapping.yaml").read_text() == "mesh: first"
+        assert db_path.read_bytes() == before
+        assert self._importing_files(output_dir) == []
+
+    def test_flushed_comparison_records_come_back_once_from_their_sidecar(self, tmp_path, monkeypatch):
         """flush_comparison_records_to_db writes records into db.sqlite and into comparison_records.json beside it. A
         later import into the same directory replaces db.sqlite and reads the records back from the JSON, once."""
         report_dir = tmp_path / "report"
@@ -961,17 +1128,9 @@ class TestImportReportFreshDatabase:
             "global_tensor_comparison_records": [],
             "tensors": [{"tensor_id": 1001, "shape": "torch.Size([1, 32])", "storage_type": "HOST"}],
         }
-        # What flush_comparison_records_to_db leaves behind.
-        (report_dir / graph_report.COMPARISON_RECORDS_FALLBACK_NAME).write_text(json.dumps(comparison_records))
-        conn = sqlite3.connect(report_dir / "db.sqlite")
-        try:
-            cursor = conn.cursor()
-            graph_report.create_database_schema(cursor)
-            graph_report.save_database_schema_version(cursor)
-            graph_report.import_tensor_comparison_records(cursor, comparison_records, rank=0)
-            conn.commit()
-        finally:
-            conn.close()
+        monkeypatch.setattr(ttnn.graph, "_comparison_records_data", comparison_records)
+        ttnn.graph.flush_comparison_records_to_db(report_dir)
+        assert _query_db(report_dir / "db.sqlite", "SELECT COUNT(*) FROM local_tensor_comparison_records") == [(1,)]
         # The graph report fixture imports a report directory into itself.
         _write_reports(report_dir, [("graph_capture.json", _make_report(_minimal_single_op_graph()))])
         db_path = graph_report.import_report(report_dir, report_dir)

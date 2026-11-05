@@ -27,6 +27,7 @@ captured in a sidecar JSON file. The importer consumes that sidecar offline and
 populates the visualizer comparison tables.
 """
 
+import fcntl
 import hashlib
 import json
 import math
@@ -36,6 +37,7 @@ import secrets
 import shutil
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 from collections import defaultdict
@@ -411,32 +413,62 @@ _IMPORTING_INFIX = ".importing-"
 _SQLITE_SIDECAR_SUFFIXES = ("-journal", "-wal", "-shm")
 # .<target name>.importing-<host>-<pid>-<random hex>, plus a SQLite sidecar suffix for a database's journal.
 _IMPORTING_FILE_RE = re.compile(
-    r"^\..+" + re.escape(_IMPORTING_INFIX) + r"(?P<host>.+)-(?P<pid>\d+)-[0-9a-f]+(?:-journal|-wal|-shm)?$"
+    r"^(?P<importing>\..+"
+    + re.escape(_IMPORTING_INFIX)
+    + r"(?P<host>.+)-(?P<pid>\d+)-[0-9a-f]+)(?:"
+    + "|".join(map(re.escape, _SQLITE_SIDECAR_SUFFIXES))
+    + r")?$"
+)
+# (key in a capture, file stem) of the YAMLs written beside the database, one per rank of a multi-rank run.
+_YAMLS_BESIDE_DATABASE = (
+    ("cluster_descriptor", "cluster_descriptor"),
+    ("mesh_coordinate_mapping", "physical_chip_mesh_coordinate_mapping"),
+)
+_YAML_BESIDE_DATABASE_RE = re.compile(
+    r"^(?:" + "|".join(re.escape(stem) for _, stem in _YAMLS_BESIDE_DATABASE) + r")(?:_\d+_of_\d+)?\.yaml$"
 )
 
 
-def _create_importing_file(path: Path) -> Path:
+def _create_importing_file(path: Path) -> tuple[Path, int]:
     """Create an empty hidden sibling of ``path`` that an import writes first and moves onto ``path`` once it succeeds.
+
+    Returns its path and a descriptor holding an exclusive ``flock`` on it, which the caller closes once the file is
+    published or removed; while it is held, ``_remove_orphaned_importing_files`` leaves the file alone.
 
     Created exclusively, so a file or link already at that name is never followed, and with a random part, so
     overlapping imports into the same directory don't share one. The host and pid in the name let a later import
-    remove it if this process dies before its clean-up runs (see ``_remove_orphaned_importing_files``).
+    remove it if this process dies before its clean-up runs. It takes the permission bits of a file already at
+    ``path`` (keeping write access for its owner), so the hidden copy is no easier to read than the file it replaces.
     """
     while True:
         candidate = path.with_name(
             f".{path.name}{_IMPORTING_INFIX}{socket.gethostname()}-{os.getpid()}-{secrets.token_hex(4)}"
         )
         try:
-            os.close(os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666))
+            fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
         except FileExistsError:
             continue
-        return candidate
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        if os.fstat(fd).st_nlink == 0:
+            # Another import took it for an orphan and removed it before the lock was taken.
+            os.close(fd)
+            continue
+        try:
+            os.fchmod(fd, stat.S_IMODE(path.stat().st_mode) | stat.S_IRUSR | stat.S_IWUSR)
+        except FileNotFoundError:
+            pass
+        except BaseException:
+            os.close(fd)
+            candidate.unlink(missing_ok=True)
+            raise
+        return candidate, fd
 
 
 def _pid_is_alive(pid: int) -> bool:
+    """Whether a process with ``pid`` exists in this process's PID namespace; a pid no process can have is not alive."""
     try:
         os.kill(pid, 0)
-    except ProcessLookupError:
+    except (ProcessLookupError, OverflowError, ValueError):
         return False
     except PermissionError:  # Alive, but owned by another user.
         return True
@@ -447,13 +479,30 @@ def _remove_orphaned_importing_files(directory: Path) -> None:
     """Remove importing files that an import on this host left in ``directory`` when its process was killed (SIGKILL,
     OOM, a CI timeout) before its clean-up ran; each would otherwise stay hidden at the size of a database.
 
-    Files of live processes, and of other hosts sharing the directory, are left alone.
+    Files of live processes, and of other hosts sharing the directory, are left alone. So is a file whose ``flock`` is
+    still held (for a SQLite journal, the database's): a process in another PID namespace on the same host, such as
+    another container sharing the host's network and this directory, can be alive although its pid isn't here.
     """
     host = socket.gethostname()
-    for path in directory.glob(f".*{_IMPORTING_INFIX}*"):
+    for path in list(directory.glob(f".*{_IMPORTING_INFIX}*")):
         match = _IMPORTING_FILE_RE.match(path.name)
-        if match is not None and match["host"] == host and not _pid_is_alive(int(match["pid"])):
+        if match is None or match["host"] != host or _pid_is_alive(int(match["pid"])):
+            continue
+        try:
+            fd = os.open(path.with_name(match["importing"]), os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:  # A journal whose database is gone.
             path.unlink(missing_ok=True)
+            continue
+        except OSError:  # A link, or a file this user can't open: not this importer's to remove.
+            continue
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            continue
+        else:
+            path.unlink(missing_ok=True)
+        finally:
+            os.close(fd)
 
 
 def _remove_sqlite_sidecars(path: Path) -> None:
@@ -462,23 +511,64 @@ def _remove_sqlite_sidecars(path: Path) -> None:
         path.with_name(path.name + suffix).unlink(missing_ok=True)
 
 
-def _stage_file(staged_files: dict[Path, Path], path: Path, text: str) -> bool:
-    """Write ``text`` for ``path`` under an importing name, to be published along with the database.
-
-    The first capture of an import that carries the file wins; returns whether this call wrote it.
-    """
-    if path in staged_files:
-        return False
-    staged_files[path] = _create_importing_file(path)
-    staged_files[path].write_text(text)
-    return True
-
-
 def _publish_staged_file(staged: Path, path: Path) -> None:
     """Move ``staged`` onto ``path``, keeping the permission bits of a file it replaces."""
     if path.exists():
         shutil.copymode(path, staged)
     os.replace(staged, path)
+
+
+class _StagedImport:
+    """The files one import writes beside its database, built under importing names and published together.
+
+    ``publish`` moves them into place once the import has succeeded; ``close`` removes whatever is still staged (all
+    of it after a failure, the rest if publishing stopped partway) and releases the locks.
+    """
+
+    def __init__(self, db_path: Path, yaml_dir: Path):
+        self.db_path = db_path
+        self.yaml_dir = yaml_dir
+        self._lock_fds: list[int] = []
+        self.importing_db_path = self._create(db_path)
+        self._staged_yamls: dict[Path, Path] = {}  # final path -> importing path
+
+    def _create(self, path: Path) -> Path:
+        importing_path, fd = _create_importing_file(path)
+        self._lock_fds.append(fd)
+        return importing_path
+
+    def stage_yaml(self, name: str, text: str) -> bool:
+        """Stage ``text`` for ``yaml_dir / name``; the first capture of an import that carries it wins. Returns
+        whether this call staged it."""
+        path = self.yaml_dir / name
+        if path in self._staged_yamls:
+            return False
+        self._staged_yamls[path] = self._create(path)
+        self._staged_yamls[path].write_text(text)
+        return True
+
+    def publish(self) -> None:
+        """Move the staged files into place, and remove YAMLs an earlier import left that this one doesn't replace.
+
+        Each move is atomic, but the set is not: if one fails, the files already moved stay in place.
+        """
+        for path in self.yaml_dir.iterdir():
+            if _YAML_BESIDE_DATABASE_RE.match(path.name) and path not in self._staged_yamls:
+                path.unlink(missing_ok=True)
+        for path, staged in self._staged_yamls.items():
+            _publish_staged_file(staged, path)
+        # A journal left beside the old file would otherwise be taken for the new one's.
+        _remove_sqlite_sidecars(self.db_path)
+        _publish_staged_file(self.importing_db_path, self.db_path)
+
+    def close(self) -> None:
+        try:
+            for staged in [*self._staged_yamls.values(), self.importing_db_path]:
+                staged.unlink(missing_ok=True)
+            _remove_sqlite_sidecars(self.importing_db_path)
+        finally:
+            for fd in self._lock_fds:
+                os.close(fd)
 
 
 # Matches "File \"path\", line N" lines in formatted Python stack traces (see ttnn.graph._capture_python_stack_trace).
@@ -2470,13 +2560,20 @@ def import_report(
     Each import writes a new database, built beside the target and moved over it only once the import succeeds: a
     finished import holds only these captures, never rows left from an earlier import into the same directory, and a
     failed one leaves whatever file ``output_dir`` already held as it was, whatever its schema, even if it is not a
-    SQLite database. The cluster descriptor and mesh mapping YAMLs are staged and published the same way.
+    SQLite database. Until the move, the earlier database and the new one are both on disk, so a re-import needs room
+    for two copies, which matters for large multi-rank captures.
+
+    The cluster descriptor and mesh mapping YAMLs are staged and published the same way, and publishing removes the
+    ones an earlier import left that this import doesn't write, so the YAMLs beside a database always come from the
+    import that wrote it. The files are moved one at a time, the database last: in the unlikely case that a move fails
+    (all of them stay within ``output_dir``), the YAMLs already moved stay beside the earlier database.
 
     Replacing the file also drops rows another writer added to it since the previous import: comparison records that
     ``ttnn.graph.flush_comparison_records_to_db`` wrote come back only from the ``comparison_records.json`` it leaves
     beside them, which the import reads for a capture without its own comparison sidecar. A replaced file keeps its
-    permission bits; a new one gets the umask's. The temporary files are removed when the import raises; ones left by
-    a process that was killed are removed by the next import into the same directory on the same host.
+    permission bits, and its temporary copy has them from the start; a new one gets the umask's. The temporary files
+    are removed when the import raises; ones left by a process that was killed are removed by the next import into the
+    same directory on the same host.
     """
     report_path = Path(report_path)
     output_dir = Path(output_dir)
@@ -2490,18 +2587,16 @@ def import_report(
     except ValueError as e:
         raise ValueError(f"{e}{_unchanged_database_note(db_path, db_existed)}") from e
 
-    for directory in {output_dir, db_path.parent}:
-        _remove_orphaned_importing_files(directory)
-    # Built under a temporary name and moved over db_path at the end, so a reader never sees a partial database.
-    importing_db_path = _create_importing_file(db_path)
-    # YAMLs that go beside the database (final path -> importing path), published along with it.
-    staged_files: dict[Path, Path] = {}
-
     # Create graphs directory if generating SVGs
     graphs_dir = None
     if generate_svgs:
         graphs_dir = output_dir / "graphs"
         graphs_dir.mkdir(parents=True, exist_ok=True)
+
+    for directory in {output_dir, db_path.parent}:
+        _remove_orphaned_importing_files(directory)
+    # Built under temporary names and moved into place at the end, so a reader never sees a partial database.
+    staged = _StagedImport(db_path, output_dir)
 
     conn = None
     imported = False
@@ -2512,7 +2607,7 @@ def import_report(
         sys.settrace(None)
         sys.setprofile(None)
 
-        conn = sqlite3.connect(importing_db_path)
+        conn = sqlite3.connect(staged.importing_db_path)
         cursor = conn.cursor()
 
         create_database_schema(cursor)
@@ -2672,19 +2767,10 @@ def import_report(
                 import_metadata(cursor, report["metadata"])
 
             # Save cluster descriptor YAML if present
-            if "cluster_descriptor" in report and report["cluster_descriptor"]:
-                cd_suffix = _rank_file_suffix(rank, report_world_size) if report_world_size > 1 else ""
-                cluster_path = output_dir / f"cluster_descriptor{cd_suffix}.yaml"
-                if _stage_file(staged_files, cluster_path, report["cluster_descriptor"]):
-                    total_stats["cluster_descriptor"] = True
-
-            # Save mesh coordinate mapping if present (matches old save_mesh_descriptor behavior)
-            if "mesh_coordinate_mapping" in report and report["mesh_coordinate_mapping"]:
-                mesh_suffix = _rank_file_suffix(rank, report_world_size) if report_world_size > 1 else ""
-                mesh_name = f"physical_chip_mesh_coordinate_mapping{mesh_suffix}.yaml"
-                mesh_path = output_dir / mesh_name
-                if _stage_file(staged_files, mesh_path, report["mesh_coordinate_mapping"]):
-                    total_stats["mesh_coordinate_mapping"] = True
+            yaml_suffix = _rank_file_suffix(rank, report_world_size) if report_world_size > 1 else ""
+            for report_key, stem in _YAMLS_BESIDE_DATABASE:
+                if report.get(report_key) and staged.stage_yaml(f"{stem}{yaml_suffix}.yaml", report[report_key]):
+                    total_stats[report_key] = True
 
             # Import buffer chunks (collapsed per-(op, device, addr, bank, core)).
             # Preferred: buffer_pages_by_address (compact, ~0.5 MB) combined with
@@ -2856,17 +2942,11 @@ def import_report(
         sys.setprofile(_prev_profile)
         if conn is not None:
             conn.close()
-        if imported:
-            for path, staged in staged_files.items():
-                _publish_staged_file(staged, path)
-            # A journal left beside the old file would otherwise be taken for the new one's.
-            _remove_sqlite_sidecars(db_path)
-            _publish_staged_file(importing_db_path, db_path)
-        else:
-            for staged in staged_files.values():
-                staged.unlink(missing_ok=True)
-            importing_db_path.unlink(missing_ok=True)
-            _remove_sqlite_sidecars(importing_db_path)
+        try:
+            if imported:
+                staged.publish()
+        finally:
+            staged.close()
 
     return db_path
 
