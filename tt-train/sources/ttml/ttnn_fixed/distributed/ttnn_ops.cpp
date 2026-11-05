@@ -211,11 +211,10 @@ ttnn::Tensor ring_shift(
 
     const uint32_t cluster_axis_value = cluster_axis.has_value() ? cluster_axis.value() : 0;
     const uint32_t ring_size = mesh_shape[cluster_axis_value];
-    TT_FATAL(ring_size % 2 == 0, "ring_shift requires an even number of devices in the ring, got {}", ring_size);
-
     if (ring_size <= 1U) {
         return tensor;
     }
+    TT_FATAL(ring_size % 2 == 0, "ring_shift requires an even number of devices in the ring, got {}", ring_size);
 
     auto output_tensor = ttnn::empty_like(tensor);
 
