@@ -47,13 +47,18 @@ constexpr float TT_SELECTED_CORE_LOG_TWO = 6.9314718055994529e-01f;
 #include "ckernel_sfpu_acosh_bf16_core_bridge_exponent.inc"
 #include "ckernel_sfpu_acosh_bf16_rational_interleaved_core.inc"
 template <uint32_t N, uint32_t D>
-inline void eval_rational_numer_denom(const float* n, const float* d, vFloat x, vFloat& a, vFloat& b) {
+__attribute__((always_inline)) inline void eval_rational_numer_denom(
+    const float* n, const float* d, vFloat x, vFloat& a, vFloat& b) {
     eval_rational_interleaved_numer_denom<N, D>(n, d, x, a, b);
 }
 #include "ckernel_sfpu_acosh_bf16_rational_segment_core.inc"
-inline vFloat prepare_raw_domain_input(vFloat x) { return selected_core_bridge_prepare(x); }
-inline vFloat apply_output_postcompose(vFloat y, vFloat) { return y; }
-inline void finalize_raw_domain_actions(vFloat x, vFloat& y) { selected_core_bridge_finalize(x, y); }
+__attribute__((always_inline)) inline vFloat prepare_raw_domain_input(vFloat x) {
+    return selected_core_bridge_prepare(x);
+}
+__attribute__((always_inline)) inline vFloat apply_output_postcompose(vFloat y, vFloat) { return y; }
+__attribute__((always_inline)) inline void finalize_raw_domain_actions(vFloat x, vFloat& y) {
+    selected_core_bridge_finalize(x, y);
+}
 // Upstream LLK runs several tiles in one DEST half, so the coefficients are
 // immediates rather than rows parked past this tile.
 inline void tile() {
@@ -93,7 +98,7 @@ inline void calculate_acosh_bf16_body() {
 }
 // The constants stock's init also sets hold the kernel's own values for its call only.
 template <int ITERATIONS = 32>
-inline void calculate_acosh_bf16() {
+__attribute__((noinline)) inline void calculate_acosh_bf16() {
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x3ea57ebbu);
     sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0x3fba2e90u);
     sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0x4007c1f2u);
@@ -102,11 +107,7 @@ inline void calculate_acosh_bf16() {
     sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0x3eba2000u);
     sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0xbf004000u);
 }
-inline void init_acosh_bf16() {
-    ckernel::sfpu::bf16::acosh::init_core_bridge_rational<ckernel::sfpu::AcoshBf16Config>();
-    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x33b17218u);
-    sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0x3eba2000u);
-    sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0xbf004000u);
-}
+// The call sets the constants it holds and puts stock's back, so the init leaves them to stock's.
+inline void init_acosh_bf16() {}
 
 }  // namespace ckernel::sfpu

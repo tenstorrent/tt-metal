@@ -13,8 +13,8 @@
 #include "ckernel_sfpu_sqrt_custom.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_log1p.h"
-#include "sfpu/ckernel_sfpu_log.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_log.h"
+#include "ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -692,13 +692,13 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     return y;
 }
 
-// t = exp(a); cosh(a) = 0.5 * (t + 1/t)
+// t = exp(|x|); cosh(x) = 0.5 * (t + 1/t)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat a = sfpi::setsgn(x, 0);
-        sfpi::vFloat q = _sfpu_quarter_exp_abs_<is_fp32_dest_acc_en>(a);
+        // _sfpu_quarter_exp_abs_ takes |x| itself; no setsgn needed here.
+        sfpi::vFloat q = _sfpu_quarter_exp_abs_<is_fp32_dest_acc_en>(x);
         sfpi::vFloat r = _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(q);
         sfpi::vFloat y = q + q;
         r *= 0.125f;
@@ -1010,10 +1010,12 @@ sfpi_inline sfpi::vFloat _sfpu_sqrt_ge0_(sfpi::vFloat x) {
     return a;
 }
 
-bool bf16_dest_acosh();
-template <int ITERATIONS>
-void calculate_acosh_bf16();
-void init_acosh_bf16();
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_acosh_bf16.h"
+
+namespace ckernel::sfpu {
+
 // Whether BF16 DEST runs the generated acosh kernel as one call over the whole tile.
 inline constexpr bool acosh_bf16_whole_tile = true;
 // Sets up the generated BF16 acosh kernel for the instance it serves.
@@ -1023,7 +1025,6 @@ inline void acosh_bf16_tile_init() {
         init_acosh_bf16();
     }
 }
-
 // acosh(x) = log(x + sqrt(x^2 - 1)), reformulated through log1p to remove the
 // absorption error at x -> 1+ and the x^2 overflow at large x. Three regions:
 //   x < 1            -> NaN
@@ -1226,5 +1227,3 @@ void init_atanh() {
 }
 
 }  // namespace ckernel::sfpu
-
-#include "ckernel_sfpu_acosh_bf16.h"

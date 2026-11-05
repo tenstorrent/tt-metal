@@ -186,6 +186,106 @@ def test_scalarB_celu(device, h, w, alpha, torch_dtype, ttnn_dtype):
         assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
+@pytest.mark.parametrize("alpha", [-1.0, -4.0])
+@pytest.mark.parametrize(
+    "torch_dtype,ttnn_dtype",
+    [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)],
+)
+def test_scalarB_celu_negative_alpha_negative_input(device, alpha, torch_dtype, ttnn_dtype):
+    """celu(x, alpha) = alpha * (exp(x / alpha) - 1) for x < 0. With alpha < 0 the exp
+    argument x / alpha is positive and unbounded; torch overflows to -inf once it passes
+    ln(FLT_MAX) ~ 88.72, and the device must agree (it used to wrap the 2^k exponent of
+    its exp reconstruction and return +|alpha| instead of -inf).
+
+    x / alpha in [0, 80] exercises the finite path, [90, 200] the overflow path. The gap
+    (80, 90) is left out on purpose: there exp(x / alpha) is within a factor of two of
+    FLT_MAX and the device's 2^k reconstruction cannot represent it (a separate accuracy
+    edge, not the sign wrap). Power-of-two alphas keep x / alpha and alpha * (...) exact on
+    both host and device so the ULP bound measures the kernel, not the host reciprocal.
+    """
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar celu kernel is unchanged: no upper clamp / nonfinite pass-through yet")
+    h, w = 64, 128
+    ratio = torch.cat([torch.linspace(0.0, 80.0, h * w // 2), torch.linspace(90.0, 200.0, h * w // 2)])
+    torch_input_tensor_a = (ratio * alpha).reshape(h, w).to(torch_dtype)  # x = alpha * ratio <= 0
+
+    golden_function = ttnn.get_golden_function(ttnn.celu)
+    torch_output_tensor = golden_function(torch_input_tensor_a, alpha=alpha)
+    overflow = torch.isinf(torch_output_tensor)
+    assert overflow.sum() == h * w // 2, "the x / alpha >= 90 half must overflow to -inf in the golden"
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.celu(input_tensor_a, alpha=alpha))
+
+    assert torch.equal(
+        output_tensor[overflow], torch_output_tensor[overflow]
+    ), f"x / alpha past ln(FLT_MAX) must give -inf, device gave {output_tensor[overflow].unique().tolist()}"
+    assert_with_ulp(
+        expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2, allow_nonfinite=True
+    )
+
+
+@pytest.mark.parametrize("alpha", [1.0, -1.0])
+@pytest.mark.parametrize(
+    "torch_dtype,ttnn_dtype",
+    [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)],
+)
+def test_scalarB_celu_nonfinite_input(device, alpha, torch_dtype, ttnn_dtype):
+    """+-NaN and +-inf inputs for either sign of alpha. Both NaN signs matter: the kernel's
+    x >= 0 branch is a sign test, so a sign-set NaN takes the exp branch, where a swap-based
+    clamp of the exp argument would turn it into a number.
+
+    Expectations beyond torch's, all pre-existing and documented in the ISA:
+    - bfloat16 output goes through SFPSTOCHRND, which turns +NaN into +inf and -NaN into
+      -inf, so for bfloat16 a NaN input must give an infinity with the NaN's sign.
+    - For alpha > 0 the sign-set NaN element is not checked: on that (unchanged) branch the
+      NaN sign of the x / alpha product is unspecified on Wormhole, so the helper's own
+      clamp may rank it below -87 and return alpha * (exp(-87) - 1) instead of NaN.
+    """
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar celu kernel is unchanged: no upper clamp / nonfinite pass-through yet")
+    h, w = 32, 32
+    if torch_dtype == torch.float32:
+        nan_bits = torch.tensor([0x7FC00000, -0x00400000], dtype=torch.int32)  # +NaN, -NaN (0xFFC00000)
+    else:
+        nan_bits = torch.tensor([0x7FC0, -0x0040], dtype=torch.int16)  # +NaN, -NaN (0xFFC0)
+    specials = [*nan_bits.view(torch_dtype), torch.tensor(float("inf")), torch.tensor(float("-inf"))]
+    x = torch.linspace(-4.0, 4.0, h * w, dtype=torch.float32).to(torch_dtype)
+    for i, v in enumerate(specials * 8):  # every face and every SFPU lane group sees each special
+        x[i * 29] = v
+    torch_input_tensor_a = x.reshape(h, w)
+    int_dtype = torch.int32 if torch_dtype == torch.float32 else torch.int16
+    nan_in = torch.isnan(torch_input_tensor_a)
+    nan_in_signset = nan_in & (torch_input_tensor_a.view(int_dtype) < 0)
+    assert nan_in_signset.any() and (nan_in & ~nan_in_signset).any(), "the input must contain NaNs of both signs"
+
+    golden_function = ttnn.get_golden_function(ttnn.celu)
+    torch_output_tensor = golden_function(torch_input_tensor_a, alpha=alpha)
+    assert torch.equal(torch.isnan(torch_output_tensor), nan_in)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.celu(input_tensor_a, alpha=alpha))
+
+    checked = nan_in if alpha < 0 else (nan_in & ~nan_in_signset)
+    if torch_dtype == torch.float32:
+        assert torch.isnan(
+            output_tensor[checked]
+        ).all(), f"NaN in must be NaN out, device gave {output_tensor[checked].unique().tolist()}"
+    else:
+        assert torch.isinf(output_tensor[checked]).all() and torch.equal(
+            output_tensor[checked] < 0, nan_in_signset[checked]
+        ), f"bfloat16 NaN in must be inf with the NaN's sign, device gave {output_tensor[checked].unique().tolist()}"
+    rest = ~nan_in
+    assert not torch.isnan(output_tensor[rest]).any(), "NaN produced from a non-NaN input"
+    inf_out = torch.isinf(torch_output_tensor)
+    assert torch.equal(output_tensor[inf_out], torch_output_tensor[inf_out]), "infinite outputs differ from torch"
+    assert_with_ulp(
+        expected_result=torch_output_tensor[rest & ~inf_out],
+        actual_result=output_tensor[rest & ~inf_out],
+        ulp_threshold=2,
+    )
+
+
 @pytest.mark.parametrize("weight", [-0.5, 1.0, 0.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
