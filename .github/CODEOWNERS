@@ -175,6 +175,7 @@ tt_metal/hw/inc/hostdev/streaming_profiler_common.h @mo-tenstorrent @yusufbashiT
 tt_metal/hw/inc/internal/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/internal/ethernet/eth_ptp.hpp @mo-tenstorrent @yusufbashiTT @aliuTT @ubcheema
 tt_metal/hw/inc/internal/tt-1xx/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
+tt_metal/hw/inc/**/tensor/
 tt_metal/hw/inc/api/tensor/ @abhullar-tt @akerteszTT @riverwuTT
 tt_metal/hw/toolchain/ @jbaumanTT @nathan-TT
 tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT @nathan-TT
@@ -389,6 +390,7 @@ ttnn/cpp/ttnn/operations/data_movement/**/CMakeLists.txt @tenstorrent/metalium-d
 ttnn/cpp/ttnn/operations/data_movement/fold/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/data_movement/gather/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nsorabaTT
 ttnn/cpp/ttnn/operations/data_movement/scatter/ @aczajkowskiTT @sjameelTT @bbradelTT @nsorabaTT
+ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/**/nd_reshard*
 ttnn/cpp/ttnn/operations/data_movement/sort/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nmauriceTT @nsorabaTT
 ttnn/cpp/ttnn/operations/kernel_helper_functions/ @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/cpp/ttnn/operations/kernel_helper_functions/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra
@@ -614,6 +616,7 @@ tests/ttnn/docs_examples/test_normalization_examples.py @tenstorrent/metalium-de
 tests/ttnn/docs_examples/test_pointwise_*_examples.py @tenstorrent/metalium-developers-eltwise
 tests/ttnn/docs_examples/test_pooling_examples.py @tenstorrent/metalium-developers-convolutions
 tests/ttnn/docs_examples/test_reduction_examples.py @tenstorrent/metalium-developers-mmfusedreduce
+tests/ttnn/docs_examples/test_tensor_creation_examples.py
 
 # TTNN Distributed
 tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
@@ -713,7 +716,7 @@ ttnn/cpp/ttnn-nanobind/layer_ack_service.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/layer_completion.* @nsextonTT
 ttnn/ttnn/_experimental/layer_completion.py
 tests/ttnn/unit_tests/gtests/tensor/kernels/ @razorback3 @dongjin-na @bbradelTT
-tests/ttnn/unit_tests/gtests/tensor/test_d2d_* @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/tensor/*stream_service* @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/tensor/test_stream_pipeline.cpp @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/*stream_service* @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_d2d_pipeline_descriptor.py @razorback3 @dongjin-na @bbradelTT
@@ -742,6 +745,7 @@ ttnn/cpp/ttnn-nanobind/disaggregation.* @nsextonTT
 ttnn/cpp/ttnn/experimental/disaggregation/
 tests/ttnn/unit_tests/base_functionality/test_kv_chunk_table_strided_bindings.py @razorback3 @dongjin-na @bbradelTT
 # Bindings and tests for code other teams own.
+tests/ttnn/unit_tests/base_functionality/test_graph_report_device_tensors_unit.py @razorback3 @dongjin-na @bbradelTT
 ttnn/cpp/ttnn-nanobind/pipeline_module_nanobind.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/mcast_host.* @nsextonTT
 tests/ttnn/unit_tests/base_functionality/test_mcast_host_bindings.py @razorback3 @dongjin-na @bbradelTT
