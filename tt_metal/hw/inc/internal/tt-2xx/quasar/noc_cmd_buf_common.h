@@ -512,9 +512,16 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_flushed(u
     return __builtin_riscv_ttrocc_scmdbuf_tr_ack() == 0;
 }
 
+// Always true on a Keraunos CCE (Quasar Ethernet), where a router hart does not get past the simple command buffer's
+// transaction-count queries. "None outstanding" holds only if a CCE write with a transaction id completes before its
+// issue call returns.
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_transaction_id_sent(
     uint32_t noc, uint32_t transcation_id) {
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+    return true;
+#else
     return __builtin_riscv_ttrocc_scmdbuf_wr_sent_trid(transcation_id) == 0;
+#endif
 }
 
 // The RoCC write counts track what is outstanding now, not a running total, so there is nothing to checkpoint.
@@ -527,9 +534,14 @@ inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_since(uint3
     return ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, NOC_OVERLAY_TRID_STATIC);
 }
 
+// Always true on a Keraunos CCE, as ncrisc_noc_nonposted_write_with_transaction_id_sent().
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_transaction_id_flushed(
     uint32_t noc, uint32_t transcation_id) {
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+    return true;
+#else
     return __builtin_riscv_ttrocc_scmdbuf_tr_ack_trid(transcation_id) == 0;
+#endif
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(uint32_t noc) {
