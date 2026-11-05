@@ -56,6 +56,8 @@ class TernaryAttention:
         self.rot_in, self.rot_out = rot_in, rot_out
         self._xr = None
         self._v = None
+        self.heads = heads
+        self.head_dim = packed["q"][3] // heads // 2 if heads else None
         self.pre_q = None
         if prefill_rotations is not None:
             # exact ternary prefill (bonsai2/tt/tprefill): q with its columns as [q heads | gate heads]
@@ -77,14 +79,32 @@ class TernaryAttention:
         self._xr = prerot.take(x)  # k and v reuse it
         if self._xr is None:
             self._xr = self.rot_in(x)
+        if self._hm_ok(lead):  # q head-major and the gate as their own tensors (no reshape / chunk / transpose)
+            return _QGDec(*self.q(self._xr, lead=lead, qg_heads=self.heads))
         return self.q(self._xr, lead=lead)
 
     def project_k(self, x):
         lead = tuple(list(x.shape)[:-1])
-        k, self._v = self.kv(self._xr, lead=lead, split=self.kv_split)
+        if self._hm_ok(lead):
+            hk = self.kv_split // self.head_dim
+            shape = [1, hk, 1, self.head_dim]
+            k, v = self.kv(self._xr, lead=lead, split=self.kv_split, shapes=(shape, shape))
+            self._v = _HMDec(v)
+            k = _HMDec(k)
+        else:
+            k, self._v = self.kv(self._xr, lead=lead, split=self.kv_split)
         ttnn.deallocate(self._xr)
         self._xr = None
         return k
+
+    def _hm_ok(self, lead):
+        """Head-major decode outputs: one token, B = 1, the head size known (BONSAI_DECODE_HM=0: off)."""
+        return (
+            os.environ.get("BONSAI_DECODE_HM", "1") == "1"
+            and self.heads is not None
+            and tuple(lead)[:2] == (1, 1)
+            and list(lead)[-1] == 1
+        )
 
     def project_v(self, x):
         v, self._v = self._v, None
@@ -214,6 +234,21 @@ class _NormRope:
         self.t, self.op, self.head_major = t, op, head_major
 
 
+class _HMDec:
+    """A decode projection output written head-major [1, heads, 1, D] (decode_linear3 shapes= / qg_heads=), standing in
+    for the shared code's [B, T, heads, D]: its reshape and transpose(1, 2) are no-ops."""
+
+    def __init__(self, t):
+        self.t = t
+
+
+class _QGDec:
+    """The decode q projection as (q head-major, gate [1, 1, heads D]): reshape is a no-op, chunk returns the two."""
+
+    def __init__(self, q, gate):
+        self.q, self.gate = q, gate
+
+
 class _GatedOut:
     """Decode attn * sigmoid(gate), not computed yet (TernaryAttention.project_o rotates it in one op)."""
 
@@ -236,18 +271,40 @@ class TernaryAttentionTtnn:
         qkr = getattr(self._t, "pre_qkr", None) or {}
         w = kwargs.get("weight")
         if os.environ.get("BONSAI_DECODE_QKR", "1") == "1" and w is not None and id(w) in qkr and not args:
+            if isinstance(t, _HMDec):
+                return _NormRope(t.t, qkr[id(w)], head_major=True)
             return _NormRope(t, qkr[id(w)])
+        if isinstance(t, _HMDec):
+            return _HMDec(ttnn.rms_norm(t.t, *args, **kwargs))
         return ttnn.rms_norm(t, *args, **kwargs)
+
+    def reshape(self, t, shape, *args, **kwargs):
+        if isinstance(t, (_HMDec, _QGDec)):
+            return t
+        if not args and not kwargs and list(t.shape) == list(shape):
+            return t
+        return ttnn.reshape(t, shape, *args, **kwargs)
+
+    def chunk(self, t, n, dim=-1):
+        if isinstance(t, _QGDec):
+            return _HMDec(t.q), t.gate
+        return ttnn.chunk(t, n, dim=dim)
 
     def transpose(self, t, *args, **kwargs):
         if isinstance(t, _NormRope):
+            if t.head_major:
+                return t
             y = ttnn.transpose(t.t, *args, **kwargs)  # [B, T, H, D] -> [B, H, T, D]: QKNormRope's head-major input
             ttnn.deallocate(t.t)
             return _NormRope(y, t.op, head_major=True)
+        if isinstance(t, _HMDec):
+            return t.t  # already [B, H, T, D]
         return ttnn.transpose(t, *args, **kwargs)
 
     def deallocate(self, t, *args, **kwargs):
-        if isinstance(t, _NormRope):
+        if isinstance(t, _QGDec):
+            return None  # its q and gate live on as the chunk outputs
+        if isinstance(t, (_NormRope, _HMDec)):
             return ttnn.deallocate(t.t)
         if isinstance(t, (SigGate, _GatedOut)):
             return None  # consumed (and freed) by project_o's gated rotation

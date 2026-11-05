@@ -37,7 +37,7 @@ void kernel_main() {
     constexpr uint32_t NB = get_compile_time_arg_val(1);
     constexpr auto w_args = TensorAccessorArgs<2>();
     constexpr auto out_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
-#if SPLIT_NT > 0
+#if SPLIT_NT > 0 || defined(QG_HT)
     constexpr auto out2_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 #endif
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
@@ -62,7 +62,7 @@ void kernel_main() {
 
     const uint32_t bytes = get_tile_size(cb_out);
     const auto out = TensorAccessor(out_args, out_addr, bytes);
-#if SPLIT_NT > 0
+#if SPLIT_NT > 0 || defined(QG_HT)
     const auto out2 = TensorAccessor(out2_args, OUT2_ADDR, bytes);
 #endif
 #ifdef GLU_PAIRS
@@ -75,7 +75,13 @@ void kernel_main() {
         cb_wait_front(cb_out, 1);
         const uint32_t nt = first_nt + i;
 #endif
-#if SPLIT_NT > 0
+#if defined(QG_HT)
+        // per head [q (QG_HT tiles) | gate (QG_HT tiles)] -> q head-major [1, heads, 1, D] and gate [1, 1, heads D]:
+        // one tile row each (decode), so both are page remaps
+        const uint32_t hq = nt / (2 * QG_HT), cq = nt % QG_HT;
+        const uint64_t dst =
+            ((nt / QG_HT) & 1) ? out2.get_noc_addr(hq * QG_HT + cq) : out.get_noc_addr(hq * QG_HT + cq);
+#elif SPLIT_NT > 0
         const uint64_t dst = nt < SPLIT_NT ? out.get_noc_addr(nt) : out2.get_noc_addr(nt - SPLIT_NT);
 #else
         const uint64_t dst = out.get_noc_addr(nt);

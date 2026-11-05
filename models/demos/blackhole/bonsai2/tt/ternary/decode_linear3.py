@@ -167,11 +167,16 @@ class TernaryDecodeLinear3:
         lead=(1, 1, TILE),
         split=0,
         residual=None,
+        shapes=None,
+        qg_heads=0,
     ):
         """split > 0: return two tensors, output columns [0, split) and [split, N) (split a multiple of 32).
         x_rot: [C, K] bf16 ROW_MAJOR, C copies of the rotated activation (one per DRAM bank: page c is in bank
         c mod 8) -> [32, N] bf16 TILE, row 0 = y.
-        residual: a tensor of the output's shape added before the bf16 rounding (out = residual + y)."""
+        residual: a tensor of the output's shape added before the bf16 rounding (out = residual + y).
+        shapes: the output shape(s) instead of lead + [N] (one tile row: e.g. head-major [1, heads, 1, D], whose pages
+        are the token-major ones). qg_heads: per head [q | gate] columns -> (q [1, heads, 1, D], gate [1, 1, heads D]).
+        """
         device = x_rot.device()
         K, N = self.K, self.N
         if getattr(self, "page_split", PAGE_SPLIT) and self.inline_scales and self.group16:
@@ -194,17 +199,26 @@ class TernaryDecodeLinear3:
         Kt, Nt, KB = K // TILE, N // TILE, K // KBLOCK
         ppr = self.ppr if self.inline_scales else Kt * 256 // PAGE_BYTES
         # lead: the output's leading logical dims; any of them tile-pad to one 32-row tile row, so the pages match.
+        if qg_heads:
+            D = N // qg_heads // 2
+            shapes = ([1, qg_heads, 1, D], [1, 1, qg_heads * D])
+            dm_defines = list(dm_defines) + [("QG_HT", str(D // TILE))]
         out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(list(lead) + [(split or (N // 2 if glu else N)) * (3 if dbg else 1)]),
+            ttnn.Shape(
+                list(shapes[0]) if shapes else list(lead) + [(split or (N // 2 if glu else N)) * (3 if dbg else 1)]
+            ),
             ttnn.float32 if dbg else ttnn.bfloat16,
             ttnn.TILE_LAYOUT,
             device,
         )
         out2 = (
             ttnn.allocate_tensor_on_device(
-                ttnn.Shape(list(lead) + [N - split]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device
+                ttnn.Shape(list(shapes[1]) if shapes else list(lead) + [N - split]),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                device,
             )
-            if split
+            if split or qg_heads
             else None
         )
         grid = device.compute_with_storage_grid_size()
@@ -257,7 +271,11 @@ class TernaryDecodeLinear3:
             rd_c = [x_rot.buffer_address(), s_addr, self.w.buffer_address()] + span + [x_rot.shape[0]]
             if residual is not None:
                 rd_c.append(residual.buffer_address())  # tdec3_reader.cpp RESIDUAL
-            wr_c = [self.w.buffer_address(), out.buffer_address()] + span + [out2.buffer_address() if split else 0]
+            wr_c = (
+                [self.w.buffer_address(), out.buffer_address()]
+                + span
+                + [out2.buffer_address() if out2 is not None else 0]
+            )
             cp_c = span
             rd, wr, cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             dm_defines = list(dm_defines) + [("COMMON_ARGS", "1")]
@@ -269,7 +287,7 @@ class TernaryDecodeLinear3:
             rd_ct += ttnn.TensorAccessorArgs(residual).get_compile_time_args()
         wr_ct = [ppr, inflight] + ttnn.TensorAccessorArgs(self.w).get_compile_time_args()
         wr_ct += ttnn.TensorAccessorArgs(out).get_compile_time_args()
-        if split:
+        if split or qg_heads:
             assert split % TILE == 0, split
             wr_ct += ttnn.TensorAccessorArgs(out2).get_compile_time_args()
         program = ttnn.ProgramDescriptor(
@@ -334,7 +352,7 @@ class TernaryDecodeLinear3:
             + ([] if self.inline_scales else [self.s])
             + ([residual] if residual is not None else [])
             + [self.w, out]
-            + ([out2] if split else []),
+            + ([out2] if out2 is not None else []),
             program,
         )
-        return (out, out2) if split else res  # generic_op returns the last tensor of its list
+        return (out, out2) if out2 is not None else res  # generic_op returns the last tensor of its list
