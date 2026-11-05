@@ -8948,29 +8948,23 @@ def profile_traced_final_chunk(model, q_chunk_size, k_chunk_size, k_splits):
 
 # Kimi K3 / K2.7 production attention (expanded K, head pairs, K-split bands; chunks from ttMLA): final 50k+5k chunk on
 # an 8-device SP ring (110 SDPA cores). Util counts QK at the expanded width (192), PV at 128 and the in-op per-head K
-# expansion (latent 512 -> 128); it is not comparable to the ring_mla (d_v=512) rows above.
-if MESH_CONFIG.is_galaxy:
-    # Blackhole Galaxy sp=8 tp=4, 2D torus, production fabric packets, +/-5%.
-    EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
-        # (model_name, ring_size, expected_util, margin)
-        ("kimi_k3_expanded_k", 8, 58.21, 0.05),
-        ("kimi_k2_7_expanded_k", 8, 55.95, 0.05),
-    ]
-else:
-    # Blackhole LoudBox ring (sp=8 tp=1), production fabric packets, +/-5%.
-    EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
-        ("kimi_k3_expanded_k", 8, 58.51, 0.05),
-        ("kimi_k2_7_expanded_k", 8, 56.34, 0.05),
-    ]
+# and V expansions (latent 512 -> 128 each); it is not comparable to the ring_mla (d_v=512) rows above. Calibrated on a
+# high-power Blackhole Galaxy (sp=8 tp=4, 2D torus, production fabric packets), +/-5%.
+# Measured 2026-11-05 on bh-glx-120-c02u02: K3 4.43 ms, K2.7 3.10 ms.
+EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
+    # (model_name, ring_size, expected_util, margin)
+    ("kimi_k3_expanded_k", 8, 65.54, 0.05),
+    ("kimi_k2_7_expanded_k", 8, 62.39, 0.05),
+]
 
 
-def expanded_k_expansion_utilization(model, chunk_size, perf_chunk, duration_ns, core_count):
-    """Math util of the in-op K expansion: each head's K_nope = c_kv . W_UK over every K row of the ring, the work of the
-    highest-ranked chip, which bounds the op (the dense causal skip drops the newest slab of higher-ranked shards on the
-    other chips before they expand)."""
+def expanded_kv_expansion_utilization(model, chunk_size, perf_chunk, duration_ns, core_count):
+    """Math util of the in-op K and V expansions: each head's K_nope = c_kv . W_UK and V = c_kv . W_UV over every K row
+    of the ring, the work of the highest-ranked chip, which bounds the op (the dense causal skip drops the newest slab of
+    higher-ranked shards on the other chips before they expand)."""
     latent = model.d_k - (model.d_q - model.k_expand_nope)
     k_rows = (perf_chunk + 1) * chunk_size
-    flops = 2 * k_rows * model.k_expand_nope * latent * model.nhq
+    flops = 2 * k_rows * (model.k_expand_nope + model.d_v) * latent * model.nhq
     constants = ARCH_CONSTANTS["blackhole"]
     peak = core_count * duration_ns * constants["clock_ghz"] * constants["mm_flops_per_cycle_per_core"]
     return 100.0 * flops / peak
@@ -8984,6 +8978,7 @@ def expanded_k_expansion_utilization(model, chunk_size, perf_chunk, duration_ns,
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+@pytest.mark.skipif(not MESH_CONFIG.is_galaxy, reason="expanded-K perf is calibrated on the Galaxy")
 @pytest.mark.skipif(
     MESH_CONFIG.is_galaxy and not is_high_power(),
     reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
@@ -8998,11 +8993,11 @@ def test_ring_joint_attention_chunked_expanded_k_perf_check(model_name, ring_siz
     model = EXPANDED_K_CHUNKED_MODEL_CONFIGS[model_name]
     run = profile_traced_final_chunk(model, q_chunk_size, k_chunk_size, k_splits)
 
-    # Attention FLOPs (QK at the expanded d_q, PV at d_v) plus the in-op per-head K expansion.
+    # Attention FLOPs (QK at the expanded d_q, PV at d_v) plus the in-op per-head K and V expansions.
     utilization, _ = compute_chunked_prefill_perf_check_utilization(
         MESH_CONFIG, model, run.chunk_size, run.perf_chunk, run.duration_ns, run.sdpa_cores
     )
-    utilization += expanded_k_expansion_utilization(
+    utilization += expanded_kv_expansion_utilization(
         model, run.chunk_size, run.perf_chunk, run.duration_ns, run.sdpa_cores
     )
     utilization /= get_matmul_peak_multiplier(model)

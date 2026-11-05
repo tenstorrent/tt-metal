@@ -30,7 +30,8 @@ from tests.nightly.blackhole.sdpa.test_ring_joint_sdpa import (
     close_ring_joint_sdpa_runtime,
     compute_chunked_prefill_perf_check_utilization,
     expand_mla_k_reference,
-    expanded_k_expansion_utilization,
+    expanded_kv_expansion_utilization,
+    get_matmul_peak_multiplier,
     expanded_k_production_chunks,
     model_fabric_payload_size,
     open_ring_joint_sdpa_runtime,
@@ -424,11 +425,11 @@ def test_split_kv_rejects(invalid_case, error, expect_error):
 # Final 50k+5k chunk of the production prefill on the 32-device Galaxy (110 SDPA cores per chip, TorusXY, production
 # fabric packets): math util as test_ring_joint_attention_chunked_expanded_k_perf_check counts it (the per-chip work
 # matches the SP ring's), +/- margin.
-# Measured 2026-11-04 on a high-power Galaxy: K3 4.99 ms, K2.7 3.51 ms.
+# Measured 2026-11-05 on bh-glx-120-c02u02: K3 5.04 ms, K2.7 3.56 ms.
 SPLIT_KV_PERF_CHECK_CONFIGS = [
     # (model_name, expected_util, margin)
-    ("kimi_k3_expanded_k", 46.44, 0.05),
-    ("kimi_k2_7_expanded_k", 44.01, 0.05),
+    ("kimi_k3_expanded_k", 57.61, 0.05),
+    ("kimi_k2_7_expanded_k", 54.43, 0.05),
 ]
 
 
@@ -478,7 +479,8 @@ def test_split_kv_perf_check(model_name, expected_util, margin):
     utilization, _ = compute_chunked_prefill_perf_check_utilization(
         MESH_CONFIG, model, case.chunk, perf_chunk, duration_ns, sdpa_cores
     )
-    utilization += expanded_k_expansion_utilization(model, case.chunk, perf_chunk, duration_ns, sdpa_cores)
+    utilization += expanded_kv_expansion_utilization(model, case.chunk, perf_chunk, duration_ns, sdpa_cores)
+    utilization /= get_matmul_peak_multiplier(model)
     logger.info(f"split-KV {model_name} final chunk: {duration_ns / 1e6:.3f} ms, math util {utilization:.2f}%")
     low, high = expected_util * (1 - margin), expected_util * (1 + margin)
     assert low <= utilization <= high, (
