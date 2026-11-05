@@ -9,7 +9,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 
 namespace ckernel::sfpu {
 
@@ -82,12 +82,14 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
     return sfpi::copysgn(exp_abs * rsqrt_y * correction, x_signed);
 }
 
-bool bf16_dest_i1();
-template <int ITERATIONS>
-void calculate_i1_bf16();
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_i1_bf16.h"
+
+namespace ckernel::sfpu {
+
 // Whether BF16 DEST runs the generated i1 kernel as one call over the whole tile.
 inline constexpr bool i1_bf16_whole_tile = true;
-
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void calculate_i1() {
     if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
@@ -155,8 +157,6 @@ inline void calculate_i1() {
     }
 }
 
-void init_i1_bf16();
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void i1_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -167,5 +167,3 @@ void i1_init() {
 }
 
 }  // namespace ckernel::sfpu
-
-#include "ckernel_sfpu_i1_bf16.h"

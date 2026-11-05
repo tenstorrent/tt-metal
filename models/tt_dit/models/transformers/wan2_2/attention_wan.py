@@ -311,7 +311,7 @@ class WanAttention(Module):
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
-        N: int,
+        N: int | ttnn.Tensor,
         prompt_1BLP: ttnn.Tensor | None = None,
         cross_attn_mask: ttnn.Tensor | None = None,
         rope_cos: ttnn.Tensor | None = None,

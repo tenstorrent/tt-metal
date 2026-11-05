@@ -10,7 +10,7 @@ using namespace ::sfpi;
 using ::sfpi::DataLayout;
 
 template <int CODE>
-inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f)
+__attribute__((always_inline)) inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f)
 {
     static_assert(CODE >= 0 && CODE <= 6, "unsupported raw terminal class");
     if constexpr (CODE == 0)
@@ -115,7 +115,7 @@ inline void apply_raw_domain_record(Float x_raw, Float& result)
 }
 
 template <typename Config, std::uint32_t INDEX>
-inline void apply_raw_domain_records(vFloat x_raw, vFloat& result)
+__attribute__((always_inline)) inline void apply_raw_domain_records(vFloat x_raw, vFloat& result)
 {
     apply_raw_domain_record<Config, INDEX>(x_raw, result);
     if constexpr (INDEX > 0)

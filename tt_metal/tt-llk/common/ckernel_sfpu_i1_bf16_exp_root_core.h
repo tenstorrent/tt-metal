@@ -10,7 +10,7 @@ using namespace ::sfpi;
 using ::sfpi::DataLayout;
 
 template <typename Held = void>
-inline vFloat exp_root_rsqrt(vFloat x)
+__attribute__((always_inline)) inline vFloat exp_root_rsqrt(vFloat x)
 {
     vInt i    = as<vInt>(as<vUInt>(x) >> 1);
     vFloat y  = as<vFloat>(vConstIntPrgm0 - i);
@@ -34,7 +34,7 @@ inline vFloat exp_root_rsqrt(vFloat x)
 }
 
 template <typename Config, bool Held = false>
-inline vFloat exp_root_eval(vFloat x)
+__attribute__((always_inline)) inline vFloat exp_root_eval(vFloat x)
 {
     static_assert(
         Config::kExpDegree == 2u && Config::kCoreDegree == 4u && Config::kCorrectionDegree == 1u && Config::kCorrectionCoefficients[0] == 1.0f,
