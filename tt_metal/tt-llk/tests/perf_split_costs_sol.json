@@ -44,6 +44,7 @@
   "perf_matmul": 4257.8,
   "perf_compressed_custom_mm": 281.0,
   "perf_matmul_custom_compressed": 525.0,
+  "perf_matmul_face_compressed": 332.0,
   "perf_pack": 543.9,
   "perf_pack_dest_bank": 4.4,
   "perf_pack_untilize": 774.5,
