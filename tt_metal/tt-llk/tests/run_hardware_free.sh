@@ -41,6 +41,11 @@ pytest "${COMMON[@]}" ../hardware_free \
     -k "test_gathering_config or test_out_of_tree_contract" \
     --junitxml=pytest-report-hardware-free-blackhole.xml \
     || pytest_exit=$?
+# Firmware gathering configuration with gathering disabled: the opt-out must still boot with it off.
+TT_METAL_DISABLE_GATHERING=1 pytest "${COMMON[@]}" ../hardware_free \
+    -k "test_firmware_gathering_matches_build_config" \
+    --junitxml=pytest-report-hardware-free-blackhole-no-gathering.xml \
+    || pytest_exit=$?
 # The accuracy suite by its directory, not by -k: a renamed directory fails here rather than selecting nothing.
 pytest "${COMMON[@]}" "${XDIST[@]}" \
     ../hardware_free/accuracy \

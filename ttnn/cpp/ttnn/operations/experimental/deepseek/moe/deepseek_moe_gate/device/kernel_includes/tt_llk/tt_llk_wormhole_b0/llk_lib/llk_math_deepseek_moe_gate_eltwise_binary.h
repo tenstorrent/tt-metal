@@ -114,8 +114,9 @@ inline void deepseek_moe_gate_eltwise_binary_configure_mop(
         math_op = TT_OP_ELWMUL(0, 0, broadcast_type, addr_mod, dst_math_offset);
     }
     if constexpr (mode == DeepseekMoeGateEltwiseBinaryMode::RELOAD) {
-        lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 5);
-        deepseek_moe_gate_eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>();
+        ckernel::load_replay_buf(ckernel::math::replay_buf_offset, 5, [] {
+            deepseek_moe_gate_eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>();
+        });
         std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 5);
         ckernel_template tmp(outerloop, innerloop, math_op);
         tmp.set_start_op(replay_instr);

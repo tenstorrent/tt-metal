@@ -37,7 +37,7 @@ BUILD_ENV = [
     "LLK_PERF_L1_CLIENT_SEL",
     "LLK_TEST_SEED",
     "TT_METAL_DISABLE_SFPLOADMACRO",
-    "TT_METAL_ENABLE_GATHERING",
+    "TT_METAL_DISABLE_GATHERING",
 ]
 MUST_MATCH = ["commit", "compiler", "cmd", "group", "splits", "env"]
 

@@ -370,6 +370,20 @@ repos:
           tt_metal/tt-llk/infra/redundant_drain_baseline\.txt
         )$
       exclude: ^tt_metal/third_party/
+    - id: llk-replay-record-helper
+      name: "llk: every replay-buffer record goes through load_replay_buf"
+      entry: python3 tt_metal/tt-llk/infra/check_replay_record_helper.py
+      language: system
+      # Blocking, zero findings, no baseline. Blackhole gathering is on, and a record outside
+      # load_replay_buf runs without the gathering bracket. The whole repository, since any JIT
+      # kernel can record; Quasar and vendored code are skipped by the script. A change to the
+      # checker rescans every file.
+      files: |
+        (?x)^(
+          .*\.(h|hpp|cpp|cc|inl)|
+          tt_metal/tt-llk/infra/check_replay_record_helper\.py
+        )$
+      exclude: ^tt_metal/third_party/
     - id: llk-fix-cstdint
       name: "llk: fix std::uint*_t and add cstdint include"
       entry: python3 tt_metal/tt-llk/infra/fix_cstdint.py

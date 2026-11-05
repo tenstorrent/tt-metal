@@ -469,13 +469,11 @@ void JitBuildEnv::init(
         this->defines_ += "-DL1_ECC_HALT ";
     }
 
-    if (rtoptions.get_gathering_enabled()) {
+    if (this->arch_ == tt::ARCH::BLACKHOLE && rtoptions.get_gathering_enabled()) {
         this->defines_ += "-DENABLE_GATHERING ";
-        if (this->arch_ == tt::ARCH::BLACKHOLE) {
-            // Gathering is incompatible with loading a replay buffer: the LLKs bracket their own records, the
-            // compiler's replay optimisation does not. A flag, not a define: JIT preprocessing drops the defines.
-            this->cflags_ += "-mno-tt-tensix-optimize-replay ";
-        }
+        // Gathering is incompatible with loading a replay buffer: the LLKs bracket their own records, the
+        // compiler's replay optimisation does not. A flag, not a define: JIT preprocessing drops the defines.
+        this->cflags_ += "-mno-tt-tensix-optimize-replay ";
     }
 
     if (config.routing_fw_enabled) {
