@@ -21,6 +21,7 @@
 namespace ckernel::sfpu {
 
 // tanh(x): t = 0.5*expm1(abs(2*x)); sgn(x) * t / (t + 1)
+// calculate_tanh carries its own copy of this function; change both together.
 sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     sfpi::vFloat a, r, s, f, w, y, scale, bias0;
     sfpi::vFloat j, t, rcp, x0, x1, y0;
@@ -290,12 +291,15 @@ inline void calculate_tanh() {
         }
 
 #else
-        TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0x66DB);
-        TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, 0xBEFA);
-        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0x1CA0);
-        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, 0x3CFD);
-        TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_USHORT, 0xBEC0);
-        TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, 0x3F7F);
+        constexpr std::uint32_t c3 = __builtin_bit_cast(std::uint32_t, TANH_POLY_C3);
+        constexpr std::uint32_t c2 = __builtin_bit_cast(std::uint32_t, TANH_POLY_C2);
+        constexpr std::uint32_t c1 = __builtin_bit_cast(std::uint32_t, TANH_POLY_C1);
+        TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, c3 & 0xFFFF);
+        TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, c3 >> 16);
+        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, c2 & 0xFFFF);
+        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, c2 >> 16);
+        TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_USHORT, c1 & 0xFFFF);
+        TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, c1 >> 16);
         static_assert(ITERATIONS % 2 == 0, "tanh: ITERATIONS must be even");
         _tanh_bf16_lm_pairs_<0, ITERATIONS / 2>();
         TTI_SFPNOP;
