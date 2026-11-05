@@ -263,7 +263,7 @@ def record(results_file, rows, mode, times, *, k_chunk=None, density=None, dense
 
 def time_mask(bench, results_file, rows, make, k_chunk, pooled, structure="random", logical_n=None, lofi=False):
     """Time the sparse op on the mask `make(case)` builds and record it against the bf16 dense op and the gather of
-    the same inputs (lofi: Bench.shape)."""
+    the same inputs."""
     dense, gather = bench.baseline(rows, logical_n)
     if lofi:
         gather = bench.lofi_gather(rows, logical_n)

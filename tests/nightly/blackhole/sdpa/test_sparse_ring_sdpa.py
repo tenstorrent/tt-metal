@@ -294,8 +294,7 @@ def runtime():
 
 
 def round_significand(x, bits):
-    """x rounded to `bits` significant bits, to nearest even, on its fp32 pattern: the LoFi (FAST) recipe's input
-    rounding (PR #59522), so LoFi's narrower matmul operands lose nothing further."""
+    """x rounded to `bits` significant bits, to nearest even."""
     shift = 24 - bits
     raw = x.float().contiguous().view(torch.int32)
     raw = (raw + ((1 << (shift - 1)) - 1) + ((raw >> shift) & 1)) & ~((1 << shift) - 1)
@@ -778,9 +777,6 @@ def test_block_float_inputs(runtime, dtype, pooled):
     _check(f"{dtype} {_mode(pooled)}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
 
 
-# LoFi matmuls on inputs rounded as the LoFi recipe rounds them (Case(lofi=True)): exact against the reference on the
-# rounded inputs (LoFi drops no bits of pre-rounded operands), and within the recipe's relative L2 bounds of
-# attention on the unrounded inputs (the FAST recipe's bounds, PR #59522).
 LOFI_REL_L2_MAX = {ttnn.bfloat16: 0.042, ttnn.bfloat8_b: 0.044}
 
 
