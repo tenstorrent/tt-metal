@@ -5,6 +5,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -22,36 +23,62 @@ int main() {
         std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << std::endl;
     }
 
-    // Initialize mesh device (1x1), command queue, workload, device range, and program.
+    // Initialize mesh device (1x1), command queue, workload, and device range.
     // We are going to use the first device (0) and the first core (0, 0) on the device.
-    constexpr CoreCoord core = {0, 0};
+    constexpr experimental::NodeCoord core = {0, 0};
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     // Prepare a workload and a device coordinate range that spans the mesh.
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();
 
     // Configure and create Data Movement kernels
     // There are 2 Data Movement cores per Tensix. In applications one is usually used for reading data from DRAM and
     // the other for writing data. However for demonstration purposes, we will create 2 Data Movement kernels that
     // simply prints a message to show them running at the same time.
-    KernelHandle data_movement_kernel_0 = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    // Both kernel specs use the same kernel source; each one names its own Data Movement core and NoC.
+    const experimental::KernelSpecName data_movement_kernel_0{"data_movement_kernel_0"};
+    const experimental::KernelSpecName data_movement_kernel_1{"data_movement_kernel_1"};
 
-    KernelHandle data_movement_kernel_1 = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    experimental::KernelSpec data_movement_kernel_0_spec{
+        .unique_id = data_movement_kernel_0,
+        .source = OVERRIDE_KERNEL_PREFIX "hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+            },
+    };
+
+    experimental::KernelSpec data_movement_kernel_1_spec{
+        .unique_id = data_movement_kernel_1,
+        .source = OVERRIDE_KERNEL_PREFIX "hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
+            },
+    };
+
+    // A program spec describes the program: its kernels and the cores the kernels run on (the work units).
+    experimental::ProgramSpec program_spec{
+        .name = "hello_world_datamovement_kernel",
+        .kernels = {data_movement_kernel_0_spec, data_movement_kernel_1_spec},
+        .work_units =
+            {{.name = "hello_world_datamovement_kernel",
+              .kernels = {data_movement_kernel_0, data_movement_kernel_1},
+              .target_nodes = core}},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, program_spec);
 
     // Set Runtime Arguments for the Data Movement Kernels (none in this case and execute the program)
-    SetRuntimeArgs(program, data_movement_kernel_0, core, {});
-    SetRuntimeArgs(program, data_movement_kernel_1, core, {});
+    experimental::ProgramRunArgs run_args{
+        .kernel_run_args = {{.kernel = data_movement_kernel_0}, {.kernel = data_movement_kernel_1}},
+    };
+    experimental::SetProgramRunArgs(program, run_args);
     std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication."
               << std::endl;
 

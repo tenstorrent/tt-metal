@@ -3,14 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ckernel.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t src0_dram = get_arg_val<uint32_t>(0);
-    uint32_t src1_dram = get_arg_val<uint32_t>(1);
-    uint32_t dst_dram = get_arg_val<uint32_t>(2);
-    uint32_t src0_l1 = get_arg_val<uint32_t>(3);
-    uint32_t src1_l1 = get_arg_val<uint32_t>(4);
-    uint32_t dst_l1 = get_arg_val<uint32_t>(5);
+    // Arguments are read by the names declared in the host code.
+    uint32_t src0_dram = get_arg(args::src0_dram);
+    uint32_t src1_dram = get_arg(args::src1_dram);
+    uint32_t dst_dram = get_arg(args::dst_dram);
+    uint32_t src0_l1 = get_arg(args::src0_l1);
+    uint32_t src1_l1 = get_arg(args::src1_l1);
+    uint32_t dst_l1 = get_arg(args::dst_l1);
 
     // Create address generators for the input buffers. Consider these the
     // pointers for interleaved buffers. The parameters here must match the

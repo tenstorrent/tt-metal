@@ -5,37 +5,35 @@
 #include <cstdint>
 
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t c_addr = get_arg_val<uint32_t>(0);
-    uint32_t n_tiles = get_arg_val<uint32_t>(1);
+    uint32_t n_tiles = get_arg(args::n_tiles);
 
-    // The circular buffer that we are going to read from and write to DRAM
-    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
-    const uint32_t tile_size_bytes = get_tile_size(cb_out0);
+    // The dataflow buffer that we are going to read from and write to DRAM
+    DataflowBuffer dfb_out(dfb::out0);
+    const uint32_t tile_size_bytes = dfb_out.get_entry_size();
 
-    // Address of the output buffer
-    constexpr auto out0_args = TensorAccessorArgs<0>();
-    const auto out0 = TensorAccessor(out0_args, c_addr);
+    // The output tensor is bound to this kernel by name in the host code.
+    const auto out0 = TensorAccessor(tensor::out0);
 
-    // Create Device 2.0 Noc and CircularBuffer objects
+    // Create Device 2.0 Noc object
     Noc noc;
-    CircularBuffer cb_out(cb_out0);
 
     // Loop over all the tiles and write them to the output buffer
     for (uint32_t i = 0; i < n_tiles; i++) {
-        // Make sure there is a tile in the circular buffer
-        cb_out.wait_front(1);
+        // Make sure there is a tile in the dataflow buffer
+        dfb_out.wait_front(1);
         // write the tile to DRAM
-        noc.async_write(cb_out, out0, tile_size_bytes, {}, {.page_id = i});
+        noc.async_write(dfb_out, out0, tile_size_bytes, {}, {.page_id = i});
         noc.async_write_barrier();  // This will wait until the write is done. As an alternative,
                                     // noc_async_write_flushed() can be faster because it waits
                                     // until the write request is sent. In that case, you have to
                                     // use noc_async_write_barrier() at least once at the end of
                                     // data movement kernel to make sure all writes are done.
         // Mark the tile as consumed
-        cb_out.pop_front(1);
+        dfb_out.pop_front(1);
     }
 }

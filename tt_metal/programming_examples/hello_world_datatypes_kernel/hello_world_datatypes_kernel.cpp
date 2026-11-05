@@ -5,6 +5,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -28,44 +31,76 @@ int main() {
         fmt::print("WARNING: For example, export TT_METAL_DPRINT_CORES=0,0\n");
     }
 
-    // Initialize mesh device, command queue, workload, device range, and program
-    constexpr CoreCoord core = {0, 0};
+    // Initialize mesh device, command queue, workload, and device range
+    constexpr experimental::NodeCoord core = {0, 0};
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();
 
-    // Define and create a DRAM-backed replicated mesh buffer with float data type
-    // ReplicatedBufferConfig allocates an identical buffer per device in the mesh (unit mesh ⇒ single device)
+    // Define and create a DRAM-backed replicated mesh tensor with float data type
+    // The tensor is allocated identically on each device in the mesh (unit mesh ⇒ single device)
+    // Each row of a row-major tensor is one page, so a single row of buffer_size bytes gives one page of buffer_size.
     constexpr uint32_t buffer_size = 2 * 1024;
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = buffer_size, .buffer_type = tt_metal::BufferType::DRAM};
-    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
-    std::shared_ptr<distributed::MeshBuffer> dram_buffer =
-        distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    TensorSpec dram_tensor_spec(
+        Shape({1, buffer_size / sizeof(float)}),
+        TensorLayout(
+            DataType::FLOAT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    MeshTensor dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
 
-    // Configure and create an L1 circular buffer (to move data from DRAM to L1)
-    // Set page size equal to buffer_size so one page equals one transfer unit
-    constexpr uint32_t src0_cb_index = CBIndex::c_0;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(buffer_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src0_cb_index, buffer_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    // Configure and create an L1 dataflow buffer (to move data from DRAM to L1)
+    // Set entry size equal to buffer_size so one entry equals one transfer unit
+    // The kernel both fills and reads this dataflow buffer, so it is bound to the kernel as producer and consumer.
+    const experimental::DFBSpecName src0_dfb{"src0"};
+    experimental::DataflowBufferSpec src0_dfb_spec{
+        .unique_id = src0_dfb,
+        .entry_size = buffer_size,
+        .num_entries = 1,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
 
     // Configure and create the kernel
-    KernelHandle data_reader_kernel_id = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "hello_world_datatypes_kernel/kernels/dataflow/float_dataflow_kernel.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    const experimental::KernelSpecName data_reader_kernel{"data_reader"};
+    experimental::KernelSpec data_reader_kernel_spec{
+        .unique_id = data_reader_kernel,
+        .source = OVERRIDE_KERNEL_PREFIX "hello_world_datatypes_kernel/kernels/dataflow/float_dataflow_kernel.cpp",
+        .dfb_bindings = {experimental::ProducerOf(src0_dfb, "src0"), experimental::ConsumerOf(src0_dfb, "src0")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dram_addr"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+            },
+    };
 
-    // Initialize Float data on host and upload to the DRAM buffer (non-blocking upload)
+    // A program spec describes the program: its kernels, its dataflow buffers, and the cores the kernels run on
+    // (the work units).
+    experimental::ProgramSpec program_spec{
+        .name = "hello_world_datatypes_kernel",
+        .kernels = {data_reader_kernel_spec},
+        .dataflow_buffers = {src0_dfb_spec},
+        .work_units = {{.name = "hello_world_datatypes_kernel", .kernels = {data_reader_kernel}, .target_nodes = core}},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, program_spec);
+
+    // Initialize Float data on host and upload to the DRAM tensor (non-blocking upload)
+    // Keep the host tensor alive until the upload is complete.
     std::vector<float> init_data(buffer_size / sizeof(float), 1.23);
-    distributed::EnqueueWriteMeshBuffer(cq, dram_buffer, init_data, false);
+    HostTensor init_host_tensor = HostTensor::from_vector(init_data, dram_tensor_spec);
+    cq.enqueue_write_tensor(init_host_tensor, dram_tensor);
 
     // Set runtime args, add program to mesh workload, and enqueue (non-blocking)
-    SetRuntimeArgs(program, data_reader_kernel_id, core, {dram_buffer->address()});
+    experimental::ProgramRunArgs run_args{
+        .kernel_run_args = {{
+            .kernel = data_reader_kernel,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                core, {{"dram_addr", static_cast<uint32_t>(dram_tensor.address())}}),
+        }},
+    };
+    experimental::SetProgramRunArgs(program, run_args);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 

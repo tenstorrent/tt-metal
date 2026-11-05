@@ -8,6 +8,8 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 #ifdef TRISC_MATH
 #include "experimental/llk_sfpu/ckernel_sfpu_smoothstep.h"
@@ -24,7 +26,7 @@
  *
  * Usage:
  *   - Call after loading data into Dst registers with copy_tile()
- *   - Specify Dst register indices (not CB indices!)
+ *   - Specify Dst register indices (not DFBs!)
  *   - Results written to specified Dst register
  */
 inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
@@ -33,16 +35,16 @@ inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, flo
 }
 
 void kernel_main() {
-    uint32_t n_tiles = get_arg_val<uint32_t>(0);
+    uint32_t n_tiles = get_arg(args::n_tiles);
 
-    // Input circular buffer for tiles
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    // Output circular buffer for results
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    // Input dataflow buffer for tiles
+    DataflowBuffer dfb_in0(dfb::in0);
+    // Output dataflow buffer for results
+    DataflowBuffer dfb_out0(dfb::out0);
 
-    // Initialize SFPU for computation using cb_in0 and cb_out0
-    compute_kernel_hw_startup(cb_in0, cb_out0);
-    copy_init(cb_in0);
+    // Initialize SFPU for computation using dfb_in0 and dfb_out0
+    compute_kernel_hw_startup(dfb::in0, dfb::out0);
+    copy_init(dfb::in0);
 
     // precompute inverse of (edge1 - edge0) for efficiency
     constexpr float edge0 = 0.0f;
@@ -52,23 +54,23 @@ void kernel_main() {
     // Loop over all tiles and apply smoothstep
     for (uint32_t i = 0; i < n_tiles; i++) {
         // Wait for input tile
-        cb_wait_front(cb_in0, 1);
+        dfb_in0.wait_front(1);
         // Acquire tile registers (8 at a time)
         tile_regs_acquire();
-        // Copy input tile from circular buffer to Dst register
-        copy_tile(cb_in0, 0, 0);  // input x
+        // Copy input tile from dataflow buffer to Dst register
+        copy_tile(dfb::in0, 0, 0);  // input x
         // Apply smoothstep SFPU operation
         my_smoothstep_tiles(0, edge0, edge1, inv_delta);  // <-- Custom SFPU smoothstep
         // Commit and wait for register transfer
         tile_regs_commit();
         tile_regs_wait();
         // Reserve space in output buffer
-        cb_reserve_back(cb_out0, 1);
+        dfb_out0.reserve_back(1);
         // Pack result tile to output buffer
-        pack_tile(0, cb_out0);
+        pack_tile(0, dfb::out0);
         // Push result and pop input
-        cb_push_back(cb_out0, 1);
-        cb_pop_front(cb_in0, 1);
+        dfb_out0.push_back(1);
+        dfb_in0.pop_front(1);
         // Release tile registers
         tile_regs_release();
     }

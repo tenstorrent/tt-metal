@@ -4,19 +4,22 @@
 
 #include <cstdint>
 
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+
 void kernel_main() {
     // Read parameters from the kernel arguments
-    uint32_t in0_addr = get_arg_val<uint32_t>(0);
-    uint32_t in1_addr = get_arg_val<uint32_t>(1);
+    uint32_t in0_addr = get_arg(args::in0_addr);
+    uint32_t in1_addr = get_arg(args::in1_addr);
 
-    // The circular buffers to read the tiles into
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
+    // The dataflow buffers to read the tiles into
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
 
-    // Get the tile size used in the circular buffers. We assume the
-    // circular buffers are created with the same tile size as the DRAM
+    // Get the tile size used in the dataflow buffers. We assume the
+    // dataflow buffers are created with the same tile size as the DRAM
     // buffers (This is most of the cases).
-    const uint32_t tile_size_bytes = get_tile_size(cb_in0);
+    const uint32_t tile_size_bytes = dfb_in0.get_entry_size();
 
     // Create address generators for the input buffers. Consider these the
     // pointers for interleaved buffers
@@ -34,17 +37,17 @@ void kernel_main() {
         .data_format = DataFormat::Float16_b,
     };
 
-    // read the tiles from DRAM into the circular buffers
-    cb_reserve_back(cb_in0, 1);
-    uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-    noc_async_read_page(0, in0, cb_in0_addr);  // read
-    noc_async_read_barrier();                  // wait until the read is done
-    cb_push_back(cb_in0, 1);                   // mark the tile as ready.
+    // read the tiles from DRAM into the dataflow buffers
+    dfb_in0.reserve_back(1);
+    uint32_t dfb_in0_addr = dfb_in0.get_write_ptr();
+    noc_async_read_page(0, in0, dfb_in0_addr);  // read
+    noc_async_read_barrier();                   // wait until the read is done
+    dfb_in0.push_back(1);                       // mark the tile as ready.
 
-    // same process for the second input (different circular buffer and input buffer)
-    cb_reserve_back(cb_in1, 1);
-    uint32_t cb_in1_addr = get_write_ptr(cb_in1);
-    noc_async_read_page(0, in1, cb_in1_addr);
+    // same process for the second input (different dataflow buffer and input buffer)
+    dfb_in1.reserve_back(1);
+    uint32_t dfb_in1_addr = dfb_in1.get_write_ptr();
+    noc_async_read_page(0, in1, dfb_in1_addr);
     noc_async_read_barrier();
-    cb_push_back(cb_in1, 1);
+    dfb_in1.push_back(1);
 }

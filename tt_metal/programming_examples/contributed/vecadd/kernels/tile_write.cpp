@@ -4,30 +4,32 @@
 
 #include <cstdint>
 
-void kernel_main() {
-    uint32_t c_addr = get_arg_val<uint32_t>(0);
-    uint32_t n_tiles = get_arg_val<uint32_t>(1);
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
-    // The circular buffer that we are going to read from and write to DRAM
-    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
+void kernel_main() {
+    uint32_t n_tiles = get_arg(args::n_tiles);
+
+    // The dataflow buffer that we are going to read from and write to DRAM
+    DataflowBuffer dfb_out0(dfb::out0);
 
     // Address generator for the output buffer. This is faster than doing plain DRAM writes.
-    constexpr auto c_args = TensorAccessorArgs<0>();
-    const auto c = TensorAccessor(c_args, c_addr);
+    // The output tensor is bound to this kernel by name in the host code.
+    const auto c = TensorAccessor(tensor::c);
 
     // Loop over all the tiles and write them to the output buffer
     for (uint32_t i = 0; i < n_tiles; i++) {
-        // Make sure there is a tile in the circular buffer
-        cb_wait_front(cb_out0, 1);
-        uint32_t cb_out0_addr = get_read_ptr(cb_out0);
+        // Make sure there is a tile in the dataflow buffer
+        dfb_out0.wait_front(1);
+        uint32_t dfb_out0_addr = dfb_out0.get_read_ptr();
         // write the tile to DRAM
-        noc_async_write_page(i, c, cb_out0_addr);
+        noc_async_write_page(i, c, dfb_out0_addr);
         noc_async_write_barrier();  // This will wait until the write is done. As an alternative,
                                     // noc_async_write_flushed() can be faster because it waits
                                     // until the write request is sent. In that case, you have to
                                     // use noc_async_write_barrier() at least once at the end of
                                     // data movement kernel to make sure all writes are done.
         // Mark the tile as consumed
-        cb_pop_front(cb_out0, 1);
+        dfb_out0.pop_front(1);
     }
 }
