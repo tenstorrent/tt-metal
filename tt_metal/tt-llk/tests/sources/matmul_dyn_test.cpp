@@ -443,8 +443,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 #else
                 [[maybe_unused]] constexpr bool matmul_unfused_cell = false;
                 #endif
-                [[maybe_unused]] constexpr bool fused_post_flip = !matmul_unfused_cell && !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b);
-                #endif
+                // main's form ends its section as main does: the fused post is for the cells the table gives another form
+                [[maybe_unused]] constexpr bool matmul_main_math_form =
+                    ckernel::matmul_default_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>() == '.';
+                [[maybe_unused]] constexpr bool fused_post_flip = !matmul_unfused_cell && !matmul_main_math_form && !matmul_prod_keys &&
+                                                                  (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b);
+#endif
                 #else
                 [[maybe_unused]] constexpr bool fused_post_flip = !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3);
                 #endif
