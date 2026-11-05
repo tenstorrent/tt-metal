@@ -111,14 +111,6 @@ SGDRuntimeScalars compute_runtime_scalars(const operation_attributes_t& operatio
     };
 }
 
-// The work unit is one tile of the parameter (grad and the momentum buffer have its padded shape). Both functions walk
-// the cores with this split; create_descriptor() pins it to split_work_to_cores.
-WorkSplit compute_sgd_work_split(const ttnn::Tensor& param) {
-    return compute_work_split(
-        param.device()->compute_with_storage_grid_size(),
-        static_cast<uint32_t>(param.physical_volume() / tt::constants::TILE_HW));
-}
-
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor SGDProgramFactory::create_descriptor(
@@ -161,7 +153,7 @@ tt::tt_metal::ProgramDescriptor SGDProgramFactory::create_descriptor(
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_tiles_to_process);
-    const WorkSplit split = compute_sgd_work_split(param);
+    const WorkSplit split = compute_tile_work_split(param);
     check_work_split(
         split, num_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2);
 
@@ -321,7 +313,7 @@ void SGDProgramFactory::override_runtime_arguments(
         tensor_args.momentum_buffer.has_value() ? tensor_args.momentum_buffer->buffer()->address() : 0U;
     const uint32_t output_addr = tensor_return_value.buffer()->address();
     const SGDRuntimeScalars scalars = compute_runtime_scalars(operation_attributes);
-    const WorkSplit split = compute_sgd_work_split(tensor_args.param);
+    const WorkSplit split = compute_tile_work_split(tensor_args.param);
 
     auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
     auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);

@@ -56,14 +56,6 @@ TTML_ASSERT_DESCRIPTOR_OVERRIDE(FrobeniusNormalizeDeviceOperation, FrobeniusNorm
 
 namespace {
 
-// The work unit is one tile of the input. Both functions walk the cores with this split; create_descriptor() pins it to
-// split_work_to_cores.
-WorkSplit compute_frobenius_work_split(const ttnn::Tensor& input) {
-    return compute_work_split(
-        input.device()->compute_with_storage_grid_size(),
-        static_cast<uint32_t>(input.physical_volume() / tt::constants::TILE_HW));
-}
-
 // Compute runtime arg kComputeEpsilonIdx, the only value left out of the program hash.
 uint32_t epsilon_bits(const FrobeniusNormalizeAttributes& args) {
     return std::bit_cast<uint32_t>(args.epsilon);
@@ -128,7 +120,7 @@ tt::tt_metal::ProgramDescriptor FrobeniusNormalizeProgramFactory::create_descrip
 
     auto [num_cores, all_cores, core_group_1, core_group_2, tiles_per_core_g1, tiles_per_core_g2] =
         tt::tt_metal::split_work_to_cores(compute_grid, total_tiles);
-    const WorkSplit split = compute_frobenius_work_split(input);
+    const WorkSplit split = compute_tile_work_split(input);
     check_work_split(split, num_cores, core_group_1, core_group_2, tiles_per_core_g1, tiles_per_core_g2);
 
     uint32_t block_size = std::min(4U, tiles_per_core_g1);
@@ -286,7 +278,7 @@ void FrobeniusNormalizeProgramFactory::override_runtime_arguments(
     const uint32_t input_address = tensor_args.input.buffer()->address();
     const uint32_t output_address = output[0].buffer()->address();
     const uint32_t epsilon = epsilon_bits(operation_attributes);
-    const WorkSplit split = compute_frobenius_work_split(tensor_args.input);
+    const WorkSplit split = compute_tile_work_split(tensor_args.input);
     const KernelIndices kernel_idx = compute_kernel_indices(split);
 
     auto& reader_origin_rt = tt::tt_metal::GetRuntimeArgs(program, kernel_idx.reader_origin);

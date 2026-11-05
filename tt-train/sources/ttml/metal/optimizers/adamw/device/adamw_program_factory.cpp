@@ -144,14 +144,6 @@ ComputeScalarArgs make_compute_scalar_args(const operation_attributes_t& attrs) 
     };
 }
 
-// The param's padded tiles over the device's compute grid. create_descriptor() pins it against split_work_to_cores,
-// and override_runtime_arguments() walks the same cores from it.
-WorkSplit make_work_split(const ttnn::Tensor& param) {
-    return compute_work_split(
-        param.device()->compute_with_storage_grid_size(),
-        static_cast<uint32_t>(param.physical_volume() / tt::constants::TILE_HW));
-}
-
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor AdamWProgramFactory::create_descriptor(
@@ -194,7 +186,7 @@ tt::tt_metal::ProgramDescriptor AdamWProgramFactory::create_descriptor(
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_tiles_to_process);
-    const WorkSplit split = make_work_split(param);
+    const WorkSplit split = compute_tile_work_split(param);
     check_work_split(
         split, num_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2);
 
@@ -374,7 +366,7 @@ void AdamWProgramFactory::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     // Nothing else runs on a cache hit, so every address, scalar and seed is rewritten on every core. The tile counts
     // and offsets (reader 5-6, writer 4-5) follow from the hashed param shape and keep their create_descriptor() value.
-    const WorkSplit split = make_work_split(tensor_args.param);
+    const WorkSplit split = compute_tile_work_split(tensor_args.param);
 
     const uint32_t param_addr = tensor_args.param.buffer()->address();
     const uint32_t grad_addr = tensor_args.grad.buffer()->address();

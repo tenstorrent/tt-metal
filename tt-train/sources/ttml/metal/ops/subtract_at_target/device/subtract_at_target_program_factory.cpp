@@ -50,15 +50,6 @@ uint32_t float_to_uint32_bits(float v) {
     return bits;
 }
 
-// Rows of tiles (NC * Ht) of the padded input shape: the unit of the work split. create_descriptor() and the override
-// both split them over the device grid with compute_work_split, so the override patches exactly the cores that got
-// runtime args.
-uint32_t num_tile_rows(const ttnn::Shape& padded_shape) {
-    const uint32_t Ht = padded_shape[-2] / tt::constants::TILE_HEIGHT;
-    const uint32_t NC = padded_shape[0] * padded_shape[1];
-    return NC * Ht;
-}
-
 }  // namespace
 
 namespace ttml::metal::ops::subtract_at_target::device {
@@ -134,7 +125,7 @@ tt::tt_metal::ProgramDescriptor SubtractAtTargetProgramFactory::create_descripto
 
     const uint32_t Wt = padded_shape[-1] / tt::constants::TILE_WIDTH;
     const uint32_t Ht = padded_shape[-2] / tt::constants::TILE_HEIGHT;
-    const uint32_t total_rows = num_tile_rows(padded_shape);
+    const uint32_t total_rows = num_tile_rows(input);
 
     const uint32_t target_page_size = target.logical_shape()[-1] * target.element_size();
     const uint32_t target_read_page_size = tt::datum_size(tt::DataFormat::UInt32) * tt::constants::TILE_HEIGHT;
@@ -143,7 +134,7 @@ tt::tt_metal::ProgramDescriptor SubtractAtTargetProgramFactory::create_descripto
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows);
-    const WorkSplit split = compute_work_split(compute_with_storage_grid_size, total_rows);
+    const WorkSplit split = compute_tile_row_work_split(input);
     check_work_split(
         split, num_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
 
@@ -217,8 +208,7 @@ void SubtractAtTargetProgramFactory::override_runtime_arguments(
     const uint32_t target_addr = tensor_args.target.buffer()->address();
     const uint32_t output_addr = tensor_return_value.buffer()->address();
     const RuntimeScalars scalars = compute_runtime_scalars(operation_attributes, input, mesh_coordinate);
-    const WorkSplit split =
-        compute_work_split(input.device()->compute_with_storage_grid_size(), num_tile_rows(input.padded_shape()));
+    const WorkSplit split = compute_tile_row_work_split(input);
 
     auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
     auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);

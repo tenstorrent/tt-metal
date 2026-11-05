@@ -381,6 +381,26 @@ inline WorkSplit compute_work_split(const tt::tt_metal::CoreCoord& grid, uint32_
     return split;
 }
 
+// Rows of tiles of a TILE-layout tensor: the height of its physical 2D shape (every dim but the last, padded) in units
+// of its tile's height.
+inline uint32_t num_tile_rows(const ttnn::Tensor& tensor) {
+    const auto& spec = tensor.tensor_spec();
+    return static_cast<uint32_t>(spec.physical_shape().height() / spec.tile().get_height());
+}
+
+// compute_work_split with one unit per tile row (num_tile_rows) of a TILE-layout tensor, over its device's compute
+// grid.
+inline WorkSplit compute_tile_row_work_split(const ttnn::Tensor& tensor) {
+    return compute_work_split(tensor.device()->compute_with_storage_grid_size(), num_tile_rows(tensor));
+}
+
+// compute_work_split with one unit per tile of a TILE-layout tensor's padded shape, over its device's compute grid.
+inline WorkSplit compute_tile_work_split(const ttnn::Tensor& tensor) {
+    return compute_work_split(
+        tensor.device()->compute_with_storage_grid_size(),
+        static_cast<uint32_t>(tensor.physical_volume() / tensor.tensor_spec().tile().get_tile_hw()));
+}
+
 // TT_FATALs unless `split` describes the same cores and units as the split_work_to_cores result passed in.
 inline void check_work_split(
     const WorkSplit& split,
