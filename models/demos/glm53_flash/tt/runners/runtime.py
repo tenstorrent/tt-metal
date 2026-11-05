@@ -86,23 +86,38 @@ class GLM53FlashPrefillRuntime:
         return torch.cat([ttnn.to_torch(devs[r * cols]).flatten() for r in range(rows)]).to(torch.int64)
 
     def compile(self, kv_caches) -> None:
-        """Warm the programs at the lengths the engine sends (``GLM53F_RUNNER_WARMUP``, default: one full chunk at start
-        0 and a full chunk continuing at start = chunk), then export once so the export path is warm too."""
+        """Warm the programs at the lengths the engine sends, export included (``GLM53F_RUNNER_WARMUP``, comma list):
+        ``N:S`` one call of N tokens at start S (S > 0 must continue the previous item), ``cN`` a whole N-token prompt in
+        engine-sized chunks (its last chunk is the ragged tail; long prompts also create the DSA pool-bucket widths of
+        every start). Every 256-token padded length is its own program set (a first request at a new one pays ~6-50 s,
+        tt-blaze G53F-0256 G4b), so the default covers the cuts S' = 4 * floor((S - 1) / 4) of ISL 1k / 2k / 4k / 16k.
+        """
         chunk = self.config.chunk_size
-        spec = os.environ.get("GLM53F_RUNNER_WARMUP", f"{chunk}:0,{chunk}:{chunk}")
-        for item in [v for v in spec.split(",") if v.strip()]:
-            n_, _, s_ = item.partition(":")
-            n, s = int(n_), int(s_ or 0)
-            if s + n > self.config.max_seq_len:
+        spec = os.environ.get("GLM53F_RUNNER_WARMUP", f"1020:0,2044:0,4092:0,c{2 * chunk - 4}")
+        for item in [v.strip() for v in spec.split(",") if v.strip()]:
+            if item.startswith("c"):
+                n = int(item[1:])
+                parts = [(s, min(n, s + chunk)) for s in range(0, n, chunk)]
+            else:
+                n_, _, s_ = item.partition(":")
+                parts = [(int(s_ or 0), int(s_ or 0) + int(n_))]
+            if parts[-1][1] > self.config.max_seq_len:
+                logger.info(f"[glm53f-runtime] warm-up {item} skipped (past max_seq_len {self.config.max_seq_len})")
                 continue
-            ids = torch.tensor(([785, 6722, 315, 9621] * (n // 4 + 1))[:n], dtype=torch.int64)
             tw = time.perf_counter()
-            self._prefill(ids, s)
-            ttnn.synchronize_device(self.mesh_device)
-            tp = time.perf_counter()
-            self._export(kv_caches, s, s + n)
+            tp = te = 0.0
+            for s, e in parts:
+                n = e - s
+                ids = torch.tensor(([785, 6722, 315, 9621] * (n // 4 + 1))[:n], dtype=torch.int64)
+                t0 = time.perf_counter()
+                self._prefill(ids, s)
+                ttnn.synchronize_device(self.mesh_device)
+                t1 = time.perf_counter()
+                self._export(kv_caches, s, e)
+                tp, te = tp + (t1 - t0), te + (time.perf_counter() - t1)
             logger.info(
-                f"[glm53f-runtime] warm-up {n} tokens at {s}: prefill {tp - tw:.2f} s, export {time.perf_counter() - tp:.2f} s"
+                f"[glm53f-runtime] warm-up {item} ({len(parts)} chunk(s), {parts[-1][1]} tokens): prefill {tp:.2f} s, "
+                f"export {te:.2f} s, wall {time.perf_counter() - tw:.2f} s"
             )
 
     def prefill_chunk(self, input_tensor, kv_caches, *, slot_id, actual_start, actual_end, request_id=0, **_):
