@@ -70,8 +70,10 @@ namespace detail {
 // Both -inf gives L' = -inf and a NaN O'; the ring schedule never produces it, since step 0
 // always computes the diagonal block.
 // O_i must be finite even where l_i = -inf: w = 0 only removes it if 0 * O_i = 0 (0 * inf is
-// NaN). The ring caller passes the reused output buffer there, which step 0 writes on every
-// device, so a skipped step merges the previous step's finite output with weight 0.
+// NaN). The ring caller passes its reused output buffer there, which is zero-initialized, so a
+// skipped step merges zeros or an earlier step's finite output with weight 0. A row the SDPA
+// kernel masks out completely inside a step it does run would break this (O_i = 0/0); no mask
+// the ring supports produces one.
 void merge_partial_into(
     ttnn::Tensor& output_accum,
     ttnn::Tensor& running_lse,
@@ -184,10 +186,10 @@ autograd::TensorPtr ring_attention_sdpa(
 
     // Allocate output and intermediate tensors (mesh tensors)
     // These will be reused each step
-    // output_tensor is never cleared: a device the causal schedule skips merges its previous
-    // contents with weight 0, which needs them finite (see merge_partial_into). Step 0 runs on
-    // every device and writes them first.
-    ttnn::Tensor output_tensor = ttnn::empty_like(query_tensor);
+    // output_tensor is zero-initialized rather than left empty: a device the schedule skips
+    // merges the buffer's contents with weight 0, which needs them finite (see
+    // merge_partial_into), whichever steps the schedule runs. One fill per forward call.
+    ttnn::Tensor output_tensor = ttnn::zeros_like(query_tensor);
     ttnn::Tensor intermediate_tensor = ttnn::empty(
         ttnn::Shape{batch_num, heads, seq_len_local, 32U},
         ttnn::DataType::FLOAT32,
