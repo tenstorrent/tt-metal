@@ -17,6 +17,7 @@ eval/golden_tests/nomic_moe_route_dispatch/feature_spec.py.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -447,24 +448,100 @@ def _refuse_l1():
     raise UnsupportedAxisValue("nomic_moe_route_dispatch: the output and circular buffers do not fit below live L1")
 
 
+# ---------------------------------------------------------------------------
+# Call-state cache (host time)
+# ---------------------------------------------------------------------------
+
+# One entry per call-state key: everything validate(), the plan and the program descriptor depend on beyond buffer
+# addresses (x's and W's shapes, dtypes, layouts and memory configs, the spare tile rows, the output buffer type, the
+# compute config, the device and the ablation defines). validate() and the descriptor build run on a key's first
+# call only; every call rebinds the cached descriptor to its own buffers (bind_call), so it never rebuilds the
+# 110-core program, which took ~600 of the ~800 us of host time a call. The live-L1 checks run on every call.
+# Knobs are read when an entry is built: after patching one, clear this cache.
+_CALL_CACHE = {}
+
+
+@dataclass
+class _CallState:
+    plan: Plan
+    compute: object  # ttnn.ComputeConfigDescriptor
+    out_buffer_type: object  # ttnn.BufferType of `dispatched`
+    out_l1_bytes: int  # a bank's share of an L1 `dispatched`, 0 in DRAM
+    descriptor: object = None  # ttnn.ProgramDescriptor, built on the key's first call (needs the tensors)
+    binding: object = None  # the descriptor's address slots (nomic_moe_route_dispatch_program_descriptor.CallBinding)
+
+
+def _compute_key(config):
+    if config is None:
+        return None
+    return (
+        config.math_fidelity,
+        config.fp32_dest_acc_en,
+        config.math_approx_mode,
+        config.dst_full_sync_en,
+        config.bfp8_pack_precise,
+        tuple(config.unpack_to_dest_mode),
+    )
+
+
+def _call_key(input_tensor, weight, spare_tile_rows, compute_kernel_config, out_buffer_type) -> tuple:
+    return (
+        tuple(input_tensor.shape),
+        input_tensor.dtype,
+        input_tensor.layout,
+        repr(input_tensor.memory_config()),
+        tuple(weight.shape),
+        weight.dtype,
+        weight.layout,
+        repr(weight.memory_config()),
+        spare_tile_rows,
+        out_buffer_type,
+        _compute_key(compute_kernel_config),
+        input_tensor.device().id(),
+        os.environ.get("NOMIC_MOE_ROUTE_DISPATCH_ABLATE", ""),
+    )
+
+
+def _call_state(input_tensor, weight, spare_tile_rows, compute_kernel_config, memory_config) -> _CallState:
+    """The key's cached state; validate() runs on the key's first call. The malformed-call checks run every call."""
+    _check_malformed(input_tensor, weight, spare_tile_rows)
+    out_buffer_type = (memory_config or ttnn.L1_MEMORY_CONFIG).buffer_type
+    key = _call_key(input_tensor, weight, spare_tile_rows, compute_kernel_config, out_buffer_type)
+    state = _CALL_CACHE.get(key)
+    if state is None:
+        validate(
+            input_tensor,
+            weight,
+            spare_tile_rows=spare_tile_rows,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=memory_config,
+        )
+        p = plan(input_tensor, spare_tile_rows, out_buffer_type)
+        state = _CallState(
+            plan=p,
+            compute=compute_kernel_config or default_compute_kernel_config(),
+            out_buffer_type=out_buffer_type,
+            out_l1_bytes=0 if p.out_dram else p.max_blocks_per_core * p.block_width_tiles * BF16_TILE_BYTES,
+        )
+        _CALL_CACHE[key] = state
+    return state
+
+
 def nomic_moe_route_dispatch(
     input_tensor, weight, *, spare_tile_rows=0, compute_kernel_config=None, memory_config=None
 ):
-    validate(
-        input_tensor,
-        weight,
-        spare_tile_rows=spare_tile_rows,
-        compute_kernel_config=compute_kernel_config,
-        memory_config=memory_config,
+    state = _call_state(input_tensor, weight, spare_tile_rows, compute_kernel_config, memory_config)
+    from .nomic_moe_route_dispatch_program_descriptor import (  # noqa: PLC0415
+        CallBinding,
+        bind_call,
+        create_program_descriptor,
     )
-    from .nomic_moe_route_dispatch_program_descriptor import create_program_descriptor  # noqa: PLC0415
 
-    out_buffer_type = (memory_config or ttnn.L1_MEMORY_CONFIG).buffer_type
-    p = plan(input_tensor, spare_tile_rows, out_buffer_type)
+    out_buffer_type = state.out_buffer_type
+    p = state.plan
     device = input_tensor.device()
     # An L1 dispatched is allocated top-down just below the live buffers; refuse before an allocation that cannot fit.
-    out_l1_bytes = 0 if p.out_dram else p.max_blocks_per_core * p.block_width_tiles * BF16_TILE_BYTES
-    if not _l1_room(device, p, out_l1_bytes):
+    if not _l1_room(device, p, state.out_l1_bytes):
         _refuse_l1()
     dram = ttnn.DRAM_MEMORY_CONFIG
     dispatched = ttnn.allocate_tensor_on_device(
@@ -488,8 +565,10 @@ def nomic_moe_route_dispatch(
         for tensor in outputs:
             ttnn.deallocate(tensor)
         _refuse_l1()
-    descriptor = create_program_descriptor(
-        p, input_tensor, weight, *outputs, compute_kernel_config or default_compute_kernel_config()
-    )
-    ttnn.generic_op([input_tensor, weight, *outputs], descriptor)
+    if state.descriptor is None:
+        state.descriptor = create_program_descriptor(p, input_tensor, weight, *outputs, state.compute)
+        state.binding = CallBinding(state.descriptor, p, input_tensor)
+    # Every call rebinds the addresses (a cached descriptor never carries a previous call's).
+    bind_call(state.binding, input_tensor, weight, *outputs)
+    ttnn.generic_op([input_tensor, weight, *outputs], state.descriptor)
     return tuple(outputs)

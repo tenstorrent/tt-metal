@@ -81,6 +81,17 @@ REGION_WORDS = 32  # slot-rows header: starts[8], totals[8], regions_end, stagin
 READER_NOC = ttnn.NOC.NOC_0
 WRITER_NOC = ttnn.NOC.NOC_1
 
+# Where a descriptor holds the call's buffer addresses: the only values bind_call() rewrites when the op reuses a
+# cached descriptor (nomic_moe_route_dispatch._CALL_CACHE). create_program_descriptor() checks them on every build.
+READER_KERNEL_SLOT, WRITER_KERNEL_SLOT = 0, 1
+READER_ARG_X_ADDRESS = 7  # per-core reader args
+WRITER_ARG_COMBINE_INDEX_ADDRESS = 4  # per-core writer args
+WRITER_ARG_DISPATCHED_ADDRESS = 8
+WRITER_ARG_X_ADDRESS = 12
+READER_COMMON_ADDRESSES = 0  # reader common args 0..3: W, combine_index, combine_weights, expert_counts
+WRITER_COMMON_WEIGHT_ADDRESS = NUM_CORES  # writer common args: the NoC coordinates, W (address, page size),
+WRITER_COMMON_COMBINE_WEIGHTS_ADDRESS = NUM_CORES + 2  # then combine_weights (address, page size)
+
 
 # Debug scaffolding (ablation profiling, /perf-measure): NOMIC_MOE_ROUTE_DISPATCH_ABLATE="A,B" compiles the kernels
 # with -DABLATE_A -DABLATE_B; a name in KERNEL_LIB_ABLATIONS (the helpers' own payload switches) is passed as is.
@@ -156,6 +167,15 @@ def _push_args(p: Plan, member) -> list:
 
 def cb_bytes(p: Plan) -> int:
     return sum(page * pages for _, _, page, pages in _cb_specs(p))
+
+
+def _sharded_cb_slots(p: Plan) -> tuple:
+    """Positions in the descriptor's CB list of the CBs backed by x's shard and by `dispatched`'s shards (None where
+    absent): they follow the _cb_specs() CBs, in this order."""
+    slot = len(_cb_specs(p))
+    x_slot = None if p.x_interleaved else slot
+    dispatched_slot = None if p.out_dram else slot + (0 if p.x_interleaved else 1)
+    return x_slot, dispatched_slot
 
 
 def _grid():
@@ -422,4 +442,77 @@ def create_program_descriptor(
         semaphore_id = channel.next_semaphore_id()
     assert semaphore_id <= MAX_SEMAPHORES, f"{semaphore_id} semaphores a core"
     descriptor.kernels = [reader, writer, compute]
+    _check_address_slots(descriptor, p, x, weight, dispatched, combine_index, combine_weights, expert_counts)
     return descriptor
+
+
+def _check_address_slots(descriptor, p: Plan, x, weight, dispatched, combine_index, combine_weights, expert_counts):
+    """The address slots bind_call() rewrites hold this build's addresses: a change to the argument layout that moves
+    an address fails here rather than leaving a stale address in a cached descriptor."""
+    kernels = descriptor.kernels
+    reader, writer = kernels[READER_KERNEL_SLOT], kernels[WRITER_KERNEL_SLOT]
+    for core_idx in range(NUM_CORES):
+        logical = _logical(core_idx)
+        reader_args = reader.runtime_args[logical.x][logical.y]
+        writer_args = writer.runtime_args[logical.x][logical.y]
+        assert reader_args[READER_ARG_X_ADDRESS] == x.buffer_address(), "reader arg layout moved x's address"
+        assert writer_args[WRITER_ARG_COMBINE_INDEX_ADDRESS] == combine_index.buffer_address()
+        assert writer_args[WRITER_ARG_DISPATCHED_ADDRESS] == dispatched.buffer_address()
+        assert writer_args[WRITER_ARG_X_ADDRESS] == x.buffer_address()
+    reader_common = list(reader.common_runtime_args)
+    expected = [t.buffer_address() for t in (weight, combine_index, combine_weights, expert_counts)]
+    assert reader_common[READER_COMMON_ADDRESSES : READER_COMMON_ADDRESSES + 4] == expected
+    writer_common = list(writer.common_runtime_args)
+    assert writer_common[WRITER_COMMON_WEIGHT_ADDRESS] == weight.buffer_address()
+    assert writer_common[WRITER_COMMON_COMBINE_WEIGHTS_ADDRESS] == combine_weights.buffer_address()
+    x_slot, dispatched_slot = _sharded_cb_slots(p)
+    cbs = descriptor.cbs
+    assert len(cbs) == len(_cb_specs(p)) + (x_slot is not None) + (dispatched_slot is not None)
+    if x_slot is not None:
+        assert cbs[x_slot].buffer_address() == x.buffer_address(), "x's CB is not where _sharded_cb_slots puts it"
+    if dispatched_slot is not None:
+        assert cbs[dispatched_slot].buffer_address() == dispatched.buffer_address()
+
+
+class CallBinding:
+    """References into a built descriptor's address slots, taken once, so a call rebinds the cached descriptor in
+    place (bind_call) instead of rebuilding it. Writes through these references land in the descriptor."""
+
+    def __init__(self, descriptor, p: Plan, x):
+        self.descriptor = descriptor
+        kernels = descriptor.kernels  # references into the descriptor
+        reader, writer = kernels[READER_KERNEL_SLOT], kernels[WRITER_KERNEL_SLOT]
+        reader_rt, writer_rt = reader.runtime_args, writer.runtime_args
+        cores = [_logical(core_idx) for core_idx in range(NUM_CORES)]
+        self.reader_args = [reader_rt[core.x][core.y] for core in cores]
+        self.writer_args = [writer_rt[core.x][core.y] for core in cores]
+        self.reader_common = reader.common_runtime_args
+        self.writer_common = writer.common_runtime_args
+        self.x_cb_slot, self.dispatched_cb_slot = _sharded_cb_slots(p)
+        self.x_core_ranges = None if p.x_interleaved else x.memory_config().nd_shard_spec.grid
+        self.grid = _grid()
+
+
+def bind_call(binding: CallBinding, x, weight, dispatched, combine_index, combine_weights, expert_counts):
+    """Rebind a (cached) descriptor to this call's tensors: every address slot (_check_address_slots) and the CBs
+    backed by x's and `dispatched`'s shards. Everything else in the descriptor depends only on the call-state key."""
+    x_address = x.buffer_address()
+    index_address = combine_index.buffer_address()
+    dispatched_address = dispatched.buffer_address()
+    for args in binding.reader_args:
+        args[READER_ARG_X_ADDRESS] = x_address
+    for args in binding.writer_args:
+        args[WRITER_ARG_COMBINE_INDEX_ADDRESS] = index_address
+        args[WRITER_ARG_DISPATCHED_ADDRESS] = dispatched_address
+        args[WRITER_ARG_X_ADDRESS] = x_address
+    for position, tensor in enumerate((weight, combine_index, combine_weights, expert_counts)):
+        binding.reader_common[READER_COMMON_ADDRESSES + position] = tensor.buffer_address()
+    binding.writer_common[WRITER_COMMON_WEIGHT_ADDRESS] = weight.buffer_address()
+    binding.writer_common[WRITER_COMMON_COMBINE_WEIGHTS_ADDRESS] = combine_weights.buffer_address()
+    cbs = binding.descriptor.cbs
+    if binding.x_cb_slot is not None:
+        x_cb = ttnn.cb_descriptor_from_sharded_tensor(CB_X_TILES, x, core_ranges=binding.x_core_ranges)
+        cbs[binding.x_cb_slot].set_buffer_from_cb(x_cb)
+    if binding.dispatched_cb_slot is not None:
+        dispatched_cb = ttnn.cb_descriptor_from_sharded_tensor(CB_DISPATCHED, dispatched, core_ranges=binding.grid)
+        cbs[binding.dispatched_cb_slot].set_buffer_from_cb(dispatched_cb)

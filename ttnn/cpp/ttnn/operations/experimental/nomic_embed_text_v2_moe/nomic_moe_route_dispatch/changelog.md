@@ -191,3 +191,49 @@ No row regressed. Every production row (`test_perf_row`) is below its `stock_ns`
 
 - Not graduated, recorded as options: `codeA_perm` (-0.6k more, needs a host-side W column permutation), `codeA_cnt` (changes the slot-page contract).
 - Leads for a next round: (1) the push is now ~35% of the op (12.5k p50 / 14.6k max a RISC; ~7k of it software); (2) the reader/writer select split is token-contiguous, so the writer waits for code tiles 2-3 and the reader then idles 4.1k cycles in `rd_wait_writer_counts` (a per-tile interleaved split would end select ~1.5k earlier); (3) `member_units` on top of the graduated top-2 / tail for rps >= 2, if a single path that does not regress rps = 1 can be found.
+
+## Host time per call: cache the program descriptor (model integration)
+- Date: 2026-11-05
+- What was done: host Python only; the kernels and the device program are unchanged.
+  - **Call-state cache** (`_CALL_CACHE`, `_call_key`). The key holds everything validate(), the plan and the
+    descriptor depend on beyond buffer addresses: x's and W's shapes, dtypes, layouts and memory configs, the spare
+    tile rows, the output buffer type, the compute config, the device id and `NOMIC_MOE_ROUTE_DISPATCH_ABLATE`.
+    validate() and `create_program_descriptor()` run on a key's first call only. The malformed-call checks and both
+    live-L1 checks (`_l1_room`) still run on every call. Knobs are read when an entry is built: clear the cache after
+    patching one.
+  - **Per-call binding** (`CallBinding`, `bind_call`). References into the built descriptor's address slots are
+    taken once. Every call rewrites them in place:
+    - reader per-core arg 7 (x);
+    - writer per-core args 4, 8 and 12 (combine_index, dispatched, x);
+    - reader common args 0..3 (W, combine_index, combine_weights, expert_counts);
+    - writer common args NUM_CORES and NUM_CORES + 2 (W, combine_weights);
+    - the CBs backed by x's shard and by `dispatched`'s shards.
+
+    The slot positions are named constants. `_check_address_slots()` asserts them on every build, so an argument
+    layout change fails loudly instead of leaving a stale address in a cached descriptor.
+- Host time (blackhole p300c, one call, median of 30 after warm-up, x in the norm's ND layout, L1 `dispatched`):
+
+  | shape | before | after |
+  |---|---|---|
+  | 2x512 | 798 us | 143 us |
+  | 4x512 | 825 us | 144 us |
+  | 8x512 | 827 us | 150 us |
+
+  Before, the descriptor build took ~600 us of each call, generic_op ~90 (per-core runtime args on 110 cores x 3
+  kernels are re-sent every call), validate ~45, the four output allocations ~45 and the live-L1 checks ~17.
+- Model, eager latency a forward (profile_variant.py host, median of 20, same session), the three-op path
+  (router_front_end, routing_metadata, nomic_moe_dispatch) -> this op uncached -> cached:
+
+  | shape | three ops | uncached | cached |
+  |---|---|---|---|
+  | 2x512 | 18.4 ms | 23.2 ms | 19.4 ms |
+  | 4x512 | 22.7 ms | 27.4 ms | 23.0 ms |
+  | 8x512 | 29.4 ms | 35.5 ms | 30.4 ms |
+
+  The uncached column is from an earlier run. What is left is mostly generic_op's per-core runtime args. Moving them
+  into common-arg tables would need kernel changes, so it was not done here.
+- Device time: unchanged (same program).
+- Tests added: `test_cached_descriptor_is_rebound_every_call` in test_nomic_moe_route_dispatch.py: two 2x512 calls
+  with different inputs, the first call's tensors still allocated. They share one descriptor, every address slot
+  holds the current call's address, and both calls' outputs pass the full check. `run_case` takes a seed and returns
+  its device tensors.

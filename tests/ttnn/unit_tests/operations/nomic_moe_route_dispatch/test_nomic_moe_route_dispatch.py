@@ -67,8 +67,9 @@ def nd_norm_memory_config(shape, device):
     return input_memory_config(tuple(shape), device)
 
 
-def run_case(device, batch, seq, spare_tile_rows=0, compute_kernel_config=None, x_memory_config=None):
-    torch.manual_seed(42)
+def run_case(device, batch, seq, spare_tile_rows=0, compute_kernel_config=None, x_memory_config=None, seed=42):
+    """Run the op on random x and W and check every output; returns (x, W, outputs) on device."""
+    torch.manual_seed(seed)
     shape = (batch, 1, seq, HIDDEN)
     x = torch.randn(shape).bfloat16()
     w = (torch.randn(HIDDEN, NUM_EXPERTS) * WEIGHT_STD).float()
@@ -161,6 +162,7 @@ def run_case(device, batch, seq, spare_tile_rows=0, compute_kernel_config=None, 
 
     # Inputs are not modified.
     assert torch.equal(ttnn.to_torch(x_dev).view(torch.int16), x.view(torch.int16))
+    return x_dev, w_dev, outputs
 
 
 @pytest.mark.parametrize(
@@ -205,3 +207,39 @@ def test_explicit_compute_config(device):
 def test_interleaved_and_ragged(device, batch, seq, placement):
     memory = {"dram": ttnn.DRAM_MEMORY_CONFIG, "l1": ttnn.L1_MEMORY_CONFIG, "nd_norm": None}[placement]
     run_case(device, batch, seq, x_memory_config=memory)
+
+
+def test_cached_descriptor_is_rebound_every_call(device):
+    """The op builds its program descriptor once per call-state key and rebinds it to each call's buffers
+    (nomic_moe_route_dispatch._CALL_CACHE, bind_call): two calls of one shape share one descriptor, every address
+    slot holds the current call's address, and both calls' outputs are right. The first call's tensors stay
+    allocated, so the second call's buffers sit at other addresses."""
+    import importlib
+
+    op = importlib.import_module("ttnn.operations.nomic_moe_route_dispatch.nomic_moe_route_dispatch")
+    pd = importlib.import_module("ttnn.operations.nomic_moe_route_dispatch.nomic_moe_route_dispatch_program_descriptor")
+    calls = []
+    for seed in (42, 7):
+        x_dev, w_dev, outputs = run_case(device, 2, 512, seed=seed)
+        dispatched, combine_index, combine_weights, expert_counts = outputs
+        state = op._CALL_CACHE[op._call_key(x_dev, w_dev, 0, None, ttnn.BufferType.L1)]
+        binding = state.binding
+        assert binding.descriptor is state.descriptor
+        assert all(args[pd.READER_ARG_X_ADDRESS] == x_dev.buffer_address() for args in binding.reader_args)
+        for args in binding.writer_args:
+            assert args[pd.WRITER_ARG_COMBINE_INDEX_ADDRESS] == combine_index.buffer_address()
+            assert args[pd.WRITER_ARG_DISPATCHED_ADDRESS] == dispatched.buffer_address()
+            assert args[pd.WRITER_ARG_X_ADDRESS] == x_dev.buffer_address()
+        addresses = [t.buffer_address() for t in (w_dev, combine_index, combine_weights, expert_counts)]
+        assert list(binding.reader_common)[pd.READER_COMMON_ADDRESSES : pd.READER_COMMON_ADDRESSES + 4] == addresses
+        writer_common = list(binding.writer_common)
+        assert writer_common[pd.WRITER_COMMON_WEIGHT_ADDRESS] == w_dev.buffer_address()
+        assert writer_common[pd.WRITER_COMMON_COMBINE_WEIGHTS_ADDRESS] == combine_weights.buffer_address()
+        cbs = state.descriptor.cbs
+        assert cbs[binding.x_cb_slot].buffer_address() == x_dev.buffer_address()
+        assert cbs[binding.dispatched_cb_slot].buffer_address() == dispatched.buffer_address()
+        calls.append((state.descriptor, x_dev, w_dev, outputs))
+    assert calls[0][0] is calls[1][0], "the second call reuses the cached descriptor"
+    assert calls[0][1].buffer_address() != calls[1][1].buffer_address()
+    for first, second in zip(calls[0][3], calls[1][3]):
+        assert first.buffer_address() != second.buffer_address()
