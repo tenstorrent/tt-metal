@@ -2847,6 +2847,8 @@ def test_where_inherited_sharded_output_runs_on_its_sub_device(device, a_shardin
         ttnn.deallocate(placeholder)
 
         dummy = ttnn.from_torch(torch.zeros(32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        # Compile the delay kernel first, so the calibration below times only its run.
+        ttnn.generic_op([dummy, dummy], _sub_device_delay_program(sd0_cores, 1))
         ttnn.synchronize_device(device)
         # Calibrate the delay kernel to roughly one second on this device.
         start = time.monotonic()
