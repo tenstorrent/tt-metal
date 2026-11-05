@@ -124,7 +124,8 @@ struct DataflowBufferBindingHandle {
     uint8_t pap = 0;
     uint8_t cap = 0;
     // Watcher: the nodes the DFB's address is reserved on, as rectangles in NoC coordinates. Empty without Watcher NoC
-    // sanitizing, or for a DFB borrowed from an interleaved tensor.
+    // sanitizing, and for a DFB borrowed from an interleaved tensor: that tensor holds the address in every L1 bank, so
+    // no node set narrower than the whole grid limits a multicast into it.
     std::vector<experimental::NodeRange> watcher_node_ranges;
 };
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;

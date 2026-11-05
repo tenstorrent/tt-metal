@@ -60,7 +60,9 @@ inline constexpr bool always_false = false;
 struct SemaphoreBindingToken {
     std::uint32_t id;
     SemScope scope;
-    // Watcher builds only: the rectangles the semaphore exists on, so multicasts can be checked against them.
+    // Watcher builds only: the rectangles the semaphore exists on, so multicasts can be checked against them. Either
+    // nullptr with num_node_ranges 0, or num_node_ranges ranges that outlive the token; the generated bindings header
+    // passes a constexpr array.
     const DebugNodeRange* node_ranges = nullptr;
     std::uint32_t num_node_ranges = 0;
 };

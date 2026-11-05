@@ -35,7 +35,8 @@
 template <dfb::AccessPattern Pap = dfb::AccessPattern::UNKNOWN, dfb::AccessPattern Cap = dfb::AccessPattern::UNKNOWN>
 struct DFBBindingToken {
     // node_ranges: Watcher builds only, the rectangles the DFB exists on, so multicasts into it can be checked against
-    // them.
+    // them. Either nullptr with num_node_ranges 0, or num_node_ranges ranges that outlive the token; the generated
+    // bindings header passes a constexpr array.
     explicit constexpr DFBBindingToken(
         uint16_t id, const DebugNodeRange* node_ranges = nullptr, uint32_t num_node_ranges = 0) noexcept :
         id_(id), node_ranges_(node_ranges), num_node_ranges_(num_node_ranges) {}
@@ -62,6 +63,8 @@ struct DFBBindingToken {
     // This conversion is constexpr; it's intended for Gen1 use only.
     constexpr operator uint32_t() const noexcept { return id_; }
 
+    // nullptr, with num_node_ranges() 0, when the token carries no node ranges: without Watcher NoC sanitizing, for a
+    // DFB borrowed from an interleaved tensor, or for a token built from an ID alone.
     constexpr const DebugNodeRange* node_ranges() const noexcept { return node_ranges_; }
     constexpr uint32_t num_node_ranges() const noexcept { return num_node_ranges_; }
 
