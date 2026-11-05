@@ -34,7 +34,8 @@ def signpost(header, message=None):
 
 
 def layer_norm(x, params, residual=None, memory_config=None):
-    """``ttnn.layer_norm(x + residual)`` with the eps of the module ``params`` were preprocessed from.
+    """``ttnn.layer_norm(x + residual)`` with the eps of the module ``params`` were preprocessed from,
+    in ``memory_config`` (None: the input's).
 
     ttnn defaults to epsilon=1e-12; ``preprocess_layer_norm_parameters`` records the
     module's own (1e-5 for nn.LayerNorm). The residual add runs inside the norm's kernel.
@@ -151,6 +152,43 @@ def _linear_compute_config(arch, fp32_output):
     )
 
 
+# Share of the device's L1 a group of intermediates that live at once may take; the rest holds
+# the programs' circular buffers, which sit below the lowest L1 buffer.
+L1_INTERMEDIATE_SHARE = 0.75
+
+
+def l1_if_fits(device, nbytes):
+    """``ttnn.L1_MEMORY_CONFIG`` for ``nbytes`` of intermediates that live at once when they fit
+    ``L1_INTERMEDIATE_SHARE`` of the device's L1, else ``ttnn.DRAM_MEMORY_CONFIG``.
+
+    A static budget against the L1's capacity, not its free space: the caller counts everything
+    of its own that lives at once, and the order of the groups keeps others' buffers out of the
+    way (``tt_encoder.TTBEVFormerLayer``)."""
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    capacity = view.num_banks * view.total_bytes_per_bank
+    return ttnn.L1_MEMORY_CONFIG if nbytes <= L1_INTERMEDIATE_SHARE * capacity else ttnn.DRAM_MEMORY_CONFIG
+
+
+def grid_linear_kwargs(device):
+    """``ttnn.linear`` keyword arguments that keep the gridless default's HiFi2 on a full core grid.
+
+    Without a core grid, an activation runs as a separate unary op over the whole output and an
+    L1 output picks a config that post-processes the bias. A core grid fuses both, but defaults
+    to LoFi.
+    """
+    grid = device.compute_with_storage_grid_size()
+    return dict(
+        core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        ),
+    )
+
+
 class TTFFN:
     """The decoder's FFN, Linear-ReLU-Linear, into L1, without the residual: the layer adds it
     inside the LayerNorm that follows. ``params`` from ``model_preprocessing.preprocess_ffn_parameters``."""
@@ -177,18 +215,25 @@ def is_pointwise(conv):
 class TTConv2D:
     """``conv`` carries the conv's geometry and its input's batch, height and width.
 
-    Most convs run through conv2d. ``input_dtype`` and ``input_layout`` describe the
-    interleaved DRAM tensor every call receives; conv2d lays its weights out for that
-    input, so they are prepared here against it and a forward does no host work, and a
-    call with a different input fails instead of running on mismatched weights.
+    Most convs run through conv2d. ``input_dtype``, ``input_layout`` and
+    ``input_memory_config`` describe the tensor every call receives, interleaved in DRAM unless
+    given; conv2d lays its weights out for that input, so they are prepared here against it and a
+    forward does no host work, and a call with a different input fails instead of running on
+    mismatched weights.
     With ``dram_activation``, a 1x1 stride-1 conv runs as ``ttnn.linear`` instead, which
-    takes any layout, sharding or dtype and ignores ``input_dtype`` and ``input_layout``; its
-    ``conv_pth`` is then a Linear's ``(in, out)`` weight and ``(1, out)`` bias, which
-    ``model_preprocessing`` emits for such convs. A spatial conv keeps conv2d and runs in
-    ``dram_conv_slices`` width slices.
+    takes any layout, sharding or dtype and ignores ``input_dtype``, ``input_layout`` and
+    ``output_layout``; its ``conv_pth`` is then a Linear's ``(in, out)`` weight and ``(1, out)``
+    bias, which ``model_preprocessing`` emits for such convs. A spatial conv keeps conv2d and runs
+    in ``dram_conv_slices`` width slices.
 
     ``dealloc_act`` lets conv2d free the L1-sharded copy it makes of a DRAM input once the
     halo has read it; the DRAM input itself is never freed.
+
+    ``output_layout`` is the layout conv2d emits, None for its TILE default. conv2d's DRAM path
+    runs every slice through its L1 conv with a TILE output and, with a single slice, returns
+    that tensor as it is, whatever layout was asked for. A ROW_MAJOR conv therefore runs
+    unsliced on the L1 path, so its activation and output must fit in L1, and cannot take
+    ``dram_activation``.
 
     ``output_dtype`` is the dtype the conv emits, None for its input's. A spatial conv, on
     conv2d's own path with packer_l1_acc off, keeps its partial sums between reduction blocks
@@ -212,11 +257,17 @@ class TTConv2D:
         dram_conv_slices=None,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
+        input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_dtype=None,
+        output_layout=None,
     ):
+        assert not (
+            dram_activation and output_layout == ttnn.ROW_MAJOR_LAYOUT
+        ), "a ROW_MAJOR output needs conv2d's unsliced L1 path, which dram_activation leaves"
         self.dram_activation = dram_activation
         self.input_dtype = input_dtype
         self.input_layout = input_layout
+        self.input_memory_config = input_memory_config
         self.output_dtype = output_dtype
         if is_blk:
             shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -248,6 +299,8 @@ class TTConv2D:
         )
         if act_block_h is not None:
             self.conv_config.act_block_h_override = act_block_h
+        if output_layout is not None:
+            self.conv_config.output_layout = output_layout
 
         self.bias = conv_pth.bias
 
@@ -268,6 +321,8 @@ class TTConv2D:
             output_width = (self.input_width + 2 * self.padding[1] - self.kernel_size[1]) // self.stride[1] + 1
             num_slices = min(dram_conv_slices, math.ceil(output_width / ttnn.TILE_SIZE))
             self.slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=num_slices)
+        elif output_layout == ttnn.ROW_MAJOR_LAYOUT:
+            self.slice_config = ttnn.Conv2dL1FullSliceConfig
 
         self.linear_weight = None
         self.linear_bias = None
@@ -300,6 +355,7 @@ class TTConv2D:
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        warmup_input = ttnn.to_memory_config(warmup_input, self.input_memory_config)
         warmup_output, _, _ = self._conv2d(warmup_input)
         ttnn.deallocate(warmup_output)
 
@@ -330,16 +386,14 @@ class TTConv2D:
         if self.dram_activation and self.is_pointwise:
             return self._pointwise_as_linear(x), self.input_height, self.input_width
 
-        memory_config = x.memory_config()
         assert (
-            memory_config.buffer_type == ttnn.BufferType.DRAM
-            and not memory_config.is_sharded()
+            x.memory_config() == self.input_memory_config
             and x.dtype == self.input_dtype
             and x.layout == self.input_layout
         ), (
-            f"conv {self.in_channels}->{self.out_channels} k={tuple(self.kernel_size)}: weights prepared for an "
-            f"interleaved DRAM {self.input_dtype} {self.input_layout} input, got {memory_config.buffer_type} "
-            f"sharded={memory_config.is_sharded()} {x.dtype} {x.layout}"
+            f"conv {self.in_channels}->{self.out_channels} k={tuple(self.kernel_size)}: weights prepared for a "
+            f"{self.input_dtype} {self.input_layout} input in {self.input_memory_config}, got {x.dtype} "
+            f"{x.layout} in {x.memory_config()}"
         )
         return self._conv2d(x)
 

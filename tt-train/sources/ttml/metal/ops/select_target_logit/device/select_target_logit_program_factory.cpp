@@ -77,7 +77,7 @@ CreatedProgram create_program_for_device(
     const auto& target = tensor_args.target;
 
     auto* device = logit.device();
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
 
     TT_FATAL(
         datatype_to_dataformat_converter(logit.dtype()) == tt::DataFormat::Float16_b,

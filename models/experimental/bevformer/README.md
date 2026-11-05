@@ -51,15 +51,21 @@ scene selection, score filtering, and output format.
 
 ## Performance
 
-- For the detector's device ops, one live frame with a previous BEV between Tracy's `start` and
-  `stop` signposts by default. Set `BEVFORMER_PERF_FRAMES=2` for two consecutive measured frames;
-  the harness accepts only `1` or `2`, and either run has one preparation frame outside the
-  signposts:
+- For the detector's device ops, one frame with a previous BEV between Tracy's `start` and `stop`
+  signposts by default, live (`[live]`) or replayed from the demo's traces (`[trace]`). Set
+  `BEVFORMER_PERF_FRAMES=2` for two consecutive measured frames; the harness accepts only `1` or
+  `2`, and either run has one preparation frame outside the signposts. Profile one variant per
+  run, and add `--tracing-mode` to `tt-perf-report` for `[trace]`:
 
 ```sh
-python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py"
-BEVFORMER_PERF_FRAMES=2 python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py"
+# Live: one measured frame, or two with BEVFORMER_PERF_FRAMES=2
+python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py::test_bevformer_perf[live]"
+BEVFORMER_PERF_FRAMES=2 python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py::test_bevformer_perf[live]"
 tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop
+
+# Replayed from traces
+python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py::test_bevformer_perf[trace]"
+tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop --tracing-mode
 ```
 - See the demo's [recorded smoke results](demo/README.md#recorded-smoke-results) for ten-frame
   end-to-end measurements of the bundled tiny, small and base configs. These wall-clock results
@@ -86,11 +92,16 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/
 - `test_resnet.py`: the backbone's bottlenecks and layers against the reference.
 - `test_fpn.py`: the FPN neck on random backbone outputs in the dtypes the backbone emits.
 - `test_backbone_fpn.py`: camera images through the backbone and the FPN end to end.
-- `test_ms_deformable_attention.py`, `test_fused_msda.py`: the deformable attention module and the fused MSDA op.
+- `test_ms_deformable_attention.py`, `test_fused_msda.py`: the deformable attention module, with each
+  of its attention-weight softmaxes, and the fused MSDA op.
 - `test_point_sampling_3d_2d.py`: the BEV pillars' projection into the cameras and the visibility mask.
-- `test_temporal_self_attention.py`: the temporal self-attention, batch-first and sequence-first.
-- `test_spatial_cross_attention.py`: the spatial cross-attention with its per-camera rebatch, and
-  the device-built rebatch plan against a host build and its capacity over frame sequences.
+- `test_temporal_self_attention.py`: the temporal self-attention, batch-first and sequence-first;
+  a previous BEV with per-sample ego shifts (bs 1 and 2, up to highway speed), with the
+  intermediates around the fused op in L1 or DRAM; the grouped softmax the deformable attention
+  modules share.
+- `test_spatial_cross_attention.py`: the spatial cross-attention with its per-camera rebatch, with
+  the intermediates around the fused op in L1 or DRAM, and the device-built rebatch plan against
+  a host build and its capacity over frame sequences.
 - `test_encoder.py`: the encoder on several presets and layer counts.
 - `test_perception_transformer.py`: the encoder's glue over consecutive frames with ego motion.
 - `test_decoder.py`: the six-layer detection decoder and its reference-point refinement.
@@ -101,6 +112,15 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/
 
 ```sh
 pytest --disable-warnings models/experimental/bevformer/tests/pcc/test_bevformer.py
+```
+- `tests/e2e/test_bevformer_trace.py`: the demo's pipelined path, two command queues with host
+  inputs prepared ahead, against the same detector run live, frame by frame: replays at changing
+  counts, a frame no camera sees, and the plan grown both within a frame and between frames, each
+  followed by a recapture. It runs the selected variant and is not part of `tests/pcc/`, as its
+  cold run compiles every kernel again for the two-queue grid:
+
+```sh
+pytest models/experimental/bevformer/tests/e2e/test_bevformer_trace.py
 ```
 
 ## Project Structure
@@ -113,6 +133,7 @@ models/experimental/bevformer/
 ├── reference/          # PyTorch reference implementation
 ├── tests/
 │   ├── common.py       # Test helpers: dataset presets, dummy weights and random inputs
+│   ├── e2e/            # The detector replayed from traces against the live detector
 │   ├── fixtures/       # Deterministic synthetic camera geometry used only by tests
 │   ├── pcc/            # Unit tests for individual components
 │   └── perf/           # Device-perf harnesses, one per stage and one for the detector
@@ -358,4 +379,5 @@ tt/model_preprocessing.py
 - BEV grid (base): 200x200, small 150x150, tiny 50x50; 900 object queries; up to 300 boxes per frame
 - Preparing a frame projects the cameras on device and reads back only their visible counts, which
   size the spatial cross-attention's rebatch plan; the plan's shapes follow a capacity that only
-  grows, and the detector runs live, not under a trace.
+  grows. `tt/tt_bevformer_trace.py` replays the detector from three traces around that readback,
+  capturing them again when the capacity grows (the demo's `--trace`).
