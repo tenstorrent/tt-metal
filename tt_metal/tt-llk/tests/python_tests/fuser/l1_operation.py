@@ -152,7 +152,7 @@ class L1Operation:
         init_code += unpack_common.unpack_to_dest_sync_init(config, self)
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             init_code += unpack_ops[0].unpack_init(self, config, None)
-        code = self._zone(config, "INIT", init_code)
+        code = self._zone(config, f"INIT{self.stage_id}", init_code)
 
         code += unpack_common.sync_with_packer(config, self)
 
@@ -204,14 +204,14 @@ class L1Operation:
 
         code += self._zone_loop(
             config,
-            "TILE_LOOP",
+            f"TILE_LOOP{self.stage_id}",
             self._batch_loop(blocks, batch_body, init_fn, uninit_fn),
         )
 
         uninit_code = ""
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             uninit_code += unpack_ops[0].unpack_uninit(self, config, None)
-        code += self._zone(config, "UNINIT", uninit_code)
+        code += self._zone(config, f"UNINIT{self.stage_id}", uninit_code)
 
         return code
 
@@ -231,7 +231,7 @@ class L1Operation:
             init_code += config.sentinel.configure_math(config, self, fpu_ops[0])
         if hoist and not fpu_ops[0].fpu.per_block_init:
             init_code += fpu_ops[0].fpu_init(self, config, None)
-        code += self._zone(config, "INIT", init_code)
+        code += self._zone(config, f"INIT{self.stage_id}", init_code)
 
         init_fn = None
         uninit_fn = None
@@ -275,14 +275,14 @@ class L1Operation:
 
         code += self._zone_loop(
             config,
-            "TILE_LOOP",
+            f"TILE_LOOP{self.stage_id}",
             self._batch_loop(blocks, batch_body, init_fn, uninit_fn),
         )
 
         uninit_code = ""
         if hoist and not fpu_ops[0].fpu.per_block_init:
             uninit_code += fpu_ops[0].fpu_uninit(self, config, None)
-        code += self._zone(config, "UNINIT", uninit_code)
+        code += self._zone(config, f"UNINIT{self.stage_id}", uninit_code)
 
         return code
 
@@ -307,7 +307,7 @@ class L1Operation:
         init_code += pack_common.pack_dest_init(config, self, pack_only[0])
         if hoist and not pack_only[0].packer.per_block_init:
             init_code += pack_only[0].init(self, config, None)
-        code += self._zone(config, "INIT", init_code)
+        code += self._zone(config, f"INIT{self.stage_id}", init_code)
 
         init_fn = None
         uninit_fn = None
@@ -351,7 +351,7 @@ class L1Operation:
 
         code += self._zone_loop(
             config,
-            "TILE_LOOP",
+            f"TILE_LOOP{self.stage_id}",
             self._batch_loop(blocks, batch_body, init_fn, uninit_fn),
         )
 
@@ -359,7 +359,7 @@ class L1Operation:
         if hoist and not pack_only[0].packer.per_block_init:
             uninit_code += pack_only[0].uninit(self, config)
         uninit_code += pack_common.pack_reduce_mask_clear(self)
-        code += self._zone(config, "UNINIT", uninit_code)
+        code += self._zone(config, f"UNINIT{self.stage_id}", uninit_code)
 
         return code
 
