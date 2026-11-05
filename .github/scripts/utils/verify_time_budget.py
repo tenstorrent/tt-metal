@@ -165,6 +165,18 @@ def collect(tests_dir, budgets, problems):
                 continue
 
             team, skus = test["team"], test["skus"]
+            if not isinstance(team, str) or not team:
+                problems.append(
+                    problem(
+                        "bad_team",
+                        f"{label} has an invalid 'team'; expected a non-empty string.",
+                        yaml=basename,
+                        test=name,
+                        found=repr(team),
+                    )
+                )
+                continue
+
             if not isinstance(skus, dict) or not skus:
                 problems.append(
                     problem(
@@ -438,6 +450,11 @@ PROBLEM_KINDS = (
         "Every SKU under `skus` needs a `timeout` in minutes — that is the number charged against the budget.",
     ),
     (
+        "bad_team",
+        "Invalid `team`",
+        f"`team` must be a non-empty string naming a team in {BUDGET_FILE_LINK}.",
+    ),
+    (
         "bad_budget_type",
         "Invalid `budget_type`",
         "`budget_type` must be a string, or a list of strings when one yaml is run by two "
@@ -538,7 +555,7 @@ def comment_body(problems):
                 lines.append(f"- {yaml_link(item['yaml'])} → **{item['test']}** — missing {keys}")
             elif kind == "missing_timeout":
                 lines.append(f"- {yaml_link(item['yaml'])} → **{item['test']}** — SKU `{item['sku']}` has no `timeout`")
-            elif kind == "bad_budget_type":
+            elif kind in ("bad_team", "bad_budget_type"):
                 lines.append(f"- {yaml_link(item['yaml'])} → **{item['test']}** — got `{item['found']}`")
             else:
                 lines.append(f"- {yaml_link(item['yaml'])} → **{item['test']}**")

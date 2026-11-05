@@ -85,7 +85,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersSequentiallyPlaced) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program;
+        Program program = CreateProgram(*device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
@@ -117,7 +117,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferSequentialAcrossAllCores) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program;
+        Program program = CreateProgram(*device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
         CBConfig cb_config;
@@ -169,7 +169,7 @@ TEST_F(MeshDeviceFixture, TensixTestValidCircularBufferAddress) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program;
+        Program program = CreateProgram(*device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
         CBConfig cb_config;
@@ -217,7 +217,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program;
+        Program program = CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
         uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
@@ -263,7 +263,7 @@ TEST_F(MeshDeviceFixture, TensixTestValidUpdateCircularBufferSize) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program;
+        Program program = CreateProgram(*device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
         CBConfig cb_config;
@@ -305,7 +305,7 @@ TEST_F(MeshDeviceFixture, TensixTestInvalidUpdateCircularBufferSize) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program;
+        Program program = CreateProgram(*device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
         CBConfig cb_config;
@@ -342,7 +342,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddress) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program;
+        Program program = CreateProgram(*device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
         CBConfig cb_config;
@@ -385,7 +385,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddressFromMeshTensor) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program;
+        Program program = CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
         CBConfig cb_config;
@@ -495,7 +495,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program;
+        Program program = CreateProgram(*device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
         CBConfig cb_config;
@@ -586,7 +586,7 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program;
+        Program program = CreateProgram(*device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
         CoreCoord core(0, 0);
@@ -724,7 +724,7 @@ TEST_F(MeshDispatchFixture, TensixTestCircularBufferConfigDispatchWithOverlappin
     // merge them into {(0,0)-(4,0)}.
     CoreRangeSet all_cores(std::vector<CoreRange>{cores0_range, cores1_range});
 
-    Program program;
+    Program program = CreateProgram(*this->devices_[0]);
 
     uint32_t size0 = cb_config.page_size;
     uint32_t size1 = cb_config.page_size * 2;
