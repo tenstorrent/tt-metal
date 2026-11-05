@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -31,8 +32,10 @@ private:
     std::thread server_thread_;
     JitCompileService jit_compile_service_;
     std::mutex start_stop_mutex_;
-    std::atomic<bool> should_stop_{false};
     std::atomic<bool> is_running_{false};
+    // Set by run_server() while its event loop runs; wakes the loop so it returns.
+    std::mutex wake_mutex_;
+    std::function<void()> wake_;
 
     std::condition_variable server_start_cv_;
     std::mutex server_start_mutex_;

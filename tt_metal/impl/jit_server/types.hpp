@@ -23,6 +23,8 @@ struct CompileRequest {
     std::string gpp;
     std::vector<TargetRecipe> targets;
     std::vector<GeneratedFile> generated_files;
+    // The client's tree (TT_METAL_HOME, with a trailing slash), which the paths in the request start with.
+    std::string client_root;
 };
 
 struct ElfBlob {
