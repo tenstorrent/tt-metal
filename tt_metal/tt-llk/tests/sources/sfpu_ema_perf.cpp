@@ -117,7 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
             false /* is_int_fpu_en */,
-            PackMode::Default>(num_faces, formats.math);
+            PackMode::Default>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), formats.math);
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 

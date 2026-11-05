@@ -39,8 +39,10 @@ inline void calculate_tanh_bf16_body() {
     ckernel::sfpu::bf16::tanh::calculate_signed_abs_terminal<ckernel::sfpu::TanhBf16Config, ITERATIONS>();
 }
 // The constants stock's init also sets hold the kernel's own values for its call only.
+// Each call records replay slots 0-25, overwriting what an init recorded there (matmul and reduce
+// record from replay_buf_offset = 16).
 template <int ITERATIONS = 32>
-inline void calculate_tanh_bf16() {
+__attribute__((noinline)) inline void calculate_tanh_bf16() {
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x3bb0e52du);
     sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0xbd8035c9u);
     sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0x3e8a1bd5u);
@@ -49,11 +51,7 @@ inline void calculate_tanh_bf16() {
     sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0xbd887f48u);
     sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0x3e905782u);
 }
-inline void init_tanh_bf16() {
-    ckernel::sfpu::bf16::tanh::init_signed_abs<ckernel::sfpu::TanhBf16Config>();
-    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x3bc0919eu);
-    sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0xbd887f48u);
-    sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0x3e905782u);
-}
+// The call sets the constants it holds and puts stock's back, so the init leaves them to stock's.
+inline void init_tanh_bf16() {}
 
 }  // namespace ckernel::sfpu
