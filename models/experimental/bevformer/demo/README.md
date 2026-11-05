@@ -55,13 +55,13 @@ These runs used the commands above:
 
 | Variant | BEV size | Encoder layers | p100a Device FPS |
 | --- | ---: | ---: | ---: |
-| tiny | 50 | 3 | 44.12 |
-| small | 150 | 3 | 13.03 |
-| base | 200 | 6 | 4.89 |
+| tiny | 50 | 3 | 52.42 |
+| small | 150 | 3 | 14.03 |
+| base | 200 | 6 | 5.11 |
 
 | Card | Enabled Tensix cores | Compute grid | DRAM channels | Commit |
 | --- | ---: | ---: | ---: | --- |
-| p100a | 120 | 11x10 | 7 | [`7f2bbaed256`](https://github.com/tenstorrent/tt-metal/commit/7f2bbaed256b18458dbd4d70fce7dcd87fc6d3c4) |
+| p100a | 120 | 11x10 | 7 | [`c540f56da9d`](https://github.com/tenstorrent/tt-metal/commit/c540f56da9dade1d8e8b89c19c2bc7877f32a3a1) |
 
 Compare runs by Device FPS (see [Output](#output)). These come from one ten-frame run per variant
 with random weights and validate end-to-end execution only; they are not statistically characterized
