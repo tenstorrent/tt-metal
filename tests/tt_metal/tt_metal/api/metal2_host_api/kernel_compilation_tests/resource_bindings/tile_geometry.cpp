@@ -214,6 +214,85 @@ INSTANTIATE_TEST_SUITE_P(
         GeometryCase{"PerNode", std::nullopt, 32, 32, 4, false, false, true}),
     [](const ::testing::TestParamInfo<GeometryCase>& info) { return info.param.name; });
 
+std::string MakeNonPublicCustomFaceQuerySource(const GeometryCase& geometry, const char* token) {
+    const Tile tile = geometry.tile.value_or(Tile{});
+    const auto face = tile.get_face_shape();
+    return fmt::format(
+        R"(
+void kernel_main() {{
+    static_assert(get_face_r_dim({0}) == {1} && get_face_c_dim({0}) == {2} &&
+                  get_num_faces_r_dim({0}) == {3} && get_num_faces_c_dim({0}) == {4});
+    static_assert(get_tile_r_dim({0}) == {5} && get_tile_c_dim({0}) == {6} &&
+                  get_tile_hw({0}) == {7} && get_tile_num_faces({0}) == {8});
+    static_assert(get_partial_face({0}) == {9}u && get_narrow_tile({0}) == {10}u);
+}}
+)",
+        token,
+        face[0],
+        face[1],
+        geometry.rows / face[0],
+        geometry.columns / face[1],
+        geometry.rows,
+        geometry.columns,
+        geometry.rows * geometry.columns,
+        geometry.faces,
+        static_cast<uint32_t>(geometry.partial),
+        static_cast<uint32_t>(geometry.narrow));
+}
+
+class BindingTokenCustomFaceWidth : public test_helpers::ProgramSpecTestBlackhole,
+                                    public ::testing::WithParamInterface<GeometryCase> {
+protected:
+    distributed::MeshDevice& fixture_device() { return *mesh_device_; }
+};
+
+// A scratchpad's scalar geometry reflects the face width configured on its resource.
+TEST_P(BindingTokenCustomFaceWidth, ScratchpadGeometry) {
+    const GeometryCase geometry = GetParam();
+    const std::string source = MakeNonPublicCustomFaceQuerySource(geometry, "scratch::pad");
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
+    spec.dataflow_buffers[0].tile_format_metadata.reset();
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+}
+
+// A tensor binding's scalar geometry reflects the face width configured on its resource.
+TEST_P(BindingTokenCustomFaceWidth, TensorGeometry) {
+    const GeometryCase geometry = GetParam();
+    const std::string source = MakeNonPublicCustomFaceQuerySource(geometry, "tensor::local");
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
+    spec.dataflow_buffers[0].tile_format_metadata.reset();
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+}
+
+// A scratchpad's aggregate shape preserves custom face dimensions and grid counts.
+TEST_P(BindingTokenCustomFaceWidth, ScratchpadTensorShape) {
+    const GeometryCase geometry = GetParam();
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
+    spec.dataflow_buffers[0].tile_format_metadata.reset();
+    spec.kernels[1].source =
+        KernelSpec::SourceCode{MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(scratch::pad)")};
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+}
+
+// A tensor binding's aggregate shape preserves custom face dimensions and grid counts.
+TEST_P(BindingTokenCustomFaceWidth, TensorBindingTensorShape) {
+    const GeometryCase geometry = GetParam();
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
+    spec.dataflow_buffers[0].tile_format_metadata.reset();
+    spec.kernels[1].source = KernelSpec::SourceCode{
+        MakeNonPublicTensorShapeQuerySource(geometry, "tensor_accessor::get_tensor_shape(tensor::local)")};
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ResourceFaces,
+    BindingTokenCustomFaceWidth,
+    ::testing::Values(
+        GeometryCase{"EightWideFaces", Tile({16, 16}, {16, 8}), 16, 16, 2, true, true},
+        GeometryCase{"SquareEightWideFaces", Tile({16, 16}, {8, 8}), 16, 16, 4, true, true},
+        GeometryCase{"TallEightWideFaces", Tile({32, 16}, {16, 8}), 32, 16, 4, false, true}),
+    [](const ::testing::TestParamInfo<GeometryCase>& info) { return info.param.name; });
+
 struct ShapeWithoutFormatCase {
     const char* name;
     const char* query;
