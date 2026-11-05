@@ -14,9 +14,7 @@ def test_concat(device):
 
     # Concatenate along dimension 3
     concatenated_tensor = ttnn.concat([tensor1, tensor2], dim=3)
-    logger.info(
-        "Concatenated Tensor Shape:", concatenated_tensor.shape
-    )  # Concatenated Tensor Shape: Shape([1, 1, 64, 64])
+    logger.info(f"Concatenated Tensor Shape: {concatenated_tensor.shape}")  # Shape([1, 1, 64, 64])
 
 
 def test_nonzero(device):
