@@ -27,6 +27,13 @@ namespace fabric_router {
 constexpr uint8_t LOCAL_NOC = tt::tt_fabric::edm_to_local_chip_noc;
 constexpr uint8_t LOCAL_NOC_VC = tt::tt_fabric::forward_and_local_write_noc_vc;
 
+// Whether local writes go into the NoC's software write counters (noc_nonposted_writes_num_issued/acked). Blackhole:
+// yes, as its write API always counts (issue 28758), and a flushed atomic then checks the counters once
+// (flush_write_to_noc_pipeline's fast path). Wormhole: no. Nothing reads them while the router runs (the flush checks
+// transaction IDs there) and teardown reloads them from the NIU (ncrisc_noc_counters_init), so counting would only add
+// two L1 read-modify-writes per delivered packet.
+constexpr bool counts_local_writes = is_blackhole_arch;
+
 FORCE_INLINE void local_write_init() {
     if constexpr (CommandBuffers::presets) {
         while (!noc_cmd_buf_ready(LOCAL_NOC, CommandBuffers::local_writes));
@@ -75,14 +82,16 @@ FORCE_INLINE void local_write(uint32_t src_addr, uint64_t dst_noc_addr, uint32_t
 // API updates itself for each write it counts (update_counter): a scatter packet's writes skip that and are counted
 // here once. The one place the router touches the API's counters.
 FORCE_INLINE void count_local_writes(uint32_t writes) {
-    noc_nonposted_writes_num_issued[LOCAL_NOC] += writes;
-    noc_nonposted_writes_acked[LOCAL_NOC] += writes;
+    if constexpr (counts_local_writes) {
+        noc_nonposted_writes_num_issued[LOCAL_NOC] += writes;
+        noc_nonposted_writes_acked[LOCAL_NOC] += writes;
+    }
 }
 
 // An atomic increment; a flushed one first waits for every earlier write to be acknowledged.
 FORCE_INLINE void local_atomic_inc(uint64_t addr, uint32_t value, bool flush, uint8_t channel) {
     if (flush) {
-        flush_write_to_noc_pipeline</*all_writes_counted=*/true>(channel);
+        flush_write_to_noc_pipeline</*all_writes_counted=*/counts_local_writes>(channel);
     }
     noc_semaphore_inc<true>(addr, value, LOCAL_NOC, LOCAL_NOC_VC);
 }
@@ -126,7 +135,7 @@ FORCE_INLINE void deliver(
     const uint32_t payload = reinterpret_cast<uint32_t>(header) + sizeof(PACKET_HEADER_TYPE);
     if (type == NocSendType::NOC_UNICAST_WRITE) {
         channel_trimming_usage_recorder.set_noc_send_type_used(CH, type);
-        local_write<true>(payload, header->command_fields.unicast_write.noc_address, payload_size, trid);
+        local_write<counts_local_writes>(payload, header->command_fields.unicast_write.noc_address, payload_size, trid);
         return;
     }
     if (type == NocSendType::NOC_UNICAST_SCATTER_WRITE) {
@@ -178,7 +187,7 @@ FORCE_INLINE void deliver(
     if (type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
         channel_trimming_usage_recorder.set_noc_send_type_used(CH, type);
         const auto& fused = header->command_fields.unicast_seminc_fused;
-        local_write<true>(payload, fused.noc_address, payload_size, trid);
+        local_write<counts_local_writes>(payload, fused.noc_address, payload_size, trid);
         local_atomic_inc(fused.semaphore_noc_address, fused.val, fused.flush != 0, CH);
         return;
     }
