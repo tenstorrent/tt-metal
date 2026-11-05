@@ -6,7 +6,7 @@ fabric settings and the architecture. It also describes each mesh's credit trans
 
 | Function | Fills | Reads |
 | --- | --- | --- |
-| `describe_run()` | `run` | The MPI context, the clock, the build's version header |
+| `describe_run(control_plane)` | `run` | The MPI context, the physical system descriptor, the clock, the build's version header |
 | `describe_fabric(control_plane)` | `fabric` | ControlPlane, FabricContext, the Metal environment |
 | `describe_arch(hal)` | `arch` | The HAL, UMD, and fabric's heartbeat constants |
 | `describe_credit_transport(builder_context, mesh_id)` | A mesh's `credit_transport` | The builder context's credit transport plan for the mesh |
@@ -21,6 +21,7 @@ has already decided.
 | Key | From |
 | --- | --- |
 | `mpi_rank`, `world_size` | The MPI context: this process and how many there are |
+| `host_name` | `PhysicalSystemDescriptor::my_host_name()`: the name discovery gave this host, the cluster descriptor's cluster id. On a mock cluster without one, it's the mock descriptor's file name |
 | `written_at` | The time the manifest was written, in UTC, as ISO 8601 |
 | `build.git_sha`, `build.git_sha_short`, `build.git_dirty` | The commit tt-metal was built from, and whether tracked files had uncommitted changes |
 | `build.version`, `build.build_type` | The version string and the CMake build type, such as `Release` |
@@ -64,6 +65,9 @@ The rest of `fabric` is what FabricContext derived from the settings:
 ## Arch
 
 `arch` describes what the architecture fixes on every router core, stated once since it's the same on all of them.
+
+**L1** (`arch.l1`): the HAL's `BASE` area on an active Ethernet core, its address and size. On Wormhole that stops 32
+bytes short of the core's 256 KB, which UMD keeps for its L1 barrier.
 
 **L1 areas** (`arch.l1_areas`). Each is an L1 region, registered with the type it holds and its location from the HAL
 or fabric (TYPE_REGISTRY.md's "Where regions are registered"):

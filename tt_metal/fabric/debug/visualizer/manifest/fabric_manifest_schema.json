@@ -48,6 +48,11 @@
       "properties": {
         "mpi_rank": { "$ref": "#/$defs/count" },
         "world_size": { "type": "integer", "minimum": 1 },
+        "host_name": {
+          "description": "The host this process runs on, as the physical system descriptor names it: the cluster id UMD stamps on the cluster descriptor (TT_METAL_CLUSTER_ID, else the OS hostname).",
+          "type": "string",
+          "minLength": 1
+        },
         "written_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
         "build": {
           "type": "object",
@@ -69,7 +74,7 @@
           "additionalProperties": false
         }
       },
-      "required": ["mpi_rank", "world_size", "written_at", "build"],
+      "required": ["mpi_rank", "world_size", "host_name", "written_at", "build"],
       "additionalProperties": false
     },
 
@@ -226,10 +231,20 @@
     },
 
     "arch": {
-      "description": "What the architecture fixes on every router core: L1 areas at the HAL's addresses, and the register blocks.",
+      "description": "What the architecture fixes on every router core: its L1, L1 areas at the HAL's addresses, and the register blocks.",
       "type": "object",
       "properties": {
         "name": { "$ref": "#/$defs/name" },
+        "l1": {
+          "description": "The whole L1 of the Ethernet core a router runs on, size_bytes bytes from address: the HAL's BASE area on an active Ethernet core. Every L1 region the manifest names lies inside it.",
+          "type": "object",
+          "properties": {
+            "address": { "$ref": "#/$defs/count" },
+            "size_bytes": { "type": "integer", "minimum": 1 }
+          },
+          "required": ["address", "size_bytes"],
+          "additionalProperties": false
+        },
         "l1_areas": {
           "type": "object",
           "properties": {
@@ -288,7 +303,7 @@
         },
         "fabric_telemetry_version": { "description": "FABRIC_TELEMETRY_VERSION: which layout of FabricTelemetry the fabric_telemetry area holds.", "$ref": "#/$defs/count" }
       },
-      "required": ["name", "l1_areas", "core_registers", "fabric_telemetry_version"],
+      "required": ["name", "l1", "l1_areas", "core_registers", "fabric_telemetry_version"],
       "additionalProperties": false
     },
 
