@@ -2316,6 +2316,13 @@ class TPGatedDeltaNet:
             # persistent fp32 zero initial state: the op's own fallback (ttnn.zeros) is a host upload, illegal under trace
             zero_rec=zero_rec if zero_rec is not None else z((Bg, self.Nv, self.Dk, self.Dv), ttnn.float32),
             conv=[z((1, Bg, self.qkv_dim_tp), ttnn.bfloat16) for _ in range(self.K)],
+            # QWEN36_GDN_CONV_PACKED=1: the K-1 conv taps of every row in ONE [Bg, K-1, C] tensor (one copy per layer
+            # instead of a slice / re-tile / copy per tap); conv[*] then stay untouched
+            conv_packed=(
+                z((Bg, self.K - 1, self.qkv_dim_tp), ttnn.bfloat16)
+                if os.environ.get("QWEN36_GDN_CONV_PACKED", "0") == "1"
+                else None
+            ),
         )
 
     def _kda_conv_group(self, qkv, conv_sel, zeros_pad, hist_first=False):
@@ -2494,9 +2501,12 @@ class TPGatedDeltaNet:
         if rec_src is not final_state:
             ttnn.deallocate(rec_src)
         ttnn.deallocate(final_state)
-        for m in range(1, self.K):
-            src = ttnn.reshape(ttnn.slice(conv_new_state, (0, m - 1, 0), (Bg, m, C)), (1, Bg, C))
-            ttnn.copy(src, scratch.conv[m])
+        if getattr(scratch, "conv_packed", None) is not None:
+            ttnn.copy(conv_new_state, scratch.conv_packed)
+        else:
+            for m in range(1, self.K):
+                src = ttnn.reshape(ttnn.slice(conv_new_state, (0, m - 1, 0), (Bg, m, C)), (1, Bg, C))
+                ttnn.copy(src, scratch.conv[m])
         ttnn.deallocate(conv_new_state)
 
         return self._prefill_out_tail(o, z, M, o_head_major=self._gdn_fuse_out, B=Bg, return_gated=return_gated)
