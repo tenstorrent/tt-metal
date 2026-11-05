@@ -23,6 +23,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>  // ttsl::hash for hash_named_args_schema
 
+#include "impl/experimental/blaze/named_kernel_args_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_settings.hpp"
@@ -67,6 +68,42 @@ std::vector<uint32_t> merge_common_runtime_args(const KernelDescriptor& kernel_d
         merged.insert(merged.end(), arg.values.begin(), arg.values.end());
     }
     return merged;
+}
+
+// Lengths of the positional-then-named layout. Empty lists are skipped unless named per-core args are merged.
+std::map<CoreCoord, std::size_t> merged_per_core_runtime_arg_counts(const KernelDescriptor& kernel_descriptor) {
+    const auto& named_args = kernel_descriptor.blaze_named_args;
+    std::map<CoreCoord, std::size_t> core_to_count;
+    // SetRuntimeArgs skips an empty list, so it must not replace the last nonempty positional count.
+    const bool merges_named_per_core_args =
+        !named_args.named_per_core_runtime_args.empty() || !named_args.named_per_core_runtime_arg_arrays.empty();
+    for (const auto& [core, positional] : kernel_descriptor.runtime_args) {
+        if (!merges_named_per_core_args && positional.empty()) {
+            core_to_count.try_emplace(core, 0);
+        } else {
+            core_to_count[core] = positional.size();
+        }
+    }
+    for (const auto& arg : named_args.named_per_core_runtime_args) {
+        for (const auto& core_value : arg.core_values) {
+            core_to_count[core_value.first] += 1;
+        }
+    }
+    for (const auto& arg : named_args.named_per_core_runtime_arg_arrays) {
+        for (const auto& [core, values] : arg.core_values) {
+            core_to_count[core] += values.size();
+        }
+    }
+    return core_to_count;
+}
+
+std::size_t merged_common_runtime_arg_count(const KernelDescriptor& kernel_descriptor) {
+    const auto& named_args = kernel_descriptor.blaze_named_args;
+    std::size_t count = kernel_descriptor.common_runtime_args.size() + named_args.named_common_runtime_args.size();
+    for (const auto& arg : named_args.named_common_runtime_arg_arrays) {
+        count += arg.values.size();
+    }
+    return count;
 }
 
 }  // namespace
@@ -190,6 +227,37 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
         }
     }
     kernel->set_named_ct_arg_namespaces(ct_ns_map);
+}
+
+void validate_cached_runtime_arg_counts(
+    Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_index) {
+    auto kernel = program.impl().get_kernel(kernel_index);
+    // Apply writes every positional entry; the merged count keeps only the last one per core.
+    for (const auto& [core, args] : kernel_descriptor.runtime_args) {
+        const std::size_t cached = kernel->logical_runtime_arg_count(core);
+        TT_FATAL(args.size() <= cached, "Runtime args size mismatch: cached {} vs new {}", cached, args.size());
+    }
+    const auto expected_per_core = merged_per_core_runtime_arg_counts(kernel_descriptor);
+    for (const auto& [core, expected] : expected_per_core) {
+        const std::size_t cached = kernel->logical_runtime_arg_count(core);
+        TT_FATAL(cached == expected, "Runtime args size mismatch: cached {} vs new {}", cached, expected);
+    }
+    // A cached core missing from the new descriptor is the same as an empty list.
+    for (const auto& core : kernel->cores_with_runtime_args()) {
+        if (expected_per_core.contains(core)) {
+            continue;
+        }
+        const std::size_t cached = kernel->logical_runtime_arg_count(core);
+        TT_FATAL(cached == 0, "Runtime args size mismatch: cached {} vs new {}", cached, 0);
+    }
+
+    const std::size_t expected_common = merged_common_runtime_arg_count(kernel_descriptor);
+    const std::size_t cached_common = kernel->logical_common_runtime_arg_count();
+    TT_FATAL(
+        cached_common == expected_common,
+        "Common runtime args size mismatch: cached {} vs new {}",
+        cached_common,
+        expected_common);
 }
 
 void apply_named_runtime_args(Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_index) {

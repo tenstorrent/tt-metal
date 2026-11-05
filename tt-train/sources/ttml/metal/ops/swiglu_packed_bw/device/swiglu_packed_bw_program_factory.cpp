@@ -49,7 +49,7 @@ SwigluPackedBwProgramFactory::cached_program_t SwigluPackedBwProgramFactory::cre
     const auto& dh = tensor_args.dL_dh;
 
     auto* const device = packed.device();
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
 
     const tt::DataFormat data_format = datatype_to_dataformat_converter(packed.dtype());
     const uint32_t tile_size_bytes = tt::tile_size(data_format);
