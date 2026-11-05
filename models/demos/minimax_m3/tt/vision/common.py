@@ -257,8 +257,15 @@ def _linear_blocking(
 # The q chunks sdpa_program_config picks from. Chunks below 128 are left out: on a P150 a q chunk of 64 saved 0.4 ms
 # of the 3.7 ms its query rows predict at 672x672, and none has been timed at a size where the rule would pick it.
 SDPA_Q_CHUNK_SIZES = (128, 160, 192, 256)
-# On a P150 k chunks of 256 ran a 672x672 image about as fast as q chunks of 160, but change the output's rounding.
-SDPA_K_CHUNK_SIZE = 128
+# The k chunk of sdpa_program_config. SDPA rescales its running softmax sum and output once per k chunk, so chunks of
+# 256 rescale half as often as chunks of 128: the output rounds differently, at the same precision (HiFi4, fp32
+# accumulation). On a P150 (12x10, activations in DRAM), with q chunks of 160, a 672x672 image ran 2.7 ms faster with
+# k chunks of 256 than of 128. On the six images of tests/test_vision_accuracy.py its final output was closer to the
+# fp32 Hugging Face goldens (lowest PCC 0.99932 against 0.99892) and its tower output about as close (lowest PCC 0.99823
+# against 0.99830).
+# SDPA's circular buffers grow with the k chunk; the L1 walk in tests/unit/test_vision_block_placement.py checks that
+# they still fit below the blocks' tensors wherever block_placement keeps those in L1.
+SDPA_K_CHUNK_SIZE = 256
 
 
 def sdpa_program_config(mesh_device, seq_len: int, num_heads: int):

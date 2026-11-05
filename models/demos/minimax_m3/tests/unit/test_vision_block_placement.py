@@ -196,14 +196,16 @@ CB_BYTES = {
 }
 # At 2304 patches on 12x10, in a bank of P150_L1_BANK_BYTES (a device opened with no L1_SMALL region), the least margin
 # of each block op over the blocks. A P150 measured these with every tensor of the block in L1 interleaved; SDPA's and
-# GELU's outputs, in DRAM here, leave them the same.
+# GELU's outputs, in DRAM here, leave them the same. SDPA's, with its k chunks of 256, it measured with the residual
+# stream in block shards instead, where SDPA's lowest tensor lay where it lies here: with k chunks of 128 SDPA's margin
+# was 516224 B in both runs.
 MEASURED_MARGINS_2304 = dict(
     ln1=625280,
     qkv=199296,
     heads=940672,
     rope_q=873088,
     rope_k=873088,
-    sdpa=516224,
+    sdpa=312960,
     add1=1292928,
     ln2=625280,
     fc1=125568,
