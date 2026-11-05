@@ -152,6 +152,24 @@ def test_ctrl_page_words_follow_the_op_contract():
         assert idx[1, t * lay.nv : (t + 1) * lay.nv].tolist() == lay.head_pages(torch.tensor([21 + t]))[0].tolist()
 
 
+def test_chain_body_twin_builds_the_host_ctrl_pages():
+    # The chain body (QWEN36_SPEC_CHAIN) gathers each group's start pages from its ring_page_idx at column mi'; for a
+    # chained step that is the host's page with start column mi and no held row.
+    from models.demos.blackhole.qwen36.tt.spec_chain import chain_ctrl_rows
+
+    lay = _layout(4, 2048, 8, "two_pool")
+    book = sbs.SpecBlockBook(lay, 3, B, T, "none")
+    g = torch.Generator().manual_seed(0)
+    blocks = [torch.randperm(60, generator=g)[: B * T].reshape(B, T) + 1 for _ in range(3)]
+    book.set_step(blocks, torch.zeros(B, dtype=torch.int64), range(B))
+    words = spec_ctrl_words(B, lay.nv)
+    for mi in ([0, 1, 2, 3], [3, 3, 0, 1], [2, 0, 0, 0]):
+        host = book.ctrl_rows(mi, 1, words, hold=(), start_col=mi).to(torch.int64) & 0xFFFFFFFF
+        twin = chain_ctrl_rows(mi, 1, B=B, K=K, Nv=lay.nv, ctrl_words=words, ring_idx=book.idx_host)
+        assert [r.tolist() for r in host] == [r.tolist() for r in twin]
+    assert max(int(r.max()) for r in book.idx_host) < 1 << 24  # exact in the body's fp32 math
+
+
 # --------------------------------------------------------------------------------------------------- the fake device
 class _FakeDevice:
     """Pages of every GDN group as labels: the head pages (first page of each head) and the conv history page of a

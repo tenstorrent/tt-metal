@@ -120,7 +120,9 @@ def pack_ovr_host(
     return _wrap32(out)
 
 
-def chain_reference(res_c, drafts, fused_aux_prev, ovr, *, B, K, Nv, rope_rows, ctrl_words, rope_delta=None):
+def chain_reference(
+    res_c, drafts, fused_aux_prev, ovr, *, B, K, Nv, rope_rows, ctrl_words, rope_delta=None, ring_idx=None
+):
     """Pure-torch twin of CH. Returns (token_buf int32 [R] (uint32 words), vfy_aux int32 [3, W] (uint32 words),
     next_fused_aux int32 [7, W_aux]).
 
@@ -131,6 +133,8 @@ def chain_reference(res_c, drafts, fused_aux_prev, ovr, *, B, K, Nv, rope_rows, 
       tokens = ((tok0, cols) * (1-mask) + host_tokens * mask) * active'
       row0 = p0' + j (model._vfy_row_positions, model.py:2309); row1 = rope_row_index (tp_common.py:156)
       row2 = spec_ctrl_page (gdn/tp.py:301): [parity, mi'[B], ((mi'*B+u)*Nv+h)[B*Nv]] zero padded to ctrl_words
+      ``ring_idx`` (QWEN36_MAMBA_SPEC: one int [B, T*Nv] ring_page_idx per GDN group): rows 2 .. 1 + G instead, the ctrl
+      page of group g = [parity, mi'[B], ring_idx[g][u, mi'*Nv + h][B*Nv]] (the start state in window column mi')
       next aux = ovr rows 0..3,5 and OVR_DELTA (as aux row 6) with row 4 = p0' (spec_fused.fused_accept_aux_host layout)
     ``fused_aux_prev`` (the step that made res_c; may be None) is only checked: its p0 row must equal RES_P0."""
     T, R = K + 1, B * (K + 1)
@@ -163,17 +167,36 @@ def chain_reference(res_c, drafts, fused_aux_prev, ovr, *, B, K, Nv, rope_rows, 
         else [signed_rope_delta(w) for w in ovr[OVR_DELTA, :B].tolist()]
     )
     ridx = rope_row_index(pos, [d for d in row_d for _ in range(T)], rope_rows).to(torch.int64)
-    blk = ((min_ * B + torch.arange(B))[:, None] * Nv + torch.arange(Nv)[None, :]).reshape(-1)
-    ctrl = torch.zeros(ctrl_words, dtype=torch.int64)
-    ctrl[0] = parity
-    ctrl[1 : 1 + B] = min_
-    ctrl[1 + B : 1 + B + B * Nv] = blk
+    ctrls = chain_ctrl_rows(min_, parity, B=B, K=K, Nv=Nv, ctrl_words=ctrl_words, ring_idx=ring_idx)
     token_buf = _wrap32(tokens.reshape(-1))
-    vfy_aux = pack_u32_rows([pos, ridx, ctrl])
+    vfy_aux = pack_u32_rows([pos, ridx, *ctrls])
     w_aux = _align(max(B, 5))
     aux = torch.cat([ovr[:AUX_DELTA, :w_aux], ovr[OVR_DELTA : OVR_DELTA + 1, :w_aux]], 0).clone()
     aux[AUX_P0, :B] = p0n
     return token_buf, vfy_aux, _wrap32(aux)
+
+
+def chain_ctrl_rows(min_, parity, *, B, K, Nv, ctrl_words, ring_idx=None):
+    """The GDN ctrl page(s) of chain_reference: [parity, mi'[B], start block or page per (u, h)] zero padded to
+    ctrl_words, int64. Without ``ring_idx`` one page of ring blocks (mi'*B+u)*Nv+h; with it one page per GDN group whose
+    start pages are ring_idx[g][u, mi'*Nv + h]."""
+    min_ = torch.as_tensor(min_).to(torch.int64).reshape(B)
+    if ring_idx is None:
+        blks = [((min_ * B + torch.arange(B))[:, None] * Nv + torch.arange(Nv)[None, :]).reshape(-1)]
+    else:
+        cols = (min_[:, None] * Nv + torch.arange(Nv)[None, :]).to(torch.int64)
+        blks = [
+            torch.gather(torch.as_tensor(r).to(torch.int64).reshape(B, (K + 1) * Nv), 1, cols).reshape(-1)
+            for r in ring_idx
+        ]
+    ctrls = []
+    for blk in blks:
+        ctrl = torch.zeros(ctrl_words, dtype=torch.int64)
+        ctrl[0] = int(parity)
+        ctrl[1 : 1 + B] = min_
+        ctrl[1 + B : 1 + B + B * Nv] = blk
+        ctrls.append(ctrl)
+    return ctrls
 
 
 def fused_fit_mode_range(p0_prev, capacity, active, K):
@@ -227,7 +250,9 @@ class ChainDevice:
              ovr_in     int32 RM [11, W_o] (pack_ovr_host layout, staged by the host: ``stage_ovr``)
     Outputs, written IN PLACE with ttnn.copy (addresses never change):
              tok_out    uint32 RM [1, R]   (= model._vfy_token_buf)
-             vaux_out   uint32 RM [3, W_v] (= model._vfy_aux_buf; W_v = align(max(R, spec_ctrl_words(B, Nv))))
+             vaux_out   uint32 RM [3, W_v] (= model._vfy_aux_buf; W_v = align(max(R, spec_ctrl_words(B, Nv))));
+                        [2 + G, W_v] with ``ring_idx`` (G uint32 RM [B, T*Nv] ring_page_idx tensors, QWEN36_MAMBA_SPEC):
+                        one ctrl page per GDN group, start pages gathered at column mi' (chain_reference)
              next_aux_out = aux_prev_in itself (int32 [7, W_a]): every value is read before the final copy.
     All values are integers < 2^24, so fp32 TILE math is exact.
     QWEN36_SPEC_CHAIN_KERNEL=1: ``body`` is ONE single-core kernel on the same buffers (spec_fused_kernels.ChainKernel); the op
@@ -269,14 +294,20 @@ class ChainDevice:
         draft_ins=None,
         tok_out=None,
         vaux_out=None,
+        ring_idx=None,
     ):
         """Persistent buffers; every ``*_in`` / ``*_out`` argument binds a LIVE engine tensor (shape / dtype / layout
-        checked), None allocates a standalone one."""
+        checked), None allocates a standalone one. ``ring_idx``: see the class docstring."""
         import ttnn
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_words
 
         self = cls()
         self.mesh, self.B, self.K, self.Nv, self.T, self.R = mesh, B, K, Nv, K + 1, B * (K + 1)
+        self.ring_idx = None if ring_idx is None else list(ring_idx)
+        n_ctrl = 1 if ring_idx is None else len(self.ring_idx)
+        if self.ring_idx is not None:
+            for i, t in enumerate(self.ring_idx):
+                cls._check_bound(f"ring_idx[{i}]", t, (B, (K + 1) * Nv), ttnn.uint32)
         R = self.R
         self.W_res, self.W_a = _align(max(R, B)), _align(max(B, 5))
         self.W_o, self.ctrl_words = _align(max(R, B, 5)), spec_ctrl_words(B, Nv)
@@ -291,7 +322,7 @@ class ChainDevice:
         for name, t, shape, dt in (
             ("aux_prev_in", aux_prev_in, (FUSED_AUX_ROWS, self.W_a), i32),
             ("tok_out", tok_out, (1, R), u32),
-            ("vaux_out", vaux_out, (3, self.W_v), u32),
+            ("vaux_out", vaux_out, (2 + n_ctrl, self.W_v), u32),
         ):
             if t is not None:
                 cls._check_bound(name, t, shape, dt)
@@ -299,7 +330,7 @@ class ChainDevice:
             aux_prev_in if aux_prev_in is not None else cls._dev(mesh, z(FUSED_AUX_ROWS, self.W_a), i32, RM)
         )
         self.tok_out = tok_out if tok_out is not None else cls._dev(mesh, z(1, R), u32, RM)
-        self.vaux_out = vaux_out if vaux_out is not None else cls._dev(mesh, z(3, self.W_v), u32, RM)
+        self.vaux_out = vaux_out if vaux_out is not None else cls._dev(mesh, z(2 + n_ctrl, self.W_v), u32, RM)
         if draft_ins is None:
             draft_ins = [cls._dev(mesh, z(1, 1, B, 1), u32, RM) for _ in range(K)]
         assert len(draft_ins) == K
@@ -313,6 +344,10 @@ class ChainDevice:
         self.c_iota_h = f(torch.arange(Nv).reshape(1, Nv))
         self.c_u = f(torch.arange(B).reshape(B, 1))
         if spec_chain_kernel_enabled():
+            if self.ring_idx is not None:
+                raise ValueError(
+                    "QWEN36_SPEC_CHAIN_KERNEL=1 does not build the per-group ctrl pages of QWEN36_MAMBA_SPEC"
+                )
             from models.demos.blackhole.qwen36.tt.spec_fused_kernels import attach_chain_kernel
 
             self._kernel = attach_chain_kernel(self)
@@ -388,11 +423,27 @@ class ChainDevice:
         # ---- verify aux [3, W_v]: kv positions, rope rows, GDN ctrl page
         pos = ttnn.add(p0n, self.c_iota_t)  # [B,T]
         ridx = ttnn.minimum(ttnn.relu(ttnn.add(pos, delta)), rows_m1)
-        blk = ttnn.add(ttnn.multiply(ttnn.add(ttnn.multiply(min_, float(B)), self.c_u), float(Nv)), self.c_iota_h)
-        ctrl = cat([parity, ttnn.transpose(min_, 0, 1), ttnn.reshape(blk, (1, B * Nv))], 1)  # [1, 1+B+B*Nv]
-        vaux = cat(
-            [padw(ttnn.reshape(pos, (1, R)), R), padw(ttnn.reshape(ridx, (1, R)), R), padw(ctrl, 1 + B + B * Nv)], 0
-        )
+        if self.ring_idx is None:
+            blks = [
+                ttnn.add(ttnn.multiply(ttnn.add(ttnn.multiply(min_, float(B)), self.c_u), float(Nv)), self.c_iota_h)
+            ]
+        else:  # QWEN36_MAMBA_SPEC: start page of (u, h) = ring_page_idx[u, mi'*Nv + h] (one-hot over the T columns)
+            sel = fl(ttnn.eq(self.c_iota_t, min_))  # [B,T]
+            blks = []
+            for idx in self.ring_idx:
+                pages = fl(idx)  # [B, T*Nv]
+                acc = None
+                for t in range(T):
+                    term = ttnn.multiply(
+                        ttnn.slice(pages, [0, t * Nv], [B, (t + 1) * Nv]), ttnn.slice(sel, [0, t], [B, t + 1])
+                    )
+                    acc = term if acc is None else ttnn.add(acc, term)
+                blks.append(acc)  # [B,Nv]
+        ctrls = [
+            padw(cat([parity, ttnn.transpose(min_, 0, 1), ttnn.reshape(blk, (1, B * Nv))], 1), 1 + B + B * Nv)
+            for blk in blks
+        ]  # [1, 1+B+B*Nv] each
+        vaux = cat([padw(ttnn.reshape(pos, (1, R)), R), padw(ttnn.reshape(ridx, (1, R)), R), *ctrls], 0)
         ttnn.copy(ttnn.to_layout(ttnn.typecast(vaux, ttnn.uint32), RM), self.vaux_out)
         # ---- next fused aux = ovr rows 0..3, 5, OVR_DELTA with row 4 = p0' (written over aux_prev_in: all reads are above)
         p0row = ttnn.pad(ttnn.transpose(p0n, 0, 1), [(0, 0), (0, W_a - B)], value=0.0)

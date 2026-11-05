@@ -289,9 +289,21 @@ class SpecBlockBook:
             self.row_blocks[int(u)] = mapped
         return changed
 
-    def ctrl_rows(self, mi, parity, words, hold=()):
-        """int32 [G, words]: the ctrl page of each group (same parity and mi, the group's start pages)."""
-        return torch.cat([ctrl_page_paged(mi, self.init[g], parity, words, hold) for g in range(self.G)], dim=0)
+    def ctrl_rows(self, mi, parity, words, hold=(), start_col=None):
+        """int32 [G, words]: the ctrl page of each group (same parity and mi, the group's start pages). ``start_col``
+        (int [B]): start pages at these columns of the staged windows instead of the staged start columns."""
+        init = self.init
+        if start_col is not None and self.step_blocks is not None:
+            sw = StepWindows(self.step_blocks, torch.as_tensor(start_col, dtype=torch.int64).reshape(-1))
+            init = [sw.init_pages(self.layout, g) for g in range(self.G)]
+        return torch.cat([ctrl_page_paged(mi, init[g], parity, words, hold) for g in range(self.G)], dim=0)
+
+    def set_start(self, cols):
+        """Move staged rows' start columns: {engine row: column} (a chained row the host stages after all)."""
+        for u, c in cols.items():
+            self.step_start[u] = int(c)
+            for g in range(self.G):
+                self.init[g][u] = self.layout.head_pages(self.step_blocks[g][u, int(c)].reshape(1))[0]
 
     def step_start_blocks(self, u):
         """[G] block ids of engine row u's start column in the staged step, or None."""
@@ -461,8 +473,8 @@ class SpecGdnBlockState:
                 self._idx_dev[g],
             )
 
-    def ctrl_rows(self, mi, parity, words, hold=()):
-        return self.book.ctrl_rows(mi, parity, words, hold)
+    def ctrl_rows(self, mi, parity, words, hold=(), start_col=None):
+        return self.book.ctrl_rows(mi, parity, words, hold, start_col)
 
     def step_start_blocks(self, u):
         return self.book.step_start_blocks(u)

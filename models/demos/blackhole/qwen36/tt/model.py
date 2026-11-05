@@ -2526,11 +2526,14 @@ class Qwen36Model:
         assert len(d) * T == int(n_pos), (len(d), T, n_pos)
         return [x for x in d for _ in range(T)]
 
-    def _vfy_aux_host(self, row_positions, mi_prev, parity=None, rope_delta=None):
+    def _vfy_aux_host(self, row_positions, mi_prev, parity=None, rope_delta=None, predict=False, hold=None):
         """Host form of ``_vfy_aux_buf``: torch.int32 [3 (2 without the fused GDN op), W]. ``parity`` (default: the layers'
         current GDN window parity): the parity word of the ctrl page, for a step whose replay was enqueued earlier.
         ``rope_delta`` (default: each row's own delta): an int = every row the same; a list of one delta per engine row
         (each repeated for the row's T positions, user-major), as the fused / chain device bodies build it.
+        ``predict`` (QWEN36_MAMBA_SPEC, the next verify's prestage): start pages at window column mi_prev of the staged
+        windows, the next step's start column when its window does not move and no copy resets its count. ``hold``
+        (QWEN36_MAMBA_SPEC): the held rows (default: the step's, every row before the first step).
         """
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_page
 
@@ -2556,9 +2559,14 @@ class Qwen36Model:
             if blocks is None:
                 segs.append(spec_ctrl_page(mi_prev, self._vfy_B, self._vfy_Nv, parity=parity).reshape(-1))
             else:  # QWEN36_MAMBA_SPEC: start pages of each group's window column state_accepted_counts - 1; held rows
-                hold = getattr(self, "_spec_hold", None)  # None (warmup, capture): every row is held
+                if hold is None:
+                    hold = getattr(self, "_spec_hold", None)  # None (warmup, capture): every row is held
                 rows = blocks.ctrl_rows(
-                    mi_prev, parity, self._vfy_ctrl_words, hold=range(self._vfy_B) if hold is None else hold
+                    mi_prev,
+                    parity,
+                    self._vfy_ctrl_words,
+                    hold=range(self._vfy_B) if hold is None else hold,
+                    start_col=mi_prev if predict else None,
                 )
                 segs.extend(r.to(torch.int64) & 0xFFFFFFFF for r in rows)
         return pack_u32_rows(segs)
@@ -2596,7 +2604,7 @@ class Qwen36Model:
             return False
         if any(int(x) < 0 for x in positions) or any(not 0 <= int(x) < T for x in mi_prev):
             return False
-        self._vfy_stage_aux(self._vfy_aux_host(self._vfy_row_positions(positions), mi_prev))
+        self._vfy_stage_aux(self._vfy_aux_host(self._vfy_row_positions(positions), mi_prev, predict=True))
         return True
 
     def _vfy_narrow_logits(self, logits_rm, b=None):

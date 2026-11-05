@@ -2205,12 +2205,6 @@ class MTPSpecEngine:
         """
         if not spec_chain_enabled():
             return
-        if self._paged_state() is not None:
-            logger.warning(
-                "[spec_engine] QWEN36_SPEC_CHAIN=1 with QWEN36_MAMBA_SPEC: the chain body does not build the "
-                "per-group ctrl pages yet; chain off"
-            )
-            return
         model, fa, fs = self.model, self._fa, self._fs
         if not (
             getattr(model, "_vfy_hostset", False)
@@ -2222,6 +2216,15 @@ class MTPSpecEngine:
             )
             return
         kw = dict(aux_prev_in=fa.aux_in, tok_out=model._vfy_token_buf, vaux_out=model._vfy_aux_buf)
+        paged = self._paged_state()
+        if paged is not None:
+            # QWEN36_MAMBA_SPEC: one ctrl page per GDN group, start pages gathered from its ring_page_idx in fp32
+            if 2 * paged.layout.pool1_pages >= 1 << 24:
+                raise ValueError(
+                    f"QWEN36_SPEC_CHAIN with QWEN36_MAMBA_SPEC: {2 * paged.layout.pool1_pages} state pages exceed the "
+                    "chain body's exact fp32 range (2^24)"
+                )
+            kw["ring_idx"] = list(paged._idx_dev)
         Nv = int(model._vfy_Nv)
         ch_g = ch_s = None
         try:
@@ -3024,7 +3027,10 @@ class MTPSpecEngine:
         act = torch.as_tensor(active, dtype=torch.bool).reshape(-1).tolist()
         live = [u for u in range(self.B) if act[u]]
         start_col = (counts - 1).clamp(0, self.T - 1)
-        bad = [u for u in live if int(counts[u]) < 1 or int(counts[u]) > self.T]
+        # -1: a chained row, whose count only the device knows (the chain body gathers its start pages at column mi');
+        # if the step falls back to the host, verify() starts it at its materialized count - 1
+        self._paged_unknown = [u for u in live if int(counts[u]) == -1]
+        bad = [u for u in live if int(counts[u]) != -1 and (int(counts[u]) < 1 or int(counts[u]) > self.T)]
         if bad:
             raise ValueError(f"state_accepted_counts {counts.tolist()} out of [1, {self.T}] on rows {bad}")
         for g, b in enumerate(blocks):
@@ -3040,6 +3046,11 @@ class MTPSpecEngine:
         paged.set_step(blocks, start_col, live, boundary)
         self.model._spec_hold = [u for u in range(self.B) if not act[u]]
         self._paged_step_rows = live
+
+    def _paged_chain_twin(self):
+        """_vfy_aux_host kwargs that make it build the chain body's words (QWEN36_MAMBA_SPEC): start pages at column
+        mi', no HOLD rows. Empty without the flag."""
+        return {} if self._paged_state() is None else dict(predict=True, hold=())
 
     def release(self, slot):
         """Mark runner slot ``slot`` (engine row _phys[slot]) empty and re-offer drafts to every row (no device work)."""
@@ -4218,6 +4229,11 @@ class MTPSpecEngine:
             self._paged_step_rows = None  # one verify per staged window set
             if fresh_now and not self.fast_join:
                 raise ValueError("QWEN36_MAMBA_SPEC needs the fast join (QWEN36_SPEC_FAST_JOIN=1)")
+            if any(not act[u] and u in self._active for u in range(B)):
+                self._chain_ev = self._chain_ev or "park"  # a held row: the chain body has no HOLD rows
+            unknown = self.__dict__.pop("_paged_unknown", ())
+            if unknown:  # a chain row the host staged: its start column is its materialized count - 1
+                self._paged_state().book.set_start({u: int(mi_prev[u]) for u in unknown})
         if fresh_now and self.fast_join:
             # QWEN36_SPEC_FAST_JOIN=1: seed the fresh rows' ring slot 0 / E_prev in place, then verify them in THIS
             # replay as 0-draft rows at mi = 0 next to the running rows (one forward for the whole step).
@@ -4534,10 +4550,6 @@ class MTPSpecEngine:
             raise ValueError(f"spec_sampling needs spec_mode 'fused_sample', got {spec_mode!r}")
         if self._dv_guard is not None:  # QWEN36_DRAFT_VOCAB_FALLBACK: the drafter head of this step
             self._dv_decide()
-        if defer_read and self._paged_state() is not None:
-            raise NotImplementedError(
-                "QWEN36_MAMBA_SPEC: deferred (defer_read) steps are not wired to the block windows yet"
-            )
         if defer_read:
             if spec_sampling is not None and bool(self._cert_rows(spec_sampling).any()):
                 raise ValueError(
@@ -4565,6 +4577,7 @@ class MTPSpecEngine:
                 chain_rows,
                 chain_tip,
                 finishing_slots,
+                gdn_windows=gdn_windows,
             )
         if chain_rows is not None or chain_tip is not None:
             raise ValueError("chain_rows / chain_tip need defer_read=True")
@@ -5138,6 +5151,9 @@ class MTPSpecEngine:
         cn, p0 = prev["counts"], prev["p0"]
         if not torch.equal(mi[cont], cn[cont] - 1):
             return "counts_differ"
+        paged = self._paged_state()
+        if paged is not None and not torch.equal(paged.book.step_start[cont], mi[cont]):
+            return "mamba_start"  # a state move reset the row's start column: the chain body starts at column mi'
         if not torch.equal(torch.as_tensor(start_pos).to(torch.int64)[cont], (p0 + cn)[cont]):
             return "position_differs"
         tok0 = prev["committed"].gather(1, (cn - 1)[:, None])  # [B, 1] the bonus / correction token
@@ -5180,7 +5196,9 @@ class MTPSpecEngine:
             return None
         exp_tok = torch.as_tensor(args[0]).to(torch.int64).reshape(-1)
         # at the parity the replay reads, with the per-row deltas the trace reads (the common delta with the flag off; inactive rows too)
-        exp_aux = model._vfy_aux_host(model._vfy_row_positions(args[1]), args[2], rope_delta=rope_delta)
+        exp_aux = model._vfy_aux_host(
+            model._vfy_row_positions(args[1]), args[2], rope_delta=rope_delta, **self._paged_chain_twin()
+        )
         return exp_tok, exp_aux, torch.as_tensor(aux).clone()
 
     def _chain_exec(self, prev):
@@ -5404,6 +5422,7 @@ class MTPSpecEngine:
         chain_rows,
         chain_tip,
         finishing_slots=None,
+        gdn_windows=None,
     ):
         """decode_forward(defer_read=True): see the section comment. Returns VerifyResult(spec_mode, None, handle=FusedHandle)."""
         B, K, T = self.B, self.K, self.T
@@ -5455,6 +5474,8 @@ class MTPSpecEngine:
             self.remap_slots(slot_remap)
         clean, start0, active, nv_rows, acc_rows, pt_rows = self._to_rows(clean, start0, active, nv_in, acc, page_table)
         self._check_finishing_rows([u for u in range(B) if bool(active[u])])
+        if self._paged_state() is not None:
+            self._stage_gdn_windows(gdn_windows, start0, active)
         cmask = None if cr is None else (self._to_rows(cr)[0] & active)
         if cmask is not None and not bool(cmask.any()):
             cmask = None
@@ -5958,7 +5979,11 @@ class MTPSpecEngine:
         exp_tok = self._def_tokens(h, pd).reshape(-1)
         delta = aux_row_deltas(h.aux, B)  # the per-row deltas this step's fused aux carries (row AUX_DELTA)
         exp_aux = model._vfy_aux_host(
-            model._vfy_row_positions(p0n.tolist()), min_.tolist(), parity=h.parity, rope_delta=delta
+            model._vfy_row_positions(p0n.tolist()),
+            min_.tolist(),
+            parity=h.parity,
+            rope_delta=delta,
+            **self._paged_chain_twin(),
         )
         exp_fa = h.aux.clone().to(torch.int64)
         exp_fa[AUX_P0, :B] = p0n
