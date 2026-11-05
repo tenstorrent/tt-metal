@@ -11,7 +11,6 @@
 #include "ckernel_trisc_common.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
-#include "llk_dest_region.h"
 
 namespace ckernel
 {
@@ -65,6 +64,32 @@ constexpr std::uint32_t STALL[] = {
 constexpr std::uint32_t DONE[] = {p_stall::UNPACK0, p_stall::MATH, p_stall::WAIT_SFPU, p_stall::PACK, p_stall::NOTHING};
 
 constexpr std::uint32_t DRAIN_STALL = ME == PACK ? p_stall::STALL_MATH | p_stall::STALL_SYNC : p_stall::STALL_SYNC;
+
+// Dest is split into two regions (one in SyncFull). Two are enough for two clients, but with a third client, for example
+// FPU, SFPU and PACK, one client always has to wait for a free region. In the future dest should hold more tensors.
+template <DstSync DST, bool EN_32BIT_DEST>
+struct DestRegion
+{
+    static_assert(DST == DstSync::SyncHalf || DST == DstSync::SyncFull, "Unknown destination synchronization mode");
+
+    static constexpr std::uint32_t REGIONS = DST == DstSync::SyncHalf ? 2 : 1;
+    static constexpr std::uint32_t ROWS    = (trisc::DEST_REGISTER_FULL_SIZE / REGIONS) >> EN_32BIT_DEST;
+
+    static constexpr std::uint32_t base(const std::uint32_t index)
+    {
+        return index * ROWS;
+    }
+
+    static constexpr std::uint32_t next(const std::uint32_t index)
+    {
+        return index ^ (REGIONS - 1);
+    }
+
+    static constexpr std::uint32_t clear_word(const std::uint32_t index)
+    {
+        return TT_OP_ZEROACC(REGIONS == 2 ? p_zeroacc::CLR_HALF : p_zeroacc::CLR_ALL, EN_32BIT_DEST, 0, ADDR_MOD_7, index);
+    }
+};
 
 struct State
 {
@@ -167,7 +192,7 @@ template <DstSync DST, bool EN_32BIT_DEST>
 inline void _llk_dest_sync_init_()
 {
     using namespace dst_sync;
-    using Region = DestRegionOf<DST, EN_32BIT_DEST>;
+    using Region = DestRegion<DST, EN_32BIT_DEST>;
 
     if constexpr (ME == PACK)
     {
@@ -188,7 +213,7 @@ template <DstSync DST, DestClient CLIENT, bool EN_32BIT_DEST>
 NOINLINE void _llk_dest_sync_take_()
 {
     using namespace dst_sync;
-    using Region                  = DestRegionOf<DST, EN_32BIT_DEST>;
+    using Region                  = DestRegion<DST, EN_32BIT_DEST>;
     constexpr std::uint32_t TAKER = to_underlying(CLIENT);
 
     if (state.holder == TAKER)
@@ -197,19 +222,20 @@ NOINLINE void _llk_dest_sync_take_()
     }
     State s = state;
     LLK_ASSERT(TAKER != PACK || s.holder != NONE, "PACK only reads dest, so it cannot open a use");
-    const bool opens = TAKER != PACK && (s.holder == NONE || s.holder == PACK);
-    if (ME != TAKER && !opens && s.holder != ME)
+    const bool opens    = TAKER != PACK && (s.holder == NONE || s.holder == PACK);
+    const bool clears   = ME == PACK && s.holder == PACK;
+    const bool involved = ME == TAKER || (opens ? clears || s.last == ME : s.holder == ME);
+    if (!involved)
     {
         state.holder = TAKER;
         if (TAKER != PACK)
         {
             state.last = TAKER;
         }
-        return;
-    }
-    if (ME != TAKER && opens && s.last != ME && (ME != PACK || s.holder != PACK))
-    {
-        state = {TAKER, TAKER, static_cast<std::uint8_t>(Region::next(s.region)), s.base};
+        if (opens)
+        {
+            state.region = Region::next(s.region);
+        }
         return;
     }
     if (opens)
