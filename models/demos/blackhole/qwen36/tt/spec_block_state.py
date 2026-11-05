@@ -262,51 +262,71 @@ class SpecBlockBook:
         self.step_start = None  # int64 [B] start columns
         self.pending = []  # (engine row, column) whose conv rows are written once the staged verify ran
         self.prefill_blocks = None  # per group int64 [n]: the prefill step's running block of request u
+        self._pages = [torch.zeros(self.B, self.T, nv, dtype=torch.int64) for _ in range(self.G)]  # head pages
+        self._rows = torch.arange(self.B)
+        self._map_live, self._map_dirty = None, True  # live rows the window map was built for; a copy changed it
 
     def set_step(self, blocks, start_col, live_rows, boundary=()):
         """Stage one verify. ``blocks``: [G] int64 [B, T] in ENGINE rows (0 = the null block on rows no request holds);
         ``start_col``: int64 [B] (state_accepted_counts - 1); ``live_rows``: the engine rows the verify computes (the
         others are held). ``boundary``: (row, column) pairs whose conv rows take_pending returns after the verify.
-        Returns the groups whose ring_page_idx rows changed (the device copy to make)."""
+        Returns the groups whose ring_page_idx rows changed (the device copy to make). Runs every decode step, so the
+        head pages of a group and the window map are rebuilt only when its blocks, the live rows or a copy changed
+        them."""
         if len(blocks) != self.G:
             raise ValueError(f"{len(blocks)} window groups, the model binds {self.G}")
-        sw = StepWindows(blocks, start_col)
         changed = []
         for g in range(self.G):
-            host = sw.ring_page_idx(self.layout, g)
-            if not torch.equal(host, self.idx_host[g]):
-                self.idx_host[g] = host
+            if self.step_blocks is None or not torch.equal(blocks[g], self.step_blocks[g]):
+                self._pages[g] = self.layout.head_pages(blocks[g])  # [B, T, Nv]
+                self.idx_host[g] = self._pages[g].reshape(self.B, -1).to(torch.int32)
                 changed.append(g)
-            self.init[g] = sw.init_pages(self.layout, g)
-        self.step_blocks = [b.clone() for b in blocks]
-        self.step_start = torch.as_tensor(start_col, dtype=torch.int64).clone()
+        self.step_blocks = [b.clone() for b in blocks] if changed else self.step_blocks
+        self.step_start = torch.as_tensor(start_col, dtype=torch.int64).reshape(-1).clone()
+        self.init = [p[self._rows, self.step_start] for p in self._pages]
         self.pending = [(int(u), int(t)) for u, t in boundary]
-        for u in live_rows:
-            self.forget_row(u)
-            mapped = []
-            for g in range(self.G):
-                for t, b in enumerate(blocks[g][u].tolist()):
-                    if b > 0:
-                        self.window_map[int(b)] = (int(u), t, g)
-                        mapped.append(int(b))
-            self.row_blocks[int(u)] = mapped
+        live = tuple(int(u) for u in live_rows)
+        if changed or self._map_dirty or live != self._map_live:
+            for u in live:
+                self.forget_row(u)
+                mapped = []
+                for g in range(self.G):
+                    for t, b in enumerate(blocks[g][u].tolist()):
+                        if b > 0:
+                            self.window_map[b] = (u, t, g)
+                            mapped.append(b)
+                self.row_blocks[u] = mapped
+            self._map_live, self._map_dirty = live, False
         return changed
 
     def ctrl_rows(self, mi, parity, words, hold=(), start_col=None):
-        """int32 [G, words]: the ctrl page of each group (same parity and mi, the group's start pages). ``start_col``
-        (int [B]): start pages at these columns of the staged windows instead of the staged start columns."""
-        init = self.init
+        """int32 [G, words]: the ctrl page of each group (same parity and mi, the group's start pages; see
+        ctrl_page_paged). ``start_col`` (int [B]): start pages at these columns of the staged windows instead of the
+        staged start columns."""
         if start_col is not None and self.step_blocks is not None:
-            sw = StepWindows(self.step_blocks, torch.as_tensor(start_col, dtype=torch.int64).reshape(-1))
-            init = [sw.init_pages(self.layout, g) for g in range(self.G)]
-        return torch.cat([ctrl_page_paged(mi, init[g], parity, words, hold) for g in range(self.G)], dim=0)
+            cols = torch.as_tensor(start_col, dtype=torch.int64).reshape(-1)
+            init = torch.stack([p[self._rows, cols] for p in self._pages])
+        else:
+            init = torch.stack(self.init)  # [G, B, Nv]
+        B, nv = self.B, self.layout.nv
+        m = torch.as_tensor(mi, dtype=torch.int64).reshape(-1).clone()
+        hold = list(hold)
+        if hold:
+            init = init.clone()
+            init[:, hold] = 0xFFFFFFFF
+            m[hold] = 0
+        out = torch.zeros(self.G, words, dtype=torch.int64)
+        out[:, 0] = int(parity)
+        out[:, 1 : 1 + B] = m
+        out[:, 1 + B : 1 + B + B * nv] = init.reshape(self.G, -1)
+        return as_u32_words(out)
 
     def set_start(self, cols):
         """Move staged rows' start columns: {engine row: column} (a chained row the host stages after all)."""
         for u, c in cols.items():
             self.step_start[u] = int(c)
             for g in range(self.G):
-                self.init[g][u] = self.layout.head_pages(self.step_blocks[g][u, int(c)].reshape(1))[0]
+                self.init[g][u] = self._pages[g][u, int(c)]
 
     def step_start_blocks(self, u):
         """[G] block ids of engine row u's start column in the staged step, or None."""
@@ -343,17 +363,21 @@ class SpecBlockBook:
             self.forget_block(dst)
             if ent is not None:
                 ops.append(("conv", ent[0], ent[1], ent[2], dst))
+                self._map_dirty = True
                 self.window_map[dst] = ent
                 self.row_blocks.setdefault(ent[0], []).append(dst)
         return ops
 
     def forget_row(self, u):
+        self._map_dirty = True
         for b in self.row_blocks.pop(int(u), ()):
             if self.window_map.get(b, (None,))[0] == int(u):
                 del self.window_map[b]
 
     def forget_block(self, b):
         ent = self.window_map.pop(int(b), None)
+        if ent is not None:
+            self._map_dirty = True
         if ent is not None and int(b) in self.row_blocks.get(ent[0], ()):
             self.row_blocks[ent[0]].remove(int(b))
 

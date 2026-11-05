@@ -3028,27 +3028,26 @@ class MTPSpecEngine:
         for b in blocks:
             if tuple(b.shape) != (self.B, self.T):
                 raise ValueError(f"gdn window {tuple(b.shape)} != [{self.B}, {self.T}]")
-        act = torch.as_tensor(active, dtype=torch.bool).reshape(-1).tolist()
-        live = [u for u in range(self.B) if act[u]]
-        start_col = (counts - 1).clamp(0, self.T - 1)
+        act = torch.as_tensor(active, dtype=torch.bool).reshape(-1)
+        live = torch.nonzero(act).reshape(-1).tolist()
+        c = counts[act]
         # -1: a chained row, whose count only the device knows (the chain body gathers its start pages at column mi');
         # if the step falls back to the host, verify() starts it at its materialized count - 1
-        self._paged_unknown = [u for u in live if int(counts[u]) == -1]
-        bad = [u for u in live if int(counts[u]) != -1 and (int(counts[u]) < 1 or int(counts[u]) > self.T)]
-        if bad:
-            raise ValueError(f"state_accepted_counts {counts.tolist()} out of [1, {self.T}] on rows {bad}")
+        self._paged_unknown = [u for u, n in zip(live, c.tolist()) if n == -1] if bool((c == -1).any()) else []
+        if bool(((c != -1) & ((c < 1) | (c > self.T))).any()):
+            raise ValueError(f"state_accepted_counts {counts.tolist()} out of [1, {self.T}] on live rows {live}")
         for g, b in enumerate(blocks):
-            null = [u for u in live if bool((b[u] <= 0).any())]
-            if null:
+            if bool((b[act] <= 0).any()):
+                null = [u for u in live if bool((b[u] <= 0).any())]
                 raise ValueError(
                     f"group {g}: live rows {null} have a null block in their state window {b[null].tolist()}"
                 )
-        sp = torch.as_tensor(start0).reshape(-1).tolist()
         boundary = []
         if paged.cache_mode == "align":
-            boundary = [(u, 0) for u in live if (int(sp[u]) + 1) % paged.mamba_block_size == 0]
-        paged.set_step(blocks, start_col, live, boundary)
-        self.model._spec_hold = [u for u in range(self.B) if not act[u]]
+            sp = torch.as_tensor(start0).to(torch.int64).reshape(-1)
+            boundary = [(u, 0) for u in torch.nonzero(act & ((sp + 1) % paged.mamba_block_size == 0)).reshape(-1).tolist()]
+        paged.set_step(blocks, (counts - 1).clamp(0, self.T - 1), live, boundary)
+        self.model._spec_hold = torch.nonzero(~act).reshape(-1).tolist()
         self._paged_step_rows = live
 
     def _paged_chain_twin(self):
