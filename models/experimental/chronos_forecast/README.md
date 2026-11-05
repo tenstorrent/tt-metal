@@ -179,6 +179,48 @@ Blackhole Galaxy bring-up:
   `sweeps/sweep_l1_chunk.py`.
 
 
+## Token packing for short sequences
+
+At context 512 and horizon 64 a series is 37 tokens (32 context patches, 4 future patches and the
+REG token), padded to 64: 42% of every matmul and attention row is padding. With
+`pack_tokens=None` (auto), `prepare_inputs` places several unique-group series in one tile-padded
+time sequence, for example six 37-token series in 224 rows. A block-diagonal time mask keeps them
+apart and RoPE positions restart for each series. The forecasts track the FP32 reference about as
+closely as the unpacked path, though not bit for bit: attention now runs over longer, mostly masked
+sequences. `tests/pcc/test_token_packing_pcc.py` checks normalized PCC >= 0.99 and a worst-row
+quantile NRMSE within 0.02 of the unpacked path. On its synthetic series the worst-row NRMSE moves
+both ways by up to about 0.014, for example 0.0317 -> 0.0454 (default, context 17) and
+0.1019 -> 0.0716 (performance, context 160 / b1024).
+
+Packing is off by default (`pack_tokens=False`), so `TtChronos` behaves as before unless you ask
+for it. Auto mode packs only when packing saves at least 25% of the padded rows. It never packs:
+
+- batches of 4 or fewer;
+- grouped series;
+- the paper shape: at context 2048 a series is 133 tokens padded to 160, which saves 10%.
+
+```python
+model = TtChronos.from_torch_model(device, reference, precision,
+                                   l1_chunk_tokens=precision.l1_chunk_tokens(), pack_tokens=None)
+prepared = model.prepare_inputs(context, num_output_patches=4)  # prepared.pack = series per sequence
+runner = TtChronosTraceRunner(model, prepared)
+```
+
+Measured on a 4× Blackhole p150 host with context 512 and horizon 64. Each figure times host
+tensors in and out: `prepare_inputs` plus `TtChronosTraceRunner.execute`. Both versions use L1
+chunks from 16 series per chip. Throughput is the mean of two interleaved rounds (each the median of repeated calls), in series/s:
+
+| Chips | Precision | b64 | b256 | b1024 |
+|---|---|---|---|---|
+| 1 | default (bf16) | 5,606 → 6,138 (1.09×) | 7,186 → 10,206 (1.42×) | 8,592 → 12,349 (1.44×) |
+| 1 | performance (bfp8_b) | 5,627 → 7,095 (1.26×) | 11,040 → 15,704 (1.42×) | 12,234 → 17,320 (1.42×) |
+| 4 | default (bf16) | unpacked | 16,554 → 19,914 (1.20×) | 20,080 → 30,460 (1.52×) |
+| 4 | performance (bfp8_b) | unpacked | 16,432 → 22,825 (1.39×) | 29,042 → 46,216 (1.59×) |
+
+Unpacked calls run the same device code as before and stay within run-to-run noise (±4%). These
+include batches of 1–4, b16, b64 on 4 chips, grouped series and the paper shape. Device memory is
+unchanged.
+
 ## Running the tests
 
 Install the requirements from [Setup](#setup) first; without them the tests

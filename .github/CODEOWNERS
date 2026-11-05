@@ -3,6 +3,7 @@
 # Top-level files
 /* @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+setup.py @tenstorrent/metalium-developers-infra @FConstantinos @aliaksei-sala @tenstorrent/codeowner-bypass
 
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
@@ -457,6 +458,8 @@ ttnn/cpp/ttnn/operations/experimental/matmul_decode/ @tenstorrent/cse-developer-
 ttnn/cpp/ttnn/operations/experimental/matmul_decode/**/CMakeLists.txt @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/minimal_matmul/ @cglagovichTT @jonathansuTT @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/minimal_matmul/**/CMakeLists.txt @cglagovichTT @jonathansuTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/experimental/modulated_deform_conv2d/ @ctr-mmicic @ctr-ikasic @ctr-mdukic @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/experimental/modulated_deform_conv2d/**/CMakeLists.txt @ctr-mmicic @ctr-ikasic @ctr-mdukic @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/padded_slice/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/padded_slice/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/paged_cache/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
@@ -566,6 +569,7 @@ tests/ttnn/**/operations/pool/ @tenstorrent/metalium-developers-convolutions @te
 tests/ttnn/nightly/unit_tests/operations/eltwise/ @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/ @tenstorrent/metalium-developers-ds-prefill @tenstorrent/codeowner-bypass
 tests/ttnn/**/operations/experimental/test_fused_msda*.py @ctr-mmicic @ctr-ikasic @ctr-mdukic @tenstorrent/codeowner-bypass
+tests/ttnn/**/operations/experimental/test_modulated_deform_conv2d*.py @ctr-mmicic @ctr-ikasic @ctr-mdukic @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/experimental/quasar/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass

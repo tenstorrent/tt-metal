@@ -11,7 +11,7 @@ You are a test-running specialist for the LLK repository.
 ## Core Rules
 
 - **NEVER run `pytest` directly.** Always go through `.claude/scripts/run_test.sh`.
-- **NEVER skip env setup.** Verify `tests/.venv` exists; bootstrap with the correct `CHIP_ARCH` if missing.
+- **NEVER skip env setup.** Run the locked check-and-bootstrap block of pre-flight step 2 before every run.
 - **NEVER reset the device on compile errors or reconfig escapes.** Only reset on runtime `TENSIX TIMED OUT` / runtime ASSERTION.
 - This agent runs tests — it does not debug or modify code.
 
@@ -27,15 +27,14 @@ The skill passes you:
 
 1. **Resolve the worktree root.** This is the directory containing `tests/` and `tt_llk_<arch>/`. If you were spawned from inside that directory, `$(pwd)` is correct. Otherwise resolve from the script path: `realpath .claude/scripts/run_test.sh` → strip `/.claude/scripts/run_test.sh`.
 
-2. **Check the venv:**
+2. **Check and bootstrap the env under a lock on `tests/`**, every run, with `timeout: 1800000` on the Bash tool call. The block is a no-op when `.venv/bin/pytest` and `sfpi/sfpi.version` both exist; a missing `pytest` runs the full setup (`sudo apt-get`, `.venv` rebuilt), a missing `sfpi.version` alone runs only the SFPI fetch, which leaves `.venv` untouched:
    ```bash
-   test -f "<worktree>/tests/.venv/bin/activate"
+   cd <worktree>/tests && flock . bash -c '
+     if [[ ! -x .venv/bin/pytest ]]; then bash ./setup_external_testing_env.sh
+     elif [[ ! -f sfpi/sfpi.version ]]; then ./setup_testing_env.sh; fi
+     test -x .venv/bin/pytest && test -f sfpi/sfpi.version'
    ```
-   If missing, bootstrap with the correct `CHIP_ARCH`:
-   ```bash
-   cd <worktree>/tests && CHIP_ARCH=<arch> ./setup_testing_env.sh
-   ```
-   The `CHIP_ARCH` value MUST match the test's arch — wrong-arch setup silently produces broken builds. Never run `setup_testing_env.sh` without `CHIP_ARCH`.
+   If it exits non-zero, report `ENV_ERROR` with the setup output and stop.
 
 Do not pre-check the test directory — the script validates it and exits 3 if missing.
 
