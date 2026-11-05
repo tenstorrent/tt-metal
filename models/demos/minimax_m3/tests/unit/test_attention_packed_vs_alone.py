@@ -20,19 +20,25 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.common.utils import block_cyclic_reorder
+from models.demos.common.prefill.chunk_layout import pack_forward_tokens
+from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
 from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.attention import Attention, AttentionConfig, allocate_kv_caches
 from models.demos.minimax_m3.tt.attention_configs import MiniMaxM3AttentionProgramConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.model import create_rope_setup
-from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk, pack_forward_tokens, validate_chunks
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
+from models.demos.minimax_m3.utils.model_variant import load_config
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 
 from ..test_factory import compose_tp_hidden, parametrize_mesh_with_fabric
 
 HIDDEN, NQ, NKV, HEAD_DIM, ROTARY_DIM, THETA, EPS = 6144, 64, 4, 128, 64, 5_000_000.0, 1e-6
 NIDX, INDEX_DIM = 4, 128
+_SPARSE = load_config()["sparse_attention_config"]
+MSA = dict(
+    msa_block_size=_SPARSE["sparse_block_size"], msa_topk_blocks=_SPARSE["sparse_topk_blocks"], msa_index_dim=INDEX_DIM
+)
 C, F, USERS = 1024, 4, 4
 CAP = 12 * C
 PCC = 0.998
@@ -139,12 +145,11 @@ def test_attention_packed_vs_alone(mesh_device, device_params, layer_kind, reset
             head_dim=HEAD_DIM,
             rotary_dim=ROTARY_DIM,
             rms_norm_eps=EPS,
-            use_qk_norm=True,
-            use_gemma_norm=True,
             max_seq_len=CAP,
             max_local_batch_size=1,
             is_sparse=is_sparse,
             sequence_parallel=True,
+            **(MSA if is_sparse else {}),
         ),
         state_dict=state,
         ccl_manager=ccl,

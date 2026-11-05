@@ -11,9 +11,8 @@
 #include "cmath_common.h"  // math::reset_counters, p_setrwc
 
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
-#include "sfpu/ckernel_sfpu_cdf.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "ckernel_sfpu_erf.h"  // ERF_LUT, ERF_NUM_DEGREE, ERF_DEN_DEGREE (INP_FLOAT32 branch for FP32 path)
 #include "ckernel_sfpu_piecewise_rational.h"
@@ -292,10 +291,12 @@ constexpr float GELU_ERF_DEN[17] = {  // even powers only (c1=0, c3=0, ..., c15=
     0.0f,
     -6.7350725691e-12f};
 
-bool bf16_dest_gelu();
-template <int ITERATIONS>
-void calculate_gelu_bf16();
-void init_gelu_bf16();
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_gelu_bf16.h"
+
+namespace ckernel::sfpu {
+
 // Whether BF16 DEST runs the generated gelu kernel as one call over the whole tile.
 inline constexpr bool gelu_bf16_whole_tile = true;
 // Sets up the generated BF16 gelu kernel for the instance it serves.
@@ -305,7 +306,6 @@ inline void gelu_bf16_tile_init() {
         init_gelu_bf16();
     }
 }
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu() {
     if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
@@ -633,5 +633,3 @@ inline void gelu_derivative_polynomial_init() {
 }
 
 }  // namespace ckernel::sfpu
-
-#include "ckernel_sfpu_gelu_bf16.h"

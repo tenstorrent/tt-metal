@@ -106,6 +106,9 @@ public:
         return num_used_receiver_channels_per_vc[vc_id];
     }
 
+    // One past the last byte of the local channel buffers.
+    size_t get_channel_buffers_end_address() const { return channel_buffers_end_address; }
+
     // Legacy getters (assume VC0 for backward compatibility)
     size_t get_sender_channel_number_of_slots(size_t channel_id) const {
         return get_sender_channel_number_of_slots(0, channel_id);
@@ -166,6 +169,8 @@ private:
     size_t available_channel_buffering_space = 0;
     size_t max_l1_loading_size = 0;
     size_t buffer_region_start = 0;
+    // One past the last byte of the last channel buffer.
+    size_t channel_buffers_end_address = 0;
 
     // Tensix configuration channel counts
     static constexpr size_t num_sender_channels_with_tensix_config =

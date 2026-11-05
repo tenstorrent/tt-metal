@@ -33,7 +33,7 @@ constexpr bool kZonePrgmPreload = true;
 // Preloaded reads the three constants from Prgm0..2 (zone_affine_even_decay_init); otherwise the
 // call loads them itself.
 template <class Config, bool Preloaded = kZonePrgmPreload>
-inline vFloat zone_affine_even_decay_eval(vFloat x) {
+__attribute__((always_inline)) inline vFloat zone_affine_even_decay_eval(vFloat x) {
     static_assert(
         Config::kExpDegree == 2u && Config::kCoreDegree == 5u && Config::kDecayDegree == 3u &&
             Config::kBodySlots == 25u && Config::kBodySlots <= Config::kReplayCapacity && Config::kPeakLive <= 8u,
@@ -115,7 +115,8 @@ inline vFloat zone_affine_even_decay_eval(vFloat x) {
 }
 
 template <class Config>
-inline void zone_affine_even_decay_origin_repair(vUInt raw_u16, vFloat x, vFloat& result) {
+__attribute__((always_inline)) inline void zone_affine_even_decay_origin_repair(
+    vUInt raw_u16, vFloat x, vFloat& result) {
     static_assert(
         Config::kOriginSlope == 0.5f && Config::kOriginMask == 0x7fffu && Config::kOriginValue == 0x7f01u &&
             Config::kOriginMantissa == 0u && Config::kOriginPatterns == 2u,

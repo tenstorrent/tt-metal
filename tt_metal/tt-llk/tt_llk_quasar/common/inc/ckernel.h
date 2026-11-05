@@ -790,6 +790,37 @@ void set_up_dest_dvalid_per_thread(dest_dvalid_client const (&clients)[N])
     }
 }
 
+// Seeds each SFPU lane PRNG directly through the seed override (PRNG_SEED_OVERRIDE_CTRL/DATA) instead of
+// the HW seeder, whose sweep has no busy flag and reaches the SFPU clients only ~1.5k cycles after the write.
+// Each lane gets its own mixed seed, so lane streams are not shifted copies of one LFSR as with the seeder.
+inline void init_prng_seed(const std::uint32_t seed)
+{
+    // SFPU PRNG client ids are 128 + {row[1:0], col[3:0]} on the seed bus.
+    constexpr std::uint32_t PRNG_SFPU_CID_START = 128;
+    constexpr std::uint32_t PRNG_SFPU_NUM_CIDS  = 64;
+    // All ones is the XNOR-LFSR lock-up state.
+    constexpr std::uint32_t PRNG_LFSR_LOCKUP_SEED = 0xFFFFFFFF;
+    auto cfg                                      = (std::uint32_t volatile *)TENSIX_CFG_BASE;
+    for (std::uint32_t i = 0; i < PRNG_SFPU_NUM_CIDS; i++)
+    {
+        // murmur3 fmix32 of seed + i * golden ratio, so neighbouring lanes get unrelated seeds.
+        std::uint32_t lane_seed = seed + i * 0x9E3779B9;
+        lane_seed ^= lane_seed >> 16;
+        lane_seed *= 0x85EBCA6B;
+        lane_seed ^= lane_seed >> 13;
+        lane_seed *= 0xC2B2AE35;
+        lane_seed ^= lane_seed >> 16;
+        // The override drives the bus while enabled, so point it at the next lane before changing the data:
+        // that lane briefly loads the previous seed and is then overwritten, the previous lane is untouched.
+        cfg[PRNG_SEED_OVERRIDE_CTRL_prng_id_ADDR32] =
+            (1u << PRNG_SEED_OVERRIDE_CTRL_override_en_SHAMT) | (PRNG_SFPU_CID_START + i);
+        cfg[PRNG_SEED_OVERRIDE_DATA_seed_override_ADDR32] = (lane_seed == PRNG_LFSR_LOCKUP_SEED) ? lane_seed - 1 : lane_seed;
+    }
+    cfg[PRNG_SEED_OVERRIDE_CTRL_prng_id_ADDR32] = 0;
+    // Read back so the override is off before any later SFPU instruction reads the PRNG.
+    (void)cfg[PRNG_SEED_OVERRIDE_CTRL_prng_id_ADDR32];
+}
+
 // d e e p e s t l o r e
 __attribute__((always_inline)) inline void rv_wrcfg(
     std::uint32_t wrdata_hi, std::uint32_t wrdata_lo, std::uint32_t cfg_addr, std::uint32_t write_64b = 0, std::uint32_t byte_mask = 0xFF)

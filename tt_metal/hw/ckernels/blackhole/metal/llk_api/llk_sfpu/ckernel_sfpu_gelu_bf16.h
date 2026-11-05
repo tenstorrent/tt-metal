@@ -4,40 +4,8 @@
 #pragma once
 #include <cstdint>
 namespace ckernel::sfpu {
-struct GeluBf16Config {
-    static constexpr float kExpCoefficients[] = {
-        __builtin_bit_cast(float, 0x3f800000u),
-        __builtin_bit_cast(float, 0x3f27dc51u),
-        __builtin_bit_cast(float, 0x3eaa0299u)};
-    static constexpr unsigned kExpDegree = 2u;
-    static constexpr float kCoreCoefficients[] = {
-        __builtin_bit_cast(float, 0x3ecb4b84u),
-        __builtin_bit_cast(float, 0xbd8262c6u),
-        __builtin_bit_cast(float, 0x3c095ac4u),
-        __builtin_bit_cast(float, 0xba3e17aau),
-        __builtin_bit_cast(float, 0x3818921cu),
-        __builtin_bit_cast(float, 0xb5556e76u)};
-    static constexpr unsigned kCoreDegree = 5u;
-    static constexpr float kDecayCoefficients[] = {
-        __builtin_bit_cast(float, 0xbe9f9763u),
-        __builtin_bit_cast(float, 0x3cd3682eu),
-        __builtin_bit_cast(float, 0x3b2ecf9fu),
-        __builtin_bit_cast(float, 0x38c1d21bu)};
-    static constexpr unsigned kDecayDegree = 3u;
-    static constexpr float kNegativeTerminal = __builtin_bit_cast(float, 0xc1530000u);
-    static constexpr float kDecayCoreBoundary = __builtin_bit_cast(float, 0xc0480000u);
-    static constexpr float kPositiveIdentity = __builtin_bit_cast(float, 0x40310000u);
-    static constexpr float kOriginSlope = __builtin_bit_cast(float, 0x3f000000u);
-    static constexpr unsigned kBodySlots = 25u;
-    static constexpr unsigned kReplayCapacity = 32u;
-    static constexpr unsigned kPeakLive = 8u;
-    static constexpr unsigned kOriginMask = 32767u;
-    static constexpr unsigned kOriginValue = 32513u;
-    static constexpr unsigned kOriginMantissa = 0u;
-    static constexpr unsigned kOriginPatterns = 2u;
-};
+struct GeluBf16Config {};
 }  // namespace ckernel::sfpu
-#include "ckernel_sfpu_gelu_bf16_zone_affine_even_decay.h"
 
 namespace ckernel::sfpu {
 
@@ -54,11 +22,7 @@ inline bool bf16_dest_gelu() {
     return false;
 #endif
 }
-// The Blackhole whole-tile call as tt-polynomial-fitter's scheduler issues it (ttpoly/sfpu_schedule.py
-// in tenstorrent/tt-polynomial-fitter, not in this repository): the compiled instructions of
-// ckernel::sfpu::bf16::gelu::calculate_zone_affine_even_decay<ckernel::sfpu::GeluBf16Config, 32> in a stall-filling
-// order, rows addressed by their immediates, constants held in LRegs. It stores the same word for every BF16 input;
-// other ITERATIONS run the compiled body itself.
+// calculate_zone_affine_even_decay's instructions in a stall-filling order, constants held in LRegs.
 inline void calculate_gelu_bf16_scheduled() {
     TTI_SFPLOADI(7, 2, 0xaa3b);
     TTI_SFPLOADI(7, 8, 0xbf38);
@@ -347,15 +311,10 @@ inline void calculate_gelu_bf16_scheduled() {
 }
 
 template <int ITERATIONS = 32>
-inline void calculate_gelu_bf16() {
-    if constexpr (ITERATIONS == 32) {
-        calculate_gelu_bf16_scheduled();
-    } else {
-        ckernel::sfpu::bf16::gelu::calculate_zone_affine_even_decay<ckernel::sfpu::GeluBf16Config, ITERATIONS>();
-    }
+__attribute__((noinline)) inline void calculate_gelu_bf16() {
+    static_assert(ITERATIONS == 32, "the BF16 kernel runs as one whole-tile call");
+    calculate_gelu_bf16_scheduled();
 }
-inline void init_gelu_bf16() {
-    ckernel::sfpu::bf16::gelu::init_zone_affine_even_decay<ckernel::sfpu::GeluBf16Config>();
-}
+inline void init_gelu_bf16() {}
 
 }  // namespace ckernel::sfpu
