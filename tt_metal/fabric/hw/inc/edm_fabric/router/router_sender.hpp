@@ -38,6 +38,8 @@
 // Sections, in order: channels and their features; state; producers (the channel kinds' links to their producers);
 // free-slots registers; sending; visits; where the channel states live, and the loop; init.
 
+#include <algorithm>
+
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp"
@@ -635,7 +637,7 @@ FORCE_INLINE bool send(
 // Slots back to channel CH's producer, `n` more for `returned` in all, by the channel's kind: to a worker, the absolute
 // count (out of line); to an upstream router, +n on its free-slots register.
 template <size_t CH>
-FORCE_INLINE void return_slots(const SenderChannelState<CH>& state, uint32_t n, uint32_t returned) {
+FORCE_INLINE void credit_slots(const SenderChannelState<CH>& state, uint32_t n, uint32_t returned) {
     if constexpr (SenderChannel<CH>::worker) {
         WorkerChannel<CH>::credit(returned, WorkerChannel<CH>::connected(state));
     } else {
@@ -685,14 +687,14 @@ FORCE_INLINE void visit_worker(
         remote.add_free_slots(completions);
         progress.completed += completions;
         if constexpr (!SenderChannel<CH>::first_level_ack) {
-            return_slots<CH>(state, completions, progress.completed);
+            credit_slots<CH>(state, completions, progress.completed);
         }
     }
     if constexpr (SenderChannel<CH>::first_level_ack) {
         if ((sent || read_acks) && reported_acks != progress.first_level_acked) {
             const uint32_t acks = reported_acks - progress.first_level_acked;
             progress.first_level_acked = reported_acks;
-            return_slots<CH>(state, acks, progress.first_level_acked);
+            credit_slots<CH>(state, acks, progress.first_level_acked);
         }
     }
 }
@@ -731,7 +733,7 @@ FORCE_INLINE void visit_channel_with_work(
         completed += completions;
         state.progress.completed = completed;
         if constexpr (!SenderChannel<CH>::first_level_ack) {
-            return_slots<CH>(state, completions, completed);
+            credit_slots<CH>(state, completions, completed);
         }
     }
     bool busy = sent != completed;
@@ -744,7 +746,7 @@ FORCE_INLINE void visit_channel_with_work(
             const uint32_t acks = reported_acks - state.progress.first_level_acked;
             if (acks != 0) {
                 state.progress.first_level_acked += acks;
-                return_slots<CH>(state, acks, state.progress.first_level_acked);
+                credit_slots<CH>(state, acks, state.progress.first_level_acked);
             }
         }
         busy = busy || sent != state.progress.first_level_acked;
@@ -963,7 +965,9 @@ template <typename LoopCopy>
 FORCE_INLINE void pass(
     LoopCopy& loop_copy, SenderChannelStates& states, uint32_t& channels_in_flight, bool& send_yielded) {
     constexpr uint32_t worker_channels = SenderChannels::worker_channels;
-    uint32_t connection_semaphores[worker_channels == 0 ? 1 : mask_width(worker_channels)];
+    // Indexed by sender channel, so up to the highest worker channel; at least 1, as an array can't be empty.
+    constexpr uint32_t semaphore_slots = std::max<uint32_t>(1, mask_width(worker_channels));
+    uint32_t connection_semaphores[semaphore_slots];
     const uint32_t holding =
         channels_with_packets<SenderChannels::read_at_pass_start, worker_channels>(connection_semaphores);
     check_worker_connection<0>(loop_copy, states, connection_semaphores);

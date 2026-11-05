@@ -176,7 +176,10 @@ __attribute__((noinline, cold)) void run_router_command() {
     }
 }
 
-// Before a run of rounds (master): true when the router command is RUN; otherwise runs the command and returns false.
+// The master's router command check, made only before a run of rounds: true when the command is RUN; otherwise runs
+// the command and returns false. The run ends when another command is pending (next_round); during it, end_round still
+// hands the core to the base firmware every SWITCH_INTERVAL rounds (or after that many rounds without a send under
+// IDLE_CONTEXT_SWITCHING), and the other ERISC follows.
 __attribute__((noinline)) bool start_running() {
     auto* state = router_state();
     if (state->command == RouterCommand::RUN) {
