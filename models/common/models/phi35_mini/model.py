@@ -51,6 +51,10 @@ from models.common.modules.tt_ccl import default_topology, get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE, get_padded_hidden_dim
 
 
+
+# phi-3.5-mini S11: TT_PHI35_GRID12=1 adapts the P150 (13 x 10) configs to a 12 x 10 Galaxy Blackhole chip.
+_S11_GRID12 = __import__("os").environ.get("TT_PHI35_GRID12") == "1"
+
 def _lazy(
     tensor: torch.Tensor,
     *,
@@ -827,7 +831,7 @@ def _build_decoder_layer(
 
     padded_hidden = get_padded_hidden_dim(mcfg.hidden_dim, num_dev, TILE_SIZE)
     # The fused W1/W3/SwiGLU decode matmul writes 2 tiles per core (128 cores); W2 reads that layout as is.
-    mlp_w13_per_core_n = 2
+    mlp_w13_per_core_n = 2 if not _S11_GRID12 else 4  # S11: 256 output tiles on 64 cores (128 > 120 on a 12 x 10 Galaxy chip)
     mlp_w2_in0_cores = padded_hidden // num_dev // TILE_SIZE // mlp_w13_per_core_n
     # [W1 | W3] as gate / up column tile pairs, for the fused SwiGLU matmuls of prefill and decode.
     w13_swiglu = _interleave_swiglu_tiles(weights.w1, weights.w3)
@@ -884,12 +888,13 @@ def _build_decoder_layer(
         # of one request per 576-byte bfloat4_b tile: 103.9 -> 78.7 us with 4 K tiles a block (output bit-identical to
         # the interleaved weight at the same config).
         prefill_128_w13_swiglu_prg_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(13, 10),
+            # phi-3.5-mini S11 (Galaxy Blackhole, 12 x 10 grid): 13 x 10 / 16-per-bank stream need 130 / 128 cores.
+            compute_with_storage_grid_size=(13, 10) if not _S11_GRID12 else (8, 8),
             in0_block_w=1,
             out_subblock_h=1,
             out_subblock_w=4,
             per_core_M=PREFILL_1D_SEQ_LEN // TILE_SIZE,
-            per_core_N=4,
+            per_core_N=4 if not _S11_GRID12 else 8,
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,
@@ -898,7 +903,7 @@ def _build_decoder_layer(
             # multicast, the whole K in 16-bit Dest (ff1_3_compute_kernel_cfg): 79.0 -> 65.8 us (pcc 0.99919 against
             # the 1D matmul). fp32 accumulation through a Float32 L1 accumulator ran 67.0 us and scored acc128 no
             # better (90.8 / 98.6 against 91.8 / 99.0).
-            dram_stream_workers_per_bank=16,
+            dram_stream_workers_per_bank=16 if not _S11_GRID12 else 0,
             dram_stream_distributors=1,
             dram_stream_chunk=4,
         ),
@@ -908,9 +913,9 @@ def _build_decoder_layer(
         # 128-row W2 on the multi-row DRAM-streamed program over w2_decode (6 cores per bank, two activation
         # distributors taking turns, 8 K tiles per multicast), fp32 Dest over K = 8192: 81.5 -> 58 us (pcc 0.99990
         # against the 1D matmul).
-        prefill_128_w2_prg_config=_prefill_128_1d_config(n=mcfg.dim, num_cores=96, grid=(13, 10), in0_block_w=8),
+        prefill_128_w2_prg_config=_prefill_128_1d_config(n=mcfg.dim, num_cores=96, grid=(13, 10) if not _S11_GRID12 else (12, 10), in0_block_w=8),
         prefill_128_w2_stream_prg_config=_prefill_128_1d_config(
-            n=mcfg.dim, num_cores=96, grid=(13, 10), in0_block_w=1, dram_stream=(6, 2, 8)
+            n=mcfg.dim, num_cores=96, grid=(13, 10) if not _S11_GRID12 else (12, 10), in0_block_w=1, dram_stream=(6, 2, 8)
         ),
         prefill_128_w2_compute_kernel_cfg=_HIFI2_FP32_COMPUTE_KERNEL_CFG,
         w13_swiglu_prefill=_lazy_placed(
@@ -928,7 +933,7 @@ def _build_decoder_layer(
             k=mcfg.dim,
             n=2 * padded_hidden // num_dev,
             in0_cores=residual_cores,
-            workers_per_bank=8,
+            workers_per_bank=8 if not _S11_GRID12 else 4,
             in0_block_w=1,
             per_core_n=mlp_w13_per_core_n,
             fuse_swiglu=True,

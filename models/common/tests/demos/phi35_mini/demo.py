@@ -177,6 +177,10 @@ def load_reference_data(hf_model_id: str):
 
 def load_input_prompts(batch_size: int) -> list[str]:
     """Load prompts for performance testing from shared sample file."""
+    if os.environ.get("S11_PROMPTS"):  # S11 phi override: e.g. the Tier 2 fraud prompts
+        with open(os.environ["S11_PROMPTS"]) as f:
+            ps = [e["prompt"] for e in json.load(f)]
+        return [ps[i % len(ps)] for i in range(batch_size)]
     prompts_path = Path("models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json")
     if not prompts_path.exists():
         return ["What is the meaning of life?"] * batch_size
@@ -441,7 +445,7 @@ def test_phi35_mini(test_config, mesh_device, optimizations):
 
     try:
         if test_config == "batch-32":
-            max_bs, max_seq_len = 32, _BATCH32_MAX_SEQ_LEN[optimizations]
+            max_bs, max_seq_len = int(os.environ.get("S11_BATCH", "32")), _BATCH32_MAX_SEQ_LEN[optimizations]  # S11 phi override
             expected = EXPECTED_METRICS_BATCH32.get(_sampling_bucket(), {}).get(optimizations, {}).get(device_name, {})
         elif test_config == "eval-32":
             # 32 users x 3 rotated repeats, a fresh traced executor per repeat.
@@ -480,7 +484,7 @@ def test_phi35_mini(test_config, mesh_device, optimizations):
             )
             _run_perf_benchmark(model, mesh_device, perf_expected, batch_size=1, case_name=f"{optimizations}/batch-1")
         elif test_config == "batch-32":
-            _run_perf_benchmark(model, mesh_device, expected, batch_size=32, case_name=f"{optimizations}/batch-32")
+            _run_perf_benchmark(model, mesh_device, expected, batch_size=int(os.environ.get("S11_BATCH", "32")), case_name=f"{optimizations}/batch-32")
         elif test_config == "batch-32-ci":
             # CI-faithful leg: 1024 decode tokens (clamped to KV headroom in _run_perf_benchmark).
             _run_perf_benchmark(
@@ -685,7 +689,7 @@ def _run_perf_benchmark(
 
         # Decode-token budget, clamped to the KV-cache headroom. Prompts bucket to ~128 and we keep a
         # 16-token margin, so the high-water decode position stays inside max_seq_len.
-        _PROMPT_BUCKET = 128
+        _PROMPT_BUCKET = int(os.environ.get("S11_PROMPT_BUCKET", "128"))  # S11 phi override
         _DECODE_MARGIN = 16
         requested_decode = _PERF_NUM_DECODE_TOKENS if num_decode_tokens is None else num_decode_tokens
         effective_decode = min(requested_decode, max_seq_len - _PROMPT_BUCKET - _DECODE_MARGIN)
