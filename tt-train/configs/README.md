@@ -58,9 +58,9 @@ Optimizer is configured inline under `training_config.optimizer`. See [Optimizer
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `precision.master_dtype` | str | unset | Dtype trainable parameters (the master weights) are stored in: `"bfloat16"` or `"float32"`. `"float32"` gives fp32 master weights with fused `AdamW`; forward and backward still run in bf16. Not PyTorch FSDP2's `param_dtype`, which is the compute dtype. See [fp32 master weights](../docs/MIXED_PRECISION.md#fp32-master-weights). Unset keeps the model's dtype (bf16) |
-| `precision.reduce_dtype` | str | unset | Dtype gradients are summed in when they are averaged across devices: `"bfloat16"` or `"float32"`. `"float32"` sums and averages each gradient in fp32 and casts the mean back to the gradient's dtype. It applies to the DDP sync (`ttml.sync_gradients`, `synchronize_gradients`) when the optimizer is created from the whole config, as `precision.master_dtype` does, and to FSDP when the runner passes it to `fully_shard(reduce_dtype=...)`, as `train.py` does. Unset keeps the bf16 sum, also when an earlier config in the same process set the key |
+| `precision.reduce_dtype` | str | unset | Dtype gradients are summed in when they are averaged across devices: `"bfloat16"` or `"float32"`. `"float32"` sums and averages each gradient in fp32 and casts the mean back to the gradient's dtype, in the DDP sync (`ttml.sync_gradients`, `synchronize_gradients`) and in FSDP's reduce-scatter. It is stored when the optimizer is created from the whole config, as with `precision.master_dtype`. `"bfloat16"` and unset both keep today's bf16 sum, unset also when an earlier config in the same process set the key. See [Gradient reduction in fp32](../docs/MIXED_PRECISION.md#gradient-reduction-in-fp32) |
 
-Any other key under `precision`, or a `precision` that isn't a map, stops the run with an error.
+Any other key under `precision`, or a `precision` that isn't a map, stops the run with an error. GRPO, and `SFTTrainer` given an optimizer dict, don't apply `precision` yet: they keep the model's dtype and the bf16 sum. In 2- and 3-tier training, the aggregators sum the workers' gradients in bf16 whatever `reduce_dtype` says.
 
 ### Example
 ```yaml

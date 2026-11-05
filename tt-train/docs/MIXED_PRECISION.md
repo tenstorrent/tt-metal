@@ -135,12 +135,24 @@ the fused kernels require. Unset keeps the bf16 sum.
 
   Models with many small gradients pay per call rather than per byte, so fewer, larger collectives would cut most of
   the cost.
-- **Not covered.** GRPO calls `fully_shard()` without `reduce_dtype` and builds its optimizer from the optimizer section
-  only, and the 3-tier aggregator sums the workers' gradients in bf16, so they keep the bf16 sum.
+- **Scope.** `reduce_dtype` covers the sum across devices. Two sums next to it still run in the gradient's dtype, until
+  a later PR of #56513 keeps the gradient in fp32 from its first add to the optimizer step:
+  - With gradient accumulation, the sum across micro-batches: `Tensor::add_grad` adds each micro-batch's gradient with
+    `ttnn::add`. Under FSDP, `backward_post` writes the mean back in bf16 after every micro-batch, and the next one
+    adds into it.
+  - Under HSDP (`dp` x `fsdp`), the second reduction of a sharded parameter's gradient: FSDP writes its fp32 mean in
+    bf16, and the `dp` sum in `ttml.sync_gradients()` rounds it again. No shipped config enables HSDP, and none of the
+    measurements below is an HSDP run.
+- **Not covered yet.** GRPO, and `SFTTrainer` when it builds its own optimizer (from an optimizer dict, or its default
+  `AdamW`), don't apply the precision block, so their syncs find no stored value and keep the bf16 sum. The
+  aggregators of 2- and 3-tier training add the workers' gradients and all-reduce them in bf16: the C++ 3-tier one,
+  and `aggregator()` and `aggregator_optimizer()` in the Python hierarchical example
+  (`sources/examples/python/multihost/hierarchical_parallel/trainer.py`).
 
 The mean is cast back to bf16 rather than kept in fp32: a gradient is used once per step, so this costs one rounding,
-while the optimizer state and the master weights, which accumulate, stay in fp32. A sum that is exact in fp32 would
-need new kernels; over 17 TinyLlama runs per variant it made no difference to the loss against this one.
+while the optimizer state and the master weights, which accumulate, stay in fp32 with `master_dtype: float32` (with
+bf16 parameters, fused `AdamW` keeps bf16 moments). A sum that is exact in fp32 would need new kernels; over 17
+TinyLlama runs per variant it made no difference to the loss against this one.
 
 ### How the design was chosen
 
@@ -177,7 +189,8 @@ variant, steps 201-300: fp32 minus exact +0.007 (95% interval −0.085 to +0.100
 | 1x8 ring | 1.95 ms | 4.76 ms (2.44×) | 3.10 ms (1.59×) | 20.2 ms (10.4×) |
 
 Up to 1 MB per device the two fp32 routes are within 3% of each other: a call there costs 155-190 µs of host time
-against 32-49 µs on the device. From 4 MB the reduce-scatter route takes 0.71-0.79 of the all-reduce's time.
+against 32-49 µs on the device. From 4 MB the reduce-scatter route takes 0.65-0.79 of the all-reduce's time: 0.71-0.79 at
+4 MB and 0.67-0.73 at 16 MB (1x2, 1x8 and 2x4 meshes), and 0.65-0.67 at 64 MB (1x8).
 
 **Options and verdicts:**
 
@@ -194,7 +207,7 @@ against 32-49 µs on the device. From 4 MB the reduce-scatter route takes 0.71-0
 | `FABRIC_1D` instead of `FABRIC_2D` | raw links 28.5-30.3 against 22.9 GB/s, but collectives within 1% at 4-64 MB (the ops cap near 21 GB/s per link), and rings would run as lines | no change |
 | 10240-byte fabric packets | 1.09-1.32× on 16-64 MB collectives, nothing below 1 MB | separate work |
 | trace | the whole nano DeepSeek sync 39.9 → 14.4 ms, TinyLlama unchanged; tt-train can't trace today | later |
-| bucketing small gradients | nano DeepSeek's sync is a quarter of its step, the device is busy 28% of it, and one 64 MB call takes 3.1 ms against 14.4 ms of device time for its 249 calls | the main lever for later |
+| bucketing small gradients | nano DeepSeek's whole sync, measured on its own: 249 calls take 39.9 ms eager and 14.4 ms replayed as a trace, against 3.1 ms for one 64 MB call; in a training-step profile on an older build the sync was a quarter of the step | the main lever for later |
 
 PyTorch's FSDP2 with `reduce_dtype=torch.float32` also reduce-scatters in fp32, but casts the result to the parameter's
 dtype, so with fp32 parameters its optimizer gets fp32 gradients; DDP's `bf16_compress_hook` sums in bf16.
