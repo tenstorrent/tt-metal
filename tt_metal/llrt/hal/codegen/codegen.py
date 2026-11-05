@@ -190,7 +190,7 @@ class CodeGen:
         for include in self.includes:
             my_includes.discard(include)
             print(include)
-        print(*sorted(my_includes), sep="\n")
+        print(*my_includes, sep="\n")
         if self.interface_ns:
             print(f"namespace {self.interface_ns} {{")
         for constant in self.constants:
