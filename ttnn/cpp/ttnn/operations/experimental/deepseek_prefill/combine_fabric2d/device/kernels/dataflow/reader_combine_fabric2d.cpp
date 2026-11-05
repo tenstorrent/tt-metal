@@ -255,13 +255,19 @@ struct Untilized {
     // Where `page`'s row sits, blocking until the batch holding it has been staged. Hands back everything
     // before it FIRST: the producer reuses those slots to build this one, so holding them back would be
     // waiting on a core that is waiting on us.
-    uint64_t take(const ::cmbf2d::GroupWalk& walk, uint32_t page) {
+    //
+    // While it waits it calls `idle`, which keeps this stream's channels and credits moving. A bare spin here
+    // closes a cycle around the ring: the producer can be waiting on our partner stream, which waits for room
+    // in the next chip's channel, whose reader is in this same wait behind its own partner, and so on.
+    template <typename Idle>
+    uint64_t take(const ::cmbf2d::GroupWalk& walk, uint32_t page, Idle idle) {
         const uint32_t batch = expert_base + walk.batch_of(page);
         if (batch != open) {
             release_through(batch);
             volatile tt_l1_ptr uint32_t* produced = produced_by(owner(batch));
             invalidate_l1_cache();
             while (*produced < batch / ct.num_untilizers + 1) {
+                idle();
                 invalidate_l1_cache();
             }
             open = batch;
@@ -318,7 +324,7 @@ struct Reader {
     // tokens are already rows.
     uint64_t token_source(uint32_t p) {
 #if TILE
-        return untilized.take(walk, p);
+        return untilized.take(walk, p, [this] { relay_while_waiting(); });
 #else
         return dram.in.get_noc_addr(p);
 #endif
@@ -338,6 +344,9 @@ struct Reader {
     uint32_t consumed[::cmbf2d::MAX_VCS] = {};
     uint32_t expected[::cmbf2d::MAX_VCS] = {};
     uint32_t credits_pending[::cmbf2d::MAX_VCS] = {};
+    // Pages of the downstream channel a batch in progress has reserved but not yet aimed a token at. A
+    // channel served in the middle of that batch (relay_while_waiting) must not spend them.
+    uint32_t reserved[::cmbf2d::MAX_VCS] = {};
 
     void flush_publish() {
         if (pending_publish > 0) {
@@ -407,7 +416,7 @@ struct Reader {
     uint32_t downstream_credit(uint32_t vc) {
         volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.vc_freed_addr(vc));
         invalidate_l1_cache();
-        return ct.vc_pages - (out_page[vc] - *freed);
+        return ct.vc_pages - (out_page[vc] - *freed) - reserved[vc];
     }
 
     // How much of `want` may be staged into channel `vc` right now, at least one. While that channel is
@@ -424,6 +433,20 @@ struct Reader {
             credit = downstream_credit(vc);
         }
         return credit < want ? credit : want;
+    }
+
+    // Waiting for an untilizer batch. Every slot claimed so far has its read issued and its metadata written
+    // (issue_token takes its row before claiming), so it can be announced once the reads land; after that
+    // nothing is held back and moving a channel is as safe as between batches.
+    void relay_while_waiting() {
+        if (claimed != published) {
+            noc_async_read_barrier();
+            publish_n(claimed - published);
+        }
+        flush_publish();
+        if (!serve_one_channel()) {
+            flush_credits();
+        }
     }
 
     // Hand `n` pages of our channel `vc` back to the chip that wrote them. It cannot be told directly --
@@ -513,12 +536,15 @@ struct Reader {
     // Issues one token's read and fills its metadata but does NOT barrier or announce it: the caller does
     // both once per batch, so several reads are in flight together.
     void issue_token(uint32_t dst_chip_id, uint32_t own_vc, uint32_t in_page, uint32_t pad) {
+        // The row first: waiting for it may announce and relay (relay_while_waiting), which is only safe while
+        // every claimed slot is fully issued.
+        const uint64_t src = token_source(in_page);
         const uint32_t slot = claim_slot();
         volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata = slot_metadata(slot);
         volatile tt_l1_ptr uint32_t* meta =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_pads_addr + pad * ::cmbf2d::META_PAD_STRIDE);
 
-        noc_async_read(token_source(in_page), slot_addr_of(slot), ct.token_size_bytes);
+        noc_async_read(src, slot_addr_of(slot), ct.token_size_bytes);
         // Everything below runs while that read is in flight, which is the point of prefetching the metadata.
         // Record layout: [0] linearized_coord, [1] token_idx, [2] topk_idx; the destination chip is already
         // known from the run this token came out of.
@@ -532,6 +558,7 @@ struct Reader {
         } else {
             metadata->final_addr = final_addr;
             metadata->dst_chip = (uint64_t)dst_chip_id;
+            reserved[own_vc]--;
             aim_at_downstream(metadata, own_vc, out_page[own_vc]++);
         }
     }
@@ -561,12 +588,17 @@ struct Reader {
                 uint32_t k = (n - q) > ct.batch ? ct.batch : (n - q);
                 if (own_vc != ::cmbf2d::VC_NONE) {
                     k = reserve_downstream(own_vc, k);
+                    reserved[own_vc] = k;
                 }
                 for (uint32_t j = 0; j < k; j++) {
                     issue_token(dst_chip_id, own_vc, base + pad_at(n, q + j), pad_at(n, q + j));
                 }
                 noc_async_read_barrier();  // every token of the batch is in L1 before any is announced
-                publish_n(k);
+                if (own_vc != ::cmbf2d::VC_NONE) {
+                    reserved[own_vc] = 0;  // every page it held is aimed at by now
+                }
+                // A wait for an untilizer batch inside the loop may have announced the first ones already.
+                publish_n(claimed - published);
                 q += k;
                 // Our own tokens have priority, but a channel left unserved while we are busy is a channel
                 // the chip behind us is stalled on. One batch between ours keeps both moving.
@@ -681,12 +713,11 @@ struct Reader {
     // alike — before the next one starts; that costs some overlap with the fabric work still draining, and
     // whether these copies belong on separate cores entirely is a stage-3 question.
     void run_local_phase(uint32_t local_expert) {
-        // One slot serves as the staging buffer for the whole phase, and is deliberately NEVER published:
-        // the sender must not see these tokens, or it would send them over the fabric as well. Slot
-        // `published % num_l1_slots` is the next one the sender has yet to be told about, so it is ours to
-        // scribble in; claim_slot() is still what proves at least one slot is free before we take it, and
-        // `published` does not move during this phase so it stays free. The CMD_END slot below reclaims it.
-        const uint32_t slot_addr = slot_addr_of(claim_slot());
+        // One slot serves as the staging buffer, and is deliberately NEVER published: the sender must not see
+        // these tokens, or it would send them over the fabric as well. Slot `published % num_l1_slots` is the
+        // next one the sender has yet to be told about, so it is ours to scribble in; claim_slot() is still
+        // what proves at least one slot is free before we take it. It is taken per token, AFTER the token's
+        // row is staged: that wait may relay (relay_while_waiting), which would announce a slot held here.
         const uint32_t e = expert_of(ctl, ct.my_dg_index, local_expert);
         const uint32_t begin = ctl.run_begin(ct.my_dg_index, e);
         const uint32_t n = ctl.run_end(ct.my_dg_index, e) - begin;
@@ -699,16 +730,18 @@ struct Reader {
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_pads_addr + pad * ::cmbf2d::META_PAD_STRIDE);
                 const uint32_t out_page = meta[1] * ct.num_experts_per_tok + meta[2];
                 const uint64_t out_addr = dram.out.get_noc_addr(out_page);
-                noc_async_read(token_source(base + pad), slot_addr, ct.token_size_bytes);
+                const uint64_t src = token_source(base + pad);
+                const uint32_t slot_addr = slot_addr_of(claim_slot());
+                noc_async_read(src, slot_addr, ct.token_size_bytes);
                 noc_async_read_barrier();
                 noc_async_write(slot_addr, out_addr, ct.token_size_bytes);
                 // Serialised on purpose: the slot IS the buffer, so it cannot be refilled until the write
                 // has read it out. Overlapping these needs several buffers in flight, tracked separately
                 // from the sender's ring accounting.
                 noc_async_write_barrier();
+                claimed--;  // hand the staging slot back; nothing was ever announced for it
             }
         });
-        claimed--;  // hand the staging slot back; nothing was ever announced for it
     }
 
     // Tokens the upstream chip on this stream writes straight into OUR output over the whole launch. Every
