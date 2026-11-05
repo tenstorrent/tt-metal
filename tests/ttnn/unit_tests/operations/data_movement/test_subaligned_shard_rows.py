@@ -85,6 +85,20 @@ def run_slice_into_preallocated_nd(device):
     return out, ttnn.to_torch(t)[:, :, 8:24, 16:48]
 
 
+def run_slice_into_aligned_preallocated(device):
+    # Only the input is sub-aligned: it moves to interleaved memory, and the slice writes straight into the
+    # preallocated output, whose 32-byte shard rows are aligned.
+    t = ttnn.from_torch(ramp([1, 1, 64, 64]), layout=RM, device=device, memory_config=width_config(L1, 16, [64, 4]))
+    out = ttnn.from_torch(
+        torch.zeros(1, 1, 32, 64, dtype=torch.bfloat16),
+        layout=RM,
+        device=device,
+        memory_config=width_config(L1, 4, [32, 16]),
+    )
+    ttnn.slice(t, [0, 0, 16, 0], [1, 1, 48, 64], [1, 1, 1, 1], output_tensor=out)
+    return out, ttnn.to_torch(t)[:, :, 16:48, :], t
+
+
 def run_permute_nd(device):
     cores = grid(((0, 0), (6, 5)), ((0, 6), (5, 6)))
     config = nd_config([1, 1, 2, 80], cores, ROUND_ROBIN)
@@ -100,6 +114,12 @@ def run_permute_nd_height_input(device):
     return ttnn.permute(t, (1, 0, 3, 2), memory_config=t.memory_config()), ttnn.to_torch(t).permute(1, 0, 3, 2)
 
 
+def run_permute_into_aligned_width_l1(device):
+    t = ttnn.from_torch(ramp([1, 2, 32, 64]), layout=RM, device=device, memory_config=width_config(L1, 16, [64, 4]))
+    y = ttnn.permute(t, (1, 0, 2, 3), memory_config=width_config(L1, 4, [64, 16]))
+    return y, ttnn.to_torch(t).permute(1, 0, 2, 3), t
+
+
 def run_permute_width_l1(device):
     t = ttnn.from_torch(ramp([2, 2, 32, 64]), layout=RM, device=device, memory_config=width_config(L1, 16, [128, 4]))
     return ttnn.permute(t, (2, 0, 1, 3)), ttnn.to_torch(t).permute(2, 0, 1, 3)
@@ -107,6 +127,24 @@ def run_permute_width_l1(device):
 
 def run_transpose_width_l1(device):
     t = ttnn.from_torch(ramp([1, 1, 32, 64]), layout=RM, device=device, memory_config=width_config(L1, 16, [32, 4]))
+    return ttnn.transpose(t, 2, 3), ttnn.to_torch(t).transpose(2, 3)
+
+
+def run_transpose_into_aligned_width_l1(device):
+    # The input moves to interleaved memory; the output keeps its sharded config, with aligned 16-byte shard rows.
+    t = ttnn.from_torch(ramp([1, 1, 32, 64]), layout=RM, device=device, memory_config=width_config(L1, 16, [32, 4]))
+    y = ttnn.transpose(t, 2, 3, memory_config=width_config(L1, 4, [64, 8]))
+    return y, ttnn.to_torch(t).transpose(2, 3), t
+
+
+def run_transpose_height_input_promoted(device):
+    # transpose gives an N = C = 1 HEIGHT-sharded input a WIDTH-sharded output: [256, 4] shards of 8-byte rows.
+    config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        L1,
+        ttnn.ShardSpec(grid(((0, 0), (7, 1))), [4, 256], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    t = ttnn.from_torch(ramp([1, 1, 64, 256]), layout=RM, device=device, memory_config=config)
     return ttnn.transpose(t, 2, 3), ttnn.to_torch(t).transpose(2, 3)
 
 
@@ -192,22 +230,43 @@ def run_fold_nd(device):
     return ttnn.fold(t, 2, 2), want
 
 
+def run_fold_nd_input_only(device):
+    # Only the input's 8-byte ND shard rows are sub-aligned; fold's synthesized output shard rows are 16 bytes.
+    shape = (1, 4, 12, 16)
+    t = ttnn.from_torch(
+        ramp(shape, 29),
+        layout=RM,
+        device=device,
+        memory_config=nd_config([1, 4, 12, 4], grid(((0, 0), (3, 0))), CONTIGUOUS),
+    )
+    n, h, w, c = shape
+    want = (
+        ttnn.to_torch(t).reshape(n, h // 2, 2, w // 2, 2, c).permute(0, 1, 3, 2, 4, 5).reshape(n, h // 2, w // 2, 4 * c)
+    )
+    return ttnn.fold(t, 2, 2), want, t
+
+
 @pytest.mark.parametrize(
     "run",
     [
         run_repeat,
         run_slice_nd,
         run_slice_into_preallocated_nd,
+        run_slice_into_aligned_preallocated,
         run_permute_nd,
         run_permute_nd_height_input,
         run_permute_width_l1,
+        run_permute_into_aligned_width_l1,
         run_transpose_width_l1,
+        run_transpose_into_aligned_width_l1,
+        run_transpose_height_input_promoted,
         run_transpose_width_dram,
         run_permute_into_width_dram,
         run_indexed_fill_width_dram,
         run_pad_into_width_dram,
         run_pad_single_core_width_l1,
         run_fold_nd,
+        run_fold_nd_input_only,
         run_gather_nd,
     ],
     ids=lambda run: run.__name__[len("run_") :],

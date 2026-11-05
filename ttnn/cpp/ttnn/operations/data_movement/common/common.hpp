@@ -534,7 +534,16 @@ Tensor launch_with_aligned_shard_rows(
             return detail::launch_through_interleaved(input, output_spec, preallocated_output, launch);
         }
     }
-    return launch(input, std::nullopt);
+    // Skipping the output-spec check when neither config may split rows relies on no operation deriving a WIDTH,
+    // BLOCK or ND output from a HEIGHT or interleaved config. Fold passes its input's config here as a stand-in for
+    // the output config it synthesizes, which keeps the input's layout. Debug builds check the output it made.
+    Tensor output = launch(input, std::nullopt);
+#ifdef DEBUG
+    TT_ASSERT(
+        input.layout() != tt::tt_metal::Layout::ROW_MAJOR || !has_subaligned_split_row(output.tensor_spec()),
+        "An operation launched without staging produced a row-major output with sub-aligned split rows");
+#endif
+    return output;
 }
 
 bool codegen_supported_on_arch(const ttnn::Tensor& input);
