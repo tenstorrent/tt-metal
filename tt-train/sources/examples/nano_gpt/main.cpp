@@ -708,14 +708,20 @@ int main(int argc, char **argv) {
 
     // Before anything is loaded and the optimizer is created, so the loaders write the stored dtype (an fp32 file keeps
     // its bits in fp32 master weights) and the optimizer state follows it. Save-and-exit exports the loaded weights in
-    // the dtype the model builds, so it skips the conversion. 3-tier workers keep bf16 parameters for RemoteOptimizer;
-    // the optimizer worker holds the fp32 master weights.
+    // the dtype the model builds, so it skips the conversion. 3-tier workers keep bf16 parameters for RemoteOptimizer,
+    // since the optimizer worker holds the fp32 master weights, and take only the reduce dtype: with float32 their
+    // micro-batches add up in fp32, and RemoteOptimizer sends the sum in bf16.
     if (save_and_exit_path.empty() && !is_three_tier_training(multihost_config)) {
         if (auto master_dtype =
                 ttml::core::apply_precision_config(yaml_config["training_config"], get_model_parameters(model))) {
             fmt::print("Master dtype: {}\n", *master_dtype);
         }
         if (auto reduce_dtype = ttml::autograd::ctx().get_gradient_reduce_dtype()) {
+            fmt::print("Reduce dtype: {}\n", *reduce_dtype);
+        }
+    } else if (save_and_exit_path.empty()) {
+        if (auto reduce_dtype =
+                ttml::core::apply_reduce_dtype_config(yaml_config["training_config"], get_model_parameters(model))) {
             fmt::print("Reduce dtype: {}\n", *reduce_dtype);
         }
     }

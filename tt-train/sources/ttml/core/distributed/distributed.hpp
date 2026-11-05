@@ -5,6 +5,7 @@
 #pragma once
 
 #include <core/ttnn_all_includes.hpp>
+#include <functional>
 
 #include "serialization/serializable.hpp"
 
@@ -42,5 +43,17 @@ void synchronize_gradients(
     const serialization::NamedParameters& parameters,
     const std::vector<uint32_t>& cluster_axes,
     std::optional<ttnn::DataType> reduce_dtype = std::nullopt);
+
+// The mean of `count` gradients, which `gradient(i)` hands over one at a time (the 3-tier aggregator receives them from
+// its workers this way, so only one is held besides the sum). With `reduce_dtype` FLOAT32, a narrower gradient is cast
+// to fp32 before it is added, the sum and the division run in fp32, and the result is written in the first gradient's
+// dtype once; unset or BFLOAT16 runs every op in the gradients' own dtype. `sum_over_devices` then all-reduces the mean
+// over every device of the mesh, in the same dtype as the sum: a sum, not a mean, as the 3-tier aggregator has always
+// done under DDP.
+ttnn::Tensor average_gradients(
+    uint32_t count,
+    const std::function<ttnn::Tensor(uint32_t)>& gradient,
+    std::optional<ttnn::DataType> reduce_dtype,
+    bool sum_over_devices = false);
 
 }  // namespace ttml::core::distributed

@@ -9,6 +9,7 @@
 #include "common.hpp"
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/socket_manager.hpp"
+#include "core/parameter_dtype.hpp"
 #include "datasets/utils.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/gpt2.hpp"
@@ -27,6 +28,7 @@ void send_aggregated_gradients_from_workers_to_optimizer(
     const std::shared_ptr<ttml::core::distributed::DistributedContext> &aggregator_and_optimizer_ctx,
     const SortedParameters &sorted_model_parameters,
     int workers,
+    std::optional<ttnn::DataType> reduce_dtype,
     bool is_ddp = false) {
     Rank optimizer_rank{aggregator_and_optimizer_ctx->rank().get() + 1};
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
@@ -34,19 +36,16 @@ void send_aggregated_gradients_from_workers_to_optimizer(
             continue;
         }
 
+        // Each worker sends its gradient in bf16 (RemoteOptimizer casts an fp32 one first); with reduce_dtype float32
+        // they are summed and averaged in fp32 and the mean is sent in bf16.
         // TODO: allow usage of tensor from model parameters (avoids redundant storage of a model)
-        auto tensor = ttnn::empty_like(tensor_ptr->get_value());
-        tensor = socket_manager.recv(tensor, workers_and_aggregator_ctx, ttml::core::distributed::Rank{0});
-        for (int worker_id = 1; worker_id < workers; ++worker_id) {
-            auto tensor_to_add = ttnn::empty_like(tensor_ptr->get_value());
-            tensor_to_add = socket_manager.recv(
-                tensor_to_add, workers_and_aggregator_ctx, ttml::core::distributed::Rank{worker_id});
-            tensor = ttnn::add(tensor, tensor_to_add);
-        }
-        tensor = ttnn::multiply(tensor, 1.0F / static_cast<float>(workers));
-        if (is_ddp) {
-            tensor = ttml::ttnn_fixed::distributed::all_reduce(tensor);
-        }
+        const auto receive = [&](uint32_t worker_id) {
+            auto tensor = ttnn::empty_like(tensor_ptr->get_value());
+            return socket_manager.recv(
+                tensor, workers_and_aggregator_ctx, ttml::core::distributed::Rank{static_cast<int>(worker_id)});
+        };
+        const auto tensor = ttml::core::distributed::average_gradients(
+            static_cast<uint32_t>(workers), receive, reduce_dtype, /* sum_over_devices */ is_ddp);
         socket_manager.send(tensor, aggregator_and_optimizer_ctx, optimizer_rank);
     }
 }
@@ -84,6 +83,7 @@ int main(int argc, char **argv) {
     CLI11_PARSE(app, argc, argv);
 
     auto yaml_config = YAML::LoadFile(config_name);
+    ttml::core::validate_precision_config(yaml_config["training_config"]);
     three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);
     three_tier_arch::DeviceConfig device_config = three_tier_arch::parse_device_config(yaml_config);
 
@@ -143,6 +143,12 @@ int main(int argc, char **argv) {
     auto sorted_model_parameters = SortedParameters(model_parameters.begin(), model_parameters.end());
 
     auto workers = config.num_mh_workers;
+    // The aggregator computes no gradients, so it takes only the dtype the workers' gradients are summed in.
+    const auto reduce_dtype =
+        ttml::core::apply_reduce_dtype_config(yaml_config["training_config"], ttml::serialization::NamedParameters{});
+    if (reduce_dtype) {
+        fmt::print("[aggregator] Reduce dtype: {}\n", *reduce_dtype);
+    }
 
     auto workers_and_aggregator_ranks =
         three_tier_arch::get_workers_and_aggregator_ranks(static_cast<uint32_t>(distributed_ctx->rank().get()));
@@ -164,6 +170,7 @@ int main(int argc, char **argv) {
             aggregator_and_optimizer_ctx,
             sorted_model_parameters,
             workers,
+            reduce_dtype,
             device_config.enable_ddp);
         send_weights_from_optimizer_to_workers(
             socket_manager, workers_and_aggregator_ctx, aggregator_and_optimizer_ctx, sorted_model_parameters, workers);

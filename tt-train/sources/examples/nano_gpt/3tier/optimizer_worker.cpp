@@ -70,6 +70,7 @@ int main(int argc, char **argv) {
     CLI11_PARSE(app, argc, argv);
 
     auto yaml_config = YAML::LoadFile(config_name);
+    ttml::core::validate_precision_config(yaml_config["training_config"]);
     three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);
     auto optimizer_node = yaml_config["training_config"]["optimizer"];
     three_tier_arch::DeviceConfig device_config = three_tier_arch::parse_device_config(yaml_config);

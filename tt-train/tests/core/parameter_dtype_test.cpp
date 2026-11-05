@@ -242,6 +242,41 @@ TEST_F(ParameterDtypeTest, SetsFp32GradAccumulationOnTrainableParametersWithAnFp
     autograd::ctx().set_gradient_reduce_dtype(std::nullopt);
 }
 
+// A 3-tier worker keeps bf16 parameters (the optimizer worker holds the master weights) but adds its micro-batches up
+// in fp32: only the reduce dtype applies, whatever master_dtype says, and the whole block is still checked. Without
+// parameters it only stores and returns the dtype, which is what the 3-tier aggregator needs.
+TEST_F(ParameterDtypeTest, AppliesOnlyTheReduceDtypeToParametersKeptInBf16) {
+    auto trainable = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
+    auto frozen = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ false);
+    const serialization::NamedParameters parameters{{"trainable", trainable}, {"frozen", frozen}};
+    const auto apply = [](const char* training_config, const serialization::NamedParameters& on) {
+        return core::apply_reduce_dtype_config(YAML::Load(training_config), on);
+    };
+
+    EXPECT_EQ(apply("precision: {master_dtype: float32, reduce_dtype: float32}", parameters), ttnn::DataType::FLOAT32);
+    EXPECT_EQ(native(trainable).dtype(), ttnn::DataType::BFLOAT16);
+    EXPECT_EQ(trainable->get_grad_accumulation_dtype(), ttnn::DataType::FLOAT32);
+    EXPECT_EQ(frozen->get_grad_accumulation_dtype(), std::nullopt);
+    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::FLOAT32);
+
+    // Without the key nothing is stored and the accumulation dtype is cleared, as apply_precision_config does.
+    EXPECT_EQ(apply("precision: {master_dtype: float32}", parameters), std::nullopt);
+    EXPECT_EQ(trainable->get_grad_accumulation_dtype(), std::nullopt);
+    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), std::nullopt);
+
+    // A wrong master_dtype name is still an error, raised before anything changes.
+    (void)apply("precision: {reduce_dtype: float32}", parameters);
+    EXPECT_ANY_THROW(apply("precision: {master_dtype: float16, reduce_dtype: bfloat16}", parameters));
+    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::FLOAT32);
+    EXPECT_EQ(trainable->get_grad_accumulation_dtype(), ttnn::DataType::FLOAT32);
+
+    EXPECT_EQ(apply("precision: {reduce_dtype: bfloat16}", serialization::NamedParameters{}), ttnn::DataType::BFLOAT16);
+    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::BFLOAT16);
+    EXPECT_EQ(trainable->get_grad_accumulation_dtype(), ttnn::DataType::FLOAT32);
+
+    autograd::ctx().set_gradient_reduce_dtype(std::nullopt);
+}
+
 // The bf16-only gradient consumers call this right before they read the gradients. An fp32 gradient is replaced by its
 // bf16 cast, the same bits ttnn::typecast gives; a bf16 gradient, a parameter without one and a second call are left
 // alone.

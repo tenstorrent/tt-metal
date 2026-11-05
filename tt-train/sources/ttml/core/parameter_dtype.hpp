@@ -42,6 +42,15 @@ void validate_precision_config(const YAML::Node& training_config);
 std::optional<ttnn::DataType> apply_precision_config(
     const YAML::Node& training_config, const serialization::NamedParameters& parameters);
 
+// Applies only training_config.precision.reduce_dtype, as apply_precision_config() does: stores it as the gradient
+// syncs' default and, with "float32", sets fp32 gradient accumulation on the trainable parameters (clearing it
+// otherwise). The parameters keep the dtype they are stored in, whatever master_dtype says, though the whole block is
+// still validated. For a process that computes gradients on bf16 copies of parameters whose master weights live
+// elsewhere, such as a 3-tier worker, and, with no parameters, for one that only needs the reduce dtype, such as the
+// 3-tier aggregator. Returns the reduce dtype it stored, if any.
+std::optional<ttnn::DataType> apply_reduce_dtype_config(
+    const YAML::Node& training_config, const serialization::NamedParameters& parameters);
+
 // Installs a bf16 copy of every fp32 gradient of the parameters, which frees the fp32 one; bf16 gradients and
 // parameters without one are left as they are. With reduce_dtype "float32" a trainable parameter's gradient can be fp32
 // (see apply_precision_config), and the consumers that take bf16 gradients only call this right before they read them:

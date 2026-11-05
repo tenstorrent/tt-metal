@@ -90,11 +90,20 @@ void validate_precision_config(const YAML::Node& training_config) {
 
 std::optional<ttnn::DataType> apply_precision_config(
     const YAML::Node& training_config, const serialization::NamedParameters& parameters) {
+    // Both keys are read, and so the whole block validated, before anything changes.
+    validate_precision_config(training_config);
     const auto master_dtype = precision_dtype_from_config(training_config, "master_dtype");
-    const auto reduce_dtype = precision_dtype_from_config(training_config, "reduce_dtype");
     if (master_dtype) {
         store_trainable_parameters_as(parameters, *master_dtype);
     }
+    (void)apply_reduce_dtype_config(training_config, parameters);
+    return master_dtype;
+}
+
+std::optional<ttnn::DataType> apply_reduce_dtype_config(
+    const YAML::Node& training_config, const serialization::NamedParameters& parameters) {
+    validate_precision_config(training_config);
+    const auto reduce_dtype = precision_dtype_from_config(training_config, "reduce_dtype");
     autograd::ctx().set_gradient_reduce_dtype(reduce_dtype);
     const auto accumulation_dtype =
         reduce_dtype == ttnn::DataType::FLOAT32 ? std::optional{ttnn::DataType::FLOAT32} : std::nullopt;
@@ -103,7 +112,7 @@ std::optional<ttnn::DataType> apply_precision_config(
             parameter->set_grad_accumulation_dtype(accumulation_dtype);
         }
     }
-    return master_dtype;
+    return reduce_dtype;
 }
 
 void cast_fp32_gradients_to_bf16(const serialization::NamedParameters& parameters) {
