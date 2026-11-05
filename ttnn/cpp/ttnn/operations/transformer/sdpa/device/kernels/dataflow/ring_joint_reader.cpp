@@ -1175,16 +1175,26 @@ void kernel_main() {
                     if (!ksplit_k_range.contains(source_k_chunk)) {
                         return true;
                     }
-                    // causal_end_nt is logical_nt when the causal skip is off.
-                    return !chunked_kv_chunk_is_live<kv_pad_rotation_enabled, chunked_enabled>(
-                        source_ring_id,
-                        source_k_chunk,
-                        Sk_chunk_t,
-                        logical_nt,
-                        causal_end_nt,
-                        kv_local_padded_Nt,
-                        chunk_size_t,
-                        kv_region_Nt);
+                    // causal_end_nt is logical_nt when the causal skip is off. The static path keeps the local
+                    // geometry in the template arguments, as before dynamic_local_n.
+                    if constexpr (dynamic_local_n) {
+                        return !chunked_kv_chunk_is_live<kv_pad_rotation_enabled, chunked_enabled>(
+                            source_ring_id,
+                            source_k_chunk,
+                            Sk_chunk_t,
+                            logical_nt,
+                            causal_end_nt,
+                            kv_local_padded_Nt,
+                            chunk_size_t,
+                            kv_region_Nt);
+                    } else {
+                        return !chunked_kv_chunk_is_live<
+                            kv_pad_rotation_enabled,
+                            chunked_enabled,
+                            kv_local_padded_Nt_ct,
+                            chunk_size_t_ct,
+                            kv_region_Nt_ct>(source_ring_id, source_k_chunk, Sk_chunk_t, logical_nt, causal_end_nt);
+                    }
                 }();
 
                 // Sharded joint: this ring iteration serves shard `ring_id`, whose global joint tile
