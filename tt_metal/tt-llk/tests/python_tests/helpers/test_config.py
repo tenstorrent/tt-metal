@@ -986,10 +986,21 @@ class TestConfig:
 
     @staticmethod
     def resolve_worker_tensix_location():
-        """Bind TENSIX_LOCATION from the card once Exalens has a context."""
+        """Bind TENSIX_LOCATION from the card once Exalens has a context.
+
+        ttsim hosts a private chip in each xdist process, and a test only
+        touches one core, so every worker uses the first functional core. The
+        xdist index is not a core index there: ``-n`` can exceed the
+        descriptor, and a restarted worker (``gw32``, ``gw33``, ...) still has
+        a core. Silicon and the RTL server share one device, so the index
+        still selects a distinct core and a worker past the card is still an
+        error.
+        """
         index = TestConfig._PENDING_WORKER_INDEX
         if index is None:
             return
+        if TestConfig.runs_on_ttsim():
+            index = 0
         TestConfig.TENSIX_LOCATION = device_module.tensix_location_for_worker(index)
         TestConfig._PENDING_WORKER_INDEX = None
 
