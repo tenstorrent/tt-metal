@@ -11,7 +11,8 @@
 // every output row outside [u*T, u*T + T) is then exactly 0. HOLD is decided per (u,h) ctrl word; q/k window chunk
 // ownership is per key-head group (h % rf == 0), so a caller must hold ALL Nv heads of a user (the op cannot check
 // ctrl contents).
-// GDN_RING_PAGE_IDX: the state after token t goes to ring page ring_page_idx[u][t] + h*KV instead of block t*BH + bh.
+// GDN_RING_PAGE_IDX: the state after token t goes to ring page ring_page_idx[u][t*Nv + h] instead of block t*BH + bh.
+// GDN_RING_POOL2 (= ring's page count): pages from there on are ring_pool2's (page - count).
 // VB > 1 (value blocks, GDN_VSPLIT): core (u, h, s) owns state / output column tiles [s*Vs, (s+1)*Vs). Block 0 alone
 // writes (or copies through) the window; each block writes its KVs ring tiles (i, s*Vs + j) per token, zeroes / writes
 // only its Vs output tiles, and before that swaps the last token's pre-norm output tiles with its head's other blocks:
@@ -146,6 +147,9 @@ TT_KERNEL void writer(
     uint32_t peer_x3,
     uint32_t peer_y3) {
     const auto ring_acc = TensorAccessor(tensor::ring_out);
+#ifdef GDN_RING_POOL2
+    const auto ring2_acc = same_layout_accessor(ring_acc, tensor::ring2_out);
+#endif
     const auto out_acc = TensorAccessor(tensor::out);
     const auto wa_acc = TensorAccessor(tensor::win_a_w);
     const auto wb_acc = TensorAccessor(tensor::win_b_w);
@@ -198,7 +202,7 @@ TT_KERNEL void writer(
     ctrl_w.reserve_back(1);
     noc.async_read(ctrl_acc, ctrl_w, ctrl_bytes, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
 #ifdef GDN_RING_PAGE_IDX
-    // row u of ring_page_idx: the first ring page of token t's state (reserved, never pushed)
+    // row u of ring_page_idx: word t*Nv + h = first ring page of token t's state of head h (reserved, never pushed)
     const auto ridx_acc = TensorAccessor(tensor::ridx);
     DataflowBuffer ridx(dfb::ridx_w);
     ridx.reserve_back(1);
@@ -511,21 +515,29 @@ TT_KERNEL void writer(
                 uint32_t page0;
                 {
                     auto lock = ridx.scoped_write_lock(1);
-                    page0 = lock.template get_ptr<volatile uint32_t>()[t] + h * KV + v0;
+                    page0 = lock.template get_ptr<volatile uint32_t>()[t * Nv + h] + v0;
                 }
 #else
                 const uint32_t page0 = (t * BH + bh) * KV + v0;
 #endif
-                for (uint32_t i = 0; i < Kt; ++i) {
-                    for (uint32_t j = 0; j < Vs; ++j) {
-                        noc.async_write(
-                            hnew,
-                            ring_acc,
-                            entry,
-                            {.offset_bytes = (i * Vs + j) * entry},
-                            {.page_id = page0 + i * Vt + j});
+                auto write_state = [&](const auto& acc, uint32_t first) {
+                    for (uint32_t i = 0; i < Kt; ++i) {
+                        for (uint32_t j = 0; j < Vs; ++j) {
+                            noc.async_write(
+                                hnew,
+                                acc,
+                                entry,
+                                {.offset_bytes = (i * Vs + j) * entry},
+                                {.page_id = first + i * Vt + j});
+                        }
                     }
-                }
+                };
+#ifdef GDN_RING_POOL2
+                const bool in2 = page0 >= GDN_RING_POOL2;
+                write_state(in2 ? ring2_acc : ring_acc, in2 ? page0 - GDN_RING_POOL2 : page0);
+#else
+                write_state(ring_acc, page0);
+#endif
                 noc.async_write_barrier();
             }
             hnew.pop_front(KVs);

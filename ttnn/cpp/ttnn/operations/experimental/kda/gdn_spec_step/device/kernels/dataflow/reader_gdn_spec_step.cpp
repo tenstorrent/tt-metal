@@ -23,6 +23,7 @@
 // pushed right after their reads / build, before the taps, the norm weight row and the row masks (which the compute
 // needs only from phase A3 on), so phase A starts earlier. Both move no value: every tile holds the same bytes.
 // GDN_RING_PAGE_IDX: the ctrl word of (u,h) is the first fp32 ring page of the initial state, not a block index.
+// GDN_RING_POOL2 (= ring's page count): ctrl pages from there on are ring_pool2's (page - count).
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_dataflow_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
@@ -80,6 +81,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     const auto wa_acc = TensorAccessor(tensor::win_a);
     const auto wb_acc = TensorAccessor(tensor::win_b);
     const auto ring_acc = TensorAccessor(tensor::ring);
+#ifdef GDN_RING_POOL2
+    const auto ring2_acc = same_layout_accessor(ring_acc, tensor::ring2);
+#endif
     const auto ctrl_acc = TensorAccessor(tensor::ctrl);
     const auto taps_acc = TensorAccessor(tensor::taps);
     const auto dtb_acc = TensorAccessor(tensor::dtb);
@@ -188,15 +192,23 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     const uint32_t state_page0 = blk * KV;
 #endif
     // the initial state of this block: KVs tiles from page state_page0 (VB = 1: the whole 16-tile block in one run)
-    auto read_state = [&]() {
+    auto read_state_from = [&](const auto& acc, uint32_t first) {
         if constexpr (VB == 1) {
             (void)s;
-            read_tiles_at(ring_acc, state_in, noc, state_page0, KV, 0);
+            read_tiles_at(acc, state_in, noc, first, KV, 0);
         } else {
             for (uint32_t i = 0; i < Kt; ++i) {
-                read_tiles_at(ring_acc, state_in, noc, state_page0 + i * Vt + s * Vs, Vs, i * Vs);
+                read_tiles_at(acc, state_in, noc, first + i * Vt + s * Vs, Vs, i * Vs);
             }
         }
+    };
+    auto read_state = [&]() {
+#ifdef GDN_RING_POOL2
+        const bool in2 = state_page0 >= GDN_RING_POOL2;
+        read_state_from(in2 ? ring2_acc : ring_acc, in2 ? state_page0 - GDN_RING_POOL2 : state_page0);
+#else
+        read_state_from(ring_acc, state_page0);
+#endif
     };
 
     // ---- constants and per-head scalars (each scalar is a small read with its own barrier)

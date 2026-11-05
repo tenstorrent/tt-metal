@@ -50,16 +50,20 @@ void bind_gdn_spec_step(nb::module_& mod) {
                 64 = gate split (with 2 and value_blocks > 1: the head's blocks split the gate math); 128 = each value
                 block normalizes / gates only its own output columns. Out, ring and window stay bit-identical to
                 kernel_opts=0.
-            ring_page_idx (ttnn.Tensor, optional): ``[>= B, T]`` ROW_MAJOR INT32 or UINT32 device tensor. Entry
-                ``(u, t)`` is the first FLOAT32 page of ``ring`` that receives the state after token ``t`` of user
-                ``u`` (value head ``h`` at ``+ h*KV``, KV = Dk*Dv/1024, tile order as in ``[Dk, Dv]``), in place of
-                ring block ``t*M*Nv + u*Nv + h``. ``ring`` may then be any FLOAT32 tiled page pool (for example a
-                view of vLLM-owned spec blocks) of at least max_users*Nv blocks (a held head reads block
-                u*Nv + h as a placeholder). In this mode the ctrl word ``1 + M + u*Nv + h`` is the first FLOAT32
-                page of that head's initial state (any page, no block alignment), not a ring block index.
-                Pages written for different (user, token) pairs must not overlap; a (user, head)'s writes may
-                overlap its own initial block. Read on device on every call, so a captured trace follows new pages
-                when only the contents change. Default None.
+            ring_page_idx (ttnn.Tensor, optional): ``[>= B, T*Nv]`` ROW_MAJOR INT32 or UINT32 device tensor. Entry
+                ``(u, t*Nv + h)`` is the first FLOAT32 page of ``ring`` that receives value head ``h``'s state after
+                token ``t`` of user ``u`` (KV = Dk*Dv/1024 pages, tile order as in ``[Dk, Dv]``), in place of ring
+                block ``t*M*Nv + u*Nv + h``. ``ring`` may then be any FLOAT32 tiled page pool (for example a view of
+                vLLM-owned spec blocks) of at least max_users*Nv blocks (a held head reads block u*Nv + h as a
+                placeholder). In this mode the ctrl word ``1 + M + u*Nv + h`` is the first FLOAT32 page of that head's
+                initial state (any page, no block alignment), not a ring block index. Pages written for different
+                (user, token, head) triples must not overlap; a (user, head)'s writes may overlap its own initial
+                pages. Read on device on every call, so a captured trace follows new pages when only the contents
+                change. Default None.
+            ring_pool2 (ttnn.Tensor, optional): with ``ring_page_idx`` only. A second FLOAT32 tiled pool: a page
+                ``p >= P`` (P = page count of ``ring``) in ``ring_page_idx`` or in the ctrl initial words addresses
+                page ``p - P`` of ``ring_pool2``, so a user's heads can be split over two buffers (for example the K
+                and V cache of a layer). A head's KV pages must lie in one pool.
             With fast_mode=True, fp32_state=True a T = 1 call is bit-identical (out, state, window) to
             gdn_decode_step(..., fast_mode=True, fp32_state=True), and a T-step call equals T chained T = 1 calls.
         )doc",
@@ -94,7 +98,8 @@ void bind_gdn_spec_step(nb::module_& mod) {
         nb::arg("max_users") = 0,
         nb::arg("value_blocks") = 1,
         nb::arg("kernel_opts") = 0,
-        nb::arg("ring_page_idx") = nb::none());
+        nb::arg("ring_page_idx") = nb::none(),
+        nb::arg("ring_pool2") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::gdn_spec_step::detail
