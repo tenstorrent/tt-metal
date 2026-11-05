@@ -20,7 +20,7 @@ ours fails.
 
 Env: MRS_CMP_MESH mesh to open (default 1x4; 4x8 on a Galaxy), MRS_CMP_PAYLOAD fabric router payload bytes (default 8192, the tt_dit ring presets), MRS_CMP_PATHS comma list to
 restrict paths (e.g. ours,prod), MRS_CMP_SEPARATE_EPILOGUE=1 runs ours' bias and addcmul as separate ops (its program
-without them).
+without them), MRS_CMP_GRID the matmul grid ours runs on (grid_2d, folded_n or folded_m; default grid_2d).
 """
 
 from __future__ import annotations
@@ -62,6 +62,8 @@ OUT_PATH = os.environ.get("MRS_CMP_OUT", "generated/mrs_model_compare.jsonl")
 ONLY_PATHS = {p for p in os.environ.get("MRS_CMP_PATHS", "").split(",") if p}
 # 1: ours runs addcmul as a separate op instead of fused (the op's ungated program; for A/B and program comparisons)
 SEPARATE_EPILOGUE = os.environ.get("MRS_CMP_SEPARATE_EPILOGUE", "0") == "1"
+# the matmul grid ours runs on (the caller's choice; a shape a grid cannot take is refused and recorded as an error)
+OURS_GRID = os.environ.get("MRS_CMP_GRID", "grid_2d")
 
 DTYPES = {"bf16": ttnn.bfloat16, "bf8b": ttnn.bfloat8_b, "bf4b": ttnn.bfloat4_b, "fp32": ttnn.float32}
 FIDELITY = {
@@ -255,7 +257,8 @@ def rs_minimal(env: Env, x, *, hyper=None, persistent=False):
     return env.ccl.reduce_scatter(x, dim=3, mesh_axis=G.axis, use_persistent_buffer=persistent)
 
 
-def path_mmrs_dit(env: Env, inp: Inputs, case: Case):
+def dit_fused_params(env: Env, case: Case):
+    """The fused op's parameters for this shape, as tt_dit resolves them (narrowed to this device's grid), + info."""
     from models.tt_dit.utils.matmul import get_fused_mmrs_config
 
     if case.model == "MiniMax-H3":
@@ -288,6 +291,11 @@ def path_mmrs_dit(env: Env, inp: Inputs, case: Case):
         adapted = f"matmul grid {resolved.compute_with_storage_grid_size.x} -> {dev_grid.x} columns" + (
             f", RS workers/link {workers} -> {zone_workers}" if capped else ""
         )
+    return params, source, adapted
+
+
+def path_mmrs_dit(env: Env, inp: Inputs, case: Case):
+    params, source, adapted = dit_fused_params(env, case)
     use_l1 = params["mm_window_blocks"] is not None
     ckc = wh_ckc(env.mesh_device, case)
     pre_rs_shape = (1, 1, case.M, case.N)
@@ -360,6 +368,89 @@ def path_unfused_dit(env: Env, inp: Inputs, case: Case):
     return run, info
 
 
+# Diagnostics (MRS_CMP_PATHS only): the tt_dit paths' parts timed alone.
+def path_mm_dit_fused_cfg(env: Env, inp: Inputs, case: Case):
+    """minimal_matmul alone with the fused op's config (its matmul grid and blocking), no reduce-scatter."""
+    params, _, adapted = dit_fused_params(env, case)
+    ckc = wh_ckc(env.mesh_device, case)
+    x = list(inp.x) if case.k_split else inp.x[0]
+    bias = inp.bias_pre if case.bias else None
+    info = {"matmul": "minimal_matmul (fused op's config)", "config": repr(params["config"]), "adapted": adapted}
+
+    def run():
+        return ttnn.experimental.minimal_matmul(
+            input_tensor=x, weight_tensor=inp.w, bias_tensor=bias, config=params["config"], compute_kernel_config=ckc
+        )
+
+    return run, info
+
+
+def path_mm_dit_full(env: Env, inp: Inputs, case: Case):
+    """minimal_matmul alone on the full grid with the unfused path's config, no reduce-scatter."""
+    from models.tt_dit.utils.matmul import get_matmul_config
+
+    ckc = wh_ckc(env.mesh_device, case)
+    cfg = get_matmul_config(case.M, case.K, case.N, DIT_MM_GRID, None)
+    x = list(inp.x) if case.k_split else inp.x[0]
+    bias = inp.bias_pre if case.bias else None
+
+    def run():
+        return ttnn.experimental.minimal_matmul(
+            input_tensor=x, weight_tensor=inp.w, bias_tensor=bias, config=cfg, compute_kernel_config=ckc
+        )
+
+    return run, {"matmul": "minimal_matmul (full grid)", "config": repr(cfg)}
+
+
+def path_rs_dit(env: Env, inp: Inputs, case: Case):
+    """The unfused path's reduce-scatter alone, on a matmul output computed once outside the timed span."""
+    from models.tt_dit.utils.matmul import get_matmul_config
+
+    cfg = get_matmul_config(case.M, case.K, case.N, DIT_MM_GRID, None)
+    x = list(inp.x) if case.k_split else inp.x[0]
+    pre = ttnn.experimental.minimal_matmul(
+        input_tensor=x, weight_tensor=inp.w, config=cfg, compute_kernel_config=wh_ckc(env.mesh_device, case)
+    )
+
+    def run():
+        return rs_minimal(env, pre, hyper=True, persistent=True)
+
+    return run, {"rs": "reduce_scatter_minimal_async (tt_dit hyperparameters)"}
+
+
+def path_ours_noepi(env: Env, inp: Inputs, case: Case):
+    """Ours with no bias and no addcmul (the op's program without the epilogue): the epilogue's cost = ours - this."""
+    ckc = ttnn.ComputeConfigDescriptor(math_fidelity=FIDELITY[case.fidelity], math_approx_mode=case.approx)
+
+    def run():
+        x = ttnn.concat(inp.x, dim=3) if case.k_split else inp.x[0]
+        return ttnn.experimental.matmul_reduce_scatter_prefill(
+            x,
+            inp.w,
+            cluster_axis=G.axis,
+            scatter_dim=-1,
+            topology=env.topology,
+            num_links=NUM_LINKS,
+            compute_kernel_config=ckc,
+            grid=getattr(ttnn.MatmulReduceScatterPrefillGrid, OURS_GRID.upper()),
+        )
+
+    return run, {"epilogue": [], "note": "no bias, no addcmul"}
+
+
+def default_matmul_config(a, b, dtype=None, ckc=None):
+    """repr of the program config ttnn.matmul resolves by default for these operands (its grid / blocks)."""
+    try:
+        params = ttnn.MatmulParams()
+        if dtype is not None:
+            params.output_dtype = dtype
+        if ckc is not None:
+            params.compute_kernel_config = ckc
+        return repr(ttnn.create_matmul_attributes(a, b, params, []).program_config)
+    except Exception as e:  # a reporting aid only
+        return f"unavailable: {e}"
+
+
 def path_unfused_gptoss(env: Env, inp: Inputs, case: Case):
     # apply_output_projection: ttnn.matmul(bf8b x, o_proj, dtype=bf16), bias added in place; then the RS half of
     # mesh_config.allreduce (reduce_scatter_minimal_async, barrier, no persistent buffers).
@@ -368,7 +459,10 @@ def path_unfused_gptoss(env: Env, inp: Inputs, case: Case):
         ttnn.add(out, inp.bias_pre, output_tensor=out)
         return rs_minimal(env, out)
 
-    return run, {"matmul": "ttnn.matmul default"}
+    return run, {
+        "matmul": "ttnn.matmul default",
+        "config": default_matmul_config(inp.x[0], inp.w, DTYPES[case.out_dtype]),
+    }
 
 
 def path_unfused_m3(env: Env, inp: Inputs, case: Case):
@@ -378,7 +472,10 @@ def path_unfused_m3(env: Env, inp: Inputs, case: Case):
         out = ttnn.matmul(inp.x[0], inp.w, dtype=DTYPES[case.out_dtype], compute_kernel_config=ckc)
         return rs_minimal(env, out)
 
-    return run, {"matmul": "ttnn.matmul default" if ckc is None else "ttnn.matmul HiFi3"}
+    return run, {
+        "matmul": "ttnn.matmul default" if ckc is None else "ttnn.matmul HiFi3",
+        "config": default_matmul_config(inp.x[0], inp.w, DTYPES[case.out_dtype], ckc),
+    }
 
 
 def _muse_ckc(mesh_device):
@@ -563,7 +660,7 @@ def path_mrs_async_qwen36(env: Env, inp: Inputs, case: Case):
 def path_ours(env: Env, inp: Inputs, case: Case):
     ckc = ttnn.ComputeConfigDescriptor(math_fidelity=FIDELITY[case.fidelity], math_approx_mode=case.approx)
     x_in = inp.x
-    info = {"epilogue": []}
+    info = {"epilogue": [], "grid": OURS_GRID}
     if case.act == "fp32":
         # the op takes bf16 / bf8b activations: hand it the activation in bf16 (outside the measured trace)
         x_in = [ttnn.typecast(t, ttnn.bfloat16) for t in inp.x]
@@ -593,6 +690,7 @@ def path_ours(env: Env, inp: Inputs, case: Case):
             topology=env.topology,
             num_links=NUM_LINKS,
             compute_kernel_config=ckc,
+            grid=getattr(ttnn.MatmulReduceScatterPrefillGrid, OURS_GRID.upper()),
             **({"bias": inp.bias_pre} if fused_bias else {}),
             **addcmul,
         )
@@ -605,8 +703,17 @@ def path_ours(env: Env, inp: Inputs, case: Case):
     return run, info
 
 
+# timed parts of a path, not whole paths: their output is not the scattered result, so it is not checked
+DIAG_PATHS = {"mm_dit_fused_cfg", "mm_dit_full", "rs_dit", "ours_noepi"}
 PATHS = {
     "mmrs_dit": path_mmrs_dit,
+    "mm_dit_fused_cfg": path_mm_dit_fused_cfg,
+    "mm_dit_full": path_mm_dit_full,
+    "rs_dit": path_rs_dit,
+    "ours_noepi": path_ours_noepi,
+    "mm_dit_fused_cfg": path_mm_dit_fused_cfg,
+    "mm_dit_full": path_mm_dit_full,
+    "rs_dit": path_rs_dit,
     "unfused_dit": path_unfused_dit,
     "unfused_gptoss": path_unfused_gptoss,
     "mmrs_gptoss": path_mmrs_gptoss,
@@ -716,8 +823,8 @@ def run_path(mesh_device, env, inputs, case, path_name):
         rec["info"] = info
         eager = run()
         ttnn.synchronize_device(mesh_device)
-        rec["pcc"] = check_output(eager, inputs, case)
-        if path_name == "ours":
+        rec["pcc"] = 1.0 if path_name in DIAG_PATHS else check_output(eager, inputs, case)
+        if path_name in ("ours", "ours_noepi"):
             try:
                 plan = ttnn._ttnn.operations.experimental.ccl_experimental._matmul_reduce_scatter_prefill_last_plan()
                 rec["plan"] = {str(k): (list(v) if isinstance(v, tuple) else v) for k, v in dict(plan).items()}
@@ -736,7 +843,7 @@ def run_path(mesh_device, env, inputs, case, path_name):
         ttnn.synchronize_device(mesh_device)
         time.sleep(0.3)  # profiler records arrive asynchronously: let the warm-up's land before any window opens
         rec.update(measure_trace(mesh_device, trace_id))
-        rec["pcc_traced"] = check_output(traced, inputs, case)
+        rec["pcc_traced"] = 1.0 if path_name in DIAG_PATHS else check_output(traced, inputs, case)
         floor = PCC_FLOOR[case.fidelity]
         rec["pcc_ok"] = rec["pcc"] >= floor and rec["pcc_traced"] >= floor
         rec["status"] = "ok" if rec["pcc_ok"] else "wrong_output"
@@ -803,6 +910,7 @@ def test_model_compare(mesh_device, case: Case):
     paths = [case.prod, *case.alts, "ours"]
     if ONLY_PATHS:
         paths = [p for p in paths if p in ONLY_PATHS or ("prod" in ONLY_PATHS and p == case.prod)]
+        paths += [p for p in sorted(ONLY_PATHS & DIAG_PATHS) if p == "ours_noepi" or case.prod == "mmrs_dit"]
     # each path gets its own CCLManager: its buffer cache is keyed by shape only, and the fused path's (output-only)
     # ping-pong entry would otherwise be handed to the unfused reduce-scatter
     results = {p: run_path(mesh_device, Env(mesh_device, case), inputs, case, p) for p in paths}
