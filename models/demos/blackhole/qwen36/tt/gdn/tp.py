@@ -2400,9 +2400,33 @@ class TPGatedDeltaNet:
         qkv_f, z, a, b = self._project_qkvzab(x, M)
         qkv = ttnn.reshape(qkv_f, (Bg, Tb, C))
         # init (resumed rows): {"rec": [Bg,Nv,Dk,Dv] fp32 initial state, "pad": [Bg,32,C] conv-history block}
-        q, k, v, conv_new_state = self._kda_conv_group(
-            qkv, masks["conv_sel"], init["pad"] if init is not None else masks["zeros_pad"], hist_first=init is not None
-        )
+        if Bg == 1 and init is not None and init.get("hist") is not None:
+            # one row: the conv op takes its 3-row history directly ([1, K-1, C] ROW_MAJOR, this chip's channels),
+            # no pad block concat before / row slices after (bit-identical to the padded layout)
+            self._ensure_kda_consts()
+            q, k, v, _ = kda_conv_prefill(
+                qkv,
+                Tb,
+                init["hist"],
+                self.tw["conv_taps"],
+                (kd, kd, self.value_dim_tp),
+                self._kda_actual_start,
+                emit_state=False,
+            )
+            conv_new_state = ttnn.matmul(
+                masks["conv_sel"],
+                qkv,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=exact_select_cfg(),
+                dtype=ttnn.bfloat16,
+            )
+        else:
+            q, k, v, conv_new_state = self._kda_conv_group(
+                qkv,
+                masks["conv_sel"],
+                init["pad"] if init is not None else masks["zeros_pad"],
+                hist_first=init is not None,
+            )
         ttnn.deallocate(qkv)
         if self._gdn_flat_qkv:
             _qkv_head_dims = (Nk, Dk, Nv, Dv)
