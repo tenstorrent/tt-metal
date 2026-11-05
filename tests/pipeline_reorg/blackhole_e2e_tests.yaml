@@ -86,7 +86,7 @@
   skus:
     bh_loudbox:
       timeout: 10
-  owner_id: U09LK84G4TF # Nikola Milicevic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   budget_type: e2e
 
@@ -102,7 +102,7 @@
       timeout: 10
     bh_loudbox:
       timeout: 10
-  owner_id: U09LK84G4TF # Nikola Milicevic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   budget_type: e2e
 
@@ -347,6 +347,6 @@
   skus:
     bh_loudbox:
       timeout: 10
-  owner_id: U09LK84G4TF # Nikola Milicevic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: e2e
