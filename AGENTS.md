@@ -18,21 +18,18 @@ from the generic tt_transformers framework into the autoport. Validate that serv
 registers and imports this run's autoport adapter, rather than a stock adapter.
 
 Use this machine for local TT work. Serialize all local device commands and check
-for device owners before reset. Up to six CI machines are authorized through the
-manual-tt-shield-dispatch.yml workflow in tenstorrent/tt-agentic-bringup-qb2.
-Use default batches and evals from the selected skills. Read current release eval
-names, versions, timeouts and output limits from the pinned release spec and its
-harness/workflow sources; the model spec alone may not contain the eval limits.
-Do not reuse the old implementation's layout/precision/serving settings as evidence.
+for device owners before reset. No other machines are granted for this run: every
+stage runs on this machine, and no CI workflow is dispatched. Use default batches and
+evals from the selected skills, with the goal-12 inputs in
+`bringup/agentic_evals/inputs.json`. Read current release eval names, versions,
+timeouts and output limits from the pinned release spec and its harness sources; the
+model spec alone may not contain the eval limits. Do not reuse the old
+implementation's layout/precision/serving settings as evidence.
 
-The operator authorizes pushing dedicated experiment branches for CI in tt-metal,
-tt-inference-server and vllm-tt-plugin. Publish from separate checkouts with remotes;
-keep this execution checkout without a remote. Use source-only commits on the pinned
-upstream base, dispatch immutable SHAs, and keep weights, credentials, private logs,
-profiler dumps, and collected results out of publication commits. Never update main
-or stable. Do not create issue comments or send messages.
+Keep this execution checkout without a remote. Do not push branches, create issue
+comments or send messages.
 
 Pipeline worker: gpt-6-astra, medium effort, personal ChatGPT login in
-/home/mvasiljevic/.codex-personal-gemma4. Do not substitute enterprise credentials or
+/home/mvasiljevic/.codex-gemma4-v3. Do not substitute enterprise credentials or
 ambient OpenAI/Codex API keys. Use enabled workflow skills from the requested skills
 branch. Stage templates authorize subagents where the selected skill requests them.
