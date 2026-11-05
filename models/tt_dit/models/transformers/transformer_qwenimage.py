@@ -424,15 +424,17 @@ class QwenImageCheckpoint:
         device: ttnn.MeshDevice,
         sp_axis: int,
         image_latents_sizes: Sequence[tuple[int, int]] = (),
+        on_host: bool = False,
     ) -> tuple[tuple[ttnn.Tensor, ttnn.Tensor], tuple[ttnn.Tensor, ttnn.Tensor]]:
-        """Compute the RoPE inputs of ``QwenImageTransformer.forward`` and upload them to ``device``.
+        """Compute the RoPE inputs of ``QwenImageTransformer.forward`` for ``device``.
 
         For editing, the spatial sequence continues with the patchified latents of the input images,
         whose ``(height, width)`` ``image_latents_sizes`` lists. Each image is a frame of its own,
         following the generated one, and the prompt positions start after the largest of them.
 
         Returns:
-            The ``spatial_rope`` and ``prompt_rope`` cos/sin pairs. The spatial ones are padded with
+            The ``spatial_rope`` and ``prompt_rope`` cos/sin pairs, on ``device``, or with
+            ``on_host`` on the host, distributed for ``device``. The spatial ones are padded with
             zeros to ``padded_spatial_sequence_length`` and sharded along ``sp_axis``, and the prompt
             ones are replicated.
         """
@@ -447,12 +449,12 @@ class QwenImageCheckpoint:
         spatial_freqs = torch_pad(spatial_freqs, padding, dim=0)
 
         spatial_rope = tuple(
-            tensor.from_torch(x.repeat_interleave(2, dim=-1), device=device, mesh_axes=[sp_axis, None])
+            tensor.from_torch(x.repeat_interleave(2, dim=-1), device=device, mesh_axes=[sp_axis, None], on_host=on_host)
             for x in (spatial_freqs.real, spatial_freqs.imag)
         )
         prompt_rope = (
-            tensor.from_torch(prompt_freqs.real.repeat_interleave(2, dim=-1), device=device),
-            tensor.from_torch(prompt_freqs.imag.repeat_interleave(2, dim=-1), device=device),
+            tensor.from_torch(prompt_freqs.real.repeat_interleave(2, dim=-1), device=device, on_host=on_host),
+            tensor.from_torch(prompt_freqs.imag.repeat_interleave(2, dim=-1), device=device, on_host=on_host),
         )
         return spatial_rope, prompt_rope
 
