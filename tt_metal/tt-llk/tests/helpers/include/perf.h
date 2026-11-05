@@ -47,6 +47,14 @@ enum class PerfRunType
     SFPU_ISOLATE
 };
 
+// The PACK_ISOLATE and L1_CONGESTION pack loops release every dest section as tile_regs_release does in production
+// (Wormhole only for now: without the drain its four packers can lock into their slow pattern for the whole loop)
+#if defined(ARCH_WORMHOLE)
+constexpr bool PERF_PACK_SECTION_RELEASE = true;
+#else
+constexpr bool PERF_PACK_SECTION_RELEASE = false;
+#endif
+
 inline void _perf_unpack_set_valid(std::uint32_t source)
 {
     std::uint32_t set_a = source == ckernel::SrcA ? 1 : 0;
