@@ -48,11 +48,9 @@ StreamAssignment FabricBuilderContext::compute_stream_assignment(MeshId mesh_id)
     // shared router config) -- the same facts the per-router derivation used, lifted to the scope
     // they actually vary at.
     const bool multi_txq_enabled = get_fabric_router_config().multi_txq_enabled();
-    // Without stream registers every credit is a software counter.
-    const bool counters_only = !fabric_context_.get_hal().has_stream_registers();
     const CreditTransportPlan plan{
-        .vc0_uses_counters = multi_txq_enabled || counters_only,
-        .vc1_uses_counters = multi_txq_enabled || express_enabled || counters_only,
+        .vc0_uses_counters = multi_txq_enabled,
+        .vc1_uses_counters = multi_txq_enabled || express_enabled,
         // VC2 has no completion register to fall back on -- the completed table stops at flat
         // position 8 and VC2's sender is position 9 -- so it rides counters wherever it exists.
         .vc2_uses_counters = intermesh_vc_config_.requires_vc2};
