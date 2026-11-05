@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -187,7 +188,11 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
     // >> (input_tensors[0].padded_shape()[-1] / groups % TILE_WIDTH == 0
     // >> && input_tensors[1].padded_shape()[-1] / groups % TILE_WIDTH == 0)
     constexpr uint32_t MAX_1_BYTE_TILES_PER_BATCH = 16;
-    const uint32_t batch_size = MAX_1_BYTE_TILES_PER_BATCH / inputs[0].get().element_size();
+    // 32-bit Dest halves per-tile capacity; floor sub-2-byte elements at 2 to stay inside Dest when 8-bit ints are promoted.
+    const uint32_t effective_element_size = ttnn::operations::data_movement::requires_32bit_dest(data_format)
+                                                ? std::max<uint32_t>(inputs[0].get().element_size(), 2u)
+                                                : inputs[0].get().element_size();
+    const uint32_t batch_size = MAX_1_BYTE_TILES_PER_BATCH / effective_element_size;
 
     // Calculate stride sizes to determine if we can use single-packet NOC reads
     // For BF8, the kernel uses bf16_tile_size (2048 bytes) for stride calculation
@@ -292,19 +297,19 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    const bool fp32_dest_acc_en = data_format == tt::DataFormat::Float32 || data_format == tt::DataFormat::Int32 ||
-                                  data_format == tt::DataFormat::UInt32;
+    // UInt8 needs 32-bit Dest on WH/BH.
+    const bool fp32_dest_acc_en = ttnn::operations::data_movement::requires_32bit_dest(data_format);
 
     // Metal 2.0's validator requires an explicit unpack mode for every Float32 buffer a compute
-    // kernel consumes while 32-bit dest is enabled; legacy defaulted silently. The legacy descriptor
-    // left unpack_to_dest_mode empty — i.e. Default on every buffer — which is UnpackToSrc. When the
-    // data format is Float32 all three buffers compute consumes carry that format (an is_bf8 input
-    // cannot also be Float32), so all three need the entry.
+    // kernel consumes while 32-bit dest is enabled. When the data format is Float32 all three
+    // buffers compute consumes carry that format (an is_bf8 input cannot also be Float32). Unpack
+    // them straight to Dest, as the sharded WH transpose does: through SrcA they would be truncated
+    // to TF32 and this copy-only op would drop the low 13 mantissa bits of every element.
     ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
     if (data_format == tt::DataFormat::Float32) {
-        unpack_modes[INPUT0_DFB] = UnpackMode::UnpackToSrc;
-        unpack_modes[INPUT1_DFB] = UnpackMode::UnpackToSrc;
-        unpack_modes[CONCAT_DFB] = UnpackMode::UnpackToSrc;
+        unpack_modes[INPUT0_DFB] = UnpackMode::UnpackToDest;
+        unpack_modes[INPUT1_DFB] = UnpackMode::UnpackToDest;
+        unpack_modes[CONCAT_DFB] = UnpackMode::UnpackToDest;
     }
 
     // The legacy factory set a Metal ComputeConfigDescriptor directly rather than resolving a TTNN
