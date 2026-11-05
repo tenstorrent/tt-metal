@@ -163,6 +163,10 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     const m2::TensorParamName NEA{"nea"};
     const m2::TensorParamName WEIGHT{"weight"};
     const m2::TensorParamName OUT{"out"};
+    const m2::TensorParamName RIDX{"ring_page_idx"};
+    const bool ring_paged = in.ring_page_idx.has_value();
+    const m2::TensorParamName RING2{"ring_pool2"};
+    const bool ring2 = in.ring_pool2.has_value();  // validated: only with ring_page_idx
 
     const auto fp32 = tt::DataFormat::Float32;
     const auto bf16 = tt::DataFormat::Float16_b;
@@ -249,6 +253,11 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     std::vector<Dfb> compute_out = {
         {"hnew", a.hnew_depth * KVs, t32, fp32}, {"out", Vs, tout, out_fmt}, {"wout", ChA, t16, bf16}};
     std::vector<Dfb> writer_local = {{"ctrl_w", 1, ctrl_bytes, u32}, {"bounce", Ch, t16, bf16}};
+    if (ring_paged) {
+        // the user's row of ring_page_idx (T*Nv words), one aligned page
+        writer_local.push_back(
+            {"ridx_w", 1, static_cast<uint32_t>(in.ring_page_idx->buffer()->aligned_page_size()), u32});
+    }
     // VSPLIT: acc_mine = this block's last-token pre-norm output tiles (compute -> writer); acc_x = the head's full
     // pre-norm row, every block's tiles at offset s*Vs (writer -> compute, filled over the NoC by all VB blocks)
     std::vector<Dfb> writer_out;
@@ -313,6 +322,14 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         .runtime_arg_schema = {.runtime_arg_names = {"u", "h", "b_idx", "s"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
+    if (ring_paged) {
+        reader.compiler_options.defines.emplace("GDN_RING_PAGE_IDX", "1");  // ctrl initial words are pages
+    }
+    if (ring2) {
+        // the define carries ring's page count, where ring_pool2's pages start in the page space (the tensor binding
+        // is added with the others below)
+        reader.compiler_options.defines.emplace("GDN_RING_POOL2", std::to_string(in.ring.buffer()->num_pages()));
+    }
     if (FAST) {
         reader.compiler_options.defines.emplace("GDN_FAST", "1");
     }
@@ -342,6 +359,9 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         m2::TensorBinding{DTB, "dtb"},
         m2::TensorBinding{NEA, "nea"},
         m2::TensorBinding{WEIGHT, "weight"}};
+    if (ring2) {
+        reader.tensor_bindings.push_back(m2::TensorBinding{RING2, "ring2"});
+    }
     reader.compile_time_args = {
         {"Kt", Kt},
         {"Vt", Vt},
@@ -435,6 +455,14 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     for (const auto& d : writer_local) {
         writer.dfb_bindings.push_back(bind(d.name, EP::PRODUCER));
         writer.dfb_bindings.push_back(bind(d.name, EP::CONSUMER));
+    }
+    if (ring_paged) {
+        writer.tensor_bindings.push_back(m2::TensorBinding{RIDX, "ridx"});
+        writer.compiler_options.defines.emplace("GDN_RING_PAGE_IDX", "1");
+    }
+    if (ring2) {
+        writer.tensor_bindings.push_back(m2::TensorBinding{RING2, "ring2_out"});
+        writer.compiler_options.defines.emplace("GDN_RING_POOL2", std::to_string(in.ring.buffer()->num_pages()));
     }
     writer.compile_time_args = {
         {"Kt", Kt},
@@ -601,6 +629,16 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         {NEA, nea},
         {WEIGHT, weight},
         {OUT, output}};
+    if (ring_paged) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = RIDX, .spec = in.ring_page_idx->mesh_tensor().tensor_spec()});
+        run_args.tensor_args.emplace(RIDX, in.ring_page_idx->mesh_tensor());
+    }
+    if (ring2) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = RING2, .spec = in.ring_pool2->mesh_tensor().tensor_spec()});
+        run_args.tensor_args.emplace(RING2, in.ring_pool2->mesh_tensor());
+    }
 
     m2::ProgramSpec spec{
         .name = "gdn_spec_step",

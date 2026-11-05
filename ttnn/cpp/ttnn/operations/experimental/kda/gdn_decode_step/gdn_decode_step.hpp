@@ -16,7 +16,10 @@ namespace ttnn::experimental::kda {
 // [q|k|v]), `qkv` is the full projection row [q|k|v|z|a|b], `beta` is dt_bias and `g` is -exp(A_log): the 4-tap causal
 // conv + SiLU, beta/decay gates and the silu(z) output gate are computed in-kernel and the packed history is shifted in
 // place. fast_mode (fused-conv mode only) selects the faster *_conv_fast kernels (same o; the in-place state keeps the
-// full fp32 sum, so it differs from the default kernels in the last bits).
+// full fp32 sum, so it differs from the default kernels in the last bits). state_page_idx (fused-conv mode only) makes
+// `state` and `conv_hist` page pools: column b of the [2*Nv, >= B] index names, per value head, the first state page
+// and the first conv_hist page of batch row b. The optional second pools extend each page space: index pages past the
+// first pool's page count address state_pool2 / conv_hist_pool2.
 ttnn::Tensor gdn_decode_step(
     const ttnn::Tensor& qkv,
     const ttnn::Tensor& beta,
@@ -37,6 +40,9 @@ ttnn::Tensor gdn_decode_step(
     const std::optional<ttnn::Tensor>& conv_taps = std::nullopt,
     uint32_t qkvz_dim = 0,
     bool fast_mode = false,
-    bool fp32_state = false);
+    bool fp32_state = false,
+    const std::optional<ttnn::Tensor>& state_page_idx = std::nullopt,
+    const std::optional<ttnn::Tensor>& state_pool2 = std::nullopt,
+    const std::optional<ttnn::Tensor>& conv_hist_pool2 = std::nullopt);
 
 }  // namespace ttnn::experimental::kda

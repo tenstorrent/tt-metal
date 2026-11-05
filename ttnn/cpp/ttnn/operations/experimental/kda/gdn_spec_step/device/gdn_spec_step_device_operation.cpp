@@ -139,12 +139,54 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
         kOp,
         C,
         ts);
-    TT_FATAL(
-        in.ring.logical_volume() >= static_cast<uint64_t>(T) * M * Nv * Dk * Dv && in.ring.logical_shape()[-1] == Dv &&
-            in.ring.logical_shape()[-2] == Dk,
-        "{}: ring must hold >= T*M*Nv blocks (M = max_users or B) of [Dk, Dv] (got {})",
-        kOp,
-        in.ring.logical_shape());
+    if (in.ring_page_idx.has_value()) {
+        const Tensor& idx = *in.ring_page_idx;
+        check_allocated_device_tensor(idx, kOp, "ring_page_idx");
+        check_layout(idx, Layout::ROW_MAJOR, kOp, "ring_page_idx");
+        check_interleaved(idx, kOp, "ring_page_idx");
+        check_same_device(in.qkvzab, idx, kOp, "ring_page_idx");
+        TT_FATAL(
+            idx.dtype() == DataType::INT32 || idx.dtype() == DataType::UINT32,
+            "{}: ring_page_idx must be INT32 or UINT32 (got {})",
+            kOp,
+            idx.dtype());
+        const auto& is = idx.logical_shape();
+        TT_FATAL(
+            is.rank() == 2 && is[0] >= B && is[1] == T * Nv,
+            "{}: ring_page_idx must be [>= B, T*Nv] (got {}, B = {}, T = {}, Nv = {})",
+            kOp,
+            is,
+            B,
+            T,
+            Nv);
+        if (in.ring_pool2.has_value()) {
+            check_tiled(*in.ring_pool2, "ring_pool2", {DataType::FLOAT32});
+            check_same_device(in.qkvzab, *in.ring_pool2, kOp, "ring_pool2");
+            // the kernels address both pools with one accessor type
+            TT_FATAL(
+                in.ring_pool2->buffer()->buffer_type() == in.ring.buffer()->buffer_type(),
+                "{}: ring_pool2 must be in the same memory (DRAM / L1) as ring",
+                kOp);
+            TT_FATAL(
+                in.ring_pool2->buffer()->num_pages() >= static_cast<uint64_t>(Dk / TW) * (Dv / TW),
+                "{}: ring_pool2 must hold at least Dk * Dv / 1024 tiles",
+                kOp);
+        }
+        // a held head reads ring block u*Nv + h as a placeholder state, so blocks [0, M*Nv) must exist
+        TT_FATAL(
+            in.ring.buffer()->num_pages() >= static_cast<uint64_t>(M) * Nv * (Dk / TW) * (Dv / TW),
+            "{}: ring pool must hold at least M * Nv * Dk * Dv / 1024 tiles (M = max_users or B; got {})",
+            kOp,
+            in.ring.buffer()->num_pages());
+    } else {
+        TT_FATAL(!in.ring_pool2.has_value(), "{}: ring_pool2 needs ring_page_idx", kOp);
+        TT_FATAL(
+            in.ring.logical_volume() >= static_cast<uint64_t>(T) * M * Nv * Dk * Dv &&
+                in.ring.logical_shape()[-1] == Dv && in.ring.logical_shape()[-2] == Dk,
+            "{}: ring must hold >= T*M*Nv blocks (M = max_users or B) of [Dk, Dv] (got {})",
+            kOp,
+            in.ring.logical_shape());
+    }
     const auto& cs = in.ctrl.logical_shape();
     const uint32_t words = static_cast<uint32_t>(cs[-1]);
     TT_FATAL(
@@ -200,7 +242,9 @@ Tensor gdn_spec_step(
     bool fp32_state,
     uint32_t max_users,
     uint32_t value_blocks,
-    uint32_t kernel_opts) {
+    uint32_t kernel_opts,
+    const std::optional<Tensor>& ring_page_idx,
+    const std::optional<Tensor>& ring_pool2) {
     TT_FATAL(!fp32_state || fast_mode, "{}: fp32_state needs fast_mode", kOp);
     return ttnn::device_operation::launch<GdnSpecStepOperation>(
         GdnSpecStepParams{
@@ -236,7 +280,9 @@ Tensor gdn_spec_step(
             .taps = taps,
             .dt_bias = dt_bias,
             .neg_exp_A = neg_exp_A,
-            .weight = weight});
+            .weight = weight,
+            .ring_page_idx = ring_page_idx,
+            .ring_pool2 = ring_pool2});
 }
 
 }  // namespace ttnn::experimental::prim
