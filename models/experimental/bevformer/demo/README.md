@@ -52,19 +52,17 @@ on Blackhole only.
 ## Recorded smoke results
 
 These runs were performed on a BH P100 with tt-metal commit
-`2c3d948c7166911d109cf9cdf15b30a69f828087`, with the commands above:
+`725bec70b29abddd84e78cb57dbd387eb0f1aee8`, with the commands above:
 
-| Variant | BEV size | Encoder layers | Device FPS | E2E FPS |
-| --- | ---: | ---: | ---: | ---: |
-| tiny | 50 | 3 | 12.50 | 10.41 |
-| small | 150 | 3 | 2.35 | 2.34 |
-| base | 200 | 6 | 1.11 | 1.11 |
+| Variant | BEV size | Encoder layers | Device FPS |
+| --- | ---: | ---: | ---: |
+| tiny | 50 | 3 | 13.61 |
+| small | 150 | 3 | 2.55 |
+| base | 200 | 6 | 1.31 |
 
-Compare runs by Device FPS (see [Output](#output)). E2E FPS is informative: it depends on the host's
-CPU. On small and base the host keeps up with the device, so E2E FPS matches Device FPS; on tiny the
-host's preparation is the slower side. These come from one ten-frame run per variant with random
-weights and validate end-to-end execution only; they are not statistically characterized benchmark
-results.
+Compare runs by Device FPS (see [Output](#output)). These come from one ten-frame run per variant
+with random weights and validate end-to-end execution only; they are not statistically characterized
+benchmark results.
 
 ## Model configuration
 

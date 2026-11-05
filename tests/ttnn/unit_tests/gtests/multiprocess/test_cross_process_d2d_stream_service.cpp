@@ -809,7 +809,7 @@ MeshWorkload make_stub_fabric_workload(
 
         std::vector<uint32_t> rt_args;
         tt::tt_fabric::append_fabric_connection_rt_args(
-            sender_node, downstream_node, links.front(), program, stub_core, rt_args);
+            *mesh, sender_node, downstream_node, links.front(), program, stub_core, rt_args);
         SetRuntimeArgs(program, kernel, stub_core, rt_args);
         workload.add_program(MeshCoordinateRange(coord), std::move(program));
     }
@@ -890,7 +890,8 @@ MeshWorkload make_stress_fabric_workload(
             expected_per_iter,
         };
         for (const auto& [neighbor_node, link] : conns) {
-            tt::tt_fabric::append_fabric_connection_rt_args(sender_node, neighbor_node, link, program, fabric_core, rt);
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                *mesh, sender_node, neighbor_node, link, program, fabric_core, rt);
             rt.push_back(static_cast<uint32_t>(neighbor_node.chip_id));
             rt.push_back(static_cast<uint32_t>(*neighbor_node.mesh_id));
         }

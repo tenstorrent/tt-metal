@@ -171,13 +171,10 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
 
     // ---- Compute (donor fork: transpose_wh, swap-hw only) ----
     if (swap_hw) {
-        bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
-                                cb_data_format == tt::DataFormat::UInt32;
+        bool fp32_dest_acc_en = requires_32bit_dest(cb_data_format);
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-        // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 for Float32 → UnpackMode::UnpackToDest.
-        // Compute consumes SRC0 (c_0). Int32/UInt32 also unpack to Dest: Quasar's transpose needs it
-        // for 32-bit data and rejects a 32-bit integer unpack into SrcA (#59515).
-        if (fp32_dest_acc_en) {
+        // UnpackToDest lowers to UnpackToDestFp32 (bypasses SrcA); keep 8-bit ints on SrcA.
+        if (requires_unpack_to_dest(cb_data_format)) {
             compute_cfg.unpack_modes = {{SRC0, UnpackMode::UnpackToDest}};
         }
         kernels.push_back(KernelSpec{
@@ -475,13 +472,10 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
 
     // ---- Compute (donor fork: transpose_wh, swap-hw only) ----
     if (swap_hw) {
-        bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
-                                cb_data_format == tt::DataFormat::UInt32;
+        bool fp32_dest_acc_en = requires_32bit_dest(cb_data_format);
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-        // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 for Float32 → UnpackMode::UnpackToDest.
-        // Compute consumes SRC0 (c_0). Int32/UInt32 also unpack to Dest: Quasar's transpose needs it
-        // for 32-bit data and rejects a 32-bit integer unpack into SrcA (#59515).
-        if (fp32_dest_acc_en) {
+        // UnpackToDest lowers to UnpackToDestFp32 (bypasses SrcA); keep 8-bit ints on SrcA.
+        if (requires_unpack_to_dest(cb_data_format)) {
             compute_cfg.unpack_modes = {{SRC0, UnpackMode::UnpackToDest}};
         }
         kernels.push_back(KernelSpec{
@@ -787,17 +781,10 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     uint32_t non_x_rows = num_rows / x;
 
     // ---- Compute config (Style B: build ComputeHardwareConfig directly, mirroring legacy) ----
-    bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
-                            cb_data_format == tt::DataFormat::UInt32;
+    bool fp32_dest_acc_en = requires_32bit_dest(cb_data_format);
     ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-    // Metal 2.0 requires an explicit unpack_modes entry for each Float32 DFB the compute kernel consumes
-    // when enable_32_bit_dest = true. Compute consumes SRC_CB (via tilize) and TILIZE_CB (self-loop).
-    // Keep both the tilize input (c_0 = SRC_CB) and its output (c_1 = TILIZE_CB, which feeds the transpose)
-    // in full Float32 on the unpack-to-dest path; otherwise the unpacker falls back to tf32 and drops the
-    // low mantissa bits. UnpackToDest is the Metal 2.0 equivalent of the legacy UnpackToDestFp32.
-    // Int32/UInt32 take the same route: Quasar's tilize and transpose unpack to Dest only when
-    // UnpackToDest is requested, and Quasar rejects a 32-bit integer unpack into SrcA (#59515).
-    if (fp32_dest_acc_en) {
+    // UnpackToDest lowers to UnpackToDestFp32 (bypasses SrcA, drops to tf32 on floats); keep 8-bit ints on SrcA.
+    if (requires_unpack_to_dest(cb_data_format)) {
         compute_cfg.unpack_modes = {{SRC_CB, UnpackMode::UnpackToDest}, {TILIZE_CB, UnpackMode::UnpackToDest}};
     }
 

@@ -42,10 +42,14 @@ Tensor _variance_impl(
     const std::optional<MemoryConfig>& output_mem_config) {
     ttsl::SmallVector<int> dims = {2, 3};
     constexpr float correction = 0.0f;
-    auto shape_wh = y.padded_shape();
-    float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
+    const auto& logical_shape = y.logical_shape();
+    const auto rank = logical_shape.rank();
+    TT_FATAL(rank == 4, "normalize_hw requires rank 4 tensor, got rank {}", rank);
+    const uint64_t logical_elements = static_cast<uint64_t>(logical_shape[2]) * logical_shape[3];
+    const float divisor = static_cast<float>(logical_elements) - correction;
+    const float scale = (divisor > 0.0f) ? (1.0f / divisor) : 0.0f;
     Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
-    return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
+    return ttnn::sum(sqr_y_minus_mean_y, dims, true, output_mem_config, std::nullopt, scale);
 }
 
 // ttnn::var and ttnn::std over H and W run as one program, but give each (N, C) plane to a single core. The
@@ -209,7 +213,7 @@ Tensor std_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_con
 Tensor normalize_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     ttsl::SmallVector<int> dims = {2, 3};
     Tensor mean_y = ttnn::mean(y, dims, true);
-    Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
+    Tensor y_minus_mean_y = ttnn::subtract(y, mean_y);
     // The divisor was built as reciprocal(sqrt(variance)), two dispatches for
     // what rsqrt is, and multiply applies a unary chain to its operands anyway,
     // so the rsqrt rides on the multiply that was going to read it.

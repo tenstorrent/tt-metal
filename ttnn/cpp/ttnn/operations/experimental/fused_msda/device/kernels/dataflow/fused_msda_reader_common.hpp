@@ -166,7 +166,11 @@ constexpr bool TILED_GEOMETRY = get_compile_time_arg_val(33) != 0;
 constexpr uint32_t geom_rm_cb_index = get_compile_time_arg_val(34);
 constexpr uint32_t ref_tile_cb_index = get_compile_time_arg_val(35);
 constexpr uint32_t const_cb_index = get_compile_time_arg_val(36);
-constexpr uint32_t MSDA_LAST_SCALAR_CT_ARG = 36;
+// Heads-packed locations, (B, Q, H*L*P*2): one page per (b, q), head h's stick at byte offset
+// h * loc_stick_nbytes. derive_shapes has checked that the stick fills whole alignment units, so
+// the aligned loc_stick_nbytes is the unpadded stick.
+constexpr bool LOC_HEADS_IN_PAGE = get_compile_time_arg_val(37) != 0;
+constexpr uint32_t MSDA_LAST_SCALAR_CT_ARG = 37;
 constexpr uint32_t MSDA_TENSOR_ACCESSOR_ARG_BASE = MSDA_LAST_SCALAR_CT_ARG + 1;
 
 // ---------------------------------------------------------------------------
@@ -175,7 +179,7 @@ constexpr uint32_t MSDA_TENSOR_ACCESSOR_ARG_BASE = MSDA_LAST_SCALAR_CT_ARG + 1;
 constexpr uint32_t TILE_MAX_ROWS = fused_msda_tile_layout::TILE_MAX_ROWS;
 constexpr uint32_t TILE_NBYTES = fused_msda_tile_layout::TILE_NBYTES;
 constexpr uint32_t TILE_WORDS = TILE_NBYTES / sizeof(uint32_t);
-constexpr uint32_t HALF_STICK_NBYTES = 32;  // one face-row half: 16 bf16
+constexpr uint32_t HALF_STICK_NBYTES = fused_msda_tile_layout::FACE_ROW_NBYTES;
 constexpr uint32_t HALF_WORDS = HALF_STICK_NBYTES / sizeof(uint32_t);
 constexpr uint32_t WORDS_PER_TILE_ROW = 2 * HALF_WORDS;
 
@@ -189,6 +193,9 @@ static_assert(D % 16 == 0 && D > 0, "D must be a positive multiple of 16");
 // Staging fan-out per query row.
 constexpr uint32_t ATTN_STICKS_PER_ROW = ATTN_PACKED ? 1u : NUM_LEVELS;
 constexpr uint32_t LOC_STICKS_PER_ROW = LOC_PACKED ? 1u : (NUM_LEVELS * NUM_POINTS);
+
+static_assert(!LOC_HEADS_IN_PAGE || LOC_PACKED, "heads-packed locations are packed");
+constexpr uint32_t loc_page_nbytes = LOC_HEADS_IN_PAGE ? NUM_HEADS * loc_stick_nbytes : loc_stick_nbytes;
 
 // Sampling points per output block: the reduction runs over (level, point).
 constexpr uint32_t POINTS_PER_BLOCK = NUM_LEVELS * NUM_POINTS;
@@ -269,7 +276,7 @@ inline void stage_attention_weights(
     }
 }
 
-// Issues the NoC reads that stage a (B, Q, H, L, P, 2)- or (B, Q, H, L*P*2)-shaped
+// Issues the NoC reads that stage a (B, Q, H, L, P, 2)-, (B, Q, H, L*P*2)- or (B, Q, H*L*P*2)-shaped
 // location-like tensor (V1 locations, V2 offsets) for one output block, row r
 // at loc_arena_l1 + r * row_nbytes.
 template <typename LocAccessor>
@@ -286,9 +293,15 @@ inline void stage_location_tensor(
         const uint32_t q = q_start + r;
         const uint32_t bqh = (b * Q + q) * NUM_HEADS + head;
         for (uint32_t s = 0; s < LOC_STICKS_PER_ROW; ++s) {
-            const uint32_t page = LOC_PACKED ? bqh : (bqh * NUM_LEVELS * NUM_POINTS + s);
+            uint32_t page = LOC_PACKED ? bqh : (bqh * NUM_LEVELS * NUM_POINTS + s);
+            uint32_t offset_bytes = 0;
+            if constexpr (LOC_HEADS_IN_PAGE) {
+                page = b * Q + q;
+                offset_bytes = head * loc_stick_nbytes;
+            }
             CoreLocalMem<uint32_t> dst(loc_arena_l1 + r * row_nbytes + s * loc_stick_nbytes);
-            noc.async_read(loc_acc, dst, loc_stick_nbytes, {.page_id = page}, {.offset_bytes = 0});
+            noc.async_read(
+                loc_acc, dst, loc_stick_nbytes, {.page_id = page, .offset_bytes = offset_bytes}, {.offset_bytes = 0});
         }
     }
 }
