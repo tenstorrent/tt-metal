@@ -113,7 +113,6 @@ def _install_stubs_if_needed() -> bool:
 STUBBED = _install_stubs_if_needed()
 
 import ttnn  # noqa: E402
-
 from models.tt_dit.models.transformers.minimax_h3 import agmm_config, mmrs_config  # noqa: E402
 from models.tt_dit.utils import agmm_rules, matmul, mmrs_rules  # noqa: E402
 
