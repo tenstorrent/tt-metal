@@ -45,6 +45,8 @@ Tensor gdn_decode_step(
     uint32_t qkvz_dim = 0,
     bool fast_mode = false,
     bool fp32_state = false,
-    const std::optional<Tensor>& state_page_idx = std::nullopt);
+    const std::optional<Tensor>& state_page_idx = std::nullopt,
+    const std::optional<Tensor>& state_pool2 = std::nullopt,
+    const std::optional<Tensor>& conv_hist_pool2 = std::nullopt);
 
 }  // namespace ttnn::experimental::prim
