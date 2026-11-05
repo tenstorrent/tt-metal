@@ -153,6 +153,8 @@ namespace ttnn::experimental::deepseek::moe {
 //                     layer id >= num_layers stops every kernel. Needs the whole-mesh all-reduce,
 //                     the fused router with a DRAM gate, the shared expert and the one-row replica;
 //                     the returned tensor is the op's scratch, and results arrive only on the socket.
+//   persistent_h2d_device_pull: the H2D sockets are DEVICE_PULL (the host stages pages in pinned
+//                     host RAM and the control core reads them over PCIe) rather than HOST_PUSH.
 //
 // Returns a [1, B, H] BFLOAT16 tensor in the input's layout (TILE or ROW_MAJOR):
 //   act       = silu(clamp(gate, max=limit)) * clamp(up, -limit, limit),
@@ -195,6 +197,7 @@ Tensor fused_experts(
     const std::optional<Tensor>& persistent_layer_table = std::nullopt,
     const std::optional<tt::tt_metal::CoreCoord>& persistent_socket_core = std::nullopt,
     const std::optional<std::vector<uint32_t>>& persistent_h2d_socket_addresses = std::nullopt,
-    std::optional<uint32_t> persistent_d2h_socket_address = std::nullopt);
+    std::optional<uint32_t> persistent_d2h_socket_address = std::nullopt,
+    bool persistent_h2d_device_pull = false);
 
 }  // namespace ttnn::experimental::deepseek::moe

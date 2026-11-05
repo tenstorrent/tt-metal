@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Web monitor for ``demo/server.py`` on the Rust host runtime (``DEEPSEEK_V41_RUST_HOST=1``).
+"""Web monitor for ``demo/server.py`` on the Rust host runtime (the default; ``DEEPSEEK_V41_RUST_HOST=0`` turns it
+off, and with it the monitor).
 
 It runs as a process of its own, so watching the server costs the server nothing beyond what it publishes:
 

@@ -2437,7 +2437,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if self.dspark is not None:
             raise NotImplementedError("the host runtime does not run speculative decode")
         if not isinstance(self._engram_lookup, (host_rs.RustEngramLookup, type(None))):
-            raise RuntimeError("the host runtime needs the Rust Engram lookup: set DEEPSEEK_V41_RUST_HOST=1")
+            raise RuntimeError("the host runtime needs the Rust Engram lookup, which DEEPSEEK_V41_RUST_HOST turned off")
         self._wait_replays_dispatched()
         keys = list(self.submeshes_io[0]["tids"])
         if any(set(sm["tids"]) != set(keys) for sm in self.submeshes_io):

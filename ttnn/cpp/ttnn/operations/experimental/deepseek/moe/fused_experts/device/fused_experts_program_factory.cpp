@@ -2176,7 +2176,11 @@ ProgramDescriptor build_program_descriptor(
             constexpr uint32_t kHeaderBytes = 64;
             const uint32_t row_bytes = k_tiles * out_tile_bytes;
             constexpr uint32_t cb_ctrl = CBIndex::c_21;
-            const uint32_t ctrl_cb_bytes = params.num_layers * kHeaderBytes + kHeaderBytes;
+            // A DEVICE_PULL socket has no L1 FIFO (its fifo_addr is 0), so the control kernel pulls each page
+            // into a 64 B-aligned slot here, after the go words.
+            const uint32_t ctrl_cb_bytes =
+                params.num_layers * kHeaderBytes + kHeaderBytes +
+                (operation_attributes.persistent->h2d_device_pull ? kHeaderBytes + row_bytes + 64u : 0u);
             desc.cbs.push_back(CBDescriptor{
                 .total_size = ctrl_cb_bytes,
                 .core_ranges = ctrl_set,
@@ -2217,6 +2221,9 @@ ProgramDescriptor build_program_descriptor(
             ctrl_desc.defines = {
                 {"FE_HDR_ADDR", std::to_string(persistent->header->address())},
                 {"FE_SEM_READY", std::to_string(sem_ready_id)}};
+            if (operation_attributes.persistent->h2d_device_pull) {
+                ctrl_desc.defines.emplace_back("FE_H2D_PULL", "1");
+            }
             std::vector<std::variant<uint32_t, Buffer*>> ctrl_rt_args = {layer_table_buffer, input_buffer};
             for (const auto& s : ar_senders) {
                 ctrl_rt_args.push_back(static_cast<uint32_t>(device->worker_core_from_logical_core(s).x));
