@@ -1097,6 +1097,32 @@ void py_module(nb::module_& mod) {
                 Tensor: The multi-device host tensor.
             )doc");
     mod.def(
+        "from_local_host_shards",
+        [](const std::map<MeshCoordinate, Tensor>& shards,
+           MeshDevice& mesh_device,
+           const tt::tt_metal::TensorTopology& topology) -> Tensor {
+            return from_local_host_shards(shards, mesh_device.get_view(), topology);
+        },
+        nb::arg("shards"),
+        nb::arg("mesh_device"),
+        nb::arg("topology"),
+        R"doc(
+            Creates a multi-device host tensor from the shards this host holds, labelled exactly as given.
+
+            Unlike ``from_host_shards``, which needs one shard per coordinate of the whole mesh and spells a 1-D
+            label of its own, this takes one host shard per coordinate local to this host (every coordinate on a
+            single-host mesh) and the ``TensorTopology`` the tensor should carry. Coordinates that belong to other
+            hosts of a multi-host mesh stay unpopulated, so the result can be moved to the device with ``to``.
+
+            Args:
+                shards (Dict[MeshCoordinate, Tensor]): One host shard per local coordinate; all with the same spec.
+                mesh_device (MeshDevice): The mesh the tensor is destined for; decides which coordinates are local.
+                topology (TensorTopology): The label the tensor carries, as the live tensor it will be placed into has it.
+
+            Returns:
+                Tensor: The multi-device host tensor.
+            )doc");
+    mod.def(
         "combine_device_tensors",
         [](const std::vector<Tensor>& tensors) -> Tensor { return combine_device_tensors(tensors); },
         nb::kw_only(),

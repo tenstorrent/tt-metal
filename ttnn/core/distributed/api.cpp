@@ -137,4 +137,42 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shar
     return Tensor(DeviceStorage::combine_device_storages(device_storages, shard_dim));
 }
 
+Tensor from_local_host_shards(
+    const std::map<MeshCoordinate, Tensor>& shards,
+    const tt::tt_metal::distributed::MeshDeviceView& mesh_device_view,
+    const tt::tt_metal::TensorTopology& topology) {
+    TT_FATAL(!shards.empty(), "from_local_host_shards needs at least one shard");
+    const auto& [reference_coord, reference_shard] = *shards.begin();
+    const auto& mesh_shape = mesh_device_view.shape();
+    for (const auto& [coord, shard] : shards) {
+        TT_FATAL(
+            shard.storage_type() == StorageType::HOST, "from_local_host_shards: the shard at {} is not on host", coord);
+        TT_FATAL(
+            shard.tensor_spec() == reference_shard.tensor_spec(),
+            "from_local_host_shards: the shard at {} has a different tensor spec from the one at {}",
+            coord,
+            reference_coord);
+        bool inside = coord.dims() == mesh_shape.dims();
+        for (size_t dim = 0; inside && dim < mesh_shape.dims(); ++dim) {
+            inside = coord[dim] < mesh_shape[dim];
+        }
+        TT_FATAL(inside, "from_local_host_shards: coordinate {} is not inside the mesh of shape {}", coord, mesh_shape);
+    }
+
+    // The buffer spans the whole mesh; only this host's coordinates are local and may hold a shard.
+    auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_view);
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_shape)) {
+        const bool local = distributed_host_buffer.is_local(coord);
+        const bool given = shards.contains(coord);
+        TT_FATAL(!given || local, "from_local_host_shards: coordinate {} is not local to this host", coord);
+        TT_FATAL(given || !local, "from_local_host_shards: no shard was given for local coordinate {}", coord);
+    }
+    for (const auto& [coord, shard] : shards) {
+        HostBuffer buffer = host_buffer::get_host_buffer(shard);
+        distributed_host_buffer.emplace_shard(coord, [&]() { return std::move(buffer); });
+    }
+    return Tensor(host_tensor_from_buffer_with_topology(
+        std::move(distributed_host_buffer), reference_shard.tensor_spec(), topology));
+}
+
 }  // namespace ttnn::distributed
