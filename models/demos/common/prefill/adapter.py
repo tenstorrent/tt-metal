@@ -156,6 +156,11 @@ class PrefillModelAdapter(ABC):
     tp_shard_kv_default: bool = False
     # The runtime implements prefill_forward; without it a forward of several chunks runs prefill_chunk per chunk.
     supports_packed_forward: bool = False
+    # With supports_packed_forward, whether prefill_forward also serves PREFILL_USE_TRACE=1 (it stages each chunk's
+    # inputs before a trace replay) and PREFILL_LAYER_ACK_D2H=1 (it sends one 12-byte (slot, start, end) record per
+    # chunk per KV-writing layer, each chunk's records contiguous). Otherwise the runner refuses those at F > 1.
+    supports_packed_forward_trace: bool = False
+    supports_packed_forward_d2h_acks: bool = False
     # Whether a pipeline split can hand indexer indices from one rank to the next (cross-layer indexer reuse).
     passes_indexer_indices: bool = False
     # Fail PCC verification unless the producer drained exactly one completion per layer per chunk.
@@ -183,7 +188,7 @@ class PrefillModelAdapter(ABC):
     def layer_position_range(self, layer_idx: int, real_len: int) -> tuple[int, int]:
         """Table positions one /migrate of layer ``layer_idx`` covers after a ``real_len``-token prefill.
         A token cache migrates ``[0, real_len)``. A model whose layer holds a cache on another axis
-        (Kimi-K3's KDA state: one of decode's eight version windows) overrides this; the migration driver
+        (Kimi-K3's KDA state: one synthetic window per layer) overrides this; the migration driver
         issues one call per run of consecutive layers with equal ranges and byte-verifies that range."""
         return 0, real_len
 
