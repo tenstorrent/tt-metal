@@ -259,9 +259,7 @@ static __attribute__((noinline, noclone)) void res_s5_flush(
         st.batch_completes = false;
         ++st.batch_idx;
     }
-    // The output slots are Float32 (the packer converts from DEST and accumulates in Float32), the S5 packs
-    // intermediate-format: one packer switch per flush, around its P@V members. The pack MOP follows DEST's format,
-    // so pk_w stays valid across it.
+    // One packer switch to the Float32 output slots per flush (the pack MOP depends only on DEST's format: pk_w holds).
     bool pv_pack_fmt = false;
     while (st.s6_next < st.n_done && (final || static_cast<uint32_t>(st.cbatch[st.s6_next]) + 1u < st.batch_idx)) {
         const uint32_t g = st.s6_next;
@@ -300,10 +298,9 @@ static __attribute__((noinline, noclone)) void res_s5_flush(
     }
 }
 
-// Normalization of one slot, consumed from the front of the Float32 output and sum slots into cb_out. Per Q tile row:
-// the sum tile goes through DEST into cb_recip_scratch (the matmul unpack does not read Float32 into the 16-bit
-// DEST), col_identity collapses its partial sums and the reciprocal replaces it, then the output row is scaled by it.
-// Unpacker in the intermediate format and packer in cb_recip_scratch's on entry and exit.
+// Normalizes one slot from the front of the Float32 output and sum slots into cb_out. Per Q tile row the sum tile is
+// first copied to bf16 in cb_recip_scratch (the matmul cannot unpack Float32 into the 16-bit DEST). Unpacker in the
+// intermediate format and packer in cb_recip_scratch's on entry and exit.
 template <
     uint32_t Sq_chunk_t,
     uint32_t vDHt,
@@ -804,7 +801,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
         UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
 
-        // ---- S4 (rescale only, see the lazy-rescale comment for its rounding). ----
+        // ---- S4 (rescale only). ----
         if (rescale) {
             sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_prev_out, cb_qkt_im, cb_exp_max_diff>();
             sdpa_maybe_pack_reconfig_data_format<cb_qkt_im, cb_prev_out>();
@@ -826,10 +823,9 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     //      UNPACK takes it before that batch's first P@V, so few tokens are outstanding (capacity 15). The MOPs and
     //      the unpacker's srcA format are re-issued on every stage switch. ----
     exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
-    // Exp headroom: P = exp(scale * (s - m) - kExpOctaves ln 2). The fast exp computes 256 log2(e) scale x + (B - C)
-    // as INT16; lowering its constant (LREG13) by 256 per octave scales P by exactly 2^-kExpOctaves (the error
-    // pattern is unchanged, the scale cancels at normalization) and moves saturation from 0.72 to kExpOctaves ln 2 +
-    // 0.72 above the stored max, past the rescale threshold. Underflow moves up by as much (to -68 here): still 0.
+    // Exp headroom: lowering the fast exp's constant (LREG13) by 256 per octave scales P by exactly 2^-kExpOctaves
+    // (cancelled at normalization) and moves its saturation from 0.72 to kExpOctaves ln 2 + 0.72 above the stored
+    // max, past the rescale threshold.
     PACK({
         constexpr uint32_t kExpOctaves = 28;
         constexpr float exp_c = 32500.818359375f - 256.0f * kExpOctaves;
@@ -1024,8 +1020,7 @@ void sdpa_ring_resident(
     [[maybe_unused]] const volatile uint8_t* block_counts) {
     static_assert(resident_slots >= 1 && resident_slots <= 32, "resident state is tracked in a 32-bit mask");
     // The step reconfigures the unpacker/packer only around the Q@K^T and P@V matmuls (whose inputs may be block
-    // float) and the Float32 output and sum slots, and otherwise assumes every max, scratch and scale CB carries the
-    // intermediate format.
+    // float) and the Float32 output and sum slots, and otherwise assumes the intermediate format.
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     static_assert(
         !sdpa_unpack_format_changed<cb_qkt_im, cb_max_in>() &&

@@ -116,17 +116,13 @@ class Bench:
             shape = (1, case.H, case.S * rows, D)
             g = torch.Generator().manual_seed(rows)
             qkv = [torch.randn(shape, generator=g, dtype=torch.bfloat16) for _ in range(3)]
-            if lofi:
-                q, k, v = case.prepare(*qkv)
-                self.tensors = (
-                    case._upload(q, case.seq_dims),
-                    *(case._upload(x, case.seq_dims, dtype=case.dtype) for x in (k, v)),
-                )
-                pooled = (case.quantize(pool(x, geo, case.S), bits=case.kv_bits()) for x in (k, v))
-                self.pooled = tuple(case._upload(x, case.dims(None, 1), dtype=case.dtype) for x in pooled)
-            else:
-                self.tensors = tuple(case._upload(x, case.seq_dims) for x in qkv)
-                self.pooled = tuple(case._upload(pool(x, geo, case.S), case.dims(None, 1)) for x in qkv[1:])
+            q, k, v = case.prepare(*qkv)
+            self.tensors = (
+                case._upload(q, case.seq_dims, dtype=case.q_dtype),
+                *(case._upload(x, case.seq_dims, dtype=case.dtype) for x in (k, v)),
+            )
+            pooled = (case.quantize(pool(x, geo, case.S), bits=case.kv_bits()) for x in (k, v))
+            self.pooled = tuple(case._upload(x, case.dims(None, 1), dtype=case.dtype) for x in pooled)
             self.key, self.case = (rows, logical_n, lofi), case
         return self.case
 
