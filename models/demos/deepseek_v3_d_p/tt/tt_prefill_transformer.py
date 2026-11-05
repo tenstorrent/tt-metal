@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reverse_reorder_tensor_chunks,
     rotated_row_of_position,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, packed_padding_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import (
     MTPDeviceEmbedSource,
@@ -50,6 +50,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbe
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
+from models.demos.minimax_m3.tt.packed_rows import packed_real_rows
 
 
 def _row_fold_width(n: int, max_cols: int = 2048) -> int:
@@ -840,6 +841,14 @@ class TtPrefillTransformer(LightweightModule):
         else:
             h = token_ids
 
+        # Eager: one MoE padding config for every layer of the forward, not one per layer's gate.
+        owned_padding_config = None
+        if metadata is None and padding_config is None:
+            chunk_local = h.shape[2] // n
+            real_rows = packed_real_rows(chunks, self.mesh_device.shape[0], chunk_local)
+            owned_padding_config = packed_padding_config(self.mesh_device, real_rows, n * chunk_local)
+            padding_config = owned_padding_config
+
         reuse = self.indexer_types is not None
         if reuse:
             assert self.indexer_types[self.first_layer_idx] == "full" or seed_indexer_indices is not None, (
@@ -878,6 +887,8 @@ class TtPrefillTransformer(LightweightModule):
                 h, _ = ret
             signpost(f"forward_layer_{i}_end")
             if self.kv_only_last_layer and i == len(self.layers) - 1:
+                if owned_padding_config is not None:
+                    ttnn.deallocate(owned_padding_config)
                 return intermediates
             if return_intermediates:
                 ttnn.synchronize_device(self.mesh_device)
@@ -887,6 +898,8 @@ class TtPrefillTransformer(LightweightModule):
         if self.forwards_indexer_indices:
             self.last_indexer_indices = self._pack_chunk_indices(indexer_indices)
         indexer_indices = None
+        if owned_padding_config is not None:
+            ttnn.deallocate(owned_padding_config)
 
         if not self.is_last_rank:
             return h

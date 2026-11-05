@@ -916,7 +916,7 @@ class TtMoe(LightweightModule):
         metadata: Optional[tuple] = None,
         input_ids: Optional[torch.Tensor] = None,
         cache_user_id: int = 0,
-        padding_real_rows: Optional[tuple] = None,
+        packed: bool = False,
         packed_padding_config: Optional[ttnn.Tensor] = None,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
@@ -946,11 +946,11 @@ class TtMoe(LightweightModule):
                 the HASH_HOST / HASH_DEVICE gate modes, which select experts by tid2eid[input_ids].
                 HASH_DEVICE ships them per forward, so it is illegal inside a trace capture and
                 assumes sequential SP placement (not is_balanced).
-            padding_real_rows: a packed forward's per-SP-chip count of leading real rows (packed_real_rows),
-                used instead of actual_isl / actual_start, which describe a single chunk. Eager only: the
-                config is built on host. Requires right padding.
-            packed_padding_config: the traced packed forward's padding config, a persistent caller-owned
-                [sp, 2] (local_real_tokens, pad_side) tensor refreshed before every replay. Used as is.
+            packed: a packed forward (several chunks' rows back to back), whose padding comes from
+                ``packed_padding_config`` instead of actual_isl / actual_start, which describe one chunk.
+            packed_padding_config: a packed forward's padding config, a caller-owned [sp, 2]
+                (local_real_tokens, pad_side) tensor built once for every MoE layer of the forward (eager) or
+                refreshed before every replay (traced); None when every row is real. Used as is.
 
         Returns:
             Tuple of (final_output, intermediates):
@@ -1006,15 +1006,11 @@ class TtMoe(LightweightModule):
         #     actual_isl=None and get a capture with no padding-aware path at all.
         padding_config = None
         gate_marks_padding = self.gate.fallback_mode in (GateComputeMode.DEVICE_FP32, GateComputeMode.GPT_DEVICE)
-        if packed_padding_config is not None:
-            assert padding_real_rows is None and actual_isl is None and metadata is None
-            if gate_marks_padding:
-                padding_config = packed_padding_config
-        elif padding_real_rows is not None:
-            assert actual_isl is None and metadata is None, "padding_real_rows replaces actual_isl and metadata"
+        if packed:
+            assert actual_isl is None and metadata is None, "a packed forward's padding is packed_padding_config"
             assert padding_side == "right", "a packed forward is right-padded per chunk"
             if gate_marks_padding:
-                padding_config = self.gate.build_padding_config_for_rows(padding_real_rows)
+                padding_config = packed_padding_config
         elif actual_isl is not None and gate_marks_padding:
             if metadata is not None:
                 # Traced path: the per-chunk scalars live on-device in the metadata tensors, so build
@@ -1042,7 +1038,7 @@ class TtMoe(LightweightModule):
             actual_start or 0,
             cache_user_id,
             metadata is not None,
-            packed=padding_real_rows is not None or packed_padding_config is not None,
+            packed=packed,
         )
 
         (

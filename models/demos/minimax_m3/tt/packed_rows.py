@@ -40,6 +40,18 @@ def _packed_real_rows(chunks: tuple, sp: int, chunk_local: int) -> tuple:
     return tuple(rows)
 
 
+def packed_routed_pad_rows(chunks, sp: int, chunk_local: int) -> int:
+    """Pad rows the MoE routes in a packed forward: those packed_real_rows counts as real because a chunk with pad
+    rows on a chip is followed by a non-empty chunk there. Zero when every partial chunk is last on its chips."""
+    chunks = tuple(chunks)
+    counts = [
+        _chunk_real_counts(c.actual_start % (sp * chunk_local), c.actual_end - c.actual_start, sp, chunk_local)
+        for c in chunks
+    ]
+    lead = _packed_real_rows(chunks, sp, chunk_local)
+    return sum(lead[chip] - sum(count[chip] for count in counts) for chip in range(sp))
+
+
 def _chunk_real_counts(slab_offset: int, n_real: int, sp: int, chunk_local: int) -> list:
     if n_real == sp * chunk_local:
         return [chunk_local] * sp
