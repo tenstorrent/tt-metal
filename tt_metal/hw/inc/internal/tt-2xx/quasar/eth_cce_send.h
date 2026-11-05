@@ -83,7 +83,7 @@ struct EthLink {
     uint32_t reserved[2];
 };
 static_assert(sizeof(EthLink) == MEM_IERISC_FABRIC_ETH_LINK_SIZE);
-constexpr uint32_t kEthLinkValid = 0x4B4E494C;  // "LINK"
+constexpr uint32_t kEthLinkValid = MEM_IERISC_FABRIC_ETH_LINK_VALID;
 
 // The slot, once the host has written it. Without the valid word the peer tile is stale and a send would land in
 // another tile's SRAM, so this trips a watcher assert, and without watcher spins until the host writes the slot.
