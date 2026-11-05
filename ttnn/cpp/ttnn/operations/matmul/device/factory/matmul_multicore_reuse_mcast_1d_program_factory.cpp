@@ -3286,6 +3286,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             output_is_sharded ? "sharded" : "interleaved");
     }
     const uint32_t num_batches_scanned = use_sparsity ? in0_B * sparsity->batchB : in0_B;
+    // Without nnz, the in0 kernels tell compute per batch whether to skip it, through dfb::batch_valid.
+    const bool get_batch_from_reader = use_sparsity && sparsity->get_batch_from_reader;
 
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
@@ -3519,6 +3521,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     const DFBSpecName INTERM0_ALIAS_DFB{"intermed0_reload_alias"};
     const DFBSpecName BIAS_DFB{"bias"};
     const DFBSpecName IN0_TRANSPOSED_DFB{"in0_transposed"};
+    const DFBSpecName BATCH_VALID_DFB{"batch_valid"};
 
     const ScratchpadSpecName SPARSITY_IN0_SCRATCH{"sparsity_in0"};
     const ScratchpadSpecName SPARSITY_IN1_SCRATCH{"sparsity_in1"};
@@ -3561,6 +3564,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     if (use_sparsity) {
         mm_kernel_in0_sender_writer_defines["SPARSITY"] = "1";
         mm_kernel_in1_sender_writer_defines["SPARSITY"] = "1";
+    }
+    // dfb::batch_valid is bound only with get_batch_from_reader. A buffer that is not bound has no dfb::
+    // token, so a define hides the references to it in the three kernels that use it.
+    std::map<std::string, std::string> mm_kernel_in0_receiver_defines;
+    if (get_batch_from_reader) {
+        mm_kernel_in0_sender_writer_defines["BATCH_VALID_DFB"] = "1";
+        mm_kernel_in0_receiver_defines["BATCH_VALID_DFB"] = "1";
+        mm_kernel_defines["BATCH_VALID_DFB"] = "1";
     }
     if (bias_tensor.has_value()) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
@@ -3840,6 +3851,19 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             });
         }
     }
+    if (get_batch_from_reader) {
+        // One entry per batch from the in0 kernel on each node (the in0 sender or an in0 receiver) to the
+        // compute kernel on that node: a 16-bit flag, nonzero when the batch is valid, so that compute
+        // skips the same batches as the readers. Compute reads the flag with read_tile_value and never
+        // unpacks it; RawUInt16 is a format every arch supports. Two entries let a reader post the next
+        // batch's flag while compute works on the current batch.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = BATCH_VALID_DFB,
+            .entry_size = tt::tt_metal::hal::get_l1_alignment(),
+            .num_entries = 2,
+            .data_format_metadata = tt::DataFormat::RawUInt16,
+        });
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Kernels
@@ -3850,8 +3874,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     // ON adds an extra final-credit ACK on top of the explicit pops -> in0 tile-counter underflow (posted=64
     // acked=65). So opt every bound DFB out of implicit sync on Quasar, matching the sibling matmul factories
     // (matmul_multicore_program_factory / matmul_multicore_reuse_optimized_program_factory).
-    // A batch's validity reaches compute through the BRISC mailbox, which only BRISC writes; on the
-    // sparse path the in0 kernels broadcast it, so they take BRISC and the in1 sender/writer NCRISC.
+    // On the sparse path the in0 kernels take BRISC and the in1 sender/writer NCRISC, matching the sparse
+    // matmul factory, which carries that placement over from the legacy op.
     const auto in0_processor =
         use_sparsity ? tt_metal::DataMovementProcessor::RISCV_0 : tt_metal::DataMovementProcessor::RISCV_1;
     const auto in1_processor =
@@ -4021,7 +4045,20 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             return k;
         };
 
+    // With get_batch_from_reader, the in0 kernel on each node with output work (the sender or a receiver)
+    // produces the batch_valid entries, and the compute kernel on that node consumes them.
+    const auto batch_valid_binding = [&](DFBEndpointType endpoint_type) {
+        return DFBBinding{
+            .dfb_spec_name = BATCH_VALID_DFB,
+            .accessor_name = "batch_valid",
+            .endpoint_type = endpoint_type,
+        };
+    };
+
     kernels.push_back(make_in0_sender_spec(IN0_SENDER, true, IN0_DFB));
+    if (get_batch_from_reader) {
+        kernels.back().dfb_bindings.push_back(batch_valid_binding(DFBEndpointType::PRODUCER));
+    }
 
     // Both no-work senders work the relay buffer, not in0 (see its declaration above).
     if (has_in0_no_work_in_receiver_kernel) {
@@ -4038,6 +4075,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             .unique_id = IN0_RECEIVER,
             .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
                       "reader_bmm_tile_layout_in0_receiver_metal2.cpp",
+            .compiler_options =
+                {
+                    .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_in0_receiver_defines),
+                },
             .dfb_bindings =
                 {
                     DFBBinding{
@@ -4058,6 +4099,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                 },
             .hw_config = in0_sender_hw_config,
         });
+        if (get_batch_from_reader) {
+            kernels.back().dfb_bindings.push_back(batch_valid_binding(DFBEndpointType::PRODUCER));
+        }
     }
 
     // ---- in1 sender / output writer --------------------------------------
@@ -4274,6 +4318,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                 .accessor_name = "in0_transposed",
                 .endpoint_type = DFBEndpointType::CONSUMER,
             });
+        }
+        if (get_batch_from_reader) {
+            compute_dfb_bindings.push_back(batch_valid_binding(DFBEndpointType::CONSUMER));
         }
 
         KernelSpec::CompileTimeArgs compute_cta = {

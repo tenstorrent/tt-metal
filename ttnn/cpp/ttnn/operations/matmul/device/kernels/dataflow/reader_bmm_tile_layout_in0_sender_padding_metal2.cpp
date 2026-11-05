@@ -10,12 +10,15 @@
 // The binding and argument names below are this fork's interface: every factory that later ports
 // onto it inherits them and cannot rename them.
 //
-// Two regions of the legacy kernel are gated behind defines here rather than behind a compile-time
-// arg, because each needs a resource that only exists when the feature is on:
+// Three regions are gated behind defines here rather than behind a compile-time arg, because each
+// needs a resource that only exists when the feature is on:
 //   * SPARSITY  - the sparsity scratchpad and its tensor accessor. A binding that the host
 //                 does not declare produces no scratch::/tensor:: token at all, so the references must
 //                 not reach C++ name lookup. The legacy kernel guarded these with
 //                 `if constexpr (batchB > 0)`, which still looks names up in the discarded branch.
+//   * BATCH_VALID_DFB - the batch_valid dataflow buffer, through which this kernel tells the compute
+//                 kernel on its node which batches to skip. The host binds it, and sets the define,
+//                 exactly when get_batch_from_reader is set.
 //   * FUSE_OP   - the CCL fused-op receiver. MatmulOpReceiver consumes *positional* runtime args
 //                 through an index it advances by reference, and it lives outside this op's
 //                 directory (ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp), so it cannot
@@ -30,14 +33,6 @@
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #endif
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
-#ifndef ARCH_QUASAR
-// ckernel.h / ckernel_defs.h are compute(TRISC)-only: they pull in ckernel_addrmod.h -> ckernel_trisc_id.h,
-// which #errors without COMPILE_FOR_TRISC on a DM build. They are needed here only for the BRISC->compute
-// batch-valid mailbox handoff (ckernel::mailbox_write below), which has no Quasar equivalent. Guard both
-// out on Quasar (matches the DM-side handoff guard for the other matmul readers).
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#endif
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -191,6 +186,14 @@ void kernel_main() {
     };
 #endif
 
+#ifdef BATCH_VALID_DFB
+    static_assert(get_batch_from_reader, "BATCH_VALID_DFB requires get_batch_from_reader");
+    // One entry per batch to the compute kernel on this node: nonzero when the batch is valid.
+    DataflowBuffer dfb_batch_valid(dfb::batch_valid);
+#else
+    static_assert(!get_batch_from_reader, "get_batch_from_reader requires the batch_valid dataflow buffer");
+#endif
+
 #ifdef IN0_SHARDED
     uint32_t in0_start_address = dfb_in0.get_write_ptr();
 #endif  // IN0_SHARDED
@@ -232,12 +235,15 @@ void kernel_main() {
                     }
 
                     // We need to pass the value to compute cores regardless of the value of is_batch_valid
-#ifndef ARCH_QUASAR
-                    // No BRISC->compute mailbox on Quasar; the compute kernel treats every batch as valid
-                    // there (see bmm_large_block_zm_fused_bias_activation_metal2.cpp ARCH_QUASAR guard).
-                    ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, static_cast<uint32_t>(is_batch_valid));
-                    ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, static_cast<uint32_t>(is_batch_valid));
-                    ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, static_cast<uint32_t>(is_batch_valid));
+#ifdef BATCH_VALID_DFB
+                    dfb_batch_valid.reserve_back(1);
+                    {
+                        // On Quasar, releasing the lock makes the store visible in SRAM before push_back
+                        // hands the entry to the compute kernel. No-op on WH/BH.
+                        const auto batch_valid_lock = dfb_batch_valid.scoped_write_lock(1);
+                        batch_valid_lock.get_ptr<volatile uint16_t>()[0] = static_cast<uint16_t>(is_batch_valid);
+                    }
+                    dfb_batch_valid.push_back(1);
 #endif
                 }
 
