@@ -1,0 +1,2043 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Triage for compute_api_order_corpus.md.  Key is the finding fingerprint
+# (arch|thread|rule|file:line|message).  true_positive: true/false/null.
+
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_cast.cpp:40|'typecast_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:117|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:147|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:167|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:193|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:196|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:60|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:82|'llk_math_reduce_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:94|'binop_with_scalar_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_gates.cpp:121|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_gates.cpp:121|'sigmoid_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_gates.cpp:121|'typecast_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:358|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:358|'mac_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:364|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:365|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:367|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:370|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:545|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:545|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:545|'silu_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:553|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:553|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:553|'llk_math_reduce_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:554|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:554|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:554|'llk_math_reduce_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:558|'exp_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:558|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:558|'sigmoid_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:558|'softplus_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:574|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:574|'llk_math_matmul_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'binop_with_scalar_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'llk_math_reduce_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'sigmoid_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'sqrt_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:540|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:540|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:540|'silu_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:548|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:548|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:548|'llk_math_reduce_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:549|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:549|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:549|'llk_math_reduce_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|'exp_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|'sigmoid_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|'softplus_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|'unary_bcast_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:557|'binop_with_scalar_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:557|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:557|'llk_math_matmul_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'binop_with_scalar_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'llk_math_reduce_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'sigmoid_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'sqrt_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/gate_compute.cpp:126|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/gate_compute.cpp:130|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/lowrank_compute.cpp:43|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/lowrank_compute.cpp:49|'typecast_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/norm_compute.cpp:108|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/norm_compute.cpp:112|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_write/kernels/compute.cpp:40|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_write/kernels/compute.cpp:43|'unary_bcast_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_write/kernels/compute.cpp:57|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/conv_compute.cpp:121|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/conv_compute.cpp:123|'silu_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/conv_compute.cpp:52|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/conv_compute.cpp:55|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:173|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:176|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:49|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:52|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/index_tail_compute_rope.cpp:19|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/index_tail_compute_rope.cpp:22|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/main_tail_compute_rope.cpp:14|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/main_tail_compute_staging.cpp:31|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/main_tail_compute_staging.cpp:33|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/post_attention_compute.cpp:28|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/post_attention_compute.cpp:51|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/post_attention_compute.cpp:54|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/rope_compute.cpp:83|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/score_merge_compute.cpp:29|'llk_math_eltwise_binary_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/score_merge_compute.cpp:45|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/score_merge_compute.cpp:47|'llk_math_eltwise_unary_datacopy_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|MATH|missing-init|/home/corba/AI/Inference/tt-metal/models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/tilize_16x32/kernels/tilize_16x32_kernel.cpp:29|'llk_math_eltwise_unary_datacopy'
+  has no preceding 'llk_math_eltwise_unary_datacopy_init_impl' on this path
+: note: 'BH fast-tilize fallback path: fast_tilize_init/uninit route through tilize_init/uninit;
+    the branch correlation is not yet modelled'
+  true_positive: false
+? blackhole|MATH|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:352|compute.broadcast_math
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? blackhole|MATH|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:370|compute.broadcast_math
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? blackhole|MATH|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|compute.broadcast_math
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? blackhole|MATH|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_write/kernels/compute.cpp:43|compute.broadcast_math
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? blackhole|MATH|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:156|compute.broadcast_math
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? blackhole|MATH|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/shared_expert/kernels/compute_shared_eltwise.cpp:103|compute.broadcast_math
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? blackhole|MATH|wrong-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:565|'llk_math_eltwise_unary_datacopy'
+  is for math.datacopy, but the Fpu engine was last initialized for math.transpose_dest
+: note: ordering/argument conflict in a model kernel; re-init the engine after the
+    intervening init
+  true_positive: true
+? blackhole|MATH|wrong-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:557|'llk_math_eltwise_unary_datacopy'
+  is for math.datacopy, but the Fpu engine was last initialized for math.transpose_dest
+: note: ordering/argument conflict in a model kernel; re-init the engine after the
+    intervening init
+  true_positive: true
+? blackhole|MATH|wrong-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/router_tail/kernels/compute_router_tail.cpp:181|'llk_math_eltwise_unary_datacopy'
+  is for math.datacopy, but the Fpu engine was last initialized for math.transpose_dest
+: note: ordering/argument conflict in a model kernel; re-init the engine after the
+    intervening init
+  true_positive: true
+? blackhole|MATH|wrong-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/router_tail/kernels/compute_router_tail.cpp:212|'llk_math_eltwise_unary_datacopy'
+  is for math.datacopy, but the Fpu engine was last initialized for math.transpose_dest
+: note: ordering/argument conflict in a model kernel; re-init the engine after the
+    intervening init
+  true_positive: true
+? blackhole|PACK|missing-init|/home/corba/AI/Inference/tt-metal/models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/tilize_16x32/kernels/tilize_16x32_kernel.cpp:29|'tilize_block'
+  has no preceding 'tilize_init' on this path
+: note: 'BH fast-tilize fallback path: fast_tilize_init/uninit route through tilize_init/uninit;
+    the branch correlation is not yet modelled'
+  true_positive: false
+? blackhole|PACK|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/tilize_16x32/kernels/tilize_16x32_kernel.cpp:28|compute.tilize_pack
+  init is never paired with a required uninit (tilize_uninit)
+: note: 'BH fast-tilize fallback path: fast_tilize_init/uninit route through tilize_init/uninit;
+    the branch correlation is not yet modelled'
+  true_positive: false
+? blackhole|UNPACK|init-arg-mismatch|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:565|'llk_unpack_A'
+  does not match the arguments of its init 'llk_unpack_A_init_impl'
+: note: ordering/argument conflict in a model kernel; re-init the engine after the
+    intervening init
+  true_positive: true
+? blackhole|UNPACK|init-arg-mismatch|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:557|'llk_unpack_A'
+  does not match the arguments of its init 'llk_unpack_A_init_impl'
+: note: ordering/argument conflict in a model kernel; re-init the engine after the
+    intervening init
+  true_positive: true
+? blackhole|UNPACK|init-arg-mismatch|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/router_tail/kernels/compute_router_tail.cpp:181|'llk_unpack_A'
+  does not match the arguments of its init 'llk_unpack_A_init_impl'
+: note: ordering/argument conflict in a model kernel; re-init the engine after the
+    intervening init
+  true_positive: true
+? blackhole|UNPACK|init-arg-mismatch|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/router_tail/kernels/compute_router_tail.cpp:212|'llk_unpack_A'
+  does not match the arguments of its init 'llk_unpack_A_init_impl'
+: note: ordering/argument conflict in a model kernel; re-init the engine after the
+    intervening init
+  true_positive: true
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:147|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:167|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:193|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:196|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:82|'llk_unpack_AB_reduce_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_gates.cpp:121|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:358|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:364|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:365|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:367|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:370|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:545|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:545|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:553|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:553|'llk_unpack_AB_reduce_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:553|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:554|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:554|'llk_unpack_AB_reduce_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:554|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:558|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:574|'llk_unpack_AB_matmul_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:574|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'llk_unpack_AB_reduce_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:540|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:540|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:548|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:548|'llk_unpack_AB_reduce_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:548|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:549|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:549|'llk_unpack_AB_reduce_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:549|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|'unary_bcast_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:557|'llk_unpack_AB_matmul_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:557|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'llk_unpack_AB_reduce_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/gate_compute.cpp:126|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/gate_compute.cpp:130|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/norm_compute.cpp:108|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/norm_compute.cpp:112|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_write/kernels/compute.cpp:40|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_write/kernels/compute.cpp:43|'unary_bcast_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/conv_compute.cpp:121|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/conv_compute.cpp:52|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/conv_compute.cpp:55|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:173|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:176|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:49|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:52|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/main_tail_compute_staging.cpp:31|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/main_tail_compute_staging.cpp:33|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/post_attention_compute.cpp:28|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/post_attention_compute.cpp:51|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/post_attention_compute.cpp:54|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/score_merge_compute.cpp:45|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/score_merge_compute.cpp:47|'llk_unpack_A_init_impl'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? blackhole|UNPACK|missing-init|/home/corba/AI/Inference/tt-metal/models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/tilize_16x32/kernels/tilize_16x32_kernel.cpp:29|'llk_unpack_tilize_impl'
+  has no preceding 'llk_unpack_tilize_init_impl' on this path
+: note: 'BH fast-tilize fallback path: fast_tilize_init/uninit route through tilize_init/uninit;
+    the branch correlation is not yet modelled'
+  true_positive: false
+? blackhole|UNPACK|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:352|compute.broadcast_unpack
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? blackhole|UNPACK|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:370|compute.broadcast_unpack
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? blackhole|UNPACK|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|compute.broadcast_unpack
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? blackhole|UNPACK|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_write/kernels/compute.cpp:43|compute.broadcast_unpack
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? blackhole|UNPACK|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:156|compute.broadcast_unpack
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? blackhole|UNPACK|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/shared_expert/kernels/compute_shared_eltwise.cpp:103|compute.broadcast_unpack
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? blackhole|UNPACK|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/tilize_16x32/kernels/tilize_16x32_kernel.cpp:28|unpack.tilize
+  init is never paired with a required uninit (llk_unpack_tilize_uninit_impl)
+: note: 'BH fast-tilize fallback path: fast_tilize_init/uninit route through tilize_init/uninit;
+    the branch correlation is not yet modelled'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_cast.cpp:40|'typecast_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:117|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:147|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:167|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:193|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:196|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:60|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:82|'llk_math_reduce_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:94|'binop_with_scalar_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_gates.cpp:121|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_gates.cpp:121|'sigmoid_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_gates.cpp:121|'typecast_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:358|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:358|'mac_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:364|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:365|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:367|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:370|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:545|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:545|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:545|'silu_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:553|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:553|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:553|'llk_math_reduce_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:554|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:554|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:554|'llk_math_reduce_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:558|'exp_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:558|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:558|'sigmoid_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:558|'softplus_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:574|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:574|'llk_math_matmul_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'binop_with_scalar_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'llk_math_reduce_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'sigmoid_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'sqrt_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:540|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:540|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:540|'silu_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:548|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:548|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:548|'llk_math_reduce_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:549|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:549|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:549|'llk_math_reduce_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|'exp_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|'sigmoid_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|'softplus_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|'unary_bcast_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:557|'binop_with_scalar_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:557|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:557|'llk_math_matmul_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'binop_with_scalar_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'llk_math_reduce_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'sigmoid_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'sqrt_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/gate_compute.cpp:126|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/gate_compute.cpp:130|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/lowrank_compute.cpp:43|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/lowrank_compute.cpp:49|'typecast_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/norm_compute.cpp:108|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/norm_compute.cpp:112|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_write/kernels/compute.cpp:40|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_write/kernels/compute.cpp:43|'unary_bcast_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_write/kernels/compute.cpp:57|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/conv_compute.cpp:121|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/conv_compute.cpp:123|'silu_tile_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/conv_compute.cpp:52|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/conv_compute.cpp:55|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:173|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:176|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:49|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:52|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/index_tail_compute_rope.cpp:19|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/index_tail_compute_rope.cpp:22|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/main_tail_compute_rope.cpp:14|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/main_tail_compute_staging.cpp:31|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/main_tail_compute_staging.cpp:33|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/post_attention_compute.cpp:28|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/post_attention_compute.cpp:51|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/post_attention_compute.cpp:54|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/rope_compute.cpp:83|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/score_merge_compute.cpp:29|'llk_math_eltwise_binary_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/score_merge_compute.cpp:45|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/score_merge_compute.cpp:47|'llk_math_eltwise_unary_datacopy_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|MATH|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:352|compute.broadcast_math
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? wormhole_b0|MATH|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:370|compute.broadcast_math
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? wormhole_b0|MATH|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|compute.broadcast_math
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? wormhole_b0|MATH|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_write/kernels/compute.cpp:43|compute.broadcast_math
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? wormhole_b0|MATH|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:156|compute.broadcast_math
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? wormhole_b0|MATH|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/shared_expert/kernels/compute_shared_eltwise.cpp:103|compute.broadcast_math
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? wormhole_b0|MATH|wrong-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:565|'llk_math_eltwise_unary_datacopy'
+  is for math.datacopy, but the Fpu engine was last initialized for math.transpose_dest
+: note: ordering/argument conflict in a model kernel; re-init the engine after the
+    intervening init
+  true_positive: true
+? wormhole_b0|MATH|wrong-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:557|'llk_math_eltwise_unary_datacopy'
+  is for math.datacopy, but the Fpu engine was last initialized for math.transpose_dest
+: note: ordering/argument conflict in a model kernel; re-init the engine after the
+    intervening init
+  true_positive: true
+? wormhole_b0|MATH|wrong-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/router_tail/kernels/compute_router_tail.cpp:181|'llk_math_eltwise_unary_datacopy'
+  is for math.datacopy, but the Fpu engine was last initialized for math.transpose_dest
+: note: ordering/argument conflict in a model kernel; re-init the engine after the
+    intervening init
+  true_positive: true
+? wormhole_b0|MATH|wrong-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/router_tail/kernels/compute_router_tail.cpp:212|'llk_math_eltwise_unary_datacopy'
+  is for math.datacopy, but the Fpu engine was last initialized for math.transpose_dest
+: note: ordering/argument conflict in a model kernel; re-init the engine after the
+    intervening init
+  true_positive: true
+? wormhole_b0|UNPACK|init-arg-mismatch|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:565|'llk_unpack_A'
+  does not match the arguments of its init 'llk_unpack_A_init'
+: note: ordering/argument conflict in a model kernel; re-init the engine after the
+    intervening init
+  true_positive: true
+? wormhole_b0|UNPACK|init-arg-mismatch|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:557|'llk_unpack_A'
+  does not match the arguments of its init 'llk_unpack_A_init'
+: note: ordering/argument conflict in a model kernel; re-init the engine after the
+    intervening init
+  true_positive: true
+? wormhole_b0|UNPACK|init-arg-mismatch|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/router_tail/kernels/compute_router_tail.cpp:181|'llk_unpack_A'
+  does not match the arguments of its init 'llk_unpack_A_init'
+: note: ordering/argument conflict in a model kernel; re-init the engine after the
+    intervening init
+  true_positive: true
+? wormhole_b0|UNPACK|init-arg-mismatch|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/router_tail/kernels/compute_router_tail.cpp:212|'llk_unpack_A'
+  does not match the arguments of its init 'llk_unpack_A_init'
+: note: ordering/argument conflict in a model kernel; re-init the engine after the
+    intervening init
+  true_positive: true
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:147|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:167|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:193|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:196|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_post_rows/kernels/compute_norm.cpp:82|'llk_unpack_AB_reduce_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_gates.cpp:121|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:358|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:364|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:365|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:367|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:370|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:545|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:545|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:553|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:553|'llk_unpack_AB_reduce_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:553|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:554|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:554|'llk_unpack_AB_reduce_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:554|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:558|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:574|'llk_unpack_AB_matmul_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:574|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'llk_unpack_AB_reduce_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_rows_scan/kernels/compute.cpp:582|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:540|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:540|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:548|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:548|'llk_unpack_AB_reduce_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:548|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:549|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:549|'llk_unpack_AB_reduce_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:549|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|'unary_bcast_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:557|'llk_unpack_AB_matmul_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:557|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'llk_unpack_AB_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'llk_unpack_AB_reduce_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:560|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/gate_compute.cpp:126|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/gate_compute.cpp:130|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/norm_compute.cpp:108|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_read/kernels/norm_compute.cpp:112|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_write/kernels/compute.cpp:40|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_write/kernels/compute.cpp:43|'unary_bcast_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/conv_compute.cpp:121|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/conv_compute.cpp:52|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/conv_compute.cpp:55|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:173|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:176|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:49|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:52|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/main_tail_compute_staging.cpp:31|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/main_tail_compute_staging.cpp:33|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/post_attention_compute.cpp:28|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/post_attention_compute.cpp:51|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/post_attention_compute.cpp:54|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/score_merge_compute.cpp:45|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|loop-invariant-init|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/qsa_block/kernels/score_merge_compute.cpp:47|'llk_unpack_A_init'
+  is loop-invariant but is re-run on every iteration; hoist it if the operation does
+  not change the configuration between iterations
+: note: 'advisory: this init is deliberately re-run after a reconfiguration or to
+    restore per-iteration SFPU state'
+  true_positive: false
+? wormhole_b0|UNPACK|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:352|compute.broadcast_unpack
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? wormhole_b0|UNPACK|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_pre_rows/kernels/compute_qkv.cpp:370|compute.broadcast_unpack
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? wormhole_b0|UNPACK|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gdn_step/kernels/compute.cpp:554|compute.broadcast_unpack
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? wormhole_b0|UNPACK|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/gr_write/kernels/compute.cpp:43|compute.broadcast_unpack
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? wormhole_b0|UNPACK|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/ple/kernels/gate_compute.cpp:156|compute.broadcast_unpack
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true
+? wormhole_b0|UNPACK|missing-uninit|/home/corba/AI/Inference/tt-metal/models/demos/blackhole/qwen38_flash_next/ttnn/fused/shared_expert/kernels/compute_shared_eltwise.cpp:103|compute.broadcast_unpack
+  init is never paired with a required uninit (unary_bcast_uninit)
+: note: unary_bcast_init arms persistent state; the matching uninit is missing before
+    the next op group
+  true_positive: true

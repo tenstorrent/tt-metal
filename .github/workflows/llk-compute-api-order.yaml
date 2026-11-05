@@ -1,0 +1,83 @@
+name: "LLK compute API ordering (advisory)"
+
+# Static check of compute-kernel init / uninit / reconfig ordering.  This is
+# deliberately non-blocking: every check step is continue-on-error, the report is
+# uploaded as an artifact, and findings are triaged before they become issues.
+# The full corpus run replays a captured kernel compile database from the weekly
+# kernel clang-tidy job; this workflow keeps a bounded discovery sweep so it can
+# run on every relevant pull request.
+#
+# See docs/source/tt-metalium/tools/compute_api_order_checker.rst.
+
+on:
+  pull_request:
+    paths:
+      - "tt_metal/hw/inc/api/compute/**"
+      - "tt_metal/hw/ckernels/**"
+      - "tt_metal/tt-llk/infra/**"
+      - "ttnn/**/kernels/**"
+      - "models/**/kernels/**"
+      - "tests/**/kernels/**"
+      - "tt-train/**/kernels/**"
+      - ".github/workflows/llk-compute-api-order.yaml"
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: "compute API ordering"
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Python dependencies
+        continue-on-error: true
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyyaml pytest clang==18.1.8 libclang==18.1.8
+          echo "LIBCLANG_PATH=$(python - <<'PY'
+          import clang, pathlib
+          print(pathlib.Path(clang.__file__).parent / 'native')
+          PY
+          )" >> "$GITHUB_ENV"
+
+      - name: Install SFPI headers (analysis only)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
+          mkdir -p /tmp/sfpi
+          curl -fsSL "https://github.com/tenstorrent/sfpi/releases/download/${SFPI_VERSION}/sfpi_${SFPI_VERSION}_x86_64_debian.txz" -o /tmp/sfpi.txz
+          tar -xJf /tmp/sfpi.txz -C /tmp/sfpi
+          echo "TT_METAL_SFPI_ROOT=/tmp/sfpi/sfpi" >> "$GITHUB_ENV"
+
+      - name: Unit and rule-table tests
+        continue-on-error: true
+        run: |
+          python -m pytest --noconftest tt_metal/tt-llk/infra/tests/test_check_compute_api_order.py -q
+
+      - name: Corpus sweep (bounded discovery)
+        continue-on-error: true
+        run: |
+          python tt_metal/tt-llk/infra/run_compute_api_order_corpus.py \
+            --discover --limit 40 \
+            --arch wormhole_b0 --arch blackhole \
+            --threads UNPACK MATH PACK --jobs 2 \
+            --output compute_api_order_corpus.md \
+            --json-output compute_api_order_corpus.json
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compute-api-order-report
+          path: |
+            compute_api_order_corpus.md
+            compute_api_order_corpus.json
+          if-no-files-found: ignore
