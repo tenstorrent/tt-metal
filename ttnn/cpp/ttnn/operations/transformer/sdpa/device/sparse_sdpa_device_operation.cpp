@@ -27,6 +27,16 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
     const auto& idx = t.indices;
     TT_FATAL(
         q.device() == kv.device() && q.device() == idx.device(), "sparse_sdpa: all inputs must be on the same device");
+    // The hashed worker grid must still fit the first subdevice of whatever manager is active now.
+    auto* device = q.device();
+    const auto subdevice_cores =
+        device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().at(0));
+    TT_FATAL(attrs.worker_core_grid.num_cores() > 0, "sparse_sdpa requires at least one TENSIX worker core");
+    TT_FATAL(
+        subdevice_cores.contains(attrs.worker_core_grid),
+        "sparse_sdpa worker grid {} must be contained in the TENSIX cores {}",
+        attrs.worker_core_grid,
+        subdevice_cores);
     if (t.attention_sink.has_value()) {
         const auto& sink = t.attention_sink.value();
         TT_FATAL(
@@ -267,7 +277,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
         t.indices.logical_shape(),
         t.indices.dtype(),
-        t.attention_sink);
+        t.attention_sink,
+        attrs.worker_core_grid);
 }
 
 Tensor sparse_sdpa(
@@ -281,8 +292,13 @@ Tensor sparse_sdpa(
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<BlockCyclicLayout> block_cyclic,
-    const std::optional<Tensor>& attention_sink) {
+    const std::optional<Tensor>& attention_sink,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
+    // Validated (non-empty, inside the first subdevice) in validate_non_hashed, on every dispatch.
+    auto* device = q.device();
+    const auto worker_core_grid = sub_core_grids.value_or(
+        device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().at(0)));
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .scale = scale,
@@ -292,6 +308,7 @@ Tensor sparse_sdpa(
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
             .block_cyclic = block_cyclic,
+            .worker_core_grid = worker_core_grid,
         },
         OperationType::tensor_args_t{
             .q = q,
