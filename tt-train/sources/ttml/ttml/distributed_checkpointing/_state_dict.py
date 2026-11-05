@@ -304,8 +304,19 @@ def check_param_groups(optimizer, scalars: dict[str, Any]) -> None:
         )
 
 
+def is_structural_scalar(key: str) -> bool:
+    """A scalar that describes the optimizer's own structure rather than its progress: the parameter names of a
+    param group. It is recorded for inspection and never written back, since on a multi-mesh world each rank's
+    optimizer holds its own parameters and the optimizer refuses another rank's list."""
+    return bool(_PARAM_GROUP_MEMBERS.search(key))
+
+
+_PARAM_GROUP_MEMBERS = re.compile(r"(^|/)param_groups\.\d+\.params$")
+
+
 def restore_scalars(optimizer, scalars: dict[str, Any]) -> list[str]:
-    """Put the checkpoint's scalars into the optimizer's state dict and re-install it; returns the keys applied."""
+    """Put the checkpoint's scalars into the optimizer's state dict and re-install it; returns the keys applied.
+    Structural scalars (``is_structural_scalar``) keep the live optimizer's own value."""
     if not scalars:
         return []
     state = optimizer.get_state_dict()
@@ -317,6 +328,8 @@ def restore_scalars(optimizer, scalars: dict[str, Any]) -> list[str]:
             key = "optimizer/" + "/".join(path + (str(name),))
             if isinstance(child, dict):
                 walk(child, path + (str(name),))
+            elif is_structural_scalar(key):
+                continue
             elif isinstance(child, (bool, int, float, str)) and key in scalars:
                 node[name] = bool(scalars[key]) if isinstance(child, bool) else type(child)(scalars[key])
                 applied.append(key)
@@ -351,12 +364,47 @@ def mesh_device():
     return ttml.autograd.AutoContext.get_instance().get_device()
 
 
-def world_record() -> dict:
+def local_coords() -> list[tuple[int, ...]]:
+    """The mesh coordinates this process holds: every coordinate on a single-host mesh, this host's block of a
+    multi-host mesh."""
+    view = mesh_device().get_view()
+    return [tuple(int(x) for x in c) for c in view.get_local_mesh_coord_range()]
+
+
+def mesh_id() -> int:
+    """The id the control plane gave this process's mesh (0 on a single mesh)."""
+    try:
+        raw = mesh_device().get_system_mesh_id()
+    except Exception:  # noqa: BLE001  (no control plane: a plain single-host mesh)
+        return 0
+    for convert in (int, lambda v: int(v.value()), lambda v: int(v.value), lambda v: int(v.get())):
+        try:
+            return convert(raw)
+        except Exception:  # noqa: BLE001
+            continue
+    return 0
+
+
+def rank_record(rank: int = 0, world_rank: int = 0) -> dict:
+    """This process's entry of the world record: its ranks, mesh id, the global mesh shape and axis names, and
+    the coordinates it holds."""
     device = mesh_device()
     mesh = ttml.maybe_mesh()
     shape = list(mesh.shape) if mesh is not None else list(device.shape)
     axis_names = list(mesh.axis_names) if mesh is not None else [f"_{i}" for i in range(len(shape))]
-    return {"group_size": 1, "ranks": [{"world_rank": 0, "mesh_id": 0, "shape": shape, "axis_names": axis_names}]}
+    return {
+        "rank": int(rank),
+        "world_rank": int(world_rank),
+        "mesh_id": mesh_id(),
+        "shape": shape,
+        "axis_names": axis_names,
+        "local_coords": [list(c) for c in local_coords()],
+    }
+
+
+def world_record() -> dict:
+    """The world record of a single-process save: one rank holding every coordinate."""
+    return {"group_size": 1, "ranks": [rank_record()]}
 
 
 def check_label_unchanged(live: LiveTensor, when: str) -> None:

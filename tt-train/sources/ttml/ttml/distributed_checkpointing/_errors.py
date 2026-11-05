@@ -9,6 +9,11 @@ class CheckpointError(RuntimeError):
     """Base class: a save or load that could not be carried out as asked."""
 
 
+class CheckpointFatal(CheckpointError):
+    """A collective between the ranks failed (a peer died); the operation cannot be completed or retried in
+    this process, and the staging directory is left in place."""
+
+
 class IncompleteCheckpoint(CheckpointError):
     """The directory is a staging directory, or has no readable ``index.json`` (missing, truncated or malformed)."""
 

@@ -7,15 +7,17 @@
 A tensor-parallel model needs the process-wide ParallelismContext, which cannot be reset, so a test that saves on one
 parallelism and loads on another runs each world in its own process and passes the checkpoint through a directory.
 This driver is that process. ``save`` trains a tiny Llama for a few steps, saves it, and writes a reference next to
-the checkpoint: every parameter and optimizer moment in canonical layout, the logits on a fixed batch, and the
-optimizer scalars. ``load`` builds the destination world, loads the checkpoint, and compares against the reference.
-Both commands then take one more training step and record the reference again under ``resume:``: the run one step
-after the checkpoint, which the loaded world reproduces only if the optimizer carried its moments and step count
-across (``--no-resume-step`` leaves it out).
+the checkpoint: every parameter and optimizer moment as the shards this rank holds, the logits on a fixed batch,
+the optimizer scalars and what a resumed run does next. ``load`` builds the destination world, loads the
+checkpoint, dumps the same, and rank 0 compares the two worlds in canonical layout. Both commands then take one
+more training step and dump again under ``resume:``: the run one step after the checkpoint, which the loaded world
+reproduces only if the optimizer carried its moments and step count across (``--no-resume-step`` leaves the step
+out, e.g. on a mesh whose gradient sync cannot run).
 
-The reference is computed independently of the checkpoint module: tensors are gathered through the composer and
-mapped to the canonical layout with the model's own rules written out in numpy here (per-shard segment order for
-the fused projections, the logical vocab rows for the padded LM head).
+Under tt-run every rank of a world runs this driver; each dumps the shards of its own coordinates, and the parts
+are merged by key. Shards are placed into global arrays by their topology labels and mapped to the canonical
+layout with the model's own rules written out in numpy here (per-shard segment order for the fused projections,
+the logical vocab rows for the padded LM head).
 
     python tt-train/tests/python/distributed_checkpointing/dcp_driver.py save --dir /tmp/ckpt --mesh 2x2 --axes dp,tp --tp --steps 2
     python tt-train/tests/python/distributed_checkpointing/dcp_driver.py load --dir /tmp/ckpt --mesh 2x2 --axes dp,fsdp --fsdp
@@ -24,23 +26,25 @@ the fused projections, the logical vocab rows for the padded LM head).
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import random
 import sys
+import traceback
 
 import numpy as np
 import ttnn
 
 import ttml
 import ttml.distributed_checkpointing as dcp
+from dcp_shards import local_coords, shard_arrays
 from ttml.common.schedulers import CosineAnnealingScheduler
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
 from ttml.models.llama.transformer import compute_swiglu_intermediate_size
 from ttml.common.utils import set_seed
 from ttml.distributed_checkpointing._train_state import capture_process_rng, restore_process_rng
-from ttml.sharding import Sharding
 
 from dcp_oracle import Loader
 
@@ -144,7 +148,9 @@ def loss_of(model, config: LlamaConfig, tokens, mask, targets):
     )
 
 
-def train(model, params, optimizer, scheduler, loader, config, steps: int, seed: int, start: int = 0) -> None:
+def train(
+    model, params, optimizer, scheduler, loader, config, steps: int, seed: int, mark=lambda what: None, start: int = 0
+) -> None:
     """``steps`` training steps numbered from ``start``: step ``n`` draws batch ``seed + n``, so a run resumed from
     a checkpoint repeats the batches the uninterrupted run would have drawn. The generators are seeded only when
     the run starts, at step 0; a resumed step continues from the generators the checkpoint restored."""
@@ -158,38 +164,89 @@ def train(model, params, optimizer, scheduler, loader, config, steps: int, seed:
         optimizer.zero_grad()
         loss = loss_of(model, config, tokens, mask, targets)
         loss.backward(False)
+        mark(f"step {step}: forward and backward done")
         if needs_sync:
             ttml.sync_gradients(params)
+            mark(f"step {step}: gradients synced over the non-TP axes")
         optimizer.step()
         scheduler.step()
         loader.advance()
         ctx.reset_graph()
+        mark(f"step {step}: optimizer stepped")
 
 
-def gather(tensor) -> np.ndarray:
-    """A tensor's global device-layout array as float32, through the composer."""
-    return np.asarray(Sharding.from_tensor(tensor).gather(tensor)).astype(np.float32)
+def world_group() -> tuple[int, int]:
+    """``(rank, size)`` of the ranks this process runs with: ``(0, 1)`` outside tt-run."""
+    if ttnn.distributed_context_is_initialized() and int(ttnn.distributed_context_get_size()) > 1:
+        return int(ttnn.distributed_context_get_rank()), int(ttnn.distributed_context_get_size())
+    return 0, 1
 
 
-def full_logits(tensor, config: LlamaConfig) -> np.ndarray:
-    """The logits on the fixed batch as ``[1, 1, S, vocab]`` in every world.
+def agree(ok: bool) -> bool:
+    """Whether every rank succeeded so far; an allgather, so a rank that failed never leaves another blocked."""
+    if ttnn.distributed_context_is_initialized() and int(ttnn.distributed_context_get_size()) > 1:
+        return all(int(v) == 0 for v in ttnn.distributed_context_allgather_int(0 if ok else 1))
+    return ok
 
-    A tensor-parallel LM head (``gather_output=False``) leaves the vocab dimension sharded over the TP axis, and its
-    output label does not say so, so the shards are read directly and concatenated in TP order; a replicated head
-    is read from the first device. The padded vocab columns are dropped.
-    """
-    value = tensor.get_value(NATIVE)
-    shards = [ttnn.to_torch(s).float().numpy() for s in ttnn.get_device_tensors(value)]  # row-major mesh order
-    mesh = ttml.mesh()
-    if config.use_tp:
-        shape = tuple(mesh.shape)
-        tp_axis = mesh.axis_index("tp")
-        stride = 1 if tp_axis == len(shape) - 1 else int(np.prod(shape[tp_axis + 1 :]))
-        pieces = [shards[j * stride] for j in range(shape[tp_axis])]  # coordinate 0 on every other axis
-        full = np.concatenate(pieces, axis=3)
-    else:
-        full = shards[0]
-    return full[..., : config.vocab_size]
+
+def local_shards(tensor) -> dict[tuple[int, ...], np.ndarray]:
+    """This process's shards of a tensor as float32, by mesh coordinate."""
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    return shard_arrays(tensor.get_value(NATIVE), local_coords(device))
+
+
+def label_json(tensor) -> str:
+    from ttml.distributed_checkpointing._state_dict import label_of
+
+    return json.dumps(label_of(tensor.get_value(NATIVE)).to_json())
+
+
+def assemble(label: str, shards: dict[tuple[int, ...], np.ndarray]) -> np.ndarray:
+    """The global device-layout array of a tensor from the shards of every rank, placed by its topology label."""
+    from ttml.distributed_checkpointing._topology import Label, chunk_boxes, global_shape
+
+    lab = Label.from_json(json.loads(label))
+    local_shape = next(iter(shards.values())).shape
+    full = np.zeros(global_shape(lab, local_shape), dtype=np.float32)
+    seen = set()
+    chunks = chunk_boxes(lab, local_shape)
+    for chunk in chunks:
+        if chunk.mesh_coord in shards:
+            full[chunk.box.slices()] = shards[chunk.mesh_coord]
+            seen.add(chunk.group)
+    missing = {c.group for c in chunks} - seen
+    if missing:
+        raise RuntimeError(f"no rank dumped a shard for replica groups {sorted(missing)}")
+    return full
+
+
+def replica_selections(label: str, copies: dict[tuple[int, ...], list[np.ndarray]]) -> list[dict]:
+    """Ways to pick one shard per replica group, one per distinct copy a group has across the devices and ranks
+    holding it: devices that should hold the same box may not (replicas drift apart when a world's collectives do
+    not span its ranks), and the checkpoint holds the copy of the device that was elected to write it."""
+    from ttml.distributed_checkpointing._topology import Label, chunk_boxes
+
+    lab = Label.from_json(json.loads(label))
+    local_shape = next(iter(copies.values()))[0].shape
+    distinct: dict[tuple[int, ...], list[tuple[tuple[int, ...], np.ndarray]]] = {}
+    for chunk in chunk_boxes(lab, local_shape):
+        for array in copies.get(chunk.mesh_coord, []):
+            kept = distinct.setdefault(chunk.group, [])
+            if not any(np.array_equal(array, a) for _, a in kept):
+                kept.append((chunk.mesh_coord, array))
+    width = max(len(k) for k in distinct.values())
+    selections = []
+    for i in range(width):
+        pick = {}
+        for group, kept in distinct.items():
+            coord, array = kept[min(i, len(kept) - 1)]
+            pick[coord] = array
+        selections.append(pick)
+    return selections
+
+
+def coord_key(coord: tuple[int, ...]) -> str:
+    return "-".join(str(int(c)) for c in coord)
 
 
 def uninterleave(array: np.ndarray, dim: int, sizes: tuple[int, ...], shards: int) -> np.ndarray:
@@ -232,20 +289,51 @@ def canonical_name(name: str, config: LlamaConfig) -> str:
     return name
 
 
-def reference(model, params, optimizer, scheduler, loader, config, seed: int) -> dict[str, np.ndarray]:
-    """The run as it stands: every parameter and optimizer tensor and scalar in canonical layout, the logits on a fixed
-    batch and what a resumed run does next. The dump leaves the run where it found it: the probes below step the
-    scheduler and the loader and draw from the generators, and all three are put back, so the optimizer scalars
-    compared are the ones the save or the load left and a step taken afterwards is the run's own next step."""
-    tp = ttml.mesh().axis_size("tp") if config.use_tp else 1
+def local_reference(model, params, optimizer, scheduler, loader, config, seed: int, rank: int) -> dict[str, np.ndarray]:
+    """This rank's part of the reference: every parameter and optimizer moment as the shards it holds, the logits
+    shards on a fixed batch, the optimizer scalars and what a resumed run does next. Shard keys carry the rank, so
+    the parts of ranks whose meshes share coordinates merge without colliding."""
+    mesh = ttml.mesh()
     out: dict[str, np.ndarray] = {}
+    out["meta"] = np.asarray(
+        json.dumps(
+            {
+                "tp": mesh.axis_size("tp") if config.use_tp else 1,
+                "tp_axis": mesh.axis_index("tp") if config.use_tp else -1,
+                "mesh": list(mesh.shape),
+            }
+        )
+    )
+    tag = f"w{rank:03d}"
+    for name, tensor in params.items():
+        cname = canonical_name(name, config)
+        out[f"label:param:{cname}"] = np.asarray(label_json(tensor))
+        for coord, arr in local_shards(tensor).items():
+            out[f"shard:param:{cname}:{tag}:{coord_key(coord)}"] = arr
+
+    def walk(node, path):
+        if isinstance(node, ttml.NamedParameters):
+            for name, tensor in node.items():
+                cname = "/".join(path) + ":" + canonical_name(name, config)
+                out[f"label:state:{cname}"] = np.asarray(label_json(tensor))
+                for coord, arr in local_shards(tensor).items():
+                    out[f"shard:state:{cname}:{tag}:{coord_key(coord)}"] = arr
+        elif isinstance(node, dict):
+            for key, child in node.items():
+                walk(child, path + (str(key),))
+        else:
+            out["scalar:" + "/".join(path)] = np.asarray(node)
+
+    walk(optimizer.get_state_dict(), ())
+    # What a resumed run does next: the scheduler's next LRs, the loader's next position and the next draw of each
+    # generator (the ttml one as its state text: nothing draws from it on the host). The probes step the scheduler
+    # and the loader and draw from the generators, so all three are put back: the dump leaves the run where it found
+    # it, and a step taken afterwards is the run's own next step at the LR the save or the load left.
     scheduler_state, loader_state, generators = (
         scheduler.get_state_dict(),
         loader.get_state_dict(),
         capture_process_rng(),
     )
-    # What a resumed run does next: the scheduler's next LRs, the loader's next position and the next draw of each
-    # generator (the ttml one as its state text: nothing draws from it on the host).
     scheduler.step()
     out["train:next_lrs"] = np.asarray(scheduler.get_last_lrs())
     loader.advance()
@@ -255,25 +343,10 @@ def reference(model, params, optimizer, scheduler, loader, config, seed: int) ->
     out["train:numpy_next"] = np.asarray(np.random.random())
     scheduler.set_state_dict(scheduler_state)  # writes the LRs back into the optimizer as they were
     loader.set_state_dict(loader_state)
-    for name, tensor in params.items():
-        out["param:" + canonical_name(name, config)] = canonicalize(name, gather(tensor), config, tp)
-
-    def walk(node, path):
-        if isinstance(node, ttml.NamedParameters):
-            for name, tensor in node.items():
-                out["state:" + "/".join(path) + ":" + canonical_name(name, config)] = canonicalize(
-                    name, gather(tensor), config, tp
-                )
-        elif isinstance(node, dict):
-            for key, child in node.items():
-                walk(child, path + (str(key),))
-        else:
-            out["scalar:" + "/".join(path)] = np.asarray(node)
-
-    walk(optimizer.get_state_dict(), ())
     tokens, mask, _ = inputs(config, seed + 1000)
     logits = model(tokens, mask)
-    out["logits"] = full_logits(logits, config)
+    for coord, arr in local_shards(logits).items():
+        out[f"logits:{tag}:{coord_key(coord)}"] = arr
     ttml.autograd.AutoContext.get_instance().reset_graph()
     restore_process_rng(generators)  # after the forward too, which draws from the ttml generator with dropout
     return out
@@ -283,25 +356,113 @@ RESUME = "resume:"
 
 
 def resume_reference(
-    model, params, optimizer, scheduler, loader, config, seed: int, step: int
+    model, params, optimizer, scheduler, loader, config, seed: int, rank: int, step: int, mark=lambda what: None
 ) -> dict[str, np.ndarray]:
-    """One more training step, numbered ``step`` so it draws that step's batch, then the reference again under the
+    """One more training step, numbered ``step`` so it draws that step's batch, then this rank's part again under the
     ``resume:`` prefix: the run one step after the checkpoint. Taken on the saving world after its save and on the
     loading world after its load, the two agree only if the optimizer carried its moments and step count across."""
-    train(model, params, optimizer, scheduler, loader, config, 1, seed, start=step)
-    return {
-        RESUME + key: value
-        for key, value in reference(model, params, optimizer, scheduler, loader, config, seed).items()
-    }
+    train(model, params, optimizer, scheduler, loader, config, 1, seed, mark, start=step)
+    part = local_reference(model, params, optimizer, scheduler, loader, config, seed, rank)
+    return {RESUME + key: value for key, value in part.items()}
 
 
-def compare(actual: dict[str, np.ndarray], expected: dict[str, np.ndarray], logits_tolerance: float) -> list[str]:
-    """Every entry of the loaded world against the saving world's: exact, except across layouts, where the forward
-    and the step after the checkpoint round differently. There the logits and the post-step moments must lie within
-    ``logits_tolerance`` of their scale, and the post-step parameter update within a quarter of its mean size (a
-    fresh optimizer's update differs from the restored one's by about its whole size)."""
+def merge_parts(paths: list[str]) -> dict[str, np.ndarray]:
+    """The union of the ranks' reference parts. Shards and logits are keyed by coordinate and never collide; the
+    scalars, the labels and what the run does next are taken from rank 0 (another rank's generators may differ
+    when the checkpoint held no entry for it)."""
+    merged: dict[str, np.ndarray] = {}
+    for path in sorted(paths):
+        with np.load(path) as part:
+            for key in part.files:
+                if key in merged:
+                    continue
+                merged[key] = part[key]
+    return merged
+
+
+def canonical(parts: dict[str, np.ndarray], config: LlamaConfig) -> tuple[dict[str, np.ndarray], dict[str, list]]:
+    """Every tensor in canonical layout, the full logits and the scalars, from the merged parts; and, per tensor
+    whose replicas differ between the devices or ranks of that world, every distinct canonical copy. The parts
+    dumped after the step that follows the checkpoint come back the same way under the ``resume:`` prefix."""
+    out, replicas = _canonical_part({k: v for k, v in parts.items() if not k.startswith(RESUME)}, config)
+    resume = {k[len(RESUME) :]: v for k, v in parts.items() if k.startswith(RESUME)}
+    if resume:
+        after, after_replicas = _canonical_part(resume, config)
+        out.update({RESUME + k: v for k, v in after.items()})
+        replicas.update({RESUME + k: v for k, v in after_replicas.items()})
+    return out, replicas
+
+
+def _canonical_part(parts: dict[str, np.ndarray], config: LlamaConfig) -> tuple[dict[str, np.ndarray], dict[str, list]]:
+    meta = json.loads(str(parts["meta"]))
+    out: dict[str, np.ndarray] = {}
+    copies: dict[str, dict[tuple[int, ...], list[np.ndarray]]] = {}
+    for key, value in parts.items():
+        if key.startswith("shard:"):
+            _, kind, rest = key.split(":", 2)
+            name, _rank, coord = rest.rsplit(":", 2)
+            copies.setdefault(f"{kind}:{name}", {}).setdefault(tuple(int(c) for c in coord.split("-")), []).append(
+                value
+            )
+        elif key.startswith("logits:"):
+            _, _rank, coord = key.split(":")
+            copies.setdefault("logits", {}).setdefault(tuple(int(c) for c in coord.split("-")), []).append(value)
+        elif key.startswith("scalar:") or key.startswith("train:"):
+            out[key] = value
+    replicas: dict[str, list] = {}
+    for name, by_coord in copies.items():
+        if name == "logits":
+            continue
+        kind, cname = name.split(":", 1)
+        leaf = cname.rsplit(":", 1)[-1] if kind == "state" else cname
+        distinct: list[np.ndarray] = []
+        for selection in replica_selections(str(parts["label:" + name]), by_coord):
+            full = canonicalize(leaf, assemble(str(parts["label:" + name]), selection), config, meta["tp"])
+            if not any(np.array_equal(full, c) for c in distinct):
+                distinct.append(full)
+        out[name] = distinct[0]
+        if len(distinct) > 1:
+            replicas[name] = distinct
+    by_coord = copies["logits"]
+    if any(len(v) > 1 and not all(np.array_equal(v[0], c) for c in v[1:]) for v in by_coord.values()):
+        replicas["logits"] = []
+    if meta["tp"] > 1:
+        axis = meta["tp_axis"]
+        columns = []
+        for j in range(meta["tp"]):
+            coord = tuple(j if a == axis else 0 for a in range(len(meta["mesh"])))
+            columns.append(by_coord[coord][0])
+        full = np.concatenate(columns, axis=3)
+    else:
+        full = next(iter(by_coord.values()))[0]
+    out["logits"] = full[..., : config.vocab_size]
+    return out, replicas
+
+
+def compare(
+    actual: tuple[dict[str, np.ndarray], dict[str, list]],
+    expected: tuple[dict[str, np.ndarray], dict[str, list]],
+    logits_tolerance: float,
+) -> list[str]:
+    """Every tensor of the loaded world against the saving world's. A box with one copy must match exactly; where
+    the saving world held several copies (its replicas drifted), every loaded copy must equal one of them, and the
+    logits are reported but not judged, since that world's forward was not consistent.
+
+    The entries dumped after the step that follows the checkpoint (``resume:``) are exact on the same layout. Across
+    layouts the forward and the step round differently: the post-step moments must lie within ``logits_tolerance``
+    of their scale and the post-step parameter update within a quarter of its mean size (a fresh optimizer's update
+    differs from the restored one's by about its whole size). A saving world with drifted replicas took its step
+    from inconsistent copies, so its post-step entries are not judged either."""
+    actual, actual_replicas = actual
+    expected, expected_replicas = expected
     problems = []
     exact = logits_tolerance == 0.0
+    if expected_replicas:
+        print(
+            f"NOTE: {len(expected_replicas)} tensor(s) had replicas that differ between the saving world's devices or "
+            f"ranks ({', '.join(sorted(expected_replicas)[:4])}{', ...' if len(expected_replicas) > 4 else ''}); a loaded "
+            "value may equal any copy, and the logits are reported but not judged"
+        )
     if set(actual) != set(expected):
         problems.append(
             f"keys differ: only in loaded world {sorted(set(actual) - set(expected))[:5]}, only in reference {sorted(set(expected) - set(actual))[:5]}"
@@ -316,17 +477,18 @@ def compare(actual: dict[str, np.ndarray], expected: dict[str, np.ndarray], logi
             scale = float(np.max(np.abs(e))) + 1e-6
             rel = float(np.max(np.abs(a - e))) / scale
             print(f"{key}: max |diff| / max |ref| = {rel:.4f} (tolerance {logits_tolerance})")
-            if rel > logits_tolerance:
+            if rel > logits_tolerance and not expected_replicas:
                 problems.append(f"{key} differ by {rel:.4f} of their scale (tolerance {logits_tolerance})")
-        elif a.dtype.kind in "US" or e.dtype.kind in "US":
-            if not np.array_equal(a, e):
-                problems.append(f"{key}: text differs")
-        elif not exact and base is not None and base.startswith("state:"):
+            continue
+        if base is not None and expected_replicas:
+            continue
+        if not exact and base is not None and base.startswith("state:"):
             scale = float(np.max(np.abs(e))) + 1e-6
             rel = float(np.max(np.abs(a - e))) / scale
             if rel > logits_tolerance:
                 problems.append(f"{key}: differs by {rel:.4f} of its scale (tolerance {logits_tolerance})")
-        elif not exact and base is not None and base.startswith("param:") and base in actual and base in expected:
+            continue
+        if not exact and base is not None and base.startswith("param:") and base in actual and base in expected:
             # The update each world applied. The loaded parameters equal the saved ones (checked under their own
             # key), so the updates differ only where the steps did, whatever the parameters' own magnitude.
             delta, delta_ref = a - actual[base], e - expected[base]
@@ -336,10 +498,26 @@ def compare(actual: dict[str, np.ndarray], expected: dict[str, np.ndarray], logi
             rel = float(np.mean(np.abs(delta - delta_ref))) / size
             if rel > 0.25:
                 problems.append(f"{key}: the update differs by {rel:.2f} of its mean size (tolerance 0.25)")
-        elif not np.array_equal(a, e):
-            n = int(np.count_nonzero(a != e))
-            problems.append(f"{key}: {n} of {a.size} values differ (max |diff| {float(np.max(np.abs(a - e))):.4g})")
+            continue
+        loaded_copies = actual_replicas.get(key, [a])
+        saved_copies = expected_replicas.get(key, [e])
+        if a.dtype.kind in "US" or e.dtype.kind in "US":
+            if not np.array_equal(a, e):
+                problems.append(f"{key}: text differs")
+        elif len(saved_copies) == 1 and len(loaded_copies) == 1:
+            if not np.array_equal(a, e):
+                n = int(np.count_nonzero(a != e))
+                problems.append(f"{key}: {n} of {a.size} values differ (max |diff| {float(np.max(np.abs(a - e))):.4g})")
+        else:
+            for copy in loaded_copies:
+                if not any(np.array_equal(copy, saved) for saved in saved_copies):
+                    problems.append(f"{key}: a loaded copy matches none of the {len(saved_copies)} saved copies")
+                    break
     return problems
+
+
+def part_path(base: str, rank: int) -> str:
+    return f"{base}-w{rank:03d}.npz"
 
 
 def main(argv=None) -> int:
@@ -380,16 +558,20 @@ def main(argv=None) -> int:
         "--no-resume-step",
         dest="resume_step",
         action="store_false",
-        help="skip the training step taken after the save and after the load (and its comparison)",
+        help="skip the training step taken after the save and after the load (and its comparison); every rank of "
+        "a world must agree, and a load compares the step only when the save took it too",
     )
     args = parser.parse_args(argv)
 
     mesh_shape = parse_mesh(args.mesh)
     axes = tuple(args.axes.split(","))
-    reference_path = args.dir.rstrip("/") + ".reference.npz"
+    reference_base = args.dir.rstrip("/") + ".reference"
+    actual_base = args.dir.rstrip("/") + ".actual"
+    saved_resume = False
     if args.command == "load":
-        expected = dict(np.load(reference_path))
-        sizes = json.loads(str(expected.pop("config")))
+        with np.load(reference_base + ".config.npz") as saved:
+            sizes = json.loads(str(saved["config"]))
+            saved_resume = "resume_step" in saved.files and bool(saved["resume_step"])
     else:
         sizes = dict(
             hidden_size=args.hidden,
@@ -397,73 +579,139 @@ def main(argv=None) -> int:
             num_key_value_heads=args.kv_heads,
             vocab_size=args.vocab,
         )
+    resumed = args.resume_step and (args.command == "save" or saved_resume)
+    opened = True
     try:
         open_world(mesh_shape, axes, args.tp, args.mgd)
     except RuntimeError as err:  # the descriptor does not fit this host's fabric, too few devices, ...
         print(f"MESH_OPEN_FAILED: {str(err).splitlines()[0]}")
+        opened = False
+    if not agree(opened):  # a rank that could not open its mesh must not leave the others waiting in a collective
+        if opened:
+            ttml.close_device_mesh()
         return MESH_OPEN_FAILED
+    rank, size = world_group()
+
+    def mark(what: str) -> None:
+        """Progress markers: when a world is killed for running too long, the last one says which phase hung."""
+        print(f"[driver] rank {rank}/{size}: {what}", flush=True)
+
+    mark("mesh open")
     try:
+        # Every generator a world draws from, before the model is built: ttml.init has its own generator, seeded from
+        # OS entropy unless told otherwise, so without this every rank of a multi-host world would start from
+        # different weights and the ranks' replicas could never agree. set_seed seeds it with the rest.
+        set_seed(args.seed)
         config, model, params, optimizer, scheduler = build(args.tp, args.fsdp, args.tie, sizes)
         loader = Loader()
+        mark("model built")
         if args.command == "save":
-            train(model, params, optimizer, scheduler, loader, config, args.steps, args.seed)
+            train(model, params, optimizer, scheduler, loader, config, args.steps, args.seed, mark)
+            mark("trained; saving")
             result = dcp.save(
                 args.dir,
                 model=model,
                 optimizer=optimizer,
                 scheduler=scheduler,
                 dataloader=loader,
-                header={"step": args.steps, "mesh": list(mesh_shape), "axes": list(axes)},
+                header={"step": args.steps, "mesh": list(mesh_shape), "axes": list(axes), "ranks": size},
             )
-            ref = reference(model, params, optimizer, scheduler, loader, config, args.seed)
-            if args.resume_step:
-                ref.update(resume_reference(model, params, optimizer, scheduler, loader, config, args.seed, args.steps))
-            np.savez(reference_path, config=json.dumps(sizes), **ref)
+            mark("saved; dumping the reference")
+            try:
+                part = local_reference(model, params, optimizer, scheduler, loader, config, args.seed, rank)
+                if resumed:
+                    part.update(
+                        resume_reference(
+                            model, params, optimizer, scheduler, loader, config, args.seed, rank, args.steps, mark
+                        )
+                    )
+                np.savez(part_path(reference_base, rank), **part)
+                ok = True
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+                ok = False
+            if not agree(ok):
+                print("RESULT: the reference could not be written on every rank")
+                return 1
+            if rank == 0:
+                np.savez(reference_base + ".config.npz", config=json.dumps(sizes), resume_step=np.asarray(resumed))
+                print(
+                    json.dumps(
+                        {
+                            "saved": result.path,
+                            "ranks": size,
+                            "bytes_written": result.bytes_written,
+                            "files": len(result.files),
+                            "keys": result.keys,
+                            "stats": result.stats,
+                        }
+                    )
+                )
+            return 0
+        mark("loading")
+        result = dcp.load(args.dir, model=model, optimizer=optimizer, scheduler=scheduler, dataloader=loader, rng=True)
+        mark("loaded; dumping the loaded world")
+        try:
+            part = local_reference(model, params, optimizer, scheduler, loader, config, args.seed, rank)
+            if resumed:
+                part.update(
+                    resume_reference(
+                        model, params, optimizer, scheduler, loader, config, args.seed, rank, args.steps, mark
+                    )
+                )
+            else:
+                print("NOTE: no training step after the load; the run one step on is not compared")
+            np.savez(part_path(actual_base, rank), **part)
+            ok = True
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+            ok = False
+        if not agree(ok):
+            print("RESULT: the loaded world could not be dumped on every rank")
+            return 1
+        problems: list[str] = []
+        if rank == 0:
+            try:
+                expected_parts = merge_parts(glob.glob(reference_base + "-w*.npz"))
+                if not resumed:
+                    expected_parts = {k: v for k, v in expected_parts.items() if not k.startswith(RESUME)}
+                expected = canonical(expected_parts, config)
+                actual = canonical(merge_parts(glob.glob(actual_base + "-w*.npz")), config)
+                problems = compare(actual, expected, 0.0 if args.same_layout else args.logits_tolerance)
+            except Exception as err:  # noqa: BLE001
+                traceback.print_exc()
+                problems.append(f"comparison failed: {err}")
+        if result.header.get("step") != args.steps:
+            problems.append(f"header step {result.header.get('step')} != {args.steps}")
+        expected_restored = ["scheduler", "dataloader"]
+        world_rank = ttnn.distributed_context_world_rank() if size > 1 else 0
+        if str(int(world_rank)) in dcp.read_train_state(args.dir).get("rng", {}).get("ranks", {}):
+            expected_restored += ["rng.ttml", "rng.python", "rng.numpy", "rng.ttml_init"]
+            if "torch" in sys.modules:
+                expected_restored.append("rng.torch")
+        if result.restored != expected_restored:
+            problems.append(f"restored {result.restored} != {expected_restored}")
+        if rank == 0:
             print(
                 json.dumps(
                     {
-                        "saved": result.path,
-                        "bytes_written": result.bytes_written,
-                        "files": len(result.files),
-                        "keys": result.keys,
+                        "loaded": result.path,
+                        "ranks": size,
+                        "resumed": resumed,
+                        "fast_path_keys": len(result.fast_path_keys),
+                        "missing": result.missing,
+                        "unexpected": result.unexpected,
+                        "restored": result.restored,
                         "stats": result.stats,
                     }
                 )
             )
-            return 0
-        result = dcp.load(args.dir, model=model, optimizer=optimizer, scheduler=scheduler, dataloader=loader, rng=True)
-        actual = reference(model, params, optimizer, scheduler, loader, config, args.seed)
-        resumed = args.resume_step and any(key.startswith(RESUME) for key in expected)
-        if resumed:
-            actual.update(resume_reference(model, params, optimizer, scheduler, loader, config, args.seed, args.steps))
-        else:
-            expected = {key: value for key, value in expected.items() if not key.startswith(RESUME)}
-            print("NOTE: no training step after the load; the run one step on is not compared")
-        problems = compare(actual, expected, 0.0 if args.same_layout else args.logits_tolerance)
-        if result.header.get("step") != args.steps:
-            problems.append(f"header step {result.header.get('step')} != {args.steps}")
-        expected_restored = ["scheduler", "dataloader", "rng.ttml", "rng.python", "rng.numpy", "rng.ttml_init"]
-        if "torch" in sys.modules:
-            expected_restored.append("rng.torch")
-        if result.restored != expected_restored:
-            problems.append(f"restored {result.restored} != {expected_restored}")
-        print(
-            json.dumps(
-                {
-                    "loaded": result.path,
-                    "resumed": resumed,
-                    "fast_path_keys": len(result.fast_path_keys),
-                    "missing": result.missing,
-                    "unexpected": result.unexpected,
-                    "restored": result.restored,
-                    "stats": result.stats,
-                }
-            )
-        )
         for problem in problems:
             print("MISMATCH:", problem)
-        print("RESULT:", "OK" if not problems else f"{len(problems)} mismatch(es)")
-        return 0 if not problems else 1
+        verdict = agree(not problems)
+        if rank == 0:
+            print("RESULT:", "OK" if verdict else f"{len(problems)} mismatch(es)")
+        return 0 if verdict else 1
     finally:
         ttml.close_device_mesh()
 

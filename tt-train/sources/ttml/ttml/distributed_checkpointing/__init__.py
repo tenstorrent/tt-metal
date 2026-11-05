@@ -17,6 +17,10 @@ one mesh shape and parallelism strategy loads onto another.
 The scheduler, the dataloader and the random generators (the ttml generator, ttml.init's, python, numpy, torch) are
 saved beside the header and restored on request; see ``_train_state``.
 
+Under ``tt-run`` with several ranks (a mesh spread over hosts, or one mesh per host) ``save`` and ``load`` are
+collective: every rank calls them at the same point, each writes and reads only the shards of the coordinates it
+holds, and rank 0 merges the ranks' parts into one ``index.json``; see ``_coordinator``.
+
 Topology labels are trusted. The one fact a label cannot carry, the segment order inside a fused projection, is
 declared by the layer that fuses it (``ColumnParallelLinear(fused_segments=...)``), and a padded vocab weight
 declares its logical row count; see ``_layouts``.
@@ -24,6 +28,7 @@ declares its logical row count; see ``_layouts``.
 
 from ._errors import (
     CheckpointError,
+    CheckpointFatal,
     CoverageError,
     DtypeMismatch,
     FSDPStateError,
@@ -46,6 +51,7 @@ from ._train_state import capture_rng, read_train_state, restore_rng
 
 __all__ = [
     "CheckpointError",
+    "CheckpointFatal",
     "CoverageError",
     "DtypeMismatch",
     "FSDPStateError",
