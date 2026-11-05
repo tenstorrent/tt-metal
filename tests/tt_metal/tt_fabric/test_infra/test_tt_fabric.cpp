@@ -8,7 +8,6 @@
 #include <unordered_map>
 #include <map>
 #include <algorithm>
-#include <cstdlib>
 #include <chrono>
 #include <fstream>
 #include <random>
@@ -203,10 +202,7 @@ int main(int argc, char** argv) {
 
         const auto& topology = test_config.fabric_setup.topology;
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
-        // TT_FABRIC_NO_BW_TELEMETRY=1 keeps the router's bandwidth telemetry off in benchmark and latency modes, so
-        // the measured router matches a production build (telemetry-derived golden checks are skipped).
-        const bool no_bw_telemetry = std::getenv("TT_FABRIC_NO_BW_TELEMETRY") != nullptr;
-        if (test_config.performance_test_mode != PerformanceTestMode::NONE && !no_bw_telemetry) {
+        if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
             tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
         }
 
@@ -266,8 +262,7 @@ int main(int argc, char** argv) {
             auto built_tests = builder.build_tests({test_config}, cmdline_parser);
 
             // Enable telemetry for both benchmark and latency modes to ensure buffer clearing
-            test_context.set_telemetry_enabled(
-                test_config.performance_test_mode != PerformanceTestMode::NONE && !no_bw_telemetry);
+            test_context.set_telemetry_enabled(test_config.performance_test_mode != PerformanceTestMode::NONE);
             // Set skip_packet_validation flag
             test_context.set_skip_packet_validation(test_config.skip_packet_validation);
 
