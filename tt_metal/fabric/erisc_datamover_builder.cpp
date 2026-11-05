@@ -1170,8 +1170,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             k_bfc_vc,
             remote_slots,
             k_bfc_protected_receiver_min_slots);
-        bubble_flow_control_injection_min_free_slots =
-            builder_config::bubble_flow_control_injection_min_free_slots(static_cast<uint32_t>(remote_slots));
+        bubble_flow_control_injection_min_free_slots = builder_config::bubble_flow_control_injection_min_free_slots(
+            static_cast<uint32_t>(remote_slots), config.arch);
         log_debug(
             tt::LogFabric,
             "Fabric node {}, Ethernet channel {}: bubble flow control injection sends with {} of {} far VC{} "

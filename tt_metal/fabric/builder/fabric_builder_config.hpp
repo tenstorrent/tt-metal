@@ -117,13 +117,24 @@ static constexpr uint32_t bubble_flow_control_protected_receiver_min_slots = 2;
 // and a cap of 8 slowed other ring traffic by up to 9%.
 static constexpr uint32_t bubble_flow_control_injection_max_far_receiver_occupancy = 16;
 
+// The fewest free far-receiver slots a Wormhole injection channel sends with, where the far receiver
+// has that many. With the bubble's two, each injection leaves forwarded packets only the bubble's
+// slot, so a full ring moves its forwards one at a time behind the injections; with three, a
+// forwarded packet always has a slot besides the bubble.
+static constexpr uint32_t bubble_flow_control_wormhole_injection_min_free_slots = 3;
+
 // The free slots an injection channel needs in a far VC0 receiver of `far_receiver_slots` slots before
-// it sends: the bubble's two, or more where the receiver is deeper than the occupancy cap allows.
-constexpr uint32_t bubble_flow_control_injection_min_free_slots(uint32_t far_receiver_slots) {
+// it sends: the arch's floor (the bubble's two; on Wormhole three, above), or more where the receiver
+// is deeper than the occupancy cap allows.
+constexpr uint32_t bubble_flow_control_injection_min_free_slots(uint32_t far_receiver_slots, tt::ARCH arch) {
     const uint32_t beyond_cap = far_receiver_slots > bubble_flow_control_injection_max_far_receiver_occupancy
                                     ? far_receiver_slots - bubble_flow_control_injection_max_far_receiver_occupancy
                                     : 0;
-    return std::max(bubble_flow_control_protected_receiver_min_slots, beyond_cap);
+    const bool wormhole_floor =
+        arch == tt::ARCH::WORMHOLE_B0 && far_receiver_slots >= bubble_flow_control_wormhole_injection_min_free_slots;
+    const uint32_t arch_floor = wormhole_floor ? bubble_flow_control_wormhole_injection_min_free_slots
+                                               : bubble_flow_control_protected_receiver_min_slots;
+    return std::max(arch_floor, beyond_cap);
 }
 
 // Only VC0 uses bubble flow control. VC1's intermesh dependency graph has no bubble proof for
