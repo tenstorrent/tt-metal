@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from dataclasses import dataclass
+
 import pytest
 import torch
 from helpers.constraints import get_valid_dest_accumulation_modes
@@ -35,9 +37,20 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
+    TemplateParameter,
 )
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test, result_tensor
+
+
+@dataclass
+class SKIP_LAST_UNPACK(TemplateParameter):
+    skip_last_unpack: bool
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr bool SKIP_LAST_UNPACK = {str(self.skip_last_unpack).lower()};"
+        )
 
 
 # Two flows under the semaphore scheme. 16-bit and MX inputs run a reduce through SrcA / SrcB with the math-pack
@@ -59,12 +72,19 @@ from helpers.utils import passed_test, result_tensor
     zero_tiles=lambda formats: (
         [False, True] if formats.input_format.is_32_bit() else [False]
     ),
+    # Unpack-to-dest only: the last section writes no DEST, so it packs the bank as an earlier release left it, zeroed.
+    skip_last_unpack=lambda formats, zero_tiles: (
+        [False, True]
+        if formats.input_format.is_32_bit() and not zero_tiles
+        else [False]
+    ),
 )
 def test_semaphore_sync_quasar(
     formats,
     dest_acc,
     dest_sync,
     zero_tiles,
+    skip_last_unpack,
 ):
 
     pool_type = ReducePool.Sum
@@ -97,6 +117,8 @@ def test_semaphore_sync_quasar(
             face_r_dim=16,
             tile_shape=construct_tile_shape((32, 32)),
         )
+        if skip_last_unpack:
+            golden_tensor[-1024:] = 0
     else:
         generate_golden = get_golden_generator(ReduceGapoolGolden)
         golden_tensor = generate_golden(
@@ -118,6 +140,7 @@ def test_semaphore_sync_quasar(
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
             DEST_SYNC(dest_sync),
+            SKIP_LAST_UNPACK(skip_last_unpack),
         ],
         runtimes=[
             TILE_COUNT(0 if zero_tiles else tile_cnt),
