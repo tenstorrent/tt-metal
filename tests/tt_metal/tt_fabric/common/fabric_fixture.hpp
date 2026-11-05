@@ -19,8 +19,12 @@
 #include "impl/program/program_impl.hpp"
 #include "test_host_kernel_common.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 
@@ -221,6 +225,74 @@ public:
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = compile_args,
                 .defines = defines});
+    }
+
+    // A fabric router: where the host reads its EDM status, in virtual coordinates so the read still works once the
+    // device is closed.
+    struct Router {
+        ChipId chip;
+        tt_metal::CoreCoord logical;
+        tt_metal::CoreCoord virtual_core;
+        uint32_t edm_status_address;
+    };
+
+    static bool is_mock() {
+        return tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    }
+
+    // Every fabric router of every open device, or with `masters_only` each device's master router. Fatal when the
+    // fabric config has no READY_FOR_TRAFFIC handshake, whose address is the EDM status word.
+    static std::vector<Router> get_routers(bool masters_only) {
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
+        const auto ready = builder_ctx.get_fabric_router_ready_address_and_signal();
+        TT_FATAL(ready.has_value(), "The fabric config has no READY_FOR_TRAFFIC handshake");
+        std::vector<Router> routers;
+        for (const auto& [chip, mesh] : devices_map_) {
+            std::vector<chan_id_t> chans;
+            if (masters_only) {
+                chans.push_back(builder_ctx.get_fabric_master_router_chan(chip));
+            } else {
+                const auto node = control_plane.get_fabric_node_id_from_physical_chip_id(chip);
+                for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(node)) {
+                    chans.push_back(chan);
+                }
+            }
+            for (const chan_id_t chan : chans) {
+                const tt_metal::CoreCoord logical =
+                    cluster.get_soc_desc(chip).get_eth_core_for_channel(chan, tt::CoordSystem::LOGICAL);
+                routers.push_back(
+                    {chip,
+                     logical,
+                     cluster.get_virtual_coordinate_from_logical_coordinates(chip, logical, CoreType::ETH),
+                     ready->first});
+            }
+        }
+        return routers;
+    }
+
+    // Reads through the cluster, so it works while the device is open or closed. Fatal on a short read.
+    static uint32_t read_edm_status(const Router& router) {
+        std::vector<uint32_t> value;
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            value, sizeof(uint32_t), tt_cxy_pair(router.chip, router.virtual_core), router.edm_status_address);
+        TT_FATAL(value.size() == 1, "EDM status read on chip {} returned {} words", router.chip, value.size());
+        return value[0];
+    }
+
+    // Polls `router`'s EDM status once a second until it is TERMINATED or `timeout` has passed, and returns the last
+    // status read. Blocks for up to `timeout` plus one poll.
+    static uint32_t wait_for_router_terminated(const Router& router, std::chrono::seconds timeout) {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        uint32_t status = read_edm_status(router);
+        while (status != tt::tt_fabric::EDMStatus::TERMINATED && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            status = read_edm_status(router);
+        }
+        log_info(
+            tt::LogTest, "Chip {} router {} EDM status {:#x} after close", router.chip, router.logical.str(), status);
+        return status;
     }
 
     // Utility function reused across tests to get address params. On a chip whose workers run on Ethernet cores the
