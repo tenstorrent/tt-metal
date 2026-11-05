@@ -46,6 +46,8 @@ void kernel_main() {
     // stream in flight (~8 MB queued at the banks) the small reads waited 17 us behind them.
 #if defined(GCB_STREAM)
     // the weight prefetcher delivers every record (tt/prefetch/kernels/tgcb_reader.cpp); this RISC only writes
+#elif defined(X_PAGED)
+    // x' comes from L1 (no DRAM queue to protect): stream at once
 #elif defined(INLINE_SCALES)
     cb_wait_front(tt::CBIndex::c_0, 1);  // x' landed (NCRISC pushes c_0 first)
 #else

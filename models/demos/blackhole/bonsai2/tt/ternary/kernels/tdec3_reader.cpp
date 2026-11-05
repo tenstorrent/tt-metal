@@ -74,10 +74,12 @@ void kernel_main() {
     }
 #endif
 #ifdef INLINE_SCALES
+#ifndef X_PAGED
     noc_async_read_barrier();
     cb_push_back(cb_x, Kt);
 #ifdef RESIDUAL
     cb_push_back(tt::CBIndex::c_3, num_nt);
+#endif
 #endif
 #else
     const auto ss = TensorAccessor(s_args, s_addr, S_BYTES);
@@ -96,6 +98,15 @@ void kernel_main() {
 #ifdef PAGE_SPLIT
     stream_pages<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0);
 #else
+#if defined(X_PAGED) && defined(INLINE_SCALES)
+    // x' (and the residual) come from L1: start the weight stream at once, push them when they land
+#ifdef RESIDUAL
+    stream_records<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0, x_copy, cb_x, Kt, tt::CBIndex::c_3, num_nt);
+#else
+    stream_records<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0, x_copy, cb_x, Kt);
+#endif
+#else
     stream_records<ppr, NB>(tt::CBIndex::c_1, w, first_nt, num_nt, 0, x_copy);
+#endif
 #endif
 }

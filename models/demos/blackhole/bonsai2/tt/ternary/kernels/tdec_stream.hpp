@@ -11,7 +11,18 @@
 
 template <uint32_t ppr, uint32_t NB, typename Accessor>
 FORCE_INLINE void stream_records(
-    uint32_t cb, const Accessor& w, uint32_t first_nt, uint32_t num_nt, uint32_t parity, uint32_t bank = 0) {
+    uint32_t cb,
+    const Accessor& w,
+    uint32_t first_nt,
+    uint32_t num_nt,
+    uint32_t parity,
+    uint32_t bank = 0,
+    uint32_t x_cb = 0xFFFFFFFFu,
+    uint32_t x_pages = 0,
+    uint32_t r_cb = 0xFFFFFFFFu,
+    uint32_t r_pages = 0) {
+    // x_cb (X_PAGED early start): the caller issued its x' (and residual, r_cb) reads from L1 without waiting; once
+    // the first weight pages are in flight, a barrier lands them and they are pushed
     constexpr uint32_t PAGE = 4096;
     constexpr uint32_t CBP = PAGE / 256;
     const uint32_t cb_base = get_write_ptr(cb);
@@ -43,6 +54,21 @@ FORCE_INLINE void stream_records(
             if (l1 >= cb_end) {
                 l1 = cb_base;
             }
+            if (x_cb != 0xFFFFFFFFu && count == NB) {
+                noc_async_read_barrier();
+                cb_push_back(x_cb, x_pages);
+                if (r_cb != 0xFFFFFFFFu) {
+                    cb_push_back(r_cb, r_pages);
+                }
+                x_cb = 0xFFFFFFFFu;
+            }
+        }
+    }
+    if (x_cb != 0xFFFFFFFFu) {
+        noc_async_read_barrier();
+        cb_push_back(x_cb, x_pages);
+        if (r_cb != 0xFFFFFFFFu) {
+            cb_push_back(r_cb, r_pages);
         }
     }
     while (count > 0) {
