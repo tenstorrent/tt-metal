@@ -848,7 +848,8 @@ void validate_unified_prefetcher_pipes(
     }
     const std::vector<CoreCoord>& banks = bds->cores();
     const size_t num_cores = plan.cores.size();
-    const bool krow_major = weight_buffer->has_shard_spec() && bds->num_shards() < num_cores;
+    // Classified as tensor_prefetcher_block_count_for_matmul_1d did above: a legacy shard spec is K-row-major.
+    const bool krow_major = weight_buffer->has_shard_spec();
     const bool contiguous = krow_major || strategy == ShardDistributionStrategy::CONTIGUOUS_1D;
     const size_t shards_per_bank = (krow_major ? num_cores : bds->num_shards()) / bds->num_cores_with_data();
     for (size_t i = 0; i < num_cores; ++i) {
@@ -2652,14 +2653,23 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     MatmulInputs inputs{{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}};
     if (!normalized_attributes.prefetcher_pipes.empty()) {
         // The request goes out ahead of the program (a head start for the prefetcher; launch blocks under slow
-        // dispatch), so C is allocated, putting its L1 in the budget the program is planned with, and the op validated.
+        // dispatch). So C is allocated first, the K chunk the request is cut into is chosen in the L1 C leaves (it is
+        // in the config, so the program cache keys on it), and the op is validated.
         Tensor C = MatmulDeviceOperation::create_output_tensors(normalized_attributes, inputs).at(0);
         normalized_attributes.output_mem_config = C.memory_config();
+        auto* config = std::get_if<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>(
+            &normalized_attributes.program_config.value());
+        if (config != nullptr && !config->K_chunk_tiles.has_value()) {
+            config->K_chunk_tiles =
+                plan_unified_matmul(
+                    input_tensor_a, input_tensor_b, bias_single_tile_size, *config, normalized_attributes, C, true)
+                    ->K_chunk_tiles;
+        }
         inputs.optional_output_tensors.at(0) = std::move(C);
         MatmulDeviceOperation::validate_on_program_cache_miss(normalized_attributes, inputs);
         queue_B_tensor_prefetcher_request(normalized_attributes, inputs);
     }
-    return ttnn::device_operation::launch<MatmulDeviceOperation>(normalized_attributes, std::move(inputs));
+    return ttnn::device_operation::launch<MatmulDeviceOperation>(normalized_attributes, inputs);
 }
 
 MatmulDeviceOperation::tensor_return_value_t matmul(
