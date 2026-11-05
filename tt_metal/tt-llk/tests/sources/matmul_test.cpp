@@ -393,29 +393,33 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_math_matmul_<MATMUL_MATH_TEMPLATE_ARGS>(/* dest_index */ 0, CT_DIM, RT_DIM);
                 }
-                #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && defined(MATMUL_BLOCK)
+// main's form ends its section as main does: the fused post and the skipped base write are for the cells the table gives another form
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+                [[maybe_unused]] constexpr bool matmul_main_math_form =
+                    ckernel::matmul_default_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>() == '.';
+#else
+                [[maybe_unused]] constexpr bool matmul_main_math_form = false;
+#endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && defined(MATMUL_BLOCK)
                 // the cells that keep main's whole section end: separate post and the base write of the DEST flip (llk_matmul_forms.h)
                 [[maybe_unused]] constexpr bool matmul_main_flip_cell = ckernel::matmul_main_flip(
                     MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf, MATMUL_BLOCK_ACC, MATMUL_KEY_IN1, MATMUL_KEY_IN0, MATMUL_OUT_FORMAT, MATMUL_BLOCK_RT, MATMUL_BLOCK_CT,
                     MATMUL_BLOCK_KT, MATMUL_BLOCK_THROTTLE, MATMUL_BLOCK_L1_ACC, MATMUL_BLOCK_NB);
-                #else
+#else
                 [[maybe_unused]] constexpr bool matmul_main_flip_cell = false;
-                #endif
-                #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
-                #ifdef MATMUL_UNFUSED_POST
+#endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+#ifdef MATMUL_UNFUSED_POST
                 [[maybe_unused]] constexpr bool fused_post_flip = false;
-                #else
-                #ifdef MATMUL_BLOCK
+#else
+#ifdef MATMUL_BLOCK
                 // the cells where main's separate post reads faster under packer L1 accumulate (llk_matmul_forms.h)
                 [[maybe_unused]] constexpr bool matmul_unfused_cell = matmul_main_flip_cell || ckernel::matmul_unfused_post(
                     MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf, MATMUL_BLOCK_ACC, MATMUL_KEY_IN1, MATMUL_KEY_IN0, MATMUL_OUT_FORMAT, MATMUL_BLOCK_RT, MATMUL_BLOCK_CT,
                     MATMUL_BLOCK_KT, MATMUL_BLOCK_THROTTLE, MATMUL_BLOCK_L1_ACC, MATMUL_BLOCK_NB);
-                #else
+#else
                 [[maybe_unused]] constexpr bool matmul_unfused_cell = false;
-                #endif
-                // main's form ends its section as main does: the fused post is for the cells the table gives another form
-                [[maybe_unused]] constexpr bool matmul_main_math_form =
-                    ckernel::matmul_default_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>() == '.';
+#endif
                 [[maybe_unused]] constexpr bool fused_post_flip = !matmul_unfused_cell && !matmul_main_math_form && !matmul_prod_keys &&
                                                                   (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b);
 #endif
@@ -438,7 +442,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 #if defined(MATMUL_KEEP_FLIP_WRITE)
                     [[maybe_unused]] constexpr bool next_op_sets_base = false;
 #else
-                    [[maybe_unused]] constexpr bool next_op_sets_base = !is_fp32_dest_acc_en && !matmul_main_flip_cell;
+                [[maybe_unused]] constexpr bool next_op_sets_base = !is_fp32_dest_acc_en && !matmul_main_flip_cell && !matmul_main_math_form;
 #endif
                     _llk_math_dest_section_done_<MATMUL_DEST_DONE_ARGS>();
             }
