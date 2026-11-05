@@ -243,3 +243,28 @@ def test_cached_descriptor_is_rebound_every_call(device):
     assert calls[0][1].buffer_address() != calls[1][1].buffer_address()
     for first, second in zip(calls[0][3], calls[1][3]):
         assert first.buffer_address() != second.buffer_address()
+
+
+def test_refuses_token_shards_on_the_writer_sent_w_sender(device, expect_error):
+    """5x704 in the norm's layout puts token shards on all 110 cores, among them the core whose writer multicasts
+    W slice 1. The op refuses the shape (the model then runs the three ops) instead of asserting while it builds
+    its program; 4096-token chunking makes such passes (6x704 runs as 5x704 + 1x704)."""
+    from ttnn.operations._op_contract import SupportRefusal
+
+    shape = (5, 1, 704, HIDDEN)
+    x_dev = ttnn.from_torch(
+        torch.randn(shape).bfloat16(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=nd_norm_memory_config(shape, device),
+    )
+    w_dev = ttnn.from_torch(
+        (torch.randn(HIDDEN, NUM_EXPERTS) * WEIGHT_STD).float(),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with expect_error(SupportRefusal, "writer-sent W slice"):
+        nomic_moe_route_dispatch(x_dev, w_dev)

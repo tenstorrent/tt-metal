@@ -239,6 +239,16 @@ def _plan(shape: tuple, shard_shape, num_shard_cores: int, spare_tile_rows: int,
         raise UnsupportedAxisValue(f"nomic_moe_route_dispatch: {rps} tile rows a core (max {MAX_ROWS_PER_SHARD})")
     if num_token_cores > NUM_CORES:
         raise UnsupportedAxisValue("nomic_moe_route_dispatch: more token cores than the grid holds")
+    # A W slice the writer RISC multicasts (slice c with c % W_SLICE_NOCS == 1) must come from a core that holds no
+    # tokens: that core's writer would wait for its own multicast, which leaves the source out (the descriptor
+    # asserts it). Token cores are grid cores 0 .. num_token_cores - 1, so a shape whose shards reach that sender
+    # (5x704: 110 token cores) is refused here and the model runs the three ops instead.
+    writer_senders = [W_SENDER_TOP - c for c in range(min(hidden_split, W_SLICE_NOCS)) if c % W_SLICE_NOCS == 1]
+    if any(sender < num_token_cores for sender in writer_senders):
+        raise UnsupportedAxisValue(
+            f"nomic_moe_route_dispatch: {num_token_cores} token cores reach the writer-sent W slice sender "
+            f"(core {min(writer_senders)})"
+        )
     rows = rows_for(tokens, spare_tile_rows)
     dispatch_plan = _dispatch().plan(rows)
     push_gather, stage_tiles, member_push = _push_layout(
