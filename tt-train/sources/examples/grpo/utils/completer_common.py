@@ -11,11 +11,19 @@ completer module so they can diverge independently.
 
 from __future__ import annotations
 
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 import ttnn
 
 import ttml
+
+
+def apply_precision(model: Any, precision: Optional[dict]) -> None:
+    """Apply the YAML's ``training_config.precision`` block (a dict; ``None`` applies nothing) to *model*'s parameters
+    with ``ttml.core.apply_precision_config``. A completer calls it right after building the model and before loading
+    any weights: loading keeps each parameter's stored dtype, so fp32 master weights get the loaded values unrounded."""
+    if precision is not None:
+        ttml.core.apply_precision_config({"precision": precision}, model.parameters())
 
 
 def deallocate_tensors(tensors: Any) -> None:

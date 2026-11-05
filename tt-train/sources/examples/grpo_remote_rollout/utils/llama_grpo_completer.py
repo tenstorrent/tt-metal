@@ -97,6 +97,10 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
 
     Does NOT open/close the device: the caller opens the ttml ``AutoContext``,
     passes the resulting ``mesh_device``, and owns ``close_device()``.
+
+    ``precision`` (the YAML's ``training_config.precision`` block as a dict) is
+    applied right after the model is built, before its weights load; pass the
+    same block to ``GRPOTrainer``.
     """
 
     def __init__(
@@ -108,6 +112,7 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
         model_source: str,
         inference_client: Optional[MPIRolloutClient] = None,
         enable_ddp: bool = False,
+        precision: Optional[dict] = None,
     ) -> None:
         tf_config = transformer_config
 
@@ -142,6 +147,9 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
             )
 
         tt_model = LlamaHfExport(llama_cfg)
+        # Before the weights load, so fp32 master weights get the loaded values unrounded.
+        if precision is not None:
+            ttml.core.apply_precision_config({"precision": precision}, tt_model.parameters())
 
         if enable_ddp:
             autograd_ctx.initialize_parallelism_context(

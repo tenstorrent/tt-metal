@@ -223,6 +223,7 @@ if __name__ == "__main__":
     raw = load_config(config_path)
     # A typo under training_config.precision stops the run here rather than after the model is built.
     ttml.core.validate_precision_config(raw.get("training_config") or {})
+    precision = raw["training_config"].get("precision")
     training_config = TrainingConfig(raw)
     device_config = DeviceConfig(raw)
 
@@ -264,6 +265,7 @@ if __name__ == "__main__":
         device_config=device_config,
         model_source=model_source,
         memory_efficient=args.memory_efficient,
+        precision=precision,
     )
 
     grpo_trainer = GRPOTrainer(
@@ -274,6 +276,7 @@ if __name__ == "__main__":
         optimizer_dict=optimizer_dict,
         callbacks=[EvalCallback(completer, completion_ctx, eval_dataset, args.eval_examples)],
         model_source=model_source,
+        precision=precision,
     )
     grpo_trainer.train()
     logging.info("REVERSE TEXT GRPO TRAINING COMPLETE")

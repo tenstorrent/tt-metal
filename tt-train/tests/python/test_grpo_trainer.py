@@ -187,13 +187,20 @@ def patch_llama_weight_loading(monkeypatch, tmp_path_factory):
     _patch_tiny_checkpoint(monkeypatch, tmp_path_factory.mktemp("tiny_llama"))
 
 
-def _tiny_completer(max_tokens_to_complete: int = 4, model_source: str = HF_MODEL_ID) -> LlamaGRPOCompleter:
+def _tiny_completer(
+    max_tokens_to_complete: int = 4, model_source: str = HF_MODEL_ID, precision: dict | None = None
+) -> LlamaGRPOCompleter:
     return LlamaGRPOCompleter(
         ctx=LlamaCompletionCtx(max_tokens_to_complete=max_tokens_to_complete, temperature=1.0),
         transformer_config=TINY_TRANSFORMER_CONFIG,
         device_config=DEVICE_CONFIG,
         model_source=model_source,
+        precision=precision,
     )
+
+
+def _stored_dtypes(model) -> set:
+    return {p.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype for p in model.parameters().values()}
 
 
 @pytest.mark.requires_device
@@ -246,6 +253,32 @@ def test_resumes_from_a_trainer_checkpoint(patch_llama_weight_loading, tmp_path)
 
     for name, param in resumed.model.parameters().items():
         assert np.array_equal(param.to_numpy(ttnn.DataType.FLOAT32), expected[name]), f"{name} was not resumed"
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+@pytest.mark.requires_device
+def test_resumes_fp32_master_weights_from_a_trainer_checkpoint(
+    patch_llama_weight_loading, tmp_path, gradient_reduce_default
+):
+    """With precision.master_dtype float32 the completer stores the parameters in fp32 before it loads the checkpoint,
+    and the load keeps their dtype, so a resumed run gets the saved fp32 masters back bit for bit, not rounded to bf16.
+    """
+    import ml_dtypes
+
+    precision = {"master_dtype": "float32"}
+    saved = _tiny_completer(precision=precision)
+    assert _stored_dtypes(saved.model) == {ttnn.DataType.FLOAT32}
+    checkpoint_dir = _save_trainer_checkpoint(saved, tmp_path)
+    expected = {name: param.to_numpy(ttnn.DataType.FLOAT32) for name, param in saved.model.parameters().items()}
+    assert all(
+        not np.array_equal(values, values.astype(ml_dtypes.bfloat16).astype(np.float32)) for values in expected.values()
+    ), "premise: every saved parameter has values bf16 can't hold"
+
+    resumed = _tiny_completer(model_source=checkpoint_dir, precision=precision)
+
+    assert _stored_dtypes(resumed.model) == {ttnn.DataType.FLOAT32}
+    for name, param in resumed.model.parameters().items():
+        assert np.array_equal(param.to_numpy(ttnn.DataType.FLOAT32), expected[name]), f"{name} was not resumed exactly"
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
@@ -400,6 +433,89 @@ def test_grpo_trainer_one_step_smoke(
         "either backward did not run or the gradient was identically zero"
     )
 
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+class _GradientDtypes(TrainerCallback):
+    """Records the dtypes of the gradients the optimizer is about to step with."""
+
+    def __init__(self) -> None:
+        self.dtypes: set | None = None
+
+    def on_before_optimizer_step(self, trainer):
+        self.dtypes = {p.get_grad().dtype for p in trainer.model.parameters().values() if p.is_grad_initialized()}
+
+
+@pytest.mark.requires_device
+def test_grpo_trainer_applies_precision_before_creating_its_optimizer(
+    patch_llama_weight_loading, tmp_path, gradient_reduce_default
+):
+    """The trainer applies the precision block right before it creates the optimizer, so a completer that applied
+    nothing still trains fp32 master weights: one step over two micro-batches with fused AdamW adds the gradients up in
+    fp32, and AdamW steps with them as they are."""
+    np.random.seed(0)
+    completer = LlamaGRPOCompleter(
+        ctx=LlamaCompletionCtx(max_tokens_to_complete=4, temperature=1.0, completions_per_prompt=2),
+        transformer_config=TINY_TRANSFORMER_CONFIG,
+        device_config=DEVICE_CONFIG,
+        model_source=HF_MODEL_ID,
+    )
+    assert _stored_dtypes(completer.model) == {ttnn.DataType.BFLOAT16}, "premise: the completer applied nothing"
+    before = {name: p.to_numpy(ttnn.DataType.FLOAT32) for name, p in completer.model.parameters().items()}
+
+    # 4 completions per micro-batch = 2 prompts x 2 generations; two micro-batches make the one step of 4 prompts.
+    grpo_cfg = GRPOConfig(
+        epsilon=0.2,
+        per_device_train_batch_size=4,
+        num_iterations=1,
+        gradient_accumulation_steps=2,
+        logging_steps=1,
+        output_dir=str(tmp_path),
+        checkpointing=False,
+        checkpoint_interval=999,
+        prompts_to_train=4,
+        temperature=1.0,
+        max_completion_length=4,
+        num_generations=2,
+        warmup_steps=0,
+        lr_scheduler_type="constant",
+    )
+    tokenizer = completer.tokenizer
+    prompts = ["What is 1+1?", "Name a color.", "Name a fruit.", "What is 2+2?"]
+    dataset = Dataset.from_dict(
+        {
+            "prompt": [
+                tokenizer.apply_chat_template(
+                    [{"role": "user", "content": p}], tokenize=False, add_generation_prompt=True
+                )
+                for p in prompts
+            ],
+            "answer": ["2", "blue", "apple", "4"],
+        }
+    )
+
+    def reward_func(completions, **_kwargs):
+        return [float(i % 2) for i in range(len(completions))]
+
+    recorder, gradients = _RecordingCallback(), _GradientDtypes()
+    GRPOTrainer(
+        completer=completer,
+        dataset=dataset,
+        config=grpo_cfg,
+        reward_func=reward_func,
+        optimizer_dict={"type": "AdamW", "lr": 1.0e-3},
+        callbacks=[recorder, gradients],
+        precision={"master_dtype": "float32", "reduce_dtype": "float32"},
+    ).train()
+
+    assert recorder.step_end == 1, "expected exactly one optimizer step"
+    assert _stored_dtypes(completer.model) == {ttnn.DataType.FLOAT32}
+    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.FLOAT32
+    assert gradients.dtypes == {ttnn.DataType.FLOAT32}, gradients.dtypes
+    after = completer.model.parameters()
+    assert any(
+        not np.array_equal(after[name].to_numpy(ttnn.DataType.FLOAT32), values) for name, values in before.items()
+    )
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 

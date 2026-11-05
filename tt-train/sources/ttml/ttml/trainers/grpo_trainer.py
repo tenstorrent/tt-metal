@@ -856,7 +856,15 @@ class GRPOTrainer:
         callbacks: Optional[List[Any]] = None,
         model_source: Optional[str] = None,
         reward_funcs: Optional[List[Callable[..., List[float]]]] = None,
+        *,
+        precision: Optional[dict] = None,
     ) -> None:
+        """``precision`` is the YAML's ``training_config.precision`` block as a dict (``master_dtype``,
+        ``reduce_dtype``). ``train()`` applies it to the model with ``ttml.core.apply_precision_config`` right before
+        creating the optimizer, so the optimizer state follows the stored dtype and the gradient syncs and FSDP read
+        the reduce dtype. A completer that loads weights should apply the same block right after building the model,
+        before loading, so fp32 master weights get the loaded values unrounded; applying it again here then only
+        stores the reduce default. ``None`` (default) applies nothing."""
         if optimizer_dict is None:
             raise ValueError("GRPOTrainer: 'optimizer_dict' is required.")
 
@@ -867,6 +875,7 @@ class GRPOTrainer:
         self.dataset = dataset
         self.config = config
         self.optimizer_dict = optimizer_dict
+        self.precision = precision
         self.callbacks: List[Any] = list(callbacks or [])
         self.model_source = model_source
 
@@ -1008,6 +1017,8 @@ class GRPOTrainer:
         tokenizer = completer.tokenizer
         self.model = tt_model
 
+        if self.precision is not None:
+            ttml.core.apply_precision_config({"precision": self.precision}, tt_model.parameters())
         optimizer = create_optimizer(tt_model, self.optimizer_dict)
         if grpo_cfg.use_clip_grad_norm:
             validate_clip_grad_norm(tt_model)

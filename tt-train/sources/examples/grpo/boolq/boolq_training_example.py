@@ -123,6 +123,7 @@ if __name__ == "__main__":
     raw = load_config(config_path)
     # A typo under training_config.precision stops the run here rather than after the model is built.
     ttml.core.validate_precision_config(raw.get("training_config") or {})
+    precision = raw["training_config"].get("precision")
     training_config = TrainingConfig(raw)
     device_config = DeviceConfig(raw)
     logging.info(
@@ -163,6 +164,7 @@ if __name__ == "__main__":
             device_config=device_config,
             model_source=model_id,
             memory_efficient=args.memory_efficient,
+            precision=precision,
         )
     else:
         completer = LlamaGRPOCompleter(
@@ -174,6 +176,7 @@ if __name__ == "__main__":
             transformer_config=transformer_config,
             device_config=device_config,
             model_source=model_id,
+            precision=precision,
         )
 
     grpo_trainer = GRPOTrainer(
@@ -183,6 +186,7 @@ if __name__ == "__main__":
         reward_funcs=[accuracy_reward, brevity_reward],
         optimizer_dict=optimizer_dict,
         model_source=model_id,
+        precision=precision,
     )
     grpo_trainer.train()
     logging.info("BOOLQ GRPO TRAINING COMPLETE")

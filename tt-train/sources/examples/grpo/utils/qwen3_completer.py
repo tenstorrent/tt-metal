@@ -38,7 +38,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from ttml.trainers.grpo_trainer import GRPOCompleter
 from ttml.common.sampling import positions_to_tensor
 
-from .completer_common import deallocate_tensors, async_read_to_host
+from .completer_common import apply_precision, deallocate_tensors, async_read_to_host
 from ttml.common.utils import build_mesh
 from ttml.models.qwen3.weights import load_weights_from_hf
 from ttml.models.qwen3.kv_cache import KVCache
@@ -79,6 +79,9 @@ class Qwen3GRPOCompleter(GRPOCompleter):
             micro-batch / sequence lengths. When ``False``, use
             ``RunnerType.Default`` (retain activations): faster backward, much
             higher peak memory.
+        precision: The YAML's ``training_config.precision`` block as a dict, applied once the
+            parameters exist on device and before the HF weights load (pass the same block to
+            ``GRPOTrainer``). ``None`` applies nothing.
     """
 
     @staticmethod
@@ -109,6 +112,8 @@ class Qwen3GRPOCompleter(GRPOCompleter):
         device_config: DeviceConfig,
         model_source: str,
         memory_efficient: bool = True,
+        *,
+        precision: Optional[dict] = None,
     ) -> None:
         self._mesh: Any = None
         mesh_device: Any = self.setup_device(device_config)
@@ -172,8 +177,8 @@ class Qwen3GRPOCompleter(GRPOCompleter):
             # materialize the parameters already-sharded, then stream the HF
             # weights in sharded. The full unsharded model is never present on a
             # single device. Contract: fully_shard -> materialize_module ->
-            # (load weights) -> create_optimizer (the optimizer is created later
-            # in GRPOTrainer.train()).
+            # apply precision -> (load weights) -> create_optimizer (the
+            # optimizer is created later in GRPOTrainer.train()).
             logging.info(
                 "Applying lazy-init FSDP fully_shard across the 'fsdp' axis " "(size=%d, reshard_after_forward=True)",
                 self._mesh.axis_size("fsdp"),
@@ -182,6 +187,9 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                 tt_model = Qwen3(qwen_config)
             self._fully_shard(tt_model, device_config.fsdp_replicate_params)
             ttml.materialize_module(tt_model)
+            # Once the (sharded) parameters exist and before any weights load, so fp32 master weights get the
+            # loaded values unrounded.
+            apply_precision(tt_model, precision)
 
             # Weights are uploaded already-sharded to match each materialized
             # parameter's placements (full tensor stays in host RAM).
@@ -190,6 +198,8 @@ class Qwen3GRPOCompleter(GRPOCompleter):
             del hf_state_dict
         else:
             tt_model = Qwen3(qwen_config)
+            # Before any weights load, so fp32 master weights get the loaded values unrounded.
+            apply_precision(tt_model, precision)
 
             # Load HF weights into the (still replicated) model, then shard.
             hf_state_dict = self._load_hf_state_dict(model_source)
