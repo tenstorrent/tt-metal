@@ -11,22 +11,25 @@ from models.demos.gemma4_d_p.scripts import layer_perf_report as lpr
 
 PERF_REPORT_HEADERS = [
     "ID",
-    "Total %",
+    "Total [%]",
     "Bound",
     "OP Code",
     "Device",
-    "Device Time",
-    "Op-to-Op Gap",
+    "Device Time [μs]",
+    "Op-to-Op Gap [μs]",
     "Global Call Count",
 ]
+# tt-perf-report 1.4.x names for the same columns.
+PRE_1_5_HEADERS = ["ID", "Total %", "Bound", "OP Code", "Device", "Device Time", "Op-to-Op Gap", "Global Call Count"]
 
 
-def _write_cell_csv(path, rows):
+def _write_cell_csv(path, rows, headers=PERF_REPORT_HEADERS):
+    device_time, gap = headers[5:7]
     with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=PERF_REPORT_HEADERS)
+        writer = csv.DictWriter(f, fieldnames=headers)
         writer.writeheader()
         for op, device_us, gap_us, *call_count in rows:
-            row = {"OP Code": op, "Device Time": device_us, "Op-to-Op Gap": gap_us}
+            row = {"OP Code": op, device_time: device_us, gap: gap_us}
             if call_count:
                 row["Global Call Count"] = call_count[0]
             writer.writerow(row)
@@ -78,6 +81,29 @@ def test_summarize_ignores_non_device_rows(tmp_path):
     assert summary["kernel_us"] == 1000.0
     assert summary["span_us"] == 1015.0
     assert summary["top_ops"] == [{"op": "MatmulDeviceOperation", "device_us": 500.0, "count": 2}]
+
+
+def test_summarize_rejects_pre_1_5_headers(tmp_path, expect_error):
+    path = tmp_path / "cell.csv"
+    _write_cell_csv(path, [("MatmulDeviceOperation", "300.0", "5.0")], headers=PRE_1_5_HEADERS)
+    with expect_error(ValueError, "tt-perf-report>=1.5.0"):
+        lpr.summarize_cell_csv(path)
+
+
+def test_main_fails_cell_on_pre_1_5_headers(tmp_path, monkeypatch):
+    monkeypatch.setenv("PREFILL_SUMMARIES", str(tmp_path))
+    monkeypatch.delenv("OMPI_COMM_WORLD_RANK", raising=False)
+    cells = [_cell("global", 0, 5, 9.0)]
+    lpr.write_manifest("run", cells, context_len=262144, chunk_size=8192, mesh_shape=(8, 4))
+    _write_ops_csv(tmp_path / "profiler", cells)
+
+    def fake_report(ops_csv, start, stop, out_csv):
+        _write_cell_csv(out_csv, [("MatmulDeviceOperation", "1500.0", "100.0")], headers=PRE_1_5_HEADERS)
+        return True
+
+    monkeypatch.setattr(lpr, "run_tt_perf_report", fake_report)
+    assert lpr.main(["--profiler-dir", str(tmp_path / "profiler")]) == 1
+    assert "report failed" in (tmp_path / "perf" / lpr.SUMMARY_NAME).read_text()
 
 
 def test_summarize_includes_all_ops(tmp_path):
