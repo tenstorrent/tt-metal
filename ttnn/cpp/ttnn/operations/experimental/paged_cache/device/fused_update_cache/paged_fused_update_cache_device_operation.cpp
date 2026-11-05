@@ -228,6 +228,16 @@ void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         "Fused update requires matching input tensor dtypes, got {} and {}",
         input_tensor1.dtype(),
         input_tensor2.dtype());
+    if (is_tiled) {
+        // The tiled path untilizes one tile-row of input per user, so it holds at most TILE_HEIGHT heads.
+        for (const auto* cache : {&cache_tensor1, &cache_tensor2}) {
+            TT_FATAL(
+                cache->padded_shape()[1] <= tt::constants::TILE_HEIGHT,
+                "paged_fused_update_cache with tiled inputs supports at most {} kv heads, got {}.",
+                tt::constants::TILE_HEIGHT,
+                cache->padded_shape()[1]);
+        }
+    }
     if (is_row_major) {
         TT_FATAL(
             input_tensor1.padded_shape()[-1] == 128 && input_tensor2.padded_shape()[-2] == 8,

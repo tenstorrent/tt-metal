@@ -1442,3 +1442,42 @@ def test_paged_update_cache_preserves_fp32_neighbors(input_dtype, device):
             expected[user, 0, index, :] = 3.0
         assert torch.equal(ttnn.to_torch(cache_tt), expected)
     assert device.num_program_cache_entries() - entries_before == 1
+
+
+def _run_paged_update_cache_heads(device, num_heads):
+    """Paged update of a [users, num_heads, seq, head_dim] bf16 cache with distinct per-head values."""
+    num_users, head_dim, seq_len = 2, 64, 64
+    page_table = torch.arange(num_users, dtype=torch.int32).reshape(num_users, 1)
+    indices = [0, 17]
+    cache = torch.zeros(num_users, num_heads, seq_len, head_dim)
+    update = (
+        torch.arange(num_users * num_heads * head_dim, dtype=torch.float32)
+        .reshape(1, num_users, num_heads, head_dim)
+        .bfloat16()
+        .float()
+    )
+    cache_tt = ttnn.from_torch(cache, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    update_tt = ttnn.from_torch(update, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    grid = ttnn.num_cores_to_corerangeset(num_users, device.compute_with_storage_grid_size(), True)
+    shard_spec = ttnn.ShardSpec(grid, [num_heads, head_dim], ttnn.ShardOrientation.ROW_MAJOR)
+    update_tt = ttnn.to_memory_config(
+        update_tt, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    )
+    page_table_tt = ttnn.from_torch(page_table, dtype=ttnn.int32, device=device)
+    indices_tt = ttnn.from_torch(torch.tensor(indices, dtype=torch.int32), dtype=ttnn.int32, device=device)
+    ttnn.experimental.paged_update_cache(cache_tt, update_tt, update_idxs_tensor=indices_tt, page_table=page_table_tt)
+    expected = cache.clone()
+    for user, index in enumerate(indices):
+        expected[user, :, index, :] = update[0, user]
+    return ttnn.to_torch(cache_tt).float(), expected
+
+
+def test_paged_update_cache_32_heads(device):
+    got, expected = _run_paged_update_cache_heads(device, 32)
+    assert torch.equal(got, expected)
+
+
+def test_paged_update_cache_over_32_heads_rejected(device, expect_error):
+    # One input tile-row holds at most 32 heads; more used to write stale L1 into heads 32+ silently.
+    with expect_error(RuntimeError, "supports at most 32 kv heads"):
+        _run_paged_update_cache_heads(device, 64)

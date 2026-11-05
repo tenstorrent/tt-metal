@@ -71,6 +71,18 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
             "cache_position_modulo is only supported in paged mode (when page_table is provided)");
     }
 
+    // The input holds one tile-row (up to TILE_HEIGHT heads) per user: the reader pushes Wt tiles, compute untilizes
+    // one block, and the writer walks num_heads rows of it. More heads would read rows past the untilized block.
+    {
+        const uint32_t update_num_heads =
+            operation_attributes.num_kv_heads_override.value_or(cache_tensor.padded_shape()[1]);
+        TT_FATAL(
+            update_num_heads <= tt::constants::TILE_HEIGHT,
+            "paged_update_cache supports at most {} kv heads per update, got {}.",
+            tt::constants::TILE_HEIGHT,
+            update_num_heads);
+    }
+
     // Per-block element-count consistency. The program factory wires the kernel's
     // per-block stride from (num_heads, effective_block_size, input_head_dim) read off
     // the call view. For each new physical block in the cache the kernel jumps by that
