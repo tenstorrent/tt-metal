@@ -41,17 +41,13 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_reserve_back(cb_x, 1);
     {
-        volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_x));
-        const volatile tt_l1_ptr uint32_t* f0 =
-            reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(sc + (2 * b) * 2048);
-        const volatile tt_l1_ptr uint32_t* f1 =
-            reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(sc + (2 * b + 1) * 2048);
+        // 32-B local NoC copies (a RISC word loop took ~5 us per 2 KB)
+        const uint32_t dst = get_write_ptr(cb_x);
         for (uint32_t jh = 0; jh < 32; ++jh) {
-            for (uint32_t w = 0; w < 8; ++w) {
-                dst[jh * 16 + w] = f0[jh * 16 + w];
-                dst[jh * 16 + 8 + w] = f1[jh * 16 + w];
-            }
+            noc_async_read(get_noc_addr(sc + (2 * b) * 2048 + jh * 64), dst + jh * 64, 32);
+            noc_async_read(get_noc_addr(sc + (2 * b + 1) * 2048 + jh * 64), dst + jh * 64 + 32, 32);
         }
+        noc_async_read_barrier();
     }
     cb_push_back(cb_x, 1);
     cb_push_back(cb_sc, 2 * B);
