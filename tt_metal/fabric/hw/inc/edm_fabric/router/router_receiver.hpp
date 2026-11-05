@@ -11,7 +11,7 @@
 // group, steps each serviced VC's receiver channel in VC order, then sends one credit frame if the counts changed.
 // A step: ack (first-level acks), take a packet, decode its route, admit its downstreams, forward, deliver, retire,
 // credit completions. A channel that does not forward only delivers: no decode, no admit.
-// Decode: router_routing.hpp; admit, forward: router_downstream.hpp; deliver: router_local_delivery.hpp;
+// Decode: router_route_decode.hpp; admit, forward: router_downstream.hpp; deliver: router_local_delivery.hpp;
 // rounds: router_round.hpp.
 // The packets-received register is the source of truth for arrivals; the count kept from it is a lower bound.
 //
@@ -30,7 +30,7 @@
 #include "router_init.hpp"
 #include "router_local_delivery.hpp"
 #include "router_round.hpp"
-#include "router_routing.hpp"
+#include "router_route_decode.hpp"
 #include "router_telemetry.hpp"
 
 namespace fabric_router::receiver {
