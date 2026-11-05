@@ -48,6 +48,17 @@
       "properties": {
         "mpi_rank": { "$ref": "#/$defs/count" },
         "world_size": { "type": "integer", "minimum": 1 },
+        "subcontext": {
+          "description": "Present only when tt-run splits the job into sub-contexts, each its own fabric. mpi_rank and world_size are the whole job's; rank and size are within the sub-context.",
+          "type": "object",
+          "properties": {
+            "id": { "$ref": "#/$defs/count" },
+            "rank": { "$ref": "#/$defs/count" },
+            "size": { "type": "integer", "minimum": 1 }
+          },
+          "required": ["id", "rank", "size"],
+          "additionalProperties": false
+        },
         "host_name": {
           "description": "The host this process runs on, as the physical system descriptor names it: the cluster id UMD stamps on the cluster descriptor (TT_METAL_CLUSTER_ID, else the OS hostname).",
           "type": "string",

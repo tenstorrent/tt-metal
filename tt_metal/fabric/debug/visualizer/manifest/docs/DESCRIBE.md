@@ -20,7 +20,8 @@ has already decided.
 
 | Key | From |
 | --- | --- |
-| `mpi_rank`, `world_size` | The MPI context: this process and how many there are |
+| `mpi_rank`, `world_size` | `DistributedContext::get_world_context()`: this process and how many there are in the whole job, not just its sub-context |
+| `subcontext` | `get_current_world()` when tt-run split the job (`subcontext_id()` has a value): the sub-context's id, and this process's rank in it and its size |
 | `host_name` | `PhysicalSystemDescriptor::my_host_name()`: the name discovery gave this host, the cluster descriptor's cluster id. On a mock cluster without one, it's the mock descriptor's file name |
 | `written_at` | The time the manifest was written, in UTC, as ISO 8601 |
 | `build.git_sha`, `build.git_sha_short`, `build.git_dirty` | The commit tt-metal was built from, and whether tracked files had uncommitted changes |
