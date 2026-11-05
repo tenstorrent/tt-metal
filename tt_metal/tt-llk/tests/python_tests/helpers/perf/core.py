@@ -795,6 +795,74 @@ def _selected_run_types(run_types):
     return [rt for rt in run_types if rt.name in names]
 
 
+# Template parameters a main-form cell keeps (an exact-cell row of matmul_closed_off_rows.csv with form main): the shape of the block, nothing that changes the code.
+_TRUE_MAIN_KEEP = (
+    "MATH_FIDELITY",
+    "DEST_SYNC",
+    "THROTTLE_LEVEL",
+    "MATMUL_L1_ACC",
+    "PACK_SRC_FROM_OUTPUT",
+    "MATMUL_FORM_KEYS",
+    "MATMUL_PACK_BLOCK",
+)
+
+
+def _true_main_templates(test_name, formats, dest_acc, l1_acc, templates, runtimes):
+    """The templates of a cell the table keeps on main (matmul_grid_main_cells): main's unpack, math and per-tile pack with none of the harness opt-ins (ttsync, row MOP, row end fold, stream z and narrow, reuse direction, phase elide, k loop, flip and fused post)."""
+    if not str(test_name).startswith("sources/matmul") or not hasattr(
+        formats, "input_format_B"
+    ):
+        return templates
+    from ..chip_architecture import get_chip_architecture
+    from ..llk_params import DestSync
+    from ..matmul_prod_keys import grid_main_cell
+
+    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        return templates
+    by = {type(t).__name__: t for t in templates}
+    dims = next((r for r in runtimes if type(r).__name__ == "CRK_TILE_DIMM"), None)
+    if (
+        dims is None
+        or "MATH_FIDELITY" not in by
+        or "DEST_SYNC" not in by
+        or "MATMUL_FORM_KEYS" not in by
+    ):
+        return templates
+    throttle = by["THROTTLE_LEVEL"].throttle_level if "THROTTLE_LEVEL" in by else 0
+    l1 = bool(l1_acc == L1Accumulation.Yes) or (
+        "MATMUL_L1_ACC" in by
+        and by["MATMUL_L1_ACC"].matmul_l1_acc == L1Accumulation.Yes
+    )
+    if not grid_main_cell(
+        by["MATH_FIDELITY"].math_fidelity,
+        by["DEST_SYNC"].dest_sync == DestSync.Half,
+        dest_acc == DestAccumulation.Yes,
+        formats.input_format,
+        formats.input_format_B,
+        formats.output_format,
+        dims.r_dimm,
+        dims.c_dimm,
+        dims.k_dimm,
+        throttle,
+        l1,
+    ):
+        return templates
+    out = []
+    for t in templates:
+        name = type(t).__name__
+        if name not in _TRUE_MAIN_KEEP:
+            continue
+        if name == "MATMUL_FORM_KEYS":
+            t.keep_flip = False
+            t.unfused_post = False
+            t.force_form = ""
+            t.with_block(dims.c_dimm, dims.r_dimm, dims.k_dimm, dest_acc, throttle, l1)
+        if name == "MATMUL_PACK_BLOCK":
+            t = type(t)(0)
+        out.append(t)
+    return out
+
+
 class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
@@ -818,6 +886,9 @@ class PerfConfig(TestConfig):
         requires_vector_ext: bool = False,
     ):
 
+        templates = _true_main_templates(
+            test_name, formats, dest_acc, l1_acc, templates, runtimes
+        )
         # Initialize passed templates and runtimes here so we don't get variant hash issues
         # when we reasign them in run method of PerfConfig
         self.passed_templates = templates.copy()

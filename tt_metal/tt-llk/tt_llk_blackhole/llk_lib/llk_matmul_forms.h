@@ -81,7 +81,7 @@ constexpr char matmul_default_form()
                                                             : -1;
     if constexpr (kt_per_section == 0)
     {
-        return '.'; // main's form, also for the output formats that key a forced form below
+        return '.'; // main's unpack and math form (opt-ins by their own rules), also for the output formats that key a forced form below
     }
     else if constexpr (out_format == DataFormat::Bfp2_b)
     {
@@ -123,13 +123,15 @@ constexpr bool matmul_half_end_fold()
              !(in0 == DataFormat::Bfp8_b && in1 == DataFormat::Float16_b && out_format == DataFormat::Float32) &&
              !(kt_per_section == 0 && in1 == DataFormat::Bfp4_b && out_format == DataFormat::Float32)));
 }
+
 // Cells where the keys of the ttnn matmul kernels (the format each DEST section is packed to, the row MOP rule) pick a form that reads
 // slower than main's tile MOP and per-row unpack on the tt-llk sweep (perf_matmul_forms: every form of every perf_matmul Half cell,
-// ABBA against main, no fused post flip). Those cells keep main's form. A cell is the math fidelity, whether the contraction of a section
-// is one tile, a 32-bit DEST, one input format (of in0 or in1), the output format and the format the section is packed to.
-// several_blocks_ok: the cell keeps the keyed form when the kernel runs several inner blocks. Bfp8_b input to Float32 output from a 16-bit DEST
-// with Float16_b partials (packer_l1_acc) at HiFi3 and HiFi4 with one tile per section: the last section reads slower than main (up to +1.2 cy
-// per tile) but the partial sections gain more, so two or more inner blocks are faster (ttnn, HiFi3, 4 inner blocks: 1.2 % faster than main).
+// ABBA against main, no fused post flip). Those cells keep main's unpack and math form; the harness runs them with none of its opt-ins (helpers/perf/core.py
+// _true_main_templates). A cell is the math fidelity, whether the contraction of a section is one tile, a 32-bit DEST, one input format (of in0 or in1), the
+// output format and the format the section is packed to. several_blocks_ok: the cell keeps the keyed form when the kernel runs several inner blocks. Bfp8_b
+// input to Float32 output from a 16-bit DEST with Float16_b partials (packer_l1_acc) at HiFi3 and HiFi4 with one tile per section: the last section reads
+// slower than main (up to +1.2 cy per tile) but the partial sections gain more, so two or more inner blocks are faster (ttnn, HiFi3, 4 inner blocks: 1.2 %
+// faster than main).
 struct matmul_main_form_cell
 {
     MathFidelity fidelity;
@@ -244,9 +246,10 @@ constexpr bool matmul_main_form_cell_selected()
     return false;
 }
 
-// Cells of the perf_matmul_grid sweep (every out_subblock h x w at k 1, 3 and 8 steps, one long k, the packer L1 accumulate block and static throttle) where the keyed forms
-// read slower than main's: they keep main's form. A cell is the fidelity, half sync, 32-bit DEST accumulate, in1, in0 and output format, the block (rt x ct), the k steps of the
-// section, the static throttle level and whether the packer L1 accumulates.
+// Cells of the perf_matmul_grid sweep (every out_subblock h x w at k 1, 3 and 8 steps, one long k, the packer L1 accumulate block and static throttle) where
+// the keyed forms read slower than main's: they keep main's unpack and math form (the harness switches its opt-ins off for them). A cell is the fidelity, half
+// sync, 32-bit DEST accumulate, in1, in0 and output format, the block (rt x ct), the k steps of the section, the static throttle level and whether the packer
+// L1 accumulates.
 struct matmul_grid_main_cell
 {
     MathFidelity fidelity;
@@ -1804,7 +1807,8 @@ constexpr bool matmul_tiny_main_form(const MathFidelity fidelity, const bool hal
     return false;
 }
 
-// The k key a block runs its forms by: 0, main's form, where the block is one of the grid cells above; the caller's k steps per section otherwise.
+// The k key a block runs its forms by: 0, main's unpack and math form (the opt-ins keep their own rules), where the block is one of the grid cells above; the
+// caller's k steps per section otherwise.
 template <MathFidelity math_fidelity, int sync, bool dest_acc, std::uint32_t kt_per_section, std::uint32_t kt_dim, DataFormat in0, DataFormat in1, DataFormat out_format,
           std::uint32_t ct_dim, std::uint32_t rt_dim, std::uint32_t throttle = 0, bool l1_acc = false, std::uint32_t nb = 1, std::uint32_t in0_r_dim = 32, std::uint32_t in1_c_dim = 32>
 constexpr std::uint32_t matmul_form_k()
