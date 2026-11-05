@@ -60,8 +60,8 @@ void kernel_main() {
 #ifdef FUSE_RS_ADDCMUL
     const uint32_t fused_ternary_scalar_uint = get_common_arg_val<uint32_t>(Crta::addcmul_scalar);
 #endif
-    const uint32_t slice_Ht_per_core = ttnn::runtime_length::tiles_per_core(slice_Ht, mm_cores_y);
-    const uint32_t mm_M_unit_blocks_per_core = ttnn::runtime_length::blocks_per_core(slice_Ht_per_core, mm_block_ht);
+    const uint32_t slice_Ht_per_core = ttnn::runtime_length::div_up(slice_Ht, mm_cores_y);
+    const uint32_t mm_M_unit_blocks_per_core = ttnn::runtime_length::div_up(slice_Ht_per_core, mm_block_ht);
 
     const uint32_t batch_size = input_tensor_B;
     const uint32_t last_mm_core_idx = mm_cores_y - 1;

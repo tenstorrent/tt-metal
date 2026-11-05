@@ -70,11 +70,8 @@ void kernel_main() {
     // The row count is a common runtime arg; uniform per-core ranges (unclamped: trailing cores
     // clip against M_tiles below) so every core walks the same block count as its neighbours.
     const uint32_t M_tiles = get_arg(args::M_tiles);
-    const uint32_t M_tiles_per_core = ttnn::runtime_length::tiles_per_core(M_tiles, M_cores);
-    const uint32_t M_blocks_per_core = ttnn::runtime_length::blocks_per_core(M_tiles_per_core, M_block_tiles);
-    const uint32_t padded_M_tiles = M_tiles_per_core * M_cores;
-    const uint32_t M_start_tile = M_tiles_per_core * in0_idx;
-    const uint32_t M_end_tile = M_start_tile + M_tiles_per_core;
+    const auto [M_tiles_per_core, M_blocks_per_core, padded_M_tiles, M_start_tile, M_end_tile] =
+        ttnn::runtime_length::uniform_split(M_tiles, M_cores, in0_idx, M_block_tiles);
 
     const auto in1_reader = TensorAccessor(tensor::in1);
 

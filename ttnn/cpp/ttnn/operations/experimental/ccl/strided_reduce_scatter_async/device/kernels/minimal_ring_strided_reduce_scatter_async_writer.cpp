@@ -117,8 +117,8 @@ void kernel_main() {
     const size_t batch_ready_sem = get_common_arg_val<uint32_t>(Crta::batch_ready);
     const size_t barrier_sem = get_common_arg_val<uint32_t>(Crta::barrier);
     // Same split as the reader and the matmul's in0 kernels.
-    const uint32_t slice_Ht_per_core = ttnn::runtime_length::tiles_per_core(slice_Ht, mm_cores_y);
-    const uint32_t mm_M_unit_blocks_per_core = ttnn::runtime_length::blocks_per_core(slice_Ht_per_core, mm_block_ht);
+    const uint32_t slice_Ht_per_core = ttnn::runtime_length::div_up(slice_Ht, mm_cores_y);
+    const uint32_t mm_M_unit_blocks_per_core = ttnn::runtime_length::div_up(slice_Ht_per_core, mm_block_ht);
     const uint32_t output_batch_num_pages = slice_C * slice_Ht * slice_Wt;
     const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
