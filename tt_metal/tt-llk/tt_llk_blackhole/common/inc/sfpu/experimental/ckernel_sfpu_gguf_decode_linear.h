@@ -19,6 +19,9 @@ namespace gguf
 
 using namespace ckernel::gguf;
 
+template <int FMT>
+constexpr bool q40_params = FMT == Q8_0 || FMT == Q4_0 || FMT == Q5_0 || FMT == Q4_1 || FMT == Q5_1;
+
 // Phase 1 of the linear formats and of IQ4_NL (Q4_0's scale rows). TI = tile index inside the scale page's group of
 // K-tiles.
 template <int FMT, int TI>
@@ -26,43 +29,53 @@ sfpi_inline void linear_params()
 {
     if constexpr (page_layout<static_cast<Format>(FMT)>().fp16_rows == 0)
     {
-        params_init();
+        params_init<!q40_params<FMT>>();
     }
 #pragma GCC unroll 2
     for (int a = 0; a < 2; a++)
     {
-        if constexpr (
-            FMT == Q8_0 || FMT == Q4_0 || FMT == IQ4_NL || FMT == TQ2_0 || FMT == Q2_0 || FMT == Q1_0 || FMT == Q4_1 || FMT == Q5_0 || FMT == Q5_1 ||
-            FMT == TQ1_0)
+        if constexpr (q40_params<FMT>)
         {
             // Row 0: d of columns n0 (low half) and n1 (high half); Q4_1 row 1: m; Q5_0 row TI: d; Q5_1 rows 2 TI,
-            // 2 TI + 1: d, m; TQ1_0 row 2: d.
+            // 2 TI + 1: d, m. The two columns' conversions interleave.
             vUInt r0, r1, r2, r3;
             rep4<FMT>(0, a, r0, r1, r2, r3);
-            const vUInt dw = FMT == TQ1_0 || (FMT == Q5_1 && TI % 2) ? r2 : FMT == Q5_0 && TI % 2 ? r1 : r0;
-            const vUInt mw = FMT == Q5_1 && TI % 2 ? r3 : r1;
+            const vUInt dw = FMT == Q5_1 && TI % 2 ? r2 : FMT == Q5_0 && TI % 2 ? r1 : r0;
+            vFloat d0, d1;
+            f16_both(dw, d0, d1);
+            if constexpr (FMT == Q4_1 || FMT == Q5_1)
+            {
+                vFloat m0, m1;
+                f16_both(FMT == Q5_1 && TI % 2 ? r3 : r1, m0, m1);
+                sfpi::dst_reg[PS + pidx(a, 0, 0)] = d0;
+                sfpi::dst_reg[PS + pidx(a, 1, 0)] = d1;
+                sfpi::dst_reg[PM + pidx(a, 0, 0)] = m0;
+                sfpi::dst_reg[PM + pidx(a, 1, 0)] = m1;
+            }
+            else
+            {
+                // M = c d in d's register after its store.
+                constexpr float c                 = FMT == Q8_0 ? -128.0f : FMT == Q4_0 ? -8.0f : -16.0f;
+                sfpi::dst_reg[PS + pidx(a, 0, 0)] = d0;
+                sfpi::dst_reg[PS + pidx(a, 1, 0)] = d1;
+                d0                                = d0 * c;
+                d1                                = d1 * c;
+                sfpi::dst_reg[PM + pidx(a, 0, 0)] = d0;
+                sfpi::dst_reg[PM + pidx(a, 1, 0)] = d1;
+            }
+        }
+        else if constexpr (FMT == IQ4_NL || FMT == TQ2_0 || FMT == Q2_0 || FMT == Q1_0 || FMT == TQ1_0)
+        {
+            // Row 0: d of columns n0 (low half) and n1 (high half); TQ1_0 row 2: d.
+            vUInt r0, r1, r2, r3;
+            rep4<FMT>(0, a, r0, r1, r2, r3);
+            const vUInt dw = FMT == TQ1_0 ? r2 : r0;
 #pragma GCC unroll 2
             for (int b = 0; b < 2; b++)
             {
                 vFloat d = b == 0 ? f16_at<0>(dw) : f16_at<1>(dw);
                 vFloat m = 0.0f;
-                if constexpr (FMT == Q8_0)
-                {
-                    m = d * -128.0f;
-                }
-                else if constexpr (FMT == Q4_0)
-                {
-                    m = d * -8.0f;
-                }
-                else if constexpr (FMT == Q5_0)
-                {
-                    m = d * -16.0f;
-                }
-                else if constexpr (FMT == Q4_1 || FMT == Q5_1)
-                {
-                    m = b == 0 ? f16_at<0>(mw) : f16_at<1>(mw);
-                }
-                else if constexpr (FMT == TQ2_0 || FMT == Q2_0 || FMT == TQ1_0)
+                if constexpr (FMT == TQ2_0 || FMT == Q2_0 || FMT == TQ1_0)
                 {
                     m = -d;
                 }

@@ -106,10 +106,15 @@ sfpi_inline vUInt byte_bits(const int base, const int B, const int lsb, const in
 
 // f16_at and ue4m3_half: b rebias-adds the field into the fp32 exponent (exact for normals), a = 2 b - smallest normal
 // (exact for subnormals), the value is min(a, b). Programmable constants 0 = 112 << 23 (fp16), 1 = 119 << 23 (UE4M3).
+// PRGM1 = false: constant 1 unused (Q8_0, Q4_0, Q5_0, Q4_1, Q5_1).
+template <bool PRGM1 = true>
 sfpi_inline void params_init()
 {
     sfpi::vConstIntPrgm0 = 0x38000000;
-    sfpi::vConstIntPrgm1 = 0x3B800000;
+    if constexpr (PRGM1)
+    {
+        sfpi::vConstIntPrgm1 = 0x3B800000;
+    }
 }
 
 // fp16 in bits [16 HALF, 16 HALF + 16) of w to fp32, exact for every finite value.
@@ -121,6 +126,26 @@ sfpi_inline vFloat f16_at(const vUInt w)
     const vFloat a  = sfpi::addexp(b, 1) + -6.103515625e-05f;
     const vInt sgn  = sfpi::as<vInt>(HALF == 0 ? w << 16u : w);
     return sfpi::copysgn(sfpi::min_max(a, b).first, sgn);
+}
+
+// f16_at<0> and f16_at<1> of w (the same operations), the two chains interleaved: no SFPMAD result is read by the next
+// instruction.
+sfpi_inline void f16_both(const vUInt w, vFloat& lo, vFloat& hi)
+{
+    const vUInt x   = w << 16u;
+    vUInt m1        = w >> 16u;
+    vUInt m0        = x << 1u;
+    m0              = m0 >> 4u;
+    m1              = m1 << 17u;
+    m1              = m1 >> 4u;
+    const vFloat b0 = sfpi::as<vFloat>(m0 + sfpi::as<vUInt>(sfpi::vConstIntPrgm0));
+    const vFloat b1 = sfpi::as<vFloat>(m1 + sfpi::as<vUInt>(sfpi::vConstIntPrgm0));
+    vFloat a0       = sfpi::addexp(b0, 1);
+    vFloat a1       = sfpi::addexp(b1, 1);
+    a0              = a0 + -6.103515625e-05f;
+    a1              = a1 + -6.103515625e-05f;
+    lo              = sfpi::copysgn(sfpi::min_max(a0, b0).first, sfpi::as<vInt>(x));
+    hi              = sfpi::copysgn(sfpi::min_max(a1, b1).first, sfpi::as<vInt>(w));
 }
 
 constexpr int pidx(const int a, const int b, const int h)
