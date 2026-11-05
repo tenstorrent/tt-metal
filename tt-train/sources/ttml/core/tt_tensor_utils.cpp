@@ -87,7 +87,11 @@ ttnn::Tensor empty(
 }
 
 ttnn::Tensor full(const ttnn::Shape& shape, float value, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
-    return ttnn::full(shape, value, dtype, ttnn::Layout::TILE, std::ref(*device));
+    // Allocated on the device, which labels it one Replicate per mesh axis, and filled there. bfloat16 is rounded on
+    // the host first (ties to even, as ttnn::full does), so the device stores what a host fill would.
+    auto output = ttnn::empty(shape, dtype, ttnn::Layout::TILE, device, ttnn::DRAM_MEMORY_CONFIG);
+    const float fill_value = dtype == ttnn::DataType::BFLOAT16 ? static_cast<float>(bfloat16(value)) : value;
+    return ttnn::fill(output, fill_value, ttnn::DRAM_MEMORY_CONFIG, output);
 }
 
 ttnn::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
@@ -97,6 +101,13 @@ ttnn::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* devi
 ttnn::Tensor ones(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
     return core::full(shape, 1.F, device, dtype);
 }
+std::unique_ptr<ttnn::distributed::TensorToMesh> replicate_to_mesh_mapper(ttnn::distributed::MeshDevice& device) {
+    ttnn::distributed::MeshMapperConfig config;
+    config.placements = ttsl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement>(
+        device.shape().dims(), ttnn::distributed::MeshMapperConfig::Replicate{});
+    return ttnn::distributed::create_mesh_mapper(device, config);
+}
+
 template <class VectorType, ttnn::DataType TensorType>
 ttnn::Tensor from_vector(
     const std::vector<VectorType>& buffer,
@@ -118,13 +129,13 @@ ttnn::Tensor from_vector(
     const auto tensor_layout =
         tt::tt_metal::TensorLayout(TensorType, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{});
 
-    ttnn::Tensor output;
-    if (mesh_mapper != nullptr) {
-        output = ttnn::distributed::create_distributed_tensor(
-            ttsl::make_const_span(buffer), shape, tensor_layout, *mesh_mapper);
-    } else {
-        output = ttnn::Tensor::from_vector(buffer, tt::tt_metal::TensorSpec(shape, tensor_layout));
+    std::unique_ptr<ttnn::distributed::TensorToMesh> replicate;
+    if (mesh_mapper == nullptr) {
+        replicate = replicate_to_mesh_mapper(*device);
+        mesh_mapper = replicate.get();
     }
+    ttnn::Tensor output =
+        ttnn::distributed::create_distributed_tensor(ttsl::make_const_span(buffer), shape, tensor_layout, *mesh_mapper);
 
     /* Workaround necessary due to the issue #38186.*/
     if constexpr (TensorType == ttnn::DataType::FLOAT32) {

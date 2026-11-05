@@ -10,41 +10,35 @@
 // suite to use the same fixture type, and the suites below span several translation units.
 
 #include <memory>
-#include <optional>
 
 #include <gtest/gtest.h>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
-
-#include "metal2_host_api/test_helpers/test_helpers.hpp"
 
 namespace tt::tt_metal::experimental::test_helpers {
 
 // One 1x1 MeshDevice on a mock cluster of the given architecture.
 //
-// Forces TT_METAL_SLOW_DISPATCH_MODE so that MeshDevice::create() succeeds against the
-// mock cluster (mock Quasar has no dispatch-core reservation in its descriptor). These
-// tests exercise pure API behavior, so slow dispatch is functionally fine.
+// Each test owns a private mock MetalEnv, so no process-global mock mode is toggled and any
+// runtime state shared with other suites in the same binary is left untouched. The env is declared
+// before the MeshDevice so that it outlives it, and TearDown releases them in that order.
 template <tt::ARCH Arch>
 class MockMeshDeviceFixture : public ::testing::Test {
 protected:
     void SetUp() override {
-        slow_dispatch_override_.emplace();
-        // Configuring global mock mode initializes the HAL for arch checks and Program creation.
-        experimental::configure_mock_mode(Arch, 1);
-        mesh_device_ = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
+        env_ = std::make_unique<MetalEnv>(
+            MetalEnvDescriptor{.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(Arch, 1)});
+        mesh_device_ = distributed::MeshDevice::open_mesh_device(
+            *env_, distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
     }
     void TearDown() override {
-        if (mesh_device_) {
-            mesh_device_->close();
-            mesh_device_.reset();
-        }
-        experimental::disable_mock_mode();
-        slow_dispatch_override_.reset();
+        mesh_device_.reset();
+        env_.reset();
     }
 
+    std::unique_ptr<MetalEnv> env_;
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
-    std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
 };
 
 // ProgramSpec validation and lowering (MakeProgramFromSpec).

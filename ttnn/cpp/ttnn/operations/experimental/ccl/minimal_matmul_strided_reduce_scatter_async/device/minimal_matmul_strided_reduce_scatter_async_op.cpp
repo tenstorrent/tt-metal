@@ -83,8 +83,8 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
             ta.device() == tensor_args.input_tensor.device(), "addcmul_input_tensor1 must be on same device as input");
         TT_FATAL(
             tb.device() == tensor_args.input_tensor.device(), "addcmul_input_tensor2 must be on same device as input");
-        TT_FATAL(ta.buffer() != nullptr, "addcmul_input_tensor1 must be allocated");
-        TT_FATAL(tb.buffer() != nullptr, "addcmul_input_tensor2 must be allocated");
+        TT_FATAL(ta.is_allocated(), "addcmul_input_tensor1 must be allocated");
+        TT_FATAL(tb.is_allocated(), "addcmul_input_tensor2 must be allocated");
         TT_FATAL(ta.layout() == Layout::TILE, "addcmul_input_tensor1 must be TILE layout");
         TT_FATAL(tb.layout() == Layout::TILE, "addcmul_input_tensor2 must be TILE layout");
         TT_FATAL(
