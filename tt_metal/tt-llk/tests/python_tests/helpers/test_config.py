@@ -1943,7 +1943,11 @@ class TestConfig:
                         f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
                         f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
                     ],
-                    ([f"{CODE_SHIFT_FLAG}{LLK_CODE_SHIFT}"] if LLK_CODE_SHIFT else []),
+                    (
+                        [f"{CODE_SHIFT_FLAG}{shift_n}"]
+                        if (shift_n := int(os.environ.get(f"LLK_CODE_SHIFT_{name.upper()}", LLK_CODE_SHIFT)))
+                        else []
+                    ),
                     # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3)
                     # that -nostdlib drops; only referenced helpers are linked.
                     ["-x", "c++", "-", "-lc", "-lgcc", "-o"],

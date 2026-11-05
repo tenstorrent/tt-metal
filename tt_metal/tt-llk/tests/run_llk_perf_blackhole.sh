@@ -70,9 +70,9 @@ RUN_XML="${REPORT}-run.xml"
 export PERF_KEEP_RUNS=200
 TEMP_ROOT="${RUNNER_TEMP:-$(mktemp -d)}"
 export PYTEST_ADDOPTS=""
-# Experiment: bhperf (issues 60844, 46474). Samples every STRIDE-th test of this group plus all perf_pack_untilize tests, then
+# Experiment 2: bhperf (issues 60844, 46474): code shift series. Samples every STRIDE-th test of this group plus all perf_pack_untilize tests, then
 # measures them in legs: base (+ reruns), pure code shifts, NOPs at the top of the pack/unpack/math inits.
-STRIDE="${EXP_STRIDE:-10}"
+STRIDE="${EXP_STRIDE:-8}"
 pytest -q --collect-only --compile-consumer "${SPEED_OF_LIGHT_ARGS[@]}" -p no:cacheprovider -m "perf and not accuracy" \
   --perf-splits "$N_GROUPS" --perf-group "$GROUP" . 2> /dev/null | grep '::' > grp_ids.txt || true
 grep 'perf_pack_untilize.py' grp_ids.txt > u_ids.txt || true
@@ -99,29 +99,29 @@ run() { # run <tag> <idfile> <pytest args...>
 }
 build() { # build <leg> <cflags> <shift> <objcache>
   export RUNNER_TEMP="$TEMP_ROOT/leg-$1" LLK_EXP_CFLAGS="$2" LLK_CODE_SHIFT="$3"
+  unset LLK_CODE_SHIFT_PACK LLK_CODE_SHIFT_UNPACK LLK_CODE_SHIFT_MATH
+  [[ -n "${5:-}" ]] && export "$5"
   if [[ -n "$4" ]]; then export LLK_OBJ_CACHE="$TEMP_ROOT/objs-$4"; mkdir -p "$LLK_OBJ_CACHE"; else unset LLK_OBJ_CACHE; fi
-  mapfile -t FILES < <(files_of leg_ids.txt)
+  mapfile -t FILES < <(files_of "${BUILD_IDS:-leg_ids.txt}")
   pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-producer -n "$COMPILE_WORKERS" -m "perf and not accuracy" \
-    --timeout=600 --node-list="$(realpath leg_ids.txt)" "${FILES[@]}" || echo "build $1 rc=$?"
+    --timeout=600 --node-list="$(realpath "${BUILD_IDS:-leg_ids.txt}")" "${FILES[@]}" || echo "build $1 rc=$?"
   echo "built $1 $(date -u +%T)"
 }
 X=(--dist loadgroup -n 15)
 build base "" 0 base
 run base_x1 leg_ids.txt "${X[@]}"
-run base_x2 leg_ids.txt "${X[@]}"
-[[ -s u46_ids.txt ]] && run base_ufwd u46_ids.txt -n 1
-[[ -s u46_ids.txt ]] && run base_urev u46_ids_rev.txt -n 1
-[[ -s u_ids.txt ]] && run base_ux3 u_ids.txt "${X[@]}" && run base_ux4 u_ids.txt "${X[@]}"
-for sh in 4 36; do
+run base_x2 s_ids.txt "${X[@]}"
+BUILD_IDS=s_ids.txt
+for sh in 4 8 12 16 20 24 28 32 36 40 48 56 64 128 256 512; do
   build sh$sh "" $sh base
-  run sh${sh}_x1 leg_ids.txt "${X[@]}"
+  run sh${sh}_x1 s_ids.txt "${X[@]}"
 done
-for t in PACK UNPACK MATH; do
-  build nop$t "-DLLK_EXP_NOP_${t}_INIT=1" 0 ""
-  run nop${t}_x1 leg_ids.txt "${X[@]}"
+for sh in 4 16; do
+  for t in PACK UNPACK MATH; do
+    build ${t}$sh "" 0 base "LLK_CODE_SHIFT_$t=$sh"
+    run ${t}${sh}_x1 s_ids.txt "${X[@]}"
+  done
 done
-build nopALL "-DLLK_EXP_NOP_PACK_INIT=2 -DLLK_EXP_NOP_UNPACK_INIT=2 -DLLK_EXP_NOP_MATH_INIT=2" 0 ""
-run nopALL_x1 leg_ids.txt "${X[@]}"
 cp "$COMPILE_XML" "${REPORT}.xml" 2> /dev/null || touch "${REPORT}.xml"
 exit 0
 
