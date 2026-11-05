@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cmath>
 #include <cstddef>
 #include <string>
 #include <utility>
@@ -26,8 +25,18 @@ public:
         m_beta1_pows.reserve(groups.size());
         m_beta2_pows.reserve(groups.size());
         for (const auto& group : groups) {
-            m_beta1_pows.push_back(static_cast<float>(std::pow(group.options.at("beta1"), steps)));
-            m_beta2_pows.push_back(static_cast<float>(std::pow(group.options.at("beta2"), steps)));
+            // The float product advance() builds, so a restored step count continues bit for bit. std::pow rounds
+            // differently: 0.9^3 is 0.7289999 as a float product and 0.729 from pow.
+            const float beta1 = group.options.at("beta1");
+            const float beta2 = group.options.at("beta2");
+            float beta1_pow = 1.0F;
+            float beta2_pow = 1.0F;
+            for (size_t step = 0; step < steps; ++step) {
+                beta1_pow *= beta1;
+                beta2_pow *= beta2;
+            }
+            m_beta1_pows.push_back(beta1_pow);
+            m_beta2_pows.push_back(beta2_pow);
         }
     }
 

@@ -72,7 +72,7 @@ def test_decoder(device, reset_seeds, name, bev_shape, batch_size, traced, batch
         return outputs, points, reference_box_codes(outputs, reg_branches)
 
     tt_model = TTDetectionTransformerDecoder(
-        create_decoder_parameters(torch_model, device), device, bev_shape, batch_first=batch_first
+        create_decoder_parameters(torch_model, device), device, bev_shape, batch_first=batch_first, all_layers=True
     )
     tt_reg_branches = create_reg_branch_parameters(reg_branches, device)
 

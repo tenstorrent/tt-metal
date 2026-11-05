@@ -6,9 +6,9 @@
 //       that don't require macros to function
 
 #include "api/dataflow/dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
+#include "api/buffer_types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include <tt-metalium/buffer_types.hpp>
+#include "api/buffer_types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 
 #include "ttnn/operations/ccl/common/kernels/command_processor.hpp"
