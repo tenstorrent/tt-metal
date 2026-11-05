@@ -78,5 +78,10 @@
       "readiness_vllm/final_agentic_check.log"
     ]
   },
-  "stage_review_verdict": "clean-pass"
+  "stage_review_verdict": "clean-pass",
+  "local_checkpoints": {
+    "tt_metal": "9706b2bcd0c54e89b1f1a35510e4c6e39c885569",
+    "plugin": "90f33d2e392eb8bfda6948df9dabe712a724cb1a",
+    "pushed": false
+  }
 }
