@@ -600,7 +600,7 @@ def mtp_prefill_inputs(prompt_ids, chunk_start, bucket, page_table_row, block_si
     ``bucket``-row prefill (the spec short trace's ``spec_inputs``): the same values _warm_mtp_chunk /
     Qwen36Model.ttnn_mtp_prefill_forward upload eagerly.
 
-    Returns int32 torch (tokens [1, bucket], full table [1, buf_blocks], chunk table [1, bucket // block_size]):
+    Returns int32 torch (tokens [1, bucket], full table [1, buf_blocks], chunk table [1, ceil(bucket / block_size)]):
     tokens: slot i (segment row i) fuses with prompt token chunk_start + i + 1, so row i holds
     prompt_ids[chunk_start + 1 + i] for i < n = min(bucket, Tp - 1 - chunk_start) and 0 past it (slot Tp-1 is left to
     _warm_mtp_last); chunk table: the user's blocks of the window, entries past ceil((chunk_start + n) / block_size)
@@ -609,9 +609,9 @@ def mtp_prefill_inputs(prompt_ids, chunk_start, bucket, page_table_row, block_si
     that only holds slot Tp-1): every row then pads to the scratch block."""
     Tp = len(prompt_ids)
     row = torch.as_tensor(page_table_row).reshape(1, -1).to(torch.int32)
-    bpb = bucket // block_size
+    bpb = -(-bucket // block_size)  # same window as _ShortPrefillTrace.blocks_per_bucket
     blk0 = chunk_start // block_size
-    assert chunk_start % block_size == 0 and bucket % block_size == 0
+    assert chunk_start % block_size == 0
     width = max(buf_blocks, blk0 + bpb)
     if row.shape[1] < width:
         row = torch.cat([row, torch.zeros(1, width - row.shape[1], dtype=torch.int32)], dim=1)
