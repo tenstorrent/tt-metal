@@ -98,44 +98,59 @@ constexpr uint8_t get_num_faces_c_dim(const TensorBindingToken<Cta, Addr>& token
     return get_num_faces_c_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns the tile storage size in bytes.
-// precondition: The token has format metadata and a supported tile storage size.
+/**
+ * Returns the tile storage size in bytes.
+ *
+ * precondition: The token has format metadata and a supported tile storage size.
+ */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_size(const TensorBindingToken<Cta, Addr>& token) {
     return get_tile_size(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns the tile height in elements.
+/**
+ * Returns the tile height in elements.
+ */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_r_dim(const TensorBindingToken<Cta, Addr>& token) {
     return get_tile_r_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns the tile width in elements.
+/**
+ * Returns the tile width in elements.
+ */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_c_dim(const TensorBindingToken<Cta, Addr>& token) {
     return get_tile_c_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns the number of elements in a tile.
+/**
+ * Returns the number of elements in a tile.
+ */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_hw(const TensorBindingToken<Cta, Addr>& token) {
     return get_tile_hw(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns the total number of faces in a tile.
+/**
+ * Returns the total number of faces in a tile.
+ */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_num_faces(const TensorBindingToken<Cta, Addr>& token) {
     return get_tile_num_faces(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns 1 if the tile height is less than 32 elements, or 0 otherwise.
+/**
+ * Returns 1 if the tile height is less than 32 elements, or 0 otherwise.
+ */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_partial_face(const TensorBindingToken<Cta, Addr>& token) {
     return get_partial_face(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns 1 if the tile width is less than 32 elements, or 0 otherwise.
+/**
+ * Returns 1 if the tile width is less than 32 elements, or 0 otherwise.
+ */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_narrow_tile(const TensorBindingToken<Cta, Addr>& token) {
     return get_narrow_tile(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
@@ -182,44 +197,59 @@ constexpr uint8_t get_num_faces_c_dim(const PerNodeTensorBindingToken<Cta, Addr>
     return get_num_faces_c_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns the tile storage size in bytes.
-// precondition: The token has format metadata and a supported tile storage size.
+/**
+ * Returns the tile storage size in bytes.
+ *
+ * precondition: The token has format metadata and a supported tile storage size.
+ */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_size(const PerNodeTensorBindingToken<Cta, Addr>& token) {
     return get_tile_size(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns the tile height in elements.
+/**
+ * Returns the tile height in elements.
+ */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_r_dim(const PerNodeTensorBindingToken<Cta, Addr>& token) {
     return get_tile_r_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns the tile width in elements.
+/**
+ * Returns the tile width in elements.
+ */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_c_dim(const PerNodeTensorBindingToken<Cta, Addr>& token) {
     return get_tile_c_dim(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns the number of elements in a tile.
+/**
+ * Returns the number of elements in a tile.
+ */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_hw(const PerNodeTensorBindingToken<Cta, Addr>& token) {
     return get_tile_hw(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns the total number of faces in a tile.
+/**
+ * Returns the total number of faces in a tile.
+ */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_tile_num_faces(const PerNodeTensorBindingToken<Cta, Addr>& token) {
     return get_tile_num_faces(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns 1 if the tile height is less than 32 elements, or 0 otherwise.
+/**
+ * Returns 1 if the tile height is less than 32 elements, or 0 otherwise.
+ */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_partial_face(const PerNodeTensorBindingToken<Cta, Addr>& token) {
     return get_partial_face(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
 }
 
-// Returns 1 if the tile width is less than 32 elements, or 0 otherwise.
+/**
+ * Returns 1 if the tile width is less than 32 elements, or 0 otherwise.
+ */
 template <uint32_t Cta, uint32_t Addr>
 constexpr uint32_t get_narrow_tile(const PerNodeTensorBindingToken<Cta, Addr>& token) {
     return get_narrow_tile(static_cast<const binding_details::TokenWithLLKMetadata&>(token));
