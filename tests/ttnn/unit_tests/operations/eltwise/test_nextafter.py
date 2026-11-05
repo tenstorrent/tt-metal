@@ -123,6 +123,22 @@ def test_nextafter_nan_propagates(device):
     assert torch.equal(actual[finite], expected[finite]), f"finite lanes differ: {actual[finite]}"
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_nextafter_equal_infinities(device, dtype):
+    """nextafter(x, x) == x also when x is infinite, and the infinities still step off the finite range."""
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    inf = float("inf")
+    a = torch.tensor([[inf, -inf, inf, -inf, 1.0, 1.0, 0.0, -2.5]], dtype=torch_dtype)
+    b = torch.tensor([[inf, -inf, -inf, inf, inf, -inf, 0.0, -2.5]], dtype=torch_dtype)
+
+    ttnn_a = ttnn.from_torch(a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.nextafter(ttnn_a, ttnn_b))[0, : a.numel()]
+    expected = torch.nextafter(a, b)[0]
+
+    assert torch.equal(actual, expected), f"expected {expected}, got {actual}"
+
+
 @pytest.mark.parametrize(
     "shape_a, shape_b",
     [
