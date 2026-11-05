@@ -17,9 +17,10 @@ void bind_relay_affine_prefix(nb::module_& mod) {
         mod,
         R"doc(
         The sequence-parallel prefix as a relay along the SP axis: rank ``p`` (chronological position, from
-        ``actual_start``) takes its entry state ``E_p`` from its predecessor, computes
-        ``E_{p+1} = A_p E_p + B_p`` from its packed ``[A | B]`` summary and forwards it, one head per core and
-        one tile column at a time; the last rank sends the final state on to the first. ``cores`` lists a core
+        ``actual_start``) takes its entry state ``S_p`` from its predecessor, computes
+        ``S_{p+1} = A_p S_p + B_p = S_p + (E_p S_p + B_p)`` from its packed complement-form summary ``[E | B]``
+        (``E = A - I``) and forwards it, one head per core and one tile column at a time. ``S_p`` and ``B_p`` are
+        added exactly in FP32 DST; only ``E_p S_p`` passes through the matmul's source registers; the last rank sends the final state on to the first. ``cores`` lists a core
         per head, then a sender core per link. The ``landing`` buffer and the two global ``semaphores`` outlive
         the call: a peer writes them before this rank's call starts. Consecutive calls must be separated by a
         barrier across the SP line, since a rank's landing buffer is copied out at the end of its call and
@@ -27,7 +28,7 @@ void bind_relay_affine_prefix(nb::module_& mod) {
 
         Args:
             packed (ttnn.Tensor): BFLOAT16 TILE-layout interleaved ``[1, B*H, K, 2K]`` rows of this rank's
-                packed transition ``[A | B]``.
+                packed transition in complement form ``[E | B]``, ``E = A - I``.
             initial_state (ttnn.Tensor): FLOAT32 TILE-layout interleaved ``[B*H, K, K]`` state the
                 chronologically first rank enters at.
             actual_start (ttnn.Tensor): Replicated UINT32 row-major scalar with the absolute position of the
@@ -47,14 +48,15 @@ void bind_relay_affine_prefix(nb::module_& mod) {
             entry_memory_config (ttnn.MemoryConfig, optional): Interleaved memory of the entry states.
                 Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): The hop's matmul fidelity;
-                its products accumulate in DST. Defaults to HiFi2 with FP32 destination accumulation.
+                its products accumulate in DST. Requires ``fp32_dest_acc_en``. Defaults to HiFi2 with FP32
+                destination accumulation.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: FLOAT32 TILE-layout ``[B*H, K, K]`` entry states and the final state in
                 DRAM (valid on the first and last chronological ranks).
 
         Note:
-            ``K`` must be positive, tile aligned and at most the DST's tiles wide; the fabric payload must hold
+            ``K`` must be positive and tile aligned; the fabric payload must hold
             an FP32 tile. Inputs are not modified.
         )doc",
         &ttnn::experimental::kda::relay_affine_prefix,

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The sequence-parallel prefix as a relay along the SP axis (ttnn.experimental.kda.relay_affine_prefix): each rank
-applies its own [A | B] summary to the entry state its predecessor sends and forwards the result, and the last rank
-hands the final state to the first. On a ring that hand-off is one hop; on a line it crosses the SP axis (2D routing,
+applies its own summary, in complement form [E | B] (E = A - I), to the entry state S its predecessor sends as
+S + (E S + B) and forwards the result, and the last rank hands the final state to the first. On a ring that hand-off is one hop; on a line it crosses the SP axis (2D routing,
 or sp_size - 1 hops back on a 1D fabric).
 
 The relay's landing buffer is an L1 tensor sharded one head per head core, at the same address on every device. A
