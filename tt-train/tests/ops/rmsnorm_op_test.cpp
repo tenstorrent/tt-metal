@@ -1081,15 +1081,18 @@ TEST_F(RMSNormOpTest, RejectsMaxRowSlicesOutOfRange) {
     }
 }
 
-// The tests that use these shapes only cover the sliced or the whole-row path if the planner, on this device's grid,
-// splits their rows the way they expect. Every slice they get is far inside L1, so every fit check passes.
-TEST_F(RMSNormOpTest, TestShapesGetTheirIntendedRowSplit) {
-    struct Expectation {
-        const char* label;
-        std::vector<uint32_t> shape;
-        bool sliced;
-    };
-    const std::vector<Expectation> expectations = {
+namespace {
+
+// The tests that use these shapes only cover the sliced or the whole-row path if the planner splits their rows the way
+// they expect. Every slice they get is far inside L1, so every fit check passes.
+struct RowSplitExpectation {
+    const char* label;
+    std::vector<uint32_t> shape;
+    bool sliced;
+};
+
+const std::vector<RowSplitExpectation>& row_split_expectations() {
+    static const std::vector<RowSplitExpectation> expectations = {
         {"Plain_1x32x1x1000", {1U, 1U, 32U, 1000U}, true},
         {"Plain_1x1024x1x5120", {1U, 1U, 1024U, 5120U}, true},
         {"Plain_1x1024x1x5119", {1U, 1U, 1024U, 5119U}, true},
@@ -1104,31 +1107,46 @@ TEST_F(RMSNormOpTest, TestShapesGetTheirIntendedRowSplit) {
         {"RMSNorm_Compare_FrozenGamma, sliced row", {1U, 1U, 1U, 16384U}, true},
         {"DistinctKeys, sliced tile row", {1U, 1U, 32U, 1024U}, true},
     };
+    return expectations;
+}
 
-    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
-    const auto plan_of = [&](const std::vector<uint32_t>& shape) {
-        const uint32_t tile_rows =
-            shape[0] * shape[1] * ((shape[2] + tt::constants::TILE_HEIGHT - 1U) / tt::constants::TILE_HEIGHT);
-        const uint32_t Wt = (shape[3] + tt::constants::TILE_WIDTH - 1U) / tt::constants::TILE_WIDTH;
-        return ttml::metal::ops::rmsnorm::plan_row_slices(
-            grid, tile_rows, Wt, kMaxRowSlices, [](uint32_t, uint32_t) { return true; });
-    };
-    for (const auto& e : expectations) {
-        const auto plan = plan_of(e.shape);
+ttml::metal::ops::rmsnorm::RowSlicePlan plan_row_split(
+    const tt::tt_metal::CoreCoord grid, const std::vector<uint32_t>& shape) {
+    const uint32_t tile_rows =
+        shape[0] * shape[1] * ((shape[2] + tt::constants::TILE_HEIGHT - 1U) / tt::constants::TILE_HEIGHT);
+    const uint32_t Wt = (shape[3] + tt::constants::TILE_WIDTH - 1U) / tt::constants::TILE_WIDTH;
+    return ttml::metal::ops::rmsnorm::plan_row_slices(
+        grid, tile_rows, Wt, kMaxRowSlices, [](uint32_t, uint32_t) { return true; });
+}
+
+}  // namespace
+
+// The expectations hold on a 13x10 grid, so they don't depend on the machine the tests run on. The planner itself is
+// pinned on several grids by rmsnorm_planner_test.cpp.
+TEST_F(RMSNormOpTest, TestShapesGetTheirIntendedRowSplit) {
+    const tt::tt_metal::CoreCoord grid{13U, 10U};
+    for (const auto& e : row_split_expectations()) {
+        const auto plan = plan_row_split(grid, e.shape);
         EXPECT_EQ(plan.num_slices > 1U, e.sliced)
             << e.label << ": " << plan.num_slices << " slices on a " << grid.x << "x" << grid.y << " grid";
     }
+}
 
-    // Plain_1x1184x1x2463 also covers row-groups of several rows and two core groups.
-    const auto plan = plan_of({1U, 1U, 1184U, 2463U});
-    EXPECT_GT(plan.rows_per_group_1, 1U);
-    EXPECT_TRUE(plan.has_group_2());
-
-    // Plain_1x4192x1x2368 is the only case with 2 slices, which is what model shapes get when they slice.
-    const auto two_slice_plan = plan_of({1U, 1U, 4192U, 2368U});
-    EXPECT_EQ(two_slice_plan.num_slices, 2U);
-    EXPECT_GT(two_slice_plan.rows_per_group_1, 1U);
-    EXPECT_TRUE(two_slice_plan.has_group_2());
+// On a smaller grid some of the shapes meant to be sliced run whole rows: still correct, but the sliced path they are
+// there for goes untested. Says so with a skip; never fails.
+TEST_F(RMSNormOpTest, TestShapesAreSlicedOnThisDevice) {
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    std::string uncovered;
+    for (const auto& e : row_split_expectations()) {
+        if (e.sliced && plan_row_split(grid, e.shape).num_slices == 1U) {
+            uncovered += std::string(uncovered.empty() ? "" : "; ") + "on this " + std::to_string(grid.x) + "x" +
+                         std::to_string(grid.y) + " grid " + e.label +
+                         " runs whole rows, so the sliced path is not covered";
+        }
+    }
+    if (!uncovered.empty()) {
+        GTEST_SKIP() << uncovered;
+    }
 }
 
 // ============================================================================

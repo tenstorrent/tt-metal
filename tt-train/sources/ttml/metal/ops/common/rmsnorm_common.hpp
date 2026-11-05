@@ -41,7 +41,9 @@ inline void check_input_and_gamma_shapes(const ttnn::Tensor& input, const ttnn::
 
 // Every core sends its partial to every other core of its row-group, so the exchange grows as num_slices^2.
 constexpr uint32_t kMaxRowSlices = 16U;
-// Per-row latency of the partial exchange, in tiles of per-tile work. Each core also sums num_slices partials.
+// A sliced row costs S + kRowSliceExchangeCostTiles extra tiles of work: S to sum the gathered partials, plus the NOC
+// writes and semaphore wait of the exchange. 4 is an unmeasured estimate: that round trip takes a few us, against ~1 us
+// per tile of compute. To retune, rerun rmsnorm_benchmark on its H=1, T=1024/4096 rows.
 constexpr uint32_t kRowSliceExchangeCostTiles = 4U;
 
 // How rmsnorm_fw and rmsnorm_bw split tile-rows over the cores: each row is cut into num_slices column slices of
