@@ -79,17 +79,18 @@ def _merge_heads_on_device(original, args, kwargs):
     return ttnn.tilize(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def _small_grid_sharded_linear(args, kwargs):
-    x = args[0] if args else kwargs.get("input_tensor_a")
-    if x is None or kwargs.get("program_config") is not None or not x.is_sharded():
-        return False
-    g = x.device().compute_with_storage_grid_size()
-    return g.x * g.y < 64
-
-
-def _linear_from_interleaved(original, args, kwargs):
+def _quasar_sharded_in0_matmul(args, kwargs):
     import ttnn
 
+    x = args[0] if args else kwargs.get("input_tensor_a")
+    return x is not None and x.is_sharded() and x.device().arch() == ttnn.device.Arch.QUASAR
+
+
+def _matmul_from_interleaved(original, args, kwargs):
+    import ttnn
+
+    kwargs = dict(kwargs)
+    kwargs.pop("program_config", None)  # the program configs passed with a sharded input expect that input sharded
     x = ttnn.sharded_to_interleaved(args[0] if args else kwargs.pop("input_tensor_a"), ttnn.DRAM_MEMORY_CONFIG)
     want = kwargs.get("memory_config")
     out = original(x, *args[1:], **{**kwargs, "memory_config": ttnn.DRAM_MEMORY_CONFIG})
@@ -172,14 +173,18 @@ WORKAROUNDS = [
         applies=_fewer_cores_than_heads,
         rewrite=_merge_heads_on_device,
     ),
-    Workaround(
-        name="small_grid_unshard_linear",
-        target="ttnn.linear",
-        reason="decode norms emit L1-sharded activations; with ttnn's default program those collide with the "
-        "matmul's L1 buffers on a 2-core grid (QUASAR_GAPS G4)",
-        remove_when="decode norms and linears on small grids are configured interleaved end to end",
-        applies=_small_grid_sharded_linear,
-        rewrite=_linear_from_interleaved,
+    *(
+        Workaround(
+            name=f"quasar_unshard_{op}_in0",
+            target=f"ttnn.{op}",
+            reason="matmul with a sharded in0 builds a dataflow buffer that a data-movement kernel both produces and "
+            "consumes, which Quasar rejects (QUASAR_GAPS Q4); on small grids the sharded input also collides with "
+            "the matmul's L1 buffers (G4)",
+            remove_when="the matmul factories take a sharded in0 on Quasar",
+            applies=_quasar_sharded_in0_matmul,
+            rewrite=_matmul_from_interleaved,
+        )
+        for op in ("linear", "matmul")
     ),
     Workaround(
         name="small_grid_untilize_single_core",

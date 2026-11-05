@@ -699,16 +699,26 @@ def test_untilize_single_core_workaround_predicate():
     assert not wa.applies((_FakeRowTensor(2, 1, 151936),), {"use_multicore": False})  # already single core
 
 
-def test_unshard_linear_workaround_predicate():
+class _FakeArchShardTensor(_FakeShardTensor):
+    def __init__(self, sharded, quasar):
+        import ttnn
+
+        super().__init__(8, 12, sharded)
+        arch = ttnn.device.Arch.QUASAR if quasar else ttnn.device.Arch.WORMHOLE_B0
+        self._d.arch = lambda: arch
+
+
+@pytest.mark.parametrize("op", ["linear", "matmul"])
+def test_unshard_matmul_in0_workaround_predicate(op):
     from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
 
-    wa = next(w for w in O.WORKAROUNDS if w.name == "small_grid_unshard_linear")
-    assert wa.target == "ttnn.linear"
+    wa = next(w for w in O.WORKAROUNDS if w.name == f"quasar_unshard_{op}_in0")
+    assert wa.target == f"ttnn.{op}"
     w = object()
-    assert wa.applies((_FakeShardTensor(2, 1, True), w), {})
-    assert not wa.applies((_FakeShardTensor(8, 8, True), w), {})  # full grid: stock behaviour
-    assert not wa.applies((_FakeShardTensor(2, 1, False), w), {})  # interleaved input: nothing to do
-    assert not wa.applies((_FakeShardTensor(2, 1, True), w), {"program_config": object()})  # explicit config wins
+    assert wa.applies((_FakeArchShardTensor(True, True), w), {})
+    assert wa.applies((_FakeArchShardTensor(True, True), w), {"program_config": object()})  # any config, any grid
+    assert not wa.applies((_FakeArchShardTensor(False, True), w), {})  # interleaved input: nothing to do
+    assert not wa.applies((_FakeArchShardTensor(True, False), w), {})  # WH/BH: stock behaviour
 
 
 def test_uncertified_fallback_refused(monkeypatch, expect_error):
