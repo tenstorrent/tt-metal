@@ -1802,46 +1802,18 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
 }
 
-// clang-format off
-/**
- * Initiates an inline write of a 32-bit value to a NOC destination.
- * This function must be preceded by a call to \a noc_fast_write_dw_inline_set_state.
- * This function is used to issue the actual write request after the state has been set up.
- * The 32-bit value and part of the destination address can also be set in this API
- * (Either hi or lo address should be getting updated).
- *
- * The destination node can be either a Tensix core+L1 memory
- * address or a PCIe controller; This API does not support DRAM addresses.
- *
- * Note: On Blackhole, this API can only write to stream registers, writing to L1 will cause hangs!
- *
- * Return value: None
- *
- * | Argument                            | Description                                            | Type     | Valid Range                      | Required |
- * |-------------------------------------|--------------------------------------------------------|----------|----------------------------------|----------|
- * | noc                                 | NOC to use for the transaction                         | uint32_t | 0 or 1                           | True     |
- * | cmd_buf                             | Command buffer to use for the transaction              | uint32_t | 0 - 3                            | True     |
- * | val                                 | The value to be written                                | uint32_t | Any uint32_t value               | False    |
- * | dest_addr                           | Encoding of the destination NOC location (x,y)+address | uint64_t | Results of \a get_noc_addr calls | False    |
- * | update_addr_lo (template parameter) | Whether to update the lower 32 bits of the address     | bool     | true or false                    | False    |
- * | update_addr_hi (template parameter) | Whether to update the upper 32 bits of the address     | bool     | true or false                    | False    |
- * | update_val (template parameter)     | Whether to set the value to be written                 | bool     | true or false                    | False    |
- * | posted (template parameter)         | Whether the call is posted (i.e. ack requirement)      | bool     | true or false                    | False    |
- * | update_counter (template parameter) | Whether to update the write counters                   | bool     | true or false                    | False    |
- * | dst_type (template parameter)       | Whether the write is targeting L1 or a Stream Register | InlineWriteDst     | DEFAULT, L1, REG       | False    |
- */
-// clang-format on
+// The register writes of both forms of noc_fast_write_dw_inline_with_state below; call those, not this.
 template <
-    uint8_t noc_mode = DM_DEDICATED_NOC,
-    bool update_addr_lo = false,
-    bool update_addr_hi = false,
-    bool update_val = false,
-    bool posted = false,
-    bool update_counter = true,
-    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
-    bool skip_cmdbuf_chk = false>  // the caller has already seen the command buffer ready
-inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
-    uint32_t noc, uint32_t cmd_buf, uint32_t val = 0, uint64_t dest_addr = 0, uint32_t dst_noc_addr = 0) {
+    uint8_t noc_mode,
+    bool update_addr_lo,
+    bool update_addr_hi,
+    bool update_val,
+    bool posted,
+    bool update_counter,
+    InlineWriteDst dst_type,
+    bool skip_cmdbuf_chk>
+inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state_impl(
+    uint32_t noc, uint32_t cmd_buf, uint32_t val, uint64_t dest_addr, uint32_t dst_noc_addr) {
     if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
         if constexpr (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
@@ -1862,7 +1834,6 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
             NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
         }
         if constexpr (update_addr_hi) {
-            // Both halves: the node comes as its own argument (dst_noc_addr), as noc_wwrite_with_state takes it.
             NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, dst_noc_addr);
         }
     } else if constexpr (update_addr_hi) {
@@ -1881,6 +1852,89 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
             noc_nonposted_writes_acked[noc] += 1;
         }
     }
+}
+
+// clang-format off
+/**
+ * Initiates an inline write of a 32-bit value to a NOC destination.
+ * This function must be preceded by a call to \a noc_fast_write_dw_inline_set_state.
+ * This function is used to issue the actual write request after the state has been set up.
+ * The 32-bit value and part of the destination address can also be set in this API. This form updates one half of the
+ * address from \a dest_addr: the low address (update_addr_lo) or the node (update_addr_hi). To update both, use the
+ * form that also takes \a dst_noc_addr. Registers not updated here keep the values the set_state call wrote.
+ *
+ * The destination node can be either a Tensix core+L1 memory
+ * address or a PCIe controller; This API does not support DRAM addresses.
+ *
+ * Note: On Blackhole, this API can only write to stream registers, writing to L1 will cause hangs!
+ *
+ * Return value: None
+ *
+ * | Argument                             | Description                                                     | Type           | Valid Range                     | Required |
+ * |--------------------------------------|-----------------------------------------------------------------|----------------|---------------------------------|----------|
+ * | noc                                  | NOC to use for the transaction                                  | uint32_t       | 0 or 1                          | True     |
+ * | cmd_buf                              | Command buffer to use for the transaction                       | uint32_t       | 0 - 3                           | True     |
+ * | val                                  | The value to be written                                         | uint32_t       | Any uint32_t value              | False    |
+ * | dest_addr                            | The low address (update_addr_lo) or the node (update_addr_hi)   | uint64_t       | Local address, or node: noc_addr >> NOC_ADDR_COORD_SHIFT | False |
+ * | update_addr_lo (template parameter)  | Whether to update the lower 32 bits of the address              | bool           | true or false                   | False    |
+ * | update_addr_hi (template parameter)  | Whether to update the upper 32 bits of the address (the node)   | bool           | true or false                   | False    |
+ * | update_val (template parameter)      | Whether to set the value to be written                          | bool           | true or false                   | False    |
+ * | posted (template parameter)          | Whether the call is posted (i.e. ack requirement)               | bool           | true or false                   | False    |
+ * | update_counter (template parameter)  | Whether to update the write counters                            | bool           | true or false                   | False    |
+ * | dst_type (template parameter)        | Whether the write is targeting L1 or a Stream Register          | InlineWriteDst | DEFAULT, L1, REG                | False    |
+ * | skip_cmdbuf_chk (template parameter) | Whether to skip the command buffer wait (caller saw it ready)   | bool           | true or false                   | False    |
+ */
+// clang-format on
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    bool update_addr_lo = false,
+    bool update_addr_hi = false,
+    bool update_val = false,
+    bool posted = false,
+    bool update_counter = true,
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
+    bool skip_cmdbuf_chk = false>
+inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
+    uint32_t noc, uint32_t cmd_buf, uint32_t val = 0, uint64_t dest_addr = 0) {
+    static_assert(
+        !(update_addr_lo && update_addr_hi),
+        "Only High or Low address update is supported from dest_addr; to update both, pass the node as dst_noc_addr");
+    noc_fast_write_dw_inline_with_state_impl<
+        noc_mode,
+        update_addr_lo,
+        update_addr_hi,
+        update_val,
+        posted,
+        update_counter,
+        dst_type,
+        skip_cmdbuf_chk>(noc, cmd_buf, val, dest_addr, 0);
+}
+
+// The same, updating both halves of the address: the low address from \a dest_addr and the node from \a dst_noc_addr
+// (noc_addr >> NOC_ADDR_COORD_SHIFT), as noc_wwrite_with_state takes its node. Both update_addr_lo and update_addr_hi
+// must be set.
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    bool update_addr_lo = false,
+    bool update_addr_hi = false,
+    bool update_val = false,
+    bool posted = false,
+    bool update_counter = true,
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
+    bool skip_cmdbuf_chk = false>
+inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
+    uint32_t noc, uint32_t cmd_buf, uint32_t val, uint64_t dest_addr, uint32_t dst_noc_addr) {
+    static_assert(
+        update_addr_lo && update_addr_hi, "dst_noc_addr is the node of a write that updates both address halves");
+    noc_fast_write_dw_inline_with_state_impl<
+        noc_mode,
+        update_addr_lo,
+        update_addr_hi,
+        update_val,
+        posted,
+        update_counter,
+        dst_type,
+        skip_cmdbuf_chk>(noc, cmd_buf, val, dest_addr, dst_noc_addr);
 }
 
 // clang-format off

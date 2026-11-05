@@ -2315,13 +2315,25 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
     noc_inline_dw_write_set_state_impl<posted, set_val>(addr, val, be, cmd_buf, noc, vc);
 }
 
+#ifdef ARCH_BLACKHOLE
+// Issue https://github.com/tenstorrent/tt-metal/issues/28758: always update counter for blackhole as a temporary
+// workaround for avoiding hangs in fabric router, as counters will be checked inside the
+// noc_fast_spoof_write_dw_inline, will remove this restriction once all inline write change to stream reg write.
+template <bool update_counter>
+inline constexpr bool inline_dw_write_with_state_updates_counter = true;
+#else
+template <bool update_counter>
+inline constexpr bool inline_dw_write_with_state_updates_counter = update_counter;
+#endif
+
 // clang-format off
 /**
  * Initiates an inline write of a 32-bit value to a NOC destination.
  * This function must be preceded by a call to \a noc_inline_dw_write_set_state.
  * This function is used to issue the actual write request after the state has been set up.
- * The 32-bit value and part of the destination address can also be set in this API: the low address (update_addr_lo),
- * the node (update_addr_hi, from addr), or both (from addr and dst_noc_addr).
+ * The 32-bit value and part of the destination address can also be set in this API. This form updates one half of the
+ * address from \a addr: the low address (update_addr_lo) or the node (update_addr_hi). To update both, use the form
+ * that also takes \a dst_noc_addr.
  * \a noc_inline_dw_write can be used instead if the state preservation is not
  * needed. Also, see \a noc_async_write_barrier.
  *
@@ -2332,19 +2344,19 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
  *
  * Return value: None
  *
- * | Argument                                   | Description                                            | Data type | Valid range   | required |
- * |--------------------------------------------|--------------------------------------------------------|-----------|---------------|----------|
- * | val                                        | The value to be written                                | uint32_t  | Any uint32_t  | True     |
- * | addr                                       | The local address to write to (if not set in state)    | uint32_t  | 0..1MB        | False    |
- * | cmd_buf                                    | Command buffer to use for the transaction              | uint8_t   | 0-3           | False    |
- * | noc                                        | NOC to use for the transaction                         | uint8_t   | 0 or 1        | False    |
- * | dst_noc_addr                               | The node coordinate, when both halves are updated      | uint32_t  | (noc_addr >> NOC_ADDR_COORD_SHIFT) | False |
- * | update_addr_lo (template parameter)        | Whether to update the lower 32 bits of the address     | bool      | true or false | False    |
- * | update_counter (template parameter)        | Whether to update the write counters                   | bool      | true or false | False    |
- * | posted (template parameter)                | Whether the call is posted (i.e. ack requirement)      | bool      | true or false | False    |
- * | update_addr_hi (template parameter)        | Whether to update the upper 32 bits of the address     | bool      | true or false | False    |
- * | update_val (template parameter)            | Whether to set the value to be written                 | bool      | true or false | False    |
- * | dst_type (template parameter)              | Whether the write is targeting L1 or a Stream Register | InlineWriteDst| DEFAULT, L1, REG | False    |
+ * | Argument                             | Description                                                     | Data type      | Valid range      | required |
+ * |--------------------------------------|-----------------------------------------------------------------|----------------|------------------|----------|
+ * | val                                  | The value to be written                                         | uint32_t       | Any uint32_t     | True     |
+ * | addr                                 | The low address (update_addr_lo) or the node (update_addr_hi)   | uint32_t       | 0..1MB, or node: noc_addr >> NOC_ADDR_COORD_SHIFT | False |
+ * | cmd_buf                              | Command buffer to use for the transaction                       | uint8_t        | 0-3              | False    |
+ * | noc                                  | NOC to use for the transaction                                  | uint8_t        | 0 or 1           | False    |
+ * | update_addr_lo (template parameter)  | Whether to update the lower 32 bits of the address              | bool           | true or false    | False    |
+ * | update_counter (template parameter)  | Whether to update the write counters                            | bool           | true or false    | False    |
+ * | posted (template parameter)          | Whether the call is posted (i.e. ack requirement)               | bool           | true or false    | False    |
+ * | update_addr_hi (template parameter)  | Whether to update the upper 32 bits of the address (the node)   | bool           | true or false    | False    |
+ * | update_val (template parameter)      | Whether to set the value to be written                          | bool           | true or false    | False    |
+ * | dst_type (template parameter)        | Whether the write is targeting L1 or a Stream Register          | InlineWriteDst | DEFAULT, L1, REG | False    |
+ * | skip_cmdbuf_chk (template parameter) | Whether to skip the command buffer wait (caller saw it ready)   | bool           | true or false    | False    |
  */
 // clang-format on
 template <
@@ -2354,22 +2366,9 @@ template <
     bool update_addr_hi = false,
     bool update_val = false,
     InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
-    bool skip_cmdbuf_chk = false>  // the caller has already seen the command buffer ready
+    bool skip_cmdbuf_chk = false>
 FORCE_INLINE void noc_inline_dw_write_with_state(
-    uint32_t val,
-    uint32_t addr = 0,
-    uint8_t cmd_buf = write_at_cmd_buf,
-    uint8_t noc = noc_index,
-    uint32_t dst_noc_addr = 0) {
-#ifdef ARCH_BLACKHOLE
-    // Issue https://github.com/tenstorrent/tt-metal/issues/28758: always update counter for blackhole as a temporary
-    // workaround for avoiding hangs in fabric router, as counters will be checked inside the
-    // noc_fast_spoof_write_dw_inline, will remove this restriction once all inline write change to stream reg write.
-    constexpr bool update_counter_in_callee = true;
-#else
-    constexpr bool update_counter_in_callee = update_counter;
-#endif
-
+    uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
     WAYPOINT("NWIW");
     noc_fast_write_dw_inline_with_state<
         noc_mode,
@@ -2377,7 +2376,32 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
         update_addr_hi,
         update_val,
         posted,
-        update_counter_in_callee,
+        inline_dw_write_with_state_updates_counter<update_counter>,
+        dst_type,
+        skip_cmdbuf_chk>(noc, cmd_buf, val, addr);
+    WAYPOINT("NWID");
+}
+
+// The same, updating both halves of the address: the low address from \a addr and the node from \a dst_noc_addr
+// (noc_addr >> NOC_ADDR_COORD_SHIFT). Both update_addr_lo and update_addr_hi must be set.
+template <
+    bool update_addr_lo = false,
+    bool update_counter = true,
+    bool posted = false,
+    bool update_addr_hi = false,
+    bool update_val = false,
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
+    bool skip_cmdbuf_chk = false>
+FORCE_INLINE void noc_inline_dw_write_with_state(
+    uint32_t val, uint32_t addr, uint8_t cmd_buf, uint8_t noc, uint32_t dst_noc_addr) {
+    WAYPOINT("NWIW");
+    noc_fast_write_dw_inline_with_state<
+        noc_mode,
+        update_addr_lo,
+        update_addr_hi,
+        update_val,
+        posted,
+        inline_dw_write_with_state_updates_counter<update_counter>,
         dst_type,
         skip_cmdbuf_chk>(noc, cmd_buf, val, addr, dst_noc_addr);
     WAYPOINT("NWID");
