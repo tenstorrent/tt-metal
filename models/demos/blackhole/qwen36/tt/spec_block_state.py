@@ -24,6 +24,8 @@ copy_kv_cache_blocks pair, and in mode "align" a column-0 block whose state ends
 that state for prefix-cache hits without a copy when the step had no drafts).
 """
 
+import os
+import time
 from dataclasses import dataclass, field
 
 import torch
@@ -485,8 +487,34 @@ class SpecGdnBlockState:
     def after_verify(self):
         """Once the staged verify is enqueued and the window parity flipped (verify_win_cur is the window it writes):
         enqueue the conv writes it left due behind it."""
-        for u, t, g, b in self.book.take_pending():
-            self.materialize(u, t, g, b)
+        due = self.book.take_pending()
+        with self._timed("boundary conv writes", len(due)):
+            for u, t, g, b in due:
+                self.materialize(u, t, g, b)
+
+    def _timed(self, kind, n):
+        """QWEN36_MAMBA_SPEC_TIMING=1: synchronize around a block operation and log its milliseconds (the synchronizes
+        cost time of their own; off by default)."""
+        state = self
+
+        class _Timer:
+            def __enter__(self):
+                self.on = n > 0 and os.environ.get("QWEN36_MAMBA_SPEC_TIMING", "0") == "1"
+                if self.on:
+                    import ttnn
+
+                    ttnn.synchronize_device(state.mesh)
+                    self.t0 = time.perf_counter()
+
+            def __exit__(self, *exc):
+                if self.on and exc[0] is None:
+                    import ttnn
+                    from loguru import logger
+
+                    ttnn.synchronize_device(state.mesh)
+                    logger.info(f"[mamba_spec] {kind}: {n} in {(time.perf_counter() - self.t0) * 1e3:.2f} ms")
+
+        return _Timer()
 
     def forget_row(self, u):
         self.book.forget_row(u)
@@ -570,11 +598,14 @@ class SpecGdnBlockState:
     def copy_blocks(self, copies):
         from models.demos.blackhole.qwen36.tt.gdn_block_state import copy_kv_blocks
 
-        for op in self.book.copy_plan(copies):
-            if op[0] == "copy":
-                copy_kv_blocks(self.model, [(op[1], op[2])])
-            else:
-                self.materialize(*op[1:])
+        ops = self.book.copy_plan(copies)
+        n_conv = sum(1 for op in ops if op[0] == "conv")
+        with self._timed(f"block copies ({n_conv} with conv writes)", len(ops) - n_conv):
+            for op in ops:
+                if op[0] == "copy":
+                    copy_kv_blocks(self.model, [(op[1], op[2])])
+                else:
+                    self.materialize(*op[1:])
 
     def zero_blocks(self, block_ids):
         from models.demos.blackhole.qwen36.tt.gdn_block_state import zero_kv_blocks
