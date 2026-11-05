@@ -28,12 +28,14 @@ class QKNormRope:
         self.D, self.eps, self.device = D, eps, device
 
     def __call__(self, x, cos, sin):
-        """x [1, H, T, D] bf16 TILE (head-major); cos, sin [..., T, 64] bf16 TILE -> rope(rms_norm(x) * w), same shape."""
+        """x [1, H, T, D] bf16 TILE (head-major); cos, sin [..., T, 64] bf16 TILE -> rope(rms_norm(x) * w), same shape.
+        T need not fill a tile (decode: T = 1, cos / sin [1, 1, 64])."""
         device, D = self.device, self.D
         _, H, T, Dx = list(x.shape)
-        assert Dx == D and T % 32 == 0, (x.shape, D)
+        assert Dx == D, (x.shape, D)
         assert list(cos.shape)[-1] == 64 and list(sin.shape)[-1] == 64, (cos.shape, sin.shape)
-        Mt, Dt, Rt = T // 32, D // 32, 2
+        # T < 32 (decode: one token): the padded tile rows go through too, only the logical rows are read later
+        Mt, Dt, Rt = -(-T // 32), D // 32, 2
         out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, H, T, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         grid = device.compute_with_storage_grid_size()
         items = H * Mt

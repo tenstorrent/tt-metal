@@ -200,15 +200,53 @@ def prefill_stand_in(weights, num_heads, head_dim):
     return QGSplitTtnn(weights, num_heads, head_dim, inner=TernaryAttentionPrefillTtnn(weights, t))
 
 
+class _NormRope:
+    """Decode q or k awaiting its per-head norm, fused with the RoPE (tprefill/qk_rope.QKNormRope) in apply_rope;
+    head_major once the shared code's transpose(1, 2) ran on it."""
+
+    def __init__(self, t, op, head_major=False):
+        self.t, self.op, self.head_major = t, op, head_major
+
+
 class TernaryAttentionTtnn:
     """ttnn stand-in for gated_attention_forward_ttnn's module (decode only): its four projections go to the
-    TernaryAttention, everything else is ttnn."""
+    TernaryAttention; the q / k norms run fused with the RoPE (apply_rope, BONSAI_DECODE_QKR=0: off); everything else
+    is ttnn."""
 
     def __init__(self, weights, ternary: TernaryAttention):
         self._w, self._t = weights, ternary
 
     def __getattr__(self, name):
         return getattr(ttnn, name)
+
+    def rms_norm(self, t, *args, **kwargs):
+        qkr = getattr(self._t, "pre_qkr", None) or {}
+        w = kwargs.get("weight")
+        if os.environ.get("BONSAI_DECODE_QKR", "1") == "1" and w is not None and id(w) in qkr and not args:
+            return _NormRope(t, qkr[id(w)])
+        return ttnn.rms_norm(t, *args, **kwargs)
+
+    def transpose(self, t, *args, **kwargs):
+        if isinstance(t, _NormRope):
+            y = ttnn.transpose(t.t, *args, **kwargs)  # [B, T, H, D] -> [B, H, T, D]: QKNormRope's head-major input
+            ttnn.deallocate(t.t)
+            return _NormRope(y, t.op, head_major=True)
+        return ttnn.transpose(t, *args, **kwargs)
+
+    def deallocate(self, t, *args, **kwargs):
+        if isinstance(t, _NormRope):
+            return ttnn.deallocate(t.t)
+        return ttnn.deallocate(t, *args, **kwargs)
+
+    def apply_rope(self, q, k, cos, sin, orig):
+        """Stands in for the shared apply_rotary_pos_emb_ttnn (attention/decode.py swaps it in)."""
+        if isinstance(q, _NormRope) and q.head_major and isinstance(k, _NormRope) and k.head_major:
+            out = []
+            for t in (q, k):
+                out.append(t.op(t.t, cos, sin))
+                ttnn.deallocate(t.t)
+            return tuple(out)
+        return orig(q, k, cos, sin)
 
     def linear(self, a, b, *args, **kwargs):
         w, t = self._w, self._t

@@ -43,8 +43,11 @@ def decode_forward(
         # Bonsai: q/k/v/o in its own ternary weights (models/demos/blackhole/bonsai2/tt/ternary/attention.py).
         from models.demos.blackhole.bonsai2.tt.ternary.attention import TernaryAttentionTtnn
 
-        _orig = _attn_mod.ttnn
-        _attn_mod.ttnn = TernaryAttentionTtnn(weights, ternary)
+        _orig, _orig_rope = _attn_mod.ttnn, _attn_mod.apply_rotary_pos_emb_ttnn
+        si = TernaryAttentionTtnn(weights, ternary)
+        _attn_mod.ttnn = si
+        # Bonsai: q / k norm + RoPE in one op when the stand-in deferred the norms (TernaryAttentionTtnn.apply_rope)
+        _attn_mod.apply_rotary_pos_emb_ttnn = lambda q, k, c, s: si.apply_rope(q, k, c, s, _orig_rope)
         try:
             return decode_forward(
                 x, cos, sin, weights, config, device, ckc, mc, position_tensor, page_table,
@@ -52,6 +55,7 @@ def decode_forward(
             )  # fmt: skip
         finally:
             _attn_mod.ttnn = _orig
+            _attn_mod.apply_rotary_pos_emb_ttnn = _orig_rope
     output, _, _ = gated_attention_forward_ttnn(
         hidden_states=x,
         q_proj_weight=weights.q_proj,
