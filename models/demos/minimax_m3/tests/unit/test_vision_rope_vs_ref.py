@@ -8,6 +8,8 @@ The device rotates q and k with ttnn.experimental.rotary_embedding_llama, which 
 the q and k rows of wqkv are packed in the head order of attention._rope_head_order, padded from 80 to 96, and
 rope.py lays out the cos and sin in that order. The tests check, for square, non-square, two-frame and two-image grids
 and one with a side of 2 patches:
+  - rope_cos_sin, from which rope.py makes the device's tables, equals Hugging Face's MiniMaxM3VL3DRotaryEmbedding bit
+    for bit, for the checkpoint's head_dim 80 and for 64 with another theta;
   - the op's rotation, run on host, of q and k in that order with the cos and sin of rope_cos_sin_padded equals
     Hugging Face's rotation (apply_rotary_pos_emb_vision with MiniMaxM3VL3DRotaryEmbedding's cos and sin) bit for
     bit, keeps the 16 pad dims at zero and leaves q k^T as Hugging Face's;
@@ -38,12 +40,15 @@ from models.demos.minimax_m3.tt.vision.attention import (
 )
 from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.model import ROPE_CACHE_GRIDS, M3VLVisionModel
-from models.demos.minimax_m3.tt.vision.rope import rope_cos_sin_padded
+from models.demos.minimax_m3.tt.vision.rope import rope_cos_sin, rope_cos_sin_padded
 
 from .vision_checkpoint import random_vision_weights
 from .vision_helpers import hf_vision_modules
 
 HEAD_DIM, PADDED_HEAD_DIM, NUM_HEADS, THETA, MERGE = 80, 96, 16, 10000.0, 2
+# (head_dim, theta) of the check against Hugging Face's cos and sin: the checkpoint's head_dim, which rotates 78 dims
+# and passes 2 through, and 64, which splits the rotary dims over T, H and W otherwise (60 rotated, 4 passed through).
+ROPE_DIMS = {"hd80": (HEAD_DIM, THETA), "hd64": (64, 5000.0)}
 
 # (t, h, w) patch grid of each image in the sequence.
 ROPE_GRIDS = {
@@ -79,6 +84,18 @@ def rotary_embedding_llama(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
     trans_mat = get_rot_transformation_mat()[0, 0].to(x.dtype)  # (32, 32)
     rotated = (x.unflatten(-1, (-1, trans_mat.shape[0])) @ trans_mat).flatten(-2)
     return x * cos + rotated * sin
+
+
+@torch.no_grad()
+@parametrize_rope_grids
+@pytest.mark.parametrize("head_dim, theta", list(ROPE_DIMS.values()), ids=list(ROPE_DIMS))
+def test_vision_rope_vs_hf(head_dim, theta, grid_thw, hf_vision):
+    """rope_cos_sin equals Hugging Face's MiniMaxM3VL3DRotaryEmbedding, bit for bit."""
+    grid = torch.tensor(grid_thw)
+    hf_cos, hf_sin = hf_rope(hf_vision, grid, head_dim, theta)
+    cos, sin = rope_cos_sin(grid, head_dim, theta, MERGE)
+    torch.testing.assert_close(cos, hf_cos, rtol=0, atol=0, msg=lambda m: f"cos: {m}")
+    torch.testing.assert_close(sin, hf_sin, rtol=0, atol=0, msg=lambda m: f"sin: {m}")
 
 
 @torch.no_grad()

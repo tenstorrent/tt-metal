@@ -92,7 +92,7 @@ PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE=1024 PREFILL_FORWARD_TOKENS_BUDGET=4096 PRE
 
 Module-level PCC tests (vs torch reference / HF) live under [`tests/unit/`](tests/unit/); golden generation is in [`scripts/`](scripts/). The unit tests that model real dims (RoPE θ, MoE routing, MSA parameters) read them from the selected variant's config, so `M3_MODEL_VARIANT=MiniMax-M3.1 pytest ...` runs them for M3.1; tests that need particular layer types set an explicit schedule (`utils/model_variant.with_layer_schedule`).
 
-The vision encoder (`tt/vision/`, one image per forward) has its own tests on one card, with seeded random weights and no checkpoint: its device tests compare each module and the whole encoder with the torch reference in `reference/vision.py`, and its host tests need no device.
+The vision encoder (`tt/vision/`, one image per forward) has its own tests on one card, with seeded random weights and no checkpoint: its device tests compare each module and the whole encoder with Hugging Face's vision tower and projector (transformers' `minimax_m3_vl`), and its host tests need no device.
 
 ```bash
 # The vision tests at the CI grids; M3_VISION_ALL_GRIDS=1 runs every grid of VISION_GRIDS (tests/unit/vision_helpers.py)
@@ -234,8 +234,8 @@ Multi-galaxy pipeline-parallel prefill (2 / 4 galaxies) — running, KV-cache ac
 tt/attention/     dense SP (ring_joint) + sparse MSA (indexer + sparse_sdpa_msa), RoPE, KV-cache
 tt/moe/   EP MoE (TtMiniMaxMoE + fused swigluoai routed expert), activation
 tt/               dense_mlp, layer, model, rms_norm, topk, mlp, weight_cache, tt_prefill_runtime
-tt/vision/        vision encoder (ViT tower + projector), its input checks, RoPE tables and program configs; loader.py builds its torch reference from the checkpoint
-reference/        torch reference model + sparse GQA prefill; vision.py: torch reference of the vision encoder
+tt/vision/        vision encoder (ViT tower + projector), its input checks, RoPE tables and program configs; loader.py reads its weights from the checkpoint
+reference/        torch reference model + sparse GQA prefill
 scripts/          golden KV-cache generation + verification
 scripts/prefill_matrix/  repeatable (new x cached) prefill perf matrix on the 16-stage pipeline (see its README)
 docs/             multi-galaxy pipeline-parallel prefill running & testing

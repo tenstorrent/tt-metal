@@ -94,7 +94,7 @@ class M3VLMLP(LightweightModule):
         ref: torch.nn.Module,
         dtype=ttnn.bfloat16,
     ) -> "M3VLMLP":
-        """Construct from a torch MLP with fc1 and fc2: VisionMLP of the Torch reference (reference/vision.py)."""
+        """Construct from a torch MLP with fc1 and fc2, such as Hugging Face's MiniMaxM3VLVisionMLP."""
         return cls.from_linears(mesh_device, ref.fc1, ref.fc2, dtype=dtype)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:

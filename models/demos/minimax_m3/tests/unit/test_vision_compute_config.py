@@ -19,12 +19,12 @@ import dataclasses
 import torch
 
 import ttnn
-from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionEncoder
 from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
 from models.demos.minimax_m3.tt.vision.rope import rope_cos_sin_padded
 
+from .vision_checkpoint import random_vision_weights
 from .vision_helpers import grid_device
 
 # 2 narrow layers, with 2 heads of the checkpoint's head size, 80.
@@ -52,11 +52,11 @@ def _fields(kernel_config) -> tuple:
 
 
 def _build(monkeypatch, config: MiniMaxM3VisionConfig = CONFIG) -> M3VLVisionModel:
-    """M3VLVisionModel.from_torch of a reference with config on a stand-in 12x10 device; ttnn.from_torch keeps the
-    host tensor."""
+    """M3VLVisionModel.from_state_dict of seeded random weights of config on a stand-in 12x10 device;
+    ttnn.from_torch keeps the host tensor."""
     monkeypatch.setattr(ttnn, "from_torch", lambda tensor, **kwargs: tensor)
     monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
-    return M3VLVisionModel.from_torch(grid_device(12, 10), MiniMaxM3VisionEncoder(config))
+    return M3VLVisionModel.from_state_dict(grid_device(12, 10), random_vision_weights(config), config)
 
 
 def test_vision_layernorm_compute_config(monkeypatch):

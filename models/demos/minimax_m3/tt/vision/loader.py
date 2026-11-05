@@ -6,21 +6,19 @@ Weight loader for the MiniMax-M3 vision tower and projector.
 Reads only the vision tensors (`vision_tower.*`, `multi_modal_projector.*`, `patch_merge_mlp.*`), through the text
 reference's SafetensorsWeights: it opens only the shards that the checkpoint's model.safetensors.index.json lists for
 them and dequantizes a quantized weight as the text model's loader does; no transformers needed. The checkpoint was
-saved with transformers 4.52.4 names, which `_remap` turns into the transformers 5.12 MiniMaxM3VLModel names.
-`build_reference` puts the weights into the Torch reference (reference/vision.py), the module tree that the TT
-`from_torch` builders read, built with the vision config of the checkpoint's config.json.
+saved with transformers 4.52.4 names, which `_remap` turns into the transformers 5.12 MiniMaxM3VLModel names that
+M3VLVisionModel.from_state_dict takes. tests/test_vision_accuracy.py checks on the CPU that they are the names that
+transformers' own rules give the checkpoint's tensors (tests/golden_hf_vision.py's vision_weights), by which its
+goldens were made.
 """
 from __future__ import annotations
 
-import json
 import os
 from typing import Dict
 
 import torch
 
 from models.demos.minimax_m3.reference.model import SafetensorsWeights
-from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionEncoder
-from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.utils.checkpoint import is_aux_key, plain_key
 
 _WANT = ("vision_tower.", "multi_modal_projector.", "patch_merge_mlp.")
@@ -59,12 +57,3 @@ def load_vision_state_dict(snapshot_dir: str, dtype: torch.dtype = torch.float32
         index_path = os.path.join(snapshot_dir, "model.safetensors.index.json")
         raise ValueError(f"{index_path} lists no tensor starting with {', '.join(_WANT)}")
     return {_remap(key): weights.get(key) for key in keys}
-
-
-def build_reference(snapshot_dir: str) -> MiniMaxM3VisionEncoder:
-    """Torch reference with the vision config (MiniMaxM3VisionConfig.from_hf_config of its config.json) and the vision
-    weights of the checkpoint in snapshot_dir. config.json is read first, so a missing or malformed one fails before the
-    weights are read."""
-    with open(os.path.join(_checkpoint_dir(snapshot_dir), "config.json")) as f:
-        config = MiniMaxM3VisionConfig.from_hf_config(json.load(f))
-    return MiniMaxM3VisionEncoder(config).load_hf_state_dict(load_vision_state_dict(snapshot_dir)).eval()

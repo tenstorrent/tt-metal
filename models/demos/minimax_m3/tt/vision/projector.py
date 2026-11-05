@@ -53,7 +53,7 @@ class M3VLProjector(LightweightModule):
     def from_torch(
         cls,
         mesh_device,
-        ref_projector: torch.nn.Module,  # MultiModalProjector (reference/vision.py): linear_1/2, merge_linear_1/2
+        ref_projector: torch.nn.Module,  # Hugging Face's MiniMaxM3VLMultiModalProjector: linear_1/2, merge_linear_1/2
         dtype=ttnn.bfloat16,
     ) -> "M3VLProjector":
         return cls(

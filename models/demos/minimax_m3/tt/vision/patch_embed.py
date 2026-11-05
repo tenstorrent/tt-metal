@@ -13,9 +13,8 @@ Conv3d reduces to a single dot product per output channel, that is a
 per-patch Linear from 1176 to 1280, with no bias.
 
 We implement exactly that: flatten the Conv3d weight `[1280, 3, 2, 14, 14]`
-to `[1280, 1176]` and run one `ttnn.linear`. `from_torch` takes the Conv3d
-of the Torch reference (reference/vision.py), whose shape gives the patch
-geometry.
+to `[1280, 1176]` and run one `ttnn.linear`. `from_torch` takes the Conv3d,
+such as Hugging Face's, whose shape gives the patch geometry.
 
 There is no learned position embedding (M3-VL is RoPE-only) and no class
 token, so the projection output feeds straight into `pre_layrnorm`.

@@ -25,7 +25,7 @@ class M3VLLayerNorm(LightweightModule):
     """Interleaved LayerNorm with learned weight + bias.
 
     Construct it from the weight and bias tensors, or with from_torch from an
-    nn.LayerNorm, such as those of the Torch reference (reference/vision.py).
+    nn.LayerNorm, such as those of Hugging Face's vision tower.
     """
 
     def __init__(

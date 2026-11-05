@@ -46,7 +46,7 @@ class M3VLBlock(LightweightModule):
     def from_torch(
         cls,
         mesh_device,
-        ref_layer: torch.nn.Module,  # VisionEncoderLayer (reference/vision.py): layer_norm1/2, self_attn, mlp
+        ref_layer: torch.nn.Module,  # Hugging Face's MiniMaxM3VLVisionEncoderLayer: layer_norm1/2, self_attn, mlp
         padded_head_dim: int,
         dtype=ttnn.bfloat16,
     ) -> "M3VLBlock":

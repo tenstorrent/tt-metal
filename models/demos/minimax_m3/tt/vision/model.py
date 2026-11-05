@@ -230,33 +230,6 @@ class M3VLVisionModel(LightweightModule):
             projector=projector,
         )
 
-    @classmethod
-    def from_torch(
-        cls,
-        mesh_device,
-        reference,  # MiniMaxM3VisionEncoder from reference/vision.py, whose config gives the dimensions
-        with_projector: bool = True,
-        dtype=ttnn.bfloat16,
-    ) -> "M3VLVisionModel":
-        config = reference.config
-        # q, k and v heads padded to whole tiles on device (80 -> 96), in the weights and the RoPE tables.
-        padded_head_dim = nearest_32(config.head_dim)
-        patch_embed = M3VLPatchEmbed.from_torch(mesh_device, reference.patch_embed, dtype=dtype)
-        pre_layrnorm = M3VLLayerNorm.from_torch(mesh_device, reference.pre_layrnorm, dtype=dtype)
-        blocks = [
-            M3VLBlock.from_torch(mesh_device, ref_layer, padded_head_dim, dtype=dtype) for ref_layer in reference.layers
-        ]
-        projector = M3VLProjector.from_torch(mesh_device, reference.projector, dtype=dtype) if with_projector else None
-        return cls(
-            mesh_device=mesh_device,
-            config=config,
-            padded_head_dim=padded_head_dim,
-            patch_embed=patch_embed,
-            pre_layrnorm=pre_layrnorm,
-            blocks=blocks,
-            projector=projector,
-        )
-
     # ------------------------------------------------------------------
     def push_pixel_values(self, pixel_values: torch.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
         """Check one image's input and push its pixel values to device as forward_device takes them.

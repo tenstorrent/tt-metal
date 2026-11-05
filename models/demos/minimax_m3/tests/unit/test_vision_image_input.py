@@ -21,6 +21,7 @@ Run:
 """
 from __future__ import annotations
 
+import dataclasses
 from types import SimpleNamespace
 
 import pytest
@@ -29,9 +30,7 @@ import torch
 import ttnn
 from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.image_input import num_tokens
-from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
-from models.demos.minimax_m3.tt.vision.patch_embed import M3VLPatchEmbed
 
 CONFIG = MiniMaxM3VisionConfig()  # the checkpoint's: 1176 values per patch
 ROWS = torch.zeros(16, 1176)  # the patch rows of an image of 4 x 4 patches
@@ -154,11 +153,12 @@ def test_vision_model_uploads_pixels_as_bf16(dtype, expect_error, monkeypatch):
     """A model built with bfloat8_b weights takes one good image, and its pixel values go to the device as bf16, the
     only dtype the RoPE op takes. The image's grid of 4 x 6 patches is not square, so a token count of h * h would
     reject it, and its 24 x 1176 values of 4.0 add up to more than fp16 holds, so the fp16 case also checks that the
-    finite check does not overflow. No device: the module builders, the mesh mapper and ttnn.from_torch are stand-ins,
-    and from_torch records what it gets and stops the forward."""
+    finite check does not overflow. The model has no blocks, so it needs the weights of the patch embedding and
+    pre_layrnorm only. No device: the module builders, the mesh mapper and ttnn.from_torch are stand-ins, and
+    from_torch records what it gets and stops the forward."""
     weight_dtypes, uploads = [], []
 
-    def build(mesh_device, reference_module, dtype):
+    def build(mesh_device, *weights, dtype, **kwargs):
         weight_dtypes.append(dtype)
         return _device_work
 
@@ -166,12 +166,17 @@ def test_vision_model_uploads_pixels_as_bf16(dtype, expect_error, monkeypatch):
         uploads.append((tensor.dtype, tuple(tensor.shape), kwargs["dtype"]))
         raise RuntimeError("stop after the pixel upload")
 
-    monkeypatch.setattr(M3VLPatchEmbed, "from_torch", build)
-    monkeypatch.setattr(M3VLLayerNorm, "from_torch", build)
+    monkeypatch.setattr("models.demos.minimax_m3.tt.vision.model.M3VLPatchEmbed", build)
+    monkeypatch.setattr("models.demos.minimax_m3.tt.vision.model.M3VLLayerNorm", build)
     monkeypatch.setattr(ttnn, "from_torch", from_torch)
     monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
-    reference = SimpleNamespace(config=CONFIG, patch_embed=None, pre_layrnorm=None, layers=[])
-    model = M3VLVisionModel.from_torch(None, reference, with_projector=False, dtype=ttnn.bfloat8_b)
+    config = dataclasses.replace(CONFIG, num_hidden_layers=0)
+    weights = {
+        "vision_tower.embeddings.proj.weight": torch.zeros(config.hidden_size, config.patch_dim),
+        "vision_tower.pre_layrnorm.weight": torch.ones(config.hidden_size),
+        "vision_tower.pre_layrnorm.bias": torch.zeros(config.hidden_size),
+    }
+    model = M3VLVisionModel.from_state_dict(None, weights, config, with_projector=False, dtype=ttnn.bfloat8_b)
     with expect_error(RuntimeError, "stop after the pixel upload"):
         model.forward_tower(torch.full((24, 1176), 4.0, dtype=dtype), torch.tensor([[1, 4, 6]]))
     assert weight_dtypes == [ttnn.bfloat8_b, ttnn.bfloat8_b]

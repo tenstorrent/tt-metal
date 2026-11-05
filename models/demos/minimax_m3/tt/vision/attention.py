@@ -147,7 +147,7 @@ class M3VLAttention(LightweightModule):
     def from_torch(
         cls,
         mesh_device,
-        ref_attn: torch.nn.Module,  # VisionAttention (reference/vision.py): q_proj/k_proj/v_proj/out_proj, head_dim
+        ref_attn: torch.nn.Module,  # Hugging Face's MiniMaxM3VLVisionAttention: q_proj/k_proj/v_proj/out_proj, head_dim
         padded_head_dim: int,
         dtype=ttnn.bfloat16,
     ) -> "M3VLAttention":
