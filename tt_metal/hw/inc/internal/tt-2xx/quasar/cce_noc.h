@@ -9,14 +9,15 @@
 
 #pragma once
 
-#if !(defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC))
+#include <cstdint>
+
+#include "dev_mem_map.h"
+
+#ifndef KERAUNOS_CCE
 #error "cce_noc.h is for a Keraunos CCE (Quasar Ethernet core) only"
 #endif
 
-#include <cstdint>
-
 #include "api/debug/assert.h"
-#include "dev_mem_map.h"
 #include "hostdev/cce_spa_routes.h"
 #include "internal/risc_attribs.h"
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
@@ -97,26 +98,20 @@ FORCE_INLINE uint64_t sram_offset(uint64_t flat) {
     return offset;
 }
 
-// The iDMA address of @p noc_addr: its route's SRAM base plus the SRAM offset of its local part.
-FORCE_INLINE uint64_t dma_addr(uint64_t noc_addr) {
-    const Target target = lookup(noc_addr);
-    return target.sram_base + sram_offset(target.local);
-}
+// The address of @p target's local part through its route's SRAM base.
+FORCE_INLINE uint64_t routed_addr(const Target& target) { return target.sram_base + sram_offset(target.local); }
 
-// The iDMA address of @p flat, a flat address in this CCE's SRAM, either view.
-FORCE_INLINE uint64_t local_dma_addr(uint32_t flat) {
-    volatile CceNocRoutes& r = routes();
-    return dma_addr(NOC_XY_ADDR(r.self_x, r.self_y, flat));
-}
+// The iDMA address of @p noc_addr.
+FORCE_INLINE uint64_t dma_addr(uint64_t noc_addr) { return routed_addr(lookup(noc_addr)); }
+
+// The iDMA address of @p flat, a flat address in this CCE's SRAM, either view. Needs risc_init()'s my_x / my_y.
+FORCE_INLINE uint64_t local_dma_addr(uint32_t flat) { return dma_addr(NOC_XY_ADDR(my_x[0], my_y[0], flat)); }
 
 // The address a CPU load or store uses for @p noc_addr: on this CCE its local part as given (either view), on another
 // tile the system address.
 FORCE_INLINE uintptr_t cpu_addr(uint64_t noc_addr) {
     const Target target = lookup(noc_addr);
-    if (target.kind == CceNocRouteKind::THIS_CCE) {
-        return target.local;
-    }
-    return target.sram_base + sram_offset(target.local);
+    return target.kind == CceNocRouteKind::THIS_CCE ? target.local : routed_addr(target);
 }
 
 // Issues one iDMA copy of @p len bytes between two iDMA addresses, programming the whole command buffer as chippy's

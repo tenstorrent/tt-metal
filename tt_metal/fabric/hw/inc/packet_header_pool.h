@@ -26,7 +26,7 @@ private:
     static uint32_t current_offset_;
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
     static constexpr uint32_t POOL_BASE = MEM_DISPATCH_PACKET_HEADER_POOL_BASE;
-#elif defined(ARCH_QUASAR) && (defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC))
+#elif defined(KERAUNOS_CCE)
     // A Keraunos CCE writes headers through its uncached alias: the iDMA copy that sends one reads SRAM.
     static constexpr uint32_t POOL_BASE = MEM_IERISC_PACKET_HEADER_POOL_BASE + MEM_IERISC_UNCACHED_BASE;
 #else

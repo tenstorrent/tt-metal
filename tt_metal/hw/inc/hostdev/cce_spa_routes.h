@@ -39,7 +39,6 @@ inline constexpr uint32_t CCE_NOC_ROUTES_MAX = 16;
 inline constexpr uint32_t CCE_NOC_ROUTES_VALID = 0x54554F52;  // "ROUT"
 
 enum class CceNocRouteKind : uint8_t {
-    UNMAPPED = 0,
     THIS_CCE = 1,
     THIS_TILE_OTHER_CCE = 2,
     OTHER_TILE = 3,

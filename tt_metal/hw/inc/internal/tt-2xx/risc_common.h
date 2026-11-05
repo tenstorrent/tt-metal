@@ -386,7 +386,7 @@ inline __attribute__((always_inline)) void set_l1_data_cache() {
 
 inline void risc_init() {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
-#ifdef NOC_ON_KERAUNOS_CCE
+#ifdef KERAUNOS_CCE
         // A CCE has no NOC node id: its coordinate is the one its NOC routes name.
         my_x[n] = internal_::cce_noc::routes().self_x;
         my_y[n] = internal_::cce_noc::routes().self_y;

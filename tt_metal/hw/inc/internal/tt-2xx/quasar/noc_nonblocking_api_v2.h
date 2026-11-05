@@ -37,7 +37,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t len_bytes,
     uint32_t read_req_vc = NOC_OVERLAY_RD_REQ_VC) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef NOC_ON_KERAUNOS_CCE
+#ifdef KERAUNOS_CCE
     internal_::cce_noc::copy(
         internal_::cce_noc::dma_addr(src_addr), internal_::cce_noc::local_dma_addr(dest_addr), len_bytes);
     return;
@@ -79,7 +79,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     bool posted = false,
     uint32_t trid = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef NOC_ON_KERAUNOS_CCE
+#ifdef KERAUNOS_CCE
     if (mcast || posted) {
         internal_::cce_noc::unsupported(__LINE__);
     }
@@ -152,9 +152,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
     uint32_t num_dests,
     bool multicast_path_reserve) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
 
     // Always nonposted, always src_include (loopback)
     uint64_t misc = CMD_BUF_MISC_WRITE_TRANS | CMD_BUF_MISC_SRC_INCLUDE | (linked ? CMD_BUF_MISC_LINKED : 0) |
@@ -267,7 +265,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     bool posted = false,
     uint32_t customized_src_addr = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef NOC_ON_KERAUNOS_CCE
+#ifdef KERAUNOS_CCE
     if (dst_type == InlineWriteDst::REG || be != 0xF || mcast) {
         internal_::cce_noc::unsupported(__LINE__);
     }
@@ -324,9 +322,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
     uint32_t customized_src_addr = 0,
     uint32_t num_dests = 1) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
 
     // Same register recipe as noc_fast_write_dw_inline (see there).
     // Quasar-only: byte-enabled writes bypass the security fence (checks 64 B of 256 B).
@@ -375,7 +371,7 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     bool posted = false,
     uint32_t atomic_ret_val = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef NOC_ON_KERAUNOS_CCE
+#ifdef KERAUNOS_CCE
     if (wrap != 31 || linked) {
         internal_::cce_noc::unsupported(__LINE__);
     }
@@ -418,9 +414,7 @@ template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void noc_fast_atomic_cas4(
     uint32_t noc, uint64_t addr, uint32_t vc, uint32_t cmp4, uint32_t swap4, uint32_t atomic_ret_val) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
     // Masked to 4 bits below; an out-of-range cmp could ACQUIRE a free lock.
     ASSERT(cmp4 <= 0xF && swap4 <= 0xF);
     uint64_t misc = CMD_BUF_MISC_ATOMIC_TRANS | CMD_BUF_MISC_SRC_INCLUDE;
@@ -457,9 +451,7 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     bool posted = false,
     uint32_t atomic_ret_val = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
     uint64_t misc = CMD_BUF_MISC_ATOMIC_TRANS | CMD_BUF_MISC_SRC_INCLUDE | CMD_BUF_MISC_MULTICAST |
                     (posted ? CMD_BUF_MISC_POSTED : 0) | (linked ? CMD_BUF_MISC_LINKED : 0);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
@@ -491,9 +483,7 @@ template <uint8_t noc_mode = DM_DEDICATED_NOC, bool skip_ptr_update = false, boo
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
     uint32_t src_addr_;
     src_addr_ = src_base_addr + src_addr;
 
@@ -536,9 +526,7 @@ template <uint8_t noc_mode = DM_DEDICATED_NOC, bool one_packet = false, bool use
 inline __attribute__((always_inline)) void ncrisc_noc_read_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t src_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
     noc_cmd_buf_assert_rd_resp_vc(cmd_buf);
 
     if constexpr (use_vc) {
@@ -582,9 +570,7 @@ template <uint8_t noc_mode = DM_DEDICATED_NOC, bool inc_num_issued = true, bool 
 inline __attribute__((always_inline)) void ncrisc_noc_read_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
 
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, src_local_addr);
@@ -659,9 +645,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_any_len_with_state(
 template <bool posted = false, bool one_packet = false>
 inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t dst_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
     // MISC: write, posted flag from template param. SRC_COORD set in noc_init.
     uint64_t misc = CMD_BUF_MISC_WRITE_TRANS | CMD_BUF_MISC_SRC_INCLUDE | (posted ? CMD_BUF_MISC_POSTED : 0);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
@@ -708,9 +692,7 @@ template <uint8_t noc_mode = DM_DEDICATED_NOC, bool posted = false, bool update_
 inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
 
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, src_local_addr);
@@ -805,9 +787,7 @@ inline uint32_t noc_inline_write_state_val = 0;
 template <bool posted = false, bool set_val = false>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t dest_addr, uint32_t be, uint32_t static_vc, uint32_t val = 0) {
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
     // Same register recipe as noc_fast_write_dw_inline (see there).
     // Quasar-only: byte-enabled writes bypass the security fence (checks 64 B of 256 B).
     ASSERT(be == 0xF);  // the Quasar RoCC path exposes no byte-enable mask for inline writes
@@ -868,9 +848,7 @@ template <
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t val = 0, uint64_t dest_addr = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
     static_assert("Error: Only High or Low address update is supported" && (update_addr_lo && update_addr_hi) == 0);
 
     if constexpr (update_addr_lo) {
@@ -997,9 +975,7 @@ enum CQNocSend {
 // Wormhole API compatibility wrapper for stateful inline direct writes.
 template <uint32_t cmd_buf, enum CQNocCmdFlags cmd_flags = CQ_NOC_mkp>
 inline __attribute__((always_inline)) void noc_inline_dw_write_init_state(uint32_t noc, uint32_t vc) {
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
     static_assert(cmd_buf <= 2, "Qsr has 2 complex cmd buffers (0,1) and one simple (2) command buffer");
     (void)noc;
     // Same register recipe as noc_fast_write_dw_inline (see there).
@@ -1036,9 +1012,7 @@ template <
     enum CQNocSend send = CQ_NOC_SEND>
 inline __attribute__((always_inline)) void noc_inline_dw_write_with_state(
     uint32_t noc, uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF) {
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
     static_assert(cmd_buf <= 2, "noc_inline_dw_write_* only supports cmd_buf 0, 1, or 2");
     (void)noc;
 
@@ -1114,9 +1088,7 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_with_state(
 // clang-format on
 template <uint32_t cmd_buf>
 inline __attribute__((always_inline)) void noc_read_init_state(uint32_t noc) {
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, CMD_BUF_MISC_READ);
     noc_cmd_buf_assert_rd_resp_vc(cmd_buf);
@@ -1157,9 +1129,7 @@ template <
     enum CQNocWait wait = CQ_NOC_WAIT>
 inline __attribute__((always_inline)) void noc_read_with_state(
     uint32_t noc, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 
     if constexpr (flags & CQ_NOC_FLAG_SRC) {
@@ -1199,9 +1169,7 @@ template <
     enum CQNocWait wait = CQ_NOC_WAIT>
 inline __attribute__((always_inline)) void noc_read_with_state(
     uint32_t noc, uint32_t src_noc_addr, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 
     if constexpr (flags & CQ_NOC_FLAG_SRC) {
@@ -1247,9 +1215,7 @@ inline __attribute__((always_inline)) void noc_read_with_state(
 // clang-format on
 template <uint32_t cmd_buf, enum CQNocCmdFlags cmd_flags = CQ_NOC_mkp>
 inline __attribute__((always_inline)) void noc_write_init_state(uint32_t noc, uint32_t vc) {
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
     uint64_t misc = CMD_BUF_MISC_WRITE_TRANS | CMD_BUF_MISC_SRC_INCLUDE |
                     ((cmd_flags & CQ_NOC_CMD_FLAG_LINKED) ? CMD_BUF_MISC_LINKED : 0) |
                     ((cmd_flags & CQ_NOC_CMD_FLAG_MCAST) ? CMD_BUF_MISC_MULTICAST : 0) |
@@ -1302,9 +1268,7 @@ template <
     bool posted = false>
 inline __attribute__((always_inline)) void noc_write_with_state(
     uint32_t noc, uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 
     if constexpr (flags & CQ_NOC_FLAG_SRC) {
@@ -1355,9 +1319,7 @@ template <
 inline __attribute__((always_inline)) void noc_wwrite_with_state(
     uint32_t noc, uint32_t src_addr, uint32_t dst_noc_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-#ifdef NOC_ON_KERAUNOS_CCE
-    internal_::cce_noc::unsupported(__LINE__);
-#endif
+    CCE_NOC_UNSUPPORTED();
 
     if constexpr (flags & CQ_NOC_FLAG_SRC) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
