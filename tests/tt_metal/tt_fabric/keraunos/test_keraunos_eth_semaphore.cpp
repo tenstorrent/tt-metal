@@ -50,6 +50,7 @@ constexpr uint32_t kCounterSem = 0;
 constexpr uint32_t kStageSem = 1;
 constexpr uint32_t kProbeSem = 2;
 constexpr uint32_t kObservedSem = 3;
+constexpr uint32_t kWrittenSem = 4;
 constexpr uint32_t kStageDone = 0x5E00000F;
 
 bool is_mock() {
@@ -224,7 +225,7 @@ TEST_P(KeraunosCrossTileSemaphore, IncrementPeerCounter) {
             core.logical,
             EthernetConfig{.eth_mode = eth_mode_of(core.type), .noc = NOC::NOC_0}));
         // Final argument count before finalize_offsets sizes the runtime-arg region.
-        SetRuntimeArgs(program, kernels.back(), core.logical, std::vector<uint32_t>(8, 0));
+        SetRuntimeArgs(program, kernels.back(), core.logical, std::vector<uint32_t>(10, 0));
     }
     const CoreRangeSet all(logical);
     ASSERT_EQ(CreateSemaphore(program, all, kCounterInitial, CoreType::ETH), kCounterSem);
@@ -234,6 +235,7 @@ TEST_P(KeraunosCrossTileSemaphore, IncrementPeerCounter) {
         ASSERT_EQ(CreateSemaphore(program, core.logical, kProbeBase | core.hsio, CoreType::ETH), kProbeSem);
     }
     ASSERT_EQ(CreateSemaphore(program, all, 0, CoreType::ETH), kObservedSem);
+    ASSERT_EQ(CreateSemaphore(program, all, 0, CoreType::ETH), kWrittenSem);
 
     program.impl().compile(device);
     program.impl().finalize_offsets(device);
@@ -270,7 +272,9 @@ TEST_P(KeraunosCrossTileSemaphore, IncrementPeerCounter) {
              static_cast<uint32_t>(peer_noc.x),
              static_cast<uint32_t>(peer_noc.y),
              peer_counter,
-             stage});
+             stage,
+             semaphore_address(device, program, peer, kProbeSem),
+             semaphore_address(device, program, peer, kWrittenSem)});
     }
 
     if (is_mock()) {
@@ -302,21 +306,31 @@ TEST_P(KeraunosCrossTileSemaphore, IncrementPeerCounter) {
     }
     slow_dispatch::WaitProgramDone(*device, program);
 
-    for (const auto& core : cores) {
+    for (size_t i = 0; i < cores.size(); i++) {
+        const EthCore& core = cores[i];
+        const EthCore& peer = cores[(i + 1) % cores.size()];
+        const EthCore& targeted_by = cores[(i + cores.size() - 1) % cores.size()];
         EXPECT_EQ(
             read_word(*mesh, core, semaphore_address(device, program, core, kCounterSem)),
             kCounterInitial + kIncrements)
             << "counter on hsio " << core.hsio;
-        EXPECT_EQ(read_word(*mesh, core, semaphore_address(device, program, core, kObservedSem)), kProbeBase | core.hsio)
-            << "probe copy on hsio " << core.hsio;
+        EXPECT_EQ(
+            read_word(*mesh, core, semaphore_address(device, program, core, kObservedSem)),
+            kProbeBase | (mode == 0 ? core.hsio : peer.hsio))
+            << "probe read on hsio " << core.hsio;
+        if (mode == 1) {
+            EXPECT_EQ(
+                read_word(*mesh, core, semaphore_address(device, program, core, kWrittenSem)),
+                kProbeBase | targeted_by.hsio)
+                << "probe written to hsio " << core.hsio;
+        }
     }
 }
 
 INSTANTIATE_TEST_SUITE_P(
     Modes,
     KeraunosCrossTileSemaphore,
-    // Mode 1 (noc_semaphore_inc) needs coordinate-addressed NOC writes from a CCE, which do not route yet.
-    ::testing::Values(0u),
+    ::testing::Values(0u, 1u),
     [](const ::testing::TestParamInfo<uint32_t>& info) {
         return std::string(info.param == 0 ? "LoadAddStore" : "NocSemaphoreInc");
     });
