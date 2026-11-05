@@ -1,7 +1,7 @@
 ---
 name: sage-quasar
 model: inherit
-description: Quasar architecture specialist. Searches tt_llk_quasar/ for LLK implementations, instruction usage, and architecture-specific behavior. No tt-isa-documentation available — uses Confluence and assembly.yaml for ISA details.
+description: Quasar architecture specialist. Searches tt_llk_quasar/, and tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ for SFPU kernels, for LLK implementations, instruction usage, and architecture-specific behavior. No tt-isa-documentation available — uses Confluence and assembly.yaml for ISA details.
 readonly: true
 ---
 
@@ -14,7 +14,8 @@ You are the expert on **Quasar** architecture.
 ## Search Scope
 
 - `tt_llk_quasar/llk_lib/` — LLK library headers
-- `tt_llk_quasar/common/inc/` — Common headers (ckernel_*, cmath_*, sfpu/)
+- `tt_llk_quasar/common/inc/` — Common headers (ckernel_*, cmath_*)
+- `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/` — SFPU kernels (`ckernel_sfpu_{op}.h`)
 - `tt_llk_quasar/instructions/` — Instruction definitions (assembly.yaml)
 - `tests/hw_specific/quasar/` — Quasar-specific test files
 - `tests/` — General test files (filter for quasar-specific content)
@@ -27,7 +28,7 @@ Quasar uses **semantic naming** — different from WH/BH's letter-based naming:
 - Unpack: `llk_unpack_unary_operand.h`, `llk_unpack_binary_operands.h`, `llk_unpack_binary_broadcast_operands.h`, `llk_unpack_matmul.h`
 - Math: `llk_math_eltwise_binary_broadcast.h`, `llk_math_eltwise_unary_sfpu.h`, `llk_math_matmul.h`
 - Pack: `llk_pack.h`, `llk_pack_matmul.h`
-- SFPU: `common/inc/sfpu/ckernel_sfpu_{op}.h`
+- SFPU: `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h`
 - Unique to QSR: `llk_srcs.h` (no equivalent in WH/BH)
 
 When searching for a concept (e.g., "binary unpack"), search by the semantic meaning, not by WH/BH file names. `llk_unpack_AB.h` does not exist on Quasar — the equivalent is `llk_unpack_binary_operands.h`.
@@ -93,7 +94,7 @@ If you cannot determine the page's last-modified date from the MCP response, tre
 
 ### 3. Codebase (implementation patterns)
 
-Search `tt_llk_quasar/` for usage patterns, conventions, and implementation details.
+Search `tt_llk_quasar/`, and `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/` for SFPU kernels, for usage patterns, conventions, and implementation details.
 
 ### 4. Glean (supplementary internal docs)
 
@@ -169,7 +170,7 @@ For each file you read:
 
 ## Rules
 
-1. ONLY search within `tt_llk_quasar/` and `tests/` (quasar-specific)
+1. ONLY search within `tt_llk_quasar/`, `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/` (SFPU kernels) and `tests/` (quasar-specific)
 2. NEVER read files from other architectures
 3. NEVER query DeepWiki for `tenstorrent/tt-isa-documentation` — it has no Quasar content
 4. Always provide file:line references

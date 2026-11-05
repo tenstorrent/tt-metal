@@ -25,7 +25,7 @@ work beside its Metal workloads:
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <umd/device/warm_reset.hpp>
+#include <tt-umd/warm_reset.hpp>
 
 using tt::tt_metal::distributed::MeshDevice;
 

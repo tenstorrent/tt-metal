@@ -1,0 +1,88 @@
+# Per-mesh heterogeneous fabric config. Omitting topology resolves each process's config from its own mesh's
+# dim_types. Each traffic pattern is a separate group: combining patterns in one group deadlocks at execution.
+
+Tests:
+
+  - name: "HeterogeneousFabricNeighborExchangeIntra"
+    fabric_setup: {}
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 30000
+
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: intra_mesh
+
+  - name: "HeterogeneousFabricNeighborExchangeInter"
+    fabric_setup: {}
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 30000
+
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: inter_mesh
+
+  - name: "HeterogeneousFabricAllToAllIntra"
+    sync: true
+    fabric_setup: {}
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all
+        mesh_scope: intra_mesh
+
+  - name: "HeterogeneousFabricAllToAllInter"
+    sync: true
+    fabric_setup: {}
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all
+        mesh_scope: inter_mesh
+
+  - name: "HeterogeneousFabricMulticastAllToAllIntra"
+    sync: true
+    enable_flow_control: true
+    fabric_setup: {}
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all
+        mesh_scope: intra_mesh

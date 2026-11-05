@@ -4,7 +4,15 @@
 
 # LLK perf tests are no longer triggered on PR label "llk:performance"
 # ci-quiet log mode is hard-coded.
-# SPEED_OF_LIGHT is supplied by llk-perf-impl and defaults to true in the runners.
+#
+# The env below is only read by this gate, not by llk-perf-impl itself: it mirrors
+# what llk-perf-gate.yaml's nightly-measure job passes -- the non-speed-of-light
+# nightly (llk-perf.yaml's own schedule trigger always runs speed-of-light).
+# SPEED_OF_LIGHT stays false -- a speed-of-light leg is 2-4h per change and nothing
+# compares it. LLK_PERF_RUN_TYPES mirrors ALL_MODES, which nightly-measure uses to
+# skip L1_CONGESTION (ungated, a fifth of the build); blank would keep it. PIPELINE
+# is "pr" since this runs on a pull_request, not the schedule.
+#
 # {split_group} is substituted with each row's split_group by prepare_test_matrix.py,
 # so every group below shares one identical cmd that calls a shared runner in
 # tt_metal/tt-llk/tests/: run_llk_perf_wormhole.sh and run_llk_perf_blackhole.sh
@@ -21,6 +29,12 @@
     wh_n150_civ2:
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_wormhole group 2/5
   split_group: 2
@@ -33,6 +47,12 @@
     wh_n150_civ2:
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_wormhole group 3/5
   split_group: 3
@@ -45,6 +65,12 @@
     wh_n150_civ2:
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_wormhole group 4/5
   split_group: 4
@@ -57,6 +83,12 @@
     wh_n150_civ2:
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_wormhole group 5/5
   split_group: 5
@@ -69,6 +101,12 @@
     wh_n150_civ2:
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 1/5
   split_group: 1
@@ -81,6 +119,12 @@
     bh_p150b_civ2:
       timeout: 240
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 2/5
   split_group: 2
@@ -93,6 +137,12 @@
     bh_p150b_civ2:
       timeout: 240
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 3/5
   split_group: 3
@@ -105,6 +155,12 @@
     bh_p150b_civ2:
       timeout: 240
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 4/5
   split_group: 4
@@ -117,6 +173,12 @@
     bh_p150b_civ2:
       timeout: 240
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 5/5
   split_group: 5
@@ -129,3 +191,9 @@
     bh_p150b_civ2:
       timeout: 240
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "false"
+    LLK_PERF_RUN_TYPES: "ALL_MODES"
+    PIPELINE: "pr"
+    TT_LLK_DISABLE_ASSERTS: "1"
