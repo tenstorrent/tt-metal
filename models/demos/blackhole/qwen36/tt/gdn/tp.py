@@ -556,6 +556,8 @@ class TPGatedDeltaNet:
         self.K = args.gdn_conv_kernel_size
         self.scale = self.Dk**-0.5
         self.cfg = tpc.COMPUTE_HIFI2
+        # QWEN36_GDN_IN_LOFI=1: LoFi for the prefill in-projection AGMM (bf8 weights, fp32 accumulation)
+        self.cfg_prefill_in = tpc.COMPUTE_LOFI if os.environ.get("QWEN36_GDN_IN_LOFI", "0") == "1" else self.cfg
         # In-proj decode matmul only (prefill keeps self.cfg = HiFi2)
         self.cfg_in = tpc.COMPUTE_LOFI if tpc.bfp4_gdn_in_enabled() else self.cfg
         # Must match load_gdn_weights_tp gates
@@ -1919,7 +1921,7 @@ class TPGatedDeltaNet:
                         x,
                         self.tw["qkvz"],
                         self.tt_ccl,
-                        self.cfg,
+                        self.cfg_prefill_in,
                         self.args.ccl_topology(),
                         out_memory_config=_proj_mc,
                         act_bf8=getattr(self.args, "prefill_agmm_bf8", False),
