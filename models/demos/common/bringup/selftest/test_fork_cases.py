@@ -450,6 +450,24 @@ def test_the_fork_suite_counts_every_part_and_only_the_owner_waives(monkeypatch)
     assert FS.totals(res)["fork_suite_failed"] == 2
 
 
+def test_the_fork_suite_runs_on_past_a_fork_without_a_stock_source(tmp_path, monkeypatch):
+    """F254: a fork with no tests/source.yaml stopped the whole suite (SystemExit); now it has no source tests, unless
+    its CHANGELOG names a stock source under ttnn/cpp, which is a failure."""
+    from models.demos.common.bringup.testing import fork_suite as FS
+
+    (tmp_path / "ttnn/cpp/ops/x").mkdir(parents=True)
+    forks = tmp_path / "forks"
+    for name, log in (("gen", "Source: ai-generated\n"), ("stock", "Source: `ttnn/cpp/ops/x`\n")):
+        (forks / name / "tests").mkdir(parents=True)
+        (forks / name / "CHANGELOG.md").write_text(log)
+    monkeypatch.setattr(FS, "FORKS", forks)
+    monkeypatch.setattr(FS, "REPO", tmp_path)
+    t = FS.source("gen")
+    assert t["failed"] == 0 and t["passed"] == 0
+    t = FS.source("stock")
+    assert t["failed"] == 1 and "ttnn/cpp/ops/x" in t["problems"][0]
+
+
 def test_the_skills_name_the_strict_fork_rule():
     from models.demos.common.bringup.core.spec import FRAMEWORK
 

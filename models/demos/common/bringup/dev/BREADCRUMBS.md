@@ -2588,3 +2588,11 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
 - Fix: Ledger._save_state writes every task's metrics to state_metrics.json (committed, staged by stage_paths);
   state() merges them back. *state_metrics.json is a record (stamps RECORDS) and ignored by the agent path check.
 - Selftest: test_core.py::test_metrics_live_in_their_own_committed_file.
+
+## F254: the fork suite stopped at the first fork without a stock source (rebase onto 107f838f379, 2026-11-05)
+- Problem: fork_suite's source part called fork_source.manifest, which raises SystemExit when a fork has no
+  tests/source.yaml; ckv_bfp4_ttnn (first in order) has none, so the baseline run ended after one fork. Seven forks have
+  no stock source (ai-generated or forked from a bring-up op).
+- Fix: fork_suite.source returns an empty tally for a fork without the manifest, unless its CHANGELOG names a stock
+  source under ttnn/cpp that exists, which counts as a failure.
+- Selftest: test_fork_cases.py::test_the_fork_suite_runs_on_past_a_fork_without_a_stock_source.

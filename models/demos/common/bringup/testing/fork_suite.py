@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -57,6 +58,17 @@ def source(fork: str) -> dict:
     from models.demos.common.bringup.testing import fork_source as FS
 
     t = FT.empty_tally()
+    if not (FORKS / fork / "tests" / "source.yaml").exists():
+        # F254: a fork made without a stock op (ai-generated, or forked from a bring-up op) has no source tests; one
+        # whose CHANGELOG names a stock source under ttnn/cpp must carry the manifest.
+        log = FORKS / fork / "CHANGELOG.md"
+        src = re.search(r"Source:\s*`?(ttnn/cpp/\S+?)`?(\s|$)", log.read_text()) if log.exists() else None
+        if src and (REPO / src.group(1)).exists():
+            t["failed"] += 1
+            t["problems"].append(f"no tests/source.yaml for the stock source {src.group(1)}")
+        else:
+            print(f"{fork}: no stock source, no source tests")
+        return t
     m = FS.manifest(fork)
     if not m.get("tests"):
         return t
