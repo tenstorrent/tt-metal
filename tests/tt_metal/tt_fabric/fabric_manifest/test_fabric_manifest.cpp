@@ -35,6 +35,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_published_chips.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_router_pass.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
@@ -194,6 +195,22 @@ void check_top_level(
     }
 }
 
+// Every chip names the host rank that owns it. With one local mesh, the local chips are this process's: their host rank
+// is the one ControlPlane binds this process to.
+void check_chip_host_ranks(const json& manifest) {
+    const bool one_local_mesh = control_plane().get_local_mesh_id_bindings().size() == 1;
+    const auto local_host_rank = *control_plane().get_local_host_rank_id_binding();
+    for (const auto& [m_key, mesh] : manifest.at("meshes").items()) {
+        for (const auto& [c_key, chip] : mesh.at("chips").items()) {
+            SCOPED_TRACE(m_key + "/" + c_key);
+            ASSERT_FALSE(chip.at("host_rank").is_null());
+            if (one_local_mesh && chip.at("is_local").get<bool>()) {
+                EXPECT_EQ(chip.at("host_rank").get<uint32_t>(), local_host_rank);
+            }
+        }
+    }
+}
+
 // A local chip's Z port role, which the builder takes from its per-direction capabilities, matches the one the neighbor
 // graph gives.
 void check_chip_z_port_role(const json& manifest) {
@@ -285,6 +302,22 @@ void check_credit_transport(const json& manifest, const std::vector<RouterEntry>
             }
         }
         EXPECT_TRUE(std::ranges::includes(keys_of(mesh.at("credit_transport")), vcs_with_senders));
+    }
+}
+
+// A router has VC1 senders only when the fabric's inter-mesh VC setup requires VC1, and VC2 senders only when it
+// requires VC2.
+void check_intermesh_vc(const json& manifest, const std::vector<RouterEntry>& routers) {
+    const auto& intermesh_vc = manifest.at("fabric").at("intermesh_vc");
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        const auto& senders = entry.router->at("shape").at("senders_per_vc");
+        if (senders.at(1).get<uint32_t>() > 0) {
+            EXPECT_TRUE(intermesh_vc.at("requires_vc1").get<bool>());
+        }
+        if (senders.at(2).get<uint32_t>() > 0) {
+            EXPECT_TRUE(intermesh_vc.at("requires_vc2").get<bool>());
+        }
     }
 }
 
@@ -385,13 +418,13 @@ void check_router_regions_disjoint(const json& manifest, const std::vector<Route
 // The last component of a router path, e.g. "E0" for "M0/C7/E0".
 std::string key_of_path(const std::string& path) { return path.substr(path.rfind('/') + 1); }
 
-// A ring buffer's elements are its slots, each one channel buffer of raw bytes.
-void expect_ring_buffer(const json& ring, uint32_t channel_buffer_size) {
+// A ring buffer's elements are its slots, each one channel buffer that starts with the run's packet header.
+void expect_ring_buffer(const json& ring, uint32_t channel_buffer_size, const json& packet_header) {
     if (ring.is_null()) {
         return;
     }
     EXPECT_EQ(ring.at("element_size"), channel_buffer_size);
-    EXPECT_EQ(ring.at("type"), manifest::get_manifest_type_name<std::byte>());
+    EXPECT_EQ(ring.at("type"), packet_header);
 }
 
 // A router's sender channels, over its shape. Each one's producer is the chip's worker on a VC's first channel (the
@@ -467,7 +500,8 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                     EXPECT_EQ(fields.at("buffer_index_sem").is_null(), !worker_channel) << risc_key;
                 }
 
-                expect_ring_buffer(sender.at("ring_buffer"), channel_buffer_size);
+                expect_ring_buffer(
+                    sender.at("ring_buffer"), channel_buffer_size, manifest.at("fabric").at("packet_header"));
                 // Each ERISC's credits: acked only on VC0, on an ERISC with bubble flow control.
                 const auto& credits_by_erisc = sender.at("credits");
                 EXPECT_EQ(keys_of(credits_by_erisc), keys_of(router.at("eriscs")));
@@ -712,32 +746,39 @@ void check_router_diagnostics(const std::vector<RouterEntry>& routers) {
     }
 }
 
-// The addresses of every region under `node` that the manifest marks cleared_by_host.
-void collect_cleared_addresses(const json& node, std::set<size_t>& addresses) {
+// The start address of every L1 region under `node`.
+void collect_region_addresses(const json& node, std::set<size_t>& addresses) {
     if (!node.is_object()) {
         return;
     }
-    if (node.contains("cleared_by_host")) {
-        if (node.at("cleared_by_host").get<bool>()) {
-            addresses.insert(node.at("address").get<size_t>());
-        }
+    if (node.contains("element_size")) {
+        addresses.insert(node.at("address").get<size_t>());
         return;
     }
     for (const auto& [key, child] : node.items()) {
-        collect_cleared_addresses(child, addresses);
+        collect_region_addresses(child, addresses);
     }
 }
 
-// Every address the host zeroes before launch starts a region the manifest describes as cleared_by_host, and no other
-// region is.
-void check_router_host_cleared(const std::vector<RouterEntry>& routers) {
+// The host clears are the builder context's clear list, each the size of fabric init's zero buffer, and each starts a
+// region every router describes.
+void check_host_clears(const json& manifest, const std::vector<RouterEntry>& routers) {
     const auto to_clear = builder_context().get_fabric_router_addresses_to_clear();
-    const std::set<size_t> expected(to_clear.begin(), to_clear.end());
+    const auto clear_size =
+        builder_context().get_fabric_router_config().router_buffer_clear_size_words * sizeof(uint32_t);
+    const auto& host_clears = manifest.at("fabric").at("host_clears");
+    ASSERT_EQ(host_clears.size(), to_clear.size());
+    for (size_t i = 0; i < to_clear.size(); ++i) {
+        EXPECT_EQ(host_clears.at(i).at("address"), to_clear[i]);
+        EXPECT_EQ(host_clears.at(i).at("size_bytes"), clear_size);
+    }
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
-        std::set<size_t> cleared;
-        collect_cleared_addresses(*entry.router, cleared);
-        EXPECT_EQ(cleared, expected);
+        std::set<size_t> regions;
+        collect_region_addresses(*entry.router, regions);
+        for (const size_t address : to_clear) {
+            EXPECT_TRUE(regions.contains(address)) << fmt::format("{:#x}", address);
+        }
     }
 }
 
@@ -848,12 +889,18 @@ TEST(ManifestNames, Spellings) {
 }
 
 // A chip is published once, with every router its builder initialized, and only within the chips the context holds.
+// An unpublished chip can't be read.
 TEST(ManifestPublishedChips, RejectsWhatItCannotHold) {
     manifest::PublishedChips chips(2);
     EXPECT_ANY_THROW(chips.publish(0, manifest::Chip{.routers = {manifest::Router{}}}, 2));
     EXPECT_ANY_THROW(chips.publish(2, manifest::Chip{}, 0));
+    EXPECT_FALSE(chips.has(0));
+    EXPECT_ANY_THROW(chips.get(0));
     chips.publish(0, manifest::Chip{}, 0);
+    EXPECT_TRUE(chips.has(0));
     EXPECT_ANY_THROW(chips.publish(0, manifest::Chip{}, 0));
+    EXPECT_FALSE(chips.has(2));
+    EXPECT_FALSE(chips.has(-1));
 }
 
 TEST(ManifestArgs, SameFamily) {
@@ -869,7 +916,6 @@ TEST(ManifestArgs, SameFamily) {
 // A router's inputs pass when each is read or listed as unrecorded, and fail on one that is neither.
 TEST(ManifestArgs, KernelInputsAccounted) {
     const std::vector<KernelInputs> kernel = {{
-        .kernel = 0,
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
         .noc = tt::tt_metal::NOC::NOC_0,
         .compile_args = {},
@@ -879,6 +925,7 @@ TEST(ManifestArgs, KernelInputsAccounted) {
                 {"SENDER_CH_7_IS_INJECTION", 0},
                 {"NUM_ACTIVE_ERISCS", 1},
                 {"MAX_NUM_VCS", 3},
+                {"LINK_SYNC_ROLE", 0},
             },
         .defines = {{"FABRIC_2D", ""}, {"FABRIC_2D_VC1_SERVICED", ""}},
         .runtime_args = {},
@@ -898,9 +945,11 @@ TEST(ManifestArgs, KernelInputsAccounted) {
 #define TEST_MANIFEST_CHECKS(Fixture)                                                                      \
     TEST_F(Fixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config, suite_start_); } \
     TEST_F(Fixture, ChipZPortRole) { check_chip_z_port_role(manifest_); }                                  \
+    TEST_F(Fixture, ChipHostRanks) { check_chip_host_ranks(manifest_); }                                   \
     TEST_F(Fixture, RouterLink) { check_router_link(manifest_, routers_); }                                \
     TEST_F(Fixture, PeersAreSymmetric) { check_peers_are_symmetric(manifest_, routers_); }                 \
     TEST_F(Fixture, CreditTransport) { check_credit_transport(manifest_, routers_); }                      \
+    TEST_F(Fixture, IntermeshVc) { check_intermesh_vc(manifest_, routers_); }                              \
     TEST_F(Fixture, RouterSenders) { check_router_senders(manifest_, routers_); }                          \
     TEST_F(Fixture, RouterDownstreamEdges) { check_router_edges(manifest_, routers_); }                    \
     TEST_F(Fixture, RouterFields) { check_router_fields(manifest_, routers_); }                            \
@@ -910,7 +959,7 @@ TEST(ManifestArgs, KernelInputsAccounted) {
     TEST_F(Fixture, RouterStreamRegisters) { check_router_stream_registers(routers_); }                    \
     TEST_F(Fixture, ArchCoreRegisters) { check_arch_core_registers(manifest_, routers_); }                 \
     TEST_F(Fixture, RouterDiagnostics) { check_router_diagnostics(routers_); }                             \
-    TEST_F(Fixture, RouterHostCleared) { check_router_host_cleared(routers_); }
+    TEST_F(Fixture, HostClears) { check_host_clears(manifest_, routers_); }
 
 TEST_MANIFEST_CHECKS(Manifest1DFixture)
 TEST_MANIFEST_CHECKS(Manifest2DFixture)

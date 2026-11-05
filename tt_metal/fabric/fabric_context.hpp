@@ -26,6 +26,7 @@ namespace tt::tt_fabric {
 // Forward declarations
 class ControlPlane;
 class FabricBuilderContext;
+struct PacketHeaderConfig;
 
 /**
  * FabricContext
@@ -115,6 +116,8 @@ public:
         TT_FATAL(is_2D_routing_enabled(), "Cannot query 2D route buffer size in 1D routing mode");
         return routing_2d_buffer_size_;
     }
+    // What picks the run's packet header type (visit_packet_header_type).
+    PacketHeaderConfig get_packet_header_config() const;
 
     // Configuration-wide kernel defines. Exact 2D mesh shape is runtime routing metadata; express
     // capacity is enabled for all local kernels when any locally bound mesh uses express routing.

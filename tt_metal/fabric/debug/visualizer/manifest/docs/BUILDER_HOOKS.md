@@ -47,10 +47,11 @@ way.
 
 | Hook | Where | What it hands over |
 | --- | --- | --- |
-| `KernelInputs`, one per RISC | Defined in `fabric_router_builder.hpp`; filled by `ComputeMeshRouterBuilder::create_kernel` | What each RISC's kernel was created with: its kernel handle, processor, NoC, positional and named compile-time arguments, defines and runtime arguments. The defines are read back from the `Kernel` after `CreateKernel`, so they include the fabric-wide ones `CreateEthernetKernel` adds |
+| `KernelInputs`, one per RISC | Defined in `fabric_router_builder.hpp`; filled by `ComputeMeshRouterBuilder::create_kernel` | What each RISC's kernel was created with: its processor, NoC, positional and named compile-time arguments, defines and runtime arguments. The defines are read back from the `Kernel` after `CreateKernel`, so they include the fabric-wide ones `CreateEthernetKernel` adds |
 | The kept `KernelCreationContext` | `FabricBuilder::create_kernels` | The chip-wide values every router's kernel was given: the master router's channel, the router count and the router channel mask. The manifest records them as the chip's `local_sync` |
+| `ConnectionRegistry`, one per chip | Created by `FabricBuilder::create_routers` when the manifest is on, and passed to each router builder; `ComputeMeshRouterBuilder::establish_connections_to_router` records into it | Each connection a router makes to a sibling's sender channel: the VC, the sibling's channel and direction, the sender channel it lands on, and whether it ends at the sibling's tensix mux. These are the router's downstream edges |
 | `collect_manifest_router(chip_facts)` | Pure virtual on `FabricRouterBuilder`; implemented by `ComputeMeshRouterBuilder` | One `manifest::Router`. The builder gathers what only it can see into a `ManifestRouterInputs` and hands it to the router pass (`fabric_manifest_router_pass.cpp`) |
-| `publish_manifest_chip()` | `FabricBuilder` | The chip: its Z port role, its local sync, every router sorted by Ethernet channel, and the router pairs it connected (`get_router_connection_pairs`), which the topology pass finds each edge's sibling in |
+| `publish_manifest_chip()` | `FabricBuilder` | The chip: its Z port role, its local sync, and every router sorted by Ethernet channel |
 | `get_manifest_chips()` | `FabricBuilderContext` | The `PublishedChips` (`fabric_manifest_router_pass.hpp`) that holds each chip by physical chip id. The builder context lives in `FabricContext`, so it outlives the builders, and the topology pass reads it at write time |
 | `remove_stale_fabric_manifest`, `write_fabric_manifest` | Called from `FabricFirmwareInitializer::init`; defined in `fabric_manifest.cpp` | Nothing: they delete last run's file and write this one |
 
@@ -63,11 +64,12 @@ way.
 
 | Input | From | Used for |
 | --- | --- | --- |
-| `erisc_builder` | The router's `FabricEriscDatamoverBuilder` | Its configured ERISC count, sender channels per VC, tensix extension and channel buffer size (the router's shape and slot size); its config's channel allocator (channel buffers and the L1 left over after them) and credit counter bases; its channel trimming overrides; the receiver's downstream adapter (the edges to sibling routers); and the semaphore ids three fields read |
+| `erisc_builder` | The router's `FabricEriscDatamoverBuilder` | Its config's channel allocator (channel buffers and the L1 left over after them); its channel trimming overrides; and the semaphore ids three fields read |
 | `vc_shape` | The router's `RouterVcShape` | The VC count and the receivers per VC |
 | `location` | The router's `RouterLocation` | Its Ethernet channel, the direction it faces, and whether its link is a dispatch link |
 | `chip_facts` | The chip's `ChipRoutingFacts`, passed in by `FabricBuilder` | The edge capability of the direction the router faces, which becomes its link's `edge_capability` |
-| `addresses_to_clear` | `FabricBuilderContext::get_fabric_router_addresses_to_clear()` | Whether fabric init clears each L1 region (`cleared_by_host`) |
+| `connections` | The chip's `ConnectionRegistry`, the records whose source is this router | The router's downstream edges |
+| `packet_header` | `FabricContext::get_packet_header_config()` | The header type each ring buffer slot starts with |
 | `args` | A `RouterArgs` over the `KernelInputs` recorded in `create_kernel` | Every value an argument carries: the shape's counts, credits and stream ids, every field per ERISC, which ERISCs run each channel, the defines; and the check that every argument and define is accounted for |
 | `hal` | `FabricContext`'s HAL | The physical ERISC each RISC runs on, and stream register addresses |
 
@@ -96,8 +98,7 @@ written.
 different number of routers than its builder initialized
 (`FabricBuilderContext::get_num_fabric_initialized_routers`).
 - `PublishedChips::get` fails for a chip that was never published. The topology pass treats a local chip that
-published nothing as having no routers, which is only valid when ControlPlane lists no active fabric channels for it.
-Otherwise resolving its routers fails.
+published nothing as having no routers.
 - `collect_manifest_router` must run after `create_kernel`, once connections are wired and each RISC's compile-time
 arguments are final. `publish_manifest_chip` is called right after `create_kernels` for that reason.
 

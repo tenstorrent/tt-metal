@@ -24,6 +24,7 @@
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_build_identity.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_registry.hpp"
 
@@ -45,8 +46,6 @@ struct L1 {
     uint32_t element_size = 0;
     // The type's registered name (fabric_manifest_type_registry.hpp).
     std::string_view type;
-    // If true, the host zeroes the memory before launch (get_fabric_router_addresses_to_clear()).
-    bool cleared_by_host = false;
 };
 
 // A stream register's word. Its value is the word's low `value_bits` bits, read as `type`; the bits above can hold
@@ -199,7 +198,7 @@ struct L1CreditCounters {
 // High level information about a particular router.
 struct RouterIdentity {
     uint32_t eth_chan = 0;
-    // ControlPlane's, which make the router's key.
+    // The direction the builder built the router facing
     eth_chan_directions direction = eth_chan_directions::EAST;
     routing_plane_id_t routing_plane = 0;
     tt::tt_metal::CoreCoord logical_core;
@@ -210,7 +209,7 @@ struct RouterIdentity {
 struct EthLink {
     EdgeCapability edge_capability = EdgeCapability::INTRAMESH_CARDINAL;
     bool is_dispatch_link = false;
-    // Null when ControlPlane connects the channel to nothing, or to a channel with no active router.
+    // Null when ControlPlane connects the channel to nothing, or to a channel the peer's builder built no router on.
     std::optional<RouterRef> peer;
     bool cross_host = false;
     bool wrap = false;
@@ -299,10 +298,10 @@ struct DownstreamEdge {
     // The kernel's EDGE_<n>: the sibling's compact index among this router's other directions, plus one.
     uint32_t edge = 0;
     SiblingRouterRef target;
+    // The Ethernet channel of the sibling it lands on.
+    uint32_t target_eth_chan = 0;
     // On the edge's VC.
     uint32_t landing_channel = 0;
-    // The NoC core the connection writes to: the sibling's ERISC, or its tensix mux.
-    tt::tt_metal::CoreCoord core;
     bool through_tensix_mux = false;
     FieldsByErisc fields_by_erisc;
 };
@@ -344,13 +343,6 @@ struct LocalSync {
     uint32_t router_channels_mask = 0;
 };
 
-// Two routers on a chip that the builder connected (FabricBuilder::get_router_connection_pairs), by Ethernet channel.
-// The connection runs both ways: each router's receivers forward into the other's senders.
-struct ConnectedRouters {
-    uint32_t eth_chan1 = 0;
-    uint32_t eth_chan2 = 0;
-};
-
 // Information about a chip. Every chip in the mesh graph is listed, local or not; a chip this rank can't map to a
 // device is remote, and has only its identity.
 struct Chip {
@@ -358,6 +350,8 @@ struct Chip {
     FabricNodeId fabric_node_id{MeshId{0}, 0};
     // The chip's coordinates in its mesh.
     std::vector<uint32_t> mesh_coord;
+    // Which host rank of the chip's mesh owns it
+    std::optional<uint32_t> host_rank;
     // Process-local id for the chip. Null for a remote chip.
     std::optional<ChipId> physical_chip_id;
     // Hardware id for the chip. Null for a remote chip.
@@ -366,8 +360,6 @@ struct Chip {
     // Null when the chip has no routers.
     std::optional<LocalSync> local_sync;
     std::vector<Router> routers;
-    // The router pairs the builder connected.
-    std::vector<ConnectedRouters> connected_routers;
 };
 
 // What carries one VC's sender credits on a mesh.
@@ -432,13 +424,14 @@ struct Arch {
     tt::ARCH arch = tt::ARCH::Invalid;
     ArchAreas areas;
     CoreRegisters core_registers;
+    // FABRIC_TELEMETRY_VERSION: which layout of FabricTelemetry the fabric_telemetry area holds.
+    uint32_t fabric_telemetry_version = 0;
 };
 
 // ============ The whole manifest ============
 
 // This process and the build it runs.
 struct RunInfo {
-    uint32_t host_rank = 0;
     uint32_t mpi_rank = 0;
     uint32_t world_size = 1;
     // When the manifest was written, in UTC, as ISO 8601.
@@ -458,6 +451,22 @@ struct FabricSettings {
     FabricRouterConfig router_config;
 };
 
+// The fabric's inter-mesh VC setup (FabricBuilderContext::get_intermesh_vc_config()), which decides whether routers
+// have VC1 and VC2.
+struct IntermeshVc {
+    IntermeshVCMode mode = IntermeshVCMode::DISABLED;
+    bool requires_vc1 = false;
+    bool requires_vc2 = false;
+    // TT_METAL_FABRIC_DISABLE_INTERMESH_VC: inter-mesh traffic lands on VC0 instead of VC1.
+    bool intermesh_vc_disabled = false;
+};
+
+// One range of router L1 that fabric init zeroes before launch.
+struct HostClear {
+    uint32_t address = 0;
+    uint32_t size_bytes = 0;
+};
+
 // This run's fabric: the settings it was set up with, and what FabricContext derived from them.
 struct FabricInfo {
     FabricSettings config;
@@ -465,6 +474,8 @@ struct FabricInfo {
     bool is_2d_routing = false;
     // The registered name of the packet header type the run's routers use (packet_header_types.hpp).
     std::string_view packet_header;
+    // The bytes a packet's header takes: the type's size, plus the UDMControlFields that follow it in UDM mode.
+    size_t packet_header_size_bytes = 0;
     size_t max_payload_size_bytes = 0;
     size_t channel_buffer_size_bytes = 0;
     // 2D routing only.
@@ -472,6 +483,9 @@ struct FabricInfo {
     // 1D routing only.
     std::optional<uint32_t> routing_1d_extension_words;
     bool multi_txq = false;
+    // What fabric init zeroes in every router's L1 before launch (configure_fabric_cores).
+    std::vector<HostClear> host_clears;
+    IntermeshVc intermesh_vc;
 };
 
 // Everything the sources read for one rank's manifest, one member per block they fill. The writer turns it into the
@@ -511,6 +525,7 @@ inline constexpr std::tuple k_vocabulary_lists{
     VocabularyList<Content>{"field_kind"},
     VocabularyList<ChannelStatus>{"channel_status"},
     VocabularyList<tt::tt_metal::DataMovementProcessor>{"erisc_processor"},
+    VocabularyList<IntermeshVCMode>{"intermesh_vc_mode"},
 };
 
 }  // namespace tt::tt_fabric::manifest

@@ -11,6 +11,8 @@ Each directory holding fabric_manifest_rank_*.json files under a PATH is one run
 full and names other ranks' routers only by path, so a reader joins the files through those names. No single rank can
 check them, so for each run this checks that:
   - every chip is local in exactly one rank, so exactly one file describes it
+  - every rank gives a chip the same host_rank, and each host rank of a mesh is one rank's: the ranks a mesh is split
+    across each own whole host ranks
   - a router whose peer is on another rank's chip names a router that rank wrote, and that router names it back
   - a cross-host link ends at another rank's chip
 Fails when a run doesn't, or when it finds no manifests.
@@ -50,6 +52,33 @@ def check_chip_owners(paths, owners):
         for chip_path, ranks in owners.items()
         if len(ranks) != 1
     ]
+
+
+def check_host_ranks(paths, manifests, owners):
+    """Every file gives each chip the same host_rank, and the chips of one host rank of a mesh are all one rank's."""
+    problems = []
+    host_ranks = {}
+    for path, manifest in zip(paths, manifests):
+        for mesh_key, mesh in manifest["meshes"].items():
+            for chip_key, chip in mesh["chips"].items():
+                host_ranks.setdefault(f"{mesh_key}/{chip_key}", {})[path.name] = chip["host_rank"]
+    owner_of_host_rank = {}
+    for chip_path, by_file in host_ranks.items():
+        values = set(by_file.values())
+        if len(values) != 1:
+            problems.append(f"{chip_path} has host_rank {by_file} across files")
+            continue
+        chip_owners = owners.get(chip_path, [])
+        if len(chip_owners) != 1:
+            continue
+        key = (chip_path.split("/")[0], values.pop())
+        owner_of_host_rank.setdefault(key, set()).add(chip_owners[0])
+    for (mesh_key, host_rank), ranks in owner_of_host_rank.items():
+        if len(ranks) != 1:
+            problems.append(
+                f"{mesh_key} host rank {host_rank}'s chips are local in several ranks: {sorted(paths[r].name for r in ranks)}"
+            )
+    return problems
 
 
 def find_router(manifest, router_path):
@@ -95,7 +124,11 @@ def check_cross_rank_links(paths, manifests, owners):
 def check_run(paths):
     manifests = [json.loads(path.read_text()) for path in paths]
     owners = find_chip_owners(manifests)
-    return check_chip_owners(paths, owners) + check_cross_rank_links(paths, manifests, owners)
+    return (
+        check_chip_owners(paths, owners)
+        + check_host_ranks(paths, manifests, owners)
+        + check_cross_rank_links(paths, manifests, owners)
+    )
 
 
 def main(args):

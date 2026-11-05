@@ -46,7 +46,8 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
 {
   "manifest_version": 1,
   "file_kind": "fabric_manifest",
-  "run":        { host_rank, mpi_rank, world_size, written_at, build: { git_sha, git_dirty } },
+  "run":        { mpi_rank, world_size, written_at,
+                  build: { git_sha, git_sha_short, version, build_type, git_dirty } },
   "fabric":     { config: { ... }, topology, is_2d_routing, packet_header, ... },
   "arch":       { name, l1_areas: { ... }, core_registers: [ ... ] },
   "vocabulary": { <list name>: [ <name>, ... ] },
@@ -55,7 +56,7 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
       shape, torus, express_routing, credit_transport,
       "chips": {
         "C<chip>": {
-          mesh_coord, physical_chip_id, asic_id, is_local, z_port_role, local_sync,
+          mesh_coord, host_rank, physical_chip_id, asic_id, is_local, z_port_role, local_sync,
           "routers": {
             "<key>": {
               identity, link, shape, credit_counters,
@@ -76,13 +77,13 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
 
 ## Shapes that repeat
 
-**L1 region**: `{ address, num_elements, element_size, type, cleared_by_host }`. `num_elements` elements of `type`,
-`element_size` bytes apart from `address`. Element `i` holds a `type` in its first `sizeof(type)` bytes, at
-`address + i * element_size`; the rest of the element, if `element_size` is larger, isn't typed. `cleared_by_host`
-means fabric init zeroes the region before launching the routers.
+**L1 region**: `{ address, num_elements, element_size, type }`. `num_elements` elements of `type`, `element_size`
+bytes apart from `address`. Element `i` holds a `type` in its first `sizeof(type)` bytes, at
+`address + i * element_size`; the rest of the element, if `element_size` is larger, isn't typed. Whether fabric init
+zeroes part of a region before launch is `fabric.host_clears`.
 
 ```json
-{ "address": 88960, "num_elements": 12, "element_size": 4, "type": "unsigned int", "cleared_by_host": true }
+{ "address": 88960, "num_elements": 12, "element_size": 4, "type": "unsigned int" }
 ```
 
 **Stream register**: `{ stream_id, address, value_bits, type }`. One word at `address`, in stream `stream_id`'s
@@ -125,10 +126,11 @@ id). A field the builder doesn't emit in this configuration, such as a 2D-only f
 
 | Key | Value |
 | --- | --- |
-| `host_rank` | This process's host rank |
 | `mpi_rank`, `world_size` | This process's MPI rank, and the number of processes |
 | `written_at` | When the manifest was written, in UTC, as ISO 8601 |
 | `build.git_sha` | The commit tt-metal was built from. Empty outside a git checkout or `git archive` export |
+| `build.git_sha_short` | The short form of `git_sha` |
+| `build.version`, `build.build_type` | The tt-metal version string, and the CMake build type, such as `Release` |
 | `build.git_dirty` | Whether tracked files had uncommitted changes, in which case the SHA doesn't say exactly what ran |
 
 ## fabric
@@ -141,10 +143,13 @@ id). A field the builder doesn't emit in this configuration, such as a 2D-only f
 | `topology` | The fabric topology, such as `mesh` |
 | `is_2d_routing` | Whether 2D routing is on |
 | `packet_header` | The type name of the packet header the run's routers use, such as `HybridMeshPacketHeaderT<36>`. Each ring buffer slot starts with one |
+| `packet_header_size_bytes` | The bytes the header takes in a slot: the type's size, plus `UDMControlFields` in UDM mode, so the payload starts this far into the slot |
 | `max_payload_size_bytes`, `channel_buffer_size_bytes` | Payload and channel buffer sizes |
 | `routing_2d_route_buffer_size` | 2D routing only: the packet header's route buffer size |
 | `routing_1d_extension_words` | 1D routing only: the packet header's extension words |
 | `multi_txq` | Whether senders and receivers transmit on separate Ethernet TX queues |
+| `host_clears` | What fabric init zeroes in every router's L1 before launch: `[{ address, size_bytes }]`, each the bytes it writes at that address |
+| `intermesh_vc` | `{ mode, requires_vc1, requires_vc2, intermesh_vc_disabled }`: the inter-mesh VC mode (`intermesh_vc_mode`), which decides whether routers have VC1 and VC2 senders |
 
 [DESCRIBE.md](DESCRIBE.md) says where each comes from.
 
@@ -155,6 +160,7 @@ id). A field the builder doesn't emit in this configuration, such as a 2D-only f
 | `name` | The architecture, such as `wormhole_b0` |
 | `l1_areas` | L1 regions the architecture fixes on every router core: `heartbeat` (with its `magic`, `magic_mask` and `period_iters`), `fabric_telemetry`, `routing_table`, `eth_fw_mailbox`, and base firmware's link status words `base_fw_port_status`, `base_fw_train_status`, `base_fw_retrain_count`, `base_fw_rx_link_up` and `base_fw_postcode`. An area the architecture doesn't have is null |
 | `core_registers` | An array, in read order: `soft_reset` (with `reset_masks`, each physical ERISC's reset bit), `wall_clock_low` and `wall_clock_high`, each with its `name`, `address` and `type`. Reading the low wall clock word latches the high word |
+| `fabric_telemetry_version` | `FABRIC_TELEMETRY_VERSION`: which layout of `FabricTelemetry` the `fabric_telemetry` area holds |
 
 ## vocabulary
 
@@ -173,6 +179,7 @@ what the label is:
 | `field_category`, `field_kind` | A field's `category` and `kind` |
 | `channel_status` | A channel's `status` |
 | `erisc_processor` | An ERISC's `processor` |
+| `intermesh_vc_mode` | `fabric.intermesh_vc.mode` |
 
 An `enum` field isn't a label: it writes its enumerator's name next to its value (`value_name`), so it has no list here.
 
@@ -197,6 +204,7 @@ An `enum` field isn't a label: it writes its enumerator's name next to its value
 | Key | Value |
 | --- | --- |
 | `mesh_coord` | The chip's coordinates in its mesh |
+| `host_rank` | Which host rank of its mesh owns the chip, local or remote. A mesh can be split across hosts (its `host_topology`), each host rank owning part of its chips. Null when the mesh graph doesn't say |
 | `physical_chip_id` | This process's id for the chip. Null for a remote chip |
 | `asic_id` | The chip's hardware id, as a hex string since it exceeds what JSON numbers represent exactly. Null for a remote chip |
 | `is_local` | Whether this process opened the chip |
@@ -230,7 +238,7 @@ Both kinds of channel have:
 | --- | --- |
 | `status` | `active`, or why no ERISC runs it: `vc_not_serviced`, `mux` or `trimmed` |
 | `serviced_by` | The ERISCs that run it, as `erisc<r>` |
-| `ring_buffer` | Its packet slots, as `byte` with one element per slot (`element_size` is the slot size), or null when it has none |
+| `ring_buffer` | Its packet slots, one element per slot (`element_size` is the slot size), typed as the run's packet header: each slot starts with one, and the payload after it is untyped. Null when it has none |
 | `fields` | Its fields, keyed by ERISC |
 
 A sender channel also has:
@@ -271,14 +279,13 @@ One router from a Blackhole 2D mock manifest, trimmed:
              "channel_trimming_overrides_applied": false, "has_tensix_extension": false },
   "credit_counters": {
     "to_sender_ack": { "address": 88960, "num_elements": 12, "element_size": 4, "type": "unsigned int",
-                       "cleared_by_host": true, "indexed_by": "own_sender_channel" },
+                       "indexed_by": "own_sender_channel" },
     ...
   },
   "channels": {
     "senders": { "vc0": { "ch0": {
       "status": "active", "serviced_by": ["erisc0"], "producer": "worker",
-      "ring_buffer": { "address": 90912, "num_elements": 17, "element_size": 4448, "type": "byte",
-                       "cleared_by_host": false },
+      "ring_buffer": { "address": 90912, "num_elements": 17, "element_size": 4448, "type": "HybridMeshPacketHeaderT<36>" },
       "credits": {
         "erisc0": { "completed": { "array": "credit_counters/to_sender_completion", "index": 0 } },
         "erisc1": { "completed": { "array": "credit_counters/to_sender_completion", "index": 0 } }
@@ -304,7 +311,7 @@ One router from a Blackhole 2D mock manifest, trimmed:
   },
   "eriscs": { "erisc0": { "processor": "riscv_0", "physical_erisc": 0 },
               "erisc1": { "processor": "riscv_1", "physical_erisc": 1 } },
-  "leftover_l1": { "address": 451200, "num_elements": 4064, "element_size": 1, "type": "byte", "cleared_by_host": false },
+  "leftover_l1": { "address": 451200, "num_elements": 4064, "element_size": 1, "type": "byte" },
   ...
 }
 ```

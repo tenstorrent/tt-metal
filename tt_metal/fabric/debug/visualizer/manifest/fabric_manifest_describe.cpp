@@ -133,22 +133,37 @@ CoreRegisters describe_core_registers(const tt::tt_metal::Hal& hal) {
 // The registered name of the packet header type the run's routers use: the one the routing mode and its template
 // argument pick.
 std::string_view describe_packet_header(const FabricContext& fabric_context) {
-    const bool is_2d = fabric_context.is_2D_routing_enabled();
-    const PacketHeaderConfig config{
-        .is_2d = is_2d,
-        .extension_words = is_2d ? 0 : fabric_context.get_1d_pkt_hdr_extension_words(),
-        .route_buffer_size = is_2d ? fabric_context.get_2d_pkt_hdr_route_buffer_size() : 0,
-    };
     return visit_packet_header_type(
-        config, []<typename Header>(std::type_identity<Header>) { return get_manifest_type_name<Header>(); });
+        fabric_context.get_packet_header_config(),
+        []<typename Header>(std::type_identity<Header>) { return get_manifest_type_name<Header>(); });
+}
+
+// What fabric init zeroes in every router's L1 before launch.
+std::vector<HostClear> describe_host_clears(const FabricBuilderContext& builder_context) {
+    const auto size_bytes = static_cast<uint32_t>(
+        builder_context.get_fabric_router_config().router_buffer_clear_size_words * sizeof(uint32_t));
+    std::vector<HostClear> clears;
+    for (const size_t address : builder_context.get_fabric_router_addresses_to_clear()) {
+        clears.push_back({.address = static_cast<uint32_t>(address), .size_bytes = size_bytes});
+    }
+    return clears;
+}
+
+IntermeshVc describe_intermesh_vc(const FabricBuilderContext& builder_context) {
+    const auto& config = builder_context.get_intermesh_vc_config();
+    return {
+        .mode = config.mode,
+        .requires_vc1 = config.requires_vc1,
+        .requires_vc2 = config.requires_vc2,
+        .intermesh_vc_disabled = config.intermesh_vc_disabled,
+    };
 }
 
 }  // namespace
 
-RunInfo describe_run(const ControlPlane& control_plane) {
+RunInfo describe_run() {
     const auto& world = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     return RunInfo{
-        .host_rank = static_cast<uint32_t>(*control_plane.get_local_host_rank_id_binding()),
         .mpi_rank = static_cast<uint32_t>(*world->rank()),
         .world_size = static_cast<uint32_t>(*world->size()),
         .written_at = get_utc_now_iso8601(),
@@ -173,6 +188,7 @@ FabricInfo describe_fabric(const ControlPlane& control_plane) {
         .topology = fabric_context.get_fabric_topology(),
         .is_2d_routing = is_2d_routing,
         .packet_header = describe_packet_header(fabric_context),
+        .packet_header_size_bytes = fabric_context.get_fabric_packet_header_size_bytes(),
         .max_payload_size_bytes = fabric_context.get_fabric_max_payload_size_bytes(),
         .channel_buffer_size_bytes = fabric_context.get_fabric_channel_buffer_size_bytes(),
         .routing_2d_route_buffer_size =
@@ -180,6 +196,8 @@ FabricInfo describe_fabric(const ControlPlane& control_plane) {
         .routing_1d_extension_words =
             is_2d_routing ? std::nullopt : std::optional(fabric_context.get_1d_pkt_hdr_extension_words()),
         .multi_txq = fabric_context.get_builder_context().get_fabric_router_config().multi_txq_enabled(),
+        .host_clears = describe_host_clears(fabric_context.get_builder_context()),
+        .intermesh_vc = describe_intermesh_vc(fabric_context.get_builder_context()),
     };
 }
 
@@ -219,6 +237,7 @@ Arch describe_arch(const tt::tt_metal::Hal& hal) {
                 .base_fw_postcode = describe_base_fw_word(hal, FWMailboxMsg::POSTCODE),
             },
         .core_registers = describe_core_registers(hal),
+        .fabric_telemetry_version = FABRIC_TELEMETRY_VERSION,
     };
 }
 

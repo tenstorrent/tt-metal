@@ -9,6 +9,14 @@
 
 namespace tt::tt_fabric::manifest {
 
-BuildIdentity get_build_identity() { return {.git_sha = tt::tt_metal::kGitSha, .git_dirty = tt::tt_metal::kGitDirty}; }
+BuildIdentity get_build_identity() {
+    return {
+        .git_sha = tt::tt_metal::kGitSha,
+        .git_sha_short = tt::tt_metal::kGitShaShort,
+        .version = tt::tt_metal::kVersionFull,
+        .build_type = tt::tt_metal::kBuildType,
+        .git_dirty = tt::tt_metal::kGitDirty,
+    };
+}
 
 }  // namespace tt::tt_fabric::manifest
