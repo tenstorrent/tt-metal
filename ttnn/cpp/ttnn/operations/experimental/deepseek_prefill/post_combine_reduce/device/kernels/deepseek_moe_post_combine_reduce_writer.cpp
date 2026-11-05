@@ -188,7 +188,7 @@ void kernel_main() {
                         noc.async_read(
                             weight_addrg,
                             cb_weights,
-                            weight_tile_size,
+                            weights_aligned_page_size,
                             {.page_id = weight_page_idx},
                             {.offset_bytes = 0});
                         noc.async_read_barrier();
@@ -203,7 +203,11 @@ void kernel_main() {
                 } else {
                     uint32_t weight_page_idx = global_token_idx * num_experts + expert_idx;
                     noc.async_read(
-                        weight_addrg, cb_weights, weight_tile_size, {.page_id = weight_page_idx}, {.offset_bytes = 0});
+                        weight_addrg,
+                        cb_weights,
+                        weights_aligned_page_size,
+                        {.page_id = weight_page_idx},
+                        {.offset_bytes = 0});
                     noc.async_read_barrier();
                 }
                 cb_weights.push_back(1);
