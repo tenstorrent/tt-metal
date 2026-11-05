@@ -21,6 +21,7 @@ Needs vLLM 0.31 and vllm-tt-plugin (src/ on PYTHONPATH), and the ttnn host stub 
 """
 
 import contextlib
+import inspect
 import json
 from types import SimpleNamespace
 
@@ -493,7 +494,15 @@ class _Harness:
             self.book.forget_block(b)
             self.dev.zero(b)
         self._copies([(c.src_block_id, c.dst_block_id) for c in out.kv_cache_block_copies or ()])
-        self._copies(self.groups.begin_step(out, self.req_states, self.plugin_counts))
+        # Synchronous scheduling: each row's first query position is the scheduler's num_computed_tokens. The plugin of
+        # vllm-tt-plugin#280 takes these positions; the older one reads the request states.
+        positions = {r: self.req_states[r].num_computed_tokens for r in out.num_scheduled_tokens}
+        new_api = "num_computed" in inspect.signature(self.groups.begin_step).parameters
+        self._copies(
+            self.groups.begin_step(out, self.req_states, positions, self.plugin_counts)
+            if new_api
+            else self.groups.begin_step(out, self.req_states, self.plugin_counts)
+        )
         req_ids = list(out.num_scheduled_tokens)
         width = self.groups.max_num_blocks(self.max_model_len)
         tables = []
@@ -504,7 +513,12 @@ class _Harness:
                 t[row, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
             tables.append(t)
         inputs = self.groups.step_inputs(
-            tables, req_ids, self.req_states, out.num_scheduled_tokens, list(range(len(tables))), len(req_ids)
+            tables,
+            req_ids,
+            positions if new_api else self.req_states,
+            out.num_scheduled_tokens,
+            list(range(len(tables))),
+            len(req_ids),
         )
         rows_prefill, rows_verify = [], []
         for row, r in enumerate(req_ids):

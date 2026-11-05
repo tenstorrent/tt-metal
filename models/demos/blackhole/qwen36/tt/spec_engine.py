@@ -3000,16 +3000,16 @@ class MTPSpecEngine:
         paged = self._paged_state()
         ckpts = [] if gdn_req is None or gdn_req == WARMUP_REQ else paged.prefill_checkpoints(gdn_req)
         if vision_tokens is not None:
-            return None
-        s = int(start_pos or 0)
-        from models.demos.blackhole.qwen36.tt.prefix_cache import SPEC_PREFIX_ALIGN
-
-        if s <= 0 or s % SPEC_PREFIX_ALIGN or s % self.block_size or Tp - s < 3:
             if ckpts:
                 raise RuntimeError(
                     f"multimodal prefill row {gdn_req}: vLLM asks for prefill checkpoints at "
                     f"{[n for n, _ in ckpts]}, which a multimodal prompt cannot write"
                 )
+            return None
+        s = int(start_pos or 0)
+        from models.demos.blackhole.qwen36.tt.prefix_cache import SPEC_PREFIX_ALIGN
+
+        if s <= 0 or s % SPEC_PREFIX_ALIGN or s % self.block_size or Tp - s < 3:
             s = 0
         for n, _ in ckpts:
             if not s < n < Tp or n % self.block_size:
