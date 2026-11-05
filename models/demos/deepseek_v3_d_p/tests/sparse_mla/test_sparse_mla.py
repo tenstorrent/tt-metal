@@ -70,7 +70,7 @@ SPARSE_MAIN_KV_FORMAT = {
     "deepseek_v32": MlaKvCacheFormat.BF16_RM,
 }
 # Inert-top-k fallback where seq 256 is too short: the shortest of these whose stripe is long enough on that mesh
-# (LoudBox / Galaxy 8x2: 1024; Galaxy 8x4: 2048). All are <= index_topk, so sparse == dense there. K3.1's and
+# (LoudBox: 1024; Galaxy 8x4: 2048). All are <= index_topk, so sparse == dense there. K3.1's and
 # DeepSeek-V3.2's index caches have ONE layer slot (no compacted multi-layer slab like GLM's), so the SP x TP-striped
 # per-chip stripe must itself hold >= KVPE_MIN_TOKENS_PER_CHIP rows; at 256 tokens on 8 chips (32 rows) the
 # ND-sharded cache collapses to WIDTH_SHARDED and indexer_score rejects it.
@@ -104,14 +104,13 @@ def _collect_kvpe_cache(cache, mesh_device):
 # Coverage rationale:
 #   QuietBox (4):  (1,4) TorusX and (2,2) Fabric2D.
 #   LoudBox  (8):  (2,4) TP=4 and (4,2) TP=2 — every variant at both TP.
-#   Galaxy   (32): (8,4) production TP=4 + the existing (8,2) TP=2 diagnostic plane.
+#   Galaxy   (32): (8,4) production TP=4 only.
 # Mesh shape is NOT correctness-invariant, so accuracy sweeps the whole box set; determinism and
 # chunked pin to each variant's anchor (highest supported TP) — see _sparse_cases(anchor_only=True).
 SPARSE_MESH_BY_DEVICES = {
     4: [(2, 2), (1, 4)],
     8: [(2, 4), (4, 2)],
-    # Only the complete 8x4 view uses TorusXY. The existing 8x2 plane remains plain Fabric2D.
-    32: [(8, 4), (8, 2)],
+    32: [(8, 4)],
 }
 
 # seq_len is a sparsity-regime axis (not a code path): accuracy keeps one inert-top-k point (256,
@@ -173,12 +172,8 @@ def _sparse_cases(seqs, anchor_only, variants=None):
             if not _seq_ok_for_mesh(seq_len, mesh):
                 continue
             for variant_name in variants:
-                topology_mark = (
-                    []
-                    if mesh == (8, 2)
-                    else pytest.mark.requires_mesh_topology(
-                        mesh_shape=mesh, topology="ring" if mesh == (1, 4) else f"mesh-{mesh[0]}x{mesh[1]}"
-                    )
+                topology_mark = pytest.mark.requires_mesh_topology(
+                    mesh_shape=mesh, topology="ring" if mesh == (1, 4) else f"mesh-{mesh[0]}x{mesh[1]}"
                 )
                 cases.append(
                     pytest.param(
@@ -1694,7 +1689,7 @@ def test_sparse_mla_trace_replay_chunked(mesh_device, seq_len, device_params, va
 # ---------------------------------------------------------------------------
 def _early_q_chunk(mesh) -> int:
     """The perf chunk (1280) when it tiles the SP x TP stripe and leaves the single-slot caches >= 64 rows per chip
-    (KVPE_MIN_TOKENS_PER_CHIP); otherwise 2048 (Galaxy 8x4 / 8x2)."""
+    (KVPE_MIN_TOKENS_PER_CHIP); otherwise 2048 (Galaxy 8x4)."""
     sp, tp = mesh
     for chunk in (1280, 2048):
         if chunk % (ttnn.TILE_SIZE * sp * tp) == 0 and chunk // (sp * tp) >= KVPE_MIN_TOKENS_PER_CHIP:
