@@ -87,6 +87,9 @@ Set `TT_METAL_FABRIC_GENERATE_MANIFEST=1`. Each MPI rank writes:
 
 `<logs_dir>/generated/fabric/fabric_manifest_rank_<rank + 1>_of_<world_size>.json`
 
+The rank and size are the whole job's (`MPI_COMM_WORLD`), even when tt-run splits the job into sub-contexts, so every
+rank's file has its own name.
+
 `logs_dir` is `TT_METAL_LOGS_PATH`, or the working directory when that isn't set.
 
 - The file is written after the routers are compiled and launched, and before the host waits for router sync, so a

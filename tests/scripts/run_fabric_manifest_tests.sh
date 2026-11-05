@@ -34,6 +34,8 @@ SPLIT_T3K_RANK_BINDINGS=tests/tt_metal/distributed/config/2x2_multiprocess_rank_
 BIG_MESH_T3K_RANK_BINDINGS=tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml
 SC4_SUBTORUS=$CLUSTER_DESCS/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC4_32x4_revC_subtorus_aisleC_mapping.yaml
 SC4_EXPRESS_MGD=tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/express_links_quad_8x4_mesh_graph_descriptor.textproto
+BH_6U=$CLUSTER_DESCS/blackhole/bh_6u_cluster_desc/bh_6u_cluster_desc.yaml
+BH_6U_SUBCONTEXT_MGDS=tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_mesh_graph_descriptor_mapping.yaml
 
 # A channel trimming profile for the T3K mock.
 T3K_TRIMMING_PROFILE=$PWD/tests/tt_metal/tt_fabric/fabric_manifest/t3k_trimming_profile.yaml
@@ -86,11 +88,9 @@ echo "== Device-free tests"
 # Single rank
 # ---------------------------------------------------------------------------
 
-# 1D and 2D, on Wormhole and Blackhole.
+# 1D. Since there are no architecture differences between 1d and 2d, we run it on just Wormhole.
+# Default 2D is covered by the multi-rank configs below: big_mesh_t3k on Wormhole, bh_6u_subcontexts on Blackhole.
 run_mock t3k_1d "$T3K" 'Manifest1DFixture.*'
-run_mock t3k_2d "$T3K" 'Manifest2DFixture.*'
-run_mock bh_4xp150_1d "$BH_4XP150" 'Manifest1DFixture.*'
-run_mock bh_4xp150_2d "$BH_4XP150" 'Manifest2DFixture.*'
 
 # Single-ERISC mode, where a router's one processor runs on physical ERISC1.
 TT_METAL_DISABLE_MULTI_AERISC=1 run_mock bh_4xp150_2d_single_erisc "$BH_4XP150" 'Manifest2DFixture.*'
@@ -129,6 +129,13 @@ run_ranks big_mesh_t3k 2 'Manifest2DFixture.*' \
 run_ranks sc4_express 4 'ManifestTorusXFixture.*' \
     --mesh-graph-descriptor "$SC4_EXPRESS_MGD" \
     --mock-cluster-rank-binding "$SC4_SUBTORUS"
+
+# One Blackhole galaxy as two tt-run sub-contexts, one mesh graph each: a 4x4 mesh on two ranks, and two 2x4 meshes
+# on one rank each. Both name a mesh M0, and each sub-context numbers its ranks from 0, so the manifests must be named
+# by the rank in the whole job (not subcontext-scoped).
+run_ranks bh_6u_subcontexts 4 'Manifest2DFixture.*' \
+    --mesh-graph-descriptor-mapping "$BH_6U_SUBCONTEXT_MGDS" \
+    --mock-cluster-rank-binding "$BH_6U"
 
 # ---------------------------------------------------------------------------
 # Manifest checks
