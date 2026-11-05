@@ -7,13 +7,15 @@ A chunk is a run of whole sequences. Attention never crosses a sequence and the 
 token on its own, with no capacity limit, so a chunk's outputs are the ones it would get in any other
 batch: the split changes which programs run, not what they compute.
 
-The chunk sizes are tt_config.chunk_tokens, largest first: 4096, 2048 and 1024 computed tokens. An input
-that fits the largest runs as one pass. A larger one runs as chunks of the largest size while the
-sequences left fill one, then of the next size down while they fill one, and so on; the last chunk takes
-what is left once they fill none. 4096 tokens is the pass the generated ops are tuned for and the cheapest
-per token (1.40 us at 8x512 against 1.70 for one 8192-token pass, whose activations leave L1 and which
-runs the stock norms and MoE glue), and 2048 and 1024 are the other two token counts they are tuned for:
-an 8192-token input runs as 4096 + 4096, a 7168-token one as 4096 + 2048 + 1024.
+An input of at most max_tokens computed tokens (tt_config.max_chunk_tokens, 4096) runs as one pass. A larger
+one runs as chunks of max_tokens while the sequences left fill one, and the rest as one more chunk; a rest
+under min_tokens (tt_config.min_chunk_tokens, 1024) is merged with the chunk before it and the two are split
+evenly. 4096 tokens is the pass the generated ops are tuned for and the cheapest per token (1.40 us at 8x512
+against 1.70 for one 8192-token pass, whose activations leave L1 and which runs the stock norms and MoE glue).
+Every chunk costs a fixed ~1.3 ms on top of its tokens, so the rest stays one chunk rather than being split
+further, and a chunk under ~1000 tokens runs the stock glue and costs about what 1024 tokens do, hence the
+merge: 15x512 runs as 8 + 7 sequences, 9x512 as 5 + 4 (nomic-opt c06 chunking study, 2026-11-05: 10.7% less
+device time than 4096 -> 2048 -> 1024 chunks over 14 large shapes).
 
 Computed tokens count each sequence at its tile-padded length, B x ceil32(S), as every program does.
 """
@@ -46,52 +48,41 @@ class Chunk:
         return self.count * _padded(self.seqlen)
 
 
-def _sizes(chunk_tokens: Sequence[int]) -> tuple[int, ...]:
-    sizes = tuple(sorted({int(size) for size in chunk_tokens}, reverse=True))
-    if not sizes or sizes[-1] < 1:
-        raise ValueError(f"chunk sizes must be positive token counts, got {tuple(chunk_tokens)}")
-    return sizes
-
-
-def _fill(lengths: Sequence[int], chunk_tokens: Sequence[int]) -> list[Chunk]:
+def _fill(lengths: Sequence[int], max_tokens: int, min_tokens: int) -> list[Chunk]:
     """Chunks of consecutive sequences, each run at its first sequence's length (lengths is non-increasing,
     so a chunk's first sequence is its longest).
 
-    All of them in one chunk when they fit the largest size at the longest length. Otherwise each chunk
-    holds as many sequences as fit the largest size that the sequences left fill at the current length, and
-    the last chunk takes the rest once they fill none. A sequence longer than the largest size is a chunk of
-    its own.
+    Each chunk takes as many sequences as fit max_tokens at its first sequence's length (a sequence longer than
+    that is a chunk of its own), and the last takes the rest. A last chunk under min_tokens is merged with the
+    one before it and the two are split evenly by count, the first half never larger than that chunk was.
     """
-    sizes = _sizes(chunk_tokens)
-    if not lengths:
-        return []
-    if len(lengths) * _padded(lengths[0]) <= sizes[0]:
-        return [Chunk(0, len(lengths), lengths[0])]
+    if max_tokens < 1:
+        raise ValueError(f"max_tokens must be a positive token count, got {max_tokens}")
     chunks, start = [], 0
     while start < len(lengths):
-        padded = _padded(lengths[start])
-        left = len(lengths) - start
-        fits = [size // padded for size in sizes]  # sequences a chunk of each size holds at this length
-        filled = [held for held in fits if 0 < held <= left]
-        if filled:
-            count = filled[0]  # the largest size the sequences left fill
-        elif fits[0] == 0:
-            count = 1  # longer than the largest size: a chunk of its own
-        else:
-            count = left  # the rest, which fills no size
+        count = min(max(1, max_tokens // _padded(lengths[start])), len(lengths) - start)
         chunks.append(Chunk(start, count, lengths[start]))
         start += count
+    if len(chunks) > 1 and chunks[-1].tokens < min_tokens:
+        before, last = chunks[-2], chunks[-1]
+        both = before.count + last.count
+        first = min(before.count, (both + 1) // 2)
+        if first < before.count:
+            chunks[-2:] = [
+                Chunk(before.start, first, before.seqlen),
+                Chunk(before.start + first, both - first, lengths[before.start + first]),
+            ]
     return chunks
 
 
 @cache
-def plan_chunks(batch: int, seqlen: int, chunk_tokens: tuple[int, ...]) -> tuple[Chunk, ...]:
-    """Split B sequences of S tokens into contiguous chunks of the chunk_tokens sizes (computed tokens,
-    largest first); see the module docstring."""
-    return tuple(_fill([seqlen] * batch, chunk_tokens))
+def plan_chunks(batch: int, seqlen: int, max_tokens: int, min_tokens: int = 0) -> tuple[Chunk, ...]:
+    """Split B sequences of S tokens into contiguous chunks of at most max_tokens computed tokens; see the module
+    docstring. min_tokens 0 keeps the rest as it is (every chunk full but the last)."""
+    return tuple(_fill([seqlen] * batch, max_tokens, min_tokens))
 
 
-def plan_sorted_chunks(lengths: Sequence[int], chunk_tokens: Sequence[int]) -> list[Chunk]:
+def plan_sorted_chunks(lengths: Sequence[int], max_tokens: int, min_tokens: int = 0) -> list[Chunk]:
     """Chunks of length-sorted sequences, longest first, each run at its own longest sequence's length.
 
     Sorted, a chunk's sequences are of similar length, so cutting the chunk to its longest one removes
@@ -99,8 +90,9 @@ def plan_sorted_chunks(lengths: Sequence[int], chunk_tokens: Sequence[int]) -> l
 
     Args:
         lengths: real lengths, non-increasing.
-        chunk_tokens: the chunk sizes in computed tokens; the largest is the most a chunk may take.
+        max_tokens: the most computed tokens a chunk may take.
+        min_tokens: a last chunk under this many computed tokens is merged with the one before and the two split.
     """
     if any(earlier < later for earlier, later in zip(lengths, lengths[1:])):
         raise ValueError("plan_sorted_chunks takes lengths sorted longest first")
-    return _fill(list(lengths), chunk_tokens)
+    return _fill(list(lengths), max_tokens, min_tokens)

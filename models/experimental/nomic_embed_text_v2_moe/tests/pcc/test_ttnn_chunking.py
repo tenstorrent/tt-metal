@@ -22,7 +22,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt import pooling
 from models.experimental.nomic_embed_text_v2_moe.tt.chunking import plan_chunks, plan_sorted_chunks
 from models.experimental.nomic_embed_text_v2_moe.tt.common import pooling_mask
 from models.experimental.nomic_embed_text_v2_moe.tt.model import TtNomicBertModel, embed
-from models.experimental.nomic_embed_text_v2_moe.tt.model_config import CHUNK_TOKENS, OpGroup
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS, OpGroup
 
 # embed() against the unchunked, untrimmed backbone: the chunks have other shapes, so near-tied tokens
 # route differently (measured min cosine 0.99974 over a 24-sequence ragged batch at 2048-token chunks).
@@ -33,77 +33,91 @@ def padded(seqlen):
     return max(1, ttnn.core.divup(seqlen, ttnn.TILE_SIZE)) * ttnn.TILE_SIZE
 
 
-def check_plan(chunks, lengths, sizes):
-    """Contiguous chunks, in order, covering every sequence once, each run at its first sequence's length.
-    All in one chunk when they fit the largest size; otherwise none over the largest size unless one sequence
-    alone is (then it is a chunk of its own), and every chunk but the last holds exactly what one of the sizes
-    holds at its length, the largest such size the sequences left filled."""
-    sizes = sorted(sizes, reverse=True)
-    if len(lengths) * padded(lengths[0]) <= sizes[0]:
-        assert len(chunks) == 1 and chunks[0].count == len(lengths)
+def check_plan(chunks, lengths, max_tokens, min_tokens):
+    """Contiguous chunks, in order, covering every sequence once, each run at its first sequence's length and none
+    over max_tokens unless one sequence alone is (then it is a chunk of its own). Every chunk but the last two is
+    full (as many sequences as fit max_tokens at its length); the last is under min_tokens only if splitting it and
+    the one before evenly would not shrink that one (one overlong sequence before it, or a rest of as many
+    sequences as it holds)."""
     start = 0
     for chunk in chunks:
         assert chunk.start == start and chunk.count > 0 and chunk.seqlen == lengths[start]
-        assert chunk.tokens <= sizes[0] or chunk.count == 1 or len(chunks) == 1
-        if chunk is not chunks[-1]:
-            fits = [size // padded(chunk.seqlen) for size in sizes]
-            filled = [held for held in fits if 0 < held <= len(lengths) - start]
-            assert chunk.count == (filled[0] if filled else 1), f"{chunk} is not the largest filled size"
+        assert chunk.tokens <= max_tokens or chunk.count == 1
         start += chunk.count
     assert start == len(lengths)
+    for chunk in chunks[:-2]:
+        assert chunk.count == min(max(1, max_tokens // padded(chunk.seqlen)), len(lengths) - chunk.start)
+    if len(chunks) > 1 and chunks[-1].tokens < min_tokens:
+        before, last = chunks[-2], chunks[-1]
+        assert (before.count + last.count + 1) // 2 >= before.count, f"{last} is under {min_tokens} tokens, not merged"
 
 
 @pytest.mark.parametrize(
-    "batch, seqlen, sizes",
+    "batch, seqlen, max_tokens, min_tokens",
     [
-        (32, 512, CHUNK_TOKENS),
-        (20, 512, CHUNK_TOKENS),
-        (15, 512, CHUNK_TOKENS),
-        (512, 32, CHUNK_TOKENS),
-        (21, 384, CHUNK_TOKENS),
-        (3, 2048, CHUNK_TOKENS),
-        (32, 512, (8192,)),
-        (7, 512, (2048,)),
-        (3, 2048, (1024,)),
+        (32, 512, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS),
+        (20, 512, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS),
+        (17, 512, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS),
+        (512, 32, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS),
+        (36, 128, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS),
+        (3, 2048, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS),
+        (32, 512, 8192, 0),
+        (7, 512, 2048, 0),
+        (3, 2048, 1024, 0),
     ],
 )
-def test_plan_covers_the_batch(batch, seqlen, sizes):
-    check_plan(plan_chunks(batch, seqlen, sizes), [seqlen] * batch, sizes)
+def test_plan_covers_the_batch(batch, seqlen, max_tokens, min_tokens):
+    check_plan(plan_chunks(batch, seqlen, max_tokens, min_tokens), [seqlen] * batch, max_tokens, min_tokens)
 
 
 @pytest.mark.parametrize(
     "batch, seqlen, tokens",
     [
         (8, 512, [4096]),  # fits one pass
-        (3, 512, [1536]),  # fits one pass, though no size is 1536
-        (9, 512, [4096, 512]),
+        (3, 512, [1536]),
+        (9, 512, [2560, 2048]),  # the 512-token rest is merged with the chunk before: 5 + 4 sequences
         (10, 512, [4096, 1024]),
-        (12, 512, [4096, 2048]),
-        (14, 512, [4096, 2048, 1024]),
-        (15, 512, [4096, 2048, 1024, 512]),
+        (11, 512, [4096, 1536]),
+        (13, 512, [4096, 2560]),
+        (15, 512, [4096, 3584]),
         (16, 512, [4096, 4096]),
+        (17, 512, [4096, 2560, 2048]),
         (24, 512, [4096, 4096, 4096]),
+        (31, 512, [4096, 4096, 4096, 3584]),
         (32, 512, [4096, 4096, 4096, 4096]),
-        (20, 384, [3840, 3840]),  # 10 sequences of 384 fill a 4096-token chunk
+        (36, 128, [2304, 2304]),
+        (11, 384, [2304, 1920]),
+        (13, 384, [3840, 1152]),
         (3, 2048, [4096, 2048]),
-        (2, 5000, [5024, 5024]),  # a sequence longer than the largest size is a chunk of its own
+        (2, 5000, [5024, 5024]),  # a sequence longer than max_tokens is a chunk of its own
     ],
 )
-def test_default_plan_takes_4k_then_2k_then_1k(batch, seqlen, tokens):
-    """The default sizes (tt/model_config.py CHUNK_TOKENS): 4096-token chunks while the input fills them,
-    then 2048 and 1024, the last chunk taking the rest; an input that fits 4096 tokens runs as one pass."""
-    assert CHUNK_TOKENS == (4096, 2048, 1024)
-    assert [chunk.tokens for chunk in plan_chunks(batch, seqlen, CHUNK_TOKENS)] == tokens
+def test_default_plan(batch, seqlen, tokens):
+    """The defaults (tt/model_config.py): 4096-token chunks while the input fills them, the rest as one chunk, a
+    rest under 1024 tokens merged with the chunk before it and the two split evenly."""
+    assert (MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS) == (4096, 1024)
+    assert [chunk.tokens for chunk in plan_chunks(batch, seqlen, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS)] == tokens
 
 
 def test_sorted_plan_covers_the_batch_and_cuts_each_chunk_to_its_longest(expect_error):
     generator = torch.Generator().manual_seed(0)
     lengths = sorted(torch.randint(1, 513, (96,), generator=generator).tolist(), reverse=True)
-    chunks = plan_sorted_chunks(lengths, CHUNK_TOKENS)
+    chunks = plan_sorted_chunks(lengths, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS)
     assert len(chunks) > 1
-    check_plan(chunks, lengths, CHUNK_TOKENS)
+    check_plan(chunks, lengths, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS)
     with expect_error(ValueError, "sorted longest first"):
-        plan_sorted_chunks(lengths[::-1], CHUNK_TOKENS)
+        plan_sorted_chunks(lengths[::-1], MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS)
+
+
+def test_sorted_plan_merges_a_short_rest():
+    """A last chunk under min_tokens shares the chunk before it, never taking that chunk past max_tokens."""
+    lengths = [512] * 8 + [300]
+    chunks = plan_sorted_chunks(lengths, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS)
+    assert [(c.count, c.seqlen) for c in chunks] == [(5, 512), (4, 512)]
+    lengths = [512] * 8 + [20] * 30  # the rest is 30 short sequences: an even split would put 19 at 512
+    chunks = plan_sorted_chunks(lengths, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS)
+    check_plan(chunks, lengths, MAX_CHUNK_TOKENS, MIN_CHUNK_TOKENS)
+    assert all(c.tokens <= MAX_CHUNK_TOKENS for c in chunks)
 
 
 @pytest.fixture
@@ -112,8 +126,8 @@ def tt_model(device, config, tt_config, state_dict):
 
 
 def small_chunks(model, max_tokens):
-    """The same model, planning chunks of at most max_tokens, all of that one size but the last."""
-    model.tt_config = replace(model.tt_config, chunk_tokens=(max_tokens,))
+    """The same model, planning chunks of at most max_tokens, every one full but the last."""
+    model.tt_config = replace(model.tt_config, max_chunk_tokens=max_tokens, min_chunk_tokens=0)
     return model
 
 
@@ -126,7 +140,7 @@ def test_chunked_forward_equals_its_chunks(config, tt_model, batch, seqlen, max_
     joined output keeps the batch's (B, 1, S, H) shape in DRAM."""
     model = small_chunks(tt_model, max_tokens)
     input_ids, attention_mask = random_input_ids(batch, seqlen, config, seed=4)
-    chunks = plan_chunks(batch, seqlen, (max_tokens,))
+    chunks = plan_chunks(batch, seqlen, max_tokens, 0)
     assert len(chunks) > 1, "the shape no longer splits; pick one that does"
 
     out = model(input_ids, attention_mask)

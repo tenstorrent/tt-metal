@@ -173,12 +173,15 @@ DENSE_GELU_FORM = 2
 LAYOUT = ttnn.TILE_LAYOUT
 MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
-# The chunk sizes of a large input, in computed tokens (B x ceil32(S)), largest first (tt/chunking.py). An input
-# of at most the largest runs as one backbone pass; a larger one runs as chunks of whole sequences: 4096-token
-# chunks while the input fills them, then 2048 and 1024, the last chunk taking the rest (user, 2026-11-05).
-# 4096 is the pass the generated ops are tuned for and the cheapest per token: on v04 1.40 us a token at 8x512
-# against 1.70 for one 8192-token pass, whose activations leave L1 and which runs the stock norms and glue.
-CHUNK_TOKENS = (4096, 2048, 1024)
+# Chunks of a large input, in computed tokens (B x ceil32(S)), tt/chunking.py. An input of at most
+# MAX_CHUNK_TOKENS runs as one backbone pass; a larger one runs as chunks of whole sequences: MAX_CHUNK_TOKENS
+# chunks while the input fills them and the rest as one more chunk, a rest under MIN_CHUNK_TOKENS merged with the
+# chunk before it and the two split evenly. 4096 is the pass the generated ops are tuned for and the cheapest per
+# token (1.40 us at 8x512 against 1.70 for one 8192-token pass, whose activations leave L1 and which runs the stock
+# norms and glue); a chunk costs ~1.3 ms beyond its tokens and one under ~1000 tokens about what 1024 cost (user,
+# 2026-11-05, after the nomic-opt c06 chunking study).
+MAX_CHUNK_TOKENS = 4096
+MIN_CHUNK_TOKENS = 1024
 
 
 class OpGroup(Enum):
@@ -296,7 +299,8 @@ class TtModelConfig:
     # the residual's ND layout, for a one-pass layer of a window the generated glue takes (tt/experts.py:
     # route_dispatch). Off, or where the op refuses a call: router_front_end, routing_metadata and the dispatch.
     generated_route_dispatch: bool = True
-    chunk_tokens: tuple[int, ...] = CHUNK_TOKENS  # a large forward's chunk sizes, largest first, tt/chunking.py
+    max_chunk_tokens: int = MAX_CHUNK_TOKENS  # the largest chunk a forward runs at once, tt/chunking.py
+    min_chunk_tokens: int = MIN_CHUNK_TOKENS  # a smaller last chunk is merged with the one before and split
     layout: ttnn.Layout = LAYOUT
 
     def compute_kernel_config(self, group: OpGroup) -> ttnn.DeviceComputeKernelConfig:
