@@ -52,6 +52,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     make_h2d_spec,
     num_mtp_tokens,
     open_mesh_device,
+    resolve_fabric_mode,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
@@ -1055,7 +1056,7 @@ def _print_config() -> None:
         ("PREFILL_NUM_USERS", str(NUM_USERS)),
         ("PREFILL_CAPACITY_FACTOR", str(CAPACITY_FACTOR)),
         ("PREFILL_GATE_FALLBACK_MODE", _gate_mode_name),
-        ("PREFILL_FABRIC_MODE", os.environ.get("PREFILL_FABRIC_MODE", "2d_torus_xy")),
+        ("PREFILL_FABRIC_MODE", resolve_fabric_mode(GLOBAL_MESH_SHAPE)),
         ("PREFILL_PP_D2D_FIFO_BYTES", str(D2D_FIFO_SIZE_BYTES)),
         (
             "TT_METAL_FABRIC_DISABLE_INTERMESH_VC",
