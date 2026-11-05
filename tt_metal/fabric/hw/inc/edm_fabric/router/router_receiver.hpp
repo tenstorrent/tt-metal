@@ -768,7 +768,7 @@ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
     RoundCounters round;
     while (next_round()) {
         if constexpr (telemetry::any_option) {
-            telemetry::round_start();
+            telemetry::round_start</*SENDER=*/false>();
         }
         for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
             pass(loop_copy, credit_frame_due, states, credits, downstreams, my_chip);

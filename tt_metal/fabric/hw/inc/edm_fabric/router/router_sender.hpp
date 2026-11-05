@@ -952,7 +952,7 @@ FORCE_INLINE void before_round(SenderRound& round, LoopCopy& loop_copy, SenderCh
     round.send_yielded = false;
     round.sent_at_round_start = total_sent(loop_copy, states);
     if constexpr (telemetry::any_option) {
-        telemetry::round_start();
+        telemetry::round_start</*SENDER=*/true>();
     }
 }
 

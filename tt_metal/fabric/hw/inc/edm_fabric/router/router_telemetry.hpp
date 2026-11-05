@@ -100,19 +100,25 @@ FORCE_INLINE void note_received(uint32_t bytes) {
     }
 }
 
-template <int = 0>
+// Only the sender reads the wall clock (the perf recorder's clock), so the router's two ERISCs never read it at once:
+// reading the low word latches the high word, and a read on the other ERISC between this one's two reads, as the low
+// word wraps, can leave a high word one too high (a round counted 2^32 cycles long).
+template <bool SENDER>
 __attribute__((noinline)) void round_start_impl() {
-    counters.round_wall_clock = eth_read_wall_clock();
+    if constexpr (SENDER && perf_recorder) {
+        counters.round_wall_clock = eth_read_wall_clock();
+    }
     counters.round_timestamp = get_timestamp();
     counters.round_tx_words = 0;
     counters.round_tx_eth_words = 0;
     counters.round_rx_packets = counters.rx_packets;
 }
 
-// Before a round's passes.
+// Before a round's passes, for a loop that runs the sender side (SENDER) or only the receiver side.
+template <bool SENDER>
 FORCE_INLINE void round_start() {
     if constexpr (any_option) {
-        round_start_impl();
+        round_start_impl<SENDER>();
     }
 }
 
