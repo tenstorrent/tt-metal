@@ -30,21 +30,33 @@ TT_KERNEL void writer(uint32_t head, uint32_t u0, uint32_t nu) {
     DataflowBuffer out(dfb::out);
     DataflowBuffer wshift(dfb::wshift);
     Noc noc;
+#ifdef GDN_STATE_PAGE_IDX
+    const auto pidx_acc = TensorAccessor(tensor::pidx);
+    DataflowBuffer pidx(dfb::pidx_w);
+    read_state_page_idx(pidx_acc, pidx, noc);
+    noc.async_read_barrier();
+#endif
     constexpr uint32_t KV = Kt * Vt;
     constexpr uint32_t rf = Nv / Nk;
     const uint32_t h = head;
     const uint32_t hk = h / rf;
     for (uint32_t ui = 0; ui < nu; ++ui) {
         const uint32_t b = u0 + ui;
-        const uint32_t bh = b * Nv + h;
+#ifdef GDN_STATE_PAGE_IDX
+        const uint32_t state_page = state_page_idx_at(pidx, 0, b) + h * KV;
+        const uint32_t hist_page = state_page_idx_at(pidx, 1, b) + h * 4;
+#else
+        const uint32_t state_page = (b * Nv + h) * KV;
+        const uint32_t hist_page = (b * Nv + h) * 4;
+#endif
         wshift.reserve_back(4);
         zero_reserved(wshift, noc, 4);
-        read_tiles_at(hist_acc, wshift, noc, bh * 4 + 1, 3, 0);
+        read_tiles_at(hist_acc, wshift, noc, hist_page + 1, 3, 0);
         pack_head_tile_user<Kt, Vt, Nk>(qkv_acc, wshift, noc, hk, h, b, 3);
         noc.async_read_barrier();
         wshift.push_back(4);
-        write_tiles(state_acc, hnew, noc, bh * KV, KV);  // waits for compute -> old history already consumed
-        write_tiles(hist_acc, wshift, noc, bh * 4, 4);   // slot0 <- slot1, ..., slot3 <- new token
+        write_tiles(state_acc, hnew, noc, state_page, KV);  // waits for compute -> old history already consumed
+        write_tiles(hist_acc, wshift, noc, hist_page, 4);   // slot0 <- slot1, ..., slot3 <- new token
     }
     write_rows(out_acc, out, noc, h * Vt, Vt, u0, nu);  // the group's rows of this head's output tiles
 }

@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include <tt-metalium/program_descriptors.hpp>
 
@@ -107,6 +108,10 @@ struct GdnSpecStepInputs {
     Tensor dt_bias;  // [1, 1, Nv] fp32/bf16
     Tensor neg_exp_A;  // [1, 1, Nv] fp32/bf16
     Tensor weight;     // [Dv] bf16 gated-norm weight
+    // optional: [>= B, T] ROW_MAJOR (u)int32. Entry (u, t) is the first ring page of the state after token t of user u
+    // (value head h at + h*KV, KV = Dk*Dv/1024 fp32 tiles), so the per-token states can go to arbitrary pages of a
+    // pool. Absent: ring block (t*M*Nv + u*Nv + h). The initial state is still read through the ctrl page's blocks.
+    std::optional<Tensor> ring_page_idx;
 };
 
 }  // namespace ttnn::experimental::prim

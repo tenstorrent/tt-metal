@@ -11,6 +11,7 @@
 // every output row outside [u*T, u*T + T) is then exactly 0. HOLD is decided per (u,h) ctrl word; q/k window chunk
 // ownership is per key-head group (h % rf == 0), so a caller must hold ALL Nv heads of a user (the op cannot check
 // ctrl contents).
+// GDN_RING_PAGE_IDX: the state after token t goes to ring page ring_page_idx[u][t] + h*KV instead of block t*BH + bh.
 // VB > 1 (value blocks, GDN_VSPLIT): core (u, h, s) owns state / output column tiles [s*Vs, (s+1)*Vs). Block 0 alone
 // writes (or copies through) the window; each block writes its KVs ring tiles (i, s*Vs + j) per token, zeroes / writes
 // only its Vs output tiles, and before that swaps the last token's pre-norm output tiles with its head's other blocks:
@@ -196,6 +197,13 @@ TT_KERNEL void writer(
     // ---- ctrl page: parity and HOLD
     ctrl_w.reserve_back(1);
     noc.async_read(ctrl_acc, ctrl_w, ctrl_bytes, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
+#ifdef GDN_RING_PAGE_IDX
+    // row u of ring_page_idx: the first ring page of token t's state (reserved, never pushed)
+    const auto ridx_acc = TensorAccessor(tensor::ridx);
+    DataflowBuffer ridx(dfb::ridx_w);
+    ridx.reserve_back(1);
+    noc.async_read(ridx_acc, ridx, ridx.get_entry_size(), {.page_id = u, .offset_bytes = 0}, {.offset_bytes = 0});
+#endif
     noc.async_read_barrier();
     uint32_t par, blk;
     {
@@ -499,7 +507,15 @@ TT_KERNEL void writer(
             }
             DeviceZoneScopedN("wr_ring");
             if (!hold) {
+#ifdef GDN_RING_PAGE_IDX
+                uint32_t page0;
+                {
+                    auto lock = ridx.scoped_write_lock(1);
+                    page0 = lock.template get_ptr<volatile uint32_t>()[t] + h * KV + v0;
+                }
+#else
                 const uint32_t page0 = (t * BH + bh) * KV + v0;
+#endif
                 for (uint32_t i = 0; i < Kt; ++i) {
                     for (uint32_t j = 0; j < Vs; ++j) {
                         noc.async_write(
