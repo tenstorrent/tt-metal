@@ -64,8 +64,10 @@ ttnn::Tensor roll(
 
     // A zero shift never reaches the device op below, so padding only matters for non-zero shifts.
     const bool has_shift = std::any_of(adjusted_shifts.begin(), adjusted_shifts.end(), [](int s) { return s != 0; });
-    if (is_sharded && has_shift && ttnn::prim::sharded_roll_input_has_padding(input_tensor)) {
-        // The native roll would move padding into real data, so roll the logical shape in DRAM.
+    if (is_sharded && has_shift &&
+        (!input_tensor.shard_spec().has_value() || ttnn::prim::sharded_roll_input_has_padding(input_tensor))) {
+        // The native roll needs a 2D shard spec, which an ND shard spec does not always flatten to, and
+        // would move padding into real data, so roll the logical shape in DRAM.
         const ttnn::Tensor interleaved = ttnn::to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG, std::nullopt);
         return ttnn::to_memory_config(roll(interleaved, shifts, input_dims), output_mem_config, std::nullopt);
     }
