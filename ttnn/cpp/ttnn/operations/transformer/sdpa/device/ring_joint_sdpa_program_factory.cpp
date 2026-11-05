@@ -1674,8 +1674,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool has_logical_n_tensor = tensor_args.has_logical_n_tensor();
     const bool has_logical_l_tensor = tensor_args.has_logical_l_tensor();
     const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
-    // The tensor path's placeholder only sizes host derivations; the kernels take the live length, so pin it to 0.
-    const bool logical_n_is_runtime = kv_pad_rotation_enabled || has_logical_n_tensor;
+    // On the dynamic path the logical_n tensor's placeholder only sizes host derivations; the kernels take the live
+    // length, so pin it to 0 and share the binaries. The static path compiles logical_n in, as before.
+    const bool logical_n_is_runtime = kv_pad_rotation_enabled || (args.dynamic_local_n && has_logical_n_tensor);
     const uint32_t compile_time_logical_n = logical_n_is_runtime ? 0 : static_cast<uint32_t>(args.logical_n);
     const uint32_t compile_time_logical_nt = logical_n_is_runtime ? 0 : logical_nt;
     const uint32_t compile_time_global_n_partial_col = logical_n_is_runtime ? 0 : global_n_partial_col;
