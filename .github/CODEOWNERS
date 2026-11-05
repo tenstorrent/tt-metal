@@ -360,7 +360,7 @@ ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @ayerofieiev-tt @tenstorre
 ttnn/ttnn/operations/normalization.py @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/ttnn/operations/pool.py @tenstorrent/metalium-developers-convolutions
 ttnn/ttnn/operations/reduction.py @tenstorrent/metalium-developers-mmfusedreduce
-ttnn/tutorials/ @aczajkowskiTT
+ttnn/tutorials/ @tenstorrent/metalium-developers-ttnn-core @aczajkowskiTT
 ttnn/**/kernels/ @tenstorrent/metalium-developers-ops-leads # Removes the owners above from owning kernels unless specified afterwards
 ttnn/**/kernel/ @tenstorrent/metalium-developers-ops-leads # Same, for the singular kernel/ dir the pattern above misses
 ttnn/core/tensor/ @tenstorrent/metalium-developers-ttnn-core
@@ -842,8 +842,7 @@ docs/realtime_profiler_architecture.md @mo-tenstorrent @akerteszTT @yusufbashiTT
 docs/source/tt-metalium/* @bbradelTT @pavlejosipovic @aczajkowskiTT @ntarafdar
 docs/source/tt-metalium/tt_metal/apis/kernel_apis* @bbradelTT @pavlejosipovic @aczajkowskiTT @ntarafdar
 docs/source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/ @abhullar-tt @rtawfik01 @vvukomanovicTT @atatuzunerTT
-docs/source/ttnn/ @razorback3 @dongjin-na @aczajkowskiTT
-docs/source/ttnn/ttnn/tensor.rst @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @aczajkowskiTT
+docs/source/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @aczajkowskiTT
 
 # misc
 dockerfile/** @tenstorrent/metalium-developers-infra
