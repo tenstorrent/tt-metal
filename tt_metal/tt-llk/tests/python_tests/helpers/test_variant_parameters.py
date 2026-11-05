@@ -1289,6 +1289,30 @@ class ROPE(TemplateParameter):
 
 
 @dataclass
+class GGUF_DECODE_MM(TemplateParameter):
+    """sources/gguf_decode_mm_test.cpp: format id (0: Float32 in1 tiles, no decode), the weight's K and N tiles,
+    and with matmul the rows of in0 the matmul computes and its faces in L1."""
+
+    fmt_id: int = 0
+    kt: int = 1
+    nt: int = 1
+    matmul: bool = False
+    in0_rows: int = 32
+    in0_faces: int = 4
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr std::uint32_t GGUF_FMT = {self.fmt_id};",
+            f"constexpr std::uint32_t GGUF_KT = {self.kt};",
+            f"constexpr std::uint32_t GGUF_NT = {self.nt};",
+            f"constexpr bool GGUF_MM = {str(self.matmul).lower()};",
+            f"constexpr std::uint32_t GGUF_IN0_ROWS = {self.in0_rows};",
+            f"constexpr std::uint32_t GGUF_IN0_FACES = {self.in0_faces};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TOPK_XL(TemplateParameter):
     k: int = 512
     num_chunks: int = 1
