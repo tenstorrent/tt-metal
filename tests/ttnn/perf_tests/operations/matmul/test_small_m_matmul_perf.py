@@ -216,6 +216,10 @@ def test_small_m_matmul_golden_perf(shape):
     assert n_nonfinite == 0, f"{M}x{K}x{N} produced {n_nonfinite} non-finite output elements ({covers})"
 
     median = res["median_us"]
+    print(
+        f"SMALL_M_PERF {M}x{K}x{N} board={board} median={median:.2f}us golden={golden_us:.2f}us "
+        f"delta={(median / golden_us - 1) * 100:+.1f}% limit={limit_us:.2f}us pcc={pcc}"
+    )
     assert median <= limit_us, (
         f"{M}x{K}x{N} PERF REGRESSION: {median:.2f} us > {limit_us:.2f} us "
         f"(golden {golden_us:.2f} us +{margin * 100:.0f}% on board {board}). Covers: {covers}. "
