@@ -664,6 +664,61 @@ def test_transpose_wh_tiled_uint32(device, shape):
     assert_equal(t.permute(0, 1, 3, 2), ttnn.to_torch(out))
 
 
+@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.bfloat16, ttnn.uint32])
+def test_transpose_hc_int32_pad_value(device, dtype):
+    # transpose(1, 2) pads the swapped C dim to a tile; pad_value must be the int value, not the
+    # float bit pattern written into INT32 padding cells.
+    torch.manual_seed(2005)
+    shape = (1, 3, 40, 64)
+    torch_input = random_torch_tensor(dtype, shape)
+    torch_output = torch_input.transpose(1, 2)
+
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+    tt_output = ttnn.transpose(tt_input, 1, 2, pad_value=7.0)
+
+    assert_equal(torch_output, ttnn.to_torch(tt_output))
+    output_padded = tt_output.cpu().to_torch_with_padded_shape()
+    num_padded_values = torch.prod(torch.tensor(output_padded.shape)) - torch.prod(torch.tensor(torch_output.shape))
+    assert torch.sum(output_padded == 7.0) == num_padded_values
+
+
+@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.bfloat16, ttnn.uint32])
+def test_permute_hc_int32_pad_value(device, dtype):
+    # ttnn.permute((0, 2, 1, 3)) swaps H and C and delegates to the HC transpose, so it exercises
+    # the same INT32 pad_value packing path as ttnn.transpose(1, 2).
+    torch.manual_seed(2005)
+    shape = (1, 3, 40, 64)
+    torch_input = random_torch_tensor(dtype, shape)
+    torch_output = torch.permute(torch_input, (0, 2, 1, 3))
+
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+    tt_output = ttnn.permute(tt_input, (0, 2, 1, 3), pad_value=7.0)
+
+    assert_equal(torch_output, ttnn.to_torch(tt_output))
+    output_padded = tt_output.cpu().to_torch_with_padded_shape()
+    num_padded_values = torch.prod(torch.tensor(output_padded.shape)) - torch.prod(torch.tensor(torch_output.shape))
+    assert torch.sum(output_padded == 7.0) == num_padded_values
+
+
+@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.bfloat16, ttnn.uint32])
+def test_permute_generic_int32_pad_value(device, dtype):
+    # A general permutation goes through permute_tiled_program_factory, which has the same INT32
+    # pad_value packing bug. Output W (3) is padded to a tile.
+    torch.manual_seed(2005)
+    shape = (1, 3, 32, 64)
+    perm = (0, 2, 3, 1)
+    torch_input = random_torch_tensor(dtype, shape)
+    torch_output = torch.permute(torch_input, perm)
+
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+    tt_output = ttnn.permute(tt_input, perm, pad_value=7.0)
+
+    assert_equal(torch_output, ttnn.to_torch(tt_output))
+    output_padded = tt_output.cpu().to_torch_with_padded_shape()
+    num_padded_values = torch.prod(torch.tensor(output_padded.shape)) - torch.prod(torch.tensor(torch_output.shape))
+    assert torch.sum(output_padded == 7.0) == num_padded_values
+
+
 # TODO: Fix sharded permute bugs for width and block shard strategies
 @pytest.mark.parametrize("shape", [[16, 8, 224, 224]])
 @pytest.mark.parametrize("perm", [[0, 2, 3, 1], [0, 3, 2, 1], [1, 2, 3, 0], [1, 3, 2, 0]])
