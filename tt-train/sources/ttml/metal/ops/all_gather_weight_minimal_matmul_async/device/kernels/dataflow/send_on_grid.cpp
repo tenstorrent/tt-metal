@@ -83,10 +83,10 @@ void kernel_main() {
             }
             const SendPieceArgs& piece = reader.piece();
             uint32_t l1 = slots_base + (read_slot * packet_bytes);
+            uint32_t row = piece.row_offset + reader.row();
+            uint32_t k = reader.k();
+            const uint32_t k_end = reader.k_start() + reader.chunk();
             for (uint32_t i = 0; i < reader.count(); ++i, l1 += tile_size) {
-                const uint32_t t = reader.t0() + i;
-                const uint32_t row = piece.row_offset + (t / reader.chunk());
-                const uint32_t k = reader.k_start() + (t % reader.chunk());
                 if (seg.distance == 0) {
                     const uint32_t page = weight_page<transpose_b>(row, k, K_tiles, stripe_tiles);
                     noc.async_read(shard, CoreLocalMem<uint32_t>(l1), tile_size, {.page_id = page}, {});
@@ -94,6 +94,10 @@ void kernel_main() {
                     const uint32_t page = weight_page<transpose_b>(
                         (seg.stripe * stripe_tiles) + row, k, K_tiles, stripe_tiles * ring_size);
                     noc.async_read(pwb, CoreLocalMem<uint32_t>(l1), tile_size, {.page_id = page}, {});
+                }
+                if (++k == k_end) {
+                    k = reader.k_start();
+                    ++row;
                 }
             }
             read_slot = (read_slot + 1) % slot_packets;
@@ -109,12 +113,16 @@ void kernel_main() {
             const SendSegment& seg = sender.segment();
             const SendPieceArgs& piece = sender.piece();
             uint32_t l1 = slots_base + (send_slot * packet_bytes);
+            uint32_t row = (seg.stripe * stripe_tiles) + piece.row_offset + sender.row();
+            uint32_t k = sender.k();
+            const uint32_t k_end = sender.k_start() + sender.chunk();
             for (uint32_t i = 0; i < sender.count(); ++i, l1 += tile_size) {
-                const uint32_t t = sender.t0() + i;
-                const uint32_t row = (seg.stripe * stripe_tiles) + piece.row_offset + (t / sender.chunk());
-                const uint32_t page = weight_page<transpose_b>(
-                    row, sender.k_start() + (t % sender.chunk()), K_tiles, stripe_tiles * ring_size);
+                const uint32_t page = weight_page<transpose_b>(row, k, K_tiles, stripe_tiles * ring_size);
                 fabric.async_write(l1, tt::tt_fabric::linear::addrgen_detail::get_noc_address(pwb, page, 0));
+                if (++k == k_end) {
+                    k = sender.k_start();
+                    ++row;
+                }
             }
             fabric.async_writes_flushed();
             if (sender.unit_end()) {

@@ -228,8 +228,11 @@ public:
     uint32_t chunk() const {
         return chunk_;
     }
-    uint32_t t0() const {
-        return t0_;
+    uint32_t row() const {
+        return row_;
+    }
+    uint32_t k() const {
+        return k_start_ + k_in_chunk_;
     }
     uint32_t count() const {
         return std::min(tiles_per_packet_, unit_tiles_ - t0_);
@@ -244,6 +247,11 @@ public:
     void advance() {
         if (!unit_end()) {
             t0_ += tiles_per_packet_;
+            k_in_chunk_ += tiles_per_packet_;
+            while (k_in_chunk_ >= chunk_) {
+                k_in_chunk_ -= chunk_;
+                ++row_;
+            }
             return;
         }
         t0_ = 0;
@@ -279,6 +287,8 @@ private:
     void start_unit() {
         chunk_ = std::min(chunk_tiles_, K_tiles_ - k_start_);
         unit_tiles_ = pieces_[piece_idx_].width * chunk_;
+        row_ = 0;
+        k_in_chunk_ = 0;
     }
 
     uint32_t K_tiles_;
@@ -293,6 +303,8 @@ private:
     uint32_t k_start_ = 0;
     uint32_t chunk_ = 0;
     uint32_t t0_ = 0;
+    uint32_t row_ = 0;
+    uint32_t k_in_chunk_ = 0;
     uint32_t unit_tiles_ = 0;
     bool done_ = true;
 };
