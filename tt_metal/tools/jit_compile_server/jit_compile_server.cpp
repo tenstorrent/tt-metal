@@ -579,6 +579,19 @@ int main() {
             tt::LogMetal,
             "JIT compile server cache pruning: disabled (set {} to enable)",
             tt::tt_metal::jit_server::kCacheMinFreePctEnv);
+        for (const char* name :
+             {tt::tt_metal::jit_server::kCacheTargetFreePctEnv,
+              tt::tt_metal::jit_server::kCacheMinIdleEnv,
+              tt::tt_metal::jit_server::kCacheCheckIntervalEnv}) {
+            const char* value = std::getenv(name);
+            if (value != nullptr && *value != '\0') {
+                log_warning(
+                    tt::LogMetal,
+                    "{} is set but has no effect because {} is not",
+                    name,
+                    tt::tt_metal::jit_server::kCacheMinFreePctEnv);
+            }
+        }
     }
     g_cache_pruner->start();
 

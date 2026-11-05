@@ -236,8 +236,9 @@ A background thread checks free space at startup and every
 `TT_METAL_JIT_SERVER_CACHE_CHECK_INTERVAL_S` seconds (default 300). The check is one
 `statvfs` call; the cache is only scanned once free space is below the threshold. Then the
 server deletes whole `<build_key>/kernels/<kernel>/<hash>/` directories, least recently
-used first across all build keys, until free space reaches the target. Each run logs one
-`Cache prune:` line with what it deleted.
+used first across all build keys, until free space reaches the target. Free space is
+measured the way `df` reports it, so it excludes blocks reserved for root. Each run logs one
+`Cache prune:` line with what it deleted and why anything idle was skipped.
 
 - **Deleting a kernel only costs a recompile.** The next request for it is a cache miss.
 - **Kernels in use are never deleted.** A request holds its kernel directory for its whole
@@ -250,7 +251,9 @@ used first across all build keys, until free space reaches the target. Each run 
   firmware only once (§5c). If they are what fills the disk, the log line says the target
   could not be reached.
 
-A malformed value stops the server at startup rather than silently disabling pruning.
+A malformed or out-of-range value in any of these variables stops the server at startup
+rather than silently disabling pruning. Setting the others without `..._MIN_FREE_PCT` logs a
+warning, since pruning stays off.
 
 ### Point a client at it
 
@@ -484,7 +487,7 @@ local ELF.
 | `Failed to connect to remote JIT compile server at <ep>` | Server not running, wrong port, firewall, or server bound to `localhost` while the client is remote. |
 | Compile fails with "No such file or directory" on a header or kernel source | §5a/§5b: the server does not see the same tree, or the generated source isn't on a shared filesystem. Fix the mount, or use `TT_METAL_JIT_PREPROCESS=1`. |
 | `Firmware artifact not found for build_key ...` | Server cache root was cleared after the client uploaded firmware. Restart the client (or don't clear the cache mid-run). Cache pruning never deletes firmware. |
-| `Cache prune: ... Could not reach N%` | Everything left is firmware, PCH, or used within `..._MIN_IDLE_S`. Free space elsewhere, lower the idle window, or move the cache root to a bigger disk. |
+| `Cache prune: ... Could not reach N%` | The line says why. `nothing else has been idle`: everything left is firmware, PCH, or used within `..._MIN_IDLE_S`; free space elsewhere, lower the idle window, or move the cache root to a bigger disk. `could not be deleted (first error: ...)`: fix the permission or mount problem it names. |
 | `Absolute <field> is not allowed` / `must not contain '..'` | The server rejected a client-supplied path component. Expected for a malformed or mismatched client; report it if it happens in a normal run. |
 | No speedup at all | No kernel overlap, and no extra compile CPU — see §2. |
 | Slower than local | Unique kernels on similar CPU, or `TT_METAL_JIT_PREPROCESS` left on unnecessarily. |
