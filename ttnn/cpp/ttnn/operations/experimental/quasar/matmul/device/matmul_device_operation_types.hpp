@@ -32,10 +32,8 @@ struct MatmulParams {
     std::optional<tt::tt_metal::Tile> output_tile = std::nullopt;
     std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt;
-    // B delivered over PrefetcherPipes instead of read from DRAM (MatmulUnifiedProgramConfig only): every pipe of one
-    // create_prefetcher_pipes_for_tensor_prefetcher call, or worker-sender pipes. Their receivers are the cores, and
-    // receiver i (in the config's core order) gets the K chunks of C slice i in K order. Empty means none. The pipes'
-    // geometry and addresses are in the cache key, and a cache hit rebinds the program to the pipes passed.
+    // B delivered over PrefetcherPipes whose receivers are the cores (MatmulUnifiedProgramConfig only); empty means
+    // none. Their geometry is in the cache key, and a cache hit rebinds the program to the pipes passed.
     ttnn::PrefetcherPipeList prefetcher_pipes;
 
     // Compile-time reflection used by the program-cache key (both the 64-bit hash and the

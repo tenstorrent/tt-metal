@@ -291,10 +291,10 @@ MatmulUnifiedPlan make_plan(
     plan.A_slice_entries = plan.borrow_A ? C_slice_M_tiles * plan.K_tiles
                                          : plan.C_slice_M_padded_tiles * K_chunk_tiles * plan.operand_buffer_depth;
     if (base.B_from_pipes) {
-        // The relay covers the ring's whole entries (K chunks); the pipe skips any trailing gap at the wrap.
-        const uint32_t ring_bytes = attributes.prefetcher_pipes.front()->ring_size();
-        const uint32_t entry_bytes = K_chunk_tiles * C_slice_N_tiles * plan.B_entry_bytes;
-        plan.B_slice_entries = (ring_bytes - ring_bytes % entry_bytes) / plan.B_entry_bytes;
+        // The relay covers the pipe's whole entries; the pipe skips any gap left at its end.
+        plan.B_pipe_entry_bytes = K_chunk_tiles * C_slice_N_tiles * plan.B_entry_bytes;
+        const uint32_t pipe_bytes = attributes.prefetcher_pipes.front()->ring_size();
+        plan.B_slice_entries = (pipe_bytes - pipe_bytes % plan.B_pipe_entry_bytes) / plan.B_entry_bytes;
     } else {
         plan.B_slice_entries = plan.borrow_B ? plan.K_tiles * C_slice_N_tiles
                                              : K_chunk_tiles * plan.C_slice_N_padded_tiles * plan.operand_buffer_depth;
@@ -309,7 +309,7 @@ MatmulUnifiedPlan make_plan(
                                   ? plan.C_entries_per_thread * plan.num_compute_threads
                                   : plan.num_compute_threads;
     plan.bias_entries = plan.has_bias ? plan.C_slice_N_padded_tiles * bias_buffer_depth : 0;
-    // Borrowed DFBs are the tensors' own memory and a relay is the pipe's ring: they cost nothing here.
+    // Borrowed DFBs are the tensors' own memory and a relay the pipes': they cost nothing here.
     plan.l1_bytes =
         (plan.borrow_A ? 0 : (uint64_t)plan.A_slice_entries * plan.A_entry_bytes) +
         (plan.borrow_B || plan.B_from_pipes ? 0 : (uint64_t)plan.B_slice_entries * plan.B_entry_bytes) +
@@ -555,13 +555,12 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         base.B_from_pipes ? tt::div_up(base.N_tiles, static_cast<uint32_t>(config.cores.num_cores()))
                           : config.C_slice_N_tiles.value_or(
                                 batch_groups_allowed ? base.N_tiles : tt::div_up(base.N_tiles, core_columns));
-    // Over prefetcher pipes an auto K chunk is at most one MIN_PIPE_RING_K_CHUNKS of which fit the ring (a relay is
-    // the ring, not program L1, so dfbs_fit does not bound it); at least one tile, so the ring check reports a short
-    // ring.
+    // An auto K chunk over prefetcher pipes is at most what MIN_PIPE_ENTRIES of fit in a pipe, which dfbs_fit does not
+    // bound; at least one tile, so validation reports a pipe that is too small.
     const uint32_t max_K_chunk_tiles =
         base.B_from_pipes ? std::clamp<uint32_t>(
                                 attributes.prefetcher_pipes.front()->ring_size() /
-                                    (MIN_PIPE_RING_K_CHUNKS * max_C_slice_N_tiles * tt::tile_size(base.B_format)),
+                                    (MIN_PIPE_ENTRIES * max_C_slice_N_tiles * tt::tile_size(base.B_format)),
                                 1,
                                 base.K_tiles)
                           : base.K_tiles;

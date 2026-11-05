@@ -13,9 +13,8 @@
 // With multicast, the first core of a row (or of all the cores) reads the A slices and multicasts them to the rest,
 // and the first core of a column (or of all) does the same with B; a receiving core reads none of that operand.
 // FUSE_BIAS: before a C slice's K chunks, one reader thread pushes the bias tiles of the C slice's columns.
-// B_FROM_PREFETCHER_PIPES: B arrives over prefetcher pipes, one entry per K chunk of the core's one C slice, into
-// a ring that B_slice is a relay over. After pushing a K chunk's A slice this reader publishes that K chunk's entry to
-// the compute, and acks each entry back to its sender once the compute has popped it; it reads no B.
+// B_FROM_PREFETCHER_PIPES: B arrives over prefetcher pipes, one entry per K chunk; after pushing a K chunk's A slice
+// this reader publishes the entry to the compute through B_relay, and acks it once the compute has popped it.
 // Compile-time args are the template parameters, runtime args the function parameters.
 
 #include <stdint.h>
@@ -82,10 +81,9 @@ TT_KERNEL void reader(
     Noc noc;
     DataflowBuffer A_slice(dfb::A_slice);
 #ifdef B_FROM_PREFETCHER_PIPES
-    // One accessor names every pipe; the one present on this core is bound here. bind_relay() aligns B_slice to the
-    // pipe's cursor and makes pop_front wait for the compute; the pipe's destructor stores the cursor back.
+    // One accessor names every pipe; the one present on this core is bound here.
     experimental::PrefetcherPipe B_pipe(pipe::B);
-    auto B_slice = B_pipe.bind_relay();
+    auto B_relay = B_pipe.bind_relay();
 #else
     DataflowBuffer B_slice(dfb::B_slice);
 #endif
@@ -295,7 +293,7 @@ TT_KERNEL void reader(
                     A_slice.push_back(A_slice_tiles);
                 }
 #ifdef B_FROM_PREFETCHER_PIPES
-                publish_in1_block_from_pipe(B_pipe, B_slice, noc, K_chunk, B_slice_tiles);
+                publish_in1_block_from_pipe(B_pipe, B_relay, noc, K_chunk, B_slice_tiles);
 #else
                 if constexpr (!B_borrowed) {
                     B_slice.push_back(B_slice_tiles);

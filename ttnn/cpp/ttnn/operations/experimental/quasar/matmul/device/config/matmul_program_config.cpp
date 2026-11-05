@@ -1003,15 +1003,26 @@ MatmulProgramConfig get_program_config(
     const MatmulUnifiedProgramConfig* requested =
         attributes.program_config.has_value() ? std::get_if<MatmulUnifiedProgramConfig>(&*attributes.program_config)
                                               : nullptr;
-    // Prefetcher pipes place the matmul on their receivers, the only cores they deliver B to; the plan picks the rest.
-    if (!attributes.prefetcher_pipes.empty() &&
-        (requested != nullptr ? requested->cores.num_cores() == 0 : !attributes.program_config.has_value())) {
+    // Prefetcher pipes place the matmul on their receivers, the only cores they deliver B to, and fix its K chunk,
+    // which the op's prefetch request is cut into before the program is built.
+    if (!attributes.prefetcher_pipes.empty() && (requested != nullptr || !attributes.program_config.has_value())) {
         MatmulUnifiedProgramConfig config =
             requested != nullptr ? *requested
                                  : MatmulUnifiedProgramConfig{.fused_activation = attributes.user_fused_activation};
-        config.cores = tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(
-                           ttnn::prefetcher_pipe_refs(attributes.prefetcher_pipes))
-                           .merge_ranges();
+        if (config.cores.num_cores() == 0) {
+            config.cores = tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(
+                               ttnn::prefetcher_pipe_refs(attributes.prefetcher_pipes))
+                               .merge_ranges();
+        }
+        config.K_chunk_tiles = ttnn::prim::qsr::plan_unified_matmul(
+                                   input_tensor_a,
+                                   input_tensor_b,
+                                   bias_single_tile_size,
+                                   config,
+                                   attributes,
+                                   std::nullopt,
+                                   /*must_fit=*/true)
+                                   ->K_chunk_tiles;
         return config;
     }
     if (requested != nullptr && requested->cores.num_cores() == 0) {
