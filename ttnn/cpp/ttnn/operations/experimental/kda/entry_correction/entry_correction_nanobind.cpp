@@ -18,8 +18,9 @@ void bind_entry_correction(nb::module_& mod) {
         R"doc(
         Every chunk's output and this rank's final state from the summary's emitted terms
         (``summarize_chunk_recurrence(emit_outputs=True)``) once the entry states are known. The recurrence is
-        affine in its seed, so ``output_c = F0_c + (FI_c - F0_c) @ seed`` and ``final = A @ seed + B``, all
-        chunks in parallel. The seed is ``entry`` for the chunks before the chronological reset chunk and
+        affine in its seed, so ``output_c = F0_c + (FI_c - F0_c) @ seed`` and, from the final transition's
+        complement form ``E = A - I``, ``final = seed + (E @ seed + B)`` with the seed and ``B`` added exactly in
+        FP32 (only ``E @ seed`` passes through the matmul's source registers), all chunks in parallel. The seed is ``entry`` for the chunks before the chronological reset chunk and
         ``tail_entry`` from it on; the final state takes ``tail_entry`` when the rank's valid rows reach its
         split tail. Each head's chunks are split over ``len(cores) / (B*H)`` cores, and ``terms`` is
         height-sharded over ``cores`` so each core's chunk rows are in its L1. Chunks past ``actual_end`` are
@@ -29,8 +30,8 @@ void bind_entry_correction(nb::module_& mod) {
             terms (ttnn.Tensor): FLOAT32 TILE-layout ``[len(cores), 2, rows, K]`` chunk outputs for a zero
                 seed, then for an identity seed, of each core's ``rows`` chunk rows, height-sharded in L1 over
                 ``cores`` in their order, one core per shard.
-            final_a (ttnn.Tensor): FLOAT32 TILE-layout interleaved ``[B*H, K, K]`` multiplier of the rank's
-                final transition.
+            final_e (ttnn.Tensor): FLOAT32 TILE-layout interleaved ``[B*H, K, K]`` complement ``E = A - I`` of
+                the multiplier ``A`` of the rank's final transition.
             final_b (ttnn.Tensor): FLOAT32 TILE-layout interleaved ``[B*H, K, K]`` offset of the rank's final
                 transition.
             entry (ttnn.Tensor): FLOAT32 TILE-layout interleaved ``[B*H, K, K]`` entry states.
@@ -62,7 +63,7 @@ void bind_entry_correction(nb::module_& mod) {
         )doc",
         &ttnn::experimental::kda::entry_correction,
         nb::arg("terms").noconvert(),
-        nb::arg("final_a").noconvert(),
+        nb::arg("final_e").noconvert(),
         nb::arg("final_b").noconvert(),
         nb::arg("entry").noconvert(),
         nb::arg("tail_entry").noconvert(),
