@@ -38,25 +38,15 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geo
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import mark_layer_cached
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import packed_padding_config
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.minimax_m3.tt.packed_rows import packed_real_rows
 
-# The most MoE rows per chip one packed forward can carry. The MoE's shared-expert down projection (TtSharedExpert's
-# get_program_configs: in0_block_w 16, per_core_N 19 on Kimi-K3's 224-tile width, a 9-row sub-device grid) grows its
-# static circular buffers by 104,448 B per per_core_M: per_core_M 9 (2,560 rows) measured 1,714,112 B of the
-# 1,572,864 B of L1 on Blackhole, so 8 fails and 7 fits -- 63 M-tiles, 2,016 rows. A shared-MoE program-config change
-# (an L1-aware in0_block_w, or a row-blocked shared expert) would lift it.
-MAX_PACKED_ROWS_PER_CHIP = 2016
-
 
 class TtKimiK3Transformer(LightweightModule):
     """A slice of Kimi-K3's layers, plus the tail when this rank holds it."""
-
-    # Whether a rank boundary carries AttnRes's sealed snapshots. False only for a model built on the plain residual
-    # stream (the bisection arm, PlainResidualStream), whose handoff is the live sum alone.
-    HANDS_OFF_SEALED = True
 
     @staticmethod
     def check_cache_complete(
@@ -137,17 +127,6 @@ class TtKimiK3Transformer(LightweightModule):
         if mtp_predictor is not None:
             raise ValueError("Kimi-K3 has no MTP predictor; got a non-None mtp_predictor")
         assert forward_chunks >= 1, f"forward_chunks must be positive, got {forward_chunks}"
-        sp = tuple(mesh_device.shape)[sp_axis]
-        packed_rows = seq_len * forward_chunks // sp
-        if forward_chunks > 1 and packed_rows > MAX_PACKED_ROWS_PER_CHIP:
-            budget = MAX_PACKED_ROWS_PER_CHIP * sp // seq_len * seq_len
-            raise ValueError(
-                f"Kimi-K3 packs at most {MAX_PACKED_ROWS_PER_CHIP} MoE rows per chip per forward; {forward_chunks} "
-                f"chunks of {seq_len} tokens are {packed_rows}. The MoE's shared-expert down projection "
-                f"(TtSharedExpert, get_program_configs) would need more static circular buffers than L1 holds on "
-                f"Kimi-K3's widths. Lower PREFILL_FORWARD_TOKENS_BUDGET to at most {budget} tokens "
-                f"({budget // seq_len} chunks)."
-            )
         # Chunks per packed forward; seq_len stays the per-chunk size.
         self.forward_chunks = forward_chunks
         # Kimi-K3's MLA cache is dense: `zero_padded_kv_cache` asserts TILE layout, which a sparse
@@ -386,15 +365,11 @@ class TtKimiK3Transformer(LightweightModule):
         has `F // BLOCK_SIZE` snapshots behind it. A function of the boundary alone, which is
         what keeps the transfer a static shape and therefore trace-capturable.
         """
-        if not self.HANDS_OFF_SEALED:
-            return 1
         return 1 + self.first_layer_idx // BLOCK_SIZE
 
     @property
     def outbound_planes(self) -> int:
         """Planes this rank sends on — the same count evaluated at the far edge of its slice."""
-        if not self.HANDS_OFF_SEALED:
-            return 1
         return 1 + (self.first_layer_idx + self.num_layers) // BLOCK_SIZE
 
     def _pack_handoff(self, live, sealed):
@@ -656,7 +631,11 @@ class TtKimiK3Transformer(LightweightModule):
         rows = hidden.shape[2] // n
         sp_factor = tuple(self.mesh_device.shape)[self.sp_axis]
         empty = [False] * n if traced else [c.is_empty for c in chunks]
-        padding_real_rows = None if traced else packed_real_rows(chunks, sp_factor, rows)
+        if not traced:
+            # One MoE padding config for every layer of the forward (None when every row is real).
+            padding_config = packed_padding_config(
+                self.mesh_device, packed_real_rows(chunks, sp_factor, rows), n * rows
+            )
 
         # Each chunk's KDA scalars, built once per forward like the single-chunk path builds them once per
         # chunk: borrowed from its metadata when traced, uploaded from its host ints when eager.
@@ -701,7 +680,6 @@ class TtKimiK3Transformer(LightweightModule):
                         if on_layer_complete is None
                         else (lambda layer_idx, k: on_layer_complete(layer_idx, chunks[k]))
                     ),
-                    padding_real_rows=padding_real_rows,
                     packed_padding_config=padding_config,
                     attn_input_tap=attn_input_tap,
                     zero_pad=zero_pad,
@@ -711,6 +689,8 @@ class TtKimiK3Transformer(LightweightModule):
         finally:
             for scalar in owned:
                 ttnn.deallocate(scalar)
+            if not traced and padding_config is not None:
+                ttnn.deallocate(padding_config)
 
         if self.kv_only_last_layer:
             residual.discard()

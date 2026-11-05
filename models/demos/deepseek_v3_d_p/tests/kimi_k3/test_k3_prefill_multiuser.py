@@ -38,6 +38,9 @@ AttnRes asserts PCC bars.
 
 import copy
 import gc
+import os
+import statistics
+import time
 
 import pytest
 import torch
@@ -70,7 +73,7 @@ SP_AXIS, TP_AXIS = 0, 1
 CHUNK = 5120
 N_CHUNKS = 3
 NUM_USERS = 3
-# Two chunks per forward: 1,280 MoE rows per chip, inside MAX_PACKED_ROWS_PER_CHIP (see transformer.py).
+# Two chunks per forward: 1,280 MoE rows per chip. Kimi-K3's shared-expert down projection runs out of L1 at 2,560.
 FORWARD_CHUNKS = 2
 GATE_MODE = GateComputeMode.DEVICE_FP32
 
@@ -596,6 +599,96 @@ def test_k3_packed_traced_matches_eager(variant, config_only, mesh_device, devic
         runtime.release_trace()
 
 
+PERF_REPLAYS = int(os.environ.get("K3_PACKED_PERF_REPLAYS", "5"))
+
+
+@pytest.mark.skipif(
+    os.environ.get("CI") == "true" or "TT_GH_CI_INFRA" in os.environ, reason="local measurement, no pass/fail bar"
+)
+@pytest.mark.parametrize("forward_chunks", [1, 2], ids=["f1", "f2"])
+@_common
+def test_k3_packed_forward_perf(
+    variant, config_only, mesh_device, device_params, num_links, weight_cache_path, forward_chunks
+):
+    """Traced time per forward and real tokens/s at one chunk per forward (prefill_chunk) and two (prefill_forward) on
+    the 4-layer model (every layer kind), each chunk a full 5,120 tokens from its own user at depth 0. Record only:
+    attention runs once per chunk either way, so the difference is the one MoE call."""
+    assert_gate_mode_matches_adapter(variant, GATE_MODE)
+    config = _config(config_only)
+    seq_cache = CHUNK
+    rt_config = TtPrefillRuntimeConfig(
+        num_layers=NUM_LAYERS,
+        max_seq_len=seq_cache,
+        mesh_shape=tuple(mesh_device.shape),
+        chunk_size=CHUNK,
+        forward_tokens_budget=forward_chunks * CHUNK,
+        num_users=forward_chunks,
+        num_links=num_links,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        capacity_factor=8,
+        gate_fallback_mode=GATE_MODE,
+        model_cfg=KimiK3Config,
+        routing_use_l1_small_for_semaphores=True,
+        weight_cache_path=_cache_path(mesh_device, weight_cache_path),
+        kv_only_last_layer=True,
+        use_trace=True,
+        tp_shard_kv=True,
+        sparse_kv_cache_format=None,
+    )
+    mesh_device.enable_program_cache()
+    runtime = TtKimiK3Runtime(mesh_device, config, {}, rt_config)
+    model = runtime.model
+    caches = KimiK3KvCaches(
+        kvpe=allocate_mla_kvpe_cache(
+            mesh_device=mesh_device,
+            hf_config=config,
+            max_seq_len=seq_cache,
+            mesh_shape=tuple(mesh_device.shape),
+            sp_axis=SP_AXIS,
+            num_layers=model.schedule.num_mla_layers,
+            num_users=rt_config.cache_num_users,
+            tp_axis=TP_AXIS,
+            bank_aligned=False,
+        ),
+        kda_states=KdaStates.allocate(
+            mesh_device,
+            kimi_k3_kda_geometry(tuple(mesh_device.shape), SP_AXIS, TP_AXIS),
+            layer_ids=model.schedule.rank_kda_layer_ids(),
+            num_slots=forward_chunks,
+        ),
+    )
+    try:
+        runtime.compile(caches)
+        runtime.capture_trace(caches)
+        ids = _token_ids(config, forward_chunks, CHUNK)
+        chunks = [PrefillChunk(slot, 0, CHUNK) for slot in range(forward_chunks)]
+        tokens = [ids[slot][:CHUNK].tolist() for slot in range(forward_chunks)]
+        times = []
+        for _ in range(1 + PERF_REPLAYS):
+            # One chunk per forward is the regular path (prefill_chunk), what packing is measured against.
+            packed = forward_chunks > 1
+            inp = (
+                runtime.make_forward_input(tokens, [0] * forward_chunks)
+                if packed
+                else runtime.make_chunk_input(tokens[0])
+            )
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
+            if packed:
+                runtime.prefill_forward(inp, caches, chunks)
+            else:
+                runtime.prefill_chunk(inp, caches, 0, 0, CHUNK)
+            ttnn.synchronize_device(mesh_device)
+            times.append(time.perf_counter() - t0)
+        median_ms = statistics.median(times[1:]) * 1e3
+        logger.info(
+            f"K3_PACKED_PERF forward_chunks={forward_chunks} layers={NUM_LAYERS} median_ms={median_ms:.2f} "
+            f"real_tok_per_s={forward_chunks * CHUNK / median_ms * 1e3:.0f} replays={PERF_REPLAYS}"
+        )
+    finally:
+        runtime.release_trace()
+
+
 # A pipeline split must land on an AttnRes block edge (a multiple of 12), so the smallest is rank 0 = layers 0..11 and
 # rank 1 = layers 12..15: every K3 layer kind on both sides of the boundary, the last layer MLA (KV-only), and a sealed
 # AttnRes snapshot crossing it.
@@ -614,18 +707,30 @@ PIPELINE_PCC = 0.9995
 
 
 class _PlainK3Transformer(TtKimiK3Transformer):
-    """Kimi-K3 on the plain residual stream (the bisection arm), as a runtime builds it: the handoff is the live sum."""
-
-    HANDS_OFF_SEALED = False
+    """Kimi-K3 on the plain residual stream (the bisection arm), as a runtime builds it: the handoff is the live sum
+    alone, with no sealed AttnRes snapshots."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(
             *args, residual_factory=lambda hidden, block_residual=None: PlainResidualStream(hidden), **kwargs
         )
 
+    @property
+    def inbound_planes(self) -> int:
+        return 1
+
+    @property
+    def outbound_planes(self) -> int:
+        return 1
+
 
 class _PlainK3Runtime(TtKimiK3Runtime):
     MODEL_CLS = _PlainK3Transformer
+
+    @property
+    def activation_planes(self) -> int:
+        """The live sum alone, matching _PlainK3Transformer's handoff."""
+        return 1
 
 
 def _read_d2h_records(service, count):

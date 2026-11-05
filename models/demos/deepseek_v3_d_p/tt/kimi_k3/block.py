@@ -275,7 +275,6 @@ class TtKimiK3Block(LightweightModule):
         empty: list,
         *,
         on_layer_complete=None,
-        padding_real_rows: Optional[tuple] = None,
         packed_padding_config=None,
         attn_input_tap=None,
         zero_pad: bool = False,
@@ -286,8 +285,8 @@ class TtKimiK3Block(LightweightModule):
         The attention (attn_norm, MLA with its KV write and pad-zero, or KDA with its slot's carry) runs once per
         non-empty chunk on that chunk's rows with that chunk's context; an empty chunk contributes zeros, so its
         rows pass through the residual unchanged. The FFN (ffn_norm, MoE or dense FFN) then runs ONCE over all
-        rows, the MoE skipping each chunk's pad rows (``padding_real_rows`` eager, ``packed_padding_config``
-        traced). AttnRes reduces over the hidden dimension only, so one walk serves every chunk's rows.
+        rows, the MoE skipping each chunk's pad rows (``packed_padding_config``, the forward's one padding config;
+        None when every row is real). AttnRes reduces over the hidden dimension only, so one walk serves every chunk's rows.
 
         on_layer_complete: ``(global layer index, k)`` once per non-empty chunk k, after its attention (and, on an
             MLA layer, its KV write and pad-zero).
@@ -374,7 +373,7 @@ class TtKimiK3Block(LightweightModule):
             actual_isl=None,
             padding_side="right",
             ctx=None,
-            padding_real_rows=padding_real_rows,
+            packed=True,
             packed_padding_config=packed_padding_config,
         )
         ttnn.deallocate(ffn_norm_out)
@@ -388,11 +387,11 @@ class TtKimiK3Block(LightweightModule):
         actual_isl,
         padding_side,
         ctx,
-        padding_real_rows: Optional[tuple] = None,
+        packed: bool = False,
         packed_padding_config=None,
     ) -> ttnn.Tensor:
-        """`ctx` is None for a packed forward, which passes its MoE padding as ``padding_real_rows`` (eager) or
-        ``packed_padding_config`` (traced) instead of one chunk's bounds."""
+        """`ctx` is None for a packed forward (``packed``), which passes its MoE padding as ``packed_padding_config``
+        instead of one chunk's bounds."""
         if self.is_moe:
             # 4D TILE -> 3D -> MoE -> 3D -> 4D, matching TtPrefillBlock._moe_path exactly. `TtMoe`
             # returns `(out, intermediates)`, and the squeezed input is NOT freed here: upstream
@@ -410,7 +409,7 @@ class TtKimiK3Block(LightweightModule):
                 # layer/start key and one would silently overwrite the other. A packed forward (ctx None)
                 # skips the dump in TtMoe, so slot 0 is never written for it.
                 cache_user_id=0 if ctx is None else ctx.cache_user_id,
-                padding_real_rows=padding_real_rows,
+                packed=packed,
                 packed_padding_config=packed_padding_config,
             )
             return ttnn.unsqueeze(moe_out, dim=0)
