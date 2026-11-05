@@ -60,10 +60,10 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
     const uint32_t heads = state[0];
     const uint32_t key_dim = state[1];
     const uint32_t key_tiles = key_dim / tt::constants::TILE_WIDTH;
-    // The reader indexes packed as B*H x K tile rows of [A | B].
+    // The reader indexes packed as B*H x K tile rows of the complement form [E | B], E = A - I.
     TT_FATAL(
         in.packed.padded_shape()[-1] == 2 * key_dim && in.packed.physical_volume() == heads * key_dim * 2 * key_dim,
-        "{}: packed must be [B*H, K, 2K] rows of [A | B]",
+        "{}: packed must be [B*H, K, 2K] rows of [E | B]",
         operation_name);
 
     const auto* mesh = in.packed.device();
@@ -141,14 +141,8 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
         operation_name);
     kda_factory_detail::check_output_interleaved(attrs.entry_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
-    // Compute packs a K-tile column of the next state out of DST.
-    const uint32_t dst_tiles = ttnn::get_dest_reg_count(attrs.compute_kernel_config);
-    TT_FATAL(
-        key_tiles <= dst_tiles,
-        "{}: K = {} tiles exceeds the {} DST tiles a column packs from",
-        operation_name,
-        key_tiles,
-        dst_tiles);
+    kda_factory_detail::check_fp32_dest_acc(
+        attrs.compute_kernel_config, operation_name, "the hop adds the FP32 entry state and B exactly in DST");
 }
 
 RelayAffinePrefixOperation::spec_return_value_t RelayAffinePrefixOperation::compute_output_specs(
@@ -178,7 +172,7 @@ RelayAffinePrefixOperation::create_op_performance_model(
     const auto& state = in.initial_state.logical_shape();
     const double heads = state[0];
     const double key_dim = state[1];
-    // One hop per rank: E_out = A E_in + B per head.
+    // One hop per rank: S_out = S_in + E S_in + B per head (E = A - I).
     const KdaFpuWork work{
         .fpu_matrix_flops = heads * 2.0 * key_dim * key_dim * key_dim,
         .fpu_add_ops = heads * key_dim * key_dim,
