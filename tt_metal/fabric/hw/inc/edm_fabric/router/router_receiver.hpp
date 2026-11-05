@@ -436,8 +436,8 @@ FORCE_INLINE bool receive(
 // - A ring is credited in aligned completion groups, which never wrap, so the remote sender credits its producer once
 //   per group instead of per slot.
 // - Proof: each slot's NoC commands carry its group's transaction ID and the NIU counts each ID's outgoing writes, so
-//   one status read proves a group free. Groups sharing an ID (a channel with fewer IDs than groups) only make a proof
-//   wait longer, never wrong.
+//   one status read per NoC the slot's commands use proves a group free. Groups sharing an ID (a channel with fewer IDs
+//   than groups) only make a proof wait longer, never wrong.
 // - Due: while packets arrive, once more than a group waits (never the slot retired this pass, but for Wormhole's
 //   single slots); on an idle pass, a full group at once, a partial one (traffic stopped mid-group) after
 //   IDLE_PASSES_BEFORE_PARTIAL_CREDIT idle passes in a row. So a channel holds back at most a group minus one slot,
@@ -452,10 +452,18 @@ FORCE_INLINE bool receive(
 // Whether a channel crediting one slot at a time may credit the slot retired in the same pass (above).
 constexpr bool credit_this_pass_slot = is_wormhole_arch;
 
-// Whether every write tagged `trid` has left this ERISC's NIU (local writes and forwards share one NoC: one register).
-static_assert(tt::tt_fabric::local_chip_noc_equals_downstream_noc);
+// Whether every write tagged `trid` has left this ERISC's NIU: on the local writes' NoC and, where forwards go out on
+// the other NoC, on that one too. Both statuses are read before either is tested, so the two reads overlap.
 FORCE_INLINE bool trid_writes_sent(uint32_t trid) {
-    return ncrisc_noc_nonposted_write_with_transaction_id_sent(tt::tt_fabric::edm_to_local_chip_noc, trid);
+    if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
+        return ncrisc_noc_nonposted_write_with_transaction_id_sent(tt::tt_fabric::edm_to_local_chip_noc, trid);
+    } else {
+        const bool local_writes_sent =
+            ncrisc_noc_nonposted_write_with_transaction_id_sent(tt::tt_fabric::edm_to_local_chip_noc, trid);
+        const bool forwards_sent =
+            ncrisc_noc_nonposted_write_with_transaction_id_sent(tt::tt_fabric::edm_to_downstream_noc, trid);
+        return local_writes_sent && forwards_sent;
+    }
 }
 
 // Whether the writes tagged `trid` have left, reading the status up to MAX_CHECKS times.
