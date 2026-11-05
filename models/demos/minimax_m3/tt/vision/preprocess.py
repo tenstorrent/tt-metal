@@ -5,10 +5,12 @@ The host side of the MiniMax-M3 vision encoder's input: a resized image, as the 
 (vision/media.py, M3Image.pixels), checked and turned into the encoder's patch rows. It needs torch, torchvision and
 numpy, not ttnn.
 
+  check_size(height, width) -> (grid_h, grid_w)
+    The size must be one that prepare can give: sides that are multiples of 28 pixels (2 x 2 patches of 14), 4 to 576
+    vision tokens and an aspect ratio of at most MAX_RESIZED_ASPECT_RATIO. grid_h and grid_w count its blocks of
+    28 x 28 pixels, the vision tokens down and across it.
   check_pixels(pixels) -> (grid_h, grid_w)
-    The image must be one that prepare can give: uint8 (height, width, 3) with sides that are multiples of 28 pixels
-    (2 x 2 patches of 14), 4 to 576 vision tokens and an aspect ratio of at most MAX_RESIZED_ASPECT_RATIO. grid_h and
-    grid_w count its blocks of 28 x 28 pixels, the vision tokens down and across it.
+    check_size of the image's height and width, after checking that it is uint8 (height, width, 3).
   patch_rows(pixels) -> (pixel_values, grid_thw)
     1. Rescale to [0, 1] and normalize with the CLIP mean and std, in fp32, with the processor's fused arithmetic.
     2. The image as both frames of a temporal patch, cut into 14 x 14 patches with each 2 x 2 block of patches
@@ -58,21 +60,10 @@ _MEAN_255 = torch.tensor(IMAGE_MEAN) * (1.0 / _RESCALE_FACTOR)
 _STD_255 = torch.tensor(IMAGE_STD) * (1.0 / _RESCALE_FACTOR)
 
 
-def check_pixels(pixels: np.ndarray) -> Tuple[int, int]:
-    """The token grid (grid_h, grid_w) of a resized image, after checking that it is one prepare can return.
-
-    Raises TypeError unless pixels is a uint8 numpy array, and ValueError unless it is (height, width, 3) with height
-    and width positive multiples of 28, an area of 4 to 576 tokens (56 x 56 to 672 x 672 pixels) and an aspect ratio
-    of at most MAX_RESIZED_ASPECT_RATIO: every image prepare returns passes, and nothing else the vision encoder has
-    not been built for does.
-    """
-    if not isinstance(pixels, np.ndarray):
-        raise TypeError(f"pixels must be a numpy array, got {type(pixels).__name__}")
-    if pixels.dtype != np.uint8:
-        raise TypeError(f"pixels must be uint8, got {pixels.dtype}")
-    if pixels.ndim != 3 or pixels.shape[2] != NUM_CHANNELS:
-        raise ValueError(f"pixels must be an RGB image (height, width, 3), got shape {pixels.shape}")
-    height, width = pixels.shape[:2]
+def check_size(height: int, width: int) -> Tuple[int, int]:
+    """The token grid (grid_h, grid_w) of a resized image of height x width pixels, after checking that prepare can
+    give that size: height and width positive multiples of 28, an area of 4 to 576 tokens (56 x 56 to 672 x 672
+    pixels) and an aspect ratio of at most MAX_RESIZED_ASPECT_RATIO. Raises ValueError otherwise."""
     if height < FACTOR or width < FACTOR or height % FACTOR or width % FACTOR:
         raise ValueError(
             f"pixels height and width must be positive multiples of {FACTOR}, got height {height} and width {width}"
@@ -89,6 +80,22 @@ def check_pixels(pixels: np.ndarray) -> Tuple[int, int]:
             f" got height {height} and width {width}"
         )
     return grid_h, grid_w
+
+
+def check_pixels(pixels: np.ndarray) -> Tuple[int, int]:
+    """The token grid (grid_h, grid_w) of a resized image, after checking that it is one prepare can return.
+
+    Raises TypeError unless pixels is a uint8 numpy array, and ValueError unless it is (height, width, 3) of a size
+    that check_size takes: every image prepare returns passes, and nothing else the vision encoder has not been built
+    for does.
+    """
+    if not isinstance(pixels, np.ndarray):
+        raise TypeError(f"pixels must be a numpy array, got {type(pixels).__name__}")
+    if pixels.dtype != np.uint8:
+        raise TypeError(f"pixels must be uint8, got {pixels.dtype}")
+    if pixels.ndim != 3 or pixels.shape[2] != NUM_CHANNELS:
+        raise ValueError(f"pixels must be an RGB image (height, width, 3), got shape {pixels.shape}")
+    return check_size(*pixels.shape[:2])
 
 
 def patch_rows(pixels: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:

@@ -3,7 +3,7 @@
 
 """CPU checks of the vision encoder's input against the Hugging Face MiniMax-M3 image processor: the media module's
 prepare (vision/media.py), which resizes an image, and patch_rows (tt/vision/preprocess.py), which turns the resized
-image into the encoder's patch rows; and of check_pixels' rules.
+image into the encoder's patch rows; and of check_size's and check_pixels' rules.
 
 Each step must give what the processor gives, bit for bit:
   - prepare: the processor's resized image, which is uint8 (captured where the processor rescales and normalizes it),
@@ -21,9 +21,9 @@ Two processors: the one in transformers (MiniMaxM3VLImageProcessor; tt-metal pin
 when HF_MODEL is a checkpoint with a preprocessor_config.json, the checkpoint's own, loaded with trust_remote_code.
 Without HF_MODEL the "checkpoint" cases are not generated, so CI shows no skipped test.
 
-The other tests check check_pixels' rules (every size the resize gives passes, the bounds are reached, and the sizes
-outside them fail), that prepare never returns a view of its input, patch_rows on a read-only input, and that
-tt/vision/preprocess.py and image_input.py, which the media module imports, import with ttnn blocked.
+The other tests check check_size's and check_pixels' rules (every size the resize gives passes, the bounds are
+reached, and the sizes outside them fail), that prepare never returns a view of its input, patch_rows on a read-only
+input, and that tt/vision/preprocess.py and image_input.py, which the media module imports, import with ttnn blocked.
 
 No device and no weights. These tests have no mesh id; the 1-card CI leg selects them by name (its -k includes
 "test_vision_").
@@ -53,6 +53,7 @@ from models.demos.minimax_m3.tt.vision.preprocess import (
     MAX_TOKENS,
     PATCH_SIZE,
     check_pixels,
+    check_size,
     patch_rows,
 )
 from models.demos.minimax_m3.vision.media import MiniMaxM3Media, smart_resize
@@ -212,7 +213,7 @@ def test_vision_resized_aspect_ratio_bound(hf_processor):
     assert smart_resize(48, 9600) == (FACTOR, MAX_RESIZED_ASPECT_RATIO * FACTOR)
 
 
-# id: (height, width) of resized images at the bounds of check_pixels, which must pass.
+# id: (height, width) of resized images at the bounds of check_size and check_pixels, which must pass.
 GOOD_PIXELS = {
     "fewest_tokens": (28, 112),  # 1 token down and 4 across, the area of 56 x 56 pixels
     "most_tokens": (672, 672),  # 24 tokens down and 24 across
@@ -223,11 +224,24 @@ GOOD_PIXELS = {
 
 @pytest.mark.parametrize("case", GOOD_PIXELS)
 def test_vision_check_pixels_bounds(case):
-    """check_pixels takes the resized images at its bounds and gives their token grid."""
+    """check_size and check_pixels take the resized images at their bounds and give their token grid."""
     height, width = GOOD_PIXELS[case]
-    assert check_pixels(np.zeros((height, width, 3), dtype=np.uint8)) == (height // FACTOR, width // FACTOR)
+    grid = (height // FACTOR, width // FACTOR)
+    assert check_size(height, width) == grid
+    assert check_pixels(np.zeros((height, width, 3), dtype=np.uint8)) == grid
 
 
+# id: ((height, width), message). No image resizes to these sizes.
+BAD_SIZES = {
+    "not_whole_blocks": ((56, 60), "got height 56 and width 60"),
+    "half_block": ((14, 112), "multiples of 28"),
+    "empty": ((0, 56), "multiples of 28"),
+    "one_token": ((28, 28), r"4 to 576 vision tokens .* got 1 \(1 down"),
+    "three_tokens": ((28, 84), r"got 3 \(1 down, 3 across\)"),
+    "too_many_tokens": ((700, 700), r"got 625 \(25 down, 25 across\)"),
+    "too_stretched": ((28, 9520), "aspect ratio must be at most 339"),
+    "too_stretched_tall": ((9520, 28), "aspect ratio must be at most 339"),
+}
 # id: (pixels, error, message). Every case is the resize of nothing: no image resizes to it.
 BAD_PIXELS = {
     "list": ([[[0, 0, 0]]], TypeError, "numpy array"),
@@ -237,15 +251,20 @@ BAD_PIXELS = {
     "gray": (np.zeros((56, 56), dtype=np.uint8), ValueError, r"\(height, width, 3\)"),
     "rgba": (np.zeros((56, 56, 4), dtype=np.uint8), ValueError, r"\(height, width, 3\)"),
     "channels_first": (np.zeros((3, 56, 56), dtype=np.uint8), ValueError, r"\(height, width, 3\)"),
-    "not_whole_blocks": (np.zeros((56, 60, 3), dtype=np.uint8), ValueError, "got height 56 and width 60"),
-    "half_block": (np.zeros((14, 112, 3), dtype=np.uint8), ValueError, "multiples of 28"),
-    "empty": (np.zeros((0, 56, 3), dtype=np.uint8), ValueError, "multiples of 28"),
-    "one_token": (np.zeros((28, 28, 3), dtype=np.uint8), ValueError, r"4 to 576 vision tokens .* got 1 \(1 down"),
-    "three_tokens": (np.zeros((28, 84, 3), dtype=np.uint8), ValueError, r"got 3 \(1 down, 3 across\)"),
-    "too_many_tokens": (np.zeros((700, 700, 3), dtype=np.uint8), ValueError, r"got 625 \(25 down, 25 across\)"),
-    "too_stretched": (np.zeros((28, 9520, 3), dtype=np.uint8), ValueError, "aspect ratio must be at most 339"),
-    "too_stretched_tall": (np.zeros((9520, 28, 3), dtype=np.uint8), ValueError, "aspect ratio must be at most 339"),
+    # RGB images of the sizes in BAD_SIZES
+    **{
+        case: (np.zeros((*size, 3), dtype=np.uint8), ValueError, message) for case, (size, message) in BAD_SIZES.items()
+    },
 }
+
+
+@pytest.mark.parametrize("case", BAD_SIZES)
+def test_vision_check_size_rejects(case, expect_error):
+    """check_size raises ValueError for a size that no image resizes to: sides that are not whole 28-pixel blocks,
+    fewer than 4 or more than 576 tokens, or more stretched than 339:1."""
+    (height, width), message = BAD_SIZES[case]
+    with expect_error(ValueError, message):
+        check_size(height, width)
 
 
 @pytest.mark.parametrize("case", BAD_PIXELS)
