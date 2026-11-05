@@ -78,24 +78,25 @@ inline void calculate_cumsum(const bool first) {
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void cumsum_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    lltt::record(0, 2 * cumsum_step);
-    // FIXME: These should all be TT_SFP...
-    TTI_SFPADD(10, 7, 0, 0, 0);
-    TTI_SFPNOP;
-    TTI_SFPADD(10, 0, 1, 1, 0);
-    TTI_SFPNOP;
-    TTI_SFPADD(10, 1, 2, 2, 0);
-    TTI_SFPNOP;
-    TTI_SFPADD(10, 2, 3, 3, 0);
-    TTI_SFPNOP;
-    TTI_SFPADD(10, 3, 4, 4, 0);
-    TTI_SFPNOP;
-    TTI_SFPADD(10, 4, 5, 5, 0);
-    TTI_SFPNOP;
-    TTI_SFPADD(10, 5, 6, 6, 0);
-    TTI_SFPNOP;
-    TTI_SFPADD(10, 6, 7, 7, 0);
-    TTI_SFPNOP;
+    load_replay_buf(0, 2 * cumsum_step, [] {
+        // FIXME: These should all be TT_SFP...
+        TTI_SFPADD(10, 7, 0, 0, 0);
+        TTI_SFPNOP;
+        TTI_SFPADD(10, 0, 1, 1, 0);
+        TTI_SFPNOP;
+        TTI_SFPADD(10, 1, 2, 2, 0);
+        TTI_SFPNOP;
+        TTI_SFPADD(10, 2, 3, 3, 0);
+        TTI_SFPNOP;
+        TTI_SFPADD(10, 3, 4, 4, 0);
+        TTI_SFPNOP;
+        TTI_SFPADD(10, 4, 5, 5, 0);
+        TTI_SFPNOP;
+        TTI_SFPADD(10, 5, 6, 6, 0);
+        TTI_SFPNOP;
+        TTI_SFPADD(10, 6, 7, 7, 0);
+        TTI_SFPNOP;
+    });
 }
 
 // One row of the compensated (Kahan) scan, the steps of the permuted path's calculate_kahan_step:

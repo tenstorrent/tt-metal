@@ -101,7 +101,7 @@ enum class EnvVarID {
     TT_METAL_ENABLE_HW_CACHE_INVALIDATION,              // Enable HW cache invalidation
     TT_METAL_DISABLE_RELAXED_MEM_ORDERING,              // Disable relaxed memory ordering
     TT_METAL_DISABLE_L1_ECC_HALT,                       // Disable the Blackhole L1 ECC halt
-    TT_METAL_ENABLE_GATHERING,                          // Enable instruction gathering
+    TT_METAL_DISABLE_GATHERING,                         // Disable Blackhole instruction gathering
     TT_METAL_FABRIC_BW_TELEMETRY,                       // Enable fabric bandwidth telemetry
     TT_METAL_FABRIC_TELEMETRY,                          // Enable fabric telemetry
     TT_FABRIC_PROFILE_RX_CH_FWD,                        // Enable fabric RX channel forwarding profiling
@@ -791,11 +791,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DISABLE_L1_ECC_HALT=1
         case EnvVarID::TT_METAL_DISABLE_L1_ECC_HALT: this->disable_l1_ecc_halt = is_env_enabled(value); break;
 
-        // TT_METAL_ENABLE_GATHERING
-        // Enable data gathering on Blackhole.
-        // Default: false (gathering disabled)
-        // Usage: export TT_METAL_ENABLE_GATHERING=1
-        case EnvVarID::TT_METAL_ENABLE_GATHERING: this->enable_gathering = true; break;
+        // TT_METAL_DISABLE_GATHERING
+        // Disable Tensix instruction gathering on Blackhole: firmware turns it off at boot and the
+        // kernels drop the bracket around replay-buffer records.
+        // Default: false (gathering enabled)
+        // Usage: export TT_METAL_DISABLE_GATHERING=1
+        case EnvVarID::TT_METAL_DISABLE_GATHERING: this->disable_gathering = is_env_enabled(value); break;
 
         // TT_METAL_FABRIC_BW_TELEMETRY
         // Enable fabric bandwidth telemetry data collection.

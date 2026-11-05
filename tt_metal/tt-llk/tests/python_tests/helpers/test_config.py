@@ -81,6 +81,7 @@ from .llk_params import (
     MailboxesQuasar,
 )
 from .logger import logger
+from .replay_record_scan import check_elf_records
 from .stimuli_config import StimuliConfig
 from .target_config import TestTargetConfig
 from .test_variant_parameters import (
@@ -447,17 +448,24 @@ class TestConfig:
             root = Path(runner_temp) / "tt-llk-build"
         else:
             root = TestConfig.DEFAULT_ARTEFACTS_PATH
-        # A gathering build compiles every kernel and the shared firmware differently, and the
-        # artefact cache is keyed by variant, not by compile options: keep it in its own tree.
-        if TestConfig.gathering_build():
-            root = root / "gathering"
+        # A build with gathering disabled compiles every kernel and the shared firmware
+        # differently, and the artefact cache is keyed by variant, not by compile options: keep
+        # it in its own tree.
+        if (
+            TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+            and not TestConfig.gathering_build()
+        ):
+            root = root / "no-gathering"
         return root
 
     @staticmethod
     def gathering_build() -> bool:
-        """tt-metal's JIT switch: the LLK tests build in the gathering configuration tt-metal
-        ships. "1" only, like TT_METAL_DISABLE_SFPLOADMACRO."""
-        return os.environ.get("TT_METAL_ENABLE_GATHERING") == "1"
+        """tt-metal's JIT switch: Blackhole builds with instruction gathering on unless
+        TT_METAL_DISABLE_GATHERING is "1" (only "1", like TT_METAL_DISABLE_SFPLOADMACRO)."""
+        return (
+            TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+            and os.environ.get("TT_METAL_DISABLE_GATHERING") != "1"
+        )
 
     @staticmethod
     def setup_paths(sources_path: Path):
@@ -1528,11 +1536,9 @@ class TestConfig:
 
         if TestConfig.gathering_build():
             # Every RISC, the shared firmware included, so boot.h leaves gathering on everywhere.
-            gathering_options = "-DENABLE_GATHERING "
-            if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
-                # As tt-metal's JIT build does on Blackhole only: the compiler's own replay
-                # optimisation turns unrolled SFPU loops into records it never brackets.
-                gathering_options += "-mno-tt-tensix-optimize-replay "
+            # As tt-metal's JIT build does: the compiler's own replay optimisation turns unrolled
+            # SFPU loops into records it never brackets.
+            gathering_options = "-DENABLE_GATHERING -mno-tt-tensix-optimize-replay "
             OPTIONS_COMPILE += gathering_options
             NON_COVERAGE_OPTIONS_COMPILE += gathering_options
 
@@ -1997,6 +2003,22 @@ class TestConfig:
                 ]
                 for fut in futures:
                     fut.result()
+
+            if TestConfig.gathering_build():
+                # A replay record that gathering sees can hang the core; the source lint cannot see
+                # records the compiler makes or a helper that lost its bracket, the binary can.
+                unbracketed = [
+                    f"{name}.elf: {line}"
+                    for name in TestConfig.KERNEL_COMPONENTS
+                    for line in check_elf_records(VARIANT_ELF_DIR / f"{name}.elf")[1]
+                ]
+                if unbracketed:
+                    raise RuntimeError(
+                        f"{self.test_name} variant {self.variant_id[:12]}: replay record(s) not "
+                        "bracketed by disable_gathering()/enable_gathering() in a gathering build; "
+                        "record through ckernel::load_replay_buf:\n  "
+                        + "\n  ".join(unbracketed)
+                    )
 
             if self.profiler_build == ProfilerBuild.Yes:
                 # Extract profiler metadata
