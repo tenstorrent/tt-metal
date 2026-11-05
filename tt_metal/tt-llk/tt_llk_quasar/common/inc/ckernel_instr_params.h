@@ -444,8 +444,8 @@ struct p_sfpu
 
     struct sfp_sfpcast_mod
     {
-        constexpr static std::uint32_t SM32_TO_2SC  = 0x3; // sign+magnitude int32 -> 2's complement
-        constexpr static std::uint32_t TWO_SC_TO_SM = 0x2; // 2's complement -> sign+magnitude int32
+        constexpr static std::uint32_t SM32_TO_2SC  = 0x2; // sign+magnitude int32 -> 2's complement (-0 -> 0)
+        constexpr static std::uint32_t TWO_SC_TO_SM = 0x3; // 2's complement -> sign+magnitude int32 (INT32_MIN saturates to 0xFFFFFFFF)
     };
 
     struct sfp_binary_mod

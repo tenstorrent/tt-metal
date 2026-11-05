@@ -1054,9 +1054,18 @@ def _run_quant(
     # Zero-point: a small fp32 offset.
     zero_point = 3.0
 
+    # Pinned lanes: SFPCAST SM<->2's-comp differs from plain negation only at 0x80000000.
+    # Even ones give A*scale+zp = -0.25 (STOCH_RND -0); odd ones hold INT32_MIN (int, 2's-comp only).
+    pinned = torch.arange(0, n, n // 8)
+    neg_zero_lanes, int32_min_lanes = pinned[0::2], pinned[1::2]
+    neg_zero_a = -(zero_point + 0.25) / scale[neg_zero_lanes]
+
     if a_is_int:
         # int32 operand A in a modest range so int*scale stays well within int8.
         a_vals = torch.randint(-2000, 2000, (n,), dtype=torch.int32)
+        a_vals[neg_zero_lanes] = torch.round(neg_zero_a).to(torch.int32)
+        if not sign_magnitude:
+            a_vals[int32_min_lanes] = torch.iinfo(torch.int32).min
         a_float = a_vals.to(torch.float32)
         # The SIGN_MAGNITUDE_FORMAT path skips the 2's-comp->SM input cast, so operand
         # A must already be SMAG32; the default path expects raw 2's-complement.
@@ -1064,6 +1073,7 @@ def _run_quant(
     else:
         # fp32 operand A.
         a_float = (torch.rand(n, dtype=torch.float32) - 0.5) * 4000.0  # +/-2000
+        a_float[neg_zero_lanes] = neg_zero_a
         a_vals = a_float
         a_staged = fp32_bits_as_int32(a_float)
 
@@ -1082,18 +1092,15 @@ def _run_quant(
         prod = a_float * scale + zero_point
         rounded = torch.round(prod)  # round-half-to-even matches SFP STOCH_RND NearEven
         clamped = torch.clamp(rounded, _QUANT_INT8_MIN, _QUANT_INT8_MAX).to(torch.int32)
-        # STOCH_RND emits a sign-magnitude int8 result. A negative value whose
-        # magnitude rounds to 0 becomes sign-magnitude negative-zero (0x80000000).
-        neg_zero = (clamped == 0) & (prod < 0)
         if sign_magnitude:
             # SM path stores the STOCH_RND SMAG32 result as-is (no SM32_TO_2SC cast):
-            # negatives keep bit31|magnitude and negative-zero stays 0x80000000.
+            # negatives keep bit31|magnitude and a negative value rounding to 0 stays -0 (0x80000000).
+            neg_zero = (clamped == 0) & (prod < 0)
             golden_active = int32_to_smag32(clamped)
             golden_active[neg_zero] = torch.tensor(-(2**31), dtype=torch.int32)
         else:
-            # 2's-comp path: SM32_TO_2SC maps STOCH_RND negative-zero to -1 (not +0).
+            # 2's-comp path: SM32_TO_2SC maps STOCH_RND negative-zero to 0.
             golden_active = clamped
-            golden_active[neg_zero] = -1
         out_dtype = torch.int32
 
     golden_tensor = torch.zeros(MAX_TILE_ELEMENTS, dtype=out_dtype)
