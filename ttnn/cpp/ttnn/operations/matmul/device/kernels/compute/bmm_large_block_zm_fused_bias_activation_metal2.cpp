@@ -109,12 +109,12 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     const uint32_t mm_partials_dfb_id = mm_partials_dfb.get_id();
     const uint32_t mm_partials_reload_dfb_id = mm_partials_reload_dfb.get_id();
     // mm_partials_reload_dfb_id is the buffer view the reload copies through. It equals
-    // mm_partials_dfb_id unless the partials buffer is also read as an FPU operand elsewhere (the
-    // fused bias add reads it via SrcA), in which case UnpackToDestFp32 cannot be set on it
-    // directly; instead a second buffer aliases the same SRAM with UnpackToDestFp32 set, and the
-    // reload copies through that alias while the FPU consumer keeps the original view. The alias
-    // has its own read pointer, so align it with the partials buffer's current read position
-    // before copying.
+    // mm_partials_dfb_id unless the reload is marked UnpackToDestFp32 and the partials buffer is also
+    // read as an FPU operand elsewhere (the fused bias add reads it via SrcA). In that case
+    // UnpackToDestFp32 cannot be set on the partials buffer directly; instead a second buffer aliases
+    // the same SRAM with UnpackToDestFp32 set, and the reload copies through that alias while the FPU
+    // consumer keeps the original view. The alias has its own read pointer, so align it with the
+    // partials buffer's current read position before copying.
     // Reconfigure input
     reconfig_data_format_srca(in1_dfb_id, mm_partials_reload_dfb_id);
     copy_init(mm_partials_reload_dfb_id);
@@ -227,8 +227,8 @@ void kernel_main() {
     constexpr uint32_t out_dfb_id = dfb::out;
     constexpr uint32_t mm_partials_dfb_id = dfb::intermed0;
     // Buffer view the cross-block reload copies through: the UnpackToDestFp32-marked alias of the
-    // partials buffer when it is also read as an FPU operand (fused bias), otherwise the partials
-    // buffer itself.
+    // partials buffer when the factory defines MM_PARTIALS_RELOAD_ALIAS, otherwise the partials buffer
+    // itself.
 #ifdef MM_PARTIALS_RELOAD_ALIAS
     // The partials buffer is also read as an FPU operand (fused bias) and so cannot carry
     // UnpackToDestFp32; the reload instead copies through this alias view of the same SRAM, which
@@ -343,10 +343,7 @@ void kernel_main() {
             dummy_unpack(batch_valid_dfb.get_id());
             batch_valid_dfb.pop_front(1);
 #else
-            // A factory that sets get_batch_from_reader without binding dfb::batch_valid: reject it at
-            // compile time so a Quasar build with get_batch_from_reader=true fails loudly instead of
-            // deadlocking compute on the input tiles of skipped batches, which the reader never pushes, or
-            // consuming stale DFB contents. Mirrors the experimental Quasar bmm kernel.
+            // Without dfb::batch_valid, compute cannot learn which batches the in0 kernels skip.
             static_assert(
                 !get_batch_from_reader,
                 "get_batch_from_reader (batch sparsity) on Quasar requires the batch_valid dataflow buffer "
