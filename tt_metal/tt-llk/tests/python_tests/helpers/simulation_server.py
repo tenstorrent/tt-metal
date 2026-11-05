@@ -58,7 +58,8 @@ class SimulationServer:
     HOST_SCRIPT = Path(__file__).with_name("sim_host.py")
     READY_TIMEOUT_S = 600
     POLL_INTERVAL_S = 2
-    EXIT_TIMEOUT_S = 30
+    # A waveform-dumping simulator needs longer than 30s to finish writing its dump after "exit".
+    EXIT_TIMEOUT_S = int(os.environ.get("TT_LLK_SIM_EXIT_TIMEOUT_S", "30"))
     NNG_SOCKET_ADDR = "NNG_SOCKET_ADDR"
     STALE_HOST_POLL_S = 0.5
 
