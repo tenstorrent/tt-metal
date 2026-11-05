@@ -41,7 +41,7 @@ GRID = SimpleNamespace(x=11, y=10)
     ],
 )
 def test_ring_sdpa_chunk_sizes(slab, sliding, expected):
-    assert ring_sdpa_chunk_sizes(slab, sliding, num_heads=8, num_cores=110, use_tuned_configs=True) == expected
+    assert ring_sdpa_chunk_sizes(slab, sliding, num_heads=8, grid=(11, 10), use_tuned_configs=True) == expected
 
 
 @pytest.fixture
@@ -57,8 +57,8 @@ def test_ring_sdpa_table_unavailable_uses_heuristic(ring_sdpa_table_file, conten
     if contents is not None:
         ring_sdpa_table_file.write_text(contents)
     assert ring_sdpa_chunk_sizes(768, False, use_tuned_configs=True) == (96, 256, 1, True)
-    # The old small-slab heuristic could request segments for 112 Q units on 110 cores.
-    assert ring_sdpa_chunk_sizes(448, False, use_tuned_configs=True) == (32, 256, 3, False)
+    # 112 Q units on 110 cores: the op refuses both a K split and segments, so neither is requested.
+    assert ring_sdpa_chunk_sizes(448, False, use_tuned_configs=True) == (32, 256, 1, False)
     assert ring_sdpa_chunk_sizes(448, True, use_tuned_configs=True) == (128, 128, 3, False)
 
 
@@ -76,7 +76,7 @@ def test_ring_sdpa_tuning_is_optional_and_geometry_specific():
     assert ring_sdpa_chunk_sizes(768, False) == (96, 256, 1, True)
     assert ring_sdpa_chunk_sizes(768, False, use_tuned_configs=False) == (96, 256, 1, True)
     assert ring_sdpa_chunk_sizes(768, False, num_heads=4, use_tuned_configs=True) == (96, 256, 1, True)
-    assert ring_sdpa_chunk_sizes(768, False, num_cores=120, use_tuned_configs=True) == (96, 256, 1, True)
+    assert ring_sdpa_chunk_sizes(768, False, grid=(12, 10), use_tuned_configs=True) == (96, 256, 1, True)
 
 
 @pytest.mark.parametrize(
@@ -114,17 +114,34 @@ def test_ring_sdpa_global_caller_guards_tuned_workload(
 
 
 @pytest.mark.parametrize(
-    "slab, num_heads, num_cores, k_splits",
+    "slab, expected",
     [
-        # Three bands of every (head, q 128 chunk) unit must fit on the cores.
-        (512, 8, 96, 3),
-        (512, 8, 95, 1),
-        (256, 16, 96, 3),
-        (512, 16, 110, 1),
+        (256, (64, 256, 3, False)),
+        (512, (128, 256, 3, False)),
+        # A quarter slab that is not whole tiles falls back to one tile.
+        (64, (32, 256, 3, False)),
+        # 40 units take 4 rows of 11, so three bands need 12 > 10 rows: unsplit, segmented.
+        (160, (32, 256, 1, True)),
     ],
 )
-def test_ring_sdpa_sliding_k_splits(slab, num_heads, num_cores, k_splits):
-    assert ring_sdpa_chunk_sizes(slab, True, num_heads=num_heads, num_cores=num_cores)[2] == k_splits
+def test_ring_sdpa_heuristic_never_pairs_segments_with_k_split(slab, expected):
+    assert ring_sdpa_chunk_sizes(slab, False, num_heads=8, grid=(11, 10)) == expected
+
+
+@pytest.mark.parametrize(
+    "slab, num_heads, grid, k_splits",
+    [
+        # Three bands of every (head, q 128 chunk) unit must fit in whole rows of the grid.
+        (512, 8, (11, 10), 3),
+        (512, 8, (11, 8), 1),
+        (256, 16, (11, 10), 3),
+        (512, 16, (11, 10), 1),
+        # 3 x 32 units fit 104 cores, but each band needs 3 of 8 rows.
+        (512, 8, (13, 8), 1),
+    ],
+)
+def test_ring_sdpa_sliding_k_splits(slab, num_heads, grid, k_splits):
+    assert ring_sdpa_chunk_sizes(slab, True, num_heads=num_heads, grid=grid)[2] == k_splits
 
 
 @pytest.mark.parametrize(

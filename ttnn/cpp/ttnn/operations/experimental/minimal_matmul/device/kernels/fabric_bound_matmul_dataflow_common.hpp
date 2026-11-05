@@ -334,9 +334,9 @@ void write_block_sync_granular(
                 out_read_ptr += tile_size_bytes;
             }
         }
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-    noc_async_writes_flushed();
 }
 
 /**
@@ -378,9 +378,9 @@ void write_block_sync_granular_interleaved(
                 out_read_ptr += tile_size_bytes;
             }
         }
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-    noc_async_writes_flushed();
 }
 
 /**
@@ -509,7 +509,7 @@ void write_block_sync_granular_split(
                 out_read_ptr += tile_size_bytes;
             }
         }
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-    noc_async_writes_flushed();
 }

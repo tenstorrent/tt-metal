@@ -82,7 +82,7 @@ void verify_default_page_size(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& prog = workload.get_programs().at(device_range);
 
@@ -135,7 +135,7 @@ void verify_runtime_page_size(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& prog = workload.get_programs().at(device_range);
 
