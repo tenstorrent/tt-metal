@@ -618,12 +618,11 @@ Tensor reduce(
                                               ? ttnn::PadValue{std::bit_cast<uint32_t>(pad_value)}
                                               : ttnn::PadValue{pad_value};
     auto input_tensor = input_tensor_arg;
-    if (is_tiled &&
-        (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
-         input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0)) {
+    if (is_tiled && (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+                     input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0)) {
         // fill_pad writes in place. A reduction must not rewrite its caller's tensor.
-        input_tensor = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt);
-        input_tensor = ttnn::fill_implicit_tile_padding(input_tensor, fill_pad_value);
+        input_tensor = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt, sub_core_grids);
+        input_tensor = ttnn::fill_implicit_tile_padding(input_tensor, fill_pad_value, std::nullopt, sub_core_grids);
     }
 
     // bf16 multi-axis Sum/Mean precision chain: carry FP32 between stages and pack bf16

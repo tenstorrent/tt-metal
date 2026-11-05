@@ -542,7 +542,8 @@ std::shared_ptr<Buffer> BufferImpl::create(
     const BufferType buffer_type,
     const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
-    const std::optional<SubDeviceId> sub_device_id) {
+    const std::optional<SubDeviceId> sub_device_id,
+    const std::optional<DeviceAddr> requested_address) {
     return create_owning(
         device,
         size,
@@ -551,7 +552,8 @@ std::shared_ptr<Buffer> BufferImpl::create(
         sharding_args,
         bottom_up,
         sub_device_id,
-        /*unique_id=*/std::nullopt);
+        /*unique_id=*/std::nullopt,
+        requested_address);
 }
 
 std::shared_ptr<Buffer> BufferImpl::create_for_mesh_buffer(
@@ -563,7 +565,16 @@ std::shared_ptr<Buffer> BufferImpl::create_for_mesh_buffer(
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id,
     const size_t unique_id) {
-    return create_owning(device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, unique_id);
+    return create_owning(
+        device,
+        size,
+        page_size,
+        buffer_type,
+        sharding_args,
+        bottom_up,
+        sub_device_id,
+        unique_id,
+        /*requested_address=*/std::nullopt);
 }
 
 std::shared_ptr<Buffer> BufferImpl::create_owning(
@@ -574,8 +585,16 @@ std::shared_ptr<Buffer> BufferImpl::create_owning(
     const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id,
-    const std::optional<size_t> unique_id) {
+    const std::optional<size_t> unique_id,
+    const std::optional<DeviceAddr> requested_address) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+#if defined(TT_ENABLE_LIGHT_METAL_TRACE) && (TT_ENABLE_LIGHT_METAL_TRACE == 1)
+    // Light Metal's buffer-create record cannot represent an owning fixed-address
+    // allocation. Reject it instead of replaying it as an unconstrained allocation.
+    TT_FATAL(
+        !requested_address.has_value() || !LightMetalCaptureContext::get().is_tracing(),
+        "Owning fixed-address allocations are not supported during Light Metal capture");
+#endif
 
     auto buffer = std::make_shared<Buffer>(BufferImpl(
         device,
@@ -593,7 +612,7 @@ std::shared_ptr<Buffer> BufferImpl::create_owning(
         return buffer;
     }
 
-    buffer->impl().allocate_impl(*buffer);
+    buffer->impl().allocate_impl(*buffer, requested_address);
 
     LIGHT_METAL_TRACE_FUNCTION_CALL(
         CaptureBufferCreate,
@@ -698,14 +717,14 @@ std::shared_ptr<Buffer> BufferImpl::view(Buffer& self, const BufferRegion& regio
 
 Allocator* Buffer::allocator() const { return impl_->allocator_->view().get(); }
 
-void BufferImpl::allocate_impl(Buffer& self) {
+void BufferImpl::allocate_impl(Buffer& self, std::optional<DeviceAddr> requested_address) {
     if (GraphTracker::instance().hook_allocate(&self)) {
         address_ = 0;
         hooked_allocation_ = true;
     } else {
         validate_sub_device_manager_id(sub_device_manager_id_, device_);
 
-        address_ = allocator_->allocate_buffer(&self);
+        address_ = allocator_->allocate_buffer(&self, requested_address);
 
         // Assertion here because buffer class returns a u32 when address is queried
         // Requires updating all use cases of buffer address to accept a u64 to remove

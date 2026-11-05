@@ -14,7 +14,10 @@
 namespace ttnn {
 
 Tensor fill_implicit_tile_padding(
-    const Tensor& input_tensor, ttnn::PadValue fill_value, const std::optional<MemoryConfig>& memory_config) {
+    const Tensor& input_tensor,
+    ttnn::PadValue fill_value,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     // if padded shape == logical shape for last 2 dims no padding should be present, and no fill pad is necessary
     uint32_t padded_height =
         tt::div_up(input_tensor.logical_shape()[-2], tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
@@ -26,7 +29,8 @@ Tensor fill_implicit_tile_padding(
     auto mutable_input_tensor = input_tensor;
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     if (is_block_float(input_tensor.dtype())) {
-        mutable_input_tensor = ttnn::typecast(mutable_input_tensor, DataType::BFLOAT16);
+        mutable_input_tensor =
+            ttnn::typecast(mutable_input_tensor, DataType::BFLOAT16, std::nullopt, std::nullopt, sub_core_grids);
     }
     Tensor output_tensor;
     // if input_tensor is rank > 3, then we need to reshape it to rank 3 such that the last 2 dims are the same
@@ -50,26 +54,26 @@ Tensor fill_implicit_tile_padding(
             /*memory_config=*/std::nullopt,
             /*pad_value=*/std::nullopt,
             ttnn::TileReshapeMapMode::CACHE,
-            /*sub_core_grid=*/std::nullopt,
+            /*sub_core_grid=*/sub_core_grids,
             /*skip_padding_fill=*/true);
 
-        reshaped_tensor = ttnn::prim::fill_pad(reshaped_tensor, fill_value, output_memory_config);
+        reshaped_tensor = ttnn::prim::fill_pad(reshaped_tensor, fill_value, output_memory_config, sub_core_grids);
         output_tensor = ttnn::reshape(
             reshaped_tensor,
             original_shape,
             /*memory_config=*/std::nullopt,
             /*pad_value=*/std::nullopt,
             ttnn::TileReshapeMapMode::CACHE,
-            /*sub_core_grid=*/std::nullopt,
+            /*sub_core_grid=*/sub_core_grids,
             /*skip_padding_fill=*/true);
     } else {
-        output_tensor = ttnn::prim::fill_pad(mutable_input_tensor, fill_value, output_memory_config);
+        output_tensor = ttnn::prim::fill_pad(mutable_input_tensor, fill_value, output_memory_config, sub_core_grids);
     }
     // Block-float inputs were typecast to BFLOAT16 above for fill_pad; restore the original dtype on every
     // return path, including the rank>3 branch (previously the cast-back only fired on the rank<=3 path,
     // leaking BFLOAT16 for rank>3 block-float inputs).
     if (is_block_float(input_tensor.dtype())) {
-        return ttnn::typecast(output_tensor, input_tensor.dtype());
+        return ttnn::typecast(output_tensor, input_tensor.dtype(), std::nullopt, std::nullopt, sub_core_grids);
     }
     return output_tensor;
 }

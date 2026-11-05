@@ -567,6 +567,32 @@ def test_deepseek_sampling_applies_remap_before_update_and_advance():
     assert [event[0] for event in events] == ["remap", "update", "validate", "advance"]
 
 
+def test_deepseek_eager_decode_precompiles_traced_sampling_once_before_any_trace():
+    events = []
+    sampler = _FakeSamplingGenerator(padded_batch_size=32, sampling_dp=1)
+    sampler.precompile = lambda logits, **kwargs: events.append(("precompile", kwargs))
+    sampler.sample = lambda logits, **kwargs: events.append(("sample", kwargs)) or ("tokens", None)
+    generator = SimpleNamespace(
+        sampling_generator=sampler,
+        _trace_id=None,
+        _sampling_trace_precompiled=False,
+        _sampling_device_slots=lambda user_slots: [0],
+    )
+    logits = SimpleNamespace(shape=(1, 1, 32, 128))
+
+    for _ in range(2):
+        result = DeepseekGenerator._sample_tokens_device(generator, logits, skip_precompile=True, precompile_trace=True)
+        assert result == "tokens"
+    assert [event[0] for event in events] == ["precompile", "sample", "sample"]
+    assert events[0][1] == {"all_configs": True}
+
+    # A live decode trace must not see new allocations, so a later precompile is skipped.
+    generator._sampling_trace_precompiled = False
+    generator._trace_id = 1
+    DeepseekGenerator._sample_tokens_device(generator, logits, skip_precompile=True, precompile_trace=True)
+    assert [event[0] for event in events] == ["precompile", "sample", "sample", "sample"]
+
+
 def test_deepseek_host_sampling_applies_dormant_remap_after_success(monkeypatch):
     events = []
     generator = DeepseekV3ForCausalLM.__new__(DeepseekV3ForCausalLM)

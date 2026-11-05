@@ -152,8 +152,11 @@ class DeepSeekPrefillConfig:
         )
 
     def slice_expert_weights(self, pw, e):
-        """Slice EPC-batched weights for a single expert. Caller MUST deallocate the
-        returned tensors after use; nothing is cached."""
+        """Slice EPC-batched weights for one expert.
+
+        With one expert per chip these full-range slices borrow the original
+        weights. Only slices from multi-expert tensors own temporary storage.
+        """
         H = self.config.hidden_size
         I = self.config.intermediate_size
         if pw.w1_w3_fused is not None:
@@ -367,8 +370,8 @@ def _forward_prefill_deepseek_chunk(
         buf_work = buf_tiled
 
     for local_expert in range(pc.experts_per_chip):
-        # Slice per-expert weights on-demand; deallocate at end of iter so they
-        # never persist across iters or across layers.
+        # Full-range slices alias persistent weights when there is one expert
+        # per chip (GPT-OSS-20B on Galaxy). Keep those buffers alive for replay.
         expert_w = pc.slice_expert_weights(pw, local_expert)
 
         tokens = ttnn.experimental.deepseek_prefill.extract(
@@ -390,9 +393,11 @@ def _forward_prefill_deepseek_chunk(
             w1_w3_out = ttnn.matmul(tokens_4d, w1_w3_e, memory_config=memory_config)
             ttnn.deallocate(tokens_4d)
             ttnn.deallocate(tokens_bf16)
-            ttnn.deallocate(w1_w3_e)
+            if pc.experts_per_chip > 1:
+                ttnn.deallocate(w1_w3_e)
             ttnn.add(w1_w3_out, w1_w3_bias_e, output_tensor=w1_w3_out)
-            ttnn.deallocate(w1_w3_bias_e)
+            if pc.experts_per_chip > 1:
+                ttnn.deallocate(w1_w3_bias_e)
             sh = w1_w3_out.shape
             w1_out = ttnn.slice(w1_w3_out, [0, 0, 0, 0], [sh[0], sh[1], sh[2], I], [1, 1, 1, 1])
             w3_out = ttnn.slice(w1_w3_out, [0, 0, 0, I], [sh[0], sh[1], sh[2], 2 * I], [1, 1, 1, 1])
@@ -401,24 +406,30 @@ def _forward_prefill_deepseek_chunk(
             w1_e, w1_bias_e, w3_e, w3_bias_e, w2_e, w2_bias_e = expert_w
 
             w1_out = ttnn.matmul(tokens_4d, w1_e, memory_config=memory_config)
-            ttnn.deallocate(w1_e)
+            if pc.experts_per_chip > 1:
+                ttnn.deallocate(w1_e)
             ttnn.add(w1_out, w1_bias_e, output_tensor=w1_out)
-            ttnn.deallocate(w1_bias_e)
+            if pc.experts_per_chip > 1:
+                ttnn.deallocate(w1_bias_e)
             w3_out = ttnn.matmul(tokens_4d, w3_e, memory_config=memory_config)
-            ttnn.deallocate(w3_e)
+            if pc.experts_per_chip > 1:
+                ttnn.deallocate(w3_e)
             ttnn.deallocate(tokens_4d)
             ttnn.deallocate(tokens_bf16)
             ttnn.add(w3_out, w3_bias_e, output_tensor=w3_out)
-            ttnn.deallocate(w3_bias_e)
+            if pc.experts_per_chip > 1:
+                ttnn.deallocate(w3_bias_e)
 
         activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
         # _apply_swiglu deallocates w1_out and w3_out internally.
 
         expert_out_4d = ttnn.matmul(activated, w2_e, memory_config=memory_config)
         ttnn.deallocate(activated)
-        ttnn.deallocate(w2_e)
+        if pc.experts_per_chip > 1:
+            ttnn.deallocate(w2_e)
         ttnn.add(expert_out_4d, w2_bias_e, output_tensor=expert_out_4d)
-        ttnn.deallocate(w2_bias_e)
+        if pc.experts_per_chip > 1:
+            ttnn.deallocate(w2_bias_e)
 
         # Reshape is a view of expert_out_4d; rebind same name to avoid keeping two Python refs.
         expert_out_4d = ttnn.reshape(expert_out_4d, (max_per_expert, H))

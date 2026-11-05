@@ -205,13 +205,18 @@ def test_quasar_padded_slice_rm_last_dim_no_pad(device):
     assert passed, message
 
 
-# Sliced last dim narrower than the output shard: Quasar pad-row path is not ported.
-def test_quasar_padded_slice_rm_last_dim_pad_rejected(device, expect_error):
+# Sliced last dim narrower than the output shard: the Quasar reader zero-fills the row tail.
+@pytest.mark.parametrize("start", [8, 16, 32])
+def test_quasar_padded_slice_rm_last_dim_pads_sliced_row(device, start):
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
-    begins, ends, shard_shape = [0, 0, 0, 16], [1, 1, 64, 64], (8, 64)
-    tt_input, output_mem_config, _ = _last_dim_padded_slice_setup(device, begins, ends, shard_shape, core_grid)
-    with expect_error(RuntimeError, r"pad-row path \(output_row > slice_row\) not yet ported"):
-        ttnn.experimental.quasar.padded_slice(tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config)
+    # Aligned output rows with both aligned and unaligned DRAM offsets on Wormhole and Blackhole.
+    begins, ends, shard_shape = [0, 0, 0, start], [1, 1, 64, 64], (8, 64)
+    tt_input, output_mem_config, expected = _last_dim_padded_slice_setup(device, begins, ends, shard_shape, core_grid)
+    actual = ttnn.experimental.quasar.padded_slice(
+        tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config
+    )
+    passed, message = assert_equal(expected, ttnn.to_torch(actual))
+    assert passed, message
 
 
 # The row-major pad writer zero-filled its scratch page only for 2- and 4-byte elements, so a uint8

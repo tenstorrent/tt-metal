@@ -36,6 +36,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         mesh_sub_device_manager_id_decode=None,
         save_tensor_addresses=False,
         is_qwen=False,
+        global_cb_addresses=None,
     ):
         """
         - sub devices
@@ -47,6 +48,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         self.mesh_device = mesh_device
         self.n_tensors = n_tensors
         self.n_layers = n_layers
+        self.global_cb_addresses = global_cb_addresses
 
         ###### Set up GlobalCB ######
         # Blackhole galaxy has 8 DRAM banks and a 12x10 tensix grid (vs Wormhole's 12 banks / 7x10),
@@ -113,10 +115,6 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             # L1 layout) keeps the original 728.
             self.global_cb_size = (656 if self.is_blackhole else 728) * 1088
             self.sender_receiver_mapping = list(zip(self.all_sender_cores, self.all_receiver_cores))
-            # self.global_circular_buffer = ttnn.create_global_circular_buffer(
-            #     self.mesh_device, self.sender_receiver_mapping, self.global_cb_size
-            # )
-            # logger.info(f"GlobalCB size {self.global_cb_size}")
             self.global_circular_buffer = None  # Global CB will only be allocated before decode runs
             self.prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
             self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
@@ -129,6 +127,10 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             self.mesh_sub_device_manager_id_decode = mesh_sub_device_manager_id_decode
             mesh_device.load_sub_device_manager(self.mesh_sub_device_manager_id_decode)
             mesh_device.set_sub_device_stall_group([self.prefetcher_sub_device_id, self.worker_sub_device_id])
+            if self.global_cb_addresses is not None:
+                # Restore the captured addresses before any other decode allocation.
+                # The manager switch finishes all command queues before returning.
+                self.create_global_cb()
 
         self.tensors = []
         self.tensor_addrs = []  # List of buffer addresses
@@ -136,11 +138,28 @@ class TtLlamaPrefetcherSetup(LightweightModule):
 
     def create_global_cb(self):
         if not hasattr(self, "global_circular_buffer") or self.global_circular_buffer is None:
+            buffer_address, config_address = self.global_cb_addresses or (None, None)
             self.global_circular_buffer = ttnn.create_global_circular_buffer(
                 self.mesh_device,
                 self.sender_receiver_mapping,
                 self.global_cb_size,
+                buffer_address=buffer_address,
+                config_address=config_address,
             )
+            # Only these two allocations are intentionally overwritten by the saved
+            # traces. Exact placement above must succeed before acknowledging them.
+            self.global_circular_buffer.acknowledge_corruptible()
+
+    def release_global_cb(self):
+        global_cb = getattr(self, "global_circular_buffer", None)
+        if global_cb is None:
+            return self.global_cb_addresses
+        self.global_cb_addresses = (global_cb.buffer_address(), global_cb.config_address())
+        # Layers and cached programs can still reference this GCB. Release its owned
+        # memory explicitly before loading the prefill manager, whose static CBs need it.
+        global_cb.deallocate()
+        self.global_circular_buffer = None
+        return self.global_cb_addresses
 
     def insert_tensor(self, tensor: ttnn.Tensor):
         self.tensors.append(tensor)

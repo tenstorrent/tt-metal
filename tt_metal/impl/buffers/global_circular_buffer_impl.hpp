@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -34,7 +35,9 @@ public:
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type,
-        uint8_t cq_id = 0);
+        uint8_t cq_id = 0,
+        std::optional<DeviceAddr> buffer_address = std::nullopt,
+        std::optional<DeviceAddr> config_address = std::nullopt);
 
     GlobalCircularBufferImpl(const GlobalCircularBufferImpl&) = default;
     GlobalCircularBufferImpl& operator=(const GlobalCircularBufferImpl&) = default;
@@ -48,6 +51,8 @@ public:
     const CoreRangeSet& all_cores() const;
     DeviceAddr buffer_address() const;
     DeviceAddr config_address() const;
+    void deallocate();
+    void acknowledge_corruptible();
     uint32_t size() const;
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping() const;
     IDevice* get_device() const { return this->device_; }
@@ -59,7 +64,12 @@ public:
     }
 
 private:
-    void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender, uint8_t cq_id);
+    void setup_cb_buffers(
+        BufferType buffer_type,
+        uint32_t max_num_receivers_per_sender,
+        uint8_t cq_id,
+        std::optional<DeviceAddr> buffer_address = std::nullopt,
+        std::optional<DeviceAddr> config_address = std::nullopt);
 
     // GlobalCircularBufferImpl is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions

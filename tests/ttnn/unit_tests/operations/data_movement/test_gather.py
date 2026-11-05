@@ -243,6 +243,49 @@ def test_gather_sub_core_grids(input_shape, index_shape, dim, device):
     assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
 
 
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1000000}], indirect=True)
+def test_gather_padded_indices_trace_on_worker_subdevice(device):
+    worker_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 1), ttnn.CoreCoord(3, 3))})
+    other_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    manager = device.create_sub_device_manager([ttnn.SubDevice([other_cores]), ttnn.SubDevice([worker_cores])], 65536)
+    device.load_sub_device_manager(manager)
+    device.set_sub_device_stall_group([ttnn.SubDeviceId(1)])
+    trace_id = None
+    try:
+        values = torch.randn((1, 1, 32, 128), dtype=torch.bfloat16)
+        indices = torch.arange(32, dtype=torch.int32).reshape(1, 1, 32, 1)
+        tensor = ttnn.from_torch(values, device=device, layout=ttnn.TILE_LAYOUT)
+        index_tensor = ttnn.from_torch(indices, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        def gather():
+            # Padding the produced indices must run on the worker too, or its
+            # in-place writes race the tilize during replay.
+            tiled_indices = ttnn.to_layout(index_tensor, ttnn.TILE_LAYOUT, sub_core_grids=worker_cores)
+            result = ttnn.gather(tensor, dim=-1, index=tiled_indices, sub_core_grids=worker_cores)
+            ttnn.deallocate(tiled_indices)
+            return result
+
+        warmup = gather()
+        ttnn.synchronize_device(device)
+        ttnn.deallocate(warmup)
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        result = gather()
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        for offset in (0, 32, 64):
+            replay_indices = indices + offset
+            host_indices = ttnn.from_torch(replay_indices, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.copy_host_to_device_tensor(host_indices, index_tensor)
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            expected = torch.gather(values, -1, replay_indices.long())
+            torch.testing.assert_close(ttnn.to_torch(result), expected, rtol=0, atol=0)
+    finally:
+        if trace_id is not None:
+            ttnn.release_trace(device, trace_id)
+        device.reset_sub_device_stall_group()
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)
+
+
 @pytest.mark.parametrize(
     "input_shape, index_shape, dim",
     [
