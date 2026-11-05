@@ -193,16 +193,41 @@ def _requested_dynamic_length(dynamic_length: bool | None, default: bool) -> tup
     return raw == "1", True
 
 
+def _resolve_max_sequence_length(
+    bucket_ladder: tuple[int, ...],
+    max_sequence_length: int | None,
+    *,
+    bucket_denoise: bool,
+    dynamic_length: bool,
+    sp_alignment: int,
+) -> int:
+    """The admission cap: the top rung when bucketed, an explicit length when dynamic (default: that rung). Both
+    paths size the K/V gather pair from it, so on the bucketed path it may not sit below the top rung, which the
+    higher rungs would then overflow."""
+    cap = bucket_ladder[-1] if max_sequence_length is None else int(max_sequence_length)
+    if dynamic_length:
+        validate_bucket_ladder((cap,), sp_alignment)
+    elif bucket_denoise and cap < bucket_ladder[-1]:
+        raise ValueError(
+            f"max_sequence_length {cap} is below the top rung {bucket_ladder[-1]}: the bucketed path sizes the K/V "
+            "gather pair for every rung; raise it or shorten the ladder"
+        )
+    return cap
+
+
 class _DenoisePath(NamedTuple):
     trace_denoise: bool
     bucket_denoise: bool
     dynamic_length: bool
     dynamic_from_env: bool
+    line_fallback: bool = False  # the preset's dynamic default yielded to a line topology
 
     @property
     def name(self) -> str:
         if self.dynamic_length:
             return "dynamic length"
+        if self.line_fallback:
+            return "bucketed (line topology; dynamic length needs a ring)"
         if self.trace_denoise:
             return "bucketed, traced"
         return "bucketed" if self.bucket_denoise else "unbucketed"
@@ -216,23 +241,36 @@ def _resolve_denoise_path(
     bucket_ladder: tuple[int, ...] | None,
     dynamic_length: bool | None,
     coresident: bool,
+    topology: ttnn.Topology = ttnn.Topology.Ring,
 ) -> _DenoisePath:
     """The denoise path the constructor kwargs select on `preset`.
 
     `dynamic_length` resolves kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset, and the preset's dynamic default
     yields to a caller that pinned the bucketed path by any of `trace_denoise`, `bucket_denoise` or
-    `bucket_ladder`. A dynamic request (kwarg or env) with `trace_denoise` or `bucket_denoise=True` is
-    contradictory and raises; a ladder beside it only supplies the default `max_sequence_length`.
+    `bucket_ladder`, and to a line `topology` (the fused AGMM / MMRS pins that give each length class one
+    program set are Ring-only; on a line the projections would fall back to length-keyed configs and every
+    new length would compile). A dynamic request (kwarg or env) on a line, or with `trace_denoise` or
+    `bucket_denoise=True`, is contradictory and raises; a ladder beside it only supplies the default
+    `max_sequence_length`.
     """
     trace = (preset.get("trace_denoise", False) if trace_denoise is None else trace_denoise) and coresident
     pinned = trace_denoise is not None or bucket_denoise is not None or bucket_ladder is not None
     dynamic, from_env = _requested_dynamic_length(dynamic_length, preset.get("dynamic_length", False) and not pinned)
+    line_fallback = False
+    if dynamic and topology != ttnn.Topology.Ring:
+        if dynamic_length is not None or from_env:
+            raise ValueError(
+                "dynamic_length needs a Ring topology: the fused AGMM / MMRS pins that give each length class one "
+                "program set are Ring-only, and on a line the projections fall back to length-keyed configs; use a "
+                "ring fabric or pass dynamic_length=False"
+            )
+        dynamic, line_fallback = False, True
     if dynamic and trace:
         raise ValueError("dynamic_length is eager-only: a captured denoise trace cannot take a new length")
     if dynamic and bucket_denoise:
         raise ValueError("dynamic_length and bucket_denoise=True select both denoise paths; pass one of them")
     bucket = preset.get("bucket_denoise", False) if bucket_denoise is None else bucket_denoise
-    return _DenoisePath(bool(trace), bool(trace or (bucket and not dynamic)), dynamic, from_env)
+    return _DenoisePath(bool(trace), bool(trace or (bucket and not dynamic)), dynamic, from_env, line_fallback)
 
 
 _DIT_FSDP_ENV = "MINIMAX_H3_DIT_FSDP"
@@ -637,6 +675,7 @@ class MiniMaxH3Pipeline:
             bucket_ladder=bucket_ladder,
             dynamic_length=dynamic_length,
             coresident=coresident,
+            topology=topology,
         )
         self.trace_denoise = path.trace_denoise
         self.bucket_denoise = path.bucket_denoise
@@ -735,10 +774,13 @@ class MiniMaxH3Pipeline:
                     f"the top vision patch rung {self.vision_patch_ladder[-1]} is below the {max_patches} "
                     f"patches a ref2va request can reach"
                 )
-        # The admission cap: the top rung when bucketed, an explicit length when dynamic (default: that rung).
-        self.max_sequence_length = self.bucket_ladder[-1] if max_sequence_length is None else int(max_sequence_length)
-        if self.dynamic_length:
-            validate_bucket_ladder((self.max_sequence_length,), self.sp_factor * ttnn.TILE_SIZE)
+        self.max_sequence_length = _resolve_max_sequence_length(
+            self.bucket_ladder,
+            max_sequence_length,
+            bucket_denoise=self.bucket_denoise,
+            dynamic_length=self.dynamic_length,
+            sp_alignment=self.sp_factor * ttnn.TILE_SIZE,
+        )
         if self.bucket_denoise or self.dynamic_length:
             caps = self.arena_caps
             admissible = caps.prompt + caps.condition_video_rows + caps.audio_rows + caps.video_rows
