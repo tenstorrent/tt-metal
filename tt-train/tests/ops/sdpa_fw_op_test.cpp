@@ -2299,10 +2299,9 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_LongRows_Fp64Reference) {
     // O comes out high by about 0.037% per step and the LSE by about 0.00057 per step, linear in the step
     // count and independent of S: at 64 steps O is 2.4% high and the LSE 0.037 high, at 8 steps 0.3% and
     // 0.0024, at one step 0.003% and 0.0004. With Q = 0 (every score zero, the max never moves, alpha = exp(0))
-    // the LSE still grows by 0.00065 per step, so the bias is alpha, the Blackhole SFPU exp returning
-    // slightly more than 1 at 0, applied to the sum and to the accumulator every step, with the TF32
-    // truncation of the running sum in the Src registers (which the reviewer's host emulation put at
-    // about 1% low at 64 steps) partly cancelling on the sum. Pre-existing, main has the same loop; the
+    // the LSE still grows by 0.00065 per step, consistent with a bias in alpha = exp(0). These are
+    // end-to-end device measurements; they do not isolate the contribution of TF32 truncation of the
+    // running sum in the Src registers. Pre-existing, main has the same loop; the
     // bounds here hold the current error so a fix (or a regression) shows. See the TODO at step (2) of
     // process_q_chunk in sdpa_fw_compute_kernel.cpp and https://github.com/tenstorrent/tt-metal/issues/64302.
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
