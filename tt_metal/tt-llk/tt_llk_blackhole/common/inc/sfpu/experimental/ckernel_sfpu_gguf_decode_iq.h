@@ -33,24 +33,19 @@ constexpr bool IQ_INDEXED = LOADMACRO;
 // Bits 2..3 above each field the body reads: set for IQ2 (LReg index 12 + q), cleared for IQ1 (index q).
 constexpr unsigned IQ_INDEX_BITS = IQ_INDEXED ? 0x0Cu : 0u;
 
-template <unsigned SET, unsigned CLEAR>
+template <unsigned CLEAR>
 sfpi_inline vUInt iq_index_bits(vUInt w)
 {
     if constexpr (CLEAR != 0)
     {
         w = w & vUInt(~(CLEAR * 0x01010101u));
     }
-    if constexpr (SET != 0)
-    {
-        w = w | vUInt(SET * 0x01010101u);
-    }
     return w;
 }
 
-// Level words of the codebook formats (IQ2_XXS, IQ1_S): word-vector a's four row groups to every lane, shifted
-// right by 2r per lane, into LV + 4a + l; the shift amounts into NR first. SET / CLEAR: bits set / cleared in every
-// byte afterwards.
-template <unsigned SET = 0, unsigned CLEAR = 0>
+// Level words of IQ1_S and IQ1_M: word-vector a's four row groups to every lane, shifted right by 2r per lane, into
+// LV + 4a + l; the shift amounts into NR first. CLEAR: bits cleared in every byte afterwards.
+template <unsigned CLEAR>
 sfpi_inline void iq_level_words()
 {
     {
@@ -66,41 +61,237 @@ sfpi_inline void iq_level_words()
         vUInt w2 = w0;
         vUInt w3 = w0;
         transp4(w0, w1, w2, w3);
-        sfpi::dst_reg[LV + 4 * a + 0].mode<sfpi::DataLayout::U32>() = iq_index_bits<SET, CLEAR>(shift_after_transp(w0, NR + 1));
-        sfpi::dst_reg[LV + 4 * a + 1].mode<sfpi::DataLayout::U32>() = iq_index_bits<SET, CLEAR>(shift_after_transp(w1, NR + 1));
-        sfpi::dst_reg[LV + 4 * a + 2].mode<sfpi::DataLayout::U32>() = iq_index_bits<SET, CLEAR>(shift_after_transp(w2, NR + 1));
-        sfpi::dst_reg[LV + 4 * a + 3].mode<sfpi::DataLayout::U32>() = iq_index_bits<SET, CLEAR>(shift_after_transp(w3, NR + 1));
+        sfpi::dst_reg[LV + 4 * a + 0].mode<sfpi::DataLayout::U32>() = iq_index_bits<CLEAR>(shift_after_transp(w0, NR + 1));
+        sfpi::dst_reg[LV + 4 * a + 1].mode<sfpi::DataLayout::U32>() = iq_index_bits<CLEAR>(shift_after_transp(w1, NR + 1));
+        sfpi::dst_reg[LV + 4 * a + 2].mode<sfpi::DataLayout::U32>() = iq_index_bits<CLEAR>(shift_after_transp(w2, NR + 1));
+        sfpi::dst_reg[LV + 4 * a + 3].mode<sfpi::DataLayout::U32>() = iq_index_bits<CLEAR>(shift_after_transp(w3, NR + 1));
+    }
+}
+
+constexpr unsigned IQ_ZERO = p_sfpu::LCONST_0;
+
+constexpr unsigned iq_shr(const int k)
+{
+    return static_cast<unsigned>(-k) & 0xFFFu;
+}
+
+// IQ2 params in a fixed register plan. SFPTRANSP transposes LRegs 0..3 and 4..7 as two blocks: register j of a block
+// receives row group j of each of the block's inputs, so inputs w >> kj (j = 0..3) give row group r of every output
+// the shift k r per lane. LReg 12 holds the level index bits and LReg 13 0x80808080 (phase 2 reprograms 12..14).
+constexpr unsigned I2_SET = 12, I2_HI = 13;
+
+sfpi_inline void i2_ld(const unsigned r, const int i)
+{
+    TTI_SFPLOAD(r, sfpi::SFPLOAD_MOD0_FMT_INT32, ADDR_MOD_7, 2 * i);
+}
+
+sfpi_inline void i2_st(const unsigned r, const int i)
+{
+    TTI_SFPSTORE(r, sfpi::SFPSTORE_MOD0_FMT_INT32, ADDR_MOD_7, 2 * i);
+}
+
+sfpi_inline void i2_stf(const unsigned r, const int i)
+{
+    TTI_SFPSTORE(r, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * i);
+}
+
+// LReg d = LReg c shifted left by k (right for k < 0).
+sfpi_inline void i2_sh(const unsigned d, const unsigned c, const int k)
+{
+    TTI_SFPSHFT(static_cast<unsigned>(k) & 0xFFFu, c, d, SHIFT_IMM_OF_C);
+}
+
+template <unsigned REG, std::uint32_t BITS>
+sfpi_inline void i2_const()
+{
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, BITS & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, BITS >> 16);
+    TTI_SFPCONFIG(0, REG, 0);
+}
+
+// Copies of word-vectors v and v + 1 shifted right by k j into block registers j, transposed.
+sfpi_inline void i2_rows(const int v, const int k)
+{
+    i2_ld(0, v);
+    i2_ld(4, v + 1);
+#pragma GCC unroll 3
+    for (int j = 1; j < 4; j++)
+    {
+        i2_sh(j, 0, -k * j);
+        i2_sh(4 + j, 4, -k * j);
+    }
+    TTI_SFPTRANSP(0, 0, 0, 0);
+}
+
+// IQ2 level words: as iq_level_words, with IQ_INDEX_BITS set in every byte.
+sfpi_inline void i2_level_words()
+{
+    if constexpr (IQ_INDEX_BITS != 0)
+    {
+        i2_const<I2_SET, IQ_INDEX_BITS * 0x01010101u>();
+    }
+    i2_rows(CO, 2);
+#pragma GCC unroll 8
+    for (int r = 0; r < 8; r++)
+    {
+        if constexpr (IQ_INDEX_BITS != 0)
+        {
+            TTI_SFPOR(0, I2_SET, r, 0);
+        }
+        i2_st(r, LV + r);
+    }
+}
+
+// Sign words of word-vectors 2 and 3 with bit 7 of each byte replaced by the parity of the byte's seven sign bits:
+// x = w ^ w << 4, x ^= x << 2, x ^= x << 1 leaves the parity of all eight bits in bit 7, so w ^ (x & 0x80808080).
+// Then i2_rows' shifts (k = 1) and transpose: block p, register g = row group g of word-vector 2 + p.
+sfpi_inline void i2_parity_signs()
+{
+    i2_const<I2_HI, 0x80808080u>();
+    i2_ld(0, CO + 2);
+    i2_ld(4, CO + 3);
+    i2_sh(1, 0, 4);
+    i2_sh(5, 4, 4);
+    TTI_SFPXOR(0, 0, 1, 0);
+    TTI_SFPXOR(0, 4, 5, 0);
+    i2_sh(2, 1, 2);
+    i2_sh(6, 5, 2);
+    TTI_SFPXOR(0, 2, 1, 0);
+    TTI_SFPXOR(0, 6, 5, 0);
+    i2_sh(2, 1, 1);
+    i2_sh(6, 5, 1);
+    TTI_SFPXOR(0, 2, 1, 0);
+    TTI_SFPXOR(0, 6, 5, 0);
+    TTI_SFPAND(0, I2_HI, 1, 0);
+    TTI_SFPAND(0, I2_HI, 5, 0);
+    TTI_SFPXOR(0, 1, 0, 0);
+    TTI_SFPXOR(0, 5, 4, 0);
+#pragma GCC unroll 3
+    for (int j = 1; j < 4; j++)
+    {
+        i2_sh(j, 0, -j);
+        i2_sh(4 + j, 4, -j);
+    }
+    TTI_SFPTRANSP(0, 0, 0, 0);
+}
+
+// IQ2_XXS scales. Row group a of word-vector 2 + b holds column (a, b)'s scale bits in bit 7 of each byte. Bits
+// 0..3 / 4..7 of z collect ls of columns (a, 0) / (a, 1), and c = ls / 4 + 1 / 8 (exact) is replicated by a transpose;
+// S = d c rounds once, as d / 4 (ls + 0.5).
+sfpi_inline void i2_xxs_scales()
+{
+    i2_ld(0, CO + 2);
+    i2_ld(4, CO + 3);
+    TTI_SFPAND(0, I2_HI, 1, 1);
+    TTI_SFPAND(4, I2_HI, 5, 1);
+    i2_sh(1, 1, -7);
+    i2_sh(5, 5, -3);
+    TTI_SFPOR(0, 5, 1, 0);
+    i2_sh(5, 1, -7);
+    TTI_SFPOR(0, 5, 1, 0);
+    i2_sh(5, 1, -14);
+    TTI_SFPOR(0, 5, 1, 0);
+    i2_sh(2, 1, 28);
+    i2_sh(6, 1, 24);
+    i2_sh(2, 2, -28);
+    i2_sh(6, 6, -28);
+    TTI_SFPCAST(2, 2, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
+    TTI_SFPCAST(6, 6, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
+    TTI_SFPMULI(0x3E80, 2, 0); // 0.25
+    TTI_SFPMULI(0x3E80, 6, 0);
+    TTI_SFPADDI(0x3E00, 2, 0); // 0.125
+    TTI_SFPADDI(0x3E00, 6, 0);
+#pragma GCC unroll 4
+    for (int j = 0; j < 4; j++)
+    {
+        if (j != 2)
+        {
+            TTI_SFPMOV(0, 2, j, 0);
+            TTI_SFPMOV(0, 6, 4 + j, 0);
+        }
+    }
+    TTI_SFPTRANSP(0, 0, 0, 0);
+#pragma GCC unroll 2
+    for (int a = 0; a < 2; a++)
+    {
+        TTI_SFPLOAD(2 + a, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * pf32_idx<IQ2_XXS>(0, 0, a));
+        TTI_SFPLOAD(6 + a, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * pf32_idx<IQ2_XXS>(0, 1, a));
+    }
+#pragma GCC unroll 2
+    for (int a = 0; a < 2; a++)
+    {
+        TTI_SFPMUL(2 + a, a, IQ_ZERO, 2 + a, 0);
+        TTI_SFPMUL(6 + a, 4 + a, IQ_ZERO, 6 + a, 0);
+    }
+#pragma GCC unroll 2
+    for (int a = 0; a < 2; a++)
+    {
+        i2_stf(2 + a, PS + pidx(a, 0, 0));
+        i2_stf(6 + a, PS + pidx(a, 1, 0));
+    }
+}
+
+// IQ2_S / IQ2_XS scales per column and half: S = d / 4 (ls + 0.5) with ls the 4-bit field at bit B0 + SB b + SH h of
+// row group G of word-vector 4 + a.
+template <int FMT, int G, int B0, int SB, int SH>
+sfpi_inline void i2_half_scales()
+{
+    i2_ld(0, CO + 4);
+    i2_ld(4, CO + 5);
+#pragma GCC unroll 3
+    for (int j = 1; j < 4; j++)
+    {
+        TTI_SFPMOV(0, 0, j, 0);
+        TTI_SFPMOV(0, 4, 4 + j, 0);
+    }
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    constexpr unsigned W = G, D = (G + 1) % 4, T = (G + 2) % 4;
+#pragma GCC unroll 2
+    for (int b = 0; b < 2; b++)
+    {
+        TTI_SFPLOAD(D, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * pf32_idx<FMT>(0, b, 0));
+        TTI_SFPLOAD(4 + D, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * pf32_idx<FMT>(0, b, 1));
+        TTI_SFPMULI(0x3E80, D, 0); // 0.25
+        TTI_SFPMULI(0x3E80, 4 + D, 0);
+#pragma GCC unroll 2
+        for (int h = 0; h < 2; h++)
+        {
+            const int lsb = B0 + SB * b + SH * h;
+            if (lsb == 28)
+            {
+                i2_sh(T, W, -28);
+                i2_sh(4 + T, 4 + W, -28);
+            }
+            else
+            {
+                i2_sh(T, W, 28 - lsb);
+                i2_sh(4 + T, 4 + W, 28 - lsb);
+                i2_sh(T, T, -28);
+                i2_sh(4 + T, 4 + T, -28);
+            }
+            TTI_SFPCAST(T, T, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
+            TTI_SFPCAST(4 + T, 4 + T, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
+            TTI_SFPADDI(0x3F00, T, 0); // 0.5
+            TTI_SFPADDI(0x3F00, 4 + T, 0);
+            TTI_SFPMUL(D, T, IQ_ZERO, T, 0);
+            TTI_SFPMUL(4 + D, 4 + T, IQ_ZERO, 4 + T, 0);
+            i2_stf(T, PS + pidx(0, b, h));
+            i2_stf(4 + T, PS + pidx(1, b, h));
+        }
     }
 }
 
 sfpi_inline void iq2_xxs_params()
 {
-    iq_level_words<IQ_INDEX_BITS, 0>();
+    i2_level_words();
+    i2_parity_signs();
 #pragma GCC unroll 2
-    for (int b = 0; b < 2; b++)
+    for (int a = 0; a < 2; a++)
     {
-        // Row groups 0 / 1 of word-vector 2 + b: columns b and 16 + b (+ 2c); groups 2 / 3 are grid indices.
-        vUInt u0 = ldu(CO + 2 + b);
-        vUInt u1 = u0;
-        vUInt u2 = u0;
-        vUInt u3 = u0;
-        transp4(u0, u1, u2, u3);
-#pragma GCC unroll 2
-        for (int a = 0; a < 2; a++)
-        {
-            const vUInt u                                                   = a == 0 ? u0 : u1;
-            vUInt y                                                         = (u >> 7u) & vUInt(0x01010101u);
-            y                                                               = y | (y >> 7u);
-            y                                                               = y | (y >> 14u);
-            const vFloat ls                                                 = ufloat(y & vUInt(0xFu));
-            sfpi::dst_reg[PS + pidx(a, b, 0)]                               = (pf32<IQ2_XXS>(0, b, a) * 0.25f) * (ls + 0.5f);
-            const vUInt t                                                   = u & vUInt(0x7F7F7F7Fu);
-            vUInt x                                                         = t ^ (t >> 4u);
-            x                                                               = x ^ (x >> 2u);
-            x                                                               = x ^ (x >> 1u);
-            sfpi::dst_reg[SG + pidx(a, b, 0)].mode<sfpi::DataLayout::U32>() = shift_after_transp(t | ((x & vUInt(0x01010101u)) << 7u), NR);
-        }
+        i2_st(a, SG + pidx(a, 0, 0));
+        i2_st(4 + a, SG + pidx(a, 1, 0));
     }
+    i2_xxs_scales();
 }
 
 // IQ1_S: the same level words (values -1, 0, 1 as indices 0..2). Row 6 word 2c + a holds, in half b, column
@@ -108,7 +299,7 @@ sfpi_inline void iq2_xxs_params()
 // delta = +-0.125: PS = d (2 ls + 1), PM = delta - 1.
 sfpi_inline void iq1_s_params()
 {
-    iq_level_words<0, IQ_INDEX_BITS>();
+    iq_level_words<IQ_INDEX_BITS>();
 #pragma GCC unroll 2
     for (int a = 0; a < 2; a++)
     {
@@ -143,7 +334,7 @@ constexpr int DM = CO + 16; // rows 32..63 of the page tile, past the page
 template <int TI>
 sfpi_inline void iq1_m_params()
 {
-    iq_level_words<0, IQ_INDEX_BITS>();
+    iq_level_words<IQ_INDEX_BITS>();
 #pragma GCC unroll 2
     for (int a = 0; a < 2; a++)
     {
@@ -238,43 +429,15 @@ sfpi_inline void iq2_xxs_init()
 // b, column 16a + 2c + b's scales of elements 0..15 / 16..31 in bits 4..7 / 12..15. S = d / 4 (ls + 0.5) per half.
 sfpi_inline void iq2_s_params()
 {
-    iq_level_words<IQ_INDEX_BITS, 0>();
-#pragma GCC unroll 2
-    for (int b = 0; b < 2; b++)
-    {
-        vUInt u0 = ldu(CO + 2 + b);
-        vUInt u1 = u0;
-        vUInt u2 = u0;
-        vUInt u3 = u0;
-        transp4(u0, u1, u2, u3);
-        sfpi::dst_reg[SG + pidx(0, b, 0)].mode<sfpi::DataLayout::U32>() = shift_after_transp(u0, NR);
-        sfpi::dst_reg[SG + pidx(1, b, 0)].mode<sfpi::DataLayout::U32>() = shift_after_transp(u1, NR);
-    }
+    i2_level_words();
+    i2_rows(CO + 2, 1);
 #pragma GCC unroll 2
     for (int a = 0; a < 2; a++)
     {
-        vUInt u0 = ldu(CO + 4 + a);
-        vUInt u1 = u0;
-        vUInt u2 = u0;
-        vUInt u3 = u0;
-        transp4(u0, u1, u2, u3);
-        sfpi::dst_reg[NB + a].mode<sfpi::DataLayout::U32>() = u0; // stored before any arithmetic
+        i2_st(a, SG + pidx(a, 0, 0));
+        i2_st(4 + a, SG + pidx(a, 1, 0));
     }
-#pragma GCC unroll 2
-    for (int a = 0; a < 2; a++)
-    {
-        const vUInt u = ldu(NB + a);
-#pragma GCC unroll 2
-        for (int b = 0; b < 2; b++)
-        {
-            const vFloat d4 = pf32<IQ2_S>(0, b, a) * 0.25f;
-#pragma GCC unroll 2
-            for (int h = 0; h < 2; h++)
-            {
-                sfpi::dst_reg[PS + pidx(a, b, h)] = d4 * (ufloat(bits(u, 16 * b + 4 + 8 * h, 4)) + 0.5f);
-            }
-        }
-    }
+    i2_half_scales<IQ2_S, 0, 4, 16, 8>();
 }
 
 // IQ2_XS: IQ2_S's level words and scales, IQ2_XXS's 7-bit signs per entry: rows 4..5 word 16 (l / 2) + 2c + l % 2
@@ -283,42 +446,15 @@ sfpi_inline void iq2_s_params()
 template <int TI>
 sfpi_inline void iq2_xs_params()
 {
-    iq_level_words<IQ_INDEX_BITS, 0>();
+    i2_level_words();
+    i2_parity_signs();
 #pragma GCC unroll 2
-    for (int p = 0; p < 2; p++)
+    for (int g = 0; g < 2; g++)
     {
-        vUInt u0 = ldu(CO + 2 + p);
-        vUInt u1 = u0;
-        vUInt u2 = u0;
-        vUInt u3 = u0;
-        transp4(u0, u1, u2, u3);
-#pragma GCC unroll 2
-        for (int g = 0; g < 2; g++)
-        {
-            const vUInt t                                               = (g == 0 ? u0 : u1) & vUInt(0x7F7F7F7Fu);
-            vUInt x                                                     = t ^ (t >> 4u);
-            x                                                           = x ^ (x >> 2u);
-            x                                                           = x ^ (x >> 1u);
-            sfpi::dst_reg[SG + 2 * g + p].mode<sfpi::DataLayout::U32>() = shift_after_transp(t | ((x & vUInt(0x01010101u)) << 7u), NR);
-        }
+        i2_st(g, SG + 2 * g);
+        i2_st(4 + g, SG + 2 * g + 1);
     }
-#pragma GCC unroll 2
-    for (int a = 0; a < 2; a++)
-    {
-        vUInt r0, r1, r2, r3;
-        rep4<IQ2_XS>(0, a, r0, r1, r2, r3);
-        const vUInt sw = TI / 2 == 0 ? r0 : TI / 2 == 1 ? r1 : TI / 2 == 2 ? r2 : r3;
-#pragma GCC unroll 2
-        for (int b = 0; b < 2; b++)
-        {
-            const vFloat d4 = pf32<IQ2_XS>(0, b, a) * 0.25f;
-#pragma GCC unroll 2
-            for (int h = 0; h < 2; h++)
-            {
-                sfpi::dst_reg[PS + pidx(a, b, h)] = d4 * (ufloat(bits(sw, 8 * (2 * (TI % 2) + b) + 4 * h, 4)) + 0.5f);
-            }
-        }
-    }
+    i2_half_scales<IQ2_XS, TI / 2, 16 * (TI % 2), 8, 4>();
 }
 
 // IQ3_S: entries of 4 elements with 3-bit indices into (1, 3, .., 15). lookup_grid writes entry e of columns
@@ -536,13 +672,6 @@ sfpi_inline void iq2_xxs_body()
             }
         }
     }
-}
-
-constexpr unsigned IQ_ZERO = p_sfpu::LCONST_0;
-
-constexpr unsigned iq_shr(const int k)
-{
-    return static_cast<unsigned>(-k) & 0xFFFu;
 }
 
 // IQ2_XXS, IQ2_S, IQ2_XS: levels 8, 25, 43 in the programmable constants (LReg 12..14). iq2_xxs_body's outputs: the
