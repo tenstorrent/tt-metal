@@ -96,7 +96,7 @@ protected:
     distributed::MeshDevice& fixture_device() { return *mesh_device_; }
 };
 
-constexpr const char* kNonPublicMetadataGetterNames[] = {
+constexpr const char* kPublicMetadataGetterNames[] = {
     "get_dataformat",
     "get_tile_size",
     "get_face_r_dim",
@@ -114,7 +114,7 @@ constexpr const char* kNonPublicMetadataGetterNames[] = {
 TEST_P(BindingTokenTileSizeBlackhole, QualifiedMetadataGetters) {
     const TileSizeCase size = GetParam();
     std::string source = "void kernel_main() {\n";
-    for (const char* getter : kNonPublicMetadataGetterNames) {
+    for (const char* getter : kPublicMetadataGetterNames) {
         source += fmt::format(
             "static_assert(::{0}(dfb::input_dfb) == {0}(dfb::input_dfb));\n"
             "static_assert(::{0}(scratch::pad) == {0}(scratch::pad));\n"
