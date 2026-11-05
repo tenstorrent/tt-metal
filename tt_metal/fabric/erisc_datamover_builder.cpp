@@ -1543,20 +1543,22 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     }
 
     // Receiver transaction IDs, per receiver channel: its completion group size, its number of IDs and its first ID,
-    // from the channel's final slot count, first-level acks and, on Wormhole, whether it forwards
-    // (fabric_trid_allocator.hpp). Unused channels: 1 / 0 / 0.
+    // from the channel's final slot count and whether it is credited slot by slot (fabric_trid_allocator.hpp). Unused
+    // channels: 1 / 0 / 0.
     {
         namespace trids = tt::tt_fabric::trid_allocator;
         std::vector<trids::ReceiverChannel> receivers;
         for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            // Channels credited slot by slot: under first-level acks (held completion credits stall bubble flow
+            // control), and on a Wormhole channel that forwards (its credits share the one TX queue with data, and a
+            // held group stalls a forwarding chain).
             const bool first_level_ack = named_args.at(fmt::format("ENABLE_FIRST_LEVEL_ACK_VC{}", vc)) != 0;
             const bool wormhole_forwards = config.arch == tt::ARCH::WORMHOLE_B0 &&
                                            named_args.at(fmt::format("DISABLE_RX_CH{}_FORWARDING", vc)) == 0;
+            const bool credit_each_slot = first_level_ack || wormhole_forwards;
             for (size_t i = 0; i < config.num_used_receiver_channels_per_vc[vc]; ++i) {
                 receivers.push_back(
-                    {static_channel_allocator->get_receiver_channel_number_of_slots(vc, i),
-                     first_level_ack,
-                     wormhole_forwards});
+                    {static_channel_allocator->get_receiver_channel_number_of_slots(vc, i), credit_each_slot});
             }
         }
         TT_FATAL(
@@ -1582,15 +1584,14 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                 const trids::ChannelIds& ch = ids.channels[c];
                 log_debug(
                     tt::LogFabric,
-                    "Fabric receiver transaction IDs: fabric node {}, Ethernet channel {}, RX_CH_{}: {} slots in groups "
-                    "of {}{}{}: {} groups, IDs {}..{} ({})",
+                    "Fabric receiver transaction IDs: fabric node {}, Ethernet channel {}, RX_CH_{}: {} slots in "
+                    "groups of {}{}: {} groups, IDs {}..{} ({})",
                     this->local_fabric_node_id,
                     this->my_eth_channel,
                     c,
                     receivers[c].slots,
                     ch.group_size,
-                    receivers[c].first_level_ack ? " (first-level acks)" : "",
-                    receivers[c].wormhole_forwards ? " (forwards, Wormhole)" : "",
+                    receivers[c].credit_each_slot ? " (credited per slot)" : "",
                     ch.groups,
                     ch.start,
                     ch.start + ch.num_ids - 1,

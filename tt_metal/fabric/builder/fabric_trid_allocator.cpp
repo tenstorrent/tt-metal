@@ -24,7 +24,7 @@ std::size_t floor_power_of_2(std::size_t n) {
 }  // namespace trid_detail
 
 std::size_t completion_group_size(const ReceiverChannel& channel) {
-    if (channel.first_level_ack || channel.wormhole_forwards) {
+    if (channel.credit_each_slot) {
         return 1;
     }
     return channel.slots < 8 ? 1 : (channel.slots < 16 ? 2 : 4);

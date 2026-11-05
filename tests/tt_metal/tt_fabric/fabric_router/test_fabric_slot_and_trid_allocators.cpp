@@ -146,15 +146,14 @@ TEST(FabricSlotAllocatorTest, TooSmallABufferIsAnError) {
     EXPECT_TRUE(sa::allocate_slots(no_slot_size).error.has_value());
 }
 
-TEST(FabricTridAllocatorTest, GroupSizeFollowsSlotsAndAcks) {
+TEST(FabricTridAllocatorTest, GroupSizeFollowsSlots) {
     EXPECT_EQ(trids::completion_group_size({.slots = 4}), 1u);
     EXPECT_EQ(trids::completion_group_size({.slots = 8}), 2u);
     EXPECT_EQ(trids::completion_group_size({.slots = 15}), 2u);
     EXPECT_EQ(trids::completion_group_size({.slots = 16}), 4u);
     EXPECT_EQ(trids::completion_group_size({.slots = 32}), 4u);
-    // Slots credited one by one: first-level acks, and a Wormhole channel that forwards.
-    EXPECT_EQ(trids::completion_group_size({.slots = 32, .first_level_ack = true}), 1u);
-    EXPECT_EQ(trids::completion_group_size({.slots = 32, .wormhole_forwards = true}), 1u);
+    // A channel credited slot by slot.
+    EXPECT_EQ(trids::completion_group_size({.slots = 32, .credit_each_slot = true}), 1u);
 }
 
 // The rules every successful assignment keeps.
@@ -189,14 +188,14 @@ TEST(FabricTridAllocatorTest, EachGroupGetsAnIdWhenTheyFit) {
 TEST(FabricTridAllocatorTest, TheLargestCountShrinksUntilTheyFit) {
     // 32 + 16 groups do not fit in 16 IDs: the largest halves, then the next, until they do.
     const std::vector<trids::ReceiverChannel> channels = {
-        {.slots = 32, .first_level_ack = true}, {.slots = 16, .first_level_ack = true}};
+        {.slots = 32, .credit_each_slot = true}, {.slots = 16, .credit_each_slot = true}};
     const trids::Assignment ids = trids::assign_transaction_ids(channels);
     expect_ids_hold(channels, ids);
     EXPECT_EQ(ids.used_ids, trids::noc_transaction_ids);
 }
 
 TEST(FabricTridAllocatorTest, EverySlotAllocationGetsIds) {
-    // The receivers the slot allocator produces always fit in the NoC's IDs, with or without first-level acks.
+    // The receivers the slot allocator produces always fit in the NoC's IDs, credited per group or slot by slot.
     const sa::Limits limits;
     for (const auto& [name, base] : router_shapes()) {
         const std::size_t minimum = num_channels(base) * limits.min_slots;
@@ -205,14 +204,14 @@ TEST(FabricTridAllocatorTest, EverySlotAllocationGetsIds) {
             shape.buffer_bytes = n * shape.slot_bytes;
             const sa::Allocation a = sa::allocate_slots(shape);
             ASSERT_FALSE(a.error.has_value()) << name;
-            for (const bool acks : {false, true}) {
+            for (const bool each_slot : {false, true}) {
                 std::vector<trids::ReceiverChannel> receivers;
                 for (const auto& c : a.channels) {
                     if (c.kind == sa::ChannelKind::Receiver) {
-                        receivers.push_back({.slots = c.slots, .first_level_ack = acks});
+                        receivers.push_back({.slots = c.slots, .credit_each_slot = each_slot});
                     }
                 }
-                SCOPED_TRACE(name + ", " + std::to_string(n) + " slots" + (acks ? ", first-level acks" : ""));
+                SCOPED_TRACE(name + ", " + std::to_string(n) + " slots" + (each_slot ? ", slot by slot" : ""));
                 expect_ids_hold(receivers, trids::assign_transaction_ids(receivers));
             }
         }
