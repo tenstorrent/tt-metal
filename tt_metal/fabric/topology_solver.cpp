@@ -157,7 +157,12 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::experimental::PhysicalNodeId>> bui
                 if (neighbor == asic_id) {
                     continue;
                 }
-                const auto neighbor_node_id = physical_system_descriptor.get_physical_node_id(neighbor);
+                // A neighbor without a descriptor lies outside the described system, so it is not in the mesh either.
+                const auto neighbor_node_id_opt = physical_system_descriptor.find_physical_node_id(neighbor);
+                if (!neighbor_node_id_opt.has_value()) {
+                    continue;
+                }
+                const auto& neighbor_node_id = *neighbor_node_id_opt;
                 // Make sure that the neighbor is in the mesh
                 if (mesh_node_ids.contains(neighbor_node_id)) {
                     // Add each neighbor multiple times based on number of ethernet connections
