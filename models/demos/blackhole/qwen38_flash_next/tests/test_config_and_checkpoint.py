@@ -131,6 +131,30 @@ def test_tokenizer_and_index_load_from_a_hub_snapshot(checkpoint_dir, tmp_path):
     assert len(checkpoint.shards) == 131 and checkpoint.file("config.json").parent == (tmp_path / "blobs").resolve()
 
 
+def test_tokenizer_loads_the_verified_bytes_not_a_retargeted_link(checkpoint_dir, tmp_path, monkeypatch):
+    """A tokenizer link retargeted between the hash check and the load is never read."""
+
+    import transformers
+
+    snapshot = tmp_path / "snapshots" / PINNED_CHECKPOINT_REVISION
+    snapshot.mkdir(parents=True)
+    for name in ("chat_template.jinja", "tokenizer.json", "tokenizer_config.json", "generation_config.json"):
+        shutil.copyfile(checkpoint_dir / name, snapshot / name)
+    link_into_hub_blobs(snapshot)
+    tampered = tmp_path / "blobs" / "tampered"
+    tampered.write_text("not a tokenizer")
+    load = transformers.AutoTokenizer.from_pretrained
+
+    def retarget_then_load(*args, **kwargs):
+        (snapshot / "tokenizer.json").unlink()
+        (snapshot / "tokenizer.json").symlink_to(tampered)
+        return load(*args, **kwargs)
+
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", retarget_then_load)
+    template = Qwen38OfficialChatTemplate(snapshot)
+    assert (snapshot / "tokenizer.json").resolve() == tampered and len(template.tokenizer) == 248_077
+
+
 # -- the per-device weight budget --------------------------------------------------------------------------------------
 
 
