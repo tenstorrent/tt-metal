@@ -364,6 +364,20 @@ def test_muon_with_adamw_group_options_cover_both_inner_optimizers(expect_error)
     assert opt.adamw_optimizer().get_param_groups()[0]["weight_decay"] == pytest.approx(0.05)
 
 
+@pytest.mark.requires_device
+def test_muon_with_adamw_rejects_fp32_master_weights(expect_error):
+    """Muon updates bf16 parameters only, so MuonWithAdamW refuses fp32 master weights with a message about the
+    combination, before it builds either inner optimizer; with bf16 parameters it builds as before."""
+    from ttml.common.muon_optimizer import MuonWithAdamW
+
+    model = _make_block_model()  # attention/weight and mlp/weight go to Muon
+    MuonWithAdamW({}, model.parameters())
+
+    ttml.core.apply_precision_config({"precision": {"master_dtype": "float32"}}, model.parameters())
+    with expect_error(ValueError, "MuonWithAdamW takes bf16 parameters, but .* is stored as .*use type: AdamW"):
+        MuonWithAdamW({}, model.parameters())
+
+
 def test_registry_reads_variant_only_adamw_options():
     """Stochastic Rounding (AdamW) and Kahan Summation (AdamWComposite) are parsed only for the config that has the
     field, so a renamed field would silently drop its YAML key."""

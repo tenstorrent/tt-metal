@@ -277,6 +277,34 @@ TEST_F(ParameterDtypeTest, AppliesOnlyTheReduceDtypeToParametersKeptInBf16) {
     autograd::ctx().set_gradient_reduce_dtype(std::nullopt);
 }
 
+// Stochastic rounding does nothing for fp32 parameters, so fused AdamW asked for both warns once, at construction.
+TEST_F(ParameterDtypeTest, AdamWWarnsOnceWhenStochasticRoundingMeetsFp32Parameters) {
+    const auto construct = [](const serialization::NamedParameters& parameters, bool stochastic_rounding) {
+        ::testing::internal::CaptureStdout();
+        ::testing::internal::CaptureStderr();
+        {
+            optimizers::AdamW optimizer(
+                parameters, optimizers::AdamWConfig{.stochastic_rounding = stochastic_rounding});
+        }
+        const auto output = ::testing::internal::GetCapturedStdout() + ::testing::internal::GetCapturedStderr();
+        size_t warnings = 0;
+        for (size_t at = output.find("stochastic_rounding has no effect"); at != std::string::npos;
+             at = output.find("stochastic_rounding has no effect", at + 1)) {
+            ++warnings;
+        }
+        return warnings;
+    };
+    const serialization::NamedParameters fp32_parameters{
+        {"first", autograd::create_tensor(random_values(ttnn::DataType::FLOAT32), /* requires_grad */ true)},
+        {"second", autograd::create_tensor(random_values(ttnn::DataType::FLOAT32), /* requires_grad */ true)}};
+    const serialization::NamedParameters bf16_parameters{
+        {"only", autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true)}};
+
+    EXPECT_EQ(construct(fp32_parameters, /* stochastic_rounding */ true), 1U);
+    EXPECT_EQ(construct(fp32_parameters, /* stochastic_rounding */ false), 0U);
+    EXPECT_EQ(construct(bf16_parameters, /* stochastic_rounding */ true), 0U);
+}
+
 // The bf16-only gradient consumers call this right before they read the gradients. An fp32 gradient is replaced by its
 // bf16 cast, the same bits ttnn::typecast gives; a bf16 gradient, a parameter without one and a second call are left
 // alone.
