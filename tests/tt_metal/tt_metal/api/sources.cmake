@@ -34,6 +34,7 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_dataflow_buffer_kernel_exit.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
     test_kernel_thread_sync.cpp
+    test_trisc_l1_cache.cpp
     test_banked.cpp
     test_bit_utils.cpp
     test_buffer_types_device_sync.cpp
