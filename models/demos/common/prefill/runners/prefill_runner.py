@@ -169,7 +169,7 @@ CHUNK_TIMEOUT_SECONDS = float(os.environ.get("TT_PREFILL_CHUNK_TIMEOUT_SECONDS",
 _L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_size))
 if MTP_LEVELS:
     _L1_SMALL_SIZE += 512
-_FORCED_TRACE_MODELS = {"glm_5_3"}
+_FORCED_TRACE_MODELS = {"glm_5_2", "glm_5_3"}
 USE_TRACE = ADAPTER.name in _FORCED_TRACE_MODELS or os.environ.get("PREFILL_USE_TRACE", "0") == "1"
 if ADAPTER.name in _FORCED_TRACE_MODELS and os.environ.get("PREFILL_USE_TRACE", "1") != "1":
     logger.warning(f"PREFILL_USE_TRACE={os.environ['PREFILL_USE_TRACE']} ignored: {ADAPTER.name} always runs traced")
