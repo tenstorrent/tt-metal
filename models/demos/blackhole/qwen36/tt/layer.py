@@ -16,6 +16,13 @@ from models.demos.blackhole.qwen36.utils.substate import substate
 from models.tt_transformers.tt.common import Mode
 
 
+def pg_batched_attn(pg):
+    """Grouped prefill attention batched over the rows (cos_cat / sin_cat given), unless QWEN36_GROUP_ATTN_PER_ROW=1."""
+    import os
+
+    return pg.get("cos_cat") is not None and os.environ.get("QWEN36_GROUP_ATTN_PER_ROW", "0") != "1"
+
+
 class _FusedDistRMSNorm(RMSNorm):
     """RMSNorm whose PREFILL distributed path is the single fused dit_fused_distributed_rmsnorm op
     (args.prefill_fused_dist_norm, see tpc.fused_distributed_rmsnorm). Decode keeps the replicated-weight rms_norm."""
@@ -309,7 +316,19 @@ class Qwen36DecoderLayer:
             # TP modules: input is the gathered (full-dim) norm output [1,1,B/S,dim];
             # output is fractured along dim=3. cos/sin are in rope_tp format.
             if self.is_full_attention:
-                if mode == "prefill" and prefill_group is not None:
+                if mode == "prefill" and prefill_group is not None and pg_batched_attn(prefill_group):
+                    pg = prefill_group
+                    attn_output = self.attention.forward_prefill_paged_group(
+                        attn_input,
+                        pg["cos_cat"],
+                        pg["sin_cat"],
+                        pg["Bg"],
+                        pg["Tb"],
+                        pg["full_pts"],
+                        pg["chunk_pts"],
+                        pg["csi"],
+                    )
+                elif mode == "prefill" and prefill_group is not None:
                     pg = prefill_group
                     Bg, Tb = pg["Bg"], pg["Tb"]
                     D = attn_input.shape[-1]
@@ -327,9 +346,12 @@ class Qwen36DecoderLayer:
                         )
                         ttnn.deallocate(xi)
                         outs.append(oi)
-                    attn_output = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                    for oi in outs:
-                        ttnn.deallocate(oi)
+                    if len(outs) == 1:  # Bg == 1: concat of one tensor would return it (then freed below)
+                        attn_output = outs[0]
+                    else:
+                        attn_output = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                        for oi in outs:
+                            ttnn.deallocate(oi)
                 elif mode == "prefill":
                     # Contract/vLLM path supplies a page_table → paged KV prefill; the
                     # demo path (no page_table) uses the internal concat caches.

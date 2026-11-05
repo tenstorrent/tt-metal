@@ -1234,6 +1234,81 @@ class TPAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def forward_prefill_paged_group(self, x, cos_cat, sin_cat, Bg, Tb, full_pts, chunk_pts, chunk_start_idx_tensor):
+        """Grouped short prefill of Bg rows x Tb tokens (row u = rows [u*Tb, (u+1)*Tb) of x, its own page table).
+
+        Same math as Bg calls of forward_prefill_paged(x_u, cos_u, sin_u, full_pts[u], chunk_pts[u], csi) but the
+        qkv / gate in-projection, q/k norms, rope (cos_cat/sin_cat: the rows' tables back to back [1,1,Bg*Tb,rd]),
+        the gate and the wo + reduce-scatter run ONCE over all rows; per row only the paged cache fill and the
+        chunked SDPA (all rows share chunk_start_idx_tensor)."""
+        assert self.use_paged and self.paged_k is not None
+        tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
+        S = Bg * Tb
+        qg, kp, vp = self._qkv(x)
+        q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
+        _mc = ttnn.DRAM_MEMORY_CONFIG
+        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=_mc), tw["q_norm"], memory_config=_mc)
+        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=_mc), tw["k_norm"], memory_config=_mc)
+        q = apply_partial_rope_prefill(q, cos_cat, sin_cat, NH, self.rope_dim)
+        k = apply_partial_rope_prefill(k, cos_cat, sin_cat, NKV, self.rope_dim)
+        k_paged, v_paged = self.paged_k, self.paged_v
+        if k.dtype != k_paged.dtype:
+            _k8 = ttnn.typecast(k, k_paged.dtype)
+            ttnn.deallocate(k)
+            k = _k8
+            _v8 = ttnn.typecast(v, v_paged.dtype)
+            ttnn.deallocate(v)
+            v = _v8
+        if self._sdpa_bf8:
+            q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(q)
+            q = q8
+        q_chunk, k_chunk, exp_approx = tpc.prefill_sdpa_chunks(self.args, Tb, min(128, Tb))
+        sdpa_cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
+            exp_approx_mode=exp_approx,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+        )
+        outs = []
+        for u in range(Bg):
+            r0, r1 = u * Tb, (u + 1) * Tb
+            ku = ttnn.slice(k, (0, 0, r0, 0), (1, NKV, r1, HD), memory_config=_mc)
+            vu = ttnn.slice(v, (0, 0, r0, 0), (1, NKV, r1, HD), memory_config=_mc)
+            ttnn.experimental.paged_fill_cache(k_paged, ku, chunk_pts[u], batch_idx=0)
+            ttnn.experimental.paged_fill_cache(v_paged, vu, chunk_pts[u], batch_idx=0)
+            ttnn.deallocate(ku)
+            ttnn.deallocate(vu)
+            qu = ttnn.slice(q, (0, 0, r0, 0), (1, NH, r1, HD), memory_config=_mc)
+            outs.append(
+                ttnn.transformer.chunked_scaled_dot_product_attention(
+                    input_tensor_q=qu,
+                    input_tensor_k=k_paged,
+                    input_tensor_v=v_paged,
+                    page_table_tensor=full_pts[u],
+                    chunk_start_idx_tensor=chunk_start_idx_tensor,
+                    compute_kernel_config=self.compute_cfg,
+                    program_config=sdpa_cfg,
+                )
+            )
+            ttnn.deallocate(qu)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+        if len(outs) == 1:
+            attn = outs[0]
+        else:
+            attn = ttnn.concat(outs, dim=2, memory_config=_mc)
+            for o in outs:
+                ttnn.deallocate(o)
+        attn = self._concat_heads(attn)
+        gated = ttnn.multiply(attn, ttnn.sigmoid(gate_flat, memory_config=_mc), memory_config=_mc)
+        ttnn.deallocate(attn)
+        ttnn.deallocate(gate_flat)
+        partial = self._wo_proj(gated, tw["wo"])
+        ttnn.deallocate(gated)
+        return tpc.tp_reduce_scatter(partial, self.mesh, self.tt_ccl, self.args, dim=3, memory_config=_mc)
+
     def forward_prefill_paged(
         self,
         x,
