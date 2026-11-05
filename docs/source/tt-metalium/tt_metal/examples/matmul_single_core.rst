@@ -82,27 +82,31 @@ Before touching the matrix multiplication on the device, the host program perfor
 
 After the device computation, the output data needs to be converted back to a standard format for verification:
 
-DRAM Buffer Allocation
+DRAM Tensor Allocation
 ----------------------
 
-Three DRAM buffers are allocated: ``src0_dram_buffer`` for the M×K input matrix A, ``src1_dram_buffer`` for the K×N input matrix B, and ``dst_dram_buffer`` for the M×N output matrix C. The configuration for these buffers sets ``page_size`` to ``single_tile_size`` (the size of one 32x32 bfloat16 tile), a common practice for tile-based processing.
+Three DRAM tensors are allocated: ``src0_dram_tensor`` for the M×K input matrix A, ``src1_dram_tensor`` for the K×N input matrix B, and ``dst_dram_tensor`` for the M×N output matrix C. Each ``TensorSpec`` is row-major with one tile's worth of elements per row, so the page size is ``single_tile_size`` (the size of one 32x32 bfloat16 tile), a common practice for tile-based processing.
 
 .. code-block:: cpp
 
     uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
+    uint32_t elements_per_tile = single_tile_size / sizeof(bfloat16);
 
-    // Buffer configs for matrix A, B, and C
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM
+    auto make_dram_tensor_spec = [&](size_t num_elements) {
+        return TensorSpec(
+            Shape({static_cast<uint32_t>(num_elements / elements_per_tile), elements_per_tile}),
+            TensorLayout(
+                DataType::BFLOAT16,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
     };
-    distributed::ReplicatedBufferConfig buffer_config_A{.size = sizeof(bfloat16) * a.size()};
-    distributed::ReplicatedBufferConfig buffer_config_B{.size = sizeof(bfloat16) * b.size()};
-    distributed::ReplicatedBufferConfig buffer_config_C{.size = sizeof(bfloat16) * output.size()};
+    TensorSpec src0_tensor_spec = make_dram_tensor_spec(a.size());
+    TensorSpec src1_tensor_spec = make_dram_tensor_spec(b.size());
+    TensorSpec dst_tensor_spec = make_dram_tensor_spec(output.size());
 
-    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src0_tensor_spec);
+    MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src1_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dst_tensor_spec);
 
 Circular Buffer Orchestration for Pipelined MatMul
 --------------------------------------------------
@@ -151,8 +155,8 @@ The matrix multiplication is performed by a pipeline of three specialized kernel
 
     // Reader kernel - reads tiles from DRAM into circular buffers
     std::vector<uint32_t> reader_args;
-    TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_args);
-    TensorAccessorArgs(*src1_dram_buffer->get_backing_buffer()).append_to(reader_args);
+    TensorAccessorArgs(src0_dram_tensor).append_to(reader_args);
+    TensorAccessorArgs(src1_dram_tensor).append_to(reader_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         "matmul/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
@@ -161,7 +165,7 @@ The matrix multiplication is performed by a pipeline of three specialized kernel
 
     // Writer kernel - writes result tiles from circular buffer to DRAM
     std::vector<uint32_t> writer_args;
-    TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_args);
+    TensorAccessorArgs(dst_dram_tensor).append_to(writer_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
         "matmul/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",
@@ -180,7 +184,7 @@ The matrix multiplication is performed by a pipeline of three specialized kernel
 The reader kernel
 ^^^^^^^^^^^^^^^^^
 
-The reader kernel is responsible for fetching tiles from the DRAM buffers for matrices A and B and pushing them into ``cb_src0`` and ``cb_src1``, respectively. The crucial aspect of this kernel is the *order* in which tiles are read. The nested loop structure (``for mt, for nt, for kt``) ensures that tiles are provided to the compute kernel in the sequence required by the matrix multiplication algorithm implemented in the compute kernel.
+The reader kernel is responsible for fetching tiles from the DRAM tensors for matrices A and B and pushing them into ``cb_src0`` and ``cb_src1``, respectively. The crucial aspect of this kernel is the *order* in which tiles are read. The nested loop structure (``for mt, for nt, for kt``) ensures that tiles are provided to the compute kernel in the sequence required by the matrix multiplication algorithm implemented in the compute kernel.
 
 The tile indexing logic:
 
@@ -302,7 +306,7 @@ The dimensions ``Mt``, ``Kt``, ``Nt`` are passed as compile-time arguments, enab
 The writer kernel
 ^^^^^^^^^^^^^^^^^
 
-The writer kernel consumes tiles from the output circular buffer ``cb_id_out0`` (which is ``cb_output``, index 16) and writes them to the designated DRAM buffer for matrix C. The nested loops iterate ``Mt`` and ``Nt`` times, and the tile index ``m * Nt + n`` ensures that the output tiles are written in row-major order, correctly forming the M×N output matrix in DRAM.
+The writer kernel consumes tiles from the output circular buffer ``cb_id_out0`` (which is ``cb_output``, index 16) and writes them to the designated DRAM tensor for matrix C. The nested loops iterate ``Mt`` and ``Nt`` times, and the tile index ``m * Nt + n`` ensures that the output tiles are written in row-major order, correctly forming the M×N output matrix in DRAM.
 
 .. code-block:: cpp
 
@@ -337,36 +341,38 @@ The writer kernel consumes tiles from the output circular buffer ``cb_id_out0`` 
 Kernel execution and result verification
 ----------------------------------------
 
-On the host side, runtime arguments are configured for each kernel. These typically include DRAM buffer addresses (for A, B, and C) and tile counts (``Mt``, ``Kt``, ``Nt``) that define the scope of the operation for the current invocation.
+On the host side, runtime arguments are configured for each kernel. These typically include DRAM tensor addresses (for A, B, and C) and tile counts (``Mt``, ``Kt``, ``Nt``) that define the scope of the operation for the current invocation.
 The overall execution flow is managed by enqueuing commands:
 
-1.  ``EnqueueWriteMeshBuffer``: Transfers input matrices A and B from host memory to their respective DRAM buffers on the Mesh Device (a 1x1 Mesh Device in this example).
+1.  ``enqueue_write_tensor``: Transfers input matrices A and B from host tensors to their respective DRAM tensors on the Mesh Device (a 1x1 Mesh Device in this example).
 2.  ``EnqueueMeshWorkload``: Launches the compiled workload (reader, compute, and writer kernels) on the designated core on the Unit Mesh Device.
-3.  ``EnqueueReadMeshBuffer``: Transfers the resulting matrix C from its DRAM buffer on the device back to host memory.
+3.  ``enqueue_read_tensor``: Transfers the resulting matrix C from its DRAM tensor on the device back to host memory.
 
 .. code-block:: cpp
 
     // Set runtime arguments for kernels
-    uint32_t src0_addr = src0_dram_buffer->address();
-    uint32_t src1_addr = src1_dram_buffer->address();
-    uint32_t dst_addr = dst_dram_buffer->address();
+    uint32_t src0_addr = src0_dram_tensor.address();
+    uint32_t src1_addr = src1_dram_tensor.address();
+    uint32_t dst_addr = dst_dram_tensor.address();
 
     tt_metal::SetRuntimeArgs(program, reader_id, core, {src0_addr, src1_addr, Mt, Kt, Nt});
     tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, Mt, Nt}); // Note: Writer kernel uses Mt, Nt for output C
     // Don't need to set runtime args for compute kernel, as everything is passed as compile-time args
 
     // Upload input data to device
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    HostTensor src0_host_tensor = HostTensor::from_vector(a, src0_tensor_spec);
+    HostTensor src1_host_tensor = HostTensor::from_vector(b, src1_tensor_spec);
+    cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
+    cq.enqueue_write_tensor(src1_host_tensor, src1_dram_tensor);
 
     // execute program, and read results
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::EnqueueReadMeshBuffer(cq, output.data(), dst_dram_buffer, true);
+    output = cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 
-After the program execution, the ``output.data()`` (which is ``result_vec`` in the ``main`` function of the C++ example) contains the result matrix C from the device's DRAM. However, this data is still in the tiled format used by the Tenstorrent hardware. To verify its correctness against the ``golden_vec`` (which is in a standard row-major format), two steps are necessary:
+After the program execution, ``output`` (which is ``result_vec`` in the ``main`` function of the C++ example) contains the result matrix C from the device's DRAM. However, this data is still in the tiled format used by the Tenstorrent hardware. To verify its correctness against the ``golden_vec`` (which is in a standard row-major format), two steps are necessary:
 
     pass &= mesh_device->close();
 

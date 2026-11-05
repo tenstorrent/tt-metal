@@ -21,10 +21,10 @@ We use the Mesh API: create a 1x1 mesh device, get the mesh command queue, const
 We will go through sections of the `matmul_single_core` function:
 
 -   Program, enqueue and core range settings
--   Create DRAM buffers based on input and output vectors
+-   Create DRAM tensors based on input and output vectors
 -   Create L1 Circular buffers
 -   Kernels declarations and related compile and runtime arguments
--   Program launch and reading data from DRAM output buffer to result vector
+-   Program launch and reading data from DRAM output tensor to result vector
 
 ## Create Program, Enqueue initialization, and core range definition
 
@@ -38,9 +38,10 @@ Program program{};
 CoreCoord core({0, 0});
 ```
 
-## Create DRAM buffers & Circular buffers
+## Create DRAM tensors & Circular buffers
 
-In terms of DRAM buffers, we need two source buffers and one destination buffer.
+In terms of DRAM tensors, we need two source tensors and one destination tensor.
+Each row of a row-major tensor is one page, so a row of one tile's worth of elements gives a page size of one tile.
 
 ``` cpp
 // MN = MK*KN
@@ -49,20 +50,28 @@ uint32_t Kt = K / TILE_WIDTH;
 uint32_t Nt = N / TILE_WIDTH;
 
 DataFormat cb_data_format = DataFormat::Float16_b;
-uint32_t single_tile_size = detail::TileSize(cb_data_format);
+uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
+uint32_t elements_per_tile = single_tile_size / sizeof(bfloat16);
 tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
 
-distributed::DeviceLocalBufferConfig dram_config{ .page_size = single_tile_size, .buffer_type = BufferType::DRAM };
-distributed::ReplicatedBufferConfig buffer_config_A{ .size = single_tile_size * Mt * Kt };
-distributed::ReplicatedBufferConfig buffer_config_B{ .size = single_tile_size * Nt * Kt };
-distributed::ReplicatedBufferConfig buffer_config_C{ .size = single_tile_size * Mt * Nt };
+auto make_dram_tensor_spec = [&](size_t num_elements) {
+    return TensorSpec(
+        Shape({static_cast<uint32_t>(num_elements / elements_per_tile), elements_per_tile}),
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+};
+TensorSpec src0_tensor_spec = make_dram_tensor_spec(a.size());
+TensorSpec src1_tensor_spec = make_dram_tensor_spec(b.size());
+TensorSpec dst_tensor_spec = make_dram_tensor_spec(output.size());
 
-auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
-auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
-auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
-uint32_t src0_addr = src0_dram_buffer->address();
-uint32_t src1_addr = src1_dram_buffer->address();
-uint32_t dst_addr = dst_dram_buffer->address();
+MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src0_tensor_spec);
+MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src1_tensor_spec);
+MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dst_tensor_spec);
+uint32_t src0_addr = src0_dram_tensor.address();
+uint32_t src1_addr = src1_dram_tensor.address();
+uint32_t dst_addr = dst_dram_tensor.address();
 
 uint32_t src0_cb_index = CBIndex::c_0; //0
 uint32_t num_input_tiles = 2;
@@ -97,7 +106,7 @@ vector<uint32_t> compute_args = {
 
 ## Compute kernel declaration and compile-time defines
 
-We're using a special reader kernel to take in data from DRAM into L1, and a special writer kernel to write out results from the compute engine back to the destination DRAM buffer.
+We're using a special reader kernel to take in data from DRAM into L1, and a special writer kernel to write out results from the compute engine back to the destination DRAM tensor.
 
 ``` cpp
 auto reader_id = tt_metal::CreateKernel(
@@ -130,14 +139,16 @@ tt_metal::SetRuntimeArgs(program, reader_id, core, {src0_addr, src1_addr, Mt, Kt
 tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, Mt, Kt, Nt});
 ```
 
-Launch program, enqueue & read in output buffer result into the host vector.
+Launch program, enqueue & read in output tensor result into the host vector.
 
 ``` cpp
-distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+HostTensor src0_host_tensor = HostTensor::from_vector(a, src0_tensor_spec);
+HostTensor src1_host_tensor = HostTensor::from_vector(b, src1_tensor_spec);
+cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
+cq.enqueue_write_tensor(src1_host_tensor, src1_dram_tensor);
 workload.add_program(device_range, std::move(program));
 distributed::EnqueueMeshWorkload(cq, workload, false);
-distributed::ReadShard(cq, output, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
+output = cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 ```
 
 ## Conclusion

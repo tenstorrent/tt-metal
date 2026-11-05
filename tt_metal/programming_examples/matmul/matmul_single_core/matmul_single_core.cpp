@@ -11,6 +11,8 @@
 #include <bmm_op.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include "tt-metalium/core_coord.hpp"
 
 using namespace tt::constants;
@@ -78,22 +80,29 @@ void matmul_single_core(
     uint32_t Kt = K / TILE_WIDTH;
     uint32_t Nt = N / TILE_WIDTH;
 
-    // Create DRAM buffers for the input and output data.
+    // Create DRAM tensors for the input and output data.
     uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
+    uint32_t elements_per_tile = single_tile_size / sizeof(bfloat16);
 
-    // We allocate DRAM buffers for the input and output data (replicated per device across the mesh).
-    // Setting page_size to single_tile_size is the most common configuration for memory buffers in Metalium
-    // as it is generic, works for most cases and achieves good performance.
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+    // We allocate DRAM tensors for the input and output data (replicated per device across the mesh).
+    // Setting the page size to single_tile_size is the most common configuration for memory buffers in Metalium
+    // as it is generic, works for most cases and achieves good performance. Each row of a row-major tensor is one
+    // page, so a row of one tile's worth of elements gives a page size of one tile.
+    auto make_dram_tensor_spec = [&](size_t num_elements) {
+        return TensorSpec(
+            Shape({static_cast<uint32_t>(num_elements / elements_per_tile), elements_per_tile}),
+            TensorLayout(
+                DataType::BFLOAT16,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    };
+    TensorSpec src0_tensor_spec = make_dram_tensor_spec(a.size());
+    TensorSpec src1_tensor_spec = make_dram_tensor_spec(b.size());
+    TensorSpec dst_tensor_spec = make_dram_tensor_spec(output.size());
 
-    distributed::ReplicatedBufferConfig buffer_config_A{.size = sizeof(bfloat16) * a.size()};
-    distributed::ReplicatedBufferConfig buffer_config_B{.size = sizeof(bfloat16) * b.size()};
-    distributed::ReplicatedBufferConfig buffer_config_C{.size = sizeof(bfloat16) * output.size()};
-
-    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src0_tensor_spec);
+    MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src1_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dst_tensor_spec);
 
     // Create circular buffers for the input and output data.
     // Using 2 tiles per circular buffer to allow for double buffering (data movement can be reading from one tile while
@@ -123,8 +132,8 @@ void matmul_single_core(
 
     // Create the data movement kernels and the compute kernel
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src0_dram_tensor).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src1_dram_tensor).append_to(reader_compile_time_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
@@ -135,7 +144,7 @@ void matmul_single_core(
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_dram_tensor).append_to(writer_compile_time_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",
@@ -161,9 +170,9 @@ void matmul_single_core(
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_compile_time_args});
 
     // Set kernel arguments
-    uint32_t src0_addr = src0_dram_buffer->address();
-    uint32_t src1_addr = src1_dram_buffer->address();
-    uint32_t dst_addr = dst_dram_buffer->address();
+    uint32_t src0_addr = src0_dram_tensor.address();
+    uint32_t src1_addr = src1_dram_tensor.address();
+    uint32_t dst_addr = dst_dram_tensor.address();
     tt_metal::SetRuntimeArgs(program, reader_id, core, {src0_addr, src1_addr, Mt, Kt, Nt});
 
     tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, Mt, Kt, Nt});
@@ -171,13 +180,15 @@ void matmul_single_core(
     // been set at compile time. The compute kernel does not need any runtime arguments to execute. And so we can skip
     // this step.
 
-    // Upload the input data to the DRAM buffers, execute the kernels, wait for the result to be read into the output
+    // Upload the input data to the DRAM tensors, execute the kernels, wait for the result to be read into the output
     // buffer
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    HostTensor src0_host_tensor = HostTensor::from_vector(a, src0_tensor_spec);
+    HostTensor src1_host_tensor = HostTensor::from_vector(b, src1_tensor_spec);
+    cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
+    cq.enqueue_write_tensor(src1_host_tensor, src1_dram_tensor);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
+    output = cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 }
 
 ///////////////////////////////////////

@@ -10,6 +10,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <bmm_op.hpp>
 #include <tt-metalium/device.hpp>
 #include <fmt/core.h>
@@ -128,26 +130,32 @@ void matmul_multi_core(
     const uint32_t Kt = K / TILE_WIDTH;   // Number of tiles in K dimension
     const uint32_t Nt = N / TILE_WIDTH;   // Number of tiles in N dimension
 
-    // Create DRAM buffers for input and output matrices (replicated per device across the mesh).
-    // We allocate DRAM buffers for the input matrices and output matrix.
-    // Setting page_size to single_tile_size is the most common configuration for memory buffers in Metalium
+    // Create DRAM tensors for input and output matrices (replicated per device across the mesh).
+    // We allocate DRAM tensors for the input matrices and output matrix.
+    // Setting the page size to single_tile_size is the most common configuration for memory buffers in Metalium
     // as it is generic, works for most cases and achieves good performance.
-    // Writing data from input vectors to source buffers.
+    // Each row of a row-major tensor is one page, so a row of one tile's worth of elements gives a page size of one
+    // tile.
+    // Writing data from input vectors to source tensors.
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;  // 2 * 32 * 32 = 2048 bytes
+    constexpr uint32_t elements_per_tile = single_tile_size / sizeof(bfloat16);
 
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+    auto make_dram_tensor_spec = [&](uint32_t num_tiles) {
+        return TensorSpec(
+            Shape({num_tiles, elements_per_tile}),
+            TensorLayout(
+                DataType::BFLOAT16,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    };
+    TensorSpec src0_tensor_spec = make_dram_tensor_spec(Mt * Kt);
+    TensorSpec src1_tensor_spec = make_dram_tensor_spec(Nt * Kt);
+    TensorSpec dst_tensor_spec = make_dram_tensor_spec(Mt * Nt);
 
-    distributed::ReplicatedBufferConfig buffer_config_A{.size = single_tile_size * Mt * Kt};
-
-    distributed::ReplicatedBufferConfig buffer_config_B{.size = single_tile_size * Nt * Kt};
-
-    distributed::ReplicatedBufferConfig buffer_config_C{.size = single_tile_size * Mt * Nt};
-
-    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
-    // Each handle is a mesh-wide replicated allocation; on a unit mesh this is a single device buffer
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src0_tensor_spec);
+    MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src1_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dst_tensor_spec);
+    // Each tensor is a mesh-wide replicated allocation; on a unit mesh this is a single device buffer
 
     // Configure Circular Buffers
     // Circular buffers act as staging areas for data movement between DRAM and compute units.
@@ -183,8 +191,8 @@ void matmul_multi_core(
     tt::tt_metal::MathFidelity math_fidelity =
         tt::tt_metal::MathFidelity::HiFi4;  // High fidelity math for accurate results
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src0_dram_tensor).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src1_dram_tensor).append_to(reader_compile_time_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/dataflow/reader_mm_output_tiles_partitioned.cpp",
@@ -195,7 +203,7 @@ void matmul_multi_core(
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_dram_tensor).append_to(writer_compile_time_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
@@ -227,17 +235,17 @@ void matmul_multi_core(
                     program,
                     reader_id,
                     core,
-                    {src0_dram_buffer->address(),  // Address of matrix A in DRAM
-                     src1_dram_buffer->address(),  // Address of matrix B in DRAM
-                     Mt,                           // Number of tiles in M dimension
-                     Kt,                           // Number of tiles in K dimension
-                     Nt,                           // Number of tiles in N dimension
-                     work_offset,                  // Starting offset for this core's work
-                     work_per_core});              // Amount of work for this core
+                    {src0_dram_tensor.address(),  // Address of matrix A in DRAM
+                     src1_dram_tensor.address(),  // Address of matrix B in DRAM
+                     Mt,                          // Number of tiles in M dimension
+                     Kt,                          // Number of tiles in K dimension
+                     Nt,                          // Number of tiles in N dimension
+                     work_offset,                 // Starting offset for this core's work
+                     work_per_core});             // Amount of work for this core
 
                 // Set arguments for the writer kernel (data output)
                 tt_metal::SetRuntimeArgs(
-                    program, writer_id, core, {dst_dram_buffer->address(), work_per_core, work_offset});
+                    program, writer_id, core, {dst_dram_tensor.address(), work_per_core, work_offset});
 
                 // Set arguments for the compute kernel
                 tt_metal::SetRuntimeArgs(
@@ -251,18 +259,20 @@ void matmul_multi_core(
         }
     }
 
-    // Launch program & read in output buffer result into the host vector
-    // 1. Upload input data to DRAM buffers
+    // Launch program & read in output tensor result into the host vector
+    // 1. Upload input data to DRAM tensors
     // 2. Execute the program (all kernels run in parallel across cores)
     // 3. Read back the result from DRAM to host memory
-    // The 'true' parameter in EnqueueReadMeshBuffer ensures we wait for completion (so when the function
+    // The 'true' parameter in enqueue_read_tensor ensures we wait for completion (so when the function
     // returns, the output vector is fully populated).
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    HostTensor src0_host_tensor = HostTensor::from_vector(a, src0_tensor_spec);
+    HostTensor src1_host_tensor = HostTensor::from_vector(b, src1_tensor_spec);
+    cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
+    cq.enqueue_write_tensor(src1_host_tensor, src1_dram_tensor);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    // Blocking read waits for completion before returning and resizes 'output' as needed
-    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
+    // Blocking read waits for completion before returning
+    output = cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 }
 
 ///////////////////////////////////////
