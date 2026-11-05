@@ -284,7 +284,7 @@ def copy_kv_blocks(model, copies):
         )
         for kv in kv_caches:
             for t in kv:
-                end = [src + 1] + [int(x) for x in t.shape[1:]]
+                end = [src + 1] + [int(x) for x in list(t.shape)[1:]]
                 blk = ttnn.slice(t, (src, 0, 0, 0), end, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.experimental.paged_fill_cache(t, blk, pt, batch_idx=0)
                 ttnn.deallocate(blk)
