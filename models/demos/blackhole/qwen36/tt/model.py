@@ -5201,10 +5201,8 @@ class Qwen36Model:
         use_qkv_mask = masked and self.short_prefill_trace_qkv_mask_enabled()
         for bucket in buckets:
             assert bucket % 128 == 0, f"bucket {bucket} must be a multiple of 128 (GDN sub-chunk)"
-            assert bucket % block_size == 0
-            assert (
-                page_table.shape[-1] >= bucket // block_size
-            ), f"page_table has {page_table.shape[-1]} blocks, bucket {bucket} needs {bucket // block_size}"
+            nb = -(-bucket // block_size)
+            assert page_table.shape[-1] >= nb, f"page_table has {page_table.shape[-1]} blocks, bucket {bucket} needs {nb}"
         n_hist = None
         for layer in self.layers:
             if not layer.is_full_attention:
@@ -5246,7 +5244,9 @@ class Qwen36Model:
         # Persistent inputs of ALL buckets, allocated BEFORE any warm pass/capture.
         trs = {}
         for bucket in buckets:
-            bpb = bucket // block_size
+            # Ceil: a bucket shorter than a block fills the first rows of one block. The segment starts on a block
+            # boundary (_replay_short_trace asserts it), and paged_fill_cache writes from the first row of the block.
+            bpb = -(-bucket // block_size)
             tr = _ShortPrefillTrace(bucket, buf_blocks, bpb)
             tr.block_size = block_size
             tr.masked = masked
@@ -5443,7 +5443,7 @@ class Qwen36Model:
         also returns None when the trash block collides with the request's real blocks).
 
         spec_inputs (required for a spec trace, see capture_prefill_traces_short(spec=True)): host int32 torch tensors
-        (mtp_tokens [1, bucket], mtp_full_table [1, buf_blocks], mtp_chunk_table [1, bucket/block]) staged into the
+        (mtp_tokens [1, bucket], mtp_full_table [1, buf_blocks], mtp_chunk_table [1, ceil(bucket/block)]) staged into the
         MTP inputs; MTPSpecEngine builds them with mtp_prefill_inputs.
 
         chunk_start (default 0; a multiple of 128): the segment's ABSOLUTE start position, for a prefix-cached /
@@ -5949,7 +5949,7 @@ class Qwen36Model:
         assert self._paged_kv_caches is not None, "Call allocate_kv_caches first"
         assert bucket % 128 == 0, f"bucket {bucket} must be a multiple of 128 (GDN sub-chunk)"
         block_size = get_block_size(self._paged_kv_caches)
-        blocks_per_bucket = bucket // block_size
+        blocks_per_bucket = -(-bucket // block_size)
 
         if getattr(self, "_bucket_trace_id", None) is not None:
             ttnn.release_trace(device, self._bucket_trace_id)
@@ -6101,7 +6101,7 @@ class Qwen36Model:
         assert getattr(self, "_bucket_trace_id", None) is not None, "Call capture_prefill_trace_bucket first"
         bucket = self._bucket_size
         block_size = get_block_size(self._paged_kv_caches)
-        blocks_per_bucket = bucket // block_size
+        blocks_per_bucket = -(-bucket // block_size)
         rep = ttnn.ReplicateTensorToMesh(self.device)
 
         B = len(token_ids_list)
