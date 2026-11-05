@@ -67,7 +67,7 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
-from models.demos.blackhole.qwen36.tt.tp_common import fabric_router_config
+from models.demos.blackhole.qwen36.tt.tp_common import fabric_router_config, kv_block_size
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
@@ -276,18 +276,19 @@ def _warmup_prefill(model, device, token_ids):
     model.reset_state()
 
 
-BLOCK_SIZE = 64
+BLOCK_SIZE = kv_block_size()  # QWEN36_KV_BLOCK_SIZE, default 64
 ACCURACY_PREFILL_LEN = 512  # accuracy cases prefill this many reference tokens, then teacher-force the rest
 PREFILL_CHUNK = 2048
-# 256k ceiling (4096×64 tokens); _blocks_for sizes the cache per seqlen so short tests stay cheap.
-MAX_BLOCK_BUDGET = 4096
+# 256k ceiling; _blocks_for sizes the cache per seqlen so short tests stay cheap.
+MAX_BLOCK_BUDGET = 262144 // BLOCK_SIZE
+MIN_BLOCK_BUDGET = max(1, 4096 // BLOCK_SIZE)
 
 
 def _blocks_for(seqlen, max_generated_tokens):
     """Paged-KV block budget for ``seqlen`` (prompt bucket + decode, capped at 256k, min 4k)."""
     bucket = ((seqlen + PREFILL_CHUNK - 1) // PREFILL_CHUNK) * PREFILL_CHUNK
     needed = bucket + max_generated_tokens
-    blocks = max(64, (needed + BLOCK_SIZE - 1) // BLOCK_SIZE)
+    blocks = max(MIN_BLOCK_BUDGET, (needed + BLOCK_SIZE - 1) // BLOCK_SIZE)
     # Round num_blocks up to a multiple of 8 for SDPA page-table stick alignment (<=7 extra blocks).
     blocks = ((blocks + 7) // 8) * 8
     return min(MAX_BLOCK_BUDGET, blocks)

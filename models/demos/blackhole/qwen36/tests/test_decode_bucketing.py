@@ -23,10 +23,11 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.blackhole.qwen36.tests.test_factory import parametrize_mesh_tp
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.blackhole.qwen36.tt.tp_common import kv_block_size
 
 N_LAYERS = 8
 
-BLOCK = 64
+BLOCK = kv_block_size()
 # ISL under test. Override with QWEN36_BUCKET_TEST_CTX to compare against a server run at a
 # different ISL (the benchmark sweep was trimmed to 4096).
 CTX = int(os.environ.get("QWEN36_BUCKET_TEST_CTX", "8192"))

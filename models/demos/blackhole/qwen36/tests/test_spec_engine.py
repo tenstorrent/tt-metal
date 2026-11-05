@@ -26,10 +26,11 @@ from models.demos.blackhole.qwen36.tests.spec_helpers import (
     _plain_greedy,
     _prompt_pool,
 )
+from models.demos.blackhole.qwen36.tests.test_factory import kv_pool_blocks
 from models.demos.blackhole.qwen36.tests.test_spec_lossless import NEAR_TIE_GAP
 
 K = 3
-NUM_BLOCKS = 72  # pool size and page-table width nb
+NUM_BLOCKS = kv_pool_blocks(4608, align=8)  # pool size and page-table width nb
 CONTRACT_MAX_NEW = 96
 MAX_NEW = 48
 NEAR_CAP_MAX_NEW = 200
@@ -240,7 +241,7 @@ def test_spec_engine_serves_many_requests_with_one_capture(mesh_device):
         pytest.skip("spec decode is the TP path; run with MESH_DEVICE=P150x4")
     from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
 
-    num_blocks = 72  # 4096 + MAX_NEW + K + margin = 65 blocks, rounded up
+    num_blocks = kv_pool_blocks(4608, align=8)  # 4096 + MAX_NEW + K + margin, rounded up
     model, tokenizer, kv_shape = _build(mesh_device, num_blocks)
     pool = _prompt_pool(tokenizer, 4096 + 256)
     short1 = _get_prompt(130, tokenizer)[0].tolist()
