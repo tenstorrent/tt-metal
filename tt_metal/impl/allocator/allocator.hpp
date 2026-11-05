@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -14,9 +15,12 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt_stl/span.hpp>
 
 #include "impl/allocator/allocator_types.hpp"
 #include "impl/allocator/bank_manager.hpp"
+#include "impl/allocator/in_flight_l1_regions.hpp"
 #include "impl/allocator/persistent_l1_arena.hpp"
 
 namespace tt::tt_metal {
@@ -164,6 +168,21 @@ public:
     PersistentL1Arena& persistent_l1() { return persistent_l1_; }
     const PersistentL1Arena& persistent_l1() const { return persistent_l1_; }
 
+    // Static L1 regions of a program enqueued on (cq_id, sub_device_id) that may still be running.
+    // Lockstep L1 allocations on the cores they cover are placed clear of them until cleared.
+    // event_id is the first event recorded on cq_id after the program.
+    void mark_in_flight_l1_regions(
+        uint32_t cq_id,
+        SubDeviceId sub_device_id,
+        uint32_t event_id,
+        const InFlightL1Regions::RegionsByCoreRange& regions);
+    // Clears the marks of programs completed by up_to_event_id on cq_id. An empty sub_device_ids
+    // means every sub-device.
+    void clear_in_flight_l1_regions(
+        uint32_t cq_id,
+        ttsl::Span<const SubDeviceId> sub_device_ids,
+        uint32_t up_to_event_id = std::numeric_limits<uint32_t>::max());
+
     // We likely won't need to perform heap allocation just to expose the user side of Allocator,
     // this is to ease transition so we keep the pointer-to-allocator semantics.
     const std::unique_ptr<Allocator>& view() const;
@@ -223,6 +242,8 @@ private:
     std::unique_ptr<AllocatorConfig> config_;
 
     PersistentL1Arena persistent_l1_;
+
+    InFlightL1Regions in_flight_l1_regions_;
 
     // External view of the allocator, this shouldn't need to be a unique_ptr, but currently kept as so to preserve API
     // stability

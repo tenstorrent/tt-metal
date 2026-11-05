@@ -230,8 +230,13 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
 
             // PrefetcherPipe / persistent L1 regions sit outside BankManager, so lockstep must avoid
             // them too. They stay unscoped under range lockstep: they are reservations this allocator
-            // cannot attribute to a core, so there is no smaller set to narrow them to.
-            std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges = persistent_l1_.occupied_ranges();
+            // cannot attribute to a core, so there is no smaller set to narrow them to. A LOCKSTEP
+            // bank manager has never subtracted them, and in-flight regions below now route it
+            // through the path that would, so they are handed over in HYBRID mode only.
+            std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges;
+            if (config_->allocator_mode == AllocatorMode::HYBRID) {
+                additional_ranges = persistent_l1_.occupied_ranges();
+            }
             if (!hybrid_device_allocators_.empty()) {
                 using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
                 auto gather_from = [&](const AllocatorImpl* dev_alloc, uint32_t bank_id) {
@@ -284,6 +289,19 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             // so unsorted and overlapping ranges are fine.
             additional_ranges.insert(
                 additional_ranges.end(), hybrid_remote_occupied_ranges_.begin(), hybrid_remote_occupied_ranges_.end());
+            if (!in_flight_l1_regions_.empty()) {
+                // Only the cores holding data matter here: a CB elsewhere cannot overlap this buffer.
+                std::optional<std::vector<CoreCoord>> cores_with_data;
+                if (const auto& distribution_spec = buffer->buffer_distribution_spec();
+                    num_cores.has_value() && distribution_spec.has_value()) {
+                    cores_with_data = distribution_spec->cores_with_data();
+                } else if (num_cores.has_value()) {
+                    const auto& shard_spec = buffer->shard_spec().tensor_shard_spec;
+                    cores_with_data = corerange_to_cores(
+                        shard_spec.grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+                }
+                in_flight_l1_regions_.append_occupied_ranges(cores_with_data, additional_ranges);
+            }
             address = l1_manager_->allocate_buffer(
                 size,
                 page_size,
@@ -413,6 +431,28 @@ void AllocatorImpl::unmirror_lockstep_allocation(DeviceAddr address) {
     std::lock_guard<std::mutex> lock(mutex_);
     using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
     l1_manager_->mark_deallocated(AllocatorID{0}, address);
+}
+
+void AllocatorImpl::mark_in_flight_l1_regions(
+    uint32_t cq_id,
+    SubDeviceId sub_device_id,
+    uint32_t event_id,
+    const InFlightL1Regions::RegionsByCoreRange& regions) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    in_flight_l1_regions_.mark(
+        cq_id, sub_device_id, event_id, regions, std::max(config_->l1_alignment, config_->dram_alignment));
+}
+
+void AllocatorImpl::clear_in_flight_l1_regions(
+    uint32_t cq_id, ttsl::Span<const SubDeviceId> sub_device_ids, uint32_t up_to_event_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (sub_device_ids.empty()) {
+        in_flight_l1_regions_.clear(cq_id, up_to_event_id);
+        return;
+    }
+    for (const auto& sub_device_id : sub_device_ids) {
+        in_flight_l1_regions_.clear(cq_id, sub_device_id, up_to_event_id);
+    }
 }
 
 std::unordered_set<Buffer*> AllocatorImpl::get_allocated_buffers() const {

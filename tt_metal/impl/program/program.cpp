@@ -2532,6 +2532,15 @@ void detail::ProgramImpl::merge_cb_l1_regions_by_core_range(
     }
 }
 
+std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>> detail::ProgramImpl::static_l1_regions() const {
+    std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>> regions_per_range;
+    this->merge_cb_l1_regions_by_core_range(regions_per_range);
+    for (const auto& dfb_allocator : dfb_allocation_metadata_.regions) {
+        merge_cb_stats_intervals(regions_per_range[dfb_allocator.core_range], dfb_allocator.l1_regions);
+    }
+    return regions_per_range;
+}
+
 std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> detail::ProgramImpl::expand_cb_l1_regions_per_core(
     const std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>>& regions_per_range) {
     std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> regions_per_core;

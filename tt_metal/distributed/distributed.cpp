@@ -20,6 +20,7 @@
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "impl/allocator/allocator.hpp"
 #include "impl/program/slow_dispatch.hpp"
 #include "llrt/tt_cluster.hpp"
 #ifdef TT_METAL_USE_EMULE
@@ -160,6 +161,16 @@ void EventSynchronize(const MeshEvent& event) {
                event.impl().id()) {
             mesh_cq->throw_if_reader_failed();
         }
+    }
+    const auto& sub_device_ids = event.impl().sub_device_ids();
+    if (!sub_device_ids.empty()) {
+        // As in finish: an event that waited on every sub-device covers all earlier programs on its queue.
+        ttsl::Span<const SubDeviceId> completed_sub_device_ids;
+        if (sub_device_ids.size() != event.device()->num_sub_devices()) {
+            completed_sub_device_ids = sub_device_ids;
+        }
+        event.device()->allocator_impl()->clear_in_flight_l1_regions(
+            event.impl().mesh_cq_id(), completed_sub_device_ids, event.impl().id());
     }
 }
 

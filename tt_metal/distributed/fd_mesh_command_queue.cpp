@@ -453,6 +453,18 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         return;
     }
 
+    // With one sub-device on one CQ, later work runs strictly after this program, so its CBs cannot
+    // be raced and allocations need not avoid them.
+    const bool may_run_concurrently = mesh_device_->num_hw_cqs() > 1 || mesh_device_->num_sub_devices() > 1;
+    if (may_run_concurrently && this->get_target_device_type() != tt::TargetDevice::Mock &&
+        this->get_target_device_type() != tt::TargetDevice::Emule) {
+        const uint32_t next_event_id = sysmem_manager.get_current_event(id_) + 1;
+        for (auto& [device_range, program] : mesh_workload.get_programs()) {
+            mesh_device_->allocator_impl()->mark_in_flight_l1_regions(
+                id_, sub_device_id, next_event_id, program.impl().static_l1_regions());
+        }
+    }
+
     program_dispatch::ProgramDispatchMetadata dispatch_metadata;
     // Expected number of workers from the previous run
     uint32_t expected_num_workers_completed = sysmem_manager.get_bypass_mode()
@@ -763,8 +775,16 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
     this->wait_for_outstanding_reads(lock);
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
-    for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
+    const auto finished_sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+    for (const auto& sub_device_id : finished_sub_device_ids) {
         sub_device_cq_owner[*sub_device_id].finished(this->id_);
+    }
+    // Draining every sub-device also drains programs of a sub-device manager loaded before this one,
+    // which are ordered ahead of its reset and whose ids may not exist any more, so clear them all.
+    if (finished_sub_device_ids.size() == mesh_device_->num_sub_devices()) {
+        mesh_device_->allocator_impl()->clear_in_flight_l1_regions(id_, {});
+    } else {
+        mesh_device_->allocator_impl()->clear_in_flight_l1_regions(id_, finished_sub_device_ids);
     }
 
     if (should_handle_exception_.load()) {
@@ -968,6 +988,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
         sysmem_manager.get_next_event(id_), *this, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+    event.impl().set_sub_device_ids(std::vector<SubDeviceId>(sub_device_ids.begin(), sub_device_ids.end()));
     auto dispatch_lambda = [this, &event, &sub_device_ids, notify_host](const MeshCoordinate& coord) {
         event_dispatch::issue_record_event_commands(
             mesh_device_,
