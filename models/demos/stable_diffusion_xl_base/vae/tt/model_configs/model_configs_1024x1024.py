@@ -32,6 +32,18 @@ class VAEModelOptimisations(ModelOptimisations1024x1024):
             exp_approx_mode=True,
         )
 
+        self.conv_configs["ABH_256_ADB_WDB_BS_W16"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_w_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
+        )
+
         self.groupnorm_configs["DRAM_GROUPNORM_32"] = {
             "op_config": {
                 "core_grid": ttnn.CoreGrid(y=8, x=8),
@@ -104,19 +116,19 @@ class VAEModelOptimisations(ModelOptimisations1024x1024):
             return self.conv_configs["ABH_0_ADB_HS"]
         # MID BLOCK (ENCODER + DECODER) and UP BLOCK 0
         elif "mid_block.resnet" in conv_path or "decoder.up_blocks.0.resnet" in conv_path:
-            return self.conv_configs["ABH_512_NO_ADB_BS"]
+            return self.conv_configs["ABH_512_ADB_WDB_BS"]
         elif "decoder.up_blocks.0.upsamplers" in conv_path:
-            return self.conv_configs["ABH_256_NO_ADB_BS"]
+            return self.conv_configs["ABH_256_ADB_WDB_BS_W16"]
         # UP BLOCK 1
         elif "decoder.up_blocks.1.resnet" in conv_path:
-            return self.conv_configs["ABH_256_NO_ADB_BS"]
+            return self.conv_configs["ABH_256_ADB_WDB_BS_W16"]
         elif "decoder.up_blocks.1.upsamplers" in conv_path:
-            return self.conv_configs["ABH_256_NO_ADB_BS"]
+            return self.conv_configs["ABH_256_ADB_WDB_BS_W16"]
         # UP BLOCK 2
         elif "decoder.up_blocks.2.resnet" in conv_path:
-            return self.conv_configs["ABH_512_NO_ADB_BS"]
+            return self.conv_configs["ABH_512_ADB_WDB_BS"]
         elif "decoder.up_blocks.2.upsamplers" in conv_path:
-            return self.conv_configs["ABH_512_NO_ADB_BS"]
+            return self.conv_configs["ABH_512_ADB_WDB_BS"]
         # UP BLOCK 3
         elif "decoder.up_blocks.3.resnet" in conv_path:
             return self.conv_configs["ABH_32_ADB_HS"]
@@ -130,7 +142,7 @@ class VAEModelOptimisations(ModelOptimisations1024x1024):
             elif "down_blocks.1" in conv_path:
                 return self.conv_configs["ABH_1024_NO_ADB_BS"]
             elif "down_blocks.2" in conv_path:
-                return self.conv_configs["ABH_512_NO_ADB_BS"]
+                return self.conv_configs["ABH_512_ADB_WDB_BS"]
         # DOWN BLCOK 0
         elif "down_blocks.0" in conv_path:
             return self.conv_configs["ABH_32_ADB_HS"]
@@ -139,16 +151,16 @@ class VAEModelOptimisations(ModelOptimisations1024x1024):
             if "resnets.0" in conv_path and "conv1" in conv_path:
                 return self.conv_configs["ABH_64_NO_ADB_HS"]
             else:
-                return self.conv_configs["ABH_512_NO_ADB_BS"]
+                return self.conv_configs["ABH_512_ADB_WDB_BS"]
         # DOWN BLOCK 2
         elif "down_blocks.2" in conv_path:
             if "resnets.0" in conv_path and "conv1" in conv_path:
                 return self.conv_configs["ABH_1024_NO_ADB_BS"]
             else:
-                return self.conv_configs["ABH_256_NO_ADB_BS"]
+                return self.conv_configs["ABH_256_ADB_WDB_BS_W16"]
         # DOWN BLOCK 3
         elif "down_blocks.3" in conv_path:
-            return self.conv_configs["ABH_512_NO_ADB_BS"]
+            return self.conv_configs["ABH_512_ADB_WDB_BS"]
         # ENCODER CONV IN
         elif "encoder.conv_in" == conv_path:
             return self.conv_configs["ABH_1024_NO_ADB_HS"]
