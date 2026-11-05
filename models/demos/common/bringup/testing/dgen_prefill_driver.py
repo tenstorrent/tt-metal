@@ -41,7 +41,7 @@ def log(msg: str) -> None:
 
 
 def device_pipeline_args(doc: str, svc: str, ack: str, chunk: int, lpc: int, timeout_ms: int, sp: int) -> dict:
-    """F200: keyword arguments for te.device_prefill_pipeline as this build declares it (its signature, the first line
+    """F203: keyword arguments for te.device_prefill_pipeline as this build declares it (its signature, the first line
     of __doc__). tt-d-gen 1cf343887 (#1600, the runner's layer-completion ring) dropped layers_per_chunk; passed by
     position, the timeout became sp_factor (ENGINE_FATAL chunk_size=5120 is not divisible by sp_factor=1800000)."""
     kw = dict(service_id=svc, ack_shm_name=ack, chunk_size=chunk, connect_timeout_ms=timeout_ms, sp_factor=sp)

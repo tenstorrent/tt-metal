@@ -462,6 +462,7 @@ class TtExperts:
     def flat_op(self, flat_w, cache_prefix=None):
         """The layer's FlatRoutedExpert: the weights laid out once (or loaded from the weight cache). Also used by
         tt/moe_block_adapter.py (MOE_IMPL=block): the same arguments, so the same cache files."""
+        from ttnn.bringup.combine_rf.sparse_combine_rf import L1_MAX_WRITERS
         from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
         from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
@@ -495,6 +496,11 @@ class TtExperts:
             check_exact=False,
             cache_prefix=cache_prefix,
             layout=self.flat_layout,
+            # (at most the combine's L1 hand-off writers: a Galaxy chip with its east DRAM readers in column 7 has 40
+            # down cores under the legacy layout, column 6 has 32; capped, both get the 32-core down split and the same
+            # weight cache key. The marko layout's even split already keeps at most 32 down cores and no reader tails:
+            # a no-op there)
+            max_y_writers=L1_MAX_WRITERS,
         )
         logger.info(
             f"EXPERTS_FLAT layer={self.layer} plan nu={fe.plan['nu']} np={fe.plan['np']} "

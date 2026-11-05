@@ -337,7 +337,8 @@ TABLE = {
         "combine's arena CBs; the combine's runtime args when its extra_addrs change) patched on a hit, so the 40 "
         "layers share one program per pass and a new gather buffer (xg) never rebuilds it; addresses (the op before) "
         "= every baked address in the key: a new xg address a call is a miss (+20..40 programs a 40-layer chunk, ~0.5 "
-        "s of host each, never warm under F196). Bit-identical outputs (tt/perf_flat_program_key.py)",
+        "s of host each, never warm under F196). Bit-identical outputs (tt/perf_flat_program_key.py). MOE_IMPL=flat "
+        "only: the block's exchange calls the op address-keyed (it pins its buffers instead)",
     ),
     "EXPERTS_LAYOUT": Setting(
         "marko",

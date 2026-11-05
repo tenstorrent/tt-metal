@@ -10,8 +10,12 @@ the E = 6 chip's down split, so the same weight-layout cache key.
   unchanged; a cap below them keeps the first down cores of the uncapped plan's order and splits all H columns over
   them; the model's cap (32) gives the down split an E = 6 chip has (32 x 5 columns), on this chip whatever its E (on
   an E = 7 chip: the 40-core plan cut to its first 32).
-- test_capped_op (any Blackhole chip): the op with a cap below this chip's down cores (the capped path runs whatever
-  the harvesting) vs the bfp4-weight reference, per active expert, as test_flat_uneven_split.
+  Pinned to flat_layouts.LEGACY: the plan whose down cores depend on the chip's east column.
+- test_plan_cap_marko (any Blackhole chip, plan only): the model's default layout (EXPERTS_LAYOUT=marko: the even
+  split, rows_hint = chunk K / E, x_helpers 1) keeps at most 32 down cores and no reader tails on any chip, so the
+  model's cap of 32 leaves that plan bit for bit unchanged (a no-op there; the weight cache key unchanged).
+- test_capped_op (any Blackhole chip; legacy and marko): the op with a cap below this chip's down cores (the capped
+  path runs whatever the harvesting) vs the bfp4-weight reference, per active expert, as test_flat_uneven_split.
 
     scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/test_max_y_writers.py
 """
@@ -24,15 +28,23 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from ttnn.bringup.combine_rf.sparse_combine_rf import L1_MAX_WRITERS
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import WEIGHT_LAYOUT_KEYS, FlatRoutedExpert
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY, flat_layout
 
 pytestmark = pytest.mark.skipif(not ttnn.device.is_blackhole(), reason="the flat routed expert is Blackhole-only")
 
 # DeepSeek-V4.1-Flash on 8x4: H 5120, I 2304, 12 local experts of 96 in a column, capacity 5120 (the model's flat_cap)
 H, I, E, NG, M = 5120, 2304, 12, 96, 5120
+# the model's EXPERTS_LAYOUT=marko (tt/experts.py flat_op: rows_hint = round(chunk K / experts), x_helpers 1)
+MARKO = dict(rows_hint=round(5120 * 6 / 384), x_helpers=1)
+LAYOUTS = {"legacy": LEGACY, "marko": MARKO}
 
 
-def _plan(device, cap, m=M):
-    return dict(ttnn._ttnn.operations.bringup.flat_routed_expert_plan(device, H, I, E, NG, m, max_y_writers=cap))
+def _plan(device, cap, m=M, layout=LEGACY):
+    return dict(
+        ttnn._ttnn.operations.bringup.flat_routed_expert_plan(
+            device, H, I, E, NG, m, layout=flat_layout(layout), max_y_writers=cap
+        )
+    )
 
 
 def _writers(p):
@@ -72,6 +84,17 @@ def test_plan_cap(device):
     assert (lay["n_rd"], lay["nd"], lay["rem_cols"], lay["rdown"], lay["nsg"]) == (16, 32, 160, False, 1), lay
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+def test_plan_cap_marko(device):
+    p0 = _plan(device, 0, layout=MARKO)
+    logger.info(
+        f"marko layout, east DRAM reader column {_east(p0)}: {p0['nd']} down cores, pcds {sorted(set(p0['pcds']))}, "
+        f"reader tails {len(p0['rdn']) if p0['rdown'] else 0}, gate/up {len(p0['gu'])}"
+    )
+    assert _writers(p0) <= L1_MAX_WRITERS, (p0["nd"], p0["rdown"])
+    assert _plan(device, L1_MAX_WRITERS, layout=MARKO) == p0, "the model's cap changed the marko plan"
+
+
 def _counts(E_, m, seed):
     g = torch.Generator().manual_seed(seed)
     c = torch.randint(0, 120, (E_,), generator=g)
@@ -83,15 +106,27 @@ def _counts(E_, m, seed):
 
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-def test_capped_op(device):
+@pytest.mark.parametrize("lay", list(LAYOUTS))
+def test_capped_op(device, lay):
     m = 2048  # (test_flat_uneven_split's v41 case)
-    nd0 = _plan(device, 0, m)["nd"]
+    layout = LAYOUTS[lay]
+    nd0 = _plan(device, 0, m, layout)["nd"]
     cap = min(L1_MAX_WRITERS, nd0) - 4  # (below this chip's down cores, whatever its harvesting)
     torch.manual_seed(0)
     weights = [[(torch.randn(H, I) * 0.02, torch.randn(H, I) * 0.02, torch.randn(I, H) * 0.02) for _ in range(E)]]
     gids = [[(NG // E) * e + 1 for e in range(E)]]
     op = FlatRoutedExpert(
-        device, weights, m=m, H=H, I=I, gids=gids, n_global=NG, act="clamped_silu", pin=1, max_y_writers=cap
+        device,
+        weights,
+        m=m,
+        H=H,
+        I=I,
+        gids=gids,
+        n_global=NG,
+        act="clamped_silu",
+        pin=1,
+        layout=layout,
+        max_y_writers=cap,
     )
     assert op.plan["nd"] <= cap < nd0, (op.plan["nd"], cap, nd0)
     logger.info(f"capped at {cap}: {op.plan['nd']} down cores (uncapped {nd0}), pcds {sorted(set(op.plan['pcds']))}")

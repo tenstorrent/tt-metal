@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""F200: a runner test that tt-d-gen's engine drives does not gate, and starts no agent, while serving.require_engine
+"""F203: a runner test that tt-d-gen's engine drives does not gate, and starts no agent, while serving.require_engine
 holds and no build is found; independent tasks go on, and the task runs once the build appears (DeepSeek-V4.1 8x4
 K.1, 2026-10-27: the engine was built alongside the run)."""
 

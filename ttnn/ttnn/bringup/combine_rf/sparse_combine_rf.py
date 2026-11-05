@@ -399,6 +399,9 @@ MISC_BYTES = 2048
 # devplan scratch; 256.. rows consumed per source chip (accumulators increment); 288.. rows covered by the credit
 # snapshots sent; 320.. acc taken[] (per ring = source chip); 477..511 the hang words (CombineProbes.hw)
 M_RTOT, M_RDONE, M_TAKEN = 256, 288, 320
+# the L1 hand-off's y writers: one landed counter each on every receiver (MISC words 128..159; 160..191 for an
+# accumulator that shares its core with a port) and the port readers' writer coordinates (wx / hwx[32])
+L1_MAX_WRITERS = 32
 GRANTS = 8  # (landing "shared": grant ids outstanding a (source, accumulator) at most - its grant ring)
 
 
@@ -1920,6 +1923,17 @@ def sparse_combine_rf_prepare(
         f"combine L1 hand-off: {row_bytes} B rows need one piece (piece_max {PIECE_MAX} < row: pass piece_max >= "
         f"{row_bytes} and a fabric payload >= {row_bytes + 32})"
     )
+    # every piece goes as ONE fabric packet of PD + 32 B (its trailer); the routers do not split packets, so a mesh whose
+    # fabric payload is smaller (the router default 4352 B: a mesh opened without the caller's fabric_router_config)
+    # hangs the combine (deepseek_v41_flash_d_p K.1, 2026-10-27: every chip waiting on rows / credits, the flat expert's
+    # compute stalled behind full rings). Refused here, at build, instead.
+    if G > 1:
+        fab_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+        assert PD + 32 <= fab_payload, (
+            f"sparse_combine_rf: {PD + 32} B fabric packets (a {PD} B row piece + its 32 B trailer) exceed the mesh's "
+            f"fabric payload of {fab_payload} B: open the mesh with a fabric_router_config whose "
+            f"max_packet_payload_size_bytes >= {PD + 32} (or pass a smaller piece_max, without the L1 hand-off)"
+        )
     pr = probes or CombineProbes.from_env()
     # idle credit snapshots batched (at least 8 rows, or 6 us old) where there are many sources: a snapshot costs an EDM
     # slot on the row-injecting sender, so per-source packets scale with the source count - on the Galaxy's 31 (the
@@ -2241,7 +2255,7 @@ def sparse_combine_rf_prepare(
         )
         wv = [virt(ttnn.CoreCoord(*c)) for c in l1["writers"]]
         wxy = [v for c in wv for v in (c.x, c.y)]
-        assert len(wv) <= 32
+        assert len(wv) <= L1_MAX_WRITERS, f"{len(wv)} y writers > the L1 hand-off's {L1_MAX_WRITERS}"
     l1_args = []
     prof = pr.prof
     pace_us = pr.pace_us  # pace every port's injections to finish at this time

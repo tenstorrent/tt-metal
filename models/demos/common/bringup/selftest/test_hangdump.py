@@ -1,4 +1,4 @@
-"""F201: a hang's triage report and Inspector logs survive the next unit, and no framework kill cuts off tt-triage."""
+"""F204: a hang's triage report and Inspector logs survive the next unit, and no framework kill cuts off tt-triage."""
 
 from models.demos.common.bringup import overseer as OV
 from models.demos.common.bringup.core import hangdump
