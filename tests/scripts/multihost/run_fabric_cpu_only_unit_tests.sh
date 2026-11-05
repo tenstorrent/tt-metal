@@ -1188,9 +1188,10 @@ if run_group "teardown-litmus"; then
 
 # Does a distributed job end, end cleanly, and report it after one failure? Two tt-metal ranks on the 6U
 # dual-host mock through tt-run (the distributed context, the control plane's init, the collectives, close,
-# the user's signals); rows that fail today are xfail(strict) with the error id of the plan, so a fix flips
-# them. Each row kills what it left; the outer cap only guards the whole file. See the README next to it.
-TT_FABRIC_TEST_TIMEOUT=1500s run_test python3 -m pytest tests/tt_metal/distributed/multiprocess/teardown_litmus -v -p no:cacheprovider
+# the user's signals) and, with the C probe, OpenMPI and PRRTE alone (TT_LITMUS_MPI_PREFIX picks another MPI
+# install); rows that fail today are xfail(strict) with the error id of the plan, so a fix flips them. Each row
+# kills what it left; the outer cap only guards the whole directory. See the README next to it.
+TT_FABRIC_TEST_TIMEOUT=2000s run_test python3 -m pytest tests/tt_metal/distributed/multiprocess/teardown_litmus -v -p no:cacheprovider -p no:benchmark
 
 fi # teardown-litmus
 

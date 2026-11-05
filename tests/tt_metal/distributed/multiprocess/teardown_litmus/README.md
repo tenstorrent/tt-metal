@@ -5,7 +5,7 @@ plane's init inside `open_mesh_device`, the collectives, close and exit, plus th
 Two ranks of 8x4 on the Wormhole 6U dual-host mock descriptors, launched by tt-run, no device.
 
 The rows come from the teardown plan for tt-metal #56902 (tt-blaze `tools/teardown_probe`, lane L4, where
-every row was first measured with its log). A row that passes today is a gate. A row that fails today runs
+every row was first measured with its log). A row that passes today in the fabric CPU-only lane is a gate. A row that fails today runs
 in report mode: `xfail(strict=True)` with the plan's error id in the reason, so the unexpected pass after the
 fix fails the job and the marker is dropped in the same PR.
 
@@ -26,10 +26,32 @@ fix fails the job and the marker is dropped in the same PR.
 | `test_send_without_recv_ends` | a send nobody receives | the job ends | report, P16 |
 | `test_sigkill_before_init_ends` | rank 1 killed before MPI_Init | the job ends | report, P13 |
 | `test_dead_peer_in_open_exit_nonzero` | rank 1 killed inside open | exit non-zero | report, P17 P4 |
-| `test_ctrl_c_in_deadlock_leaves_nothing` | SIGINT at tt-run in a deadlock after open | tt-run ends, nothing left 3 s later | gate |
+| `test_ctrl_c_in_deadlock_leaves_nothing` | SIGINT at tt-run in a deadlock after open | tt-run ends, nothing left 3 s later | report, P6 (prterun is left in CI) |
 | `test_ctrl_c_in_init_leaves_nothing` | SIGINT at tt-run while a rank waits in the context init for a late peer | nothing left 3 s later | report, P6 |
 | `test_sigterm_at_ttrun_ends` | SIGTERM at tt-run in a deadlock | the job ends, nothing left | report, P7 |
 | `test_solve_rank_killed_ends` | a phase-1 rank killed | tt-run ends non-zero, nothing left | report, P18 |
+
+## MPI only (`test_teardown_litmus_mpi.py`)
+
+The same questions asked of OpenMPI and PRRTE alone: `litmus_mpi_probe.c` uses MPI the way the DistributedContext
+does and has no tt-metal in it. These are the rows to run again when the MPI install changes:
+`TT_LITMUS_MPI_PREFIX=/opt/openmpi-<version>` picks that install's `mpirun` and `mpicc` and the probe is
+recompiled against it; otherwise the build's `teardown_mpi_probe` and the `mpirun` on PATH are used.
+
+| row | fault | assertion | today |
+|---|---|---|---|
+| `test_mpi_clean` | none | exit 0, nothing left | gate |
+| `test_mpi_dead_rank_ends_ulfm` | a rank killed, `--with-ft ulfm` | the job ends, nothing left | gate |
+| `test_mpi_dead_rank_exit_nonzero_plain` | a rank killed, plain mpirun | exit non-zero (the truthful code) | gate |
+| `test_mpi_survivor_abort_exit_nonzero` | a rank killed, survivors call MPI_Abort | exit non-zero under ULFM (the fix shape) | gate |
+| `test_mpi_exit_nofinalize_ends` | a rank `_exit`s, `btl self,tcp` | exit non-zero, nothing left | gate |
+| `test_mpi_hang_timeout_ends` | a rank spins, PRRTE `--timeout 20` | exit 241, nothing left | gate |
+| `test_mpi_ctrl_c_at_mpirun_leaves_nothing` | SIGINT at mpirun | the whole tree is gone | gate |
+| `test_mpi_dead_rank_exit_nonzero_ulfm` | a rank killed, `--with-ft ulfm` | exit non-zero | report, P4 |
+| `test_mpi_exit_after_error_ends` | a rank `exit(1)`s after an error | the job ends | report, P1 |
+| `test_mpi_hang_never_ends` | a rank spins, no wall clock | the job ends | report, P5 |
+| `test_mpi_wrong_interface_ends` | `btl_tcp_if_include nosuchif` | the job ends | report, P14 |
+| `test_mpi_exit_nofinalize_sm_layer_ends` | a rank `_exit`s with the shared-memory layer on | the job ends | report, P2 |
 
 Every row kills whatever it left (its own process group, then any launcher or probe process of this user
 that appeared during the row) before the next one starts, so a hang in one row cannot fail the next.
@@ -37,7 +59,7 @@ that appeared during the row) before the next one starts, so a hang in one row c
 Run from the repository root with a built tree:
 
 ```
-pytest tests/tt_metal/distributed/multiprocess/teardown_litmus -v
+pytest tests/tt_metal/distributed/multiprocess/teardown_litmus -v -p no:benchmark
 ```
 
 In CI this is group `teardown-litmus` of `tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh`, entry
