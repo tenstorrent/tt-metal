@@ -1155,7 +1155,8 @@ class MATMUL_UNPACK_TTSYNC(TemplateParameter):
         ):
             return []
         # the init stall of the ttsync unpack (about 11 cycles per kernel) costs more than its loop gain on these cells
-        if math_fidelity == MathFidelity.LoFi and (
+        if (
+            math_fidelity,
             formats.input_format,
             formats.input_format_B,
             formats.output_format,
@@ -1163,9 +1164,42 @@ class MATMUL_UNPACK_TTSYNC(TemplateParameter):
             rt_dim,
             kt_dim,
         ) in (
-            (DataFormat.Float32, DataFormat.Float32, DataFormat.Bfp8_b, 2, 1, 3),
-            (DataFormat.Float32, DataFormat.Float32, DataFormat.Bfp8_b, 2, 1, 4),
-            (DataFormat.Bfp8_b, DataFormat.Bfp8_b, DataFormat.Bfp8_b, 2, 2, 4),
+            (
+                MathFidelity.LoFi,
+                DataFormat.Float32,
+                DataFormat.Float32,
+                DataFormat.Bfp8_b,
+                2,
+                1,
+                3,
+            ),
+            (
+                MathFidelity.LoFi,
+                DataFormat.Float32,
+                DataFormat.Float32,
+                DataFormat.Bfp8_b,
+                2,
+                1,
+                4,
+            ),
+            (
+                MathFidelity.LoFi,
+                DataFormat.Bfp8_b,
+                DataFormat.Bfp8_b,
+                DataFormat.Bfp8_b,
+                2,
+                2,
+                4,
+            ),
+            (
+                MathFidelity.HiFi2,
+                DataFormat.Bfp4_b,
+                DataFormat.Bfp8_b,
+                DataFormat.Float32,
+                1,
+                1,
+                1,
+            ),
         ):
             return []
         if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync):
