@@ -46,6 +46,7 @@ HalCoreInfoType create_eth_mem_map(HalProgrammableCoreType core_type, bool progr
     static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROCESSOR_COUNT);
     static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
     static_assert(sizeof(CceNocRoutes) <= MEM_IERISC_NOC_ROUTES_SIZE);
+    static_assert(MEM_IERISC_PACKET_HEADER_POOL_SIZE == MEM_PACKET_HEADER_POOL_SIZE);
     static_assert(MEM_IERISC_KERNEL_BASE + MEM_IERISC_KERNEL_SIZE * MEM_IERISC_LOCAL_HARTS <= MEM_IERISC_L1_SIZE);
 
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
