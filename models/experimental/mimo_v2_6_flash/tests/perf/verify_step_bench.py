@@ -144,6 +144,7 @@ def main():
         help="sample the decoding requests (temperature 1, top_p 0.95, the plugin's spec_sampling with fresh uniforms "
         "each step) instead of greedy",
     )
+    p.add_argument("--dump", default=None, help="write each run's committed tokens per request to this JSON file")
     a = p.parse_args()
     users_list = [int(x) for x in a.users.split(",")]
     users = max(users_list)
@@ -235,6 +236,7 @@ def main():
             tok = getattr(main, "_tok", list(last))
             times, per_step_tokens = [], []
             emitted = [[] for _ in range(n)]  # each request's committed tokens (the run's digest)
+            margins = [[] for _ in range(n)]  # plain: each token's top-2 logit gap (near ties, --dump)
             if plain:
                 for s in range(a.steps):
                     tokens = torch.zeros(rows, 1, dtype=torch.int32)
@@ -251,6 +253,9 @@ def main():
                     for r in range(n):
                         tok[r], pos[r] = int(logits[r, 0].argmax()), pos[r] + 1
                         emitted[r].append(tok[r])
+                        if a.dump:
+                            top = torch.topk(logits[r, 0].float(), 2).values
+                            margins[r].append(float(top[0] - top[1]))
                     per_step_tokens.append(1.0)
                 mode = "plain"
             else:
@@ -345,6 +350,14 @@ def main():
                 f"users={n} mode={mode} step_ms={1e3 * med:.2f} mean={1e3 * statistics.mean(t):.2f} "
                 f"tokens_per_step={tps:.2f} tok_s={tps / statistics.mean(t):.1f}"
             )
+            if a.dump:
+                runs = getattr(main, "_runs", [])
+                runs.append({"users": n, "mode": mode, "tokens": emitted, "margins": margins})
+                main._runs = runs
+                import json
+
+                with open(a.dump, "w") as f:
+                    json.dump(runs, f)
             # Greedy: the same arithmetic commits the same tokens (compare runs of two builds).
             digest = [f"{zlib.crc32(str(e).encode()):08x}:{len(e)}" for e in emitted]
             say(f"users={n} mode={mode} tokens {' '.join(digest)}")
