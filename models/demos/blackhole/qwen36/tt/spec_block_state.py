@@ -246,16 +246,13 @@ class SpecBlockBook:
     of the staged verify, the window map {block: (engine row, column, group)} of each row's latest verify, the conv
     writes a verify leaves due (mode "align" boundaries) and what each vLLM block copy must do."""
 
-    def __init__(self, layout, G, B, T, cache_mode="none", mamba_block_size=0, decode_conv=True):
-        """``decode_conv`` False (vLLM's prefix_cache_retention_interval 0): vLLM keeps no block state that decode
-        wrote, so no block copy or boundary needs the window's conv rows written into a block."""
+    def __init__(self, layout, G, B, T, cache_mode="none", mamba_block_size=0):
         if cache_mode not in ("none", "align"):
             raise ValueError(f"mamba_cache_mode {cache_mode!r} not supported")
         if cache_mode == "align" and int(mamba_block_size) <= 0:
             raise ValueError("mamba_cache_mode align needs the MambaSpec block size")
         self.layout, self.G, self.B, self.T = layout, int(G), int(B), int(T)
         self.cache_mode, self.mamba_block_size = cache_mode, int(mamba_block_size)
-        self.decode_conv = bool(decode_conv)
         nv = layout.nv
         self.idx_host = [torch.zeros(self.B, self.T * nv, dtype=torch.int32) for _ in range(self.G)]
         self.init = [torch.zeros(self.B, nv, dtype=torch.int64) for _ in range(self.G)]
@@ -287,7 +284,7 @@ class SpecBlockBook:
         self.step_blocks = [b.clone() for b in blocks] if changed else self.step_blocks
         self.step_start = torch.as_tensor(start_col, dtype=torch.int64).reshape(-1).clone()
         self.init = [p[self._rows, self.step_start] for p in self._pages]
-        self.pending = [(int(u), int(t)) for u, t in boundary] if self.decode_conv else []
+        self.pending = [(int(u), int(t)) for u, t in boundary]
         live = tuple(int(u) for u in live_rows)
         if changed or self._map_dirty or live != self._map_live:
             for u in live:
@@ -369,9 +366,8 @@ class SpecBlockBook:
             ops.append(("copy", src, dst))
             ent = self.window_map.get(src)
             self.forget_block(dst)
-            if ent is not None and self.decode_conv:
-                ops.append(("conv", ent[0], ent[1], ent[2], dst))
             if ent is not None:
+                ops.append(("conv", ent[0], ent[1], ent[2], dst))
                 self._map_dirty = True
                 self.window_map[dst] = ent
                 self.row_blocks.setdefault(ent[0], []).append(dst)
@@ -430,9 +426,7 @@ class SpecGdnBlockState:
     slot's KV buffers: dn._spec_paged (rec views of K and V, conv view of V, the group's ring_page_idx tensor). The host
     state is a SpecBlockBook (``book``); this class runs its device work."""
 
-    def __init__(
-        self, model, per_layer_specs, kv_caches, T, layout="two_pool", cache_mode="none", mamba_block_size=0, decode_conv=True
-    ):
+    def __init__(self, model, per_layer_specs, kv_caches, T, layout="two_pool", cache_mode="none", mamba_block_size=0):
         import ttnn
         from models.demos.blackhole.qwen36.tt.gdn_block_state import is_mamba_entry
 
@@ -485,7 +479,7 @@ class SpecGdnBlockState:
             )
             self.layers.append((i, dn, g))
         self.layout = lay
-        self.book = SpecBlockBook(lay, self.G, self.bmax, self.T, cache_mode, mamba_block_size, decode_conv)
+        self.book = SpecBlockBook(lay, self.G, self.bmax, self.T, cache_mode, mamba_block_size)
         rep = ttnn.ReplicateTensorToMesh(mesh)
         self._idx_dev = [
             ttnn.from_torch(h, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
