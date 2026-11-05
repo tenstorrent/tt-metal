@@ -2626,7 +2626,7 @@ __attribute__((optimize("Os"))) void teardown(
             notify_subordinate_routers(
                 edm_channels_mask,
                 local_handshake_master_eth_chan,
-                static_cast<uint32_t>(reinterpret_cast<uintptr_t>(termination_signal_ptr)),
+                router_l1_offset(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(termination_signal_ptr))),
                 *termination_signal_ptr);
         }
     }
@@ -3354,9 +3354,9 @@ void kernel_main() {
                 // This still send to self even though with single risc core case, but no side effects
                 constexpr uint32_t exclude_eth_chan = std::numeric_limits<uint32_t>::max();
                 notify_subordinate_routers(
-                    edm_channels_mask, exclude_eth_chan, edm_local_sync_ptr_addr, num_local_edms);
+                    edm_channels_mask, exclude_eth_chan, router_l1_offset(edm_local_sync_ptr_addr), num_local_edms);
             } else {
-                notify_master_router(local_handshake_master_eth_chan, edm_local_sync_ptr_addr);
+                notify_master_router(local_handshake_master_eth_chan, router_l1_offset(edm_local_sync_ptr_addr));
                 wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
                     edm_local_sync_ptr_addr, num_local_edms, termination_signal_ptr);
             }
@@ -3376,7 +3376,7 @@ void kernel_main() {
                 notify_subordinate_routers(
                     edm_channels_mask,
                     local_handshake_master_eth_chan,
-                    edm_status_ptr_addr,
+                    router_l1_offset(edm_status_ptr_addr),
                     tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
             }
         }
