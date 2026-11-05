@@ -176,7 +176,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           NIGHTLY: ${{ inputs.speed-of-light && 'llk-perf.yaml' || 'llk-perf-gate.yaml' }}
-        run: .github/scripts/llk-fetch-test-durations.sh llk-perf.yaml nstojictt/llk-perf-split-durations workflow_dispatch split-durations
+        run: .github/scripts/llk-fetch-test-durations.sh "$NIGHTLY" main schedule split-durations
       - name: Upload test durations for the legs
         if: steps.durations.outputs.found == 'true'
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
