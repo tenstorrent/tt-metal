@@ -789,14 +789,26 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
         if (forward_fabric_node_id.has_value()) {
             const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                target_device_fabric_node_id, forward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                *mesh_device,
+                target_device_fabric_node_id,
+                forward_fabric_node_id.value(),
+                link,
+                desc,
+                core,
+                writer_rt_args);
         }
 
         writer_rt_args.push_back(backward_fabric_node_id.has_value());
         if (backward_fabric_node_id.has_value()) {
             const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                target_device_fabric_node_id, backward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                *mesh_device,
+                target_device_fabric_node_id,
+                backward_fabric_node_id.value(),
+                link,
+                desc,
+                core,
+                writer_rt_args);
         }
 
         // Promote writer RT args to the descriptor.  None of the indices in this

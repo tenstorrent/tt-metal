@@ -317,6 +317,7 @@ def main(argv=None):
         help="false: post nothing when the gate passes; regressions and skips still post",
     )
     ap.add_argument("--threshold", default="", help="for the combined post")
+    ap.add_argument("--min-cycles", default="", help="for the combined post")
     ap.add_argument("--module-thresholds", default="", help="for the combined post")
     ap.add_argument(
         "--part-out",
@@ -361,6 +362,7 @@ def main(argv=None):
         "trigger": a.trigger,
         "note": a.note,
         "threshold": a.threshold,
+        "min_cycles": a.min_cycles,
         "module_thresholds": a.module_thresholds,
     }
     text = build_text(status, rows, ctx)

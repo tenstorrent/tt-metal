@@ -416,14 +416,21 @@ class SamplingGenerator:
         tt_out_tok: ttnn.Tensor | None = None,
         count_tokens: bool = True,
     ):
+        raw_logits = None
         if penalties_on:
-            logits = self.tt_penalties.apply(logits)
+            log_probs = self.tt_sampling.log_probs_calculator
+            if log_probs.enable_log_probs and not log_probs._use_topk_logprobs:
+                raw_logits = logits
+            logits = self.tt_penalties.apply(logits, keep_input=raw_logits is not None)
 
         tt_tokens, tt_log_probs = self.tt_sampling(
             logits,
             tt_out_tok=tt_out_tok,
             apply_grammar=grammar_on,
+            **({"log_prob_logits": raw_logits} if raw_logits is not None else {}),
         )
+        if raw_logits is not None:
+            ttnn.deallocate(logits)
 
         if penalties_on and count_tokens:
             # Fold the penalty bookkeeping into the sampled step rather than running it afterwards in

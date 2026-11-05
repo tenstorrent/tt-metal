@@ -365,7 +365,14 @@ ProgramDescriptor build_program_descriptor(
             }
             KernelHandle writer_kernel_handle = kWriterKernelIdx;
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args<ProgramDescriptor>(
-                sender_fabric_node_id, dst_nodes, {link}, desc, writer_kernel_handle, core, writer_fabric_args);
+                *mesh_device,
+                sender_fabric_node_id,
+                dst_nodes,
+                {link},
+                desc,
+                writer_kernel_handle,
+                core,
+                writer_fabric_args);
 
             KernelDescriptor::RTArgList writer_rt_args;
             for (uint32_t slice = 0; slice < kRingSize; ++slice) {
