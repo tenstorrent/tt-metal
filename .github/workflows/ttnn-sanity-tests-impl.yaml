@@ -414,18 +414,20 @@ jobs:
             #
             # The whole group cmd is wrapped in `bash -c "$TEST_GROUP_CMD"` so that a group command
             # with chained commands (e.g. `pytest ... && pytest ...`) is captured in full, not just
-            # the first simple command.
+            # the first simple command. That bash gets -eo pipefail, like the run-with-log shell
+            # around it: a plain `bash -c` drops errexit, so a failed line of a multi-line cmd
+            # would be masked by a later line that passes.
             if [ "$PERF_PROFILE_THIS" = "true" ] && [ "$PERF_READY" = "true" ]; then
               # Sanitize the group name for use in a filename: spaces and any non [A-Za-z0-9._-] -> '_'.
               SANITIZED=$(printf '%s' "$TEST_GROUP_NAME" | sed -E 's/[^A-Za-z0-9._-]+/_/g')
               PERF_OUTPUT="/work/perf_${SANITIZED}.data"
               echo "perf host profiling ENABLED for '$TEST_GROUP_NAME' -> $PERF_OUTPUT (freq ${PERF_SAMPLE_FREQUENCY}Hz)"
-              RUNNER=(perf record -g -F "${PERF_SAMPLE_FREQUENCY}" -o "${PERF_OUTPUT}" -- bash -c "$TEST_GROUP_CMD")
+              RUNNER=(perf record -g -F "${PERF_SAMPLE_FREQUENCY}" -o "${PERF_OUTPUT}" -- bash --noprofile --norc -eo pipefail -c "$TEST_GROUP_CMD")
             else
               if [ "$PERF_PROFILE_THIS" = "true" ]; then
                 echo "::warning::perf recording not available; running '$TEST_GROUP_NAME' without profiling."
               fi
-              RUNNER=(bash -c "$TEST_GROUP_CMD")
+              RUNNER=(bash --noprofile --norc -eo pipefail -c "$TEST_GROUP_CMD")
             fi
 
             # The JIT build logs each kernel compile command into this leg's
@@ -474,7 +476,9 @@ jobs:
             # HW, so that per-op limit kills slow-but-correct ops (the job timeout-minutes is the backstop;
             # PYTEST_ADDOPTS also sets -p no:timeout). Run that cmd with xdist; if a worker crashes (xdist
             # only reports "worker crashed"), re-run serially (drop -n 4 via the PYTEST_ADDOPTS override)
-            # with --lf for actionable diagnostics.
+            # with --lf for actionable diagnostics. The first run is a -eo pipefail bash, not
+            # `eval` inside `if`: errexit is off in an `if` condition, so a failed line of a
+            # multi-line cmd would be masked by a later line that passes.
             export cmd=$(printf '%s' '${{ matrix.test-group.cmd }}' | sed -E 's/[[:space:]]+--timeout[[:space:]]+[0-9]+//g')
             # PYTEST_ADDOPTS for the serial fallback re-run (drops -n 4); applied only on retry.
             export SERIAL_ADDOPTS="-p no:timeout ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || startsWith(matrix.test-group.sku, 'sim_quasar') && needs.load-test-matrix.outputs.skip-args-quasar || '' }}"
@@ -487,7 +491,7 @@ jobs:
               --label "${{ matrix.test-group.name }} (simulator)" \
               --output /work/mem_report.json \
               -- bash -c '
-                if eval "$cmd"; then
+                if bash --noprofile --norc -eo pipefail -c "$cmd"; then
                   exit 0
                 fi
                 echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."

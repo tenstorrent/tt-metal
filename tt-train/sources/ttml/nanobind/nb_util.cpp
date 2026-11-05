@@ -11,6 +11,7 @@
 #include <numeric>
 
 #include "autograd/auto_context.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "tt-metalium/bfloat16.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
@@ -133,42 +134,32 @@ ttnn::Tensor create_tensor_from_span(
     static const tt::tt_metal::MemoryConfig tensor_memory_config{};
     const tt::tt_metal::PageConfig tensor_page_config(tt::tt_metal::Layout::ROW_MAJOR);
     tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
-    tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
     auto* device = &ttml::autograd::ctx().get_device();
 
-    if constexpr (!std::is_same_v<MetalType, NumpyType>) {
-        std::vector<MetalType> converted_data;
-        converted_data.reserve(numpy_data_span.size());
-        converted_data.assign(numpy_data_span.begin(), numpy_data_span.end());
-
-        auto row_major_tensor = (mapper != nullptr)
-                                    ? ttnn::distributed::create_distributed_tensor(
-                                          ttsl::make_const_span(converted_data), tensor_shape, tensor_layout, *mapper)
-                                    : ttnn::Tensor::from_vector(converted_data, tensor_spec, device);
-
-        if (mapper != nullptr) {
-            row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
-        }
-
-        if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
-            return row_major_tensor;
-        }
-        return ttnn::tilize_with_zero_padding(row_major_tensor);
-    } else {
-        auto row_major_tensor = (mapper != nullptr)
-                                    ? ttnn::distributed::create_distributed_tensor(
-                                          ttsl::make_const_span(numpy_data_span), tensor_shape, tensor_layout, *mapper)
-                                    : ttnn::Tensor::from_span(numpy_data_span, tensor_spec, device);
-
-        if (mapper != nullptr) {
-            row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
-        }
-
-        if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
-            return row_major_tensor;
-        }
-        return ttnn::tilize_with_zero_padding(row_major_tensor);
+    std::unique_ptr<ttnn::distributed::TensorToMesh> replicate;
+    if (mapper == nullptr) {
+        replicate = ttml::core::replicate_to_mesh_mapper(*device);
+        mapper = replicate.get();
     }
+
+    // The mapper can borrow the moved converted data (replicas share one buffer); a const numpy span is copied.
+    auto distributed = [&] {
+        if constexpr (!std::is_same_v<MetalType, NumpyType>) {
+            std::vector<MetalType> converted_data(numpy_data_span.begin(), numpy_data_span.end());
+            return ttnn::distributed::distribute_tensor(
+                ttnn::Tensor::from_vector(
+                    std::move(converted_data), tt::tt_metal::TensorSpec(tensor_shape, tensor_layout)),
+                *mapper);
+        } else {
+            return ttnn::distributed::create_distributed_tensor(
+                ttsl::make_const_span(numpy_data_span), tensor_shape, tensor_layout, *mapper);
+        }
+    }();
+    auto row_major_tensor = ttnn::to_device(distributed, device, tt::tt_metal::MemoryConfig{});
+    if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
+        return row_major_tensor;
+    }
+    return ttnn::tilize_with_zero_padding(row_major_tensor);
 }
 
 [[noreturn]] void throw_exception(
@@ -519,6 +510,36 @@ ttnn::Tensor make_metal_tensor(
     // Handle custom dtype (ml_dtypes.bfloat16)
     // Already validated at the beginning of this function
     return impl.template operator()<bfloat16>(new_type.value_or(tt::tt_metal::DataType::BFLOAT16));
+}
+
+YAML::Node obj_to_yaml(nb::object obj) {
+    if (nb::isinstance<nb::dict>(obj)) {
+        YAML::Node node;
+        for (auto [key, val] : nb::cast<nb::dict>(obj)) {
+            node[nb::cast<std::string>(key)] = obj_to_yaml(nb::borrow(val));
+        }
+        return node;
+    }
+    if (nb::isinstance<nb::list>(obj)) {
+        YAML::Node node;
+        for (auto item : nb::cast<nb::list>(obj)) {
+            node.push_back(obj_to_yaml(nb::borrow(item)));
+        }
+        return node;
+    }
+    if (nb::isinstance<nb::bool_>(obj)) {
+        return YAML::Node(nb::cast<bool>(obj));
+    }
+    if (nb::isinstance<nb::int_>(obj)) {
+        return YAML::Node(nb::cast<int64_t>(obj));
+    }
+    if (nb::isinstance<nb::float_>(obj)) {
+        return YAML::Node(nb::cast<double>(obj));
+    }
+    if (nb::isinstance<nb::str>(obj)) {
+        return YAML::Node(nb::cast<std::string>(obj));
+    }
+    return YAML::Node();
 }
 
 }  // namespace ttml::nanobind::util

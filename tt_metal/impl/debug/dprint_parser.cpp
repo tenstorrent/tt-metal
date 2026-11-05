@@ -19,12 +19,12 @@
 
 #include <enchantum/enchantum.hpp>
 #include <enchantum/scoped.hpp>
-#include "device/device_impl.hpp"
 #include "impl/data_format/blockfloat_common.hpp"
 #include <tt_stl/assert.hpp>
 
 #include "fmt/base.h"
 #include "hostdevcommon/dprint_common.h"
+#include "hostdevcommon/kernel_structs.h"
 #include "hostdev/device_print_structures.h"
 #include "tt_backend_api_types.hpp"
 
