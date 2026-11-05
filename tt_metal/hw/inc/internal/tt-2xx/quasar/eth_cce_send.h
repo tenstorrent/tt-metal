@@ -69,17 +69,27 @@ inline void check_on_cce0() {
     }
 }
 
-// MEM_IERISC_FABRIC_ETH_LINK_BASE, as the host writes it.
+// The Ethernet-link slot at MEM_IERISC_FABRIC_ETH_LINK_BASE. The host (RiscFirmwareInitializer) writes it before
+// launch on every linked Quasar Ethernet core, from the cluster's link table; when that table has no peer for the
+// core, valid stays 0.
 struct EthLink {
-    uint32_t local_tile;
-    uint32_t peer_tile;
-    uint32_t reserved[2];
+    uint32_t local_tile;  // HSIO tile of this CCE
+    uint32_t peer_tile;   // HSIO tile of the link peer's CCE
+    uint32_t valid;       // kEthLinkValid once the host has written both tiles
+    uint32_t reserved;
 };
 static_assert(sizeof(EthLink) == MEM_IERISC_FABRIC_ETH_LINK_SIZE);
+constexpr uint32_t kEthLinkValid = 0x4B4E494C;  // "LINK"
 
+// The slot, once the host has written it. Without the valid word the tiles are stale and a send would land in
+// another tile's SRAM, so this trips a watcher assert, and without watcher spins until the host writes the slot.
 FORCE_INLINE const volatile EthLink& eth_link() {
-    return *reinterpret_cast<const volatile EthLink*>(
+    const volatile EthLink& link = *reinterpret_cast<const volatile EthLink*>(
         static_cast<uintptr_t>(MEM_IERISC_FABRIC_ETH_LINK_BASE + MEM_IERISC_UNCACHED_BASE));
+    ASSERT(link.valid == kEthLinkValid);
+    while (link.valid != kEthLinkValid) {
+    }
+    return link;
 }
 
 FORCE_INLINE uint32_t txq_req_vc(uint32_t q_num) {
