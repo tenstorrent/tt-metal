@@ -8,44 +8,29 @@
 #include <numeric>
 #include <string>
 
+#include <fmt/format.h>
+
 namespace tt::tt_fabric::slot_allocator {
 
-const char* to_string(ChannelKind kind) {
-    switch (kind) {
-        case ChannelKind::Worker: return "worker";
-        case ChannelKind::Forwarding: return "forwarding";
-        case ChannelKind::Receiver: return "receiver";
+std::size_t full_rate_depth(std::size_t vc, ChannelKind kind, bool is_2d) {
+    if (vc >= NUM_VCS) {
+        return 0;
     }
-    return "?";
-}
-
-std::size_t full_rate_depth(std::size_t vc, ChannelKind kind, bool one_d) {
-    switch (vc) {
-        case 0:
-            switch (kind) {
-                case ChannelKind::Worker: return one_d ? vc0_worker_full_rate_depth_1d : vc0_worker_full_rate_depth_2d;
-                case ChannelKind::Forwarding:
-                    return one_d ? vc0_forwarding_full_rate_depth_1d : vc0_forwarding_full_rate_depth_2d;
-                case ChannelKind::Receiver:
-                    return one_d ? vc0_receiver_full_rate_depth_1d : vc0_receiver_full_rate_depth_2d;
-            }
-            break;
-        case 1:
-            // VC1's channels all forward; a VC1 worker channel, if one were built, is treated as forwarding.
-            return kind == ChannelKind::Receiver ? vc1_receiver_full_rate_depth_2d : vc1_forwarding_full_rate_depth_2d;
-        case 2:
-            // VC2's sender is its worker; a VC2 forwarding channel, if one were built, is treated as its worker.
-            return kind == ChannelKind::Receiver ? vc2_receiver_full_rate_depth_2d : vc2_worker_full_rate_depth_2d;
-        default: break;
+    // VC1 and VC2 are built on 2D fabrics only.
+    const FullRateDepths& depths = (is_2d || vc != 0) ? full_rate_depths_2d[vc] : vc0_full_rate_depths_1d;
+    switch (kind) {
+        case ChannelKind::Worker: return depths.worker;
+        case ChannelKind::Forwarding: return depths.forwarding;
+        case ChannelKind::Receiver: return depths.receiver;
     }
     return 0;
 }
 
-LeftoverOrder default_leftover_order(bool one_d) {
-    if (one_d) {
-        return {{{0, ChannelKind::Receiver}}, {{0, ChannelKind::Worker}, {0, ChannelKind::Forwarding}}};
+LeftoverOrder default_leftover_order(bool is_2d) {
+    if (is_2d) {
+        return {{{0, ChannelKind::Receiver}}, {{0, ChannelKind::Forwarding}}, {{0, ChannelKind::Worker}}};
     }
-    return {{{0, ChannelKind::Receiver}}, {{0, ChannelKind::Forwarding}}, {{0, ChannelKind::Worker}}};
+    return {{{0, ChannelKind::Receiver}}, {{0, ChannelKind::Worker}, {0, ChannelKind::Forwarding}}};
 }
 
 std::size_t Allocation::slots(std::size_t vc, ChannelKind kind, std::size_t index) const {
@@ -58,12 +43,6 @@ std::size_t Allocation::slots(std::size_t vc, ChannelKind kind, std::size_t inde
 }
 
 namespace {
-
-// a/b with one decimal, for the reasons.
-std::string ratio_text(std::size_t num, std::size_t den) {
-    const std::size_t tenths = (num * 10 + den / 2) / den;
-    return std::to_string(tenths / 10) + "." + std::to_string(tenths % 10);
-}
 
 // The power of 2 nearest to num/den (ties up), at least min_slots and at most max_slots.
 std::size_t nearest_power_of_2(std::size_t num, std::size_t den, const Limits& limits) {
@@ -96,23 +75,26 @@ Allocation allocate_slots(const RouterShape& shape, const LeftoverOrder& leftove
     for (std::size_t vc = 0; vc < NUM_VCS; ++vc) {
         const auto& v = shape.vcs[vc];
         for (std::size_t i = 0; i < v.receivers; ++i) {
-            rx.push_back({vc, ChannelKind::Receiver, i, limits.min_slots, 0, "minimum"});
+            rx.push_back({vc, ChannelKind::Receiver, i, limits.min_slots, 0});
         }
         for (std::size_t i = 0; i < v.workers; ++i) {
-            tx.push_back({vc, ChannelKind::Worker, i, limits.min_slots, 0, "minimum"});
+            tx.push_back({vc, ChannelKind::Worker, i, limits.min_slots, 0});
         }
         for (std::size_t i = 0; i < v.forwarding; ++i) {
-            tx.push_back({vc, ChannelKind::Forwarding, i, limits.min_slots, 0, "minimum"});
+            tx.push_back({vc, ChannelKind::Forwarding, i, limits.min_slots, 0});
         }
     }
     const std::size_t num_channels = rx.size() + tx.size();
     if (num_channels * limits.min_slots > n) {
-        a.error = std::to_string(num_channels) + " channels at " + std::to_string(limits.min_slots) +
-                  " slots each do not fit in " + std::to_string(n) + " slots of " + std::to_string(shape.slot_bytes) +
-                  " B";
+        a.error = fmt::format(
+            "{} channels at {} slots each do not fit in {} slots of {} B",
+            num_channels,
+            limits.min_slots,
+            n,
+            shape.slot_bytes);
         return a;
     }
-    const auto depth = [&](const ChannelSlots& c) { return full_rate_depth(c.vc, c.kind, shape.one_d); };
+    const auto depth = [&](const ChannelSlots& c) { return full_rate_depth(c.vc, c.kind, shape.is_2d); };
     std::size_t all_depths = 0;
     for (const auto& c : rx) {
         all_depths += depth(c);
@@ -122,22 +104,15 @@ Allocation allocate_slots(const RouterShape& shape, const LeftoverOrder& leftove
         sender_depths += depth(c);
     }
     all_depths += sender_depths;
+    a.all_depths = all_depths;
+    a.sender_depths = sender_depths;
 
     // Stage 1: receivers at f = min(1, N / every channel's depth), nearest power of 2.
     const bool squeezed = n < all_depths;
-    a.notes.push_back(
-        squeezed ? "stage 1: " + std::to_string(n) + " slots for " + std::to_string(all_depths) +
-                       " of full-rate depths, f = " + ratio_text(n * 100, all_depths) + "%"
-                 : "stage 1: " + std::to_string(n) + " slots cover every full-rate depth (" +
-                       std::to_string(all_depths) + ")");
     for (auto& c : rx) {
-        const std::size_t num = squeezed ? depth(c) * n : depth(c);
-        const std::size_t den = squeezed ? all_depths : 1;
-        c.slots = nearest_power_of_2(num, den, limits);
+        c.slots = squeezed ? nearest_power_of_2(depth(c) * n, all_depths, limits)
+                           : nearest_power_of_2(depth(c), 1, limits);
         c.stage = 1;
-        c.reason = squeezed ? "full-rate depth " + std::to_string(depth(c)) + " x f = " + ratio_text(num, den) +
-                                  ", nearest power of 2"
-                            : "full-rate depth";
     }
     std::size_t rx_slots = 0;
     for (const auto& c : rx) {
@@ -154,7 +129,6 @@ Allocation allocate_slots(const RouterShape& shape, const LeftoverOrder& leftove
         }
         rx_slots -= it->slots / 2;
         it->slots /= 2;
-        it->reason += ", halved for the senders' minimums";
     }
 
     // Stage 2: the senders at f' = min(1, B / the senders' depths). A VC's forwarding channels form one unit with one
@@ -173,25 +147,19 @@ Allocation allocate_slots(const RouterShape& shape, const LeftoverOrder& leftove
             same->push_back(i);
         }
     }
-    const auto set_unit = [&](const std::vector<std::size_t>& u, std::size_t slots, const std::string& reason) {
+    const auto set_unit = [&](const std::vector<std::size_t>& u, std::size_t slots) {
         for (std::size_t i : u) {
             tx[i].slots = slots;
             tx[i].stage = 2;
-            tx[i].reason = reason;
         }
     };
     const std::size_t b = n - rx_slots;
+    a.sender_slots = b;
     if (b >= sender_depths) {
         for (const auto& u : units) {
-            set_unit(u, std::min(depth(tx[u.front()]), limits.max_slots), "full-rate depth");
+            set_unit(u, std::min(depth(tx[u.front()]), limits.max_slots));
         }
-        a.notes.push_back(
-            "stage 2: " + std::to_string(b) + " slots after the receivers cover the senders' full-rate depths (" +
-            std::to_string(sender_depths) + ")");
     } else {
-        a.notes.push_back(
-            "stage 2: " + std::to_string(b) + " slots after the receivers for " + std::to_string(sender_depths) +
-            " of senders' full-rate depths, f' = " + ratio_text(b * 100, sender_depths) + "%");
         // Every channel of a unit gets the floor of its share; a unit grows a slot on each of its channels at a time.
         std::vector<std::size_t> floor_of(units.size());
         std::vector<std::size_t> rem_of(units.size());
@@ -222,17 +190,14 @@ Allocation allocate_slots(const RouterShape& shape, const LeftoverOrder& leftove
             }
             return cx.index < cy.index;
         });
-        std::vector<bool> raised(units.size(), false);
         for (std::size_t u : order) {
             if (count[u] == floor_of[u] && floor_of[u] >= limits.min_slots && given + units[u].size() <= b) {
                 count[u]++;
-                raised[u] = true;
                 given += units[u].size();
             }
         }
         // Minimums raised above the share: each step takes a slot from every channel of the unit most above its
         // minimum. What a step frees beyond the overshoot is left to stage 3.
-        std::vector<std::size_t> lowered(units.size(), 0);
         while (given > b) {
             std::size_t pick = units.size();
             for (std::size_t u = 0; u < units.size(); ++u) {
@@ -246,18 +211,10 @@ Allocation allocate_slots(const RouterShape& shape, const LeftoverOrder& leftove
                 return a;
             }
             count[pick]--;
-            lowered[pick]++;
             given -= units[pick].size();
         }
         for (std::size_t u = 0; u < units.size(); ++u) {
-            const std::size_t d = depth(tx[units[u].front()]);
-            set_unit(
-                units[u],
-                count[u],
-                "full-rate depth " + std::to_string(d) + " x f' = " + ratio_text(d * b, sender_depths) +
-                    (floor_of[u] < limits.min_slots ? ", raised to the minimum" : "") +
-                    (raised[u] ? ", +1 by largest remainder" : "") +
-                    (lowered[u] ? ", -" + std::to_string(lowered[u]) + " for the minimums" : ""));
+            set_unit(units[u], count[u]);
         }
     }
 
@@ -294,7 +251,6 @@ Allocation allocate_slots(const RouterShape& shape, const LeftoverOrder& leftove
             for (auto* c : receivers) {
                 c->slots *= 2;
                 c->stage = 3;
-                c->reason += ", to the next power of 2 with leftovers";
             }
             left -= step;
         }
@@ -306,29 +262,19 @@ Allocation allocate_slots(const RouterShape& shape, const LeftoverOrder& leftove
                 }
             }
         }
-        std::vector<std::size_t> added(sender_units.size(), 0);
         for (bool grew = !sender_units.empty(); grew;) {
             grew = false;
-            for (std::size_t g = 0; g < sender_units.size(); ++g) {
-                const auto& u = *sender_units[g];
+            for (const auto* unit : sender_units) {
+                const auto& u = *unit;
                 if (u.size() > left || tx[u.front()].slots >= limits.max_slots) {
                     continue;
                 }
                 for (std::size_t i : u) {
                     tx[i].slots += 1;
+                    tx[i].stage = 3;
                 }
                 left -= u.size();
-                added[g] += 1;
                 grew = true;
-            }
-        }
-        for (std::size_t g = 0; g < sender_units.size(); ++g) {
-            if (added[g] == 0) {
-                continue;
-            }
-            for (std::size_t i : *sender_units[g]) {
-                tx[i].stage = 3;
-                tx[i].reason += ", +" + std::to_string(added[g]) + " leftover";
             }
         }
     }
@@ -339,7 +285,7 @@ Allocation allocate_slots(const RouterShape& shape, const LeftoverOrder& leftove
 }
 
 Allocation allocate_slots(const RouterShape& shape, const Limits& limits) {
-    return allocate_slots(shape, default_leftover_order(shape.one_d), limits);
+    return allocate_slots(shape, default_leftover_order(shape.is_2d), limits);
 }
 
 }  // namespace tt::tt_fabric::slot_allocator

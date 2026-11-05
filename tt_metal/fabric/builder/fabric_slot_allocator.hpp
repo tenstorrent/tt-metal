@@ -4,9 +4,9 @@
 
 // Slot allocation for a fabric router's channel buffers.
 //
-// allocate_slots() is a pure function: the router's shape in, a slot count per channel out, each with the stage and
-// the reason that set it. It reads only facts the host knows without measuring anything: the channel buffer bytes,
-// the slot size, the VCs built and their channels, and whether the router is 1D or 2D. Standard library only.
+// allocate_slots() is a pure function: the router's shape in, a slot count per channel out, each with the stage that
+// set it. It reads only facts the host knows without measuring anything: the channel buffer bytes, the slot size, the
+// VCs built and their channels, and whether the router is 2D or 1D.
 //
 // Each channel kind has a full-rate depth: the slots the channel needs to run at full rate when it alone carries its
 // link. A slot holds one packet whatever its size, so depths are in slots, not bytes. Small packets are router-bound
@@ -52,35 +52,36 @@ enum class ChannelKind : std::size_t {
     Receiver = 2,    // a receiver channel, fed by the far router's senders
 };
 
-const char* to_string(ChannelKind kind);
+// The full-rate depths of one VC's channel kinds, in slots.
+struct FullRateDepths {
+    std::size_t worker = 0;
+    std::size_t forwarding = 0;
+    std::size_t receiver = 0;
+};
 
-// Full-rate depths, in slots. 2D: mesh and torus routers; 1D: line and ring routers.
-//
-// The VC0 worker's slot frees only after the router has sent the packet and the far receiver's credit has come back
-// over Ethernet; the depth covers that loop at the router's per-packet rate. A 1D router has fewer channels to serve
-// per pass, so its per-packet time is shorter and the same loop takes more packets. The 2D depth sits in the measured
-// knee of 17-20 slots.
-inline constexpr std::size_t vc0_worker_full_rate_depth_2d = 18;
-inline constexpr std::size_t vc0_worker_full_rate_depth_1d = 24;
-// A forwarding channel's loop is the worker's one hop on: the packet arrives from the router's own receiver, is sent,
-// and the slot frees when the next router's credit returns.
-inline constexpr std::size_t vc0_forwarding_full_rate_depth_2d = 16;
-inline constexpr std::size_t vc0_forwarding_full_rate_depth_1d = 24;
-// A receiver slot frees only when its local write and its forward have left the router and its credit has been sent
-// back to the far sender.
-inline constexpr std::size_t vc0_receiver_full_rate_depth_2d = 16;
-inline constexpr std::size_t vc0_receiver_full_rate_depth_1d = 32;
-// VC1 carries inter-mesh traffic through forwarding channels only. Its slots free by the same loops as VC0's
-// forwarding and receiver channels; the depths are those loops with VC1 alone on its link.
-inline constexpr std::size_t vc1_forwarding_full_rate_depth_2d = 10;
-inline constexpr std::size_t vc1_receiver_full_rate_depth_2d = 8;
-// VC2 carries one-hop neighbor exchange to a delivery-only receiver; what it carries depends on the workload, so its
-// depths start near the minimum and are meant to grow by override.
-inline constexpr std::size_t vc2_worker_full_rate_depth_2d = 4;
-inline constexpr std::size_t vc2_receiver_full_rate_depth_2d = 4;
+// 2D routers (mesh, torus), per VC.
+//   VC0 worker: its slot frees only after the router has sent the packet and the far receiver's credit has come back
+//     over Ethernet; the depth covers that loop at the router's per-packet rate, in the measured knee of 17-20 slots.
+//   VC0 forwarding: the worker's loop one hop on: the packet arrives from the router's own receiver, is sent, and the
+//     slot frees when the next router's credit returns.
+//   VC0 receiver: a slot frees only when its local write and its forward have left the router and its credit has been
+//     sent back to the far sender.
+//   VC1 carries inter-mesh traffic through forwarding channels only (a VC1 worker, if one were built, counts as
+//     forwarding); its loops are VC0's forwarding and receiver loops with VC1 alone on its link.
+//   VC2 carries one-hop neighbor exchange to a delivery-only receiver (a VC2 forwarding channel, if one were built,
+//     counts as its worker); what it carries depends on the workload, so its depths start near the minimum and are
+//     meant to grow by override.
+inline constexpr std::array<FullRateDepths, NUM_VCS> full_rate_depths_2d = {{
+    {.worker = 18, .forwarding = 16, .receiver = 16},
+    {.worker = 10, .forwarding = 10, .receiver = 8},
+    {.worker = 4, .forwarding = 4, .receiver = 4},
+}};
+// 1D routers (line, ring) build VC0 only. A 1D router has fewer channels to serve per pass, so its per-packet time is
+// shorter and the same loops take more packets.
+inline constexpr FullRateDepths vc0_full_rate_depths_1d = {.worker = 24, .forwarding = 24, .receiver = 32};
 
-// The full-rate depth of a channel kind on a VC. VC1 and VC2 are built on 2D fabrics, so they have 2D depths only.
-std::size_t full_rate_depth(std::size_t vc, ChannelKind kind, bool one_d);
+// The full-rate depth of a channel kind on a VC (0 past the last VC).
+std::size_t full_rate_depth(std::size_t vc, ChannelKind kind, bool is_2d);
 
 // The facts the stages read about one router.
 struct RouterShape {
@@ -95,7 +96,7 @@ struct RouterShape {
     };
     std::array<Vc, NUM_VCS> vcs{};
 
-    bool one_d = false;  // a 1D router (line, ring); otherwise 2D (mesh, torus)
+    bool is_2d = true;  // a 2D router (mesh, torus); otherwise 1D (line, ring)
 };
 
 // One channel kind on one VC, as the leftover order names it.
@@ -112,7 +113,7 @@ using LeftoverOrder = std::vector<std::vector<ChannelKindOnVc>>;
 //   1D: then the VC0 worker and forwarding channel in one group, +1 on each in turn, worker first. Both have the same
 //       full-rate depth on a 1D router, so the rest is spread over them evenly.
 // On a router with no forwarding channels (one that only exchanges with its neighbor) the worker takes the rest.
-LeftoverOrder default_leftover_order(bool one_d);
+LeftoverOrder default_leftover_order(bool is_2d);
 
 struct ChannelSlots {
     std::size_t vc = 0;
@@ -120,14 +121,18 @@ struct ChannelSlots {
     std::size_t index = 0;  // among the channels of this kind on this VC
     std::size_t slots = 0;
     std::size_t stage = 0;  // the last stage that set the count
-    std::string reason;
 };
 
 struct Allocation {
     std::size_t total_slots = 0;         // N
     std::size_t unused_slots = 0;        // slots no group of the leftover order takes in whole steps
     std::vector<ChannelSlots> channels;  // receivers first, then senders, each in VC order
-    std::vector<std::string> notes;      // the squeeze factors
+    // The squeeze inputs: stage 1 covers every channel's full-rate depth (all_depths) with total_slots; stage 2 covers
+    // the senders' depths (sender_depths) with the slots the receivers leave (sender_slots). Each factor is
+    // min(1, slots / depths).
+    std::size_t all_depths = 0;
+    std::size_t sender_slots = 0;
+    std::size_t sender_depths = 0;
     std::optional<std::string> error;
 
     // The slots of the index-th channel of a kind on a VC (0 if there is none).
@@ -146,7 +151,7 @@ struct Limits {
 
 Allocation allocate_slots(const RouterShape& shape, const LeftoverOrder& leftover_order, const Limits& limits = {});
 
-// The same, with default_leftover_order(shape.one_d).
+// The same, with default_leftover_order(shape.is_2d).
 Allocation allocate_slots(const RouterShape& shape, const Limits& limits = {});
 
 }  // namespace tt::tt_fabric::slot_allocator

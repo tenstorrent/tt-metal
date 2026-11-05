@@ -759,7 +759,7 @@ void FabricStaticSizedChannelsAllocator::configure_staged_buffer_slots(
     sa::RouterShape shape;
     shape.buffer_bytes = this->available_channel_buffering_space;
     shape.slot_bytes = this->channel_buffer_size_bytes;
-    shape.one_d = !(topology == Topology::Mesh || topology == Topology::Torus);
+    shape.is_2d = is_2D_topology(topology);
     const size_t vc0_senders = num_used_sender_channels_per_vc[0];
     shape.vcs[0] = {
         std::min<size_t>(vc0_senders, 1),
@@ -775,9 +775,21 @@ void FabricStaticSizedChannelsAllocator::configure_staged_buffer_slots(
         this->channel_buffer_size_bytes,
         this->available_channel_buffering_space,
         allocation.error.value_or(""));
-    for (const auto& note : allocation.notes) {
-        log_debug(tt::LogFabric, "Fabric channel slots: {}", note);
-    }
+    // f and f' as in fabric_slot_allocator.hpp: the share of the full-rate depths the slots cover, at most 100%.
+    const auto squeeze_pct = [](size_t slots, size_t depths) {
+        return depths == 0 ? 100.0 : 100.0 * std::min<double>(1.0, static_cast<double>(slots) / depths);
+    };
+    log_debug(
+        tt::LogFabric,
+        "Fabric channel slots: {} slots of {} B for {} slots of full-rate depths (f = {:.1f}%); {} left for the "
+        "senders' {} (f' = {:.1f}%)",
+        allocation.total_slots,
+        this->channel_buffer_size_bytes,
+        allocation.all_depths,
+        squeeze_pct(allocation.total_slots, allocation.all_depths),
+        allocation.sender_slots,
+        allocation.sender_depths,
+        squeeze_pct(allocation.sender_slots, allocation.sender_depths));
 
     // VC0's forwarding channels are its sender channels other than the worker-connected one, in channel order.
     const uint32_t worker_channel = get_worker_connected_sender_channel();
@@ -801,13 +813,13 @@ void FabricStaticSizedChannelsAllocator::configure_staged_buffer_slots(
         }
         log_debug(
             tt::LogFabric,
-            "Fabric channel slots: VC{} {} channel {}: {} slots (stage {}: {})",
+            "Fabric channel slots: VC{} {} channel {}: {} slots (full-rate depth {}, set by stage {})",
             c.vc,
-            sa::to_string(c.kind),
+            enchantum::to_string(c.kind),
             channel,
             c.slots,
-            c.stage,
-            c.reason);
+            sa::full_rate_depth(c.vc, c.kind, shape.is_2d),
+            c.stage);
     }
     if (allocation.unused_slots > 0) {
         log_debug(
