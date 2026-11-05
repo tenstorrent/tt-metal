@@ -56,6 +56,7 @@ from ttnn.tools import trace_allocation_tracker
 import ttnn
 from models.demos.blackhole.qwen36.tt import prefill_plan
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
+from models.demos.blackhole.qwen36.tt.spec_block_state import WARMUP_REQ
 from models.demos.blackhole.qwen36.tt.spec_bucket import apply_row_swap, pick_bucket, plan_row_swap
 from models.demos.blackhole.qwen36.tt.spec_chain import (
     ChainDevice,
@@ -1907,8 +1908,10 @@ class MTPSpecEngine:
                 if prev is not None:
                     model._unbind_gdn_prefill_scratch(prev)
         warm_lens = [L for L in _WARM_PROMPT_LENS if L + T + 1 <= cap]
+        # QWEN36_MAMBA_SPEC: the dummy prompts write their GDN state into vLLM's null block 0
+        warm_kw = {} if self._paged_state() is None else {"gdn_req": WARMUP_REQ}
         for L in warm_lens:  # dummy prompts through the real (eager) prefill path on engine row 0
-            self._prefill_row(0, [1] * L, pt[0:1], _cap_blocks=width)
+            self._prefill_row(0, [1] * L, pt[0:1], _cap_blocks=width, **warm_kw)
             self._fresh.pop(0, None)
             self._active.discard(0)
 
@@ -2157,6 +2160,8 @@ class MTPSpecEngine:
             if spec_fused_enabled():
                 self._prepare_fused()
 
+        if self._paged_state() is not None:
+            self._paged_state().warmup()
         ttnn.synchronize_device(self.mesh)
         self.prepared = True
         logger.info(
@@ -3195,7 +3200,7 @@ class MTPSpecEngine:
             if gdn_req is None:
                 raise ValueError("QWEN36_MAMBA_SPEC prefill needs gdn_req (the request's state block index)")
             paged.forget_row(slot)
-            if final:
+            if final and gdn_req != WARMUP_REQ:
                 self._paged_row_blocks[slot] = [paged.prefill_block(g, gdn_req) for g in range(paged.G)]
         reset_draft_skip(self, slot)
         self._parked.pop(slot, None)

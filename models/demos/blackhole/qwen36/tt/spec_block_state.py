@@ -33,6 +33,7 @@ BF16_PAGE = 2048
 BF8_TILE = 1088
 HEAD_PAGES = 16  # fp32 pages of one [Dk, Dv] = [128, 128] head
 HALF_PAGES = 8  # fp32 pages of one [Dk / 2, Dv] slice: the unit of the rec views
+WARMUP_REQ = -1  # the prefill request index of the engine's warmup prompts: they write into vLLM's null block 0
 LAYOUTS = ("two_pool", "k_only")
 # S = tiles * 1088 is a multiple of 64, so block b's offset b * S modulo a 4096 B page repeats within 64 blocks: the
 # whole-page counts of blocks 0 .. 63 are those of every block
@@ -361,6 +362,8 @@ class SpecBlockBook:
         self.prefill_blocks = [torch.as_tensor(t).reshape(-1).to(torch.int64) for t in per_group]
 
     def prefill_block(self, g, u):
+        if u == WARMUP_REQ:
+            return 0
         if self.prefill_blocks is None:
             raise ValueError("QWEN36_MAMBA_SPEC prefill without state_block_ids_per_layer")
         b = int(self.prefill_blocks[g][u])
@@ -529,6 +532,39 @@ class SpecGdnBlockState:
             rm = ttnn.to_layout(dn.conv_carry, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             self._write_carry(dn, b, rm)
             ttnn.deallocate(rm)
+
+    def warmup(self):
+        """Run every eager program of the block paths once on vLLM's null block 0 (prefill write and restore on the
+        bound B=1 scratch, the conv write from the window, the whole-block copy and zeroing), so none compiles after
+        the decode traces are captured."""
+        import ttnn
+
+        from models.demos.blackhole.qwen36.tt.gdn_block_state import zero_kv_blocks
+
+        model = self.model
+        prev = model._bind_gdn_prefill_scratch()
+        try:
+            self.write_prefill(WARMUP_REQ)
+            self.restore(WARMUP_REQ)
+        finally:
+            model._unbind_gdn_prefill_scratch(prev)
+        for g in range(self.G):
+            self.materialize(0, 0, g, 0)
+        mesh = model.mesh_device
+        pt = ttnn.from_torch(
+            torch.tensor([[0]], dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        for kv in model._paged_kv_caches:  # copy_kv_blocks' programs, block 0 onto itself
+            for t in kv:
+                blk = ttnn.slice(t, (0, 0, 0, 0), [1] + [int(x) for x in list(t.shape)[1:]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.experimental.paged_fill_cache(t, blk, pt, batch_idx=0)
+                ttnn.deallocate(blk)
+        ttnn.deallocate(pt)
+        zero_kv_blocks(model, [0])
 
     # ---------------------------------------------------------------- block hooks
     def copy_blocks(self, copies):
