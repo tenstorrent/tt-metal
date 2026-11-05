@@ -549,7 +549,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::create_mesh_workload(
         for (const auto& mesh_coord : mesh_coord_range) {
             const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
             auto cached_program = create_at(operation_attributes, mesh_coord, tensor_args, tensor_return_value);
-            shared_variables[single_coord_range] = std::move(cached_program.shared_variables);
+            shared_variables[single_coord_range] = cached_program.shared_variables;
             mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
         }
     }
