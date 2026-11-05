@@ -94,6 +94,7 @@ def fully_shard(
     mesh_axis: str = "fsdp",
     reshard_after_forward: bool = True,
     replicate: Sequence[str] = (),
+    *,
     reduce_dtype: Optional[ttnn.DataType] = None,
 ) -> AbstractModuleBase
 ```
