@@ -864,16 +864,29 @@ def _check_dense_q_gather(tag, case, q, ranges, got):
     """Device s holds every other shard's dense-Q slab, exactly, in shard order. Its own slab is not copied (the
     kernels read it from q, as the local K / V), so it stays as allocated: zero."""
     rows, off = case.geo.rows, 0
+    # Status per (device s, slab of shard t): ok, 0 (never written), x (wrong data), - (own slab, left zero), . (no
+    # slab); logged as one grid before any assert so a failure shows which sends / relays are missing.
+    grid, errors = [], []
     for t, (start, n) in enumerate(dense_q_slabs(case.geo, case.S, ranges)):
         want = q[0, :, t * rows + start : t * rows + start + n]
+        line = []
         for s in range(case.S):
             have = got[s, :, off : off + n]
-            if s == t:
-                assert (have == 0).all(), f"{tag}: device {s} wrote its own slab"
+            if n == 0:
+                line.append(".")
+            elif s == t:
+                line.append("-" if (have == 0).all() else "W")
+                if not (have == 0).all():
+                    errors.append(f"device {s} wrote its own slab")
             else:
                 bad = (have != want).any(-1).nonzero()
-                assert bad.numel() == 0, f"{tag}: device {s}, slab of shard {t}: {len(bad)} rows differ, first {bad[0]}"
+                line.append("ok" if bad.numel() == 0 else ("0" if (have == 0).all() else "x"))
+                if bad.numel():
+                    errors.append(f"device {s}, slab of shard {t}: {len(bad)} rows differ, first {bad[0]}")
+        grid.append(f"slab {t} ({n} rows): " + " ".join(f"{c:>2}" for c in line))
         off += n
+    logger.info(f"[{tag}] dense-Q buffer per device 0..{case.S - 1}:\n" + "\n".join(grid))
+    assert not errors, f"{tag}: " + "; ".join(errors[:4])
 
 
 @pytest.mark.parametrize("ranges", ["start", "end", "two"])

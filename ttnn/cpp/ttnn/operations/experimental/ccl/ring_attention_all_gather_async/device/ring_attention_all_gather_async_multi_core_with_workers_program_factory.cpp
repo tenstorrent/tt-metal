@@ -1293,6 +1293,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                     *input_batch_slice_idx, num_heads, input_tensor_Ht, input_tensor_Wt);
             }
 
+            if (has_rank_slabs && i + 1 == num_inputs) {
+                // This rank's own slab: its first input row (field 5, pushed below) and its rows (field 6).
+                input_batch_base = last_input_rank_slabs[my_tensor_rank].input_row * input_tensor_Wt;
+            }
             tensor_descriptor_args.push_back(input_tensor_Wt);   // 0 == input_tensor_Wt
             tensor_descriptor_args.push_back(input_tensor_Ht);   // 1 == input_tensor_Ht
             tensor_descriptor_args.push_back(output_tensor_Wt);  // 2 == output_tensor_Wt
@@ -1308,8 +1312,6 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                                                       ? std::min(*gather_valid_Ht, input_tensor_Ht) * input_tensor_Wt
                                                       : single_batch_head_num_pages;
             if (has_rank_slabs && i + 1 == num_inputs) {
-                // This rank's own slab: the rows it reads and sends.
-                input_batch_base = last_input_rank_slabs[my_tensor_rank].input_row * input_tensor_Wt;
                 valid_pages_per_batch_head = last_input_rank_slabs[my_tensor_rank].rows * input_tensor_Wt;
             }
             tensor_descriptor_args.push_back(valid_pages_per_batch_head);  // 6 == valid_pages_per_batch_head
