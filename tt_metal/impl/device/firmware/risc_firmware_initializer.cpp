@@ -5,6 +5,7 @@
 #include "risc_firmware_initializer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <chrono>
 #include <future>
@@ -122,6 +123,30 @@ std::optional<uint32_t> dram_channel_for_translated_core(const metal_SocDescript
         }
     }
     return std::nullopt;
+}
+
+// The Ethernet-link slot (HalL1MemAddrType::ETH_LINK) of linked Quasar Ethernet core `logical_eth` on `chip`, laid out
+// as internal_::cce_eth::EthLink in tt-2xx/quasar/eth_cce_send.h. When the cluster's link table has no peer for the
+// core, the valid word stays 0 and a warning is logged. Fatal when either end has no keraunos.cores entry.
+std::array<uint32_t, 4> quasar_eth_link_slot(const Cluster& cluster, ChipId chip, const CoreCoord& logical_eth) {
+    constexpr uint32_t k_eth_link_valid = 0x4B4E494C;  // kEthLinkValid in eth_cce_send.h
+    const auto& soc = cluster.get_soc_desc(chip);
+    const uint32_t chan = soc.logical_eth_core_to_chan_map.at(logical_eth);
+    std::array<uint32_t, 4> slot{soc.get_keraunos_core_for_channel(chan).hsio, 0, 0, 0};
+    const auto& connections = cluster.get_ethernet_connections();
+    const auto chip_links = connections.find(chip);
+    if (chip_links == connections.end() || !chip_links->second.contains(chan)) {
+        log_warning(
+            tt::LogMetal,
+            "Chip {} Ethernet channel {} has no link peer in this cluster; its Ethernet-link slot is left invalid",
+            chip,
+            chan);
+        return slot;
+    }
+    const auto& [peer_chip, peer_chan] = chip_links->second.at(chan);
+    slot[1] = cluster.get_soc_desc(peer_chip).get_keraunos_core_for_channel(peer_chan).hsio;
+    slot[2] = k_eth_link_valid;
+    return slot;
 }
 
 // Whether a Mock device of `arch` builds firmware. Quasar Mock skips kernel JIT (ProgramImpl::compile), which is
@@ -1718,6 +1743,19 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             hal_.get_dev_addr(
                 llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core),
                 HalL1MemAddrType::CORE_INFO));
+        if (has_quasar_ethernet) {
+            const auto slot = quasar_eth_link_slot(cluster_, device_id, eth_core);
+            TT_FATAL(
+                hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK) == sizeof(slot),
+                "HAL Ethernet-link slot is {} B, the host writes {} B",
+                hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK),
+                sizeof(slot));
+            cluster_.write_core_immediate(
+                slot.data(),
+                sizeof(slot),
+                {static_cast<size_t>(device_id), virtual_core},
+                hal_.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK));
+        }
         initialize_firmware(
             device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         if (!hal_.get_eth_fw_is_cooperative()) {
