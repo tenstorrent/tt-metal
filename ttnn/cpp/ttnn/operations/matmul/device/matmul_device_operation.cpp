@@ -1977,6 +1977,20 @@ void validate_matmul_mcast2d_config(
                 config_name,
                 program_config.per_core_N,
                 (input_tensor_b.shard_spec().value().shape[1] / in1_tile.get_width()));
+            // The in1 sender multicasts the resident shard from a single address and its CB view
+            // holds at most two K blocks, so more than one K block hangs or multicasts stale data.
+            const auto K = operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);
+            TT_FATAL(
+                program_config.in0_block_w == K,
+                "{}: non-DRAM sharded input B requires a single K block: in0_block_w ({}) must equal K ({} tiles)",
+                config_name,
+                program_config.in0_block_w,
+                K);
+            TT_FATAL(
+                !attributes.transpose_b,
+                "{}: transpose_b is not supported with non-DRAM sharded input B; the shards are consumed in their "
+                "stored layout",
+                config_name);
         }
         if (tensor_b_memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             TT_FATAL(
@@ -2495,6 +2509,11 @@ void validate_matmul_mcast1d_config(
                 config_name,
                 input_tensor_b.shard_spec().value().shape[1] / in1_tile.get_width(),
                 program_config.per_core_N);
+            TT_FATAL(
+                !attributes.transpose_b,
+                "{}: transpose_b is not supported with L1-sharded input B; the shards are consumed in their stored "
+                "layout",
+                config_name);
             if (optional_bias.has_value()) {
                 TT_FATAL(
                     input_tensor_b.shard_spec().value().shape[1] == optional_bias.value().shard_spec().value().shape[1],
