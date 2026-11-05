@@ -124,11 +124,8 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     add_cb(cb_in_scores, scores_page_size, 2 * width_tiles, scores_data_format);
     add_cb(cb_in_bias, bias_page_size, 2 * width_tiles, bias_data_format);
 
-    // fp32 upcast targets for the raw inputs (identity copy when the input is already fp32).
-    auto cb_scores_fp32 = tt::CBIndex::c_24;
-    auto cb_bias_fp32 = tt::CBIndex::c_25;
-    add_cb(cb_scores_fp32, compute_page_size, 2 * width_tiles, compute_data_format);
-    add_cb(cb_bias_fp32, compute_page_size, 2 * width_tiles, compute_data_format);
+    // The compute kernel reads the raw inputs straight into DEST (bf16 is exact through SrcA, fp32 inputs
+    // unpack to DEST), so there are no fp32 upcast CBs.
     add_cb(cb_out_weights, tt::tile_size(weights_data_format), 2 * n_activated_expert_tiles, weights_data_format);
     add_cb(cb_out_indices, indices_page_size, 2 * n_activated_expert_tiles, indices_data_format);
 
@@ -223,8 +220,6 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     KernelDescriptor::NamedCompileTimeArgs compute_named_compile_time_args = {
         {"cb_in_scores", cb_in_scores},
         {"cb_in_bias", cb_in_bias},
-        {"cb_scores_fp32", cb_scores_fp32},
-        {"cb_bias_fp32", cb_bias_fp32},
         {"cb_sigmoid_scores", cb_sigmoid_scores},
         {"cb_biased_scores", cb_biased_scores},
         {"cb_biased_dump", cb_biased_dump},
@@ -270,31 +265,39 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
         {"log_width_tiles", ceil_log2(static_cast<uint32_t>(width_tiles))},
     };
 
-    // Default-unpacked fp32 tiles reach DEST through SrcA as TF32, i.e. with zero low 13 mantissa bits;
-    // the kernel's rank-tag stable engine keeps its tag inside those bits and is lossless only then.
-    // sort_keys_tf32 certifies it from the modes actually passed for the two CBs the rank-tag sorts
-    // read (an UnpackToDestFp32 mode there turns it off and the kernel keeps the comparator engine).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    // fp32_selection: every read on the selection path unpacks straight to the fp32 DEST instead of through the
-    // TF32 source registers (the logits / bias upcasts, the activation input, the bias add, which then runs on the
-    // SFPU, and the sort keys, which turns off the rank-tag engine), so the chosen experts are those of an fp32
-    // reference: near-tied experts (gaps ~1e-3) otherwise swap.
-    const bool precise = operation_attributes.fp32_selection;
-    if (precise) {
-        for (auto cb : {cb_in_scores, cb_in_bias, cb_scores_fp32, cb_bias_fp32, cb_sigmoid_scores, cb_biased_scores,
-                        cb_group_summed_scores, cb_gathered_sigmoid}) {
+    // Raw fp32 inputs unpack straight to DEST, so the activation and the SFPU bias add see exact values.
+    if (scores_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(cb_in_scores)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    if (bias_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(cb_in_bias)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    // Full-fp32 sort keys on every path: each CB that carries routing scores into a sort or into the group
+    // sum unpacks straight to DEST (SrcA would truncate it to TF32, 10 mantissa bits), transpose_tile then
+    // takes the 32-bit transpose_dest path, and the group sum runs on the SFPU. The rank-tag top-k compares
+    // 23 - GATE_TAG_BITS = 17 mantissa bits; exact ties still go lowest index first.
+    unpack_to_dest_mode[static_cast<uint32_t>(cb_biased_scores)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    if (operation_attributes.n_groups > 1) {
+        for (auto cb : {cb_top_experts_per_group, cb_group_summed_scores, cb_winning_group_scores}) {
             unpack_to_dest_mode[static_cast<uint32_t>(cb)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
     }
+    // fp32_selection: the weights are normalized and scaled in fp32 on the SFPU, from the gathered scores unpacked
+    // straight to DEST (the FPU path reads them through the TF32 source registers, which biases every weight low).
+    // The selection half of the option (fp32 activation input, SFPU bias add, full-fp32 sort keys) is now what
+    // every path does, above.
+    const bool precise = operation_attributes.fp32_selection;
+    if (precise) {
+        unpack_to_dest_mode[static_cast<uint32_t>(cb_gathered_sigmoid)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     compute_named_compile_time_args.emplace_back("precise", static_cast<uint32_t>(precise));
-    compute_named_compile_time_args.emplace_back("packed_epsilon", std::bit_cast<uint32_t>(operation_attributes.epsilon));
-    compute_named_compile_time_args.emplace_back("packed_route_scale", std::bit_cast<uint32_t>(operation_attributes.route_scale));
-    const auto default_unpack = [&](tt::CBIndex cb) {
-        return unpack_to_dest_mode[static_cast<uint32_t>(cb)] == tt::tt_metal::UnpackToDestMode::Default;
-    };
-    const bool sort_keys_tf32 = default_unpack(cb_biased_scores) && default_unpack(cb_group_summed_scores);
-    compute_named_compile_time_args.emplace_back("sort_keys_tf32", static_cast<uint32_t>(sort_keys_tf32));
+    compute_named_compile_time_args.emplace_back(
+        "packed_epsilon", std::bit_cast<uint32_t>(operation_attributes.epsilon));
+    compute_named_compile_time_args.emplace_back(
+        "packed_route_scale", std::bit_cast<uint32_t>(operation_attributes.route_scale));
 
     KernelDescriptor::NamedCompileTimeArgs writer_named_compile_time_args = {
         {"row_major_weights", static_cast<uint32_t>(row_major_weights)},
@@ -331,7 +334,7 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
         {"packed_one_scalar", std::bit_cast<uint32_t>(1.0f)},
         {"packed_epsilon", std::bit_cast<uint32_t>(operation_attributes.epsilon)},
         {"packed_route_scale", std::bit_cast<uint32_t>(operation_attributes.route_scale)},
-        {"precise", static_cast<uint32_t>(operation_attributes.fp32_selection)},
+        {"precise", static_cast<uint32_t>(precise)},
         {"cb_epsilon_scalar", cb_epsilon_scalar},
         {"cb_route_scale_scalar", cb_route_scale_scalar},
         {"seq_len_tiles", tt::div_up(seq_len, tile_height)},

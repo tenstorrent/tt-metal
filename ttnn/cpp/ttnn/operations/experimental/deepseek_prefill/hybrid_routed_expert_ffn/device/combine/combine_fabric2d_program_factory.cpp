@@ -181,7 +181,7 @@ void validate_allocations(
           std::pair{&tensor_args.expert_region_offsets, "expert_region_offsets"},
           std::pair{&tensor_args.expert_offsets, "expert_offsets"},
           std::pair{&output, "output"}}) {
-        TT_FATAL(tensor->buffer() != nullptr, "combine_fabric2d: {} has no device buffer", name);
+        TT_FATAL(tensor->is_allocated(), "combine_fabric2d: {} has no device buffer", name);
     }
     TT_FATAL(
         output.buffer()->aligned_page_size() == token_size_bytes(tensor_args),
@@ -234,9 +234,10 @@ struct RingSemaphores {
     tt::tt_metal::GlobalSemaphore fwd_arrived;
     tt::tt_metal::GlobalSemaphore final_arrived;
     // Arrival is per movement class now, so the single fwd_arrived above no longer serves the kernels; it is
-    // kept because the hybrid op's contract still hands one in and validates it. These are allocated here
-    // rather than taken from that contract: every chip makes them in the same order on the same grid, which
-    // is what keeps their addresses uniform across the mesh -- the only property the upstream sender needs.
+    // kept because the hybrid op's contract still hands one in and validates it. The channel counters below
+    // come from that same contract, for the same two reasons spelled out at channel_semaphore_count: the
+    // upstream chip bumps them across launches, and by the time this op is built there is no L1 left to
+    // allocate them from -- the routed expert's arena holds every free byte.
     tt::tt_metal::GlobalSemaphore credit_done;
     std::vector<tt::tt_metal::GlobalSemaphore> vc_arrived;
     std::vector<tt::tt_metal::GlobalSemaphore> vc_freed;
@@ -256,7 +257,14 @@ struct RingSemaphores {
     uint32_t num_program_semaphores() const { return ready() + 2; }
 
     uint32_t lowest_address() const {
-        return static_cast<uint32_t>(std::min(fwd_arrived.address(), final_arrived.address()));
+        uint32_t lowest =
+            static_cast<uint32_t>(std::min({fwd_arrived.address(), final_arrived.address(), credit_done.address()}));
+        for (const auto* group : {&vc_arrived, &vc_freed, &vc_outbox}) {
+            for (const auto& sem : *group) {
+                lowest = std::min(lowest, static_cast<uint32_t>(sem.address()));
+            }
+        }
+        return lowest;
     }
 };
 
@@ -292,15 +300,28 @@ const OwnRingSemaphores& ring_semaphores(ttnn::MeshDevice* mesh) {
     }
     return it->second;
 }
+// credit_done, then arrived / freed / outbox a channel. Named off the channel count rather than the ring so
+// the public entry point and the allocation below are the same arithmetic.
+constexpr uint32_t channel_semaphore_count_for_vcs(uint32_t vcs) { return 1 + 3 * vcs; }
 
 RingSemaphores allocate_ring_semaphores(
-    ttnn::MeshDevice* mesh, uint32_t num_links, uint32_t untilizers_per_group, const CombineL1& provided) {
+    ttnn::MeshDevice* mesh,
+    uint32_t num_links,
+    uint32_t untilizers_per_group,
+    uint32_t vcs,
+    const CombineL1& provided) {
     // Allocated on the full worker grid so the address is uniform across the mesh. One semaphore of each kind
     // serves every stream: each stream is drained by a different worker core, so the per-core copy at this
     // uniform L1 offset already separates them, and the sender simply targets the right core.
     TT_FATAL(
         (provided.fwd_arrived == nullptr) == (provided.final_arrived == nullptr),
         "combine_fabric2d: fwd_arrived and final_arrived must be provided together or not at all");
+    TT_FATAL(
+        provided.channels == nullptr || provided.channels->size() == channel_semaphore_count_for_vcs(vcs),
+        "combine_fabric2d: {} channel semaphores provided, {} channels need {}",
+        provided.channels != nullptr ? provided.channels->size() : std::size_t{0},
+        vcs,
+        channel_semaphore_count_for_vcs(vcs));
     const auto grid = mesh->compute_with_storage_grid_size();
     const CoreRangeSet all_workers(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
     auto make_or_take = [&](const tt::tt_metal::GlobalSemaphore* sem) {
@@ -309,19 +330,27 @@ RingSemaphores allocate_ring_semaphores(
         }
         return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
     };
-    // The op's own semaphores (credit_done and the per-VC ones): made once per mesh and kept (ring_semaphores), not
-    // per program build - a build runs under the caller's per-call L1 arena, which can hold every free byte of L1
-    // (GLM-5.3: "Out of Memory ... free: 0 B" making them), and it may run during a trace capture
-    const auto& own = ring_semaphores(mesh);
+    // The channels in the order channel_semaphore_count documents. Handed over by the caller (upstream), or else
+    // the op's own: made once per mesh and kept (ring_semaphores), not per program build - a build runs under the
+    // caller's per-call L1 arena, which can hold every free byte of L1 (GLM-5.3: "Out of Memory ... free: 0 B"
+    // making them), and it may run during a trace capture.
+    const OwnRingSemaphores* own = provided.channels == nullptr ? &ring_semaphores(mesh) : nullptr;
+    uint32_t next_channel = 0;
+    auto channel = [&] { return (*provided.channels)[next_channel++]; };
     RingSemaphores sems{
         make_or_take(provided.fwd_arrived),
         make_or_take(provided.final_arrived),
-        own.credit_done,
-        own.vc_arrived,
-        own.vc_freed,
-        own.vc_outbox,
+        own != nullptr ? own->credit_done : channel(),
+        {},
+        {},
+        {},
         untilizers_per_group,
         num_links};
+    for (uint32_t v = 0; v < vcs; v++) {
+        sems.vc_arrived.push_back(own != nullptr ? own->vc_arrived[v] : channel());
+        sems.vc_freed.push_back(own != nullptr ? own->vc_freed[v] : channel());
+        sems.vc_outbox.push_back(own != nullptr ? own->vc_outbox[v] : channel());
+    }
     TT_FATAL(
         sems.num_program_semaphores() <= kSemaphoresPerCore,
         "combine_fabric2d: {} program semaphores per combine core exceed the {} a core has ({} untilizers per "
@@ -693,8 +722,12 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 }  // namespace
 
 void prepare_ring_semaphores(ttnn::MeshDevice* mesh) { (void)ring_semaphores(mesh); }
+uint32_t channel_semaphore_count(uint32_t ring_extent) {
+    return channel_semaphore_count_for_vcs(num_vcs(ring_extent));
+}
 
 tt::tt_metal::TensorSpec forwarding_buffer_spec(const CombineFabric2dParams& args, uint32_t token_size_bytes) {
+    TT_FATAL(args.num_links >= 1 && args.num_links <= 4, "num_links must be between 1 and 4 (got {})", args.num_links);
     const uint32_t page_bytes = token_size_bytes + cmbf2d::FORWARDING_METADATA_SIZE;
     TT_FATAL(
         page_bytes % 64 == 0, "combine_fabric2d: forwarding page {} B must be 64-byte aligned for DRAM", page_bytes);
@@ -727,7 +760,12 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
     validate_allocations(operation_attributes, tensor_args, tensor_return_value);
 
     const uint32_t per_group = untilizers_per_group();
-    const auto sems = allocate_ring_semaphores(mesh_device, operation_attributes.num_links, per_group, l1_resources);
+    const auto sems = allocate_ring_semaphores(
+        mesh_device,
+        operation_attributes.num_links,
+        per_group,
+        num_vcs(ring_extent(operation_attributes)),
+        l1_resources);
     const auto l1 = compute_l1_layout(
         mesh_device,
         tensor_args,
