@@ -12,6 +12,7 @@
 #include "mesh_device.hpp"
 #include "mesh_device_impl.hpp"
 #include "mesh_event_impl.hpp"
+#include "mesh_command_queue_base.hpp"
 #include "mesh_workload_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
@@ -20,7 +21,6 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/program/slow_dispatch.hpp"
-#include <tt-metalium/tt_metal.hpp>
 #include "llrt/tt_cluster.hpp"
 #ifdef TT_METAL_USE_EMULE
 #include "emule_mesh_command_queue.hpp"
@@ -151,11 +151,14 @@ void EventSynchronize(const MeshEvent& event) {
         return;
     }
 #endif
+    // The completion-queue reader thread advances the event counter; if it failed, the counter never moves.
+    auto* mesh_cq = dynamic_cast<MeshCommandQueueBase*>(&event.device()->mesh_command_queue(event.impl().mesh_cq_id()));
+    TT_FATAL(mesh_cq != nullptr, "MeshCommandQueue is not a MeshCommandQueueBase");
     for (const auto& coord : event.impl().device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
         while (physical_device->sysmem_manager().get_last_completed_event(event.impl().mesh_cq_id()) <
                event.impl().id()) {
-            ;
+            mesh_cq->throw_if_reader_failed();
         }
     }
 }

@@ -223,13 +223,32 @@ def test_mean_multi_axis_bf16(device):
 
 
 @pytest.mark.parametrize("dim", [None, [0, 1, 2, 3]])
-def test_mean_full_tensor_bf16(device, dim):
-    torch_input = torch.full((1, 2, 32, 64), 1024.0, dtype=torch.bfloat16)
+@pytest.mark.parametrize(
+    "shape, layout",
+    [
+        ((1, 2, 32, 64), ttnn.TILE_LAYOUT),
+        ((1, 2, 32, 64), ttnn.ROW_MAJOR_LAYOUT),
+        ((1, 2, 32, 2048), ttnn.TILE_LAYOUT),
+        pytest.param(
+            (1, 2, 32, 2048),
+            ttnn.ROW_MAJOR_LAYOUT,
+            marks=pytest.mark.xfail(
+                reason=(
+                    "https://github.com/tenstorrent/tt-metal/issues/62259: "
+                    "fp32-Dest row reduce leaks column 16 into the chunk accumulator"
+                ),
+                strict=True,
+            ),
+        ),
+    ],
+)
+def test_mean_full_tensor_bf16(device, dim, shape, layout):
+    torch_input = torch.full(shape, 1024.0, dtype=torch.bfloat16)
     torch_input[0, 1] = -1024.0
     torch_input[0, 1, :, 0] = -1020.0
     torch_output = torch.mean(torch_input.double()).to(torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input, layout=layout, device=device)
     output_tensor = ttnn.mean(input_tensor, dim=dim)
 
     assert torch.equal(ttnn.to_torch(output_tensor).flatten(), torch_output.flatten())

@@ -76,7 +76,7 @@ void run_bcast_test(distributed::MeshDevice& mesh_device, BcastDim::Enum bcast_d
         bdim_to_log_string[bcast_dim],
         op_id_to_op_name[bcast_op]);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     CoreCoord core = {0, 0};
 
