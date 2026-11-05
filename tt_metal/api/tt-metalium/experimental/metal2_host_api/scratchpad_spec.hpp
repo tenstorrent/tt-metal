@@ -58,6 +58,9 @@ namespace tt::tt_metal::experimental {
 using ScratchpadSpecName = ttsl::StrongType<std::string, struct ScratchpadSpecNameTag>;
 
 struct ScratchpadSpec {
+    // invariant: For an MX data format, the effective tile contains a multiple of 32 elements.
+    // The effective tile is tile_format_metadata when set, or the default 32x32 tile otherwise.
+
     // Scratchpad identifier: used to reference this scratchpad within the ProgramSpec
     ScratchpadSpecName unique_id;
 

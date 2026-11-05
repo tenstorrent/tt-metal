@@ -111,7 +111,7 @@ constexpr const char* kPublicMetadataGetterNames[] = {
     "get_narrow_tile"};
 
 // Metadata getters are available through each token's public API namespace.
-TEST_P(BindingTokenTileSizeBlackhole, QualifiedMetadataGetters) {
+TEST_P(BindingTokenTileSizeBlackhole, CPU_QualifiedMetadataGetters) {
     const TileSizeCase size = GetParam();
     std::string source = "void kernel_main() {\n";
     for (const char* getter : kPublicMetadataGetterNames) {
@@ -127,7 +127,7 @@ TEST_P(BindingTokenTileSizeBlackhole, QualifiedMetadataGetters) {
 }
 
 // Resource tokens expose tile storage bytes independently of DFB entries and scratchpad allocation sizes.
-TEST_P(BindingTokenTileSizeBlackhole, TileStorageBytes) {
+TEST_P(BindingTokenTileSizeBlackhole, CPU_TileStorageBytes) {
     const TileSizeCase size = GetParam();
     const std::string source = fmt::format(
         R"(
@@ -143,7 +143,7 @@ void kernel_main() {{
 }
 
 // MX storage sizes use the host format and include block scales before hardware format remapping.
-TEST_P(BindingTokenTileSizeQuasar, TileStorageBytes) {
+TEST_P(BindingTokenTileSizeQuasar, CPU_TileStorageBytes) {
     const TileSizeCase size = GetParam();
     ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(size, "void kernel_main() {}", true);
     Program program = MakeProgramFromSpec(fixture_device(), spec);
@@ -197,7 +197,7 @@ protected:
 };
 
 // Resource metadata queries take precedence over conversion to a legacy CB ID.
-TEST_F(BindingTokenTileSizeMetadata, TokenMetadataWinsOverCbIdConversion) {
+TEST_F(BindingTokenTileSizeMetadata, CPU_TokenMetadataWinsOverCbIdConversion) {
     const TileSizeCase size{"Default", tt::DataFormat::Float16_b, DataType::BFLOAT16, std::nullopt, 2048};
     const std::string source = R"(
 namespace cb_compatibility {
@@ -211,7 +211,7 @@ void kernel_main() { static_assert(cb_compatibility::token_tile_size() == 2048);
 }
 
 // A kernel's cache key includes the resolved byte count emitted into its resource token.
-TEST_F(BindingTokenTileSizeMetadata, StorageBytesAffectKernelHash) {
+TEST_F(BindingTokenTileSizeMetadata, CPU_StorageBytesAffectKernelHash) {
     const TileSizeCase size{"Default", tt::DataFormat::Float16_b, DataType::BFLOAT16, std::nullopt, 2048};
     ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(size, "void kernel_main() {}");
     Program program = MakeProgramFromSpec(fixture_device(), spec);
@@ -222,7 +222,7 @@ TEST_F(BindingTokenTileSizeMetadata, StorageBytesAffectKernelHash) {
 }
 
 // A TF32 scratchpad can still expose its configured format when tile storage is unsupported.
-TEST_F(BindingTokenTileSizeMetadata, Tf32FormatQueryStillCompiles) {
+TEST_F(BindingTokenTileSizeMetadata, CPU_Tf32FormatQueryStillCompiles) {
     const TileSizeCase size{"Default", tt::DataFormat::Float16_b, DataType::BFLOAT16, std::nullopt, 2048};
     ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(
         size, "void kernel_main() { static_assert(get_dataformat(scratch::pad) == DataFormat::Tf32); }");
@@ -233,7 +233,7 @@ TEST_F(BindingTokenTileSizeMetadata, Tf32FormatQueryStillCompiles) {
 }
 
 // A TF32 tile-size query reports an unsupported format instead of missing metadata.
-TEST_F(BindingTokenTileSizeMetadata, Tf32StorageSizeQueryFails) {
+TEST_F(BindingTokenTileSizeMetadata, CPU_Tf32StorageSizeQueryFails) {
     const TileSizeCase size{"Default", tt::DataFormat::Float16_b, DataType::BFLOAT16, std::nullopt, 2048};
     ProgramSpec spec = MakeNonPublicTileSizeProgramSpec(
         size, "void kernel_main() { static_assert(get_tile_size(scratch::pad) > 0); }");
@@ -252,7 +252,7 @@ protected:
 };
 
 // A tile-size query without resource format metadata fails constant evaluation with a metadata diagnostic.
-TEST_P(BindingTokenTileSizeMissing, RequiresMetadata) {
+TEST_P(BindingTokenTileSizeMissing, CPU_RequiresMetadata) {
     const std::string source = fmt::format(
         R"(void kernel_main() {{
     {}

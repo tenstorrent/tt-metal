@@ -72,6 +72,9 @@ using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 //------------------------------------------------
 
 struct DataflowBufferSpec {
+    // invariant: For an MX data format, the effective tile contains a multiple of 32 elements.
+    // The effective tile is tile_format_metadata when set, or the default 32x32 tile otherwise.
+
     // DFB identifier: used to reference this DFB within the ProgramSpec
     DFBSpecName unique_id;
 
