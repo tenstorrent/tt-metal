@@ -16,6 +16,20 @@ def test_from_torch_none():
     assert ttnn.from_torch(None) is None
 
 
+def test_from_torch_unsupported_dtype_raises(expect_error):
+    with expect_error(RuntimeError, "is not supported by ttnn"):
+        ttnn.from_torch(torch.zeros(4, dtype=torch.float64))
+    with expect_error(RuntimeError, "is not supported by ttnn"):
+        ttnn.from_torch(torch.zeros(4, dtype=torch.uint64))
+
+
+def test_from_torch_float64_with_explicit_dtype():
+    torch_input = torch.tensor([1.5, 2.5, 3.5], dtype=torch.float64)
+    tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32)
+    torch_output = ttnn.to_torch(tensor)
+    assert torch.allclose(torch_output.to(torch.float64), torch_input)
+
+
 @pytest.mark.parametrize(
     "shape",
     [
