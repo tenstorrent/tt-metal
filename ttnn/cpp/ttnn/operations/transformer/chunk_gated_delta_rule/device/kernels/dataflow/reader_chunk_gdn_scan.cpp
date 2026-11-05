@@ -42,6 +42,7 @@
 #include "api/debug/assert.h"
 #include "api/debug/ring_buffer.h"
 #include "api/debug/waypoint.h"
+#include "chunk_gdn_fused_rt_args.hpp"
 #include "chunk_gdn_handoff.hpp"
 
 // Runtime checks of the hand-off protocol's invariants (chunk_gdn_handoff_protocol.md, "Runtime checks"): compiled
@@ -163,7 +164,8 @@ void kernel_main() {
     // the VALIDs of different chunks cannot interleave.
     // N_INIT = init-barrier increments to expect before the first credit: the distinct producers that
     // serve this head. kickoff_wait_cycles holds the initial-state read back, out of chunk 0's
-    // input-read burst. Map: BH, then (NPH, NX, num, den) as in chunk_gdn_fused_map.hpp. Common args:
+    // input-read burst. Map: BH, then (NPH, NX, num, den) as in chunk_gdn_fused_map.hpp, then the DRAM row
+    // offset of this program's head 0 in initial_state (the protocol's head indices start at 0). Common args:
     // the producers' virtual worker coords x | y << 8, two per word, producer p in word p / 2.
     const uint32_t N_INIT = get_arg_val<uint32_t>(4);
     const uint32_t kickoff_wait_cycles = get_arg_val<uint32_t>(5);
@@ -175,6 +177,7 @@ void kernel_main() {
         get_arg_val<uint32_t>(9),
         get_arg_val<uint32_t>(10)};
     auto producer_word = [](uint32_t p) { return (get_common_arg_val<uint32_t>(p / 2) >> (16 * (p % 2))) & 0xFFFFu; };
+    const uint32_t s0_row = h + get_arg_val<uint32_t>(fused_rt::kReceiverHeadOffsetArg);
 #elif defined(GDN_MCAST_RECEIVER)
     const uint32_t vb_addr = get_arg_val<uint32_t>(3);
     const uint32_t s0_addr = get_arg_val<uint32_t>(4);
@@ -455,7 +458,8 @@ void kernel_main() {
         const uint32_t pw = producer_word(owner);
         gdn_handoff::credit_inc(noc, pw & 0xFFu, pw >> 8, credit_base + 4 * slot);
         if (FAULT == gdn_handoff::kFaultDoubleCredit && c == 0) {
-            gdn_handoff::credit_inc(noc, pw & 0xFFu, pw >> 8, credit_base + 4 * slot);  // C1 on the owner (or C2 at its exit)
+            gdn_handoff::credit_inc(
+                noc, pw & 0xFFu, pw >> 8, credit_base + 4 * slot);  // C1 on the owner (or C2 at its exit)
         }
     };
 #endif
@@ -518,7 +522,7 @@ void kernel_main() {
     }
     {
         DeviceZoneScopedN("rx_s0");
-        read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
+        read_vslice(s0_acc, cb_S, s0_row * Kt * Vt_full, Kt);
     }
     for (uint32_t c = 0; c < NC; c++) {
         WAYPOINT("RXVL");

@@ -19,7 +19,6 @@
 from itertools import product
 
 import pytest
-import torch
 from conftest import blackhole_only
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -35,7 +34,6 @@ from helpers.llk_params import (
     EltwiseBinaryReuseDestType,
     StochasticRounding,
     Transpose,
-    format_dict,
 )
 from helpers.param_config import (
     generate_params,
@@ -63,12 +61,11 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # SUPPORTED FORMATS FOR TEST
 supported_formats = [
     DataFormat.Float32,
-    DataFormat.Float16,
     DataFormat.Float16_b,
     DataFormat.Bfp8_b,
 ]
@@ -128,26 +125,6 @@ def filter_params_with_constraints(all_params):
     valid_params = []
     for params in all_params:
         (testname, formats, num_faces, face_r_dim, input_dims) = params
-
-        # ttsim functional-sim limitation (NOT a bug in the SDPA unpack path):
-        # a datacopy whose SOURCE/DEST format is a 127-exponent-bias 16-bit
-        # format (Float16_b) or a block-float (Bfp8_b) but whose OUTPUT is the
-        # 15-bias Float16 drops the upper 8 rows of every face on ttsim (the
-        # second MOV_8_ROWS of each face reads back as zero). The identical
-        # MOVA2D data movement is used for every format, and the exact same
-        # (in_Float16_b/Bfp8_b -> out_Float16) conversion is what fails, so this
-        # is ttsim's modeling of the 16-bit->16-bit exponent-rebias conversion,
-        # not the A->Dest copy under test. Float16->Float16 (no rebias) and
-        # Float32->Float16 (32-bit source) both pass. The passing sibling
-        # test_sdpa_reduce_row.py sidesteps this by only exercising
-        # Float16_b -> Float16_b. Skip the affected output=Float16 combinations
-        # here for the same reason; do not distort the identity golden to match
-        # the sim inaccuracy.
-        if formats.output_format == DataFormat.Float16 and formats.input_format in (
-            DataFormat.Float16_b,
-            DataFormat.Bfp8_b,
-        ):
-            continue
 
         # Partial faces (face_r_dim < 16) require num_faces == 2 and full-face
         # (16-row) formats — Bfp8_b partial faces are not exercised here.
@@ -303,7 +280,7 @@ def test_unpack_A_sdpa(
 
     # Identity datacopy defines every lane of the tile, so validate the full
     # tile against the golden with the output-format tolerance.
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"

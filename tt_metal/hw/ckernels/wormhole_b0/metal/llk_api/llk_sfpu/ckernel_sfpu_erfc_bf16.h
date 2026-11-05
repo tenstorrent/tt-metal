@@ -21,6 +21,7 @@ struct ErfcBf16Config {
     static constexpr float kMultiplier = __builtin_bit_cast(float, 0x3fb8aa3bu);
     static constexpr uint32_t kBoundBits = 0x41140000u;
     static constexpr float kPositiveNonfiniteConstant = __builtin_bit_cast(float, 0x2c4e0000u);
+    static constexpr float kPositiveInfinityConstant = __builtin_bit_cast(float, 0x00000000u);
 
     // Typed domain actions.
     struct TtDomainActionRecord {
@@ -70,8 +71,10 @@ inline bool bf16_dest_erfc() {
     return false;
 #endif
 }
+// Each call records replay slots 0-31, overwriting what an init recorded there (matmul and reduce
+// record from replay_buf_offset = 16).
 template <int ITERATIONS = 32>
-inline void calculate_erfc_bf16() {
+__attribute__((noinline)) inline void calculate_erfc_bf16() {
     ckernel::sfpu::bf16::erfc::calculate_abs_exp_correction<ckernel::sfpu::ErfcBf16Config, ITERATIONS>();
 }
 inline void init_erfc_bf16() { ckernel::sfpu::bf16::erfc::init_abs_exp_correction<ckernel::sfpu::ErfcBf16Config>(); }

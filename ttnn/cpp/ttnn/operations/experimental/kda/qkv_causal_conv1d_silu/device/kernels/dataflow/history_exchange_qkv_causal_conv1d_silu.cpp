@@ -16,6 +16,7 @@
 #include "api/scratchpad.h"
 #include "api/semaphore.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/local_mem/address_access.h"
 #include "experimental/kernel_args.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/api_common.h"
@@ -61,7 +62,8 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
     Semaphore predecessor_ready(sem::predecessor_ready);
 
     // Scratch, from an aligned base: a slot for the chronology scalars, then three outgoing rows and three carry rows.
-    const uint32_t scratch_base = scratch.get_base_address();
+    // Raw: base/offset arithmetic below feeds raw reads/writes into scratch; no handle form yet.
+    const uint32_t scratch_base = local_mem::detail::AddressAccess::address(scratch.local_mem());
     const uint32_t scalar_slot = align_up(scratch_base, read_alignment);
     const uint32_t outgoing = scalar_slot + read_alignment;
     const uint32_t carry = outgoing + history_rows * row_bytes;

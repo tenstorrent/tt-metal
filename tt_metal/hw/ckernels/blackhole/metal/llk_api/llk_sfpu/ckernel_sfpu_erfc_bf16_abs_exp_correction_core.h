@@ -29,7 +29,7 @@ template <
     bool SplitScaleBias,
     typename Mult,
     bool PoolHeld = false>
-inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* c) {
+__attribute__((always_inline)) inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* c) {
     vFloat xlog2;
     if constexpr (SplitScaleBias) {
         // An explicit MAD(product, 1, bias) keeps the compiler from contracting the MUL into it.

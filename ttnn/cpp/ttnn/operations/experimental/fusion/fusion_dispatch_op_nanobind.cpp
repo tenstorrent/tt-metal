@@ -53,24 +53,62 @@ void fusion_dispatch_op_with_address_refresh(
 std::vector<Tensor> allocate_outputs(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<tt::tt_metal::TensorSpec>& output_specs,
-    const std::vector<std::uint32_t>& shared_output_map) {
+    const std::vector<std::uint32_t>& shared_output_map,
+    const std::vector<std::optional<Tensor>>& supplied_outputs) {
     const auto n = output_specs.size();
+    TT_FATAL(
+        supplied_outputs.empty() || supplied_outputs.size() == n,
+        "fusion dispatch requires one optional binding per output");
+    TT_FATAL(
+        shared_output_map.empty() || shared_output_map.size() == n,
+        "shared_output_map size ({}) must match output_specs size ({})",
+        shared_output_map.size(),
+        n);
+    std::vector<std::optional<Tensor>> bound(supplied_outputs.empty() ? 0 : n);
+    for (size_t i = 0; i < supplied_outputs.size(); ++i) {
+        if (!supplied_outputs[i].has_value()) {
+            continue;
+        }
+        const auto& tensor = supplied_outputs[i].value();
+        if (tensor.storage_type() == StorageType::DEVICE &&
+            (!tensor.is_allocated() || !tensor.device_storage().is_root_allocated() ||
+             !tensor.device_storage().is_uniform_storage())) {
+            continue;
+        }
+        TT_FATAL(
+            tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated() && tensor.device() == mesh_device &&
+                tensor.tensor_spec() == output_specs[i],
+            "fusion dispatch output {} must be allocated on the cached device with the cached TensorSpec",
+            i);
+        TT_FATAL(
+            tensor.tensor_spec().tile().get_transpose_within_face() ==
+                    output_specs[i].tile().get_transpose_within_face() &&
+                tensor.tensor_spec().tile().get_transpose_of_faces() == output_specs[i].tile().get_transpose_of_faces(),
+            "fusion dispatch output {} must have the cached tile transpose flags",
+            i);
+        const auto canonical = shared_output_map.empty() ? i : shared_output_map[i];
+        TT_FATAL(canonical <= i, "Invalid canonical output index");
+        TT_FATAL(
+            !bound[canonical].has_value() || bound[canonical]->buffer() == tensor.buffer(),
+            "fusion dispatch shared output {} has conflicting supplied buffers",
+            i);
+        bound[canonical] = tensor;
+    }
     std::vector<Tensor> outputs;
     outputs.reserve(n);
 
     if (shared_output_map.empty()) {
         for (size_t i = 0; i < n; ++i) {
-            outputs.push_back(ttnn::create_device_tensor(output_specs[i], mesh_device));
+            outputs.push_back(
+                !bound.empty() && bound[i].has_value() ? *bound[i]
+                                                       : ttnn::create_device_tensor(output_specs[i], mesh_device));
         }
     } else {
-        TT_FATAL(
-            shared_output_map.size() == n,
-            "shared_output_map size ({}) must match output_specs size ({})",
-            shared_output_map.size(),
-            n);
         for (size_t i = 0; i < n; ++i) {
             if (shared_output_map[i] == static_cast<std::uint32_t>(i)) {
-                outputs.push_back(ttnn::create_device_tensor(output_specs[i], mesh_device));
+                outputs.push_back(
+                    !bound.empty() && bound[i].has_value() ? *bound[i]
+                                                           : ttnn::create_device_tensor(output_specs[i], mesh_device));
             } else {
                 auto canonical = shared_output_map[i];
                 TT_FATAL(
@@ -90,7 +128,8 @@ std::vector<Tensor> allocate_outputs(
 /// and output allocation metadata. Holds no persistent tensors or Python
 /// objects.
 ///
-/// ``dispatch(inputs)`` takes deduped inputs from Python, allocates outputs and
+/// ``dispatch(inputs, output_tensors)`` takes deduped inputs from Python, binds supplied outputs,
+/// allocates missing outputs and
 /// a command-lifetime semaphore bank, patches the cached descriptor, dispatches,
 /// and returns outputs. No tensor state is retained between calls.
 class FusionDispatchState {
@@ -126,11 +165,12 @@ public:
         mesh_desc_.mesh_programs.emplace_back(ttnn::MeshCoordinateRange(mesh_device_->shape()), program_descriptor);
     }
 
-    std::vector<Tensor> dispatch(const std::vector<Tensor>& inputs) {
+    std::vector<Tensor> dispatch(
+        const std::vector<Tensor>& inputs, const std::vector<std::optional<Tensor>>& supplied_outputs) {
         // One state is shared by every container with the same cache entry.
         // Keep descriptor patching and dispatch atomic across host threads.
         std::scoped_lock lock(dispatch_mutex_);
-        auto outputs = allocate_outputs(mesh_device_, output_specs_, shared_output_map_);
+        auto outputs = allocate_outputs(mesh_device_, output_specs_, shared_output_map_, supplied_outputs);
         std::optional<FusionSemaphoreBank> semaphore_bank;
         if (semaphore_bank_config_.has_value()) {
             semaphore_bank.emplace(mesh_device_, *semaphore_bank_config_);
@@ -212,6 +252,36 @@ void bind_fusion_dispatch_op(nb::module_& mod) {
         )doc");
 
     mod.def(
+        "_descriptor_references_tensor",
+        [](const tt::tt_metal::ProgramDescriptor& desc, const Tensor& tensor) {
+            const auto* buffer = tensor.buffer();
+            const auto address = buffer->address();
+            for (const auto& kernel : desc.kernels) {
+                for (const auto& [core, args] : kernel.runtime_args) {
+                    for (const auto value : args) {
+                        if (value == address) {
+                            return true;
+                        }
+                    }
+                }
+                for (const auto value : kernel.common_runtime_args) {
+                    if (value == address) {
+                        return true;
+                    }
+                }
+            }
+            for (const auto& cb : desc.cbs) {
+                // Compare raw pointers only: old descriptor pointers may be stale.
+                if (cb.buffer == buffer || cb.tensor == &tensor.mesh_tensor()) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        nb::arg("program_descriptor"),
+        nb::arg("tensor"));
+
+    mod.def(
         "cb_has_backing",
         [](const tt::tt_metal::CBDescriptor& descriptor) { return get_cb_backing_buffer(descriptor) != nullptr; },
         nb::arg("cb_descriptor"),
@@ -262,7 +332,8 @@ void bind_fusion_dispatch_op(nb::module_& mod) {
         Caches MeshProgramDescriptor (patched in-place) and output allocation
         metadata. Holds no persistent tensors and no Python objects.
 
-        ``dispatch(inputs)`` takes deduped inputs, allocates ephemeral outputs
+        ``dispatch(inputs, output_tensors=[])`` takes deduped inputs, uses supplied outputs
+        and allocates missing outputs,
         and one command-lifetime semaphore bank, patches all addresses,
         dispatches, and returns outputs.
     )doc")
@@ -284,7 +355,11 @@ void bind_fusion_dispatch_op(nb::module_& mod) {
             nb::arg("mesh_device"),
             nb::arg("semaphore_core_ranges") = std::vector<tt::tt_metal::CoreRangeSet>{},
             nb::arg("semaphore_initial_values") = std::vector<std::uint32_t>{})
-        .def("dispatch", &FusionDispatchState::dispatch, nb::arg("inputs"));
+        .def(
+            "dispatch",
+            &FusionDispatchState::dispatch,
+            nb::arg("inputs"),
+            nb::arg("output_tensors") = std::vector<std::optional<Tensor>>{});
 }
 
 }  // namespace ttnn::operations::experimental::fusion::detail

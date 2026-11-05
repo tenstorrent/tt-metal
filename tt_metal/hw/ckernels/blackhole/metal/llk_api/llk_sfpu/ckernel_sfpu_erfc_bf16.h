@@ -22,6 +22,7 @@ struct ErfcBf16Config {
     static constexpr uint32_t kBoundBits = 0x41140000u;
     static constexpr bool kSquareDecay = true;
     static constexpr float kPositiveNonfiniteConstant = __builtin_bit_cast(float, 0x2c4f0000u);
+    static constexpr float kPositiveInfinityConstant = __builtin_bit_cast(float, 0x00000000u);
 };
 }  // namespace ckernel::sfpu
 #include "ckernel_sfpu_erfc_bf16_abs_exp_correction.h"
@@ -42,7 +43,7 @@ inline bool bf16_dest_erfc() {
 #endif
 }
 template <int ITERATIONS = 32>
-inline void calculate_erfc_bf16() {
+__attribute__((noinline)) inline void calculate_erfc_bf16() {
     ckernel::sfpu::bf16::erfc::calculate_abs_exp_correction<ckernel::sfpu::ErfcBf16Config, ITERATIONS>();
 }
 inline void init_erfc_bf16() { ckernel::sfpu::bf16::erfc::init_abs_exp_correction<ckernel::sfpu::ErfcBf16Config>(); }
