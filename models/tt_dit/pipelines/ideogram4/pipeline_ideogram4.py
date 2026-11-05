@@ -200,6 +200,9 @@ MAX_TEXT_TOKENS = 2048
 # number of slice programs to MAX_TEXT_TOKENS / _TEXT_READBACK_BUCKET.
 _TEXT_READBACK_BUCKET = 256
 
+# The four 2K serving sizes, as (width, height): the resolutions a BH Galaxy pipeline warms by default.
+SERVING_SIZES: tuple[tuple[int, int], ...] = ((2048, 2048), (2048, 1152), (1152, 2048), (1360, 2048))
+
 # SP shards the sequence across the ring; each per-device shard must be tile-aligned, i.e. the
 # padded length is a multiple of tile_size * sp_factor. This is exactly the shared tt_dit helper
 # get_padded_vision_seq_len(N, num_devices) (ring SDPA pads+masks any partial tail internally).
@@ -222,10 +225,57 @@ def _resolve_weights_dir(weights: str) -> str:
 _PRESETS: dict[tuple[int, ...], dict] = {
     # BH loudbox 2x4 (mesh-shape convention shared with the other BH pipelines): SP4 (axis 1) x
     # TP2 (axis 0). SP takes the size-4 axis since Ideogram is SP-heavy (full-mesh sequential CFG).
+    # No default resolutions: call warmup(sizes) or run untraced.
     (2, 4): {"tp": (2, 0), "sp": (4, 1), "num_links": 2, "topology": ttnn.Topology.Linear},
-    # BH Galaxy 4x8, 2D torus Ring: TP4 (axis 0) x SP8 (axis 1).
-    (4, 8): {"tp": (4, 0), "sp": (8, 1), "num_links": 2, "topology": ttnn.Topology.Ring},
+    # BH Galaxy 4x8, 2D torus Ring: TP4 (axis 0) x SP8 (axis 1). The pipeline warms the four 2K
+    # serving sizes at load. Their four kept step traces allocate 10.9 MB in each of the 8 DRAM banks
+    # (87 MB), which filled 87% of a 100 MB region (12.5 MB per bank; jobs 179862, 180015).
+    # trace_region_size is what the mesh must be opened with for them: 128 MB (16 MB per bank, 68% used).
+    (4, 8): {
+        "tp": (4, 0),
+        "sp": (8, 1),
+        "num_links": 2,
+        "topology": ttnn.Topology.Ring,
+        "resolutions": SERVING_SIZES,
+        "trace_region_size": 128_000_000,
+    },
 }
+
+
+def _preset(mesh_shape) -> dict:
+    preset = _PRESETS.get(tuple(mesh_shape))
+    if preset is None:
+        raise ValueError(f"no Ideogram4 parallelism preset for mesh shape {tuple(mesh_shape)}; known: {list(_PRESETS)}")
+    return preset
+
+
+def required_trace_region_size(mesh_shape) -> int:
+    """The ``trace_region_size`` (bytes) to open a mesh of this shape with, so that the step traces of
+    its default resolutions fit; 0 when it has none."""
+    return _preset(mesh_shape).get("trace_region_size", 0)
+
+
+def _check_trace_region(mesh_device: ttnn.MeshDevice, mesh_shape, sizes: Sequence[tuple[int, int]]) -> None:
+    """Raise before any device work if warming ``sizes`` would overflow the mesh's trace region.
+
+    Only the mesh's default resolutions have a measured requirement, so the check applies when
+    ``sizes`` includes one of them; other sizes are left to ttnn's own check at capture. A trace
+    region of 0 (ttnn's dynamic trace allocation in DRAM) is not checked.
+    """
+    defaults = _preset(mesh_shape).get("resolutions", ())
+    if not any(tuple(size) in defaults for size in sizes):
+        return
+    need = required_trace_region_size(mesh_shape)
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.TRACE)
+    # Each bank reserves trace_region_size / num_banks, rounded up to whole trace pages.
+    reserved = view.total_bytes_per_bank * view.num_banks
+    if 0 < reserved < need:
+        msg = (
+            f"Ideogram4: the mesh reserves {reserved / 1e6:.0f} MB of trace region, but warming {list(sizes)} "
+            f"needs {need / 1e6:.0f} MB; open the mesh with trace_region_size >= {need} "
+            f"(required_trace_region_size({tuple(mesh_shape)}))"
+        )
+        raise ValueError(msg)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -239,6 +289,7 @@ class Ideogram4PipelineConfig:
     vae_parallel_config: VAEParallelConfig
     height: int
     width: int
+    resolutions: tuple[tuple[int, int], ...]
     weights_dir: str
     qwen_repo: str
 
@@ -249,16 +300,23 @@ class Ideogram4PipelineConfig:
         mesh_shape: ttnn.MeshShape,
         topology: ttnn.Topology | None = None,
         num_links: int | None = None,
-        height: int = 512,
-        width: int = 512,
+        height: int | None = None,
+        width: int | None = None,
+        resolutions: Sequence[tuple[int, int]] | None = None,
         weights_dir: str = _DEFAULT_WEIGHTS_DIR,
         qwen_repo: str = _DEFAULT_QWEN_REPO,
     ) -> Ideogram4PipelineConfig:
-        preset = _PRESETS.get(tuple(mesh_shape))
-        if preset is None:
-            raise ValueError(
-                f"no Ideogram4 parallelism preset for mesh shape {tuple(mesh_shape)}; known: {list(_PRESETS)}"
-            )
+        """The preset for ``mesh_shape``. ``resolutions`` are the (width, height) sizes the pipeline
+        warms at load; by default the preset's (the four 2K ``SERVING_SIZES`` on 4x8, none on 2x4).
+        ``height`` and ``width`` are the size of a call that names none: by default the first
+        resolution, as in Wan, or 512x512 when there are no resolutions."""
+        preset = _preset(mesh_shape)
+        if resolutions is None:
+            resolutions = preset.get("resolutions", ())
+        if height is None and width is None and resolutions:
+            width, height = resolutions[0]
+        height = 512 if height is None else height
+        width = 512 if width is None else width
         tp, sp = preset["tp"], preset["sp"]
         return cls(
             topology=topology if topology is not None else preset["topology"],
@@ -269,6 +327,7 @@ class Ideogram4PipelineConfig:
             vae_parallel_config=VAEParallelConfig.from_tuple(tp),
             height=height,
             width=width,
+            resolutions=tuple((int(w), int(h)) for w, h in resolutions),
             weights_dir=weights_dir,
             qwen_repo=qwen_repo,
         )
@@ -310,7 +369,10 @@ class Ideogram4Pipeline(PipelineAPIMixin):
     sequentially, and CFG is blended on-device (cfg_blend) rather than across submeshes.
     """
 
-    def __init__(self, *, device: ttnn.MeshDevice, config: Ideogram4PipelineConfig) -> None:
+    def __init__(self, *, device: ttnn.MeshDevice, config: Ideogram4PipelineConfig, run_warmup: bool = True) -> None:
+        if run_warmup and config.resolutions:
+            # Before loading the weights, so a server with too small a trace region fails fast.
+            _check_trace_region(device, device.shape, config.resolutions)
         self._config = config
         dit_pc = config.dit_parallel_config
         # Single full-mesh submesh (cfg-parallel factor 1): both the conditional and
@@ -463,28 +525,45 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         del akl, vae_sd
         _gc.collect()
 
+        if run_warmup and config.resolutions:
+            self.warmup(sizes=config.resolutions)
+
     @classmethod
     def create_pipeline(
         cls,
         *,
         mesh_device: ttnn.MeshDevice,
-        height: int = 512,
-        width: int = 512,
+        height: int | None = None,
+        width: int | None = None,
         weights_dir: str = _DEFAULT_WEIGHTS_DIR,
         qwen_repo: str = _DEFAULT_QWEN_REPO,
         topology: ttnn.Topology | None = None,
         num_links: int | None = None,
+        resolutions: Sequence[tuple[int, int]] | None = None,
+        run_warmup: bool = True,
     ) -> Ideogram4Pipeline:
+        """Build the pipeline and, by default, warm it up to serve.
+
+        ``resolutions`` ((width, height) pairs; default the mesh preset's) are warmed at load with
+        ``warmup``, which compiles every program of each size and captures and keeps its step trace,
+        so no request at those sizes compiles or captures after this returns, and a request at any
+        other size raises. On a BH Galaxy (4x8) the default is the four 2K ``SERVING_SIZES``, which
+        need a mesh opened with ``trace_region_size`` >= ``required_trace_region_size(mesh_shape)``
+        (128 MB); other meshes have none. A call that names no size runs at ``height`` x ``width``,
+        by default the first resolution (512x512 without resolutions). ``run_warmup=False`` skips the warmup: then call ``warmup``
+        yourself before traced requests, or run untraced at any size.
+        """
         config = Ideogram4PipelineConfig.default(
             mesh_shape=mesh_device.shape,
             height=height,
             width=width,
+            resolutions=resolutions,
             weights_dir=weights_dir,
             qwen_repo=qwen_repo,
             topology=topology,
             num_links=num_links,
         )
-        return cls(device=mesh_device, config=config)
+        return cls(device=mesh_device, config=config, run_warmup=run_warmup)
 
     @classmethod
     def from_pretrained(
@@ -498,7 +577,8 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         **kw,
     ):
         """Back-compat factory. Prefer create_pipeline; the tp_axis/num_links/topology now come
-        from the mesh-shape preset (tp_axis is ignored, preset is authoritative)."""
+        from the mesh-shape preset (tp_axis is ignored, preset is authoritative). Like
+        create_pipeline, it warms the configured resolutions unless ``run_warmup=False``."""
         return cls.create_pipeline(
             mesh_device=mesh_device, weights_dir=weights_dir, num_links=num_links, topology=topology, **kw
         )
@@ -747,6 +827,15 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         self.decode_stage.vae_decoder.check_output_size(width, height)
 
     @property
+    def resolutions(self) -> tuple[tuple[int, int], ...]:
+        """The (width, height) sizes a traced call may ask for: the warmed ones (``warmed_sizes``).
+
+        Unlike Wan's ``resolutions`` (the configured sizes), these are the sizes actually warmed: empty
+        after ``run_warmup=False`` until ``warmup`` runs, and they grow with each ``warmup`` call.
+        """
+        return self.warmed_sizes
+
+    @property
     def warmed_sizes(self) -> tuple[tuple[int, int], ...]:
         """The (width, height) sizes ``warmup`` prepared, in warmup order."""
         return tuple(self._sizes)
@@ -773,6 +862,8 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         sizes = [(int(w), int(h)) for w, h in sizes]
         for w, h in sizes:
             self._check_size(w, h)
+        # Every warmed size's trace is re-captured, not only the new ones.
+        _check_trace_region(self.mesh_device, self.mesh_device.shape, [*self._sizes, *sizes])
 
         # No trace may be live while phase 1 allocates.
         self.release_traces()

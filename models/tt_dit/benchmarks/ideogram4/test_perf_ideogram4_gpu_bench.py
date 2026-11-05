@@ -46,15 +46,16 @@ from loguru import logger
 import ttnn
 
 from ...pipelines.events import SectionTimer
-from ...pipelines.ideogram4.pipeline_ideogram4 import Ideogram4Pipeline
+from ...pipelines.ideogram4.pipeline_ideogram4 import Ideogram4Pipeline, required_trace_region_size
 from ...utils.test import ring_params
 
 _NEEDS_WEIGHTS = pytest.mark.skipif(
     not os.environ.get("IDEOGRAM4_WEIGHTS"), reason="IDEOGRAM4_WEIGHTS not set (gated fp8 checkpoint)"
 )
 
-# Room for a step trace at each of the four 2K release sizes (66 MB together, job 172299).
-_RING_PIPE = {**ring_params, "l1_small_size": 32768, "trace_region_size": 100000000}
+# The pipeline's published trace region: room for a kept step trace at each of the four 2K serving
+# sizes, which the traced benchmarks warm (and which the pipeline checks before it loads).
+_RING_PIPE = {**ring_params, "l1_small_size": 32768, "trace_region_size": required_trace_region_size((4, 8))}
 
 SEED = 123
 WARMUP_PRESET = "V4_TURBO_12"  # presets differ only outside the transformers; any one warms the program cache
@@ -151,7 +152,7 @@ def test_gpu_bench_match(*, mesh_device) -> None:
     mode = "traced" if traced else "untraced"
 
     start = time.perf_counter()
-    pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, height=size, width=size)
+    pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, height=size, width=size, run_warmup=False)
     load_s = time.perf_counter() - start
     if traced:
         pipe.warmup(sizes=[(size, size)])

@@ -54,7 +54,7 @@ _PERF_TARGETS = {
 )
 @pytest.mark.parametrize(("height", "width", "preset"), [(512, 512, "V4_TURBO_12")], ids=["512px_turbo12"])
 def test_latency(*, mesh_device, is_ci_env, height, width, preset) -> None:
-    pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, height=height, width=width)
+    pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, height=height, width=width, run_warmup=False)
 
     pipe.warmup(sizes=[(width, height)])  # compiles everything and captures the step trace
     profiler = BenchmarkProfiler()

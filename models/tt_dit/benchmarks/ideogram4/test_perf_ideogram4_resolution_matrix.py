@@ -100,7 +100,9 @@ def test_resolution_matrix(*, mesh_device) -> None:
     text = caption_path.read_text(encoding="utf-8")
 
     t0 = time.perf_counter()
-    pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, height=sizes[0][3], width=sizes[0][2])
+    pipe = Ideogram4Pipeline.create_pipeline(
+        mesh_device=mesh_device, height=sizes[0][3], width=sizes[0][2], run_warmup=False
+    )
     load_s = time.perf_counter() - t0
     if traced:
         pipe.warmup(sizes=[(w, h) for _, _, w, h in sizes])
