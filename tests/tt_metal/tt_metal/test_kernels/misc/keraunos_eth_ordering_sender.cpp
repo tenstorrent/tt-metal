@@ -25,6 +25,13 @@ namespace cce_eth = internal_::cce_eth;
 
 namespace {
 
+// Polls the ack word until it reads @p want, at most @p polls times. False on a timeout.
+bool wait_ack(const volatile uint32_t* ack, uint32_t want, uint32_t polls) {
+    for (uint32_t p = 0; *ack != want && p < polls; p++) {
+    }
+    return *ack == want;
+}
+
 void send_credit(uint32_t q, uint32_t credit_addr, uint32_t value) {
 #if defined(KERAUNOS_CREDIT_SEND_DWORD)
     while (internal_::eth_txq_is_busy(q)) {
@@ -57,11 +64,7 @@ void kernel_main() {
     const uint32_t payload_words = payload_bytes / sizeof(uint32_t);
 
     for (uint32_t i = 1; i <= iterations; i++) {
-        uint32_t p = 0;
-        while (*ack != i - 1 && p < polls) {
-            p++;
-        }
-        if (*ack != i - 1) {
+        if (!wait_ack(ack, i - 1, polls)) {
             result->ack_timeout_iteration = i;
             result->status = kStatusTimeout;
             return;
@@ -79,11 +82,7 @@ void kernel_main() {
         result->iterations_sent = i;
     }
 
-    uint32_t p = 0;
-    while (*ack != iterations && p < polls) {
-        p++;
-    }
-    if (*ack != iterations) {
+    if (!wait_ack(ack, iterations, polls)) {
         result->ack_timeout_iteration = iterations + 1;
         result->status = kStatusTimeout;
         return;
