@@ -648,10 +648,31 @@ inline void read_last_zone()
 #define MEASURE_PERF_COUNTERS(zone_name)
 #endif
 
+namespace llk_perf
+{
+constexpr bool zone_is_tile_loop(const char* name)
+{
+    return __builtin_strcmp(name, "TILE_LOOP") == 0;
+}
+
+// Wormhole: trisc.cpp turns the init prefetch on as trisck.cc does; the loop starts without it, as after a kernel's first wait.
+template <bool tile_loop>
+__attribute__((always_inline)) inline void init_prefetch_end()
+{
+#if defined(ARCH_WORMHOLE)
+    if constexpr (tile_loop)
+    {
+        ckernel::icache_prefetch_init_end();
+    }
+#endif
+}
+} // namespace llk_perf
+
 // One measured scope: the zone's timing and, counters on, its counter window. Without the profiler there is no zone.
 #if defined(LLK_PROFILER)
-#define START_PERF_MEASURE(zone_name) \
-    MEASURE_PERF_COUNTERS(zone_name)  \
+#define START_PERF_MEASURE(zone_name)                                         \
+    llk_perf::init_prefetch_end<llk_perf::zone_is_tile_loop(zone_name)>();    \
+    MEASURE_PERF_COUNTERS(zone_name)                                          \
     ZONE_SCOPED(zone_name)
 #else
 #define START_PERF_MEASURE(zone_name) MEASURE_PERF_COUNTERS(zone_name)
