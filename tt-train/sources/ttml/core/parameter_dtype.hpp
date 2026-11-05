@@ -17,13 +17,11 @@ namespace ttml::core {
 // parameters and non-float tensors keep their dtype. With FLOAT32, fused AdamW keeps the fp32 master weights in the
 // parameters themselves, and forward and backward run on their bf16 view.
 //
-// Call it after the model is built and before the optimizer is created, so the optimizer state follows the new dtype.
-// Loading has to fit around it:
-// - Load a checkpoint after it. Checkpoint loading uses assign(), which casts into the dtype a tensor is stored in, so
-//   an fp32 checkpoint loaded while the parameters are still bf16 is rounded to bf16, and converting afterwards only
-//   widens the rounded values.
-// - Run loaders that install tensors with set_value(), such as the C++ safetensors loaders, before it. Run after it,
-//   they put bf16 tensors back.
+// Call it after the model is built and before any values are loaded and the optimizer is created, so the loaded values
+// and the optimizer state follow the new dtype. Checkpoint loading and the C++ safetensors loaders install values with
+// assign() (serialization::assign_from_floats() for the latter), which keeps the dtype a tensor is stored in: loaded
+// after the conversion, an fp32 source keeps its bits in fp32 parameters; loaded before it, it is rounded to bf16, and
+// converting afterwards only widens the rounded values.
 void store_trainable_parameters_as(const serialization::NamedParameters& parameters, ttnn::DataType dtype);
 
 // Checks training_config.precision without applying it: the block must be a map of known keys (or null), and each

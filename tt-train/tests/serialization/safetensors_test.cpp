@@ -4,14 +4,25 @@
 
 #include "serialization/safetensors.hpp"
 
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <random>
 #include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+#include "autograd/auto_context.hpp"
+#include "core/parameter_dtype.hpp"
+#include "core/tt_tensor_utils.hpp"
+#include "models/gpt2.hpp"
+#include "models/llama.hpp"
+#include "serialization/serialization.hpp"
 
 std::string get_test_data_dir() {
     const char* env_var = std::getenv("TEST_LOCAL_DATA_DIR");
@@ -130,4 +141,217 @@ TEST(SafeTensorsTest, F16DecodeSubnormals) {
     for (size_t i = 0; i < expected.size(); ++i) {
         EXPECT_EQ(out[i], expected[i]);
     }
+}
+
+// The C++ safetensors loaders install each value in the dtype its parameter is stored in: fp32 parameters, converted
+// before the load as precision.master_dtype: float32 does, get the file's fp32 values exactly; bf16 parameters get the
+// same bits the loaders installed before they kept the stored dtype (the host rounding of core::from_vector()).
+class SafetensorsLoaderTest : public ::testing::Test {
+public:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+namespace {
+
+struct FileTensor {
+    std::string name;
+    std::vector<int64_t> shape;
+    std::vector<float> values;
+};
+
+// Writes `tensors` as an F32 safetensors file named model.safetensors in a fresh directory and returns the directory.
+std::filesystem::path write_f32_safetensors(const std::string& dir_name, const std::vector<FileTensor>& tensors) {
+    const auto dir = std::filesystem::temp_directory_path() / dir_name;
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    std::string header = "{";
+    uint64_t offset = 0;
+    for (const auto& tensor : tensors) {
+        const uint64_t size = tensor.values.size() * sizeof(float);
+        std::string shape;
+        for (const auto dim : tensor.shape) {
+            shape += fmt::format("{}{}", shape.empty() ? "" : ",", dim);
+        }
+        header += fmt::format(
+            R"({}"{}":{{"dtype":"F32","shape":[{}],"data_offsets":[{},{}]}})",
+            header.size() > 1 ? "," : "",
+            tensor.name,
+            shape,
+            offset,
+            offset + size);
+        offset += size;
+    }
+    header += "}";
+    header.resize((header.size() + 7U) / 8U * 8U, ' ');
+    std::ofstream out(dir / "model.safetensors", std::ios::binary);
+    const uint64_t header_size = header.size();
+    for (int byte = 0; byte < 8; ++byte) {
+        out.put(static_cast<char>((header_size >> (8 * byte)) & 0xFFU));
+    }
+    out.write(header.data(), static_cast<std::streamsize>(header.size()));
+    for (const auto& tensor : tensors) {
+        out.write(
+            reinterpret_cast<const char*>(tensor.values.data()),
+            static_cast<std::streamsize>(tensor.values.size() * sizeof(float)));
+    }
+    return dir;
+}
+
+// Values in [-1, 1) with more fraction bits than bf16 keeps.
+std::vector<float> random_values(size_t size, uint32_t seed) {
+    std::mt19937 gen(seed);
+    std::uniform_real_distribution<float> dist(-1.0F, 1.0F);
+    std::vector<float> values(size);
+    for (auto& value : values) {
+        value = dist(gen);
+    }
+    return values;
+}
+
+std::vector<float> transposed(const std::vector<float>& values, size_t rows, size_t cols) {
+    std::vector<float> out(values.size());
+    for (size_t row = 0; row < rows; ++row) {
+        for (size_t col = 0; col < cols; ++col) {
+            out[col * rows + row] = values[row * cols + col];
+        }
+    }
+    return out;
+}
+
+// Checks that `name` holds `expected` in `dtype`: exactly for fp32, as core::from_vector() rounds it for bf16.
+void expect_loaded(
+    const ttml::serialization::NamedParameters& parameters,
+    const std::string& name,
+    const std::vector<float>& expected,
+    ttnn::DataType dtype) {
+    SCOPED_TRACE(name);
+    const auto& stored = parameters.at(name)->get_value(ttml::autograd::PreferredPrecision::NATIVE);
+    ASSERT_EQ(stored.dtype(), dtype);
+    const auto loaded = ttml::core::to_vector<float>(stored);
+    if (dtype == ttnn::DataType::FLOAT32) {
+        EXPECT_EQ(loaded, expected);
+        // The file's values aren't bf16 values, so a load through bf16 would have changed them.
+        const auto through_bf16 =
+            ttml::core::to_vector<float>(ttml::core::from_vector(expected, stored.logical_shape(), stored.device()));
+        EXPECT_NE(loaded, through_bf16);
+    } else {
+        EXPECT_EQ(
+            loaded,
+            ttml::core::to_vector<float>(ttml::core::from_vector(expected, stored.logical_shape(), stored.device())));
+    }
+}
+
+ttml::models::gpt2::TransformerConfig tiny_gpt2_config() {
+    ttml::models::gpt2::TransformerConfig config;
+    config.num_heads = 2;
+    config.embedding_dim = 64;
+    config.dropout_prob = 0.0F;
+    config.num_blocks = 1;
+    config.vocab_size = 64;
+    config.max_sequence_length = 32;
+    return config;
+}
+
+// GPT-2's three kinds of entries: one copied as is (ln_f), one transposed (c_attn, stored in x out in the file), and
+// the embedding, whose rows are padded with zeros to the model's vocabulary.
+void check_gpt2_load(ttnn::DataType dtype) {
+    auto model = ttml::models::gpt2::create(tiny_gpt2_config());
+    auto parameters = model->parameters();
+    if (dtype == ttnn::DataType::FLOAT32) {
+        ttml::core::store_trainable_parameters_as(parameters, ttnn::DataType::FLOAT32);
+    }
+    const auto ln_f = random_values(64, 1U);
+    const auto c_attn = random_values(64 * 192, 2U);
+    const auto wte = random_values(50 * 64, 3U);
+    const auto dir = write_f32_safetensors(
+        fmt::format("ttml_gpt2_safetensors_{}", static_cast<int>(dtype)),
+        {{"ln_f.weight", {64}, ln_f}, {"h.0.attn.c_attn.weight", {64, 192}, c_attn}, {"wte.weight", {50, 64}, wte}});
+    model->load_from_safetensors(dir);
+    std::filesystem::remove_all(dir);
+
+    auto padded_wte = wte;
+    padded_wte.resize(64 * 64, 0.0F);
+    expect_loaded(parameters, "transformer/ln_fc/gamma", ln_f, dtype);
+    expect_loaded(
+        parameters, "transformer/gpt_block_0/attention/qkv_linear/weight", transposed(c_attn, 64, 192), dtype);
+    expect_loaded(parameters, "transformer/fc/weight", padded_wte, dtype);
+}
+
+ttml::models::llama::LlamaConfig tiny_llama_config() {
+    ttml::models::llama::LlamaConfig config;
+    config.num_heads = 2;
+    config.num_groups = 1;
+    config.embedding_dim = 64;
+    config.intermediate_dim = 128;
+    config.num_blocks = 1;
+    config.vocab_size = 64;
+    config.max_sequence_length = 32;
+    return config;
+}
+
+// Llama's paths: the final norm copied as is, the (tied) embedding, the down projection, and k_proj + v_proj
+// concatenated into kv_linear. k_proj's rows within a head are reordered on load; every row of the one key head is
+// the same here, so the expected kv_linear is plain k followed by v.
+void check_llama_load(ttnn::DataType dtype) {
+    auto model = ttml::models::llama::create(tiny_llama_config());
+    auto parameters = model->parameters();
+    if (dtype == ttnn::DataType::FLOAT32) {
+        ttml::core::store_trainable_parameters_as(parameters, ttnn::DataType::FLOAT32);
+    }
+    const auto norm = random_values(64, 4U);
+    const auto embed = random_values(64 * 64, 5U);
+    const auto down = random_values(64 * 128, 6U);
+    const auto key_row = random_values(64, 7U);
+    std::vector<float> key;
+    for (int row = 0; row < 32; ++row) {
+        key.insert(key.end(), key_row.begin(), key_row.end());
+    }
+    const auto value = random_values(32 * 64, 8U);
+    const auto dir = write_f32_safetensors(
+        fmt::format("ttml_llama_safetensors_{}", static_cast<int>(dtype)),
+        {{"model.norm.weight", {64}, norm},
+         {"model.embed_tokens.weight", {64, 64}, embed},
+         {"model.layers.0.mlp.down_proj.weight", {64, 128}, down},
+         {"model.layers.0.self_attn.k_proj.weight", {32, 64}, key},
+         {"model.layers.0.self_attn.v_proj.weight", {32, 64}, value}});
+    model->load_from_safetensors(dir);
+    std::filesystem::remove_all(dir);
+
+    auto kv = key;
+    kv.insert(kv.end(), value.begin(), value.end());
+    expect_loaded(parameters, "llama/ln_fc/gamma", norm, dtype);
+    expect_loaded(parameters, "llama/fc/weight", embed, dtype);
+    expect_loaded(parameters, "llama/llama_block_0/mlp/w2/weight", down, dtype);
+    expect_loaded(parameters, "llama/llama_block_0/attention/kv_linear/weight", kv, dtype);
+}
+
+}  // namespace
+
+TEST_F(SafetensorsLoaderTest, Gpt2LoadsFp32ValuesExactlyIntoFp32Parameters) {
+    check_gpt2_load(ttnn::DataType::FLOAT32);
+}
+
+TEST_F(SafetensorsLoaderTest, Gpt2LoadsBf16ParametersAsBefore) {
+    check_gpt2_load(ttnn::DataType::BFLOAT16);
+}
+
+TEST_F(SafetensorsLoaderTest, LlamaLoadsFp32ValuesExactlyIntoFp32Parameters) {
+    check_llama_load(ttnn::DataType::FLOAT32);
+}
+
+TEST_F(SafetensorsLoaderTest, LlamaLoadsBf16ParametersAsBefore) {
+    check_llama_load(ttnn::DataType::BFLOAT16);
+}
+
+TEST_F(SafetensorsLoaderTest, AssignFromFloatsRejectsNonFloatTensors) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        std::vector<uint32_t>(32 * 32, 1U), ttnn::Shape({1, 1, 32, 32}), device));
+    EXPECT_THROW(
+        ttml::serialization::assign_from_floats(tensor, std::vector<float>(32 * 32, 0.5F)), std::invalid_argument);
 }

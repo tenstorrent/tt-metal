@@ -10,6 +10,7 @@
 #include "modules/positional_embeddings.hpp"
 #include "serialization/safetensors.hpp"
 #include "serialization/serializable.hpp"
+#include "serialization/serialization.hpp"
 
 namespace {
 
@@ -216,7 +217,10 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
         if (it == parameters.end()) {
             throw std::runtime_error(fmt::format("Parameter {} not found in the model", name));
         }
-        fmt::print(" Parameter {}, shape: {}\n", name, it->second->get_value().logical_shape());
+        fmt::print(
+            " Parameter {}, shape: {}\n",
+            name,
+            it->second->get_value(autograd::PreferredPrecision::NATIVE).logical_shape());
         return it->second;
     };
     serialization::SafetensorSerialization::TensorCallback loading_callback =
@@ -229,31 +233,30 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                 fmt::print("Original shape {}, {}", info.shape[0], info.shape[1]);
                 fmt::print(
                     "Transformed shape {}, {}\n",
-                    out_tensor1->get_value().logical_shape()[-2],
-                    out_tensor1->get_value().logical_shape()[-1]);
+                    out_tensor1->get_value(autograd::PreferredPrecision::NATIVE).logical_shape()[-2],
+                    out_tensor1->get_value(autograd::PreferredPrecision::NATIVE).logical_shape()[-1]);
                 auto padded_emb = pad_rows_flat(
-                    float_vec, info.shape[0], info.shape[1], out_tensor1->get_value().logical_shape()[-2]);
-                out_tensor1->set_value(core::from_vector(
-                    padded_emb, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                    float_vec,
+                    info.shape[0],
+                    info.shape[1],
+                    out_tensor1->get_value(autograd::PreferredPrecision::NATIVE).logical_shape()[-2]);
+                serialization::assign_from_floats(out_tensor1, padded_emb);
             }
 
             //  pos_emb -> wpe.weight
             if (info.name == "wpe.weight") {
                 auto out_tensor1 = get_parameter("transformer/pos_emb/weight");
-                out_tensor1->set_value(core::from_vector(
-                    float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                serialization::assign_from_floats(out_tensor1, float_vec);
             }
 
             //  ln_f.{weight,bias}
             if (info.name == "ln_f.weight") {
                 auto out_tensor1 = get_parameter("transformer/ln_fc/gamma");
-                out_tensor1->set_value(core::from_vector(
-                    float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                serialization::assign_from_floats(out_tensor1, float_vec);
             }
             if (info.name == "ln_f.bias") {
                 auto out_tensor1 = get_parameter("transformer/ln_fc/beta");
-                out_tensor1->set_value(core::from_vector(
-                    float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                serialization::assign_from_floats(out_tensor1, float_vec);
             }
 
             // ---- Per-block mappings ----
@@ -266,14 +269,12 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                 if (info.name == pfx + ".ln_1.weight") {
                     auto block_name = fmt::format("transformer/gpt_block_{}/ln1/gamma", i);
                     auto out_tensor1 = get_parameter(block_name);
-                    out_tensor1->set_value(core::from_vector(
-                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                    serialization::assign_from_floats(out_tensor1, float_vec);
                 }
                 if (info.name == pfx + ".ln_1.bias") {
                     auto block_name = fmt::format("transformer/gpt_block_{}/ln1/beta", i);
                     auto out_tensor1 = get_parameter(block_name);
-                    out_tensor1->set_value(core::from_vector(
-                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                    serialization::assign_from_floats(out_tensor1, float_vec);
                 }
 
                 // attention: qkv_linear <- attn.c_attn.{weight,bias}
@@ -281,14 +282,12 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                     auto block_name = fmt::format("transformer/gpt_block_{}/attention/qkv_linear/weight", i);
                     auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
                     auto out_tensor1 = get_parameter(block_name);
-                    out_tensor1->set_value(core::from_vector(
-                        transposed, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                    serialization::assign_from_floats(out_tensor1, transposed);
                 }
                 if (info.name == pfx + ".attn.c_attn.bias") {
                     auto block_name = fmt::format("transformer/gpt_block_{}/attention/qkv_linear/bias", i);
                     auto out_tensor1 = get_parameter(block_name);
-                    out_tensor1->set_value(core::from_vector(
-                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                    serialization::assign_from_floats(out_tensor1, float_vec);
                 }
 
                 // attention: out_linear <- attn.c_proj.{weight,bias}
@@ -296,56 +295,48 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                     auto block_name = fmt::format("transformer/gpt_block_{}/attention/out_linear/weight", i);
                     auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
                     auto out_tensor1 = get_parameter(block_name);
-                    out_tensor1->set_value(core::from_vector(
-                        transposed, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                    serialization::assign_from_floats(out_tensor1, transposed);
                 }
                 if (info.name == pfx + ".attn.c_proj.bias") {
                     auto block_name = fmt::format("transformer/gpt_block_{}/attention/out_linear/bias", i);
                     auto out_tensor1 = get_parameter(block_name);
-                    out_tensor1->set_value(core::from_vector(
-                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                    serialization::assign_from_floats(out_tensor1, float_vec);
                 }
 
                 // ln2
                 if (info.name == pfx + ".ln_2.weight") {
                     auto block_name = fmt::format("transformer/gpt_block_{}/ln2/gamma", i);
                     auto out_tensor1 = get_parameter(block_name);
-                    out_tensor1->set_value(core::from_vector(
-                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                    serialization::assign_from_floats(out_tensor1, float_vec);
                 }
                 if (info.name == pfx + ".ln_2.bias") {
                     auto block_name = fmt::format("transformer/gpt_block_{}/ln2/beta", i);
                     auto out_tensor1 = get_parameter(block_name);
-                    out_tensor1->set_value(core::from_vector(
-                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                    serialization::assign_from_floats(out_tensor1, float_vec);
                 }
 
                 // mlp: fc1 <- mlp.c_fc.{weight,bias}
                 if (info.name == pfx + ".mlp.c_fc.weight") {
                     auto out_tensor1 = get_parameter("transformer/gpt_block_" + std::to_string(i) + "/mlp/fc1/weight");
                     auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
-                    out_tensor1->set_value(core::from_vector(
-                        transposed, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                    serialization::assign_from_floats(out_tensor1, transposed);
                 }
                 if (info.name == pfx + ".mlp.c_fc.bias") {
                     auto block_name = fmt::format("transformer/gpt_block_{}/mlp/fc1/bias", i);
                     auto out_tensor1 = get_parameter(block_name);
-                    out_tensor1->set_value(core::from_vector(
-                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                    serialization::assign_from_floats(out_tensor1, float_vec);
                 }
 
                 // mlp: fc2 <- mlp.c_proj.{weight,bias}
                 if (info.name == pfx + ".mlp.c_proj.weight") {
                     auto out_tensor1 = get_parameter("transformer/gpt_block_" + std::to_string(i) + "/mlp/fc2/weight");
                     auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
-                    out_tensor1->set_value(core::from_vector(
-                        transposed, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                    serialization::assign_from_floats(out_tensor1, transposed);
                 }
                 if (info.name == pfx + ".mlp.c_proj.bias") {
                     auto block_name = fmt::format("transformer/gpt_block_{}/mlp/fc2/bias", i);
                     auto out_tensor1 = get_parameter(block_name);
-                    out_tensor1->set_value(core::from_vector(
-                        float_vec, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                    serialization::assign_from_floats(out_tensor1, float_vec);
                 }
             }
             return true;

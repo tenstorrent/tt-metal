@@ -72,6 +72,24 @@ void get_enum(FlatBufferFile& file, std::string_view name, T& value) {
     value = static_cast<T>(int_value);
 }
 
+void assign_from_floats(const autograd::TensorPtr& tensor, const std::vector<float>& values) {
+    const auto& stored = tensor->get_value(autograd::PreferredPrecision::NATIVE);
+    const auto& shape = stored.logical_shape();
+    auto* device = stored.device();
+    switch (stored.dtype()) {
+        case ttnn::DataType::BFLOAT16:
+            tensor->assign(core::from_vector<float, ttnn::DataType::BFLOAT16>(values, shape, device));
+            return;
+        case ttnn::DataType::FLOAT32:
+            tensor->assign(core::from_vector<float, ttnn::DataType::FLOAT32>(values, shape, device));
+            return;
+        default:
+            throw std::invalid_argument(fmt::format(
+                "assign_from_floats loads into bf16 or fp32 tensors, got one stored as {}",
+                enchantum::to_string(stored.dtype())));
+    }
+}
+
 void write_ttnn_tensor(FlatBufferFile& file, std::string_view name, const ttnn::Tensor& tensor) {
     // Store tensor in m_tensors - it will be written to file during serialize()
     // This ensures tensors are written to the correct directory

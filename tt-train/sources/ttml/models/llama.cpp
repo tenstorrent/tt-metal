@@ -6,6 +6,7 @@
 
 #include "core/tt_tensor_utils.hpp"
 #include "serialization/safetensors.hpp"
+#include "serialization/serialization.hpp"
 
 namespace {
 
@@ -384,7 +385,10 @@ void load_model_from_safetensors(
         if (it == parameters.end()) {
             throw std::runtime_error(fmt::format("Parameter {} not found in the model", name));
         }
-        fmt::print("Using parameter: {} with shape: {}\n", name, it->second->get_value().logical_shape());
+        fmt::print(
+            "Using parameter: {} with shape: {}\n",
+            name,
+            it->second->get_value(autograd::PreferredPrecision::NATIVE).logical_shape());
         used_parameters.insert(name);
         return it->second;
     };
@@ -396,7 +400,7 @@ void load_model_from_safetensors(
         auto block_name = fmt::format("llama/llama_block_{}/attention/kv_linear/weight", layer_idx);
         auto out_tensor = get_parameter(block_name);
 
-        const auto tgt = out_tensor->get_value().logical_shape();
+        const auto tgt = out_tensor->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
         const int64_t tr = tgt[-2], tc = tgt[-1];
 
         auto K = k_weights[layer_idx];
@@ -420,7 +424,7 @@ void load_model_from_safetensors(
             combined.reserve(Kx.size() + Vx.size());
             combined.insert(combined.end(), Kx.begin(), Kx.end());
             combined.insert(combined.end(), Vx.begin(), Vx.end());
-            out_tensor->set_value(core::from_vector(combined, tgt, out_tensor->get_value().device()));
+            serialization::assign_from_floats(out_tensor, combined);
             return true;
         };
 
@@ -466,35 +470,35 @@ void load_model_from_safetensors(
                     (weight_tying == WeightTyingType::Enabled) ? "llama/fc/weight" : "llama/tok_emb/weight";
                 auto out_tensor1 = get_parameter(embedding_weights_name);
 
-                auto tgt = out_tensor1->get_value().logical_shape();
+                auto tgt = out_tensor1->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
 
                 auto resized_emb = pad_and_resize_flat(float_vec, info.shape[0], info.shape[1], tgt[-2], tgt[-1]);
-                out_tensor1->set_value(core::from_vector(resized_emb, tgt, out_tensor1->get_value().device()));
+                serialization::assign_from_floats(out_tensor1, resized_emb);
 
                 return true;
             }
             if (info.name == "lm_head.weight") {
                 if (config.weight_tying == WeightTyingType::Disabled) {
                     auto out_tensor2 = get_parameter("llama/fc/weight");
-                    auto tgt2 = out_tensor2->get_value().logical_shape();
+                    auto tgt2 = out_tensor2->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
 
                     auto resized_emb2 =
                         pad_and_resize_flat(float_vec, info.shape[0], info.shape[1], tgt2[-2], tgt2[-1]);
-                    out_tensor2->set_value(core::from_vector(resized_emb2, tgt2, out_tensor2->get_value().device()));
+                    serialization::assign_from_floats(out_tensor2, resized_emb2);
                 }
                 return true;
             }
             // ---- Final LayerNorm (vector) ----
             if (info.name == "norm.weight" || info.name == "model.norm.weight") {
                 auto out = get_parameter("llama/ln_fc/gamma");
-                auto tgt = out->get_value().logical_shape();
+                auto tgt = out->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
                 const int64_t N = tgt[-1];
 
                 if (static_cast<int64_t>(float_vec.size()) != N) {
                     throw std::runtime_error(
                         fmt::format("[final LN] length mismatch: src={}, tgt={}", float_vec.size(), N));
                 }
-                out->set_value(core::from_vector(float_vec, tgt, out->get_value().device()));
+                serialization::assign_from_floats(out, float_vec);
                 return true;
             }
 
@@ -508,14 +512,14 @@ void load_model_from_safetensors(
                     info.name == layers_pfx + ".input_layernorm.weight") {
                     auto name = fmt::format("llama/llama_block_{}/attention_norm/gamma", i);
                     auto out = get_parameter(name);
-                    auto tgt = out->get_value().logical_shape();
+                    auto tgt = out->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
                     const int64_t N = tgt[-1];
 
                     if (static_cast<int64_t>(float_vec.size()) != N) {
                         throw std::runtime_error(
                             fmt::format("[attn LN] layer {} length mismatch: src={}, tgt={}", i, float_vec.size(), N));
                     }
-                    out->set_value(core::from_vector(float_vec, tgt, out->get_value().device()));
+                    serialization::assign_from_floats(out, float_vec);
                     return true;
                 }
 
@@ -524,14 +528,14 @@ void load_model_from_safetensors(
                     info.name == layers_pfx + ".post_attention_layernorm.weight") {
                     auto name = fmt::format("llama/llama_block_{}/mlp_norm/gamma", i);
                     auto out = get_parameter(name);
-                    auto tgt = out->get_value().logical_shape();
+                    auto tgt = out->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
                     const int64_t N = tgt[-1];
 
                     if (static_cast<int64_t>(float_vec.size()) != N) {
                         throw std::runtime_error(
                             fmt::format("[mlp LN] layer {} length mismatch: src={}, tgt={}", i, float_vec.size(), N));
                     }
-                    out->set_value(core::from_vector(float_vec, tgt, out->get_value().device()));
+                    serialization::assign_from_floats(out, float_vec);
                     return true;
                 }
 
@@ -540,7 +544,7 @@ void load_model_from_safetensors(
                     info.name == layers_pfx + ".self_attn.q_proj.weight") {
                     auto name = fmt::format("llama/llama_block_{}/attention/q_linear/weight", i);
                     auto out = get_parameter(name);
-                    auto tgt = out->get_value().logical_shape();
+                    auto tgt = out->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
                     const int64_t tr = tgt[-2], tc = tgt[-1];
 
                     std::vector<float> src = float_vec;
@@ -554,7 +558,7 @@ void load_model_from_safetensors(
                     auto exact = strict_copy_linear(
                         src, info.shape[0], info.shape[1], tr, tc, fmt::format("q_proj layer {}", i));
 
-                    out->set_value(core::from_vector(exact, tgt, out->get_value().device()));
+                    serialization::assign_from_floats(out, exact);
                     return true;
                 }
 
@@ -589,12 +593,12 @@ void load_model_from_safetensors(
                     info.name == layers_pfx + ".self_attn.o_proj.weight") {
                     auto name = fmt::format("llama/llama_block_{}/attention/out_linear/weight", i);
                     auto out = get_parameter(name);
-                    auto tgt = out->get_value().logical_shape();
+                    auto tgt = out->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
                     const int64_t tr = tgt[-2], tc = tgt[-1];
 
                     auto exact = strict_copy_linear(
                         float_vec, info.shape[0], info.shape[1], tr, tc, fmt::format("o_proj layer {}", i));
-                    out->set_value(core::from_vector(exact, tgt, out->get_value().device()));
+                    serialization::assign_from_floats(out, exact);
                     return true;
                 }
 
@@ -603,24 +607,24 @@ void load_model_from_safetensors(
                     info.name == layers_pfx + ".mlp.gate_proj.weight") {
                     auto name = fmt::format("llama/llama_block_{}/mlp/w1/weight", i);
                     auto out = get_parameter(name);
-                    auto tgt = out->get_value().logical_shape();
+                    auto tgt = out->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
                     const int64_t tr = tgt[-2], tc = tgt[-1];
 
                     auto exact = strict_copy_linear(
                         float_vec, info.shape[0], info.shape[1], tr, tc, fmt::format("mlp.w1 layer {}", i));
-                    out->set_value(core::from_vector(exact, tgt, out->get_value().device()));
+                    serialization::assign_from_floats(out, exact);
                     return true;
                 }
 
                 if (info.name == layer_pfx + ".mlp.up_proj.weight" || info.name == layers_pfx + ".mlp.up_proj.weight") {
                     auto name = fmt::format("llama/llama_block_{}/mlp/w3/weight", i);
                     auto out = get_parameter(name);
-                    auto tgt = out->get_value().logical_shape();
+                    auto tgt = out->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
                     const int64_t tr = tgt[-2], tc = tgt[-1];
 
                     auto exact = strict_copy_linear(
                         float_vec, info.shape[0], info.shape[1], tr, tc, fmt::format("mlp.w3 layer {}", i));
-                    out->set_value(core::from_vector(exact, tgt, out->get_value().device()));
+                    serialization::assign_from_floats(out, exact);
                     return true;
                 }
 
@@ -628,12 +632,12 @@ void load_model_from_safetensors(
                     info.name == layers_pfx + ".mlp.down_proj.weight") {
                     auto name = fmt::format("llama/llama_block_{}/mlp/w2/weight", i);
                     auto out = get_parameter(name);
-                    auto tgt = out->get_value().logical_shape();
+                    auto tgt = out->get_value(autograd::PreferredPrecision::NATIVE).logical_shape();
                     const int64_t tr = tgt[-2], tc = tgt[-1];
 
                     auto exact = strict_copy_linear(
                         float_vec, info.shape[0], info.shape[1], tr, tc, fmt::format("mlp.w2 layer {}", i));
-                    out->set_value(core::from_vector(exact, tgt, out->get_value().device()));
+                    serialization::assign_from_floats(out, exact);
                     return true;
                 }
             }
