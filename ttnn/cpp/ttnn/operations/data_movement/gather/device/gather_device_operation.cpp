@@ -97,6 +97,28 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
         "Gather only supports TILE or ROW_MAJOR layout. Current layout: {}",
         tensor_args.input_tensor.layout());
 
+    // The factory sizes its buffers with tt::tile_size and compute_output_specs gives the output the default tile, so
+    // only 32x32 tiles are addressed correctly.
+    auto validate_tile_shape = [](const Tensor& tensor, const char* name) {
+        if (tensor.layout() != Layout::TILE) {
+            return;
+        }
+        const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+        TT_FATAL(
+            tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
+            "Gather supports only {}x{} tiles, but {} has a {}x{} tile",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            name,
+            tile_shape[0],
+            tile_shape[1]);
+    };
+    validate_tile_shape(tensor_args.input_tensor, "the input tensor");
+    validate_tile_shape(tensor_args.input_index_tensor, "the index tensor");
+    if (tensor_args.output_tensor.has_value()) {
+        validate_tile_shape(*tensor_args.output_tensor, "the output tensor");
+    }
+
     // TILE-only: any user-provided output shard_spec must be tile-aligned. RM operates at
     // stick granularity, so sub-tile shards are valid there.
     if (tensor_args.input_tensor.layout() == Layout::TILE && attributes.output_mem_config.is_sharded() &&
