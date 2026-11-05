@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -40,6 +42,18 @@ struct ClusterFacts {
     std::optional<std::string> cluster_id;
     std::vector<FoundChip> chips;
     std::vector<DiscoverySkippedCore> skipped_cores;
+};
+
+// How capture reaches the chips. Reads only: nothing capture does writes to a chip. A read that fails throws, with a
+// message saying why.
+class DeviceReader {
+public:
+    virtual ~DeviceReader() = default;
+
+    // Reads out.size() bytes of a core's L1, from `address`.
+    virtual void read_l1(int32_t chip, CoreXY core, uint64_t address, std::span<std::byte> out) = 0;
+    // Reads one 32-bit register.
+    virtual uint32_t read_register(int32_t chip, CoreXY core, uint64_t address) = 0;
 };
 
 }  // namespace tt::tt_fabric::capture

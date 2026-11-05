@@ -901,9 +901,8 @@ void check_arch_core_registers(const json& manifest, const std::vector<RouterEnt
     }
 }
 
-
-// The chips capture would find on this rank, from the mock cluster: each local chip's unique id, and the translated core
-// of each of its Ethernet channels, as a reader gives them.
+// The chips capture would find on this rank, from the mock cluster: each local chip's unique id, and the translated
+// core of each of its Ethernet channels, as a reader gives them.
 capture::ClusterFacts collect_cluster_facts(const json& manifest) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     capture::ClusterFacts facts;
@@ -938,7 +937,9 @@ capture::ClusterFacts collect_cluster_facts(const json& manifest) {
 // and matching the plan to the cluster's chips finds every router at its manifest core.
 void check_capture_plan(
     // Parse manifest file using capture's own reader
-    const std::filesystem::path& manifest_path, const json& manifest, const std::vector<RouterEntry>& routers) {
+    const std::filesystem::path& manifest_path,
+    const json& manifest,
+    const std::vector<RouterEntry>& routers) {
     const capture::ManifestFile file = capture::read_manifest_file(manifest_path);
     const capture::CapturePlan plan = capture::collect_capture_plan(file.json);
     const capture::ManifestIdentity identity = capture::collect_manifest_identity(file);
@@ -991,7 +992,7 @@ void check_capture_plan(
     EXPECT_TRUE(targets.missing_chips.empty());
     for (const capture::CaptureTarget& target : targets.cores) {
         EXPECT_EQ(target.location, capture::CoreLocation::FOUND)
-            << target.router_path << " at " << target.manifest_core.x << "," << target.manifest_core.y;
+            << target.router.path << " at " << target.router.virtual_core.x << "," << target.router.virtual_core.y;
     }
 }
 
