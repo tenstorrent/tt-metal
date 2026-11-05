@@ -129,6 +129,13 @@ constexpr MatmulPlan plan_matmul(
     return plan;
 }
 
+// periods x (paired handshakes of both sources, then b_only SrcB ones), in that order for the producer and the consumer:
+// the stream's pattern, bit j of the period set for a SrcB handshake (the period is at most the zmask)
+constexpr std::uint32_t plan_ab_then_b_pattern(const std::uint32_t paired, const std::uint32_t b_only)
+{
+    return b_only >= ZMASK_BITS ? ~0u : ((1u << b_only) - 1) << paired;
+}
+
 // periods x (one SrcB handshake and a_count SrcA ones): the producer gives B first, the consumer takes it back last. pattern
 // is the stream's (bit j of the period of a_count + 1 handshakes: the SrcB one).
 struct SrcbReusePlan

@@ -214,6 +214,15 @@ static void check_srcb_rows()
     }
 }
 
+static void check_ab_then_b()
+{
+    CHECK(plan_ab_then_b_pattern(1, 1) == 0x2, "COL: AB then B");
+    CHECK(plan_ab_then_b_pattern(4, 0) == 0, "no SrcB only handshakes");
+    CHECK(plan_ab_then_b_pattern(0, 4) == 0xF, "ROW: B only");
+    CHECK(plan_ab_then_b_pattern(2, 2) == 0xC, "two and two");
+    CHECK(plan_ab_then_b_pattern(0, 32) == 0xFFFFFFFFu, "a whole zmask of SrcB");
+}
+
 int main()
 {
     check_segment_rows();
@@ -221,6 +230,7 @@ int main()
     check_mop_loops();
     check_matmul_rows();
     check_srcb_rows();
+    check_ab_then_b();
     std::printf(failures == 0 ? "perf mock plan table: OK\n" : "perf mock plan table: %d failures\n", failures);
     return failures == 0 ? 0 : 1;
 }
