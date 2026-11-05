@@ -23,6 +23,70 @@ def pg_batched_attn(pg):
     return pg.get("cos_cat") is not None and os.environ.get("QWEN36_GROUP_ATTN_PER_ROW", "0") != "1"
 
 
+def tokpar_enabled():
+    """QWEN36_TOKPAR=1: token-parallel residual stream for TP prefill (forward_tokpar)."""
+    import os
+
+    return os.environ.get("QWEN36_TOKPAR", "0") == "1"
+
+
+def tokpar_a2a(x, to_tokens):
+    """Hidden-sharded [1,1,S,dim/tp] <-> token-sharded [1,1,S/tp,dim] over the (1, tp) TP axis (all_to_all)."""
+    in_dim, out_dim = (3, 2) if to_tokens else (2, 3)
+    return ttnn.experimental.all_to_all_async_generic(
+        x,
+        in_dim=in_dim,
+        out_dim=out_dim,
+        num_links=2,
+        topology=ttnn.Topology.Ring,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _load_tokpar_mlp(mesh, mlp_state, cache_dir):
+    """Full (unsharded) gate / up / down weights, bf8, replicated on every chip, [in, out] for ttnn.linear."""
+    rep = ttnn.ReplicateTensorToMesh(mesh)
+
+    def load(name):
+        return ttnn.as_tensor(
+            mlp_state[f"{name}.weight"],
+            preprocess=lambda t: t.T.contiguous(),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=rep,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=(cache_dir / f"mlp.{name}.weight.tokpar_rep") if cache_dir else None,
+        )
+
+    return {"w1": load("gate_proj"), "w3": load("up_proj"), "w2": load("down_proj")}
+
+
+def _tokpar_pc(m, k, n, bw, act=None):
+    """2D mcast prefill config on the full 12x10 grid: per_core_M = M tiles / 10 rows, per_core_N = N tiles / 12."""
+    import math
+
+    gx, gy = 12, 10
+    mt, kt, nt = m // 32, k // 32, n // 32
+    pm, pn = math.ceil(mt / gy), math.ceil(nt / gx)
+    sw = max(d for d in (4, 3, 2, 1) if pn % d == 0)
+    while kt % bw:
+        bw -= 1
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(gx, gy),
+        in0_block_w=bw,
+        out_subblock_h=1,
+        out_subblock_w=sw,
+        out_block_h=pm,
+        out_block_w=pn,
+        per_core_M=pm,
+        per_core_N=pn,
+        transpose_mcast=False,
+        fused_activation=act,
+        fuse_batch=False,
+    )
+
+
 class _FusedDistRMSNorm(RMSNorm):
     """RMSNorm whose PREFILL distributed path is the single fused dit_fused_distributed_rmsnorm op
     (args.prefill_fused_dist_norm, see tpc.fused_distributed_rmsnorm). Decode keeps the replicated-weight rms_norm."""
@@ -172,6 +236,11 @@ class Qwen36DecoderLayer:
             )
         else:
             self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
+        # QWEN36_TOKPAR=1 (prefill, TP meshes, dense MLP): token-parallel residual stream. Full MLP weights replicated on
+        # every chip; see forward_tokpar.
+        self._tokpar = None
+        if tokpar_enabled() and self.num_devices > 1 and not args.is_moe_layer(layer_num):
+            self._tokpar = _load_tokpar_mlp(mesh_device, mlp_state, mlp_cache)
 
     def _make_norm(
         self,
@@ -220,6 +289,93 @@ class Qwen36DecoderLayer:
                 norm, args, tt_ccl=tt_ccl, TG=args.is_galaxy, ag_config_key=ag_key, enable_all_gather=enable_all_gather
             )
         return norm
+
+    def _tokpar_norm(self, x, norm):
+        return ttnn.rms_norm(
+            x,
+            epsilon=norm.norm.eps,
+            weight=norm.norm.weight,
+            compute_kernel_config=norm.norm.compute_kernel_config_hifi2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _tokpar_mlp(self, x):
+        """Token-parallel SwiGLU MLP on this chip's [1,1,S/tp,dim] rows with the full weights (no CCL)."""
+        import os
+
+        w = self._tokpar
+        M, K = x.shape[-2], x.shape[-1]
+        F = w["w1"].shape[-1]
+        ck = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=tpc.mlp_fidelity(getattr(self.args, "mlp_math_fidelity", None)),
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        x8 = x
+        if os.environ.get("QWEN36_TOKPAR_MLP_BF8", "1") == "1":
+            x8 = ttnn.typecast(x, ttnn.bfloat8_b, memory_config=dram)
+        gate = ttnn.linear(
+            x8,
+            w["w1"],
+            compute_kernel_config=ck,
+            memory_config=dram,
+            program_config=_tokpar_pc(M, K, F, 8, act=ttnn.UnaryOpType.SILU),
+        )
+        up = ttnn.linear(
+            x8, w["w3"], compute_kernel_config=ck, memory_config=dram, program_config=_tokpar_pc(M, K, F, 8)
+        )
+        if x8 is not x:
+            ttnn.deallocate(x8)
+        hidden = ttnn.mul(gate, up, memory_config=dram, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
+        pc_d = tpc.create_prefill_mlp_matmul_program_config(M, F, K, max_cols=12)
+        out = ttnn.linear(hidden, w["w2"], compute_kernel_config=ck, memory_config=dram, program_config=pc_d)
+        ttnn.deallocate(hidden)
+        return out
+
+    def forward_tokpar(self, x, prefill_group, chunk_size=128):
+        """Grouped TP prefill with a TOKEN-parallel residual stream (QWEN36_TOKPAR=1).
+
+        x: [1,1,S/tp,dim] this chip's rows of the group's S = Bg*Tb rows (chip d owns rows [d*S/tp, (d+1)*S/tp)).
+        The mixer (GDN / full attention) runs unchanged, head-parallel: its K-sharded input is the local norm output
+        all-to-all'ed to [1,1,S,dim/tp], its hidden-sharded output all-to-all'ed back to rows. Norms are local (no
+        distributed-norm CCL); the MLP is token-parallel with the full weights (no all-gather / reduce-scatter)."""
+        pg = prefill_group
+        xn = self._tokpar_norm(x, self.attention_norm)
+        xh = tokpar_a2a(xn, to_tokens=False)
+        ttnn.deallocate(xn)
+        if self.is_full_attention:
+            if pg_batched_attn(pg):
+                a = self.attention.forward_prefill_paged_group(
+                    xh, pg["cos_cat"], pg["sin_cat"], pg["Bg"], pg["Tb"], pg["full_pts"], pg["chunk_pts"], pg["csi"]
+                )
+            else:
+                raise NotImplementedError("forward_tokpar needs the batched group attention (cos_cat / sin_cat)")
+        else:
+            a = self.attention.forward_prefill_group(
+                xh,
+                pg["Bg"],
+                pg["Tb"],
+                pg["gdn_masks"],
+                pg["gdn_scratch"][id(self.attention)],
+                chunk_size=chunk_size,
+                init=(pg.get("gdn_init") or {}).get(id(self.attention)),
+            )
+        ttnn.deallocate(xh)
+        a = ttnn.reshape(a, (1, 1, a.shape[-2], a.shape[-1]))
+        at = tokpar_a2a(a, to_tokens=True)
+        ttnn.deallocate(a)
+        h = ttnn.add(x, at, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(at)
+        ff = self._tokpar_norm(h, self.ffn_norm)
+        f = self._tokpar_mlp(ff)
+        ttnn.deallocate(ff)
+        out = ttnn.add(h, f, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(h)
+        ttnn.deallocate(f)
+        return out
 
     def forward(
         self,

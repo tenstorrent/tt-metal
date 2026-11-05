@@ -279,12 +279,18 @@ class Qwen36MLP:
         )
         # Dense MLP: args.mlp_math_fidelity, else QWEN36_MLP_FIDELITY (default hifi2). MoE shared expert stays LoFi.
         fid = tpc.mlp_fidelity(getattr(args, "mlp_math_fidelity", None) if dense else ttnn.MathFidelity.LoFi)
+        # QWEN36_MLP_L1ACC=1: packer L1 accumulation for the prefill MLP matmuls (down + fused gate/up AGMM), as the
+        # GDN / attention projections already use (COMPUTE_HIFI2): K-block partials accumulate in L1 instead of being
+        # re-unpacked per block. Default off = the measured team config.
+        _l1acc = os.environ.get("QWEN36_MLP_L1ACC", "0") == "1"
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=False
+            math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=_l1acc
         )
         # fuse_swiglu AGMM: fp32 acc (subblock_w=4) to match GDN/attn in-proj.
         self.compute_kernel_config_agmm = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=False
+            math_fidelity=fid,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=_l1acc and os.environ.get("QWEN36_MLP_L1ACC_AGMM", "1") == "1",
         )
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
             math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=True
