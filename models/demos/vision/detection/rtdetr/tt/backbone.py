@@ -28,15 +28,16 @@ def conv_output_size(size: int, kernel: int, stride: int, padding: int) -> int:
     return (size + 2 * padding - kernel) // stride + 1
 
 
-# One op's L1 working set may take at most this fraction of the grid's total L1; the rest is left
-# for halo and circular buffers and for tensors that other ops keep alive.
-L1_BUDGET_FRACTION = 8
+# One op's L1 working set may take at most 1/L1_BUDGET_DIVISOR of the grid's total L1; the rest is
+# left for halo and circular buffers and for tensors that other ops keep alive. At 1/8 the full
+# P100 grid keeps every activation in L1, while a two-core grid sends what does not fit to DRAM.
+L1_BUDGET_DIVISOR = 8
 BF16_BYTES = 2
 
 
 def l1_budget_bytes(device) -> int:
     l1 = ttnn.get_memory_view(device, ttnn.BufferType.L1)
-    return l1.num_banks * l1.total_bytes_per_bank // L1_BUDGET_FRACTION
+    return l1.num_banks * l1.total_bytes_per_bank // L1_BUDGET_DIVISOR
 
 
 def exceeds_l1_budget(device, num_elements: int) -> bool:
