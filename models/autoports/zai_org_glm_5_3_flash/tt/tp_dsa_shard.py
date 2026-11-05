@@ -101,7 +101,8 @@ class TPMlaShard(TPM.TPMla):
         # GLM53_DSA_SHARD_LANES_T4=1 (2026-11-05): lane cores for the t <= 4 streams too, so att_lanes' LANES_T4 rule
         # applies on the shard (1 M probes, layers 0-7: B = 8 native 10.45 ms vs B = 4 16.16 -- the one-lane t <= 4
         # build runs the users' select / merge / tree chains in series)
-        lanes_t4 = os.environ.get("GLM53_DSA_SHARD_LANES_T4", "0") == "1" and max(self.stream_ts) > 1
+        # default ON (2026-11-05 e2e, block 45 layers B = 4 ISL 4 K: 36.1 -> 22.8 ms per step, ids identical)
+        lanes_t4 = os.environ.get("GLM53_DSA_SHARD_LANES_T4", "1") == "1" and max(self.stream_ts) > 1
         if max(self.stream_ts) > MK.DSA_T_MAX or lanes_t4:
             rest = [v for v in free if tuple(v) not in {tuple(e) for e in ex}]
             self.ix_lane_cores = self.mk.reserve_lane_cores(rest, 2 * self.L)
@@ -114,7 +115,8 @@ class TPMlaShard(TPM.TPMla):
         # layers launch one after another in the same order on every chip: one stream launched 11 x per step. Frees
         # 10 x 4 x 1.5 KB of L1 per t (the n29h7 1M env: 246 KB per bank at t = 1 / 8 / 16 / 32).
         self._sync_from = None
-        if stream_share is not None and os.environ.get("GLM53_DSA_SHARD_SHARE_SYNC", "0") == "1":
+        # default ON (2026-11-05): the 45-layer stack sits at the L1 floor; the per-layer syncs put the shard 20 KB over
+        if stream_share is not None and os.environ.get("GLM53_DSA_SHARD_SHARE_SYNC", "1") == "1":
             assert stream_share.lane_core == self.lane_core, (stream_share.lane_core, self.lane_core)
             self._sync_from = stream_share
         self.streams = {t: self._new_streams(t) for t in self.stream_ts}
