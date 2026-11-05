@@ -59,7 +59,7 @@ def _model(n_layers=8, bmax=8, nv=NV):
     attn_idx = [i for i in range(n_layers) if i % 4 == 3]
     layers = []
     for i in range(n_layers):
-        dn = SimpleNamespace(Nv=nv, Dk=DK, Dv=DV, _decode_op=True, use_fused_recurrent_decode=False)
+        dn = SimpleNamespace(Nv=nv, Nk=nv // 3, Dk=DK, Dv=DV, K=4, _decode_op=True, use_fused_recurrent_decode=False)
         layers.append(SimpleNamespace(is_full_attention=i in attn_idx, attention=dn))
     return SimpleNamespace(
         mesh_device="mesh", args=SimpleNamespace(max_batch_size=bmax), _attention_layer_indices=attn_idx, layers=layers
@@ -154,8 +154,11 @@ def test_state_pages_lie_inside_their_block_on_every_bank(fake, dtype, block, nv
             for h in range(2 * nv):
                 p = int(idx[h, d])
                 if h < nv:
-                    pool, q0, n, size, s = ("k", p, 16, 4096, ps.bank_bytes_k) if p < ps.rec_pages_k else (
-                        "v", p - ps.rec_pages_k, 16, 4096, ps.bank_bytes_v)
+                    pool, q0, n, size, s = (
+                        ("k", p, 16, 4096, ps.bank_bytes_k)
+                        if p < ps.rec_pages_k
+                        else ("v", p - ps.rec_pages_k, 16, 4096, ps.bank_bytes_v)
+                    )
                 else:
                     pool, q0, n, size, s = "v", p, 4, 2048, ps.bank_bytes_v
                 for q in range(q0, q0 + n):

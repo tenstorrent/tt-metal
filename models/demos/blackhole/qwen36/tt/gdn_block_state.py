@@ -90,6 +90,14 @@ class GdnBlockState:
             k, v = kv_by_slot[e[2]]
             dn._paged_state = self._bind(dn, k, v)
             self.layers.append((i, dn))
+        # The gather tables and the zero block live as long as the model. Allocate them now, before the warmup
+        # captures any trace: a buffer allocated after a capture and still alive at a replay can be overwritten by it.
+        for _, dn in self.layers:
+            self._mirror_table(dn.Nv * 4, 0)
+            self._mirror_table(dn.Nv * 4, 1)
+            self._unpack_table(dn)
+        if kv_caches:
+            zero_block(model, kv_caches[0][0])
 
     def _bind(self, dn, k, v):
         num_blocks, heads, block, hd = (int(x) for x in k.shape)
@@ -112,7 +120,8 @@ class GdnBlockState:
             rv = -(-hv * head_pages // nb)
             period = FP32_PAGE_BYTES // math.gcd(s_v, FP32_PAGE_BYTES)
             if any(
-                (_first_row(b, s_v, FP32_PAGE_BYTES) + rv) * FP32_PAGE_BYTES > (b + 1) * s_v - hist_rows * BF16_PAGE_BYTES
+                (_first_row(b, s_v, FP32_PAGE_BYTES) + rv) * FP32_PAGE_BYTES
+                > (b + 1) * s_v - hist_rows * BF16_PAGE_BYTES
                 for b in range(period)
             ):
                 raise ValueError(
@@ -378,17 +387,12 @@ def copy_kv_blocks(model, copies):
         ttnn.deallocate(pt)
 
 
-def zero_kv_blocks(model, block_ids):
-    """Zero blocks in every K and V buffer of model._paged_kv_caches (vLLM's new_block_ids_to_zero: a block that held
-    fp32 GDN state reads as NaN / Inf in bf16 attention)."""
-    kv_caches = getattr(model, "_paged_kv_caches", None)
-    if not block_ids or not kv_caches:
-        return
-    mesh = model.mesh_device
-    k0 = kv_caches[0][0]
+def zero_block(model, k0):
+    """model._zero_kv_block: one zero block shaped and typed like the paged buffer k0 (created on the first call)."""
     shape = [1] + [int(x) for x in list(k0.shape)[1:]]
     zeros = getattr(model, "_zero_kv_block", None)
     if zeros is None or list(zeros.shape) != shape or zeros.dtype != k0.dtype:
+        mesh = model.mesh_device
         zeros = model._zero_kv_block = ttnn.from_torch(
             torch.zeros(shape, dtype=torch.bfloat16),
             dtype=k0.dtype,
@@ -397,6 +401,17 @@ def zero_kv_blocks(model, block_ids):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
+    return zeros
+
+
+def zero_kv_blocks(model, block_ids):
+    """Zero blocks in every K and V buffer of model._paged_kv_caches (vLLM's new_block_ids_to_zero: a block that held
+    fp32 GDN state reads as NaN / Inf in bf16 attention)."""
+    kv_caches = getattr(model, "_paged_kv_caches", None)
+    if not block_ids or not kv_caches:
+        return
+    mesh = model.mesh_device
+    zeros = zero_block(model, kv_caches[0][0])
     for blk in block_ids:
         pt = ttnn.from_torch(
             torch.tensor([[blk]], dtype=torch.int32),
