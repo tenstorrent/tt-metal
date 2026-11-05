@@ -22,6 +22,10 @@ from models.common.sampling.generator import (
     format_sampling_params,
 )
 
+# Per-device top-k candidates. Each device contributes its shard's top 64, so any
+# request top_k <= 64 (GPQA's lm-eval task uses 40) samples on device exactly.
+MAX_DEVICE_TOP_K = 64
+
 
 @dataclass
 class DecodeOutput:
@@ -38,7 +42,7 @@ class K2HorizonGenerator(Generator):
         "supports_chunked_prefill": True,
         "supports_intermediate_prefill_mask": True,
         "supports_sample_on_device": True,
-        "max_device_top_k": 32,
+        "max_device_top_k": MAX_DEVICE_TOP_K,
         "supports_device_penalties": True,
         "supports_async_decode": True,
         "output_tokens_per_step": 1,
@@ -108,7 +112,7 @@ class K2HorizonGenerator(Generator):
             vocab_size=model.vocab_size,
             padded_vocab_size=model.padded_vocab_size,
             max_batch_size=max_batch_size,
-            max_top_k=32,
+            max_top_k=MAX_DEVICE_TOP_K,
             cluster_shape=(1, 4),
             sampling_all_gather_axis=1,
             use_topk_logprobs=True,
@@ -762,9 +766,10 @@ class K2HorizonGenerator(Generator):
         temperatures, top_k = values("temperature"), values("top_k")
         for index, temperature in enumerate(temperatures):
             k = top_k[min(index, len(top_k) - 1)]
-            if temperature < 0 or (temperature != 0 and not 1 <= k <= 32):
+            if temperature < 0 or (temperature != 0 and not 1 <= k <= MAX_DEVICE_TOP_K):
                 raise ValueError(
-                    "Device sampling requires temperature>=0 and stochastic top_k in1..32; use explicit host mode otherwise"
+                    f"Device sampling requires temperature>=0 and stochastic top_k in1..{MAX_DEVICE_TOP_K}; "
+                    "use explicit host mode otherwise"
                 )
         if any(not 0 <= p <= 1 for p in values("top_p")):
             raise ValueError("top_p must be in0..1")
