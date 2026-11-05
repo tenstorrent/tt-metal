@@ -93,7 +93,7 @@ def _warmup_sizes(options: dict) -> list[tuple[int, int]]:
 
 def _clear_frames(error: BaseException) -> None:
     """Clear the locals of the frames that error's traceback keeps, and those of the exceptions it chains: the frames
-    of a failed load hold the encoder's device tensors. The tracebacks keep their lines, not their locals."""
+    of a failed load or encode hold the encoder's device tensors. The tracebacks keep their lines, not their locals."""
     pending, seen = [error], set()
     while pending:
         error = pending.pop()
@@ -219,15 +219,20 @@ class MiniMaxM3Media:
 
     def _encode_into(self, item: M3Image, rows: np.ndarray) -> None:
         """The vision tokens of item, read from the chip straight into rows (format.embeddings of its value). The
-        caller holds the lock."""
+        caller holds the lock. If forward or the read fails, it clears the failed call's frames before it raises, as
+        load does."""
         import ttnn
         from models.demos.minimax_m3.vision.encoder import read_embeddings
 
-        tokens = self._encoder.forward(item.pixels)
         try:
-            read_embeddings(tokens, rows)
-        finally:
-            ttnn.deallocate(tokens)
+            tokens = self._encoder.forward(item.pixels)
+            try:
+                read_embeddings(tokens, rows)
+            finally:
+                ttnn.deallocate(tokens)
+        except BaseException as error:
+            _clear_frames(error)  # so that a close while the caller holds the error frees the encoder's device tensors
+            raise
 
     def close(self) -> None:
         """Free the encoder, and close the chip if load opened it (once, even if closing raises). Waits for a load or
