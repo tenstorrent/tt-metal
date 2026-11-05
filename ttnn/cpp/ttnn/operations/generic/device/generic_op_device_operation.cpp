@@ -7,7 +7,6 @@
 #include "generic_op_device_operation_types.hpp"
 
 #include <tt_stl/reflection.hpp>
-#include <unordered_set>
 
 namespace ttnn::operations::generic {
 
@@ -15,11 +14,16 @@ using namespace tt::tt_metal;
 
 void verify_no_duplicate_mesh_coord_ranges(
     const tt::tt_metal::experimental::MeshProgramDescriptor::MeshPrograms& mesh_programs) {
-    std::unordered_set<ttnn::MeshCoordinateRange> seen;
-    seen.reserve(mesh_programs.size());
-    for (const auto& [range, _] : mesh_programs) {
-        auto [it, inserted] = seen.insert(range);
-        TT_FATAL(inserted, "Duplicate MeshCoordinateRange found in MeshProgramDescriptor: {}", range);
+    for (size_t i = 0; i < mesh_programs.size(); ++i) {
+        const auto& range_i = mesh_programs[i].first;
+        for (size_t j = i + 1; j < mesh_programs.size(); ++j) {
+            const auto& range_j = mesh_programs[j].first;
+            TT_FATAL(
+                !range_i.intersects(range_j),
+                "Overlapping MeshCoordinateRange found in MeshProgramDescriptor: {} overlaps {}",
+                range_i,
+                range_j);
+        }
     }
 }
 

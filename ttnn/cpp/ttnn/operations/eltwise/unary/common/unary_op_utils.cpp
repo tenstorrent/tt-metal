@@ -1157,6 +1157,37 @@ template std::pair<std::string, std::string> get_op_init_and_func<std::uint32_t>
     const std::string& idst,
     std::optional<DataType> input_dtype);
 
+std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    DataType input_dtype,
+    DataType output_dtype,
+    bool fp32_dest_acc_en,
+    tt::ARCH arch) {
+    // The generated kernels are fitted for BF16 data in a 16-bit DEST and exist for Blackhole and
+    // Wormhole only.
+    if (op_chain.size() != 1 || input_dtype != DataType::BFLOAT16 || output_dtype != DataType::BFLOAT16 ||
+        fp32_dest_acc_en || (arch != tt::ARCH::BLACKHOLE && arch != tt::ARCH::WORMHOLE_B0)) {
+        return std::nullopt;
+    }
+    const auto& op = op_chain[0];
+    // Each case names its op where its kernel serves the call: on the boards it installs on, with the
+    // parameters it is fitted for.
+    std::string op_name;
+    switch (op.type()) {
+        case UnaryOpType::LOGSIGMOID: op_name = "log_sigmoid"; break;
+        default: return std::nullopt;
+    }
+    if (op_name.empty()) {
+        return std::nullopt;
+    }
+    return std::map<std::string, std::string>{
+        {"SFPU_OP_CHAIN_0", "SFPU_OP_CHAIN_0_INIT_0 SFPU_OP_CHAIN_0_FUNC_0"},
+        {"SFPU_OP_CHAIN_0_INIT_0", fmt::format("{}_tile_init();", op_name)},
+        {"SFPU_OP_CHAIN_0_FUNC_0", fmt::format("{}_tile(0);", op_name)},
+        {get_macro_definition(op.type()), "1"},
+    };
+}
+
 std::map<std::string, std::string> get_block_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const std::string& block_id,
@@ -1176,32 +1207,6 @@ std::map<std::string, std::string> get_block_defines(
     }
     block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
     return block_defines;
-}
-
-std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
-    const std::vector<EltwiseUnaryWithParam>& op_chain,
-    DataType input_dtype,
-    DataType output_dtype,
-    bool fp32_dest_acc_en,
-    tt::ARCH arch) {
-    // The generated kernels are fitted for BF16 data in a 16-bit DEST and exist for Blackhole and
-    // Wormhole only.
-    if (op_chain.size() != 1 || input_dtype != DataType::BFLOAT16 || output_dtype != DataType::BFLOAT16 ||
-        fp32_dest_acc_en || (arch != tt::ARCH::BLACKHOLE && arch != tt::ARCH::WORMHOLE_B0)) {
-        return std::nullopt;
-    }
-    const auto& op = op_chain[0];
-    std::string op_name;
-    switch (op.type()) {
-        case UnaryOpType::LOGSIGMOID: op_name = "log_sigmoid"; break;
-        default: return std::nullopt;
-    }
-    return std::map<std::string, std::string>{
-        {"SFPU_OP_CHAIN_0", "SFPU_OP_CHAIN_0_INIT_0 SFPU_OP_CHAIN_0_FUNC_0"},
-        {"SFPU_OP_CHAIN_0_INIT_0", fmt::format("{}_tile_init();", op_name)},
-        {"SFPU_OP_CHAIN_0_FUNC_0", fmt::format("{}_tile(0);", op_name)},
-        {get_macro_definition(op.type()), "1"},
-    };
 }
 
 // update split eltwise ops include macros
@@ -1250,6 +1255,11 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
 
 bool uses_dedicated_compute_kernel(UnaryOpType op_type, std::optional<DataType> input_dtype) {
     return get_compute_kernel_path(op_type, input_dtype) != kGenericChainKernel;
+}
+
+bool compute_kernel_supports_work_queue(UnaryOpType op_type, std::optional<DataType> input_dtype) {
+    const std::string_view kernel = get_compute_kernel_path(op_type, input_dtype);
+    return kernel == kGenericChainKernel || kernel == "eltwise_identity_kernel.cpp" || kernel == "hardswish_kernel.cpp";
 }
 
 std::uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype) {
