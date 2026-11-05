@@ -8,6 +8,7 @@
 # x280_add_image resolves relative SOURCES against x280/, so pass an absolute path.
 # Produces ${X280_IMAGE_DIR}/firmware-telemetry.bin.
 x280_add_image(NAME firmware-telemetry SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/telemetry.c)
+x280_add_image(NAME firmware-telemetry2 SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/telemetry_v2.c)
 
 # Adds the host loader which loads the firmware, and idle firmware if necessary.
 add_executable(x280_telemetry_loader host/telemetry_loader.cpp)
@@ -29,3 +30,13 @@ target_link_libraries(
         TT::Metalium
 )
 target_include_directories(x280_telemetry_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# Adds the host application which reads the telemetry table and displays it.
+add_executable(x280_telemetry_app2 host/telemetry_app_v2.cpp)
+target_link_libraries(
+    x280_telemetry_app2
+    PRIVATE
+        x280_device
+        TT::Metalium
+)
+target_include_directories(x280_telemetry_app2 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

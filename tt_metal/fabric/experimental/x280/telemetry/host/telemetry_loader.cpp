@@ -72,9 +72,9 @@ int run(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh, cons
 
         for (const auto& curr_outcome : result.chips) {
 	        show_chip_state(curr_outcome);
-        }   
+        }
 
-	    return 1;
+        return 1;
     }
     auto& runtime = *result.runtime;
 
@@ -89,7 +89,7 @@ int run(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh, cons
         return false;
     });
 
-    tile_ids.erase(last, tile_ids.end()); 
+    tile_ids.erase(last, tile_ids.end());
 
     for(const auto& curr_tile_id: tile_ids) {
         std::cout << "Loading firmware on chip id: " << curr_tile_id.chip_id << "\n";
@@ -115,7 +115,7 @@ int run(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh, cons
             }
 
             std::cout << "booted resident idle\n";
-        } 
+        }
 
         ActiveRunRequest request;
         request.image_path = image;
@@ -128,8 +128,7 @@ int run(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh, cons
             }
             return 1;
         }
-        std::cout << "Running: " << image << "\n"; 
-
+        std::cout << "Running: " << image << "\n";
 
         // Fires up all the harts and waits for them to start running.
         auto waited = runtime.session(enqueued.session).wait_until_running(3000ms);
@@ -138,12 +137,12 @@ int run(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh, cons
         } else {
             std::cout << "wait failed: " << describe(waited) << "\n";
             return 1;
-        }   
+        }
 
         auto cleaned = runtime.cleanup(enqueued.session, request.cleanup_timeout);
         if (!cleaned.cleaned_up()) {
             std::cout << "cleanup failed: " << describe(cleaned) << "\n";
-            return 1; 
+            return 1;
         }
     } // for()
 
@@ -155,6 +154,7 @@ int run(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh, cons
 int main(int argc, char** argv) {
     bool do_prime = false;
     std::string image = std::string(X280_IMAGE_DIR) + "/firmware-telemetry.bin";
+    std::string image2 = std::string(X280_IMAGE_DIR) + "//firmware-telemetry2.bin";
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--prime") {
@@ -162,10 +162,14 @@ int main(int argc, char** argv) {
         } else if (arg == "-h" || arg == "--help") {
             std::printf("usage: %s [--prime] [image.bin]\n", argv[0]);
             return 0;
+        } else if (arg == "--image2") {
+            image = image2;
         } else {
             image = arg;
         }
     }
+
+    std::cout << "Using image: " << image << "\n";
 
     auto mesh =
         tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig(std::nullopt));
