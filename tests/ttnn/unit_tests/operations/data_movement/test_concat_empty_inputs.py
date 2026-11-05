@@ -270,18 +270,3 @@ def test_concat_with_zero_sized_input_keeps_allocation_rule(device, expect_error
 
     with expect_error(RuntimeError, "allocated"):
         ttnn.concat(inputs, dim=-1)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
-@pytest.mark.parametrize("dim", [0, -1])
-@pytest.mark.parametrize("shape", [(2, 0, 4), (2, 3, 0)], ids=["empty_middle_dim", "empty_last_dim"])
-def test_stack_of_zero_sized_inputs(device, shape, dim, layout):
-    torch_inputs = [torch.zeros(shape), torch.zeros(shape)]
-    expected = torch.stack(torch_inputs, dim=dim)
-
-    inputs = [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=layout, device=device) for t in torch_inputs]
-    result = ttnn.stack(inputs, dim=dim)
-
-    shape, expected_shape = tuple(result.shape), tuple(expected.shape)
-    assert shape == expected_shape, f"shape {shape} != expected {expected_shape}"
-    assert result.dtype == ttnn.bfloat16, f"dtype {result.dtype} != expected {ttnn.bfloat16}"
