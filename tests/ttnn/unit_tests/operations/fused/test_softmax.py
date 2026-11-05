@@ -1470,3 +1470,45 @@ def test_scale_mask_softmax_scale_not_exact_in_float32(device, scale):
 
     assert torch.equal(output, expected)
     assert torch.allclose(output, torch_output, atol=1e-2)
+
+
+@pytest.mark.parametrize("op_name", ["scale_mask_softmax", "softmax_in_place", "scale_mask_softmax_in_place"])
+@pytest.mark.parametrize("use_mask", [False, True], ids=["no_mask", "mask"])
+@pytest.mark.parametrize("shape", [(2, 3, 2, 64, 64), (2, 2, 3, 2, 32, 96)], ids=["rank5", "rank6"])
+def test_softmax_variants_rank_above_4(device, op_name, use_mask, shape):
+    if op_name == "softmax_in_place" and use_mask:
+        pytest.skip("softmax_in_place takes no mask")
+    torch.manual_seed(0)
+    # the fused ops reject a scale without a mask
+    scale = 0.75 if use_mask else None
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    golden = torch_input.float() * (scale if use_mask else 1.0)
+    ttnn_mask = None
+    if use_mask:
+        mask_shape = shape[:-3] + (1, 32, shape[-1])
+        torch_mask = torch.randn(mask_shape, dtype=torch.bfloat16)
+        # a broadcast mask only contributes its first row to every input row
+        golden = golden + torch_mask[..., :1, :].float()
+        ttnn_mask = ttnn.from_torch(torch_mask, layout=ttnn.TILE_LAYOUT, device=device)
+    if op_name == "softmax_in_place":
+        golden = torch_input.float()
+    torch_output = F.softmax(golden, dim=-1)
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    if op_name == "scale_mask_softmax":
+        ttnn_output = ttnn.scale_mask_softmax(ttnn_input, scale, ttnn_mask)
+    elif op_name == "softmax_in_place":
+        ttnn_output = ttnn.softmax_in_place(ttnn_input, dim=-1)
+    else:
+        ttnn_output = ttnn.scale_mask_softmax_in_place(ttnn_input, scale, ttnn_mask)
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert ttnn_output.shape == torch_input.shape
+    assert_numeric_metrics(
+        torch_output,
+        ttnn_output.float(),
+        pcc_threshold=0.999,
+        rtol=0.09,
+        atol=0.01,
+        frobenius_threshold=0.05,
+    )

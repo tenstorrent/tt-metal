@@ -18,6 +18,31 @@ constexpr float DEFAULT_SCALE_VALUE = 1.0f;
 
 namespace ttnn {
 
+namespace {
+
+// Rank <= 4 gains leading dims; higher ranks fold every dim before the last three into one.
+Tensor fold_to_4D(const Tensor& tensor) {
+    const auto& shape = tensor.logical_shape();
+    const int rank = static_cast<int>(shape.rank());
+    if (rank <= 4) {
+        return ttnn::unsqueeze_to_4D(tensor);
+    }
+    uint32_t folded = 1;
+    for (int i = 0; i < rank - 3; ++i) {
+        folded *= shape[i];
+    }
+    return tensor.reshape(ttnn::Shape({folded, shape[-3], shape[-2], shape[-1]}));
+}
+
+std::optional<const Tensor> fold_mask_to_4D(const std::optional<const Tensor>& mask) {
+    if (mask.has_value() && mask->logical_shape().rank() > 4) {
+        return fold_to_4D(*mask);
+    }
+    return mask;
+}
+
+}  // namespace
+
 Tensor softmax(
     const Tensor& input_tensor,
     int dim,
@@ -78,11 +103,11 @@ Tensor scale_mask_softmax(
     }
 
     // Operation
-    auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+    auto input_tensor_4D = fold_to_4D(input_tensor);
     auto output_tensor = prim::scale_mask_softmax(
         input_tensor_4D,
         scale,
-        mask,
+        fold_mask_to_4D(mask),
         memory_config.value_or(input_tensor.memory_config()),
         is_causal_mask,
         compute_kernel_config,
@@ -115,9 +140,11 @@ Tensor softmax_in_place(
     }
 
     // Operation
-    auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+    auto input_tensor_4D = fold_to_4D(input_tensor);
+    // The fold moves the softmax dim by the number of dims added or removed.
+    const int dim_4D = dim_calculated + static_cast<int>(input_tensor_4D.logical_shape().rank()) - rank;
     auto output_tensor = prim::softmax_in_place(
-        input_tensor_4D, static_cast<int8_t>(dim_calculated), program_config, compute_kernel_config, numeric_stable);
+        input_tensor_4D, static_cast<int8_t>(dim_4D), program_config, compute_kernel_config, numeric_stable);
 
     return output_tensor.reshape(input_shape);
 }
@@ -141,9 +168,15 @@ Tensor scale_mask_softmax_in_place(
     }
 
     // Operation
-    auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+    auto input_tensor_4D = fold_to_4D(input_tensor);
     auto output_tensor = prim::scale_mask_softmax_in_place(
-        input_tensor_4D, scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable);
+        input_tensor_4D,
+        scale,
+        fold_mask_to_4D(mask),
+        program_config,
+        is_causal_mask,
+        compute_kernel_config,
+        numeric_stable);
 
     return output_tensor.reshape(input_shape);
 }
@@ -166,9 +199,9 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
     }
 
     // Operation
-    auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+    auto input_tensor_4D = fold_to_4D(input_tensor);
     auto output_tensor = prim::scale_causal_mask_hw_dims_softmax_in_place(
-        input_tensor_4D, scale, mask, program_config, compute_kernel_config, numeric_stable);
+        input_tensor_4D, scale, fold_mask_to_4D(mask), program_config, compute_kernel_config, numeric_stable);
 
     return output_tensor.reshape(input_shape);
 }
