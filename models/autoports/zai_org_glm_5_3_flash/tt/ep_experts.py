@@ -22,6 +22,16 @@ import os
 import ttnn
 
 
+def xsl_group(ndev: int) -> int:
+    """GLM53_TP_XSL_GROUP (the hybrid expert sharding: EP over the ndev / g chip groups x batched expert TP inside a
+    group of g chips): default 8 on a mesh of 8 k chips, k > 1 (the 32-chip replica 2026-11-05: B = 4 distinct
+    prompts 22.0 -> 17.9 ms per step, identical 19.5 -> 17.5); 0 = plain EP (the A/B, and every other mesh)."""
+    v = os.environ.get("GLM53_TP_XSL_GROUP")
+    if v is not None and v != "":
+        return int(v)
+    return 8 if ndev > 8 and ndev % 8 == 0 else 0
+
+
 class EpList:
     """global expert id -> the slot tensor holding it on its owning chip (slot = id mod E_loc)"""
 
@@ -58,7 +68,7 @@ def load_ep_experts(source, layer: int, num_experts: int, mesh, cache_dir: str, 
     # e_loc = E / (ndev / g). Every chip of the busiest group streams 1 / g of each of its experts: the EP imbalance
     # at distinct prompts (3-4 of 32 selections on one chip: +2.5 ms per step at B = 4) becomes ~12 / 8 expert-
     # equivalents, balanced. Same bytes per chip as EP.
-    group = int(os.environ.get("GLM53_TP_XSL_GROUP", "0") or 0)
+    group = xsl_group(ndev)
     ngroups = ndev // group if group else ndev
     assert ndev % max(group, 1) == 0 and num_experts % ngroups == 0, (num_experts, ndev, group)
     e_loc = num_experts // ngroups

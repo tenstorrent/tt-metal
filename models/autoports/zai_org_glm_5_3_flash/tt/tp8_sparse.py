@@ -184,7 +184,9 @@ class TPSparseKDALayer(TPDenseKDALayer):
         # GLM53_TP_XSL_GROUP = g: EP over the ndev / g chip groups x XSL (8-tile slices) inside a group (tt/ep_experts.py
         # loads slot i on chip k = slice k % g of expert e_loc (k // g) + i); the weight streamer runs the XSL branch
         # with e_lo = e_loc (rank // g) patched per chip and the sliced tensors (XSL_C = 0)
-        self.xsl_group = int(os.environ.get("GLM53_TP_XSL_GROUP", "0") or 0)
+        from models.autoports.zai_org_glm_5_3_flash.tt.ep_experts import xsl_group
+
+        self.xsl_group = xsl_group(sh.ndev)
         if self.xsl_group:
             assert sh.ndev % self.xsl_group == 0 and self.xsl_group in (2, 4, 8), (sh.ndev, self.xsl_group)
             assert self.e_all % (sh.ndev // self.xsl_group) == 0, (self.e_all, sh.ndev, self.xsl_group)

@@ -131,10 +131,15 @@ class TPSparseStack(TPStack):
                 if rank and not getattr(self.fl, "placement", None):  # placed experts (MKX_LOC): e_lo 0 everywhere
                     kw = desc.kernels[wk]  # a fresh copy (ProgramDescriptor.kernels returns copies)
                     ct = list(kw.compile_time_args)
-                    # (sliced XSL: every chip's tensor IS its slice -> 0, as tp8_sparse)
+                    # (sliced XSL: every chip's tensor IS its slice -> 0, as tp8_sparse). GLM53_TP_XSL_GROUP = g (the
+                    # hybrid: EP over the chip groups x XSL inside a group, tp8_sparse): e_lo = e_loc (rank // g) --
+                    # 2026-11-05 02:45: `e_loc * rank` here sent ranks >= ndev / g past the expert range, so one chip
+                    # per group streamed its slice alone (a partial routed sum: residual stream 2 at 0.6-0.85 vs HF)
+                    grp = int(getattr(self.fl, "xsl_group", 0) or 0)
                     ct[e_lo_idx] = (
-                        (0 if getattr(self.fl, "xsl_sliced", False) else rank) if xsl else self.fl.e_loc * rank
-                    )
+                        (0 if getattr(self.fl, "xsl_sliced", False) else rank) if xsl
+                        else self.fl.e_loc * (rank // grp if grp else rank)
+                    )  # fmt: skip
                     kw.compile_time_args = ct
                     ks[wk] = kw
                 lk, lcbs = fab.lane_parts(r, c, 2 * self.n, self.fl.n_readers, self.fl.owner_noc, cons_sem=SEM_A)

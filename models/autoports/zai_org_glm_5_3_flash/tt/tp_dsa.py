@@ -117,7 +117,9 @@ class TPMoE:
         assert self.e_all % ndev == 0, (self.e_all, ndev)
         self.e_loc = self.e_all // ndev
         # GLM53_TP_XSL_GROUP = g (tt/tp8_sparse.py): EP over the ndev / g chip groups x XSL inside a group
-        self.xsl_group = int(os.environ.get("GLM53_TP_XSL_GROUP", "0") or 0)
+        from models.autoports.zai_org_glm_5_3_flash.tt.ep_experts import xsl_group
+
+        self.xsl_group = xsl_group(ndev)
         if self.xsl_group:
             assert ndev % self.xsl_group == 0 and self.e_all % (ndev // self.xsl_group) == 0, (ndev, self.xsl_group)
             self.e_loc = self.e_all // (ndev // self.xsl_group)
