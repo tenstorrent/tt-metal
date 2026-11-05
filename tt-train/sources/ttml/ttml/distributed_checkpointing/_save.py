@@ -47,6 +47,7 @@ from ._state_dict import (
     fsdp_gate,
     world_record,
 )
+from ._train_state import TRAIN_STATE_KEY, capture_train_state
 
 
 @dataclass
@@ -107,6 +108,9 @@ def save(
     model=None,
     optimizer=None,
     header: dict | None = None,
+    scheduler=None,
+    dataloader=None,
+    rng: bool = True,
     threads: int | None = None,
     max_inflight_bytes: int = 4 << 30,
     overwrite: bool = False,
@@ -114,9 +118,11 @@ def save(
 ) -> SaveResult:
     """Write ``model`` and ``optimizer`` to the directory ``ckpt_dir``.
 
-    ``header`` is any JSON-encodable dict (the step, dataloader state, ...), returned by ``load``. ``threads`` caps
-    the writer threads (default: one per device data file); ``max_inflight_bytes`` bounds the host buffers waiting
-    to be written. An existing
+    ``header`` is any JSON-encodable dict (the step, the config, ...), returned by ``load``. ``scheduler`` and
+    ``dataloader`` are saved through their ``get_state_dict`` (JSON only) and, with ``rng`` (default), so is the
+    state of every random generator training draws from: the ttml generator, python's, numpy's and torch's when
+    torch is imported; ``load`` restores them on request. ``threads`` caps the writer threads (default: one per
+    device data file); ``max_inflight_bytes`` bounds the host buffers waiting to be written. An existing
     ``ckpt_dir`` is refused unless ``overwrite=True``. FSDP modules must be in their sharded state; with
     ``reshard_fsdp`` (default) they are resharded first.
     """
@@ -137,6 +143,9 @@ def save(
         live.extend(state_live)
     by_key = {lt.key: lt for lt in live}
     world = world_record()
+    train_state = capture_train_state(
+        scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world["ranks"][0]["world_rank"]
+    )
     stats["collect_s"] = time.perf_counter() - t0
 
     ckpt_dir = os.path.abspath(ckpt_dir)
@@ -229,7 +238,13 @@ def save(
 
         write_header(
             staging,
-            {"format": FORMAT, "version": VERSION, "checkpoint_id": os.path.basename(ckpt_dir), "user": header or {}},
+            {
+                "format": FORMAT,
+                "version": VERSION,
+                "checkpoint_id": os.path.basename(ckpt_dir),
+                "user": header or {},
+                TRAIN_STATE_KEY: train_state,
+            },
         )
         index = Index(
             checkpoint_id=os.path.basename(ckpt_dir),

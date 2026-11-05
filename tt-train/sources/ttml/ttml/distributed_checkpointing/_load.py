@@ -22,7 +22,7 @@ from math import prod
 import numpy as np
 import ttnn
 
-from ._errors import CheckpointError, IncompleteCheckpoint
+from ._errors import CheckpointError, IncompleteCheckpoint, MissingKeyError
 from ._index import Index, is_complete, read_index
 from ._index import read_header as _read_header_json
 from ._planner import KeyPlan, LoadPlan, ReadItem, create_load_plan
@@ -40,7 +40,9 @@ from ._state_dict import (
     fsdp_gate,
     mesh_device,
     restore_scalars,
+    world_record,
 )
+from ._train_state import TRAIN_STATE_KEY, missing_train_state, restore_train_state
 
 
 @dataclass
@@ -52,6 +54,8 @@ class LoadResult:
     unexpected: list[str]
     fast_path_keys: list[str]
     stats: dict[str, float] = field(default_factory=dict)
+    train_state: dict = field(default_factory=dict)
+    restored: list[str] = field(default_factory=list)
 
 
 def _read_into(
@@ -154,6 +158,9 @@ def load(
     *,
     model=None,
     optimizer=None,
+    scheduler=None,
+    dataloader=None,
+    rng: bool = False,
     strict: bool = True,
     threads: int | None = None,
     reshard_fsdp: bool = True,
@@ -163,8 +170,12 @@ def load(
     Works on any single-host mesh shape and parallelism: each destination shard reads only the bytes it needs. With
     ``strict`` (default), a live tensor without an entry, or an entry of a requested role (model, and optimizer state
     when ``optimizer`` is passed) without a live tensor, is an error; otherwise they are listed in the result.
-    Optimizer scalars (steps, learning rates) are restored through ``set_state_dict``. ``threads`` caps the reader
-    threads (default 32; a read is one contiguous byte range of one file). Returns the header passed to ``save``.
+    Optimizer scalars (steps, learning rates) are restored through ``set_state_dict``. ``scheduler`` and
+    ``dataloader`` are restored through their ``set_state_dict`` from the state ``save`` stored, and with
+    ``rng=True`` so is every random generator ``save`` captured (the ttml generator for this world rank, python,
+    numpy, torch when imported); a component asked for that the checkpoint lacks is an error under ``strict`` and
+    listed in ``missing`` otherwise. ``threads`` caps the reader threads (default 32; a read is one contiguous byte
+    range of one file). Returns the header passed to ``save``, the train state stored and the names restored.
     """
     if model is None and optimizer is None:
         raise CheckpointError("load needs a model and/or an optimizer")
@@ -176,6 +187,10 @@ def load(
         raise IncompleteCheckpoint(f"{ckpt_dir} is not a complete checkpoint (staging directory or missing index.json)")
     index: Index = read_index(ckpt_dir)
     header = _read_header_json(ckpt_dir)
+    train_state = header.get(TRAIN_STATE_KEY, {})
+    missing_state = missing_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng)
+    if strict and missing_state:
+        raise MissingKeyError(f"the checkpoint holds no state for {missing_state}")
 
     fsdp_states = fsdp_gate(model, reshard_fsdp)
     # A sharded FSDP module's cached shards are its current values: drop them now, so every value the load replaces is
@@ -271,13 +286,23 @@ def load(
     applied: list[str] = []
     if optimizer is not None:
         applied = restore_scalars(optimizer, index.scalars)
+    # After the optimizer scalars: a scheduler writes its last LRs back into the optimizer and has the last word.
+    restored = restore_train_state(
+        train_state,
+        scheduler=scheduler,
+        dataloader=dataloader,
+        rng=rng,
+        world_rank=world_record()["ranks"][0]["world_rank"],
+    )
     stats["total_s"] = time.perf_counter() - t0
     return LoadResult(
         ckpt_dir,
         header.get("user", {}),
         {k: index.scalars[k] for k in applied} if optimizer is not None else dict(index.scalars),
-        plan.missing,
+        plan.missing + missing_state,
         plan.unexpected,
         plan.fast_path_keys,
         stats,
+        train_state=train_state,
+        restored=restored,
     )
