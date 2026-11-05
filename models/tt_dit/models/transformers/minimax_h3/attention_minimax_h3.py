@@ -207,6 +207,17 @@ class MiniMaxH3Attention(Module):
             and self.exp_ring_num_passes <= self.exp_ring_max_passes
         )
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
+        # Ring attention through the release's WH core loop (wh_sdpa_minimax_h3.py) on Wormhole with an 8-column
+        # grid; MINIMAX_H3_WH_SDPA=0 keeps the ttnn ring SDPA.
+        self.wh_sdpa = None
+        if (
+            os.environ.get("MINIMAX_H3_WH_SDPA", "1") == "1"
+            and not is_blackhole()
+            and mesh_device.compute_with_storage_grid_size().x == 8
+        ):
+            from .wh_sdpa_minimax_h3 import WhSdpa
+
+            self.wh_sdpa = WhSdpa(mesh_device)
 
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -567,7 +578,17 @@ class MiniMaxH3Attention(Module):
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
         exp_program_config = self._exp_sdpa_program_config(q_BHNE.shape[2])
-        if exp_program_config is not None:
+        if self.wh_sdpa is not None and self.use_ring and self.wh_sdpa.supports(q_BHNE.shape, k_BHNE.shape):
+            # The release's WH SDPA core loop (wh_sdpa_minimax_h3.py) on all 8 columns: gather K and V^T around
+            # the SP ring first (no fused gather, so the CCL column is free), then attend.
+            k_full = self.ccl_manager.all_gather(k_BHNE, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False)
+            vt_BHEN = ttnn.transpose(v_BHNE, -2, -1)
+            vt_full = self.ccl_manager.all_gather(vt_BHEN, dim=3, mesh_axis=self.sp_mesh_axis, use_hyperparams=False)
+            ttnn.deallocate(vt_BHEN)
+            spatial_BHNE = self.wh_sdpa(q_BHNE, k_full, vt_full, logical_n)
+            ttnn.deallocate(k_full)
+            ttnn.deallocate(vt_full)
+        elif exp_program_config is not None:
             spatial_BHNE, _prompt, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                 q_BHNE,
                 k_BHNE,
