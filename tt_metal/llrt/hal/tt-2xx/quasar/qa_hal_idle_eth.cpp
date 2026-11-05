@@ -78,6 +78,9 @@ HalCoreInfoType create_eth_mem_map(HalProgrammableCoreType core_type, bool progr
         mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_STATE)] = MEM_IERISC_FABRIC_ROUTER_STATE_BASE;
         mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_COMMAND)] =
             MEM_IERISC_FABRIC_ROUTER_COMMAND_BASE;
+        mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_KERNEL_HEARTBEAT)] =
+            MEM_IERISC_FABRIC_KERNEL_HEARTBEAT_BASE;
+        mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_LINK)] = MEM_IERISC_FABRIC_ETH_LINK_BASE;
     }
 
     std::vector<std::uint32_t> mem_map_sizes;
@@ -102,6 +105,9 @@ HalCoreInfoType create_eth_mem_map(HalProgrammableCoreType core_type, bool progr
         mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_IERISC_FABRIC_TELEMETRY_SIZE;
         mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_STATE)] = sizeof(std::uint32_t);
         mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_COMMAND)] = sizeof(std::uint32_t);
+        mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_KERNEL_HEARTBEAT)] =
+            MEM_IERISC_FABRIC_KERNEL_HEARTBEAT_SIZE;
+        mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ETH_LINK)] = MEM_IERISC_FABRIC_ETH_LINK_SIZE;
     }
 
     assert_kernel_config_no_overlap(mem_map_bases, mem_map_sizes, HalL1MemAddrType::UNRESERVED, "ethernet");

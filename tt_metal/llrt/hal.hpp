@@ -98,9 +98,11 @@ enum class HalL1MemAddrType : uint8_t {
     FW_STAGE,  // Always-on ethernet firmware execution-stage breadcrumb (eth_status_t.eth_fw_stage)
     TENSIX_FABRIC_CONNECTIONS,
     FABRIC_CONNECTION_LOCK,
-    ETH_PTP_TRACE,  // Runtime FW entry/exit PTP stamps (Blackhole only)
-    L1_ECC_HALT,    // L1 ECC halt record and BRISC release code, l1_ecc_halt_slot_t (Blackhole Tensix only)
-    COUNT           // Keep this last so it always indicates number of enum options
+    ETH_PTP_TRACE,            // Runtime FW entry/exit PTP stamps (Blackhole only)
+    L1_ECC_HALT,              // L1 ECC halt record and BRISC release code, l1_ecc_halt_slot_t (Blackhole Tensix only)
+    FABRIC_KERNEL_HEARTBEAT,  // Fabric router heartbeat (Quasar only)
+    ETH_LINK,                 // This core's and its link peer's HSIO tile, written before launch (Quasar only)
+    COUNT                     // Keep this last so it always indicates number of enum options
 };
 
 enum class HalDramMemAddrType : uint8_t {
