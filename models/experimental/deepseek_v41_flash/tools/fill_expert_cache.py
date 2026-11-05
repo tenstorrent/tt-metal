@@ -18,7 +18,8 @@ cache and renamed into place, so an interrupted run leaves no truncated entries.
 
 The files are the ones experts built for a 1x4 mesh read, one per expert and part holding all four
 ranks' shards. ``--tp-size N`` writes a 1xN mesh's instead, and ``--tp-size 1`` the single-chip
-files ``test_moe.py`` and the TP1 decoder-layer test read. By default the gate_up is the K-split one
+files ``test_moe.py`` and the TP1 decoder-layer test read. A file records its mesh's shape, so a TP
+mesh of several rows needs ``--mesh-rows``: ``--tp-size 12 --mesh-rows 3`` for the persistent MoE's 3x4. By default the gate_up is the K-split one
 (``gate_up_fused.tp4.k4``) that the model's experts read (``balance_dram_banks``, on by default, for both
 decode and prefill); ``--no-balance-dram-banks`` writes the whole-K files the block tests build with
 ``balance_dram_banks=False``. Down is the same file either way.
@@ -26,6 +27,7 @@ decode and prefill); ``--no-balance-dram-banks`` writes the whole-K files the bl
     python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --layers 20 21 24
     python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --layers 1 2 --tp-size 1 --no-balance-dram-banks
     python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --all-layers
+    python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --all-layers --tp-size 12 --mesh-rows 3
     python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --dspark
 """
 
@@ -101,6 +103,7 @@ class _ExpertWriter:
         cache_dir: str,
         scratch: str,
         tp_size: int,
+        mesh_rows: int,
         balance_dram_banks: bool,
     ):
         self.config = load_config(snapshot)
@@ -116,10 +119,10 @@ class _ExpertWriter:
         self.down_nd = _fused_nd_dram_config(local, hidden, hidden // num_cores, banks)
         self.gate_up_mapper = self.down_mapper = None
         if tp_size > 1:
-            # The shards ``ShardTensorToMesh`` cuts for a 1xTP mesh, built without one.
+            # The shards ``ShardTensorToMesh`` cuts for a mesh_rows x (TP / mesh_rows) mesh, built without one.
             self.gate_up_mapper, self.down_mapper = (
                 ttnn.create_mesh_mapper(
-                    ttnn.MeshShape(1, tp_size),
+                    ttnn.MeshShape(mesh_rows, tp_size // mesh_rows),
                     ttnn.MeshMapperConfig([ttnn.PlacementShard(dim)], ttnn.MeshShape([tp_size])),
                 )
                 for dim in (1, 0)
@@ -156,11 +159,14 @@ def _init_worker(
     scratch: str,
     threads: int,
     tp_size: int,
+    mesh_rows: int,
     balance_dram_banks: bool,
 ) -> None:
     global _writer
     torch.set_num_threads(threads)
-    _writer = _ExpertWriter(snapshot, getattr(ttnn, dtype_name), cache_dir, scratch, tp_size, balance_dram_banks)
+    _writer = _ExpertWriter(
+        snapshot, getattr(ttnn, dtype_name), cache_dir, scratch, tp_size, mesh_rows, balance_dram_banks
+    )
 
 
 def _fill(group: str, e: int) -> None:
@@ -177,7 +183,8 @@ def main():
     parser.add_argument("--dtype", default="bfloat4_b", help="ttnn dtype of the experts, as the test builds them")
     parser.add_argument("--cache-dir", default=CACHE_DIR)
     parser.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR)
-    parser.add_argument("--tp-size", type=int, default=4, help="TP ranks of the 1xN mesh the experts are built for")
+    parser.add_argument("--tp-size", type=int, default=4, help="TP ranks of the mesh the experts are built for")
+    parser.add_argument("--mesh-rows", type=int, default=1, help="rows of that mesh, which spans tp-size chips")
     parser.add_argument(
         "--balance-dram-banks",
         action=argparse.BooleanOptionalAction,
@@ -186,6 +193,8 @@ def main():
     )
     parser.add_argument("--force", action="store_true", help="rewrite experts that are already cached")
     args = parser.parse_args()
+    if args.tp_size % args.mesh_rows != 0:
+        parser.error(f"--mesh-rows {args.mesh_rows} does not divide --tp-size {args.tp_size}")
 
     snapshot = resolve_snapshot_dir(args.model_dir)
     config = load_config(snapshot)
@@ -234,6 +243,7 @@ def main():
                 scratch,
                 max(1, os.cpu_count() // args.workers),
                 args.tp_size,
+                args.mesh_rows,
                 args.balance_dram_banks,
             ),
         ) as pool:

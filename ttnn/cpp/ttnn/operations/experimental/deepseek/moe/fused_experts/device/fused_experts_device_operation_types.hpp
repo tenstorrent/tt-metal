@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -28,22 +29,32 @@ struct FusedAllReduceParams {
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear;
 };
 
-// The persistent op: launched once, it serves one token row per page of each chip's H2D socket --
-// a 64-byte header whose first word is the layer id, then the [1, H] bf16 row -- until a page whose
-// layer id is not below num_layers (0xFFFFFFFF by convention) stops every kernel. The all-reduce
-// becomes a reduce to mesh coordinate (0, 0), whose D2H socket returns each summed [1, H] row.
+// The persistent op: launched once, it serves requesters, each a pair of D2D sockets. Every chip
+// receives on each input socket; a page is one token row -- a 64-byte header whose first word is the
+// layer id, then the [1, H] bf16 row -- and the pages of all the inputs, taken round robin as they
+// arrive, go through the op's pipeline one after another. The all-reduce becomes a reduce to mesh
+// coordinate (0, 0), which sends each summed [1, H] row on the output socket paired with the row's
+// input. A page whose layer id is not below num_layers (0xFFFFFFFF by convention) closes its input;
+// once every input is closed, every kernel stops.
 //
-// The socket objects are the caller's; the op only takes their config buffer addresses.
+// The socket objects are the caller's; the op only takes their config buffer addresses (sockets are
+// allocated in lockstep, so one address serves every chip) and the outputs' routes.
+// Kernel array bounds: requesters, and sends per requester's output.
+constexpr uint32_t kMaxPersistentRequesters = 8;
+constexpr uint32_t kMaxPersistentRoutes = 16;
+
 struct FusedPersistentParams {
     uint32_t num_layers{};
-    // The control core (logical), outside the worker grid, where every socket lives.
+    // The control core (logical), outside the worker grid, where every socket's endpoint on this mesh lives.
     tt::tt_metal::CoreCoord socket_core;
-    // Per chip of the mesh, in row-major order.
-    std::vector<uint32_t> h2d_socket_config_addresses;
-    uint32_t d2h_socket_config_address{};
-    // The H2D sockets are DEVICE_PULL: the host only stages each page in pinned host RAM, and the control
-    // core reads it over PCIe. Otherwise HOST_PUSH, the page already in the control core's L1.
-    bool h2d_device_pull{};
+    // Per requester.
+    std::vector<uint32_t> input_socket_config_addresses;
+    std::vector<uint32_t> output_socket_config_addresses;
+    // Per requester, its output's sends out of (0, 0) (see d2d_routes), as the kernel reads them.
+    std::vector<std::vector<uint32_t>> output_route_args;
+    // Where the root's one fabric connection, which every output route leaves by, is opened toward.
+    uint32_t output_connection_mesh_id{};
+    uint32_t output_connection_chip_id{};
 };
 
 // Non-tensor parameters of the fused routed-expert FFN.

@@ -34,9 +34,8 @@ Tensor fused_experts(
     tt::tt_fabric::Topology all_reduce_topology,
     const std::optional<Tensor>& persistent_layer_table,
     const std::optional<tt::tt_metal::CoreCoord>& persistent_socket_core,
-    const std::optional<std::vector<uint32_t>>& persistent_h2d_socket_addresses,
-    std::optional<uint32_t> persistent_d2h_socket_address,
-    bool persistent_h2d_device_pull) {
+    const std::optional<std::vector<tt::tt_metal::distributed::MeshSocket>>& persistent_input_sockets,
+    const std::optional<std::vector<tt::tt_metal::distributed::MeshSocket>>& persistent_output_sockets) {
     return ttnn::prim::fused_experts(
         input_tensor,
         gate_up_weights,
@@ -63,9 +62,8 @@ Tensor fused_experts(
         all_reduce_topology,
         persistent_layer_table,
         persistent_socket_core,
-        persistent_h2d_socket_addresses,
-        persistent_d2h_socket_address,
-        persistent_h2d_device_pull);
+        persistent_input_sockets,
+        persistent_output_sockets);
 }
 
 }  // namespace ttnn::experimental::deepseek::moe

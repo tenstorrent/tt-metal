@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fused_experts_device_operation.hpp"
+#include "d2d_routes.hpp"
 
 #include <algorithm>
 #include <array>
@@ -74,15 +75,14 @@ struct AllReduceBranch {
 struct PersistentEpilogue {
     bool is_root;
     ttnn::MeshCoordinate root;
-    uint32_t h2d_socket_config_address;
     // GlobalSemaphores: the odd iterations' out_ready (the epilogue's is the even ones') on the output
     // cores, and the root's per-iteration credit on the senders.
     uint32_t out_ready1_sem_addr;
     uint32_t credit_sem_addr;
     // kFeHdrWords + kFeGoWords words on every core of the input replica's grid, zeroed.
     tt::tt_metal::Buffer* header;
-    // Two [1, H] rows on the control core: the root's output on its way to the D2H socket.
-    tt::tt_metal::Buffer* d2h_staging;
+    // Two [1, H] rows on the control core: the root's output on its way to the output socket.
+    tt::tt_metal::Buffer* out_staging;
 };
 
 // Everything the all-reduce epilogue adds to one chip's program; built per mesh coordinate by
@@ -827,13 +827,20 @@ ProgramDescriptor build_program_descriptor(
     const CoreRange all_range({0, 0}, {GRID_X - 1, GRID_Y - 1});
     const CoreRangeSet all_cores{all_range};
     const CoreRangeSet input_cores = router_bcast_input ? all_cores.merge(router_cores) : all_cores;
-    const CoreRangeSet sender_set{CoreRange{sender, sender}};
     const CoreRangeSet input_sender_set{CoreRange{input_sender, input_sender}};
-    // Receivers = full grid minus {0,0} and {1,0}: row 0 (x=2..7) plus rows 1..7 (all x).
-    const CoreRangeSet receiver_cores{std::vector<CoreRange>{
+    // The persistent op runs the route merge a row ahead of the grid, on the last router core's free DM
+    // processor (see compute_expert_ids.cpp, FE_ROUTE_STAGE); {0,0} is then a plain receiver and hub0.
+    const CoreCoord route_merge{num_router_cores - 1u, GRID_Y};
+    const CoreRangeSet sender_set{CoreRange{sender, sender}};
+    const CoreRangeSet route_merge_set{CoreRange{route_merge, route_merge}};
+    const CoreRangeSet ids_cores = persistent != nullptr ? all_cores.merge(route_merge_set) : all_cores;
+    // Receivers = full grid minus {0,0} and {1,0}: row 0 (x=2..7) plus rows 1..7 (all x); {0,0} too
+    // in the persistent op.
+    const CoreRangeSet grid_receivers{std::vector<CoreRange>{
         CoreRange{{2, 0}, {GRID_X - 1, 0}},
         CoreRange{{0, 1}, {GRID_X - 1, GRID_Y - 1}},
     }};
+    const CoreRangeSet receiver_cores = persistent != nullptr ? grid_receivers.merge(sender_set) : grid_receivers;
 
     // Collect the grid cores satisfying `want` as row-wise contiguous runs, so the kernel
     // descriptors stay a handful of ranges rather than one per core.
@@ -875,7 +882,7 @@ ProgramDescriptor build_program_descriptor(
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = sem_id,
         .core_type = CoreType::WORKER,
-        .core_ranges = all_cores,
+        .core_ranges = ids_cores,
         .initial_value = 0,
     });
     desc.semaphores.push_back(SemaphoreDescriptor{
@@ -915,6 +922,20 @@ ProgramDescriptor build_program_descriptor(
             .initial_value = 0,
         });
     }
+    // The persistent op's stage handoffs (see fe_ctrl.cpp): the router stage's ready count on the
+    // control core, and on the route merge one bump per row the control core has started the grid on.
+    constexpr uint32_t sem_route_ready_id = 13;
+    constexpr uint32_t sem_expert_go_id = 14;
+    // And the reduce stage's (the senders') ready count, also on the control core.
+    constexpr uint32_t sem_reduce_ready_id = 15;
+    if (persistent != nullptr) {
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = sem_expert_go_id,
+            .core_type = CoreType::WORKER,
+            .core_ranges = route_merge_set,
+            .initial_value = 0,
+        });
+    }
 
     // CBs are allocated identically on all cores so the broadcast CBs land at the same
     // L1 address everywhere (required for the multicast writes to be valid). cb_routing comes first
@@ -933,7 +954,7 @@ ProgramDescriptor build_program_descriptor(
     constexpr uint32_t cb_bcast = CBIndex::c_1;
     desc.cbs.push_back(CBDescriptor{
         .total_size = bcast_cb_bytes,
-        .core_ranges = all_cores,
+        .core_ranges = ids_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = cb_bcast,
             .data_format = tt::DataFormat::UInt32,
@@ -1440,25 +1461,33 @@ ProgramDescriptor build_program_descriptor(
     Buffer* routing_binding = routing_buffer ? routing_buffer : (ranking_buffer ? ranking_buffer : score_binding);
     Buffer* ranking_binding = ranking_buffer ? ranking_buffer : score_binding;
 
+    // The persistent route merge sits outside the grid, on the router core's RISCV_1 and NoC 1 (router_topk
+    // has RISCV_0 and NoC 0), so it multicasts to every grid core, from the far corner.
+    const CoreCoord ids_sender = persistent != nullptr ? route_merge : sender;
+    const auto ids_rect = mcast_rect(0, 0, GRID_X - 1, GRID_Y - 1);
     KernelDescriptor sender_desc;
     sender_desc.kernel_source = std::string(kKernelDir) + "/dataflow/compute_expert_ids.cpp";
     sender_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    sender_desc.core_ranges = sender_set;
+    sender_desc.core_ranges = CoreRangeSet{CoreRange{ids_sender, ids_sender}};
     sender_desc.compile_time_args = sender_ct_args;
     sender_desc.config = DataMovementConfigDescriptor{
-        .processor = DataMovementProcessor::RISCV_0,
-        .noc = NOC::NOC_0,
+        .processor = persistent != nullptr ? DataMovementProcessor::RISCV_1 : DataMovementProcessor::RISCV_0,
+        .noc = persistent != nullptr ? NOC::NOC_1 : NOC::NOC_0,
     };
     add_reader_input_define(sender_desc);
+    if (persistent != nullptr) {
+        sender_desc.defines.emplace_back("FE_ROUTE_STAGE", "1");
+        sender_desc.defines.emplace_back("FE_SEM_EXPERT_GO", std::to_string(sem_expert_go_id));
+    }
     // Pass the routing buffers as BufferBindings (not raw addresses) so the framework
     // patches the addresses on program-cache hits instead of rebuilding the descriptor.
     std::vector<std::variant<uint32_t, Buffer*>> sender_rt_args = {
         routing_binding,
-        mcast_start_x,
-        mcast_start_y,
-        mcast_end_x,
-        mcast_end_y,
-        num_dests,
+        persistent != nullptr ? ids_rect[2] : mcast_start_x,
+        persistent != nullptr ? ids_rect[3] : mcast_start_y,
+        persistent != nullptr ? ids_rect[0] : mcast_end_x,
+        persistent != nullptr ? ids_rect[1] : mcast_end_y,
+        persistent != nullptr ? ids_rect[4] + 1u : num_dests,
         core_index_for(sender),
         score_binding,
         group0_rect[0],
@@ -1482,7 +1511,7 @@ ProgramDescriptor build_program_descriptor(
     if (persistent != nullptr) {
         sender_rt_args.push_back(layer_table_buffer);
     }
-    sender_desc.emplace_runtime_args(sender, sender_rt_args);
+    sender_desc.emplace_runtime_args(ids_sender, sender_rt_args);
     desc.kernels.push_back(std::move(sender_desc));
 
     // ---- Input-broadcaster kernel on {1,0} (NoC 1). ----
@@ -1831,7 +1860,7 @@ ProgramDescriptor build_program_descriptor(
     if (fuse_ar) {
         writer_ct_args.insert(writer_ct_args.end(), {sem_ar_ready_id, cb_ar_scratch, all_reduce->ring_size});
         if (persistent != nullptr) {
-            writer_ct_args.push_back(cb_ar_out);
+            writer_ct_args.insert(writer_ct_args.end(), {cb_ar_out, ar_cores_per_link});
         }
     }
 
@@ -1884,7 +1913,7 @@ ProgramDescriptor build_program_descriptor(
                          ar_staging_slot});
                     if (persistent != nullptr) {
                         writer_args.insert(
-                            writer_args.end(), {persistent->out_ready1_sem_addr, persistent->d2h_staging});
+                            writer_args.end(), {persistent->out_ready1_sem_addr, persistent->out_staging});
                     }
                 }
                 writer_desc.emplace_runtime_args(core, writer_args);
@@ -1947,12 +1976,19 @@ ProgramDescriptor build_program_descriptor(
             .fp32_dest_acc_en = false,
         };
 
+        const auto merge_noc = device->worker_core_from_logical_core(ids_sender);
         for (uint32_t c = 0; c < num_router_cores; ++c) {
             const CoreCoord core{c, GRID_Y};
             // The bias and gate are bound as buffers so a program-cache hit patches their addresses (an L1
             // gate's cb_rw alias follows it the same way).
             router_reader_desc.emplace_runtime_args(
-                core, {router_bias_buffer, router_weight_buffer, router_tile_count(c), c, hub0_noc_x, hub0_noc_y});
+                core,
+                {router_bias_buffer,
+                 router_weight_buffer,
+                 router_tile_count(c),
+                 c,
+                 static_cast<uint32_t>(merge_noc.x),
+                 static_cast<uint32_t>(merge_noc.y)});
             router_compute_desc.runtime_args.emplace_back(
                 core, KernelDescriptor::CoreRuntimeArgs{c, router_tile_count(c)});
         }
@@ -1978,13 +2014,13 @@ ProgramDescriptor build_program_descriptor(
             .initial_value = 0,
         });
         // The persistent op's (see persistent.h): the writers' iteration count, read by their own core's
-        // reader; the senders' go; and the control core's ready count and D2H handshake.
+        // reader; the senders' go; and the control core's ready count and output handshake.
         constexpr uint32_t sem_writer_done_id = 7;
         constexpr uint32_t sem_go_id = 8;
         constexpr uint32_t sem_ready_id = 9;
-        constexpr uint32_t sem_d2h_count_id = 10;
-        constexpr uint32_t sem_d2h_done_id = 11;
-        constexpr uint32_t sem_d2h_stop_id = 12;
+        constexpr uint32_t sem_out_count_id = 10;
+        constexpr uint32_t sem_out_done_id = 11;
+        constexpr uint32_t sem_out_stop_id = 12;
         const CoreCoord ctrl_core = persistent != nullptr ? operation_attributes.persistent->socket_core : CoreCoord{};
         const CoreRangeSet ctrl_set{CoreRange(ctrl_core, ctrl_core)};
         if (persistent != nullptr) {
@@ -2000,7 +2036,13 @@ ProgramDescriptor build_program_descriptor(
                 .core_ranges = ar_sender_set,
                 .initial_value = 0,
             });
-            for (uint32_t s : {sem_ready_id, sem_d2h_count_id, sem_d2h_done_id, sem_d2h_stop_id}) {
+            for (uint32_t s :
+                 {sem_ready_id,
+                  sem_out_count_id,
+                  sem_out_done_id,
+                  sem_out_stop_id,
+                  sem_route_ready_id,
+                  sem_reduce_ready_id}) {
                 desc.semaphores.push_back(SemaphoreDescriptor{
                     .id = s,
                     .core_type = CoreType::WORKER,
@@ -2012,7 +2054,8 @@ ProgramDescriptor build_program_descriptor(
         // The output cores push exactly their ring_size slots, which the compute pops in one go. The
         // senders take the scratch base -- their staging -- from their own cb_ar_scratch, so they
         // declare it too, over their link's run of slots.
-        // The persistent root sums the two halves of the scratch in alternate iterations.
+        // The persistent root sums the two halves of the scratch in alternate iterations, and the persistent
+        // senders stage them in two halves of their run.
         const uint32_t core_bytes = shard_pages * out_tile_bytes;
         desc.cbs.push_back(CBDescriptor{
             .total_size = (persistent != nullptr ? 2u : 1u) * all_reduce->ring_size * core_bytes,
@@ -2026,7 +2069,7 @@ ProgramDescriptor build_program_descriptor(
             .buffer = all_reduce->scratch,
         });
         desc.cbs.push_back(CBDescriptor{
-            .total_size = ar_cores_per_link * core_bytes,
+            .total_size = (persistent != nullptr ? 2u : 1u) * ar_cores_per_link * core_bytes,
             .core_ranges = ar_sender_set,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = cb_ar_scratch,
@@ -2074,6 +2117,7 @@ ProgramDescriptor build_program_descriptor(
                 all_reduce->ring_size,
                 sem_go_id,
                 cb_ar_scratch,
+                ar_cores_per_link,
             };
             ar_sender.emplace_common_runtime_args(
                 {all_reduce->scratch,
@@ -2164,8 +2208,13 @@ ProgramDescriptor build_program_descriptor(
                 kernel.defines.emplace_back("FE_HDR_ADDR", std::to_string(persistent->header->address()));
                 kernel.defines.emplace_back("FE_REWIND_CBS", std::to_string(rewind_cbs) + "u");
                 kernel.defines.emplace_back("FE_SEM_WRITER_DONE", std::to_string(sem_writer_done_id));
-                kernel.defines.emplace_back("FE_SEM_READY", std::to_string(sem_ready_id));
-                kernel.defines.emplace_back("FE_SEM_D2H_COUNT", std::to_string(sem_d2h_count_id));
+                // Each stage reports to its own count: the router row (router cores and route merge) runs a
+                // row ahead of the worker grid, the reduce senders a row behind it.
+                const uint32_t ready_id = router_cores.contains(kernel.core_ranges)    ? sem_route_ready_id
+                                          : ar_sender_set.contains(kernel.core_ranges) ? sem_reduce_ready_id
+                                                                                       : sem_ready_id;
+                kernel.defines.emplace_back("FE_SEM_READY", std::to_string(ready_id));
+                kernel.defines.emplace_back("FE_SEM_OUT_COUNT", std::to_string(sem_out_count_id));
                 kernel.defines.emplace_back("FE_CTRL_X", std::to_string(ctrl_noc.x));
                 kernel.defines.emplace_back("FE_CTRL_Y", std::to_string(ctrl_noc.y));
                 if (persistent->is_root) {
@@ -2176,11 +2225,9 @@ ProgramDescriptor build_program_descriptor(
             constexpr uint32_t kHeaderBytes = 64;
             const uint32_t row_bytes = k_tiles * out_tile_bytes;
             constexpr uint32_t cb_ctrl = CBIndex::c_21;
-            // A DEVICE_PULL socket has no L1 FIFO (its fifo_addr is 0), so the control kernel pulls each page
-            // into a 64 B-aligned slot here, after the go words.
-            const uint32_t ctrl_cb_bytes =
-                params.num_layers * kHeaderBytes + kHeaderBytes +
-                (operation_attributes.persistent->h2d_device_pull ? kHeaderBytes + row_bytes + 64u : 0u);
+            // The preloaded headers, the go words, then the ring of each iteration's requester.
+            const uint32_t source_ring_offset = (params.num_layers + 1u) * kHeaderBytes;
+            const uint32_t ctrl_cb_bytes = source_ring_offset + kHeaderBytes;
             desc.cbs.push_back(CBDescriptor{
                 .total_size = ctrl_cb_bytes,
                 .core_ranges = ctrl_set,
@@ -2191,17 +2238,26 @@ ProgramDescriptor build_program_descriptor(
                 }}},
             });
 
-            const auto rect = mcast_rect(0, 0, GRID_X - 1, GRID_Y);
+            const auto rect = mcast_rect(0, 0, GRID_X - 1, GRID_Y - 1);
+            const auto route_rect = mcast_rect(0, GRID_Y, num_router_cores - 1u, GRID_Y);
+            TT_FATAL(
+                !router_cores.intersects(ar_sender_set),
+                "fused_experts: the persistent op's reduce senders {} must not take a router core {}, which is in "
+                "the router stage",
+                ar_sender_set.str(),
+                router_cores.str());
+            const auto route_merge_noc = device->worker_core_from_logical_core(route_merge);
+            const auto num_requesters = static_cast<uint32_t>(params.input_socket_config_addresses.size());
             std::vector<uint32_t> ctrl_ct_args = {
-                persistent->h2d_socket_config_address,
+                num_requesters,
                 kHeaderBytes + row_bytes,
                 row_bytes,
                 params.num_layers,
                 cb_ctrl,
-                GRID_X * GRID_Y + num_router_cores + all_reduce->num_links,
+                GRID_X * GRID_Y,
                 persistent->is_root ? 1u : 0u,
-                sem_d2h_done_id,
-                sem_d2h_stop_id,
+                sem_out_done_id,
+                sem_out_stop_id,
                 sem_go_id,
                 rect[0],
                 rect[1],
@@ -2209,10 +2265,21 @@ ProgramDescriptor build_program_descriptor(
                 rect[3],
                 rect[4] + 1u,
                 static_cast<uint32_t>(ar_senders.size()),
+                route_rect[0],
+                route_rect[1],
+                route_rect[2],
+                route_rect[3],
+                route_rect[4] + 1u,
+                num_router_cores + 1u,
+                sem_route_ready_id,
+                static_cast<uint32_t>(route_merge_noc.x),
+                static_cast<uint32_t>(route_merge_noc.y),
+                sem_expert_go_id,
+                sem_reduce_ready_id,
             };
             TensorAccessorArgs(*layer_table_buffer).append_to(ctrl_ct_args);
             KernelDescriptor ctrl_desc;
-            ctrl_desc.kernel_source = std::string(kKernelDir) + "/dataflow/fe_h2d_ctrl.cpp";
+            ctrl_desc.kernel_source = std::string(kKernelDir) + "/dataflow/fe_ctrl.cpp";
             ctrl_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
             ctrl_desc.core_ranges = ctrl_set;
             ctrl_desc.compile_time_args = ctrl_ct_args;
@@ -2221,9 +2288,6 @@ ProgramDescriptor build_program_descriptor(
             ctrl_desc.defines = {
                 {"FE_HDR_ADDR", std::to_string(persistent->header->address())},
                 {"FE_SEM_READY", std::to_string(sem_ready_id)}};
-            if (operation_attributes.persistent->h2d_device_pull) {
-                ctrl_desc.defines.emplace_back("FE_H2D_PULL", "1");
-            }
             std::vector<std::variant<uint32_t, Buffer*>> ctrl_rt_args = {layer_table_buffer, input_buffer};
             for (const auto& s : ar_senders) {
                 ctrl_rt_args.push_back(static_cast<uint32_t>(device->worker_core_from_logical_core(s).x));
@@ -2231,26 +2295,53 @@ ProgramDescriptor build_program_descriptor(
             for (const auto& s : ar_senders) {
                 ctrl_rt_args.push_back(static_cast<uint32_t>(device->worker_core_from_logical_core(s).y));
             }
+            ctrl_rt_args.insert(
+                ctrl_rt_args.end(),
+                params.input_socket_config_addresses.begin(),
+                params.input_socket_config_addresses.end());
             ctrl_desc.emplace_runtime_args(ctrl_core, ctrl_rt_args);
             desc.kernels.push_back(std::move(ctrl_desc));
 
             if (persistent->is_root) {
-                KernelDescriptor d2h_desc;
-                d2h_desc.kernel_source = std::string(kKernelDir) + "/dataflow/fe_d2h.cpp";
-                d2h_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-                d2h_desc.core_ranges = ctrl_set;
-                d2h_desc.compile_time_args = {
-                    params.d2h_socket_config_address,
+                KernelDescriptor out_desc;
+                out_desc.kernel_source = std::string(kKernelDir) + "/dataflow/fe_out.cpp";
+                out_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+                out_desc.core_ranges = ctrl_set;
+                out_desc.compile_time_args = {
+                    num_requesters,
                     row_bytes,
                     static_cast<uint32_t>(ar_out_cores.size()),
-                    sem_d2h_count_id,
-                    sem_d2h_done_id,
-                    sem_d2h_stop_id,
+                    sem_out_count_id,
+                    sem_out_done_id,
+                    sem_out_stop_id,
+                    static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes()),
+                    cb_ctrl,
+                    source_ring_offset,
                 };
-                d2h_desc.config =
+                out_desc.config =
                     DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
-                d2h_desc.emplace_runtime_args(ctrl_core, {persistent->d2h_staging});
-                desc.kernels.push_back(std::move(d2h_desc));
+                tt::tt_metal::KernelHandle out_id = desc.kernels.size();
+                desc.kernels.push_back(std::move(out_desc));
+                std::vector<uint32_t> out_args = {static_cast<uint32_t>(persistent->out_staging->address())};
+                for (uint32_t k = 0; k < num_requesters; ++k) {
+                    out_args.push_back(params.output_socket_config_addresses[k]);
+                    out_args.push_back(static_cast<uint32_t>(params.output_route_args[k].size() / kD2DRouteArgs));
+                    out_args.insert(
+                        out_args.end(), params.output_route_args[k].begin(), params.output_route_args[k].end());
+                }
+                // Link 0: the root's reduce senders hold no connection in the outputs' direction.
+                tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                    src_node,
+                    {tt::tt_fabric::FabricNodeId(
+                        tt::tt_fabric::MeshId{params.output_connection_mesh_id}, params.output_connection_chip_id)},
+                    {0u},
+                    desc,
+                    out_id,
+                    ctrl_core,
+                    out_args,
+                    tt::tt_fabric::FabricApiType::Mesh);
+                desc.kernels[out_id].runtime_args.emplace_back(
+                    ctrl_core, KernelDescriptor::CoreRuntimeArgs(out_args.begin(), out_args.end()));
             }
         }
     }
@@ -2281,12 +2372,13 @@ tt::tt_metal::WorkloadDescriptor FusedExpertsDeviceOperation::MultiCoreAllReduce
     // reserved in every L1 bank, and a sender stages its link's run of output shards in it, so it
     // has at least that many slots. It lives as long as the cached workload, so it goes in L1_SMALL
     // when it fits there and, like the semaphore, does not fragment L1.
-    // The persistent root reduces into the two halves of it in alternate iterations.
+    // The persistent root reduces into the two halves of it in alternate iterations, and a persistent
+    // sender stages alternate iterations in two halves too.
     const auto& persistent = operation_attributes.persistent;
     const auto& shard = output.shard_spec().value();
-    const uint32_t scratch_slots = std::max(
-        (persistent.has_value() ? 2u : 1u) * ar.ring_size,
-        tt::div_up(static_cast<uint32_t>(shard.grid.num_cores()), ar.num_links));
+    const uint32_t halves = persistent.has_value() ? 2u : 1u;
+    const uint32_t scratch_slots =
+        halves * std::max(ar.ring_size, tt::div_up(static_cast<uint32_t>(shard.grid.num_cores()), ar.num_links));
     auto scratch_shape = output.logical_shape();
     scratch_shape[-2] *= scratch_slots;
     const ShardSpec scratch_shard{shard.grid, {shard.shape[0] * scratch_slots, shard.shape[1]}, shard.orientation};
@@ -2320,9 +2412,9 @@ tt::tt_metal::WorkloadDescriptor FusedExpertsDeviceOperation::MultiCoreAllReduce
     }
 
     // The persistent op's header words on every core of the input replica's grid, which have to start out
-    // zero (no go), and the root's two-row D2H staging on the control core.
+    // zero (no go), and the root's two-row output staging on the control core.
     std::shared_ptr<Tensor> header;
-    std::shared_ptr<Tensor> d2h_staging;
+    std::shared_ptr<Tensor> out_staging;
     if (persistent.has_value()) {
         constexpr uint32_t kHeaderWords = 32;
         const auto& in_grid = input.memory_config().shard_spec().value().grid;
@@ -2342,7 +2434,7 @@ tt::tt_metal::WorkloadDescriptor FusedExpertsDeviceOperation::MultiCoreAllReduce
         workload.buffers.push_back({header, header->buffer()});
         const CoreCoord ctrl = persistent->socket_core;
         const uint32_t hidden = static_cast<uint32_t>(input.logical_shape()[-1]);
-        d2h_staging = std::make_shared<Tensor>(create_device_tensor(
+        out_staging = std::make_shared<Tensor>(create_device_tensor(
             TensorSpec(
                 ttnn::Shape({2, hidden}),
                 TensorLayout(
@@ -2353,7 +2445,7 @@ tt::tt_metal::WorkloadDescriptor FusedExpertsDeviceOperation::MultiCoreAllReduce
                         BufferType::L1,
                         ShardSpec{CoreRangeSet(CoreRange(ctrl, ctrl)), {2, hidden}, ShardOrientation::ROW_MAJOR}})),
             mesh_device));
-        workload.buffers.push_back({d2h_staging, d2h_staging->buffer()});
+        workload.buffers.push_back({out_staging, out_staging->buffer()});
     }
     tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, sub_devices);
 
@@ -2432,16 +2524,13 @@ tt::tt_metal::WorkloadDescriptor FusedExpertsDeviceOperation::MultiCoreAllReduce
         };
         if (persistent.has_value()) {
             const ttnn::MeshCoordinate root(0, 0);
-            const auto& mesh_shape = mesh_device->shape();
             epilogue.persistent = PersistentEpilogue{
                 .is_root = coord == root,
                 .root = root,
-                .h2d_socket_config_address =
-                    persistent->h2d_socket_config_addresses.at(coord[0] * mesh_shape[1] + coord[1]),
                 .out_ready1_sem_addr = static_cast<uint32_t>(workload.semaphores[1].address()),
                 .credit_sem_addr = static_cast<uint32_t>(workload.semaphores[2].address()),
                 .header = header->buffer(),
-                .d2h_staging = d2h_staging->buffer(),
+                .out_staging = out_staging->buffer(),
             };
         }
         workload.programs.push_back(
