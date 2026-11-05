@@ -773,7 +773,9 @@ class TtMoe(LightweightModule):
             cluster_axis=1,  # TP axis for reduce-scatter
             num_links=self.col_num_links,
             topology=self.col_topology,
-            output_memory_config=ttnn.L1_MEMORY_CONFIG if _GLUE_EPI_L1 else None,
+            # The latent MoE keeps DRAM: from_latent()'s distributed norm gathers its stats with
+            # high_bw_all_gather, which needs a DRAM input.
+            output_memory_config=ttnn.L1_MEMORY_CONFIG if _GLUE_EPI_L1 and not self.use_latent_moe else None,
         )
 
         # Load debug flags from environment
