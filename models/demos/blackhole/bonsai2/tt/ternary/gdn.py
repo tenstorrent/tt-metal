@@ -150,16 +150,35 @@ class TernaryGDN:
         ttnn.deallocate(ab)
         return qkv, a, b, z
 
+    def takes_norm(self):
+        """Whether decode() can run the layer's norm + rotation inside its qkvz op (prerot.put_norm): only when the
+        step computes a / b from the tiled blocks, since that form never makes the normalised x (BONSAI_GDN_NORM_FUSE=0:
+        off)."""
+        return (
+            getattr(self, "wab", None) is not None
+            and os.environ.get("BONSAI_STEP_AB", "1") == "1"
+            and os.environ.get("BONSAI_GDN_NORM_FUSE", "1") == "1"
+        )
+
     def decode(self, x, gdn, compute_kernel_config=None):
         """The whole one-token GDN layer: in_proj, the fused step (conv, gates, state update, gated norm; updates
         gdn's conv and recurrent state in place), out_proj. x [1, 1, 5120] -> [1, 1, 5120]."""
         lead = tuple(list(x.shape)[:-1])
-        xr = prerot.take(x)
-        if xr is None:
-            xr = self.rot_in(x)
-        qkv, z = self.qkvz(xr, lead=lead, split=self.split)
-        ttnn.deallocate(xr)
-        xnt = prerot.take_xnt(x) if getattr(self, "wab", None) is not None else None
+        nrot = prerot.take_norm(x)
+        if nrot is not None:
+            # the layer's norm + rotation inside the qkvz op (x is the un-normalised residual stream); it also writes
+            # the normalised blocks tiled (xnt) for the step's a / b
+            xnt = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([nrot.B * 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, x.device(), ttnn.L1_MEMORY_CONFIG
+            )
+            qkv, z = self.qkvz.rotated(nrot, x, lead=lead, u=xnt, split=self.split)
+        else:
+            xr = prerot.take(x)
+            if xr is None:
+                xr = self.rot_in(x)
+            qkv, z = self.qkvz(xr, lead=lead, split=self.split)
+            ttnn.deallocate(xr)
+            xnt = prerot.take_xnt(x) if getattr(self, "wab", None) is not None else None
         if xnt is not None and os.environ.get("BONSAI_STEP_AB", "1") == "1":
             # a / b inside the step: dot products of the norm op's tiled blocks with this head's weight blocks
             o = self.step(qkv, None, z, gdn.fused_conv_state, gdn.recurrent_state, xnt=xnt, wab=self.wab)

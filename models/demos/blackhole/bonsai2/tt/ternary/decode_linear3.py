@@ -215,7 +215,7 @@ class TernaryDecodeLinear3:
             extra_defines = list(extra_defines) + [("BATCH4", "1")]
         glu = getattr(self, "glu", False)
         if rot is not None:
-            assert COMMON_ARGS and not split and not qg_heads and self.inline_scales and self.group16
+            assert COMMON_ARGS and not qg_heads and self.inline_scales and self.group16
             dm_defines = list(dm_defines) + [("X_HUB", "1")]  # x' from the fused rotation (tdec_stream.hpp XHub)
         elif x_rot is not None and list(x_rot.shape) == [K // 1024, 1024]:
             dm_defines = list(dm_defines) + [("X_PAGED", "1")]  # x' as 2-KB pages in L1 (rotate.py XPAGED)
@@ -334,10 +334,11 @@ class TernaryDecodeLinear3:
         rkern, rcbs, rins, rsems = [], [], [], []
         if rot is not None:
             rotation, rx, ru, rsig = rot
-            assert cores + rotation.B <= grid.x * grid.y, (cores, rotation.B)
+            spare = grid.x * grid.y - cores  # a NormRotation spreads its blocks over these; a DecodeRotation needs B
+            assert spare > 0 and (spare >= rotation.B or hasattr(rotation, "eps")), (cores, rotation.B)
             hub = device.worker_core_from_logical_core(ttnn.CoreCoord(0, 0))
             rkern, rcbs, rins, rsems = rotation.fused_parts(
-                rx, ru, rsig, cores, grid.x, (hub.x, hub.y), xl1.buffer_address()
+                rx, ru, rsig, cores, grid.x, (hub.x, hub.y), xl1.buffer_address(), spare=spare
             )
         program = ttnn.ProgramDescriptor(
             kernels=rkern
@@ -408,8 +409,8 @@ class TernaryDecodeLinear3:
         )
         return (out, out2) if out2 is not None else res  # generic_op returns the last tensor of its list
 
-    def rotated(self, rotation, x, lead=(1, 1, TILE), u=None, sig=False, residual=None, out_l1=False):
+    def rotated(self, rotation, x, lead=(1, 1, TILE), u=None, sig=False, residual=None, out_l1=False, split=0):
         """This linear on rotation(x) (rotation(x, u=u, sig=sig)) in one op: the rotation runs on the cores after this
         linear's and hands x' over through core 0 (no rotation op, no x' round trip; the weight stream starts at
         once). x (and u) should be in L1: the rotation's reads then do not queue behind the weight streams."""
-        return self(None, lead=lead, rot=(rotation, x, u, sig), residual=residual, out_l1=out_l1)
+        return self(None, lead=lead, rot=(rotation, x, u, sig), residual=residual, out_l1=out_l1, split=split)

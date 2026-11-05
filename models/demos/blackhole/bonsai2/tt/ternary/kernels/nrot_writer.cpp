@@ -16,22 +16,42 @@
 #define NR_FIRST 0
 #endif
 
+#ifndef NR_BPC
+#define NR_BPC 1
+#endif
+
 void kernel_main() {
 #ifdef NR_TO_HUB
-    // fused into a ternary decode linear (decode_linear3.py rotated()): x' block b into the hub's (core 0's) buffer
-    // and its counter bumped (as rot_writer.cpp ROT_TO_HUB). common args: hub x, hub y, buffer, counter, grid_x
+    // fused into a ternary decode linear (decode_linear3.py rotated()): each own x' block b into the hub's (core 0's)
+    // buffer at 2048 b and its counter bumped (as rot_writer.cpp ROT_TO_HUB); NR_XNT: also the tiled normalised block
+    // into tile b of xnt. common args: hub x, hub y, buffer, counter, grid_x, B, xnt
     const uint32_t hx = get_common_arg_val<uint32_t>(0), hy = get_common_arg_val<uint32_t>(1);
     const uint32_t hbuf = get_common_arg_val<uint32_t>(2), hcnt = get_common_arg_val<uint32_t>(3);
-    const uint32_t hb = core_index(get_common_arg_val<uint32_t>(4)) - NR_FIRST;
+    const uint32_t c = core_index(get_common_arg_val<uint32_t>(4)) - NR_FIRST;
+    const uint32_t B = get_common_arg_val<uint32_t>(5);
+    const uint32_t b0 = c * NR_BPC, nb = (B - b0 < NR_BPC) ? B - b0 : NR_BPC;
+#ifdef NR_XNT
+    constexpr auto t_args = TensorAccessorArgs<0>();
+    const auto xnt = TensorAccessor(t_args, get_common_arg_val<uint32_t>(6), 2048);
+#endif
     constexpr uint32_t cb_yh = NR_CB_Y;
-    cb_wait_front(cb_yh, 1);
-    noc_async_write(get_read_ptr(cb_yh), get_noc_addr(hx, hy, hbuf + hb * 2048), 2048);
-    noc_async_write_barrier();
-    noc_semaphore_inc(get_noc_addr(hx, hy, hcnt), 1);
+    for (uint32_t i = 0; i < nb; ++i) {
+#ifdef NR_XNT
+        cb_wait_front(20, 1);
+        noc_async_write(get_read_ptr(20), xnt.get_noc_addr(b0 + i), 2048);
+#endif
+        cb_wait_front(cb_yh, 1);
+        noc_async_write(get_read_ptr(cb_yh), get_noc_addr(hx, hy, hbuf + (b0 + i) * 2048), 2048);
+        noc_async_write_barrier();
+        noc_semaphore_inc(get_noc_addr(hx, hy, hcnt), 1);
+        cb_pop_front(cb_yh, 1);
+#ifdef NR_XNT
+        cb_pop_front(20, 1);
+#endif
+    }
     noc_async_atomic_barrier();
-    cb_pop_front(cb_yh, 1);
 #else
-    // common args: out (x' copies), xn, grid_x, xnt (the normalised blocks tiled, B tiles)
+    // common args: out (x' copies), xn, grid_x, xnt (the normalised blocks tiled, B tiles); one block per core
     const uint32_t b = core_index(get_common_arg_val<uint32_t>(2)) - NR_FIRST;
     constexpr uint32_t C = get_compile_time_arg_val(0);
     constexpr uint32_t ROW_BYTES = get_compile_time_arg_val(1);

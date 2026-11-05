@@ -349,8 +349,14 @@ class Qwen36DecoderLayer:
             # (models/demos/blackhole/bonsai2/tt/ternary/rotate.py NormRotation, prerot.py).
             from models.demos.blackhole.bonsai2.tt.ternary import prerot
 
-            attn_input, _xr = self._bonsai_attn_nrot(x)
-            prerot.put(attn_input, _xr)
+            _tgdn = None if self.is_full_attention else getattr(self.attention, "ternary", None)
+            if _tgdn is not None and _tgdn.takes_norm():
+                # Bonsai: the norm + rotation runs inside the GDN's qkvz op (the GDN gets x itself)
+                attn_input = x
+                prerot.put_norm(x, self._bonsai_attn_nrot)
+            else:
+                attn_input, _xr = self._bonsai_attn_nrot(x)
+                prerot.put(attn_input, _xr)
             prerot.put_residual(x)  # Bonsai: the output projection adds x in its output stage (residual_added below)
         elif single_decode:
             attn_input = sharded_decode_rms_norm(self.attention_norm, x, self.args.dim)
@@ -454,7 +460,8 @@ class Qwen36DecoderLayer:
             attn_output = self.attention.forward(
                 attn_input, mode=deltanet_mode, chunk_size=chunk_size, valid_len=valid_len
             )
-        ttnn.deallocate(attn_input)
+        if attn_input is not x:  # else the GDN took the residual x itself (its norm inside the qkvz op)
+            ttnn.deallocate(attn_input)
 
         if pre_ff is not None:
             from models.demos.blackhole.bonsai2.tt.ternary import prerot
