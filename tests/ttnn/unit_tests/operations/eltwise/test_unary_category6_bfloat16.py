@@ -129,10 +129,6 @@ def _exhaustive_bf16_4d():
 
 
 def _to_device_bf16_comparand(value):
-    """Round a scalar parameter to the nearest bf16, as the device does before
-    comparing against it or writing it into the output. Ints and None pass
-    through.
-    """
     if value is None or isinstance(value, bool) or not isinstance(value, float):
         return value
     return bf16_quantize_rne(value)
@@ -238,11 +234,6 @@ def _assert_bitwise_equal(result, golden, label):
 @pytest.mark.parametrize("min_val", [0.25, 0.5, 0.66, -1.0])
 @pytest.mark.parametrize("max_val", [1.0, 2.5, 3.0, 6.6])
 def test_hardtanh_op(device, min_val, max_val):
-    """output_i = clamp(x_i, min_val, max_val). Exhaustive normal bf16 sweep.
-
-    The golden is built from the bounds rounded to the nearest bf16, as the
-    device rounds them: min_val=0.66 is 0.66015625 on both sides.
-    """
     input_tensor = _exhaustive_bf16_4d()
     device_min_val = _to_device_bf16_comparand(min_val)
     device_max_val = _to_device_bf16_comparand(max_val)
