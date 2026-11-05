@@ -13,7 +13,7 @@
 
 #if defined(KERNEL_BUILD)
 #include "dev_mem_map.h"
-#include "internal/tt-2xx/quasar/eth_cce_send.h"
+#include "internal/ethernet/tunneling.h"  // eth_cce_send.h, which needs tunneling.h's postcode pointers
 #endif
 
 namespace keraunos_eth_ordering {
