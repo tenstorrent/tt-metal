@@ -3305,7 +3305,16 @@ std::vector<tt::tt_metal::TensorTopology> MatmulDeviceOperation::compute_output_
     if (a_rank < 2 || b_rank < 2) {
         return {};
     }
-    const int output_rank = std::max(a_rank, b_rank);
+    // A preallocated output may have another rank than the operands give the result, folding leading dims into its rows
+    // or adding leading dims of size 1 (validation checks only its last dim, its rows in whole tiles and its volume):
+    // its own dims are the ones the label counts.
+    const auto& outputs = args.optional_output_tensors;
+    const int output_rank = !outputs.empty() && outputs.front().has_value()
+                                ? static_cast<int>(outputs.front()->logical_shape().rank())
+                                : std::max(a_rank, b_rank);
+    if (output_rank < 2) {
+        return {};
+    }
     const OperandDims a_dims{
         .rank = a_rank,
         .contracted = attributes.transpose_a ? a_rank - 2 : a_rank - 1,

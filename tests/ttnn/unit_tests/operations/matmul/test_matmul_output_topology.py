@@ -83,6 +83,46 @@ def test_bias_split_on_out(mesh_device):
     assert_with_pcc(x @ w.mT + bias, _gathered(out), 0.999)
 
 
+def test_bias_label_of_higher_distribution_rank(mesh_device):
+    """A weight with the collapsed label {2},[Shard(2)] next to a bias labelled [Replicate, Shard(1)]: the union counts
+    only labels of the highest distribution rank, so the output's label is the bias's, renumbered."""
+    x, w, bias = torch.randn(1, 1, S, K), torch.randn(1, 1, N, K), torch.randn(1, N)
+
+    out = ttnn.linear(
+        _replicated(x, mesh_device),
+        _sharded(w, mesh_device, 2, nd=False),
+        bias=_sharded(bias, mesh_device, 1),
+        transpose_b=True,
+    )
+
+    assert _placements(out) == [REPLICATE, "PlacementShard(3)"]
+    assert_with_pcc(x @ w.mT + bias, _gathered(out), 0.999)
+
+
+def test_preallocated_output_of_lower_rank(mesh_device):
+    """A preallocated output may fold the leading dims into its rows: a 2-D out for a 4-D product. Its dim 1 holds the
+    columns, so a weight split on out labels it Shard(1)."""
+    x, w = torch.randn(1, 1, S, K), torch.randn(K, N)
+    out = _replicated(torch.zeros(S, N // 2), mesh_device)
+
+    ttnn.matmul(_replicated(x, mesh_device), _sharded(w, mesh_device, 1), optional_output_tensor=out)
+
+    assert _placements(out) == [REPLICATE, "PlacementShard(1)"]
+    assert_with_pcc((x @ w)[0, 0], _gathered(out), 0.999)
+
+
+def test_preallocated_output_of_higher_rank(mesh_device):
+    """A 3-D activation split on its batch dim, written to a 4-D preallocated output: the batch dim is the output's
+    dim 1, counted in the output's own rank."""
+    a, b = torch.randn(2, S, K), torch.randn(K, N)
+    out = _replicated(torch.zeros(1, 1, S, N), mesh_device)
+
+    ttnn.matmul(_sharded(a, mesh_device, 0), _replicated(b, mesh_device), optional_output_tensor=out)
+
+    assert _placements(out) == [REPLICATE, "PlacementShard(1)"]
+    assert_with_pcc((a @ b).unsqueeze(0), _gathered(out), 0.999)
+
+
 def test_transposed_activation_split_on_rows(mesh_device):
     """An a stored [K, M] and split on M: with transpose_a each device computes its slice of the output's rows."""
     a, b = torch.randn(1, 1, K, S), torch.randn(1, 1, K, N)
