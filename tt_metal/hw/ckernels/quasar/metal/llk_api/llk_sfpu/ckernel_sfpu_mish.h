@@ -14,6 +14,9 @@
 
 namespace ckernel::sfpu {
 
+// Whether BF16 DEST runs the generated mish kernel as one call over the whole tile.
+inline constexpr bool mish_bf16_whole_tile = false;
+
 /**
  * Mish activation function:  mish(x) = x * tanh(softplus(x)) = x * tanh(log(1+exp(x)))
  *
@@ -88,7 +91,7 @@ inline void calculate_mish() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 inline void mish_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     // exp does not need an init.
