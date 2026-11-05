@@ -64,14 +64,17 @@ struct CapturedCore {
     bool operator==(const CapturedCore&) const = default;
 };
 
-// Reads one router core, going through all steps in ReadStep order. Stops at the first read that fails.
+// Reads one router core, going through all steps in ReadStep order. Stops at the first read that fails. The router
+// must be one capture reads, and `chip` the reader's id for its chip.
 CapturedCore read_router_core(
-    const CapturePlan& plan, const CaptureTarget& target, DeviceReader& reader, CaptureClock& clock);
+    const CapturePlan& plan, int32_t chip, const RouterTarget& target, DeviceReader& reader, CaptureClock& clock);
 
 // How many liveness rounds to take, and how far apart.
 struct LivenessOptions {
     uint32_t num_rounds = 3;
     std::chrono::milliseconds interval{1000};
+
+    bool operator==(const LivenessOptions&) const = default;
 };
 
 // One liveness sample of a router core: its heartbeat word, and its core registers.
@@ -89,10 +92,11 @@ struct LivenessSample {
 
 // Takes the liveness rounds: each round samples every core capture reads, a few words each, and the rounds are
 // options.interval apart. These come before any core's full read, so they show which routers are still running.
-// Returns each target's samples, in the targets' order.
-std::vector<std::vector<LivenessSample>> collect_liveness_rounds(
+// Returns each router's samples, indexed by chip and then router, as the targets are. A router capture doesn't read has
+// none.
+std::vector<std::vector<std::vector<LivenessSample>>> collect_liveness_rounds(
     const CapturePlan& plan,
-    const std::vector<CaptureTarget>& targets,
+    const std::vector<ChipTarget>& targets,
     DeviceReader& reader,
     CaptureClock& clock,
     const LivenessOptions& options);
