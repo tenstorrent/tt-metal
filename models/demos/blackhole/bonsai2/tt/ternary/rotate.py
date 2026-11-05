@@ -24,15 +24,9 @@ class DecodeRotation:
         h32 = hadamard(32) * np.sqrt(32)  # +-1
         h = np.stack([h32, h32 / 32.0]).astype(np.float32)  # H32, H32 / 32: product = H_1024 factors, exact in bf16
         self.h = ttnn.from_torch(torch.from_numpy(h), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        # sign masks: bf16 sign bit (0x8000) where D = -1, block b as 512 uint32 (two bf16 each, low half first)
-        bits = (signs < 0).astype(np.uint32).reshape(self.B, 512, 2)
-        masks = (bits[..., 0] << 15) | (bits[..., 1] << 31)
-        self.m = ttnn.from_torch(
-            torch.from_numpy(masks.astype(np.uint32).view(np.int32)),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-        )
+        # signs D as +-1 tiles: block b's [32, 32] (element (jh, jl) = D[1024 b + 32 jh + jl]), tiled like the block
+        d = torch.from_numpy(np.where(signs < 0, -1.0, 1.0).astype(np.float32)).reshape(self.B * 32, 32)
+        self.m = ttnn.from_torch(d.bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         self.device = device
 
     def __call__(self, x: ttnn.Tensor, debug_copy=False, u=None, sig=False) -> ttnn.Tensor:
@@ -110,7 +104,8 @@ class DecodeRotation:
             semaphores=[],
             cbs=[
                 cb(0, ttnn.bfloat16, 2048, 1),
-                cb(1, ttnn.uint32, 2048, 1),
+                cb(1, ttnn.bfloat16, 2048, 1),
+                cb(28, ttnn.bfloat16, 2048, 1),
                 cb(3, ttnn.bfloat16, 4096, 1),
                 cb(2, ttnn.bfloat16, 2048, 2),
                 cb(24, ttnn.bfloat16, 2048, 1),

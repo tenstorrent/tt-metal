@@ -67,13 +67,30 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_in = cb_xt;
 #endif
+    // D: the block's signs (a +-1 tile, tiled like the block; the reader no longer flips sign bits word by word)
+    constexpr uint32_t cb_m = tt::CBIndex::c_1, cb_d = tt::CBIndex::c_28;
+    cb_wait_front(cb_m, 1);
+    cb_wait_front(cb_in, 1);
+    reconfig_data_format(cb_in, cb_m);
+    mul_init(cb_in, cb_m);
+    tile_regs_acquire();
+    mul_tiles(cb_in, cb_m, 0, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    cb_reserve_back(cb_d, 1);
+    pack_reconfig_data_format(cb_d);
+    pack_tile(0, cb_d);
+    tile_regs_release();
+    cb_push_back(cb_d, 1);
+    cb_pop_front(cb_in, 1);
+    cb_pop_front(cb_m, 1);
 
     cb_wait_front(cb_h, 2);
-    cb_wait_front(cb_in, 1);
+    cb_wait_front(cb_d, 1);
 #ifdef ROT_DEBUG_COPY
-    copy_init(cb_xt);
+    copy_init(cb_d);
     tile_regs_acquire();
-    copy_tile(cb_xt, 0, 0);
+    copy_tile(cb_d, 0, 0);
     tile_regs_commit();
     tile_regs_wait();
     pack_untilize_dest_init<1>(cb_y);
@@ -84,10 +101,10 @@ void kernel_main() {
     pack_untilize_uninit(cb_y);
     return;
 #endif
-    reconfig_data_format<SrcOrder::Reverse>(cb_h, cb_in);
-    matmul_init(cb_h, cb_in);
+    reconfig_data_format<SrcOrder::Reverse>(cb_h, cb_d);
+    matmul_init(cb_h, cb_d);
     tile_regs_acquire();
-    matmul_tiles(cb_h, cb_in, 0, 0, 0);
+    matmul_tiles(cb_h, cb_d, 0, 0, 0);
     tile_regs_commit();
     tile_regs_wait();
     cb_reserve_back(cb_t, 1);
