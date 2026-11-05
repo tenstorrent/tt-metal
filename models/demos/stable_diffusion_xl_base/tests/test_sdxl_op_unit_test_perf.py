@@ -21,21 +21,21 @@ def test_dram_group_norm_two_pass_vae(device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_block_sharded_group_norm_sdxl(device):
-    from tt_py_test_utils_common.sdxl_group_norm import test_sdxl_base_group_norm
+    from models.demos.stable_diffusion_xl_base.tests.sdxl_group_norm import test_sdxl_base_group_norm
 
     test_sdxl_base_group_norm(device, (1, 1920, 32, 32), use_welford=False, perf_test_mode=USE_PERF_TEST_MODE)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 47000}], indirect=True)
 def test_block_sharded_group_norm_negative_mask_sdxl(device):
-    from tt_py_test_utils_common.sdxl_group_norm import test_sdxl_base_group_norm_negative_mask
+    from models.demos.stable_diffusion_xl_base.tests.sdxl_group_norm import test_sdxl_base_group_norm_negative_mask
 
     test_sdxl_base_group_norm_negative_mask(device, (1, 640, 128, 128), perf_test_mode=USE_PERF_TEST_MODE)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_ff_matmul_with_gelu_sdxl(device):
-    from tt_py_test_utils_common.sdxl_matmul import test_sdxl_matmul
+    from models.demos.stable_diffusion_xl_base.tests.sdxl_matmul import test_sdxl_matmul
 
     test_sdxl_matmul(
         device,
@@ -55,7 +55,7 @@ def test_ff_matmul_with_gelu_sdxl(device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
 def test_conv2d_block_sharded_sdxl(device):
-    from tt_py_test_utils_common.sdxl_conv2d import test_conv2d_sdxl
+    from models.demos.stable_diffusion_xl_base.tests.sdxl_conv2d import test_conv2d_sdxl
 
     test_conv2d_sdxl(
         device,
@@ -87,7 +87,7 @@ def test_conv2d_block_sharded_sdxl(device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 27 * 1024}], indirect=True)
 def test_conv2d_auto_sliced_vae(device):
-    from tt_py_test_utils_common.sdxl_conv2d import test_conv2d_vae_sdxl
+    from models.demos.stable_diffusion_xl_base.tests.sdxl_conv2d import test_conv2d_vae_sdxl
 
     test_conv2d_vae_sdxl(
         device,

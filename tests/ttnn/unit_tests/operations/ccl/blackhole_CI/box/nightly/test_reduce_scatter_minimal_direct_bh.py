@@ -28,7 +28,7 @@ from tests.nightly.t3000.ccl.test_reduce_scatter_minimal_direct import (
     RS_DIRECT_TRACE_IDS,
     run_reduce_scatter_minimal_direct_impl,
 )
-from tests.scripts.common import get_updated_device_params
+from tt_py_test_utils_common.device_params import get_updated_device_params
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 

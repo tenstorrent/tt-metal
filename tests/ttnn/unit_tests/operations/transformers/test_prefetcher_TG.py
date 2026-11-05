@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tt_py_test_utils_common.prefetcher_tg_shapes import (
+from models.demos.llama3_70b_galaxy.tests.prefetcher_tg_shapes import (
     LLAMA_INPUT_DTYPES,
     LLAMA_INPUT_SHAPES,
     QWEN_INPUT_DTYPES,

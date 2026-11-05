@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
     tp_axis_is_wrapped,
 )
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KIMI_K3_CONVOLUTION_NRMSE,
     LayerNrmseThresholds,
@@ -37,7 +38,6 @@ from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_m
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from models.tt_transformers.tt.ccl import TT_CCL
 from tt_py_test_utils_common.comparison_funcs import comp_pcc
-from tt_py_test_utils_common.kda_test_utils import make_actual_start
 from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 
 pytestmark = [

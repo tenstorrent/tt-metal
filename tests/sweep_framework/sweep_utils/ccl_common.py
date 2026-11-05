@@ -13,7 +13,7 @@ from math import prod
 import ttnn
 
 from loguru import logger
-from tests.scripts.common import get_updated_device_params
+from tt_py_test_utils_common.device_params import get_updated_device_params
 
 
 def mesh_shape_iterator(num_devices, limit=None):

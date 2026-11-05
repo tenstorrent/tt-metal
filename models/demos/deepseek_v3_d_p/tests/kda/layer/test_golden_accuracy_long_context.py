@@ -28,6 +28,12 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_co
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256, load_kda_layer_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.first_layer_input import FIRST_LAYER_INPUT, FirstLayerInput
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
+    TokenErrorAccumulator,
+    assert_accurate,
+    make_actual_start,
+    nrmse,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, load_window, token_ids_sha256
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
@@ -38,7 +44,6 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     to_sp_input,
 )
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
-from tt_py_test_utils_common.kda_test_utils import TokenErrorAccumulator, assert_accurate, make_actual_start, nrmse
 
 # The 1M case runs ~7 min on SP2xTP4 plus setup; pytest.ini's 300 s default would cut it short.
 pytestmark = [run_for_blackhole(), pytest.mark.timeout(900)]

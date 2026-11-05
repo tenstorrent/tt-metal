@@ -23,6 +23,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_bit_identical, make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import _trace_wall_samples_ms
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
@@ -45,7 +46,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     export_state,
     import_state,
 )
-from tt_py_test_utils_common.kda_test_utils import assert_bit_identical, make_actual_start
 
 pytestmark = [run_for_blackhole(), pytest.mark.perf]
 

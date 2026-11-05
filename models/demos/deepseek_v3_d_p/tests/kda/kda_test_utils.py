@@ -3,11 +3,13 @@
 """Dependency-light numerical assertions shared by KDA tests."""
 
 from __future__ import annotations
+
 from collections.abc import Callable, Sequence
 
-from loguru import logger
 import torch
 import torch.nn.functional as F
+from loguru import logger
+
 import ttnn
 
 

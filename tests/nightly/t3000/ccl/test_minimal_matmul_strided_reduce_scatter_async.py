@@ -10,7 +10,6 @@ from tt_py_test_utils_common.minimal_matmul_strided_reduce_scatter import (
 
 import torch
 import pytest
-from dataclasses import dataclass
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc

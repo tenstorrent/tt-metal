@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tt_py_test_utils_common.moe_compute_helpers import (
+from models.common.moe.moe_compute_helpers import (
     ATOL_THRESHOLD,
     _MoEHostData,
     _MoEWeightInputs,

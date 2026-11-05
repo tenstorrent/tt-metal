@@ -148,7 +148,7 @@ def test_routing_metadata_from_the_router(device, config, tt_router, batch, seql
     padding rows inside the pass's last tile row.
     """
     # Imported here, so a moved op test tree fails this test alone rather than the module.
-    from tt_py_test_utils_common.routing_metadata_reference import (
+    from models.experimental.nomic_embed_text_v2_moe.routing_metadata_reference import (
         assert_matches_reference,
     )
 

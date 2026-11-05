@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tt_py_test_utils_common.all_reduce_core_ranges import FF1_CRS_RS_OUT, SUB_DEVICE_CRS
+from models.demos.llama3_70b_galaxy.tests.all_reduce_core_ranges import FF1_CRS_RS_OUT, SUB_DEVICE_CRS
 
 import torch
 import pytest

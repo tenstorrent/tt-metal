@@ -12,6 +12,12 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_recurrent_reference
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
+    assert_accurate,
+    assert_bit_identical,
+    collect_accuracy_and_determinism_results,
+    make_actual_start,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
     compare_cpu_device,
@@ -19,12 +25,6 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
-from tt_py_test_utils_common.kda_test_utils import (
-    assert_accurate,
-    assert_bit_identical,
-    collect_accuracy_and_determinism_results,
-    make_actual_start,
-)
 
 pytestmark = run_for_blackhole()
 

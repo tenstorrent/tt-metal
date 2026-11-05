@@ -9,6 +9,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_bit_identical, make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import LayerNrmseThresholds
 from models.demos.deepseek_v3_d_p.tests.kda.utils import assert_matches_reference as _assert_matches_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import build_layer as _build_layer
@@ -20,7 +21,6 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tests.kda.utils import reference_case as _reference_case
 from models.demos.deepseek_v3_d_p.tests.kda.utils import to_sp_input as _to_sp_input
-from tt_py_test_utils_common.kda_test_utils import assert_bit_identical, make_actual_start
 
 pytestmark = run_for_blackhole()
 

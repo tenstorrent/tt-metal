@@ -8,7 +8,7 @@ import ttnn
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
-from tt_py_test_utils_common.prefetcher_tg_shapes import (
+from models.demos.llama3_70b_galaxy.tests.prefetcher_tg_shapes import (
     QWEN_INPUT_SHAPES,
     QWEN_INPUT_DTYPES,
 )

@@ -8,8 +8,12 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
+    assert_accurate,
+    assert_bit_identical,
+    make_actual_start,
+)
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import AffineTransform, distributed_prefix, pack_transform
-from tt_py_test_utils_common.kda_test_utils import assert_accurate, assert_bit_identical, make_actual_start
 
 pytestmark = run_for_blackhole()
 

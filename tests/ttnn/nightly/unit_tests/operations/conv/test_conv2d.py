@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tt_py_test_utils_common.sdxl_conv2d import (
+from models.demos.stable_diffusion_xl_base.tests.sdxl_conv2d import (
     BS,
     randomize_torch_tensor,
     run_conv,

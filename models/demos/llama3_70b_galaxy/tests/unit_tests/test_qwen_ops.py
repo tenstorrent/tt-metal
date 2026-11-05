@@ -7,7 +7,7 @@ import pytest
 from models.common.utility_functions import comp_pcc
 
 from models.common.utility_functions import skip_for_blackhole
-from tt_py_test_utils_common.all_reduce_core_ranges import FF1_CRS_RS_OUT
+from models.demos.llama3_70b_galaxy.tests.all_reduce_core_ranges import FF1_CRS_RS_OUT
 from tt_py_test_utils_common.distributed_layernorm_sharded import (
     create_input_and_weight_tensors,
     create_tt_tensors,

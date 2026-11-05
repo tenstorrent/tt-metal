@@ -8,7 +8,7 @@ import torch
 
 from models.demos.deepseek_v3_d_p.reference.kda.tests.helpers import make_config, random_weights
 from models.demos.deepseek_v3_d_p.reference.kda.weights import normalize_kda_state_dict, validate_kda_weights
-from tt_py_test_utils_common.kda_test_utils import assert_equal
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_equal
 
 
 def test_weight_validation_reports_exact_name_and_shape(expect_error) -> None:
