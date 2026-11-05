@@ -2554,8 +2554,9 @@ def test_slice_rm_wide_row_after_l1_fills(device):
         ttnn.deallocate(resident)
 
 
-# A negative step used to be cast to a huge uint32 and return an empty (or one-element) tensor
-# silently; a zero step divided by zero on the host (SIGFPE). Issue #57988.
+# ttnn.slice already rejects step <= 0 at its entry; these cases guard that and
+# cover quasar slice, whose host path used to cast a negative step to a huge uint32 (silent empty tensor)
+# and divide by a zero step (SIGFPE). The moved device-op check is not reachable from here.
 @pytest.mark.parametrize("slice_fn", [ttnn.slice, ttnn.experimental.quasar.slice], ids=["slice", "quasar_slice"])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
