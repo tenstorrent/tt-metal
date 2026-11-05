@@ -41,9 +41,9 @@ inline std::string get_umd_arch_name() {
         return tt::arch_to_str(tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc));
     }
 
-    // In mock/emulated mode, get arch from the already-initialized cluster
+    // Off silicon (mock, emulated, the EmuAxi and JTAG targets), get arch from the already-initialized cluster
     // rather than trying to probe real hardware.
-    if (tt_metal::MetalContext::instance().get_cluster().is_mock_or_emulated()) {
+    if (tt_metal::MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Silicon) {
         return get_string_lowercase(tt_metal::MetalContext::instance().get_cluster().arch());
     }
 
