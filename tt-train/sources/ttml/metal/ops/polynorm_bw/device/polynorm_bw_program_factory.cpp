@@ -6,9 +6,11 @@
 
 #include <bit>
 #include <enchantum/enchantum.hpp>
+#include <optional>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "polynorm_bw_device_operation.hpp"
 
 namespace {
 
@@ -19,7 +21,20 @@ constexpr auto kDLdxWriterKernelPath =
 constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/polynorm_bw/device/kernels/compute/polynorm_bw_kernel.cpp";
 
-constexpr uint32_t kWriterOutputBufferIdx = 0U;
+// Kernel handles are the push order into ProgramDescriptor::kernels: reader, writer, then one compute kernel per core
+// group (group 2 only when it has cores).
+constexpr uint32_t kReaderKernelIdx = 0U;
+constexpr uint32_t kDLdxWriterKernelIdx = 1U;
+constexpr uint32_t kComputeGroup1KernelIdx = 2U;
+constexpr uint32_t kComputeGroup2KernelIdx = 3U;
+
+// reader runtime args
+constexpr uint32_t kInputAddrIdx = 0U;
+constexpr uint32_t kDLdoutAddrIdx = 1U;
+constexpr uint32_t kWeightAddrIdx = 2U;
+// writer runtime args
+constexpr uint32_t kDLdxOutputAddrIdx = 0U;
+constexpr uint32_t kPackedPartialsOutputAddrIdx = 1U;
 
 // Data input CBs (shared across all sequential passes)
 constexpr auto kXCbIndex = tt::CBIndex::c_0;
@@ -68,24 +83,30 @@ constexpr auto kPackedPartialsOutputCbIndex = tt::CBIndex::c_22;
 
 constexpr uint32_t kNumOneTile = 1U;
 
-struct PolyNormBackwardKernels {
-    tt::tt_metal::KernelHandle reader{};
-    tt::tt_metal::KernelHandle dL_dx_writer{};
-    tt::tt_metal::KernelHandle compute_group_1{};
-    tt::tt_metal::KernelHandle compute_group_2{};
-};
-
 }  // namespace
 
 namespace ttml::metal::ops::polynorm3_bw::device {
 
-PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactory::create(
+namespace {
+
+// The input's tile rows over the device's compute grid. create_descriptor() pins it against split_work_to_cores, and
+// override_runtime_arguments() walks the same cores from it.
+WorkSplit make_work_split(const ttnn::Tensor& input) {
+    const auto& shape = input.padded_shape();
+    return compute_work_split(
+        input.device()->compute_with_storage_grid_size(),
+        shape[0] * shape[1] * (shape[-2] / tt::constants::TILE_HEIGHT));
+}
+
+}  // namespace
+
+tt::tt_metal::ProgramDescriptor PolyNorm3BackwardProgramFactory::create_descriptor(
     const PolyNorm3BWAttributes& args, const PolyNorm3BWTensorArgs& tensor_args, PolyNorm3BWTensorReturn& output) {
     const auto& input = tensor_args.input;
     const auto& dL_dout = tensor_args.dL_dout;
     auto* device = input.device();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor desc;
     const tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
     TT_FATAL(data_format == tt::DataFormat::Float16_b, "PolyNormBackward currently supports BF16 input only");
     const uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
@@ -99,85 +120,74 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
     const uint32_t total_rows_to_process = NC * Ht;
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     constexpr uint32_t block_size = 4U;  // Fixed block size; tail tiles handled via current_block_size in kernels.
     constexpr uint32_t packed_partials_tiles_per_row = 4U;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
+    const WorkSplit split = make_work_split(input);
+    check_work_split(
+        split, num_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
 
     // Data input CBs (shared across all passes)
-    [[maybe_unused]] auto cb_x =
-        create_circular_buffer(program, all_cores, kXCbIndex, data_format, bfloat16_tile_size, block_size);
-    [[maybe_unused]] auto cb_dout =
-        create_circular_buffer(program, all_cores, kDoutCbIndex, data_format, bfloat16_tile_size, block_size);
-    [[maybe_unused]] auto cb_db_acc = create_circular_buffer(
-        program, all_cores, kDbAccCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kXCbIndex, data_format, bfloat16_tile_size, block_size));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kDoutCbIndex, data_format, bfloat16_tile_size, block_size));
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kDbAccCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile));
 
     // Scalar/constant CBs
-    [[maybe_unused]] auto cb_scaler = create_circular_buffer(
-        program, all_cores, kScalerCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_matmul_reduce = create_circular_buffer(
-        program, all_cores, kMatmulReduceCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_one = create_circular_buffer(
-        program, all_cores, kOneCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_w0 =
-        create_circular_buffer(program, all_cores, kW0CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_w1 =
-        create_circular_buffer(program, all_cores, kW1CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_w2 =
-        create_circular_buffer(program, all_cores, kW2CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_weight_scalar_scratch = create_circular_buffer(
-        program, all_cores, kWeightScalarScratchCbIndex, data_format, bfloat16_tile_size, kNumOneTile);
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kScalerCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile));
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kMatmulReduceCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile));
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kOneCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kW0CbIndex, data_format, bfloat16_tile_size, kNumOneTile));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kW1CbIndex, data_format, bfloat16_tile_size, kNumOneTile));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kW2CbIndex, data_format, bfloat16_tile_size, kNumOneTile));
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kWeightScalarScratchCbIndex, data_format, bfloat16_tile_size, kNumOneTile));
 
     // Intermediate per-row sum tiles (Float32)
-    [[maybe_unused]] auto cb_sum_x2 = create_circular_buffer(
-        program, all_cores, kSumX2CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_sum_x4 = create_circular_buffer(
-        program, all_cores, kSumX4CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_sum_x6 = create_circular_buffer(
-        program, all_cores, kSumX6CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_sum_xdout = create_circular_buffer(
-        program, all_cores, kSumXdoutCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_sum_x2dout = create_circular_buffer(
-        program, all_cores, kSumX2doutCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_sum_x3dout = create_circular_buffer(
-        program, all_cores, kSumX3doutCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kSumX2CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile));
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kSumX4CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile));
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kSumX6CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile));
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kSumXdoutCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile));
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kSumX2doutCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile));
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kSumX3doutCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile));
 
     // Scalar results (bfloat16)
-    [[maybe_unused]] auto cb_inv_rms_x =
-        create_circular_buffer(program, all_cores, kInvRmsXCbIndex, data_format, bfloat16_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_inv_rms_x2 =
-        create_circular_buffer(program, all_cores, kInvRmsX2CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_inv_rms_x3 =
-        create_circular_buffer(program, all_cores, kInvRmsX3CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kInvRmsXCbIndex, data_format, bfloat16_tile_size, kNumOneTile));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kInvRmsX2CbIndex, data_format, bfloat16_tile_size, kNumOneTile));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kInvRmsX3CbIndex, data_format, bfloat16_tile_size, kNumOneTile));
 
     // Per-row correction γ_k tiles (bfloat16, one per branch).
-    [[maybe_unused]] auto cb_gamma_1 =
-        create_circular_buffer(program, all_cores, kGamma1CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_gamma_2 =
-        create_circular_buffer(program, all_cores, kGamma2CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_gamma_3 =
-        create_circular_buffer(program, all_cores, kGamma3CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kGamma1CbIndex, data_format, bfloat16_tile_size, kNumOneTile));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kGamma2CbIndex, data_format, bfloat16_tile_size, kNumOneTile));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kGamma3CbIndex, data_format, bfloat16_tile_size, kNumOneTile));
 
     // Preweighted inv_rms tiles (Float32, one per branch).
-    [[maybe_unused]] auto cb_weighted_inv_rms_x = create_circular_buffer(
-        program, all_cores, kWeightedInvRmsXCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_weighted_inv_rms_x2 = create_circular_buffer(
-        program, all_cores, kWeightedInvRmsX2CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_weighted_inv_rms_x3 = create_circular_buffer(
-        program, all_cores, kWeightedInvRmsX3CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kWeightedInvRmsXCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile));
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kWeightedInvRmsX2CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile));
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kWeightedInvRmsX3CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile));
 
     // Output CBs
-    [[maybe_unused]] auto cb_output =
-        create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_tile_size, block_size);
-    [[maybe_unused]] auto cb_packed_partials_output = create_circular_buffer(
-        program,
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kOutputCbIndex, data_format, bfloat16_tile_size, block_size));
+    desc.cbs.push_back(make_cb_descriptor(
         all_cores,
         kPackedPartialsOutputCbIndex,
         tt::DataFormat::Float32,
         float32_tile_size,
-        packed_partials_tiles_per_row);
+        packed_partials_tiles_per_row));
 
     auto* input_buffer = input.buffer();
     TT_FATAL(
@@ -209,7 +219,6 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
         "Packed partials output buffer must be in DRAM. Output buffer of type {}",
         enchantum::to_string(packed_partials_output_buffer->buffer_type()));
 
-    PolyNormBackwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dL_dout_buffer).append_to(reader_compile_time_args);
@@ -218,124 +227,78 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
+    desc.kernels.push_back(
+        make_reader_kernel_descriptor(all_cores, reader_compile_time_args, defines, kReaderKernelPath));
 
     std::vector<uint32_t> dL_dx_writer_compile_time_args{block_size, Wt, packed_partials_tiles_per_row};
     tt::tt_metal::TensorAccessorArgs(dL_dx_output_buffer).append_to(dL_dx_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(packed_partials_output_buffer).append_to(dL_dx_writer_compile_time_args);
-    kernels.dL_dx_writer =
-        create_writer_kernel(program, all_cores, dL_dx_writer_compile_time_args, defines, kDLdxWriterKernelPath);
+    desc.kernels.push_back(
+        make_writer_kernel_descriptor(all_cores, dL_dx_writer_compile_time_args, defines, kDLdxWriterKernelPath));
 
+    // HiFi4, fp32 dest accumulation, no math approximation; every other compute config field at its default.
     std::vector<uint32_t> compute_group_1_args = {num_rows_per_core_group_1, block_size};
-    kernels.compute_group_1 = tt::tt_metal::CreateKernel(
-        program,
-        kComputeKernelPath,
-        core_group_1,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = true,
-            .math_approx_mode = false,
-            .compile_args = compute_group_1_args,
-            .defines = defines});
+    desc.kernels.push_back(make_compute_kernel_descriptor(
+        core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true));
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_group_2_args = {num_rows_per_core_group_2, block_size};
-        kernels.compute_group_2 = tt::tt_metal::CreateKernel(
-            program,
-            kComputeKernelPath,
-            core_group_2,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-                .fp32_dest_acc_en = true,
-                .math_approx_mode = false,
-                .compile_args = compute_group_2_args,
-                .defines = defines});
+        desc.kernels.push_back(make_compute_kernel_descriptor(
+            core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true));
     }
 
     const uint32_t scaler_fp32_bits = std::bit_cast<uint32_t>(1.0F / static_cast<float>(input.logical_shape()[-1]));
     const uint32_t eps_fp32_bits = std::bit_cast<uint32_t>(args.epsilon);
 
-    for_each_core_with_work(
-        num_cores,
-        num_cores_y,
-        core_group_1,
-        core_group_2,
-        num_rows_per_core_group_1,
-        num_rows_per_core_group_2,
-        [&](const CoreWork& work) {
-            const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
-            SetRuntimeArgs(
-                program,
-                kernels.reader,
-                core,
-                {input_buffer->address(),
-                 dL_dout_buffer->address(),
-                 weight_buffer->address(),
-                 num_rows,
-                 start_row,
-                 scaler_fp32_bits,
-                 eps_fp32_bits});
-            SetRuntimeArgs(
-                program,
-                kernels.dL_dx_writer,
-                core,
-                {dL_dx_output_buffer->address(), packed_partials_output_buffer->address(), num_rows, start_row});
-            SetRuntimeArgs(
-                program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {Wt, eps_fp32_bits});
-        });
+    // Per-core runtime args. Slots as named at the top of the file; override_runtime_arguments() rewrites the
+    // addresses on every cache hit. The other args (row split, Wt, scaler, eps) depend only on hashed values.
+    // References taken after the last kernel push (a later push could reallocate desc.kernels); a group-2 core only
+    // exists when the group-2 compute kernel was pushed.
+    auto& reader = desc.kernels[kReaderKernelIdx];
+    auto& dL_dx_writer = desc.kernels[kDLdxWriterKernelIdx];
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
+        // Slot 6 (eps) is read and dropped by the reader (compute takes eps); kept so the arg layout is unchanged.
+        reader.emplace_runtime_args(
+            core, {input_buffer, dL_dout_buffer, weight_buffer, num_rows, start_row, scaler_fp32_bits, eps_fp32_bits});
+        dL_dx_writer.emplace_runtime_args(
+            core, {dL_dx_output_buffer, packed_partials_output_buffer, num_rows, start_row});
+        desc.kernels[in_group_1 ? kComputeGroup1KernelIdx : kComputeGroup2KernelIdx].emplace_runtime_args(
+            core, {Wt, eps_fp32_bits});
+    });
 
-    return cached_program_t{
-        std::move(program),
-        {
-            kernels.reader,
-            kernels.dL_dx_writer,
-            kernels.compute_group_1,
-            kernels.compute_group_2,
-            core_group_1,
-            core_group_2,
-            num_cores,
-            num_cores_y,
-        }};
+    return desc;
 }
 
 void PolyNorm3BackwardProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const PolyNorm3BWAttributes& operation_attributes,
+    tt::tt_metal::Program& program,
+    const PolyNorm3BWAttributes& /*operation_attributes*/,
     const PolyNorm3BWTensorArgs& tensor_args,
-    PolyNorm3BWTensorReturn& tensor_return_value) {
-    auto& shared = cached_program.shared_variables;
-    auto& program = cached_program.program;
+    PolyNorm3BWTensorReturn& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const WorkSplit split = make_work_split(tensor_args.input);
 
-    auto* input_buffer = tensor_args.input.buffer();
-    auto* dL_dout_buffer = tensor_args.dL_dout.buffer();
-    auto* weight_buffer = tensor_args.weight.buffer();
-    auto* dL_dx_output_buffer = tensor_return_value[0].buffer();
-    auto* packed_partials_output_buffer = tensor_return_value[1].buffer();
+    const uint32_t input_addr = tensor_args.input.buffer()->address();
+    const uint32_t dL_dout_addr = tensor_args.dL_dout.buffer()->address();
+    const uint32_t weight_addr = tensor_args.weight.buffer()->address();
+    const uint32_t dL_dx_output_addr = output[0].buffer()->address();
+    const uint32_t packed_partials_output_addr = output[1].buffer()->address();
 
-    const uint32_t scaler_fp32_bits =
-        std::bit_cast<uint32_t>(1.0F / static_cast<float>(tensor_args.input.logical_shape()[-1]));
-    const uint32_t eps_fp32_bits = std::bit_cast<uint32_t>(operation_attributes.epsilon);
+    auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
+    auto& dL_dx_writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kDLdxWriterKernelIdx);
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& core = work.core;
 
-    auto& reader_runtime_args = GetRuntimeArgs(program, shared.reader_kernel_id);
-    auto& dL_dx_writer_runtime_args = GetRuntimeArgs(program, shared.dL_dx_writer_kernel_id);
+        auto& reader_args = reader_runtime_args[core.x][core.y];
+        reader_args[kInputAddrIdx] = input_addr;
+        reader_args[kDLdoutAddrIdx] = dL_dout_addr;
+        reader_args[kWeightAddrIdx] = weight_addr;
 
-    for_each_core(shared.num_cores, shared.num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
-        auto& rr = reader_runtime_args[core.x][core.y];
-        rr[0] = input_buffer->address();
-        rr[1] = dL_dout_buffer->address();
-        rr[2] = weight_buffer->address();
-        rr[5] = scaler_fp32_bits;
-        rr[6] = eps_fp32_bits;
-
-        auto& dL_dx_wr = dL_dx_writer_runtime_args[core.x][core.y];
-        dL_dx_wr[kWriterOutputBufferIdx] = dL_dx_output_buffer->address();
-        dL_dx_wr[1] = packed_partials_output_buffer->address();
-
-        // Update compute kernel eps (runtime arg index 1).
-        auto compute_kernel =
-            shared.core_group_1.contains(core) ? shared.compute_kernel_group_1_id : shared.compute_kernel_group_2_id;
-        auto& cr = GetRuntimeArgs(program, compute_kernel);
-        cr[core.x][core.y][1] = eps_fp32_bits;
+        auto& dL_dx_writer_args = dL_dx_writer_runtime_args[core.x][core.y];
+        dL_dx_writer_args[kDLdxOutputAddrIdx] = dL_dx_output_addr;
+        dL_dx_writer_args[kPackedPartialsOutputAddrIdx] = packed_partials_output_addr;
     });
 }
+
+TTML_ASSERT_DESCRIPTOR_OVERRIDE(PolyNorm3BackwardDeviceOperation, PolyNorm3BackwardProgramFactory);
 
 }  // namespace ttml::metal::ops::polynorm3_bw::device

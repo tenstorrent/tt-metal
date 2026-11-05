@@ -4,6 +4,9 @@
 
 #include "outbound_socket_service_sync_program_factory.hpp"
 
+#include <algorithm>
+#include <utility>
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -56,22 +59,31 @@ ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
     auto* backing_buffer = backing_out.buffer();
     Buffer* metadata_buffer = has_metadata ? tensor_args.metadata->buffer() : nullptr;
 
+    const size_t num_extra = tensor_args.extra_inputs.size();
+    uint32_t max_page_size = page_size;
+    for (const uint32_t extra_page_size : args.extra_page_sizes) {
+        max_page_size = std::max(max_page_size, extra_page_size);
+    }
+
     ProgramDescriptor desc;
 
-    // Single-slot scratch CB, sized to one page, used as per-page staging L1.
+    // Single-slot scratch CB, sized to the largest page of any segment, used as
+    // per-page staging L1.
     desc.cbs.push_back(CBDescriptor{
-        .total_size = page_size,
+        .total_size = max_page_size,
         .core_ranges = worker_crs,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(args.scratch_cb_index),
             .data_format = datatype_to_dataformat_converter(input.dtype()),
-            .page_size = page_size,
+            .page_size = max_page_size,
         }}},
     });
 
     // CT args (uniform across workers). Base addresses are NOT here -- they are runtime
     // BufferBindings. input and backing share the spec, so ONE accessor block describes
-    // both; the metadata accessor (if any) is packed right after it.
+    // both. Then the extra-segment count and one accessor block shared by every extra
+    // input and backing (all DRAM interleaved; base address and page size go in the
+    // runtime args); the metadata accessor (if any) goes last.
     std::vector<uint32_t> ct_args = {
         page_size,
         args.scratch_cb_index,
@@ -82,6 +94,10 @@ ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
         args.metadata_data_offset,
     };
     TensorAccessorArgs(input_buffer).append_to(ct_args);
+    ct_args.push_back(static_cast<uint32_t>(num_extra));
+    if (num_extra > 0) {
+        TensorAccessorArgs(tensor_args.extra_inputs[0].buffer()).append_to(ct_args);
+    }
     if (has_metadata) {
         TensorAccessorArgs(metadata_buffer).append_to(ct_args);
     }
@@ -95,16 +111,16 @@ ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
     writer.compile_time_args = std::move(ct_args);
     writer.config = WriterConfigDescriptor{};
 
-    // Distribute pages across workers; the leading workers absorb the remainder so no
-    // page is dropped.
-    const uint32_t base = num_pages / num_workers;
-    const uint32_t remainder = num_pages % num_workers;
-    uint32_t cursor = 0;
+    // Distribute each segment's pages across workers; the leading workers absorb the
+    // remainder so no page is dropped.
+    const auto worker_slice = [num_workers](uint32_t total, uint32_t i) {
+        const uint32_t base = total / num_workers;
+        const uint32_t remainder = total % num_workers;
+        const uint32_t start = (i * base) + std::min(i, remainder);
+        return std::pair<uint32_t, uint32_t>{start, start + base + (i < remainder ? 1u : 0u)};
+    };
     for (uint32_t i = 0; i < num_workers; ++i) {
-        const uint32_t n = base + (i < remainder ? 1u : 0u);
-        const uint32_t start_page = cursor;
-        const uint32_t end_page = cursor + n;
-        cursor += n;
+        const auto [start_page, end_page] = worker_slice(num_pages, i);
 
         // Buffer* entries auto-register as BufferBindings (patched on cache hits); the
         // rest are plain uint32 scalars. Order MUST match the kernel's get_arg_val
@@ -121,6 +137,22 @@ ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
             rt_args.push_back(metadata_buffer);   // 7: metadata input base
             rt_args.push_back(metadata_l1_addr);  // 8: service-core metadata L1
             rt_args.push_back(termination_addr);  // 9: service-core control words (ring only)
+        } else if (num_extra > 0) {
+            rt_args.push_back(0u);
+            rt_args.push_back(0u);
+            rt_args.push_back(0u);
+        }
+        // 10 + 6*s: extra segment s [input base, backing base, page size, aligned page size,
+        // start_page, end_page].
+        for (size_t s = 0; s < num_extra; ++s) {
+            const auto [seg_start, seg_end] = worker_slice(args.extra_num_pages[s], i);
+            Buffer* seg_backing = tensor_args.extra_backings[s].buffer();
+            rt_args.push_back(tensor_args.extra_inputs[s].buffer());
+            rt_args.push_back(seg_backing);
+            rt_args.push_back(args.extra_page_sizes[s]);
+            rt_args.push_back(static_cast<uint32_t>(seg_backing->aligned_page_size()));
+            rt_args.push_back(seg_start);
+            rt_args.push_back(seg_end);
         }
         writer.emplace_runtime_args(workers[i], rt_args);
     }
