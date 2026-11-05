@@ -136,6 +136,12 @@ class DS41PrefillRuntime:
         )
         # FIX.17: DEEP_LAYERS=tail skips layers 21-39 until the prompt's end; the engine reads every layer's window KV
         assert not self.model.deep, "DEEP_LAYERS=tail is not served: the engine needs every layer's whole history"
+        # P.32: WINDOW_KV_KEEP=ring | none keep a ring, not tt-d-gen's 0_window_kv of every position (its reader pending)
+        from ..attention import window_keep
+
+        assert (
+            window_keep() == "full"
+        ), f"WINDOW_KV_KEEP={window_keep()} is not served yet: tt-d-gen reads every position"
         self.geo = WindowGeometry(mesh_device, c)
         from models.demos.common.bringup.testing.contract import gap_feed
 

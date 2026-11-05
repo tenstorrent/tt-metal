@@ -1,0 +1,108 @@
+{
+ "used": [
+  {
+   "id": "K-1",
+   "how": "WindowRing.put passes src itself when the piece is the whole tensor (a full-range ttnn.slice returns src's own buffer, which the dealloc after it would free)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-5",
+   "how": "full keeps the served 0_window_kv of every position as before; ring / none drop it from DS41ContractKV and the runner refuses them (tt-d-gen reads every position)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-143",
+   "how": "the ring keeps the bf16 rows the served cache keeps (the attention re-rounds the carry to bfp8 as from the slab), so ring and full read the same carry bytes",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-181",
+   "how": "the region path's chip-0 carry stays the kept tail (rtail) for whole consecutive chunks; the ring is read only where full read the served slab (carry_ready / _kept mirror rtail_end)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-201",
+   "how": "a carry the ring does not keep is masked by truncation (start class 0, TtWindowCache.truncate), not by a zero carry",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-146",
+   "how": "the rings are allocated with the state (load time) and written in place; the none working rings once per model (WindowTables.shared_ring)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-69",
+   "how": "test_window_ring's states take max_seq = a multiple of the chunk >= the follow-up's start + chunk (attempt 1 hit the compressor's history assert at 4000 + 2560 > 5120 with max_seq = the rung's 10240)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-145",
+   "how": "the ring's small copies (slice / slice_write / the own rows' untilize, <= 192 rows) run on one row of WINDOW_RING_CORES = 8 cores: plain profile wall 210.6 -> 206.4 ms (ring on)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-201",
+   "how": "replay128's decoder-tail windows are truncated by design; their window KV is recorded ungated (ring_diag_*), as P.31's owner note",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the frozen test_dram and the F230 position profiles run a chunk at start > 0 on a fresh state (the full path reads the never-written zeros): a keep mode that refuses missing carries has to treat a slot that never held a window row as starting there"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded: the ring writes the chunk's own last 192 rows (32-row blocks, the record size), no op limit worked around"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "no Python-built op added or touched: the ring uses ttnn.slice / ttnn.concat / ttnn.to_layout / the slice_write fork (C++), the fabric all_gather it already used"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; only the new model-level test_window_ring and the gate units"
+  }
+ ],
+ "cited_only": [
+  "K-72"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.32",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-05T14:10:03",
+  "head": "7b016ef767b",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.32.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.32_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.32_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.32.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_window_ring.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/kv_contract.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

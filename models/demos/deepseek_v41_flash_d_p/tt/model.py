@@ -59,7 +59,7 @@ import ttnn
 from models.demos.common.bringup.reference.interface import Ctx, run_block
 
 from . import ccl, host_alloc
-from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights
+from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights, window_keep
 from .ccl import dealloc
 from .collapse import TtHcCollapse
 from .common import (
@@ -235,15 +235,27 @@ class DS41DeviceState:
         slabs: dict | None = None,
         keep_history: bool = True,
         compress: dict | None = None,
+        keep: str | None = None,
     ):
         """``compress`` (DECODER_SKIP=replay128, P.31): {layer: TtCompressCaches} of another state, shared (the decoder
-        tail's state reads the main state's layer-20 caches; never freed here)."""
+        tail's state reads the main state's layer-20 caches; never freed here). ``keep`` (WINDOW_KV_KEEP, P.32; None:
+        the setting): what the window caches keep (full: every position, the served slab; ring: the last 192 rows a
+        layer; none: nothing of their own, the model's working ring of each layer)."""
         cfg, mesh, tables = model.cfg, model.mesh, model.tables
         self.model, self.cfg, self.mesh, self.max_seq = model, cfg, mesh, max_seq
         self.keep_history = keep_history
+        self.keep = keep = keep or window_keep()
         slabs = slabs or {}
         self.window = {
-            i: TtWindowCache(mesh, tables, max_seq, slab=slabs.get(i, {}).get("0_window_kv")) for i in model.layers
+            i: TtWindowCache(
+                mesh,
+                tables,
+                max_seq,
+                slab=slabs.get(i, {}).get("0_window_kv"),
+                keep=keep,
+                ring=tables.shared_ring(i) if keep == "none" else None,
+            )
+            for i in model.layers
         }
         shared = compress or {}
         self.shared_compress = frozenset(shared)
@@ -398,6 +410,11 @@ class DS41DeviceState:
             if last.numel():
                 t[-last.numel() :] = rows.hasher.token_map[last]
             self.tail[i] = t
+
+    def window_bytes(self) -> int:
+        """WINDOW_KV_KEEP (P.32): window KV bytes a chip this slot keeps (its decoder tail's caches included)."""
+        own = sum(c.served_bytes() for c in self.window.values())
+        return own + (self.tail_state.window_bytes() if self.tail_state is not None else 0)
 
     def formats(self) -> dict:
         out = {"0_window_kv": ttnn.bfloat16}
@@ -974,6 +991,9 @@ class TtDS41Model:
         self.decoder, self.kv_only = [], frozenset()
         self._skip = False  # this chunk skips the decoder (set per chunk by begin_chunk)
         mode = settings.get("DECODER_SKIP")
+        # (WINDOW_KV_KEEP=ring | none, P.32: begin_chunk truncates a window whose carry is not kept under exact /
+        # replay128 and refuses the chunk under off; the decoder tail model never decides it)
+        self.skip_mode = mode if tail_of is None else "off"
         if mode in ("exact", "replay128") and tail_of is None:
             assert not self.deep, "DECODER_SKIP and DEEP_LAYERS=tail are two different skips: one at a time"
             self.decoder = [i for i in self.layers if cfg.cand_source >= 0 and i >= cfg.cand_source]
@@ -1114,7 +1134,12 @@ class TtDS41Model:
         if state.tail_state is None:
             tail = self.build_tail()
             shared = {i: state.compress[i] for i in tail.layers if i in state.compress}
-            state.tail_state = DS41DeviceState(tail, state.max_seq, compress=shared, keep_history=state.keep_history)
+            # (WINDOW_KV_KEEP=ring | none, P.32: the tail's windows are truncated at every tail chunk, never carried:
+            # the tail model's working rings, nothing of the slot's own; full keeps P.31's caches)
+            keep = "full" if state.keep == "full" else "none"
+            state.tail_state = DS41DeviceState(
+                tail, state.max_seq, compress=shared, keep_history=state.keep_history, keep=keep
+            )
             self.state = state  # (the tail state's constructor made itself the tail model's active state only)
         return state.tail_state
 
@@ -1127,8 +1152,10 @@ class TtDS41Model:
         return TailH(self._tail_in[0], self._tail_in[1])
 
     # ------------------------------------------------------------------ per chunk
-    def new_state(self, max_seq: int, slabs: dict | None = None, keep_history: bool = True) -> DS41DeviceState:
-        return DS41DeviceState(self, max_seq, slabs=slabs, keep_history=keep_history)
+    def new_state(
+        self, max_seq: int, slabs: dict | None = None, keep_history: bool = True, keep: str | None = None
+    ) -> DS41DeviceState:
+        return DS41DeviceState(self, max_seq, slabs=slabs, keep_history=keep_history, keep=keep)
 
     def begin_chunk(self, tokens: torch.Tensor, start: int, last: bool | None = None, replay: bool = False) -> None:
         """The host input of every engram layer: hash the chunk's ids (pad past actual_end skipped, DS41-26) with the
@@ -1144,13 +1171,15 @@ class TtDS41Model:
         ``replay`` (P.31): the chunk starts a request on a cached prefix, ``replay_rows`` before its new tokens (the
         caller pulls back). Under replay128 every layer's window is truncated at ``start`` (the carry masked: start
         class 0); under exact nothing changes (the pull-back recomputes exactly from the complete caches)."""
-        self._skip = bool(self.decoder) and last is False
+        self._skip = bool(self.decoder) and last is False and self.skip_mode != "off"
         self._tail_mode = self.replay and last is True
         self._tail_at = None
         st = self.state
         if self._tail_mode:
             self.build_tail()
-        if self.replay and st is not None and (replay or st.cut is not None):  # (host only)
+        if st is not None and st.keep != "full":  # WINDOW_KV_KEEP=ring | none (P.32, host only)
+            self._window_policy(st, start, replay)
+        elif self.replay and st is not None and (replay or st.cut is not None):  # (host only)
             st.cut = start if replay else None  # every layer's carry rows before start are not read
             for c in st.window.values():
                 c.truncate(st.cut)
@@ -1171,6 +1200,58 @@ class TtDS41Model:
                 st.tail[i] = new_tail
             _free(self._engram_dev.pop(i, None))
             self._engram_dev[i] = dev
+
+    def _window_policy(self, st: DS41DeviceState, start: int, replay: bool) -> None:
+        """WINDOW_KV_KEEP=ring | none (P.32), before the chunk at ``start`` (host only): every layer whose window this
+        chunk reads (the decoder's not on a skipped chunk nor on replay128's last chunk, whose tail has windows of its
+        own) needs its carry [start - 128, start) kept (TtWindowCache.carry_ready). When it is not (another request's
+        prefix, a resume older than the ring, a pulled-back chunk; under none every follow-up): DECODER_SKIP=exact /
+        replay128 truncate the window at ``start`` (start class 0: the rows before it never read; the caller pulled back,
+        exact >= last_rows, replay128 replay_rows) and off refuses the chunk (ValueError), except on a slot that never
+        held a window row (fresh: its window starts here, as the timing harnesses run; ``origin`` keeps that start, and a
+        chunk at or before it restarts the window there, DS41-208: the harness's re-run of the same chunk on a fresh
+        state, whose carry rows no request ever wrote into this slot). ``replay`` (P.31, a request on a cached prefix):
+        replay128 and none truncate at ``start`` whatever is kept; exact keeps what the ring holds."""
+        reads = {i for i in st.window if not (i in self._decoder_set and (self._skip or self._tail_mode))}
+        cut, refused = {}, []
+        for i, c in st.window.items():
+            want = None
+            if not c.history:
+                c.origin = start
+            if start > 0 and i in reads:
+                if replay and (self.replay or st.keep == "none"):
+                    want = start
+                elif not c.carry_ready(start):
+                    if self.skip_mode == "off" and c.history and not (c.origin is not None and start <= c.origin):
+                        refused.append(i)
+                    want = start
+            cut[i] = want
+        if refused:
+            c = st.window[refused[0]]
+            held = sorted(p for p in c.ring.pos if p is not None)
+            raise ValueError(
+                f"WINDOW_KV_KEEP={st.keep}, DECODER_SKIP=off: the chunk at {start} needs the window rows "
+                f"[{max(0, start - self.cfg.window)}, {start}) of layers {refused}, which are not kept (layer "
+                f"{refused[0]} keeps positions {held[:1] and [held[0], held[-1] + 32]}, last write ending at "
+                f"{c.ring.end}); refused rather than computed without them: start where the carry is kept, or run "
+                "DECODER_SKIP=exact (pull back >= 2688 tokens) / replay128 (replay 128)"
+            )
+        for i, c in st.window.items():
+            c.truncate(cut[i])
+        st.cut = start if any(v is not None for v in cut.values()) else None
+
+    def use_decoder_skip(self, mode: str) -> None:
+        """Tests only (tests/bringup/test_window_ring.py, P.32): run a model loaded with DECODER_SKIP=replay128 (its
+        decoder tail built) as exact, replay128 or off (host only: the same decoder layers, the numbers
+        ``replay_rows`` / ``last_rows`` of the value; off: no chunk skips the decoder, every window carry must be kept).
+        """
+        assert mode in ("off", "exact", "replay128"), mode
+        assert self.decoder and self.tail_chunk, "use_decoder_skip needs a model loaded with DECODER_SKIP=replay128"
+        self.skip_mode = mode
+        self.replay = mode == "replay128"
+        w = self.cfg.window
+        self.replay_rows = w if self.replay else 0
+        self.last_rows = 0 if self.replay else -(-(len(self.decoder) * (w - 1) + w) // 32) * 32
 
     def _begin_engram_async(self, tokens: torch.Tensor, start: int) -> None:
         """ENGRAM_ASYNC=on: on this thread only the new tails (3 ids a layer) and the device rows' allocation (the
