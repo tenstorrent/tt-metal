@@ -712,12 +712,13 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     num_receiver_buffer_slots_per_vc[2].fill(vc2_receiver_buffer_slots);
     num_remote_receiver_buffer_slots_per_vc[2].fill(vc2_receiver_buffer_slots);
 
-    // Mesh allocation uses one conservative depth for every channel in a VC,
-    // which can leave whole packet slots unused. Give those slots to the live
-    // local-worker injection channel; forwarding and receive depths stay
-    // unchanged.
-    if ((topology == Topology::Mesh || topology == Topology::Torus) &&
-        options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED) {
+    // The per-VC options give every channel of a VC one depth, which can leave whole packet slots unused. On every
+    // topology they are spread evenly over VC0's sender channels, the remainder to the worker channel; receive depths
+    // stay unchanged. The forwarding channels keep one depth between them, since an upstream router holds one
+    // downstream depth per VC (downstream_sender_channels_num_buffers). All to the worker would leave a mesh router's
+    // forwarding channels far shallower than its worker channel, which limits forwarded traffic, and a line's worker
+    // channel, deeper than its forwarding channel, would take link share from forwarded traffic.
+    if (options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED) {
         size_t allocated_slots = 0;
         for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
             allocated_slots += std::accumulate(
@@ -734,7 +735,21 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         const size_t spare_slots = slot_capacity - allocated_slots;
         const uint32_t worker_channel = get_worker_connected_sender_channel();
 
-        const size_t requested_worker_slots = num_sender_buffer_slots_per_vc[0][worker_channel] + spare_slots;
+        size_t worker_spare_slots = spare_slots;
+        const size_t vc0_sender_channels = num_used_sender_channels_per_vc[0];
+        if (vc0_sender_channels > 1) {
+            const size_t per_channel = spare_slots / vc0_sender_channels;
+            for (size_t channel = 0; channel < vc0_sender_channels; ++channel) {
+                if (channel != worker_channel) {
+                    const size_t slots =
+                        std::min(num_sender_buffer_slots_per_vc[0][channel] + per_channel, MAX_CHANNEL_BUFFER_SLOTS);
+                    num_sender_buffer_slots_per_vc[0][channel] = slots;
+                    num_remote_sender_buffer_slots_per_vc[0][channel] = slots;
+                }
+            }
+            worker_spare_slots = spare_slots - (per_channel * (vc0_sender_channels - 1));
+        }
+        const size_t requested_worker_slots = num_sender_buffer_slots_per_vc[0][worker_channel] + worker_spare_slots;
         const size_t worker_slots = std::min(requested_worker_slots, MAX_CHANNEL_BUFFER_SLOTS);
 
         num_sender_buffer_slots_per_vc[0][worker_channel] = worker_slots;
