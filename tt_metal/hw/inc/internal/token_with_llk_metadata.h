@@ -65,7 +65,7 @@ public:
     friend constexpr uint32_t get_tile_size(const TokenWithLLKMetadata& token) {
         assert_dataformat_set(token.llk_metadata_);
         if (token.llk_metadata_.tile_size_bytes == 0) {
-            tile_size_metadata_not_set();
+            tile_size_unsupported_for_format();
         }
         return token.llk_metadata_.tile_size_bytes;
     }

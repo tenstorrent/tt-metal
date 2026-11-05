@@ -56,7 +56,7 @@ constexpr void assert_dataformat_set(const LLKMetadata& metadata) {
     }
 }
 
-// Deliberately non-constexpr so unsupported or missing tile sizes fail constant evaluation.
-inline void tile_size_metadata_not_set() { ASSERT(false); }
+// Deliberately non-constexpr so unsupported tile storage formats fail constant evaluation.
+inline void tile_size_unsupported_for_format() { ASSERT(false); }
 
 }  // namespace binding_details
