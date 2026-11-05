@@ -1424,11 +1424,13 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                 layout=os.environ.get("QWEN36_MAMBA_SPEC_LAYOUT", "two_pool"),
                 cache_mode=mode,
                 mamba_block_size=int(getattr(cc, "block_size", 0) or 0) if mode == "align" else 0,
+                # retention 0 keeps no decode-written state for prefix hits: no conv writes at block copies
+                decode_conv=getattr(cc, "prefix_cache_retention_interval", None) != 0,
             )
             logger.info(
                 f"QWEN36_MAMBA_SPEC: GDN state in vLLM blocks, mode {mode}, layout {model._spec_blocks.layout.layout} "
                 f"({model._spec_blocks.layout.heads_in_k}/{model._spec_blocks.layout.nv} heads in K), "
-                f"{model._spec_blocks.G} GDN groups"
+                f"{model._spec_blocks.G} GDN groups, decode conv writes {model._spec_blocks.book.decode_conv}"
             )
         return kv
 

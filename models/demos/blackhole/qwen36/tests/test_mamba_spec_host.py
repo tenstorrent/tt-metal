@@ -358,7 +358,8 @@ class _Harness:
         self.mamba = [i for i, g in enumerate(self.kv.kv_cache_groups) if isinstance(g.kv_cache_spec, MambaSpec)]
         self.max_model_len = max_model_len
         lay = _layout(tp, block, n_banks, layout, num_blocks)
-        self.book = _BookAsState(lay, len(self.mamba), B, T, mode, block if mode == "align" else 0)
+        # as the spec class binds it: vLLM's retention 0 keeps no decode-written state, so no conv writes
+        self.book = _BookAsState(lay, len(self.mamba), B, T, mode, block if mode == "align" else 0, retention != 0)
         self.dev = _FakeDevice(lay, len(self.mamba))
         self.eng = _EngineStub(self.book, block)
         self.req_states = {}
@@ -637,6 +638,22 @@ def test_rejections_at_a_block_boundary_and_hits_on_the_states_decode_left(tmp_p
     assert h.boundary_writes > 0 and h.conv_writes > 0
 
 
+def test_retention_0_writes_no_decode_conv_and_keeps_no_decode_state(tmp_path):
+    # vLLM's default retention keeps no block state that decode wrote, so the spec class skips the conv writes of
+    # block copies and boundaries; the follow-ups then recompute (no hit on a decode-written state) and every read is
+    # still exact
+    h = _Harness(tmp_path, "align", retention=0)
+    h.accept = _rotate
+    for name, n in (("t1", 1023), ("t2", 1022), ("t3", 1021)):
+        h.add(name, _prompt(len(name) * 7 + n, n), max_tokens=24)
+    h.run()
+    for name in ("t1", "t2", "t3"):
+        h.add("f" + name, h.tokens[name][: 1024 + 5] + _prompt(40 + len(name), 300), max_tokens=6)
+    h.run()
+    assert all(h.hits["f" + name] == 0 for name in ("t1", "t2", "t3")), h.hits
+    assert h.conv_writes == 0 and h.boundary_writes == 0
+
+
 def _broken(name):
     """A SpecBlockBook with one mechanism removed."""
 
@@ -794,8 +811,9 @@ def test_spec_class_binds_and_routes_only_through_the_spec_layout(monkeypatch):
     made = []
 
     class Recorder:
-        def __init__(self, model, specs, kv, T, layout, cache_mode, mamba_block_size):
-            made.append((T, layout, cache_mode, mamba_block_size))
+        def __init__(self, model, specs, kv, T, layout, cache_mode, mamba_block_size, decode_conv):
+            made.append((T, layout, cache_mode, mamba_block_size, decode_conv))
+            self.book = SimpleNamespace(decode_conv=decode_conv)
             self.layout = SimpleNamespace(layout=layout, heads_in_k=8, nv=12)
             self.G, self.calls = 3, []
 
@@ -817,7 +835,7 @@ def test_spec_class_binds_and_routes_only_through_the_spec_layout(monkeypatch):
     )
     cls = Qwen36MTPContractForCausalLM
     kv = cls.allocate_kv_cache_per_layer(me, _per_layer_specs())
-    assert len(kv) == 16 and made == [(T, "two_pool", "align", 2048)]
+    assert len(kv) == 16 and made == [(T, "two_pool", "align", 2048, True)]  # retention unknown: write conv
     assert isinstance(model._spec_blocks, Recorder) and not hasattr(model, "_paged_state")
     cls.copy_kv_cache_blocks(me, None, [(3, 4)])
     cls.zero_kv_cache_blocks(me, None, [5])
