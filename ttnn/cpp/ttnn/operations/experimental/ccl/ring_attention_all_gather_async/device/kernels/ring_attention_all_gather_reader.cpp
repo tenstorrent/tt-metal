@@ -48,6 +48,8 @@ enum CompileTimeArg : uint32_t {
     kPrefetchPackets,
     // Trace-safe cache-slot select, appended last so main's arg order is untouched.
     kHasSlotMetadata,
+    // The last input's slices are per-rank tile-row slabs (see rank_slice below).
+    kHasRankSlabs,
     kNumFixedCompileTimeArgs,
 };
 
@@ -76,6 +78,7 @@ constexpr bool partial_readiness_enabled = get_compile_time_arg_val(kPartialRead
 constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule);
 constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
 constexpr bool has_slot_metadata = get_compile_time_arg_val(kHasSlotMetadata);
+constexpr bool has_rank_slabs = get_compile_time_arg_val(kHasRankSlabs);
 
 static_assert(!partial_readiness_enabled || num_inputs == 1, "partial readiness requires one gathered input");
 static_assert(
@@ -84,6 +87,7 @@ static_assert(
 static_assert(
     !partial_readiness_enabled || (num_targets_forward_direction > 0 && num_targets_backward_direction > 0),
     "partial readiness requires both ring directions");
+static_assert(!has_rank_slabs || (output_bank_owned_schedule && !has_metadata), "rank slabs: bank-owned, no metadata");
 
 // Prefetch: batch multiple packets of DRAM reads before a single barrier.
 // This keeps more reads in flight across interleaved DRAM banks, hiding latency.
@@ -237,6 +241,23 @@ void kernel_main() {
             input_tile_id_end);
     }
 
+    // Rank slabs: two words per tensor rank (output tile row, tile rows) after the metadata block.
+    [[maybe_unused]] const uint32_t rank_slab_args = arg_idx;
+    if constexpr (has_rank_slabs) {
+        arg_idx += 2 * ring_size;
+    }
+    // Tensor rank r's slice of an input in one output (batch, head): the whole input slab at r's position, or for the
+    // rank-slab input (the last) r's own tile rows, possibly none. The writer derives the same.
+    const auto rank_slice = [&](uint32_t input_idx, uint32_t tensor_rank, uint32_t& page_base, uint32_t& pages) {
+        if (has_rank_slabs && input_idx + 1 == num_inputs) {
+            page_base = get_arg_val<uint32_t>(rank_slab_args + 2 * tensor_rank) * input_tensor_Wt[input_idx];
+            pages = get_arg_val<uint32_t>(rank_slab_args + 2 * tensor_rank + 1) * input_tensor_Wt[input_idx];
+        } else {
+            page_base = tensor_rank * input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
+            pages = input_valid_pages[input_idx];
+        }
+    };
+
     OpSignaler op_signaler;
     if constexpr (fuse_op) {
         op_signaler = OpSignaler(arg_idx);
@@ -256,13 +277,15 @@ void kernel_main() {
         const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
         const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
         if constexpr (output_bank_owned_schedule) {
+            uint32_t rank_page_base = 0;
+            uint32_t rank_pages = 0;
+            rank_slice(input_idx, my_tensor_rank, rank_page_base, rank_pages);
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
                 const uint32_t input_page_base = input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
-                const uint32_t output_page_base =
-                    bh_idx * output_pages_per_batch_head + my_tensor_rank * input_pages_per_batch_head;
+                const uint32_t output_page_base = bh_idx * output_pages_per_batch_head + rank_page_base;
                 if constexpr (partial_readiness_enabled) {
-                    const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
-                        input_valid_pages[input_idx], input_tensor_Wt[input_idx]);
+                    const uint32_t first_pages =
+                        ring_attention_all_gather::midpoint_prefix_pages(rank_pages, input_tensor_Wt[input_idx]);
                     prefetch_bank_owned_slices<false>(
                         noc_obj,
                         cb_output,
@@ -282,7 +305,7 @@ void kernel_main() {
                         input_tensor_addrgens[input_idx],
                         input_page_base + first_pages,
                         output_page_base + first_pages,
-                        input_valid_pages[input_idx] - first_pages,
+                        rank_pages - first_pages,
                         worker_link[input_idx],
                         num_links);
                 } else {
@@ -294,7 +317,7 @@ void kernel_main() {
                         input_tensor_addrgens[input_idx],
                         input_page_base,
                         output_page_base,
-                        input_valid_pages[input_idx],
+                        rank_pages,
                         worker_link[input_idx],
                         num_links);
                 }
@@ -420,12 +443,14 @@ void kernel_main() {
                     const uint32_t first_bank =
                         worker_link[input_idx] + (is_split_forwarded_slice ? direction * num_links : 0);
                     const uint32_t bank_stride = num_links * split_factor;
+                    uint32_t rank_page_base = 0;
+                    uint32_t rank_pages = 0;
+                    rank_slice(input_idx, sender_tensor_rank, rank_page_base, rank_pages);
                     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
-                        const uint32_t output_page_base =
-                            bh_idx * output_pages_per_batch_head + sender_tensor_rank * input_pages_per_batch_head;
+                        const uint32_t output_page_base = bh_idx * output_pages_per_batch_head + rank_page_base;
                         if constexpr (partial_readiness_enabled) {
                             const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
-                                input_valid_pages[input_idx], input_tensor_Wt[input_idx]);
+                                rank_pages, input_tensor_Wt[input_idx]);
                             prefetch_bank_owned_slices<true>(
                                 noc_obj,
                                 cb_output,
@@ -445,7 +470,7 @@ void kernel_main() {
                                 output_tensor_addrgens[input_idx],
                                 output_page_base + first_pages,
                                 output_page_base + first_pages,
-                                input_valid_pages[input_idx] - first_pages,
+                                rank_pages - first_pages,
                                 first_bank,
                                 bank_stride);
                         } else {
@@ -457,7 +482,7 @@ void kernel_main() {
                                 output_tensor_addrgens[input_idx],
                                 output_page_base,
                                 output_page_base,
-                                input_valid_pages[input_idx],
+                                rank_pages,
                                 first_bank,
                                 bank_stride);
                         }

@@ -366,6 +366,42 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
                 end);
         }
     }
+    // Dense rows' Q rides the fused gather into gathered_dense_q (dense_q_slabs).
+    const auto& dense_q = tensor_args.gathered_dense_q;
+    TT_FATAL(
+        dense_q.has_value() == !dense.empty(),
+        "SparseRingSDPA: persistent_output_buffer_dense_q is required with dense_blocks and only with them");
+    if (dense_q.has_value()) {
+        const auto slabs =
+            dense_q_slabs(dense, args.ring_size, nb_pad, N_local_q / tt::constants::TILE_HEIGHT, args.block_tiles());
+        uint32_t dense_q_tiles = 0;
+        for (const auto& slab : slabs) {
+            dense_q_tiles += slab.rows;
+        }
+        TT_FATAL(dense_q_tiles > 0, "SparseRingSDPA: dense_blocks name no real Q block");
+        // The gather moves one page format: K's.
+        TT_FATAL(
+            input_tensor_q.dtype() == dtype,
+            "SparseRingSDPA: dense_blocks need q in the dtype of k / v ({}), got {}",
+            dtype,
+            input_tensor_q.dtype());
+        TT_FATAL(
+            dense_q->layout() == Layout::TILE && dense_q->dtype() == dtype && dense_q->buffer() != nullptr &&
+                dense_q->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                dense_q->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "persistent_output_buffer_dense_q must be a tile, DRAM-interleaved {} tensor",
+            dtype);
+        const auto& dq_shape = dense_q->logical_shape();
+        const auto& dq_padded = dense_q->padded_shape();
+        TT_FATAL(
+            dq_shape.rank() == 4 && dq_shape[0] == 1 && dq_shape[1] == NQH && dq_shape[3] == DH &&
+                dq_padded[1] == NQH && dq_padded[3] == DH && dq_padded[2] >= dense_q_tiles * tt::constants::TILE_HEIGHT,
+            "persistent_output_buffer_dense_q must be [1, NH = {}, >= {} dense rows, DH = {}], got {}",
+            NQH,
+            dense_q_tiles * tt::constants::TILE_HEIGHT,
+            DH,
+            dq_shape);
+    }
     const uint32_t nqb = tt::div_up(N_local_q, block_size);
     TT_FATAL(
         mask.logical_shape()[0] == 1 && mask.logical_shape()[1] == NQH && mask.logical_shape()[2] >= nqb &&
@@ -419,6 +455,9 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
     if (tensor_args.block_counts.has_value()) {
         input_tensors.push_back(*tensor_args.block_counts);
     }
+    if (tensor_args.gathered_dense_q.has_value()) {
+        input_tensors.push_back(*tensor_args.gathered_dense_q);
+    }
     // logical_n is baked into the kernels (compile-time args and the bias generator), so it is keyed.
     // The slots per pass and the K/V CB depth are derived from these inputs plus the live L1 top
     // (lowest_occupied_compute_l1_address), which is not keyed: a cached program keeps the choice of the call that
@@ -439,7 +478,8 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         args.dense_keys,
         tensor_args.pooled_k.has_value(),
         tensor_args.pooled_v.has_value(),
-        tensor_args.block_counts.has_value());
+        tensor_args.block_counts.has_value(),
+        tensor_args.gathered_dense_q.has_value());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> SparseRingSDPADeviceOperation::create_op_performance_model(
@@ -505,7 +545,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
     const std::optional<uint32_t> q_blocks_per_pass,
     const std::optional<ttnn::Tensor>& block_counts,
     const std::vector<std::pair<uint32_t, uint32_t>>& dense_blocks,
-    const bool dense_keys) {
+    const bool dense_keys,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_dense_q) {
     using OperationType = ttnn::prim::SparseRingSDPADeviceOperation;
     // Checked before the launch: a cache hit skips the miss-path validation.
     TT_FATAL(
@@ -582,7 +623,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
         .block_mask = block_mask,
         .pooled_k = pooled_k,
         .pooled_v = pooled_v,
-        .block_counts = block_counts};
+        .block_counts = block_counts,
+        .gathered_dense_q = persistent_output_buffer_dense_q};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

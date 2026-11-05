@@ -36,7 +36,8 @@ ttnn::Tensor sparse_ring_sdpa(
     std::optional<uint32_t> q_blocks_per_pass,
     const std::optional<ttnn::Tensor>& block_counts,
     const std::optional<std::vector<std::pair<uint32_t, uint32_t>>>& dense_blocks,
-    bool dense_keys) {
+    bool dense_keys,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_dense_q) {
     auto output_tensors = ttnn::prim::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,  // AllGather input
@@ -63,7 +64,8 @@ ttnn::Tensor sparse_ring_sdpa(
         q_blocks_per_pass,
         block_counts,
         dense_blocks.value_or(std::vector<std::pair<uint32_t, uint32_t>>{}),
-        dense_keys);
+        dense_keys,
+        persistent_output_buffer_dense_q);
     return output_tensors[prim::SPARSE_RING_SDPA_OUTPUT_IDX];
 }
 

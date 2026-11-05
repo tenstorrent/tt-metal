@@ -709,7 +709,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     uint32_t kv_cache_layer_idx,
     bool split_forwarding_enabled,
     bool partial_readiness_enabled,
-    RingAttentionRankMapping rank_mapping) {
+    RingAttentionRankMapping rank_mapping,
+    const std::vector<RingAttentionRankSlab>& last_input_rank_slabs) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
@@ -997,6 +998,47 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const bool has_slot_metadata = slot_id.has_value();
     const bool has_metadata = kv_actual_isl.has_value();
     TT_FATAL(!has_slot_metadata || has_metadata, "slot metadata requires KV-extent metadata");
+    const bool has_rank_slabs = !last_input_rank_slabs.empty();
+    const uint32_t my_tensor_rank =
+        rank_mapping.full_mesh
+            ? ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<true>(
+                  ring_index, rank_mapping.mesh_rows, rank_mapping.mesh_cols, rank_mapping.orientation)
+            : ring_index;
+    if (has_rank_slabs) {
+        TT_FATAL(
+            last_input_rank_slabs.size() == ring_size,
+            "Ring attention rank slabs: {} entries for ring size {}",
+            last_input_rank_slabs.size(),
+            ring_size);
+        TT_FATAL(
+            output_bank_owned_schedule && !has_metadata && !partial_readiness_enabled &&
+                !input_batch_slice_idx.has_value() && dim == kSequenceDimension,
+            "Ring attention rank slabs need the bank-owned schedule and a plain sequence gather");
+        const auto in_shape = input_tensor.back().padded_shape();
+        const auto out_shape = output_tensor.back().padded_shape();
+        TT_FATAL(
+            in_shape[kWidthDimension] == out_shape[kWidthDimension] &&
+                in_shape[kBatchDimension] * in_shape[kHeadDimension] ==
+                    out_shape[kBatchDimension] * out_shape[kHeadDimension],
+            "Ring attention rank slabs: input {} and output {} differ beyond the sequence",
+            in_shape,
+            out_shape);
+        const uint32_t in_Ht = in_shape[kSequenceDimension] / tt::constants::TILE_HEIGHT;
+        const uint32_t out_Ht = out_shape[kSequenceDimension] / tt::constants::TILE_HEIGHT;
+        for (uint32_t r = 0; r < ring_size; ++r) {
+            const auto& slab = last_input_rank_slabs[r];
+            TT_FATAL(
+                slab.input_row + slab.rows <= in_Ht && slab.output_row + slab.rows <= out_Ht,
+                "Ring attention rank slab {} (input row {}, output row {}, {} rows) exceeds the input ({}) or output "
+                "({}) tile rows",
+                r,
+                slab.input_row,
+                slab.output_row,
+                slab.rows,
+                in_Ht,
+                out_Ht);
+        }
+    }
     const uint32_t meta_cb_index = tt::CB::c_in3;
     if (has_metadata) {
         const uint32_t meta_cb_page_size_bytes = kv_actual_isl->buffer()->page_size();
@@ -1058,6 +1100,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             // Appended last so main's arg order is untouched; the reader reads it as kHasSlotMetadata
             // and kReaderFixedCompileTimeArgCount (asserted just below) counts it.
             static_cast<uint32_t>(has_slot_metadata),  // kHasSlotMetadata
+            static_cast<uint32_t>(has_rank_slabs),     // kHasRankSlabs
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kReaderFixedCompileTimeArgCount,
@@ -1112,6 +1155,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(partial_readiness_enabled),   // kPartialReadinessEnabled
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
+            static_cast<uint32_t>(has_rank_slabs),              // kHasRankSlabs
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kWriterFixedCompileTimeArgCount,
@@ -1260,9 +1304,14 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             // first gather_valid_Ht tile-rows so only kv_actual-sized data moves. The fused path also
             // re-patches this per dispatch on cache hits (apply_ring_joint_scalar_runtime_args); setting
             // it here makes the cache-miss (first) dispatch bounded too.
-            const uint32_t valid_pages_per_batch_head =
-                gather_valid_Ht.has_value() ? std::min(*gather_valid_Ht, input_tensor_Ht) * input_tensor_Wt
-                                            : single_batch_head_num_pages;
+            uint32_t valid_pages_per_batch_head = gather_valid_Ht.has_value()
+                                                      ? std::min(*gather_valid_Ht, input_tensor_Ht) * input_tensor_Wt
+                                                      : single_batch_head_num_pages;
+            if (has_rank_slabs && i + 1 == num_inputs) {
+                // This rank's own slab: the rows it reads and sends.
+                input_batch_base = last_input_rank_slabs[my_tensor_rank].input_row * input_tensor_Wt;
+                valid_pages_per_batch_head = last_input_rank_slabs[my_tensor_rank].rows * input_tensor_Wt;
+            }
             tensor_descriptor_args.push_back(valid_pages_per_batch_head);  // 6 == valid_pages_per_batch_head
             tensor_descriptor_args.push_back(placement.link);              // 7 == worker_link
             if (has_metadata) {
@@ -1313,6 +1362,13 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             reader_args.push_back(kv_cache_num_layers);
             reader_args.push_back(kv_cache_layer_idx);
         }
+        const auto append_rank_slabs = [&](KernelDescriptor::RTArgList& args) {
+            for (const auto& slab : last_input_rank_slabs) {
+                args.push_back(slab.output_row);
+                args.push_back(slab.rows);
+            }
+        };
+        append_rank_slabs(reader_args);
         if (fuse_op) {
             std::vector<uint32_t> signaler_args;
             auto& signaler = is_forward ? fused_op_signaler_forward : fused_op_signaler_backward;
@@ -1342,6 +1398,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             writer_args.push_back(kv_actual_isl->buffer());
             writer_args.push_back(chunk_local_tiles);
         }
+        append_rank_slabs(writer_args);
 
         const auto neighbor_coord = is_forward ? backward_device_coord : forward_device_coord;
         std::vector<uint32_t> writer_extra_args;

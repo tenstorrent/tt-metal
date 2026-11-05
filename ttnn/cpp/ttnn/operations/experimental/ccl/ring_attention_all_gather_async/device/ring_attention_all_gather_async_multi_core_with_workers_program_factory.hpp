@@ -127,6 +127,14 @@ struct RingAttentionRankMapping {
     uint32_t mesh_cols = 0;
 };
 
+// A rank-slab input (the last gathered input): tensor rank r sends `rows` tile rows per (batch, head) of its input,
+// from tile row `input_row`, to tile row `output_row` of the output; a rank may send none. Bank-owned schedule only.
+struct RingAttentionRankSlab {
+    uint32_t input_row = 0;
+    uint32_t output_row = 0;
+    uint32_t rows = 0;
+};
+
 // Sliding attention exchanges one or two predecessor tails into compact output slots.
 struct RingAttentionNeighborHaloConfig {
     uint32_t send_to_next_start_Ht;
@@ -327,7 +335,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Opt-in two-stage fused readiness: every received shard signals once at its row midpoint and
     // once when complete. Only consumers that interpret the doubled semaphore protocol may enable it.
     bool partial_readiness_enabled = false,
-    RingAttentionRankMapping rank_mapping = {});
+    RingAttentionRankMapping rank_mapping = {},
+    // Empty: every input sends its whole slab. Else one entry per tensor rank for the last input.
+    const std::vector<RingAttentionRankSlab>& last_input_rank_slabs = {});
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,

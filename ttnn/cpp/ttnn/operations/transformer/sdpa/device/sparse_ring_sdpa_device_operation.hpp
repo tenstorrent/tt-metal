@@ -60,6 +60,7 @@ SparseRingSDPAResult sparse_ring_sdpa(
     std::optional<uint32_t> q_blocks_per_pass = std::nullopt,
     const std::optional<ttnn::Tensor>& block_counts = std::nullopt,
     const std::vector<std::pair<uint32_t, uint32_t>>& dense_blocks = {},
-    bool dense_keys = true);
+    bool dense_keys = true,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_dense_q = std::nullopt);
 
 }  // namespace ttnn::prim

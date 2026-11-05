@@ -397,6 +397,19 @@ class Case:
             pytest.skip(f"{most} / {fewest} blocks per core cannot be split into {passes} passes")
         return q_blocks_per_pass
 
+    def dense_q_buffer(self, ranges):
+        """A zeroed persistent_output_buffer_dense_q for dense_blocks `ranges` (dense_q_slabs)."""
+        rows = sum(n for _, n in dense_q_slabs(self.geo, self.S, ranges))
+        return self._upload(torch.zeros(1, self.H, rows, D), self.dims(None, 1), dtype=self.q_dtype)
+
+    def read_dense_q(self, buf):
+        """[S, H, rows, D]: every device's dense-Q buffer, by SP index."""
+        dims = [None, None]
+        dims[self.rt.sp_axis], dims[self.rt.tp_axis] = 0, 1
+        dev = self.rt.mesh_device
+        composer = ttnn.ConcatMesh2dToTensor(dev, mesh_shape=tuple(dev.shape), dims=dims)
+        return ttnn.to_torch(buf, mesh_composer=composer).float()
+
     def call(self, q, k, v, mask, pooled_k=None, pooled_v=None, **overrides):
         """The sparse op on device tensors with this case's arguments; `overrides` replace or add op kwargs."""
         rt = self.rt
@@ -434,11 +447,15 @@ class Case:
         counts=None,
         dense_blocks=None,
         dense_keys=True,
+        dense_q_buf=None,
     ):
         """pooled=False omits pooled K / V (kept blocks only). dense_floor=True (with want_ref="slice") also computes
         the exact dense reference on the slice. counts: the block_counts input ([S * nb_pad]), also used by the
-        pooling and the reference. dense_blocks / dense_keys go to the op only (the reference uses `mask`)."""
+        pooling and the reference. dense_blocks / dense_keys go to the op only (the reference uses `mask`), with
+        dense_q_buf (default: a new dense_q_buffer), returned as "dense_q"."""
         rt, geo = self.rt, self.geo
+        if dense_blocks is not None and dense_q_buf is None:
+            dense_q_buf = self.dense_q_buffer(dense_blocks)
         tq = self._upload(q, self.seq_dims, dtype=self.q_dtype)
         tk, tv = (self._upload(x, self.seq_dims, dtype=self.dtype) for x in (k, v))
         pooled_k, pooled_v = (self.quantize(pool(x, geo, self.S, counts), bits=self.kv_bits()) for x in (k, v))
@@ -466,6 +483,7 @@ class Case:
             block_counts=t_counts,
             dense_blocks=dense_blocks,
             dense_keys=dense_keys,
+            persistent_output_buffer_dense_q=dense_q_buf,
         )
         sparse = ttnn.to_torch(out, mesh_composer=self.composer).float()
         dense = None
@@ -514,6 +532,7 @@ class Case:
             "dense": None if dense is None else dense[:, :, :n],
             "ref": None if ref is None else ref[:, :, :n],
             "dense_ref": None if dense_ref is None else dense_ref[:, :, :n],
+            "dense_q": dense_q_buf,
         }
 
 
@@ -807,6 +826,17 @@ def _dense_ranges(name, geo, S):
     }[name]
 
 
+def dense_q_slabs(geo, S, ranges):
+    """Per shard, (first local Q row, rows) of its dense-Q slab: from its first to its last Q block in a range."""
+    nb, nb_pad = geo.nb(), geo.nb_pad()
+    slabs = []
+    for s in range(S):
+        blocks = [g - s * nb_pad for a, b in ranges for g in range(max(a, s * nb_pad), min(b, s * nb_pad + nb))]
+        start = min(blocks, default=0) * BLOCK
+        slabs.append((start, min((max(blocks) + 1) * BLOCK, geo.rows) - start) if blocks else (0, 0))
+    return slabs
+
+
 @pytest.mark.parametrize("dense_keys", [True, False], ids=["rows_keys", "rows"])
 @pytest.mark.parametrize("ranges", ["start", "end", "two"])
 @pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
@@ -828,6 +858,46 @@ def test_dense_blocks(runtime, geom, pooled, ranges, dense_keys):
     _check(tag, {**r, "sparse": out}, _density(explicit, geo, case.S), dense_min=None, ref_min=0.999)
     diff = (out - r["sparse"]).abs().max().item()
     assert torch.equal(out, r["sparse"]), f"{tag}: vs the explicit mask, max |diff| {diff:.3e}"
+
+
+def _check_dense_q_gather(tag, case, q, ranges, got):
+    """Device s holds every other shard's dense-Q slab, exactly, in shard order. Its own slab is not copied (the
+    kernels read it from q, as the local K / V), so it stays as allocated: zero."""
+    rows, off = case.geo.rows, 0
+    for t, (start, n) in enumerate(dense_q_slabs(case.geo, case.S, ranges)):
+        want = q[0, :, t * rows + start : t * rows + start + n]
+        for s in range(case.S):
+            have = got[s, :, off : off + n]
+            if s == t:
+                assert (have == 0).all(), f"{tag}: device {s} wrote its own slab"
+            else:
+                bad = (have != want).any(-1).nonzero()
+                assert bad.numel() == 0, f"{tag}: device {s}, slab of shard {t}: {len(bad)} rows differ, first {bad[0]}"
+        off += n
+
+
+@pytest.mark.parametrize("ranges", ["start", "end", "two"])
+@pytest.mark.parametrize("geom", ["r1024k256", "r1184k256"])
+def test_dense_q_gather(runtime, geom, ranges):
+    """The dense rows' Q rides the fused gather into persistent_output_buffer_dense_q (read back from every device,
+    exact) and the output stays bit-equal to the explicit mask's. The second call is a program cache hit into another
+    buffer."""
+    geo = GEOMETRIES[geom]
+    case = Case(runtime, geo)
+    dense = _dense_ranges(ranges, geo, case.S)
+    mask = make_mask(geo, case.S, case.H, density=0.1, seed=31)
+    q, k, v = case.inputs(31)
+    explicit = dense_blocks_mask(mask, geo, case.S, dense)
+    want = case.run(q, k, v, explicit, want_dense=False, want_ref=False, pooled=False)["sparse"]
+    bufs = [case.dense_q_buffer(dense) for _ in range(2)]
+    for call, buf in enumerate(bufs):
+        tag = f"dense q gather {ranges} {geom} call {call}"
+        r = case.run(q, k, v, mask, want_dense=False, want_ref=False, pooled=False, dense_blocks=dense, dense_q_buf=buf)
+        _check_dense_q_gather(tag, case, q, dense, case.read_dense_q(buf))
+        diff = (r["sparse"] - want).abs().max().item()
+        assert torch.equal(r["sparse"], want), f"{tag}: vs the explicit mask, max |diff| {diff:.3e}"
+    for buf in bufs:
+        ttnn.deallocate(buf)
 
 
 @pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <tuple>
@@ -112,6 +114,8 @@ struct SparseRingSDPAParams {
 //                 softmax as pooled entries. Absent: the softmax covers the kept blocks only.
 //   block_counts  optional, uint32 row-major [1, 1, 1, n_blocks_pad]: real tokens per global block. Absent: the
 //                 geometric lengths.
+//   gathered_dense_q  with dense_blocks only, tile [1, NH, >= dense_q_rows, DH] in q's dtype: the fused gather lands
+//                 every other shard's dense-Q slab (dense_q_slabs) in it; this shard's own slab is not copied.
 struct SparseRingSDPAInputs {
     Tensor input_q;
     Tensor input_k;
@@ -122,12 +126,48 @@ struct SparseRingSDPAInputs {
     std::optional<Tensor> pooled_k;
     std::optional<Tensor> pooled_v;
     std::optional<Tensor> block_counts;
+    std::optional<Tensor> gathered_dense_q;
 
     // The pooled route (Sol-Attn's correction for the dropped blocks) runs iff pooled K / V are given.
     bool pooled_route() const { return pooled_k.has_value(); }
 
     uint32_t local_kv_seq_len() const { return static_cast<uint32_t>(input_k.logical_shape()[2]); }
 };
+
+// The dense-Q slab of each shard s: local Q tile rows [row_start, row_start + rows), from its first to its last Q block
+// in a dense_blocks range (rows = 0: none). gathered_dense_q holds the slabs in shard order, each at the sum of the
+// earlier shards' rows.
+struct DenseQSlab {
+    uint32_t row_start = 0;
+    uint32_t rows = 0;
+};
+
+inline std::vector<DenseQSlab> dense_q_slabs(
+    const std::vector<std::pair<uint32_t, uint32_t>>& dense_blocks,
+    uint32_t ring_size,
+    uint32_t nb_pad,
+    uint32_t local_q_tiles,
+    uint32_t block_tiles) {
+    const uint32_t nb = (local_q_tiles + block_tiles - 1) / block_tiles;
+    std::vector<DenseQSlab> slabs(ring_size);
+    for (uint32_t s = 0; s < ring_size; ++s) {
+        uint32_t lo = nb;
+        uint32_t hi = 0;
+        for (const auto& [start, end] : dense_blocks) {
+            const uint32_t a = std::max(start, s * nb_pad);
+            const uint32_t b = std::min(end, s * nb_pad + nb);
+            if (a < b) {
+                lo = std::min(lo, a - s * nb_pad);
+                hi = std::max(hi, b - s * nb_pad);
+            }
+        }
+        if (lo < hi) {
+            slabs[s].row_start = lo * block_tiles;
+            slabs[s].rows = std::min(hi * block_tiles, local_q_tiles) - slabs[s].row_start;
+        }
+    }
+    return slabs;
+}
 
 // SparseRingSDPAResult holds one tensor, the attention output.
 constexpr size_t SPARSE_RING_SDPA_OUTPUT_IDX = 0;

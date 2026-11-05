@@ -30,6 +30,8 @@ namespace ttnn::transformer {
 //   block_counts  optional [1, 1, 1, ring_size * nb_pad]  uint32 ROW_MAJOR, real tokens per block
 //   dense_blocks  optional, at most 8 disjoint [start, end) ranges of global blocks s * nb_pad + b: a Q block in a
 //                 range keeps every block (its mask row is ignored); with dense_keys every Q block also keeps them
+//   persistent_output_buffer_dense_q  required iff dense_blocks: [1, H, >= dense rows, D] TILE, q's dtype (= k's);
+//                 the gather lands each shard's dense-Q slab in it (dense_q_slabs)
 // Returns [1, H, N/ring_size, D], same layout as q.
 ttnn::Tensor sparse_ring_sdpa(
     const ttnn::Tensor& input_tensor_q,
@@ -57,6 +59,7 @@ ttnn::Tensor sparse_ring_sdpa(
     std::optional<uint32_t> q_blocks_per_pass = std::nullopt,
     const std::optional<ttnn::Tensor>& block_counts = std::nullopt,
     const std::optional<std::vector<std::pair<uint32_t, uint32_t>>>& dense_blocks = std::nullopt,
-    bool dense_keys = true);
+    bool dense_keys = true,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_dense_q = std::nullopt);
 
 }  // namespace ttnn::transformer

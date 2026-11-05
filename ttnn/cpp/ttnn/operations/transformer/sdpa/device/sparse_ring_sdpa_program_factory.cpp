@@ -1596,6 +1596,18 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     std::vector<Tensor> all_gather_input_tensors = {input_tensor_k, input_tensor_v};
     std::vector<Tensor> all_gather_output_tensors = {gathered_input_tensor_k, gathered_input_tensor_v};
+    // dense_blocks: the dense rows' Q rides the gather after K and V, one slab per shard (dense_q_slabs).
+    std::vector<RingAttentionRankSlab> dense_q_rank_slabs;
+    if (tensor_args.gathered_dense_q.has_value()) {
+        uint32_t output_row = 0;
+        for (const auto& slab :
+             dense_q_slabs(args.dense_blocks, ring_size, mask_nb_pad, q_local_padded_Nt, block_tiles)) {
+            dense_q_rank_slabs.push_back({.input_row = slab.row_start, .output_row = output_row, .rows = slab.rows});
+            output_row += slab.rows;
+        }
+        all_gather_input_tensors.push_back(input_tensor_q);
+        all_gather_output_tensors.push_back(*tensor_args.gathered_dense_q);
+    }
     // Append the all-gather portion to `desc`. Buffer addresses are auto-patched on cache hits.
     ring_attention_all_gather_async_multi_core_with_workers_helper(
         desc,
@@ -1625,7 +1637,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         // consumer implements the second-half wait.
         sdpa_fused_op_signaler->split_forwarding_enabled,
         /*partial_readiness_enabled=*/false,
-        rank_mapping);
+        rank_mapping,
+        dense_q_rank_slabs);
 
     return desc;
 }

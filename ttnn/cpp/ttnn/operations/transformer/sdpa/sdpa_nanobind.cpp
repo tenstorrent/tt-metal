@@ -193,7 +193,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
     std::optional<uint32_t> q_blocks_per_pass,
     const std::optional<ttnn::Tensor>& block_counts,
     const std::optional<std::vector<std::pair<uint32_t, uint32_t>>>& dense_blocks,
-    bool dense_keys) {
+    bool dense_keys,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_dense_q) {
     return ttnn::transformer::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -221,7 +222,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
         q_blocks_per_pass,
         block_counts,
         dense_blocks,
-        dense_keys);
+        dense_keys,
+        persistent_output_buffer_dense_q);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -921,6 +923,10 @@ void bind_sdpa(nb::module_& mod) {
                 Defaults to None.
             dense_keys (bool): with dense_blocks, every Q block also keeps the blocks in the ranges, whatever its
                 mask bits. False: only the rows are dense. Defaults to True.
+            persistent_output_buffer_dense_q (ttnn.Tensor, optional): required with dense_blocks, and only then.
+                [1, H, >= R, D] TILE DRAM in q's dtype, which must be k's. Shard s's dense-Q slab is its local Q rows
+                from its first to its last block in a range (R = the slabs' rows summed); the fused gather writes the
+                slabs of the other shards in shard order, each after the earlier shards' rows.
 
         Returns:
             ttnn.Tensor: [1, H, N/ring_size, D], same layout as input_tensor_q.
@@ -952,7 +958,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("q_blocks_per_pass") = nb::none(),
         nb::arg("block_counts").noconvert() = nb::none(),
         nb::arg("dense_blocks") = nb::none(),
-        nb::arg("dense_keys") = true);
+        nb::arg("dense_keys") = true,
+        nb::arg("persistent_output_buffer_dense_q").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.
