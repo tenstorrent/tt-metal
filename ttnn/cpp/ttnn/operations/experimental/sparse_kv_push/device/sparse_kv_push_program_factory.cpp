@@ -22,6 +22,7 @@
 namespace ttnn::operations::experimental::sparse_kv_push {
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // Kernel handles: create_descriptor pushes the kernels in this order.
 constexpr tt::tt_metal::KernelHandle kReaderKernel = 0;
@@ -223,7 +224,10 @@ tt::tt_metal::KernelDescriptor data_movement_kernel(
     return kernel;
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
+
+using namespace CMAKE_UNIQUE_NAMESPACE;
 
 tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     const SparseKvPushParams& params,

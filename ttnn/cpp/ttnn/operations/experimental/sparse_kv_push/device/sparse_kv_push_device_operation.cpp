@@ -14,6 +14,7 @@
 namespace ttnn::operations::experimental::sparse_kv_push {
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 constexpr uint32_t kRowDim = 2;  // the cache is sharded over its rows across every chip
 
@@ -262,7 +263,10 @@ ttsl::hash::hash_t program_hash(const SparseKvPushParams& params, const SparseKv
         batch_index_spec);
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
+
+using namespace CMAKE_UNIQUE_NAMESPACE;
 
 ttsl::hash::hash_t SparseKvPushDeviceOperation::compute_program_hash(
     const SparseKvPushParams& args, const SparseKvPushInputs& tensor_args) {

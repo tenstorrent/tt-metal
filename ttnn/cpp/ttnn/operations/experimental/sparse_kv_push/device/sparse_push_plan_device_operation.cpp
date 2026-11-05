@@ -16,6 +16,7 @@
 namespace ttnn::operations::experimental::sparse_kv_push {
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 constexpr uint32_t kIdxAlign = 16;      // indices per core are a multiple of this, so each slice starts 64 B aligned
 constexpr uint32_t kCbAlignBytes = 64;  // CB sizes are rounded up to whole 64 B
@@ -68,7 +69,10 @@ void validate_runtime(const SparsePushPlanInputs& args) {
         "chunk_start must not overlap the indices");
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
+
+using namespace CMAKE_UNIQUE_NAMESPACE;
 
 void SparsePushPlanDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
