@@ -53,7 +53,7 @@ inline constexpr const char* kCacheCheckIntervalEnv = "TT_METAL_JIT_SERVER_CACHE
 inline constexpr const char* kServerCacheRootEnv = "TT_METAL_JIT_SERVER_CACHE_ROOT";
 inline constexpr const char* kDefaultServerCacheRoot = "/tmp/tt-metal-cache/";
 // After a run that frees nothing, checks back off exponentially up to this.
-inline constexpr std::chrono::seconds kMaxPruneBackoff{6 * 3600};
+inline constexpr std::chrono::seconds kMaxPruneBackoff{3600};
 
 struct CachePruneConfig {
     // Pruning starts when free space falls below this percentage of the filesystem; 0 disables it.

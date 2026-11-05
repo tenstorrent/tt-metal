@@ -243,7 +243,7 @@ measured the way `df` reports it, so it excludes blocks reserved for root, and i
 again after every deletion rather than estimated. On filesystems that free blocks lazily, a
 run stops once it has deleted twice the original shortfall. Each run logs one `Cache prune:`
 line with what it deleted and why anything idle was skipped. A run that frees nothing
-doubles the time to the next check, up to 6 hours, so an unreachable target does not rescan
+doubles the time to the next check, up to 1 hour, so an unreachable target does not rescan
 the cache every few minutes.
 
 - **Deleting a kernel only costs a recompile.** The next request for it is a cache miss.
@@ -486,7 +486,7 @@ local ELF.
 | `TT_METAL_JIT_SERVER_CACHE_MIN_FREE_PCT` | unset (off) | Enables cache pruning: when free space on the cache filesystem drops below this percentage, delete least recently used kernels. Requires an explicit, server-only `..._CACHE_ROOT`. See §3, Cache pruning. |
 | `TT_METAL_JIT_SERVER_CACHE_TARGET_FREE_PCT` | `MIN_FREE_PCT + 10` (at most 100) | Pruning stops once free space reaches this percentage. |
 | `TT_METAL_JIT_SERVER_CACHE_MIN_IDLE_S` | `3600` | Kernels used more recently than this are never pruned. |
-| `TT_METAL_JIT_SERVER_CACHE_CHECK_INTERVAL_S` | `300` | How often to check free space. Backs off to at most 6 hours while runs free nothing. |
+| `TT_METAL_JIT_SERVER_CACHE_CHECK_INTERVAL_S` | `300` | How often to check free space. Backs off to at most 1 hour while runs free nothing. |
 
 ---
 
