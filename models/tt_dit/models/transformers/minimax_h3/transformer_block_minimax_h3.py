@@ -21,6 +21,7 @@ from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_block_size
 from .attention_minimax_h3 import MiniMaxH3Attention
 from .mmrs_config import has_mmrs_config, register_mmrs_config
+from .vsa_prepass import MiniMaxH3VSAConfig
 
 # Number of modalities the AdaLN table is indexed by: video (0), text (1), audio (2).
 # Mirrors `MINIMAX_H3_MODALITY_NUM` in the reference; padding rows (-1) are clamped to 0.
@@ -71,6 +72,7 @@ class MiniMaxH3TransformerBlock(Module):
         is_fsdp: bool = False,
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
+        vsa_config: MiniMaxH3VSAConfig | None = None,
     ) -> None:
         super().__init__()
 
@@ -110,6 +112,7 @@ class MiniMaxH3TransformerBlock(Module):
             is_fsdp=is_fsdp,
             kv_gather_capacity=kv_gather_capacity,
             use_persistent_ccl_buffers=use_persistent_ccl_buffers,
+            vsa_config=vsa_config,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,

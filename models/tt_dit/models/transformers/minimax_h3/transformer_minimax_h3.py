@@ -20,6 +20,7 @@ from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock
+from .vsa_prepass import MiniMaxH3VSAConfig, VSAPrepass
 
 # shift, scale -- the order `norm_out.linear` emits them in.
 NUM_OUT_MODULATION_PARAMS = 2
@@ -209,6 +210,8 @@ class MiniMaxH3Transformer3DModel(Module):
         is_fsdp: bool = False,
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
+        # VSA: when set, bind a geometry's pre-pass with `set_vsa_prepass` and feed the sequence in its tile order.
+        vsa_config: MiniMaxH3VSAConfig | None = None,
     ) -> None:
         super().__init__()
 
@@ -216,6 +219,7 @@ class MiniMaxH3Transformer3DModel(Module):
         self.freq_dim = freq_dim
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
+        self._vsa_prefix_rows = 0
         self._temb_state = StateTensor()
         self._timestep_idx_state: dict[int, StateTensor] = {}
         self._eye_states: dict[int, StateTensor] = {}
@@ -309,6 +313,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     is_fsdp=is_fsdp,
                     kv_gather_capacity=kv_gather_capacity,
                     use_persistent_ccl_buffers=use_persistent_ccl_buffers,
+                    vsa_config=vsa_config,
                 )
                 for _ in range(num_layers)
             ]
@@ -524,7 +529,7 @@ class MiniMaxH3Transformer3DModel(Module):
             adaln_tile_map=adaln_tile_map,
             adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
             traced=traced,
-            tracer_trace_key=(pad_to, adaln_tile_map is not None),
+            tracer_trace_key=(pad_to, adaln_tile_map is not None, self._vsa_prefix_rows),
         )
 
         hidden = self.norm_out(
@@ -581,6 +586,13 @@ class MiniMaxH3Transformer3DModel(Module):
         if tilerow is not None:
             ttnn.deallocate(tilerow[1])
         return hidden
+
+    def set_vsa_prepass(self, prepass: VSAPrepass) -> None:
+        """Bind one geometry's VSA pre-pass to every block: its constants are shared across layers."""
+        # The prefix recompute's shapes follow the prefix length, so a rung's trace is per prefix length.
+        self._vsa_prefix_rows = prepass.prefix_rows
+        for block in self.transformer_blocks:
+            block.attn.set_vsa_prepass(prepass)
 
     def release_traces(self) -> None:
         """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets."""
