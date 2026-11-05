@@ -13,6 +13,8 @@
 #include "api/tensor/noc_traits.h"
 #include "dataflow_common.hpp"
 
+// in1 data mover: the injector reads the weight (its own stripe from the shard, the rest once the senders land
+// them), the others get it from upstream, and every core but the last forwards it down the chain.
 void kernel_main() {
     Noc noc;
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -44,17 +46,17 @@ void kernel_main() {
     uint32_t argidx = 0;
     const uint32_t in1_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in1_dest_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);    // last core of the chain: nothing to forward
+    const uint32_t in1_dest_noc_x = get_arg_val<uint32_t>(argidx++);  // next core in the chain
     const uint32_t in1_dest_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in1_sender_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in1_sender_noc_x = get_arg_val<uint32_t>(argidx++);  // previous core, which feeds us
     const uint32_t in1_sender_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t chain_offset = get_arg_val<uint32_t>(argidx++);
+    const uint32_t chain_offset = get_arg_val<uint32_t>(argidx++);  // this chain's slice of every stripe
     const uint32_t chain_width = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
-    uint32_t stripe_order[ring_size];
+    uint32_t stripe_order[ring_size];  // stripes in the order this device uses them; [0] is our own
     for (uint32_t i = 0; i < ring_size; i++) {
         stripe_order[i] = get_arg_val<uint32_t>(argidx++);
     }
@@ -70,10 +72,11 @@ void kernel_main() {
     for (uint32_t i = 0; i < ring_size; i++) {
         stripe_sem_addrs[i] = get_arg_val<uint32_t>(argidx++);
     }
+    // Sink row only: the previous core of the in0 chain.
     const uint32_t in0_upstream_noc_x = sink_in0 ? get_arg_val<uint32_t>(argidx++) : 0;
     const uint32_t in0_upstream_noc_y = sink_in0 ? get_arg_val<uint32_t>(argidx++) : 0;
     const uint32_t local_stripe = stripe_order[0];
-    uint32_t arrived[ring_size] = {};
+    uint32_t arrived[ring_size] = {};  // K chunks already seen per stripe
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -88,9 +91,9 @@ void kernel_main() {
     Semaphore<> in0_sender_semaphore(in0_sender_semaphore_id);
     Semaphore<> in0_receiver_semaphore(in0_receiver_semaphore_id);
 
-    in1_valid_semaphore.set(VALID);
+    in1_valid_semaphore.set(VALID);  // relay_unicast copies this into the next core's receiver semaphore
 
-    constexpr uint32_t full_N_tiles_bytes = N_block_tiles * in1_tile_size;
+    constexpr uint32_t full_N_tiles_bytes = N_block_tiles * in1_tile_size;  // row pitch of an in1 block in the CB
 
     uint32_t cols[N_block_tiles];
     uint32_t width = 0;
@@ -99,7 +102,7 @@ void kernel_main() {
     for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
         const bool any_real = block_columns<N_block_tiles, piece_tiles, ring_size, hops_before>(
             n_block_iter, stripe_order, stripe_tiles, chain_offset, chain_width, cols, width);
-        const uint32_t forward_row_bytes = any_real ? width * in1_tile_size : 0;
+        const uint32_t forward_row_bytes = any_real ? width * in1_tile_size : 0;  // all-padding blocks aren't sent on
 
         for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
             uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
@@ -107,7 +110,7 @@ void kernel_main() {
             bool is_last_block = (n_block_iter == N_blocks_per_core - 1) && (m_block_iter == (M_blocks_per_core - 1));
 
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                if constexpr (sink_in0) {
+                if constexpr (sink_in0) {  // sink row: no in0 kernel here, so take its block too
                     cb_in0.reserve_back(in0_block_num_tiles);
                     in0_receiver_semaphore.set(INVALID);
                     in0_sender_semaphore.up(noc, in0_upstream_noc_x, in0_upstream_noc_y, 1);
@@ -117,6 +120,7 @@ void kernel_main() {
                 uint32_t in1_start_address = cb_in1.get_write_ptr();
                 if constexpr (is_injector_core) {
                     if (any_real) {
+                        // columns of other devices' stripes: wait until this K chunk is in the persistent buffer
                         wait_for_block_stripes(
                             cols, width, local_stripe, stripe_tiles, stripe_sem_addrs, k_block + 1, arrived);
                         read_in1_block_columns<K_block_tiles, N_block_tiles, transpose_b>(
@@ -132,7 +136,7 @@ void kernel_main() {
                             local_stripe,
                             stripe_tiles);
                     }
-                } else {
+                } else {  // tell upstream we have room, then wait for the block
                     in1_receiver_semaphore.set(INVALID);
                     in1_sender_semaphore.up(noc, in1_sender_noc_x, in1_sender_noc_y, 1);
                     in1_receiver_semaphore.wait(VALID);
@@ -144,11 +148,11 @@ void kernel_main() {
                     cb_in0.push_back(in0_block_num_tiles);
                 }
 
-                if (!is_sink_core) {
+                if (!is_sink_core) {  // once downstream has room, forward the block and mark it valid
                     in1_sender_semaphore.wait(1);
                     in1_sender_semaphore.set(0);
 
-                    if (forward_row_bytes > 0) {
+                    if (forward_row_bytes > 0) {  // only the real columns of each K row
                         for (uint32_t i = 0; i < K_block_tiles; i++) {
                             noc.async_write(
                                 CoreLocalMem<uint32_t>(in1_start_address),
@@ -161,13 +165,13 @@ void kernel_main() {
                     }
 
 #ifdef ARCH_BLACKHOLE
-                    noc.async_writes_flushed();
+                    noc.async_writes_flushed();  // the block must leave before its valid flag
 #endif
 
                     in1_valid_semaphore.relay_unicast(noc, in1_receiver_semaphore, in1_dest_noc_x, in1_dest_noc_y);
                 }
 
-                if constexpr (is_output_writer) {
+                if constexpr (is_output_writer) {  // the previous block's output goes out mid-way through this one
                     if (deferred.pending && k_block == defer_write_k_block) {
                         deferred.write(out_writer, cb_out_id, M_tiles, N_tiles, out_tile_size);
                     }
@@ -184,7 +188,7 @@ void kernel_main() {
             }
         }
     }
-    if constexpr (is_injector_core) {
+    if constexpr (is_injector_core) {  // subtract only this call's counts; the next call's may already be in
         for (uint32_t s = 0; s < ring_size; s++) {
             if (arrived[s] > 0) {
                 noc_semaphore_inc(get_noc_addr(stripe_sem_addrs[s]), -K_num_blocks);

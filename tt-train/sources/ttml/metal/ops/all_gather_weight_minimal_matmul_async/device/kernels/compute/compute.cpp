@@ -9,6 +9,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "tt-train/sources/ttml/metal/ops/all_gather_weight_minimal_matmul_async/device/kernels/all_gather_weight_minimal_matmul_async_utils.hpp"
 
+// Copies only the real tiles of a partial block
 void copy_and_pack_block(
     uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles, uint32_t rows, uint32_t cols) {
     CircularBuffer cb_out(out_cb);
@@ -46,6 +47,7 @@ void matmul_blocks(
 
     for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
         const uint32_t rows = std::min(subblock_h, M_block_tiles - M_start);
+        // A short last subblock gets its own init instead of padding the block.
         if (rows != subblock_h) {
             matmul_block_init(in0_cb, in1_cb, transpose_b, subblock_w, rows, K_block_tiles);
         }
@@ -95,6 +97,7 @@ void kernel_main() {
     constexpr uint32_t ring_size = get_compile_time_arg_val(9);
     constexpr bool transpose_b = get_compile_time_arg_val(10) == 1;
     constexpr uint32_t hops_before = get_compile_time_arg_val(11);
+    // N blocks are cut per hop region and differ in width, so compute needs the stripe layout too.
     using Blocks = StripeBlocks<N_block_tiles, piece_tiles, ring_size, hops_before>;
 
     uint32_t argidx = 0;
@@ -118,6 +121,7 @@ void kernel_main() {
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
+    // N-outer: every M block of an N block runs before the next one, so remote stripes are needed as late as possible.
     for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
         uint32_t current_N_block_tiles = Blocks::span(n_block_iter).width;
         uint32_t current_subblock_w = std::min(current_N_block_tiles, subblock_w);
@@ -128,7 +132,7 @@ void kernel_main() {
             uint32_t current_M_block_tiles = m_tile_end - m_tile;
             uint32_t current_subblock_h = std::min(current_M_block_tiles, subblock_h);
 
-            reconfig_data_format(in1_cb, in0_cb);
+            reconfig_data_format(in1_cb, in0_cb);  // the copy-out left the unpackers set up for itself
             pack_reconfig_data_format(intermediate_cb);
             matmul_block_init(in0_cb, in1_cb, transpose_b, current_subblock_w, current_subblock_h, K_block_tiles);
             cb_intermediate.reserve_back(out_block_num_tiles);
@@ -149,7 +153,7 @@ void kernel_main() {
 
                 cb_in0.pop_front(in0_block_num_tiles);
                 cb_in1.pop_front(in1_block_num_tiles);
-                if (k_block == 0) {
+                if (k_block == 0) {  // later K blocks accumulate in L1
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
             }
@@ -157,6 +161,7 @@ void kernel_main() {
             cb_intermediate.push_back(out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
 
+            // Partials are in the accumulation format; copy them out in the output format.
             cb_out.reserve_back(out_block_num_tiles);
             cb_intermediate.wait_front(out_block_num_tiles);
             copy_and_pack_block(

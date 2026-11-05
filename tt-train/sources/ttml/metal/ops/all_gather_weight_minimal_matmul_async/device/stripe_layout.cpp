@@ -15,6 +15,7 @@ namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async {
 
 namespace {
 
+// On a ring, ring_size / 2 of the other stripes count as behind us; on a line, every device before us does.
 uint32_t stripe_hops_before(uint32_t ring_size, uint32_t ring_index, bool ring) {
     if (!ring) {
         return ring_index;
@@ -22,6 +23,8 @@ uint32_t stripe_hops_before(uint32_t ring_size, uint32_t ring_index, bool ring) 
     return ring_size / 2;
 }
 
+// How many hops a stripe travels in one direction. On an even ring the farthest stripe is reachable both
+// ways, so chains split it between the directions by parity.
 uint32_t relay_range(
     const StripeLayout& layout, uint32_t origin, uint32_t c, int32_t dir, bool ring, uint32_t parity_unit) {
     const uint32_t r = layout.ring_size;
@@ -36,6 +39,7 @@ uint32_t relay_range(
 
 }  // namespace
 
+// A stripe is spread over the chains as evenly as possible; the first `rem` chains get one extra tile.
 uint32_t StripeLayout::chain_offset(uint32_t c) const {
     const uint32_t base = stripe_tiles / num_chains;
     const uint32_t rem = stripe_tiles % num_chains;
@@ -74,6 +78,7 @@ StripeLayout make_stripe_layout(
     layout.piece_tiles = tt::div_up(layout.stripe_tiles, num_chains);
     layout.N_block_tiles = N_block_tiles;
     layout.hops_before = stripe_hops_before(ring_size, ring_index, ring);
+    // Local stripe first, then by hop distance.
     layout.stripe_order.push_back(ring_index);
     for (uint32_t dist = 1; dist < stripe_regions::count(ring_size, layout.hops_before); ++dist) {
         if (dist <= layout.hops_before) {
@@ -93,9 +98,10 @@ RelayPlan make_relay_plan(const StripeLayout& layout, uint32_t ring_index, bool 
     for (const int32_t dir : {1, -1}) {
         auto& segments = dir > 0 ? plan.forward : plan.backward;
         for (uint32_t j = 0; j < r; ++j) {
+            // Step j forwards the stripe that started j hops behind us in this direction.
             const int32_t o = static_cast<int32_t>(ring_index) - (dir * static_cast<int32_t>(j));
             if (!ring && (o < 0 || o >= static_cast<int32_t>(r))) {
-                break;
+                break;  // a line has nothing beyond its ends
             }
             const uint32_t origin = static_cast<uint32_t>(
                 ((o % static_cast<int32_t>(r)) + static_cast<int32_t>(r)) % static_cast<int32_t>(r));
@@ -103,9 +109,9 @@ RelayPlan make_relay_plan(const StripeLayout& layout, uint32_t ring_index, bool 
             for (uint32_t c = 0; c < layout.num_chains; ++c) {
                 const uint32_t range = relay_range(layout, origin, c, dir, ring, parity_unit);
                 if (layout.chain_width(c) == 0 || j + 1 > range) {
-                    continue;
+                    continue;  // empty chain, or this stripe stops here: the next device doesn't need it
                 }
-                seg.pieces.push_back({c, (j + 2 <= range) ? 1u : 0u});
+                seg.pieces.push_back({c, (j + 2 <= range) ? 1u : 0u});  // notify: the next device relays it again
             }
             if (!seg.pieces.empty()) {
                 segments.push_back(std::move(seg));

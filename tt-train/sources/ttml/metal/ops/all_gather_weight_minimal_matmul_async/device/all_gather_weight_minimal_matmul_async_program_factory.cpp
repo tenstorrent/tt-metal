@@ -28,9 +28,10 @@ namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async {
 namespace {
 constexpr const char* kKernelDir =
     "tt-train/sources/ttml/metal/ops/all_gather_weight_minimal_matmul_async/device/kernels/";
+// Runtime-arg slots that override_runtime_arguments patches on cache hits.
 constexpr uint32_t kRtInputAddrIdx = 0;
 constexpr uint32_t kRtOutputAddrIdx = 1;
-constexpr uint32_t kRtDmFixedArgs = 12;
+constexpr uint32_t kRtDmFixedArgs = 12;  // data-mover args before stripe_order
 constexpr uint32_t kRtSenderShardAddrIdx = 0;
 constexpr uint32_t kRtSenderPwbAddrIdx = 1;
 constexpr uint32_t kRtSenderSemaphoresIdx = 2;
@@ -72,16 +73,19 @@ ttnn::CoreCoord clamped_next(const std::vector<ttnn::CoreCoord>& order, uint32_t
     return order[index >= last ? last : index + 1];
 }
 
+// Output tiles per core once M is padded over the M cores and every stripe over the chains.
 uint64_t padded_work_per_core(
     uint32_t M_tiles, uint32_t N_tiles, uint32_t ring_size, uint32_t m_cores, uint32_t n_chains) {
     return static_cast<uint64_t>(tt::div_up(M_tiles, m_cores)) * ring_size * tt::div_up(N_tiles / ring_size, n_chains);
 }
 
+// A scatter-write packet carries at most 4 tiles.
 uint32_t send_tiles_per_packet(uint32_t tile_size) {
     return std::max<uint32_t>(
         1, std::min<uint32_t>(4, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / tile_size));
 }
 
+// On the sink row one data-mover kernel takes both operands, which frees a RISC for the fabric sender.
 struct CoreRole {
     bool in0_injector;
     bool in1_injector;
@@ -145,7 +149,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
 
     const bool transpose_b = operation_attributes.transpose_b;
     const uint32_t K = input_tensor.padded_shape()[-1];
-    const uint32_t M = input_tensor.physical_volume() / K;
+    const uint32_t M = input_tensor.physical_volume() / K;  // all leading dims of the input fold into M
     const uint32_t N = tensor_args.persistent_weight_buffer.padded_shape()[transpose_b ? -2 : -1];
     const uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
     const uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
@@ -164,6 +168,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
         subblock_w = config.value().subblock_w;
     }
 
+    // As in minimal_matmul: the bigger operand reads on the DRAM-read NOC, the smaller one also writes the output.
     auto small_input_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     auto small_input_risc = tt::tt_metal::DataMovementProcessor::RISCV_1;
     auto large_input_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
@@ -172,6 +177,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
         padded_work_per_core(M_tiles, N_tiles, operation_attributes.ring_size, grid_size.y, grid_size.x);
     const uint64_t work_rows_on_x =
         padded_work_per_core(M_tiles, N_tiles, operation_attributes.ring_size, grid_size.x, grid_size.y);
+    // Put M on whichever grid axis leaves less padded work per core.
     const bool transpose_core_grid = work_rows_on_x != work_rows_on_y ? work_rows_on_x < work_rows_on_y : M > N;
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
@@ -180,6 +186,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     auto in1_risc = transpose_core_grid ? small_input_risc : large_input_risc;
     uint32_t in1_parallel_axis_cores = transpose_core_grid ? grid_size.y : grid_size.x;
 
+    // The column chains end on this row.
     const uint32_t sink_row =
         build_core_order_for_axis({0, 0}, false, grid_size.y, large_input_noc, false, {0, 0}).first.back().y;
 
@@ -219,6 +226,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
         out_tile_size,
         out_block_num_tiles * double_buffer_factor,
         output_data_format);
+    // Partials accumulate here (packer L1 accumulation) before being copied out in the output format.
     tt::tt_metal::create_cb(
         tt::CBIndex::c_3, program, core_grid, intermediate_tile_size, out_block_num_tiles, intermediate_data_format);
 
@@ -233,6 +241,8 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
         "The matmul's circular buffers leave no L1 for the fabric senders' packets on the sink row; use smaller "
         "blocks");
 
+    // Chain handshake: a core with room bumps its upstream's sender semaphore, the upstream writes the block and
+    // flips the core's receiver semaphore to VALID.
     auto in0_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
@@ -277,7 +287,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
             layout.piece_tiles,
             layout.hops_before,
             static_cast<uint32_t>(transpose_b),
-            static_cast<uint32_t>(sink_other),
+            static_cast<uint32_t>(sink_other),  // sink row: also receive the other operand, with its semaphores
             other_sender_sem,
             other_receiver_sem,
         };
@@ -293,6 +303,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     const std::string in1_source = std::string(kKernelDir) + "dataflow/dm_in1.cpp";
     const ttnn::Tensor& pwb = tensor_args.persistent_weight_buffer;
 
+    // Cores with the same (injector, sink row) role share one kernel.
     std::map<std::pair<bool, bool>, std::vector<ttnn::CoreCoord>> in0_groups;
     std::map<std::pair<bool, bool>, std::vector<ttnn::CoreCoord>> in1_groups;
     for (uint32_t y = 0; y < grid_size.y; ++y) {
@@ -397,6 +408,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
         const uint32_t in0_idx = transpose_core_grid ? core.x : core.y;
         const uint32_t in1_idx = transpose_core_grid ? core.y : core.x;
 
+        // Injectors of this core's row and column chains.
         ttnn::CoreCoord left_core = {(std::size_t)0, (std::size_t)core.y};
         ttnn::CoreCoord top_core = {(std::size_t)core.x, (std::size_t)0};
         auto [in0_core_order, in0_core_order_index] = build_core_order_for_axis(
@@ -420,6 +432,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
 
         const uint32_t M_start_tile = M_tiles_per_core * in0_idx;
         const uint32_t M_end_tile = M_tiles_per_core * (in0_idx + 1);
+        // Rows write their output at different K blocks so the writes don't all hit the NOC at once.
         const uint32_t defer_write_k_block = std::min(static_cast<uint32_t>(core.y) * k_blocks_per_core, K_blocks - 1);
         const bool is_in0_sink = core == in0_core_order.back();
         const bool is_in1_sink = core == in1_core_order.back();
@@ -449,6 +462,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
 
         std::vector<uint32_t> in1_args =
             dm_runtime_args(weight_tensor.buffer()->address(), is_in1_sink, in1_next, in1_prev);
+        // in1 also gets the persistent buffer and one semaphore per stripe.
         in1_args.push_back(pwb.buffer()->address());
         in1_args.insert(in1_args.end(), stripe_sem_addrs.begin(), stripe_sem_addrs.end());
         std::vector<uint32_t> in0_args =
@@ -456,6 +470,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
 
         const CoreRole role = core_role(core, transpose_core_grid, sink_row);
         shared_variables_t::CoreKernels core_kernels{.core = core};
+        // A sink-row kernel also receives the other operand, so it needs that chain's previous core.
         if (role.has_in0()) {
             if (role.in0_sinks_in1) {
                 in0_args.insert(in0_args.end(), {static_cast<uint32_t>(in1_prev.x), static_cast<uint32_t>(in1_prev.y)});
@@ -476,12 +491,14 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
 
     std::vector<shared_variables_t::Sender> senders;
     const uint32_t num_links = operation_attributes.num_links;
+    // parity_unit = num_links: each run of num_links chains (one per link) sends the far stripe the same way, so
+    // every link splits it evenly between the two directions.
     const RelayPlan plan = make_relay_plan(layout, ring_index, ring, num_links);
     const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
         mesh_coordinate, forward_coord, backward_coord, device);
 
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    const uint32_t chunk_tiles = K_block_tiles;
+    const uint32_t chunk_tiles = K_block_tiles;  // senders ship K in the chunks the matmul consumes
     const auto src_node_id = device->get_fabric_node_id(mesh_coordinate);
 
     for (uint32_t link = 0; link < num_links; ++link) {
@@ -491,6 +508,8 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
                 continue;
             }
             const auto& segments = dir == 0 ? plan.forward : plan.backward;
+            // Schedule: per segment {stripe, distance, num_pieces}, then per piece
+            // {chain offset, chain width, injector x, injector y, notify}. Chains are dealt round-robin over links.
             uint32_t num_segments = 0;
             std::vector<uint32_t> schedule_body;
             for (const auto& seg : segments) {
@@ -522,6 +541,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
                 continue;
             }
 
+            // Senders run on the sink row's free data movers, spread evenly past column 0.
             const uint32_t sender_index = (2 * link) + dir;
             const ttnn::CoreCoord send_core{1 + ((sender_index * (grid_size.x - 1)) / (2 * num_links)), sink_row};
             const ttnn::CoreCoord send_virtual_core = device->worker_core_from_logical_core(send_core);
@@ -557,6 +577,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
             send_rt.insert(
                 send_rt.end(),
                 {static_cast<uint32_t>(send_virtual_core.x), static_cast<uint32_t>(send_virtual_core.y)});
+            // Router connection for this link; the kernel opens it with open_connections.
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
                 src_node_id,
                 {device->get_fabric_node_id(neighbour.value())},
@@ -582,6 +603,7 @@ void AllGatherWeightMinimalMatmulAsyncProgramFactory::override_runtime_arguments
     const AllGatherWeightMinimalMatmulAsyncParams& operation_attributes,
     const AllGatherWeightMinimalMatmulAsyncInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
+    // Only buffer and semaphore addresses change between cache hits.
     const uint32_t in0_addr = tensor_args.input_tensor.buffer()->address();
     const uint32_t in1_addr = tensor_args.weight_tensor.buffer()->address();
     const uint32_t out_addr = tensor_return_value.buffer()->address();

@@ -7,8 +7,10 @@
 #include <algorithm>
 #include <cstdint>
 
+// A block column that only pads a narrow chain up to piece_tiles.
 constexpr uint32_t kPaddingColumn = 0xFFFFFFFFu;
 
+// Page of weight tile (n, k), for a weight stored [N, K] (transpose_b) or [K, N].
 template <bool transpose_b>
 inline uint32_t weight_page(uint32_t n, uint32_t k, uint32_t K_tiles, uint32_t n_cols) {
     if constexpr (transpose_b) {
@@ -23,6 +25,8 @@ struct BlockSpan {
     uint32_t width = 0;
 };
 
+// Region r holds the pieces at hop distance r. N blocks are cut per region, so a block
+// never waits on two hop distances.
 namespace stripe_regions {
 constexpr uint32_t hops_after(uint32_t ring_size, uint32_t hops_before) {
     return ring_size - 1 - hops_before;
@@ -59,6 +63,8 @@ struct StripeBlocks {
     static constexpr uint32_t num_blocks =
         stripe_regions::total_blocks(ring_size, hops_before, piece_tiles, N_block_tiles);
 
+    // Where N block n starts (in virtual columns) and how wide it is. Each region is split into
+    // ceil(tiles / N_block_tiles) blocks of near-equal width, so no block crosses a region or ends as a tiny tail.
     static BlockSpan span(uint32_t n_block_iter) {
         uint32_t first_piece = 0;
         for (uint32_t r = 0; r < num_regions; r++) {

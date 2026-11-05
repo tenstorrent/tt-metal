@@ -13,6 +13,8 @@
 #include "api/tensor/noc_traits.h"
 #include "dataflow_common.hpp"
 
+// in0 data mover: the injector reads in0 from DRAM, the others get it from upstream, and every core but the last
+// forwards it down the chain.
 void kernel_main() {
     Noc noc;
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -43,13 +45,14 @@ void kernel_main() {
     uint32_t argidx = 0;
     const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in0_dest_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);    // last core of the chain: nothing to forward
+    const uint32_t in0_dest_noc_x = get_arg_val<uint32_t>(argidx++);  // next core in the chain
     const uint32_t in0_dest_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in0_sender_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_sender_noc_x = get_arg_val<uint32_t>(argidx++);  // previous core, which feeds us
     const uint32_t in0_sender_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
+    // This core's in1 chain and stripe order: the output writer needs them to know which columns it writes.
     const uint32_t chain_offset = get_arg_val<uint32_t>(argidx++);
     const uint32_t chain_width = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
@@ -57,6 +60,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < ring_size; i++) {
         stripe_order[i] = get_arg_val<uint32_t>(argidx++);
     }
+    // Sink row only: the previous core of the in1 chain.
     const uint32_t in1_upstream_noc_x = sink_in1 ? get_arg_val<uint32_t>(argidx++) : 0;
     const uint32_t in1_upstream_noc_y = sink_in1 ? get_arg_val<uint32_t>(argidx++) : 0;
 
@@ -80,7 +84,7 @@ void kernel_main() {
     Semaphore<> in1_sender_semaphore(in1_sender_semaphore_id);
     Semaphore<> in1_receiver_semaphore(in1_receiver_semaphore_id);
 
-    in0_valid_semaphore.set(VALID);
+    in0_valid_semaphore.set(VALID);  // relay_unicast copies this into the next core's receiver semaphore
 
     uint32_t cols[N_block_tiles];
     uint32_t width = 0;
@@ -96,11 +100,12 @@ void kernel_main() {
             uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
             uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
             uint32_t current_M_block_tiles = m_tile_end - m_tile;
+            // A partial M block only forwards its real rows.
             uint32_t current_block_bytes = current_M_block_tiles * K_block_tiles * in0_tile_size;
             bool is_last_block = (m_block_iter == (M_blocks_per_core - 1)) && (n_block_iter == (N_blocks_per_core - 1));
 
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                if constexpr (sink_in1) {
+                if constexpr (sink_in1) {  // sink row: no in1 kernel here, so take its block too
                     cb_in1.reserve_back(in1_block_num_tiles);
                     in1_receiver_semaphore.set(INVALID);
                     in1_sender_semaphore.up(noc, in1_upstream_noc_x, in1_upstream_noc_y, 1);
@@ -118,7 +123,7 @@ void kernel_main() {
                         m_tile_end,
                         k_block * K_block_tiles,
                         (k_block + 1) * K_block_tiles);
-                } else {
+                } else {  // tell upstream we have room, then wait for the block
                     in0_receiver_semaphore.set(INVALID);
                     in0_sender_semaphore.up(noc, in0_sender_noc_x, in0_sender_noc_y, 1);
                     in0_receiver_semaphore.wait(VALID);
@@ -130,7 +135,7 @@ void kernel_main() {
                     cb_in1.push_back(in1_block_num_tiles);
                 }
 
-                if (!is_sink_core) {
+                if (!is_sink_core) {  // once downstream has room, forward the block and mark it valid
                     in0_sender_semaphore.wait(1);
                     in0_sender_semaphore.set(0);
 
@@ -142,13 +147,13 @@ void kernel_main() {
                         {.noc_x = in0_dest_noc_x, .noc_y = in0_dest_noc_y, .addr = in0_start_address});
 
 #ifdef ARCH_BLACKHOLE
-                    noc.async_writes_flushed();
+                    noc.async_writes_flushed();  // the block must leave before its valid flag
 #endif
 
                     in0_valid_semaphore.relay_unicast(noc, in0_receiver_semaphore, in0_dest_noc_x, in0_dest_noc_y);
                 }
 
-                if constexpr (is_output_writer) {
+                if constexpr (is_output_writer) {  // the previous block's output goes out mid-way through this one
                     if (deferred.pending && k_block == defer_write_k_block) {
                         deferred.write(out_writer, cb_out_id, M_tiles, N_tiles, out_tile_size);
                     }

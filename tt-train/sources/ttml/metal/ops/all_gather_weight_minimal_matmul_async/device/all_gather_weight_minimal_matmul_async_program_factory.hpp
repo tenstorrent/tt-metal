@@ -15,6 +15,7 @@ struct AllGatherWeightMinimalMatmulAsyncProgramFactory {
     struct shared_variables_t {
         struct CoreKernels {
             ttnn::CoreCoord core;
+            // On the sink row one of the two data-mover kernels is absent.
             std::optional<tt::tt_metal::KernelHandle> in0;
             std::optional<tt::tt_metal::KernelHandle> in1;
         };

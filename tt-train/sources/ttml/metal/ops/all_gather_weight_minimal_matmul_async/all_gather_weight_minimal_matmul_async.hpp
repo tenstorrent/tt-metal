@@ -12,6 +12,9 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttml::metal {
+// input @ weight, where the weight is sharded along N (one stripe per device on cluster_axis) and gathered
+// over fabric while the matmul runs. persistent_weight_buffer receives the full weight; alternate two of them
+// between back-to-back calls. One global semaphore per ring device.
 ttnn::Tensor all_gather_weight_minimal_matmul_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,

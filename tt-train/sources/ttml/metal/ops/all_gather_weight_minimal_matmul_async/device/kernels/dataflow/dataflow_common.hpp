@@ -14,6 +14,8 @@
 #include "tt-train/sources/ttml/metal/ops/all_gather_weight_minimal_matmul_async/device/kernels/all_gather_weight_minimal_matmul_async_utils.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"
 
+// Global N columns of one N block for this chain (kPaddingColumn where the chain is narrower than a piece).
+// Returns false if the whole block is padding.
 template <uint32_t N_block_tiles, uint32_t piece_tiles, uint32_t ring_size, uint32_t hops_before>
 inline bool block_columns(
     uint32_t n_block_iter,
@@ -27,6 +29,7 @@ inline bool block_columns(
     width = span.width;
     bool any_real = false;
     for (uint32_t j = 0; j < span.width; j++) {
+        // Virtual column: the chain's pieces of all stripes laid side by side in stripe order.
         const uint32_t v = span.v_start + j;
         const uint32_t local = v % piece_tiles;
         if (local < chain_width) {
@@ -39,6 +42,7 @@ inline bool block_columns(
     return any_real;
 }
 
+// Our own stripe comes straight from the shard, the others from the persistent buffer the senders fill.
 template <
     uint32_t K_block_tiles,
     uint32_t N_block_tiles,
@@ -68,9 +72,9 @@ inline void read_in1_block_columns(
             if (cols[j] == kPaddingColumn) {
                 continue;
             }
-            if (k >= K_tiles) {
+            if (k >= K_tiles) {  // K padding
                 fill_zeros_async(noc, cb, tile_bytes, ptr - base);
-            } else if (cols[j] - local_first < stripe_tiles) {
+            } else if (cols[j] - local_first < stripe_tiles) {  // inside our own stripe
                 noc.async_read(
                     shard,
                     CoreLocalMem<uint32_t>(ptr),
@@ -91,6 +95,8 @@ inline void read_in1_block_columns(
     noc.write_zeros_l1_barrier();
 }
 
+// Waits until every remote stripe in the block has its first `chunks` K chunks in. `arrived` remembers what we
+// already saw so each stripe's semaphore is polled only when it can still be behind.
 inline void wait_for_block_stripes(
     const uint32_t* cols,
     uint32_t width,
@@ -107,11 +113,14 @@ inline void wait_for_block_stripes(
         if (s == local_stripe || arrived[s] >= chunks) {
             continue;
         }
+        // The sender bumps this core's semaphore once per K chunk of our piece of the stripe.
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stripe_sem_addrs[s]), chunks);
         arrived[s] = chunks;
     }
 }
 
+// Writes the real columns of an output block. granular waits for and frees one row at a time; it's used for the
+// last block, where nothing else overlaps the write.
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, bool granular, typename Accessor>
 inline void write_block_columns(
     const Accessor& writer,
@@ -158,6 +167,7 @@ inline void write_block_columns(
     }
 }
 
+// Holds a finished block's output until the writer gets to it during the next block.
 template <uint32_t M_block_tiles, uint32_t N_block_tiles>
 struct DeferredBlockWrite {
     uint32_t cols[N_block_tiles];
@@ -184,20 +194,22 @@ struct DeferredBlockWrite {
     }
 };
 
+// The sender's schedule as the factory writes it into the runtime args.
 struct SendSegment {
     uint32_t stripe = 0;
-    uint32_t distance = 0;
+    uint32_t distance = 0;  // hops the stripe already travelled to reach us; 0 is our own
     uint32_t num_pieces = 0;
 };
 
 struct SendPieceArgs {
-    uint32_t row_offset = 0;
+    uint32_t row_offset = 0;  // the chain's slice of the stripe
     uint32_t width = 0;
-    uint32_t inj_noc_x = 0;
+    uint32_t inj_noc_x = 0;  // the chain's injector, which waits for this piece on the next device
     uint32_t inj_noc_y = 0;
-    uint32_t notify = 0;
+    uint32_t notify = 0;  // the next device relays this piece further
 };
 
+// Walks segment -> K chunk -> piece -> packet; a unit is one piece of one K chunk.
 class SendCursor {
 public:
     SendCursor(uint32_t schedule_arg_idx, uint32_t K_tiles, uint32_t chunk_tiles, uint32_t tiles_per_packet) :
@@ -219,13 +231,14 @@ public:
     const SendPieceArgs& piece() const {
         return pieces_[piece_idx_];
     }
+    // Units of the segment in send order; the relay counters count in the same order.
     uint32_t unit_index() const {
         return (chunk_idx_ * seg_->num_pieces) + piece_idx_;
     }
     uint32_t k_start() const {
         return k_start_;
     }
-    uint32_t chunk() const {
+    uint32_t chunk() const {  // K tiles in this chunk; the last one can be short
         return chunk_;
     }
     uint32_t row() const {
@@ -234,16 +247,17 @@ public:
     uint32_t k() const {
         return k_start_ + k_in_chunk_;
     }
-    uint32_t count() const {
+    uint32_t count() const {  // tiles in the current packet; the unit's last packet can be short
         return std::min(tiles_per_packet_, unit_tiles_ - t0_);
     }
-    bool unit_begin() const {
+    bool unit_begin() const {  // are we at the first packet of a unit?
         return t0_ == 0;
     }
-    bool unit_end() const {
+    bool unit_end() const {  // are we at the last packet of a unit?
         return t0_ + tiles_per_packet_ >= unit_tiles_;
     }
 
+    // Next packet. Past the end of a unit: next piece, then next K chunk, then next segment.
     void advance() {
         if (!unit_end()) {
             t0_ += tiles_per_packet_;
@@ -272,6 +286,7 @@ public:
     }
 
 private:
+    // Segments sit back to back in the runtime args: the header, then its pieces.
     void load_segment() {
         seg_ = reinterpret_cast<const tt_l1_ptr SendSegment*>(args_);
         pieces_ = reinterpret_cast<const tt_l1_ptr SendPieceArgs*>(seg_ + 1);
@@ -302,7 +317,7 @@ private:
     uint32_t piece_idx_ = 0;
     uint32_t k_start_ = 0;
     uint32_t chunk_ = 0;
-    uint32_t t0_ = 0;
+    uint32_t t0_ = 0;  // first tile of the current packet within the unit
     uint32_t row_ = 0;
     uint32_t k_in_chunk_ = 0;
     uint32_t unit_tiles_ = 0;
