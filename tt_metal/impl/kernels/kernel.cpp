@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <ranges>
 #include <set>
+#include <stdexcept>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -41,6 +42,14 @@
 #include <impl/debug/watcher_server.hpp>
 
 namespace tt::tt_metal {
+
+void ValidateKernelConfigDefines(const std::map<std::string, std::string>& defines) {
+    for (const auto& [key, value] : defines) {
+        if (value.find('\0') != std::string::npos) {
+            throw std::invalid_argument("Define value for key '" + key + "' contains null character");
+        }
+    }
+}
 
 namespace fs = std::filesystem;
 

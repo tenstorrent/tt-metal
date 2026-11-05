@@ -54,6 +54,7 @@ class CircularBufferConfig;
 class IDevice;
 class JitBuildOptions;
 class MeshTensor;
+struct ProgramDescriptor;
 
 class HWCommandQueue;
 class EnqueueProgramCommand;
@@ -221,10 +222,20 @@ struct BoundTensorFootprint {
 
 BoundTensorFootprint make_bound_tensor_footprint(const MeshTensor& tensor);
 
+// Holds Metal 1.0 resources whose ownership is not expressed by ProgramDescriptor.
+struct Metal1Quirks {
+    // Buffers temporarily owned by the program
+    std::vector<std::shared_ptr<Buffer>> retained_buffers;
+};
+
 // The internal implementation of the Program class. Program is a view of this class that's usable by API clients.
 class ProgramImpl : public std::enable_shared_from_this<ProgramImpl> {
 public:
     explicit ProgramImpl(ContextId context_id = DEFAULT_CONTEXT_ID);
+
+    // Constructs a program from its descriptor and takes ownership of its Metal 1.0 resources.
+    // postcondition: the program is uncompiled and its offsets are not finalized.
+    ProgramImpl(ContextId context_id, const ProgramDescriptor& descriptor, Metal1Quirks quirks);
 
     ProgramImpl(const ProgramImpl& other) = delete;
     ProgramImpl& operator=(const ProgramImpl& other) = delete;
@@ -652,8 +663,7 @@ public:
 private:
     HWCommandQueue* last_used_command_queue_for_testing = nullptr;
 
-    // Buffers temporarily owned by the program
-    std::vector<std::shared_ptr<Buffer>> owned_buffer_pool;
+    Metal1Quirks metal1_quirks_;
 
     // The buffer that holds the kernel/binaries/etc for this program
     std::unordered_map<ChipId, std::shared_ptr<Buffer>> kernels_buffer_;

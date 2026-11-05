@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <set>
 #include <sstream>
@@ -22,6 +23,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>  // ttsl::hash for hash_named_args_schema
+#include <tt_stl/span.hpp>
 
 #include "impl/experimental/blaze/named_kernel_args_impl.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -106,28 +108,30 @@ std::size_t merged_common_runtime_arg_count(const KernelDescriptor& kernel_descr
     return count;
 }
 
-}  // namespace
-
-void process_named_args(Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_handle) {
+void process_named_args_impl(
+    Kernel& kernel,
+    const KernelDescriptor& kernel_descriptor,
+    const std::function<void(const CoreCoord&, ttsl::Span<const uint32_t>)>& set_runtime_args,
+    const std::function<void(ttsl::Span<const uint32_t>)>& set_common_runtime_args) {
     const auto& named_args = kernel_descriptor.blaze_named_args;
 
     // Set per-core runtime args: positional values followed by named values (see
     // merge_per_core_runtime_args for the exact layout).
     if (!named_args.named_per_core_runtime_args.empty() || !named_args.named_per_core_runtime_arg_arrays.empty()) {
         for (const auto& [core, merged] : merge_per_core_runtime_args(kernel_descriptor)) {
-            SetRuntimeArgs(program, kernel_handle, core, merged);
+            set_runtime_args(core, merged);
         }
     } else {
         for (const auto& [core_coord, core_runtime_args] : kernel_descriptor.runtime_args) {
-            SetRuntimeArgs(program, kernel_handle, core_coord, core_runtime_args);
+            set_runtime_args(core_coord, core_runtime_args);
         }
     }
 
     // Set common runtime args: positional values followed by named scalars, then named arrays.
     if (!named_args.named_common_runtime_args.empty() || !named_args.named_common_runtime_arg_arrays.empty()) {
-        SetCommonRuntimeArgs(program, kernel_handle, merge_common_runtime_args(kernel_descriptor));
+        set_common_runtime_args(merge_common_runtime_args(kernel_descriptor));
     } else {
-        SetCommonRuntimeArgs(program, kernel_handle, kernel_descriptor.common_runtime_args);
+        set_common_runtime_args(kernel_descriptor.common_runtime_args);
     }
 
     // Build namespace maps for JIT header generation.
@@ -152,8 +156,6 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
         validate_identifier(field, "field");
         return {ns, field};
     };
-
-    auto kernel = program.impl().get_kernel(kernel_handle);
 
     // RT namespace map: rt::get<rt::ns::field>()
     if (!named_args.named_common_runtime_args.empty() || !named_args.named_per_core_runtime_args.empty() ||
@@ -193,7 +195,7 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
             per_core_index += len;
         }
 
-        kernel->set_named_runtime_arg_namespaces(rt_ns_map);
+        kernel.set_named_runtime_arg_namespaces(rt_ns_map);
     }
 
     // CT namespace map: blaze_ct_args::ns::field (plain constexpr values)
@@ -226,7 +228,35 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
             ct_ns_map[ns].emplace_back(field, value);
         }
     }
-    kernel->set_named_ct_arg_namespaces(ct_ns_map);
+    kernel.set_named_ct_arg_namespaces(ct_ns_map);
+}
+
+}  // namespace
+
+void process_named_args(Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_handle) {
+    process_named_args_impl(
+        *program.impl().get_kernel(kernel_handle),
+        kernel_descriptor,
+        [&](const CoreCoord& core, ttsl::Span<const uint32_t> args) {
+            SetRuntimeArgs(program, kernel_handle, core, args);
+        },
+        [&](ttsl::Span<const uint32_t> args) { SetCommonRuntimeArgs(program, kernel_handle, args); });
+}
+
+void process_named_args(Kernel& kernel, const KernelDescriptor& kernel_descriptor) {
+    process_named_args_impl(
+        kernel,
+        kernel_descriptor,
+        [&](const CoreCoord& core, ttsl::Span<const uint32_t> args) {
+            if (!args.empty()) {
+                kernel.set_runtime_args(core, args);
+            }
+        },
+        [&](ttsl::Span<const uint32_t> args) {
+            if (!args.empty()) {
+                kernel.set_common_runtime_args(args);
+            }
+        });
 }
 
 void validate_cached_runtime_arg_counts(

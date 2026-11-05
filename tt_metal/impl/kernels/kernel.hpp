@@ -7,6 +7,7 @@
 #include <tt-umd/types/core_coordinates.hpp>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -31,6 +32,9 @@
 #include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
+
+// Rejects kernel define values that contain a null character.
+void ValidateKernelConfigDefines(const std::map<std::string, std::string>& defines);
 
 class JitBuildOptions;
 namespace detail {

@@ -92,7 +92,8 @@
 #include "host_api.hpp"
 #include "tt_metal.hpp"  // WriteRuntimeArgsToDevice
 #include "kernels/kernel.hpp"
-#include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
+#include "impl/experimental/blaze/named_kernel_args_impl.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/op_profiler_support.hpp>
 #include <tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
@@ -114,6 +115,66 @@ class GlobalCircularBuffer;
 namespace {
 
 using namespace tt::tt_metal;
+
+std::variant<DataMovementConfig, ComputeConfig> make_kernel_config(const KernelDescriptor& kernel_descriptor) {
+    std::vector<uint32_t> compile_args(
+        kernel_descriptor.compile_time_args.begin(), kernel_descriptor.compile_time_args.end());
+    std::map<std::string, std::string> defines(kernel_descriptor.defines.begin(), kernel_descriptor.defines.end());
+    std::unordered_map<std::string, uint32_t> named_compile_args(
+        kernel_descriptor.named_compile_time_args.begin(), kernel_descriptor.named_compile_time_args.end());
+
+    std::vector<std::filesystem::path> compiler_include_paths(
+        kernel_descriptor.compiler_include_paths.begin(), kernel_descriptor.compiler_include_paths.end());
+
+    return std::visit(
+        ttsl::overloaded{
+            [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
+                return ReaderDataMovementConfig{
+                    std::move(compile_args),
+                    std::move(defines),
+                    std::move(named_compile_args),
+                    kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                    std::move(compiler_include_paths)};
+            },
+            [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
+                return WriterDataMovementConfig{
+                    std::move(compile_args),
+                    std::move(defines),
+                    std::move(named_compile_args),
+                    kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                    std::move(compiler_include_paths)};
+            },
+            [&](const DataMovementConfigDescriptor& dm_descriptor) -> std::variant<DataMovementConfig, ComputeConfig> {
+                return DataMovementConfig{
+                    .processor = dm_descriptor.processor,
+                    .noc = dm_descriptor.noc,
+                    .noc_mode = dm_descriptor.noc_mode,
+                    .compile_args = std::move(compile_args),
+                    .defines = std::move(defines),
+                    .named_compile_args = std::move(named_compile_args),
+                    .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                    .compiler_include_paths = std::move(compiler_include_paths),
+                };
+            },
+            [&](const ComputeConfigDescriptor& compute_descriptor) -> std::variant<DataMovementConfig, ComputeConfig> {
+                return ComputeConfig{
+                    .math_fidelity = compute_descriptor.math_fidelity,
+                    .fp32_dest_acc_en = compute_descriptor.fp32_dest_acc_en,
+                    .dst_full_sync_en = compute_descriptor.dst_full_sync_en,
+                    .unpack_to_dest_mode = compute_descriptor.unpack_to_dest_mode,
+                    .bfp8_pack_precise = compute_descriptor.bfp8_pack_precise,
+                    .math_approx_mode = compute_descriptor.math_approx_mode,
+                    .enable_trisc2_rvv = compute_descriptor.enable_trisc2_rvv,
+                    .compile_args = std::move(compile_args),
+                    .defines = std::move(defines),
+                    .named_compile_args = std::move(named_compile_args),
+                    .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
+                    .compiler_include_paths = std::move(compiler_include_paths),
+                };
+            },
+        },
+        kernel_descriptor.config);
+}
 
 size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
     const auto& hal = MetalContext::instance(extract_context_id(device)).hal();
@@ -469,6 +530,66 @@ detail::ProgramImpl::ProgramImpl(ContextId context_id) :
     Inspector::program_created(this);
 }
 
+detail::ProgramImpl::ProgramImpl(ContextId context_id, const ProgramDescriptor& descriptor, Metal1Quirks quirks) :
+    ProgramImpl(context_id) {
+    ScopedBusyClock build_busy(kProgramBuildBusy);
+    metal1_quirks_ = std::move(quirks);
+
+    if (descriptor.reload_table.has_value()) {
+        set_reload_table(descriptor.reload_table->address, descriptor.reload_table->cores);
+    }
+
+    for (const auto& cb_descriptor : descriptor.cbs) {
+        builder_.add_circular_buffer_(std::make_shared<CircularBufferImpl>(cb_descriptor));
+    }
+
+    for (const auto& semaphore_descriptor : descriptor.semaphores) {
+        builder_.add_semaphore(
+            semaphore_descriptor.core_ranges,
+            semaphore_descriptor.id,
+            semaphore_descriptor.initial_value,
+            semaphore_descriptor.core_type);
+    }
+
+    for (const auto& kernel_descriptor : descriptor.kernels) {
+        bool is_file = kernel_descriptor.source_type == KernelDescriptor::SourceType::FILE_PATH;
+        auto config = make_kernel_config(kernel_descriptor);
+
+        std::visit([](const auto& cfg) { ValidateKernelConfigDefines(cfg.defines); }, config);
+        const KernelSource kernel_source = is_file
+                                               ? KernelSource::from_path(context_id, kernel_descriptor.kernel_source)
+                                               : KernelSource::from_source(kernel_descriptor.kernel_source);
+        auto kernel_handle = std::visit(
+            ttsl::overloaded{
+                [&](const DataMovementConfig& cfg) {
+                    return builder_.create_data_movement_kernel(kernel_source, kernel_descriptor.core_ranges, cfg);
+                },
+                [&](const ComputeConfig& cfg) {
+                    return builder_.create_compute_kernel(kernel_source, kernel_descriptor.core_ranges, cfg);
+                }},
+            config);
+        auto kernel = get_kernel(kernel_handle);
+
+        ////////////////////////////////////////////////////////////
+        // Blaze-only experimental named args
+        // Removal is tracked by issue #50953
+        if (!kernel_descriptor.blaze_named_args.empty() || !kernel_descriptor.named_compile_time_args.empty()) {
+            experimental::blaze::process_named_args(*kernel, kernel_descriptor);
+        } else {
+            ////////////////////////////////////////////////////////////
+            // Regular (non-Blaze) code path
+            for (const auto& [core_coord, core_runtime_args] : kernel_descriptor.runtime_args) {
+                if (!core_runtime_args.empty()) {
+                    kernel->set_runtime_args(core_coord, core_runtime_args);
+                }
+            }
+            if (!kernel_descriptor.common_runtime_args.empty()) {
+                kernel->set_common_runtime_args(kernel_descriptor.common_runtime_args);
+            }
+        }
+    }
+}
+
 detail::ProgramImpl::~ProgramImpl() noexcept {
     // Deallocate circular buffers and unregister from devices
     cb_allocator_.deallocate();
@@ -487,108 +608,10 @@ Program::Program(std::shared_ptr<detail::ProgramImpl> impl) : internal_(std::mov
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
 }
 
-Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shared<detail::ProgramImpl>()) {
+Program::Program(const ProgramDescriptor& descriptor) :
+    internal_(std::make_shared<detail::ProgramImpl>(DEFAULT_CONTEXT_ID, descriptor, detail::Metal1Quirks{})) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
-    ScopedBusyClock build_busy(kProgramBuildBusy);
-
-    if (descriptor.reload_table.has_value()) {
-        internal_->set_reload_table(descriptor.reload_table->address, descriptor.reload_table->cores);
-    }
-
-    for (const auto& cb_descriptor : descriptor.cbs) {
-        internal_->builder().add_circular_buffer_(std::make_shared<CircularBufferImpl>(cb_descriptor));
-    }
-
-    for (const auto& semaphore_descriptor : descriptor.semaphores) {
-        internal_->builder().add_semaphore(
-            semaphore_descriptor.core_ranges,
-            semaphore_descriptor.id,
-            semaphore_descriptor.initial_value,
-            semaphore_descriptor.core_type);
-    }
-
-    for (const auto& kernel_descriptor : descriptor.kernels) {
-        bool is_file = kernel_descriptor.source_type == KernelDescriptor::SourceType::FILE_PATH;
-        std::vector<uint32_t> compile_args(
-            kernel_descriptor.compile_time_args.begin(), kernel_descriptor.compile_time_args.end());
-        std::map<std::string, std::string> defines(kernel_descriptor.defines.begin(), kernel_descriptor.defines.end());
-        std::unordered_map<std::string, uint32_t> named_compile_args(
-            kernel_descriptor.named_compile_time_args.begin(), kernel_descriptor.named_compile_time_args.end());
-
-        std::vector<std::filesystem::path> compiler_include_paths(
-            kernel_descriptor.compiler_include_paths.begin(), kernel_descriptor.compiler_include_paths.end());
-
-        auto config = std::visit(
-            ttsl::overloaded{
-                [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
-                    return ReaderDataMovementConfig{
-                        std::move(compile_args),
-                        std::move(defines),
-                        std::move(named_compile_args),
-                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
-                        std::move(compiler_include_paths)};
-                },
-                [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
-                    return WriterDataMovementConfig{
-                        std::move(compile_args),
-                        std::move(defines),
-                        std::move(named_compile_args),
-                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
-                        std::move(compiler_include_paths)};
-                },
-                [&](const DataMovementConfigDescriptor& dm_descriptor)
-                    -> std::variant<DataMovementConfig, ComputeConfig> {
-                    return DataMovementConfig{
-                        .processor = dm_descriptor.processor,
-                        .noc = dm_descriptor.noc,
-                        .noc_mode = dm_descriptor.noc_mode,
-                        .compile_args = std::move(compile_args),
-                        .defines = std::move(defines),
-                        .named_compile_args = std::move(named_compile_args),
-                        .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
-                        .compiler_include_paths = std::move(compiler_include_paths),
-                    };
-                },
-                [&](const ComputeConfigDescriptor& compute_descriptor)
-                    -> std::variant<DataMovementConfig, ComputeConfig> {
-                    return ComputeConfig{
-                        .math_fidelity = compute_descriptor.math_fidelity,
-                        .fp32_dest_acc_en = compute_descriptor.fp32_dest_acc_en,
-                        .dst_full_sync_en = compute_descriptor.dst_full_sync_en,
-                        .unpack_to_dest_mode = compute_descriptor.unpack_to_dest_mode,
-                        .bfp8_pack_precise = compute_descriptor.bfp8_pack_precise,
-                        .math_approx_mode = compute_descriptor.math_approx_mode,
-                        .enable_trisc2_rvv = compute_descriptor.enable_trisc2_rvv,
-                        .compile_args = std::move(compile_args),
-                        .defines = std::move(defines),
-                        .named_compile_args = std::move(named_compile_args),
-                        .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
-                        .compiler_include_paths = std::move(compiler_include_paths),
-                    };
-                },
-            },
-            kernel_descriptor.config);
-
-        auto kernel_handle =
-            is_file
-                ? CreateKernel(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config)
-                : CreateKernelFromString(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config);
-
-        ////////////////////////////////////////////////////////////
-        // Blaze-only experimental named args
-        // Removal is tracked by issue #50953
-        if (!kernel_descriptor.blaze_named_args.empty() || !kernel_descriptor.named_compile_time_args.empty()) {
-            experimental::blaze::process_named_args(*this, kernel_descriptor, kernel_handle);
-        } else {
-            ////////////////////////////////////////////////////////////
-            // Regular (non-Blaze) code path
-            for (const auto& [core_coord, core_runtime_args] : kernel_descriptor.runtime_args) {
-                SetRuntimeArgs(*this, kernel_handle, core_coord, core_runtime_args);
-            }
-            SetCommonRuntimeArgs(*this, kernel_handle, kernel_descriptor.common_runtime_args);
-        }
-    }
 }
 
 std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) const {
@@ -2942,9 +2965,11 @@ std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers() const {
 
 const std::vector<Semaphore>& detail::ProgramImpl::semaphores() const { return builder_.semaphores(); }
 
-void detail::ProgramImpl::add_buffer(std::shared_ptr<Buffer> buf) { owned_buffer_pool.push_back(std::move(buf)); }
+void detail::ProgramImpl::add_buffer(std::shared_ptr<Buffer> buf) {
+    metal1_quirks_.retained_buffers.push_back(std::move(buf));
+}
 
-void detail::ProgramImpl::release_buffers() { owned_buffer_pool = {}; }
+void detail::ProgramImpl::release_buffers() { metal1_quirks_.retained_buffers.clear(); }
 
 std::vector<std::reference_wrapper<const Semaphore>> detail::ProgramImpl::semaphores_on_core(
     const CoreCoord& core, CoreType core_type) const {

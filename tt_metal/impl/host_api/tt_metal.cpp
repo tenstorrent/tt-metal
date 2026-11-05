@@ -526,14 +526,6 @@ Program CreateProgram(distributed::MeshDevice& mesh_device) {
     return Program(std::make_shared<detail::ProgramImpl>(extract_context_id(&mesh_device)));
 }
 
-void ValidateKernelConfigDefines(const std::map<std::string, std::string>& defines) {
-    for (const auto& [key, value] : defines) {
-        if (value.find('\0') != std::string::npos) {
-            throw std::invalid_argument("Define value for key '" + key + "' contains null character");
-        }
-    }
-}
-
 KernelHandle CreateKernel(
     Program& program,
     const std::string& file_name,
