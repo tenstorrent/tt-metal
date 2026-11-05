@@ -87,4 +87,4 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, hidden_size, m
     output = ttnn.to_torch(output)
 
     output = output.squeeze(1)
-    assert_with_pcc(torch_output, output, 0.985)
+    assert_with_pcc(torch_output, output, 0.99)

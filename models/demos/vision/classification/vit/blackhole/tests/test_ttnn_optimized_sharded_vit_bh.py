@@ -247,7 +247,7 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.985)
+    assert_with_pcc(torch_output, output, 0.99)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -352,4 +352,4 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     )
     output = ttnn.to_torch(output)
     # 1000 classes slicing
-    assert_with_pcc(torch_output, output[0, 0, :1000], 0.879)
+    assert_with_pcc(torch_output, output[0, 0, :1000], 0.95)
