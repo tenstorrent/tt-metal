@@ -117,8 +117,8 @@ def spec_learn_positions(start_pos, prompt_len, align=SPEC_PREFIX_ALIGN, min_tai
     return out
 
 
-# The vLLM KV block size the spec engine serves with (qwen36_vllm._BLOCK_SIZE; its spec gate refuses any other): vLLM's
-# start_pos (num_computed_tokens of a prefix hit) is a multiple of it.
+# The default vLLM KV block size (tp_common.KV_BLOCK_SIZE_DEFAULT; the vLLM spec gate refuses any block size but
+# kv_block_size()): vLLM's start_pos (num_computed_tokens of a prefix hit) is a multiple of the block size.
 SPEC_VLLM_BLOCK = 64
 
 

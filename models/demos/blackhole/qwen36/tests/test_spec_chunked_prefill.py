@@ -31,12 +31,13 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.demo.text_demo import _MESH_SHAPE, _MULTI, DEVICE_PARAMS
 from models.demos.blackhole.qwen36.tests.spec_helpers import _prompt_pool
+from models.demos.blackhole.qwen36.tests.test_factory import kv_pool_blocks
 from models.demos.blackhole.qwen36.tests.test_spec_prefix_cache import BLOCK, Harness
 from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36MTPContractForCausalLM
 
 MAX_SEQ = 12288
 BPU = MAX_SEQ // BLOCK
-NUM_BLOCKS = 640
+NUM_BLOCKS = kv_pool_blocks(40960, min_blocks=96)
 WIDTH = 2  # slot 0 = chunked request, slot 1 = reference
 PROMPT_LEN = 10000  # not a multiple of 128: the final chunk has a ragged tail
 
@@ -235,7 +236,7 @@ def test_spec_chunked_prefill_interleaved(lens, mesh_device, reset_seeds, ensure
     from models.demos.blackhole.qwen36.tests.test_spec_prefix_cache import pcc
 
     width, max_seq, chunk = 4, 12288, 4096
-    cls, model, kv, bpu = _boot(mesh_device, monkeypatch, width, max_seq, 768)
+    cls, model, kv, bpu = _boot(mesh_device, monkeypatch, width, max_seq, kv_pool_blocks(49152, min_blocks=96))
     cache = model._prefix_cache
     assert cache is not None, "spec warmup did not build the GdnPrefixStateCache (QWEN36_SPEC_PREFIX_CACHE=1?)"
     tok = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)

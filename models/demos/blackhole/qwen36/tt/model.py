@@ -26,7 +26,7 @@ from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.demos.blackhole.qwen36.tt.spec_masks import MASK_NEG, MASK_ROWS, SHARD_WORDS
 from models.demos.blackhole.qwen36.tt.spec_argmax_fused import LANES as _ARGMAX_FUSED_LANES
 from models.demos.blackhole.qwen36.tt.tp_common import aliases as _tpc_aliases
-from models.demos.blackhole.qwen36.tt.tp_common import kv_cache_bf8_enabled, kv_write_masked_enabled
+from models.demos.blackhole.qwen36.tt.tp_common import kv_block_size, kv_cache_bf8_enabled, kv_write_masked_enabled
 from models.demos.blackhole.qwen36.tt.tp_common import lm_head_kwargs as _lm_head_kwargs
 from models.demos.blackhole.qwen36.tt.tp_common import (
     GDN_SNAP_SLOTS,
@@ -51,6 +51,12 @@ def serve_device_decode_env_enabled():
     """QWEN36_SERVE_DEVICE_DECODE (default "1"): device-resident serving decode (see Qwen36Model._serve_device_decode).
     "0" keeps the host-reload decode (host-packed RoPE, [B,1] token input, no feedback / async) byte for byte."""
     return os.environ.get("QWEN36_SERVE_DEVICE_DECODE", "1") == "1"
+
+
+def paged_block_size(model):
+    """Tokens per paged KV block: the bound cache's (model._paged_kv_caches), else kv_block_size()."""
+    kv = getattr(model, "_paged_kv_caches", None)
+    return get_block_size(kv) if kv else kv_block_size()
 
 
 class VerifyHandle:
@@ -1634,7 +1640,7 @@ class Qwen36Model:
                     # (slices the staged per-request table for multimodal; 1D RoPE otherwise).
                     cos, sin = self.rope.get_prefill_rot_mats(chunk_start, chunk_end - chunk_start)
 
-                    block_size = 64
+                    block_size = paged_block_size(self)
                     chunk_blocks_end = math.ceil(chunk_end / block_size)
                     chunk_page_table = page_table[:, chunk_start // block_size : chunk_blocks_end]
                     chunk_page_table_tt = ttnn.from_torch(
@@ -1952,7 +1958,6 @@ class Qwen36Model:
         if cache is None or start_pos is None or self.args.max_batch_size <= 1:
             return None
         from models.demos.blackhole.qwen36.tt.prefix_cache import (
-            SPEC_VLLM_BLOCK,
             SpecPoints,
             prefix_end_at_cap,
             spec_learn_positions,
@@ -1973,9 +1978,8 @@ class Qwen36Model:
         end_kw = {}
         if prefix_end_at_cap():
             # QWEN36_PREFIX_END_AT_CAP: the end checkpoint at the resume cap of the next request extending this prompt,
-            # whose start_pos vLLM counts in blocks of the paged KV cache (64 in serving).
-            kv = getattr(self, "_paged_kv_caches", None)
-            end_kw["end_block"] = get_block_size(kv) if kv else SPEC_VLLM_BLOCK
+            # whose start_pos vLLM counts in blocks of the paged KV cache.
+            end_kw["end_block"] = paged_block_size(self)
         points = spec_save_points(
             L,
             s,
@@ -6983,7 +6987,7 @@ class Qwen36Model:
         """Eager final partial-chunk prefill (< chunk_size). GDN zero-pads to 128-multiple internally
         (not bucket padding). Returns hidden [1,T_tail_padded,hidden_size]."""
         T_tail = token_slice.shape[1]
-        block_size = 64
+        block_size = paged_block_size(self)
         tok = ttnn.from_torch(
             token_slice.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
         )

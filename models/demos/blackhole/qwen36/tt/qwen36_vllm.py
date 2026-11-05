@@ -27,10 +27,13 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
-from models.demos.blackhole.qwen36.tt.model import serve_device_decode_env_enabled
+from models.demos.blackhole.qwen36.tt.model import paged_block_size, serve_device_decode_env_enabled
 from models.demos.blackhole.qwen36.tt.spec_engine import rows_to_engine, slot_map_after_remap, slot_map_inverse
 from models.demos.blackhole.qwen36.tt.tp_common import (
     fabric_router_config,
+    kv_block_size,
+    kv_cache_bf8_enabled,
+    mamba_spec_enabled,
     spec_chain_enabled,
     spec_device_logprobs_enabled,
     spec_device_mask_enabled,
@@ -170,8 +173,8 @@ def _build_model_capabilities():
     """The plugin-visible capabilities. QWEN36_SERVE_DEVICE_DECODE=0 returns exactly the pre-1.6S dict."""
     caps = {
         # Automatic prefix caching: vLLM reuses the attention KV blocks and passes start_pos (cached tokens, a multiple
-        # of the block size 64); the model keeps its own GDN-state snapshots (tt/prefix_cache.py). QWEN36_PREFIX_CACHE=0
-        # disables it. Run vLLM with --block-size 64 and --enable-prefix-caching.
+        # of the KV block size); the model keeps its own GDN-state snapshots (tt/prefix_cache.py). QWEN36_PREFIX_CACHE=0
+        # disables it. Run vLLM with --block-size 64 (or QWEN36_KV_BLOCK_SIZE) and --enable-prefix-caching.
         "supports_prefix_caching": os.environ.get("QWEN36_PREFIX_CACHE", "1") == "1",
         # vLLM chunked prefill: a prompt longer than the per-step token budget (--max-num-batched-tokens) is prefilled
         # over several engine steps, with decode steps in between. Batched TP resumes each chunk from a GDN snapshot
@@ -204,7 +207,6 @@ def _build_model_capabilities():
 
 _PREFILL_WARMUP_CHUNK = 2048
 _PREFILL_WARMUP_BUCKET = 4096
-_BLOCK_SIZE = 64
 
 
 class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
@@ -258,6 +260,27 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 f"vocab={model.args.vocab_size}, logits/device={logits_per_device}. "
                 "Unset sample_on_device_mode for host sampling."
             )
+
+    @classmethod
+    def get_kv_cache_spec(cls, vllm_config):
+        """vllm-tt-plugin hook. QWEN36_MAMBA_SPEC=1: one FullAttentionSpec per attention layer and one MambaSpec per GDN
+        layer (tt/kv_cache_spec.py), per device at the MESH_DEVICE TP degree, with num_speculative_blocks = the MTP
+        draft length K. Otherwise None: the plugin keeps its single FullAttentionSpec."""
+        if not mamba_spec_enabled():
+            return None
+        from models.demos.blackhole.qwen36.tt.kv_cache_spec import qwen36_kv_cache_spec
+
+        tc = vllm_config.model_config.hf_config
+        tc = tc.get_text_config() if hasattr(tc, "get_text_config") else tc
+        cc = vllm_config.cache_config
+        return qwen36_kv_cache_spec(
+            tc,
+            _mesh_tp(),
+            cc.block_size,
+            kv_bf8=kv_cache_bf8_enabled(),
+            num_speculative_blocks=cls._SPEC_K if cls._ENABLE_MTP else 0,
+            mamba_cache_mode=getattr(cc, "mamba_cache_mode", "none"),
+        )
 
     @classmethod
     def get_max_tokens_all_users(
@@ -1020,7 +1043,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             # Round to a multiple of 32: paged/chunked SDPA needs the page-table stick % 32 == 0.
             num_blocks = math.ceil(int(kv_cache[0][0].shape[0]) / 32) * 32
         else:
-            num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / _BLOCK_SIZE)
+            num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / kv_block_size())
         page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
         # Batched serving (max_num_seqs>1): the decode buffers are [B,...], but prefill runs B=1. Bind
         # the PERSISTENT B=1 GDN prefill scratch and capture the chunk trace against IT, so long prompts
@@ -1253,9 +1276,10 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         if requested_k < k:
             return SpecReject(reason=f"requested_k={requested_k} < engine K={k}", supported_k=(k,))
         bs = getattr(getattr(vllm_config, "cache_config", None), "block_size", None)
-        if bs is not None and int(bs) != _BLOCK_SIZE:
+        if bs is not None and int(bs) != kv_block_size():
             return SpecReject(
-                reason=f"block_size={bs} unsupported; the engine's page tables use {_BLOCK_SIZE}", supported_k=()
+                reason=f"block_size={bs} unsupported; the engine serves QWEN36_KV_BLOCK_SIZE={kv_block_size()}",
+                supported_k=(),
             )
         try:
             from models.demos.blackhole.qwen36.tt.spec_engine import spec_memory_costs
@@ -1265,7 +1289,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             tc = tc.get_text_config() if hasattr(tc, "get_text_config") else tc
             if int(getattr(tc, "mtp_num_hidden_layers", 0) or 0) < 1:
                 return SpecReject(reason="checkpoint has no MTP weights (mtp_num_hidden_layers < 1)", supported_k=())
-            costs = spec_memory_costs(tc, _mesh_tp(), max_num_seqs, k, max_seq_len=mc.max_model_len)
+            costs = spec_memory_costs(tc, _mesh_tp(), max_num_seqs, k, block_size=bs, max_seq_len=mc.max_model_len)
             # costs are for the whole batch: per_seq scales with B, fixed is shared
             per_seq = math.ceil((costs["per_seq"]["total"] + costs["fixed"]["total"]) / max_num_seqs)
             per_token = int(costs["per_token"]["total"])
@@ -1316,7 +1340,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     def _table_width(self):
         from models.demos.blackhole.qwen36.tt.spec_engine import spec_table_width
 
-        return spec_table_width(self.model[0].args.max_seq_len, self._SPEC_K, _BLOCK_SIZE)
+        return spec_table_width(self.model[0].args.max_seq_len, self._SPEC_K, paged_block_size(self.model[0]))
 
     def _table(self, pt):
         """Zero-pad (or trim) a vLLM page table [rows, w] to the engine width; block 0 is vLLM's null block."""
