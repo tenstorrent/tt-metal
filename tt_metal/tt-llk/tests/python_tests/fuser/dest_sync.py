@@ -47,11 +47,3 @@ def take(config: "GlobalConfig", operation: "L1Operation", node) -> str:
 
 def takes(config: "GlobalConfig", operation: "L1Operation", nodes) -> str:
     return "".join(take(config, operation, node) for node in nodes)
-
-
-def unpack_take(config: "GlobalConfig", operation: "L1Operation", node) -> str:
-    return take(config, operation, node) if config.quasar_unpack_to_dest else ""
-
-
-def unpack_takes(config: "GlobalConfig", operation: "L1Operation", nodes) -> str:
-    return "".join(unpack_take(config, operation, node) for node in nodes)

@@ -145,10 +145,10 @@ class L1Operation:
         hoist = len(unpack_ops) == 1
         hoist_reconfig = hoist or self._all_same_operand_formats(unpack_ops)
 
-        init_code = dest_sync.init(config, self)
-        init_code += config.sentinel.hw_configure_unpack(config, self)
+        init_code = config.sentinel.hw_configure_unpack(config, self)
         if unpack_ops and not config.skip_unpack_init:
             init_code += config.sentinel.configure_unpack(config, self, unpack_ops[0])
+        init_code += dest_sync.init(config, self)
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             init_code += unpack_ops[0].unpack_init(self, config, None)
         code = self._zone(config, f"INIT{self.stage_id}", init_code)
@@ -169,8 +169,8 @@ class L1Operation:
             body = ""
             after_commit = ""
             for cu in self.math_nodes:
-                body += dest_sync.unpack_take(config, self, cu)
                 if not isinstance(cu, FpuNode):
+                    body += dest_sync.take(config, self, cu)
                     continue
                 block = planned.block_for(cu)
                 node_body = ""
@@ -182,6 +182,8 @@ class L1Operation:
                     node_body += config.sentinel.configure_unpack(config, self, cu)
                 if not hoist:
                     node_body += cu.unpack_init(self, config, block)
+                init_body, node_body = node_body, ""
+                take = dest_sync.take(config, self, cu)
                 if cu.unpacker is not None:
                     node_body += planned.plan(cu, "unpack").emit_calls(
                         constants,
@@ -194,12 +196,13 @@ class L1Operation:
                     and cu.unpacker is not None
                     and cu.unpacker.emits_dummy_srcb_valid
                 ):
+                    body += init_body + take
                     after_commit += node_body
                 else:
-                    body += node_body
+                    body += init_body + take + node_body
             if not hoist_reconfig and not config.skip_unpack_init:
                 body += config.sentinel.configure_unpack(config, self, unpack_ops[0])
-            body += dest_sync.unpack_takes(config, self, self.pack_nodes)
+            body += dest_sync.takes(config, self, self.pack_nodes)
             return body + after_commit
 
         code += self._zone_loop(
@@ -248,12 +251,13 @@ class L1Operation:
             body = fpu_common.math_wait_for_dest(config, self)
             for cu in self.math_nodes:
                 block = planned.block_for(cu)
-                body += dest_sync.take(config, self, cu)
                 if isinstance(cu, FpuNode):
                     if not hoist_reconfig and not config.skip_math_init:
                         body += config.sentinel.configure_math(config, self, cu)
                     if not hoist:
                         body += cu.fpu_init(self, config, block)
+                body += dest_sync.take(config, self, cu)
+                if isinstance(cu, FpuNode):
                     body += planned.plan(cu, "math").emit_calls(
                         constants,
                         partial(cu.fpu_call, self, config, block),
@@ -301,14 +305,15 @@ class L1Operation:
             if fpu_ops:
                 config.sentinel.configure_math(config, self, fpu_ops[0])
             for cu in self.math_nodes:
+                if isinstance(cu, SfpuNode):
+                    config.sentinel.configure_sfpu(config, self, cu)
+                    body += cu.sfpu_init(self, config, planned.block_for(cu))
                 body += dest_sync.take(config, self, cu)
                 if isinstance(cu, FpuNode):
                     config.sentinel.configure_math(config, self, cu)
                 elif isinstance(cu, SfpuNode):
                     block = planned.block_for(cu)
-                    config.sentinel.configure_sfpu(config, self, cu)
                     body += config.sentinel.sfpu_math_reconfig(config)
-                    body += cu.sfpu_init(self, config, block)
                     body += planned.plan(cu, "sfpu").emit_calls(
                         constants,
                         partial(cu.sfpu_call, self, config, block),
@@ -364,7 +369,6 @@ class L1Operation:
             prev_was_pack = False
             for pack_node in self.pack_nodes:
                 block = planned.block_for(pack_node)
-                body += dest_sync.take(config, self, pack_node)
                 if isinstance(pack_node, SfpuNode):
                     if prev_was_pack:
                         body += "TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK);\n"
@@ -380,6 +384,7 @@ class L1Operation:
                         body += config.sentinel.configure_pack(config, self, pack_node)
                     if not hoist:
                         body += pack_node.init(self, config, block)
+                    body += dest_sync.take(config, self, pack_node)
                     body += planned.plan(pack_node, "pack").emit_calls(
                         constants,
                         partial(pack_node.pack_call, self, config, block),

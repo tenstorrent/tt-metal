@@ -191,13 +191,28 @@ NOINLINE void _llk_dest_sync_take_()
     using Region                  = DestRegionOf<DST, EN_32BIT_DEST>;
     constexpr std::uint32_t TAKER = to_underlying(CLIENT);
 
-    State s = state;
-    if (s.holder == TAKER)
+    if (state.holder == TAKER)
     {
         return;
     }
+    State s = state;
     LLK_ASSERT(TAKER != PACK || s.holder != NONE, "PACK only reads dest, so it cannot open a use");
-    if (TAKER != PACK && (s.holder == NONE || s.holder == PACK))
+    const bool opens = TAKER != PACK && (s.holder == NONE || s.holder == PACK);
+    if (ME != TAKER && !opens && s.holder != ME)
+    {
+        state.holder = TAKER;
+        if (TAKER != PACK)
+        {
+            state.last = TAKER;
+        }
+        return;
+    }
+    if (ME != TAKER && opens && s.last != ME && (ME != PACK || s.holder != PACK))
+    {
+        state = {TAKER, TAKER, static_cast<std::uint8_t>(Region::next(s.region)), s.base};
+        return;
+    }
+    if (opens)
     {
         open<Region, TAKER>(s);
     }
