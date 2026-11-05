@@ -110,13 +110,25 @@ def _runtime_replay_records(words):
         value, compose = word & 0xFFFFF000, None
         for j in range(i + 1, end):
             w = words[j]
-            if not _is_tensix_word(w) and w & 0x7F in RISCV_OPCODES_WRITING_RD and (w >> 7) & 0x1F == rd:
+            if (
+                not _is_tensix_word(w)
+                and w & 0x7F in RISCV_OPCODES_WRITING_RD
+                and (w >> 7) & 0x1F == rd
+            ):
                 funct3, rs1 = (w >> 12) & 0x7, (w >> 15) & 0x1F
-                if w & 0x7F == RISCV_OPCODE_OP_IMM and rs1 == rd and funct3 in (FUNCT3_ADDI, FUNCT3_ORI):
+                if (
+                    w & 0x7F == RISCV_OPCODE_OP_IMM
+                    and rs1 == rd
+                    and funct3 in (FUNCT3_ADDI, FUNCT3_ORI)
+                ):
                     imm = w >> 20
                     if imm & 0x800:
                         imm -= 0x1000
-                    value = (value + imm) if funct3 == FUNCT3_ADDI else (value | (imm & 0xFFFFFFFF))
+                    value = (
+                        (value + imm)
+                        if funct3 == FUNCT3_ADDI
+                        else (value | (imm & 0xFFFFFFFF))
+                    )
                     compose = j
                 break  # rd is redefined: the lui's value ends here
         if compose is None or not value & 0x1:
