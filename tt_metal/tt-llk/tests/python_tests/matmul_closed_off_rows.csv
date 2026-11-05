@@ -469,3 +469,15 @@ LoFi,Float16_b,Bfp4_b,Bfp8_b,2,1,15,0,False,False,1,perf_matmul_cases(gap),-0.15
 HiFi2,Float32,Bfp4_b,Bfp4_b,1,6,32,0,False,False,1,perf_matmul_cases(gap),0.459,,True,True,main,Half
 HiFi2,Float32,Bfp8_b,Bfp4_b,1,6,32,0,False,False,1,perf_matmul_cases(gap),0.431,,True,True,main,Half
 LoFi,Float16_b,Float32,Bfp8_b,1,2,32,0,False,False,1,perf_matmul_cases(gap),-0.134,,True,True,main,Half
+HiFi2,Float16_b,Float16_b,Float16_b,1,2,1,0,True,True,4,perf_matmul_grid2(tr50),6.84,,True,True,main,Half
+LoFi,Float16_b,Bfp8_b,Float16_b,1,2,1,0,True,True,2,perf_matmul_grid2(tr50),2.09,,True,True,main,Half
+HiFi2,Float16_b,Float32,Float16_b,1,2,1,0,True,True,4,perf_matmul_grid2(tr50),6.61,,True,True,main,Half
+LoFi,Float32,Float32,Float16_b,2,2,32,0,False,True,1,perf_matmul_grid2(tr50),0.3,,True,True,main,Half
+LoFi,Float32,Float32,Bfp8_b,2,2,32,0,False,False,1,perf_matmul_grid2(tr50),0.39,,True,True,main,Half
+LoFi,Float32,Float32,Bfp8_b,2,1,32,0,False,True,1,perf_matmul_grid2(tr50),0.27,,True,True,main,Half
+LoFi,Float32,Bfp8_b,Float32,1,3,3,0,True,True,1,perf_matmul_grid(tr50),0.27,,True,True,main,Half
+LoFi,Float32,Bfp4_b,Bfp4_b,1,3,1,0,False,True,1,perf_matmul_grid(tr50),0.64,,True,True,main,Half
+LoFi,Float32,Float32,Bfp4_b,2,2,3,0,False,False,1,perf_matmul_grid(tr50),0.17,,True,True,main,Half
+LoFi,Bfp4_b,Bfp2_b,Float16_b,2,1,1,0,False,True,1,perf_matmul_llkx(tr50),2.52,,True,True,main,Half
+LoFi,Bfp8_b,Bfp2_b,Float16_b,2,1,1,0,False,True,1,perf_matmul_llkx(tr50),2.88,,True,True,main,Half
+LoFi,Float32,Float32,Bfp8_b,2,2,8,2,False,True,1,perf_matmul_llkx(tr50),1.2,,True,True,main,Half
