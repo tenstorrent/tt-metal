@@ -2726,6 +2726,23 @@ tasks:
       checks only (the gate reruns P.28''s ladder at rung last and the profile).'
     gate_tasks:
     - P.28
+- id: P.33
+  title: 'DECODER_CUT_TEST: prefill that stops at an even cut 128 tokens short of the end (every chunk non-last), checked at the cut'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.32
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  brief:
+    details: 'OWNER 2026-11-05 (Kartik / Nikhil''s updated proposal: prefill never runs the decoder; it stops at an even cut 128 tokens short of the end; decode runs the last 128 through all 40 layers): a test only, no model change. Add tests/bringup/test_decoder_cut.py: a prompt (rung s10240 goldens) prefilled up to an even cut = end - 128 (rounded down to even), every chunk last=False under DECODER_SKIP=exact; check at the cut the encoder windows (layers 0-19, the last 128 window rows before the cut) and layer 20''s compressed KV and index keys against the golden, each with its limit from the framework''s end-to-end limits (testing/e2e_limits.py), recorded as cut_err_window_kv_L*, cut_err_compress_kv_L20, cut_err_index_k_L20 with their _limit. If the model cannot end a prefill at a cut (an end not at a chunk boundary with last=False), say so with the evidence instead of changing the model. Model-level checks only.'
+  gate:
+    cmd: DS41_ENGRAM_TABLE=resident DS41_DECODER_SKIP=exact scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_decoder_cut.py
+    metrics:
+      cut_err_window_kv_L*: <= limit
+      cut_err_compress_kv_L20: <= limit
+      cut_err_index_k_L20: <= limit
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -2752,6 +2769,7 @@ tasks:
   - P.30
   - P.31
   - P.32
+  - P.33
   - P.29
   - FIX.22
   gate:

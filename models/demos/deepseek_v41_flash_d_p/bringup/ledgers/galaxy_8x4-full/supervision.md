@@ -1576,3 +1576,15 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
 - Host leak (tt-kmd #301): unaccounted ~130 GiB (reboot ~250). Expert caches: bfp4 / bfp4_mse / bfp8 on /scratch;
   bfp4 + bfp4_mse backed up on /data/dnijemcevic/.../tt_cache/8x4/v1/experts-5254448103b6.
 - Overseer guard set (tmux overseer pane-died), heartbeat cron 7,37 in this session only (a new session re-creates it).
+- 19:10 OWNER (strongly): no fixed agent time limit; an agent making progress is never interrupted; measurements
+  checkpointed per unit. F252 committed (78e96d6ea47: stall-based stop in run_agent, selftest, skill rule). Its
+  defaults.yaml part (timeout_s 0, stall_s 5400) reverted (defaults.yaml is in the code key: changing it mid-A/B could
+  void P.32's measured units): re-apply at P.32's decision pause, before the orchestrator restarts:
+  `git show 78e96d6ea47:models/demos/common/bringup/defaults.yaml > models/demos/common/bringup/defaults.yaml`.
+  Still to do (next overseer): an A/B side reuses every unit an agent's `measure` finished on the same code; F251.
+- 19:58 P.32 table in, gate PASS; ACCEPTED as a switch (owner's order; default WINDOW_KV_KEEP full). Timing per 5k chunk
+  (ring / full side): non-last (exact) wall 114.3 / 116.0 ms at 51200, 123.5 / 116.2 at 512000, device 87.3 / 88.5,
+  96.4 / 98.3; last under replay128 wall 214.4 / 219.9, 212.4 / 207.9, device 135.9 / 136.3, 156.2 / 157.4 (the
+  128-row tail costs ~100 ms of wall: host overhead). Plain chunk device 171.5 / 170.4 (+1.1). P.33 written into
+  tasks.yaml (deps P.32, X.3 deps += P.33); run_ds41_8x4.sh --until X.3. F252's defaults.yaml still to apply at the
+  next stop (it would void P.32's accept reuse now).
