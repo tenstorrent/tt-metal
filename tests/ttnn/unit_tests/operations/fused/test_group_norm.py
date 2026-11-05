@@ -2598,10 +2598,8 @@ def test_group_norm_interleaved_wide_groups_fp32_dest(
 FP32_INPUT_NARROW_GROUPS_MAX_ERR = 1.2e-3
 
 
-# With 16 channels per group, every group after the first in a tile is added into cb_x through SrcB. SrcB was left
-# on the bf16 input mask format, which truncated those groups to bf16 for FLOAT32 input (#29960). This test ensures
-# their error stays at fp32 level, on the mcast factory (interleaved TILE input on an 8x8 grid) and the sharded
-# factory (block-sharded ROW_MAJOR input on an 8x8 grid).
+# With 16 channels per group, every group after the first in a tile goes through the accumulate that truncated it to
+# bf16 for FLOAT32 input (#29960). This test checks that the error stays below that truncation level.
 @pytest.mark.parametrize("path", ["mcast", "sharded"])
 def test_group_norm_welford_fp32_input_narrow_groups_accuracy(device, path):
     torch.manual_seed(0)
@@ -2649,13 +2647,13 @@ def test_group_norm_welford_fp32_input_narrow_groups_accuracy(device, path):
 #   - "mcast": interleaved TILE input on an 8x8 grid; one sample selects the mcast factory.
 #   - "no_mcast": interleaved TILE input on an 8x4 grid; with N=8 every virtual row is filled, which selects the
 #     no-mcast factory.
-#   - "sharded": block-sharded ROW_MAJOR input on a 4x4 grid, with no input mask.
+#   - "sharded": block-sharded ROW_MAJOR input on a 4x4 grid, with no caller-supplied input mask.
 def _run_group_norm_user_kernel_config(device, x, G, path, dtype, compute_kernel_config, use_welford):
     N, _, HW, C = x.shape
     if path == "sharded":
         grid = ttnn.CoreGrid(y=4, x=4)
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
-        shard_spec = ttnn.ShardSpec(shard_grid, (N * HW // grid.x, C // grid.y), ttnn.ShardOrientation.ROW_MAJOR)
+        shard_spec = ttnn.ShardSpec(shard_grid, (N * HW // grid.y, C // grid.x), ttnn.ShardOrientation.ROW_MAJOR)
         memory_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
@@ -2684,7 +2682,7 @@ USER_KERNEL_CONFIG_PATHS = [("mcast", 1, 1024), ("no_mcast", 8, 128), ("sharded"
 
 # A user compute_kernel_config replaces the op's default config wholesale, so its fp32_dest_acc_en must reach the
 # kernels unchanged. Float32 input defaults to fp32 DEST, so an explicit fp32_dest_acc_en=False is only rejected if
-# the user's value is actually the one in effect. Each factory has its own copy of the check.
+# the user's value is actually the one in effect.
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
 @pytest.mark.parametrize("path, N, HW", USER_KERNEL_CONFIG_PATHS, ids=[p[0] for p in USER_KERNEL_CONFIG_PATHS])
