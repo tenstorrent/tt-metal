@@ -1839,6 +1839,18 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         }
     }
 
+    // CceNocRoutes sits after the bank-to-NOC staging table, as CceSpaRoutes does on a DRAM core.
+    const auto write_cce_noc_routes =
+        [&](const CoreCoord& logical_eth, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) {
+            const CceNocRoutes routes = quasar_cce_noc_routes(cluster_, device_id, logical_eth);
+            cluster_.write_core_immediate(
+                &routes,
+                sizeof(routes),
+                {static_cast<size_t>(device_id), virtual_core},
+                hal_.get_dev_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH) +
+                    hal_.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH));
+        };
+
     log_debug(tt::LogMetal, "Initializing active ethernet cores");
     dev_msgs_factory = hal_.get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH);
     core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::ACTIVE_ETH);
@@ -1870,6 +1882,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
                 sizeof(slot),
                 {static_cast<size_t>(device_id), virtual_core},
                 hal_.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK));
+            write_cce_noc_routes(eth_core, virtual_core, HalProgrammableCoreType::ACTIVE_ETH);
         }
         initialize_firmware(
             device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
@@ -1897,6 +1910,9 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             hal_.get_dev_addr(
                 llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core),
                 HalL1MemAddrType::CORE_INFO));
+        if (has_quasar_ethernet) {
+            write_cce_noc_routes(eth_core, virtual_core, HalProgrammableCoreType::IDLE_ETH);
+        }
         initialize_firmware(
             device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         not_done_cores.insert(virtual_core);

@@ -6,6 +6,7 @@
 #define COMPILE_FOR_ERISC
 
 #include <tt-metalium/math.hpp>
+#include "hostdev/cce_spa_routes.h"
 #include "hostdev/dev_msgs.h"
 #include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "hostdev/realtime_profiler_msgs.h"
@@ -44,6 +45,7 @@ HalCoreInfoType create_eth_mem_map(HalProgrammableCoreType core_type, bool progr
     static_assert(PROCESSOR_COUNT == MEM_IERISC_LOCAL_HARTS);
     static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROCESSOR_COUNT);
     static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
+    static_assert(sizeof(CceNocRoutes) <= MEM_IERISC_NOC_ROUTES_SIZE);
     static_assert(MEM_IERISC_KERNEL_BASE + MEM_IERISC_KERNEL_SIZE * MEM_IERISC_LOCAL_HARTS <= MEM_IERISC_L1_SIZE);
 
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
