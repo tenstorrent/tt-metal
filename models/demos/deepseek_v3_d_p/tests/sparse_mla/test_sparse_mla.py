@@ -60,19 +60,25 @@ SPARSE_TOPK_RECALL = 0.99
 SPARSE_TOPK_TIE_BAND = 0.01
 # glm_5_2: the production-closest GLM (populated reference cache; architecturally == GLM-5.3).
 # kimi_k3_1: K3's gated NoPE MLA (96 heads) + a NoPE lightning indexer; its main KVPE cache is scaled FP8.
-SPARSE_VARIANTS = ["glm_5_2", "kimi_k3_1"]
+# deepseek_v32: 128 heads, so the only variant whose TP=2 and TP=4 head shards both suit sparse_sdpa unresharded.
+SPARSE_VARIANTS = ["glm_5_2", "kimi_k3_1", "deepseek_v32"]
 # Per-variant main KVPE cache format. Accuracy runs the main format at every sequence and the other format
 # at the real-pruning sequence only, as a diagnostic that separates quantization error from logic error.
-SPARSE_MAIN_KV_FORMAT = {"glm_5_2": MlaKvCacheFormat.BF16_RM, "kimi_k3_1": MlaKvCacheFormat.SCALED_FP8}
-# Inert-top-k fallback for K3.1 where seq 256 is too short: the shortest of these whose stripe is long enough
-# on that mesh (LoudBox / Galaxy 8x2: 1024; Galaxy 8x4: 2048). All are <= index_topk, so sparse == dense there.
-# K3.1's index cache has ONE layer slot (no compacted multi-layer slab like GLM's), so its SP x TP-striped
+SPARSE_MAIN_KV_FORMAT = {
+    "glm_5_2": MlaKvCacheFormat.BF16_RM,
+    "kimi_k3_1": MlaKvCacheFormat.SCALED_FP8,
+    "deepseek_v32": MlaKvCacheFormat.BF16_RM,
+}
+# Inert-top-k fallback where seq 256 is too short: the shortest of these whose stripe is long enough on that mesh
+# (LoudBox / Galaxy 8x2: 1024; Galaxy 8x4: 2048). All are <= index_topk, so sparse == dense there. K3.1's and
+# DeepSeek-V3.2's index caches have ONE layer slot (no compacted multi-layer slab like GLM's), so the SP x TP-striped
 # per-chip stripe must itself hold >= KVPE_MIN_TOKENS_PER_CHIP rows; at 256 tokens on 8 chips (32 rows) the
 # ND-sharded cache collapses to WIDTH_SHARDED and indexer_score rejects it.
 SPARSE_INERT_FALLBACK_SEQS = (1024, 2048)
+SINGLE_SLOT_INDEX_VARIANTS = ("kimi_k3_1", "deepseek_v32")
 
 
-def _k31_seq_ok_for_mesh(seq_len, mesh):
+def _single_slot_seq_ok(seq_len, mesh):
     return _seq_ok_for_mesh(seq_len, mesh) and seq_len // (mesh[0] * mesh[1]) >= KVPE_MIN_TOKENS_PER_CHIP
 
 
@@ -92,9 +98,9 @@ def _collect_kvpe_cache(cache, mesh_device):
 # ---------------------------------------------------------------------------
 # Box-adaptive candidate meshes (sp, tp), keyed by physical device count. Each box lists ONLY shapes
 # that fit it, so off-box shapes are never generated (no "needs N devices" skips). Shapes must be
-# TP>=2 (the dense 128-head epilogue overflows L1 at TP=1). Every variant runs every listed mesh: GLM's
-# thin per-chip head shard at tp=4 (64/4=16 < 32) is handled by the head→sequence reshard in
-# ttMLA._sparse_mla (#48727) + the head-replicated seq-sharded indexer, so GLM is no longer TP-capped.
+# TP>=2 (the dense 128-head epilogue overflows L1 at TP=1). Every variant runs every listed mesh: sparse
+# attention reshards heads -> sequence at every TP > 1 (ttMLA.reshards_heads_to_seq), fed by the
+# head-replicated seq-sharded indexer.
 # Coverage rationale:
 #   QuietBox (4):  (1,4) TorusX and (2,2) Fabric2D.
 #   LoudBox  (8):  (2,4) TP=4 and (4,2) TP=2 — every variant at both TP.
@@ -187,30 +193,32 @@ def _sparse_cases(seqs, anchor_only, variants=None):
     return cases
 
 
-def _k31_seq_for_mesh(candidates, mesh):
-    """The first candidate sequence that is valid for K3.1 on this mesh, or None."""
-    return next((seq for seq in candidates if _k31_seq_ok_for_mesh(seq, mesh)), None)
+def _single_slot_seq_for_mesh(candidates, mesh):
+    """The first candidate sequence that is valid for a single-slot index cache on this mesh, or None."""
+    return next((seq for seq in candidates if _single_slot_seq_ok(seq, mesh)), None)
 
 
-def _k31_inert_fallback_cases():
-    """K3.1 meshes where seq 256 is invalid get the shortest valid inert-top-k point instead."""
+def _inert_fallback_cases():
+    """Single-slot index-cache variants get the shortest valid inert-top-k point on meshes where seq 256 is invalid."""
     cases = []
     for mesh in _sparse_meshes() or []:
-        if _k31_seq_ok_for_mesh(SPARSE_SEQS_ACCURACY[0], mesh):
+        if _single_slot_seq_ok(SPARSE_SEQS_ACCURACY[0], mesh):
             continue
-        seq = _k31_seq_for_mesh(SPARSE_INERT_FALLBACK_SEQS, mesh)
-        assert seq is not None, f"no K3.1 inert-top-k sequence fits mesh {mesh}"
-        cases += [c for c in _sparse_cases([seq], anchor_only=False, variants=["kimi_k3_1"]) if c.values[1] == mesh]
+        seq = _single_slot_seq_for_mesh(SPARSE_INERT_FALLBACK_SEQS, mesh)
+        assert seq is not None, f"no single-slot inert-top-k sequence fits mesh {mesh}"
+        variants = list(SINGLE_SLOT_INDEX_VARIANTS)
+        cases += [c for c in _sparse_cases([seq], anchor_only=False, variants=variants) if c.values[1] == mesh]
     return cases
 
 
 def _sparse_accuracy_cases():
     """Each variant's main KV format covers both sparsity regimes; the other format runs only in the
-    real-pruning regime (GLM: BF16 main + FP8 at 5120; K3.1: scaled FP8 main + BF16 diagnostic at 5120)."""
+    real-pruning regime (GLM / DeepSeek-V3.2: BF16 main + FP8 at 5120; K3.1: scaled FP8 main + BF16 diagnostic at
+    5120). Single-slot index-cache variants take the inert fallback sequence where 256 is too short."""
     cases = []
-    for case in _sparse_cases(SPARSE_SEQS_ACCURACY, anchor_only=False) + _k31_inert_fallback_cases():
+    for case in _sparse_cases(SPARSE_SEQS_ACCURACY, anchor_only=False) + _inert_fallback_cases():
         variant, mesh, seq_len, device_params = case.values
-        if variant == "kimi_k3_1" and not _k31_seq_ok_for_mesh(seq_len, mesh):
+        if variant in SINGLE_SLOT_INDEX_VARIANTS and not _single_slot_seq_ok(seq_len, mesh):
             continue  # replaced by the SPARSE_INERT_FALLBACK_SEQS case
         main = SPARSE_MAIN_KV_FORMAT[variant]
         other = MlaKvCacheFormat.SCALED_FP8 if main == MlaKvCacheFormat.BF16_RM else MlaKvCacheFormat.BF16_RM
@@ -238,11 +246,9 @@ def _only(cases, *variants):
     return [c for c in cases if c.values[0] in variants]
 
 
-# Multi-chunk coverage: GLM at its anchor mesh; K3.1 on EVERY mesh of the box, because its TP=2 path (48
-# heads/chip -- thin, head->sequence resharded) is distinct from the TP=4 anchor and nothing else chunks it.
-SPARSE_CHUNKED_CASES = _only(SPARSE_ANCHOR_CASES, "glm_5_2") + _only(
-    _sparse_cases(SPARSE_SEQS_ANCHOR, anchor_only=False), "kimi_k3_1"
-)
+# Multi-chunk coverage on every mesh of the box: each variant's TP=2 early-Q path (all heads per chip after the
+# head->sequence reshard) differs from its TP=4 one.
+SPARSE_CHUNKED_CASES = _sparse_cases(SPARSE_SEQS_ANCHOR, anchor_only=False)
 
 
 def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=1, tp_axis=1):
@@ -318,8 +324,8 @@ def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk, 
 def _device_topk_rows(indices, mesh_device, seq_len):
     """Device indexer selection -> [seq_len, k] key positions in natural row order.
 
-    The indexer emits [1, 1, rows, k] per chip: SP-sharded rows, further split over TP when the head shard
-    is thin (TP sequence shards), else TP-replicated. Concatenate as [sp, tp, rows, k] and flatten in
+    The indexer emits [1, 1, rows, k] per chip: SP-sharded rows, further split over TP when the layer
+    reshards heads -> sequence (every TP > 1), else TP-replicated. Concatenate as [sp, tp, rows, k] and flatten in
     linear chip order (sp-major, tp-minor) -- one full-sequence chunk at offset 0 is in natural order."""
     sp, tp = mesh_device.shape[0], mesh_device.shape[1]
     t = ttnn.to_torch(
@@ -1124,8 +1130,8 @@ def test_sparse_mla_accuracy_chunked(
     )
 
 
-# GLM-5.2 indexer reuse: anchor cases for the reuse-capable variant.
-SPARSE_REUSE_CASES = _only(SPARSE_ANCHOR_CASES, "glm_5_2")
+# GLM-5.2 indexer reuse, the reuse-capable variant, on every mesh: TP=2 injects TP-sequence-sharded indices too.
+SPARSE_REUSE_CASES = _only(SPARSE_CHUNKED_CASES, "glm_5_2")
 
 
 @pytest.mark.parametrize(
@@ -1177,8 +1183,9 @@ def test_sparse_mla_indexer_reuse_chunked(
     )
     # A: compute the indexer, capture its top-k selection + output.
     out_a, _, _, shard_dims, idx = run_mla_inference(tt_kvpe_cache=_kvpe(), return_indices=True, **common)
-    # B: a fresh MLA (same weights + input) fed A's indices -> skips its own indexer.
-    out_b, _, _, _ = run_mla_inference(tt_kvpe_cache=_kvpe(), inject_indices=idx, **common)
+    # B: a shared layer (same weights + input) fed A's indices -> it has no indexer of its own.
+    shared_idx = next(i for i, t in enumerate(config.indexer_types) if t == "shared")
+    out_b, _, _, _ = run_mla_inference(tt_kvpe_cache=_kvpe(), inject_indices=idx, layer_idx=shared_idx, **common)
 
     def _to_torch(t):
         return ttnn.to_torch(
@@ -1208,8 +1215,7 @@ def test_sparse_mla_determinism_chunked(
     )
 
 
-# Anchor cases (seq=5120) crossed with the prefill chunk sizes; collected == run. K3.1 also runs its TP=2 mesh
-# (SPARSE_CHUNKED_CASES).
+# SPARSE_CHUNKED_CASES (every variant on every mesh, seq=5120) crossed with the prefill chunk sizes; collected == run.
 def _chunked_cases():
     """(case, chunk): every case at 1024, plus the 1280 perf chunk where it tiles the SP x TP stripe (it lands in the
     tuned 640-row slot on LoudBox 2x4; Galaxy's 32-chip stripe needs 1024 multiples)."""
@@ -1330,7 +1336,7 @@ K31_SLOT_MODEL_LAYERS = (3, 7, 91, 92)
 K31_SLOT_SEQS = SPARSE_INERT_FALLBACK_SEQS
 SPARSE_SLOT_CASES = []
 for _mesh in [_anchor_mesh(_sparse_meshes())] if _sparse_meshes() else []:
-    _seq = _k31_seq_for_mesh(K31_SLOT_SEQS, _mesh)
+    _seq = _single_slot_seq_for_mesh(K31_SLOT_SEQS, _mesh)
     assert _seq is not None, f"no K3.1 slot-test sequence fits mesh {_mesh}"
     SPARSE_SLOT_CASES += [
         c for c in _sparse_cases([_seq], anchor_only=True, variants=["kimi_k3_1"]) if c.values[1] == _mesh
@@ -1477,7 +1483,7 @@ TRACE_REGION_SIZE = 64 * 1024 * 1024
 
 
 def _trace_cases():
-    """Each variant's anchor mesh, plus K3.1 on its other meshes: the TP=2 early-Q path replays too."""
+    """Every variant on every mesh of the box (SPARSE_CHUNKED_CASES): the TP=2 early-Q path replays too."""
     out = []
     anchor_ids = {c.id for c in SPARSE_ANCHOR_CASES}
     for c in SPARSE_ANCHOR_CASES + [c for c in SPARSE_CHUNKED_CASES if c.id not in anchor_ids]:
@@ -1769,6 +1775,53 @@ def test_identity_rope_is_a_fused_concat(mesh_device, seq_len, device_params, va
         run(dev(taller), dev(torch.randn(tp, heads, rows * sp * 2, prefix_dim).to(torch.bfloat16)))
 
 
+def _single_chunk_forward(mesh_device, config, weights, hidden, chunk, cache_format, early_q):
+    """One sparse layer over one chunk at offset 0 on fresh caches. Returns the layer and (output, KVPE, index-K)."""
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = list(mesh_device.shape)
+    shard_dims = [None, None]
+    shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
+    mla = ttMLA(
+        config,
+        weights,
+        mesh_device,
+        layer_idx=0,
+        seq_len=chunk,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_chunked=True,
+        active_seq_len=chunk,
+        layer_num=1,
+        sparse_kv_cache_format=cache_format,
+        sparse_mla_overlap_profile="off",
+    )
+    assert mla._early_q_reshard == early_q
+    kvpe = init_mla_kv_cache(
+        cache_format=cache_format,
+        hf_config=config,
+        mesh_device=mesh_device,
+        seq_len=chunk,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+        tp_axis=tp_axis,
+    )
+    index_kv = _init_index_kv_cache(config, mesh_device, chunk, mesh_shape, sp_axis, tp_axis=tp_axis)
+    rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(chunk, chunk)
+    tt_x = ttnn.from_torch(
+        hidden.unsqueeze(0),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+    out = mla.forward(tt_x, rope, kvpe, actual_start=0, index_kv_cache=index_kv)
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+    out = ttnn.to_torch(out, mesh_composer=composer).to(torch.bfloat16)
+    ttnn.synchronize_device(mesh_device)
+    return mla, (out, _collect_kvpe_cache(kvpe, mesh_device), _cache_natural(index_kv, mesh_device, chunk))
+
+
 def _early_vs_late_cases():
     """K3.1 meshes at the perf chunk; TP=2 also at 2560, the chunk whose 640 rows/chip hit the tuned TP=2 wkv_b1."""
     out = []
@@ -1798,12 +1851,8 @@ def test_sparse_mla_k31_early_q_matches_late_q(
     config.max_seq_len = chunk
     sp_axis, tp_axis = 0, 1
     tp = mesh_device.shape[tp_axis]
-    mesh_shape = list(mesh_device.shape)
     weights, _ = build_weights(variant, config, seed=42)
     hidden = make_hidden(chunk, config.hidden_size, seed=3)
-    shard_dims = [None, None]
-    shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
-    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
     late_rule = ttMLA.replicates_wkv_b1
     sdpa = ttnn.transformer.sparse_sdpa
     captured = []
@@ -1828,50 +1877,14 @@ def test_sparse_mla_k31_early_q_matches_late_q(
                 staticmethod(lambda c, t, h: late_rule(c, t, h) and not getattr(c, "mla_use_nope", False)),
             )
         try:
-            mla = ttMLA(
-                config,
-                weights,
-                mesh_device,
-                layer_idx=0,
-                seq_len=chunk,
-                sp_axis=sp_axis,
-                tp_axis=tp_axis,
-                is_chunked=True,
-                active_seq_len=chunk,
-                layer_num=1,
-                sparse_kv_cache_format=MlaKvCacheFormat.SCALED_FP8,
-                sparse_mla_overlap_profile="off",
+            mla, results = _single_chunk_forward(
+                mesh_device, config, weights, hidden, chunk, MlaKvCacheFormat.SCALED_FP8, early_q=early
             )
-            assert mla._early_q_reshard == early
             heads_on_chip = mla.wkv_b1_weight.shape[1]
             assert heads_on_chip == (config.num_attention_heads if early else config.num_attention_heads // tp)
             if chunk // mesh_device.shape[sp_axis] == 640:  # the tuned 640-row slot this case exists to exercise
                 assert mla._resolve_mm_cfg("wkv_b1", 640) is not None, "tuned wkv_b1 slot did not resolve"
-            kvpe = init_mla_kv_cache(
-                cache_format=MlaKvCacheFormat.SCALED_FP8,
-                hf_config=config,
-                mesh_device=mesh_device,
-                seq_len=chunk,
-                mesh_shape=mesh_shape,
-                sp_axis=sp_axis,
-                num_kvpe_cache_layers=1,
-                tp_axis=tp_axis,
-            )
-            index_kv = _init_index_kv_cache(config, mesh_device, chunk, mesh_shape, sp_axis, tp_axis=tp_axis)
-            rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
-                chunk, chunk
-            )
-            tt_x = ttnn.from_torch(
-                hidden.unsqueeze(0),
-                device=mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
-            )
-            out = mla.forward(tt_x, rope, kvpe, actual_start=0, index_kv_cache=index_kv)
-            out = ttnn.to_torch(out, mesh_composer=composer).to(torch.bfloat16)
-            ttnn.synchronize_device(mesh_device)
-            return out, _collect_kvpe_cache(kvpe, mesh_device), _cache_natural(index_kv, mesh_device, chunk)
+            return results
         finally:
             patch.undo()
 
@@ -1890,3 +1903,45 @@ def test_sparse_mla_k31_early_q_matches_late_q(
         max_diff = float((a - b).abs().max())
         logger.info(f"[{variant.name} tp={tp}] early vs late {name}: max |diff| {max_diff}")
         assert torch.equal(a, b), f"{name}: early-Q path differs from the late path (max |diff| {max_diff})"
+
+
+def _tp_reshard_cases():
+    """GLM at TP=2 and DeepSeek-V3.2 at both TPs: the head shards sparse_sdpa can also run without the reshard. TP=2
+    also runs 2560, whose 640 rows/chip hit the tuned wkv_b1 slot."""
+    out = []
+    for c in SPARSE_CHUNKED_CASES:
+        variant, mesh = c.values[0], c.values[1]
+        if (variant == "glm_5_2" and mesh[1] == 2) or variant == "deepseek_v32":
+            chunks = [_early_q_chunk(mesh)] + ([2560] if mesh[1] == 2 and 2560 // mesh[0] == 640 else [])
+            out += [pytest.param(*c.values, ch, marks=c.marks, id=f"{c.id}-c{ch}") for ch in chunks]
+    return out
+
+
+@pytest.mark.parametrize(
+    "variant, mesh_device, seq_len, device_params, chunk",
+    _tp_reshard_cases(),
+    indirect=["variant", "mesh_device", "device_params"],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_tp_reshard_matches_head_sharded(
+    mesh_device, seq_len, chunk, device_params, variant, config_only, monkeypatch
+):
+    """The head -> sequence reshard against the head-sharded layout sparse_sdpa can also run for these models (forced
+    here; production always reshards at TP > 1), on the same weights and input.
+    sparse_sdpa's math per (token, head) does not depend on how many heads share a chip, and the caches not on the
+    q layout at all, so all three match bit for bit."""
+    config = config_only
+    config.max_seq_len = chunk
+    weights, _ = build_weights(variant, config, seed=42)
+    hidden = make_hidden(chunk, config.hidden_size, seed=3)
+    cache_format = SPARSE_MAIN_KV_FORMAT[variant.name]
+    _, resharded = _single_chunk_forward(mesh_device, config, weights, hidden, chunk, cache_format, early_q=True)
+    monkeypatch.setattr(ttMLA, "reshards_heads_to_seq", staticmethod(lambda tp_factor: False))
+    _, head_sharded = _single_chunk_forward(mesh_device, config, weights, hidden, chunk, cache_format, early_q=False)
+    tp = mesh_device.shape[1]
+    for name, a, b in zip(("output", "kvpe", "index-K"), head_sharded, resharded):
+        a, b = a.float(), b.float()
+        max_diff = float((a - b).abs().max())
+        logger.info(f"[{variant.name} tp={tp}] resharded vs head-sharded {name}: max |diff| {max_diff}")
+        assert torch.equal(a, b), f"{name} depends on the q layout (max |diff| {max_diff})"

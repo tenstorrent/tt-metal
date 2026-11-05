@@ -228,31 +228,27 @@ def _mla_stub(config, tp_factor, has_indexer=True):
     stub._is_blackhole = True
     stub.mm_configs = MLA_MATMUL_CONFIG
     stub.wkv_b1_weight = SimpleNamespace(shape=(1, 1, config.qk_nope_head_dim, config.kv_lora_rank))
+    stub.qk_nope_head_dim, stub.kv_lora_rank = config.qk_nope_head_dim, config.kv_lora_rank
+    stub.ring_sdpa_compute_grid = (11, 10)
+    stub.default_compute_kernel_config = None
+    stub.hifi2_fp32_compute_kernel_config = None
     return stub
 
 
 @pytest.mark.parametrize("tp_factor", [1, 2, 4])
 def test_early_q_reshard_predicates(tp_factor):
-    """One rule decides weight replication, the early-Q path and the attention redistribution for sparse layers;
-    the three must agree, or a layer loads TP-sharded wkv_b1 into the all-heads path (or the reverse)."""
+    """One rule decides weight replication, the early-Q path and the attention redistribution for sparse layers:
+    every TP > 1 reshards. The three must agree, or a layer loads TP-sharded wkv_b1 into the all-heads path."""
     from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
     from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_hf_config
 
-    k31, glm, ds, k3_dense = kimi_k3_1_hf_config(), glm_5_3_hf_config(), deepseek_v32_hf_config(), kimi_k3_hf_config()
-    # (config, has_indexer, expected thin-shard reshard at this TP)
-    cases = [
-        (k31, True, tp_factor > 1),  # 96 heads: 48 / 24 per chip, never a multiple of 32
-        (glm, True, tp_factor == 4),  # 64 heads: 32 per chip at TP=2 is not thin
-        (ds, True, False),  # 128 heads: 64 / 32 per chip
-        (k3_dense, False, False),  # dense: no indexer, never replicates
-    ]
-    for config, has_indexer, expected in cases:
+    sparse = [kimi_k3_1_hf_config(), glm_5_3_hf_config(), deepseek_v32_hf_config()]  # 96 / 64 / 128 heads
+    for config, has_indexer in [(c, True) for c in sparse] + [(kimi_k3_hf_config(), False)]:
         stub = _mla_stub(config, tp_factor, has_indexer)
         replicates = ttMLA.replicates_wkv_b1(config, tp_factor, has_indexer)
-        assert replicates == (expected and has_indexer), (config.num_attention_heads, tp_factor)
+        assert replicates == (has_indexer and tp_factor > 1), (config.num_attention_heads, tp_factor)
         assert stub._early_q_reshard == replicates
-        if has_indexer:
-            assert stub._needs_head_to_seq_reshard == replicates, "early-Q and the attention reshard must agree"
+        assert stub._needs_head_to_seq_reshard == replicates, "early-Q and the attention reshard must agree"
 
 
 @pytest.mark.parametrize("tp_factor, expected_per_core_m", [(4, 5), (2, 10)])
@@ -265,6 +261,40 @@ def test_k31_early_q_wkv_b1_config(tp_factor, expected_per_core_m):
     dense = ttMLA._resolve_mm_cfg(_mla_stub(kimi_k3_hf_config(), tp_factor, has_indexer=False), "wkv_b1", 640)
     if tp_factor == 2:
         assert dense is None, "the K3.1 early-Q TP=2 tiling must not apply to dense K3"
+
+
+@pytest.mark.parametrize(
+    "tp_factor, slot, per_core_m, in_l1",
+    [(4, 640, 5, True), (2, 640, 10, True), (4, 4096, 8, False), (2, 3200, 10, False)],
+)
+def test_early_q_wkv_b1_config_spreads_heads(tp_factor, slot, per_core_m, in_l1):
+    """Without a model-tagged entry (DeepSeek-V3.2), early-Q wkv_b1 puts one head x up to 10 row tiles x the full
+    width on each core, also where an untagged 1D entry sits in the slot (4096, 3200); big outputs go to DRAM."""
+    from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
+
+    stub = _mla_stub(deepseek_v32_hf_config(), tp_factor)
+    kwargs = ttMLA._early_q_wkv_b1_kwargs(stub, slot)
+    pc = kwargs["program_config"]
+    assert isinstance(pc, ttnn.MatmulMultiCoreReuseProgramConfig)
+    assert (pc.per_core_M, pc.per_core_N, pc.in0_block_w) == (per_core_m, 16, 4)
+    assert (slot // tp_factor // ttnn.TILE_SIZE) % pc.per_core_M == 0
+    assert (kwargs["memory_config"] == ttnn.L1_MEMORY_CONFIG) == in_l1
+
+
+def test_early_q_wkv_b1_keeps_model_tagged_entries():
+    """K3.1's tuned TP=2 entry wins over the computed tiling."""
+    stub = _mla_stub(kimi_k3_1_hf_config(), 2)
+    assert (
+        ttMLA._early_q_wkv_b1_kwargs(stub, 640)["program_config"]
+        is ttMLA._resolve_mm_cfg(stub, "wkv_b1", 640)["program_config"]
+    )
+
+
+@pytest.mark.parametrize("tp_factor, tuned", [(4, True), (2, False)])
+def test_glm_q_b_proj_config_is_tp4_only(tp_factor, tuned):
+    """GLM's 640-row q_b_proj tiling spans 11 grid columns at TP=4; TP=2's doubled N would need 22."""
+    cfg = ttMLA._resolve_mm_cfg(_mla_stub(glm_5_3_hf_config(), tp_factor), "q_b_proj", 640)
+    assert (cfg is not None) == tuned
 
 
 def test_check_cache_complete_requires_gate_and_indexer(tmp_path):
@@ -1177,7 +1207,7 @@ def test_sparse_mla_overlap_growing_prefix_cache_and_lifetime(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
         ),
-        # TP=2 on the folded 4x2 view: K3.1's replicated wkv_b1 and its sharded-only-cache gather run on the folded axis.
+        # TP=2 on the folded 4x2 view: the replicated wkv_b1 and its sharded-only-cache gather run on the folded axis.
         pytest.param(
             (4, 2),
             fabric2d_device_params(
@@ -1191,7 +1221,12 @@ def test_sparse_mla_overlap_growing_prefix_cache_and_lifetime(
     indirect=["mesh_device", "device_params"],
 )
 # kimi_k3_1: the only test of gated (g_proj) + indexer cache-only construction.
-@pytest.mark.parametrize("variant", ["glm_5_3", "kimi_k3_1"], indirect=True, ids=["glm_5_3", "kimi_k3_1"])
+@pytest.mark.parametrize(
+    "variant",
+    ["glm_5_3", "kimi_k3_1", "deepseek_v32"],
+    indirect=True,
+    ids=["glm_5_3", "kimi_k3_1", "deepseek_v32"],
+)
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, seq_len, variant, config_only):
@@ -1301,6 +1336,23 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, seq_len,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
+        # LoudBox: TP=4 and the folded TP=2 view, where shared layers now take the head -> sequence reshard too.
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
+            ),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
+        ),
+        pytest.param(
+            (4, 2),
+            fabric2d_device_params(
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
+            ),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-4x2",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -1325,6 +1377,7 @@ def test_glm53_shared_layer_cache_skips_indexer(mesh_device, device_params, vari
     init_checker(CACHE_DIR)
     assert ttMLA.check_cache_complete(CACHE_DIR, prefix, has_indexer=False), "shared MLA cache should be complete"
     assert not list(CACHE_DIR.glob(f"{prefix}.indexer_*.tensorbin")), "shared layer must not write indexer tensorbins"
+    assert list(CACHE_DIR.glob(f"layer_{shared_idx}.mla_repl.wkv_b1*.tensorbin")), "shared layers reshard at TP > 1"
 
     # Cache-only construct at the shared layer: sparse attention, but a weight-less ReuseIndexer.
     mla_c = ttMLA(
@@ -1341,6 +1394,9 @@ def test_glm53_shared_layer_cache_skips_indexer(mesh_device, device_params, vari
     )
     assert mla_c._has_indexer and mla_c._indexer_reuse, f"{variant.name}: shared layer must be sparse + reuse"
     assert type(mla_c._indexer).__name__ == "ReuseIndexer", "shared layer must bind ReuseIndexer"
+    tp = mesh_device.shape[TP_AXIS]
+    assert mla_c._early_q_reshard and mla_c.wkv_b1_weight.shape[1] == config.num_attention_heads
+    assert mla_c.indexer_indices_shape()[2] == SEQ_LEN // (mesh_device.shape[SP_AXIS] * tp), "TP-sequence-split indices"
     logger.info(f"[{variant.name}] shared layer {shared_idx}: cache built without indexer, ReuseIndexer bound")
     ttnn.synchronize_device(mesh_device)
 

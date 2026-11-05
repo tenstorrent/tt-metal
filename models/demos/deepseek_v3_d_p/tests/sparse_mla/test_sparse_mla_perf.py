@@ -16,7 +16,7 @@ workload mirrors Galaxy rather than a heavier one:
 
 That keeps local query rows/chip (640), per-chip KVPE depth (cache/SP = 6.25k), and the number of
 chunks-to-fill in `cold` (11) equal to Galaxy. QuietBox deliberately uses SP=2 so it exercises the
-all-gather/top-k overlap path; its TP=2 head shard is twice the Galaxy per-chip head shard. CAVEAT: the
+all-gather/top-k overlap path; at its TP=2, as at TP=4, sparse attention reshards heads → sequence. CAVEAT: the
 indexer K-cache is replicated full-depth (= the box-local cache), so on smaller boxes it holds a
 proportionally SHORTER prefix than Galaxy — only Galaxy exercises the true 50k (or 0.5M) indexer/top-k
 depth; smaller boxes under-represent any op that scales with the replicated key-cache length.
@@ -72,8 +72,8 @@ Three scenarios (the test sweeps all three):
     Galaxy-equal on every box (LoudBox=128k, QuietBox=128k box-local cache).
 
 variant axis — deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_3 (64 / 32). Galaxy and
-  LoudBox use TP=4; QuietBox uses TP=2 to retain SP=2. GLM's thin TP=4 head shard is handled by the
-  head→sequence reshard in ttMLA._sparse_mla (#48727) plus the head-replicated seq-sharded indexer.
+  LoudBox use TP=4; QuietBox uses TP=2 to retain SP=2. Sparse attention reshards heads → sequence at every
+  TP > 1 (ttMLA.reshards_heads_to_seq), so the indexer's TP-sequence-split top-k feeds it directly.
   GLM-5.3's sparse case intentionally builds the final ``full`` indexer layer (layer 74), with
   its compact 21-slot index cache. This makes the fused ring op select nonzero slot 20—the multi-slot path
   used by the complete 78-layer model—rather than exercising only the trivial single-slot layer-0 proxy.
@@ -107,7 +107,8 @@ Knobs (env): DS_PERF_CACHE (default 51200), DS_PERF_CHUNK (default 5120), DS_PER
 512000), DS_PERF_CSV / DS_DENSE_PERF_CSV (summary filename, per-scenario suffix appended; written under
 generated/profiler/{variant}_{mode}_mla_perf/), DS_PERF_RT_TIMEOUT (realtime-profiler record drain
 ceiling in seconds, default 30). DS_PERF_CHUNK is the Galaxy-global target chunk; smaller boxes scale
-BOTH the measured chunk and the cache by SP/8; cache must stay a whole chunk multiple. DS_PERF_VARIANT /
+BOTH the measured chunk and the cache by SP/8; cache must stay a whole chunk multiple. DS_PERF_MESH (SPxTP,
+overrides the box default, e.g. 4x2 on LoudBox). DS_PERF_VARIANT /
 DS_PERF_SCENARIO / DS_PERF_ATTN_MODE remain as the module-level defaults used for mesh-shape detection,
 but the test itself sweeps the full matrix via parametrization.
 
@@ -161,7 +162,6 @@ LONG_CACHE_TOKENS = int(os.environ.get("DS_PERF_LONG_CACHE", 512000))
 ATTN_MODE = os.environ.get("DS_PERF_ATTN_MODE", "sparse")  # module-level default (mesh-shape detection)
 # Model-variant axis: deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_3 (64 / 32).
 # Galaxy/LoudBox use TP=4; QuietBox uses TP=2 so its four chips retain SP=2 and exercise the overlap path.
-# GLM's thin TP=4 head shard is handled by the head→sequence reshard in ttMLA._sparse_mla (#48727).
 # Every model dimension comes from the single-source reference config, never hardcoded here. GLM-5.3
 # additionally exercises a nonzero slot of its compact full-indexer cache below.
 # kimi_k3_1 (96 / 32, NoPE MLA + NoPE indexer, gated): its main KVPE cache is scaled FP8, so only
@@ -182,6 +182,8 @@ _CONFIG_BUILDERS = {
 # wrapper stops once no new record has landed for its settle window, bounded by this ceiling. A generous
 # default covers a many-program forward across up to 32 chips; each forward is profiled as its own
 # (volume-bounded) region so this is a safety ceiling, not the expected wait.
+# SPxTP override of the box's default mesh, e.g. DS_PERF_MESH=4x2 on a LoudBox for the TP=2 split.
+PERF_MESH = os.environ.get("DS_PERF_MESH", "")
 RT_RECORD_TIMEOUT_S = float(os.environ.get("DS_PERF_RT_TIMEOUT", 30.0))
 
 # When set, also write an execution-ordered per-call CSV (the RT analog of tracy's ops_perf_results):
@@ -207,7 +209,8 @@ def _profile_case_id(mode: str, cache_format: MlaKvCacheFormat, tp_shard_kv: boo
 def _subdir(variant: str, mode: str, cache_format: MlaKvCacheFormat, tp_shard_kv: bool = False) -> str:
     """Format-specific profiler directory; matched sparse BF16/FP8 reports must never clobber each other."""
     profile_case = _profile_case_id(mode, cache_format, tp_shard_kv).replace("-", "_")
-    return f"{variant}_{profile_case}_mla_perf"
+    mesh = f"_{PERF_MESH.lower()}" if PERF_MESH else ""  # an overridden mesh must not clobber the default's
+    return f"{variant}_{profile_case}_mla_perf{mesh}"
 
 
 def _csv_name(variant: str, mode: str, cache_format: MlaKvCacheFormat, tp_shard_kv: bool = False) -> str:
@@ -334,9 +337,10 @@ def _write_run_manifest(
             else None
         )
         case_filter = _profile_case_id(attn_mode, cache_format, tp_shard_kv)
+        knobs = f"DS_PERF_MESH={PERF_MESH} " if PERF_MESH else ""
         reproducer = (
             f"DS_PERF_CACHE={CACHE_TOKENS} DS_PERF_CHUNK={CHUNK_TOKENS} DS_PERF_LONG_CACHE={LONG_CACHE_TOKENS} "
-            f"{command} -k '{variant} and {scenario} and {case_filter}'"
+            f"{knobs}{command} -k '{variant} and {scenario} and {case_filter}'"
         )
         head = _git_head()
         manifest = {
@@ -433,6 +437,10 @@ def _detect_perf_workload(variant_name: str) -> tuple[PerfWorkload, str | None]:
         )
 
     system_name, mesh_shape = system
+    if PERF_MESH:
+        mesh_shape = tuple(int(d) for d in PERF_MESH.lower().split("x"))
+        if len(mesh_shape) != 2 or mesh_shape[0] * mesh_shape[1] != num_devices:
+            raise ValueError(f"DS_PERF_MESH={PERF_MESH} must be SPxTP over the {num_devices} chips")
     sp, tp = mesh_shape
     # Head counts come from the single-source reference config for the variant (deepseek_v32: 128/64,
     # glm_5_3: 64/32) — the same builder the config_only fixture resolves, so device and harness agree.
@@ -515,7 +523,7 @@ _OP_CODE_RULES = (
     ("/ring_attention_all_gather", "RingJointSDPA"),
     ("/transformer/sdpa/", "SDPA"),
     ("/topk_large_indices/", "TopkLargeIndices"),
-    # Thin-head-shard reshards (GLM TP=4; Kimi-K3.1 at TP=2 and TP=4) and the persistent-buffer gathers
+    # Head -> sequence reshards (every sparse variant at TP > 1) and the persistent-buffer gathers
     # (Kimi-K3.1's g_proj input, the q/kv latents). Before the generic all_gather rule.
     ("/ccl/all_to_all_async_generic/", "AllToAllAsyncGeneric"),
     ("/high_bw_all_gather/", "HighBwAllGather"),

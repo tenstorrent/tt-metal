@@ -53,13 +53,17 @@ class ttMLA:
         return ttMLA.MLA_WEIGHT_NAMES + (["g_proj"] if has_output_gate else [])
 
     @staticmethod
+    def reshards_heads_to_seq(tp_factor: int) -> bool:
+        """Sparse attention moves the TP split from heads to sequence at every TP > 1. sparse_sdpa gathers each
+        token's top-k KV rows once for all of that token's heads, so a head-sharded q would repeat the gather on
+        every TP chip, and the indexer's TP-sequence-split top-k would have to be all-gathered back."""
+        return tp_factor > 1
+
+    @staticmethod
     def replicates_wkv_b1(config, tp_factor: int, has_indexer: bool) -> bool:
-        """True for the layers that take _early_q_reshard: they run wkv_b1 over every head after the all-to-all
-        to sequence sharding, so they load all heads' wkv_b1 on every chip instead of the TP shard. Must agree with
-        _needs_head_to_seq_reshard for sparse layers."""
-        heads_local = config.num_attention_heads // tp_factor
-        thin_head_shard = tp_factor > 1 and (heads_local < 32 or heads_local % 32 != 0)
-        return has_indexer and thin_head_shard
+        """True for the layers that take _early_q_reshard: sparse layers that reshard run wkv_b1 over every head
+        after the all-to-all to sequence sharding, so they load all heads' wkv_b1 on every chip."""
+        return has_indexer and ttMLA.reshards_heads_to_seq(tp_factor)
 
     @staticmethod
     def check_cache_complete(
@@ -187,6 +191,7 @@ class ttMLA:
                 return _wkv_b1_as(ttnn.ReplicateTensorToMesh(mesh_device), repl_name)
             # A cache holding only the TP-sharded file: gather the TP shards once, at load. Loading
             # the placeholder through as_tensor would write it to the cache as the weights.
+            logger.info(f"{repl_name}: no replicated wkv_b1 in the cache, gathering TP shards (rebuild to skip)")
             shard = _wkv_b1_as(mapper_tp1, _cache_name("wkv_b1"))
             full = ttnn.all_gather(shard, dim=1, cluster_axis=tp_axis, memory_config=mem)
             ttnn.deallocate(shard)
@@ -956,7 +961,7 @@ class ttMLA:
         cfg = self._resolve_mm_cfg(weight_name, seq_len_local)
         return cfg["act_mem_config"] if cfg is not None else ttnn.DRAM_MEMORY_CONFIG
 
-    def _get_mm_kwargs(self, weight_name: str, seq_len_local: int, rows_local: Optional[int] = None) -> dict:
+    def _get_mm_kwargs(self, weight_name: str, seq_len_local: int) -> dict:
         """Get matmul kwargs from config, falling back to defaults.
 
         Always carries compute_kernel_config: HiFi2 by default, or HiFi2 with an fp32 dest when the
@@ -966,8 +971,7 @@ class ttMLA:
         cfg = self._resolve_mm_cfg(weight_name, seq_len_local)
         if cfg is None:
             if weight_name in self._BATCHED_MM_DIMS:
-                # rows_local: the matmul's real M when it differs from the lookup slot (early-Q reshard).
-                return self._make_batched_mm_kwargs(weight_name, rows_local or seq_len_local)
+                return self._make_batched_mm_kwargs(weight_name, seq_len_local)
             return {
                 "memory_config": ttnn.DRAM_MEMORY_CONFIG,
                 "dtype": self.MM_DEFAULT_DTYPES[weight_name],
@@ -982,6 +986,33 @@ class ttMLA:
                 if cfg.get("fp32_dest_acc")
                 else self.default_compute_kernel_config
             ),
+        }
+
+    def _early_q_wkv_b1_kwargs(self, seq_len_local: int) -> dict:
+        """wkv_b1 on the early-Q path: q is [1, all heads, rows / tp, qk_nope]. A tuned entry tagged with this model's
+        num_heads applies as is; otherwise each core takes one head x up to 10 row tiles x the full kv_lora width, so
+        the heads spread over the grid (the batched default and the untagged 1D entries split only along M)."""
+        m_tiles = seq_len_local // self.tp_factor // ttnn.TILE_SIZE
+        cfg = self._resolve_mm_cfg("wkv_b1", seq_len_local)
+        if cfg is not None and cfg.get("num_heads") is not None and m_tiles % cfg["program_config"].per_core_M == 0:
+            return self._get_mm_kwargs("wkv_b1", seq_len_local)
+        k_tiles = self.qk_nope_head_dim // ttnn.TILE_SIZE
+        n_tiles = self.kv_lora_rank // ttnn.TILE_SIZE
+        out_bytes = self.num_heads * m_tiles * n_tiles * ttnn.TILE_SIZE * ttnn.TILE_SIZE * 2
+        return {
+            # L1 up to DeepSeek-V3.2's TP=2 640-row case (40 MiB, measured), DRAM beyond.
+            "memory_config": ttnn.L1_MEMORY_CONFIG if out_bytes <= 40 << 20 else ttnn.DRAM_MEMORY_CONFIG,
+            "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
+                # The batched default's K block: bf16 partials accumulate in L1, so the blocking sets the rounding.
+                in0_block_w=max(w for w in range(1, 5) if k_tiles % w == 0),
+                out_subblock_h=1,
+                out_subblock_w=max(w for w in range(1, 9) if n_tiles % w == 0),
+                per_core_M=max(m for m in range(1, 11) if m_tiles % m == 0),
+                per_core_N=n_tiles,
+            ),
+            "dtype": ttnn.bfloat16,
+            "compute_kernel_config": self.default_compute_kernel_config,
         }
 
     def _make_batched_mm_kwargs(self, weight_name: str, seq_len_local: int) -> dict:
@@ -1394,11 +1425,11 @@ class ttMLA:
 
     @property
     def _early_q_reshard(self) -> bool:
-        """Sparse layers whose head shard is too thin for sparse_sdpa move q to sequence sharding before the wkv_b1
-        absorption, where it is qk_nope + qk_rope wide (192 for K3.1, 256 for GLM) instead of 576, and RoPE (an identity
-        under NoPE) writes it row-major for sparse_sdpa, so
-        no untilize follows; sparse_sdpa's row-major output then goes to the all-to-all back to heads, which tilizes
-        it on the way. Costs all heads' wkv_b1 on every chip, which __init__ loads replicated for these layers."""
+        """Sparse layers that reshard (reshards_heads_to_seq) move q to sequence sharding before the wkv_b1 absorption,
+        where it is qk_nope + qk_rope wide (192 for K3.1 and DeepSeek-V3.2, 256 for GLM) instead of 576, and RoPE (an identity under NoPE)
+        writes it row-major for sparse_sdpa, so no untilize follows; sparse_sdpa's row-major output then goes to the
+        all-to-all back to heads, which tilizes it on the way. Costs all heads' wkv_b1 on every chip, which __init__
+        loads replicated for these layers."""
         return ttMLA.replicates_wkv_b1(self.config, self.tp_factor, self._has_indexer)
 
     def _q_stem_seq_sharded(self, tt_q_nope, tt_q_rope, rope_tensors, kv_actual_isl, seq_len_local, metadata):
@@ -1415,13 +1446,8 @@ class ttMLA:
         nope_seq, rope_seq = a2a(tt_q_nope), a2a(tt_q_rope)
         ttnn.deallocate(tt_q_nope)
         ttnn.deallocate(tt_q_rope)
-        # wkv_b1 holds every head here (replicate_wkv_b1). Tuned configs are looked up by the pre-reshard slot; the
-        # default factory gets the rows actually on this chip.
-        prefix = ttnn.linear(
-            nope_seq,
-            self.wkv_b1_weight,
-            **self._get_mm_kwargs("wkv_b1", seq_len_local, rows_local=seq_len_local // self.tp_factor),
-        )
+        # wkv_b1 holds every head here (replicate_wkv_b1).
+        prefix = ttnn.linear(nope_seq, self.wkv_b1_weight, **self._early_q_wkv_b1_kwargs(seq_len_local))
         ttnn.deallocate(nope_seq)
         if self._use_nope:
             # Identity rotation: the scalar start 0 indexes the one-slab table on every chunk, so no metadata.
@@ -2390,11 +2416,8 @@ class ttMLA:
 
     @property
     def _needs_head_to_seq_reshard(self) -> bool:
-        """True when the per-chip MLA head shard is too thin for sparse_sdpa (needs H % 32 == 0 and
-        H >= 32). When the TP head shard is too thin (e.g. GLM's 64 heads at tp=4 → 16), _sparse_mla
-        transposes the TP sharding axis heads → sequence for the duration of the attention."""
-        heads_local = self.num_heads // self.tp_factor
-        return self.tp_factor > 1 and (heads_local < 32 or heads_local % 32 != 0)
+        """_sparse_mla moves the TP split from heads to sequence for the attention (see reshards_heads_to_seq)."""
+        return self._has_indexer and ttMLA.reshards_heads_to_seq(self.tp_factor)
 
     def indexer_indices_shape(self) -> tuple:
         rows = self.active_seq_len // self.sp_factor
@@ -2412,8 +2435,9 @@ class ttMLA:
     ) -> ttnn.Tensor:
         """Absorbed MQA over the top-k selected latents (FlashMLA sparse contract: no causal mask —
         ``indices`` already encode it via the 0xFFFFFFFF sentinel). Invoked SPMD on the SP×TP mesh:
-        each chip runs the single-chip ``ttnn.transformer.sparse_sdpa`` over its own q shard, so q's
-        distribution is preserved — q SP-sharded on seq (dim2), TP-sharded on heads (dim1), out the same.
+        each chip runs the single-chip ``ttnn.transformer.sparse_sdpa`` over its own q shard. q arrives and the
+        output leaves SP-sharded on seq (dim2) and TP-sharded on heads (dim1); at TP > 1 the attention itself
+        runs TP-sharded on seq (see reshards_heads_to_seq).
 
         q is absorbed ``[1, H/tp, S/sp, geometry.logical_width]`` TILE bf16. ``kvpe`` carries one
         replicated ROW_MAJOR physical cache row per token; its width depends on the explicit cache format.
@@ -2435,12 +2459,11 @@ class ttMLA:
         q_seq_ready = q.layout == ttnn.ROW_MAJOR_LAYOUT
         seq_len_local = q.shape[2] * (self.tp_factor if q_seq_ready else 1)  # per-chip query rows == S / sp
 
-        # sparse_sdpa requires per-chip heads H % 32 == 0 and H >= 32. When the TP head shard is too
-        # thin (e.g. GLM's 64 heads at tp=4 → 16), transpose the TP sharding axis from heads to sequence
-        # with one 2D-fabric all-to-all. Each chip sends only its destination sequence quarter and receives
-        # all head quarters for that sequence quarter. We invert the redistribution after sparse_sdpa to
-        # restore the head-sharded layout expected by the epilogue. No replicated intermediate or wasted
-        # network traffic; tp=1 and already-fat shards are untouched.
+        # At TP > 1 the TP split moves from heads to sequence for the attention (reshards_heads_to_seq): each
+        # chip then runs every head of its rows, so a token's top-k KV rows are gathered once, not once per TP
+        # chip. One 2D-fabric all-to-all: each chip sends only its destination sequence slice and receives every
+        # head shard of it. The redistribution is inverted after sparse_sdpa to restore the head-sharded layout
+        # expected by the epilogue.
         # The indexer emits matching TP sequence shards directly. The partition fallback below also
         # accepts SP-only or globally replicated indices from callers using the older output contract.
         transpose_head_to_seq = self._needs_head_to_seq_reshard

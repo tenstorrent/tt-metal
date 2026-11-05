@@ -95,8 +95,10 @@ MLA_MATMUL_CONFIG = {
                 "out_mem_config": ttnn.L1_MEMORY_CONFIG,
                 "out_dtype": ttnn.bfloat16,
             },
+            # Tuned at TP=4 (N_t 128 -> 11 columns); TP=2 doubles N_t past the 11-column grid.
             {
                 **_GLM_TAGS,
+                "tp_factor": 4,
                 "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=COMPUTE_GRID,
                     in0_block_w=8,
