@@ -241,6 +241,13 @@ def test_sdxl_base_group_norm_split_unit_shapes(device, N, C, H, W, num_groups, 
 
 
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_splits", base.SDXL_BASE_GROUP_NORM_SPLIT_SHAPES)
+@pytest.mark.parametrize("specify_grid", [True])
+def test_sdxl_base_group_norm_split_specified(device, N, C, H, W, num_groups, num_splits, specify_grid):
+    base.test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits, specify_grid)
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_splits",
     [

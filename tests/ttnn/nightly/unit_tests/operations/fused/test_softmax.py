@@ -151,3 +151,15 @@ def test_scale_mask_softmax_non_divisible_width(device, batch, causal, Wt, pad, 
 @pytest.mark.parametrize("api", ["scale_mask_softmax_in_place", "attention_softmax_"])
 def test_scale_mask_softmax_in_place_row_major_mask(device, W, api):
     base.test_scale_mask_softmax_in_place_row_major_mask(device, W, api)
+
+
+@pytest.mark.parametrize(
+    "Wt", [w for w in base.CAUSAL_LARGE_KERNEL_WTS if w not in base.CAUSAL_LARGE_KERNEL_SANITY_WTS]
+)
+def test_scale_mask_softmax_causal_large_kernel(device, Wt):
+    base.test_scale_mask_softmax_causal_large_kernel(device, Wt)
+
+
+@pytest.mark.parametrize("input_shape, dim", base.SOFTMAX_5D_NIGHTLY_CASES)
+def test_5d_softmax(device, input_shape, dim):
+    base.test_5d_softmax(device, input_shape, dim)

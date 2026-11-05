@@ -1621,8 +1621,14 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, s
     ), "High-accuracy config should have lower Frobenius error than low-accuracy config"
 
 
+# The bf16 mask read path does not depend on the spatial size. Sanity runs a 32x32 input; the SDXL
+# 128x128 input runs nightly (#62486).
+BF16_NEGATIVE_MASK_SHAPES = [(1, 640, 32, 32, 32), (1, 640, 128, 128, 32)]
+BF16_NEGATIVE_MASK_SANITY_SHAPES = [(1, 640, 32, 32, 32)]
+
+
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
-@pytest.mark.parametrize("N, C, H, W, num_groups", [(1, 640, 128, 128, 32)])
+@pytest.mark.parametrize("N, C, H, W, num_groups", BF16_NEGATIVE_MASK_SANITY_SHAPES)
 def test_group_norm_bf16_negative_mask(device, N, C, H, W, num_groups):
     """
     Caller-supplied bf16 positive + negative masks on the sharded factory.
@@ -1708,9 +1714,10 @@ def test_group_norm_bf16_negative_mask(device, N, C, H, W, num_groups):
     )
 
 
-@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
-@pytest.mark.parametrize("N, C, H, W, num_groups", [(1, 640, 128, 128, 32)])
-def test_group_norm_auto_negative_mask_synthesis(device, N, C, H, W, num_groups):
+# Runs nightly only (#62486): the op synthesizes the negative mask only when L1 is too tight for the
+# normal layout, and the ballast below is sized for this 128x128 input, so the shape cannot shrink.
+# The nightly wrapper parametrizes it with (1, 640, 128, 128, 32) and l1_small_size 47000.
+def run_group_norm_auto_negative_mask_synthesis(device, N, C, H, W, num_groups):
     """
     Exercises NEGATIVE_MASK_SYNTHESIZE with no mask tensors passed at all. The L1 ballast
     below leaves the overlap as the only layout that fits, so the call completing is the
@@ -2279,11 +2286,41 @@ def test_group_norm_optional_weight_bias(
     )
 
 
+def _gn_sharded_config_id(use_welford, layout, in_dtype, gb_dtype):
+    return "-".join(
+        [
+            "two_pass" if use_welford else "tile_reduction",
+            "tile" if layout == ttnn.TILE_LAYOUT else "row_major",
+            "fp32" if in_dtype == ttnn.float32 else "bf16",
+            "gb_fp32" if gb_dtype == ttnn.float32 else "gb_bf16",
+        ]
+    )
+
+
+# (use_welford, layout, in_dtype, gb_dtype): all 16 combinations.
+GN_SHARDED_CONFIGS = [
+    (use_welford, layout, in_dtype, gb_dtype)
+    for use_welford in (True, False)
+    for layout in (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT)
+    for in_dtype in (ttnn.float32, ttnn.bfloat16)
+    for gb_dtype in (ttnn.bfloat16, ttnn.float32)
+]
+# Sanity keeps every (statistics backend, layout, input dtype) combination and alternates the gamma/beta
+# dtype across them, so each gamma/beta dtype still meets every backend, layout and input dtype. The
+# gamma/beta dtype only sets the format of the gamma/beta buffer. The other 8 run nightly (#62486).
+GN_SHARDED_SANITY_CONFIGS = [
+    c
+    for c in GN_SHARDED_CONFIGS
+    if (c[0] + (c[1] == ttnn.TILE_LAYOUT) + (c[2] == ttnn.float32) + (c[3] == ttnn.float32)) % 2 == 0
+]
+
+
 @pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", GN_SHARDED_SHAPES)
-@pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
-@pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
-@pytest.mark.parametrize("use_welford", [True, False], ids=["two_pass", "tile_reduction"])
+@pytest.mark.parametrize(
+    "use_welford, layout, in_dtype, gb_dtype",
+    GN_SHARDED_SANITY_CONFIGS,
+    ids=[_gn_sharded_config_id(*c) for c in GN_SHARDED_SANITY_CONFIGS],
+)
 def test_group_norm_sharded_all_config(
     device, use_welford, layout, in_dtype, gb_dtype, N, C, H, W, num_groups, grid_y, grid_x
 ):
@@ -2460,19 +2497,23 @@ def test_group_norm_sharded_dirty_padding(device, grid_y, grid_x, padding_value,
     assert pcc > 0.999, f"pcc {pcc} with tile padding = {padding_value} (see #52685)"
 
 
+# Group sizes that are a WHOLE number of tiles. On grid_y=8, C=1024 gives 128 channels
+# (4 tiles) per core:
+#   G=32 -> group 32 ch = 1 tile   (block_wt == 1)
+#   G=16 -> group 64 ch = 2 tiles  (block_wt == 2)
+#   G=64 -> group 16 ch, sub-tile  (control, matches the regime already covered)
+TILE_ALIGNED_GROUP_CASES = [(1024, 32, True), (1024, 16, True), (1024, 64, False)]
+TILE_ALIGNED_GROUP_IDS = ["blockwt1", "blockwt2", "subtile_control"]
+# The padding value is only the data written into the padding rows; any value that leaks shows up as
+# error. Sanity runs one value, the other runs nightly (#62486).
+TILE_ALIGNED_GROUPS_PADDING_VALUES = [7.0, -3.5]
+TILE_ALIGNED_GROUPS_SANITY_PADDING_VALUES = [7.0]
+
+
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.parametrize("padding_value", [7.0, -3.5])
+@pytest.mark.parametrize("padding_value", TILE_ALIGNED_GROUPS_SANITY_PADDING_VALUES)
 @pytest.mark.parametrize("grid_x", [1, 2, 4])
-@pytest.mark.parametrize(
-    # Group sizes that are a WHOLE number of tiles. On grid_y=8, C=1024 gives 128 channels
-    # (4 tiles) per core:
-    #   G=32 -> group 32 ch = 1 tile   (block_wt == 1)
-    #   G=16 -> group 64 ch = 2 tiles  (block_wt == 2)
-    #   G=64 -> group 16 ch, sub-tile  (control, matches the regime already covered)
-    "C, G, whole_tile_groups",
-    [(1024, 32, True), (1024, 16, True), (1024, 64, False)],
-    ids=["blockwt1", "blockwt2", "subtile_control"],
-)
+@pytest.mark.parametrize("C, G, whole_tile_groups", TILE_ALIGNED_GROUP_CASES, ids=TILE_ALIGNED_GROUP_IDS)
 @pytest.mark.parametrize("mask_mode", ["doubled", "single_set", "synthesized"])
 def test_group_norm_sharded_dirty_padding_tile_aligned_groups(
     device, grid_x, C, G, whole_tile_groups, padding_value, mask_mode

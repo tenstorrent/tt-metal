@@ -608,8 +608,19 @@ def test_post_allgather_layernorm_optional_affine(
     )
 
 
+SIMULATED_DISTRIBUTED_LAYERNORM_GRIDS = [
+    ((8, 4), ttnn.CoreCoord(0, 0), (8, 4)),
+    ((4, 4), ttnn.CoreCoord(1, 0), (4, 4)),
+    ((8, 2), ttnn.CoreCoord(0, 0), (8, 3)),
+    ((2, 4), ttnn.CoreCoord(0, 0), (4, 2)),
+]
+# The seed only changes the random input values. Sanity runs one seed, the other runs nightly (#62486).
+SIMULATED_DISTRIBUTED_LAYERNORM_SEEDS = [0, 1234]
+SIMULATED_DISTRIBUTED_LAYERNORM_SANITY_SEEDS = [0]
+
+
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
-@pytest.mark.parametrize("seed", [0, 1234])
+@pytest.mark.parametrize("seed", SIMULATED_DISTRIBUTED_LAYERNORM_SANITY_SEEDS)
 @pytest.mark.parametrize("eps", [1e-6])
 @pytest.mark.parametrize(("min_pcc", "max_atol"), ((0.9997, 0.45),))
 @pytest.mark.parametrize("input_width", [2048])
@@ -617,15 +628,7 @@ def test_post_allgather_layernorm_optional_affine(
 @pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("weights_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
-@pytest.mark.parametrize(
-    "core_grid, grid_offset, output_core_grid",
-    [
-        ((8, 4), ttnn.CoreCoord(0, 0), (8, 4)),
-        ((4, 4), ttnn.CoreCoord(1, 0), (4, 4)),
-        ((8, 2), ttnn.CoreCoord(0, 0), (8, 3)),
-        ((2, 4), ttnn.CoreCoord(0, 0), (4, 2)),
-    ],
-)
+@pytest.mark.parametrize("core_grid, grid_offset, output_core_grid", SIMULATED_DISTRIBUTED_LAYERNORM_GRIDS)
 def test_simulated_distributed_layernorm(
     device,
     input_width,
