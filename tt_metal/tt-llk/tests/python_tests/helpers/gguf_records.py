@@ -395,47 +395,40 @@ def _code(block, plane, bits, w):
 
 
 def _pack_codes(fmt, planes, t, page):
-    """The codes of K tiles page_tiles * page .. as a page's code words (pair pages: tile i's low plane from
-    word-vector lo_bits * i, its high plane from 2 lo_bits + i; Q3_K: 3-bit fields, ckernel_sfpu_gguf_decode.h
-    q3k_code)."""
+    """The codes of K tiles page_tiles * page .. as a page's code words: code q = lo | hi << lo_bits as one B-bit
+    field, tile i's B word-vectors from word-vector B i (ckernel_sfpu_gguf_decode.h mrow, mword, mlsb). Stream
+    position k is row o = 16 (k // 8 % 2) + 8 (k // 16) + k % 8. When B divides 32, row o is field o % F of word
+    o // F (F = 32 // B); otherwise position k < F B is field k % F of word k // F, and positions F B .. 31 take the
+    words' top two bits: bit s of that string (word 0 bits 30, 31, word 1 bits 30, 31, ..) is bit s % B of position
+    F B + s // B."""
     lo_bits, lo, hi_bits, hi = planes
     words = [0] * (fmt.code_bytes // 4)
-    lo_per = 32 // lo_bits
-    hi_per = 32 // hi_bits if hi_bits else 0
+    B = lo_bits + hi_bits
+    F = 32 // B
+    clean = F * B if 32 % B else 32
     for i in range(fmt.page_tiles):
         kt = fmt.page_tiles * page + i
         b = 32 * kt // fmt.block_elems
         w0 = 32 * kt % fmt.block_elems
-        lo_wv = i * lo_bits if fmt.page_tiles == 2 else 0
-        hi_wv = 2 * lo_bits + i if fmt.page_tiles == 2 else lo_bits
-        for o in range(32):
+        for k in range(32):
+            o = 16 * (k // 8 % 2) + 8 * (k // 16) + k % 8
             for r in range(4):
                 w = w0 + _out_k(o, r)
                 for c in range(8):
                     blk = t.block(_out_n(o, c), b)
-                    q_lo = _code(blk, lo, lo_bits, w)
-                    if fmt.name == "Q3_K":
-                        q = q_lo | _code(blk, hi, hi_bits, w) << 2
-                        W = [_lane_word(3 * i + v, r, c) for v in range(3)]
-                        g, j = o // 8, o % 8
-                        if g < 3:
-                            words[W[g]] |= q << (3 * j)
-                        elif j < 6:
-                            words[W[j // 2]] |= q << (24 + 3 * (j % 2))
-                        elif j == 6:
-                            words[W[0]] |= (q & 3) << 30
-                            words[W[1]] |= (q >> 2) << 30
-                        else:
-                            words[W[1]] |= (q & 1) << 31
-                            words[W[2]] |= (q >> 1) << 30
-                        continue
-                    words[_lane_word(lo_wv + o // lo_per, r, c)] |= q_lo << (
-                        lo_bits * (o % lo_per)
-                    )
-                    if hi_per:
-                        words[_lane_word(hi_wv + o // hi_per, r, c)] |= _code(
-                            blk, hi, hi_bits, w
-                        ) << (hi_bits * (o % hi_per))
+                    q = _code(blk, lo, lo_bits, w)
+                    if hi_bits:
+                        q |= _code(blk, hi, hi_bits, w) << lo_bits
+                    if 32 % B == 0:
+                        words[_lane_word(B * i + o // F, r, c)] |= q << (B * (o % F))
+                    elif k < clean:
+                        words[_lane_word(B * i + k // F, r, c)] |= q << (B * (k % F))
+                    else:
+                        for j in range(B):
+                            bit = B * (k - clean) + j
+                            words[_lane_word(B * i + bit // 2, r, c)] |= (
+                                (q >> j) & 1
+                            ) << (clean + bit % 2)
     return _words(*words)
 
 
