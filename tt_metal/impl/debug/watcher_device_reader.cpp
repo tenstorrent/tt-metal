@@ -676,8 +676,8 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
 
     // Quasar's MPSC head lives outside the mailbox: in a semaphore register on Tensix, in its own L1 line on
     // dispatch engines. Read it here with the rest of the snapshot. Gated on the same condition as
-    // DumpMpscRingBuffer(), the only consumer: with the ring buffer disabled the device firmware never
-    // initializes semaphore 31, so touching it at all would fault.
+    // DumpMpscRingBuffer(), the only consumer: on Tensix, with the ring buffer disabled the firmware never
+    // initializes semaphore 31, so touching it would fault.
     uint32_t ring_buf_head = 0;
     if (hal.get_arch() == tt::ARCH::QUASAR && !rtoptions.watcher_ring_buffer_disabled()) {
         uint64_t head_addr = (programmable_core_type == HalProgrammableCoreType::DISPATCH)

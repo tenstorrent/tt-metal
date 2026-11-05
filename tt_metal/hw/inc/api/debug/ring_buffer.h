@@ -89,7 +89,7 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     uint32_t thread_idx = internal_::get_hw_thread_idx();
     __atomic_store_n(&buf->slots[idx].write_id, thread_idx + 1, __ATOMIC_RELEASE);
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
-    // After the slot writes, so the host never sees a head past an unwritten slot of ours.
+    // After the slot writes, so once a push returns the host's head covers it.
     flush_l2_cache_line(MEM_DISPATCH_WATCHER_RING_HEAD);
 #endif
 }
