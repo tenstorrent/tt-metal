@@ -2718,6 +2718,9 @@ void kernel_main() {
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED);
 #endif
+#if defined(ARCH_QUASAR)
+    internal_::cce_eth::check_on_cce0();
+#endif
 
     const auto* routing_table_l1 =
         reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(router_l1(ROUTING_TABLE_BASE));
