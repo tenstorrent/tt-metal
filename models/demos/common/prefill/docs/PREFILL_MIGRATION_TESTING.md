@@ -232,6 +232,11 @@ Two consequences follow automatically. Depth stops being synthetic — a slot pu
 `mid_end_prob` are bypassed. And a prompt longer than the per-user cache is clamped to
 `MAX_SEQ_LEN / CHUNK_SIZE` chunks with a warning, so distinct full-length traces still fit the KV budget.
 
+`PREFILL_PRODUCER_SLOT_LENGTHS="n0,n1,..."` keeps the one shared prompt but gives slot *i* a prompt of its
+first n_i tokens, so a test can mix lengths (a long prompt, a lone chunk, a partial last chunk) with a golden for
+every slot. Slots past the list keep random lengths. Each length must fit in whole chunks within
+`MAX_SEQ_LEN`, and it can't be combined with `PREFILL_PRODUCER_SLOT_TRACES`, whose traces set each slot's length.
+
 This is the discriminating multi-prompt check: with one shared prompt every slot's KV is identical, so
 crossed slot→prompt wiring or a slot-index bug in the address table still passes. Note that
 `slot_lengths` is keyed by slot, so with `max_requests > num_users` a recycled slot replays the *same*
@@ -547,7 +552,7 @@ gates you intend to run require.
 | 1 | `build_kv_chunk_table` | serialises the block-cyclic layout; issues no comms |
 | 2 | `kv_migration_stages` | one `KvCacheStage` per migratable cache, for the cross-stage table merge |
 | 1, 2 | `cache_kind` (adapter) | what each table config holds (`kvpe` / `index` / other); the producer's index check and the driver's cache plan key on it instead of the config count. Kimi-K3 declares its KDA state configs here (`tt/kda/KDA_STATE_MIGRATION.md`) |
-| 2 | `layer_position_range` (adapter) | positions one /migrate of a layer covers; default `[0, real_len)`. Kimi-K3 returns the KDA version window `[v * 36864, (v + 1) * 36864)`, `v = (real_len - 1) % 8`, for its KDA layers, so MLA and KDA layers go in separate calls and the byte verify walks that window |
+| 2 | `layer_position_range` (adapter) | positions one /migrate of a layer covers; default `[0, real_len)`. Kimi-K3 returns the KDA window `[0, 36864)` for its KDA layers. Consecutive layers with equal ranges share one call (at `real_len` 36864 that is every layer), and the byte verify walks each layer's own range |
 | 2 `dst-bytes` | **none** | nothing is decoded — the byte compare is model-agnostic |
 | 2 `dst-golden` | none beyond Gate 1 | reuses the producer's own read-back, not a runtime hook |
 

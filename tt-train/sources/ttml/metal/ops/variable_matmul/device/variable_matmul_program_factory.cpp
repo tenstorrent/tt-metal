@@ -76,7 +76,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     const VariableMatmulParams& operation_attributes,
     const VariableMatmulInputs& tensor_args,
     ttnn::Tensor& output_tensor) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*tensor_args.input_tensor.device());
 
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& weight_tensor = tensor_args.weight_tensor;
