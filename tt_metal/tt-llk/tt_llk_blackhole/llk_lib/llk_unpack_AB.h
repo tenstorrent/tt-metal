@@ -204,6 +204,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
 {
+    LLK_EXP_NOPS_UNPACK(); // experiment hook, empty without LLK_EXP_NOP_UNPACK_INIT
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_init_", tensor_shape);
     const bool within_face_16x16_transpose = transpose == ckernel::Transpose::IntraFace || transpose == ckernel::Transpose::Both;

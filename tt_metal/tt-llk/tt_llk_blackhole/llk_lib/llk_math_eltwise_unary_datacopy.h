@@ -569,6 +569,7 @@ template <
 inline void _llk_math_eltwise_unary_datacopy_init_(
     const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_format = 255)
 {
+    LLK_EXP_NOPS_MATH(); // experiment hook, empty without LLK_EXP_NOP_MATH_INIT
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
         "Blackhole _llk_math_eltwise_unary_datacopy_init_ supports only PackMode::Default and PackMode::Tilize");

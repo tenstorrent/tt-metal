@@ -67,6 +67,64 @@ REPORT="pytest-report-blackhole-${GROUP}${LLK_PERF_REPORT_TAG:-}"
 COMPILE_XML="${REPORT}-compile.xml"
 RUN_XML="${REPORT}-run.xml"
 
+export PERF_KEEP_RUNS=200
+TEMP_ROOT="${RUNNER_TEMP:-$(mktemp -d)}"
+export PYTEST_ADDOPTS=""
+# Experiment: bhperf (issues 60844, 46474). Samples every STRIDE-th test of this group plus all perf_pack_untilize tests, then
+# measures them in legs: base (+ reruns), pure code shifts, NOPs at the top of the pack/unpack/math inits.
+STRIDE="${EXP_STRIDE:-10}"
+pytest -q --collect-only --compile-consumer "${SPEED_OF_LIGHT_ARGS[@]}" -p no:cacheprovider -m "perf and not accuracy" \
+  --perf-splits "$N_GROUPS" --perf-group "$GROUP" . 2> /dev/null | grep '::' > grp_ids.txt || true
+grep 'perf_pack_untilize.py' grp_ids.txt > u_ids.txt || true
+grep -v 'perf_pack_untilize.py' grp_ids.txt | awk -v s="$STRIDE" 'NR % s == 0' > s_ids.txt
+cat s_ids.txt u_ids.txt > leg_ids.txt
+python3 - << 'PYEOF'
+import re
+out = []
+for l in open("u_ids.txt"):
+    m = re.search(r"benchmark:Standard-formats:Bfp8_b->\w+.*full_rt_dim:(\d+)-full_ct_dim:(\d+)", l)
+    if m and int(m.group(1)) * int(m.group(2)) >= 32:
+        out.append(l)
+open("u46_ids.txt", "w").writelines(out)
+PYEOF
+tac u46_ids.txt > u46_ids_rev.txt
+wc -l grp_ids.txt s_ids.txt u_ids.txt
+files_of() { cut -d: -f1 "$1" | sort -u; }
+run() { # run <tag> <idfile> <pytest args...>
+  local tag=$1 ids=$2; shift 2
+  mapfile -t FILES < <(files_of "$ids")
+  env PERF_RUN_TAG="$tag" pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-consumer --timeout=600 \
+    -p no:cacheprovider -m "perf and not accuracy" --node-list="$(realpath "$ids")" "$@" "${FILES[@]}" || echo "run $tag rc=$?"
+  echo "done $tag $(date -u +%T)"
+}
+build() { # build <leg> <cflags> <shift> <objcache>
+  export RUNNER_TEMP="$TEMP_ROOT/leg-$1" LLK_EXP_CFLAGS="$2" LLK_CODE_SHIFT="$3"
+  if [[ -n "$4" ]]; then export LLK_OBJ_CACHE="$TEMP_ROOT/objs-$4"; mkdir -p "$LLK_OBJ_CACHE"; else unset LLK_OBJ_CACHE; fi
+  mapfile -t FILES < <(files_of leg_ids.txt)
+  pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-producer -n "$COMPILE_WORKERS" -m "perf and not accuracy" \
+    --timeout=600 --node-list="$(realpath leg_ids.txt)" "${FILES[@]}" || echo "build $1 rc=$?"
+  echo "built $1 $(date -u +%T)"
+}
+X=(--dist loadgroup -n 15)
+build base "" 0 base
+run base_x1 leg_ids.txt "${X[@]}"
+run base_x2 leg_ids.txt "${X[@]}"
+[[ -s u46_ids.txt ]] && run base_ufwd u46_ids.txt -n 1
+[[ -s u46_ids.txt ]] && run base_urev u46_ids_rev.txt -n 1
+[[ -s u_ids.txt ]] && run base_ux3 u_ids.txt "${X[@]}" && run base_ux4 u_ids.txt "${X[@]}"
+for sh in 4 36; do
+  build sh$sh "" $sh base
+  run sh${sh}_x1 leg_ids.txt "${X[@]}"
+done
+for t in PACK UNPACK MATH; do
+  build nop$t "-DLLK_EXP_NOP_${t}_INIT=1" 0 ""
+  run nop${t}_x1 leg_ids.txt "${X[@]}"
+done
+build nopALL "-DLLK_EXP_NOP_PACK_INIT=2 -DLLK_EXP_NOP_UNPACK_INIT=2 -DLLK_EXP_NOP_MATH_INIT=2" 0 ""
+run nopALL_x1 leg_ids.txt "${X[@]}"
+cp "$COMPILE_XML" "${REPORT}.xml" 2> /dev/null || touch "${REPORT}.xml"
+exit 0
+
 if [[ "$PHASE" != run ]]; then
   pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-producer -n "$COMPILE_WORKERS" -m "perf and not accuracy" --timeout=60 \
     --perf-splits "$N_GROUPS" --perf-group "$GROUP" \

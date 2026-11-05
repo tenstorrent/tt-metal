@@ -1473,6 +1473,7 @@ class TestConfig:
             if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
             else "-DLLK_BOOT_MODE_BRISC "
         )
+        OPTIONS_COMPILE += os.environ.get("LLK_EXP_CFLAGS", "") + " "  # experiment hook
         # ttsim models no counter or overlay registers; the RTL emulator does, so it keeps them.
         if TestConfig.runs_on_ttsim():
             OPTIONS_COMPILE += "-DTT_METAL_TTSIM "

@@ -377,6 +377,7 @@ inline void transpose_dest_configure_mop()
 template <bool transpose_of_faces = true, bool is_32bit = false>
 inline void _llk_math_transpose_dest_init_()
 {
+    LLK_EXP_NOPS_MATH(); // experiment hook, empty without LLK_EXP_NOP_MATH_INIT
     transpose_dest_configure_addrmod<is_32bit>();
     transpose_dest_configure_mop<transpose_of_faces, is_32bit>();
 

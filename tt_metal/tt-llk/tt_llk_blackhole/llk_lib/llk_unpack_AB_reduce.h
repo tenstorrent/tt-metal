@@ -106,6 +106,7 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape)
 {
+    LLK_EXP_NOPS_UNPACK(); // experiment hook, empty without LLK_EXP_NOP_UNPACK_INIT
     // The partial-face clear picks CLR_SRC_NEGINF only for MAX, so MIN would pad SrcA with zero where it needs +inf.
     static_assert(
         pool_type != PoolType::MIN,

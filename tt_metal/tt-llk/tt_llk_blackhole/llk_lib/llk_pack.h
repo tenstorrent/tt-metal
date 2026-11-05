@@ -525,6 +525,7 @@ inline void _llk_pack_init_(
     const std::uint32_t num_tiles,
     const bool skip_bh_tilize_workaround)
 {
+    LLK_EXP_NOPS_PACK(); // experiment hook, empty without LLK_EXP_NOP_PACK_INIT
     static_assert(
         !mutex_ADC || pack_mode == PackMode::Default,
         "mutex_ADC is supported for PackMode::Default only: other modes issue ADC instructions from inside the MOP, "

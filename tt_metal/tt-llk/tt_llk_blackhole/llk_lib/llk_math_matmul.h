@@ -720,6 +720,7 @@ inline void _llk_math_matmul_init_(
     const std::uint32_t ct_dim         = 1,
     const std::uint32_t rt_dim         = 1)
 {
+    LLK_EXP_NOPS_MATH(); // experiment hook, empty without LLK_EXP_NOP_MATH_INIT
     // in1=32x16 NOT supported with transpose (no addr_mod handling)
     LLK_ASSERT(!(transpose && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == FACE_C_DIM)), "Transpose with input 1 dimensions 32x16 not supported");
 

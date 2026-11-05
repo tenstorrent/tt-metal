@@ -66,6 +66,7 @@ template <PoolType type, ReduceDim dim>
 inline void _llk_unpack_reduce_init_(
     const std::uint32_t unpB_src_format, const std::uint32_t unpB_dst_format, const std::uint32_t within_face_16x16_transpose = 0)
 {
+    LLK_EXP_NOPS_UNPACK(); // experiment hook, empty without LLK_EXP_NOP_UNPACK_INIT
     // This path's MOP clears SrcA to zero for every pool type, which a min reduce would lose to.
     static_assert(
         type != PoolType::MIN,

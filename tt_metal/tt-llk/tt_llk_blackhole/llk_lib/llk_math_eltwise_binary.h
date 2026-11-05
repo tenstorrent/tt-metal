@@ -207,6 +207,7 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_eltwise_binary_standard_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t acc_to_dest)
 {
+    LLK_EXP_NOPS_MATH(); // experiment hook, empty without LLK_EXP_NOP_MATH_INIT
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_binary_standard_init_", tensor_shape);
 
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();

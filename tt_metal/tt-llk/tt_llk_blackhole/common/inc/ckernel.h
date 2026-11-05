@@ -27,6 +27,26 @@
 
 #define UNROLL_LOOP(factor) GCC unroll factor
 
+// Experiment hooks (not for merge): N NOPs when LLK_EXP_NOP_<THREAD>_INIT=N is defined
+#define LLK_EXP_STR2_(x) #x
+#define LLK_EXP_STR_(x)  LLK_EXP_STR2_(x)
+#define LLK_EXP_NOPS_(n) __asm__ __volatile__(".rept " LLK_EXP_STR_(n) "\n\tnop\n\t.endr")
+#if defined(LLK_EXP_NOP_PACK_INIT) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 2
+#define LLK_EXP_NOPS_PACK() LLK_EXP_NOPS_(LLK_EXP_NOP_PACK_INIT)
+#else
+#define LLK_EXP_NOPS_PACK()
+#endif
+#if defined(LLK_EXP_NOP_UNPACK_INIT) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
+#define LLK_EXP_NOPS_UNPACK() LLK_EXP_NOPS_(LLK_EXP_NOP_UNPACK_INIT)
+#else
+#define LLK_EXP_NOPS_UNPACK()
+#endif
+#if defined(LLK_EXP_NOP_MATH_INIT) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 1
+#define LLK_EXP_NOPS_MATH() LLK_EXP_NOPS_(LLK_EXP_NOP_MATH_INIT)
+#else
+#define LLK_EXP_NOPS_MATH()
+#endif
+
 #ifndef EN_DEST_DOUBLE_BUFFERING
 #define EN_DEST_DOUBLE_BUFFERING 1
 #endif

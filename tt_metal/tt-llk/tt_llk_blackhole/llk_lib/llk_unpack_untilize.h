@@ -80,6 +80,7 @@ inline void _llk_unpack_untilize_mop_config_()
  */
 inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
+    LLK_EXP_NOPS_UNPACK(); // experiment hook, empty without LLK_EXP_NOP_UNPACK_INIT
     // Always include setup calls first for safety (as recommended by maintainer)
     // Disable transpose when unused
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);

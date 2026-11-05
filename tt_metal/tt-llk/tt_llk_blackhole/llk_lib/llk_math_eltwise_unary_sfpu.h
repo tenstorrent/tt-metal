@@ -61,6 +61,7 @@ inline void eltwise_unary_sfpu_configure_addrmod()
 template <SfpuType sfpu_op>
 inline void _llk_math_eltwise_unary_sfpu_init_()
 {
+    LLK_EXP_NOPS_MATH(); // experiment hook, empty without LLK_EXP_NOP_MATH_INIT
     sfpu::_init_sfpu_config_reg();
     eltwise_unary_sfpu_configure_addrmod<sfpu_op>();
     math::reset_counters(p_setrwc::SET_ABD_F);
