@@ -26,6 +26,10 @@
 //    the lower expert fall out of ctz on the DM RISC (decode_top2). code >= 2^17 <=> two lanes tie at m1: w2 = m1.
 //  - code + 2^23 keeps the integer in the mantissa of a normal float (no denormal at the packer).
 // Equality tests are on the fp32 bits; the weights are y's bits.
+//
+// share_faces (G > 1) also bypasses _llk_math_eltwise_unary_sfpu_params_: no VectorMode runs face 0 or face 2 alone,
+// and each group member computes only its own 16-token halves (Perf R3.1, perf_experiments/r3_softmax_split: 8x512
+// whole op 29.5 -> 26.8 us, cmp_softmax end 15.5k -> 11.1k cycles, bit-identical).
 
 #pragma once
 
@@ -118,6 +122,22 @@ inline void face() {
         band<G>();
         dst_reg += 2;
     }
+}
+
+// Split softmax: the faces of DEST tile 0 in this member's share (face 0: tokens 0..15, face 2: 16..31). Same
+// sequence as VectorMode::C (face, 2 face increments, face), with the unowned face's call skipped.
+template <uint32_t G>
+inline void share_faces(bool face0, bool face2) {
+    _llk_math_eltwise_sfpu_start_(0);
+    if (face0) {
+        face<G>();
+    }
+    _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    if (face2) {
+        face<G>();
+    }
+    _llk_math_eltwise_sfpu_done_();
 }
 
 inline void init() {
