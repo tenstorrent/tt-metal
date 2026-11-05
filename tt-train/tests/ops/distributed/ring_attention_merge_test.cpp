@@ -17,11 +17,13 @@
 #include <cstdint>
 #include <limits>
 #include <random>
+#include <string>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/distributed/ring_attention_sdpa.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 
 namespace {
@@ -198,20 +200,43 @@ double accum_error_over_bound(const xt::xarray<float>& actual, const MergeResult
 
 }  // namespace
 
-class RingAttentionMergeTest : public ::testing::Test {
-protected:
-    static void SetUpTestSuite() {
-        ttml::autograd::ctx().open_device();
-    }
+// Merge shapes. kTwoCoreGroups stands for S = two_core_group_seq_len(0): each core then holds
+// several tile rows spanning heads and batch entries, and both core groups run on any grid, so
+// the weight column broadcast is exercised across tile-row, head and batch boundaries.
+constexpr uint32_t kTwoCoreGroups = 0U;
 
-    static void TearDownTestSuite() {
-        ttml::autograd::ctx().close_device();
-    }
+struct MergeShape {
+    uint32_t B, H, S, D;
 };
 
+uint32_t resolve_seq_len(uint32_t S) {
+    return S == kTwoCoreGroups ? ttml::test_utils::two_core_group_seq_len(0U) : S;
+}
+
+class RingAttentionMergeTest : public ttml::test_utils::DeviceSuiteTest,
+                               public ::testing::WithParamInterface<MergeShape> {};
+
+INSTANTIATE_TEST_SUITE_P(
+    Shapes,
+    RingAttentionMergeTest,
+    ::testing::Values(
+        MergeShape{1U, 2U, 128U, 128U},            // one tile row per core
+        MergeShape{2U, 8U, 1024U, 128U},           // 8B / 32B-class head dim
+        MergeShape{2U, 8U, kTwoCoreGroups, 64U}),  // TinyLlama head dim, both core groups
+    [](const ::testing::TestParamInfo<MergeShape>& info) {
+        const MergeShape& p = info.param;
+        return fmt::format(
+            "B{}_H{}_S{}_D{}",
+            p.B,
+            p.H,
+            p.S == kTwoCoreGroups ? std::string("TwoCoreGroups") : std::to_string(p.S),
+            p.D);
+    });
+
 // One merge over rows of every kind, against the float64 reference.
-TEST_F(RingAttentionMergeTest, SingleMergeMatchesReference) {
-    constexpr uint32_t B = 1U, H = 2U, S = 128U, D = 128U;
+TEST_P(RingAttentionMergeTest, SingleMergeMatchesReference) {
+    const auto [B, H, S_param, D] = GetParam();
+    const uint32_t S = resolve_seq_len(S_param);
     MergeInputs in = make_inputs(B, H, S, D, /*seed=*/7U);
     DeviceMergeInputs dev = upload(in);
     const MergeResult ref = reference_merge(in);
@@ -239,11 +264,14 @@ TEST_F(RingAttentionMergeTest, SingleMergeMatchesReference) {
     EXPECT_LT(lse_err.max_rel, 1.0e-6);
 
     // "No contribution" rows must be passed through untouched, bit for bit.
-    for (uint32_t h = 0; h < H; ++h) {
-        for (uint32_t s = kSkippedStep; s < S; s += kNumRowKinds) {
-            ASSERT_EQ(lse(0, h, s, 0), in.running_lse(0, h, s, 0)) << "h " << h << " s " << s;
-            for (uint32_t d = 0; d < D; ++d) {
-                ASSERT_EQ(accum(0, h, s, d), in.accum(0, h, s, d)) << "h " << h << " s " << s << " d " << d;
+    for (uint32_t b = 0; b < B; ++b) {
+        for (uint32_t h = 0; h < H; ++h) {
+            for (uint32_t s = kSkippedStep; s < S; s += kNumRowKinds) {
+                ASSERT_EQ(lse(b, h, s, 0), in.running_lse(b, h, s, 0)) << "b " << b << " h " << h << " s " << s;
+                for (uint32_t d = 0; d < D; ++d) {
+                    ASSERT_EQ(accum(b, h, s, d), in.accum(b, h, s, d))
+                        << "b " << b << " h " << h << " s " << s << " d " << d;
+                }
             }
         }
     }
@@ -251,8 +279,10 @@ TEST_F(RingAttentionMergeTest, SingleMergeMatchesReference) {
 
 // A full ring of merges starting from (O = 0, L = -inf), some steps skipped, against the direct
 // combination O = sum_i exp(l_i - L) * O_i with L = logsumexp_i(l_i).
-TEST_F(RingAttentionMergeTest, RingOfMergesMatchesDirectCombination) {
-    constexpr uint32_t B = 1U, H = 2U, S = 64U, D = 128U, kSteps = 8U;
+TEST_P(RingAttentionMergeTest, RingOfMergesMatchesDirectCombination) {
+    constexpr uint32_t kSteps = 8U;
+    const auto [B, H, S_param, D] = GetParam();
+    const uint32_t S = resolve_seq_len(S_param);
     const std::array<size_t, 4> full_shape{B, H, S, D};
     const std::array<size_t, 4> lse_shape{B, H, S, 1};
 
@@ -281,21 +311,23 @@ TEST_F(RingAttentionMergeTest, RingOfMergesMatchesDirectCombination) {
 
     xt::xarray<double> ref_accum = xt::zeros<double>(full_shape);
     xt::xarray<double> ref_lse = xt::zeros<double>(lse_shape);
-    for (uint32_t h = 0; h < H; ++h) {
-        for (uint32_t s = 0; s < S; ++s) {
-            double total = -std::numeric_limits<double>::infinity();
-            for (uint32_t step = 0; step < kSteps; ++step) {
-                total = logaddexp(total, step_lses[step](0, h, s, 0));
-            }
-            ref_lse(0, h, s, 0) = total;
-            for (uint32_t step = 0; step < kSteps; ++step) {
-                const double l = step_lses[step](0, h, s, 0);
-                if (std::isinf(l)) {
-                    continue;
+    for (uint32_t b = 0; b < B; ++b) {
+        for (uint32_t h = 0; h < H; ++h) {
+            for (uint32_t s = 0; s < S; ++s) {
+                double total = -std::numeric_limits<double>::infinity();
+                for (uint32_t step = 0; step < kSteps; ++step) {
+                    total = logaddexp(total, step_lses[step](b, h, s, 0));
                 }
-                const double w = std::exp(l - total);
-                for (uint32_t d = 0; d < D; ++d) {
-                    ref_accum(0, h, s, d) += w * step_outputs[step](0, h, s, d);
+                ref_lse(b, h, s, 0) = total;
+                for (uint32_t step = 0; step < kSteps; ++step) {
+                    const double l = step_lses[step](b, h, s, 0);
+                    if (std::isinf(l)) {
+                        continue;
+                    }
+                    const double w = std::exp(l - total);
+                    for (uint32_t d = 0; d < D; ++d) {
+                        ref_accum(b, h, s, d) += w * step_outputs[step](b, h, s, d);
+                    }
                 }
             }
         }

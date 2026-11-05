@@ -28,9 +28,8 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -70,11 +69,30 @@ namespace detail {
 //   l_i = -inf, L finite:  L' = L,   w = exp(-inf) = 0, O' = O exactly
 // Both -inf gives L' = -inf and a NaN O'; the ring schedule never produces it, since step 0
 // always computes the diagonal block.
+// O_i must be finite even where l_i = -inf: w = 0 only removes it if 0 * O_i = 0 (0 * inf is
+// NaN). The ring caller passes the reused output buffer there, which step 0 writes on every
+// device, so a skipped step merges the previous step's finite output with weight 0.
 void merge_partial_into(
     ttnn::Tensor& output_accum,
     ttnn::Tensor& running_lse,
     const ttnn::Tensor& step_output,
     const ttnn::Tensor& step_intermediates) {
+    TT_FATAL(
+        output_accum.dtype() == ttnn::DataType::FLOAT32 && running_lse.dtype() == ttnn::DataType::FLOAT32 &&
+            step_intermediates.dtype() == ttnn::DataType::FLOAT32,
+        "merge_partial_into: output_accum, running_lse and step_intermediates must be FLOAT32, got {}, {}, {}",
+        output_accum.dtype(),
+        running_lse.dtype(),
+        step_intermediates.dtype());
+    TT_FATAL(
+        step_output.dtype() == ttnn::DataType::BFLOAT16 || step_output.dtype() == ttnn::DataType::FLOAT32,
+        "merge_partial_into: step_output must be BFLOAT16 or FLOAT32, got {}",
+        step_output.dtype());
+    TT_FATAL(
+        step_intermediates.logical_shape()[-1] == 32U,
+        "merge_partial_into: step_intermediates must be (B, H, S, 32), got {}",
+        step_intermediates.logical_shape());
+
     // 1. lse of this step: column 0 of the (B, H, S, 32) FP32 intermediates.
     const auto [batch, heads, seq_len, width] = step_intermediates.logical_shape().to_array_4D();
     const ttsl::SmallVector<uint32_t> slice_step = {1, 1, 1, 1};
@@ -166,6 +184,9 @@ autograd::TensorPtr ring_attention_sdpa(
 
     // Allocate output and intermediate tensors (mesh tensors)
     // These will be reused each step
+    // output_tensor is never cleared: a device the causal schedule skips merges its previous
+    // contents with weight 0, which needs them finite (see merge_partial_into). Step 0 runs on
+    // every device and writes them first.
     ttnn::Tensor output_tensor = ttnn::empty_like(query_tensor);
     ttnn::Tensor intermediate_tensor = ttnn::empty(
         ttnn::Shape{batch_num, heads, seq_len_local, 32U},

@@ -57,9 +57,10 @@ namespace detail {
 /**
  * Online-softmax merge of one ring step's partial attention result (exposed for testing).
  *
- * @param output_accum (B, H, S, D) FP32 accumulator, updated in place
- * @param running_lse (B, H, S, 1) FP32 running logsumexp (-inf = nothing merged yet), updated in place
- * @param step_output (B, H, S, D) this step's normalized attention output (any float dtype)
+ * @param output_accum (B, H, S, D) FP32 accumulator, replaced by the merged result
+ * @param running_lse (B, H, S, 1) FP32 running logsumexp (-inf = nothing merged yet), replaced by the merged one
+ * @param step_output (B, H, S, D) this step's normalized attention output, BFLOAT16 or FLOAT32. Must be finite in
+ *             every row, including rows whose lse is -inf (they are weighted by 0, and 0 * inf = NaN)
  * @param step_intermediates (B, H, S, 32) FP32 SDPA intermediates, logsumexp in column 0
  *             (-inf = the step contributes nothing)
  */
