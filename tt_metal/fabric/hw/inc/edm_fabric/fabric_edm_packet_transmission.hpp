@@ -97,14 +97,16 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeade
 // flushed atomic increment issued next is seen after them. Earlier atomics are not waited on.
 //
 // all_writes_counted: the caller counts every non-posted write it issues in the NoC's software counters (the API's
-// update_counter). On Blackhole without deadlock avoidance, where local writes and forwards go out on this RISC's NoC
-// (noc_index), one counter check (ncrisc_noc_nonposted_writes_flushed) then covers every earlier write, instead of a
-// check per transaction ID.
+// update_counter). On Blackhole, where local writes and forwards go out on this RISC's NoC (noc_index), one counter
+// check (ncrisc_noc_nonposted_writes_flushed) then covers every earlier write, instead of a check per transaction ID.
+// It waits for every channel's writes, not only this one's: never earlier than the per-ID wait. With or without
+// deadlock avoidance: a forward's write lands in a downstream slot its credit already reserved, so its acknowledgement
+// does not wait on the fabric.
 template <bool all_writes_counted = false>
 FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
 #if defined(ARCH_BLACKHOLE)
     if constexpr (
-        all_writes_counted && !enable_deadlock_avoidance && tt::tt_fabric::local_chip_noc_equals_downstream_noc &&
+        all_writes_counted && tt::tt_fabric::local_chip_noc_equals_downstream_noc &&
         tt::tt_fabric::edm_to_local_chip_noc == noc_index) {
         while (!ncrisc_noc_nonposted_writes_flushed(tt::tt_fabric::edm_to_local_chip_noc));
         return;
