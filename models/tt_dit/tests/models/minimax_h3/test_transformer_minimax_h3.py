@@ -1071,6 +1071,11 @@ def test_minimax_h3_transformer_block_perf(
     sizes = _packed_sizes(duration_s, num_text_tokens)
     seq_len = sizes["seq_len"]
     padded_len = padded_sequence_length(seq_len, sp_factor * SIM) // SIM
+    # H3_BLOCK_PADDED_LEN: the padded length the pipeline actually runs (its bucket rung, e.g. 111616 at 15 s
+    # on 4x8), which the natural padding above does not reproduce.
+    if os.environ.get("H3_BLOCK_PADDED_LEN"):
+        padded_len = int(os.environ["H3_BLOCK_PADDED_LEN"])
+        assert padded_len >= seq_len and padded_len % (sp_factor * ttnn.TILE_SIZE) == 0, padded_len
     logger.info(
         f"{duration_s:g}s @ {sizes['height']}x{sizes['width']}: {sizes['num_frames']} frames -> "
         f"{sizes['latent_frames']} latent frames x {sizes['grid_h']}x{sizes['grid_w']} patches = "
@@ -1150,6 +1155,20 @@ def test_minimax_h3_transformer_block_perf(
     signpost("start")
     tt_out = run_block()
     signpost("stop")
+
+    # H3_BLOCK_ITERS: further warm calls timed on the host clock, each ending in a device sync.
+    wall_iters = int(os.environ.get("H3_BLOCK_ITERS", 0))
+    if wall_iters:
+        times = []
+        for _ in range(wall_iters):
+            t0 = time.perf_counter()
+            tt_out = run_block()
+            times.append((time.perf_counter() - t0) * 1e3)
+        times.sort()
+        logger.info(
+            f"H3_BLOCK rows/dev {padded_len // sp_factor}: median {times[len(times) // 2]:.2f} ms, "
+            f"min {times[0]:.2f}, max {times[-1]:.2f} over {wall_iters}"
+        )
 
     assert tuple(tt_out.shape) == (
         1,
