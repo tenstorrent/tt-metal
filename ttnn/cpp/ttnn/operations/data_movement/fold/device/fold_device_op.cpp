@@ -19,8 +19,7 @@ namespace ttnn::operations::data_movement {
 
 bool is_fast_path_input(const Tensor& t) {
     return t.memory_config().is_l1() && t.is_sharded() && t.shard_spec().has_value() &&
-           t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && t.layout() == Layout::ROW_MAJOR &&
-           t.shard_spec()->shape[1] == t.logical_shape()[-1];
+           t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && t.layout() == Layout::ROW_MAJOR;
 }
 
 tt::tt_metal::ShardSpec synthesize_fold_output_shard_spec(

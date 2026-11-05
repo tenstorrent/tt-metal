@@ -120,6 +120,14 @@ def run_permute_into_aligned_width_l1(device):
     return y, ttnn.to_torch(t).permute(1, 0, 2, 3), t
 
 
+def run_permute_into_width_l1(device):
+    # ttnn.permute used to reject a row-major output config with sub-aligned shard rows before the prim could stage it.
+    t = ttnn.from_torch(ramp([1, 2, 32, 64]), layout=RM, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.permute(t, (1, 0, 2, 3), memory_config=width_config(L1, 16, [64, 4])), ttnn.to_torch(t).permute(
+        1, 0, 2, 3
+    )
+
+
 def run_permute_width_l1(device):
     t = ttnn.from_torch(ramp([2, 2, 32, 64]), layout=RM, device=device, memory_config=width_config(L1, 16, [128, 4]))
     return ttnn.permute(t, (2, 0, 1, 3)), ttnn.to_torch(t).permute(2, 0, 1, 3)
@@ -146,6 +154,21 @@ def run_transpose_height_input_promoted(device):
     )
     t = ttnn.from_torch(ramp([1, 1, 64, 256]), layout=RM, device=device, memory_config=config)
     return ttnn.transpose(t, 2, 3), ttnn.to_torch(t).transpose(2, 3)
+
+
+def run_quasar_transpose_nd(device):
+    config = nd_config([1, 1, 32, 4], grid(((0, 0), (7, 1))), CONTIGUOUS)
+    t = ttnn.from_torch(ramp([1, 1, 32, 64]), layout=RM, device=device, memory_config=config)
+    return ttnn.experimental.quasar.transpose(t, 2, 3), ttnn.to_torch(t).transpose(2, 3), t
+
+
+def run_quasar_slice_nd(device):
+    config = nd_config([1, 1, 8, 4], grid(((0, 0), (7, 1))), CONTIGUOUS)
+    t = ttnn.from_torch(ramp([1, 1, 64, 64]), layout=RM, device=device, memory_config=config)
+    y = ttnn.experimental.quasar.slice(
+        t, [0, 0, 0, 0], [1, 1, 32, 64], [1, 1, 1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    return y, ttnn.to_torch(t)[:, :, :32, :], t
 
 
 def run_transpose_width_dram(device):
@@ -257,9 +280,12 @@ def run_fold_nd_input_only(device):
         run_permute_nd_height_input,
         run_permute_width_l1,
         run_permute_into_aligned_width_l1,
+        run_permute_into_width_l1,
         run_transpose_width_l1,
         run_transpose_into_aligned_width_l1,
         run_transpose_height_input_promoted,
+        run_quasar_transpose_nd,
+        run_quasar_slice_nd,
         run_transpose_width_dram,
         run_permute_into_width_dram,
         run_indexed_fill_width_dram,
@@ -281,3 +307,20 @@ def test_subaligned_shard_rows(device, run):
     assert got.shape == want.shape
     wrong = int((got != want).sum())
     assert wrong == 0, f"{wrong} of {want.numel()} values wrong ({config})"
+
+
+def test_permute_into_height_shards_with_unaligned_rows(device):
+    # A HEIGHT-sharded output never splits a row, so 8-byte rows are fine; ttnn.permute used to reject them.
+    config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        L1,
+        ttnn.ShardSpec(grid(((0, 0), (3, 0))), [16, 4], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    t = ttnn.from_torch(ramp([1, 2, 32, 4]), layout=RM, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output = ttnn.permute(t, (1, 0, 2, 3), memory_config=config)
+    assert output.memory_config() == config
+    want = ttnn.to_torch(t).permute(1, 0, 2, 3)
+    got = ttnn.to_torch(output)
+    assert got.shape == want.shape
+    wrong = int((got != want).sum())
+    assert wrong == 0, f"{wrong} of {want.numel()} values wrong"
