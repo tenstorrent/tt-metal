@@ -46,6 +46,15 @@ def power_class():
     return cls
 
 
+def probe_tokens(label):
+    """Tokens a probe label stands for ("@5k" -> 5120, "@1M" -> 1048576, "@123" -> 123); -1 if unparsable."""
+    scale = {"k": 1024, "M": 1048576}.get(label[-1:], 1)
+    try:
+        return int(label[1 : -1 if scale > 1 else None]) * scale
+    except ValueError:
+        return -1
+
+
 class GateError(Exception):
     """The leg is baselined but cannot be gated on this host."""
 
@@ -171,10 +180,12 @@ def main():
 
     gated = [probe for probe, _ in baselines if probe is not None]
     if gated and label not in gated:
-        fail_deterministic(
-            f"TPS GATE FAIL: baseline covers {', '.join(gated)} but the deepest probe is {label}; "
-            f"the context length changed, so re-measure and update perf_baselines.json"
-        )
+        msg = f"TPS GATE FAIL: baseline covers {', '.join(gated)} but the deepest probe is {label}"
+        if probe_tokens(label) > max(map(probe_tokens, gated)):
+            fail_deterministic(f"{msg}; the context length changed, so re-measure and update perf_baselines.json")
+        else:
+            # Shallower than the baseline: as likely a lost deep sample as a shorter context, so retryable.
+            fail(f"{msg}; the deeper probes were not measured or the context length shrank")
         return 1
 
     results = [

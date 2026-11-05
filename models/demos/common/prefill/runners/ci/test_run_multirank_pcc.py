@@ -502,6 +502,13 @@ class PerfGateTableTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(reasons, [])
 
+    def test_missing_deepest_probe_stays_retryable(self):
+        # Only @5k was measured on a leg baselined at @55k: a lost deep sample, not a known context change.
+        result, reasons = self.gate_records("legacy", {"@5k": 20000})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("the deeper probes were not measured", result.stderr)
+        self.assertEqual(reasons, [])
+
     def test_deeper_context_than_baseline_fails(self):
         result, _ = self.gate("multi", {"@5k": 20000, "@55k": 10000, "@1M": 5000})
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)

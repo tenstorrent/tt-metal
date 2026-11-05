@@ -16,7 +16,11 @@ ci_no_retry = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ci_no_retry)
 
 REPO, RUN = "o/r", "42"
-MARK = {"title": "ci-no-retry", "message": "1 deterministic failure(s): TPS GATE FAIL"}
+# The message format classify-failure/action.yml writes.
+MARK = {
+    "title": "ci-no-retry",
+    "message": "1 deterministic failure(s), a re-run of this commit cannot pass: TPS GATE FAIL",
+}
 OTHER = {"title": "Prefill perf gate", "message": "TPS GATE FAIL"}
 
 
@@ -99,11 +103,9 @@ def test_api_errors_fail_open(capsys, monkeypatch, make_error):
 
 
 def check(capsys, monkeypatch, attempts, attempt, job_id):
-    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", str(attempt))
-    monkeypatch.setenv("GITHUB_REPOSITORY", REPO)
-    monkeypatch.setenv("GITHUB_RUN_ID", RUN)
     monkeypatch.setattr(ci_no_retry, "api", FakeApi(attempts))
-    monkeypatch.setattr(sys, "argv", ["x", "job-check", "--job-id", str(job_id)])
+    argv = ["x", "job-check", "--job-id", str(job_id), "--repo", REPO, "--run-id", RUN, "--attempt", str(attempt)]
+    monkeypatch.setattr(sys, "argv", argv)
     return ci_no_retry.main(), capsys.readouterr().out
 
 
@@ -126,7 +128,10 @@ def test_short_circuit_reason_does_not_nest(capsys, monkeypatch):
     attempts = {2: [job(2, "leg", "failure", [remark])], 3: [job(3, "leg", None)]}
     rc, out = check(capsys, monkeypatch, attempts, 3, 3)
     assert rc == ci_no_retry.SKIP_EXIT
-    assert out.count("failed deterministically") == 1 and "attempt 2" in out
+    assert out.strip() == (
+        "::error title=ci-no-retry::Not re-run: attempt 2 failed deterministically: "
+        f"{MARK['message']} -- a re-run of this run cannot change that; start a new run to measure again"
+    )
 
 
 @pytest.mark.parametrize(

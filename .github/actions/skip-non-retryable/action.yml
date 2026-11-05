@@ -28,6 +28,7 @@ runs:
         [ "${GITHUB_RUN_ATTEMPT:-1}" -gt 1 ] || exit 0
         command -v python3 >/dev/null || { echo "python3 not found; not checking the previous attempt"; exit 0; }
         rc=0
-        python3 "$SCRIPT" job-check --job-id "$JOB_ID" || rc=$?
+        python3 "$SCRIPT" job-check --job-id "$JOB_ID" --repo "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" \
+          --attempt "${GITHUB_RUN_ATTEMPT:-1}" || rc=$?
         [ "$rc" -eq 3 ] && exit 1
         exit 0
