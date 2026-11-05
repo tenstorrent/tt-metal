@@ -177,9 +177,19 @@ def _detected_ops(found, changed_files):
 
 
 def _harness_compiles(side, arch, log, jobs):
-    """Compile one ordinary op on ``side``: a failure means harness skew, not the PR."""
-    built = detect.compile_all(side, arch, "unary", log, jobs, only_ops=("neg",))
-    return built in (0, runner.NO_TESTS_COLLECTED)
+    """Compile ordinary unary and typecast variants to detect harness skew."""
+    unary = detect.compile_all(side, arch, "unary", log, jobs, only_ops=("neg",))
+    if unary not in (0, runner.NO_TESTS_COLLECTED):
+        return False
+    typecast = detect.compile_all(
+        side,
+        arch,
+        "typecast",
+        log,
+        jobs,
+        extra_pytest_args=("-k", "Float16_b and UInt16"),
+    )
+    return typecast == 0
 
 
 class NotMeasured(Exception):

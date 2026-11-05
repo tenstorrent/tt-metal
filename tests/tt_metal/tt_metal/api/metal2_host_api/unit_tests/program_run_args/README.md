@@ -27,6 +27,12 @@ struct ProgramRunArgs {
         using CommonRuntimeArgValues = Table<std::string, ArgValue>;
         CommonRuntimeArgValues common_runtime_arg_values;
 
+        using RuntimeArrayArgValues = Table<std::string, Table<NodeCoord, ArrayArgValue>>;
+        RuntimeArrayArgValues runtime_array_arg_values;
+
+        using CommonRuntimeArrayArgValues = Table<std::string, ArrayArgValue>;
+        CommonRuntimeArrayArgValues common_runtime_array_arg_values;
+
         AdvancedKernelRunArgs advanced_options;
     };
     // Invariant:
