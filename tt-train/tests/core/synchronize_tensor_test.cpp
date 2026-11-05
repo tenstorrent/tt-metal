@@ -254,6 +254,28 @@ TEST_F(SynchronizeTensorTest, SynchronizeGradientsTakesTheConfiguredReduceDtypeU
 
 // Which route each sum takes, from the device operations it runs: only an fp32 sum of a large bf16 tensor that splits
 // into whole-tile slices takes the reduce-scatter route; an fp32 tensor needs no cast and gains nothing from it.
+// An explicit BFLOAT16 never narrows: an fp32 tensor (a gradient accumulated in fp32) is summed in fp32 and stays fp32,
+// the same bits as with no reduce dtype or FLOAT32, both through synchronize_tensor and synchronize_gradients.
+TEST_F(SynchronizeTensorTest, Bf16ReduceDtypeLeavesAnFp32TensorInFp32) {
+    const auto values = make_gradients(64U, 128U, /*seed=*/21U);
+    const auto fp32 = ttnn::typecast(upload(values), ttnn::DataType::FLOAT32);
+    const auto unset = core::distributed::synchronize_tensor(fp32, {kDdpAxis});
+    ASSERT_EQ(unset.dtype(), ttnn::DataType::FLOAT32);
+    for (const auto reduce_dtype : {ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32}) {
+        const auto result = core::distributed::synchronize_tensor(fp32, {kDdpAxis}, reduce_dtype);
+        EXPECT_EQ(result.dtype(), ttnn::DataType::FLOAT32);
+        expect_same_on_every_device(result, unset);
+    }
+
+    auto parameter = ddp_parameter(fp32);
+    core::distributed::synchronize_gradients(
+        serialization::NamedParameters{{"parameter", parameter}},
+        std::vector<uint32_t>{kDdpAxis},
+        ttnn::DataType::BFLOAT16);
+    EXPECT_EQ(parameter->get_grad().dtype(), ttnn::DataType::FLOAT32);
+    expect_same_on_every_device(parameter->get_grad(), unset);
+}
+
 TEST_F(SynchronizeTensorTest, OnlyALargeNarrowerTensorTakesTheReduceScatterRoute) {
     const auto large = upload(make_gradients(512, 1024, 3));
     const auto small = upload(make_gradients(64, 128, 1));

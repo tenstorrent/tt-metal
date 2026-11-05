@@ -128,6 +128,26 @@ def test_fp32_shard_takes_the_next_micro_batch_in_fp32(fsdp_mesh):
     np.testing.assert_array_equal(_gathered(grad), _gathered(expected))
 
 
+# An explicit bf16 reduce never narrows a gradient: an fp32 one (accumulated in fp32) is reduce-scattered in fp32 and its
+# mean shard stays fp32, the same bits as with FLOAT32.
+@pytest.mark.requires_device
+def test_bf16_reduce_dtype_leaves_an_fp32_gradient_in_fp32(fsdp_mesh):
+    values = make_gradients(64, 128, seed=8)
+
+    def reduce(reduce_dtype):
+        layer = LinearLayer(128, 64, has_bias=False)
+        ttml.fsdp.fully_shard(layer, reduce_dtype=reduce_dtype)
+        layer.unshard()
+        ((parameter, _),) = layer._fsdp_state.managed
+        parameter.tensor.set_grad(ttnn.typecast(per_device_tensor(values).get_value(), ttnn.DataType.FLOAT32))
+        layer._fsdp_state.backward_post()
+        grad = parameter.tensor.get_grad()
+        assert grad.dtype == ttnn.DataType.FLOAT32
+        return _gathered(grad)
+
+    np.testing.assert_array_equal(reduce(ttnn.DataType.BFLOAT16), reduce(ttnn.DataType.FLOAT32))
+
+
 # Without reduce_dtype, backward_post sums in the default create_optimizer stores, as ttml.sync_gradients does; a
 # reduce_dtype given to fully_shard wins over it.
 @pytest.mark.requires_device
