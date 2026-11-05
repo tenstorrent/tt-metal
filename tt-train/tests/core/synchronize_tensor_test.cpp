@@ -220,6 +220,13 @@ TEST_F(SynchronizeTensorTest, SynchronizeGradientsOverTheDdpAxisUsesTheReduceDty
 
     core::distributed::synchronize_gradients({{"parameter", parameter}}, ttnn::DataType::FLOAT32);
     expect_same_on_every_device(parameter->get_grad(), fp32);
+
+    // The C++ runner calls it without a dtype, after apply_precision_config has stored precision.reduce_dtype. The
+    // gradient is reset first: averaging the averaged values again gives the same bits in either dtype.
+    parameter->set_grad(gradients);
+    (void)core::apply_precision_config(YAML::Load("precision: {reduce_dtype: float32}"), {});
+    core::distributed::synchronize_gradients({{"parameter", parameter}});
+    expect_same_on_every_device(parameter->get_grad(), fp32);
 }
 
 // The runners set the default from precision.reduce_dtype; a dtype the call passes wins over it, both ways.
@@ -280,13 +287,29 @@ TEST_F(SynchronizeTensorTest, OnlyALargeNarrowerTensorTakesTheReduceScatterRoute
     }
 }
 
-// The parallelism context describes the mesh it was made for, so closing the device drops it and the next mesh
+namespace {
+
+// One device: its [1, 1] mesh takes the line-topology branch of the parallelism context with DDP enabled, so the merge
+// gate's single-chip runners run these too.
+class ParallelismContextTest : public ::testing::Test {
+protected:
+    static void SetUpTestSuite() {
+        autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        autograd::ctx().close_device();
+    }
+};
+
+}  // namespace
+
+// The parallelism context describes the mesh it was made for, so closing the device drops it and the next device
 // initializes its own.
-TEST_F(SynchronizeTensorTest, CloseDeviceDropsTheParallelismContext) {
+TEST_F(ParallelismContextTest, CloseDeviceDropsIt) {
     autograd::ctx().initialize_parallelism_context({.enable_ddp = true});
     autograd::ctx().close_device();
     EXPECT_FALSE(autograd::ctx().is_parallelism_context_initialized());
 
-    SetUp();  // reopens the mesh as the fixture does; TearDown closes it again
+    autograd::ctx().open_device();
     EXPECT_NO_THROW(autograd::ctx().initialize_parallelism_context({.enable_ddp = true}));
 }
