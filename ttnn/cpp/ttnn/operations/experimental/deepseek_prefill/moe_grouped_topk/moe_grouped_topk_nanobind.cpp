@@ -57,11 +57,11 @@ void bind_moe_grouped_topk(nb::module_& mod) {
                 weights_layout (ttnn.Layout, optional): Layout of the BFLOAT16 weights. Defaults to TILE.
                     ROW_MAJOR supports interleaved L1/DRAM output and at most 32 activated experts.
                     Indices remain TILE in either case.
-                fp32_selection (bool, optional): Run the expert selection (activation, bias add, top-k keys) and
-                    the weight normalization entirely in fp32: inputs unpack straight to the fp32 DEST, and the bias
-                    add, row sum, reciprocal and scaling run on the SFPU. By default those steps read their operands
-                    through the TF32 source registers, which can swap near-tied experts (score gaps ~1e-3) and
-                    truncates the weights (biased low, mean -2.7e-4 on GLM-5.3's gate). Slightly slower.
+                fp32_selection (bool, optional): Also run the weight normalization in fp32: the gathered scores
+                    unpack straight to the fp32 DEST and the row sum, reciprocal and scaling run on the SFPU. By
+                    default the FPU normalization reads its operands through the TF32 source registers, which
+                    truncates the weights (biased low, mean -2.7e-4 on GLM-5.3's gate). The expert selection
+                    itself (activation, bias add, sort keys) is always full fp32. Slightly slower.
                     Defaults to False.
 
             Returns:
