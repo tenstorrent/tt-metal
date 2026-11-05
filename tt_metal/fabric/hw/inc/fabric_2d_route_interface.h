@@ -79,12 +79,12 @@ FORCE_INLINE void copy_2d_map_to_l1(
 // A packed route-table byte holds four 2-bit next-hop codes. Expand it into four one-hot action bytes
 // in one uint32_t so the packet map can be emitted a word at a time. Fabric2DRoutingConfig::widen drops
 // Z on the axis that carries no chords in this build.
-template <Fabric2DAxis AXIS>
+template <Fabric2DAxis Axis>
 FORCE_INLINE std::uint32_t widen_packed_byte(std::uint8_t packed) {
-    return static_cast<std::uint32_t>(Fabric2DRoutingConfig::widen(AXIS, packed & 0x3u)) |
-           (static_cast<std::uint32_t>(Fabric2DRoutingConfig::widen(AXIS, (packed >> 2) & 0x3u)) << 8) |
-           (static_cast<std::uint32_t>(Fabric2DRoutingConfig::widen(AXIS, (packed >> 4) & 0x3u)) << 16) |
-           (static_cast<std::uint32_t>(Fabric2DRoutingConfig::widen(AXIS, (packed >> 6) & 0x3u)) << 24);
+    return static_cast<std::uint32_t>(Fabric2DRoutingConfig::widen(Axis, packed & 0x3u)) |
+           (static_cast<std::uint32_t>(Fabric2DRoutingConfig::widen(Axis, (packed >> 2) & 0x3u)) << 8) |
+           (static_cast<std::uint32_t>(Fabric2DRoutingConfig::widen(Axis, (packed >> 4) & 0x3u)) << 16) |
+           (static_cast<std::uint32_t>(Fabric2DRoutingConfig::widen(Axis, (packed >> 6) & 0x3u)) << 24);
 }
 
 // Streams widened action bytes into the packet's contiguous [Y | X] map. Full words start at the

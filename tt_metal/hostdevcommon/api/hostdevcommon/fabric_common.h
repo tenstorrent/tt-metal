@@ -23,6 +23,14 @@ using routing_plane_id_t = std::uint8_t;
 static constexpr std::uint32_t CLIENT_INTERFACE_SIZE = 3280;
 static constexpr std::uint32_t PACKET_WORD_SIZE_BYTES = 16;
 
+// Every FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS main-loop iterations, the fabric router writes
+// FABRIC_KERNEL_HEARTBEAT_MAGIC | (16-bit iteration count) to a word owned by the base ethernet firmware.
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE = 0x1F80;
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE = 0x7CC70;
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_MAGIC = 0xDCBA0000;
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_MAGIC_MASK = 0xFFFF0000;
+static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS = 64;
+
 // Constants for fabric mesh configuration
 static constexpr std::uint32_t MAX_MESH_SIZE = 256;
 static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
@@ -30,6 +38,23 @@ static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
 constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
 
 static constexpr std::size_t MAX_CHANNEL_BUFFER_SLOTS = UINT8_MAX / 2;
+
+// Read and write stream scratch register store values as uint32_t.
+enum class CoordinatedEriscContextSwitchState : std::uint32_t {
+    // Initially set by the master (erisc0) in entrance of kernel_main() and is the default state. erisc1 polls for this
+    // state at the end of the handshake
+    NORMAL_EXECUTION = 0,
+    // Set by master to signal intent on beginning handshake. Checked by erisc1 before it begins handshake
+    RETRAIN_INTENT = 1,
+    // Set by erisc1 to indicate it's cooperation. Polled by master before it runs the retrain to ensure that it has
+    // erisc1's cooperation
+    INTENT_ACK = 2,
+    // Set by erisc0 to indicate completion of retrain. Polled by erisc1
+    RETRAIN_COMPLETE = 3,
+    // Set by erisc1 to indicate it has seen the completion of retrain. Polled by erisc0 before it sets register back to
+    // NORMAL_EXECUTION
+    COMPLETE_ACK = 4,
+};
 
 // Magic values for ethernet channel directions
 enum eth_chan_magic_values : std::uint8_t {
@@ -122,12 +147,15 @@ struct FabricHeaderConfig {
 // Centralized 1D low-latency routing field constants.
 struct RoutingFieldsConstants {
     struct LowLatency {
+        // What the router does at a hop (the value of the hop's FIELD_WIDTH-bit field).
+        enum HopAction : uint32_t {
+            NOOP = 0b00,
+            WRITE_ONLY = 0b01,
+            FORWARD_ONLY = 0b10,
+            WRITE_AND_FORWARD = 0b11,
+        };
         static constexpr uint32_t FIELD_WIDTH = 2;
         static constexpr uint32_t FIELD_MASK = 0b11;
-        static constexpr uint32_t NOOP = 0b00;
-        static constexpr uint32_t WRITE_ONLY = 0b01;
-        static constexpr uint32_t FORWARD_ONLY = 0b10;
-        static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
         static constexpr uint32_t BASE_HOPS = 16;               // Hops per 32-bit word
         static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;  // 32-bit pattern (all FORWARD_ONLY)
         static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;   // 32-bit pattern (all WRITE_ONLY)
@@ -274,10 +302,39 @@ struct Routing2DCodec {
 
     // Packed edge fields: two 6-bit row indices, fixed by the Y <= 64 bound, plus a parent_output
     // holding this axis's 2-bit vector code, so it widens through widen(axis, code).
-    static constexpr int mcast_edge_child(std::uint16_t packed) { return packed & 0x3F; }
-    static constexpr int mcast_edge_parent(std::uint16_t packed) { return (packed >> 6) & 0x3F; }
+    // Packed edge layout (16 bits):
+    //
+    //    15  14 | 13  12 | 11  10   9   8   7   6 |  5   4   3   2   1   0
+    //   --------+--------+-------------------------+------------------------
+    //    unused | output |       parent row        |       child row
+    //    (zero) | 2 bits |         6 bits          |         6 bits
+    //
+    // Example, Y axis: "to reach row 3, row 2 sends S" (child 3, parent 2, output Y2_SOUTH = 2):
+    //
+    //      00   |   10   |         000010          |         000011         = 0x2083
+    //
+    // mcast_edge_child(0x2083) == 3, mcast_edge_parent(0x2083) == 2, mcast_edge_output(0x2083) == Y2_SOUTH.
+    static constexpr uint32_t MCAST_EDGE_COORD_BITS = 6;
+    static constexpr uint32_t MCAST_EDGE_COORD_MASK = (1u << MCAST_EDGE_COORD_BITS) - 1;
+    static constexpr uint32_t MCAST_EDGE_PARENT_SHIFT = MCAST_EDGE_COORD_BITS;
+    static constexpr uint32_t MCAST_EDGE_OUTPUT_SHIFT = 2 * MCAST_EDGE_COORD_BITS;
+    static constexpr uint32_t MCAST_EDGE_OUTPUT_MASK = (1u << BITS_PER_ACTION) - 1;
+    static_assert((1u << MCAST_EDGE_COORD_BITS) >= MAX_AXIS_SIZE, "a row field must address every row of an axis");
+    static_assert(
+        MCAST_EDGE_OUTPUT_SHIFT + BITS_PER_ACTION <= 8 * MCAST_TREE_EDGE_BYTES,
+        "the three edge fields must fit in MCAST_TREE_EDGE_BYTES");
+
+    static constexpr std::uint16_t mcast_edge_pack(uint32_t child, uint32_t parent, uint8_t output) {
+        return static_cast<std::uint16_t>(
+            (child & MCAST_EDGE_COORD_MASK) | ((parent & MCAST_EDGE_COORD_MASK) << MCAST_EDGE_PARENT_SHIFT) |
+            ((output & MCAST_EDGE_OUTPUT_MASK) << MCAST_EDGE_OUTPUT_SHIFT));
+    }
+    static constexpr int mcast_edge_child(std::uint16_t packed) { return packed & MCAST_EDGE_COORD_MASK; }
+    static constexpr int mcast_edge_parent(std::uint16_t packed) {
+        return (packed >> MCAST_EDGE_PARENT_SHIFT) & MCAST_EDGE_COORD_MASK;
+    }
     static constexpr std::uint8_t mcast_edge_output(std::uint16_t packed) {
-        return static_cast<std::uint8_t>((packed >> 12) & 0x3);
+        return static_cast<std::uint8_t>((packed >> MCAST_EDGE_OUTPUT_SHIFT) & MCAST_EDGE_OUTPUT_MASK);
     }
 
     // Byte-wise so neither side has to reason about halfword alignment inside a packed union.

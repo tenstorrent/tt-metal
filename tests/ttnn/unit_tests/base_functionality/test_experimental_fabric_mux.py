@@ -65,8 +65,8 @@ def test_fabric_mux_argument_builders_preserve_runtime_abi(mesh_device, expect_e
 
     kernel_compile_time_args = mux_config.kernel_compile_time_args()
     assert (
-        len(kernel_compile_time_args) == 19
-    ), f"mux kernel CT-arg count: expected 19, got {len(kernel_compile_time_args)}"
+        len(kernel_compile_time_args) == 22
+    ), f"mux kernel CT-arg count: expected 22, got {len(kernel_compile_time_args)}"
     expected_kernel_ct_prefix = [
         1,
         2,
@@ -80,6 +80,11 @@ def test_fabric_mux_argument_builders_preserve_runtime_abi(mesh_device, expect_e
     assert (
         kernel_compile_time_args[5:7] == compile_time_args[2:4]
     ), f"mux and client must agree on channel addresses: {kernel_compile_time_args[5:7]} vs {compile_time_args[2:4]}"
+    assert kernel_compile_time_args[18:21] == [
+        0,
+        0,
+        0,
+    ], f"program-local L1 placement CT args of a fixed-address mux: expected [0, 0, 0], got {kernel_compile_time_args[18:21]}"
     assert kernel_compile_time_args[-1] == 0, f"last mux kernel CT arg: expected 0, got {kernel_compile_time_args[-1]}"
 
     mux_program_descriptor = ttnn.ProgramDescriptor()

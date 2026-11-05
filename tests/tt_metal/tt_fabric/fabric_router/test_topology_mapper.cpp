@@ -7,6 +7,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include <algorithm>
 #include <memory>
 #include <unordered_set>
 
@@ -54,15 +55,18 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
 
     auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::T3K, t3k_mesh_graph_desc_path.string());
 
-    // Create a local mesh binding for testing
-    LocalMeshBinding local_mesh_binding;
-    local_mesh_binding.mesh_ids = {MeshId{0}};
-    local_mesh_binding.host_rank = MeshHostRankId{0};
+    const MeshId bound_mesh_id = MeshId{0};
+    const MeshHostRankId bound_host_rank = MeshHostRankId{0};
 
     // Test that TopologyMapper can be constructed with valid parameters
     // This is a basic smoke test
     auto topology_mapper = TopologyMapper(
-        get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+        get_cluster(),
+        get_distributed_context(),
+        mesh_graph,
+        *physical_system_descriptor_,
+        bound_mesh_id,
+        bound_host_rank);
 
     // Fabric Node ID layout:
     // 0 1 2 3
@@ -109,18 +113,23 @@ TEST_F(TopologyMapperTest, DualGalaxyBigMeshTest) {
 
     auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::GALAXY, dual_galaxy_big_mesh_graph_desc_path.string());
 
-    // Create a local mesh binding for testing
-    LocalMeshBinding local_mesh_binding;
+    MeshId bound_mesh_id{0};
+    MeshHostRankId bound_host_rank{0};
     if (*get_distributed_context().rank() == 0) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{0};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{0};
     } else {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{1};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{1};
     }
 
     auto topology_mapper = TopologyMapper(
-        get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+        get_cluster(),
+        get_distributed_context(),
+        mesh_graph,
+        *physical_system_descriptor_,
+        bound_mesh_id,
+        bound_host_rank);
 
     // Physical System Descriptor: 8x8
     //  0  1  2  3  4  5  6  7
@@ -172,13 +181,16 @@ TEST_F(TopologyMapperTest, N300MeshGraphTest) {
 
     auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::N300, n300_mesh_graph_desc_path.string());
 
-    // Create a local mesh binding for testing
-    LocalMeshBinding local_mesh_binding;
-    local_mesh_binding.mesh_ids = {MeshId{0}};
-    local_mesh_binding.host_rank = MeshHostRankId{0};
+    const MeshId bound_mesh_id = MeshId{0};
+    const MeshHostRankId bound_host_rank = MeshHostRankId{0};
 
     auto topology_mapper = TopologyMapper(
-        get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+        get_cluster(),
+        get_distributed_context(),
+        mesh_graph,
+        *physical_system_descriptor_,
+        bound_mesh_id,
+        bound_host_rank);
 
     // Physical System Descriptor: 1x2
     // 0 1
@@ -213,13 +225,16 @@ TEST_F(TopologyMapperTest, P100MeshGraphTest) {
 
     auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::P100, p100_mesh_graph_desc_path.string());
 
-    // Create a local mesh binding for testing
-    LocalMeshBinding local_mesh_binding;
-    local_mesh_binding.mesh_ids = {MeshId{0}};
-    local_mesh_binding.host_rank = MeshHostRankId{0};
+    const MeshId bound_mesh_id = MeshId{0};
+    const MeshHostRankId bound_host_rank = MeshHostRankId{0};
 
     auto topology_mapper = TopologyMapper(
-        get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+        get_cluster(),
+        get_distributed_context(),
+        mesh_graph,
+        *physical_system_descriptor_,
+        bound_mesh_id,
+        bound_host_rank);
 
     // Single-chip mesh: 1x1 with chip id 0
     const MeshId mesh_id{0};
@@ -258,24 +273,29 @@ TEST_F(TopologyMapperTest, BHQB4x4MeshGraphTest) {
 
     auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, bh_qb_4x4_mesh_graph_desc_path.string());
 
-    // Create a local mesh binding for testing
-    LocalMeshBinding local_mesh_binding;
+    MeshId bound_mesh_id{0};
+    MeshHostRankId bound_host_rank{0};
     if (*get_distributed_context().rank() == 0) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{0};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{0};
     } else if (*get_distributed_context().rank() == 1) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{1};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{1};
     } else if (*get_distributed_context().rank() == 2) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{2};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{2};
     } else if (*get_distributed_context().rank() == 3) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{3};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{3};
     }
 
     auto topology_mapper = TopologyMapper(
-        get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+        get_cluster(),
+        get_distributed_context(),
+        mesh_graph,
+        *physical_system_descriptor_,
+        bound_mesh_id,
+        bound_host_rank);
 
     // Physical System Descriptor: 4x4 Blackhole mesh
     // 0  1  | 2  3
@@ -346,24 +366,29 @@ TEST_F(TopologyMapperTest, BHQB4x4StrictReducedMeshGraphTest) {
     auto mesh_graph =
         MeshGraph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, bh_qb_4x4_strict_mesh_graph_desc_path.string());
 
-    // Create a local mesh binding for testing
-    LocalMeshBinding local_mesh_binding;
+    MeshId bound_mesh_id{0};
+    MeshHostRankId bound_host_rank{0};
     if (*get_distributed_context().rank() == 0) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{0};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{0};
     } else if (*get_distributed_context().rank() == 1) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{1};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{1};
     } else if (*get_distributed_context().rank() == 2) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{2};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{2};
     } else if (*get_distributed_context().rank() == 3) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{3};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{3};
     }
 
     auto topology_mapper = TopologyMapper(
-        get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+        get_cluster(),
+        get_distributed_context(),
+        mesh_graph,
+        *physical_system_descriptor_,
+        bound_mesh_id,
+        bound_host_rank);
 
     // Physical System Descriptor: 4x4 Blackhole mesh
     // 0  1  | 2  3
@@ -410,24 +435,29 @@ TEST_F(TopologyMapperTest, BHQB4x4RelaxedMeshGraphTest) {
     auto mesh_graph =
         MeshGraph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, bh_qb_4x4_relaxed_mesh_graph_desc_path.string());
 
-    // Create a local mesh binding for testing
-    LocalMeshBinding local_mesh_binding;
+    MeshId bound_mesh_id{0};
+    MeshHostRankId bound_host_rank{0};
     if (*get_distributed_context().rank() == 0) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{0};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{0};
     } else if (*get_distributed_context().rank() == 1) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{1};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{1};
     } else if (*get_distributed_context().rank() == 2) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{2};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{2};
     } else if (*get_distributed_context().rank() == 3) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{3};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{3};
     }
 
     auto topology_mapper = TopologyMapper(
-        get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+        get_cluster(),
+        get_distributed_context(),
+        mesh_graph,
+        *physical_system_descriptor_,
+        bound_mesh_id,
+        bound_host_rank);
 
     // Physical System Descriptor: 4x4 Blackhole mesh
     // 0  1  | 2  3
@@ -474,20 +504,20 @@ TEST_F(TopologyMapperTest, BHQB4x4StrictInvalidMeshGraphTest) {
     auto mesh_graph =
         MeshGraph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, bh_qb_4x4_strict_invalid_mesh_graph_desc_path.string());
 
-    // Create a local mesh binding for testing
-    LocalMeshBinding local_mesh_binding;
+    MeshId bound_mesh_id{0};
+    MeshHostRankId bound_host_rank{0};
     if (*get_distributed_context().rank() == 0) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{0};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{0};
     } else if (*get_distributed_context().rank() == 1) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{1};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{1};
     } else if (*get_distributed_context().rank() == 2) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{2};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{2};
     } else if (*get_distributed_context().rank() == 3) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{3};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{3};
     }
 
     EXPECT_THROW(
@@ -496,7 +526,8 @@ TEST_F(TopologyMapperTest, BHQB4x4StrictInvalidMeshGraphTest) {
             get_distributed_context(),
             mesh_graph,
             *physical_system_descriptor_,
-            local_mesh_binding,
+            bound_mesh_id,
+            bound_host_rank,
             std::chrono::duration<float>(10.0f)),
         std::exception);
 }
@@ -511,13 +542,17 @@ TEST_F(TopologyMapperTest, T3kMultiMeshTest) {
 
     auto mesh_graph = MeshGraph(get_cluster(), t3k_multimesh_graph_desc_path.string());
 
-    // Create a local mesh binding for testing
-    LocalMeshBinding local_mesh_binding;
-    local_mesh_binding.mesh_ids = {MeshId{0}, MeshId{1}, MeshId{2}};
-    local_mesh_binding.host_rank = MeshHostRankId{0};
+    // One process binds a single mesh; multi-mesh-per-host is unsupported (see the skip above).
+    const MeshId bound_mesh_id = MeshId{0};
+    const MeshHostRankId bound_host_rank = MeshHostRankId{0};
 
     auto topology_mapper = TopologyMapper(
-        get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+        get_cluster(),
+        get_distributed_context(),
+        mesh_graph,
+        *physical_system_descriptor_,
+        bound_mesh_id,
+        bound_host_rank);
 }
 
 TEST_F(TopologyMapperTest, ClosetBox3PodTTSwitchHostnameAPIs) {
@@ -527,20 +562,26 @@ TEST_F(TopologyMapperTest, ClosetBox3PodTTSwitchHostnameAPIs) {
 
     auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::GALAXY, mesh_graph_desc_path.string());
 
-    // Create local mesh binding (for testing, bind all meshes including switch)
-    LocalMeshBinding local_mesh_binding;
+    // Bind each rank to its own mesh.
+    MeshId bound_mesh_id{0};
+    MeshHostRankId bound_host_rank{0};
     if (*get_distributed_context().rank() == 0) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
+        bound_mesh_id = MeshId{0};
     } else if (*get_distributed_context().rank() == 1) {
-        local_mesh_binding.mesh_ids = {MeshId{1}};
+        bound_mesh_id = MeshId{1};
     } else if (*get_distributed_context().rank() == 2) {
-        local_mesh_binding.mesh_ids = {MeshId{2}};
+        bound_mesh_id = MeshId{2};
     } else if (*get_distributed_context().rank() == 3) {
-        local_mesh_binding.mesh_ids = {MeshId{3}};
+        bound_mesh_id = MeshId{3};
     }
 
     auto topology_mapper = TopologyMapper(
-        get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+        get_cluster(),
+        get_distributed_context(),
+        mesh_graph,
+        *physical_system_descriptor_,
+        bound_mesh_id,
+        bound_host_rank);
 
     // Get the current hostname from the physical system descriptor
     const auto& current_hostname = physical_system_descriptor_->my_host_name();
@@ -657,13 +698,14 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_1pin) 
     auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::GALAXY, galaxy_mesh_graph_desc_path.string());
 
     // Local mesh binding for single-host
-    LocalMeshBinding local_mesh_binding;
+    MeshId bound_mesh_id{0};
+    MeshHostRankId bound_host_rank{0};
     if (*get_distributed_context().rank() == 0) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{0};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{0};
     } else {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{1};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{1};
     }
 
     // Choose a real ASIC on this host and pin its (tray, location) to logical node (mesh 0, chip 0)
@@ -675,7 +717,13 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_1pin) 
     };
 
     TopologyMapper topology_mapper_with_pins(
-        get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding, pins);
+        get_cluster(),
+        get_distributed_context(),
+        mesh_graph,
+        *physical_system_descriptor_,
+        bound_mesh_id,
+        bound_host_rank,
+        pins);
 
     tt::tt_metal::AsicID mapped_asic;
     for (const auto& asics : physical_system_descriptor_->get_asics_connected_to_host(my_host)) {
@@ -700,13 +748,14 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_2pins)
     auto mesh_graph = MeshGraph(get_cluster(), galaxy_mesh_graph_desc_path.string());
 
     // Local mesh binding for single-host
-    LocalMeshBinding local_mesh_binding;
+    MeshId bound_mesh_id{0};
+    MeshHostRankId bound_host_rank{0};
     if (*get_distributed_context().rank() == 0) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{0};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{0};
     } else {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{1};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{1};
     }
 
     // Choose a real ASIC on this host and pin its (tray, location) to logical node (mesh 0, chip 0)
@@ -719,7 +768,13 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_2pins)
     };
 
     TopologyMapper topology_mapper_with_pins(
-        get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding, pins);
+        get_cluster(),
+        get_distributed_context(),
+        mesh_graph,
+        *physical_system_descriptor_,
+        bound_mesh_id,
+        bound_host_rank,
+        pins);
 
     // Check that the potential mapped ASICs are correctly for the pinned ASICs
     std::vector<tt::tt_metal::AsicID> potential_mapped_asics;
@@ -749,13 +804,14 @@ TEST_F(TopologyMapperTest, PinningThrowsOnBadAsicPositionGalaxyMesh) {
 
     auto mesh_graph = MeshGraph(get_cluster(), galaxy_mesh_graph_desc_path.string());
 
-    LocalMeshBinding local_mesh_binding;
+    MeshId bound_mesh_id{0};
+    MeshHostRankId bound_host_rank{0};
     if (*get_distributed_context().rank() == 0) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{0};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{0};
     } else {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{1};
+        bound_mesh_id = MeshId{0};
+        bound_host_rank = MeshHostRankId{1};
     }
 
     // Use an ASIC position that does not exist in this environment
@@ -770,7 +826,8 @@ TEST_F(TopologyMapperTest, PinningThrowsOnBadAsicPositionGalaxyMesh) {
             get_distributed_context(),
             mesh_graph,
             *physical_system_descriptor_,
-            local_mesh_binding,
+            bound_mesh_id,
+            bound_host_rank,
             pins_missing,
             std::chrono::duration<float>(10.0f)),
         std::exception);
@@ -798,15 +855,9 @@ TEST_P(T3kTopologyMapperWithCustomMappingFixture, T3kMeshGraphWithCustomMapping)
         mesh_ids_in_mapping.insert(fabric_node_id.mesh_id);
     }
 
-    // Create local mesh binding - use the first mesh ID found, or all meshes if multi-mesh
-    LocalMeshBinding local_mesh_binding;
-    if (mesh_ids_in_mapping.size() == 1) {
-        local_mesh_binding.mesh_ids = {*mesh_ids_in_mapping.begin()};
-    } else {
-        // For multi-mesh cases, bind to all meshes
-        local_mesh_binding.mesh_ids.assign(mesh_ids_in_mapping.begin(), mesh_ids_in_mapping.end());
-    }
-    local_mesh_binding.host_rank = MeshHostRankId{0};
+    // Bind to the lowest mesh ID in the mapping; the provided mapping covers every mesh.
+    MeshId bound_mesh_id = *std::min_element(mesh_ids_in_mapping.begin(), mesh_ids_in_mapping.end());
+    MeshHostRankId bound_host_rank{0};
 
     // Create TopologyMapper using the new constructor that skips discovery
     auto topology_mapper_with_mapping = TopologyMapper(
@@ -814,7 +865,8 @@ TEST_P(T3kTopologyMapperWithCustomMappingFixture, T3kMeshGraphWithCustomMapping)
         get_distributed_context(),
         mesh_graph,
         *physical_system_descriptor_,
-        local_mesh_binding,
+        bound_mesh_id,
+        bound_host_rank,
         logical_mesh_chip_id_to_physical_chip_id_mapping);
 
     // Verify that the mapper correctly uses the provided mapping for each mesh
@@ -899,7 +951,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 // CPU-only host test: verifies mesh host rank correctness when using manual logical-to-physical
 // pinnings. The topology mapper must correctly use mesh graph host ranks for get_host_rank_for_chip
-// (preserving coordinate ranges) while get_local_host_rank returns local_mesh_binding.host_rank for
+// (preserving coordinate ranges) while get_local_host_rank returns the bound host rank for
 // the current host.
 TEST_F(TopologyMapperTest, T3kMeshGraphTestHostRankWithManualPinning) {
     const std::filesystem::path mesh_graph_desc_path =
@@ -920,16 +972,16 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestHostRankWithManualPinning) {
     auto logical_mesh_chip_id_to_physical_chip_id_mapping =
         fabric_router_tests::get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords);
 
-    LocalMeshBinding local_mesh_binding;
-    local_mesh_binding.mesh_ids = {MeshId{0}};
-    local_mesh_binding.host_rank = MESH_HOST_RANK_UNSET;
+    const MeshId bound_mesh_id = MeshId{0};
+    const MeshHostRankId bound_host_rank = MESH_HOST_RANK_UNSET;
 
     auto topology_mapper = TopologyMapper(
         get_cluster(),
         get_distributed_context(),
         mesh_graph,
         *physical_system_descriptor_,
-        local_mesh_binding,
+        bound_mesh_id,
+        bound_host_rank,
         logical_mesh_chip_id_to_physical_chip_id_mapping);
 
     const MeshId mesh_id{0};
@@ -989,15 +1041,19 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
     }
 
     // Verify that the mesh graph can be used with TopologyMapper
-    LocalMeshBinding local_mesh_binding;
-    local_mesh_binding.mesh_ids = {mesh_id};
-    local_mesh_binding.host_rank = MeshHostRankId{0};
+    const MeshId bound_mesh_id = mesh_id;
+    const MeshHostRankId bound_host_rank = MeshHostRankId{0};
 
     // This should work without throwing since the mesh graph was generated
     // to match the physical topology
     EXPECT_NO_THROW({
         TopologyMapper topology_mapper(
-            get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+            get_cluster(),
+            get_distributed_context(),
+            mesh_graph,
+            *physical_system_descriptor_,
+            bound_mesh_id,
+            bound_host_rank);
         // Verify that mappings exist
         for (const auto& chip_id : chip_ids.values()) {
             FabricNodeId fabric_node_id(mesh_id, chip_id);
@@ -1031,20 +1087,25 @@ TEST_F(TopologyMapperTest, ClosetBoxSuperpodRelaxedPolicyTest) {
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_superpod_mgd_relaxed_test.textproto";
 
     auto mesh_graph = MeshGraph(tt::tt_metal::ClusterType::GALAXY, galaxy_mesh_graph_desc_path.string());
-    // Create a local mesh binding for testing
-    LocalMeshBinding local_mesh_binding;
+    MeshId bound_mesh_id{0};
+    MeshHostRankId bound_host_rank{0};
     if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
+        bound_mesh_id = MeshId{0};
     } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 1) {
-        local_mesh_binding.mesh_ids = {MeshId{1}};
+        bound_mesh_id = MeshId{1};
     } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 2) {
-        local_mesh_binding.mesh_ids = {MeshId{2}};
+        bound_mesh_id = MeshId{2};
     } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 3) {
-        local_mesh_binding.mesh_ids = {MeshId{3}};
+        bound_mesh_id = MeshId{3};
     }
 
     auto topology_mapper = TopologyMapper(
-        get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+        get_cluster(),
+        get_distributed_context(),
+        mesh_graph,
+        *physical_system_descriptor_,
+        bound_mesh_id,
+        bound_host_rank);
 
     // Verify that the topology mapper was created successfully
     auto current_rank = *tt::tt_metal::MetalContext::instance().global_distributed_context().rank();
@@ -1105,16 +1166,16 @@ TEST_F(TopologyMapperTest, ClosetBoxSuperpodStrictInvalidPolicyTest) {
     EXPECT_FALSE(mesh_graph.is_inter_mesh_policy_relaxed())
         << "MeshGraph should correctly read STRICT policy from graph_topology";
 
-    // Create a local mesh binding for testing
-    LocalMeshBinding local_mesh_binding;
+    MeshId bound_mesh_id{0};
+    MeshHostRankId bound_host_rank{0};
     if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
-        local_mesh_binding.mesh_ids = {MeshId{0}};
+        bound_mesh_id = MeshId{0};
     } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 1) {
-        local_mesh_binding.mesh_ids = {MeshId{1}};
+        bound_mesh_id = MeshId{1};
     } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 2) {
-        local_mesh_binding.mesh_ids = {MeshId{2}};
+        bound_mesh_id = MeshId{2};
     } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 3) {
-        local_mesh_binding.mesh_ids = {MeshId{3}};
+        bound_mesh_id = MeshId{3};
     }
 
     auto current_rank = *tt::tt_metal::MetalContext::instance().global_distributed_context().rank();
@@ -1141,7 +1202,8 @@ TEST_F(TopologyMapperTest, ClosetBoxSuperpodStrictInvalidPolicyTest) {
             get_distributed_context(),
             mesh_graph,
             *physical_system_descriptor_,
-            local_mesh_binding,
+            bound_mesh_id,
+            bound_host_rank,
             std::chrono::duration<float>(10.0f)),
         std::exception)
         << "TopologyMapper should throw with STRICT policy when mapping conditions are invalid (e.g., insufficient "

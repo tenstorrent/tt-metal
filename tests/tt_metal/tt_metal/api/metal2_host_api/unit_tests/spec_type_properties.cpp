@@ -57,6 +57,7 @@ static_assert(
     hashable_v<KernelSpec::CompilerOptions>, "KernelSpec::CompilerOptions must be hashable via ttsl reflection");
 static_assert(
     hashable_v<KernelSpec::RuntimeArgSchema>, "KernelSpec::RuntimeArgSchema must be hashable via ttsl reflection");
+static_assert(hashable_v<ArrayArgDecl>, "ArrayArgDecl must be hashable via ttsl reflection");
 static_assert(hashable_v<DFBBinding>, "DFBBinding must be hashable via ttsl reflection");
 static_assert(hashable_v<SemaphoreBinding>, "SemaphoreBinding must be hashable via ttsl reflection");
 static_assert(hashable_v<TensorBinding>, "TensorBinding must be hashable via ttsl reflection");
@@ -160,6 +161,8 @@ static_assert(
 static_assert(
     std::is_aggregate_v<KernelSpec::RuntimeArgSchema>,
     "RuntimeArgSchema must remain an aggregate to support designated initializers");
+static_assert(
+    std::is_aggregate_v<ArrayArgDecl>, "ArrayArgDecl must remain an aggregate to support designated initializers");
 
 // These tests document the intended construction pattern using designated initializers.
 // They serve as living documentation and will fail to compile if aggregate status is broken.

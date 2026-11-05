@@ -25,6 +25,10 @@ struct FabricConfigDescriptor {
     tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED;
     tt_fabric::FabricManagerMode fabric_manager = tt_fabric::FabricManagerMode::DEFAULT;
     tt_fabric::FabricRouterConfig router_config = {};
+    // This process's binding into the mesh graph descriptor. Defaults to mesh 0 with the host rank left to the
+    // topology mapper; TT_MESH_ID / TT_MESH_HOST_RANK, when set, override these.
+    tt_fabric::MeshId mesh_id = tt_fabric::MeshId{0};
+    tt_fabric::MeshHostRankId host_rank = tt_fabric::MESH_HOST_RANK_UNSET;
 };
 
 // Configuration for a MetalEnv. The default targets the physical cluster.
@@ -46,6 +50,10 @@ class MetalEnvImpl;
 //
 // This is a lightweight, copyable, non-owning view. It is valid only while the MetalEnv it was obtained from is
 // alive. Values are read from the environment on each call.
+//
+// Every entry point (MetalEnv::get_device_properties() and the MeshDevice overloads in mesh_device_properties.hpp)
+// returns this view, so a new property is added here, implemented against MetalEnvImpl in metal_env.cpp, and is then
+// answered by all of them.
 class MetalDeviceProperties {
 public:
     /// @return Architecture of the devices.

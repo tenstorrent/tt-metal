@@ -511,7 +511,7 @@ int main(int argc, char** argv) {
         log_debug(LogTest, "out_subblock_h {}", out_subblock_h);
         log_debug(LogTest, "out_subblock_w {}", out_subblock_w);
 
-        tt::tt_metal::Program program;
+        tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
         if (single_core) {
             program = create_program_single_core(
                 device.get(),
@@ -893,7 +893,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>
 }
 
 tt_metal::Program create_program_single_core(
-    tt_metal::distributed::MeshDevice* /*device*/,
+    tt_metal::distributed::MeshDevice* device,
     tt::DataFormat cb_data_format,
     tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -911,7 +911,7 @@ tt_metal::Program create_program_single_core(
     bool packer_l1,
     uint32_t num_blocks,
     uint32_t interm_cb_dtype) {
-    tt_metal::Program program{};
+    tt_metal::Program program = tt_metal::CreateProgram(*device);
 
     log_debug(tt::LogTest, "cb_data_format: {} ", cb_data_format);
     log_debug(tt::LogTest, "math_fidelity: {} ", math_fidelity);
@@ -1123,7 +1123,7 @@ tt_metal::Program create_program(
     uint32_t out_addr,
     bool matmul_block,
     bool packer_l1) {
-    tt_metal::Program program{};
+    tt_metal::Program program = tt_metal::CreateProgram(*device);
 
     uint32_t num_buffer = 2;  // double buffer
     uint32_t in0_block_tiles = per_core_Mt * in0_block_w;
