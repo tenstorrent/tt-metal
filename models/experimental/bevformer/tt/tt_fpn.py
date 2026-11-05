@@ -192,6 +192,10 @@ class TTFPN:
             extra_source = outs[-1]
             if i > used_backbone_levels and self.relu_before_extra_convs:
                 extra_source = ttnn.relu(extra_source)
+            # An extra conv reads ROW_MAJOR and emits TILE, so a second one takes the first's output
+            # untilized.
+            if extra_source.layout != ttnn.ROW_MAJOR_LAYOUT:
+                extra_source = ttnn.to_layout(extra_source, ttnn.ROW_MAJOR_LAYOUT)
             outs.append(_to_dram(self.fpn_convs[i](extra_source)))
         signpost(header="TTNN FPN Forward End")
         return tuple(outs)
