@@ -112,6 +112,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
     ckernel::_llk_math_topk_xl_copy_init_(math_format);
+#if defined(TOPK_XL_PRESET_DEST_REMAP)
+    // The state a preceding fast tilize / pack_untilize kernel leaves on the core; init_tokens must clear it.
+    _llk_math_reconfig_remap_(true);
+#endif
     topk_xl_split::init_tokens();
     topk_xl_scrub_dest();
     topk_xl_split::start_pack();

@@ -93,7 +93,7 @@ CASE_IDS = [
 ]
 
 
-def _config(test_name, case, ascending=None):
+def _config(test_name, case, ascending=None, preset_dest_remap=False):
     K, num_chunks, tail, num_rows, mode, fp32, seg_base, case_ascending = case
     ascending = case_ascending if ascending is None else ascending
     formats = FP32_FORMATS if fp32 else FORMATS
@@ -117,6 +117,7 @@ def _config(test_name, case, ascending=None):
                     if ascending
                     else TopKSortDirection.Descending
                 ),
+                preset_dest_remap=preset_dest_remap,
             ),
         ],
         variant_stimuli=StimuliConfig(
@@ -189,3 +190,56 @@ def test_topk_xl_split(case):
                 f"row {r}: ascending final rebuild is not the mirror of the descending one "
                 f"in {mismatch}/{K} lanes"
             )
+
+
+# The split kernel's MATH (FPU) and PACK (SFPU) write Dst concurrently. With the Dst remap that fast tilize and
+# pack_untilize leave set (DEST_ACCESS_CFG remap_addrs + swizzle_32b), a same-cycle pair of those writes can lose
+# the FPU write, so the kernel clears the remap in its init. These cases start with the remap set.
+DEST_REMAP_CASES = [
+    (512, 2, 512, 1, "positive", False, 0, True),
+    (512, 2, 8, 1, "positive", False, 0, True),
+    (512, 2, 512, 1, "positive", False, 0, False),
+]
+
+
+@pytest.mark.parametrize(
+    "case",
+    DEST_REMAP_CASES,
+    ids=[
+        f"k{k}-chunks{c}-tail{t}{'-asc' if a else ''}"
+        for k, c, t, _, _, _, _, a in DEST_REMAP_CASES
+    ],
+)
+def test_topk_xl_split_after_dest_remap(case):
+    K, _, _, _, mode, _, seg_base, _ = case
+    single, rows, formats = _config("sources/topk_xl_test.cpp", case)
+    split, _, _ = _config(
+        "sources/topk_xl_split_test.cpp", case, preset_dest_remap=True
+    )
+    single.prepare()
+    split.prepare()
+
+    split_result = split.run().result
+    single_result = single.run().result
+
+    out_format = format_dict[formats.output_format]
+    differ = (
+        (
+            torch.tensor(split_result, dtype=out_format)
+            != torch.tensor(single_result, dtype=out_format)
+        )
+        .nonzero()
+        .flatten()
+    )
+    assert differ.numel() == 0, (
+        f"split result after a Dst remap differs from the single-thread kernel in {differ.numel()} words, "
+        f"first at {differ[:8].tolist()}"
+    )
+    _check(
+        split_result,
+        K,
+        rows,
+        compare_index_set=not mode.startswith("random"),
+        index_offset=seg_base,
+        value_format=formats.input_format,
+    )
