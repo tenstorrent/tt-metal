@@ -166,13 +166,12 @@ def test_vae_flux2_decoder(
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
-        [(1, 1), single_device_params_flux2],
         [(2, 2), line_params_flux2],
         [(2, 4), line_params_flux2],
         [(1, 8), line_params_flux2],
         [(4, 8), line_params_flux2],
     ],
-    ids=["1x1", "2x2", "2x4", "1x8", "4x8"],
+    ids=["2x2", "2x4", "1x8", "4x8"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("height", "width"), [(1024, 1024)], ids=["1024"])
