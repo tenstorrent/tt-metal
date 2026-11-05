@@ -6,10 +6,10 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <span>
 #include <vector>
 
+#include "tt_metal/fabric/builder/connection_registry.hpp"
 #include "tt_metal/fabric/fabric_router_builder.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_kernel_inputs.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
@@ -21,6 +21,7 @@ class Hal;
 namespace tt::tt_fabric {
 
 class FabricEriscDatamoverBuilder;
+struct PacketHeaderConfig;
 struct RouterVcShape;
 
 // Everything the router pass reads about one router.
@@ -29,11 +30,13 @@ struct ManifestRouterInputs {
     const RouterVcShape& vc_shape;
     const RouterLocation& location;
     const ChipRoutingFacts& chip_facts;
-    // get_fabric_router_addresses_to_clear()
-    const std::vector<size_t>& addresses_to_clear;
+    // The connections this router made to its siblings, as establish_connections_to_router recorded them.
+    std::span<const RouterConnectionRecord> connections;
     // What create_kernel built each RISC's kernel with. The router pass reads what an argument carries from here, and
     // only uses the builders for info not carried in arguments.
     const manifest::RouterArgs& args;
+    // The run's packet header (FabricContext::get_packet_header_config()), which starts every ring buffer slot.
+    const PacketHeaderConfig& packet_header;
     const tt::tt_metal::Hal& hal;
 };
 
@@ -43,24 +46,5 @@ void check_kernel_inputs_accounted(std::span<const KernelInputs> kernel_inputs_b
 
 // Collects a built router's manifest facts from what its kernels were fed and from its builders.
 manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs);
-
-namespace manifest {
-
-// Each chip's routers and chip-wide facts, published by the chip's FabricBuilder once its kernels are created and read
-// by the topology pass when the manifest is written. The builder context owns it, since it outlives each FabricBuilder.
-class PublishedChips {
-public:
-    explicit PublishedChips(size_t num_chips) : chips_by_physical_id_(num_chips) {}
-
-    // Publishes `chip`, whose routers must be every router its builder initialized.
-    void publish(ChipId physical_chip_id, Chip chip, uint32_t num_initialized_routers);
-    bool has(ChipId physical_chip_id) const;
-    const Chip& get(ChipId physical_chip_id) const;
-
-private:
-    std::vector<std::optional<Chip>> chips_by_physical_id_;
-};
-
-}  // namespace manifest
 
 }  // namespace tt::tt_fabric

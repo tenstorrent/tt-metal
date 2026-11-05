@@ -12,6 +12,11 @@ namespace tt::tt_fabric::manifest {
 struct BuildIdentity {
     // Empty when the source tree is neither a git checkout nor a `git archive` export.
     std::string_view git_sha;
+    std::string_view git_sha_short;
+    // The version string, such as "v0.62.0-rc1-123-gabcdef1".
+    std::string_view version;
+    // The CMake build type, such as "Release".
+    std::string_view build_type;
     // Whether tracked files had uncommitted changes.
     bool git_dirty = false;
 };

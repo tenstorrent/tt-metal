@@ -48,8 +48,6 @@ struct FieldIndex {
     uint32_t edge = 0;
     // The edge's rank among the router's edges, VC0's before VC1's, which its teardown semaphore is indexed by.
     uint32_t teardown = 0;
-    // Whether the sender channel is its VC's worker channel, fed by a worker or the tensix mux rather than a sibling.
-    bool worker_channel = false;
 };
 
 // When the builder emits a named argument.
@@ -430,6 +428,88 @@ inline constexpr auto k_router_fields = [] {
             .content = content::Number{},
             .description = "The FabricTelemetryStatistic bits this ERISC collects; 0 when its telemetry is off.",
         },
+        RouterField{
+            .key = "telemetry_enabled",
+            .source = "ENABLE_FABRIC_TELEMETRY",
+            .category = DIAGNOSTICS,
+            .content = content::Flag{},
+            .description = "Whether this ERISC collects fabric telemetry. telemetry_stats_mask says which statistics.",
+        },
+        RouterField{
+            .key = "perf_telemetry_mode",
+            .source = "PERF_TELEMETRY_MODE",
+            .category = DIAGNOSTICS,
+            .content = content::Number{},
+            .description = "The kernel's PerfTelemetryRecorderType: 0 for none, 1 for low-resolution bandwidth. The "
+                           "enum is device-side only, so the value is written as a number.",
+        },
+        RouterField{
+            .key = "code_profiling_timers",
+            .source = "CODE_PROFILING_ENABLED_TIMERS",
+            .category = DIAGNOSTICS,
+            .content = content::Number{},
+            .description = "The CodeProfilingTimerType bits the kernel times; 0 when code profiling is off.",
+        },
+        RouterField{
+            .key = "sender_txq",
+            .source = "SENDER_TXQ_ID",
+            .category = KERNEL_PARAMS,
+            .content = content::Number{},
+            .description = "The Ethernet TX queue the router sends packets on.",
+        },
+        RouterField{
+            .key = "receiver_txq",
+            .source = "RECEIVER_TXQ_ID",
+            .category = KERNEL_PARAMS,
+            .content = content::Number{},
+            .description = "The Ethernet TX queue the router sends credits back on: 1 in 2-ERISC mode, otherwise the "
+                           "sender's.",
+        },
+        RouterField{
+            .key = "intermesh_router",
+            .source = "IS_INTERMESH_ROUTER",
+            .category = KERNEL_PARAMS,
+            .content = content::Flag{},
+            .description = "Whether the router's link goes to another mesh.",
+        },
+        RouterField{
+            .key = "intermesh_edge",
+            .source = "IS_INTERMESH_ROUTER_ON_EDGE",
+            .category = KERNEL_PARAMS,
+            .content = content::Flag{},
+            .description = "Whether the router's channel is one of the chip's inter-mesh-facing channels "
+                           "(ControlPlane::get_intermesh_facing_eth_chans).",
+        },
+        RouterField{
+            .key = "intramesh_edge",
+            .source = "IS_INTRAMESH_ROUTER_ON_EDGE",
+            .category = KERNEL_PARAMS,
+            .content = content::Flag{},
+            .description = "Whether the router is an intra-mesh router on a chip with inter-mesh links, which checks "
+                           "each packet for an inter-mesh exit.",
+        },
+        RouterField{
+            .key = "mesh_x_size",
+            .source = NamedArg{"MESH_X_SIZE", ArgIndex::NONE, Emitted::FABRIC_2D},
+            .category = KERNEL_PARAMS,
+            .content = content::Number{},
+            .description = "The mesh's columns, which bound the router's 2D route table.",
+        },
+        RouterField{
+            .key = "mesh_y_size",
+            .source = NamedArg{"MESH_Y_SIZE", ArgIndex::NONE, Emitted::FABRIC_2D},
+            .category = KERNEL_PARAMS,
+            .content = content::Number{},
+            .description = "The mesh's rows, which bound the router's 2D route table.",
+        },
+        RouterField{
+            .key = "remote_worker_sender_channel",
+            .source = "REMOTE_WORKER_SENDER_CHANNEL",
+            .category = CONTROL_INFO,
+            .content = content::Number{},
+            .description = "The peer router's worker sender channel. In mux mode the router writes it as the source "
+                           "channel of the packets it receives. 0 when the router has no peer.",
+        },
     };
 }();
 
@@ -487,18 +567,19 @@ inline constexpr auto k_sender_channel_fields = [] {
         },
         RouterField{
             .key = "buffer_index_sem",
-            // Only a worker channel's producer keeps a cursor. A sibling router's adapter never reads or writes one,
-            // so the other channels' slot is allocated but unused, and 0 leaves the field null.
+            // What the builder gives the router to reset at startup (get_runtime_args): set only on the channels it
+            // treats as worker channels. A sibling router's adapter never keeps a cursor, so the others are 0, which
+            // leaves the field null.
             .source = BuilderMember{[](const FabricEriscDatamoverBuilder& builder, const FieldIndex& index) {
-                return index.worker_channel
-                           ? static_cast<uint32_t>(builder.sender_channels_buffer_index_semaphore_id[index.compact])
-                           : 0u;
+                return static_cast<uint32_t>(
+                    builder.downstream_vcs_sender_channel_buffer_index_semaphore_id[index.compact]);
             }},
             .category = CONTROL_INFO,
             .content = register_l1_region<SenderChannelProducerCursor>(),
             .description = "Where the worker channel's producer keeps its write cursor across connections, for the "
                            "next producer to pick up. In the producer's runtime args, from the channel's connection "
-                           "spec. Null on the other channels, whose producer keeps none.",
+                           "spec, and the router's, which zeroes it at startup. Null on the other channels, whose "
+                           "producer keeps none.",
         },
         RouterField{
             .key = "static_connection",
@@ -508,6 +589,14 @@ inline constexpr auto k_sender_channel_fields = [] {
             .description = "Whether a sibling router connects to the channel once, at startup: before its main loop, "
                            "each ERISC that runs the channel waits for that connection. The builder gives an ERISC "
                            "that doesn't run it 0.",
+        },
+        RouterField{
+            .key = "live_check_skip",
+            .source = NamedArg{"SENDER_CH_{}_LIVE_CHECK_SKIP", ArgIndex::COMPACT},
+            .category = CONTROL_INFO,
+            .content = content::Flag{},
+            .description = "Whether the router skips the connection liveness check on the channel: it has a static "
+                           "peer, or the builder forces the skip.",
         },
     };
 }();
@@ -682,8 +771,7 @@ constexpr bool same_arg_family(std::string_view a, std::string_view b) {
     return i == a.size() && j == b.size();
 }
 
-// The named arguments the router pass covers outside the field tables: the ones it reads to work out facts, and the
-// ones whose value it takes from the builder state the builder fed them from.
+// The named arguments the router pass reads outside the field tables, to work out facts.
 inline constexpr auto k_router_pass_args = std::to_array<std::string_view>({
     "NUM_ACTIVE_ERISCS",
     "ACTUAL_VC{}_SENDER_CHANNELS",
@@ -702,6 +790,7 @@ inline constexpr auto k_router_pass_args = std::to_array<std::string_view>({
     "VC{}_USES_COUNTER_CREDITS",
     "TO_SENDER_{}_PKTS_COMPLETED_ID",
     "TO_SENDER_{}_PKTS_ACKED_ID",
+    "ENABLE_FIRST_LEVEL_ACK_VC{}",
     "NUM_DOWNSTREAM_SENDERS_VC{}",
 });
 
@@ -719,6 +808,9 @@ struct Unrecorded {
 };
 
 inline constexpr std::string_view k_not_yet_described = "Not yet described.";
+inline constexpr std::string_view k_link_sync =
+    "The streaming profiler's link sync, fed on Blackhole when the profiler is on "
+    "(link_sync::add_router_compile_args). Not yet described.";
 
 inline constexpr auto k_unrecorded_args = std::to_array<Unrecorded>({
     // Recorded elsewhere
@@ -726,41 +818,38 @@ inline constexpr auto k_unrecorded_args = std::to_array<Unrecorded>({
     {"NUM_LOCAL_EDMS", "The chip's local_sync num_routers, from KernelCreationContext."},
     {"EDM_CHANNELS_MASK", "The chip's local_sync router_channels_mask, from KernelCreationContext."},
     {"MY_ERISC_ID", "The ERISC's index in the router's eriscs, which the manifest lists in RISC order."},
-    {"NUM_RECEIVER_CHANNELS", "The router's receiver count. The manifest lists the receivers from the builder's VC shape."},
+    {"NUM_RECEIVER_CHANNELS",
+     "The router's receiver count. The manifest lists the receivers from the builder's VC shape."},
 
     // The same on every router
     {"MAX_NUM_SENDER_CHANNELS", "builder_config::num_max_sender_channels."},
     {"MAX_NUM_RECEIVER_CHANNELS", "builder_config::num_max_receiver_channels."},
     {"MAX_NUM_VCS", "builder_config::MAX_NUM_VCS."},
+    {"NUM_ETH_PORTS", "The SoC's Ethernet channel count, which sizes the kernel's port_direction_table."},
+
+    // Not read by the kernel, or carried by another input
+    {"SKIP_SRC_CH_ID_UPDATE",
+     "Not read: the kernel derives the flag from FABRIC_TENSIX_EXTENSION_MUX_MODE (fabric_erisc_router_ct_args.hpp)."},
+    {"PACKED_DOWNSTREAM_VC{}_SENDER_CHANNEL_IDS",
+     "The edges' landing channels, packed; fed only in 2D with channel trimming capture. Each edge records its own."},
 
     // Not yet described
     {"MY_ETH_CHANNEL", k_not_yet_described},
-    {"NUM_ETH_PORTS", k_not_yet_described},
     {"NUM_SENDER_CHANNELS", k_not_yet_described},
     {"NUM_DOWNSTREAM_CHANNELS", k_not_yet_described},
     {"NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS", k_not_yet_described},
     {"VC{}_DOWNSTREAM_EDM_SIZE", k_not_yet_described},
-    {"PACKED_DOWNSTREAM_VC{}_SENDER_CHANNEL_IDS", k_not_yet_described},
-    {"IS_INTERMESH_ROUTER", k_not_yet_described},
-    {"IS_INTERMESH_ROUTER_ON_EDGE", k_not_yet_described},
-    {"IS_INTRAMESH_ROUTER_ON_EDGE", k_not_yet_described},
-    {"MESH_X_SIZE", k_not_yet_described},
-    {"MESH_Y_SIZE", k_not_yet_described},
-    {"SENDER_CH_{}_LIVE_CHECK_SKIP", k_not_yet_described},
-    {"ENABLE_FIRST_LEVEL_ACK_VC{}", k_not_yet_described},
     {"FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR", k_not_yet_described},
-    {"SENDER_TXQ_ID", k_not_yet_described},
-    {"RECEIVER_TXQ_ID", k_not_yet_described},
     {"EDM_NOC_VC", k_not_yet_described},
     {"FORCE_ALL_PATHS_TO_USE_SAME_NOC", k_not_yet_described},
-    {"SKIP_SRC_CH_ID_UPDATE", k_not_yet_described},
-    {"REMOTE_WORKER_SENDER_CHANNEL", k_not_yet_described},
     {"UDM_MODE", k_not_yet_described},
     {"LOCAL_RELAY_NUM_BUFFERS", k_not_yet_described},
     {"TENSIX_RELAY_LOCAL_FREE_SLOTS_STREAM_ID", k_not_yet_described},
-    {"ENABLE_FABRIC_TELEMETRY", k_not_yet_described},
-    {"PERF_TELEMETRY_MODE", k_not_yet_described},
-    {"CODE_PROFILING_ENABLED_TIMERS", k_not_yet_described},
+
+    // Fed by the streaming profiler
+    {"LINK_SYNC_ROLE", k_link_sync},
+    {"LINK_SYNC_L1_ADDR", k_link_sync},
+    {"LINK_SYNC_CHECK", k_link_sync},
 });
 
 inline constexpr std::string_view k_fabric_wide_define =
@@ -787,8 +876,8 @@ constexpr bool table_reads(const auto& fields, std::string_view name) {
 
 // Whether a field table or the router pass reads the named argument `name`.
 constexpr bool manifest_reads_arg(std::string_view name) {
-    return table_reads(k_router_fields, name) || table_reads(k_sender_channel_fields, name) || table_reads(k_receiver_channel_fields, name) ||
-           table_reads(k_downstream_edge_fields, name) ||
+    return table_reads(k_router_fields, name) || table_reads(k_sender_channel_fields, name) ||
+           table_reads(k_receiver_channel_fields, name) || table_reads(k_downstream_edge_fields, name) ||
            std::ranges::any_of(k_router_pass_args, [&](std::string_view arg) { return same_arg_family(arg, name); });
 }
 

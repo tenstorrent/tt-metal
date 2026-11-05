@@ -57,7 +57,6 @@ json make_l1_json(const manifest::content::L1& l1) {
     out["num_elements"] = l1.num_elements;
     out["element_size"] = l1.element_size;
     out["type"] = std::string(l1.type);
-    out["cleared_by_host"] = l1.cleared_by_host;
     return out;
 }
 
@@ -79,12 +78,14 @@ json make_stream_reg_json(const manifest::content::StreamReg& stream) {
 // This process and the build it runs: ranks, when the manifest was written, and the commit built from.
 json make_run_json(const manifest::RunInfo& run) {
     json out;
-    out["host_rank"] = run.host_rank;
     out["mpi_rank"] = run.mpi_rank;
     out["world_size"] = run.world_size;
     out["written_at"] = run.written_at;
     json build;
     build["git_sha"] = std::string(run.build.git_sha);
+    build["git_sha_short"] = std::string(run.build.git_sha_short);
+    build["version"] = std::string(run.build.version);
+    build["build_type"] = std::string(run.build.build_type);
     build["git_dirty"] = run.build.git_dirty;
     out["build"] = std::move(build);
     return out;
@@ -110,6 +111,7 @@ json make_fabric_json(const manifest::FabricInfo& fabric) {
     block["topology"] = lower_enum_name(fabric.topology);
     block["is_2d_routing"] = fabric.is_2d_routing;
     block["packet_header"] = std::string(fabric.packet_header);
+    block["packet_header_size_bytes"] = fabric.packet_header_size_bytes;
     block["max_payload_size_bytes"] = fabric.max_payload_size_bytes;
     block["channel_buffer_size_bytes"] = fabric.channel_buffer_size_bytes;
     if (fabric.routing_2d_route_buffer_size.has_value()) {
@@ -119,6 +121,18 @@ json make_fabric_json(const manifest::FabricInfo& fabric) {
         block["routing_1d_extension_words"] = *fabric.routing_1d_extension_words;
     }
     block["multi_txq"] = fabric.multi_txq;
+    json host_clears = json::array();
+    for (const auto& clear : fabric.host_clears) {
+        host_clears.push_back({{"address", clear.address}, {"size_bytes", clear.size_bytes}});
+    }
+    block["host_clears"] = std::move(host_clears);
+    const auto& intermesh_vc = fabric.intermesh_vc;
+    block["intermesh_vc"] = {
+        {"mode", lower_enum_name(intermesh_vc.mode)},
+        {"requires_vc1", intermesh_vc.requires_vc1},
+        {"requires_vc2", intermesh_vc.requires_vc2},
+        {"intermesh_vc_disabled", intermesh_vc.intermesh_vc_disabled},
+    };
     return block;
 }
 
@@ -179,6 +193,7 @@ json make_arch_json(const manifest::Arch& arch) {
     out["name"] = lower_enum_name(arch.arch);
     out["l1_areas"] = std::move(areas_json);
     out["core_registers"] = make_core_registers_json(arch.core_registers);
+    out["fabric_telemetry_version"] = arch.fabric_telemetry_version;
     return out;
 }
 
@@ -313,7 +328,8 @@ json make_by_erisc_json(const std::vector<Entry>& entries_by_erisc, EntryJson en
 
 // Each ERISC's fields, keyed erisc<N>.
 json make_fields_by_erisc_json(const manifest::FieldsByErisc& fields_by_erisc) {
-    return make_by_erisc_json(fields_by_erisc, [](const std::vector<manifest::Field>& fields) { return make_fields_json(fields); });
+    return make_by_erisc_json(
+        fields_by_erisc, [](const std::vector<manifest::Field>& fields) { return make_fields_json(fields); });
 }
 
 json make_serviced_by_json(const std::vector<uint32_t>& risc_ids) {
@@ -504,6 +520,7 @@ json make_chip_routers_json(const manifest::Chip& chip) {
 json make_chip_json(const manifest::Chip& chip) {
     json out;
     out["mesh_coord"] = chip.mesh_coord;
+    out["host_rank"] = chip.host_rank.has_value() ? json(*chip.host_rank) : json(nullptr);
     if (!chip.physical_chip_id.has_value()) {
         out["physical_chip_id"] = json(nullptr);
         out["asic_id"] = json(nullptr);
@@ -550,7 +567,7 @@ void serialize_fabric_manifest_to_file(
         fabric_context.has_builder_context(), "Fabric manifest: must be written after the fabric routers are compiled");
     const auto& metal_context = tt::tt_metal::MetalContext::instance();
     const manifest::ManifestFacts facts{
-        .run = manifest::describe_run(control_plane),
+        .run = manifest::describe_run(),
         .fabric = manifest::describe_fabric(control_plane),
         .arch = manifest::describe_arch(metal_context.hal()),
         .meshes =

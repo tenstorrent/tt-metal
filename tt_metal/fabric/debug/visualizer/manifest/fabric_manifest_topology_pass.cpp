@@ -9,19 +9,15 @@
 #include <llrt/tt_cluster.hpp>
 
 #include <algorithm>
-#include <iterator>
-#include <map>
 #include <optional>
 #include <set>
 #include <utility>
 #include <vector>
 
-#include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
-#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_describe.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_router_pass.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_published_chips.hpp"
 
 namespace tt::tt_fabric {
 
@@ -29,26 +25,55 @@ namespace {
 
 using manifest::router_key;
 
-// The router on `peer_chan`, or nullopt when ControlPlane has no active router there (the channel was trimmed from
-// the peer's routing planes).
+// The router on `peer_chan`, or nullopt when the peer's builder built none there. The peer may be on another host, so
+// this asks ControlPlane for the channels FabricBuilder builds routers on (its routing planes in the direction).
 std::optional<manifest::RouterRef> find_peer_router(
     const ControlPlane& control_plane, FabricNodeId peer_node, chan_id_t peer_chan) {
     for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(peer_node)) {
-        if (chan == peer_chan) {
-            return manifest::RouterRef{
-                .node = peer_node,
-                .direction = direction,
-                .routing_plane = control_plane.get_routing_plane_id(peer_node, chan),
-            };
+        // Find the peer ethernet channel in the active channels list
+        if (chan != peer_chan) {
+            continue;
         }
+
+        // Find the peer's routing plane in the direction it faces. If no active
+        // routing planes are active in that direction, the peer has no router there.
+        const auto routed_chans = control_plane.get_active_fabric_eth_routing_planes_in_direction(
+            peer_node, control_plane.eth_direction_to_routing_direction(direction));
+        if (std::ranges::find(routed_chans, chan) == routed_chans.end()) {
+            return std::nullopt;
+        }
+
+        return manifest::RouterRef{
+            .node = peer_node,
+            .direction = direction,
+            .routing_plane = control_plane.get_routing_plane_id(peer_node, chan),
+        };
     }
     return std::nullopt;
 }
 
-// Wrap edges are resolved here rather than inferred by the viewer: a link wraps when its axis genuinely
-// closes and its coordinate delta spans the mesh.
+// Which axes of `mesh_id` MeshGraph wrapped, or null for a mesh that isn't 2D. MeshGraph builds each mesh's connections
+// from its own fabric type (get_valid_connections), and gives the corner chip (0, 0) an N edge only when the mesh wraps
+// rows and a W edge only when it wraps columns.
+std::optional<manifest::MeshTorus> describe_mesh_torus(const MeshGraph& mesh_graph, MeshId mesh_id) {
+    // No torus for non-2D meshes
+    if (mesh_graph.get_mesh_shape(mesh_id).dims() != 2) {
+        return std::nullopt;
+    }
+
+    const auto& corner_edges = mesh_graph.get_intra_mesh_connectivity().at(*mesh_id).at(0);
+    // Check if any of the corner chip's edges have connections to the wrapping direction
+    const auto has_edge_toward = [&](RoutingDirection direction) {
+        return std::ranges::any_of(
+            corner_edges, [&](const auto& edge) { return edge.second.port_direction == direction; });
+    };
+    return manifest::MeshTorus{.y = has_edge_toward(RoutingDirection::N), .x = has_edge_toward(RoutingDirection::W)};
+}
+
+// Wrap edges are resolved here rather than inferred by the viewer: a link wraps when its mesh wraps the link's axis
+// and its coordinate delta spans the mesh.
 bool is_wrap_link(
-    FabricType fabric_type,
+    const std::optional<manifest::MeshTorus>& torus,
     const MeshGraph& mesh_graph,
     FabricNodeId node,
     eth_chan_directions direction,
@@ -58,68 +83,18 @@ bool is_wrap_link(
     const bool is_north_south = direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
 
     // Wrap links require a 2D mesh, a peer in the same mesh, and an east-west or north-south direction
-    if (mesh_shape.dims() != 2 || !peer.has_value() || peer->first.mesh_id != node.mesh_id ||
+    if (!torus.has_value() || !peer.has_value() || peer->first.mesh_id != node.mesh_id ||
         !(is_east_west || is_north_south)) {
         return false;
     }
     const uint32_t axis = is_east_west ? 1 : 0;
-    if (!has_genuine_torus_axis(fabric_type, mesh_shape, axis)) {
+    if (!(is_east_west ? torus->x : torus->y)) {
         return false;
     }
     const uint32_t here = mesh_graph.chip_to_coordinate(node.mesh_id, node.chip_id)[axis];
     const uint32_t there = mesh_graph.chip_to_coordinate(node.mesh_id, peer->first.chip_id)[axis];
     const uint32_t delta = here > there ? here - there : there - here;
     return delta == mesh_shape[axis] - 1;
-}
-
-using RoutersByChan = std::map<chan_id_t, const manifest::Router*>;
-
-RoutersByChan index_routers_by_chan(const std::vector<manifest::Router>& routers) {
-    RoutersByChan by_chan;
-    for (const auto& router : routers) {
-        by_chan.emplace(router.identity.eth_chan, &router);
-    }
-    return by_chan;
-}
-
-// The router the builder connected the router on `chan` to, that faces `direction`, or null when it connected it to
-// none.
-//
-// Siblings are routers on the same chip, wired to each other inside it. A router's downstream edge only names the
-// direction it forwards to (edge.target.direction); this finds which router that is.
-//
-// Example: E0 (on chan 0) has a downstream edge toward N, so the call is chan = 0, direction = N.
-//
-//                    +-----------+
-//                    | N0 (ch 4) |
-//                    +-----------+
-//                     /         \
-//          { 4, 9 }  /           \  { 0, 4 }
-//                   /             \
-//       +-----------+             +-----------+
-//       | W0 (ch 9) |-------------| E0 (ch 0) |  <-- `chan`
-//       +-----------+  { 0, 9 }   +-----------+
-//
-//   Only the pairs holding chan 0 are considered. The other end of each is checked against `direction`:
-//
-//       { 0, 4 }  other end = ch 4 = N0, faces N     N == direction (N)  ->  match, return N0
-//       { 0, 9 }  other end = ch 9 = W0, faces W     W != direction (N)  ->  no match, try the next pair
-const manifest::Router* find_connected_sibling(
-    const std::vector<manifest::ConnectedRouters>& connected_routers,
-    const RoutersByChan& routers_by_chan,
-    chan_id_t chan,
-    eth_chan_directions direction) {
-    for (const auto& pair : connected_routers) {
-        if (pair.eth_chan1 != chan && pair.eth_chan2 != chan) {
-            continue;
-        }
-        const auto other = static_cast<chan_id_t>(pair.eth_chan1 == chan ? pair.eth_chan2 : pair.eth_chan1);
-        const auto it = routers_by_chan.find(other);
-        if (it != routers_by_chan.end() && it->second->identity.direction == direction) {
-            return it->second;
-        }
-    }
-    return nullptr;
 }
 
 tt::tt_metal::CoreCoord get_router_logical_core(const tt::Cluster& cluster, ChipId physical_chip_id, chan_id_t chan) {
@@ -132,65 +107,34 @@ tt::tt_metal::CoreCoord get_router_virtual_core(const tt::Cluster& cluster, Chip
         physical_chip_id, get_router_logical_core(cluster, physical_chip_id, chan), CoreType::ETH);
 }
 
-// Resolves each collected router's identity from its Ethernet channel: its key (direction and routing plane, ie. E0)
-// and cores. Returns the routers in the order ControlPlane lists the chip's active channels.
-//
-// The router hooks only know which Ethernet channel a router runs on, so each collected router starts with just
-// its eth_chan. ControlPlane knows what each active channel means on the chip, and the cluster knows where it sits.
+// Resolves each published router's key and cores. The router pass recorded the channel the router runs on and the
+// direction its builder built it facing; ControlPlane gives its routing plane, its place among the direction's
+// channels, and the cluster gives its cores.
 //
 // Example: a chip with two E links, one N link and one W link.
 //
-//   collected (eth_chan only, in the order the hooks ran):
+//   published, in Ethernet channel order:
 //
 //       ch 0          ch 1          ch 4          ch 9
-//       dir   ?       dir   ?       dir   ?       dir   ?
+//       dir   E       dir   E       dir   N       dir   W
 //       plane ?       plane ?       plane ?       plane ?
 //       cores ?       cores ?       cores ?       cores ?
 //
-//   ControlPlane::get_active_fabric_eth_channels(node), in its order, with get_routing_plane_id per channel:
+//   resolved, with ControlPlane::get_routing_plane_id per channel:
 //
-//       (ch 9, W)    (ch 0, E)    (ch 1, E)    (ch 4, N)
-//        plane 0      plane 0      plane 1      plane 0
-//
-//   Each active channel claims its collected router and fills in the identity, so the result is reordered to match:
-//
-//       ch 9          ch 0          ch 1          ch 4
-//       W0            E0            E1            N0         <-- router_key(direction, routing_plane)
+//       E0            E1            N0            W0         <-- router_key(direction, routing_plane)
 //       logical core  logical core  logical core  logical core  <-- from the cluster's soc descriptor
 //       virtual core  virtual core  virtual core  virtual core
-std::vector<manifest::Router> resolve_router_identities(
-    std::vector<manifest::Router> collected,
+void resolve_router_identities(
+    std::vector<manifest::Router>& routers,
     const ControlPlane& control_plane,
     const tt::Cluster& cluster,
     FabricNodeId node,
     ChipId physical_chip_id) {
-    // Index the collected routers by their Ethernet channel
-    std::map<chan_id_t, manifest::Router> by_chan;
-    for (auto& router : collected) {
-        const chan_id_t chan = router.identity.eth_chan;
-        TT_FATAL(
-            by_chan.emplace(chan, std::move(router)).second,
-            "Fabric manifest: {} has two collected routers on channel {}",
-            node,
-            chan);
-    }
-
-    std::vector<manifest::Router> routers;
     std::set<std::pair<eth_chan_directions, routing_plane_id_t>> keys;
-    for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(node)) {
-        // Get the router for this channel
-        const auto it = by_chan.find(chan);
-        TT_FATAL(
-            it != by_chan.end(),
-            "Fabric manifest: {} channel {} is an active fabric router, but no router was collected for it",
-            node,
-            chan);
-        manifest::Router router = std::move(it->second);
-        by_chan.erase(it);
-
-        // Fill in the router's identity
+    for (auto& router : routers) {
         auto& identity = router.identity;
-        identity.direction = direction;
+        const chan_id_t chan = identity.eth_chan;
         identity.routing_plane = control_plane.get_routing_plane_id(node, chan);
         TT_FATAL(
             keys.emplace(identity.direction, identity.routing_plane).second,
@@ -199,17 +143,7 @@ std::vector<manifest::Router> resolve_router_identities(
             router_key(identity.direction, identity.routing_plane));
         identity.logical_core = get_router_logical_core(cluster, physical_chip_id, chan);
         identity.virtual_core = get_router_virtual_core(cluster, physical_chip_id, chan);
-        routers.push_back(std::move(router));
     }
-
-    // Ensure none of the collected routers haven't been resolved
-    TT_FATAL(
-        by_chan.empty(),
-        "Fabric manifest: {} has {} collected routers on channels that are not active fabric routers",
-        node,
-        by_chan.size());
-
-    return routers;
 }
 
 // The router that leads the chip's local sync.
@@ -261,7 +195,7 @@ manifest::RouterRef get_master_router(
 void resolve_link_peer(
     manifest::Router& router,
     const ControlPlane& control_plane,
-    FabricType fabric_type,
+    const std::optional<manifest::MeshTorus>& torus,
     FabricNodeId node,
     ChipId physical_chip_id) {
     const chan_id_t chan = router.identity.eth_chan;
@@ -270,63 +204,21 @@ void resolve_link_peer(
         router.link.peer = find_peer_router(control_plane, peer->first, peer->second);
     }
     router.link.cross_host = control_plane.is_cross_host_eth_link(physical_chip_id, chan);
-    router.link.wrap = is_wrap_link(fabric_type, control_plane.get_mesh_graph(), node, router.identity.direction, peer);
-}
-
-// Resolves whether each of `router`'s downstream edges ends at the tensix mux of the sibling it lands on.
-//
-// A downstream edge names a sibling and a sender channel on it, but a sibling built with the tensix extension does not
-// take every VC straight into its erisc router: VC0 goes through a tensix mux first.
-//
-// Example: W0 (ch 9) has one downstream edge on each of VC0 and VC1, both toward E (the east router, E0 on ch 0),
-// which has the tensix extension. Routers sit on the chip edge they face, with the tensix mux in front of E0.
-//
-//    +---------------------------------------------------------------------------------------+
-//    |                                                                                       |
-//    |  +-------------+                                                +-----------------+   |
-//    |  | W0 (ch 9)   |  VC0 edge        +------------+  feeds E0      | E0 (ch 0)       |   |
-//    |  | (`router`)  |----------------->| tensix mux |--------------->| has tensix ext  |   |
-//    |  |             |  lands on mux    +------------+                |                 |   |
-//    |  |             |                                                |                 |   |
-//    |  |             |  VC1 edge, lands on erisc router directly      |                 |   |
-//    |  |             |----------------------------------------------->| erisc router    |   |
-//    |  +-------------+                                                +-----------------+   |
-//    |                                                                                       |
-//    | chip                                                                                  |
-//    +---------------------------------------------------------------------------------------+
-void resolve_edges_through_tensix_mux(
-    manifest::Router& router,
-    const std::vector<manifest::ConnectedRouters>& connected_routers,
-    const RoutersByChan& routers_by_chan) {
-    const chan_id_t chan = router.identity.eth_chan;
-    for (uint32_t vc = 0; vc < router.intra_chip_downstream_edges.size(); ++vc) {
-        for (auto& edge : router.intra_chip_downstream_edges[vc]) {
-            const auto* sibling =
-                find_connected_sibling(connected_routers, routers_by_chan, chan, edge.target.direction);
-            edge.through_tensix_mux =
-                sibling != nullptr &&
-                builder_type_for_vc(vc, sibling->shape.has_tensix_extension) == BuilderType::TENSIX;
-        }
-    }
+    router.link.wrap = is_wrap_link(torus, control_plane.get_mesh_graph(), node, router.identity.direction, peer);
 }
 
 // Resolves which sibling feeds each of `router`'s sender channels: the one whose downstream edge lands on the channel,
-// excluding edges that end at this router's tensix mux.
-void resolve_sibling_producers(
-    manifest::Router& router,
-    const std::vector<manifest::Router>& routers,
-    const std::vector<manifest::ConnectedRouters>& connected_routers,
-    const RoutersByChan& routers_by_chan) {
+// excluding edges that end at this router's tensix mux. An edge landing past the router's senders on its VC feeds none.
+void resolve_sibling_producers(manifest::Router& router, const std::vector<manifest::Router>& routers) {
     for (const auto& sibling : routers) {
         if (&sibling == &router) {
             continue;
         }
         for (uint32_t vc = 0; vc < sibling.intra_chip_downstream_edges.size(); ++vc) {
             for (const auto& edge : sibling.intra_chip_downstream_edges[vc]) {
-                const auto* lands_on = find_connected_sibling(
-                    connected_routers, routers_by_chan, sibling.identity.eth_chan, edge.target.direction);
                 auto& senders = router.channels.senders.at(vc);
-                if (lands_on == &router && !edge.through_tensix_mux && edge.landing_channel < senders.size()) {
+                if (edge.target_eth_chan == router.identity.eth_chan && !edge.through_tensix_mux &&
+                    edge.landing_channel < senders.size()) {
                     senders[edge.landing_channel].producer =
                         manifest::SiblingRouterRef{.direction = sibling.identity.direction};
                 }
@@ -336,16 +228,16 @@ void resolve_sibling_producers(
 }
 
 // Resolves the Ethernet channels the builders recorded to the routers they name: each router's key and cores, the
-// local sync master, each link's peer, and each edge's sibling.
+// local sync master, each link's peer, and the sibling feeding each sender channel.
 manifest::Chip resolve_chip_routers(
     manifest::Chip chip,
     const ControlPlane& control_plane,
     const tt::Cluster& cluster,
-    FabricType fabric_type,
+    const std::optional<manifest::MeshTorus>& torus,
     FabricNodeId node,
     ChipId physical_chip_id) {
-    // Get the router's routing plane and facing direction
-    chip.routers = resolve_router_identities(std::move(chip.routers), control_plane, cluster, node, physical_chip_id);
+    // Get each router's routing plane and cores
+    resolve_router_identities(chip.routers, control_plane, cluster, node, physical_chip_id);
 
     if (chip.local_sync.has_value()) {
         chip.local_sync->master = get_master_router(chip.routers, node, chip.local_sync->master_eth_chan);
@@ -353,16 +245,12 @@ manifest::Chip resolve_chip_routers(
 
     // Resolve each router's link to its off-chip peer router (sender -> receiver)
     for (auto& router : chip.routers) {
-        resolve_link_peer(router, control_plane, fabric_type, node, physical_chip_id);
+        resolve_link_peer(router, control_plane, torus, node, physical_chip_id);
     }
 
-    // Each router resolves only its own edges, then only its own sender channels' producers, from the edges.
-    const RoutersByChan routers_by_chan = index_routers_by_chan(chip.routers);
+    // Each router resolves only its own sender channels' producers, from its siblings' edges.
     for (auto& router : chip.routers) {
-        resolve_edges_through_tensix_mux(router, chip.connected_routers, routers_by_chan);
-    }
-    for (auto& router : chip.routers) {
-        resolve_sibling_producers(router, chip.routers, chip.connected_routers, routers_by_chan);
+        resolve_sibling_producers(router, chip.routers);
     }
 
     return chip;
@@ -372,17 +260,22 @@ manifest::Chip describe_chip(
     const ControlPlane& control_plane,
     const tt::Cluster& cluster,
     const FabricBuilderContext& builder_context,
-    FabricType fabric_type,
+    const std::optional<manifest::MeshTorus>& torus,
     FabricNodeId node) {
     // Get the chip's coordinates in its mesh
-    const MeshCoordinate mesh_coord = control_plane.get_mesh_graph().chip_to_coordinate(node.mesh_id, node.chip_id);
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const MeshCoordinate mesh_coord = mesh_graph.chip_to_coordinate(node.mesh_id, node.chip_id);
     std::vector<uint32_t> coords(mesh_coord.coords().begin(), mesh_coord.coords().end());
+    std::optional<uint32_t> host_rank;
+    if (const auto owner = mesh_graph.get_host_rank_for_chip(node.mesh_id, node.chip_id); owner.has_value()) {
+        host_rank = **owner;
+    }
 
     // Non-local chips, where locality is at the host rank granularity, can only be described by their place in the
     // mesh. The chip's owning rank takes care of more in depth description.
     const auto physical_chip_id = control_plane.try_get_physical_chip_id_from_fabric_node_id(node);
     if (!physical_chip_id.has_value()) {
-        return manifest::Chip{.fabric_node_id = node, .mesh_coord = std::move(coords)};
+        return manifest::Chip{.fabric_node_id = node, .mesh_coord = std::move(coords), .host_rank = host_rank};
     }
 
     // A chip that built no routers published nothing, so it starts with no routers
@@ -393,18 +286,18 @@ manifest::Chip describe_chip(
     // Fill in the chip's details
     chip.fabric_node_id = node;
     chip.mesh_coord = std::move(coords);
+    chip.host_rank = host_rank;
     chip.physical_chip_id = physical_chip_id;
     chip.asic_id = *control_plane.get_asic_id_from_fabric_node_id(node);
 
     // Resolve the chip's routers against the control plane and the chip's other routers
-    return resolve_chip_routers(std::move(chip), control_plane, cluster, fabric_type, node, *physical_chip_id);
+    return resolve_chip_routers(std::move(chip), control_plane, cluster, torus, node, *physical_chip_id);
 }
 
 manifest::Mesh describe_mesh(
     const ControlPlane& control_plane,
     const tt::Cluster& cluster,
     const FabricBuilderContext& builder_context,
-    FabricType fabric_type,
     MeshId mesh_id) {
     // Get the mesh's shape and configuration
     const auto& mesh_graph = control_plane.get_mesh_graph();
@@ -414,14 +307,7 @@ manifest::Mesh describe_mesh(
         mesh.shape.push_back(mesh_shape[dim]);
     }
 
-    // has_genuine_torus_axis() is defined only for a 2D shape, and deliberately reports false for a declared
-    // torus axis whose extent is too small to realize a distinct wrap edge.
-    if (mesh_shape.dims() == 2) {
-        mesh.torus = manifest::MeshTorus{
-            .y = has_genuine_torus_axis(fabric_type, mesh_shape, 0),
-            .x = has_genuine_torus_axis(fabric_type, mesh_shape, 1),
-        };
-    }
+    mesh.torus = describe_mesh_torus(mesh_graph, mesh_id);
 
     // The builder context plans credits only for the meshes on this host
     const auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
@@ -432,7 +318,7 @@ manifest::Mesh describe_mesh(
     // Describe each chip in the mesh
     for (const auto& [_, fabric_chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
         mesh.chips.push_back(
-            describe_chip(control_plane, cluster, builder_context, fabric_type, FabricNodeId(mesh_id, fabric_chip_id)));
+            describe_chip(control_plane, cluster, builder_context, mesh.torus, FabricNodeId(mesh_id, fabric_chip_id)));
     }
 
     return mesh;
@@ -444,13 +330,12 @@ namespace manifest {
 
 std::vector<Mesh> describe_meshes(
     const ControlPlane& control_plane, const tt::Cluster& cluster, const FabricBuilderContext& builder_context) {
-    const FabricType fabric_type = get_fabric_type(control_plane.get_fabric_config(), cluster.is_ubb_galaxy());
     auto mesh_ids = control_plane.get_mesh_graph().get_all_mesh_ids();
     std::ranges::sort(mesh_ids, {}, [](const MeshId& mesh_id) { return *mesh_id; });
     std::vector<Mesh> meshes;
     meshes.reserve(mesh_ids.size());
     for (const auto& mesh_id : mesh_ids) {
-        meshes.push_back(describe_mesh(control_plane, cluster, builder_context, fabric_type, mesh_id));
+        meshes.push_back(describe_mesh(control_plane, cluster, builder_context, mesh_id));
     }
     return meshes;
 }
