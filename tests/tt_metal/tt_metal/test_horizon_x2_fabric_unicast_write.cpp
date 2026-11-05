@@ -74,11 +74,7 @@ protected:
         QuasarMeshDeviceSingleCardFixture::SetUp();
     }
 
-    void TearDown() override {
-        QuasarMeshDeviceSingleCardFixture::TearDown();
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-        MetalContext::instance().set_default_fabric_topology();
-    }
+    void TearDown() override { QuasarMeshDeviceSingleCardFixture::TearDown(); }
 };
 
 void expect_fabric_unicast_write_with_checker(
