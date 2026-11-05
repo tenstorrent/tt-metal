@@ -2546,6 +2546,17 @@ def test_group_norm_sharded_dirty_padding_tile_aligned_groups(
     assert pcc > 0.999, f"pcc {pcc} at C={C} G={G} with tile padding = {padding_value}"
 
 
+# Grid for the fp32 accuracy tests below (wide groups with fp32 DEST, FLOAT32 input with narrow groups, and the user
+# compute_kernel_config's fp32_dest_acc_en). 4x4 fits every supported device (the smallest is the 20-core Blackhole
+# SKU, 5x4, and Wormhole with dispatch on a worker row is 8x7) and still reaches both the mcast and no-mcast factories.
+SMALL_DEVICE_GRID = ttnn.CoreGrid(y=4, x=4)
+
+
+def skip_if_grid_too_small(device, grid):
+    if device.core_grid.x < grid.x or device.core_grid.y < grid.y:
+        pytest.skip(f"device grid too small for {grid.x}x{grid.y}")
+
+
 # The interleaved factories used to pick channel subblocks of up to 8 tiles. The statistics loops fill a whole
 # subblock in one DEST acquire, and an fp32 DEST in half-sync mode only holds 4 tiles, so groups of 5 or more
 # channel tiles got wrong statistics. The sharded factory already caps the subblock at 4 in that case.
@@ -2556,14 +2567,15 @@ def test_group_norm_sharded_dirty_padding_tile_aligned_groups(
     ids=["fp32", "bf16_fp32_dest", "bf16"],
 )
 @pytest.mark.parametrize("dst_full_sync_en", [False, True], ids=["half_sync", "full_sync"])
-# One sample on an 8x8 grid takes the mcast factory. Eight samples on an 8x4 grid (one group per core column)
-# fill all virtual rows, which selects the no-mcast factory.
-@pytest.mark.parametrize("N, HW, core_grid", [(1, 1024, (8, 8)), (8, 128, (8, 4))], ids=["mcast", "no_mcast"])
-def test_group_norm_interleaved_wide_groups_fp32_dest(
-    device, C, dtype, fp32_dest_acc_en, dst_full_sync_en, N, HW, core_grid
-):
+# On the 4x4 grid each group gets one core column (4 virtual rows). One sample takes the mcast factory; four samples
+# fill all virtual rows, which selects the no-mcast factory. HW keeps 2 (mcast) and 4 (no-mcast) tile rows per core:
+# more rows per core overflow L1 for fp32 at 8 channel tiles and push the bf16 DEST error past the tolerance.
+@pytest.mark.parametrize("N, HW", [(1, 256), (4, 128)], ids=["mcast", "no_mcast"])
+def test_group_norm_interleaved_wide_groups_fp32_dest(device, C, dtype, fp32_dest_acc_en, dst_full_sync_en, N, HW):
     torch.manual_seed(0)
     G = 4
+    grid = SMALL_DEVICE_GRID
+    skip_if_grid_too_small(device, grid)
     x = torch.randn(N, 1, HW, C)
     if dtype == ttnn.bfloat16:
         x = x.bfloat16().float()
@@ -2581,7 +2593,7 @@ def test_group_norm_interleaved_wide_groups_fp32_dest(
         tt_input,
         num_groups=G,
         epsilon=1e-5,
-        core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
+        core_grid=grid,
         inplace=False,
         compute_kernel_config=compute_kernel_config,
     )
@@ -2593,8 +2605,9 @@ def test_group_norm_interleaved_wide_groups_fp32_dest(
 
 
 # Mean abs error bound for FLOAT32 input with groups narrower than a tile: between the fixed error and the error
-# when SrcB truncated those groups to bf16 (#29960). Over seeds 0-9 on Wormhole n300 (HiFi3), the fixed kernels give
-# 8.4e-4 to 9.1e-4 and the truncating kernels 1.68e-3 to 1.76e-3, on both the mcast and sharded factories.
+# when SrcB truncated those groups to bf16 (#29960). Over seeds 0-9, the fixed kernels give 8.4e-4 to 9.1e-4 and the
+# truncating kernels 1.68e-3 to 1.76e-3. The values are the same on Wormhole (HiFi3) and Blackhole (HiFi4), on 4x4 and
+# 8x8 grids, and on both the mcast and sharded factories.
 FP32_INPUT_NARROW_GROUPS_MAX_ERR = 1.2e-3
 
 
@@ -2613,13 +2626,14 @@ def test_group_norm_welford_fp32_input_narrow_groups_accuracy(device, path):
         math_approx_mode=True,
         fp32_dest_acc_en=True,
     )
-    grid = ttnn.CoreGrid(y=8, x=8)
+    grid = SMALL_DEVICE_GRID
+    skip_if_grid_too_small(device, grid)
     tt_input = ttnn.from_torch(
         x, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT if path == "sharded" else ttnn.TILE_LAYOUT, device=device
     )
     if path == "sharded":
-        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
-        shard_spec = ttnn.ShardSpec(shard_grid, (N * HW // 8, C // 8), ttnn.ShardOrientation.COL_MAJOR)
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+        shard_spec = ttnn.ShardSpec(shard_grid, (N * HW // grid.y, C // grid.x), ttnn.ShardOrientation.COL_MAJOR)
         memory_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
@@ -2643,15 +2657,16 @@ def test_group_norm_welford_fp32_input_narrow_groups_accuracy(device, path):
     assert err < FP32_INPUT_NARROW_GROUPS_MAX_ERR, f"mean abs error {err}"
 
 
-# Helper for the user compute_kernel_config tests below: runs group_norm on x (N, 1, HW, C) on one factory:
-#   - "mcast": interleaved TILE input on an 8x8 grid; one sample selects the mcast factory.
-#   - "no_mcast": interleaved TILE input on an 8x4 grid; with N=8 every virtual row is filled, which selects the
-#     no-mcast factory.
-#   - "sharded": block-sharded ROW_MAJOR input on a 4x4 grid, with no caller-supplied input mask.
+# Helper for the user compute_kernel_config tests below: runs group_norm on x (N, 1, HW, C) on one factory, all on
+# the 4x4 grid (4 virtual rows for C=512, G=4):
+#   - "mcast": interleaved TILE input; one sample selects the mcast factory.
+#   - "no_mcast": interleaved TILE input; with N=4 every virtual row is filled, which selects the no-mcast factory.
+#   - "sharded": block-sharded ROW_MAJOR input, with no caller-supplied input mask.
 def _run_group_norm_user_kernel_config(device, x, G, path, dtype, compute_kernel_config, use_welford):
     N, _, HW, C = x.shape
+    grid = SMALL_DEVICE_GRID
+    skip_if_grid_too_small(device, grid)
     if path == "sharded":
-        grid = ttnn.CoreGrid(y=4, x=4)
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
         shard_spec = ttnn.ShardSpec(shard_grid, (N * HW // grid.y, C // grid.x), ttnn.ShardOrientation.ROW_MAJOR)
         memory_config = ttnn.MemoryConfig(
@@ -2662,7 +2677,6 @@ def _run_group_norm_user_kernel_config(device, x, G, path, dtype, compute_kernel
         )
         kwargs = {"core_grid": grid, "memory_config": memory_config}
     else:
-        grid = ttnn.CoreGrid(y=8, x=8) if path == "mcast" else ttnn.CoreGrid(y=8, x=4)
         tt_input = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
         kwargs = {"core_grid": grid, "inplace": False}
     tt_output = ttnn.group_norm(
@@ -2677,7 +2691,7 @@ def _run_group_norm_user_kernel_config(device, x, G, path, dtype, compute_kernel
 
 
 # (N, HW) per factory for the user compute_kernel_config tests; see _run_group_norm_user_kernel_config.
-USER_KERNEL_CONFIG_PATHS = [("mcast", 1, 1024), ("no_mcast", 8, 128), ("sharded", 1, 1024)]
+USER_KERNEL_CONFIG_PATHS = [("mcast", 1, 1024), ("no_mcast", 4, 128), ("sharded", 1, 1024)]
 
 
 # A user compute_kernel_config replaces the op's default config wholesale, so its fp32_dest_acc_en must reach the
