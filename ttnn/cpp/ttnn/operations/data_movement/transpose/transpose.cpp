@@ -298,6 +298,7 @@ ttnn::Tensor transpose_impl(
         const uint32_t rank_diff = 4 - initial_rank;
         normalized_dim1 += rank_diff;
         normalized_dim2 += rank_diff;
+        shift_shard_dims(input_unsqueezed, static_cast<int>(rank_diff));
     } else if (initial_rank > 4) {
         return detail::transpose_nd(input_tensor, normalized_dim1, normalized_dim2, memory_config_arg, pad_value);
     }
@@ -339,7 +340,10 @@ ttnn::Tensor transpose_impl(
         output = detail::transpose_(
             input_typecasted, transpose_dims[normalized_dim1][normalized_dim2], memory_config_arg, pad_value);
     }
-    output = initial_rank < 4u ? ttnn::squeeze_from_4D(output, initial_rank) : output;
+    if (initial_rank < 4u) {
+        output = ttnn::squeeze_from_4D(output, initial_rank);
+        shift_shard_dims(output, -static_cast<int>(4 - initial_rank));
+    }
     return typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
 }
 

@@ -13,7 +13,6 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "permute_device_operation.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"

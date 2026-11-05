@@ -490,4 +490,10 @@ bool codegen_supported_on_arch(const ttnn::Tensor& input);
 std::optional<tt::tt_metal::TensorTopology> permuted_tensor_topology(
     const tt::tt_metal::TensorTopology& topology, const ttsl::SmallVector<uint32_t>& dims);
 
+// Moves each Shard of `view`'s label that is counted from the front by `offset` dims, for a view that adds `offset`
+// leading dims of size 1 (offset > 0) or drops -offset of them (offset < 0): a view copies its input's label unchanged.
+// A Shard counted from the end names the same dim in both and stays. `view` must have a label of its own, as a reshape
+// to another rank gives it. TODO(#64322): drop the calls once reshape renumbers the label itself.
+void shift_shard_dims(Tensor& view, int offset);
+
 }  // namespace ttnn::operations::data_movement

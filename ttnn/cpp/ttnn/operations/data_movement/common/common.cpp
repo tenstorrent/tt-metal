@@ -1090,7 +1090,7 @@ std::optional<tt::tt_metal::TensorTopology> permuted_tensor_topology(
             continue;
         }
         const int dim = shard->dim < 0 ? shard->dim + rank : shard->dim;
-        const auto position = std::find(dims.begin(), dims.end(), static_cast<uint32_t>(dim));
+        const auto* const position = std::find(dims.begin(), dims.end(), static_cast<uint32_t>(dim));
         if (dim < 0 || position == dims.end()) {
             continue;  // a dim the tensor does not have keeps its number
         }
@@ -1103,6 +1103,24 @@ std::optional<tt::tt_metal::TensorTopology> permuted_tensor_topology(
         return std::nullopt;
     }
     return tt::tt_metal::TensorTopology(topology.distribution_shape(), std::move(placements), topology.mesh_coords());
+}
+
+void shift_shard_dims(Tensor& view, int offset) {
+    using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+    const auto& topology = view.tensor_topology();
+    auto placements = topology.placements();
+    bool shifted = false;
+    for (auto& placement : placements) {
+        auto* shard = std::get_if<Shard>(&placement);
+        if (shard != nullptr && shard->dim >= 0 && shard->dim + offset >= 0) {
+            shard->dim += offset;
+            shifted = true;
+        }
+    }
+    if (shifted) {
+        view.update_tensor_topology(
+            tt::tt_metal::TensorTopology(topology.distribution_shape(), std::move(placements), topology.mesh_coords()));
+    }
 }
 
 }  // namespace ttnn::operations::data_movement
