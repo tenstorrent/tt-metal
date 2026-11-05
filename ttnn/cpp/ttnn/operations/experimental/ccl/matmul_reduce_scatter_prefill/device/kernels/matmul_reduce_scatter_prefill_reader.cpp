@@ -111,8 +111,13 @@ void kernel_main() {
     // so the second NoC adds DRAM-response links for the fill
     constexpr uint8_t a_read_noc = get_compile_time_arg_val(ct::A_READ_NOC);
     constexpr uint8_t w_read_noc = get_compile_time_arg_val(ct::W_READ_NOC);
-    constexpr bool a_alternate = a_read_noc == mrs::read_noc::ALTERNATE;  // A tiles alternate NoC0 / NoC1
-    constexpr bool w_alternate = w_read_noc == mrs::read_noc::ALTERNATE;  // W tiles alternate NoC0 / NoC1
+    // ALTERNATE: both NoCs, and every DRAM bank answers on both. W alternates tile by tile: a core's W tiles step by
+    // Nt pages, so with Nt even each column's bank sees both NoCs, and with Nt odd the columns' parity mixes them. A
+    // pages are contiguous, so a tile-by-tile alternation would tie the NoC to the bank's parity (Kt a multiple of the
+    // bank count: even banks on NoC0 only, odd on NoC1 only); A flips the NoC on each pass over the banks instead
+    // (measured on a fold along M with A the 15.6 MB stream: 62.3 us, as on one NoC, against 48 us)
+    constexpr bool a_alternate = a_read_noc == mrs::read_noc::ALTERNATE;
+    constexpr bool w_alternate = w_read_noc == mrs::read_noc::ALTERNATE;
     constexpr bool two_read_nocs = a_alternate || w_alternate || a_read_noc != w_read_noc || a_read_noc != noc_index;
     constexpr uint32_t num_waves = get_compile_time_arg_val(ct::NUM_WAVES);  // entries per block (e is wave e mod W)
     constexpr uint32_t num_chunks = get_compile_time_arg_val(ct::NUM_CHUNKS);
@@ -304,12 +309,11 @@ void kernel_main() {
             const uint32_t i1 = i1_nom < m_valid_w ? i1_nom : m_valid_w;
             for (uint32_t i = i0; i < i1; ++i) {
                 for (uint32_t kk = 0; kk < kb; ++kk) {
-                    const uint8_t an = a_alternate ? static_cast<uint8_t>((i + kk) & 1) : a_read_noc;
+                    const uint32_t page = page0 + i * Kt + kk;
+                    const uint8_t an =
+                        a_alternate ? static_cast<uint8_t>((page ^ (page / NUM_DRAM_BANKS)) & 1) : a_read_noc;
                     noc_async_read(
-                        a_acc.get_noc_addr(page0 + i * Kt + kk, 0, an),
-                        dst + (i * kb + kk) * a_tile_bytes,
-                        a_tile_bytes,
-                        an);
+                        a_acc.get_noc_addr(page, 0, an), dst + (i * kb + kk) * a_tile_bytes, a_tile_bytes, an);
                 }
             }
         }
