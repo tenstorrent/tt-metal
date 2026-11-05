@@ -1506,3 +1506,24 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   by the agent on the changed tree, kept). STOPPED only for "files outside its paths": tasks.yaml, my own P.32 edits
   made while its agent ran (my error: tasks.yaml is edited at a pause). Kept; resumed --until X.3 (P.32 waits for the
   profile suffix change).
+- 19:01 Expert cache backup DONE: /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/tt_cache/8x4/v1/experts-5254448103b6
+  (bfp4 + bfp4_mse, 240 files, 571G, size-checked).
+- 19:03 P.23 full gate (quick-accepted pick, before X.3) FAIL on one unit: test_adapter_acks, tt-d-gen's fixed 0.99
+  last-block PCC, 0_window_kv layer 18 0.9898 (bfp4_mse default moved the rounding; waiver covers layers 35 / 38
+  only). Rest of the unit passes. Asked the owner to widen the waiver to any layer for this check. Run waits.
+- 08:35 OWNER: widen the window-KV last-block waiver to any layer (P.23 full gate, layer 18 0.9898, rel 0.143): done in
+  spec.yaml (both test_adapter_acks and test_runner_contract), intake re-approved. gate P.23 --unit test_adapter_acks
+  running. OWNER: X.3 after P.32: P.32 deps -> P.31, X.3 deps += P.32. Next: profile.py _last / _nonlast suffix
+  (framework, selftest), gate P.23 --continue, then run --until P.32.
+- 08:50 OWNER aligned P.32: WINDOW_KV_KEEP full | ring | none (ring = DeepSeek-style kept windows, none = Kartik's
+  page, always replay); test_window_ring runs ring and none under exact and replay128; A/B full vs ring. Updated in
+  tasks.yaml, un-paused. F249 committed (5cef7c2ade0: position profile suffix _last / _nonlast; selftest).
+- 09:01 MY ERROR: `timeout 600` around `gate P.23 --continue` killed the gate mid-unit (runner contract); the orphaned
+  runner_case finished on its own, but the killed safe runner left all 32 cards dirty (/tmp/tt-device-*.dirty). No
+  chip held. Asked the owner for the reset (recover-hosts via the safe runner, then the box test); then P.23's last
+  units, then P.32. Lesson: never wrap a device command in `timeout`; use run_in_background for long gates.
+- 09:55 OWNER: reset ("run the script yourself"). First try: recover-hosts aborted in its new MPI stress pre-check
+  ("At least two ranks are required"; single host) before resetting. Second: TTPOOL_RECOVER_CMD with
+  --skip-mpi-stress-test: "Recovery succeeded on attempt 1 of 1" (tt-smi -glx_reset + validation), box test PASS
+  (2m19s total), 0 dirty cards. Made permanent in scripts/lib/tt_device_pool.sh. Skill: Galaxy reset = recover-hosts
+  or tt-smi -glx_reset, never -r (Jacob Panasiuk, 873e0e45e54).

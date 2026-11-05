@@ -2751,6 +2751,7 @@ tasks:
   - P.28
   - P.30
   - P.31
+  - P.32
   - P.29
   - FIX.22
   gate:
@@ -2774,26 +2775,26 @@ tasks:
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-last.json: 3e5bd842719f73a13d5e8493c3d47dc33ad312fc00f48e6b5e253f688db46ecf
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-s56320.json: 5115183638d346663cf8bace35ff5906c4f9a95fd362b53e26cc0b69299f34c6
 - id: P.32
-  title: 'WINDOW_KV_KEEP=final: keep only each layer''s last window rows per user (a ring), not the window history'
+  title: 'WINDOW_KV_KEEP full | ring | none: keep the window history, only each layer''s last 192 rows per user, or nothing (replay)'
   step: perf
   role: perf
   device: true
-  hold: 'owner 2026-11-04: after X.3; released with --until P.32'
+  hold: 'owner 2026-11-05: before X.3 (X.3 after P.32); aligned on full | ring | none 2026-11-05, released (--until P.32)'
   deps:
-  - X.3
+  - P.31
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-11-04: the memory half of DeepSeek-V4.1-Flash''s bounded window (arXiv 2609.19969: SWA KV is not persisted). A new switch WINDOW_KV_KEEP (full | final; default full until the owner decides; full = today: every position of every layer''s window KV). final = per user and layer only the last 192 window rows (128 the window reads + 64, the server''s kv_block_size: a follow-up turn starts at align_down(prev_end, 64), so its 128-row carry is still in the ring), written in place as a ring; the compressed KV and index keys unchanged. Everything that reads window rows reads the ring: the chunk''s 128-row carry, a pulled-back chunk, load_host / load_ring / to_host for the harness. A start whose carry is not in the ring (a prefix reused from another request, a resume older than the ring) is served by the decoder-skip modes P.30 / P.31 already have (exact: the caller pulls back >= 2688 tokens; replay128: the 128-token replay); with DECODER_SKIP=off such a start is refused with a clear error, never computed from missing rows. Add tests/bringup/test_window_ring.py: (1) a 3-chunk prompt (rung s10240 + one more chunk, or the goldens available) and a follow-up turn starting at align_down(end, 64), with WINDOW_KV_KEEP=final vs full: the last chunk''s final hidden, top-5 and every layer''s final 128 window rows against the golden with the framework''s end-to-end limits (testing/e2e_limits.py), recorded as ring_err_final_hidden / ring_err_window_kv_L* / ring_top5_overlap with their _limit, the full path''s values beside them; (2) a start outside the ring under DECODER_SKIP=off raises. Memory: test_dram.py (1M, one slot) on both sides; the served window cache per chip per user should fall from ~1.25 GiB to ~5 MB. The serving contract''s window-KV per-position tests and the tt-d-gen runner tests expect the full history: not in this gate (tt-d-gen change pending). TIMING (owner 2026-11-04): the gate also times one 5k chunk at 51200 and 512000 as the request''s last chunk under DECODER_SKIP=replay128 (decoder on its last 128 rows; metrics *_p<pos>_last) and as a non-last chunk under DECODER_SKIP=exact (*_p<pos>_nonlast), on both A/B sides: the framework runs these (BRINGUP_CHUNK_LAST); do not time them yourself. Model-level checks only; no fork regression suites on the 8x4; every Python-built op prepared.'
+    details: 'OWNER 2026-11-04: the memory half of DeepSeek-V4.1-Flash''s bounded window (arXiv 2609.19969: SWA KV is not persisted). OWNER 2026-11-05: one switch, three values. A new switch WINDOW_KV_KEEP (full | ring | none; default full until the owner decides; full = today: every position of every layer''s window KV; ring = DeepSeek-style: the windows kept per user, here on the device; none = Kartik''s page: nothing kept, every follow-up replays). ring = per user and layer only the last 192 window rows (128 the window reads + 64, the server''s kv_block_size: a follow-up turn starts at align_down(prev_end, 64), so its 128-row carry is still in the ring), written in place as a ring; the compressed KV and index keys unchanged. Everything that reads window rows reads the ring: the chunk''s 128-row carry, a pulled-back chunk, load_host / load_ring / to_host for the harness. none = no window rows kept between requests (the served window cache holds nothing outside the running request): every follow-up and every prefix hit is served by the replay modes below. A start whose carry is not in the ring (a prefix reused from another request, a resume older than the ring, an evicted ring) is served by the decoder-skip modes P.30 / P.31 already have (exact: the caller pulls back >= 2688 tokens; replay128: the 128-token replay); with DECODER_SKIP=off such a start is refused with a clear error, never computed from missing rows. Add tests/bringup/test_window_ring.py: (1) a 3-chunk prompt (rung s10240 + one more chunk, or the goldens available) and a follow-up turn starting at align_down(end, 64), for each of WINDOW_KV_KEEP=ring and none, each under DECODER_SKIP=exact and replay128, vs full (4 combinations, metrics suffixed _ring_exact / _ring_replay128 / _none_exact / _none_replay128): the last chunk''s final hidden, top-5 and every layer''s final 128 window rows against the golden with the framework''s end-to-end limits (testing/e2e_limits.py), recorded as ring_err_final_hidden / ring_err_window_kv_L* / ring_top5_overlap with their _limit, the full path''s values beside them; (2) a start outside the ring under DECODER_SKIP=off raises. Memory: test_dram.py (1M, one slot) on both sides (and record none''s served window bytes in test_window_ring); the served window cache per chip per user should fall from ~1.25 GiB to ~5 MB. The serving contract''s window-KV per-position tests and the tt-d-gen runner tests expect the full history: not in this gate (tt-d-gen change pending). TIMING (owner 2026-11-04): the gate also times one 5k chunk at 51200 and 512000 as the request''s last chunk under DECODER_SKIP=replay128 (decoder on its last 128 rows; metrics *_p<pos>_last) and as a non-last chunk under DECODER_SKIP=exact (*_p<pos>_nonlast), on both A/B sides: the framework runs these (BRINGUP_CHUNK_LAST); do not time them yourself. Model-level checks only; no fork regression suites on the 8x4; every Python-built op prepared.'
   ab:
     keep_default: true
     env:
       WINDOW_KV_KEEP: full
       ENGRAM_TABLE: resident
     change:
-      WINDOW_KV_KEEP: final
+      WINDOW_KV_KEEP: ring
       ENGRAM_TABLE: resident
   ab_mode: full
   ab_rungs:
@@ -2819,9 +2820,9 @@ tasks:
       err_state_*_L*: <= limit
       err_final_hidden: <= limit
       top5_overlap: '>= limit'
-      ring_err_final_hidden: <= limit
+      ring_err_final_hidden_*: <= limit
       ring_err_window_kv_L*: <= limit
-      ring_top5_overlap: '>= limit'
+      ring_top5_overlap_*: '>= limit'
       dram_load_gib_max: '> 0'
       dram_peak_gib_max: '> 0'
 - id: O.1
