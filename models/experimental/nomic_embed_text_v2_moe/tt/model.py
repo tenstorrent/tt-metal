@@ -21,9 +21,10 @@
           l2_normalize          -> (b, 1, 1, dim) unit norm
         to_torch, input order   -> (B, dim)
 
-Large inputs run in chunks of whole sequences (tt/chunking.py): the backbone splits a batch past
-tt_config.max_chunk_tokens computed tokens into contiguous chunks and joins their outputs, and embed()
-sorts the texts by length so that each chunk also drops the padding its longest text did not need.
+Large inputs run in chunks of whole sequences (tt/chunking.py): the backbone splits a batch past the
+largest of tt_config.chunk_tokens (4096 computed tokens) into contiguous chunks of 4096, 2048 and 1024 tokens
+and joins their outputs, and embed() sorts the texts by length so that each chunk also drops the padding its
+longest text did not need.
 
 The split is the reference's: the model is the backbone and nothing else, and the pooling stages
 are called directly by the one driver rather than wrapped in a method of their own. Anyone
@@ -117,10 +118,10 @@ class TtNomicBertModel(LightweightModule):
     ) -> ttnn.Tensor:
         """Embed the tokens and run the encoder stack, in chunks of whole sequences when the batch is large.
 
-        Past tt_config.max_chunk_tokens computed tokens the batch runs as contiguous chunks
-        (tt.chunking.plan_chunks), each through the whole backbone, and their outputs are joined: a chunk's
-        activations then stay in L1. Each sequence's output is what the backbone computes for it in its own
-        chunk.
+        Past the largest of tt_config.chunk_tokens computed tokens the batch runs as contiguous chunks of
+        those sizes (tt.chunking.plan_chunks), each through the whole backbone, and their outputs are joined:
+        a chunk's activations then stay in L1 and run on the generated ops. Each sequence's output is what
+        the backbone computes for it in its own chunk.
 
         Args:
             input_ids: (B, S) int64 token ids, from reference.preprocessing.tokenize.
@@ -148,7 +149,7 @@ class TtNomicBertModel(LightweightModule):
 
         batch, seqlen = input_ids.shape
         outputs = []
-        for chunk in plan_chunks(batch, seqlen, self.tt_config.max_chunk_tokens):
+        for chunk in plan_chunks(batch, seqlen, self.tt_config.chunk_tokens):
             rows = slice(chunk.start, chunk.start + chunk.count)
             outputs.append(self.backbone(input_ids[rows], None if attention_mask is None else attention_mask[rows]))
         if len(outputs) == 1:
@@ -240,8 +241,8 @@ def embed(
 ) -> torch.Tensor:
     """Token ids to normalized embeddings, in length-sorted chunks each cut to its longest sequence.
 
-    The sequences are sorted longest first and split into chunks of at most tt_config.max_chunk_tokens
-    computed tokens (tt.chunking.plan_sorted_chunks). Each chunk runs at its own longest sequence's length,
+    The sequences are sorted longest first and split into chunks of the tt_config.chunk_tokens sizes
+    (tt.chunking.plan_sorted_chunks). Each chunk runs at its own longest sequence's length,
     so a short text no longer computes the padding its batch's longest text set, and each is pooled and
     normalized on its own; the rows come back in input order. All chunks are queued before the first is
     read back.
@@ -265,7 +266,7 @@ def embed(
     if not torch.equal(attention_mask.bool(), torch.arange(seqlen) < lengths[:, None]):
         lengths = torch.full_like(lengths, seqlen)
     order = torch.argsort(lengths, descending=True, stable=True)
-    chunks = plan_sorted_chunks(lengths[order].tolist(), model.tt_config.max_chunk_tokens)
+    chunks = plan_sorted_chunks(lengths[order].tolist(), model.tt_config.chunk_tokens)
     pieces = []
     for chunk in chunks:
         rows = order[chunk.start : chunk.start + chunk.count]
