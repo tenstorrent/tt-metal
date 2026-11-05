@@ -144,10 +144,10 @@ the fused kernels require. Unset keeps the bf16 sum.
     bf16, and the `dp` sum in `ttml.sync_gradients()` rounds it again. No shipped config enables HSDP, and none of the
     measurements below is an HSDP run.
 - **Not covered yet.** GRPO, and `SFTTrainer` when it builds its own optimizer (from an optimizer dict, or its default
-  `AdamW`), don't apply the precision block, so their syncs find no stored value and keep the bf16 sum. The
-  aggregators of 2- and 3-tier training add the workers' gradients and all-reduce them in bf16: the C++ 3-tier one,
-  and `aggregator()` and `aggregator_optimizer()` in the Python hierarchical example
-  (`sources/examples/python/multihost/hierarchical_parallel/trainer.py`).
+  `AdamW`), don't apply the precision block. They store no value, so their syncs keep the bf16 sum unless an earlier
+  config in the same process stored one. The aggregators of 2- and 3-tier training add the workers' gradients and
+  all-reduce them in bf16: the C++ 3-tier one, and `aggregator()` and `aggregator_optimizer()` in the Python
+  hierarchical example (`sources/examples/python/multihost/hierarchical_parallel/trainer.py`).
 
 The mean is cast back to bf16 rather than kept in fp32: a gradient is used once per step, so this costs one rounding,
 while the optimizer state and the master weights, which accumulate, stay in fp32 with `master_dtype: float32` (with
