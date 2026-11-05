@@ -1650,7 +1650,8 @@ std::tuple<ChipId, tt::tt_metal::CoreCoord> Cluster::get_connected_ethernet_core
         this->get_cluster_desc()->get_chip_and_channel_of_remote_ethernet_core(std::get<0>(eth_core), eth_chan);
     return std::make_tuple(
         std::get<0>(connected_eth_core),
-        soc_desc.get_eth_core_for_channel(std::get<1>(connected_eth_core), CoordSystem::LOGICAL));
+        get_soc_desc(std::get<0>(connected_eth_core))
+            .get_eth_core_for_channel(std::get<1>(connected_eth_core), CoordSystem::LOGICAL));
 }
 
 // TODO: unify uint64_t with ChipUID
