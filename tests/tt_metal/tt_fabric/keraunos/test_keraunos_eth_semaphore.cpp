@@ -4,7 +4,7 @@
 
 // Semaphores on Keraunos Ethernet cores (CCE), on the two-chip test descriptors in this directory.
 // Run with TT_METAL_SLOW_DISPATCH_MODE=1. On Mock these tests check what the host computes and skip
-// before launch: Quasar Mock builds no kernel binaries, and UMD MockChip reads and writes are no-ops.
+// before launch: UMD MockChip reads and writes are no-ops.
 
 #include <gtest/gtest.h>
 
