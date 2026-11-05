@@ -2,6 +2,9 @@ set(HW_JIT_API_HEADERS
     inc/experimental/drisc_mode.h
     inc/experimental/gddr_dma.h
     inc/experimental/gddr_mc.h
+    inc/experimental/gguf_level_tables.h
+    inc/experimental/gguf_lookup_rvv.h
+    inc/experimental/gguf_page.h
     inc/experimental/blaze_rt_arg.h
     inc/api/alignment.h
     inc/api/buffer_types.hpp
