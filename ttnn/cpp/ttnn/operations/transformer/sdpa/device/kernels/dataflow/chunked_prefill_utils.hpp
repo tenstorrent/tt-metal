@@ -56,8 +56,8 @@ constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t)
 // receiver -- today a full grid row, for either the shared-K (latent-V) or the GQA-grouped family.
 // Everything here is derived identically by the program factory and all three kernels.
 //
-// rotated_max_slots -- the maximum owned chunk count -- is not here: the factory pushes it as
-// each kernel's LAST compile-time arg, and each kernel reads it back from that position.
+// rotated_max_slots -- the maximum owned chunk count -- is not here: the factory passes it to each
+// kernel as the named compile-time arg "rotated_max_slots".
 // ---------------------------------------------------------------------------
 
 // One semaphore holds distinct completion bits for all receiving active ordinals.

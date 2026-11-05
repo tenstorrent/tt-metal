@@ -3201,10 +3201,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             reader_common_args.push_back(tensor_args.slot_id->buffer());
             reader_common_args.push_back(args.kv_cache_num_layers);
             reader_common_args.push_back(args.kv_cache_layer_idx);
-            const uint32_t k_cache_batch = tensor_args.input_k.logical_shape()[0];
-            const uint32_t v_cache_batch =
-                tensor_args.input_v.has_value() ? tensor_args.input_v->logical_shape()[0] : k_cache_batch;
-            reader_common_args.push_back(std::min(k_cache_batch, v_cache_batch));
+            reader_common_args.push_back(std::min(
+                tensor_args.input_k.logical_shape()[0],
+                tensor_args.input_v.has_value() ? tensor_args.input_v->logical_shape()[0]
+                                                : tensor_args.input_k.logical_shape()[0]));
             reader_common_args.push_back(tensor_args.kv_actual_isl->buffer());
         }
         append_logical_length_common_args(reader_common_args);
@@ -3767,8 +3767,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 neighbor_halo);
         }
     } else {
-        const uint32_t kv_region_Nt =
-            tensor_args.input_q.padded_shape()[2] / (tt::constants::TILE_HEIGHT * args.kv_stripe_split);
         // Append the all-gather portion to `desc`. Buffer addresses are auto-patched on cache hits; the
         // indexed-mode input_batch_base scalar is re-patched in apply_ring_joint_scalar_runtime_args.
         // Single-slot gather is engaged whenever the op is in indexed mode -- either a host
@@ -3803,7 +3801,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             tensor_args.slot_id,
             tensor_args.kv_actual_isl,
             // The gather has R sources: its slab is the KV region, not the Q slab.
-            kv_region_Nt,
+            tensor_args.input_q.padded_shape()[2] / (tt::constants::TILE_HEIGHT * args.kv_stripe_split),
             // (user, layer)-major KV-cache batch factor: the all-gather reader computes the gathered slot as
             // slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx. Defaults (1, 0) keep callers unaffected.
             args.kv_cache_num_layers,

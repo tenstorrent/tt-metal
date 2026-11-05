@@ -23,7 +23,7 @@ struct KSplitRange {
     uint32_t begin;
     uint32_t end;
     bool empty() const { return begin >= end; }
-    bool contains(uint32_t i) const { return i >= begin && i < end; }
+    bool contains(uint32_t k_chunk) const { return k_chunk >= begin && k_chunk < end; }
 };
 
 constexpr KSplitRange kKSplitAll{0, 0xFFFFFFFFu};

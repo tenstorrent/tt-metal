@@ -24,7 +24,6 @@ BH adaptation: uses init_device_compute_kernel_config instead of WormholeCompute
 
 import ast
 import csv
-import hashlib
 import math
 import operator
 import os
@@ -1780,44 +1779,6 @@ def expand_mla_k_reference(latent_k, w_uk):
     return torch.cat([k_nope, k_pe], dim=-1).to(latent_k.dtype)
 
 
-# Part of every reference cache key: bump it whenever the reference functions (torch_sdpa_reference,
-# torch_chunked_causal_sdpa_reference, expand_mla_k_reference) or what run_ring_joint_sdpa_chunked hands them change,
-# so entries computed by the old code miss rather than being read as current.
-SDPA_REFERENCE_CACHE_VERSION = 3
-# Bytes of tensor data hashed per hashlib update, so hashing never copies a large input whole.
-SDPA_REFERENCE_CACHE_HASH_CHUNK_BYTES = 64 << 20
-
-
-def cached_sdpa_reference(compute, key, tensors):
-    """compute() (the O(total_seq^2) CPU torch reference), cached on disk under RING_JOINT_REFERENCE_CACHE when set.
-
-    Developer convenience for repeated local runs: inputs come from a fixed seed, so the reference is identical run
-    to run. The key covers SDPA_REFERENCE_CACHE_VERSION, the reference parameters and every byte of every input in
-    order, so any changed input misses the cache rather than reading a stale reference."""
-    cache_dir = os.environ.get("RING_JOINT_REFERENCE_CACHE")
-    if not cache_dir:
-        return compute()
-    hasher = hashlib.sha256(repr((SDPA_REFERENCE_CACHE_VERSION, key)).encode())
-    for tensor in tensors:
-        if tensor is None:
-            hasher.update(b"none")
-            continue
-        hasher.update(repr((tuple(tensor.shape), str(tensor.dtype))).encode())
-        data = tensor.detach().reshape(-1).contiguous().view(torch.uint8)
-        for start in range(0, data.numel(), SDPA_REFERENCE_CACHE_HASH_CHUNK_BYTES):
-            hasher.update(data[start : start + SDPA_REFERENCE_CACHE_HASH_CHUNK_BYTES].numpy())
-    path = os.path.join(cache_dir, f"sdpa_ref_{hasher.hexdigest()[:32]}.pt")
-    if os.path.exists(path):
-        return torch.load(path)
-    ref = compute()
-    os.makedirs(cache_dir, exist_ok=True)
-    # A producer-unique temporary file, so concurrent producers of the same entry each publish a complete archive.
-    tmp_path = f"{path}.{os.getpid()}.tmp"
-    torch.save(ref, tmp_path)
-    os.replace(tmp_path, path)
-    return ref
-
-
 def run_ring_joint_sdpa_chunked(
     mesh_config,
     model: ModelConfig,
@@ -2129,11 +2090,7 @@ def run_ring_joint_sdpa_chunked(
                     dim=2,
                 )
 
-            ref_full = cached_sdpa_reference(
-                compute_reference,
-                (chunk_size, ref_seq, sliding_window_size, model.scale),
-                (q_reference, k_reference, v_reference, operator_sink),
-            )
+            ref_full = compute_reference()
 
         sdpa_input_shard_dims = [None, None]
         sdpa_input_shard_dims[sp_axis] = 2
@@ -8753,7 +8710,9 @@ def test_ring_joint_attention_minimax3_gqa_create_chunked_perf_table(
     )
 
 
-def compute_chunked_prefill_perf_check_utilization(mesh_config, model, chunk_size, perf_chunk, duration_ns, core_count):
+def compute_chunked_prefill_perf_check_utilization(
+    mesh_config, model, chunk_size, perf_chunk, duration_ns, measured_core_count
+):
     # Chunk geometry: q_per_dev Q rows attend to the full prefix (non-causal rectangle) plus
     # the current chunk's causal triangle. Folding the triangle into an effective K/V length
     # (prefix + chunk_size/2) makes compute_ring_joint_utilization's non-causal FLOPs exact.
@@ -8761,13 +8720,16 @@ def compute_chunked_prefill_perf_check_utilization(mesh_config, model, chunk_siz
     prefix_k = perf_chunk * chunk_size
     effective_kv = prefix_k + chunk_size // 2
 
-    # core_count is the SDPA grid (sdpa_cols x grid_rows): every caller passes it, not a profiler core count.
-    assert core_count > 0, f"core_count={core_count}"
+    # Match perf-table effective_cores rounding (ignore non-multiple-of-grid-row CCL strays).
+    effective_cores = measured_core_count - measured_core_count % mesh_config.grid_rows
+    assert (
+        effective_cores > 0
+    ), f"effective_cores=0 (measured_core_count={measured_core_count}) - profiler output incomplete"
 
     utilization = compute_ring_joint_utilization(
-        q_per_dev, effective_kv, model.d_q, model.d_v, model.nhq, duration_ns, core_count, is_causal=False
+        q_per_dev, effective_kv, model.d_q, model.d_v, model.nhq, duration_ns, effective_cores, is_causal=False
     )
-    return utilization
+    return utilization, effective_cores
 
 
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
@@ -8841,9 +8803,6 @@ else:
         # After the Blackhole NoC MID-address write skip (#56023): 4.567-4.591 ms (70.77-71.15% util)
         # across QB and QB2 runs, so the earlier bimodal spread no longer needs a wider band.
         ("kimi_k3", 32, 640, 4, 71.0, DEFAULT_PERF_MARGIN),
-        # 8-device ring (Blackhole LoudBox, sp=8 tp=1, 110 SDPA cores).
-        ("kimi50k", 32, 640, 8, 69.76, DEFAULT_PERF_MARGIN),
-        ("kimi_k3", 32, 640, 8, 69.93, DEFAULT_PERF_MARGIN),
     ]
 
 
@@ -8892,9 +8851,7 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
     perf_chunk = n_chunks - 1  # final chunk: largest K/V prefix + current chunk (simulates galaxy 50k+5k)
 
     config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-fresh_kv"
-    runtime = open_ring_joint_sdpa_runtime(
-        MESH_CONFIG, fabric_payload_size=model_fabric_payload_size(model), kernel_config_headroom_guard=False
-    )
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, kernel_config_headroom_guard=False)
     try:
         with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
             duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
@@ -8914,7 +8871,7 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
     finally:
         close_ring_joint_sdpa_runtime(runtime)
 
-    utilization = compute_chunked_prefill_perf_check_utilization(
+    utilization, _ = compute_chunked_prefill_perf_check_utilization(
         MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
     )
 
@@ -9042,7 +8999,7 @@ def test_ring_joint_attention_chunked_expanded_k_perf_check(model_name, ring_siz
     run = profile_traced_final_chunk(model, q_chunk_size, k_chunk_size, k_splits)
 
     # Attention FLOPs (QK at the expanded d_q, PV at d_v) plus the in-op per-head K expansion.
-    utilization = compute_chunked_prefill_perf_check_utilization(
+    utilization, _ = compute_chunked_prefill_perf_check_utilization(
         MESH_CONFIG, model, run.chunk_size, run.perf_chunk, run.duration_ns, run.sdpa_cores
     )
     utilization += expanded_k_expansion_utilization(
@@ -9099,7 +9056,7 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
     finally:
         close_ring_joint_sdpa_runtime(runtime)
 
-    utilization = compute_chunked_prefill_perf_check_utilization(
+    utilization, _ = compute_chunked_prefill_perf_check_utilization(
         MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
     )
 
@@ -9155,7 +9112,7 @@ def test_ring_joint_attention_minimax3_gqa_rotated_q_perf():
     finally:
         close_ring_joint_sdpa_runtime(runtime)
 
-    utilization = compute_chunked_prefill_perf_check_utilization(
+    utilization, _ = compute_chunked_prefill_perf_check_utilization(
         MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
     )
     lower = expected_util * (1 - DEFAULT_PERF_MARGIN)
@@ -9308,7 +9265,7 @@ def test_ring_joint_attention_gemma4_chunked_perf_check(perf_config):
 
     effective_cores = MESH_CONFIG.sdpa_cores
     if model.sliding_window_size is None:
-        utilization = compute_chunked_prefill_perf_check_utilization(
+        utilization, effective_cores = compute_chunked_prefill_perf_check_utilization(
             MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, effective_cores
         )
     else:

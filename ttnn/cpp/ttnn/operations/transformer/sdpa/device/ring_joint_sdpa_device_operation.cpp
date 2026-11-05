@@ -698,11 +698,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "SDPA coregrid overlaps with AllGather coregrid (row-major)");
     }
 
-    // Only 'rear' is implemented; the strategy is meaningless without joint tensors.
-    TT_FATAL(
-        !has_joint_tensors || args.joint_strategy == "rear",
-        "Joint strategy must be 'rear'. Got: {}",
-        args.joint_strategy);
+    // Validate joint strategy is 'rear'
+    TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
 
     // Get shapes
     const auto& q_shape = input_tensor_q.logical_shape();

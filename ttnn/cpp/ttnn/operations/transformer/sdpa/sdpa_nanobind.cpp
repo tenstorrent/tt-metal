@@ -663,8 +663,7 @@ void bind_sdpa(nb::module_& mod) {
         Keyword args:
             persistent_output_buffer_k (ttnn.Tensor): Persistent buffer for gathered K tensor.
             persistent_output_buffer_v (ttnn.Tensor): Persistent buffer for gathered V tensor.
-            joint_strategy (str): Strategy for joint attention. Only "rear" is supported. Defaults to "rear";
-                ignored without joint tensors.
+            joint_strategy (str): Strategy for joint attention. Must be "rear". Defaults to "rear".
             logical_n (int or ttnn.Tensor): The logical sequence length N before sharding across devices.
                 A single-valued int32/uint32 device tensor is read on-device each dispatch, so one captured
                 trace can replay at different lengths (rewrite the tensor between replays). Not supported

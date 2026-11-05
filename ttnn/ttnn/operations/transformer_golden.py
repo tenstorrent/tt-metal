@@ -1375,6 +1375,14 @@ def _ring_joint_golden(
     return output[..., :input_length, :], joint_output, stats
 
 
+def ring_joint_scaled_dot_product_attention_golden(*args, **kwargs):
+    return _ring_joint_golden(*args, **kwargs)
+
+
+def exp_ring_joint_scaled_dot_product_attention_golden(*args, **kwargs):
+    return _ring_joint_golden(*args, **kwargs)
+
+
 def _expand_mla_k(latent_k, k_expand_weight):
     """MLA expanded K: the shared latent K [B, 1, N, latent + pe] becomes per-head K_h = [c_kv @ W_UK_h^T | k_pe]
     [B, NH, N, nope + pe], with W_UK [1, NH, nope, latent] (wkv_b1 as stored); the PE columns are shared by all heads.
@@ -1400,14 +1408,6 @@ def _expand_mla_v(latent_k, v_expand_weight):
     latent = v_expand_weight.shape[-1]
     c_kv = latent_k[..., :latent].to(torch.float32)
     return torch.einsum("bknl,hdl->bhnd", c_kv, v_expand_weight[0].to(torch.float32)).to(latent_k.dtype)
-
-
-def ring_joint_scaled_dot_product_attention_golden(*args, **kwargs):
-    return _ring_joint_golden(*args, **kwargs)
-
-
-def exp_ring_joint_scaled_dot_product_attention_golden(*args, **kwargs):
-    return _ring_joint_golden(*args, **kwargs)
 
 
 def ring_mla_golden(

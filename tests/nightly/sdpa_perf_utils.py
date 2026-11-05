@@ -116,7 +116,10 @@ class MeshConfig:
 
             grid = cls.GALAXY_GRID if "blackhole" in ttnn.get_arch_name() else cls.WH_GALAXY_GRID
         elif num_devices == cls.LOUDBOX_DEVICE_COUNT:
-            grid = cls.LOUDBOX_GRID
+            import ttnn
+
+            # A Wormhole T3000 also has 8 devices, with a smaller grid.
+            grid = cls.LOUDBOX_GRID if "blackhole" in ttnn.get_arch_name() else cls.NON_GALAXY_GRID
         else:
             grid = cls.NON_GALAXY_GRID
         return cls(

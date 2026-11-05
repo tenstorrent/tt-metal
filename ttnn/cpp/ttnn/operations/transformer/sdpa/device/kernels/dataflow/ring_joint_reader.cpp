@@ -18,7 +18,6 @@
 #include "ring_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
-#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_all_gather_metadata.hpp"
 #include "../ring_joint_ksplit.hpp"  // relative, so its chunked_prefill_utils.hpp is the same file this kernel includes
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
@@ -453,7 +452,9 @@ void kernel_main() {
         get_arg_val<uint32_t>(argidx++),
         get_arg_val<uint32_t>(argidx++),
         get_arg_val<uint32_t>(argidx++)};
-    RingSDPAOpReceiver fused_op_receiver(true /* wait_for_op_signal */, argidx);
+    RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
+        true, /* wait_for_op_signal */
+        argidx);
 
     // Rotated Q split: first runtime arg past the fused-op signaler block. Captured here because
     // argidx is final at this point; the compile-time sizes are derived below with the other CT args.

@@ -475,9 +475,10 @@ def test_split_kv_perf_check(model_name, expected_util, margin):
         if trace_id is not None:
             ttnn.release_trace(runtime.mesh_device, trace_id)
         close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
-    utilization = compute_chunked_prefill_perf_check_utilization(
+    utilization, _ = compute_chunked_prefill_perf_check_utilization(
         MESH_CONFIG, model, case.chunk, perf_chunk, duration_ns, sdpa_cores
-    ) + expanded_k_expansion_utilization(model, case.chunk, perf_chunk, duration_ns, sdpa_cores)
+    )
+    utilization += expanded_k_expansion_utilization(model, case.chunk, perf_chunk, duration_ns, sdpa_cores)
     logger.info(f"split-KV {model_name} final chunk: {duration_ns / 1e6:.3f} ms, math util {utilization:.2f}%")
     low, high = expected_util * (1 - margin), expected_util * (1 + margin)
     assert low <= utilization <= high, (

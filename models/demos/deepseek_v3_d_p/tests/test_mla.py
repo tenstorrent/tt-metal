@@ -10,7 +10,6 @@ tests/test_kv_cache_table.py and tests/sparse_mla/test_sparse_mla.py.
 import functools
 import math
 import os
-import re
 from pathlib import Path
 
 import pytest
@@ -531,36 +530,18 @@ K3_CHUNKED_RT_PERF_NS = 5_830_000
 K3_CHUNKED_RT_PERF_MARGIN = 0.05
 
 
-def _op_label(kernel_sources):
-    """Op directories of a program's kernels, e.g. 'experimental/minimal_matmul'; a fused program lists each
-    (the ring SDPAs carry their all-gather kernels)."""
-    ops = set()
-    for source in kernel_sources:
-        match = re.search(r"operations/(.+?)/(?:device/)?kernels/", source)
-        if match:
-            ops.add(match.group(1).removesuffix("/device"))
-    return " + ".join(sorted(ops)) if ops else "?"
-
-
 def _rt_profile_forward_ns(mesh_device, run_fn):
     """Profile one region; return (result, total_ns) where each program contributes its MAX duration
-    across chips (slowest chip gates that program) -- the sparse-MLA/PR #49840 convention. Logs the
-    per-op breakdown."""
+    across chips (slowest chip gates that program) -- the sparse-MLA/PR #49840 convention."""
     result, records = profile_realtime_program(mesh_device, run_fn, collect_all=True)
     per_program = {}
     for record in records:
         runtime_id = record["runtime_id"]
         if not runtime_id:  # 0 is the profiler's own sentinel
             continue
-        duration_ns, label = per_program.get(runtime_id, (0.0, _op_label(record["kernel_sources"])))
-        per_program[runtime_id] = (max(duration_ns, float(record["duration_ns"])), label)
-    per_op = {}
-    for duration_ns, label in per_program.values():
-        count, total = per_op.get(label, (0, 0.0))
-        per_op[label] = (count + 1, total + duration_ns)
-    for label, (count, total) in sorted(per_op.items(), key=lambda item: -item[1][1]):
-        logger.info(f"    {label}: {total / 1e6:.3f} ms over {count} program(s)")
-    return result, sum(duration_ns for duration_ns, _ in per_program.values())
+        duration_ns = float(record["duration_ns"])
+        per_program[runtime_id] = max(per_program.get(runtime_id, 0.0), duration_ns)
+    return result, sum(per_program.values())
 
 
 def _meta_scalar(mesh_device, value):
@@ -749,10 +730,7 @@ def _run_chunked_prefill(
             ref_out, ref_kvpe = cpu_mla_reference(config, weights, hidden)
         else:  # None -> functional / perf, no reference
             torch.manual_seed(100 + u)
-            # Random rows only past the prefix: a 512k prefix would otherwise draw ~3.8G values on the host (about two
-            # minutes). Gathered positions are all >= kv_actual >= prefill_len, so the zero prefix rows are never read.
-            hidden = torch.zeros(total_len, hidden_size, dtype=torch.bfloat16)
-            hidden[prefill_len:] = torch.randn(total_len - prefill_len, hidden_size, dtype=torch.bfloat16)
+            hidden = torch.randn(total_len, hidden_size, dtype=torch.bfloat16)
             ref_out, ref_kvpe = None, None
 
         if prefill_len == 0:
@@ -1538,35 +1516,6 @@ def test_mistral4_mla_chunked_prefill_loudbox(request, mesh_device, device_param
 
 @pytest.mark.parametrize(
     "mesh_device,device_params",
-    [pytest.param((2, 4), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x4")],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
-@pytest.mark.skipif(not is_blackhole(), reason="LoudBox (8x p150b) perf; the realtime profiler is Blackhole-only")
-@pytest.mark.timeout(0)
-def test_mla_chunked_perf_loudbox(request, mesh_device, device_params, variant):
-    """Chunked-prefill MLA forward on the LoudBox as a 2x4 mesh, logged with a per-op breakdown. sp=2 / tp=4 with a
-    640-row-per-chip chunk gives every chip the Galaxy's work -- 640 Q rows of its per-chip heads against the 50k
-    cached prefix -- at the production SDPA chunks; only the ring is shorter (2 chips, not 8)."""
-    chunk_size_global = PREFILL_CHUNK_TOKENS_PER_CHIP * mesh_device.shape[0]
-    total_ns = _run_chunked_prefill(
-        request,
-        mesh_device,
-        reference=None,
-        topology=per_axis_topology(device_params["fabric_config"]),
-        profile=True,
-        chunk_size_global=chunk_size_global,
-        iters_isl=[chunk_size_global],
-        prefill_len=50 * 1024,
-    )
-    logger.info(
-        f"{variant.name} chunked 50k + {chunk_size_global} MLA forward (LoudBox 2x4): "
-        f"{total_ns / 1e6:.3f} ms (realtime profiler)"
-    )
-
-
-@pytest.mark.parametrize(
-    "mesh_device,device_params",
     [
         pytest.param(
             (8, 4),
@@ -1683,60 +1632,6 @@ def test_mla_chunked_prefill_tp_sharded_matches_sp_only(
     for u, (sp_only, tp_sharded) in enumerate(zip(outs[False], outs[True])):
         _assert_tp_sharded_matches_sp_only(sp_only, tp_sharded, f"user {u}")
     logger.success(f"✓ tp_sharded output matches sp_only ({len(outs[True])} user(s))")
-
-
-# Per-chip DRAM saving of the TP-deduped cache, scaled to the model's MLA layers.
-_TP_SHARDED_DRAM_POINTS = [
-    pytest.param("kimi_k3", 512 * 1024, 24, 0.60e9, id="k3-512k"),
-    pytest.param("kimi_k2_7", 256 * 1024, 61, 0.85e9, id="k2_7-256k"),
-]
-
-
-def _dram_allocated_bytes(mesh_device):
-    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
-    return view.total_bytes_allocated_per_bank * view.num_banks
-
-
-@pytest.mark.parametrize(
-    "mesh_device,device_params",
-    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("variant,seq_len,mla_layers,min_saving", _TP_SHARDED_DRAM_POINTS, indirect=["variant"])
-def test_mla_tp_sharded_dram_saving(mesh_device, device_params, config_only, variant, seq_len, mla_layers, min_saving):
-    """Measured per-chip allocation of one layer's cache slot, TP-replicated vs TP-deduped; the model saves
-    mla_layers * (replicated - deduped) per user slot."""
-    seq_len = -(-seq_len // 5120) * 5120  # whole chunks, as the runner allocates
-    sp_axis, tp_axis = 0, 1
-    mesh_shape = tuple(mesh_device.shape)
-
-    def cache_bytes(tp):
-        before = _dram_allocated_bytes(mesh_device)
-        cache = init_mla_kv_cache(
-            cache_format=MlaKvCacheFormat.BFP8_TILE,
-            hf_config=config_only,
-            mesh_device=mesh_device,
-            seq_len=seq_len,
-            mesh_shape=mesh_shape,
-            sp_axis=sp_axis,
-            num_kvpe_cache_layers=1,
-            num_users=1,
-            tp_axis=tp,
-        )
-        ttnn.synchronize_device(mesh_device)
-        used = _dram_allocated_bytes(mesh_device) - before
-        ttnn.deallocate(cache.storage)
-        return used
-
-    replicated, deduped = cache_bytes(None), cache_bytes(tp_axis)
-    saving = mla_layers * (replicated - deduped)
-    logger.info(
-        f"{variant.name} seq {seq_len}: per-chip cache slot replicated {replicated / 1e6:.1f} MB, deduped "
-        f"{deduped / 1e6:.1f} MB -> {mla_layers}-layer saving {saving / 1e9:.3f} GB per user slot "
-        f"(gate >= {min_saving / 1e9:.2f} GB)"
-    )
-    assert deduped * 3 < replicated, "the deduped cache is not ~1/4 of the replicated one"
-    assert saving >= min_saving, f"saving {saving / 1e9:.3f} GB below {min_saving / 1e9:.2f} GB"
 
 
 # A captured three-layer forward replayed with the user and prefix changed between replays, on the TP-sharded cache,
