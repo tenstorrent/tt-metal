@@ -16,7 +16,7 @@ directory holds the concrete scripts and per-run notes.
 
 ### Training
 
-[`boolq_training_example.py`](boolq_training_example.py) — trains a
+[`boolq_training_example.py`](boolq/boolq_training_example.py) — trains a
 Llama or Qwen3 policy on `google/boolq` with a Yes/No correctness
 reward and a `GRPOMonitor` callback that writes per-step CSV metrics.
 
@@ -24,7 +24,7 @@ Default (Llama-3.2-1B on a single device, config
 [`grpo_boolq_llama_1b_1dev.yaml`](../../../configs/training_configs/grpo_boolq_llama_1b_1dev.yaml)):
 
 ```bash
-python3 boolq_training_example.py \
+python3 boolq/boolq_training_example.py \
     --config tt-train/configs/training_configs/grpo_boolq_llama_1b_1dev.yaml
 ```
 
@@ -34,14 +34,14 @@ or 32-device
 [`grpo_boolq_llama_1b_ddp_32dev.yaml`](../../../configs/training_configs/grpo_boolq_llama_1b_ddp_32dev.yaml)):
 
 ```bash
-python3 boolq_training_example.py \
+python3 boolq/boolq_training_example.py \
     --config tt-train/configs/training_configs/grpo_boolq_llama_1b_ddp_4dev.yaml
 ```
 
 To train **Qwen3 32B sharded across all 32 Galaxy cards with FSDP**:
 
 ```bash
-python3 boolq_training_example.py --model qwen3 \
+python3 boolq/boolq_training_example.py --model qwen3 \
     --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_fsdp.yaml
 ```
 
@@ -63,22 +63,22 @@ Notes:
 
 ### Accuracy Evaluation
 
-[`boolq_accuracy_example.py`](boolq_accuracy_example.py) — evaluates
+[`boolq_accuracy_example.py`](boolq/boolq_accuracy_example.py) — evaluates
 a model on the BoolQ validation set with greedy decoding
 (`temperature=0`) and writes per-question results to CSV. Runs on 1
 device (p150) with `PROMPTS_TO_VALIDATE=20` by default; see
-[`boolq_accuracy_example.yaml`](boolq_accuracy_example.yaml) for the
+[`boolq_accuracy_example.yaml`](boolq/boolq_accuracy_example.yaml) for the
 device / transformer config.
 
 ```bash
-python3 boolq_accuracy_example.py
+python3 boolq/boolq_accuracy_example.py
 ```
 
 To evaluate a fine-tuned checkpoint, change `MODEL_ID` at the top of
 the script to the directory containing `model.safetensors`.
 
 A companion plotting helper
-([`boolq_plot_example.py`](boolq_plot_example.py)) turns the
+([`boolq_plot_example.py`](boolq/boolq_plot_example.py)) turns the
 per-step CSV from `GRPOMonitor` into a training curve.
 
 ---
