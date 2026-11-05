@@ -90,7 +90,7 @@ ttnn::Tensor all_gather(const ttnn::Tensor& tensor, const int dim, const std::op
     if (num_devices == 1U) {
         throw std::logic_error("All gather should not be called for a single device case");
     }
-    auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
+    auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources(cluster_axis);
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(*mesh_device, /* cluster_axis */ cluster_axis);
 
     // Determine topology based on cluster axis configuration (Ring if torus, Linear otherwise)
@@ -124,7 +124,7 @@ ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t
         throw std::logic_error("All reduce supports only 4D tensors");
     }
 
-    auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
+    auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources(cluster_axis);
     auto all_reduce_barrier_semaphores = ccl_resources.get_all_reduce_barrier_semaphores();
     auto all_gather_semaphores = ccl_resources.get_all_gather_semaphore();
     auto reduce_scatter_semaphores = ccl_resources.get_reduce_scatter_semaphores();
@@ -165,7 +165,7 @@ ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t
 }
 
 ttnn::Tensor reduce_scatter(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
-    auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
+    auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources(cluster_axis);
     auto& mesh_device = ttml::autograd::ctx().get_device();
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(mesh_device, /* cluster_axis */ cluster_axis);
 

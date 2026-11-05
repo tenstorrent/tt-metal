@@ -6,7 +6,9 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <functional>
+#include <map>
 #include <memory>
+#include <optional>
 #include <random>
 #include <string>
 #include <unordered_map>
@@ -121,7 +123,8 @@ public:
     core::TTProfiler& get_profiler();
     void close_profiler();
 
-    [[nodiscard]] core::distributed::CCLResources& get_ccl_resources();
+    // One CCLResources per cluster axis; see CCLResources for why they must not be shared.
+    [[nodiscard]] core::distributed::CCLResources& get_ccl_resources(std::optional<uint32_t> cluster_axis);
 
     // A device tensor an op needs on every call but never changes (e.g. a constant index), made on first use with
     // `make` and kept until close_device, so forwards do no host writes for it.
@@ -151,7 +154,7 @@ private:
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> m_distributed_context;
     std::unique_ptr<core::TTProfiler> m_profiler;
 
-    std::unique_ptr<core::distributed::CCLResources> m_ccl_resources;
+    std::map<std::optional<uint32_t>, core::distributed::CCLResources> m_ccl_resources;
     std::unordered_map<std::string, ttnn::Tensor> m_device_constants;
 
     std::unique_ptr<core::distributed::SocketManager> m_socket_manager;
