@@ -32,7 +32,7 @@ from loguru import logger
 import ttnn
 
 from ....pipelines.events import SectionTimer
-from ....pipelines.ideogram4.pipeline_ideogram4 import MAX_TEXT_TOKENS, Ideogram4Pipeline
+from ....pipelines.ideogram4.pipeline_ideogram4 import MAX_TEXT_TOKENS, Ideogram4Pipeline, required_trace_region_size
 from ....pipelines.ideogram4.sampler import PRESETS
 from ....utils.test import ring_params
 from ....utils.tracing import Tracer
@@ -40,8 +40,8 @@ from ....utils.tracing import Tracer
 _NEEDS_WEIGHTS = pytest.mark.skipif(
     not os.environ.get("IDEOGRAM4_WEIGHTS"), reason="IDEOGRAM4_WEIGHTS not set (gated fp8 checkpoint)"
 )
-# The four 2K step traces need 66 MB together (job 172299); the test reports the measured use.
-_SERVE_PIPE = {**ring_params, "l1_small_size": 32768, "trace_region_size": 100000000}
+# The trace region the pipeline publishes for its four 2K serving sizes; the test reports the measured use.
+_SERVE_PIPE = {**ring_params, "l1_small_size": 32768, "trace_region_size": required_trace_region_size((4, 8))}
 
 DEFAULT_SIZES = "2048x2048,2048x1152,1152x2048,1360x2048"
 SEED = 123
@@ -93,7 +93,10 @@ def test_serving(*, mesh_device, expect_error) -> None:
     out = Path(os.environ.get("IDEOGRAM_SERVE_OUT", "ideogram4_serving"))
     (out / "images").mkdir(parents=True, exist_ok=True)
 
-    pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, width=sizes[0][0], height=sizes[0][1])
+    # Warmed below, by hand, to time it and to measure DRAM before it.
+    pipe = Ideogram4Pipeline.create_pipeline(
+        mesh_device=mesh_device, width=sizes[0][0], height=sizes[0][1], run_warmup=False
+    )
     dev = pipe.mesh_device  # sync the pipeline's submesh, never the parent mesh
     prompts = {"short": SHORT_PROMPT, "longest": _longest_prompt(pipe)}
     tokens = {k: pipe.count_text_tokens(v) for k, v in prompts.items()}

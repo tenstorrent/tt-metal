@@ -118,7 +118,7 @@ def test_prompt_batch(*, mesh_device) -> None:
     )
 
     t0 = time.perf_counter()
-    pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, height=height, width=width)
+    pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, height=height, width=width, run_warmup=False)
     load_s = time.perf_counter() - t0
     if traced:
         pipe.warmup(sizes=[(width, height)])
