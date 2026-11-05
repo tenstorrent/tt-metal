@@ -397,6 +397,20 @@ class CLIPEncoderLayer(Module):
         return hidden_states
 
 
+def _batched_matmul_config(
+    grid: ttnn.CoreCoord, m_tiles: int, k_block: int, n_tiles: int
+) -> ttnn.MatmulMultiCoreReuseProgramConfig:
+    out_subblock_w = max(w for w in range(1, min(n_tiles, 4) + 1) if n_tiles % w == 0)
+    return ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=k_block,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        per_core_M=m_tiles,
+        per_core_N=n_tiles,
+    )
+
+
 class CLIPAttention(Module):
     def __init__(
         self,
@@ -475,16 +489,24 @@ class CLIPAttention(Module):
         num_devices = self.parallel_config.tensor_parallel.factor
         num_local_heads = self.num_heads // num_devices
 
-        q = ttnn.reshape(q, (batch_size, seq_length, num_local_heads, self.head_dim))
-        k = ttnn.reshape(k, (batch_size, seq_length, num_local_heads, self.head_dim))
-        v = ttnn.reshape(v, (batch_size, seq_length, num_local_heads, self.head_dim))
+        local_dim = num_local_heads * self.head_dim
+        kv = ttnn.concat([k, v], dim=-1)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(q, (batch_size, 1, seq_length, local_dim)),
+            ttnn.reshape(kv, (batch_size, 1, seq_length, 2 * local_dim)),
+            num_heads=num_local_heads,
+            num_kv_heads=num_local_heads,
+            transpose_k_heads=True,
+        )
 
-        q = ttnn.transpose(q, 1, 2)
-        k = ttnn.transpose(k, 1, 2)
-        v = ttnn.transpose(v, 1, 2)
-
+        seq_tiles = -(-seq_length // ttnn.TILE_SIZE)
+        head_tiles = self.head_dim // ttnn.TILE_SIZE
+        grid = self.mesh_device.compute_with_storage_grid_size()
         scores = ttnn.matmul(
-            q, ttnn.transpose(k, -2, -1), compute_kernel_config=self.compute_kernel_config
+            q,
+            k,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=_batched_matmul_config(grid, seq_tiles, head_tiles, seq_tiles),
         )  # [batch_size, num_heads, seq_length, seq_length]
 
         if causal_attention_mask is not None:
@@ -494,10 +516,16 @@ class CLIPAttention(Module):
             scores, dim=-1, compute_kernel_config=self.compute_kernel_config, numeric_stable=True
         )
 
-        attn_output = ttnn.matmul(attn_weights, v, compute_kernel_config=self.compute_kernel_config)
+        attn_output = ttnn.matmul(
+            attn_weights,
+            v,
+            compute_kernel_config=self.compute_kernel_config,
+            # in0_block_w=1 keeps the output bit-identical to the default program at every sequence length.
+            program_config=_batched_matmul_config(grid, seq_tiles, 1, head_tiles),
+        )
 
-        attn_output = ttnn.transpose(attn_output, 1, 2)  # [batch_size, seq_length, num_heads, head_dim]
-        attn_output = ttnn.reshape(attn_output, (1, batch_size, seq_length, self.embed_dim // num_devices))
+        attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
+        attn_output = ttnn.reshape(attn_output, (1, batch_size, seq_length, local_dim))
 
         orig_shape = list(attn_output.shape)
 
