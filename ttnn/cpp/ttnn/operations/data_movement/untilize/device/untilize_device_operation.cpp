@@ -307,9 +307,8 @@ ttsl::hash::hash_t UntilizeDeviceOperation::compute_program_hash(
         return ttsl::hash::hash_objects_with_default_seed(
             ttsl::hash::type_hash<UntilizeDeviceOperation>, operation_attributes, tensor_args);
     }
-    constexpr uint64_t kSalt = 0x756e74696c697a65ULL;  // "untilize"
     return tt::tt_metal::operation::hash_operation<UntilizeDeviceOperation>(
-        kSalt, operation_attributes, ttnn::operations::common::hash_spec_without_rows(tensor_args.input, kSalt));
+        operation_attributes, ttnn::operations::common::hash_spec_without_rows(tensor_args.input));
 }
 
 UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_output_specs(
