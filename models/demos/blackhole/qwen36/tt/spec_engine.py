@@ -2049,7 +2049,8 @@ class MTPSpecEngine:
             self._join_keep = self._alloc_host_replicated(
                 torch.zeros(1, 1, B * T, B * T, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
             )
-            for dn in self._gdn:
+            # QWEN36_MAMBA_SPEC: no ring, no eager seed or join (fast join only) and no device slot remap to compile
+            for dn in self._gdn if self._paged_state() is None else ():
                 dn.seed_spec_rows(range(0, B, 2))
                 dn.seed_spec_rows(range(1, B, 2))
                 # Also with the host slot map: the per-user ring / E_prev slices this compiles are the ones
