@@ -333,3 +333,97 @@ def test_packed_forward_takes_the_upstream_indexer_indices(monkeypatch):
     runner._compute_and_send(runtime, None, 1, 0, _Tensor(), meta, runner.D2DBoundary(), sockets, indices=indices)
     runner._compute_and_send(runtime, None, 1, 1, _Tensor(), meta, runner.D2DBoundary(), sockets)
     assert seen == [{"indexer_indices": indices}, {}]
+
+
+def _configure_mtp(monkeypatch, forward_chunks, levels=2):
+    monkeypatch.setattr(runner, "FORWARD_CHUNKS", forward_chunks)
+    monkeypatch.setattr(runner, "CHUNK_SIZE", C)
+    monkeypatch.setattr(runner, "_sp", SP)
+    monkeypatch.setattr(runner, "MTP_LEVELS", levels)
+    monkeypatch.setattr(runner, "MTP_LEVEL_WORDS", forward_chunks)
+    monkeypatch.setattr(runner, "NUM_MTP_TOKENS_PER_CHUNK", runner.num_mtp_tokens(levels))
+
+
+@pytest.mark.parametrize("forward_chunks", [1, F])
+def test_mtp_record_carries_one_provided_levels_word_per_chunk(monkeypatch, forward_chunks):
+    """The D2D record is the chunk metadata, then one provided-levels word per chunk; at one chunk per forward that
+    is today's single word."""
+    _configure_mtp(monkeypatch, forward_chunks)
+    chunks = pad_chunks([PrefillChunk(0, 0, C), PrefillChunk(1, C, C + 40)][:forward_chunks], forward_chunks)
+    meta = runner._meta_from_words(forward_metadata_words(chunks, forward_chunks))
+    meta["provided_levels"] = runner.provided_levels_from_words([2, 0, 0, 0][:forward_chunks])
+    words = runner._metadata_record_words(meta).flatten().tolist()
+    chunk_words = forward_metadata_words(chunks, forward_chunks)
+    assert words == chunk_words + [2, 0, 0, 0][:forward_chunks]
+    if forward_chunks == 1:
+        assert meta["provided_levels"] == 2  # an int, as before
+        assert words == [0, 0, C, 2]
+    else:
+        assert meta["provided_levels"] == (2, 0, 0, 0)
+    assert runner.provided_levels_from_words(words[len(chunk_words) :]) == meta["provided_levels"]
+    sentinel = runner._no_provided_levels()
+    assert sentinel == (0 if forward_chunks == 1 else (0,) * forward_chunks)
+
+
+def test_chunk_provided_levels_reads_each_chunks_own_block(monkeypatch):
+    """Each chunk's provided levels come from its own lookahead block on the chip holding its last position."""
+    import torch
+
+    from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
+
+    levels = 2
+    _configure_mtp(monkeypatch, F, levels)
+    n_mtp = runner.NUM_MTP_TOKENS_PER_CHUNK
+    pad = runner._MTP_PAD_AS_INT32
+    chunks = [PrefillChunk(0, 0, C), PrefillChunk(1, 2 * C, 3 * C), PrefillChunk(2, 0, 500), PrefillChunk(0, 0, 0)]
+    real_by_block = {0: 2, 1: 1}  # chunk 0: both lookahead ids real; chunk 1: its prompt ends after one more token
+
+    def chip_ids(chip):
+        row = torch.full((F * n_mtp,), pad, dtype=torch.int32)
+        for k, real in real_by_block.items():
+            c = chunks[k]
+            slots = mtp_lookahead_positions(c.actual_start, SP, C // SP, c.actual_end, levels)[chip]
+            if slots[0] == c.actual_end:
+                row[k * n_mtp : k * n_mtp + real] = 7
+        return row
+
+    got = [0 if c.is_empty else runner.chunk_provided_levels(c, chip_ids, k) for k, c in enumerate(chunks)]
+    assert got == [2, 1, 0, 0]
+
+
+def test_packed_forward_passes_each_chunks_mtp_input(loop, monkeypatch):
+    """With MTP the runner hands prefill_forward the forward's lookahead blocks and one provided-levels count per
+    chunk, and sends them on in the D2D record."""
+
+    class _MtpRuntime(_PackedRuntime):
+        def prefill_forward(self, inp, kv, chunks, request_id=0, d2h_service=None, *, metadata_msg=None, **mtp):
+            self.calls.append((request_id, list(chunks), mtp))
+
+    mtp_tokens = _Tensor()
+    runtime = _MtpRuntime()
+    forwards = FORWARDS[:2]
+    levels_by_forward = iter([(1, 1, 0, 0), (1, 0, 0, 0)])
+
+    def socket_next(service, sockets, n_mtp=0):
+        return _Tensor(), mtp_tokens, runner._meta_from_words(next(words))
+
+    _configure(monkeypatch, supports_packed_forward=True)
+    _configure_mtp(monkeypatch, F, levels=1)
+    words = iter([forward_metadata_words(pad_chunks(f, F), F) for f in forwards] + [sentinel_words(SHUTDOWN_WORD, F)])
+    monkeypatch.setattr(runner, "_socket_next", socket_next)
+    monkeypatch.setattr(runner, "mtp_provided_levels", lambda tokens, meta: next(levels_by_forward))
+    runner.run_request_loop(
+        runtime,
+        None,
+        0,
+        1,
+        d2d_rows=0,
+        d2d_width=0,
+        h2d_service=object(),
+        outbound=runner.D2DBoundary(),
+        sockets=runner.SocketBuffers(metadata=None),
+    )
+    assert [m for _, _, m in runtime.calls] == [
+        {"mtp_tokens": mtp_tokens, "provided_levels": (1, 1, 0, 0)},
+        {"mtp_tokens": mtp_tokens, "provided_levels": (1, 0, 0, 0)},
+    ]

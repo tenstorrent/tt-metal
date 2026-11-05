@@ -780,6 +780,9 @@ class TtPrefillBlock(LightweightModule):
         metadata: Optional[list] = None,
         padding_config: Optional[ttnn.Tensor] = None,
         zero_pad: bool = False,
+        ack_layer_idx: Optional[int] = None,
+        ack_alias_layer_ids: tuple = (),
+        force_kv_only: bool = False,
     ):
         """One packed forward: ``chunks`` (PrefillChunk) back to back, ``x.shape[2] // len(chunks)`` rows each.
 
@@ -799,6 +802,8 @@ class TtPrefillBlock(LightweightModule):
         padding_config: the MoE padding config for the whole forward, built once by the caller for every layer
             (TtPrefillTransformer.forward_packed from packed_real_rows); None when every row is real.
         zero_pad: zero each chunk's KV pad window without acking, for a caller sending D2H acks afterwards.
+        ack_layer_idx / ack_alias_layer_ids / force_kv_only: as in forward(), for the MTP block TtMTPPredictor
+            replays once per level.
 
         Returns:
             (x, kv_cache=None) or, with return_indexer_indices, (x, None, per-chunk indices list). x is None
@@ -811,9 +816,10 @@ class TtPrefillBlock(LightweightModule):
         assert indexer_indices is None or len(indexer_indices) == n
         rows = x.shape[2] // n
         assert rows * n == x.shape[2], f"{x.shape[2]} rows do not split into {n} chunks"
+        kv_only = self.kv_only or force_kv_only
         # Same TT_PREFILL_BLOCK_TIMING split as forward(): "mla" covers every chunk's attention half, "ffn"
         # the one FFN half over all rows.
-        _timing = _BLOCK_TIMING_ENABLED and not self.kv_only
+        _timing = _BLOCK_TIMING_ENABLED and not kv_only
         if _timing:
             ttnn.synchronize_device(self.mesh_device)
             _t_start = time.perf_counter()
@@ -852,11 +858,13 @@ class TtPrefillBlock(LightweightModule):
                 return_indexer_indices=return_indexer_indices,
                 index_kv_cache=index_kv_cache,
                 metadata=metadata[k] if traced else None,
-                kv_only=self.kv_only,
+                kv_only=kv_only,
                 zero_pad_only=zero_pad,
                 next_step=next_step,
                 # Injected indices are new to the push planner once per forward, at its first step.
                 push_new_indices=k == first_step,
+                ack_layer_idx=ack_layer_idx,
+                ack_alias_layer_ids=ack_alias_layer_ids,
             )
             ttnn.deallocate(x_k)
             outs.append(out_k)
@@ -871,7 +879,7 @@ class TtPrefillBlock(LightweightModule):
                 idx_k = ttnn.clone(idx_k)
             chunk_indices.append(idx_k)
 
-        if self.kv_only:
+        if kv_only:
             return (None, None, chunk_indices) if return_indexer_indices else (None, None)
 
         x = outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=2)

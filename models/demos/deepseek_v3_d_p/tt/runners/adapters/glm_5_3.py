@@ -44,6 +44,8 @@ class GLM53Adapter(MLAPrefillAdapter):
     supports_packed_forward_trace = True
     supports_packed_forward_d2h_acks = True
     supports_packed_forward_indexer_indices = True
+    # MTP over a packed forward: one lookahead block and one provided-levels count per chunk. Eager only.
+    supports_packed_forward_mtp = True
     prefill_trace_default = (
         "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k"
     )

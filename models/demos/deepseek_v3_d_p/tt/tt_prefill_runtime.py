@@ -212,10 +212,15 @@ class TtPrefillRuntime:
             budget > 0 and budget % config.chunk_size == 0
         ), f"forward_tokens_budget ({budget}) must be a positive multiple of chunk_size ({config.chunk_size})"
         if config.forward_chunks > 1:
-            # The packed path runs without MTP or DFlash so far; fail at construction, not on the first forward.
-            assert not (
-                config.mtp_levels or config.dflash_enabled
-            ), "packed forwards (forward_tokens_budget > chunk_size) do not support MTP or DFlash"
+            # The packed path runs without DFlash, and MTP only eager; fail at construction, not on the first forward.
+            assert (
+                not config.dflash_enabled
+            ), "packed forwards (forward_tokens_budget > chunk_size) do not support DFlash"
+            if config.mtp_levels and config.use_trace:
+                raise NotImplementedError(
+                    "a traced packed forward (forward_tokens_budget > chunk_size, use_trace) does not run MTP; "
+                    "run packed MTP eager (PREFILL_USE_TRACE=0) or one chunk per forward"
+                )
         assert (
             config.max_seq_len % config.chunk_size == 0
         ), f"max_seq_len ({config.max_seq_len}) must be a multiple of chunk_size ({config.chunk_size})"
@@ -449,6 +454,8 @@ class TtPrefillRuntime:
             slot_num=self.config.num_users,
             is_balanced=False,
             layer_num=self.config.num_layers + k,
+            # A packed forward runs the MTP block packed too: attention per chunk, one MoE over every chunk's rows.
+            forward_chunks=self.config.forward_chunks,
         )
 
     def _build_dflash_drafter(self) -> None:
@@ -628,6 +635,75 @@ class TtPrefillRuntime:
         ttnn.deallocate(ids_block)
         return union, hidden, None
 
+    def _mtp_prepare_packed_input(self, input_tensor: ttnn.Tensor, mtp_tokens: Optional[ttnn.Tensor]) -> tuple:
+        """:meth:`_mtp_prepare_input` for a packed forward: ``(unions or None, model input, id blocks or None)``, one
+        union and one id block per chunk position.
+
+        First rank: ``input_tensor`` holds every chunk's ids back to back per chip and ``mtp_tokens`` every chunk's
+        lookahead block; chunk k's union is gathered from its own ids and block alone, so no window reaches into the
+        next chunk, which belongs to another user. The model input is the unions' trunks stacked in chunk order.
+        Downstream: the activation is the forward's hidden rows, then one id block per chunk; only the last rank
+        gathers the unions from them."""
+        cfg = self.config
+        n, rows, n_mtp = cfg.forward_chunks, cfg.chunk_size // cfg.sp_factor, self._num_mtp_tokens()
+        unions, blocks = [], []
+        if cfg.is_first_rank:
+            assert mtp_tokens is not None, "the device MTP path needs every chunk's lookahead block with the forward"
+            ids_shape, mtp_shape = list(input_tensor.shape), list(mtp_tokens.shape)
+            assert ids_shape[-1] == n * rows and mtp_shape[-1] == n * n_mtp, (
+                f"packed MTP input is {ids_shape[-1]} ids + {mtp_shape[-1]} lookahead ids per chip, expected "
+                f"{n} x ({rows} + {n_mtp})"
+            )
+            for k in range(n):
+                ids_k = ttnn.slice(
+                    input_tensor, [0] * (len(ids_shape) - 1) + [k * rows], ids_shape[:-1] + [(k + 1) * rows]
+                )
+                mtp_k = ttnn.slice(
+                    mtp_tokens, [0] * (len(mtp_shape) - 1) + [k * n_mtp], mtp_shape[:-1] + [(k + 1) * n_mtp]
+                )
+                unions.append(
+                    MTPUnionEmbedding.from_ids(ids_k, mtp_k, self.model.mtp_embed_ids, num_levels=cfg.mtp_levels)
+                )
+                if not cfg.is_last_rank:
+                    blocks.append(self._mtp_ids_block(ids_k, mtp_k))
+                ttnn.deallocate(ids_k)
+                ttnn.deallocate(mtp_k)
+            ttnn.deallocate(input_tensor)
+            ttnn.deallocate(mtp_tokens)
+            model_input = ttnn.concat([u.trunk for u in unions], dim=2)
+            if cfg.is_last_rank:
+                return unions, model_input, None
+            for u in unions:
+                u.deallocate()
+            return None, model_input, blocks
+        assert mtp_tokens is None, "only the first rank receives H2D MTP ids"
+        s0, s1, s2, s3 = input_tensor.shape
+        assert s2 == n * (rows + MTP_ID_ROWS), (
+            f"D2D activation is {s2} rows per chip, expected {n} x (L + {MTP_ID_ROWS} id rows) = "
+            f"{n * (rows + MTP_ID_ROWS)}. The sending rank and this one disagree on PREFILL_MTP_LEVELS or the "
+            "forward's chunk count."
+        )
+        hidden = ttnn.slice(input_tensor, [0, 0, 0, 0], [s0, s1, n * rows, s3])
+        for k in range(n):
+            first = n * rows + k * MTP_ID_ROWS
+            blocks.append(ttnn.slice(input_tensor, [0, 0, first, 0], [s0, s1, first + MTP_ID_ROWS, s3]))
+        ttnn.deallocate(input_tensor)
+        if not cfg.is_last_rank:
+            return None, hidden, blocks
+        for block in blocks:
+            unions.append(self._mtp_union_from_ids_block(block))
+            ttnn.deallocate(block)
+        return unions, hidden, None
+
+    def _mtp_pack_packed_activation(self, hidden: ttnn.Tensor, blocks: list) -> ttnn.Tensor:
+        """:meth:`_mtp_pack_activation` for a packed forward: the hidden rows, then each chunk's id block in chunk
+        order. Consumes the hidden and the blocks."""
+        packed = ttnn.concat([hidden, *blocks], dim=2)
+        ttnn.deallocate(hidden)
+        for block in blocks:
+            ttnn.deallocate(block)
+        return packed
+
     def make_placeholder_activation(self, dflash_packed: bool = True) -> ttnn.Tensor:
         """Allocate a zero activation matching what the D2D socket delivers, per chip.
 
@@ -642,6 +718,7 @@ class TtPrefillRuntime:
                 self.config.forward_chunks * self.config.chunk_size,
                 sp_factor=self.config.sp_factor,
                 mtp_levels=self.config.mtp_levels,
+                forward_chunks=self.config.forward_chunks,
             )
             // self.config.sp_factor
         )
@@ -760,6 +837,17 @@ class TtPrefillRuntime:
             return self.make_forward_input([[0] * chunk] * n, [c.actual_start for c in chunks])
         return self.make_placeholder_activation()
 
+    def make_forward_mtp_tokens(self, blocks: list) -> ttnn.Tensor:
+        """Build one packed forward's MTP lookahead input for `prefill_forward`: per SP chip, every chunk's
+        num_mtp_tokens block in chunk order (the layout the H2D producer emits after the chunks' ids). ``blocks``
+        holds one ``[sp, num_mtp_tokens]`` id block per chunk (MTP_PAD_TOKEN_ID past the prompt). First rank only."""
+        cfg = self.config
+        assert cfg.is_first_rank, "only the first rank builds an MTP token input"
+        assert len(blocks) == cfg.forward_chunks, f"{len(blocks)} MTP blocks for a forward of {cfg.forward_chunks}"
+        n = self._num_mtp_tokens()
+        rows = torch.cat([torch.as_tensor(b, dtype=torch.int64).reshape(cfg.sp_factor, 1, n) for b in blocks], dim=-1)
+        return _upload_ids(rows.to(torch.int32), self.mesh_device, cfg.mesh_shape, cfg.sp_axis)
+
     def make_mtp_tokens_input(self, token_ids: list[int]) -> ttnn.Tensor:
         """Build the MTP lookahead companion to :meth:`make_chunk_input`, out of the SAME
         `chunk_size + num_mtp_tokens` list. First rank only.
@@ -863,11 +951,20 @@ class TtPrefillRuntime:
         self._layer_completion_sink = NullLayerCompletionSink()
         try:
             for chunks in plan:
+                mtp = {}
+                if cfg.mtp_levels:
+                    # Zero lookahead ids, and every level generating: the generation programs compile too.
+                    blocks = [torch.zeros(cfg.sp_factor, self._num_mtp_tokens(), dtype=torch.int64)] * n
+                    mtp = dict(
+                        mtp_tokens=self.make_forward_mtp_tokens(blocks) if cfg.is_first_rank else None,
+                        provided_levels=[0] * n,
+                    )
                 out = self.prefill_forward(
                     self._packed_warm_input(chunks),
                     kv_caches,
                     chunks,
                     indexer_indices=self.make_placeholder_indices() if self.receives_indexer_indices else None,
+                    **mtp,
                 )
                 if out is not None:
                     ttnn.deallocate(out)
@@ -1435,6 +1532,8 @@ class TtPrefillRuntime:
         *,
         metadata_msg: Optional[ttnn.Tensor] = None,
         indexer_indices: Optional[ttnn.Tensor] = None,
+        mtp_tokens: Optional[ttnn.Tensor] = None,
+        provided_levels=None,
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE packed forward of ``forward_chunks`` ``chunks`` (PrefillChunk) into the engine-owned
         ``kv_caches``. Each layer runs attention once per non-empty chunk against its slot_id at its
@@ -1470,6 +1569,15 @@ class TtPrefillRuntime:
                 persistent trace_metadata_msg the D2D send forwards. Eager: unused.
             indexer_indices: the upstream rank's packed GLM-5.3 indices, exactly when receives_indexer_indices.
                 Deallocated here.
+            mtp_tokens: with MTP, the first rank's lookahead ids: one num_mtp_tokens block per chunk, in chunk order
+                (make_forward_mtp_tokens or the H2D row's tail). Deallocated here. Other ranks receive each chunk's
+                ids in an id block under the activation, and a non-last rank returns them the same way.
+            provided_levels: with MTP, per chunk, how many leading levels have their lookahead token
+                (the runner's chunk_provided_levels); the rest generate one on device. None means 0 for every chunk.
+
+        MTP (eager only) runs on the last rank after the trunk: each chunk's levels read windows of that chunk's
+        own union, and the MTP layer runs packed like a trunk layer, writing each chunk's MTP KV slots. Each
+        chunk's D2H acks cover its MTP layers too (layer_ack_layers).
         """
         cfg = self.config
         assert self.model_built, "build the model before prefill_forward()"
@@ -1511,9 +1619,18 @@ class TtPrefillRuntime:
                 )
             )
         )
+        model_input, mtp_unions, mtp_blocks, levels = input_tensor, None, None, 0
+        if cfg.mtp_levels:
+            mtp_unions, model_input, mtp_blocks = self._mtp_prepare_packed_input(input_tensor, mtp_tokens)
+            levels = [0] * cfg.forward_chunks if provided_levels is None else [int(p) for p in provided_levels]
+            assert (
+                len(levels) == cfg.forward_chunks
+            ), f"{len(levels)} provided-levels counts for {cfg.forward_chunks} chunks"
+        else:
+            assert mtp_tokens is None, "mtp_tokens passed but this runtime runs no MTP"
         # d2h_service here only zeroes each chunk's pad window; the acks follow the forward (_send_packed_acks).
         out = self.model.forward(
-            input_tensor,
+            model_input,
             kv_caches.kvpe,
             actual_isl=cfg.chunk_size,
             chunks=chunks,
@@ -1521,13 +1638,22 @@ class TtPrefillRuntime:
             on_layer_complete=on_layer_complete,
             d2h_service=d2h_service,
             **self._seed_kwargs(indexer_indices),
+            mtp_unions=mtp_unions if self.mtp_predictor is not None else None,
+            provided_levels=levels,
+            # With MTP the first rank's input is the unions' trunks, already embedded.
+            input_is_embedded=bool(cfg.mtp_levels) and cfg.is_first_rank,
         )
-        ttnn.deallocate(input_tensor)
+        ttnn.deallocate(model_input)
+        if mtp_unions is not None:
+            for union in mtp_unions:
+                union.deallocate()
         if indexer_indices is not None and indexer_indices is not getattr(self.model, "last_indexer_indices", None):
             ttnn.deallocate(indexer_indices)
         if d2h_service is not None:
             self._send_packed_acks(d2h_service, chunks)
-        return None if cfg.is_last_rank else out
+        if cfg.is_last_rank:
+            return None
+        return self._mtp_pack_packed_activation(out, mtp_blocks) if mtp_blocks is not None else out
 
     def prefill_chunk(
         self,

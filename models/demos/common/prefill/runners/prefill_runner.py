@@ -159,12 +159,16 @@ MTP_DECODE_LEVELS = int(os.environ.get("PREFILL_MTP_DECODE_LEVELS", MTP_LEVELS))
 assert MTP_DECODE_LEVELS == MTP_LEVELS or (
     MTP_LEVELS == 1 and MTP_DECODE_LEVELS > 1
 ), f"PREFILL_MTP_DECODE_LEVELS={MTP_DECODE_LEVELS} needs PREFILL_MTP_LEVELS=1 or equal to it, got {MTP_LEVELS}"
-NUM_MTP_TOKENS = num_mtp_tokens(MTP_LEVELS)
+# One lookahead block per chunk: a packed forward's H2D row ends in FORWARD_CHUNKS of them, after every chunk's ids.
+NUM_MTP_TOKENS_PER_CHUNK = num_mtp_tokens(MTP_LEVELS)
+NUM_MTP_TOKENS = FORWARD_CHUNKS * NUM_MTP_TOKENS_PER_CHUNK
 TOKEN_ID_BYTES = 4
 _MTP_PAD_AS_INT32 = MTP_PAD_TOKEN_ID - (1 << 32)
 CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS)
 
-D2D_METADATA_SIZE_BYTES = CHUNK_METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
+# With MTP the D2D record carries one provided-levels word per chunk after the chunk metadata.
+MTP_LEVEL_WORDS = FORWARD_CHUNKS if MTP_LEVELS else 0
+D2D_METADATA_SIZE_BYTES = CHUNK_METADATA_SIZE_BYTES + 4 * MTP_LEVEL_WORDS
 # The D2D FIFO must hold the L1-aligned metadata: 256 B, grown in 256 B steps for a wide packed forward.
 _D2D_FIFO_MIN_BYTES = -(-D2D_METADATA_SIZE_BYTES // 256) * 256
 D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", _D2D_FIFO_MIN_BYTES))
@@ -238,14 +242,29 @@ def _meta_from_words(words) -> dict:
     return {"slot_id": head.slot_id, "actual_start": head.actual_start, "actual_end": head.actual_end, "chunks": chunks}
 
 
+def provided_levels_from_words(words) -> object:
+    """meta["provided_levels"] from the record's MTP words: an int at one chunk per forward, else one per chunk."""
+    levels = tuple(max(0, int(w)) for w in words)
+    return levels[0] if FORWARD_CHUNKS == 1 else levels
+
+
+def provided_levels_words(provided_levels) -> list:
+    """The record's MTP words for meta["provided_levels"] (provided_levels_from_words' inverse)."""
+    return [int(provided_levels)] if FORWARD_CHUNKS == 1 else [int(p) for p in provided_levels]
+
+
+def _no_provided_levels():
+    return provided_levels_from_words([0] * max(MTP_LEVEL_WORDS, 1))
+
+
 def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False) -> dict:
-    # One D2H read; the word after the chunk metadata is MTP provided_levels.
+    # One D2H read; the words after the chunk metadata are MTP provided_levels, one per chunk.
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
     n = CHUNK_METADATA_SIZE_BYTES // 4
     meta = _meta_from_words(m[:n].tolist())
-    # Mirror _metadata_record_words: that word exists only when MTP is on.
-    if with_provided_levels and m.numel() > n:
-        meta["provided_levels"] = max(0, int(m[n]))
+    # Mirror _metadata_record_words: those words exist only when MTP is on.
+    if with_provided_levels and m.numel() >= n + MTP_LEVEL_WORDS > n:
+        meta["provided_levels"] = provided_levels_from_words(m[n : n + MTP_LEVEL_WORDS].tolist())
     return meta
 
 
@@ -255,28 +274,48 @@ def _chunks_str(meta: dict) -> str:
     return " chunks=" + ",".join(f"{c.slot_id}:[{c.actual_start},{c.actual_end})" for c in meta["chunks"])
 
 
-def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
-    if not MTP_LEVELS:
+def chunk_provided_levels(chunk, chip_ids, block: int = 0) -> int:
+    """How many of ``chunk``'s MTP levels have their lookahead token: the leading real ids of the lookahead block
+    on the chip holding the chunk's last position (0 for a partial or empty chunk, whose prompt ends inside it).
+    ``chip_ids(chip)`` is that chip's H2D lookahead row as int32 ids; ``block`` is the chunk's position in the
+    forward, whose lookahead sits at ``block * NUM_MTP_TOKENS_PER_CHUNK`` of the row."""
+    if chunk.actual_end < chunk.actual_start + CHUNK_SIZE:
         return 0
-    if meta["actual_end"] < meta["actual_start"] + CHUNK_SIZE:
-        return 0
-    assert mtp_tokens is not None, "MTP is on but no lookahead tensor arrived with this chunk"
-    lookahead = mtp_lookahead_positions(meta["actual_start"], _sp, CHUNK_SIZE // _sp, meta["actual_end"], MTP_LEVELS)
-    chips = [c for c, slots in enumerate(lookahead) if slots[0] == meta["actual_end"]]
-    assert len(chips) == 1, f"expected one chip whose lookahead starts at {meta['actual_end']}, got {chips}"
-    device_tensors = ttnn.get_device_tensors(mtp_tokens)
-    assert len(device_tensors) == _sp * _tp, f"got {len(device_tensors)} device tensors for a {_sp}x{_tp} mesh"
-    # H2D_MAPPER_CONFIG shards SP over mesh axis SP_AXIS and device tensors are row-major, so SP chip c
-    # is device c * _tp at SP_AXIS=0 and device c at SP_AXIS=1.
-    sp_stride = GLOBAL_MESH_SHAPE[1] if SP_AXIS == 0 else 1
-    ids = ttnn.to_torch(device_tensors[chips[0] * sp_stride]).view(torch.int32).flatten()
-    assert ids.numel() >= MTP_LEVELS, f"lookahead row is {ids.numel()} ids, need at least {MTP_LEVELS}"
+    lookahead = mtp_lookahead_positions(chunk.actual_start, _sp, CHUNK_SIZE // _sp, chunk.actual_end, MTP_LEVELS)
+    chips = [c for c, slots in enumerate(lookahead) if slots[0] == chunk.actual_end]
+    assert len(chips) == 1, f"expected one chip whose lookahead starts at {chunk.actual_end}, got {chips}"
+    ids = chip_ids(chips[0])
+    first = block * NUM_MTP_TOKENS_PER_CHUNK
+    assert ids.numel() >= first + MTP_LEVELS, f"lookahead row is {ids.numel()} ids, need at least {first + MTP_LEVELS}"
     provided = 0
-    for tok in ids[:MTP_LEVELS].tolist():
+    for tok in ids[first : first + MTP_LEVELS].tolist():
         if tok == _MTP_PAD_AS_INT32:
             break
         provided += 1
     return provided
+
+
+def mtp_provided_levels(mtp_tokens, meta: dict):
+    """meta["provided_levels"] for a forward that arrived over H2D: chunk_provided_levels per chunk."""
+    if not MTP_LEVELS:
+        return 0
+    if FORWARD_CHUNKS == 1 and meta["actual_end"] < meta["actual_start"] + CHUNK_SIZE:
+        return 0
+    assert mtp_tokens is not None, "MTP is on but no lookahead tensor arrived with this chunk"
+    device_tensors = ttnn.get_device_tensors(mtp_tokens)
+    assert len(device_tensors) == _sp * _tp, f"got {len(device_tensors)} device tensors for a {_sp}x{_tp} mesh"
+    rows = {}
+    # H2D_MAPPER_CONFIG shards SP over mesh axis SP_AXIS and device tensors are row-major, so SP chip c
+    # is device c * _tp at SP_AXIS=0 and device c at SP_AXIS=1.
+    sp_stride = GLOBAL_MESH_SHAPE[1] if SP_AXIS == 0 else 1
+
+    def chip_ids(chip):
+        if chip not in rows:
+            rows[chip] = ttnn.to_torch(device_tensors[chip * sp_stride]).view(torch.int32).flatten()
+        return rows[chip]
+
+    levels = [0 if c.is_empty else chunk_provided_levels(c, chip_ids, k) for k, c in enumerate(meta["chunks"])]
+    return provided_levels_from_words(levels)
 
 
 def _is_shutdown_sentinel(meta: dict) -> bool:
@@ -537,7 +576,7 @@ def _d2d_recv(inbound, sockets) -> tuple:
 def _metadata_record_words(meta: dict) -> torch.Tensor:
     words = forward_metadata_words(meta["chunks"], FORWARD_CHUNKS)
     if MTP_LEVELS:
-        words.append(int(meta["provided_levels"]))
+        words += provided_levels_words(meta["provided_levels"])
     return torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1)
 
 
@@ -614,7 +653,10 @@ def _forward_shutdown(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.create_mesh_mapper(dev, D2D_MAPPER_CONFIG),
     )
-    sentinel = {**_meta_from_words(sentinel_words(SHUTDOWN_METADATA_WORD, FORWARD_CHUNKS)), "provided_levels": 0}
+    sentinel = {
+        **_meta_from_words(sentinel_words(SHUTDOWN_METADATA_WORD, FORWARD_CHUNKS)),
+        "provided_levels": _no_provided_levels(),
+    }
     _d2d_send(d2d_out, dummy, rank, sentinel)
     d2d_out.release_fabric_links()
     if idx_out is not None:
@@ -638,7 +680,7 @@ def _forward_send_warmup(runtime, outbound: D2DBoundary, rank: int) -> None:
     """Compile the traced send before this rank's capture; the next rank drops the record."""
     d2d_out, idx_out = outbound.activation, outbound.indices
     get_inputs = getattr(runtime, "send_warmup_inputs", None)
-    words = tuple(sentinel_words(WARMUP_METADATA_WORD, FORWARD_CHUNKS)) + ((0,) if MTP_LEVELS else ())
+    words = tuple(sentinel_words(WARMUP_METADATA_WORD, FORWARD_CHUNKS)) + (0,) * MTP_LEVEL_WORDS
     inputs = get_inputs(words) if get_inputs is not None else None
     if inputs is None:
         return
@@ -878,6 +920,7 @@ def _compute_and_send(
             if sockets.persistent_metadata() is None:
                 ttnn.deallocate(sockets.metadata)
         elif FORWARD_CHUNKS > 1:
+            mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
             out = runtime.prefill_forward(
                 inp,
                 kv_caches,
@@ -885,6 +928,7 @@ def _compute_and_send(
                 request_id=c,
                 d2h_service=d2h_service,
                 metadata_msg=sockets.metadata,
+                **mtp_kwargs,
                 **({"indexer_indices": indices} if indices is not None else {}),
             )
         else:
@@ -985,7 +1029,9 @@ def run_request_loop(
         try:
             if cfg.is_first_rank:
                 inp, mtp_tokens, meta = _socket_next(h2d_service, sockets, NUM_MTP_TOKENS)
-                meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
+                meta["provided_levels"] = (
+                    _no_provided_levels() if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
+                )
                 if FORWARD_CHUNKS > 1 and not meta["chunks"][0].is_sentinel:
                     validate_chunks(
                         meta["chunks"],
@@ -1276,7 +1322,9 @@ def main() -> None:
 
 
 def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
-    d2d_activation_rows = d2d_rows_for(FORWARD_TOKENS_BUDGET, sp_factor=_sp, mtp_levels=MTP_LEVELS)
+    d2d_activation_rows = d2d_rows_for(
+        FORWARD_TOKENS_BUDGET, sp_factor=_sp, mtp_levels=MTP_LEVELS, forward_chunks=FORWARD_CHUNKS
+    )
     # The drafter partial rides beside the hidden, as a 2H width or as its own plane (the adapter's choice).
     dflash_plane = int(DFLASH_ENABLED and ADAPTER.dflash_partial_separate_plane)
     d2d_activation_width = d2d_width(hf_config.hidden_size, dflash=DFLASH_ENABLED and not dflash_plane)
@@ -1311,7 +1359,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
         h2d_service = _open_h2d(
-            make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS_BUDGET, MTP_LEVELS, SP_AXIS), service_id
+            make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS_BUDGET, MTP_LEVELS, SP_AXIS, forward_chunks=FORWARD_CHUNKS),
+            service_id,
         )
 
     inbound, outbound = D2DBoundary(), D2DBoundary()

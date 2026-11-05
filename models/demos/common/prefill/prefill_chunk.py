@@ -177,6 +177,7 @@ def packed_forward_refusals(
     traced_forward: bool = False,
     forward_d2h_acks: bool = False,
     forward_indexer_indices: bool = False,
+    forward_mtp: bool = False,
 ) -> list:
     """Why a configuration cannot run ``forward_chunks`` chunks per forward (empty list: it can).
 
@@ -188,12 +189,16 @@ def packed_forward_refusals(
       KV-writing layer, chunk by chunk.
     - ``forward_indexer_indices`` (supports_packed_forward_indexer_indices): it takes and leaves a pipeline
       boundary's indexer indices for every chunk of the forward, packed in one tensor of the runtime's
-      indexer_indices_shape()."""
+      indexer_indices_shape().
+    - ``forward_mtp`` (supports_packed_forward_mtp): its prefill_forward takes one MTP lookahead block and one
+      provided-levels word per chunk (ADDING_A_PREFILL_MODEL.md), eager only."""
     if forward_chunks == 1:
         return []
     reasons = []
-    if mtp_levels:
+    if mtp_levels and not (supports_packed_forward and forward_mtp):
         reasons.append("PREFILL_MTP_LEVELS > 0 (MTP lookahead is per chunk)")
+    elif mtp_levels and use_trace:
+        reasons.append("PREFILL_USE_TRACE=1 with PREFILL_MTP_LEVELS > 0 (a traced packed forward does not run MTP)")
     if dflash:
         reasons.append("PREFILL_DFLASH=1")
     if use_trace and not (supports_packed_forward and traced_forward):
@@ -216,6 +221,7 @@ def packed_forward_capabilities(adapter) -> dict:
         "traced_forward": adapter.supports_packed_forward_trace,
         "forward_d2h_acks": adapter.supports_packed_forward_d2h_acks,
         "forward_indexer_indices": adapter.supports_packed_forward_indexer_indices,
+        "forward_mtp": adapter.supports_packed_forward_mtp,
     }
 
 

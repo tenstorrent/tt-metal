@@ -319,9 +319,16 @@ class TtMTPModule(LightweightModule):
 
         Returns ``(x, out, out_head_normed, *block_extras)``; ``out_head_normed`` is what the next level
         consumes. Both are None when the level runs kv_only.
+
+        A ``chunks`` keyword (a packed forward's PrefillChunk list) runs the block packed
+        (TtPrefillBlock.forward_packed): the fused projection and the FFN over every chunk's rows, attention per chunk.
         """
         x = self.fused(embed, hidden)
-        out, *extras = self.layer(x, rope_tensors, kvpe_cache, **fwd_kwargs)
+        chunks = fwd_kwargs.pop("chunks", None)
+        if chunks is not None:
+            out, *extras = self.layer.forward_packed(x, rope_tensors, kvpe_cache, chunks, **fwd_kwargs)
+        else:
+            out, *extras = self.layer(x, rope_tensors, kvpe_cache, **fwd_kwargs)
         out_head_normed = self.shared_head_norm(out) if out is not None else None
         return (x, out, out_head_normed, *extras)
 
@@ -479,7 +486,10 @@ class TtMTPPredictor(LightweightModule):
             h = out_head_normed
 
         if shared_indices is not None and not return_indexer_indices:
-            ttnn.deallocate(shared_indices)
+            # A packed forward's indices are one tensor per chunk (None for an empty one).
+            for t in shared_indices if isinstance(shared_indices, list) else [shared_indices]:
+                if t is not None:
+                    ttnn.deallocate(t)
 
         return MTPPredictorOutput(
             x=xs,

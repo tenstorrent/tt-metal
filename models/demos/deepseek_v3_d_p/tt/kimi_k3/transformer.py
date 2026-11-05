@@ -438,6 +438,7 @@ class TtKimiK3Transformer(LightweightModule):
         provided_levels: int = 0,
         mtp_geometry=None,
         chunks: Optional[list] = None,
+        mtp_unions: Optional[list] = None,
     ):
         """Run this rank's layers. Returns the post-norm hidden state, or the raw one mid-pipeline.
 

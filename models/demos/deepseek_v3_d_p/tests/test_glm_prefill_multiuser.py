@@ -19,6 +19,9 @@ but the pipeline test also run on a LoudBox.
   one user's consecutive chunks in the same forward, users at different depths and empty tail chunks must
   match the same chunks run each alone in its own forward, and those must match a model built for one chunk
   per forward.
+* test_glm_packed_mtp_matches_one_chunk_forwards: the same schedule with an MTP layer (one level, random weights)
+  after the trunk. Each chunk's MTP input comes from its own ids and lookahead block, prompt-ending chunks generate
+  their own token, and every user's trunk and MTP KV must match the chunk run alone.
 * test_glm_packed_traced_matches_eager: the same schedule through TtPrefillRuntime.prefill_forward with
   use_trace (one capture, replayed per forward; per-chunk metadata and the MoE padding config read on
   device) must fill the same KV as the eager packed forward.
@@ -130,18 +133,14 @@ TEST_L1_SMALL_SIZE = GLM53Adapter.l1_small_size + 512
 MESH_PARAMS = [
     pytest.param(
         (2, 4),
-        fabric2d_device_params(
-            fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=TEST_L1_SMALL_SIZE
-        ),
+        fabric2d_device_params(fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=TEST_L1_SMALL_SIZE),
         1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
         id="fabric2d-2x4",
     ),
     pytest.param(
         (8, 4),
-        torus_xy_device_params(
-            fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=TEST_L1_SMALL_SIZE
-        ),
+        torus_xy_device_params(fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=TEST_L1_SMALL_SIZE),
         2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
@@ -1036,3 +1035,258 @@ def test_glm_packed_pipeline_matches_one_rank(variant, config_only, mesh_device,
         for r in ranks + ([ref] if ref is not None else []):
             r.release_trace()
         d2h = None
+
+
+# MTP levels the packed-MTP test runs: one, as serving GLM-5.3 does (glm53_mtp_kv_share.json).
+MTP_LEVELS = 1
+
+
+def _build_mtp(mesh_device, config, device_params, num_links, chunk, num_slots, forward_chunks):
+    """:func:`_build` with a random-weight MTP predictor (layer NUM_LAYERS, MTP_LEVELS levels) on the transformer, the
+    norm / LM head tail MTP needs, and caches widened by the MTP layer."""
+    import dataclasses
+
+    from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
+    from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtMTPPredictor
+    from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import enable_mtp_indexer_slot
+
+    sp_axis = _sp_axis(mesh_device)
+    tp_axis = 1 - sp_axis
+    mesh_shape = list(mesh_device.shape)
+    seq_cache = N_CHUNKS * chunk
+    config = _test_config(config)
+    config.max_seq_len = seq_cache
+    enable_mtp_indexer_slot(config, NUM_LAYERS)
+    topology = per_axis_topology(device_params["fabric_config"])
+    hidden = config.hidden_size
+    g = torch.Generator().manual_seed(77)
+
+    # One more layer than the trunk: its weights are the MTP decoder layer's (an MoE layer, sharing the experts).
+    state_dict = glm_random_transformer_state_dict(config, _TestGLM53Config, NUM_LAYERS + 1, share_experts=True)
+    mtp_layer = state_dict["layers"].pop()
+    state_dict["norm_weight"] = (torch.randn(hidden, generator=g) * 0.1 + 1.0).to(torch.bfloat16)
+    state_dict["lm_head_weight"] = (torch.randn(config.vocab_size, hidden, generator=g) * hidden**-0.5).to(
+        torch.bfloat16
+    )
+    mtp_cfg = dataclasses.replace(
+        MTPConfig.from_hf_config(config, num_levels=MTP_LEVELS),
+        mtp_layer_idx=NUM_LAYERS,
+        first_k_dense_replace=_TestGLM53Config.NUM_DENSE_LAYERS,
+    )
+    mtp_weights = {
+        "enorm": (torch.randn(hidden, generator=g) * 0.1 + 1.0).to(torch.bfloat16),
+        "hnorm": (torch.randn(hidden, generator=g) * 0.1 + 1.0).to(torch.bfloat16),
+        "eh_proj": (torch.randn(hidden, 2 * hidden, generator=g) * (2 * hidden) ** -0.5).to(torch.bfloat16),
+        "shared_head_norm": (torch.randn(hidden, generator=g) * 0.1 + 1.0).to(torch.bfloat16),
+    }
+    common = dict(
+        dispatch_buffer_capacity_factor=8,
+        num_links=num_links,
+        topology=topology,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        gate_fallback_mode=GATE_MODE,
+        is_chunked=True,
+        slot_num=num_slots,
+        max_seq_len=seq_cache,
+        routing_use_l1_small_for_semaphores=GLM53Adapter.routing_use_l1_small_for_semaphores,
+        tp_shard_kv=True,
+        sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
+        forward_chunks=forward_chunks,
+    )
+    predictor = TtMTPPredictor(
+        mesh_device,
+        config,
+        _TestGLM53Config,
+        {"mtp": mtp_weights, "layer": mtp_layer},
+        mtp_cfg,
+        seq_len=chunk,
+        num_levels=MTP_LEVELS,
+        layer_idx=NUM_LAYERS,
+        first_cache_slot=NUM_LAYERS,
+        layer_num=NUM_LAYERS + MTP_LEVELS,
+        **common,
+    )
+    transformer = TtPrefillTransformer(
+        mesh_device=mesh_device,
+        config=config,
+        model_cfg=_TestGLM53Config,
+        state_dict=state_dict,
+        num_layers=NUM_LAYERS,
+        seq_len=chunk,
+        is_balanced=False,
+        padding_side="right",
+        lm_head_is_column_parallel=True,
+        mtp_predictor=predictor,
+        **common,
+    )
+    del state_dict, mtp_layer
+    assert transformer.num_kvpe_cache_layers == NUM_LAYERS + MTP_LEVELS
+
+    kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BF16_RM,
+        hf_config=config,
+        mesh_device=mesh_device,
+        seq_len=seq_cache,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_kvpe_cache_layers=NUM_LAYERS + MTP_LEVELS,
+        num_users=num_slots,
+    )
+    index_kv_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=config.index_head_dim,
+        mesh_device=mesh_device,
+        seq_len=seq_cache,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_kvpe_cache_layers=full_indexer_rank(config, NUM_LAYERS + MTP_LEVELS),
+        num_users=num_slots,
+        dtype=ttnn.bfloat8_b,
+    )
+    return config, transformer, kvpe_cache, index_kv_cache
+
+
+def _mtp_forward(transformer, kvpe_cache, index_kv_cache, mesh_device, chunks, ids_by_slot, lengths, chunk):
+    """One packed forward of ``chunks`` with MTP, its inputs built as the H2D producer builds them: per chunk, the
+    rotated trunk ids and the lookahead block (_mtp_rows), and its provided levels as the runner counts them.
+    ``lengths[slot]`` is that user's prompt length; a position at or past it is MTP_PAD_TOKEN_ID."""
+    from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID, num_mtp_tokens
+    from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
+    from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPUnionEmbedding
+
+    sp = mesh_device.shape[_sp_axis(mesh_device)]
+    chunk_local, n_mtp = chunk // sp, num_mtp_tokens(MTP_LEVELS)
+
+    def upload(rows):  # [sp, n] int64 -> [sp, 1, n] uint32, one row per SP chip
+        return ttnn.from_torch(
+            rows.reshape(sp, 1, -1).to(torch.int32),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=mesh_shard_dims(0, _sp_axis(mesh_device))
+            ),
+        )
+
+    unions, levels = [], []
+    for c in chunks:
+        if c.is_empty:
+            trunk = torch.zeros(sp, chunk_local, dtype=torch.int64)
+            mtp = torch.full((sp, n_mtp), MTP_PAD_TOKEN_ID, dtype=torch.int64)
+            levels.append(0)
+        else:
+            ids, length = ids_by_slot[c.slot_id], lengths[c.slot_id]
+
+            def token(p):
+                return int(ids[p]) if p < length else MTP_PAD_TOKEN_ID
+
+            real = [token(p) if p < c.actual_end else 0 for p in range(c.actual_start, c.actual_start + chunk)]
+            trunk = torch.tensor(pack_forward_tokens([real], [c.actual_start], sp), dtype=torch.int64).reshape(sp, -1)
+            slots = mtp_lookahead_positions(c.actual_start, sp, chunk_local, c.actual_end, MTP_LEVELS)
+            mtp = torch.full((sp, n_mtp), MTP_PAD_TOKEN_ID, dtype=torch.int64)
+            for chip, positions in enumerate(slots):
+                mtp[chip, : len(positions)] = torch.tensor([token(p) for p in positions], dtype=torch.int64)
+            # The runner's count: real lookahead ids on the chip holding the chunk's last position; 0 when partial.
+            provided = 0
+            if c.actual_end == c.actual_start + chunk:
+                provided = sum(1 for p in range(c.actual_end, c.actual_end + MTP_LEVELS) if p < length)
+            levels.append(provided)
+        tt_trunk, tt_mtp = upload(trunk), upload(mtp)
+        unions.append(MTPUnionEmbedding.from_ids(tt_trunk, tt_mtp, transformer.mtp_embed_ids, num_levels=MTP_LEVELS))
+        ttnn.deallocate(tt_trunk)
+        ttnn.deallocate(tt_mtp)
+    model_input = ttnn.concat([u.trunk for u in unions], dim=2)
+    transformer.forward(
+        model_input,
+        kvpe_cache,
+        actual_isl=chunk,
+        chunks=chunks,
+        index_kv_cache=index_kv_cache,
+        mtp_unions=unions,
+        provided_levels=levels,
+        input_is_embedded=True,
+    )
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(model_input)
+    for u in unions:
+        u.deallocate()
+    return levels
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links", MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm_packed_mtp_matches_one_chunk_forwards(variant, config_only, mesh_device, device_params, num_links):
+    """Packed forwards with MTP (slots 0..3) must fill every user's trunk and MTP KV as each chunk does alone in its
+    own forward (slots 4..7). The schedule (_packed_schedule) holds a prompt-ending chunk that is not the forward's
+    last (user C's partial chunk in forward 0), two prompt-ending chunks in one forward (user B's partial chunk and
+    user D's last full chunk in forward 1, whose lookahead is all pad), full chunks whose lookahead is real, and
+    empty tail positions. A chunk's MTP input is built from its own ids and lookahead alone, so a window reaching
+    into another chunk's rows, a misplaced generation or a missing MTP KV write breaks the comparison.
+
+    Bars as test_glm_packed_forward_matches_one_chunk_forwards: dense layers to rounding, every later KV (the MTP
+    layer's included) at PACKED_KV_PCC, since the MoE sees different rows per call (#63555)."""
+    assert_gate_mode_matches_adapter(variant, GATE_MODE)
+    sp = mesh_device.shape[_sp_axis(mesh_device)]
+    chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
+    lengths, forwards = _packed_schedule(chunk)
+    num_users = len(lengths)
+    num_slots = 2 * num_users
+    mesh_device.enable_program_cache()
+    config, transformer, kvpe_cache, index_kv_cache = _build_mtp(
+        mesh_device, config_only, device_params, num_links, chunk, num_slots, FORWARD_CHUNKS
+    )
+    try:
+        ids = _token_ids(config, num_users, N_CHUNKS * chunk)
+        ids_by_slot = {s: ids[s % num_users] for s in range(num_slots)}
+        lengths_by_slot = {s: lengths[s % num_users] for s in range(num_slots)}
+        empty = PrefillChunk(0, 0, 0)
+        for chunks in forwards:
+            validate_chunks(
+                chunks,
+                chunk_size=chunk,
+                forward_chunks=FORWARD_CHUNKS,
+                num_users=num_slots,
+                max_seq_len=N_CHUNKS * chunk,
+            )
+            levels = _mtp_forward(
+                transformer, kvpe_cache, index_kv_cache, mesh_device, chunks, ids_by_slot, lengths_by_slot, chunk
+            )
+            logger.info(f"[packed mtp] forward {chunks} provided_levels={levels}")
+        for chunks in forwards:
+            for c in chunks:
+                if c.is_empty:
+                    continue
+                alone = [PrefillChunk(c.slot_id + num_users, c.actual_start, c.actual_end)]
+                alone += [empty] * (FORWARD_CHUNKS - 1)
+                _mtp_forward(
+                    transformer, kvpe_cache, index_kv_cache, mesh_device, alone, ids_by_slot, lengths_by_slot, chunk
+                )
+
+        kv_layers = NUM_LAYERS + MTP_LEVELS
+        kv_slots = _read_user_slots(kvpe_cache, mesh_device, kv_layers, num_slots)
+        idx_slots = _read_user_slots(index_kv_cache, mesh_device, full_indexer_rank(config, kv_layers), num_slots)
+        failures = []
+        for u in range(num_users):
+            for name, slots in (("kvpe", kv_slots), ("indexer_k", idx_slots)):
+                ref, got = slots[u + num_users], slots[u]
+                for layer in range(ref.shape[0]):
+                    dense = name == "kvpe" and layer < _TestGLM53Config.NUM_DENSE_LAYERS
+                    bar = SINGLE_MODEL_FIRST_KV_PCC if dense else PACKED_KV_PCC
+                    tag = "mtp kvpe" if name == "kvpe" and layer >= NUM_LAYERS else f"{name}[{layer}]"
+                    pcc = _pcc(ref[layer], got[layer])
+                    logger.info(f"[packed mtp] user {u} {tag} PCC {pcc:.6f}")
+                    if pcc < bar:
+                        failures.append(f"user {u} {tag} PCC {pcc:.6f} < {bar}")
+        # The MTP slots must hold real, user-specific KV, or the comparison above proves nothing.
+        cross = _pcc(kv_slots[0][NUM_LAYERS], kv_slots[1][NUM_LAYERS])
+        assert cross < DISTINCT_USERS_MAX_PCC, f"users 0 and 1 have the same MTP KV (PCC {cross:.6f})"
+        assert not failures, f"[packed mtp] {len(failures)} mismatch(es):\n" + "\n".join(failures)
+    finally:
+        transformer.release_sub_device_managers()

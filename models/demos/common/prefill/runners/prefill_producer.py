@@ -209,7 +209,7 @@ def _forward_payload(pushes: list, pool_of) -> tuple:
     tokens = [_chunk_slice(pool_of(p.slot_id), p.actual_start, p.actual_isl) for p in pushes]
     tokens += [[1] * CHUNK_SIZE] * (FORWARD_CHUNKS - len(pushes))
     rows = _h2d_forward_rows(tokens, [c.actual_start for c in chunks])
-    return rows, None, pack_forward_metadata(chunks, FORWARD_CHUNKS)
+    return rows, _forward_mtp_rows(pushes, pool_of), pack_forward_metadata(chunks, FORWARD_CHUNKS)
 
 
 def _partial_runs_last(pushes: list) -> list:
@@ -226,10 +226,25 @@ def _partial_runs_last(pushes: list) -> list:
     return [p for run in runs for p in run]
 
 
+def _forward_mtp_rows(pushes: list, pool_of):
+    """``[sp, 1, FORWARD_CHUNKS * num_mtp_tokens]`` lookahead ids of a packed forward, sent after every chunk's ids:
+    chunk k's block (_mtp_rows) at ``k * num_mtp_tokens``, an empty chunk's all MTP_PAD_TOKEN_ID. None without MTP."""
+    n_mtp = num_mtp_tokens(MTP_LEVELS)
+    if not n_mtp:
+        return None
+    sp = SP_FACTOR
+    blocks = [_mtp_rows(pool_of(p.slot_id), p.actual_start, p.actual_isl, actual_end=p.actual_end) for p in pushes]
+    blocks += [np.full((sp, 1, n_mtp), MTP_PAD_TOKEN_ID, dtype=np.uint32)] * (FORWARD_CHUNKS - len(pushes))
+    return np.concatenate(blocks, axis=-1)
+
+
 def _shutdown_payload() -> tuple:
     """(token rows, MTP rows, metadata) of the SHUTDOWN sentinel: every metadata word is SHUTDOWN_WORD."""
     rows = _h2d_forward_rows([[1] * CHUNK_SIZE] * FORWARD_CHUNKS, [0] * FORWARD_CHUNKS)
-    return rows, _mtp_rows([], 0), sentinel_metadata(SHUTDOWN_WORD, FORWARD_CHUNKS)
+    mtp = _mtp_rows([], 0)
+    if mtp is not None:
+        mtp = np.concatenate([mtp] * FORWARD_CHUNKS, axis=-1)  # one block per chunk position
+    return rows, mtp, sentinel_metadata(SHUTDOWN_WORD, FORWARD_CHUNKS)
 
 
 def _mtp_rows(pool, actual_start: int, actual_isl=None, actual_end=None):

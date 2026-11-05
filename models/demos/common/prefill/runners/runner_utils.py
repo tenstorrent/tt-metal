@@ -169,8 +169,15 @@ def make_token_spec(mesh_shape: tuple, row_len: int, sp_axis: int = 0) -> ttnn.T
     )
 
 
-def make_h2d_spec(mesh_shape: tuple, chunk_size: int, mtp_levels: int = 0, sp_axis: int = 0) -> ttnn.TensorSpec:
+def make_h2d_spec(
+    mesh_shape: tuple, chunk_size: int, mtp_levels: int = 0, sp_axis: int = 0, forward_chunks: int = 1
+) -> ttnn.TensorSpec:
+    """One forward's H2D row per SP chip. ``chunk_size`` is the forward's tokens (forward_chunks chunks); with MTP the
+    row ends in one num_mtp_tokens(mtp_levels) lookahead block per chunk, after every chunk's ids."""
     sp_factor = mesh_shape[sp_axis]
+    if mtp_levels and forward_chunks > 1:
+        row = h2d_row_len(chunk_size, sp_factor) + forward_chunks * num_mtp_tokens(mtp_levels)
+        return make_token_spec(mesh_shape, row, sp_axis)
     if mtp_levels:
         return make_token_spec(mesh_shape, mtp_union_rows(chunk_size, sp_factor, mtp_levels), sp_axis)
     return make_token_spec(mesh_shape, h2d_row_len(chunk_size, sp_factor), sp_axis)
@@ -220,10 +227,11 @@ def activation_global_spec(rows: int, hidden_size: int, planes: int = 1) -> ttnn
 MTP_ID_ROWS = TILE_HEIGHT
 
 
-def d2d_activation_rows(chunk_size: int, *, sp_factor: int, mtp_levels: int = 0) -> int:
+def d2d_activation_rows(chunk_size: int, *, sp_factor: int, mtp_levels: int = 0, forward_chunks: int = 1) -> int:
+    """Rows of the D2D activation: the forward's ``chunk_size`` hidden rows, then with MTP one id block per chunk."""
     if not mtp_levels:
         return chunk_size
-    return chunk_size + sp_factor * MTP_ID_ROWS
+    return chunk_size + forward_chunks * sp_factor * MTP_ID_ROWS
 
 
 def d2d_activation_width(hidden_size: int, *, dflash: bool = False) -> int:
