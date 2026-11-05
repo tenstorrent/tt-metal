@@ -170,7 +170,7 @@ IntermeshVc describe_intermesh_vc(const FabricBuilderContext& builder_context) {
 
 }  // namespace
 
-RunInfo describe_run(const ControlPlane& control_plane) {
+RunInfo describe_run(const ControlPlane& control_plane, const std::string& run_id) {
     using tt_metal::distributed::multihost::DistributedContext;
     // The whole job's communicator, not the current world: tt-run can split a job into sub-contexts, and each
     // sub-context's ranks start again from 0.
@@ -185,6 +185,7 @@ RunInfo describe_run(const ControlPlane& control_plane) {
         };
     }
     return RunInfo{
+        .run_id = run_id,
         .mpi_rank = static_cast<uint32_t>(*world->rank()),
         .world_size = static_cast<uint32_t>(*world->size()),
         .subcontext = subcontext,

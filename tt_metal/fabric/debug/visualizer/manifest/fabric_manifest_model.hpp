@@ -447,6 +447,9 @@ struct Subcontext {
 
 // This process and the build it runs.
 struct RunInfo {
+    // The fabric run this manifest belongs to: made by rank 0 at fabric init and shared by every rank of the fabric. It
+    // names the run's folder, such as "20261105T221500Z-1a2b3c4d".
+    std::string run_id;
     // This process's rank in the whole job, and the job's number of ranks.
     uint32_t mpi_rank = 0;
     uint32_t world_size = 1;

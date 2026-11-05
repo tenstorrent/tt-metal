@@ -11,6 +11,7 @@ Each directory holding fabric_manifest_rank_*.json files under a PATH is one run
 (run.subcontext.id) is one fabric: sub-contexts name their meshes and chips independently. A rank describes its own
 chips in full and names other ranks' routers only by path, so a reader joins the files through those names. No single
 rank can check them, so for each fabric this checks that:
+  - every rank wrote the same run id, which names the run's folder
   - every chip is local in exactly one rank, so exactly one file describes it
   - every rank gives a chip the same host_rank, and each host rank of a mesh is one rank's: the ranks a mesh is split
     across each own whole host ranks
@@ -125,11 +126,24 @@ def check_cross_rank_links(paths, manifests, owners):
     return problems
 
 
+def check_run_ids(paths, manifests):
+    """Every rank of the fabric wrote the same run id, and it's the name of the folder they're in."""
+    run_ids = {path.name: manifest["run"]["run_id"] for path, manifest in zip(paths, manifests)}
+    problems = []
+    if len(set(run_ids.values())) != 1:
+        problems.append(f"the ranks wrote different run ids: {run_ids}")
+    for path, manifest in zip(paths, manifests):
+        if path.parent.name != manifest["run"]["run_id"]:
+            problems.append(f"{path.name} has run id {manifest['run']['run_id']} but is in {path.parent.name}")
+    return problems
+
+
 def check_fabric(paths):
     manifests = [json.loads(path.read_text()) for path in paths]
     owners = find_chip_owners(manifests)
     return (
-        check_chip_owners(paths, owners)
+        check_run_ids(paths, manifests)
+        + check_chip_owners(paths, owners)
         + check_host_ranks(paths, manifests, owners)
         + check_cross_rank_links(paths, manifests, owners)
     )
