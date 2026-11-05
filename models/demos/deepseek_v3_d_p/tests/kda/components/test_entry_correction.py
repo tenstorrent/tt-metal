@@ -18,8 +18,8 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.entry_correction import EntryCorrection
-from tests.ttnn.profiling.realtime_profiler_utils import require_realtime_profiler
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
+from tt_py_test_utils_common.realtime_profiler_utils import require_realtime_profiler
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, make_actual_start
 
 pytestmark = run_for_blackhole()
 

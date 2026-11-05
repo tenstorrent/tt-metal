@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tt_py_test_utils_common.sdxl_matmul import test_sdxl_matmul as _shared_test_sdxl_matmul
+from models.demos.stable_diffusion_xl_base.tests.sdxl_matmul import test_sdxl_matmul as _shared_test_sdxl_matmul
 
 import pytest
 import torch

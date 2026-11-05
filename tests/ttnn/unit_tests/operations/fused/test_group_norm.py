@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tt_py_test_utils_common.sdxl_group_norm import (
+from models.demos.stable_diffusion_xl_base.tests.sdxl_group_norm import (
     run_sdxl_base_group_norm_test,
     test_sdxl_base_group_norm as _shared_test_sdxl_base_group_norm,
     test_sdxl_base_group_norm_negative_mask as _shared_test_sdxl_base_group_norm_negative_mask,

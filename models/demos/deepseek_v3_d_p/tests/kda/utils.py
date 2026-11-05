@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
     kda_state_dict_sha256,
     load_kda_layer_state_dict,
 )
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, decode_tail
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
     KDARecurrenceProgramConfig,
@@ -43,7 +44,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
-from tt_py_test_utils_common.kda_test_utils import assert_accurate, decode_tail
 from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged
 
 

@@ -2,14 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
+import dataclasses
 import os
 import random
+
 import torch
-import ttnn
+from loguru import logger
 from ttnn.operations.ccl import MoEActivationFunction
-from tt_py_test_utils_common.selective_combine import device_mesh_iterator
+
+import ttnn
 from tt_py_test_utils_common.all_to_all_combine_ref import get_batch_cluster_idxr, get_cluster_dims
+from tt_py_test_utils_common.selective_combine import device_mesh_iterator
 from tt_py_test_utils_common.utility_functions import comp_pcc
 
 

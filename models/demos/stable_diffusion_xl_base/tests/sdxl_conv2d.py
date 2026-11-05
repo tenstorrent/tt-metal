@@ -3,13 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-from loguru import logger
-import torch
+
 import pytest
+import torch
+from loguru import logger
+from ttnn.operations.activations import get_golden_function_for_activation
+
+import ttnn
 from tt_py_test_utils_common.utility_functions import is_blackhole, is_wormhole_b0
 from tt_py_test_utils_common.utils_for_testing import assert_equal, check_with_pcc_without_tensor_printout
-import ttnn
-from ttnn.operations.activations import get_golden_function_for_activation
 
 BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
 

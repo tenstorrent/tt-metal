@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tt_py_test_utils_common.device_params import get_updated_device_params
-
 import os
 import copy
 import pathlib

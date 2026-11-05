@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
 from tt_py_test_utils_common.matmul_determinism import ttnn_linear
 from tt_py_test_utils_common.utils_for_testing import assert_numeric_metrics

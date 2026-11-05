@@ -15,7 +15,7 @@ from typing import Optional
 import torch
 
 import ttnn
-from tt_py_test_utils_common.moe_compute_helpers import gen_expert_mapping
+from models.common.moe.moe_compute_helpers import gen_expert_mapping
 
 
 @dataclass

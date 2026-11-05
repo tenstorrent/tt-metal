@@ -13,7 +13,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     kda_device_params,
     pack_transform,
 )
-from tt_py_test_utils_common.kda_test_utils import (
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
     make_actual_start,

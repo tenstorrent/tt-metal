@@ -21,8 +21,8 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_recurrent_reference
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.kda.components.test_recurrence import _run_recurrence, _to_device
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_CHUNK_SIZE
-from tt_py_test_utils_common.kda_test_utils import assert_accurate
 
 pytestmark = run_for_blackhole()
 

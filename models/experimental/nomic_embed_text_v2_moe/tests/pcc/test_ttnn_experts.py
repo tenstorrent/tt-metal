@@ -199,7 +199,7 @@ def test_misoriented_w2_decorrelates(device, config, tt_config, state_dict, refe
 def window_metadata(routing: Routing, num_experts: int, token_start: int, num_tokens: int):
     """routing_metadata's four outputs for one routed pass, on the device and on the host."""
     # Imported here, so a moved op test tree fails the routed tests alone rather than the module.
-    from tt_py_test_utils_common.routing_metadata_reference import (
+    from models.experimental.nomic_embed_text_v2_moe.routing_metadata_reference import (
         to_host,
     )
 
@@ -225,7 +225,7 @@ def torch_experts(reference, dispatched: torch.Tensor, expert_counts: torch.Tens
 
     The expert of each block follows from the counts alone, as the device's grouped matmul derives it.
     """
-    from tt_py_test_utils_common.routing_metadata_reference import (
+    from models.experimental.nomic_embed_text_v2_moe.routing_metadata_reference import (
         BLOCK_ROWS,
         block_experts,
     )
