@@ -325,6 +325,9 @@ inline void _llk_math_eltwise_unary_datacopy_(
             ckernel_template::run();
             // MOVA2D clears DEST zero flags as a side effect, so it hits the same budabackend#2730 drop as unpack-to-dest:
             // a written row can stay flagged zero and pack back as 0 (tt-metal#63295).
+            // Reset the DEST counter first: the MOP leaves it at the end of the tile, and CLR_16 derives its bank
+            // select from the DEST address, so the last tile of a bank would be cleared in the other half (tt-metal#53693).
+            math::clear_dst_reg_addr();
             _llk_math_clear_dest_zero_flags_(dst_index, num_faces, is_fp32_dest_acc_en ? 1 : 0);
         }
         else if constexpr (type == DataCopyType::B2D)
