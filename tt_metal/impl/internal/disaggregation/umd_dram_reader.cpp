@@ -29,7 +29,7 @@
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wsign-compare"
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/cluster_descriptor.hpp>
 #include <tt-umd/soc_descriptor.hpp>
 #include <tt-umd/types/arch.hpp>

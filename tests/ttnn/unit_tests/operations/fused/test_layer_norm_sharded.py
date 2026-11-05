@@ -22,6 +22,9 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     non_rectangular_width_shard_config,
     NON_RECTANGULAR_GRID_CASES,
     NON_RECTANGULAR_GRID_IDS,
+    LINE_GRID_1D_MCAST_CASES,
+    LINE_GRID_1D_MCAST_IDS,
+    line_width_shard_config,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
@@ -513,6 +516,53 @@ def test_layer_norm_sharded_1d_mcast_with_grid_offset(device, grid_offset, use_w
         block_ht=1,
         block_wt=1,
         subblock_w=1,
+    )
+
+    if use_welford:
+        pcc_threshold = 0.99975
+        rtol = 0.14
+        atol = 0.085
+        frobenius_threshold = 0.02
+    else:
+        pcc_threshold = 0.9999
+        rtol = 0.065
+        atol = 0.065
+        frobenius_threshold = 0.014
+    assert_numeric_metrics(
+        ref_output,
+        output,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "h", "w", "orientation"), LINE_GRID_1D_MCAST_CASES, ids=LINE_GRID_1D_MCAST_IDS
+)
+@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
+def test_layer_norm_sharded_1d_mcast_line_grid(device, start, end, h, w, orientation, use_welford):
+    torch.manual_seed(0)
+    sharded_mem_config, block_wt = line_width_shard_config(device, start, end, h, w, orientation)
+
+    torch_input = generate_input_tensor(h, w, "random", torch.bfloat16)
+    ref_output = torch.nn.functional.layer_norm(torch_input, [w])
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_mem_config,
+    )
+
+    output = ttnn_layer_norm_sharded(
+        device,
+        tt_input,
+        use_welford,
+        block_ht=h // 32,
+        block_wt=block_wt,
+        subblock_w=4,
     )
 
     if use_welford:

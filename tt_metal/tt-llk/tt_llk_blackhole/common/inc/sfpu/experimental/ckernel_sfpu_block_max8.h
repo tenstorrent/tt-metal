@@ -45,6 +45,18 @@ inline sfpi::vFloat rotate_right(sfpi::vFloat value)
 }
 
 /**
+ * @brief Rotate one vector right, then merge it with another by bitwise OR.
+ *
+ * The callers keep the set instances of the two inputs disjoint, so the OR only moves bits.
+ * @tparam STEPS Number of one-instance rotations applied to rotated.
+ */
+template <int STEPS>
+inline sfpi::vFloat rotate_or(sfpi::vFloat rotated, sfpi::vFloat other)
+{
+    return sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(rotate_right<STEPS>(rotated)) | sfpi::as<sfpi::vUInt>(other));
+}
+
+/**
  * @brief Load one parity of a four-row face band and replace invalid scores with negative infinity.
  *
  * For BF16, vector element = 8 * physical_lane + instance, and vConstTileId
@@ -77,31 +89,22 @@ inline sfpi::vFloat load_masked(std::uint32_t band, std::uint32_t valid_scores)
  *
  * These pairs represent two four-row bands from each of the left and right faces.
  * SFPSWAP leaves maxima in the even registers and minima in the odd scratch
- * registers. Each swap is followed immediately by SFPNOP: Blackhole auto-stalls
- * if another SFPU instruction follows, even for independent registers. Keeping
- * each NOP takes two cycles instead of three; it is a scheduling optimization,
- * not a correctness requirement for this non-macro sequence.
+ * registers. Blackhole auto-stalls the next SFPU instruction, so no SFPNOP is needed:
  * https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPSWAP.md#instruction-scheduling
  */
 inline void max_four_pairs()
 {
     TTI_SFPSWAP(0, 0, 1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP;
     TTI_SFPSWAP(0, 2, 3, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP;
     TTI_SFPSWAP(0, 4, 5, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP;
     TTI_SFPSWAP(0, 6, 7, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP;
 }
 
 /**
  * @brief Rotate all four independent reductions into their odd-numbered scratch LREGs.
  *
  * Each SHFLROR1 rotates right by one instance without mixing physical lanes.
- * Each shuffle is followed immediately by SFPNOP: Blackhole auto-stalls if
- * another SFPU instruction follows. Keeping each NOP takes two cycles instead
- * of three, as described in the Blackhole ISA instruction-scheduling section:
+ * Blackhole auto-stalls the next SFPU instruction, so no SFPNOP is needed:
  * https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPSHFT2.md#instruction-scheduling
  * @tparam FROM_MAX Select even-numbered maxima as sources; otherwise rotate scratch in place.
  */
@@ -109,13 +112,9 @@ template <bool FROM_MAX>
 inline void shuffle_four_pairs()
 {
     TTI_SFPSHFT2(0, FROM_MAX ? 0 : 1, 1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
     TTI_SFPSHFT2(0, FROM_MAX ? 2 : 3, 3, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
     TTI_SFPSHFT2(0, FROM_MAX ? 4 : 5, 5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
     TTI_SFPSHFT2(0, FROM_MAX ? 6 : 7, 7, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
 }
 
 /**
@@ -157,27 +156,28 @@ __attribute__((noinline)) inline void reduce_eight_rows(std::uint32_t address)
 }
 
 /**
- * @brief Gather one block maximum from each face into instances 0 and 1.
+ * @brief Gather one block maximum from each face into instances 3 and 4 (BLOCK 0) or 7 and 0 (BLOCK 1).
  *
  * The first/second block resides in instance 3/7, corresponding to even face
  * column 6/14. The two gathered values form one parity of the final four-score
- * row; other instances are zeroed for the later bitwise merge.
+ * row; other instances are zeroed for the later bitwise merge. The caller
+ * rotates them into place, after the transpose.
  * @tparam BLOCK Select the first or second eight-score block within each face.
  * @param src_address Left-face physical DST row address for four logical rows.
  */
 template <std::uint32_t BLOCK>
 inline sfpi::vFloat gather_face_blocks(std::uint32_t src_address)
 {
-    constexpr std::uint32_t instance = 3 + 4 * BLOCK;
-    sfpi::vFloat left                = rotate_right<8 - instance>(sfpi::dst_reg[src_address / 2]);
-    sfpi::vFloat right               = rotate_right<9 - instance>(sfpi::dst_reg[(src_address + FACE_R_DIM) / 2]);
-    sfpi::vFloat blocks              = 0.0f;
-    v_if ((sfpi::vConstTileId & static_cast<int>(FACE_C_DIM - 2)) == 0)
+    constexpr int instance = 3 + 4 * BLOCK;
+    // Pre-rotate the right face so its block sits at instance + 1, which wraps to 0 for BLOCK 1.
+    sfpi::vFloat right     = rotate_right<1 /*STEPS*/>(sfpi::dst_reg[(src_address + FACE_R_DIM) / 2]);
+    sfpi::vFloat blocks    = 0.0f;
+    v_if ((sfpi::vConstTileId & static_cast<int>(FACE_C_DIM - 2)) == 2 * instance)
     {
-        blocks = left;
+        blocks = sfpi::dst_reg[src_address / 2];
     }
     v_endif;
-    v_if ((sfpi::vConstTileId & static_cast<int>(FACE_C_DIM - 2)) == 2)
+    v_if ((sfpi::vConstTileId & static_cast<int>(FACE_C_DIM - 2)) == (2 * (instance + 1)) % FACE_C_DIM)
     {
         blocks = right;
     }
@@ -206,11 +206,25 @@ __attribute__((noinline)) inline void compact_row_band(std::uint32_t src_address
     sfpi::vFloat row0 = gather_face_blocks<BLOCK>(src_address);
     sfpi::vFloat row1 = row0, row2 = row0, row3 = row0;
     sfpi::subvec_transp(row0, row1, row2, row3);
-    row1 = rotate_right<2>(row1);
-    row2 = rotate_right<4>(row2);
-    row3 = rotate_right<6>(row3);
-    sfpi::vFloat packed =
-        sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(row0) | sfpi::as<sfpi::vUInt>(row1) | sfpi::as<sfpi::vUInt>(row2) | sfpi::as<sfpi::vUInt>(row3));
+    // Transpose and rotation commute, so each row k takes one net rotation of (2k - 3 - 4 * BLOCK) mod 8,
+    // which moves its two blocks to instances 2k and 2k + 1. Order the rows by descending net
+    // rotation: three rotate-by-2 steps and one rotate-by-1, 7 shuffles total.
+    sfpi::vFloat packed;
+    if constexpr (BLOCK == 0)
+    {
+        // Net rotations 5, 7, 1, 3 for rows 0..3.
+        packed = rotate_or<2 /*STEPS*/>(row1, row0);
+        packed = rotate_or<2 /*STEPS*/>(packed, row3);
+        packed = rotate_or<2 /*STEPS*/>(packed, row2);
+    }
+    else
+    {
+        // Net rotations 1, 3, 5, 7 for rows 0..3.
+        packed = rotate_or<2 /*STEPS*/>(row3, row2);
+        packed = rotate_or<2 /*STEPS*/>(packed, row1);
+        packed = rotate_or<2 /*STEPS*/>(packed, row0);
+    }
+    packed = rotate_right<1 /*STEPS*/>(packed);
     v_if ((sfpi::vConstTileId >> __builtin_ctz(FACE_C_DIM)) == static_cast<int>(output_row))
     {
         sfpi::dst_reg[dst_address / 2] = packed;

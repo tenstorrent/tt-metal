@@ -52,7 +52,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import run_for_wormhole_b0
+from tt_py_test_utils_common.utility_functions import run_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 
 

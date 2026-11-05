@@ -33,7 +33,9 @@ class KimiK27Config:
     ROUTED_EXPERT_COMBINE_OVERLAP = True
     # Opts this model into TtMoe's fabric2d transport (dispatch_fabric2d / combine_fabric2d) wherever the mesh can
     # run it (Blackhole, axis 0 wired into a ring). Every other config runs dispatch and combine.
-    MOE_FABRIC2D_TRANSPORT = True
+    # Off while the GLM 5.3 SC4 prefill regression is bisected: it runs dispatch and combine again. Set True to
+    # re-enable.
+    MOE_FABRIC2D_TRANSPORT = False
     INTERMEDIATE_SIZE = 18432  # Dense FFN hidden dimension
 
     # MoE configuration
