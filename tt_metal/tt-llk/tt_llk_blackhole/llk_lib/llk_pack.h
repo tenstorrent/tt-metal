@@ -744,26 +744,14 @@ inline std::uint32_t pacrs_per_tile(const std::uint32_t face_r_dim, const std::u
 }
 } // namespace pack_block_dense_internal
 
-/**
- * Opt-in setup of _llk_pack_block_dense_ for tiles of one to four faces of 1 to 16 rows, at most eight PACRs (a 16x32 tile), known at run time.
- * Call it after the default pack init, and again after any program that replaces the replay buffer.
- * Records one tile: its PACRs (the last one steps to the next face slot without closing), the step to the next tile in DEST and the face reset.
- */
-inline void _llk_pack_block_dense_init_(const std::uint32_t face_r_dim, const std::uint32_t num_faces)
+[[gnu::noinline]] inline void _llk_pack_block_dense_record_(const std::uint32_t face_r_dim, const std::uint32_t num_faces, const std::uint32_t key)
 {
     using namespace pack_block_dense_internal;
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    const std::uint32_t pacrs = pacrs_per_tile(face_r_dim, num_faces);
-    LLK_ASSERT(pacrs >= 1 && pacrs <= 8, "The dense block pack records at most eight PACRs per tile");
+    const std::uint32_t pacrs    = pacrs_per_tile(face_r_dim, num_faces);
     const std::uint32_t per_face = pacrs / num_faces;
     const std::uint32_t row      = pacr_word(face_r_dim, ADDR_MOD_0, 0);
     const std::uint32_t face     = pacr_word(face_r_dim, ADDR_MOD_2, 0);
-    const std::uint32_t key      = (num_faces << 8) | face_r_dim;
 
-    if (pack_dense_replay_key == key)
-    {
-        return;
-    }
     load_replay_buf(
         REPLAY_START,
         pacrs + 2,
@@ -781,6 +769,24 @@ inline void _llk_pack_block_dense_init_(const std::uint32_t face_r_dim, const st
             TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);
         });
     pack_dense_replay_key = key;
+}
+
+/**
+ * Opt-in setup of _llk_pack_block_dense_ for tiles of one to four faces of 1 to 16 rows, at most eight PACRs (a 16x32 tile), known at run time.
+ * Call it after the default pack init, and again after any program that replaces the replay buffer.
+ * Records one tile: its PACRs (the last one steps to the next face slot without closing), the step to the next tile in DEST and the face reset.
+ */
+[[gnu::always_inline]] inline void _llk_pack_block_dense_init_(const std::uint32_t face_r_dim, const std::uint32_t num_faces)
+{
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(
+        pack_block_dense_internal::pacrs_per_tile(face_r_dim, num_faces) >= 1 && pack_block_dense_internal::pacrs_per_tile(face_r_dim, num_faces) <= 8,
+        "The dense block pack records at most eight PACRs per tile");
+    const std::uint32_t key = (num_faces << 8) | face_r_dim;
+    if (pack_dense_replay_key != key)
+    {
+        _llk_pack_block_dense_record_(face_r_dim, num_faces, key);
+    }
 }
 
 /**
