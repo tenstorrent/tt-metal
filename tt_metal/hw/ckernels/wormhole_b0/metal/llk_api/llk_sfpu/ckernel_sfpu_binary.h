@@ -163,15 +163,43 @@ inline void calculate_sfpu_binary(
         calculate_sfpu_binary_two_row<BINOP, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
         return;
     }
-    // XLOGY: the log body's two polynomial constants are bound here and held in LREGs across the
-    // loop; as literals inside the loop they would be re-materialised on every row.
-    // Declared for every op but loaded only for XLOGY: sfpi does not drop an unused SFPLOADI.
-    // Unassigned for every other op, so do not read them outside the XLOGY branch.
-    sfpi::vFloat log_c;
-    sfpi::vFloat log_d;
     if constexpr (BINOP == BinaryOp::XLOGY) {
-        log_c = LogPoly::C;
-        log_d = LogPoly::D;
+        // XLOGY runs here rather than as another arm of the loop below because it needs the full
+        // accurate log, the heaviest body in this header: the polynomial alone keeps several
+        // temporaries and three program constants live, which does not fit the LREGs alongside
+        // the both-operands live the loop below loads up front. Logging y first, into a single
+        // vFloat, and only then reading x, keeps that many values live at once down to what fits.
+        // FAST_APPROX and HAS_BASE_SCALING are false, so this is the same untouched path the
+        // standalone log op uses: log(1) is exactly 0 and xlogy(x, 1) is exactly 0.
+        for (int d = 0; d < ITERATIONS; d++) {
+            // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+            constexpr std::uint32_t dst_tile_size_sfpi = 32;
+            sfpi::vFloat log_in1 = calculate_log_body<
+                /*FAST_APPROX=*/false,
+                /*HAS_BASE_SCALING=*/false,
+                is_fp32_dest_acc_en>(sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi], /*log_base_scale_factor=*/0);
+            if constexpr (!is_fp32_dest_acc_en) {
+                // The Dest round trip this replaces narrowed the log to the 16-bit Dest, so the
+                // product stays bit-identical on that Dest. RNE, the same rounding calculate_log
+                // applies to the log op's own output.
+                log_in1 = sfpi::convert<sfpi::vFloat16b>(log_in1, sfpi::RoundMode::Nearest);
+            }
+            // y is dead once its log exists, and x is read only now, so neither is live across the log.
+            sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+            sfpi::vFloat product = log_in1 * in0;
+            // y is read back from Dest for the guard (its slot is not written until the store below), so it
+            // is not held live across the log. The log body gives +-inf, not NaN, for y < 0.
+            sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+            v_if((in1 < 0.0f) || (in1 == nan)) { product = nan; }
+            v_endif;
+            if constexpr (!is_fp32_dest_acc_en) {
+                // software RNE approach:
+                product = float32_to_bf16_rne(product);
+            }
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = product;
+            sfpi::dst_reg++;
+        }
+        return;
     }
     // The bf16 RNE constants are bound outside the loop for the same reason (two SFPLOADI
     // per row otherwise). Unassigned unless round_to_bf16_rne, which also gates their use.
@@ -201,27 +229,6 @@ inline void calculate_sfpu_binary(
             result = in1 - in0;
         } else if constexpr (BINOP == BinaryOp::POW) {
             result = calculate_sfpu_binary_power(in0, in1);
-        } else if constexpr (BINOP == BinaryOp::XLOGY) {
-            if constexpr (is_fp32_dest_acc_en) {
-                // ln(in1) on the register. The Dest round trip below (a store of in1, the
-                // in-place log body's load and store, and a reload) is exact on a 32-bit Dest
-                // except for its denormal flush, which the register body reproduces for
-                // sign-clear in1; the guard turns the sign-set lanes, where the two differ,
-                // into NaN. So this is bit-identical and four Dest accesses per row cheaper.
-                result = _calculate_log_body_on_reg_(in1, log_c, log_d) * in0;
-                v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
-                v_endif;
-            } else {
-                // The store to a 16-bit Dest truncates the log intermediate to the Dest format
-                // before the multiply; kept so the result stays bit-identical on that Dest.
-                v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
-                v_else {
-                    sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in1;
-                    _calculate_log_body_(log_c, log_d, dst_index_out);
-                    result = sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * in0;
-                }
-                v_endif;
-            }
         } else if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
             // Step in0 one representable value toward in1. Consecutive floats of one sign are
             // consecutive integers when the bit pattern is read as an integer, so the step is taken
@@ -400,13 +407,14 @@ inline void calculate_sfpu_binary_div(
     }
 }
 
-template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
+template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 inline void sfpu_binary_init() {
     if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW) {
         // Initialisation for use of sfpu_reciprocal_iter<2> in DIV or POW.
         sfpu_reciprocal_init<false>();
     } else if constexpr (BINOP == BinaryOp::XLOGY) {
-        _init_log_<APPROXIMATION_MODE>();
+        // Same constants calculate_log_body reads, including the fp32 vs bf16 polynomial pair.
+        log_init<APPROXIMATION_MODE, /*FAST_APPROX=*/false, is_fp32_dest_acc_en>();
     }
 }
 
