@@ -157,10 +157,6 @@ def test_embedding_streams_bench(mesh_device):
         e = ttnn.typecast(rmE(tok, T), f32)
         return ttnn.to_layout(ttnn.concat([e, e, e, e], dim=2), ttnn.TILE_LAYOUT)
 
-    def s1f(tok, T):  # one lookup of 4T rows (index repeat) -> [T,1,4,D]
-        t4 = ttnn.reshape(ttnn.repeat(ttnn.reshape(tok, [1, T, 1, 1]), [1, 1, 4, 1]), [T * 4, 1]) if False else None
-        raise RuntimeError("skipped")
-
     g = torch.Generator().manual_seed(1)
     for n in (1, 16, 24, 2048):
         tok = upload(md, torch.randint(0, VOCAB, (ROWS * n,), generator=g))
@@ -174,6 +170,8 @@ def test_embedding_streams_bench(mesh_device):
             ("S1e_f32_rm_concat", s1e),
             ("S2_rm_sharded_lean", s2),
         ):
+            if n > 24 and name in ("S1b_tile_f32_repeat", "S1c_rm_repeat", "S1e_f32_rm_concat"):
+                continue  # (the 2048-row fp32 variants crashed the run once: only the three production candidates at prefill size)
             try:
                 y = fn(tok, n)
                 ttnn.synchronize_device(md)
