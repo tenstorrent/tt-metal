@@ -187,6 +187,8 @@ class TernaryDecodeLinear3:
             # 4 kbs per SFPU pass (kernels/tdec3_compute.cpp scale_acc4)
             extra_defines = list(extra_defines) + [("BATCH4", "1")]
         glu = getattr(self, "glu", False)
+        if x_rot is not None and list(x_rot.shape) == [K // 1024, 1024]:
+            dm_defines = list(dm_defines) + [("X_PAGED", "1")]  # x' as 2-KB pages in L1 (rotate.py XPAGED)
         if residual is not None:
             assert COMMON_ARGS and not glu and not split and self.inline_scales and self.group16
             dm_defines = list(dm_defines) + [("RESIDUAL", "1")]

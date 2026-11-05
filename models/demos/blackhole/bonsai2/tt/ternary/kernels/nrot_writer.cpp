@@ -28,9 +28,14 @@ void kernel_main() {
     }
     cb_wait_front(cb_y, 1);
     const uint32_t l1 = get_read_ptr(cb_y);
+#ifdef X_PAGED
+    // x' as a [B, 1024] L1 tensor (2-KB pages over the cores' L1): block b is page b, written once
+    noc_async_write(l1, out.get_noc_addr(b), 2048);
+#else
     for (uint32_t c = 0; c < C; ++c) {
         noc_async_write(l1, out.get_noc_addr(c, b * 2048), 2048);
     }
+#endif
     cb_wait_front(20, 1);  // the tiled normalised block -> tile b of xnt
     noc_async_write(get_read_ptr(20), xnt.get_noc_addr(b), 2048);
     noc_async_write_barrier();

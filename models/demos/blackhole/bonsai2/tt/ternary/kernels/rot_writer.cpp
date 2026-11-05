@@ -20,9 +20,14 @@ void kernel_main() {
     constexpr uint32_t cb_y = tt::CBIndex::c_16;
     cb_wait_front(cb_y, 1);
     const uint32_t l1 = get_read_ptr(cb_y);
+#ifdef X_PAGED
+    // x' as a [B, 1024] L1 tensor (2-KB pages over the cores' L1): block b is page b, written once
+    noc_async_write(l1, out.get_noc_addr(b), 2048);
+#else
     for (uint32_t c = 0; c < C; ++c) {
         noc_async_write(l1, out.get_noc_addr(c, b * 2048), 2048);
     }
+#endif
     noc_async_write_barrier();
     cb_pop_front(cb_y, 1);
 }

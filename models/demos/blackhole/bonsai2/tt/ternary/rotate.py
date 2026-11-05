@@ -4,6 +4,8 @@
 H_1024 = H_32 (x) H_32 so each block is two 32x32 matmuls. In: x [.., 32, K] bf16 TILE (row 0 = the token). Out: C
 row-major copies of x' [C, K] bf16 in DRAM, one per bank, as the ternary decode linear reads them."""
 
+import os
+
 import numpy as np
 import torch
 
@@ -12,6 +14,19 @@ from models.demos.blackhole.bonsai2.tt.core_ranges import row_major_crs
 from models.demos.blackhole.bonsai2.tt.ternary.gguf_weights import hadamard
 
 KERNELS = "models/demos/blackhole/bonsai2/tt/ternary/kernels/"
+# x' as a [K / 1024, 1024] L1 tensor (2-KB pages over the cores' L1, written once) instead of C DRAM copies [C, K]:
+# the ternary decode linears read it without queueing behind their own weight streams (BONSAI_XPAGED=0: copies)
+XPAGED = os.environ.get("BONSAI_XPAGED", "1") == "1"
+
+
+def _xr_alloc(device, K, C):
+    if XPAGED:
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape([K // 1024, 1024]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+        )
+    return ttnn.allocate_tensor_on_device(
+        ttnn.Shape([C, K]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
 
 
 class DecodeRotation:
@@ -33,9 +48,7 @@ class DecodeRotation:
         """u: rotate silu(x) * u instead of x (the MLP's gate/up product, one op instead of a mul and a rotation);
         sig: sigmoid(x) * u (the attention's gated output)."""
         device, K, B, C = self.device, self.K, self.B, self.copies
-        out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([C, K]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
-        )
+        out = _xr_alloc(device, K, C)
         grid = device.compute_with_storage_grid_size()
         coords = [ttnn.CoreCoord(b % grid.x, b // grid.x) for b in range(B)]
         crs = row_major_crs(len(coords), grid.x)
@@ -82,10 +95,11 @@ class DecodeRotation:
                 ttnn.KernelDescriptor(
                     kernel_source=KERNELS + "rot_writer.cpp",
                     core_ranges=crs,
-                    compile_time_args=[C, K * 2] + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
+                    compile_time_args=[C, 2048 if XPAGED else K * 2]
+                    + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
                     runtime_args=wr,
                     common_runtime_args=wr_c,
-                    defines=dm_def,
+                    defines=dm_def + ([("X_PAGED", "1")] if XPAGED else []),
                     config=ttnn.WriterConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
@@ -150,9 +164,7 @@ class NormRotation:
 
     def __call__(self, x):
         device, K, B, C = self.device, self.K, self.B, self.copies
-        out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([C, K]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
-        )
+        out = _xr_alloc(device, K, C)
         xn = ttnn.allocate_tensor_on_device(
             ttnn.Shape(list(x.shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
         )
@@ -181,7 +193,7 @@ class NormRotation:
             + ttnn.TensorAccessorArgs(self.consts).get_compile_time_args()
         )
         wr_ct = (
-            [C, K * 2]
+            [C, 2048 if XPAGED else K * 2]
             + ttnn.TensorAccessorArgs(out).get_compile_time_args()
             + ttnn.TensorAccessorArgs(xn).get_compile_time_args()
             + ttnn.TensorAccessorArgs(xnt).get_compile_time_args()
@@ -198,6 +210,7 @@ class NormRotation:
                 ttnn.KernelDescriptor(
                     kernel_source=KERNELS + "nrot_writer.cpp",
                     core_ranges=crs,
+                    defines=[("X_PAGED", "1")] if XPAGED else [],
                     compile_time_args=wr_ct,
                     common_runtime_args=[out.buffer_address(), xn.buffer_address(), grid.x, xnt.buffer_address()],
                     config=ttnn.WriterConfigDescriptor(),

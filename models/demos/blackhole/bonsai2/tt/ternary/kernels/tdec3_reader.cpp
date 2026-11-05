@@ -48,9 +48,19 @@ void kernel_main() {
     constexpr uint32_t S_PAGES = KB;
 #endif
 
+#ifdef X_PAGED
+    // x' as a [K / 1024, 1024] L1 tensor: its 2-KB pages from the cores' L1 (no DRAM bank queue, one copy)
+    const auto xs = TensorAccessor(x_args, x_addr, 2048);
+    cb_reserve_back(cb_x, Kt);
+    (void)x_copy;
+    for (uint32_t p = 0; p < Kt / 32; ++p) {
+        noc_async_read(xs.get_noc_addr(p), get_write_ptr(cb_x) + p * 2048, 2048);
+    }
+#else
     const auto xs = TensorAccessor(x_args, x_addr, X_BYTES);
     cb_reserve_back(cb_x, Kt);
     noc_async_read(xs.get_noc_addr(x_copy), get_write_ptr(cb_x), X_BYTES);
+#endif
 #ifdef RESIDUAL
     {
         // RESIDUAL: this core's residual tiles (same layout as the output) into c_3; the compute adds them to the
