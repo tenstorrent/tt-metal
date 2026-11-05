@@ -122,12 +122,7 @@ class VSAPrepass:
             mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
         )
 
-        # Row r of shard s pools into column (r % rows) // 64 of every geometry in the rung, so the host pooling
-        # buffer and each row's slot in it are fixed; update() rewrites every slot's weight in place.
-        row = torch.arange(rung)
-        self.host_pool_t = torch.zeros(sp_factor, 1, self.rows, self.nb_pad)
-        self.pool_t_index = row * self.nb_pad + (row % self.rows) // VSA_TILE_TOKENS
-        self.pool_t = StateTensor()
+        self.pool_weights = StateTensor()
         self.always = StateTensor()
         self.pad_q_threshold = StateTensor()
         self.cand_mask = StateTensor()
@@ -175,13 +170,12 @@ class VSAPrepass:
             pad_q_threshold[:, 0, :tiles, 0] = torch.where(scored_q, 0.0, float("inf"))
             self.prefix_rows = geometry.n_prefix_tiles * VSA_TILE_TOKENS
 
-        with _timed(timings, "pool_t"):
+        with _timed(timings, "pool weights"):
             # The weights of geometry.averaging_matrix(), with the same float64 reciprocal; pad rows weigh zero.
             block = geometry.block_of_row
             counts = geometry.valid_counts[block]
             real_row = torch.arange(self.rung) - geometry.block_starts[block] < counts
             weights = torch.where(real_row, 1.0 / counts.to(torch.float64), 0.0).to(torch.float32)
-            self.host_pool_t.view(-1)[self.pool_t_index] = weights
             # -1 in the marker channel of every key row the prefix recompute must not attend: the pad rows of each
             # shard (inside partial blocks and whole pad blocks) and the recompute's extra rows, except its probe key.
             extra_rows = self.rows + PREFIX_EXTRA
@@ -191,9 +185,10 @@ class VSAPrepass:
 
         device = self.mesh_device
         sharded = [self.sp_axis, None, None, None]
-        with _timed(timings, "upload pool_t", sync=device):
-            self.pool_t.update(
-                from_torch(self.host_pool_t, device=device, dtype=ttnn.bfloat16, mesh_axes=sharded), traced=traced
+        with _timed(timings, "upload pool weights", sync=device):
+            self.pool_weights.update(
+                from_torch(weights.reshape(sp, 1, self.rows, 1), device=device, dtype=ttnn.bfloat16, mesh_axes=sharded),
+                traced=traced,
             )
         with _timed(timings, "upload always", sync=device):
             self.always.update(from_torch(always, device=device, dtype=ttnn.float32, mesh_axes=sharded), traced=traced)
@@ -248,12 +243,15 @@ class VSAPrepass:
                 from_torch(prefix_marker, device=device, dtype=ttnn.bfloat16, mesh_axes=sharded), traced=traced
             )
 
-    def _pool_t(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """[1, H, rows, D] -> per-tile means, transposed: [1, H, D, nb_pad]."""
-        xt = ttnn.transpose(x, -2, -1)
-        pooled = ttnn.matmul(xt, self.pool_t.value, compute_kernel_config=self.hifi4)
-        ttnn.deallocate(xt)
-        return pooled
+    def _pool(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """[1, H, rows, D] -> per-tile means: [1, H, nb_pad, D]."""
+        weighted = ttnn.multiply(x, self.pool_weights.value)
+        padded = ttnn.pad(weighted, [(0, 0), (0, 0), (0, self.nb_pad * VSA_TILE_TOKENS - self.rows), (0, 0)], 0.0)
+        ttnn.deallocate(weighted)
+        blocks = ttnn.experimental.view(padded, [self.num_heads, self.nb_pad, VSA_TILE_TOKENS, x.shape[-1]])
+        pooled = ttnn.sum(blocks, dim=2, compute_kernel_config=self.hifi4)
+        ttnn.deallocate(padded)
+        return ttnn.reshape(pooled, [1, self.num_heads, self.nb_pad, x.shape[-1]])
 
     def _all_gather(self, x: ttnn.Tensor, dim: int) -> ttnn.Tensor:
         return self.ccl_manager.all_gather(x, dim=dim, mesh_axis=self.sp_axis, use_hyperparams=False)
@@ -271,22 +269,20 @@ class VSAPrepass:
         included."""
         assert q.shape[2] == self.rows and q.shape[1] == self.num_heads, (q.shape, self.rows, self.num_heads)
         sync = self.mesh_device
-        # Pooled per block: q_bar and v_bar [1, H, nb_pad, D], k_bar_t [1, H, D, nb_pad]; gathered over SP to
-        # k_bar_t_g [1, H, D, n_blocks_pad] and v_bar_g [1, H, n_blocks_pad, D]. Only the coarse branch needs V.
+        # Pooled per block: q_bar, k_bar and v_bar [1, H, nb_pad, D]; k_bar and v_bar gathered over SP to
+        # [1, H, n_blocks_pad, D]. Only the coarse branch needs V.
         with _timed(timings, "vsa routing: pool q", sync=sync):
-            q_bar_t = self._pool_t(q)
-            q_bar = ttnn.transpose(q_bar_t, -2, -1)
-            ttnn.deallocate(q_bar_t)
+            q_bar = self._pool(q)
         with _timed(timings, "vsa routing: pool + gather k", sync=sync):
-            k_bar_t = self._pool_t(k)
-            k_bar_t_g = self._all_gather(k_bar_t, dim=3)
-            ttnn.deallocate(k_bar_t)
+            k_bar = self._pool(k)
+            k_bar_g = self._all_gather(k_bar, dim=2)
+            ttnn.deallocate(k_bar)
 
         # Unscaled logits in fp32: top-k is invariant to the positive 1/sqrt(D) scale, and fp32 keeps near-ties apart.
         with _timed(timings, "vsa routing: scores", sync=sync):
-            scores = ttnn.matmul(q_bar, k_bar_t_g, dtype=ttnn.float32, compute_kernel_config=self.hifi4)
+            scores = ttnn.matmul(q_bar, k_bar_g, transpose_b=True, dtype=ttnn.float32, compute_kernel_config=self.hifi4)
             ttnn.deallocate(q_bar)
-            ttnn.deallocate(k_bar_t_g)
+            ttnn.deallocate(k_bar_g)
 
         with _timed(timings, "vsa routing: topk", sync=sync):
             masked = ttnn.add(scores, self.cand_mask.value)
@@ -317,9 +313,7 @@ class VSAPrepass:
         coarse_out = None
         if coarse:
             with _timed(timings, "vsa coarse: pool + gather v", sync=sync):
-                v_bar_t = self._pool_t(v)
-                v_bar = ttnn.transpose(v_bar_t, -2, -1)
-                ttnn.deallocate(v_bar_t)
+                v_bar = self._pool(v)
                 v_bar_g = self._all_gather(v_bar, dim=2)
                 ttnn.deallocate(v_bar)
             with _timed(timings, "vsa coarse: softmax", sync=sync):
