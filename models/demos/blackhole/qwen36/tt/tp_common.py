@@ -346,7 +346,7 @@ _PREFILL_SNAP_TILE = None
 
 
 def prefill_snap_tile_enabled():
-    """QWEN36_PREFILL_SNAP_TILE (default "0"; r67 stack). With QWEN36_PREFILL_GDN_GLUE and QWEN36_PREFILL_INTRACE_SNAP
+    """QWEN36_PREFILL_SNAP_TILE (default "1"; r67 stack). With QWEN36_PREFILL_GDN_GLUE and QWEN36_PREFILL_INTRACE_SNAP
     both on, a traced prefill body that takes in-replay snapshots needs the snapshot conv rows (the three conv-input
     rows before each staged position). "0": they are gathered from the ROW_MAJOR conv input, so such a body keeps the
     untilize + row-major conv (the merge guard in TPGatedDeltaNet.forward_prefill: GDN_GLUE's conv cut is lost on
@@ -358,7 +358,7 @@ def prefill_snap_tile_enabled():
     otherwise. Read once (the traces capture whichever body is active at warm-up)."""
     global _PREFILL_SNAP_TILE
     if _PREFILL_SNAP_TILE is None:
-        _PREFILL_SNAP_TILE = os.environ.get("QWEN36_PREFILL_SNAP_TILE", "0") == "1"
+        _PREFILL_SNAP_TILE = os.environ.get("QWEN36_PREFILL_SNAP_TILE", "1") == "1"
     return _PREFILL_SNAP_TILE
 
 

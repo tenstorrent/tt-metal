@@ -128,15 +128,15 @@ def test_forward_prefill_guard_source():
     assert '**({} if snap is None else {"snap": snap})' in src
 
 
-def test_snap_tile_flag_default_off(monkeypatch):
+def test_snap_tile_flag_default_on(monkeypatch):
     from models.demos.blackhole.qwen36.tt import tp_common
 
     monkeypatch.setattr(tp_common, "_PREFILL_SNAP_TILE", None)
     monkeypatch.delenv("QWEN36_PREFILL_SNAP_TILE", raising=False)
-    assert tp_common.prefill_snap_tile_enabled() is False
-    monkeypatch.setattr(tp_common, "_PREFILL_SNAP_TILE", None)
-    monkeypatch.setenv("QWEN36_PREFILL_SNAP_TILE", "1")
     assert tp_common.prefill_snap_tile_enabled() is True
+    monkeypatch.setattr(tp_common, "_PREFILL_SNAP_TILE", None)
+    monkeypatch.setenv("QWEN36_PREFILL_SNAP_TILE", "0")
+    assert tp_common.prefill_snap_tile_enabled() is False
     monkeypatch.setattr(tp_common, "_PREFILL_SNAP_TILE", None)
 
 
