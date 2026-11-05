@@ -76,7 +76,8 @@ FORCE_INLINE uint32_t face_row_offset(uint32_t r, uint32_t h, uint32_t face_r_di
 //   then (used by INPUT_RM_ROWS): rows, k_tiles, cb_input, input_tile_bytes, face_r_dim,
 //         input_row_stride (bytes between a replica's rows), cb_rm_stage, stage_chunk_tiles
 //         (32-column chunks per staged DRAM read), then TensorAccessorArgs(input)
-//   then (FE_ALL_REDUCE): sem_ar_ready, cb_ar_scratch, ring_size, and (FE_PERSISTENT) cb_ar_out
+//   then (FE_ALL_REDUCE): sem_ar_ready, cb_ar_scratch, ring_size, and (FE_PERSISTENT) cb_ar_out and the
+//         sender's staging slots per half
 //
 // Runtime args:
 //   0: output base address
@@ -88,13 +89,14 @@ FORCE_INLINE uint32_t face_row_offset(uint32_t r, uint32_t h, uint32_t face_r_di
 //                      H columns; 0xFFFFFFFF on a gate_up-only 9th-row core, which writes no output)
 //   9: input base address (INPUT_RM_ROWS only)
 //   10-15 (FE_ALL_REDUCE): scratch address, this chip's slot, sender NoC x/y, out_ready, staging slot
-//   16-17 (FE_PERSISTENT): out_ready of the odd iterations, the D2H staging address (two rows)
+//   16-17 (FE_PERSISTENT): out_ready of the odd iterations, the output staging address (two rows)
 //
 // FE_PERSISTENT: one pass per iteration (see persistent.h), then FE_SEM_WRITER_DONE. The all-reduce
 // becomes a reduce to the root chip (see fe_reduce_sender.cpp): off the root a group-0 core only stages
-// its partial at its sender; on the root (FE_REDUCE_ROOT) it writes its own slot of the iteration's
+// its partial at its sender, in the iteration's half of the staging (the sender may still be sending the
+// previous iteration's); on the root (FE_REDUCE_ROOT) it writes its own slot of the iteration's
 // scratch half, waits for the other chips' slots there, and writes the sum into its place in the
-// iteration's half of the control core's D2H staging.
+// iteration's half of the control core's output staging.
 //
 // A producer scatters its I slice to whichever hub owns it (the slice's first column decides: below
 // `split_col` goes to hub0, at or above it to hub1) and bumps BOTH hubs' gather semaphores. Bumping
@@ -142,6 +144,7 @@ void kernel_main() {
     constexpr uint32_t ar_ring_size = get_compile_time_arg_val(kArArg + 2);
 #if defined(FE_PERSISTENT)
     constexpr uint32_t cb_ar_out_id = get_compile_time_arg_val(kArArg + 3);
+    constexpr uint32_t ar_staging_slots = get_compile_time_arg_val(kArArg + 4);
 #endif
     static_assert(out_tile_bytes == 64, "fused all-reduce slots are 1x32 bf16 faces");
     const uint32_t ar_scratch_addr = get_arg_val<uint32_t>(10);
@@ -152,7 +155,7 @@ void kernel_main() {
     const uint32_t ar_staging_slot = get_arg_val<uint32_t>(15);
 #if defined(FE_PERSISTENT)
     const uint32_t ar_out_ready_addrs[2] = {ar_out_ready_addr, get_arg_val<uint32_t>(16)};
-    const uint32_t d2h_staging_addr = get_arg_val<uint32_t>(17);
+    const uint32_t out_staging_addr = get_arg_val<uint32_t>(17);
 #endif
 #endif
 
@@ -400,7 +403,7 @@ void kernel_main() {
                     {.offset_bytes = 0},
                     {.noc_x = ar_sender_noc_x,
                      .noc_y = ar_sender_noc_y,
-                     .addr = ar_scratch_addr + ar_staging_slot * core_bytes});
+                     .addr = ar_scratch_addr + ((iter & 1u) * ar_staging_slots + ar_staging_slot) * core_bytes});
                 noc.async_write_barrier();
                 Semaphore<>(sem_ar_ready_id).up(noc, ar_sender_noc_x, ar_sender_noc_y, 1);
 #endif
@@ -459,9 +462,9 @@ void kernel_main() {
                     {.offset_bytes = 0},
                     {.noc_x = FE_CTRL_X,
                      .noc_y = FE_CTRL_Y,
-                     .addr = d2h_staging_addr + parity * k_tiles * out_tile_bytes + down_local * core_bytes});
+                     .addr = out_staging_addr + parity * k_tiles * out_tile_bytes + down_local * core_bytes});
                 noc.async_write_barrier();
-                noc_semaphore_inc(get_noc_addr(FE_CTRL_X, FE_CTRL_Y, get_semaphore(FE_SEM_D2H_COUNT)), 1);
+                noc_semaphore_inc(get_noc_addr(FE_CTRL_X, FE_CTRL_Y, get_semaphore(FE_SEM_OUT_COUNT)), 1);
                 cb_ar_out.pop_front(kLocalTiles);
                 // The sum has consumed this half: the link's sender returns the credit for it.
                 Semaphore<>(sem_ar_ready_id).up(noc, ar_sender_noc_x, ar_sender_noc_y, 1);

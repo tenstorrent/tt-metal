@@ -15,10 +15,13 @@
 namespace fabric_api = tt::tt_fabric::mesh::experimental;
 
 // The persistent op's reduce to the root chip, on one fabric sender core per link (see persistent.h for
-// the iteration protocol). Its link's output cores bump sem_ar_ready once per iteration each.
+// the iteration protocol). Its link's output cores bump sem_ar_ready once per iteration each. The senders
+// are their own stage, a row behind the worker grid: they report ready on FE_SEM_READY (the control core's
+// reduce-stage count), which the grid's go for iteration i waits on for iteration i - 2.
 //
 // Off the root, they have staged their partials here first (at the scratch's address, in their run
-// order), and the sender unicasts each one to the root's matching output core, into the slot for this
+// order, in the iteration's half of the staging), and the sender unicasts each one to the root's matching
+// output core, into the slot for this
 // chip in the iteration's half of the root's scratch -- (iter & 1) * ring_size + my_chip -- with the
 // same packet bumping that core's out_ready[iter & 1]. A half is reused two iterations later, once the
 // root has summed it: the root's sender multicasts one credit per iteration back to every chip, so
@@ -30,7 +33,8 @@ namespace fabric_api = tt::tt_fabric::mesh::experimental;
 // Compile-time args:
 //   0: my_chip   1: is_root   2: num_connections (1 off the root: the route to it; the branches on it)
 //   3: core_bytes (one output core's partial)   4: sem_ar_ready   5: ring_size   6: sem_go
-//   7: cb_scratch (this core's staging, at the scratch address)
+//   7: cb_scratch (this core's staging, at the scratch address)   8: staging_slots (output cores per link,
+//      the stride of the staging's two halves)
 //
 // Common runtime args:
 //   0: scratch address   1: out_ready[0]   2: out_ready[1]   3: credit (GlobalSemaphore, on the senders)
@@ -46,6 +50,7 @@ constexpr uint32_t sem_ar_ready_id = get_compile_time_arg_val(4);
 constexpr uint32_t ring_size = get_compile_time_arg_val(5);
 constexpr uint32_t sem_go_id = get_compile_time_arg_val(6);
 constexpr uint32_t cb_scratch_id = get_compile_time_arg_val(7);
+constexpr uint32_t staging_slots = get_compile_time_arg_val(8);
 constexpr uint32_t kStopBit = 0x80000000u;
 
 void kernel_main() {
@@ -121,6 +126,7 @@ void kernel_main() {
             }
             const uint32_t parity = iter & 1u;
             const uint32_t slot_addr = scratch_addr + (parity * ring_size + my_chip) * core_bytes;
+            const uint32_t staged_addr = staging_addr + parity * staging_slots * core_bytes;
             for (uint32_t core = 0; core < num_cores; ++core) {
                 // The headers are rewritten in place, so the previous packet's must have left.
                 noc.async_writes_flushed();
@@ -128,7 +134,7 @@ void kernel_main() {
                     UnicastFusedAtomicIncUpdateMask::WriteDstAddr | UnicastFusedAtomicIncUpdateMask::SemaphoreAddr>(
                     fabric_connection,
                     route_id,
-                    staging_addr + core * core_bytes,
+                    staged_addr + core * core_bytes,
                     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
                         safe_get_noc_addr(core_noc_x[core], core_noc_y[core], slot_addr, 0),
                         safe_get_noc_addr(core_noc_x[core], core_noc_y[core], out_ready_addr[parity], 0),

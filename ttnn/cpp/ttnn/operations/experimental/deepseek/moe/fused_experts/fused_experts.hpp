@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -144,17 +145,18 @@ namespace ttnn::experimental::deepseek::moe {
 //                     axes of a 2D mesh (which needs a 2D fabric); requires the one-row 6-expert
 //                     path and the L1 WIDTH_SHARDED [1, H/16] output on (0,0)-(1,7). The result has
 //                     the same spec, replicated over the axes.
-//   persistent_layer_table / persistent_socket_core / persistent_h2d_socket_addresses /
-//                     persistent_d2h_socket_address: launch the op once as a persistent kernel set
-//                     serving many layers (see FusedPersistentParams): every chip reads
-//                     [64-byte header with the layer id in word 0 | token row] pages from its H2D
-//                     socket, runs that layer's MoE (addresses from the layer table row) and reduces
-//                     the result onto mesh coordinate (0, 0), which returns it on its D2H socket. A
-//                     layer id >= num_layers stops every kernel. Needs the whole-mesh all-reduce,
-//                     the fused router with a DRAM gate, the shared expert and the one-row replica;
-//                     the returned tensor is the op's scratch, and results arrive only on the socket.
-//   persistent_h2d_device_pull: the H2D sockets are DEVICE_PULL (the host stages pages in pinned
-//                     host RAM and the control core reads them over PCIe) rather than HOST_PUSH.
+//   persistent_layer_table / persistent_socket_core / persistent_input_sockets /
+//                     persistent_output_sockets: launch the op once as a persistent kernel set
+//                     serving many layers for many requesters (see FusedPersistentParams): every
+//                     chip's socket core receives [64-byte header with the layer id in word 0 | token
+//                     row] pages on each requester's input D2D socket, takes them round robin through
+//                     the op's pipeline, runs that layer's MoE (addresses from the layer table row) and
+//                     reduces the result onto mesh coordinate (0, 0), which sends it on the
+//                     requester's output D2D socket. A layer id >= num_layers closes a requester's
+//                     input, and once all are closed every kernel stops. Needs the whole-mesh
+//                     all-reduce, the fused router with a DRAM gate, the shared expert and the one-row
+//                     replica; the returned tensor is the op's scratch, and results arrive only on the
+//                     output sockets.
 //
 // Returns a [1, B, H] BFLOAT16 tensor in the input's layout (TILE or ROW_MAJOR):
 //   act       = silu(clamp(gate, max=limit)) * clamp(up, -limit, limit),
@@ -196,8 +198,7 @@ Tensor fused_experts(
     tt::tt_fabric::Topology all_reduce_topology = tt::tt_fabric::Topology::Linear,
     const std::optional<Tensor>& persistent_layer_table = std::nullopt,
     const std::optional<tt::tt_metal::CoreCoord>& persistent_socket_core = std::nullopt,
-    const std::optional<std::vector<uint32_t>>& persistent_h2d_socket_addresses = std::nullopt,
-    std::optional<uint32_t> persistent_d2h_socket_address = std::nullopt,
-    bool persistent_h2d_device_pull = false);
+    const std::optional<std::vector<tt::tt_metal::distributed::MeshSocket>>& persistent_input_sockets = std::nullopt,
+    const std::optional<std::vector<tt::tt_metal::distributed::MeshSocket>>& persistent_output_sockets = std::nullopt);
 
 }  // namespace ttnn::experimental::deepseek::moe

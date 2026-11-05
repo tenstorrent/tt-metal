@@ -1,38 +1,60 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""The persistent TP12 MoE: one ``fused_experts`` launch serving several layers over host sockets.
+"""The persistent TP12 MoE: one ``fused_experts`` launch serving several layers over D2D sockets.
 
-Three layers of random weights at V4.1's shapes (D = 5120, I = 2304, 384 experts, top 6) are loaded on a 3x4
-submesh, each split TP12 as the model splits it. The op is launched once. Every step the host pushes a
-``[64-byte header | bf16 row]`` page to each chip's H2D socket, the header's first word naming the layer; the
-chips run that layer's whole MoE (router, routed experts, shared expert), reduce it onto mesh coordinate (0, 0),
-and the host reads the row back from that chip's D2H socket. The layers are visited interleaved. Each step is
-checked against a torch reference and against the same layer's non-persistent op on the same row, and then a
-stop page ends every kernel so the device closes normally.
+On the 8x4 mesh, the first five rows are left to attention and the other ops, and the MoE takes the last three
+(a 3x4 submesh at row 5). Three layers of random weights at V4.1's shapes (D = 5120, I = 2304, 384 experts, top
+6) are loaded on it, each split TP12 as the model splits it, and the op is launched once. It serves three
+requesters, TP4 rows above it (1x4 submeshes at rows 2, 3 and 4), in strict turn: each request
+(``persistent_moe_request``) sends a ``[64-byte header | bf16 row]`` page from each of the requester's chips down
+its column to the three MoE chips below, the header's first word naming the layer. The MoE chips run that
+layer's whole MoE (router, routed experts, shared expert) in their three-stage pipeline, so the requesters'
+rows overlap, and reduce it onto MoE coordinate (0, 0), which sends the row back up to all four of the
+requester's chips, so the request op's output is replicated. The layers are visited interleaved. Each step is
+checked against a torch reference and against the same layer's non-persistent op on the same row, and then
+every requester's stop request ends the kernels so the device closes normally.
+
+``test_moe_persistent_tp12_all_layers`` does the same with every one of the checkpoint's layers, real weights,
+checked against the checkpoint's reference MoE; fill the TP12 expert cache first (see its docstring).
 
     pytest models/experimental/deepseek_v41_flash/tests/decode/test_moe_persistent.py
 """
 
 import itertools
+import math
 import os
 import time
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.deepseek_v41_flash.tt.config import CACHE_DIR, DEFAULT_MODEL_DIR, load_config
+from models.experimental.deepseek_v41_flash.tests.reference import load_reference, reference_moe
+from models.experimental.deepseek_v41_flash.tt.config import (
+    CACHE_DIR,
+    DEFAULT_MODEL_DIR,
+    expert_provider,
+    load_config,
+    moe_weights,
+)
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts, DeepSeekV41SparseMoeBlock
 from models.experimental.deepseek_v4_flash.tt.common import CCL_TOPOLOGY, width_sharded_l1_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
-from models.experimental.deepseek_v4_flash.tt.weight_loader import resolve_snapshot_dir
+from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
 
 PCC = 0.95
 # The persistent op runs the very same kernels as the one-shot op, so the two should agree to rounding.
 PCC_VS_OP = 0.9999
 PARENT_MESH = (8, 4)
-SUBMESH = (3, 4)
+MOE_SUBMESH = (3, 4)
+MOE_OFFSET = (5, 0)
+# The requesters: TP4 rows above the MoE, each chip's requests going down its column to the three MoE chips
+# below. Row 4's multicast; rows 2 and 3 unicast to each MoE chip, past the rows in between. The MoE root's
+# responses all leave it northward, its one free fabric direction, which puts rows 1 to 4 in reach.
+REQUEST_SUBMESH = (1, 4)
+REQUEST_ROWS = (2, 3, 4)
 TP_SIZE = 12
 NUM_LAYERS = 3
 # The layer of each step: every layer is visited more than once, never in a fixed order.
@@ -40,9 +62,12 @@ STEPS = (0, 2, 1, 1, 0, 2, 0, 1, 2)
 # Distinct base experts per layer; expert e is base e % EXPERT_POOL scaled by its own factor, which keeps every
 # expert distinct without generating 384 full-size random experts per layer.
 EXPERT_POOL = 4
-# Biased router scores within this of the k-th one are a tie the device's bf16 router (one ulp ~ 0.008 at
-# these scores) may break either way; the torch reference accepts any top-k drawn from that band.
+# Biased router scores within this of the k-th one, or within one bf16 ulp of it if wider, are a tie the device's
+# bf16 router may break either way; the torch reference accepts any top-k drawn from that band. The random
+# layers' scores are ~1 (ulp ~ 0.008); the real layers' biases put theirs at 9 to 60 (ulp 0.06 to 0.25).
 ROUTING_TIE = 0.02
+# The real-weights test: rows per layer, every layer of the checkpoint visited this often in a shuffled order.
+REAL_ROWS_PER_LAYER = 2
 STOP_LAYER = 0xFFFFFFFF
 HEADER_BYTES = 64
 # The worker grid and router row the op multicasts each row over: 12 x (8 + 1).
@@ -82,7 +107,7 @@ def _reference(x, provider, weights, config, experts):
     renormalized top-k experts, and the shared expert, all with the ``swiglu_limit`` clamp.
 
     Returns ``(candidates, margin)``. ``candidates[0]`` is the output for the exact top-k; the rest are the
-    outputs for every other top-k the device could pick by breaking a ``ROUTING_TIE`` differently. ``margin``
+    outputs for every other top-k the device could pick by breaking a tie (``ROUTING_TIE``) differently. ``margin``
     is the gap between the k-th and (k+1)-th ranked score."""
     k = experts.top_k
     gate_w = weights["gate.weight"] / getattr(config, "gate_temp", 1.0)
@@ -91,7 +116,8 @@ def _reference(x, provider, weights, config, experts):
     order = biased.argsort(descending=True).tolist()
     margin = (biased[order[k - 1]] - biased[order[k]]).item()
     boundary = biased[order[k - 1]].item()
-    band = [e for e in order if abs(biased[e].item() - boundary) <= ROUTING_TIE]
+    tie = max(ROUTING_TIE, 2.0 ** (math.floor(math.log2(abs(boundary))) - 7))
+    band = [e for e in order if abs(biased[e].item() - boundary) <= tie]
     sure = [e for e in order[:k] if e not in band]
     limit = experts.limit
     i = config.moe_intermediate_size
@@ -129,16 +155,21 @@ def _as_int32(values):
 
 
 class PersistentMoE:
-    """The persistent op over ``moes`` (one ``DeepSeekV41SparseMoeBlock`` per layer, all at TP12 on ``device``).
+    """The persistent op over ``moes`` (one ``DeepSeekV41SparseMoeBlock`` per layer, all at TP12 on ``moe_mesh``),
+    serving one requester per mesh of ``request_meshes``.
 
     The layer table holds each layer's buffer addresses in the row layout the op reads; the op itself is launched
-    on layer 0's tensors, whose layouts every layer shares. Call it with ``(layer, row)`` to run that layer on one
-    ``[D]`` row, and :meth:`stop` once to end the kernels. ``h2d_mode`` is the H2D sockets' mode: under
-    ``DEVICE_PULL`` a host write is a memcpy into pinned memory and the control kernel reads the page over PCIe.
+    on layer 0's tensors, whose layouts every layer shares. Each requester's request socket runs from
+    ``request_core`` on each of its chips to ``socket_core`` on the MoE chips of the same column, with a one-page
+    FIFO; its response socket from ``socket_core`` on MoE (0, 0) to ``request_core`` on every one of its chips, two
+    rows deep. The op takes the requesters' requests in strict turn (requester 0, 1, ..., then 0 again), so each
+    has to send its next request only after the others have sent theirs. Use :meth:`upload` and :meth:`request`
+    (or call it with ``(requester, layer, row)`` for one blocking request), and :meth:`stop` once to end the kernels.
     """
 
-    def __init__(self, device, moes, socket_core, h2d_mode=ttnn.H2DMode.HOST_PUSH):
-        self.device = device
+    def __init__(self, moe_mesh, request_meshes, moes, socket_core, request_core):
+        self.moe_mesh = moe_mesh
+        self.request_meshes = request_meshes
         self.hidden = moes[0].hidden
         self.row_bytes = self.hidden * 2
         first = moes[0]
@@ -168,42 +199,61 @@ class PersistentMoE:
             torch.stack(rows),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
+            device=moe_mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(moe_mesh),
         )
         # The row lands here on every core of the grid, replacing the all_gather_for_matmul replica.
         self.replica = ttnn.from_torch(
             torch.zeros(1, 1, REPLICA_GRID.num_cores(), self.hidden),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
+            device=moe_mesh,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
                 ttnn.ShardSpec(REPLICA_GRID, [1, self.hidden], ttnn.ShardOrientation.ROW_MAJOR),
             ),
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(moe_mesh),
         )
 
-        page_bytes = HEADER_BYTES + self.row_bytes
-        rows_, cols = tuple(device.shape)
-        self.h2d = []
-        for r in range(rows_):
-            for c in range(cols):
-                socket = ttnn.H2DSocket(
-                    device,
+        moe_rows, moe_cols = tuple(moe_mesh.shape)
+        self.request_tx, self.request_rx, self.response_tx, self.response_rx = [], [], [], []
+        for request_mesh in request_meshes:
+            request_connections = [
+                ttnn.SocketConnection(
+                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, c), request_core),
                     ttnn.MeshCoreCoord(ttnn.MeshCoordinate(r, c), socket_core),
-                    ttnn.BufferType.L1,
-                    page_bytes,
-                    h2d_mode,
                 )
-                socket.set_page_size(page_bytes)
-                self.h2d.append(socket)
-        self.d2h = ttnn.D2HSocket(
-            device, ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), socket_core), 2 * self.row_bytes
-        )
-        self.d2h.set_page_size(self.row_bytes)
+                for c in range(moe_cols)
+                for r in range(moe_rows)
+            ]
+            tx, rx = ttnn.create_socket_pair(
+                request_mesh,
+                moe_mesh,
+                ttnn.SocketConfig(
+                    request_connections, ttnn.SocketMemoryConfig(ttnn.BufferType.L1, HEADER_BYTES + self.row_bytes)
+                ),
+            )
+            self.request_tx.append(tx)
+            self.request_rx.append(rx)
+            response_connections = [
+                ttnn.SocketConnection(
+                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), socket_core),
+                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, c), request_core),
+                )
+                for c in range(tuple(request_mesh.shape)[1])
+            ]
+            tx, rx = ttnn.create_socket_pair(
+                moe_mesh,
+                request_mesh,
+                ttnn.SocketConfig(
+                    response_connections, ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 2 * self.row_bytes)
+                ),
+            )
+            self.response_tx.append(tx)
+            self.response_rx.append(rx)
+        self.inputs = [self.request_input(j) for j in range(len(request_meshes))]
 
         shared = first.fused_shared
         self.scratch = ttnn.experimental.deepseek.moe.fused_experts(
@@ -228,38 +278,75 @@ class PersistentMoE:
             all_reduce_topology=CCL_TOPOLOGY,
             persistent_layer_table=self.layer_table,
             persistent_socket_core=socket_core,
-            persistent_h2d_socket_addresses=[s.get_config_buffer_address() for s in self.h2d],
-            persistent_d2h_socket_address=self.d2h.get_config_buffer_address(),
-            persistent_h2d_device_pull=h2d_mode == ttnn.H2DMode.DEVICE_PULL,
+            persistent_input_sockets=self.request_rx,
+            persistent_output_sockets=self.response_tx,
         )
 
-    def _send(self, layer: int, row: torch.Tensor):
-        header = torch.zeros(HEADER_BYTES // 4, dtype=torch.int32)
-        header[0] = _as_int32([layer])[0]
-        page = torch.cat([header.view(torch.uint8), row.to(torch.bfloat16).contiguous().view(torch.uint8)])
-        for socket in self.h2d:
-            socket.write_tensor(page)
+    def request_input(self, requester: int):
+        """A ``[1, 1, 1, D]`` request row on every chip of ``requester``, zeroed."""
+        mesh = self.request_meshes[requester]
+        return ttnn.from_torch(
+            torch.zeros(1, 1, 1, self.hidden),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
 
-    def __call__(self, layer: int, row: torch.Tensor) -> torch.Tensor:
-        self._send(layer, row)
-        out = torch.zeros(self.hidden, dtype=torch.bfloat16)
-        self.d2h.read_tensor(out)
-        return out.float()
+    def upload(self, requester: int, row: torch.Tensor, tensor=None):
+        host = ttnn.from_torch(
+            row.reshape(1, 1, 1, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.request_meshes[requester]),
+        )
+        ttnn.copy_host_to_device_tensor(host, self.inputs[requester] if tensor is None else tensor)
+
+    def request(self, requester: int, layer: int, tensor=None):
+        """Dispatches ``requester``'s request without waiting for it; returns its output tensor."""
+        return ttnn.experimental.deepseek.moe.persistent_moe_request(
+            self.inputs[requester] if tensor is None else tensor,
+            layer=layer,
+            request_socket=self.request_tx[requester],
+            response_socket=self.response_rx[requester],
+        )
+
+    @staticmethod
+    def rows_of(out) -> list:
+        """Each request chip's copy of the reduced row, as ``[D]`` bf16."""
+        return [ttnn.to_torch(t).reshape(-1) for t in ttnn.get_device_tensors(out)]
+
+    @classmethod
+    def row_of(cls, out) -> torch.Tensor:
+        """The reduced row of ``out``, which every request chip must hold alike."""
+        copies = cls.rows_of(out)
+        mismatched = [c for c, copy in enumerate(copies) if not torch.equal(copy, copies[0])]
+        assert not mismatched, f"request chips {mismatched} got a different response than chip 0"
+        return copies[0]
 
     def stop(self):
-        self._send(STOP_LAYER, torch.zeros(self.hidden))
-        ttnn.synchronize_device(self.device)
+        for j in range(len(self.request_meshes)):
+            ttnn.deallocate(self.request(j, STOP_LAYER))
+        for mesh in self.request_meshes + [self.moe_mesh]:
+            ttnn.synchronize_device(mesh)
 
 
 def _setup(mesh_device):
-    """``(device, config, socket_core)``: the TP12 submesh, the V4.1 config, and the persistent op's socket core."""
+    """``(moe_mesh, request_meshes, config, socket_core, request_core)``: the TP12 MoE submesh, the TP4 requester
+    submeshes, the V4.1 config, and the cores the sockets connect."""
     if tuple(mesh_device.shape) != PARENT_MESH:
         pytest.skip(f"needs an {PARENT_MESH[0]}x{PARENT_MESH[1]} mesh, got {tuple(mesh_device.shape)}")
-    device = mesh_device.create_submesh(ttnn.MeshShape(*SUBMESH), ttnn.MeshCoordinate(0, 0))
-    grid = device.compute_with_storage_grid_size()
+    moe_mesh = mesh_device.create_submesh(ttnn.MeshShape(*MOE_SUBMESH), ttnn.MeshCoordinate(*MOE_OFFSET))
+    request_meshes = [
+        mesh_device.create_submesh(ttnn.MeshShape(*REQUEST_SUBMESH), ttnn.MeshCoordinate(row, 0))
+        for row in REQUEST_ROWS
+    ]
+    grid = moe_mesh.compute_with_storage_grid_size()
     # Bottom-right: outside the 12x9 grid the op multicasts over, and away from the reduce senders, which the
-    # op picks from the bottom row's left end.
-    return device, load_config(_snapshot()), ttnn.CoreCoord(grid.x - 1, grid.y - 1)
+    # op picks from the bottom row's left end. Nothing else runs on the request chips, so any core does there.
+    core = ttnn.CoreCoord(grid.x - 1, grid.y - 1)
+    return moe_mesh, request_meshes, load_config(_snapshot()), core, core
 
 
 def _load_layers(device, config):
@@ -296,11 +383,11 @@ def _load_layers(device, config):
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True, ids=["8x4"])
-@pytest.mark.parametrize("h2d_mode", [ttnn.H2DMode.HOST_PUSH, ttnn.H2DMode.DEVICE_PULL], ids=["push", "pull"])
 @torch.no_grad()
-def test_moe_persistent_tp12(mesh_device, h2d_mode):
-    device, config, socket_core = _setup(mesh_device)
-    layers, moes = _load_layers(device, config)
+def test_moe_persistent_tp12(mesh_device):
+    moe_mesh, request_meshes, config, socket_core, request_core = _setup(mesh_device)
+    layers, moes = _load_layers(moe_mesh, config)
+    num_requesters = len(request_meshes)
 
     torch.manual_seed(0)
     hidden = torch.randn(len(STEPS), config.hidden_size).to(torch.bfloat16).float()
@@ -309,7 +396,7 @@ def test_moe_persistent_tp12(mesh_device, h2d_mode):
     )
 
     # The one-shot op on the same rows, before the persistent op takes over the cores.
-    hidden_config = width_sharded_l1_config(1, config.hidden_size, device, tile_height=1)
+    hidden_config = width_sharded_l1_config(1, config.hidden_size, moe_mesh, tile_height=1)
     one_shot = []
     for s, layer in enumerate(STEPS):
         out = moes[layer].decode_static(
@@ -317,20 +404,31 @@ def test_moe_persistent_tp12(mesh_device, h2d_mode):
                 hidden[s].reshape(1, 1, 1, -1),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
+                device=moe_mesh,
                 memory_config=hidden_config,
             )
         )
         one_shot.append(ttnn.to_torch(ttnn.get_device_tensors(out)[0]).reshape(-1).float())
         ttnn.deallocate(out)
-    ttnn.synchronize_device(device)
+    ttnn.synchronize_device(moe_mesh)
 
-    moe_op = PersistentMoE(device, moes, socket_core, h2d_mode)
+    # Step s comes from requester s % num_requesters; each round every requester's request is in flight at once.
+    moe_op = PersistentMoE(moe_mesh, request_meshes, moes, socket_core, request_core)
     outs = []
     try:
-        for s, layer in enumerate(STEPS):
-            outs.append(moe_op(layer, hidden[s]))
-            logger.info(f"step {s} layer {layer}: PCC {_pcc(one_shot[s], outs[-1])} vs the one-shot op")
+        for first in range(0, len(STEPS), num_requesters):
+            round_steps = range(first, min(first + num_requesters, len(STEPS)))
+            pending = []
+            for s in round_steps:
+                moe_op.upload(s % num_requesters, hidden[s])
+                pending.append(moe_op.request(s % num_requesters, STEPS[s]))
+            for s, out in zip(round_steps, pending):
+                outs.append(PersistentMoE.row_of(out).float())
+                ttnn.deallocate(out)
+                logger.info(
+                    f"step {s} layer {STEPS[s]} requester {s % num_requesters}: "
+                    f"PCC {_pcc(one_shot[s], outs[-1])} vs the one-shot op"
+                )
     finally:
         moe_op.stop()
 
@@ -355,6 +453,122 @@ def test_moe_persistent_tp12(mesh_device, h2d_mode):
     assert not failed, f"PCC below {PCC} vs torch or {PCC_VS_OP} vs the one-shot op:\n" + "\n".join(report)
 
 
+@pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(14400)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True, ids=["8x4"])
+@torch.no_grad()
+def test_moe_persistent_tp12_all_layers(mesh_device):
+    """Every decoder layer's real MoE in the one persistent launch.
+
+    All of the checkpoint's layers are loaded at TP12 on the MoE submesh, the routed experts K-split over every
+    DRAM bank as the model reads them (~0.64 GB per chip per layer). Fill the cache first, or the experts are
+    converted here one after another:
+
+        python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --all-layers --tp-size 12 --mesh-rows 3
+
+    ``REAL_ROWS_PER_LAYER`` random rows per layer then go through the persistent op in a shuffled layer order,
+    from the requesters in turn, each checked against the one-shot op on the same row and against the torch
+    reference, which takes any top-k the bf16 router could pick from a near-tie (``_reference``) and has to match
+    the checkpoint's own reference MoE on the exact top-k."""
+    moe_mesh, request_meshes, config, socket_core, request_core = _setup(mesh_device)
+    snapshot = _snapshot()
+    loader = DeepseekV4WeightLoader(snapshot)
+    num_layers = config.num_hidden_layers
+    num_requesters = len(request_meshes)
+
+    moes = []
+    for layer in range(num_layers):
+        start = time.perf_counter()
+        cache = WeightCache(CACHE_DIR).sub(f"layers.{layer}.ffn")
+        experts = DeepSeekV41PreloadedExperts(
+            config,
+            expert_provider(loader, layer),
+            moe_mesh,
+            dtype=ttnn.bfloat4_b,
+            cache=cache,
+            tp_size=TP_SIZE,
+            balance_dram_banks=True,
+        )
+        moe = DeepSeekV41SparseMoeBlock(
+            config, moe_weights(loader, layer), moe_mesh, experts, cache=cache, tp_size=TP_SIZE
+        )
+        assert (
+            moe.fused_router and moe.fused_shared is not None
+        ), f"layer {layer}: the fused TP12 MoE must run router and shared"
+        moes.append(moe)
+        logger.info(f"layer {layer} loaded in {time.perf_counter() - start:.1f}s")
+
+    torch.manual_seed(0)
+    steps = torch.cat([torch.randperm(num_layers) for _ in range(REAL_ROWS_PER_LAYER)]).tolist()
+    hidden = torch.randn(len(steps), config.hidden_size).to(torch.bfloat16).float()
+
+    # One layer's references at a time: their gates and shared experts are fp32, their experts loaded per call.
+    model = load_reference(snapshot)
+    expected = [None] * len(steps)
+    candidates = [None] * len(steps)
+    for layer in range(num_layers):
+        reference = reference_moe(model, snapshot, loader, layer)
+        weights = {k: v() for k, v in moe_weights(loader, layer).items()}
+        provider = expert_provider(loader, layer)
+        for s in (s for s, l in enumerate(steps) if l == layer):
+            expected[s] = reference(hidden[s].reshape(1, 1, -1)).reshape(-1).float()
+            candidates[s], _ = _reference(hidden[s], provider, weights, config, moes[layer].experts)
+        del reference, weights
+
+    hidden_config = width_sharded_l1_config(1, config.hidden_size, moe_mesh, tile_height=1)
+    one_shot = []
+    for s, layer in enumerate(steps):
+        out = moes[layer].decode_static(
+            ttnn.from_torch(
+                hidden[s].reshape(1, 1, 1, -1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=moe_mesh,
+                memory_config=hidden_config,
+            )
+        )
+        one_shot.append(ttnn.to_torch(ttnn.get_device_tensors(out)[0]).reshape(-1).float())
+        ttnn.deallocate(out)
+    ttnn.synchronize_device(moe_mesh)
+
+    moe_op = PersistentMoE(moe_mesh, request_meshes, moes, socket_core, request_core)
+    outs = []
+    try:
+        for first in range(0, len(steps), num_requesters):
+            round_steps = range(first, min(first + num_requesters, len(steps)))
+            pending = []
+            for s in round_steps:
+                moe_op.upload(s % num_requesters, hidden[s])
+                pending.append(moe_op.request(s % num_requesters, steps[s]))
+            for out in pending:
+                outs.append(PersistentMoE.row_of(out).float())
+                ttnn.deallocate(out)
+    finally:
+        moe_op.stop()
+
+    report = []
+    failed = []
+    for s, layer in enumerate(steps):
+        pccs = [_pcc(c, outs[s]) for c in candidates[s]]
+        best = max(range(len(pccs)), key=pccs.__getitem__)
+        pcc_anchor = _pcc(expected[s], candidates[s][0])
+        pcc_op = _pcc(one_shot[s], outs[s])
+        if pccs[best] < PCC or pcc_op < PCC_VS_OP or pcc_anchor < PCC_VS_OP:
+            failed.append(s)
+        routing = "exact top-k" if best == 0 else f"tie-broken top-k {best} of {len(pccs) - 1} alternatives"
+        report.append(
+            f"step {s} layer {layer} requester {s % num_requesters}: persistent vs torch {pccs[best]:.5f} ({routing}; "
+            f"exact top-k {pccs[0]:.5f}), persistent vs one-shot {pcc_op:.6f}, torch vs checkpoint reference "
+            f"{pcc_anchor:.6f}"
+        )
+    logger.info("\n" + "\n".join(report))
+    assert not failed, (
+        f"steps {failed}: PCC below {PCC} vs torch, or {PCC_VS_OP} vs the one-shot op or between torch and the "
+        "checkpoint's reference"
+    )
+
+
 def _latency(name, seconds):
     us = torch.tensor(seconds, dtype=torch.float64) * 1e6
     return (
@@ -373,112 +587,167 @@ def _latency(name, seconds):
 @pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True, ids=["8x4"])
 @torch.no_grad()
 def test_moe_persistent_tp12_perf(mesh_device):
-    """Per-token MoE latency over the interleaved layers, host row in to host row out, four ways:
+    """Per-token MoE latency over the interleaved layers:
 
     - one-shot eager: upload, ``decode_static`` dispatched op by op, read chip 0;
     - one-shot traced: upload, replay that layer's trace, read chip 0 -- the model's decode today;
     - one-shot traced, device only: back-to-back replays with no host I/O, total / count;
-    - persistent: the H2D page in, the reduced row out of the D2H socket; with HOST_PUSH and DEVICE_PULL sockets.
+    - persistent, with 1 requester and then with 3: rounds of one request per requester in flight at once, eager
+      (uploads, ``persistent_moe_request`` dispatches, readbacks; per round), then traced and replayed back to back
+      with no host I/O (per row). One requester leaves two of the MoE's three pipeline stages idle; three fill it.
+      Each traced (requester, layer)'s output must match the eager loop's on the same row bit for bit.
 
     ``MOE_PERF_WARMUP`` / ``MOE_PERF_STEPS`` override the step counts, e.g. to keep a device-profiler capture
-    (``TT_METAL_STREAMING_PROFILER=1``) small.
+    (``TT_METAL_STREAMING_PROFILER=1``) small. ``MOE_PERF_PERSISTENT_ONLY=1`` skips the one-shot runs: the
+    one-shot and persistent builds of a kernel share its profiler zone ids, so a capture holding both
+    misnames zones.
     """
-    device, config, socket_core = _setup(mesh_device)
-    _, moes = _load_layers(device, config)
+    moe_mesh, request_meshes, config, socket_core, request_core = _setup(mesh_device)
+    _, moes = _load_layers(moe_mesh, config)
     hidden = config.hidden_size
     warmup = int(os.environ.get("MOE_PERF_WARMUP", 20))
     steps = int(os.environ.get("MOE_PERF_STEPS", 270))
+    persistent_only = os.environ.get("MOE_PERF_PERSISTENT_ONLY") == "1"
     order = [STEPS[i % len(STEPS)] for i in range(warmup + steps)]
     torch.manual_seed(0)
     rows = torch.randn(len(order), hidden).to(torch.bfloat16)
-    hidden_config = width_sharded_l1_config(1, hidden, device, tile_height=1)
-    inputs = [
-        ttnn.from_torch(
-            torch.zeros(1, 1, 1, hidden),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=hidden_config,
-        )
-        for _ in range(NUM_LAYERS)
-    ]
     results = []
+    if not persistent_only:
+        hidden_config = width_sharded_l1_config(1, hidden, moe_mesh, tile_height=1)
+        inputs = [
+            ttnn.from_torch(
+                torch.zeros(1, 1, 1, hidden),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=moe_mesh,
+                memory_config=hidden_config,
+            )
+            for _ in range(NUM_LAYERS)
+        ]
 
-    def upload(i, layer):
-        host = ttnn.from_torch(
-            rows[i].reshape(1, 1, 1, -1),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-        )
-        ttnn.copy_host_to_device_tensor(host, inputs[layer])
+        def upload(i, layer):
+            host = ttnn.from_torch(
+                rows[i].reshape(1, 1, 1, -1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(moe_mesh),
+            )
+            ttnn.copy_host_to_device_tensor(host, inputs[layer])
 
-    eager = []
-    for i, layer in enumerate(order):
+        eager = []
+        for i, layer in enumerate(order):
+            start = time.perf_counter()
+            upload(i, layer)
+            out = moes[layer].decode_static(inputs[layer])
+            ttnn.to_torch(ttnn.get_device_tensors(out)[0])
+            eager.append(time.perf_counter() - start)
+            ttnn.deallocate(out)
+        results.append(_latency("one-shot eager (upload + ops + readback)", eager[warmup:]))
+
+        tids = []
+        trace_outs = []
+        for layer in range(NUM_LAYERS):
+            tid = ttnn.begin_trace_capture(moe_mesh, cq_id=0)
+            trace_outs.append(moes[layer].decode_static(inputs[layer]))
+            ttnn.end_trace_capture(moe_mesh, tid, cq_id=0)
+            tids.append(tid)
+        ttnn.synchronize_device(moe_mesh)
+
+        traced = []
+        for i, layer in enumerate(order):
+            start = time.perf_counter()
+            upload(i, layer)
+            ttnn.execute_trace(moe_mesh, tids[layer], cq_id=0, blocking=False)
+            ttnn.to_torch(ttnn.get_device_tensors(trace_outs[layer])[0])
+            traced.append(time.perf_counter() - start)
+        results.append(_latency("one-shot traced (upload + replay + readback)", traced[warmup:]))
+
+        for layer in order[:warmup]:
+            ttnn.execute_trace(moe_mesh, tids[layer], cq_id=0, blocking=False)
+        ttnn.synchronize_device(moe_mesh)
         start = time.perf_counter()
-        upload(i, layer)
-        out = moes[layer].decode_static(inputs[layer])
-        ttnn.to_torch(ttnn.get_device_tensors(out)[0])
-        eager.append(time.perf_counter() - start)
-        ttnn.deallocate(out)
-    results.append(_latency("one-shot eager (upload + ops + readback)", eager[warmup:]))
+        for layer in order[warmup:]:
+            ttnn.execute_trace(moe_mesh, tids[layer], cq_id=0, blocking=False)
+        ttnn.synchronize_device(moe_mesh)
+        per_replay = (time.perf_counter() - start) / steps
+        results.append(f"{'one-shot traced, device only (back-to-back)':<44} mean {per_replay * 1e6:8.1f} us")
 
-    tids = []
-    trace_outs = []
-    for layer in range(NUM_LAYERS):
-        tid = ttnn.begin_trace_capture(device, cq_id=0)
-        trace_outs.append(moes[layer].decode_static(inputs[layer]))
-        ttnn.end_trace_capture(device, tid, cq_id=0)
-        tids.append(tid)
-    ttnn.synchronize_device(device)
+        for tid in tids:
+            ttnn.release_trace(moe_mesh, tid)
+        for t in trace_outs + inputs:
+            ttnn.deallocate(t)
+        ttnn.synchronize_device(moe_mesh)
 
-    traced = []
-    for i, layer in enumerate(order):
-        start = time.perf_counter()
-        upload(i, layer)
-        ttnn.execute_trace(device, tids[layer], cq_id=0, blocking=False)
-        ttnn.to_torch(ttnn.get_device_tensors(trace_outs[layer])[0])
-        traced.append(time.perf_counter() - start)
-    results.append(_latency("one-shot traced (upload + replay + readback)", traced[warmup:]))
-
-    for layer in order[:warmup]:
-        ttnn.execute_trace(device, tids[layer], cq_id=0, blocking=False)
-    ttnn.synchronize_device(device)
-    start = time.perf_counter()
-    for layer in order[warmup:]:
-        ttnn.execute_trace(device, tids[layer], cq_id=0, blocking=False)
-    ttnn.synchronize_device(device)
-    per_replay = (time.perf_counter() - start) / steps
-    results.append(f"{'one-shot traced, device only (back-to-back)':<44} mean {per_replay * 1e6:8.1f} us")
-
-    for tid in tids:
-        ttnn.release_trace(device, tid)
-    for t in trace_outs + inputs:
-        ttnn.deallocate(t)
-    ttnn.synchronize_device(device)
-
-    out = torch.zeros(hidden, dtype=torch.bfloat16)
-    for mode, mode_name in ((ttnn.H2DMode.HOST_PUSH, "push"), (ttnn.H2DMode.DEVICE_PULL, "pull")):
-        moe_op = PersistentMoE(device, moes, socket_core, mode)
-        persistent = []
-        sends = []
+    # Fewer requesters than stages leave the pipeline partly empty; each requester is still one request at a
+    # time, waiting for its response.
+    for num_requesters in (1, len(request_meshes)):
+        meshes = request_meshes[-num_requesters:]
+        moe_op = PersistentMoE(moe_mesh, meshes, moes, socket_core, request_core)
+        mismatched = []
+        name = f"persistent, {num_requesters} requester{'s' if num_requesters > 1 else ''}"
         try:
-            for i, layer in enumerate(order):
+            # Row i comes from requester i % num_requesters, a round of requests in flight at once. The MoE
+            # takes the requesters' turns in that order, so every run here has to be a prefix of it: the eager
+            # rounds are whole, and the replays then start again at requester 0.
+            eager = []
+            eager_outs = []
+            for first in range(0, len(order) - len(order) % num_requesters, num_requesters):
                 start = time.perf_counter()
-                moe_op._send(layer, rows[i])
-                sent = time.perf_counter()
-                moe_op.d2h.read_tensor(out)
-                persistent.append(time.perf_counter() - start)
-                sends.append(sent - start)
+                pending = []
+                for i in range(first, min(first + num_requesters, len(order))):
+                    moe_op.upload(i % num_requesters, rows[i])
+                    pending.append(moe_op.request(i % num_requesters, order[i]))
+                for out in pending:
+                    eager_outs.append(ttnn.to_torch(ttnn.get_device_tensors(out)[0]).reshape(-1))
+                    ttnn.deallocate(out)
+                eager.append(time.perf_counter() - start)
+            results.append(
+                _latency(f"{name}, eager (round of uploads + requests + readbacks)", eager[warmup // num_requesters :])
+            )
+
+            # One trace per (requester, layer) it serves, requesting the row of that pair's first step.
+            firsts = {}
+            for i, layer in enumerate(order):
+                firsts.setdefault((i % num_requesters, layer), i)
+            inputs = {}
+            tids = {}
+            trace_outs = {}
+            for (j, layer), first in firsts.items():
+                inputs[j, layer] = moe_op.request_input(j)
+                moe_op.upload(j, rows[first], inputs[j, layer])
+                tids[j, layer] = ttnn.begin_trace_capture(meshes[j], cq_id=0)
+                trace_outs[j, layer] = moe_op.request(j, layer, inputs[j, layer])
+                ttnn.end_trace_capture(meshes[j], tids[j, layer], cq_id=0)
+            for mesh in meshes:
+                ttnn.synchronize_device(mesh)
+
+            def replay(indices):
+                for i in indices:
+                    j = i % num_requesters
+                    ttnn.execute_trace(meshes[j], tids[j, order[i]], cq_id=0, blocking=False)
+                for mesh in meshes:
+                    ttnn.synchronize_device(mesh)
+
+            replay(range(warmup))
+            start = time.perf_counter()
+            replay(range(warmup, len(order)))
+            per_row = (time.perf_counter() - start) / steps
+            results.append(f"{name + ', traced, device only (per row)':<44} mean {per_row * 1e6:8.1f} us")
+
+            for (j, layer), first in firsts.items():
+                copies = PersistentMoE.rows_of(trace_outs[j, layer])
+                mismatched += [
+                    (j, layer, c) for c, copy in enumerate(copies) if not torch.equal(copy, eager_outs[first])
+                ]
+            for key in tids:
+                ttnn.release_trace(meshes[key[0]], tids[key])
+            for t in list(trace_outs.values()) + list(inputs.values()):
+                ttnn.deallocate(t)
         finally:
             moe_op.stop()
-        results.append(_latency(f"persistent, H2D {mode_name} (page + loop + D2H row)", persistent[warmup:]))
-        results.append(_latency(f"  of which host writes to {len(moe_op.h2d)} H2D sockets", sends[warmup:]))
-        results.append(
-            _latency("  of which waiting on the D2H row", [p - s for p, s in zip(persistent[warmup:], sends[warmup:])])
-        )
+        assert not mismatched, f"{name}: traced (requester, layer, chip) outputs {mismatched} differ from eager"
         # The next launch's sockets and scratch take the same L1.
         del moe_op
-        ttnn.synchronize_device(device)
+        ttnn.synchronize_device(moe_mesh)
 
     logger.info("MoE TP12 per-token latency, layers interleaved " + str(STEPS) + ":\n" + "\n".join(results))
