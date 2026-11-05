@@ -1,0 +1,5 @@
+test_run*.log
+test_errors*.log
+pytest_errors.log
+__pycache__/
+.pytest_cache/
