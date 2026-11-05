@@ -63,10 +63,6 @@ std::optional<ttnn::DataType> precision_dtype_from_config(const YAML::Node& trai
 
 }  // namespace
 
-std::optional<ttnn::DataType> reduce_dtype_from_config(const YAML::Node& training_config) {
-    return precision_dtype_from_config(training_config, "reduce_dtype");
-}
-
 void store_trainable_parameters_as(const serialization::NamedParameters& parameters, ttnn::DataType dtype) {
     TT_FATAL(
         is_float_dtype(dtype), "Parameters can be stored as BFLOAT16 or FLOAT32, got {}", enchantum::to_string(dtype));
@@ -88,7 +84,7 @@ void store_trainable_parameters_as(const serialization::NamedParameters& paramet
 std::optional<ttnn::DataType> apply_precision_config(
     const YAML::Node& training_config, const serialization::NamedParameters& parameters) {
     const auto master_dtype = precision_dtype_from_config(training_config, "master_dtype");
-    const auto reduce_dtype = reduce_dtype_from_config(training_config);
+    const auto reduce_dtype = precision_dtype_from_config(training_config, "reduce_dtype");
     if (master_dtype) {
         store_trainable_parameters_as(parameters, *master_dtype);
     }

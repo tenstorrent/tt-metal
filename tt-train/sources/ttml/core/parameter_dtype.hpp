@@ -36,9 +36,4 @@ void store_trainable_parameters_as(const serialization::NamedParameters& paramet
 std::optional<ttnn::DataType> apply_precision_config(
     const YAML::Node& training_config, const serialization::NamedParameters& parameters);
 
-// The dtype training_config.precision.reduce_dtype names ("bfloat16" or "float32"; any other name, or an unknown key in
-// the block, is a TT_FATAL), or nullopt when it is unset or null. FSDP takes it as an argument of fully_shard(), which
-// runs before the optimizer is created, so train.py reads it with this function too.
-std::optional<ttnn::DataType> reduce_dtype_from_config(const YAML::Node& training_config);
-
 }  // namespace ttml::core
