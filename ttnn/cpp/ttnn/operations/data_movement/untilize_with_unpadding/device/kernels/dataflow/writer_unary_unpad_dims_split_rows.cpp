@@ -34,10 +34,11 @@ void kernel_main() {
     uint32_t stick_id = 0;
 
     constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
+    constexpr bool ONE_BYTE_DTYPE = get_arg(args::one_byte_dtype) == 1;
 
+    // 32-datum tile row: 4/2/1 bytes per datum -> 128/64/32 bytes.
     const uint32_t num_tiles_block_c =
-        FLOAT32_DTYPE ? block_row_size / 128
-                      : block_row_size / 64;  // Assuming 4 / 2 bytes per datum, there are 128 / 64 bytes per tile row
+        FLOAT32_DTYPE ? block_row_size / 128 : (ONE_BYTE_DTYPE ? block_row_size / 32 : block_row_size / 64);
 
     const auto s = TensorAccessor(tensor::dst);
     Noc noc;

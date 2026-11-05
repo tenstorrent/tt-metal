@@ -11,6 +11,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn/operations/ccl/all_reduce/all_reduce.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
@@ -38,45 +39,50 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVec
     return result;
 }
 
-namespace {
-
-// Returns true if the parameter's current placement on the given mesh axis is a
-// Shard{...} rather than Replicate.
 bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
-    const auto& topology = value.tensor_topology();
-    const auto& placements = topology.placements();
-    if (axis >= placements.size()) {
-        return false;
-    }
-    return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[axis]);
+    const auto* device = value.device();
+    TT_FATAL(
+        device != nullptr,
+        "is_sharded_on_axis: the tensor is not allocated on a device mesh (a host tensor, or a deallocated one); its "
+        "label is read against the mesh it is on");
+    const auto mesh_shape = device->shape();
+    TT_FATAL(
+        axis < mesh_shape.dims(),
+        "is_sharded_on_axis: mesh axis {} is out of range for the {} device mesh",
+        axis,
+        mesh_shape);
+    std::string reason;
+    const auto placements =
+        ttnn::operations::ccl::common::uncollapse_placements(value.tensor_topology(), mesh_shape, &reason);
+    TT_FATAL(
+        placements.has_value(),
+        "is_sharded_on_axis: cannot tell whether the tensor is sharded on mesh axis {}: {}",
+        axis,
+        reason);
+    return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>((*placements)[axis]);
 }
 
-// Enforce all_reduce's contract that the reduced mesh axis is Replicate on output.
-// ttnn::all_reduce_async::compute_output_topologies drops this relabel for the collapsed 1-D
-// distribution TTML produces on a multi-D mesh, so redo it here (idx 0 when collapsed, else axis).
-ttnn::Tensor force_replicate_axes(const ttnn::Tensor& t, const ttsl::SmallVector<uint32_t>& reduced_mesh_axes) {
-    const auto& topology = t.tensor_topology();
-    auto placements = topology.placements();
-    bool changed = false;
-    for (uint32_t axis : reduced_mesh_axes) {
-        const size_t idx = (placements.size() == 1) ? 0 : axis;
-        TT_FATAL(
-            idx < placements.size(),
-            "force_replicate_axes: reduced axis {} out of range for placements (size={})",
-            axis,
-            placements.size());
-        if (!std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placements[idx])) {
-            placements[idx] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-            changed = true;
+namespace {
+
+// Averages each gradient along the axes in `cluster_axes` that its parameter is not sharded on.
+void synchronize_gradients_along(
+    const serialization::NamedParameters& parameters, const ttsl::SmallVector<uint32_t>& cluster_axes) {
+    for (auto& [name, tensor] : parameters) {
+        if (!tensor->is_grad_initialized()) {
+            continue;
         }
+        ttsl::SmallVector<uint32_t> axes_for_param;
+        for (uint32_t axis : cluster_axes) {
+            if (!is_sharded_on_axis(tensor->get_value(), axis)) {
+                axes_for_param.push_back(axis);
+            }
+        }
+        if (axes_for_param.empty()) {
+            continue;
+        }
+        // all_reduce labels its own result.
+        tensor->set_grad(synchronize_tensor(tensor->get_grad(), axes_for_param));
     }
-    if (!changed) {
-        return t;
-    }
-    auto out = t;
-    out.update_tensor_topology(
-        tt::tt_metal::TensorTopology(topology.distribution_shape(), std::move(placements), topology.mesh_coords()));
-    return out;
 }
 
 }  // namespace
@@ -93,34 +99,12 @@ void synchronize_gradients(const serialization::NamedParameters& parameters) {
     if (pctx.is_ddp_enabled()) {
         cluster_axes.push_back(pctx.get_ddp_axis().value());
     }
-    for (auto& [name, tensor] : parameters) {
-        if (!tensor->is_grad_initialized()) {
-            continue;
-        }
-        // Build per-param axes, dropping any axis on which this parameter is
-        // sharded: FSDP already reduce-scattered the grad over the DDP axis in
-        // its backward-post hook.
-        ttsl::SmallVector<uint32_t> axes_for_param;
-        for (uint32_t axis : cluster_axes) {
-            if (!is_sharded_on_axis(tensor->get_value(), axis)) {
-                axes_for_param.push_back(axis);
-            }
-        }
-        if (axes_for_param.empty()) {
-            continue;
-        }
-        tensor->set_grad(force_replicate_axes(synchronize_tensor(tensor->get_grad(), axes_for_param), axes_for_param));
-    }
+    synchronize_gradients_along(parameters, cluster_axes);
 }
 
 void synchronize_gradients(
     const serialization::NamedParameters& parameters, const std::vector<uint32_t>& cluster_axes) {
-    ttsl::SmallVector<uint32_t> axes(cluster_axes.begin(), cluster_axes.end());
-    for (auto& [name, tensor] : parameters) {
-        if (tensor->is_grad_initialized()) {
-            tensor->set_grad(force_replicate_axes(synchronize_tensor(tensor->get_grad(), axes), axes));
-        }
-    }
+    synchronize_gradients_along(parameters, ttsl::SmallVector<uint32_t>(cluster_axes.begin(), cluster_axes.end()));
 }
 
 }  // namespace ttml::core::distributed
