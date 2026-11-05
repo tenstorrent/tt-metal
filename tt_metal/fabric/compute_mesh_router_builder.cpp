@@ -700,8 +700,7 @@ void ComputeMeshRouterBuilder::connect_to_local_tensix_builder(FabricTensixDatam
     auto* adapter_ptr = erisc_builder_->receiver_channel_to_downstream_adapter.get();
     const auto tensix_noc_x = tensix_builder.get_noc_x();
     const auto tensix_noc_y = tensix_builder.get_noc_y();
-    adapter_ptr->add_local_tensix_connection(
-        adapter_spec, local_tensix_dir, tt::tt_metal::CoreCoord(tensix_noc_x, tensix_noc_y));
+    adapter_ptr->add_local_tensix_connection(adapter_spec, local_tensix_dir, tt::tt_metal::CoreCoord(tensix_noc_x, tensix_noc_y));
 
     // Provide router NOC coordinates to relay kernel for sending packets back to router
     tensix_builder.append_relay_router_noc_xy(erisc_builder_->get_noc_x(), erisc_builder_->get_noc_y());
@@ -805,7 +804,9 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(ComputeMeshRouter
                     .dest_direction = downstream_router.location_.direction,
                     .dest_eth_chan = downstream_router.location_.eth_chan,
                     .dest_vc = vc,
-                    .dest_sender_channel = absolute_channel_id};
+                    .dest_sender_channel = absolute_channel_id,
+                    .dest_vc_sender_channel = vc_relative_channel_id,
+                    .dest_is_tensix = downstream_builder != downstream_router.erisc_builder_.get()};
                 connection_registry_->record_connection(record);
             }
 
@@ -983,7 +984,6 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         tt::tt_metal::SetRuntimeArgs(program, kernel, eth_logical_core, rt_args);
 
         kernel_inputs_by_erisc_.push_back({
-            .kernel = kernel,
             .processor = proc,
             .noc = noc,
             .compile_args = ct_args,
@@ -1002,16 +1002,28 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
 }
 
 manifest::Router ComputeMeshRouterBuilder::collect_manifest_router(const ChipRoutingFacts& chip_facts) const {
-    const auto& builder_context = fabric_context_.get_builder_context();
-    const auto addresses_to_clear = builder_context.get_fabric_router_addresses_to_clear();
+    TT_FATAL(
+        connection_registry_ != nullptr,
+        "Fabric manifest: router on channel {} recorded no connections; FabricBuilder records them when the manifest "
+        "is on",
+        location_.eth_chan);
+    // The registry holds every connection on the chip.
+    std::vector<RouterConnectionRecord> connections;
+    for (const auto& connection : connection_registry_->get_all_connections()) {
+        if (connection.source_eth_chan == location_.eth_chan) {
+            connections.push_back(connection);
+        }
+    }
     const manifest::RouterArgs args(kernel_inputs_by_erisc_);
+    const PacketHeaderConfig packet_header = fabric_context_.get_packet_header_config();
     ManifestRouterInputs inputs{
         .erisc_builder = *erisc_builder_,
         .vc_shape = vc_shape_,
         .location = location_,
         .chip_facts = chip_facts,
-        .addresses_to_clear = addresses_to_clear,
+        .connections = connections,
         .args = args,
+        .packet_header = packet_header,
         .hal = fabric_context_.get_hal(),
     };
     return tt::tt_fabric::collect_manifest_router(inputs);

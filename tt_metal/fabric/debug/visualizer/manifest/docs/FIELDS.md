@@ -47,6 +47,17 @@ Every field the manifest records, with the named compile-time argument that feed
 | `interrupts_enabled` | flag |  | kernel_params | `ENABLE_INTERRUPTS` | Whether this ERISC is configured with interrupts on. The router kernel declares it but does not read it. |
 | `teardown_check_iterations` | number |  | kernel_params | `ITERATIONS_BETWEEN_CTX_SWITCH_AND_TEARDOWN_CHECKS` | How many passes over its channel steps the main loop makes between its checks for termination and context switching. |
 | `telemetry_stats_mask` | number |  | kernel_params | `FABRIC_TELEMETRY_STATS_MASK` | The FabricTelemetryStatistic bits this ERISC collects; 0 when its telemetry is off. |
+| `telemetry_enabled` | flag |  | diagnostics | `ENABLE_FABRIC_TELEMETRY` | Whether this ERISC collects fabric telemetry. telemetry_stats_mask says which statistics. |
+| `perf_telemetry_mode` | number |  | diagnostics | `PERF_TELEMETRY_MODE` | The kernel's PerfTelemetryRecorderType: 0 for none, 1 for low-resolution bandwidth. The enum is device-side only, so the value is written as a number. |
+| `code_profiling_timers` | number |  | diagnostics | `CODE_PROFILING_ENABLED_TIMERS` | The CodeProfilingTimerType bits the kernel times; 0 when code profiling is off. |
+| `sender_txq` | number |  | kernel_params | `SENDER_TXQ_ID` | The Ethernet TX queue the router sends packets on. |
+| `receiver_txq` | number |  | kernel_params | `RECEIVER_TXQ_ID` | The Ethernet TX queue the router sends credits back on: 1 in 2-ERISC mode, otherwise the sender's. |
+| `intermesh_router` | flag |  | kernel_params | `IS_INTERMESH_ROUTER` | Whether the router's link goes to another mesh. |
+| `intermesh_edge` | flag |  | kernel_params | `IS_INTERMESH_ROUTER_ON_EDGE` | Whether the router's channel is one of the chip's inter-mesh-facing channels (ControlPlane::get_intermesh_facing_eth_chans). |
+| `intramesh_edge` | flag |  | kernel_params | `IS_INTRAMESH_ROUTER_ON_EDGE` | Whether the router is an intra-mesh router on a chip with inter-mesh links, which checks each packet for an inter-mesh exit. |
+| `mesh_x_size` | number |  | kernel_params | `MESH_X_SIZE` (2D only) | The mesh's columns, which bound the router's 2D route table. |
+| `mesh_y_size` | number |  | kernel_params | `MESH_Y_SIZE` (2D only) | The mesh's rows, which bound the router's 2D route table. |
+| `remote_worker_sender_channel` | number |  | control_info | `REMOTE_WORKER_SENDER_CHANNEL` | The peer router's worker sender channel. In mux mode the router writes it as the source channel of the packets it receives. 0 when the router has no peer. |
 
 ### Sender channel fields
 
@@ -60,8 +71,9 @@ Every field the manifest records, with the named compile-time argument that feed
 | `producer_credit_return_cmd_buf` | enum | `NocCmdBuf` | flow_control | `SENDER_CH_{}_ACK_CMD_BUF_ID` | The NoC command buffer it returns them through. |
 | `connection` | l1 | `ConnectionValue` | control_info | a runtime argument | The state of the producer's connection: the producer writes open and close requested, and the router writes unused once it has torn the connection down. In the router's runtime args. |
 | `conn_info` | l1 | `EDMChannelWorkerLocationInfo` | control_info | `LOCAL_SENDER_CH_{}_CONN_INFO_ADDR` | Where the producer writes where it is, and the router its read counter. |
-| `buffer_index_sem` | l1 | `SenderChannelProducerCursor` | control_info | a runtime argument | Where the worker channel's producer keeps its write cursor across connections, for the next producer to pick up. In the producer's runtime args, from the channel's connection spec. Null on the other channels, whose producer keeps none. |
+| `buffer_index_sem` | l1 | `SenderChannelProducerCursor` | control_info | a runtime argument | Where the worker channel's producer keeps its write cursor across connections, for the next producer to pick up. In the producer's runtime args, from the channel's connection spec, and the router's, which zeroes it at startup. Null on the other channels, whose producer keeps none. |
 | `static_connection` | flag |  | control_info | `SENDER_CH_{}_WAIT_STATIC_CONNECTION` | Whether a sibling router connects to the channel once, at startup: before its main loop, each ERISC that runs the channel waits for that connection. The builder gives an ERISC that doesn't run it 0. |
+| `live_check_skip` | flag |  | control_info | `SENDER_CH_{}_LIVE_CHECK_SKIP` | Whether the router skips the connection liveness check on the channel: it has a static peer, or the builder forces the skip. |
 
 ### Receiver channel fields
 
@@ -101,33 +113,23 @@ The named arguments and defines the router kernel is fed that the manifest does 
 | `MAX_NUM_SENDER_CHANNELS` | builder_config::num_max_sender_channels. |
 | `MAX_NUM_RECEIVER_CHANNELS` | builder_config::num_max_receiver_channels. |
 | `MAX_NUM_VCS` | builder_config::MAX_NUM_VCS. |
+| `NUM_ETH_PORTS` | The SoC's Ethernet channel count, which sizes the kernel's port_direction_table. |
+| `SKIP_SRC_CH_ID_UPDATE` | Not read: the kernel derives the flag from FABRIC_TENSIX_EXTENSION_MUX_MODE (fabric_erisc_router_ct_args.hpp). |
+| `PACKED_DOWNSTREAM_VC{}_SENDER_CHANNEL_IDS` | The edges' landing channels, packed; fed only in 2D with channel trimming capture. Each edge records its own. |
 | `MY_ETH_CHANNEL` | Not yet described. |
-| `NUM_ETH_PORTS` | Not yet described. |
 | `NUM_SENDER_CHANNELS` | Not yet described. |
 | `NUM_DOWNSTREAM_CHANNELS` | Not yet described. |
 | `NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS` | Not yet described. |
 | `VC{}_DOWNSTREAM_EDM_SIZE` | Not yet described. |
-| `PACKED_DOWNSTREAM_VC{}_SENDER_CHANNEL_IDS` | Not yet described. |
-| `IS_INTERMESH_ROUTER` | Not yet described. |
-| `IS_INTERMESH_ROUTER_ON_EDGE` | Not yet described. |
-| `IS_INTRAMESH_ROUTER_ON_EDGE` | Not yet described. |
-| `MESH_X_SIZE` | Not yet described. |
-| `MESH_Y_SIZE` | Not yet described. |
-| `SENDER_CH_{}_LIVE_CHECK_SKIP` | Not yet described. |
-| `ENABLE_FIRST_LEVEL_ACK_VC{}` | Not yet described. |
 | `FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR` | Not yet described. |
-| `SENDER_TXQ_ID` | Not yet described. |
-| `RECEIVER_TXQ_ID` | Not yet described. |
 | `EDM_NOC_VC` | Not yet described. |
 | `FORCE_ALL_PATHS_TO_USE_SAME_NOC` | Not yet described. |
-| `SKIP_SRC_CH_ID_UPDATE` | Not yet described. |
-| `REMOTE_WORKER_SENDER_CHANNEL` | Not yet described. |
 | `UDM_MODE` | Not yet described. |
 | `LOCAL_RELAY_NUM_BUFFERS` | Not yet described. |
 | `TENSIX_RELAY_LOCAL_FREE_SLOTS_STREAM_ID` | Not yet described. |
-| `ENABLE_FABRIC_TELEMETRY` | Not yet described. |
-| `PERF_TELEMETRY_MODE` | Not yet described. |
-| `CODE_PROFILING_ENABLED_TIMERS` | Not yet described. |
+| `LINK_SYNC_ROLE` | The streaming profiler's link sync, fed on Blackhole when the profiler is on (link_sync::add_router_compile_args). Not yet described. |
+| `LINK_SYNC_L1_ADDR` | The streaming profiler's link sync, fed on Blackhole when the profiler is on (link_sync::add_router_compile_args). Not yet described. |
+| `LINK_SYNC_CHECK` | The streaming profiler's link sync, fed on Blackhole when the profiler is on (link_sync::add_router_compile_args). Not yet described. |
 
 | Define | Reason |
 | --- | --- |

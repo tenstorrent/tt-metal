@@ -4,7 +4,6 @@
 
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_kernel_inputs.hpp"
 
-#include <algorithm>
 #include <filesystem>
 #include <numeric>
 #include <string>
@@ -12,11 +11,12 @@
 #include <fmt/format.h>
 #include <tt_stl/assert.hpp>
 
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
+
 namespace tt::tt_fabric::manifest {
 
 namespace {
 
-// "fabric_manifest_flow_control.cpp:212", for errors.
 std::string describe_reader(const std::source_location& reader) {
     return fmt::format("{}:{}", std::filesystem::path(reader.file_name()).filename().string(), reader.line());
 }
@@ -31,7 +31,21 @@ RouterArgs::RouterArgs(std::span<const KernelInputs> kernel_inputs_by_erisc) :
 
 uint32_t RouterArgs::num_eriscs() const { return static_cast<uint32_t>(kernel_inputs_by_erisc_.size()); }
 
-std::optional<uint32_t> RouterArgs::find_erisc_arg(uint32_t erisc, std::string_view name) const {
+std::optional<uint32_t> RouterArgs::find_erisc_arg(
+    uint32_t erisc, std::string_view name, std::source_location reader) const {
+    TT_FATAL(
+        manifest_reads_arg(name),
+        "Fabric manifest: {} reads {}, which no field table reads and k_router_pass_args does not list "
+        "(fabric_manifest_fields.hpp); add it to k_router_pass_args",
+        describe_reader(reader),
+        name);
+    TT_FATAL(
+        erisc < num_eriscs(),
+        "Fabric manifest: {} reads {} from ERISC{}, but the router has {} ERISCs",
+        describe_reader(reader),
+        name,
+        erisc,
+        num_eriscs());
     const auto& named_args = kernel_inputs_by_erisc_[erisc].named_compile_args;
     const auto arg = named_args.find(std::string(name));
     if (arg == named_args.end()) {
@@ -41,14 +55,7 @@ std::optional<uint32_t> RouterArgs::find_erisc_arg(uint32_t erisc, std::string_v
 }
 
 uint32_t RouterArgs::read_erisc_arg(uint32_t erisc, std::string_view name, std::source_location reader) const {
-    TT_FATAL(
-        erisc < num_eriscs(),
-        "Fabric manifest: {} reads {} from ERISC{}, but the router has {} ERISCs",
-        describe_reader(reader),
-        name,
-        erisc,
-        num_eriscs());
-    const auto value = find_erisc_arg(erisc, name);
+    const auto value = find_erisc_arg(erisc, name, reader);
     TT_FATAL(
         value.has_value(),
         "Fabric manifest: {} reads {}, but ERISC{} wasn't given it",
@@ -81,29 +88,6 @@ uint32_t RouterArgs::read_router_arg(std::string_view name, std::source_location
     return read_arg_shared_by(all_eriscs_, name, reader);
 }
 
-std::optional<uint32_t> RouterArgs::find_router_arg(std::string_view name, std::source_location reader) const {
-    const bool given_to_any =
-        std::ranges::any_of(all_eriscs_, [&](uint32_t erisc) { return find_erisc_arg(erisc, name).has_value(); });
-    if (!given_to_any) {
-        return std::nullopt;
-    }
-    return read_router_arg(name, reader);
-}
-
-uint32_t RouterArgs::read_channel_arg(
-    std::string_view name, const std::vector<uint32_t>& servicing_eriscs, std::source_location reader) const {
-    return read_arg_shared_by(servicing_eriscs.empty() ? std::vector<uint32_t>{0} : servicing_eriscs, name, reader);
-}
-
-uint32_t RouterArgs::read_sender_arg(std::string_view name, uint32_t sender_index, std::source_location reader) const {
-    return read_channel_arg(name, find_eriscs_servicing_sender(sender_index, reader), reader);
-}
-
-uint32_t RouterArgs::read_receiver_arg(
-    std::string_view name, uint32_t receiver_index, std::source_location reader) const {
-    return read_channel_arg(name, find_eriscs_servicing_receiver(receiver_index, reader), reader);
-}
-
 std::vector<uint32_t> RouterArgs::find_eriscs_with_flag(std::string_view flag_name, std::source_location reader) const {
     std::vector<uint32_t> eriscs;
     for (const uint32_t erisc : all_eriscs_) {
@@ -134,6 +118,12 @@ tt::tt_metal::NOC RouterArgs::read_erisc_noc(uint32_t erisc) const {
 }
 
 bool RouterArgs::has_define(std::string_view name, std::source_location reader) const {
+    TT_FATAL(
+        manifest_reads_define(name),
+        "Fabric manifest: {} checks the define {}, which k_router_pass_defines does not list "
+        "(fabric_manifest_fields.hpp); add it to k_router_pass_defines",
+        describe_reader(reader),
+        name);
     const std::string define(name);
     const bool defined = kernel_inputs_by_erisc_.front().defines.contains(define);
     for (const uint32_t erisc : all_eriscs_) {

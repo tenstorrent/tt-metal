@@ -19,8 +19,8 @@ For that to work, a name has to meet three conditions:
 2. **A name means one type.** Two types with one name would leave decode unable to tell which bytes it has.
 3. **The type can be rebuilt from bytes.** Decode copies bytes into the type, so the type must be trivially copyable.
 
-The type registry is how the build guarantees all three. It's one compile-time list of types. The manifest can only name a
-type through the registry, and now decode has a list of actual types that it can map the manifest-stated types to.
+The type registry is how the build guarantees all three. It's one compile-time list of types. The manifest can only name
+a type through the registry, and now decode has a list of actual types that it can map the manifest-stated types to.
 
 ## What gets registered
 
@@ -30,7 +30,7 @@ word.
 | Group | Types |
 | --- | --- |
 | Words | `uint32_t`: single words, the credit counter arrays, the ETH firmware mailbox, and the counts in stream registers |
-| Raw bytes | `std::byte`: what the manifest doesn't type, such as leftover L1, the perf telemetry buffer, and ring buffer slots |
+| Raw bytes | `std::byte`: what the manifest doesn't type, such as leftover L1 and the perf telemetry buffer |
 | Enums in L1 or a stream register | `EDMStatus`, `TerminationSignal`, `ConnectionValue`, `CoordinatedEriscContextSwitchState` |
 | Structs in L1 | `handshake_info_t`, `SenderChannelProducerCursor`, `EDMChannelWorkerLocationInfo`, `ChannelTrimmingOverrides`, `CodeProfilingTimerResult`, `FabricTelemetry`, `routing_l1_info_t` |
 | Packet headers | Every packet header type fabric can pick for a run (`PacketHeaderTypes`) |
@@ -132,14 +132,13 @@ the argument as its address. On a T3K, router `E0` on chip `C0` is fed `EDM_STAT
 ```cpp
 [&](manifest::content::L1 l1) -> manifest::Content {
     l1.address = arg;                                      // 0 -> 98624
-    l1.cleared_by_host = is_cleared_by_host(inputs, arg);
     return l1;
 },
 ```
 
 ```json
 "edm_status": { "category": "lifecycle", "kind": "l1", "address": 98624,
-                "num_elements": 1, "element_size": 4, "type": "EDMStatus", "cleared_by_host": false }
+                "num_elements": 1, "element_size": 4, "type": "EDMStatus" }
 ```
 
 A per-channel or per-edge entry names its argument with a `{}`, filled with the channel's index. For VC0 sender
@@ -173,17 +172,16 @@ or from several arguments, and registers them with it:
 
 | Function | Region | Location |
 | --- | --- | --- |
-| `describe_ring_buffer` | A channel's ring buffer, as `std::byte` with one element per slot | The channel allocator's base address and slot count, and `CHANNEL_BUFFER_SIZE` as the slot size |
+| `describe_ring_buffer` | A channel's ring buffer, as the run's packet header type with one element per slot | The channel allocator's base address and slot count, and `CHANNEL_BUFFER_SIZE` as the slot size |
 | `describe_l1_array<T>` | The four credit counter arrays, as `uint32_t` | Each array's base address argument, with the size taken from the spacing between them |
 | `collect_leftover_l1` | Leftover L1, as `std::byte` | From the builder's `get_allocated_l1_end_address` to `max_l1_loading_size` |
 | `read_fed_stream` | A credit on stream registers, as `uint32_t` | The `TO_SENDER_<c>_PKTS_COMPLETED_ID` or `TO_SENDER_<c>_PKTS_ACKED_ID` argument, through `describe_stream_register` |
 
 ```cpp
-// describe_ring_buffer: the allocator's address and slot count, and the channel's slot size.
-register_l1_region<std::byte>(address, num_slots, slot_size);
+// describe_ring_buffer: the allocator's address and slot count, and the channel's slot size, typed as the header
+// visit_packet_header_type picks for the run.
+register_l1_region<Header>(address, num_slots, slot_size);
 ```
-
-Each sets `cleared_by_host` from the builder's `get_fabric_router_addresses_to_clear()`, as `make_field` does.
 
 ### 3. Describe, from the architecture
 
@@ -271,7 +269,9 @@ How decode then shows a type's members to a person is decode's own concern. The 
 ## Quirks
 
 **A default template argument drops out of the name.** The compiler leaves out a template argument that equals its
-default: `LowLatencyPacketHeaderT<0>` comes out as `LowLatencyPacketHeaderT<>`, and `HybridMeshPacketHeaderT<36>` as `HybridMeshPacketHeaderT<>`. Those two names are written by hand, next to `manifest_type_name`. If a default changes, or a new registered template uses its default, `are_template_arguments_named` fails on the `<>` and names what to add.
+default: `LowLatencyPacketHeaderT<0>` comes out as `LowLatencyPacketHeaderT<>`, and `HybridMeshPacketHeaderT<36>` as
+`HybridMeshPacketHeaderT<>`. Those two names are written by hand, next to `manifest_type_name`. If a default changes, or
+a new registered template uses its default, `are_template_arguments_named` fails on the `<>` and names what to add.
 
 **An alias is named as what it aliases.** `uint32_t` is `unsigned int`, and `ChannelTrimmingOverrides` is
 `FabricDatapathUsageL1Results<true, 3, 10>`. A reader looking for the alias in the manifest won't find it.
@@ -280,9 +280,8 @@ default: `LowLatencyPacketHeaderT<0>` comes out as `LowLatencyPacketHeaderT<>`, 
 `are_names_unique`. Give one of them a hand-written name, next to the two above.
 
 **An element can be bigger than its type.** When `element_size` is larger than `sizeof(T)`, only the first `sizeof(T)`
-bytes of each element are typed, and the rest are raw. Ring buffer slots are written as `std::byte` today, so each
-slot's first byte is typed and the packet in it is raw. Typing slots as the run's packet header keeps the same shape:
-the header becomes the typed part, and the payload stays raw.
+bytes of each element are typed, and the rest are raw. A ring buffer slot is typed as the run's packet header, so the
+header is the typed part and the payload after it stays raw.
 
 **Host and device must lay a type out the same way.** Decode copies bytes the device wrote into the host's version of
 the type. That holds for the registered types because they're the structs host and device already share, with
@@ -290,12 +289,13 @@ fixed-width members. A registered type with a pointer, a `size_t` or a `long` me
 host and the 32-bit RISC-V cores.
 
 **A new header size registers itself; a new header template doesn't.** `PacketHeaderTypes` expands each value in
-`PKT_HDR_1D_EXTENSION_WORDS` into a `LowLatencyPacketHeaderT<N>`, and each value in `PKT_HDR_2D_ROUTE_BUFFER_SIZES` into a `HybridMeshPacketHeaderT<N>`.
+`PKT_HDR_1D_EXTENSION_WORDS` into a `LowLatencyPacketHeaderT<N>`, and each value in `PKT_HDR_2D_ROUTE_BUFFER_SIZES` into
+a `HybridMeshPacketHeaderT<N>`.
 
 - **A new size for one of those templates** is registered with no edit.
 - **A new header template**, such as a routing mode with its own header struct, has to be added to
-`detail::packet_header_type_list` by hand, since that names the two templates. `registers_every_packet_header` fails the build until it is: it walks fabric's own `for_each_packet_header_type` and checks each header it picks is
-registered.
+`detail::packet_header_type_list` by hand, since that names the two templates. `registers_every_packet_header` fails the
+build until it is: it walks fabric's own `for_each_packet_header_type` and checks each header it picks is registered.
 
 **Configuration enums carry a name the manifest doesn't write.** An `enum` field keeps its enum's name
 (`ttsl::short_type_name<E>`) in the model, for FIELDS.md and error messages. The manifest writes only the value and its

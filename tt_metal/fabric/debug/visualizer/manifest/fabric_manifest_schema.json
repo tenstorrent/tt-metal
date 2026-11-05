@@ -46,7 +46,6 @@
       "description": "This process and the build it runs. Nothing about the fabric.",
       "type": "object",
       "properties": {
-        "host_rank": { "$ref": "#/$defs/count" },
         "mpi_rank": { "$ref": "#/$defs/count" },
         "world_size": { "type": "integer", "minimum": 1 },
         "written_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
@@ -58,16 +57,19 @@
               "type": "string",
               "pattern": "^([0-9a-f]{40})?$"
             },
+            "git_sha_short": { "description": "The short form of git_sha.", "type": "string" },
+            "version": { "description": "The tt-metal version string the build was configured with.", "type": "string" },
+            "build_type": { "description": "The CMake build type, such as Release.", "type": "string" },
             "git_dirty": {
               "description": "Whether the build had uncommitted changes to tracked files.",
               "type": "boolean"
             }
           },
-          "required": ["git_sha", "git_dirty"],
+          "required": ["git_sha", "git_sha_short", "version", "build_type", "git_dirty"],
           "additionalProperties": false
         }
       },
-      "required": ["host_rank", "mpi_rank", "world_size", "written_at", "build"],
+      "required": ["mpi_rank", "world_size", "written_at", "build"],
       "additionalProperties": false
     },
 
@@ -112,15 +114,44 @@
           "description": "The packet header type the run's routers use.",
           "$ref": "#/$defs/type_name"
         },
+        "packet_header_size_bytes": {
+          "description": "The bytes a packet's header takes: the type's size, plus UDMControlFields in UDM mode.",
+          "$ref": "#/$defs/count"
+        },
         "max_payload_size_bytes": { "$ref": "#/$defs/count" },
         "channel_buffer_size_bytes": { "$ref": "#/$defs/count" },
         "routing_2d_route_buffer_size": { "$ref": "#/$defs/count" },
         "routing_1d_extension_words": { "$ref": "#/$defs/count" },
-        "multi_txq": { "type": "boolean" }
+        "multi_txq": { "type": "boolean" },
+        "host_clears": {
+          "description": "What fabric init zeroes in every router's L1 before launch.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "address": { "$ref": "#/$defs/count" },
+              "size_bytes": { "$ref": "#/$defs/count" }
+            },
+            "required": ["address", "size_bytes"],
+            "additionalProperties": false
+          }
+        },
+        "intermesh_vc": {
+          "description": "The fabric's inter-mesh VC setup, which decides whether routers have VC1 and VC2.",
+          "type": "object",
+          "properties": {
+            "mode": { "$ref": "#/$defs/name" },
+            "requires_vc1": { "type": "boolean" },
+            "requires_vc2": { "type": "boolean" },
+            "intermesh_vc_disabled": { "type": "boolean" }
+          },
+          "required": ["mode", "requires_vc1", "requires_vc2", "intermesh_vc_disabled"],
+          "additionalProperties": false
+        }
       },
       "required": [
-        "config", "topology", "is_2d_routing", "packet_header", "max_payload_size_bytes",
-        "channel_buffer_size_bytes", "multi_txq"
+        "config", "topology", "is_2d_routing", "packet_header", "packet_header_size_bytes", "max_payload_size_bytes",
+        "channel_buffer_size_bytes", "multi_txq", "host_clears", "intermesh_vc"
       ],
       "if": { "properties": { "is_2d_routing": { "const": true } } },
       "then": { "required": ["routing_2d_route_buffer_size"], "not": { "required": ["routing_1d_extension_words"] } },
@@ -147,12 +178,14 @@
         "field_category": { "type": "array", "items": { "$ref": "#/$defs/field_category" }, "uniqueItems": true },
         "field_kind": { "type": "array", "items": { "$ref": "#/$defs/field_kind" }, "uniqueItems": true },
         "channel_status": { "type": "array", "items": { "$ref": "#/$defs/channel_status" }, "uniqueItems": true },
-        "erisc_processor": { "$ref": "#/$defs/name_list" }
+        "erisc_processor": { "$ref": "#/$defs/name_list" },
+        "intermesh_vc_mode": { "$ref": "#/$defs/name_list" }
       },
       "required": [
         "arch", "fabric_config", "reliability_mode", "tensix_config", "udm_mode", "fabric_manager_mode",
         "fabric_topology", "credit_backing", "z_port_role", "edge_capability", "credit_counter_indexed_by",
-        "field_category", "field_kind", "channel_status", "erisc_processor"
+        "field_category", "field_kind", "channel_status", "erisc_processor",
+        "intermesh_vc_mode"
       ],
       "additionalProperties": false
     },
@@ -164,10 +197,9 @@
         "address": { "$ref": "#/$defs/count" },
         "num_elements": { "type": "integer", "minimum": 1 },
         "element_size": { "type": "integer", "minimum": 1 },
-        "type": { "$ref": "#/$defs/type_name" },
-        "cleared_by_host": { "type": "boolean" }
+        "type": { "$ref": "#/$defs/type_name" }
       },
-      "required": ["address", "num_elements", "element_size", "type", "cleared_by_host"]
+      "required": ["address", "num_elements", "element_size", "type"]
     },
     "region": { "$ref": "#/$defs/region_keys", "unevaluatedProperties": false },
     "optional_region": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/region" }] },
@@ -253,9 +285,10 @@
           ],
           "minItems": 3,
           "items": false
-        }
+        },
+        "fabric_telemetry_version": { "description": "FABRIC_TELEMETRY_VERSION: which layout of FabricTelemetry the fabric_telemetry area holds.", "$ref": "#/$defs/count" }
       },
-      "required": ["name", "l1_areas", "core_registers"],
+      "required": ["name", "l1_areas", "core_registers", "fabric_telemetry_version"],
       "additionalProperties": false
     },
 
@@ -297,6 +330,11 @@
       "type": "object",
       "properties": {
         "mesh_coord": { "type": "array", "items": { "$ref": "#/$defs/count" }, "minItems": 1 },
+        "host_rank": {
+          "description": "Which host rank of the chip's mesh owns it, local or remote. Null when the mesh graph doesn't say.",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
         "physical_chip_id": { "type": ["integer", "null"] },
         "asic_id": { "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^0x[0-9a-f]{16}$" }] },
         "is_local": { "type": "boolean" },
@@ -308,7 +346,7 @@
           "additionalProperties": { "$ref": "#/$defs/router" }
         }
       },
-      "required": ["mesh_coord", "physical_chip_id", "asic_id", "is_local"],
+      "required": ["mesh_coord", "host_rank", "physical_chip_id", "asic_id", "is_local"],
       "if": { "properties": { "is_local": { "const": true } } },
       "then": {
         "properties": { "physical_chip_id": { "type": "integer" }, "asic_id": { "type": "string" } },
@@ -317,7 +355,7 @@
       "else": {
         "description": "A chip this rank cannot map to a device.",
         "properties": { "physical_chip_id": { "type": "null" }, "asic_id": { "type": "null" } },
-        "maxProperties": 4
+        "maxProperties": 5
       },
       "additionalProperties": false
     },

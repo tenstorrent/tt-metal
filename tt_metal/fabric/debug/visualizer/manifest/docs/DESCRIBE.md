@@ -6,7 +6,7 @@ fabric settings and the architecture. It also describes each mesh's credit trans
 
 | Function | Fills | Reads |
 | --- | --- | --- |
-| `describe_run(control_plane)` | `run` | ControlPlane, the MPI context, the clock, the build's version header |
+| `describe_run()` | `run` | The MPI context, the clock, the build's version header |
 | `describe_fabric(control_plane)` | `fabric` | ControlPlane, FabricContext, the Metal environment |
 | `describe_arch(hal)` | `arch` | The HAL, UMD, and fabric's heartbeat constants |
 | `describe_credit_transport(builder_context, mesh_id)` | A mesh's `credit_transport` | The builder context's credit transport plan for the mesh |
@@ -20,13 +20,14 @@ has already decided.
 
 | Key | From |
 | --- | --- |
-| `host_rank` | ControlPlane's host rank binding for this process: which part of a mesh this host owns |
 | `mpi_rank`, `world_size` | The MPI context: this process and how many there are |
 | `written_at` | The time the manifest was written, in UTC, as ISO 8601 |
-| `build.git_sha`, `build.git_dirty` | The commit tt-metal was built from, and whether tracked files had uncommitted changes |
+| `build.git_sha`, `build.git_sha_short`, `build.git_dirty` | The commit tt-metal was built from, and whether tracked files had uncommitted changes |
+| `build.version`, `build.build_type` | The version string and the CMake build type, such as `Release` |
 
-**Build identity.** `git_sha` and `git_dirty` come from the version header CMake refreshes on every build
-(`cmake/version.cmake`). With uncommitted changes, the SHA doesn't say exactly what code ran. `git_sha` is empty when the source tree is neither a git checkout nor a `git archive` export. The one file that reads the header,
+**Build identity.** Every `build` value comes from the version header CMake refreshes on every build
+(`cmake/version.cmake`). With uncommitted changes, the SHA doesn't say exactly what code ran. `git_sha` is empty when
+the source tree is neither a git checkout nor a `git archive` export. The one file that reads the header,
 `fabric_manifest_build_identity.cpp`, is kept out of the unity build (`SKIP_UNITY_BUILD_INCLUSION` in
 `tt_metal/fabric/CMakeLists.txt`), so a new commit recompiles only that file.
 
@@ -51,11 +52,14 @@ The rest of `fabric` is what FabricContext derived from the settings:
 | --- | --- |
 | `topology` | The fabric topology |
 | `is_2d_routing` | Whether 2D routing is on |
-| `packet_header` | The registered name ([TYPE_REGISTRY.md](TYPE_REGISTRY.md)) of the header type `visit_packet_header_type` (`packet_header_types.hpp`) picks for the routing mode and FabricContext's 1D extension words or 2D route buffer size, such as `HybridMeshPacketHeaderT<36>` |
+| `packet_header` | The registered name ([TYPE_REGISTRY.md](TYPE_REGISTRY.md)) of the header type `visit_packet_header_type` (`packet_header_types.hpp`) picks for FabricContext's `get_packet_header_config()` (the routing mode and its 1D extension words or 2D route buffer size), such as `HybridMeshPacketHeaderT<36>` |
+| `packet_header_size_bytes` | The bytes a packet's header takes (`get_fabric_packet_header_size_bytes()`): the type's size, plus the `UDMControlFields` that follow it in UDM mode |
 | `max_payload_size_bytes`, `channel_buffer_size_bytes` | The payload and channel buffer sizes |
 | `routing_2d_route_buffer_size` | 2D routing only: the packet header's route buffer size |
 | `routing_1d_extension_words` | 1D routing only: the packet header's extension words |
 | `multi_txq` | Whether senders and receivers transmit on separate Ethernet TX queues (`FabricEriscDatamoverConfig::multi_txq_enabled`) |
+| `host_clears` | What fabric init zeroes in every router's L1 before launch (`configure_fabric_cores`): each address on `get_fabric_router_addresses_to_clear()`, with the bytes of the zero buffer it writes there, `router_buffer_clear_size_words` words |
+| `intermesh_vc` | `FabricBuilderContext::get_intermesh_vc_config()`: the inter-mesh VC mode (`disabled`, `edge_only`, `full_mesh` or `full_mesh_with_pass_through`), whether routers need VC1 and VC2, and whether `TT_METAL_FABRIC_DISABLE_INTERMESH_VC` put inter-mesh traffic on VC0 |
 
 ## Arch
 
@@ -66,8 +70,8 @@ or fabric (TYPE_REGISTRY.md's "Where regions are registered"):
 
 | Area | From |
 | --- | --- |
-| `heartbeat` | The word the router writes `magic \| iteration count` to every `period_iters` main-loop iterations, from `fabric_common.h`, with its `magic`, `magic_mask` and `period_iters`. On Blackhole it's base firmware's own heartbeat word, which the router writes over while it runs |
-| `fabric_telemetry` | The HAL's `FABRIC_TELEMETRY` area, as a `FabricTelemetry` |
+| `heartbeat` | The word the router writes `magic \| iteration count` to every `period_iters` main-loop iterations, from `fabric_common.h`, with its `magic`, `magic_mask` and `period_iters`. On Blackhole it's base firmware's own heartbeat word, which the router writes over while it runs. The address is picked by arch, copying the kernel's `#if ARCH_BLACKHOLE` (`fabric_erisc_router.cpp`), since no input carries it |
+| `fabric_telemetry` | The HAL's `FABRIC_TELEMETRY` area, as a `FabricTelemetry`. `arch.fabric_telemetry_version` is `FABRIC_TELEMETRY_VERSION` (`fabric_telemetry_msgs.h`), which layout of the struct it holds |
 | `routing_table` | The HAL's `ROUTING_TABLE` area, as a `routing_l1_info_t` |
 | `eth_fw_mailbox` | The HAL's `ETH_FW_MAILBOX` area, as `uint32_t`s. Null where the HAL has no Ethernet firmware mailbox |
 | `base_fw_port_status`, `base_fw_train_status`, `base_fw_retrain_count`, `base_fw_rx_link_up`, `base_fw_postcode` | The words base firmware keeps about its Ethernet link, each a `uint32_t` at the address the HAL gives among its Ethernet firmware mailbox values. Null where the HAL gives none, as on Wormhole |
@@ -78,10 +82,10 @@ A HAL area (`describe_hal_l1_area<T>`) must hold a whole number of its type, and
 width, worked out from the HAL where it's read ([ROUTER_PASS.md](ROUTER_PASS.md)).
 
 **Core registers** (`arch.core_registers`): `soft_reset`, `wall_clock_low` and `wall_clock_high`, each a `uint32_t` at
-its HAL address, written with its name, address and type. The array keeps the read order: reading the low word latches the high word. `soft_reset.reset_masks` is
-UMD's reset bit for each of the HAL's physical ERISCs on the Ethernet core, one on Wormhole and two on Blackhole,
-whether or not the ERISC mode runs a processor on it. A router's ERISCs say which physical ERISC each runs on
-([ROUTER_PASS.md](ROUTER_PASS.md)).
+its HAL address, written with its name, address and type. The array keeps the read order: reading the low word latches
+the high word. `soft_reset.reset_masks` is UMD's reset bit for each of the HAL's physical ERISCs on the Ethernet core,
+one on Wormhole and two on Blackhole, whether or not the ERISC mode runs a processor on it. A router's ERISCs say which
+physical ERISC each runs on ([ROUTER_PASS.md](ROUTER_PASS.md)).
 
 ## Credit transport
 
@@ -93,7 +97,8 @@ senders' credits travel. The topology pass calls `describe_credit_transport` for
 builder's own decision: the credit transport plan the builder context made for the mesh (`CreditTransportPlan`), which
 has one flag per VC (`vc0_uses_counters`, `vc1_uses_counters`, `vc2_uses_counters`).
 
-A sender channel's credits point into the counter arrays or at a stream register to match ([ROUTER_PASS.md](ROUTER_PASS.md)).
+A sender channel's credits point into the counter arrays or at a stream register to match
+([ROUTER_PASS.md](ROUTER_PASS.md)).
 
 ## Adding a fact stated once
 

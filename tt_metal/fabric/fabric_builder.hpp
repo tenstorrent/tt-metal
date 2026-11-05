@@ -143,6 +143,10 @@ private:
 
     // Set by create_kernels(). The manifest records its chip-wide values on the chip.
     KernelCreationContext kernel_creation_context_{};
+
+    // The connections the chip's routers make to each other. Only created, and so only filled, when fabric manifest
+    // generation is on for now.
+    std::shared_ptr<ConnectionRegistry> connection_registry_;
 };
 
 }  // namespace tt::tt_fabric

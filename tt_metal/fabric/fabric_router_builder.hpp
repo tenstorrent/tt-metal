@@ -24,6 +24,7 @@ class Program;
 namespace tt::tt_fabric {
 
 class FabricContext;
+class ConnectionRegistry;
 
 namespace manifest {
 struct Router;
@@ -64,7 +65,6 @@ struct KernelCreationContext {
  * What inputs an ERISC's router kernel was created with.
  */
 struct KernelInputs {
-    tt::tt_metal::KernelHandle kernel;
     tt::tt_metal::DataMovementProcessor processor;
     tt::tt_metal::NOC noc;
     std::vector<uint32_t> compile_args;
@@ -107,6 +107,7 @@ public:
      * @param local_node The local fabric node ID
      * @param location Router location (eth_chan, remote_node, direction, is_dispatch)
      * @param chip_facts The chip's routing facts (edge capabilities, ring predicates), bound at chip scope
+     * @param connection_registry Records each connection the router makes, or null to record none
      * @return A unique_ptr to the appropriate FabricRouterBuilder implementation
      */
     static std::unique_ptr<FabricRouterBuilder> create(
@@ -116,7 +117,8 @@ public:
         tt::tt_metal::Program& program,
         FabricNodeId local_node,
         const RouterLocation& location,
-        const ChipRoutingFacts& chip_facts);
+        const ChipRoutingFacts& chip_facts,
+        std::shared_ptr<ConnectionRegistry> connection_registry = nullptr);
 
     // ============ Connection Methods ============
 
