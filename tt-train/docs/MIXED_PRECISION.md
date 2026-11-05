@@ -110,10 +110,9 @@ the fused kernels require. Unset keeps the bf16 sum.
   argument.
 - **FSDP.** `backward_post` reduce-scatters in the `reduce_dtype` given to `ttml.fsdp.fully_shard()`, else in the
   stored one, which it reads when it runs, as the DDP sync does. It first runs in the first backward, after the
-  optimizer is created, so a script that shards before `create_optimizer()` needs nothing else. `train.py` also passes
-  the key, read with `ttml.core.reduce_dtype_from_config()`, to every `fully_shard()` call, the way it passes
-  `replicate`. The fp32 sum needs a transient fp32 copy of each gathered gradient, twice its bf16 size; the bf16
-  gradient is freed once it is cast.
+  optimizer is created, so a script that shards before `create_optimizer()`, as `train.py` does, needs nothing else. A
+  `reduce_dtype` given to `fully_shard()` wins over the stored one. The fp32 sum needs a transient fp32 copy of each
+  gathered gradient, twice its bf16 size; the bf16 gradient is freed once it is cast.
 - **Routes.** Both use the existing ttnn collectives. A gradient of at least 2^19 elements per device (1 MiB of bf16),
   synced over one mesh axis, with a dim that splits into whole-tile slices that no other mesh axis already splits, is
   reduce-scattered in fp32, its mean is written in the gradient's dtype, and that slice is all-gathered: a quarter fewer

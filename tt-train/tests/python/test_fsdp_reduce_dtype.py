@@ -14,7 +14,6 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, ModuleList
 
-from train_example import import_train_example
 from two_device_gradients import device, exact_mean, make_gradients, per_device, per_device_tensor
 
 _FSDP_AXIS = 1
@@ -163,19 +162,3 @@ def test_rejects_reduce_dtypes_other_than_bf16_and_fp32(expect_error):
 def test_takes_reduce_dtype_by_keyword_only(expect_error):
     with expect_error(TypeError, "positional"):
         ttml.fsdp.fully_shard(object(), "auto", "fsdp", True, (), ttnn.DataType.FLOAT32)
-
-
-# train.py shards before create_optimizer applies the config, so it reads precision.reduce_dtype for FSDP itself.
-@pytest.mark.requires_device
-@pytest.mark.parametrize(
-    "precision, expected",
-    [({"reduce_dtype": "float32"}, ttnn.DataType.FLOAT32), ({}, None)],
-)
-def test_train_py_passes_the_configured_reduce_dtype_to_fully_shard(fsdp_mesh, precision, expected):
-    train = import_train_example()
-    model = _Model(64)
-
-    train.shard_model(model, [], {"training_config": {"precision": precision}})
-
-    assert [block._fsdp_state.reduce_dtype for block in model.blocks] == [expected, expected]
-    assert model._fsdp_state.reduce_dtype == expected
