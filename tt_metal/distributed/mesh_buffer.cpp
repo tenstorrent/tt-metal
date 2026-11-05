@@ -12,7 +12,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
-#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
 #include "device.hpp"
 #include "impl/allocator/allocator.hpp"
@@ -27,9 +26,9 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <map>
 #include <mutex>
 #include <optional>
+#include <utility>
 
 namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
 
@@ -258,6 +257,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         TT_FATAL(!address.has_value(), "Per-core allocation does not support explicit address");
         mesh_buffer = std::shared_ptr<MeshBuffer>(
             new MeshBuffer(mesh_buffer_config, device_local_config, /*address=*/0, device_local_size, mesh_device));
+        mesh_buffer->unique_id_ = BufferImpl::allocate_unique_id();
         // Per-core: each device allocates independently. The mesh-level lockstep allocator queries
         // device per-bank ranges at allocation time, so no explicit mirroring is needed.
         for (auto& [coord, device_buffer] : mesh_buffer->buffers_) {
@@ -265,14 +265,15 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
                 continue;
             }
             auto* device = mesh_device->impl().get_device(coord);
-            auto buffer = BufferImpl::create(
+            auto buffer = BufferImpl::create_for_mesh_buffer(
                 device,
                 device_local_size,
                 device_local_config.page_size,
                 device_local_config.buffer_type,
                 device_local_config.sharding_args,
                 device_local_config.bottom_up,
-                device_local_config.sub_device_id);
+                device_local_config.sub_device_id,
+                *mesh_buffer->unique_id_);
             device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(std::move(buffer));
         }
     } else if (!address.has_value()) {
@@ -388,6 +389,7 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     address_(other.address_),
     device_local_size_(other.device_local_size_),
     buffers_(std::move(other.buffers_)),
+    unique_id_(std::exchange(other.unique_id_, std::nullopt)),
     state_(std::move(other.state_)) {
     other.state_ = DeallocatedState{};
     other.address_ = 0;
@@ -405,6 +407,7 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         address_ = other.address_;
         device_local_size_ = other.device_local_size_;
         buffers_ = std::move(other.buffers_);
+        unique_id_ = std::exchange(other.unique_id_, std::nullopt);
         state_ = std::move(other.state_);
 
         other.state_ = DeallocatedState{};
@@ -510,6 +513,12 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
     }
     return device_buffer.get();
 }
+
+uint32_t MeshBuffer::alignment() const { return get_reference_buffer()->alignment(); }
+DeviceAddr MeshBuffer::aligned_page_size() const { return get_reference_buffer()->aligned_page_size(); }
+uint32_t MeshBuffer::num_dev_pages() const { return get_reference_buffer()->num_dev_pages(); }
+DeviceAddr MeshBuffer::aligned_size() const { return get_reference_buffer()->aligned_size(); }
+DeviceAddr MeshBuffer::aligned_size_per_bank() const { return get_reference_buffer()->aligned_size_per_bank(); }
 
 Buffer* MeshBuffer::get_reference_buffer() const {
     for (const auto& buffer : buffers_.values()) {

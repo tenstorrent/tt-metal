@@ -3,6 +3,7 @@ model:
   num_layers: 61
   max_seq_len: 81920
   chunk_size: 5120
+  forward_tokens_budget: 5120
 
 transport:
   sp: 8

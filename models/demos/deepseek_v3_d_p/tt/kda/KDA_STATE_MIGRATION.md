@@ -10,14 +10,14 @@ KV chunk address table that carries the MLA kvpe cache, as two extra configs:
 | 2 | `"02"` | KDA convolution tail | synthetic, `chunk_n_tokens = 64` | `[3, 64]` BF16 rectangle, 384 B |
 
 Every config is published on the model's layer axis (rows 3, 7, 11, ... for kvpe; every other row
-for KDA). A KDA config has no token axis, so it uses the synthetic axis of the K3 disaggregation
-contract (`k3_disagg_contract.md`, tt-blaze #3634): one version of both states spans a window of
+for KDA). A KDA config has no token axis, so it uses the synthetic axis it shares with decode
+(tt-blaze `blaze/models/kimi_k3/cache_migration.py`, tt-blaze #6203): both states span one window of
 `W = lcm(384, 576) * 32 = 36864` positions, global segment `i` sits at `i * 96` (recurrent) or `i * 64`
-(convolution) inside it, and the table repeats each segment in all 8 windows (`v * W + i * stride`,
-`max_sequence_length = 8 * W`) because decode keeps 8 versions and every window aliases the one
-prefill state (`kda_position` in `utils/kv_cache_utils.py`). The KV Manager needs this: it requires
-equal `chunk_n_tokens` on both sides and walks one position range for every config of a layer, so
-both states must fill the same window. The runtime declares the three caches as migration stages in
+(convolution) inside it, and `max_sequence_length = W` (`kda_position` in `utils/kv_cache_utils.py`).
+Both configs are tagged `Snapshot`: the KV Manager moves a layer's whole window whatever range
+/migrate names, and refuses a migration unless both sides tag `Snapshot` with equal extents and
+`chunk_n_tokens`. Decode keeps one KDA state per user and publishes the same single window
+(tt-blaze #6203). The runtime declares the three caches as migration stages in
 this order (`TtKimiK3Runtime.kv_migration_stages`), numbered in compacted slot space; the adapter
 maps configs back to layers with `cache_kind` / `cache_layer_rows`.
 
@@ -31,7 +31,7 @@ maps configs back to layers with `cache_kind` / `cache_layer_rows`.
 
 with `H_local = 96 / TP`, `D = 128`, `K - 1 = 3`. Heads are TP-sharded; every SP row holds a replica.
 
-The contract form is a second copy the engine owns (`KdaStates`, allocated by
+The contract form is the carries' only store, owned by the engine (`KdaStates`, allocated by
 `KimiK3Adapter.allocate_kv_cache`, one consolidated slab per state kind so a `KvCacheStage` can name
 it by one base address):
 
@@ -43,8 +43,8 @@ where `L` is the rank's KDA layer count and the leading index is `slot * L + lay
 (user-major, as the kvpe cache). The convolution slab's 384-byte page `row0[64c:64c+64] |
 row1[...] | row2[...]` is byte-identical to the ND `[1, K-1, 64]` shard, and an interleaved page `p`
 sits at bank `p % N`, offset `(p // N) * 384`, where ND shard `s = p` would sit; the two forms are
-interchangeable for the table. The interleaved form is used because `slice_write` can write whole
-rows into it per layer, while no op writes a row-major sub-region into an ND-sharded tensor.
+interchangeable for the table. The interleaved form keeps each batch's rows contiguous logical pages,
+so one whole-batch copy writes them.
 
 ## Segment numbering
 
@@ -64,12 +64,15 @@ The convolution order is the golden's `[all q | all k | all v]`. The recurrent g
 `[heads, v, k]`, the transpose of the device's `[k, v]`.
 
 `models/demos/deepseek_v3_d_p/tt/kda/state_adapter.py` owns the geometry, the maps, the per-layer
-export (`fill_cache_for_user_` for recurrent, reshape/permute/`slice_write` for convolution), the
-import (`slice` back to a native carry) and the host decoders (`recurrent_segment_to_torch`,
-`convolution_segment_to_torch`, `assemble_*`). `KdaStateCache.commit` exports every committed layer
-inside the captured region, so the state a reader sees is the one after the last committed chunk, and
-it lands before any later MLA layer acks that chunk, and before the KDA layer's own ack.
-`reset(slot)` zeroes the slot's regions too.
+export (`indexed_entry_copy` of the native recurrent tiles; reshape/permute to slab rows, then
+`indexed_entry_copy`, for convolution), the import (the same copies back into a native carry) and the
+host decoders (`recurrent_segment_to_torch`, `convolution_segment_to_torch`, `assemble_*`). Both take
+the slot as a device tensor and resolve batch `slot * L + layer_position` on device, so a captured
+load or store follows the slot in the traced metadata. The slabs are the KDA carries' only store:
+every K3 KDA layer loads its slot's carry from them and stores the replacement back inside the
+captured region, so the state a reader sees is the one after the last committed chunk, and it lands
+before any later MLA layer acks that chunk, and before the KDA layer's own ack. `zero_slot(slot)`
+zeroes the slot's regions.
 
 ## Reading it back
 
@@ -82,12 +85,13 @@ devices, so run it once per host of a multi-rank run.
 
 ## For the decode side
 
-* A KDA config is whole-state: a KDA layer run migrates one whole window, not `[0, real_len)`. With
-  `v = (real_len - 1) % 8`, the version decode reads next, the call is `[v * W, (v + 1) * W)` on both
-  sides (contract section 5), or source `[0, W)` to destination `[v * W, (v + 1) * W)` where the
-  caller can pass separate ranges. MLA and KDA layers need separate calls.
-  `KimiK3Adapter.layer_position_range` gives the in-repo migration driver these ranges: one call per
-  run of same-kind layers, and the byte verify walks the window it requested.
+* A KDA config is a whole-state `Snapshot`: a KDA layer run migrates the one window `[0, W)`, not
+  `[0, real_len)`, and the KV Manager moves that window whatever range the call names. Both sides must
+  tag configs 1 and 2 `Snapshot` and span one window, so decode runs one KDA state per user
+  (`TT_K3_KDA_STATE_SLOTS=1`). `KimiK3Adapter.layer_position_range` gives the in-repo migration driver
+  `[0, W)`: one call per run of consecutive layers with equal ranges, and the byte verify walks each
+  layer's own range. At `real_len == W` that range equals the MLA layers' `[0, real_len)`, so every
+  layer goes in one call; the Snapshot configs still move whole.
 * The state is a fold over the prefix, not position-addressed: decode must resume at exactly the
   prefilled length; replaying a chunk advances it twice.
 * Only the final state after the last chunk is meaningful; per-chunk copies are valid but wasted.

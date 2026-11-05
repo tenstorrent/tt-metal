@@ -905,12 +905,15 @@ struct MuxConnection {
     bool is_termination_master;
     uint8_t fabric_mux_x;
     uint8_t fabric_mux_y;
-    size_t fabric_mux_channel_base_address;
-    size_t fabric_mux_connection_info_address;
-    size_t fabric_mux_connection_handshake_address;
-    size_t fabric_mux_flow_control_address;
-    size_t fabric_mux_buffer_index_address;
+    size_t fabric_mux_channel_base_offset;
+    size_t fabric_mux_connection_info_offset;
+    size_t fabric_mux_connection_handshake_offset;
+    size_t fabric_mux_flow_control_offset;
+    size_t fabric_mux_buffer_index_offset;
     uint8_t fabric_mux_channel_id;
+    // The mux sits in program-local L1: the *_offset fields are offsets from this address, which the mux publishes
+    // once it is ready (build_and_connect reads it).
+    uint32_t fabric_mux_l1_base = 0;
 
     uint32_t termination_sync_address;
     uint32_t local_fabric_mux_status_address;
@@ -930,28 +933,29 @@ struct MuxConnection {
     tt::tt_fabric::WorkerToFabricMuxSender<NumBuffersPerChannel> connection;
 
     FORCE_INLINE tt::tt_fabric::WorkerToFabricMuxSender<NumBuffersPerChannel>* build_and_connect(
-        size_t fabric_mux_status_address) {
+        uint32_t fabric_mux_l1_base_semaphore_id) {
         if (!connection_valid) {
             return nullptr;
         }
 
-        connection = tt::tt_fabric::build_connection_to_fabric_endpoint<NumBuffersPerChannel>(
+        // Waits for the mux to be ready to accept connections.
+        connection = tt::tt_fabric::build_connection_to_program_local_fabric_mux<NumBuffersPerChannel>(
             fabric_mux_x,
             fabric_mux_y,
             fabric_mux_channel_id,
             NumBuffersPerChannel,
             ChannelBufferSizeBytes,
-            fabric_mux_channel_base_address,
-            fabric_mux_connection_info_address,
-            fabric_mux_connection_handshake_address,
-            fabric_mux_flow_control_address,
-            fabric_mux_buffer_index_address,
+            fabric_mux_l1_base_semaphore_id,
+            fabric_mux_channel_base_offset,
+            fabric_mux_connection_info_offset,
+            fabric_mux_connection_handshake_offset,
+            fabric_mux_flow_control_offset,
+            fabric_mux_buffer_index_offset,
             local_flow_control_address,
             local_teardown_address,
-            local_buffer_index_address);
-
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
-            fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
+            local_buffer_index_address,
+            local_fabric_mux_status_address,
+            fabric_mux_l1_base);
 
         tt::tt_fabric::fabric_client_connect(connection);
 
@@ -968,11 +972,11 @@ FORCE_INLINE MuxConnection<NumBuffersPerChannel, ChannelBufferSizeBytes> parse_m
     mux.is_termination_master = get_arg_val<uint32_t>(argidx++);
     mux.fabric_mux_x = get_arg_val<uint32_t>(argidx++);
     mux.fabric_mux_y = get_arg_val<uint32_t>(argidx++);
-    mux.fabric_mux_channel_base_address = get_arg_val<uint32_t>(argidx++);
-    mux.fabric_mux_connection_info_address = get_arg_val<uint32_t>(argidx++);
-    mux.fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(argidx++);
-    mux.fabric_mux_flow_control_address = get_arg_val<uint32_t>(argidx++);
-    mux.fabric_mux_buffer_index_address = get_arg_val<uint32_t>(argidx++);
+    mux.fabric_mux_channel_base_offset = get_arg_val<uint32_t>(argidx++);
+    mux.fabric_mux_connection_info_offset = get_arg_val<uint32_t>(argidx++);
+    mux.fabric_mux_connection_handshake_offset = get_arg_val<uint32_t>(argidx++);
+    mux.fabric_mux_flow_control_offset = get_arg_val<uint32_t>(argidx++);
+    mux.fabric_mux_buffer_index_offset = get_arg_val<uint32_t>(argidx++);
     mux.fabric_mux_channel_id = get_arg_val<uint32_t>(argidx++);
 
     mux.termination_sync_address = get_semaphore(get_arg_val<uint32_t>(argidx++));

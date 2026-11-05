@@ -6,17 +6,14 @@
 #include "fabric_host_utils.hpp"
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
-#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <vector>
 #include <algorithm>
 #include <cctype>
 #include <cstring>
-#include <stdexcept>
 #include <unordered_map>
 #include <set>
 #include <filesystem>

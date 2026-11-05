@@ -1,12 +1,13 @@
 # BEVFormer
 
 ## Platforms:
-    Blackhole (p100)
+    Blackhole (P100, P150)
 
 ## Introduction
-This directory runs BEVFormer-base end to end on device: six camera images through the
-ResNet101-DCN backbone and FPN, the perception transformer around the BEVFormer encoder, the
-detection decoder and the head with its NMS-free box coder, ending in 3D boxes.
+This directory runs BEVFormer end to end on device, base by default and tiny or small through the
+bundled configs in `config/`: six camera images through the ResNet backbone (ResNet101-DCN
+for base and small, ResNet50 for tiny) and FPN, the perception transformer around the BEVFormer
+encoder, the detection decoder and the head with its NMS-free box coder, ending in 3D boxes.
 
 BEVFormer learns a Bird's-Eye-View representation from multi-camera images with spatiotemporal
 transformers: a spatial cross-attention into the cameras and a temporal self-attention into the
@@ -14,53 +15,126 @@ previous frame's BEV.
 https://arxiv.org/abs/2203.17270
 
 ## Prerequisites
+
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
-## How to Run
-- Use the following command to run the detector end to end over two frames against the reference:
+## Demo
+
+The sequence demo accepts the model variant/config, checkpoint, and dataset independently. It runs
+one preparation frame followed by 10 output frames by default. From the repository root, a
+synthetic smoke run is:
+
 ```sh
-pytest --disable-warnings models/experimental/bevformer/tests/pcc/test_bevformer.py
+python -m models.experimental.bevformer.demo.demo \
+  --config models/experimental/bevformer/config/bevformer_tiny.json \
+  --checkpoint random \
+  --dataset-format synthetic \
+  --num-frames 10
 ```
 
-### Performance
-- For the detector's device ops, one live frame with a previous BEV between Tracy's `start` and
-  `stop` signposts:
+For a real sequence, pass the three independent inputs explicitly:
+
 ```sh
-python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py"
-tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop
+python -m models.experimental.bevformer.demo.demo \
+  --config /path/to/model.json \
+  --checkpoint /path/to/checkpoint.pth \
+  --checkpoint-format mmdet3d \
+  --dataset-format manifest \
+  --dataset /path/to/sequence.json \
+  --dataset-root /path/to/dataset \
+  --num-frames 10
 ```
+
+See [`demo/README.md`](demo/README.md) for the config and manifest schemas, metadata conversion,
+scene selection, score filtering, and output format.
+
+## Performance
+
+- For the detector's device ops, one frame with a previous BEV between Tracy's `start` and `stop`
+  signposts by default, live (`[live]`) or replayed from the demo's traces (`[trace]`). Set
+  `BEVFORMER_PERF_FRAMES=2` for two consecutive measured frames; the harness accepts only `1` or
+  `2`, and either run has one preparation frame outside the signposts. Profile one variant per
+  run, and add `--tracing-mode` to `tt-perf-report` for `[trace]`:
+
+```sh
+# Live: one measured frame, or two with BEVFORMER_PERF_FRAMES=2
+python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py::test_bevformer_perf[live]"
+BEVFORMER_PERF_FRAMES=2 python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py::test_bevformer_perf[live]"
+tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop
+
+# Replayed from traces
+python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py::test_bevformer_perf[trace]"
+tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop --tracing-mode
+```
+- See the demo's [recorded smoke results](demo/README.md#recorded-smoke-results) for ten-frame
+  end-to-end measurements of the bundled tiny, small and base configs. These wall-clock results
+  are separate from the Tracy harness above.
 - The per-stage harnesses in `tests/perf/` (`test_backbone_fpn_perf.py`, `test_decoder_perf.py`,
   `test_head_perf.py`) capture a trace and replay it once; add `--tracing-mode` to `tt-perf-report`.
   `test_encoder_perf.py`, `test_encoder_layer_perf.py` and `test_fused_msda_perf.py` run live.
 
 ## Testing
+
 - Use the following command to run every PCC test:
+
 ```sh
 pytest --disable-warnings models/experimental/bevformer/tests/pcc/
 ```
-- `test_resnet.py`: the ResNet101-DCN backbone's bottlenecks and layers against the reference.
-- `test_fpn.py`: the FPN neck on random C3-C5 in the dtypes the backbone emits.
+- `BEVFORMER_VARIANT=tiny|small|base` (default `base`) selects upstream's configuration, read once
+  from `config/bevformer_<variant>.json` when `model_config.py` is first imported. A normalized
+  local config can instead be selected with `BEVFORMER_CONFIG=/path/to/config.json`. The backbone
+  and FPN tests (`test_resnet.py`,
+  `test_fpn.py`, `test_backbone_fpn.py`), `test_perception_transformer.py`, `test_bevformer.py` and
+  the backbone and detector harnesses in `tests/perf/` run the selected variant;
+  `test_perception_transformer.py` keeps fixed BEV grids, and the other tests' `*_base` and `*_tiny`
+  presets are fixed sizes.
+- `test_resnet.py`: the backbone's bottlenecks and layers against the reference.
+- `test_fpn.py`: the FPN neck on random backbone outputs in the dtypes the backbone emits.
 - `test_backbone_fpn.py`: camera images through the backbone and the FPN end to end.
-- `test_ms_deformable_attention.py`, `test_fused_msda.py`: the deformable attention module and the fused MSDA op.
+- `test_ms_deformable_attention.py`, `test_fused_msda.py`: the deformable attention module, with each
+  of its attention-weight softmaxes, and the fused MSDA op.
 - `test_point_sampling_3d_2d.py`: the BEV pillars' projection into the cameras and the visibility mask.
-- `test_temporal_self_attention.py`: the temporal self-attention, batch-first and sequence-first.
-- `test_spatial_cross_attention.py`: the spatial cross-attention with its per-camera rebatch.
+- `test_temporal_self_attention.py`: the temporal self-attention, batch-first and sequence-first;
+  a previous BEV with per-sample ego shifts (bs 1 and 2, up to highway speed), with the
+  intermediates around the fused op in L1 or DRAM; the grouped softmax the deformable attention
+  modules share.
+- `test_spatial_cross_attention.py`: the spatial cross-attention with its per-camera rebatch, with
+  the intermediates around the fused op in L1 or DRAM, and the device-built rebatch plan against
+  a host build and its capacity over frame sequences.
 - `test_encoder.py`: the encoder on several presets and layer counts.
 - `test_perception_transformer.py`: the encoder's glue over consecutive frames with ego motion.
 - `test_decoder.py`: the six-layer detection decoder and its reference-point refinement.
 - `test_head.py`: the detection head, and the coder on its outputs.
 - `test_nms_free_coder.py`: the box coder's exact top-k, decoding and filters.
-- `test_bevformer.py`: the detector end to end over two frames.
+- `test_bevformer.py`: the detector end to end over two frames against the reference. Run it
+  independently with:
+
+```sh
+pytest --disable-warnings models/experimental/bevformer/tests/pcc/test_bevformer.py
+```
+- `tests/e2e/test_bevformer_trace.py`: the demo's pipelined path, two command queues with host
+  inputs prepared ahead, against the same detector run live, frame by frame: replays at changing
+  counts, a frame no camera sees, and the plan grown both within a frame and between frames, each
+  followed by a recapture. It runs the selected variant and is not part of `tests/pcc/`, as its
+  cold run compiles every kernel again for the two-queue grid:
+
+```sh
+pytest models/experimental/bevformer/tests/e2e/test_bevformer_trace.py
+```
 
 ## Project Structure
 
 ```
 models/experimental/bevformer/
-├── model_config.py     # BEVFormer-base's configuration and the port's precision and memory choices
+├── config/             # Validated tiny, small and base inference configs and their loader
+├── demo/               # Sequence CLI, checkpoint and dataset adapters
+├── model_config.py     # Compatibility facade plus the port's precision and memory choices
 ├── reference/          # PyTorch reference implementation
 ├── tests/
-│   ├── common.py       # Test helpers: camera rigs, dataset presets, dummy weights, random inputs
+│   ├── common.py       # Test helpers: dataset presets, dummy weights and random inputs
+│   ├── e2e/            # The detector replayed from traces against the live detector
+│   ├── fixtures/       # Deterministic synthetic camera geometry used only by tests
 │   ├── pcc/            # Unit tests for individual components
 │   └── perf/           # Device-perf harnesses, one per stage and one for the detector
 └── tt/                 # TTNN implementation; model_preprocessing.py prepares every part's parameters
@@ -68,7 +142,7 @@ models/experimental/bevformer/
 
 ## Model Structure
 
-BEVFormer-base's PyTorch reference (`reference/bevformer.py`, `build_bevformer_base(200, 200)`), the
+BEVFormer-base's PyTorch reference (`reference/bevformer.py`, `build_bevformer()` by default), the
 repeated bottlenecks folded.
 
 ```
@@ -300,7 +374,10 @@ tt/model_preprocessing.py
 - Entry point for the model is `TTBEVFormer` in `models/experimental/bevformer/tt/tt_bevformer.py`;
   `tt/model_preprocessing.py` prepares its parameters from the reference.
 - Batch size: 1
-- Input: 6 cameras at 1600x900, padded to 1600x928
-- BEV grid: 200x200; 900 object queries; up to 300 boxes per frame
-- The encoder reads the cameras' visibility on the host inside its forward, so the detector runs
-  live, not under a trace.
+- Input (base): 6 cameras at 1600x900, padded to 1600x928; small and tiny scale them by 0.8 and 0.5
+  (`VARIANTS` in `model_config.py`)
+- BEV grid (base): 200x200, small 150x150, tiny 50x50; 900 object queries; up to 300 boxes per frame
+- Preparing a frame projects the cameras on device and reads back only their visible counts, which
+  size the spatial cross-attention's rebatch plan; the plan's shapes follow a capacity that only
+  grows. `tt/tt_bevformer_trace.py` replays the detector from three traces around that readback,
+  capturing them again when the capacity grows (the demo's `--trace`).
