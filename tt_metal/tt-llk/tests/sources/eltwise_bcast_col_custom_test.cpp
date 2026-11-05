@@ -269,7 +269,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, PERF_ADDRESS(PERF_OUTPUT, tile));
                 }
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                // Wormhole: the isolate loops also release the dest section as production's tile_regs_release does
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_PACK_SECTION_RELEASE)
                 {
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
