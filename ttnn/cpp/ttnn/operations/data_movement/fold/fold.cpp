@@ -34,7 +34,8 @@ std::vector<Tensor> fold_with_transpose_(
     uint32_t stride_w,
     uint32_t pad_c,
     uint32_t pad_h,
-    uint32_t pad_w) {
+    uint32_t pad_w,
+    const std::optional<MemoryConfig>& override_memory_config) {
     using namespace tt::constants;
 
     // Get the device
@@ -115,6 +116,17 @@ std::vector<Tensor> fold_with_transpose_(
         log_debug(tt::LogOp, "slice_output: {}", slice_output.logical_shape());
     } else {
         output_tensors.emplace_back(transpose_hc_output2);
+    }
+
+    // The whole chain stages through L1, so move each result to the caller's requested config when
+    // one is given, and otherwise back to the input's own config (matching the prim route, which
+    // returns in the input's placement).
+    const auto& result_mem_config =
+        override_memory_config.has_value() ? override_memory_config.value() : input.memory_config();
+    for (auto& output_tensor : output_tensors) {
+        if (result_mem_config != output_tensor.memory_config()) {
+            output_tensor = ttnn::to_memory_config(output_tensor, result_mem_config, std::nullopt);
+        }
     }
 
     return output_tensors;
@@ -466,7 +478,7 @@ Tensor fold(
                 .at(0);
         }
         return operations::data_movement::fold_with_transpose_(
-                   input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w)
+                   input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w, override_memory_config)
             .at(0);
     }
     // Shared with select_program_factory; TILE branch is untilized below before prim dispatch.
