@@ -14,7 +14,8 @@
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/device/kernels/attn_res_block_mix_items.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/device/kernels/attn_res_block_mix_partials.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/device/kernels/attn_res_tile_columns.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/tile_column_dataflow.hpp"
 
 void kernel_main() {
     constexpr uint32_t num_sites = get_named_compile_time_arg_val("num_sites");
@@ -50,21 +51,18 @@ void kernel_main() {
     auto mass_accessor = TensorAccessor(mass_args, get_common_arg_val<uint32_t>(3));
 
     // Zeroed once: only column 0 of a staging tile is ever rewritten, so its padding reads
-    // as zero for every page written from it.
-    {
-        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging_base);
-        for (uint32_t i = 0; i < num_open_sites * scalar_tile_bytes / sizeof(uint32_t); ++i) {
-            words[i] = 0;
-        }
-    }
+    // as zero for every page written from it. With RISC-V stores, not NoC zero reads: those
+    // share this core's NoC port with the reader's first candidate reads, and at tens of KB
+    // they hold up the first run.
+    dataflow_kernel_lib::fill_l1_range<sizeof(uint32_t)>(staging_base, num_open_sites * scalar_tile_bytes, 0);
 
     // Every open site's column of a row's shift or mass tile, each as column 0 of page
     // r * Ht + row, r counted among the open sites. A closed site's read is already whole.
     auto scatter_scalar = [&](CircularBuffer& src_obj, const auto& accessor, uint32_t row) {
         src_obj.wait_front(1);
         for (uint32_t r = 0; r < num_open_sites; ++r) {
-            copy_column_to_column0<uint32_t>(
-                src_obj.get_read_ptr(), staging_base + r * scalar_tile_bytes, 1 + num_closed_sites + r);
+            dataflow_kernel_lib::copy_tile_column<cb_staging, uint32_t>(
+                src_obj.get_read_ptr(), 1 + num_closed_sites + r, staging_base + r * scalar_tile_bytes, 0);
             noc.async_write(
                 cb_staging_obj,
                 accessor,

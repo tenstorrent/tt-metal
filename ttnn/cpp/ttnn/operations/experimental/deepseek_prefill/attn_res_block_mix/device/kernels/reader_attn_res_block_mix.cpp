@@ -15,7 +15,8 @@
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/device/kernels/attn_res_block_mix_items.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/device/kernels/attn_res_block_mix_partials.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/device/kernels/attn_res_tile_columns.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/tile_column_dataflow.hpp"
 
 void kernel_main() {
     constexpr uint32_t num_candidates = get_named_compile_time_arg_val("num_candidates");
@@ -57,25 +58,19 @@ void kernel_main() {
     if constexpr (num_closed_sites > 0) {
         // 1.0f in every row of a closed site's column (1 + r for site r), 0 elsewhere. Compute
         // holds it for every row.
-        constexpr uint32_t kFaceDim = 16;
         CircularBuffer cb_mask_obj(cb_closed_mask);
         cb_mask_obj.reserve_back(1);
-        auto* mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_mask_obj.get_write_ptr());
-        for (uint32_t i = 0; i < stats_tile_bytes / sizeof(uint32_t); ++i) {
-            mask[i] = 0;
-        }
+        dataflow_kernel_lib::zero_tile(cb_mask_obj);
         for (uint32_t col = 1; col <= num_closed_sites; ++col) {
-            for (uint32_t row = 0; row < 2 * kFaceDim; ++row) {
-                const uint32_t face = (row / kFaceDim) * 2 + col / kFaceDim;
-                mask[(face * kFaceDim + row % kFaceDim) * kFaceDim + col % kFaceDim] = 0x3F800000;
-            }
+            dataflow_kernel_lib::fill_tile_column<cb_closed_mask, uint32_t>(
+                cb_mask_obj.get_write_ptr(), col, 0x3F800000);
         }
         cb_mask_obj.push_back(1);
     }
 
     for_each_attn_res_block_mix_item([&](const AttnResBlockMixItem& item) {
-        // The row's statistics, candidate-major with the partials innermost: a candidate's
-        // partials are adjacent pages.
+        // The row's statistics, partial-major: one tensor-parallel rank's statistics for every
+        // candidate are adjacent, which is the window compute's partial sum reads at a time.
         cb_stats_obj.reserve_back(num_candidates * num_partials);
         for (uint32_t c = 0; c < num_candidates; ++c) {
             for (uint32_t p = 0; p < num_partials; ++p) {
@@ -84,7 +79,7 @@ void kernel_main() {
                     cb_stats_obj,
                     stats_tile_bytes,
                     {.page_id = (c * Ht + item.row) * num_partials + p},
-                    {.offset_bytes = (c * num_partials + p) * stats_tile_bytes});
+                    {.offset_bytes = (p * num_candidates + c) * stats_tile_bytes});
             }
         }
         noc.async_read_barrier();
@@ -134,10 +129,11 @@ void kernel_main() {
             const uint32_t weights_base = cb_weights_obj.get_write_ptr();
             for (uint32_t s = 0; s < sites; ++s) {
                 for (uint32_t c = 0; c < num_candidates; ++c) {
-                    copy_column_to_column0<uint16_t>(
+                    dataflow_kernel_lib::copy_tile_column<cb_weights, uint16_t>(
                         exp_base + c * value_tile_bytes,
+                        1 + first_site + s,
                         weights_base + (s * num_candidates + c) * value_tile_bytes,
-                        1 + first_site + s);
+                        0);
                 }
             }
             if (group == 0) {

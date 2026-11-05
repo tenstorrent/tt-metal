@@ -15,6 +15,9 @@
 //   e_c      = exp(scores_c - shift)
 //   mass     = sum_c e_c
 //
+// Each step is an eltwise chain. The folds across partials and candidates (the sum, max and
+// mass) are one dest session apiece, in fp32 dest on the SFPU; see attn_res_score_chain.hpp.
+//
 // A closed site has no live stream to fold in, so its weights are e_c / mass and its partial
 // is the read's value.
 //
@@ -23,22 +26,27 @@
 // DRAM once and stay in their buffer until every site group has used them.
 
 #include "api/compute/bcast.h"
-#include "api/compute/binary_max_min.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/exp.h"
-#include "api/compute/eltwise_unary/recip.h"
-#include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/attn_res_bcast_mac.hpp"
+#include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/minmax.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/attn_res_score_chain.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/device/kernels/attn_res_block_mix_items.hpp"
 
 using namespace ckernel;
+using namespace compute_kernel_lib;
+using attn_res::eltwise_chain_of;
+using attn_res::owning_tile_at;
+using attn_res::tile_at;
+using attn_res::unroll;
 
 namespace {
 
@@ -68,197 +76,138 @@ constexpr uint32_t eps = get_named_compile_time_arg_val("eps");
 constexpr uint32_t sites_per_group = get_named_compile_time_arg_val("sites_per_group");
 constexpr uint32_t num_groups = get_named_compile_time_arg_val("num_groups");
 constexpr uint32_t num_closed_sites = get_named_compile_time_arg_val("num_closed_sites");
+constexpr bool has_closed_sites = num_closed_sites > 0;
 constexpr uint32_t kOne = 0x3F800000;  // 1.0f
 
-constexpr uint32_t dst_a = 0;
-constexpr uint32_t dst_b = 1;
-constexpr uint32_t dst_c = 2;
+using Buffer = DataflowBufferFor<dfb::AccessPattern::UNKNOWN, dfb::AccessPattern::UNKNOWN>;
 
-// One dest session per candidate: `body(c)` computes into dst_a, which is packed to `out`.
-template <typename Body>
-ALWI void per_candidate(uint32_t out, Body body) {
-    for (uint32_t c = 0; c < num_candidates; ++c) {
-        tile_regs_acquire();
-        body(c);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst_a, out);
-        tile_regs_release();
-    }
-}
+// The scoring's buffers, bound once for every chain that reads or writes them.
+struct ScoreBuffers {
+    Buffer stats{cb_stats};
+    Buffer summed{cb_summed};
+    Buffer rr{cb_rr};
+    Buffer scores{cb_scores};
+    Buffer shift{cb_shift};
+    Buffer shift_out{cb_shift_out};
+    Buffer mass{cb_mass};
+    Buffer mass_out{cb_mass_out};
+    Buffer closed_mask{cb_closed_mask};
+    Buffer factor{cb_factor};
+    Buffer exp{cb_exp};
+};
 
-// `scores_c - shift`, exponentiated, in `dst`. `dst_b` holds the shift.
-ALWI void centred_exp(uint32_t c, uint32_t dst) {
-    copy_tile(cb_scores, c, dst);
-    sub_binary_tile_init();
-    sub_binary_tile(dst, dst_b, dst);
-    exp_tile_init();
-    exp_tile(dst);
+// `scores_c - shift`, exponentiated, into `Slot`. D1 holds the shift.
+template <Dst Slot>
+ALWI auto centred_exp(Buffer& scores, uint32_t c) {
+    return std::make_tuple(
+        CopyTile<tile_at(cb_scores), Slot>{scores, c}, SubBinary<Slot, Dst::D1, Slot>{}, Exp<Approx::Exact, Slot>{});
 }
 
 // Per site, what its exponentials are scaled by: 1 / mass in a closed site's column, 1 in
 // the rest. The mask is 1 in the closed sites' columns and 0 elsewhere.
-void closed_site_factor() {
-    CircularBuffer cb_mass_obj(cb_mass);
-    CircularBuffer cb_factor_obj(cb_factor);
-
-    cb_mass_obj.wait_front(1);
-    cb_factor_obj.reserve_back(1);
-    pack_reconfig_data_format(cb_factor);
-    tile_regs_acquire();
-    copy_init(cb_mass);
-    copy_tile(cb_mass, 0, dst_a);
-    recip_tile_init();
-    recip_tile(dst_a);
-    binop_with_scalar_tile_init();
-    sub_unary_tile(dst_a, kOne);
-    copy_tile(cb_closed_mask, 0, dst_b);
-    mul_binary_tile_init();
-    mul_binary_tile(dst_a, dst_b, dst_a);
-    binop_with_scalar_tile_init();
-    add_unary_tile(dst_a, kOne);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(dst_a, cb_factor);
-    tile_regs_release();
-    cb_factor_obj.push_back(1);
-    cb_mass_obj.pop_front(1);
+void closed_site_factor(ScoreBuffers& b) {
+    eltwise_chain(
+        IterationShape::one_tile(),
+        CopyTile<input(cb_mass, WaitPolicy::Upfront, PopPolicy::AtEnd)>{b.mass},
+        Recip<>{},
+        SubUnary<>{kOne},
+        CopyTile<input(cb_closed_mask, WaitPolicy::None, PopPolicy::None), Dst::D1>{b.closed_mask},
+        MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
+        AddUnary<>{kOne},
+        PackTile<output(cb_factor)>{b.factor});
 }
 
 // The row's exponentials (packed, one tile per candidate) for the writer to spread into
 // per-site weights, and its shift and mass for the writer to scatter.
-void score_row() {
-    CircularBuffer cb_stats_obj(cb_stats);
-    CircularBuffer cb_rr_obj(cb_rr);
-    CircularBuffer cb_scores_obj(cb_scores);
-    CircularBuffer cb_shift_obj(cb_shift);
-    CircularBuffer cb_summed_obj(cb_summed);
-    CircularBuffer cb_exp_obj(cb_exp);
-    CircularBuffer cb_shift_out_obj(cb_shift_out);
-    CircularBuffer cb_mass_out_obj(cb_mass_out);
-    CircularBuffer cb_mass_obj(cb_mass);
-
-    // The previous run left both unpackers on the mixture's bf16 operands, and copy_init
-    // does not reconfigure formats.
-    reconfig_data_format(cb_stats, cb_summed);
-    pack_reconfig_data_format(cb_summed);
-
-    // The statistics, summed across ranks in fp32 dest.
-    cb_stats_obj.wait_front(num_candidates * num_partials);
-    cb_summed_obj.reserve_back(num_candidates);
-    copy_init(cb_stats);
-    per_candidate(cb_summed, [](uint32_t c) {
-        copy_tile(cb_stats, c * num_partials, dst_a);
-        for (uint32_t p = 1; p < num_partials; ++p) {
-            copy_tile(cb_stats, c * num_partials + p, dst_b);
-            add_binary_tile_init();
-            add_binary_tile(dst_a, dst_b, dst_a);
-        }
-    });
-    cb_summed_obj.push_back(num_candidates);
-    cb_stats_obj.pop_front(num_candidates * num_partials);
+void score_row(ScoreBuffers& b) {
+    // The statistics, summed across ranks in fp32 dest. The reader lays them out
+    // partial-major, so partial p of every candidate is the window at p * C; the last
+    // partial's read waits for the whole set and pops it.
+    eltwise_chain_of(
+        IterationShape::tiles(num_candidates),
+        unroll<num_partials>([&](auto p) {
+            constexpr bool last = p == num_partials - 1;
+            constexpr auto spec = input(
+                cb_stats,
+                last ? WaitPolicy::Upfront : WaitPolicy::None,
+                last ? PopPolicy::AtEnd : PopPolicy::None,
+                InputTileMapping::Block,
+                DataFormatReconfig::Enabled,
+                TileAddressing::Offset);
+            if constexpr (p == 0) {
+                return std::make_tuple(CopyTile<spec, Dst::D0>{b.stats, 0});
+            } else {
+                return std::make_tuple(
+                    CopyTile<spec, Dst::D1>{b.stats, p * num_candidates}, AddBinary<Dst::D0, Dst::D1, Dst::D0>{});
+            }
+        }),
+        std::make_tuple(PackTile<output(cb_summed)>{b.summed}));
 
     // Reciprocal RMS per candidate. Only column 0 means anything.
-    cb_summed_obj.wait_front(num_candidates);
-    cb_rr_obj.reserve_back(num_candidates);
-    copy_init(cb_summed);
-    per_candidate(cb_rr, [](uint32_t c) {
-        copy_tile(cb_summed, c, dst_a);
-        binop_with_scalar_tile_init();
-        mul_unary_tile(dst_a, inv_hidden_size);
-        add_unary_tile(dst_a, eps);
-        rsqrt_tile_init();
-        rsqrt_tile(dst_a);
-    });
-    cb_rr_obj.push_back(num_candidates);
+    eltwise_chain(
+        IterationShape::tiles(num_candidates),
+        CopyTile<input(cb_summed, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block)>{b.summed},
+        MulUnary<>{inv_hidden_size},
+        AddUnary<>{eps},
+        Rsqrt<>{},
+        PackTile<output(cb_rr)>{b.rr});
 
     // Scores: every column of a candidate's statistics scaled by its column 0. An SFPU
     // product in fp32, so the mixture's math fidelity never reaches the scores.
-    cb_rr_obj.wait_front(num_candidates);
-    cb_scores_obj.reserve_back(num_candidates);
-    per_candidate(cb_scores, [](uint32_t c) {
-        copy_init(cb_summed);
-        copy_tile(cb_summed, c, dst_a);
-        unary_bcast_init<BroadcastType::COL>(cb_rr);
-        unary_bcast<BroadcastType::COL>(cb_rr, c, dst_b);
-        unary_bcast_uninit<BroadcastType::COL>(cb_rr);
-        mul_binary_tile_init();
-        mul_binary_tile(dst_a, dst_b, dst_a);
-    });
-    cb_scores_obj.push_back(num_candidates);
-    cb_rr_obj.pop_front(num_candidates);
-    cb_summed_obj.pop_front(num_candidates);
+    eltwise_chain(
+        IterationShape::tiles(num_candidates),
+        CopyTile<input(cb_summed, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block)>{b.summed},
+        UnaryBcast<
+            BroadcastDim::Col,
+            input(cb_rr, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
+            Dst::D1>{b.rr},
+        MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
+        PackTile<output(cb_scores)>{b.scores});
 
     // The shift, packed twice: compute reads it back below, and a circular buffer has a
-    // single consumer.
-    cb_scores_obj.wait_front(num_candidates);
-    cb_shift_obj.reserve_back(1);
-    cb_shift_out_obj.reserve_back(1);
-    copy_init(cb_scores);
-    tile_regs_acquire();
-    copy_tile(cb_scores, 0, dst_a);
-    for (uint32_t c = 1; c < num_candidates; ++c) {
-        copy_tile(cb_scores, c, dst_b);
-        binary_max_tile_init();
-        binary_max_tile(dst_a, dst_b, dst_a);
-    }
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(dst_a, cb_shift);
-    pack_tile(dst_a, cb_shift_out);
-    tile_regs_release();
-    cb_shift_obj.push_back(1);
-    cb_shift_out_obj.push_back(1);
+    // single consumer. The last candidate's read waits for every score; they stay for the
+    // exponentials.
+    eltwise_chain_of(
+        IterationShape::one_tile(),
+        unroll<num_candidates>([&](auto c) {
+            constexpr auto spec =
+                c == num_candidates - 1 ? owning_tile_at(cb_scores, PopPolicy::None) : tile_at(cb_scores);
+            if constexpr (c == 0) {
+                return std::make_tuple(CopyTile<spec, Dst::D0>{b.scores, 0});
+            } else {
+                return std::make_tuple(CopyTile<spec, Dst::D1>{b.scores, c}, BinaryMax<Dst::D0, Dst::D1, Dst::D0>{});
+            }
+        }),
+        std::make_tuple(PackTile<output(cb_shift)>{b.shift}, PackTile<output(cb_shift_out)>{b.shift_out}));
 
     // The mass, summed in fp32 dest from the exponentials: recomputing them below is a few
     // SFPU passes, where the packed ones are bf16 and drained by the reader.
-    cb_shift_obj.wait_front(1);
-    cb_mass_out_obj.reserve_back(1);
-    if constexpr (num_closed_sites > 0) {
-        cb_mass_obj.reserve_back(1);
-    }
-    pack_reconfig_data_format(cb_mass_out);
-    tile_regs_acquire();
-    copy_tile(cb_shift, 0, dst_b);
-    centred_exp(0, dst_a);
-    for (uint32_t c = 1; c < num_candidates; ++c) {
-        centred_exp(c, dst_c);
-        add_binary_tile_init();
-        add_binary_tile(dst_a, dst_c, dst_a);
-    }
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(dst_a, cb_mass_out);
-    if constexpr (num_closed_sites > 0) {
-        pack_tile(dst_a, cb_mass);
-    }
-    tile_regs_release();
-    cb_mass_out_obj.push_back(1);
+    eltwise_chain_of(
+        IterationShape::one_tile(),
+        std::make_tuple(CopyTile<input(cb_shift, WaitPolicy::Upfront, PopPolicy::None), Dst::D1>{b.shift}),
+        centred_exp<Dst::D0>(b.scores, 0),
+        unroll<num_candidates - 1>([&](auto c) {
+            return std::tuple_cat(
+                centred_exp<Dst::D2>(b.scores, c + 1), std::make_tuple(AddBinary<Dst::D0, Dst::D2, Dst::D0>{}));
+        }),
+        std::make_tuple(
+            PackTile<output(cb_mass_out)>{b.mass_out}, Optional<has_closed_sites, PackTile<output(cb_mass)>>{b.mass}));
 
-    if constexpr (num_closed_sites > 0) {
-        cb_mass_obj.push_back(1);
-        closed_site_factor();
+    if constexpr (has_closed_sites) {
+        closed_site_factor(b);
     }
 
     // The exponentials, in the weights' dtype; a closed site's over its mass.
-    cb_exp_obj.reserve_back(num_candidates);
-    pack_reconfig_data_format(cb_exp);
-    per_candidate(cb_exp, [](uint32_t c) {
-        copy_tile(cb_shift, 0, dst_b);
-        centred_exp(c, dst_a);
-        if constexpr (num_closed_sites > 0) {
-            copy_tile(cb_factor, 0, dst_c);
-            mul_binary_tile_init();
-            mul_binary_tile(dst_a, dst_c, dst_a);
-        }
-    });
-    cb_exp_obj.push_back(num_candidates);
-
-    if constexpr (num_closed_sites > 0) {
-        CircularBuffer(cb_factor).pop_front(1);
-    }
-    cb_shift_obj.pop_front(1);
-    cb_scores_obj.pop_front(num_candidates);
+    eltwise_chain(
+        IterationShape::tiles(num_candidates),
+        CopyTile<input(cb_shift, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>{b.shift},
+        CopyTile<input(cb_scores, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block)>{b.scores},
+        SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
+        Exp<>{},
+        Optional<has_closed_sites, CopyTile<input(cb_factor, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D2>>{
+            b.factor},
+        Optional<has_closed_sites, MulBinary<Dst::D0, Dst::D2, Dst::D0>>{},
+        PackTile<output(cb_exp)>{b.exp});
 }
 
 // Every site's partial over the run, a site group at a time: one accumulator per site of the
@@ -272,7 +221,7 @@ void mix_run(uint32_t num_tiles) {
 
     // acc_to_dest turns each broadcast multiply into a MAC against its accumulator. The
     // accumulators start at zero: the packer clears a dest section on every release.
-    attn_res_mul_bcast_cols_acc_init(cb_values, cb_weights);
+    mul_bcast_cols_init(cb_values, cb_weights, true /*acc_to_dest*/);
     reconfig_data_format(cb_values, cb_weights);
     pack_reconfig_data_format(cb_partials);
 
@@ -309,12 +258,13 @@ void mix_run(uint32_t num_tiles) {
 
 void kernel_main() {
     compute_kernel_hw_startup(cb_stats, cb_summed, cb_scores);
-    if constexpr (num_closed_sites > 0) {
+    ScoreBuffers buffers;
+    if constexpr (has_closed_sites) {
         // Built once by the reader and held for every row.
-        CircularBuffer(cb_closed_mask).wait_front(1);
+        buffers.closed_mask.wait_front(1);
     }
-    for_each_attn_res_block_mix_item([](const AttnResBlockMixItem& item) {
-        score_row();
+    for_each_attn_res_block_mix_item([&](const AttnResBlockMixItem& item) {
+        score_row(buffers);
         mix_run(item.num_tiles());
     });
 }

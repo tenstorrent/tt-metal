@@ -27,25 +27,28 @@
 // statistics are parked, so no tile can fold before all of them have been produced.
 
 #include "api/compute/bcast.h"
-#include "api/compute/binary_max_min.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/exp.h"
-#include "api/compute/eltwise_unary/recip.h"
-#include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/reduce.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/minmax.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/attn_res_bcast_mac.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/attn_res_core_runs.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/attn_res_score_chain.hpp"
 
 using namespace ckernel;
+using namespace compute_kernel_lib;
+using attn_res::eltwise_chain_of;
+using attn_res::owning_tile_at;
+using attn_res::tile_at;
+using attn_res::unroll;
 
 namespace {
 
@@ -88,11 +91,22 @@ constexpr uint32_t kRowWeights = 2;
 constexpr uint32_t kStatsPerRow = 2;
 constexpr uint32_t onetile = 1;
 
-constexpr uint32_t dst_a = 0;
-constexpr uint32_t dst_b = 1;
-constexpr uint32_t dst_den = 2;
-constexpr uint32_t dst_max = 3;
 constexpr uint32_t dst_acc = 0;
+
+// The fold's dest registers while it derives the row weights.
+constexpr Dst dst_a = Dst::D0;
+constexpr Dst dst_b = Dst::D1;
+constexpr Dst dst_den = Dst::D2;
+constexpr Dst dst_max = Dst::D3;
+
+using Buffer = DataflowBufferFor<dfb::AccessPattern::UNKNOWN, dfb::AccessPattern::UNKNOWN>;
+
+// Scalar k of a row's set, read at offset k. The last one waits for the whole set, and pops
+// it once the row weights are out.
+template <uint32_t k>
+constexpr InputSpec scalar_at() {
+    return k == kScalars - 1 ? owning_tile_at(cb_scalars, PopPolicy::AtEnd) : tile_at(cb_scalars);
+}
 
 // The reduce drains `cb_tmp`, so the same buffer carries both transforms of the
 // run: fill it, reduce it, fill it again. `init` re-establishes the unpack and
@@ -154,33 +168,27 @@ ALWI void settle_run(PrefixDFB& prefix_buf, PendingDFB& pending_buf, TotalDFB& t
     pending_buf.pop_front(chunk_tiles);
 }
 
-// A row leader's: its own pair plus the row's other chunks', summed in fp32 dest.
-void sum_row_stats() {
-    CircularBuffer cb_local_obj(cb_local_stats);
-    CircularBuffer cb_chunk_obj(cb_chunk_stats);
-    CircularBuffer cb_row_obj(cb_row_stats);
-
-    cb_local_obj.wait_front(kStatsPerRow);
-    cb_chunk_obj.wait_front(kStatsPerRow * (chunks_per_row - 1));
-    cb_row_obj.reserve_back(kStatsPerRow);
-    copy_init(cb_local_stats);
-    pack_reconfig_data_format(cb_row_stats);
-    for (uint32_t s = 0; s < kStatsPerRow; ++s) {
-        tile_regs_acquire();
-        copy_tile(cb_local_stats, s, dst_a);
-        add_binary_tile_init();
-        for (uint32_t c = 1; c < chunks_per_row; ++c) {
-            copy_tile(cb_chunk_stats, kStatsPerRow * (c - 1) + s, dst_b);
-            add_binary_tile(dst_a, dst_b, dst_a);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst_a, cb_row_stats);
-        tile_regs_release();
-    }
-    cb_row_obj.push_back(kStatsPerRow);
-    cb_chunk_obj.pop_front(kStatsPerRow * (chunks_per_row - 1));
-    cb_local_obj.pop_front(kStatsPerRow);
+// A row leader's: its own pair plus the row's other chunks', summed in fp32 dest. Chunk c's
+// pair is the window at 2 * (c - 1); the last chunk's read waits for every pair and pops them.
+void sum_row_stats(Buffer& local_stats, Buffer& chunk_stats, Buffer& row_stats) {
+    eltwise_chain_of(
+        IterationShape::tiles(kStatsPerRow),
+        std::make_tuple(
+            CopyTile<input(cb_local_stats, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block), dst_a>{
+                local_stats}),
+        unroll<chunks_per_row - 1>([&](auto i) {
+            constexpr bool last = i == chunks_per_row - 2;
+            constexpr auto spec = input(
+                cb_chunk_stats,
+                last ? WaitPolicy::Upfront : WaitPolicy::None,
+                last ? PopPolicy::AtEnd : PopPolicy::None,
+                InputTileMapping::Block,
+                DataFormatReconfig::Enabled,
+                TileAddressing::Offset);
+            return std::make_tuple(
+                CopyTile<spec, dst_b>{chunk_stats, kStatsPerRow * i}, AddBinary<dst_a, dst_b, dst_a>{});
+        }),
+        std::make_tuple(PackTile<output(cb_row_stats)>{row_stats}));
 }
 
 // The scalars live in column 0 of their tile — the only column BroadcastType::COL
@@ -189,85 +197,60 @@ void sum_row_stats() {
 //
 // The gather leaves `cb_scalars` rank-major, which is the layout this reads it in;
 // nothing is reordered on arrival.
-void derive_row_weights(CircularBuffer& cb_row_obj) {
+void derive_row_weights(Buffer& scalars, Buffer& row) {
     // Full re-init (hw_configure + pack_dest/math_pack_sync), matching the removed unary_op_init_common.
     // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
     // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup(cb_scalars, cb_row);
-    copy_init(cb_scalars);
 
-    tile_regs_acquire();
     // The live score, from the statistics up:
     //
     //   live_scores = dots * rsqrt(sum_squares * inv_hidden_size + eps)
     //
     // summed across ranks first. `dst_a` is the only register free until the
-    // sums collapse, so each rank's tiles land there one at a time.
-    copy_tile(cb_scalars, kFixedScalars, dst_den);
-    copy_tile(cb_scalars, kFixedScalars + 1, dst_b);
+    // sums collapse, so each rank's tiles land there one at a time. Then the fold of the live
+    // score into the carried shift and mass, as two weights: the carried prefix's and the
+    // live stream's.
+    eltwise_chain_of(
+        IterationShape::one_tile(),
+        std::make_tuple(
+            CopyTile<scalar_at<kFixedScalars>(), dst_den>{scalars, kFixedScalars},
+            CopyTile<scalar_at<kFixedScalars + 1>(), dst_b>{scalars, kFixedScalars + 1}),
+        unroll<num_partials - 1>([&](auto i) {
+            constexpr uint32_t sum_squares = kFixedScalars + kStatsPerPartial * (i + 1);
+            return std::make_tuple(
+                CopyTile<scalar_at<sum_squares>(), dst_a>{scalars, sum_squares},
+                AddBinary<dst_den, dst_a, dst_den>{},
+                CopyTile<scalar_at<sum_squares + 1>(), dst_a>{scalars, sum_squares + 1},
+                AddBinary<dst_b, dst_a, dst_b>{});
+        }),
+        std::make_tuple(
+            MulUnary<dst_den>{inv_hidden_size},
+            AddUnary<dst_den>{eps},
+            Rsqrt<Approx::Exact, dst_den>{},
+            MulBinary<dst_b, dst_den, dst_b>{},
+            CopyTile<scalar_at<0>(), dst_a>{scalars, 0},
+            CopyTile<scalar_at<1>(), dst_den>{scalars, 1},
+            BinaryMax<dst_a, dst_b, dst_max>{},
+            SubBinary<dst_a, dst_max, dst_a>{},
+            SubBinary<dst_b, dst_max, dst_b>{},
+            Exp<Approx::Exact, dst_a>{},
+            Exp<Approx::Exact, dst_b>{},
+            MulBinary<dst_den, dst_a, dst_den>{},
+            AddBinary<dst_den, dst_b, dst_den>{},
+            Recip<dst_den>{},
+            MulBinary<dst_a, dst_den, dst_a>{},
+            MulBinary<dst_b, dst_den, dst_b>{},
+            PackTile<output(cb_row), dst_a>{row},
+            PackTile<output(cb_row), dst_b>{row}));
 
-    if constexpr (num_partials > 1) {
-        add_binary_tile_init();
-        for (uint32_t p = 1; p < num_partials; ++p) {
-            copy_tile(cb_scalars, kFixedScalars + kStatsPerPartial * p, dst_a);
-            add_binary_tile(dst_den, dst_a, dst_den);
-            copy_tile(cb_scalars, kFixedScalars + kStatsPerPartial * p + 1, dst_a);
-            add_binary_tile(dst_b, dst_a, dst_b);
-        }
-    }
-
-    binop_with_scalar_tile_init();
-    mul_unary_tile(dst_den, inv_hidden_size);
-    add_unary_tile(dst_den, eps);
-
-    rsqrt_tile_init();
-    rsqrt_tile(dst_den);
-
-    mul_binary_tile_init();
-    mul_binary_tile(dst_b, dst_den, dst_b);
-
-    copy_tile(cb_scalars, 0, dst_a);
-    copy_tile(cb_scalars, 1, dst_den);
-
-    binary_max_tile_init();
-    binary_max_tile(dst_a, dst_b, dst_max);
-
-    sub_binary_tile_init();
-    sub_binary_tile(dst_a, dst_max, dst_a);
-    sub_binary_tile(dst_b, dst_max, dst_b);
-
-    exp_tile_init();
-    exp_tile(dst_a);
-    exp_tile(dst_b);
-
-    mul_binary_tile_init();
-    mul_binary_tile(dst_den, dst_a, dst_den);
-
-    add_binary_tile_init();
-    add_binary_tile(dst_den, dst_b, dst_den);
-
-    recip_tile_init();
-    recip_tile(dst_den);
-
-    mul_binary_tile_init();
-    mul_binary_tile(dst_a, dst_den, dst_a);
-    mul_binary_tile(dst_b, dst_den, dst_b);
-    tile_regs_commit();
-
-    cb_row_obj.reserve_back(kRowWeights);
-    tile_regs_wait();
-    pack_tile(dst_a, cb_row);
-    pack_tile(dst_b, cb_row);
-    tile_regs_release();
-    cb_row_obj.push_back(kRowWeights);
-
-    cb_row_obj.wait_front(kRowWeights);
+    row.wait_front(kRowWeights);
 
     // `partial` and the stream are separate CBs here rather than one interleaved set, so
     // the MAC alternates its srcA operand. That is only safe because the device
     // operation rejects a dtype mismatch among them — one `bcast_init` configures the
     // unpacker for all of them.
-    attn_res_mul_bcast_cols_acc_init(cb_partial, cb_row);
+    mul_bcast_cols_init(cb_partial, cb_row, true /*acc_to_dest*/);
     reconfig_data_format(cb_partial, cb_row);
     pack_reconfig_data_format(cb_out);
 }
@@ -279,8 +262,6 @@ void kernel_main() {
 
     CircularBuffer cb_partial_obj(cb_partial);
     CircularBuffer cb_stream_obj(cb_stream);
-    CircularBuffer cb_row_obj(cb_row);
-    CircularBuffer cb_scalars_obj(cb_scalars);
     CircularBuffer cb_out_obj(cb_out);
 
     DataflowBuffer prefix_buf(cb_prefix);
@@ -290,6 +271,11 @@ void kernel_main() {
     DataflowBuffer q_buf(cb_q);
     DataflowBuffer tmp_buf(cb_tmp);
     DataflowBuffer scaler_buf(cb_scaler);
+    Buffer local_stats_buf(cb_local_stats);
+    Buffer chunk_stats_buf(cb_chunk_stats);
+    Buffer row_stats_buf(cb_row_stats);
+    Buffer scalars_buf(cb_scalars);
+    Buffer row_buf(cb_row);
 
     compute_kernel_hw_startup(cb_prefix, cb_q, cb_tmp);
 
@@ -326,7 +312,7 @@ void kernel_main() {
 
         if constexpr (chunks_per_row > 1) {
             if (Split::unit(first_unit + i).chunk == 0) {
-                sum_row_stats();
+                sum_row_stats(local_stats_buf, chunk_stats_buf, row_stats_buf);
             }
         }
     }
@@ -334,13 +320,12 @@ void kernel_main() {
     scaler_buf.pop_front(1);
 
     // Pass two: the fold, over the same runs. The writer only pushes a run's scalar set
-    // once every rank's slots have landed, so waiting on `cb_scalars` is the whole of
-    // this kernel's participation in the collective. A run lies within one token row, so
-    // one derivation of the row weights serves it.
+    // once every rank's slots have landed, so the row weights' wait on `cb_scalars` is the
+    // whole of this kernel's participation in the collective. A run lies within one token
+    // row, so one derivation of the row weights serves it.
     cb_partial_obj.wait_front(num_units * chunk_tiles);
     for (uint32_t i = 0; i < num_units; ++i) {
-        cb_scalars_obj.wait_front(kScalars);
-        derive_row_weights(cb_row_obj);
+        derive_row_weights(scalars_buf, row_buf);
 
         for (uint32_t k = i * chunk_tiles; k < (i + 1) * chunk_tiles; ++k) {
             tile_regs_acquire();
@@ -355,8 +340,7 @@ void kernel_main() {
             cb_out_obj.push_back(onetile);
         }
 
-        cb_scalars_obj.pop_front(kScalars);
-        cb_row_obj.pop_front(kRowWeights);
+        row_buf.pop_front(kRowWeights);
     }
     cb_partial_obj.pop_front(num_units * chunk_tiles);
     cb_stream_obj.pop_front(num_units * chunk_tiles);

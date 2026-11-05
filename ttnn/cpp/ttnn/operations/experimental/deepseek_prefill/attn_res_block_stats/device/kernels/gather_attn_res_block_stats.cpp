@@ -19,9 +19,18 @@
 // fabric preserves order per connection, so a peer that has counted an arrival from each of
 // a sender's routes that reach it has every page that sender sent it.
 //
-// The arrival semaphore is a global semaphore, not a program-local one: program-local
-// semaphores are re-initialized at every launch, which would race a peer one program ahead.
-// It is consumed here by subtracting what this launch waited for.
+// Readiness: the gathered tensor is kept across calls, so a peer's write must not land while
+// this chip still reads the previous call's statistics out of it. Each gather core tells its
+// peers it has started before it sends anything, and sends nothing until every peer has told
+// it the same. A chip runs its programs in order, so a peer that has started this op is done
+// with everything before it, the previous call's consumer included.
+//
+// Both counts share the caller's semaphore, readiness in the low half and arrivals in the
+// high half. It is a global semaphore, not a program-local one: program-local semaphores are
+// re-initialized at every launch, which would race a peer one program ahead. Each half is
+// consumed by subtracting what this launch waited for. A peer can run at most one call
+// ahead (it waits on this chip's arrival), so at most its next readiness is early, and that
+// lands after this launch has consumed its own.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
@@ -40,11 +49,18 @@ void kernel_main() {
     constexpr uint32_t ring_size = get_named_compile_time_arg_val("ring_size");
     constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
     constexpr uint32_t num_candidates = get_named_compile_time_arg_val("num_candidates");
-    // The per-row counts of parked candidates, from this semaphore on.
+    // The per-row counts of parked candidates, from this semaphore on, each a step of
+    // candidates at a time.
     constexpr uint32_t row_sem_id = get_named_compile_time_arg_val("row_sem_id");
-    constexpr AttnResProgressFields row_fields{get_named_compile_time_arg_val("field_width")};
-    // The arrivals this core waits for: one from the same link's gather core of each peer.
+    constexpr AttnResProgressFields row_fields{get_named_compile_time_arg_val("row_field_width")};
+    constexpr uint32_t row_step = get_named_compile_time_arg_val("row_step");
+    // What this core has sent of each row, a candidate at a time: a batch can end mid-step.
+    constexpr AttnResProgressFields sent_fields{get_named_compile_time_arg_val("field_width")};
+    // The arrivals this core waits for, and as many readinesses: one from the same link's
+    // gather core of each peer.
     constexpr uint32_t num_arrivals = ring_size - 1;
+    constexpr uint32_t kReady = 1;
+    constexpr uint32_t kArrival = 1u << 16;
     constexpr uint32_t num_links = get_named_compile_time_arg_val("num_gather_cores");
     // Pages staged behind one read barrier; the staging buffer holds exactly this many.
     constexpr uint32_t kBatch = get_named_compile_time_arg_val("gather_batch");
@@ -104,14 +120,39 @@ void kernel_main() {
         ccl_routing_utils::fabric_set_line_multicast_route(inc_headers[r], route_info);
     }
 
+    // The peer's copy of the semaphore: same logical core there, one program shape per chip,
+    // so the local NOC address names it.
+    const uint64_t peer_sem_noc_addr = get_noc_addr(arrival_sem_addr);
+    auto* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_sem_addr);
+    const auto signal_peers = [&](uint32_t increment) {
+        for (uint32_t r = 0; r < num_routes; ++r) {
+            auto& sender = fabric_connections.get(r).sender;
+            inc_headers[r]->to_noc_unicast_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{peer_sem_noc_addr, increment});
+            sender.wait_for_empty_write_slot();
+            sender.send_payload_flush_blocking_from_address((uint32_t)inc_headers[r], packet_header_size_bytes);
+        }
+    };
+    // Consumed by subtraction, not by a store: a peer already signalling for the next call can
+    // increment between the load and the store of a plain reset, and that signal is lost.
+    const auto consume = [&](uint32_t unit) {
+        while ((*sem_ptr / unit & 0xFFFF) < num_arrivals) {
+            invalidate_l1_cache();
+        }
+        noc_semaphore_inc(get_noc_addr(arrival_sem_addr), uint32_t{0} - num_arrivals * unit);
+        noc_async_atomic_barrier();
+    };
+    // Told now, waited on only before the first send, so the round trip overlaps the reduction.
+    signal_peers(kReady);
+    bool peers_ready = false;
+
     // Whatever is parked and not yet sent, in batches: read back behind one barrier, then
     // multicast both ways at the same page. A page is this core's when it falls to its link.
     stage_buf.reserve_back(kBatch);
     const uint32_t stage_base = stage_buf.get_write_ptr();
-    // Each row's count of candidates sent, packed like the parked counts (a field never
-    // exceeds its parked count, so it cannot carry). The host bounds these words by the
-    // row semaphores', so the stack footprint stays small for any Ht.
-    constexpr uint32_t num_row_words = row_fields.word(Ht - 1) + 1;
+    // Each row's count of candidates sent, a field of num_candidates' bit width (so it cannot
+    // carry). The host bounds Ht, so the stack footprint stays small.
+    constexpr uint32_t num_row_words = sent_fields.word(Ht - 1) + 1;
     uint32_t sent_words[num_row_words] = {};
     // This core's pages: those of the num_candidates * Ht that fall to its link.
     constexpr uint32_t num_pages = num_candidates * Ht;
@@ -121,9 +162,10 @@ void kernel_main() {
         uint32_t batch = 0;
         for (uint32_t g = 0; g < Ht && batch < kBatch; ++g) {
             const uint32_t w = row_fields.word(g);
-            const uint32_t parked =
+            const uint32_t steps =
                 row_fields.count(*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(row_sem_id + w)), g);
-            const uint32_t already_sent = row_fields.count(sent_words[w], g);
+            const uint32_t parked = steps * row_step < num_candidates ? steps * row_step : num_candidates;
+            const uint32_t already_sent = sent_fields.count(sent_words[sent_fields.word(g)], g);
             uint32_t sent = already_sent;
             for (; sent < parked && batch < kBatch; ++sent) {
                 const uint32_t index = sent * Ht + g;
@@ -131,7 +173,7 @@ void kernel_main() {
                     batch_pages[batch++] = index * ring_size + my_rank;
                 }
             }
-            sent_words[w] += (sent - already_sent) * row_fields.increment(g);
+            sent_words[sent_fields.word(g)] += (sent - already_sent) * sent_fields.increment(g);
         }
         if (batch == 0) {
             invalidate_l1_cache();
@@ -142,6 +184,10 @@ void kernel_main() {
                 gathered, stage_buf, tile_bytes, {.page_id = batch_pages[i]}, {.offset_bytes = i * tile_bytes});
         }
         noc.async_read_barrier();
+        if (!peers_ready) {
+            consume(kReady);
+            peers_ready = true;
+        }
         for (uint32_t i = 0; i < batch; ++i) {
             for (uint32_t r = 0; r < num_routes; ++r) {
                 tt::tt_fabric::linear::to_noc_unicast_write(tile_bytes, payload_headers[r], batch_pages[i], gathered);
@@ -152,23 +198,13 @@ void kernel_main() {
         pending -= batch;
     }
 
-    // The peer's copy of the arrival semaphore: same logical core there, one program shape
-    // per chip, so the local NOC address names it.
-    const uint64_t peer_arrival_noc_addr = get_noc_addr(arrival_sem_addr);
-    for (uint32_t r = 0; r < num_routes; ++r) {
-        auto& sender = fabric_connections.get(r).sender;
-        inc_headers[r]->to_noc_unicast_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{peer_arrival_noc_addr, 1});
-        sender.wait_for_empty_write_slot();
-        sender.send_payload_flush_blocking_from_address((uint32_t)inc_headers[r], packet_header_size_bytes);
+    // A core with no page to send still consumes its peers' readiness, so the count is back
+    // at zero for the next call.
+    if (!peers_ready) {
+        consume(kReady);
     }
-
-    // Consumed by subtraction, not by a store: a peer already sending for the next call can
-    // increment between the load and the store of a plain reset, and that arrival is lost.
-    auto* arrival_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_sem_addr);
-    noc_semaphore_wait_min(arrival_sem_ptr, num_arrivals);
-    noc_semaphore_inc(get_noc_addr(arrival_sem_addr), uint32_t{0} - num_arrivals);
-    noc_async_atomic_barrier();
+    signal_peers(kArrival);
+    consume(kArrival);
 
     fabric_connections.close();
 }

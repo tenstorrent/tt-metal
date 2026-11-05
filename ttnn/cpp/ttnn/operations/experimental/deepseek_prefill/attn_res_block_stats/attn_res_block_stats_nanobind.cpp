@@ -35,8 +35,9 @@ void bind_attn_res_block_stats(nb::module_& mod) {
             rank p's land in tile column p of `gathered`, `[1, C, N, 32 * P]` float32, which
             is returned. `gathered` must stay allocated across calls (peers write into it by
             address) and is the layout `attn_res_block_mix` reads. `semaphore` counts the
-            peers' arrivals: a global semaphore over the last `num_links` cores of the grid's
-            last row, made before any trace capture and kept across calls. `topology`
+            peers' readiness and arrivals, so a peer writes into `gathered` only once this
+            chip's call has started: a global semaphore at 0 over the last `num_links` cores
+            of the grid's last row, made before any trace capture and kept across calls. `topology`
             defaults to what the axis is wired for.
         )doc",
         &ttnn::operations::experimental::deepseek_prefill::attn_res_block_stats::attn_res_block_stats,

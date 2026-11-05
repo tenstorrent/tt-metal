@@ -18,7 +18,6 @@ swaps in a walk. Nothing in the layer loop changes between them, which is the po
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -37,7 +36,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geo
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import mark_layer_cached
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 
@@ -163,20 +162,6 @@ class TtKimiK3Transformer(LightweightModule):
                 hidden_size=model_cfg.EMB_SIZE,
                 eps=model_cfg.RMS_NORM_EPS,
                 tp_axis=tp_axis,
-                # Hand AttnRes the model's own CCL pools. Without this it falls back to one fixed,
-                # privately-allocated semaphore set, which is only safe while nothing else has a
-                # collective in flight on the same axis -- and Kimi-K3's KDA layers cycle tt_ccl's
-                # pools on exactly this axis between every AttnRes read.
-                tt_ccl=get_tt_ccl(mesh_device),
-                # The statistics fold engages at FOLD_MIN_CANDIDATES (4) sealed snapshots and swaps
-                # the collective for a permute/composite-all_reduce pair. A pipelined rank reaches
-                # that depth on its FIRST layer (it inherits `first_layer_idx // 12` snapshots),
-                # where a single-rank run of the same width never would — 36 layers tops out at 3.
-                # Exposed so the fold can be taken out of the picture when diagnosing an L1
-                # placement failure. #54876's author later corrected its cause to layers-per-rank
-                # (40 fails, 36 passes even at sealed depth 6); the earlier depth-4 reproductions
-                # were contaminated by un-reset devices.
-                fold_stats=os.environ.get("PREFILL_ATTN_RES_FOLD_STATS", "1") == "1",
                 weights=load_attn_res_weights(
                     mesh_device,
                     state_dict.get("attn_res_weights"),

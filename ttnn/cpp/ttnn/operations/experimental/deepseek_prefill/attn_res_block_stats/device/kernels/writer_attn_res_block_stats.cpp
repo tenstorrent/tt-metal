@@ -22,8 +22,11 @@ void kernel_main() {
     // ranks side by side in the output (1 otherwise).
     constexpr uint32_t gather_sem_id = get_named_compile_time_arg_val("row_sem_id");
     constexpr uint32_t ring_size = get_named_compile_time_arg_val("ring_size");
-    // The per-run counts here and the per-row counts on the gather cores share a field width.
+    // The per-run counts here; the per-row counts on the gather cores, which advance a step
+    // of candidates at a time.
     constexpr AttnResProgressFields fields{get_named_compile_time_arg_val("field_width")};
+    constexpr AttnResProgressFields row_fields{get_named_compile_time_arg_val("row_field_width")};
+    constexpr uint32_t row_step = get_named_compile_time_arg_val("row_step");
     // One per fabric link, each counting the rows it sends.
     constexpr uint32_t num_gather_cores = get_named_compile_time_arg_val("num_gather_cores");
     using Split = AttnResBlockStatsSplit;
@@ -97,16 +100,22 @@ void kernel_main() {
                 {.offset_bytes = 0},
                 {.page_id = (c * Ht + unit.row) * ring_size + rank});
             if constexpr (gathers) {
-                // Parked before it is announced: the gather cores read it back to send it.
-                noc.async_write_barrier();
-                for (uint32_t l = 0; l < num_gather_cores; ++l) {
-                    const uint32_t gather_core = get_common_arg_val<uint32_t>(kGatherArgs + l);
-                    noc_semaphore_inc(
-                        get_noc_addr(
-                            gather_core >> 16,
-                            gather_core & 0xFFFF,
-                            get_semaphore(gather_sem_id + fields.word(unit.row))),
-                        fields.increment(unit.row));
+                // Parked before it is announced: the gather cores read it back to send it. A
+                // step's candidates are announced together, and the last step may be short.
+                const uint32_t parked = c + 1;
+                if (parked % row_step == 0 || parked == num_candidates) {
+                    noc.async_write_barrier();
+                    for (uint32_t l = 0; l < num_gather_cores; ++l) {
+                        const uint32_t gather_core = get_common_arg_val<uint32_t>(kGatherArgs + l);
+                        noc_semaphore_inc(
+                            get_noc_addr(
+                                gather_core >> 16,
+                                gather_core & 0xFFFF,
+                                get_semaphore(gather_sem_id + row_fields.word(unit.row))),
+                            row_fields.increment(unit.row));
+                    }
+                } else {
+                    noc.async_writes_flushed();
                 }
             } else {
                 noc.async_writes_flushed();

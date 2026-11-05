@@ -7,27 +7,8 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_stats/device/kernels/attn_res_block_stats_items.hpp"
-
-namespace {
-
-// bf16 1.0 into column 0 of a zeroed bf16 tile: the column of ones the squared row is
-// multiplied against to land its sum in column 0.
-void fill_column_of_ones(uint32_t tile_addr, uint32_t tile_bytes) {
-    auto* words = reinterpret_cast<volatile uint32_t*>(tile_addr);
-    for (uint32_t i = 0; i < tile_bytes / sizeof(uint32_t); ++i) {
-        words[i] = 0;
-    }
-    // Faces 0 and 2 hold column 0, sixteen rows each, sixteen bf16 values to a face row.
-    auto* values = reinterpret_cast<volatile uint16_t*>(tile_addr);
-    constexpr uint16_t kOne = 0x3F80;
-    for (uint32_t face : {0u, 2u}) {
-        for (uint32_t row = 0; row < 16; ++row) {
-            values[face * 256 + row * 16] = kOne;
-        }
-    }
-}
-
-}  // namespace
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/tile_column_dataflow.hpp"
 
 void kernel_main() {
     constexpr uint32_t num_candidates = get_named_compile_time_arg_val("num_candidates");
@@ -55,8 +36,13 @@ void kernel_main() {
         return;
     }
 
-    // Resident for every unit: the queries over this core's run of the row — every unit
-    // of a core is the same chunk of its row — and the column of ones.
+    // Resident for every unit: the column of ones the squared row is multiplied against to
+    // land its sum in column 0 — bf16 1.0 in column 0 of a zeroed tile — and the queries
+    // over this core's run of the row: every unit of a core is the same chunk of its row.
+    cb_ones_obj.reserve_back(1);
+    dataflow_kernel_lib::zero_tile(cb_ones_obj);
+    dataflow_kernel_lib::fill_tile_column<cb_ones, uint16_t>(cb_ones_obj.get_write_ptr(), 0, 0x3F80);
+
     const auto span = Split::unit(first_unit);
     auto queries_accessor = TensorAccessor(queries_args, get_common_arg_val<uint32_t>(0));
     cb_queries_obj.reserve_back(Split::max_run);
@@ -68,8 +54,6 @@ void kernel_main() {
             {.page_id = k},
             {.offset_bytes = (k - span.begin) * tile_bytes});
     }
-    cb_ones_obj.reserve_back(1);
-    fill_column_of_ones(cb_ones_obj.get_write_ptr(), tile_bytes);
     noc.async_read_barrier();
     cb_queries_obj.push_back(Split::max_run);
     cb_ones_obj.push_back(1);

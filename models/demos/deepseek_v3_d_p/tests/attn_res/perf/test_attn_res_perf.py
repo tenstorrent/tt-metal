@@ -104,8 +104,12 @@ _GALAXY_REFERENCE_E2E_US = {
 _PERF_REFERENCE_E2E_US = {
     _LOUDBOX_PERF_SKU: {},
 }
-# LoudBox SP2xTP4 has no CI references yet: it reports but is not gated.
-_REPORT_ONLY_LAYOUTS = ("SP2xTP4",)
+# LoudBox SP2xTP4 has no CI references yet, and SP4xTP4 runs only on a Galaxy carved by hand
+# (`SUBTORUS_4X4_ENV`), which CI has no job for: both report but are not gated.
+_REPORT_ONLY_LAYOUTS = ("SP2xTP4", "SP4xTP4")
+# A layout's prefill chunk where it is not PER_CHIP_TOKENS a chip: a 4x4 stage takes the same
+# chunk as the 8x4 mesh, so each chip holds twice the rows.
+_CHUNK_TOKENS = {"SP4xTP4": PER_CHIP_TOKENS * 8}
 _MARGIN = {
     "traced": {"boundary": 0.05, "ordinary": 0.05},
     "untraced": {"boundary": 0.05, "ordinary": 0.10},
@@ -268,6 +272,13 @@ _TRACE_REGION_SIZE = 128 * 1024 * 1024
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
+        # One 4x4 pipeline stage of SC1, on a Galaxy carved with `SUBTORUS_4X4_ENV`.
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(l1_small_size=L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE, **EXACT_BOX),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="SP4xTP4-torus-xy",
+        ),
         # Unwrapped 2D, the fabric the AttnRes model suite runs on LoudBox; `attn_res_gather_softmax` needs 2D.
         pytest.param(
             (2, 4),
@@ -290,7 +301,7 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
     # Before measuring, so a gated run without its SKU opt-in fails fast.
     references = None if report_only else _perf_reference_e2e_us(layout, mode)
     require_realtime_profiler("the AttnRes device-time report")
-    num_tokens = PER_CHIP_TOKENS * op.sp_factor
+    num_tokens = _CHUNK_TOKENS.get(layout, PER_CHIP_TOKENS * op.sp_factor)
 
     rng = generator(0)
     q_pre = [op.to_query(q) for q in random_queries(rng, RANK_LAYERS)]

@@ -149,27 +149,34 @@ ProgramDescriptor build_descriptor_at(
         desc.cbs.push_back(
             make_cb(cb_received, all_cores, (chunks_per_row - 1) * num_candidates, out_tile_size, out_format));
     }
-    // A row leader counts each other run's candidates, one field per run; the gather cores
-    // count each row's parked candidates, one field per row. A count reaches at most
-    // num_candidates, so a field of its bit width never carries.
+    // A row leader counts each other run's candidates, one field per run. A count reaches at
+    // most num_candidates, so a field of its bit width never carries.
     const uint32_t field_width = std::bit_width(num_candidates);
     TT_FATAL(
         (chunks_per_row - 1) * field_width <= 32,
         "a row leader counts {} runs' candidates in one semaphore",
         chunks_per_row - 1);
     desc.semaphores.push_back(SemaphoreDescriptor{.id = kChunkSem, .core_ranges = all_cores, .initial_value = 0});
-    const uint32_t fields_per_word = 32 / field_width;
-    const uint32_t row_sem_words = (Ht + fields_per_word - 1) / fields_per_word;
+    // The gather cores count each row's parked candidates, one field per row, in the semaphore
+    // ids left over. A field counts in steps of `row_step` candidates (the last step may be
+    // short), so where the rows outnumber what full-width fields fit, narrower fields trade how
+    // early a row's first pages go out for room: at one bit a row is announced once, whole.
+    uint32_t row_field_width = field_width;
+    const auto row_sem_words_at = [&](uint32_t width) { return (Ht + 32 / width - 1) / (32 / width); };
+    while (row_field_width > 1 && kRowSem + row_sem_words_at(row_field_width) > kMaxSemaphores) {
+        --row_field_width;
+    }
+    const uint32_t row_sem_words = row_sem_words_at(row_field_width);
+    const uint32_t row_levels = (1u << row_field_width) - 1;
+    const uint32_t row_step = (num_candidates + row_levels - 1) / row_levels;
     const CoreRangeSet gather_core_set = gather_cores_of(grid, num_gather_cores);
     const auto gather_cores = corerange_to_cores(gather_core_set, std::nullopt, /*row_wise=*/true);
     if (gathers) {
-        // Bounds Ht to (kMaxSemaphores - kRowSem) * fields_per_word rows; the gather kernel
-        // keeps its per-row sent counts in as many words.
+        // The gather kernel keeps its per-row sent counts in as many words.
         TT_FATAL(
             kRowSem + row_sem_words <= kMaxSemaphores,
-            "AttnResBlockStats gathers at most {} row tiles for {} candidates, got {}",
-            (kMaxSemaphores - kRowSem) * fields_per_word,
-            num_candidates,
+            "AttnResBlockStats gathers at most {} row tiles, got {}",
+            (kMaxSemaphores - kRowSem) * 32,
             Ht);
         TT_FATAL(!all_cores.intersects(gather_core_set), "the gather cores must hold no rows");
         for (uint32_t w = 0; w < row_sem_words; ++w) {
@@ -194,6 +201,8 @@ ProgramDescriptor build_descriptor_at(
         {"chunks_per_row", chunks_per_row},
         {"ring_size", ring_size},
         {"field_width", field_width},
+        {"row_field_width", row_field_width},
+        {"row_step", row_step},
         {"num_gather_cores", num_gather_cores},
         {"gather_batch", kGatherBatch},
         {"chunk_sem_id", kChunkSem},

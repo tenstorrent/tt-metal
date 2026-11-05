@@ -18,6 +18,8 @@ schedule on host, so what this gates is the device arithmetic and the caller's b
 rather than the schedule agreeing with itself.
 """
 
+import functools
+
 import pytest
 from loguru import logger
 
@@ -98,11 +100,35 @@ def _transformer_forward(op, embeddings, queries, blocks, block_size=BLOCK_SIZE,
     return walk.finish() if last else walk.handoff()
 
 
-def _host_case(op, seed=0):
+# Both caches key on the token count rather than the mesh, because that is all the host side
+# depends on: the three 8x4 placements share one case and one oracle, and the oracle is the
+# expensive part — a full-width torch walk of up to 93 layers, the same on every fabric. What
+# they hand out is shared across tests, so it is borrowed and must not be written to.
+
+
+@functools.cache
+def _host_case(num_tokens, seed=0):
     """The embeddings entering the stack, and the 187 queries the walk reads them against."""
     rng = generator(seed)
-    hidden_states = random_hidden(rng, PER_CHIP_TOKENS * op.sp_factor)
+    hidden_states = random_hidden(rng, num_tokens)
     return hidden_states, (random_queries(rng, LAYERS), random_queries(rng, LAYERS), random_queries(rng, 1)[0])
+
+
+@functools.cache
+def _reference(num_tokens, num_layers, seed=0):
+    """The torch oracle for the first `num_layers` layers of `_host_case`'s stack."""
+    hidden_states, (q_pre, q_post, q_out) = _host_case(num_tokens, seed)
+    torch_module = lambda h: h * MODULE_SCALE
+    return attn_res_stack(
+        hidden_states,
+        q_pre[:num_layers],
+        q_post[:num_layers],
+        q_out,
+        [torch_module] * num_layers,
+        [torch_module] * num_layers,
+        block_size=BLOCK_SIZE,
+        eps=EPS,
+    )
 
 
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"])
@@ -123,7 +149,8 @@ def test_transformer_loop_matches_reference(mesh_device, device_params):
     not just the activation.
     """
     op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
-    hidden_states, (q_pre, q_post, q_out) = _host_case(op)
+    num_tokens = PER_CHIP_TOKENS * op.sp_factor
+    hidden_states, (q_pre, q_post, q_out) = _host_case(num_tokens)
 
     embeddings = place(op, hidden_states.unsqueeze(0).unsqueeze(0))
     tt_queries = ([op.to_query(q) for q in q_pre], [op.to_query(q) for q in q_post], op.to_query(q_out))
@@ -139,17 +166,7 @@ def test_transformer_loop_matches_reference(mesh_device, device_params):
     got = compose(op, device_out)
     ttnn.deallocate(device_out)
 
-    torch_module = lambda h: h * MODULE_SCALE
-    want = attn_res_stack(
-        hidden_states,
-        q_pre,
-        q_post,
-        q_out,
-        [torch_module] * LAYERS,
-        [torch_module] * LAYERS,
-        block_size=BLOCK_SIZE,
-        eps=EPS,
-    )
+    want = _reference(num_tokens, LAYERS)
 
     snapshot_mib = PER_CHIP_TOKENS * op.shard_width * 2 / 1024**2
     for layers_done, num_sealed in boundaries:
@@ -188,7 +205,8 @@ def test_split_loop_matches_reference(mesh_device, device_params):
     """
     boundary = SPLIT_BOUNDARY
     op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
-    hidden_states, (q_pre, q_post, q_out) = _host_case(op)
+    num_tokens = PER_CHIP_TOKENS * op.sp_factor
+    hidden_states, (q_pre, q_post, q_out) = _host_case(num_tokens)
     q_pre, q_post = q_pre[:SPLIT_LAYERS], q_post[:SPLIT_LAYERS]
 
     tt_pre, tt_post = [op.to_query(q) for q in q_pre], [op.to_query(q) for q in q_post]
@@ -210,17 +228,7 @@ def test_split_loop_matches_reference(mesh_device, device_params):
     got = compose(op, device_out)
     ttnn.deallocate(device_out)
 
-    torch_module = lambda h: h * MODULE_SCALE
-    want = attn_res_stack(
-        hidden_states,
-        q_pre,
-        q_post,
-        q_out,
-        [torch_module] * SPLIT_LAYERS,
-        [torch_module] * SPLIT_LAYERS,
-        block_size=BLOCK_SIZE,
-        eps=EPS,
-    )
+    want = _reference(num_tokens, SPLIT_LAYERS)
     pcc = assert_accurate(want, got, name=f"split at layer {boundary}", pcc_threshold=PCC_GATE)
     logger.info(f"split at layer {boundary} of {SPLIT_LAYERS}: PCC {pcc:.7f}")
 

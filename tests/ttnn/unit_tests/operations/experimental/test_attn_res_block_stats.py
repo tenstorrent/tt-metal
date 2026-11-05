@@ -28,6 +28,9 @@ MESH_ARMS = [
     pytest.param((2, 2), FABRIC_2D, id="fabric2d-mesh-2x2"),
     pytest.param((2, 4), FABRIC_2D, id="fabric2d-mesh-2x4"),
     pytest.param((8, 4), TORUS_XY, id="torusxy-mesh-8x4"),
+    # A 4x4 pipeline stage: a Galaxy carved to 16 chips, see `SUBTORUS_4X4_ENV` in the AttnRes
+    # model harness.
+    pytest.param((4, 4), TORUS_XY, id="torusxy-mesh-4x4"),
 ]
 
 
@@ -68,17 +71,22 @@ def test_attn_res_block_stats(device, planes, num_sites, num_tokens):
     check(out, reference(torch.cat(snapshots, dim=1).float(), queries.float(), num_sites), num_sites)
 
 
+# The K3 shape, then a long sequence on a narrow shard: 160 row tiles a chip is more rows than
+# the gather's per-row counts fit at full width, so they count in steps of candidates.
+@pytest.mark.parametrize(
+    "per_chip_tokens, shard_width", [(PER_CHIP_TOKENS, SHARD_WIDTH), (5120, 64)], ids=["k3", "long-narrow"]
+)
 @pytest.mark.parametrize("mesh_device, device_params", MESH_ARMS, indirect=True)
 @pytest.mark.parametrize("num_sites", [1, 25])
-def test_attn_res_block_stats_gathered(mesh_device, device_params, num_sites):
+def test_attn_res_block_stats_gathered(mesh_device, device_params, num_sites, per_chip_tokens, shard_width):
     """Each rank's statistics over its shard of `d`, gathered across the tensor-parallel axis:
     every chip of a row ends up with every rank's, rank p's in tile column p."""
     torch.manual_seed(0)
     mesh_shape = tuple(mesh_device.shape)
     tp_factor, sp_factor = mesh_shape[TP_AXIS], mesh_shape[SP_AXIS]
     planes = [6, 1]
-    num_tokens = PER_CHIP_TOKENS * sp_factor
-    width = SHARD_WIDTH * tp_factor
+    num_tokens = per_chip_tokens * sp_factor
+    width = shard_width * tp_factor
 
     snapshots = [torch.randn(1, s, num_tokens, width).bfloat16() for s in planes]
     queries = torch.zeros(1, 1, width, 32)
@@ -123,8 +131,8 @@ def test_attn_res_block_stats_gathered(mesh_device, device_params, num_sites):
     v = torch.cat(snapshots, dim=1).float()
     for p in range(tp_factor):
         want = reference(
-            v[..., p * SHARD_WIDTH : (p + 1) * SHARD_WIDTH],
-            queries.float()[..., p * SHARD_WIDTH : (p + 1) * SHARD_WIDTH, :],
+            v[..., p * shard_width : (p + 1) * shard_width],
+            queries.float()[..., p * shard_width : (p + 1) * shard_width, :],
             num_sites,
         )
         for replica in range(tp_factor):
