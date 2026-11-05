@@ -804,18 +804,20 @@ _TRUE_MAIN_KEEP = (
     "PACK_SRC_FROM_OUTPUT",
     "MATMUL_FORM_KEYS",
     "MATMUL_PACK_BLOCK",
+    "_D",
 )
 
 
 def _true_main_templates(test_name, formats, dest_acc, l1_acc, templates, runtimes):
     """The templates of a cell the table keeps on main (matmul_grid_main_cells): main's unpack, math and per-tile pack with none of the harness opt-ins (ttsync, row MOP, row end fold, stream z and narrow, reuse direction, phase elide, k loop, flip and fused post)."""
-    if not str(test_name).startswith("sources/matmul") or not hasattr(
-        formats, "input_format_B"
-    ):
+    if not str(test_name).startswith(
+        ("sources/matmul", "sources/math_matmul")
+    ) or not hasattr(formats, "input_format_B"):
         return templates
     from ..chip_architecture import get_chip_architecture
     from ..llk_params import DestSync
-    from ..matmul_prod_keys import grid_main_cell
+    from ..matmul_prod_keys import grid_main_cell, reinit_keyed_cell, tiny_main_cell
+    from ..test_variant_parameters import MATMUL_TRUE_MAIN
 
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         return templates
@@ -833,10 +835,22 @@ def _true_main_templates(test_name, formats, dest_acc, l1_acc, templates, runtim
         "MATMUL_L1_ACC" in by
         and by["MATMUL_L1_ACC"].matmul_l1_acc == L1Accumulation.Yes
     )
-    if not grid_main_cell(
-        by["MATH_FIDELITY"].math_fidelity,
-        by["DEST_SYNC"].dest_sync == DestSync.Half,
-        dest_acc == DestAccumulation.Yes,
+    nbk = next((r for r in runtimes if type(r).__name__ == "NUM_BLOCKS"), None)
+    nb = nbk.num_blocks if nbk is not None else 1
+    tile = next((r for r in runtimes if type(r).__name__ == "IN_TILE_DIMS"), None)
+    r0 = tile.in0_r_dim if tile is not None else 32
+    c1 = tile.in1_c_dim if tile is not None else 32
+    half = by["DEST_SYNC"].dest_sync == DestSync.Half
+    fid = by["MATH_FIDELITY"].math_fidelity
+    acc = dest_acc == DestAccumulation.Yes
+    reinit = bool(os.environ.get("LLK_REINIT")) or any(
+        repr(t) == "DYN(4)" for t in templates
+    )
+    # init before every call: the cell re-inits on main's form unless the table names a keyed re-init form for it
+    reinit_main = reinit and not reinit_keyed_cell(
+        fid,
+        half,
+        acc,
         formats.input_format,
         formats.input_format_B,
         formats.output_format,
@@ -845,6 +859,37 @@ def _true_main_templates(test_name, formats, dest_acc, l1_acc, templates, runtim
         dims.k_dimm,
         throttle,
         l1,
+        nb,
+    )
+    if not (
+        reinit_main
+        or grid_main_cell(
+            fid,
+            half,
+            acc,
+            formats.input_format,
+            formats.input_format_B,
+            formats.output_format,
+            dims.r_dimm,
+            dims.c_dimm,
+            dims.k_dimm,
+            throttle,
+            l1,
+            nb,
+        )
+        or tiny_main_cell(
+            fid,
+            half,
+            acc,
+            formats.input_format,
+            formats.input_format_B,
+            formats.output_format,
+            r0,
+            c1,
+            dims.r_dimm,
+            dims.c_dimm,
+            dims.k_dimm,
+        )
     ):
         return templates
     out = []
@@ -856,10 +901,21 @@ def _true_main_templates(test_name, formats, dest_acc, l1_acc, templates, runtim
             t.keep_flip = False
             t.unfused_post = False
             t.force_form = ""
-            t.with_block(dims.c_dimm, dims.r_dimm, dims.k_dimm, dest_acc, throttle, l1)
+            t.with_block(
+                dims.c_dimm,
+                dims.r_dimm,
+                dims.k_dimm,
+                dest_acc,
+                throttle,
+                l1,
+                nb,
+                r0,
+                c1,
+            )
         if name == "MATMUL_PACK_BLOCK":
             t = type(t)(0)
         out.append(t)
+    out.append(MATMUL_TRUE_MAIN())
     return out
 
 

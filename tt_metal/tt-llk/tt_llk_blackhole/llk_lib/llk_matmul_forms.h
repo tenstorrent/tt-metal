@@ -713,7 +713,11 @@ inline constexpr matmul_grid_main_cell matmul_grid_main_cells[] = {
     {MathFidelity::HiFi2, true, true, DataFormat::Float16, DataFormat::Float16, DataFormat::Bfp8_b, 1, 2, 1, 0, false, 1},
     {MathFidelity::HiFi2, true, false, DataFormat::Float16, DataFormat::Float16, DataFormat::Bfp8_b, 2, 1, 1, 0, false, 1},
     {MathFidelity::HiFi2, true, true, DataFormat::Float16, DataFormat::Float16, DataFormat::Bfp8_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 2, 1, 0, false, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 2, 1, 0, false, 4},
     {MathFidelity::HiFi2, true, true, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 2, 1, 0, true, 4},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 4},
     {MathFidelity::HiFi2, true, true, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float16_b, 1, 2, 1, 0, true, 4},
     {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 6, 4, 0, false, 1},
     {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 6, 5, 0, false, 1},
@@ -737,6 +741,10 @@ inline constexpr matmul_grid_main_cell matmul_grid_main_cells[] = {
     {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 3, 5, 0, false, 1},
     {MathFidelity::HiFi2, false, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 1, 5, 0, false, 1},
     {MathFidelity::HiFi2, false, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 1, 5, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 1, 2, 1, 0, false, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 1, 2, 1, 0, false, 4},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 2, 1, 1, 0, false, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 2, 1, 1, 0, false, 4},
     {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp2_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
     {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 3, 2, 4, 0, false, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
@@ -2074,6 +2082,7 @@ struct matmul_tiny_main_cell
     DataFormat out;
     std::uint8_t r0, c1, rt, ct, kt;
 };
+
 inline constexpr matmul_tiny_main_cell matmul_tiny_main_cells[] = {
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 4, 32, 1, 4, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 4, 32, 1, 4, 1},
@@ -2088,6 +2097,23 @@ inline constexpr matmul_tiny_main_cell matmul_tiny_main_cells[] = {
     {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 8, 32, 2, 2, 4},
     {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 4, 32, 1, 4, 4},
     {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 32, 2, 2, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 32, 1, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 4, 16, 1, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 8, 32, 1, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 16, 16, 1, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 32, 16, 1, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 4, 32, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 16, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 8, 32, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 32, 16, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 2, 32, 2, 2, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 8, 16, 2, 2, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 16, 16, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 8, 32, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 16, 16, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 16, 32, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 8, 16, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 8, 32, 2, 2, 4},
 };
 
 constexpr bool matmul_tiny_main_form(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,

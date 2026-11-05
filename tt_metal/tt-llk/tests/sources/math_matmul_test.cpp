@@ -39,7 +39,10 @@ constexpr std::uint32_t matmul_reuse_dir_k = 0;
 #endif
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
 #include "llk_matmul_forms.h"
-#ifdef MATMUL_BLOCK
+#if defined(MATMUL_TRUE_MAIN)
+// a cell that runs main's code (an exact main row, or init before every call): the table key is 0 whatever the block
+constexpr std::uint32_t matmul_kt_key = 0;
+#elif defined(MATMUL_BLOCK)
 // the forms table key: main's form (0) for the blocks llk_matmul_forms.h keeps on it
 constexpr std::uint32_t matmul_kt_key = ckernel::matmul_form_k<
     MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf ? 0 : 1, MATMUL_BLOCK_ACC, MATMUL_KT_PER_SECTION, MATMUL_BLOCK_KT, MATMUL_KEY_IN0, MATMUL_KEY_IN1, MATMUL_OUT_FORMAT,
@@ -47,6 +50,10 @@ constexpr std::uint32_t matmul_kt_key = ckernel::matmul_form_k<
 #else
 constexpr std::uint32_t matmul_kt_key = MATMUL_KT_PER_SECTION;
 #endif
+// main's form writes the address mods exactly as main does (the bias register too); the other forms skip that write
+constexpr bool matmul_bias_write = matmul_kt_key == 0;
+#else
+constexpr bool matmul_bias_write = false;
 #endif
 
 #ifdef LLK_TRISC_UNPACK
@@ -217,8 +224,9 @@ constexpr bool matmul_row_end_fold_k = false;
 #endif
 #ifdef ARCH_BLACKHOLE
 #define MATMUL_MATH_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_reuse_dir_k, matmul_row_end_fold_k
-#define MATMUL_MATH_INIT_ARGS \
-    MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_in1_order, !(dest_sync == DstSync::SyncHalf && is_fp32_dest_acc_en), dest_sync == DstSync::SyncFull || matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k
+#define MATMUL_MATH_INIT_ARGS                                                                                                                     \
+    MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_in1_order, !(dest_sync == DstSync::SyncHalf && is_fp32_dest_acc_en), \
+        dest_sync == DstSync::SyncFull || matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k, 0, 0, matmul_bias_write
 #else
 #define MATMUL_MATH_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL
 #define MATMUL_MATH_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL

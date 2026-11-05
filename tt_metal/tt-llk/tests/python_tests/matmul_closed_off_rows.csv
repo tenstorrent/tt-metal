@@ -481,3 +481,11 @@ LoFi,Float32,Float32,Bfp4_b,2,2,3,0,False,False,1,perf_matmul_grid(tr50),0.17,,T
 LoFi,Bfp4_b,Bfp2_b,Float16_b,2,1,1,0,False,True,1,perf_matmul_llkx(tr50),2.52,,True,True,main,Half
 LoFi,Bfp8_b,Bfp2_b,Float16_b,2,1,1,0,False,True,1,perf_matmul_llkx(tr50),2.88,,True,True,main,Half
 LoFi,Float32,Float32,Bfp8_b,2,2,8,2,False,True,1,perf_matmul_llkx(tr50),1.2,,True,True,main,Half
+HiFi2,Float16_b,Float16_b,Float16_b,1,2,1,0,False,False,4,perf_math_matmul(re-init),7.45,,True,True,main,Half
+HiFi2,Float16_b,Float16_b,Float16_b,1,2,1,0,False,True,4,perf_math_matmul(re-init),7.45,,True,True,main,Half
+HiFi2,Float16_b,Float16_b,Float16_b,2,1,1,0,False,False,4,perf_math_matmul(re-init),7.45,,True,True,main,Half
+HiFi2,Float16_b,Float16_b,Float16_b,2,1,1,0,False,True,4,perf_math_matmul(re-init),7.45,,True,True,main,Half
+HiFi2,Float32,Float32,Float16_b,1,2,1,0,False,False,4,perf_math_matmul(re-init),7.45,,True,True,main,Half
+HiFi2,Float32,Float32,Float16_b,1,2,1,0,False,True,4,perf_math_matmul(re-init),7.45,,True,True,main,Half
+HiFi2,Float32,Float32,Float16_b,2,1,1,0,False,False,4,perf_math_matmul(re-init),7.45,,True,True,main,Half
+HiFi2,Float32,Float32,Float16_b,2,1,1,0,False,True,4,perf_math_matmul(re-init),7.45,,True,True,main,Half

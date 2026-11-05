@@ -55,7 +55,10 @@ constexpr ckernel::MathFidelity MATMUL_FIDELITY = MATH_FIDELITY;
 #endif
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
 #include "llk_matmul_forms.h"
-#ifdef MATMUL_BLOCK
+#if defined(MATMUL_TRUE_MAIN)
+// a cell that runs main's code (an exact main row, or init before every call): the table key is 0 whatever the block
+constexpr std::uint32_t matmul_kt_key = 0;
+#elif defined(MATMUL_BLOCK)
 // the forms table key: main's form (0) for the blocks llk_matmul_forms.h keeps on it
 constexpr std::uint32_t matmul_kt_key = ckernel::matmul_form_k<
     MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf ? 0 : 1, MATMUL_BLOCK_ACC, MATMUL_KT_PER_SECTION, MATMUL_BLOCK_KT, MATMUL_KEY_IN0, MATMUL_KEY_IN1, MATMUL_OUT_FORMAT,

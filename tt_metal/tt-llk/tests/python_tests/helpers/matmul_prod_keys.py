@@ -894,7 +894,11 @@ _GRID_MAIN_ROWS = (
     ("HiFi2", True, True, "F16", "F16", "B8", 1, 2, 1, 0, False, 1),
     ("HiFi2", True, False, "F16", "F16", "B8", 2, 1, 1, 0, False, 1),
     ("HiFi2", True, True, "F16", "F16", "B8", 2, 1, 1, 0, False, 1),
+    ("HiFi2", True, False, "F16b", "F16b", "F16b", 1, 2, 1, 0, False, 4),
+    ("HiFi2", True, True, "F16b", "F16b", "F16b", 1, 2, 1, 0, False, 4),
     ("HiFi2", True, True, "F16b", "F16b", "F16b", 1, 2, 1, 0, True, 4),
+    ("HiFi2", True, False, "F16b", "F16b", "F16b", 2, 1, 1, 0, False, 4),
+    ("HiFi2", True, True, "F16b", "F16b", "F16b", 2, 1, 1, 0, False, 4),
     ("HiFi2", True, True, "F16b", "F32", "F16b", 1, 2, 1, 0, True, 4),
     ("HiFi2", True, False, "F32", "B4", "B4", 1, 6, 4, 0, False, 1),
     ("HiFi2", True, False, "F32", "B4", "B4", 1, 6, 5, 0, False, 1),
@@ -918,6 +922,10 @@ _GRID_MAIN_ROWS = (
     ("HiFi2", True, False, "F32", "B8", "F16b", 2, 3, 5, 0, False, 1),
     ("HiFi2", False, False, "F32", "B8", "F32", 1, 1, 5, 0, False, 1),
     ("HiFi2", False, True, "F32", "B8", "F32", 1, 1, 5, 0, False, 1),
+    ("HiFi2", True, False, "F32", "F32", "F16b", 1, 2, 1, 0, False, 4),
+    ("HiFi2", True, True, "F32", "F32", "F16b", 1, 2, 1, 0, False, 4),
+    ("HiFi2", True, False, "F32", "F32", "F16b", 2, 1, 1, 0, False, 4),
+    ("HiFi2", True, True, "F32", "F32", "F16b", 2, 1, 1, 0, False, 4),
     ("LoFi", True, True, "B4", "B2", "F16b", 2, 1, 1, 0, False, 1),
     ("LoFi", True, False, "B4", "B4", "B8", 3, 2, 4, 0, False, 1),
     ("LoFi", True, True, "B4", "B4", "F16b", 2, 1, 1, 0, False, 1),
@@ -1478,6 +1486,23 @@ _TINY_MAIN_ROWS = (
     ("HiFi2", True, True, "F32", "F16b", "F32", 8, 32, 2, 2, 4),
     ("HiFi2", True, True, "F32", "F16b", "F32", 4, 32, 1, 4, 4),
     ("HiFi2", True, True, "F32", "F32", "F32", 2, 32, 2, 2, 4),
+    ("HiFi2", True, True, "F32", "B8", "F16b", 2, 32, 1, 4, 1),
+    ("HiFi2", True, True, "F32", "B8", "F16b", 4, 16, 1, 4, 1),
+    ("HiFi2", True, True, "F32", "B8", "F16b", 8, 32, 1, 4, 1),
+    ("HiFi2", True, True, "F32", "B8", "F16b", 16, 16, 1, 4, 1),
+    ("HiFi2", True, True, "F32", "B8", "F16b", 32, 16, 1, 4, 1),
+    ("HiFi2", True, True, "F32", "F16b", "B4", 4, 32, 1, 4, 4),
+    ("HiFi2", True, True, "F32", "F32", "B8", 2, 16, 1, 4, 4),
+    ("HiFi2", True, True, "F32", "F32", "B8", 8, 32, 1, 4, 4),
+    ("HiFi2", True, True, "F32", "F32", "B8", 32, 16, 1, 4, 4),
+    ("HiFi2", True, True, "F32", "F32", "F16b", 2, 32, 2, 2, 4),
+    ("HiFi2", True, True, "F32", "F32", "F16b", 8, 16, 2, 2, 4),
+    ("HiFi2", True, True, "F32", "F32", "F16b", 16, 16, 2, 2, 4),
+    ("LoFi", True, True, "F32", "B4", "B4", 8, 32, 2, 2, 4),
+    ("LoFi", True, True, "F32", "B4", "B4", 16, 16, 2, 2, 4),
+    ("LoFi", True, True, "F32", "B4", "B4", 16, 32, 2, 2, 4),
+    ("LoFi", True, True, "F32", "F32", "B4", 8, 16, 2, 2, 4),
+    ("LoFi", True, True, "F32", "F32", "B4", 8, 32, 2, 2, 4),
 )
 _TINY_MAIN = frozenset(_TINY_MAIN_ROWS)
 
@@ -1502,3 +1527,43 @@ def tiny_main_cell(
     except KeyError:
         return False
     return key in _TINY_MAIN
+
+
+# Cells whose re-init form (init before every call) is a keyed form: the table's own form. Every other cell re-inits on main's form (the harness takes
+# MATMUL_TRUE_MAIN), since the keyed forms' init costs more per call than their loop gains. Same key as _GRID_MAIN_ROWS.
+_REINIT_KEYED_ROWS = ()
+_REINIT_KEYED = frozenset(_REINIT_KEYED_ROWS)
+
+
+def reinit_keyed_cell(
+    fidelity,
+    half_sync,
+    fp32_acc,
+    in1,
+    in0,
+    out,
+    rt,
+    ct,
+    kb,
+    throttle=0,
+    l1_acc=False,
+    nb=1,
+) -> bool:
+    try:
+        key = (
+            fidelity.name,
+            half_sync,
+            fp32_acc,
+            _SHORT[in1],
+            _SHORT[in0],
+            _SHORT[out],
+            rt,
+            ct,
+            kb,
+            throttle,
+            bool(l1_acc),
+            nb,
+        )
+    except KeyError:
+        return False
+    return key in _REINIT_KEYED

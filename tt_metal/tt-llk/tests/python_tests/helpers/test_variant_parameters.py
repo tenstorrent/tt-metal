@@ -163,6 +163,14 @@ class MATMUL_DYN_SWITCH(TemplateParameter):
 
 
 @dataclass
+class MATMUL_TRUE_MAIN(TemplateParameter):
+    """Blackhole matmul cell that runs main's code: the forms table key is 0 whatever the block, so the harness takes none of its opt-ins (see helpers/perf/core.py _true_main_templates)."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_TRUE_MAIN"
+
+
+@dataclass
 class MATMUL_ROW_MOP(TemplateParameter):
     """Blackhole matmul math with one MOP per reuse row."""
 
