@@ -282,26 +282,6 @@ inline bool llk_pack_block_is_small(const std::uint32_t output_id) {
     return get_output_tile_c_dim(output_id) == TILE_C_DIM && num_faces * (face_r_dim < 4 ? 1 : face_r_dim >> 2) <= 8;
 }
 
-// Small tiles of a plain format, one tile per CB page: they run back to back with one close.
-inline bool llk_pack_block_is_dense(const std::uint32_t output_id) {
-    const std::uint32_t dst_format = pack_dst_format[output_id];
-    if (IS_BFP_FORMAT(dst_format) || !llk_pack_block_is_small(output_id)) {
-        return false;
-    }
-    const std::uint32_t tile_words =
-        (get_output_num_faces(output_id) * get_output_face_r_dim(output_id) * FACE_C_DIM * datum_size_in_bytes(dst_format)) >> 4;
-    return get_local_cb_interface(output_id).fifo_page_size == tile_words;
-}
-
-// Records the tile body that llk_pack_block<is_fp32_dest_acc_en, true> replays for the small tiles of this output; call it after the pack init
-// and again after any program that replaces the replay buffer.
-inline void llk_pack_block_dense_init(const std::uint32_t output) {
-    const std::uint8_t output_id = get_output_id(output);
-    if (llk_pack_block_is_dense(output_id)) {
-        _llk_pack_block_dense_init_(get_output_face_r_dim(output_id), get_output_num_faces(output_id));
-    }
-}
-
 // Next to HiFi math the closed block-float pack makes the op read slower than per-tile packs, except for 4 and 8 tiles at HiFi4; HiFi2 never gained.
 template <MathFidelity math_fidelity>
 constexpr bool llk_pack_block_closed_pays(const bool block_float_out, const std::uint32_t ntiles) {
@@ -339,10 +319,9 @@ inline void llk_pack_block_per_tile(const std::uint32_t start_tile_index, const 
     }
 }
 
-// dense_small: the caller called llk_pack_block_dense_init for this output, small tiles of a plain format then run back to back with one close.
 // guard_dest_straddle: for a caller whose start tile index is not a constant 0: two block-float tiles that straddle a four tile boundary of DEST (tiles 3 and 4)
 // read 6 cycles slower as a closed block than packed one by one, so they take the per-tile path. Off by default, the check costs instructions in the callers that pass 0.
-template <bool is_fp32_dest_acc_en, bool dense_small = false, bool guard_dest_straddle = false>
+template <bool is_fp32_dest_acc_en, bool guard_dest_straddle = false>
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     std::uint8_t output_id = get_output_id(output);
 #ifndef LLK_PACK_W_OFFSET
@@ -403,14 +382,6 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
         _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, llk_pack_rmw_tile<PackMode::Default>>(
             start_tile_index, pack_tile_addr, ntiles);
 #endif
-    } else if (dense_small && llk_pack_block_is_dense(output_id)) {
-        _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
-        std::uint32_t pack_tile_addr =
-            get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
-        get_local_cb_interface(output_id).fifo_wr_tile_ptr +=
-            get_local_cb_interface(output_id).fifo_page_size * ntiles;
-        _llk_pack_block_dense_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
-            start_tile_index, pack_tile_addr, ntiles, get_output_face_r_dim(output_id), get_output_num_faces(output_id));
     } else if (
         llk_pack_block_is_closable(output_id) &&
         !(guard_dest_straddle && IS_BFP_FORMAT(pack_dst_format[output_id]) && ntiles == 2 && (start_tile_index & 3) == 3)) {

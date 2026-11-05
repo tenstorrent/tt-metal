@@ -677,12 +677,6 @@ GATHERING_BUILD_VARIANTS = [
         "pack",
     ),
     (
-        "pack block dense init (tiny tile mode 3)",
-        "test_pack_tiny_tile_block.py::test_pack_tiny_tile_block[formats:Float16_b->Float16_b-dest_acc:No-"
-        "tile_dims:(1, 32)-num_tiles:2-pack_mode:3]",
-        "pack",
-    ),
-    (
         "pack block fast init (W offset block pack)",
         "test_pack.py::test_pack_block_w[formats:Float16_b->Float16_b-dest_acc:No-input_dimensions:[64, 64]-"
         "relu_type:NoRelu-dest_sync:Half-dest_index:0]",

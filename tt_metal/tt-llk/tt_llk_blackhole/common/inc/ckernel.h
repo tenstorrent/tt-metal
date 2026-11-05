@@ -678,14 +678,12 @@ enum ExecBool : bool
     Exec
 };
 
-// The pack thread's replay buffer holds the program _llk_pack_block_fast_init_ (pack_fast_replay_valid) or _llk_pack_block_dense_init_ (pack_dense_replay_key,
-// 0 or the tile shape it recorded) left until load_replay_buf records over it and clears both.
-// Like every LLK that records once and replays later, they assume no record the compiler makes itself (#58433) runs on this thread in between.
-// Only the pack thread tracks them; with internal linkage their stores vanish unless the block inits, the only readers, are compiled in.
+// The pack thread's replay buffer holds the program _llk_pack_block_fast_init_ recorded until load_replay_buf records over it and clears this flag.
+// Like every LLK that records once and replays later, it assumes no record the compiler makes itself (#58433) runs on this thread in between.
+// Only the pack thread tracks it; with internal linkage its stores vanish unless the fast block init, the only reader, is compiled in.
 [[maybe_unused]] static bool pack_fast_replay_valid = false;
-[[maybe_unused]] static std::uint32_t pack_dense_replay_key = 0;
 #if defined(TRISC_PACK) || defined(LLK_TRISC_PACK)
-#define LLK_PACK_REPLAY_WRITTEN() (pack_fast_replay_valid = false, pack_dense_replay_key = 0)
+#define LLK_PACK_REPLAY_WRITTEN() (pack_fast_replay_valid = false)
 #else
 #define LLK_PACK_REPLAY_WRITTEN() ((void)0)
 #endif

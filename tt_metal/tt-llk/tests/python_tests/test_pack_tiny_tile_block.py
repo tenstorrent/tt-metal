@@ -12,7 +12,6 @@ Tile32x32 DEST slots, and _llk_pack_block_contiguous_ performs the
 sparse-to-dense packing into a contiguous L1 block.
 """
 
-import pytest
 import torch
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -152,7 +151,7 @@ def _make_config(
 
 @skip_for_wormhole
 @parametrize(
-    formats=[FORMATS, FORMATS_F32],
+    formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     tile_dims=[
         (1, 32),  # face_r_dim=1,  num_faces=2
@@ -164,7 +163,7 @@ def _make_config(
         (32, 32),  # face_r_dim=16, num_faces=4 (baseline)
     ],
     num_tiles=[1, 2, 4, 8],
-    pack_mode=[0, 1, 2, 3, 4, 5],
+    pack_mode=[0, 1, 2, 4],
 )
 def test_pack_tiny_tile_block(
     formats,
@@ -173,10 +172,6 @@ def test_pack_tiny_tile_block(
     num_tiles,
     pack_mode,
 ):
-    if pack_mode in (3, 5) and tile_dims == (32, 32):
-        pytest.skip("The dense block pack records at most eight PACRs per tile")
-    if pack_mode in (3, 5) and num_tiles < 2:
-        pytest.skip("The dense block pack takes two or more tiles")
     configuration, golden_tensor, _ = _make_config(
         tile_dims, num_tiles, formats, dest_acc, pack_mode
     )
@@ -227,12 +222,10 @@ def test_pack_tiny_tile_block_bfp(
     dest_acc=[DestAccumulation.Yes],
     tile_dims=[(8, 32), (16, 16), (32, 32)],
     num_tiles=[2, 4, 8],
-    pack_mode=[1, 2, 3, 4],
+    pack_mode=[1, 2, 4],
 )
 def test_pack_tiny_tile_block_int(formats, dest_acc, tile_dims, num_tiles, pack_mode):
-    """Integer outputs through the closed block (1), per tile (2), the dense run (3) and the closed block with the W offset (4)."""
-    if pack_mode == 3 and tile_dims == (32, 32):
-        pytest.skip("The dense block pack records at most eight PACRs per tile")
+    """Integer outputs through the closed block (1), per tile (2) and the closed block with the W offset (4)."""
     configuration, golden_tensor, torch_format = _make_config(
         tile_dims, num_tiles, formats, dest_acc, pack_mode
     )
@@ -255,12 +248,10 @@ def test_pack_tiny_tile_block_int(formats, dest_acc, tile_dims, num_tiles, pack_
     ),
     tile_dims=[(8, 32), (16, 16), (32, 32)],
     num_tiles=[2, 4, 8],
-    pack_mode=[1, 2, 3, 4],
+    pack_mode=[1, 2, 4],
 )
 def test_pack_tiny_tile_block_fp8(formats, dest_acc, tile_dims, num_tiles, pack_mode):
-    """Fp8_e4m3 outputs (the only 8-bit float output hw_undefined_reason leaves defined; Lf8 is always undefined there) through the closed block (1), per tile (2), the dense run (3) and the closed W offset block (4)."""
-    if pack_mode == 3 and tile_dims == (32, 32):
-        pytest.skip("The dense block pack records at most eight PACRs per tile")
+    """Fp8_e4m3 outputs (the only 8-bit float output hw_undefined_reason leaves defined; Lf8 is always undefined there) through the closed block (1), per tile (2) and the closed W offset block (4)."""
     configuration, golden_tensor, torch_format = _make_config(
         tile_dims, num_tiles, formats, dest_acc, pack_mode
     )
