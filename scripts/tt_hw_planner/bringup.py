@@ -83,6 +83,11 @@ MESH_DEVICE_MAP: Dict[Tuple[str, Tuple[int, int]], str] = {
     ("Blackhole", (1, 8)): "P150x8",
     ("Blackhole", (4, 8)): "BHGLX",
     ("Blackhole", (8, 4)): "BHGLX",
+    # Pure TP=32 across the whole Blackhole Galaxy (chosen_tp is the mesh COLUMN
+    # count). Its own label, not an alias of BHGLX: the demos resolve BHGLX to
+    # (8,4), so aliasing would silently open TP=8. hardware.py already lists
+    # (1,32) as canonical for this box; without this row `prepare` refused it.
+    ("Blackhole", (1, 32)): "BHGLX_1x32",
 }
 
 

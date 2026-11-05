@@ -159,8 +159,8 @@ def test_every_mesh_label_the_planner_emits_resolves_in_the_demo_it_invokes():
     The tables read MESH_DEVICE with `.get(label, <default>)`, so an unknown
     label does not error — it silently falls back to a DIFFERENT mesh. A
     planner that emits a label the demo has never heard of therefore runs the
-    model on the wrong topology and reports success. Pin that every Wormhole
-    label in MESH_DEVICE_MAP resolves, to the same shape, in the demo the
+    model on the wrong topology and reports success. Pin that every label in
+    MESH_DEVICE_MAP (every arch) resolves, to the same shape, in the demo the
     planner actually invokes."""
     import ast
     import re
@@ -181,9 +181,8 @@ def test_every_mesh_label_the_planner_emits_resolves_in_the_demo_it_invokes():
         # shape (Galaxy's (4,8)/(8,4) -> "TG"). For those, orientation is the
         # authors' choice; a CHIP-COUNT difference never is.
         shapes_per_label = {}
-        for (arch, shape), label in MESH_DEVICE_MAP.items():
-            if arch == "Wormhole":
-                shapes_per_label.setdefault(label, set()).add(shape)
+        for (_arch, shape), label in MESH_DEVICE_MAP.items():
+            shapes_per_label.setdefault(label, set()).add(shape)
 
         for label, shapes in shapes_per_label.items():
             if label not in table:
@@ -199,3 +198,23 @@ def test_every_mesh_label_the_planner_emits_resolves_in_the_demo_it_invokes():
                     f"{path}: label {label!r} resolves to {got} but the planner "
                     f"emits it for {next(iter(shapes))} — the demo would run on the wrong mesh"
                 )
+
+
+def test_every_full_box_pure_tp_mesh_on_blackhole_has_a_label():
+    """A box that lists its pure-TP full-box mesh (1, chips) as canonical must
+    be able to `prepare` it: `up --mesh 1,<chips>` passed planning, then died at
+    `prepare` with "no MESH_DEVICE label". Boxes are discovered from HARDWARE,
+    not named here. Scoped to Blackhole, where the gap was fixed; Wormhole's
+    (1, 32) on Galaxy is a known, separate gap."""
+    from scripts.tt_hw_planner.bringup import mesh_device_for
+    from scripts.tt_hw_planner.hardware import HARDWARE
+
+    checked = 0
+    for box in HARDWARE:
+        pure_tp = (1, box.chips)
+        if box.arch != "Blackhole" or pure_tp not in box.mesh_shapes:
+            continue
+        label, note = mesh_device_for(box.arch, pure_tp)
+        assert label, f"{box.name}: canonical mesh {pure_tp} has no MESH_DEVICE label: {note}"
+        checked += 1
+    assert checked, "no Blackhole box lists a pure-TP full-box mesh; test is vacuous"

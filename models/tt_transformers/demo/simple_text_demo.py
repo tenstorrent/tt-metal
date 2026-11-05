@@ -867,6 +867,7 @@ def hf_max_context_len():
             "P150x4": (1, 4),
             "P150x8": (1, 8),
             "BHGLX": (8, 4),
+            "BHGLX_1x32": (1, 32),
         }.get(os.environ.get("MESH_DEVICE"), get_default_mesh_device_param())
     ],
     indirect=True,
