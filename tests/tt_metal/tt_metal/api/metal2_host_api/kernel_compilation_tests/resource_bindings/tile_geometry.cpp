@@ -93,30 +93,28 @@ protected:
     distributed::MeshDevice& fixture_device() { return *mesh_device_; }
 };
 
-// A DFB binding exposes its aggregate LLK shape through the public getter.
+// Blackhole DFB shape queries compile in data movement and all compute stages.
 TEST_P(BindingTokenGeometry, DfbTensorShape) {
     const GeometryCase geometry = GetParam();
-    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
-    spec.kernels[1].source =
-        KernelSpec::SourceCode{MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(dfb::input_dfb)")};
+    const std::string source = MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(dfb::input_dfb)");
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
-// A scratchpad binding exposes its aggregate LLK shape through the public getter.
+// Blackhole scratchpad shape queries compile in data movement and all compute stages.
 TEST_P(BindingTokenGeometry, ScratchpadTensorShape) {
     const GeometryCase geometry = GetParam();
-    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
-    spec.kernels[1].source =
-        KernelSpec::SourceCode{MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(scratch::pad)")};
+    const std::string source = MakeNonPublicTensorShapeQuerySource(geometry, "::get_tensor_shape(scratch::pad)");
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
-// Common and per-node tensor bindings expose their aggregate LLK shape through the public getter.
+// Blackhole common and per-node tensor shape queries compile in data movement and all compute stages.
 TEST_P(BindingTokenGeometry, TensorBindingTensorShape) {
     const GeometryCase geometry = GetParam();
-    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, "void kernel_main() {}");
-    spec.kernels[1].source = KernelSpec::SourceCode{
-        MakeNonPublicTensorShapeQuerySource(geometry, "tensor_accessor::get_tensor_shape(tensor::local)")};
+    const std::string source =
+        MakeNonPublicTensorShapeQuerySource(geometry, "tensor_accessor::get_tensor_shape(tensor::local)");
+    ProgramSpec spec = MakeNonPublicGeometryProgramSpec(geometry, source);
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device(), spec));
 }
 
