@@ -8,12 +8,14 @@
 #include "core_span.hpp"
 
 void kernel_main() {
-    // common args: out (x' copies), xn, grid_x
+    // common args: out (x' copies), xn, grid_x, xnt (the normalised blocks tiled, B tiles)
     const uint32_t b = core_index(get_common_arg_val<uint32_t>(2));
     constexpr uint32_t C = get_compile_time_arg_val(0);
     constexpr uint32_t ROW_BYTES = get_compile_time_arg_val(1);
     constexpr auto o_args = TensorAccessorArgs<2>();
     constexpr auto n_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
+    constexpr auto t_args = TensorAccessorArgs<n_args.next_compile_time_args_offset()>();
+    const auto xnt = TensorAccessor(t_args, get_common_arg_val<uint32_t>(3), 2048);
     const auto out = TensorAccessor(o_args, get_common_arg_val<uint32_t>(0), ROW_BYTES);
     const auto xn = TensorAccessor(n_args, get_common_arg_val<uint32_t>(1), 2048);
     constexpr uint32_t cb_y = 16, cb_xn = 17;
@@ -29,7 +31,10 @@ void kernel_main() {
     for (uint32_t c = 0; c < C; ++c) {
         noc_async_write(l1, out.get_noc_addr(c, b * 2048), 2048);
     }
+    cb_wait_front(20, 1);  // the tiled normalised block -> tile b of xnt
+    noc_async_write(get_read_ptr(20), xnt.get_noc_addr(b), 2048);
     noc_async_write_barrier();
+    cb_pop_front(20, 1);
     cb_pop_front(cb_y, 1);
     cb_pop_front(cb_xn, 1);
 }

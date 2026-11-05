@@ -156,6 +156,11 @@ class NormRotation:
         xn = ttnn.allocate_tensor_on_device(
             ttnn.Shape(list(x.shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
         )
+        # the normalised blocks tiled ([B * 32, 32]: block b's element (jh, jl) = xn[1024 b + 32 jh + jl]), for the
+        # GDN step's a / b dot products (prerot.put_xnt; gdn_step.py ab_dot)
+        xnt = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([B * 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+        )
         grid = device.compute_with_storage_grid_size()
         crs = row_major_crs(B, grid.x)
 
@@ -179,6 +184,7 @@ class NormRotation:
             [C, K * 2]
             + ttnn.TensorAccessorArgs(out).get_compile_time_args()
             + ttnn.TensorAccessorArgs(xn).get_compile_time_args()
+            + ttnn.TensorAccessorArgs(xnt).get_compile_time_args()
         )
         program = ttnn.ProgramDescriptor(
             kernels=[
@@ -193,7 +199,7 @@ class NormRotation:
                     kernel_source=KERNELS + "nrot_writer.cpp",
                     core_ranges=crs,
                     compile_time_args=wr_ct,
-                    common_runtime_args=[out.buffer_address(), xn.buffer_address(), grid.x],
+                    common_runtime_args=[out.buffer_address(), xn.buffer_address(), grid.x, xnt.buffer_address()],
                     config=ttnn.WriterConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
@@ -224,9 +230,13 @@ class NormRotation:
                 cb(29, f32, 4096, 1),
                 cb(16, bf, 2048, 1),
                 cb(17, bf, 2048, 1),
+                cb(20, bf, 2048, 1),
             ],
         )
-        ttnn.generic_op([x, self.consts, out, xn], program)
+        ttnn.generic_op([x, self.consts, out, xn, xnt], program)
+        from models.demos.blackhole.bonsai2.tt.ternary import prerot
+
+        prerot.put_xnt(xn, xnt)
         return xn, out
 
 

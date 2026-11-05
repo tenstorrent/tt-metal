@@ -79,13 +79,17 @@ void kernel_main() {
 
     cb_reserve_back(cb_x, NCH);
     cb_reserve_back(cb_z, HT);
+#ifndef STEP_AB_DOT
     cb_reserve_back(cb_a, 1);
     cb_reserve_back(cb_b, 1);
+#endif
     cb_reserve_back(cb_t, NCH);
     cb_reserve_back(cb_s, HT * HT);
     cb_reserve_back(cb_w, HT);
     cb_reserve_back(cb_e, 1);
+#ifndef STEP_AB_DOT
     cb_reserve_back(cb_ones, 1);
+#endif
     cb_reserve_back(cb_sc, 2);
     cb_reserve_back(cb_n, 2);
     const uint32_t X = get_write_ptr(cb_x), Z = get_write_ptr(cb_z), A = get_write_ptr(cb_a), B = get_write_ptr(cb_b);
@@ -93,8 +97,10 @@ void kernel_main() {
 
     zero(X, NCH * TB);
     zero(Z, HT * TB);
+#ifndef STEP_AB_DOT
     zero(A, TB);
     zero(B, TB);
+#endif
     noc_async_read_barrier();  // the zero fills land before the row reads into the same pages
 
     // Phase 1: a, b, z (the compute starts with the gates and silu(z)).
@@ -103,6 +109,28 @@ void kernel_main() {
         noc_async_read(s, SC + NCH * 128 + i * 128, 64);
         noc_async_read(s + 512, SC + NCH * 128 + i * 128 + 64, 64);
     }
+#ifdef STEP_AB_DOT
+    // a / b come from the compute's dot products (gdn_step.py ab_dot): the normalised input's 5 tiled blocks (in
+    // the ab slot), this head's [a | b] weight blocks, and ONES (needed first now)
+    {
+        constexpr uint32_t cb_xnt = 25, cb_wab = 26, NBK = 5;
+        constexpr auto w_args = TensorAccessorArgs<c_args.next_compile_time_args_offset()>();
+        const auto ws = TensorAccessor(w_args, get_common_arg_val<uint32_t>(7 + 2 * (NV / GROUP)), TB);
+        cb_reserve_back(cb_xnt, NBK);
+        cb_reserve_back(cb_wab, 2 * NBK);
+        for (uint32_t t = 0; t < NBK; ++t) {
+            noc_async_read(ab.get_noc_addr(t), get_write_ptr(cb_xnt) + t * TB, TB);
+        }
+        for (uint32_t t = 0; t < 2 * NBK; ++t) {
+            noc_async_read(ws.get_noc_addr(j * 2 * NBK + t), get_write_ptr(cb_wab) + t * TB, TB);
+        }
+        noc_async_read(cs.get_noc_addr(NV * NCH + HT + 1), get_write_ptr(cb_ones), TB);
+        noc_async_read_barrier();
+        cb_push_back(cb_xnt, NBK);
+        cb_push_back(cb_wab, 2 * NBK);
+        cb_push_back(cb_ones, 1);
+    }
+#else
     const uint32_t ca = j, cbb = NV + j;  // a and b columns of the fused [a | b] projection
     noc_async_read(ab.get_noc_addr(ca / 32) + ((ca % 32) / 16) * 512, SC + TB, 64);
     noc_async_read(ab.get_noc_addr(cbb / 32) + ((cbb % 32) / 16) * 512, SC + TB + 64, 64);
@@ -112,13 +140,16 @@ void kernel_main() {
         fill_row0(A, h[ca % 16]);
         fill_row0(B, h[32 + cbb % 16]);
     }
+#endif
     for (uint32_t i = 0; i < HT; ++i) {
         copy32(Z + i * TB, SC + NCH * 128 + i * 128);
         copy32(Z + i * TB + 512, SC + NCH * 128 + i * 128 + 64);
     }
     noc_async_read_barrier();
+#ifndef STEP_AB_DOT
     cb_push_back(cb_a, 1);
     cb_push_back(cb_b, 1);
+#endif
     cb_push_back(cb_z, HT);
 
     // Phase 2: the conv inputs, taps and E.
@@ -151,8 +182,10 @@ void kernel_main() {
     cb_push_back(cb_t, NCH);
     cb_push_back(cb_e, 1);
 
-    // Phase 3: ONES, the state, the norm weight.
+    // Phase 3: ONES (unless read first), the state, the norm weight.
+#ifndef STEP_AB_DOT
     noc_async_read(cs.get_noc_addr(NV * NCH + HT + 1), get_write_ptr(cb_ones), TB);
+#endif
     const uint32_t S = get_write_ptr(cb_s);
     for (uint32_t t = 0; t < HT * HT; ++t) {
         noc_async_read(st.get_noc_addr(j * HT * HT + t), S + t * TB, TB);
@@ -162,7 +195,9 @@ void kernel_main() {
         noc_async_read(cs.get_noc_addr(NV * NCH + i), W + i * TB, TB);
     }
     noc_async_read_barrier();
+#ifndef STEP_AB_DOT
     cb_push_back(cb_ones, 1);
+#endif
     cb_push_back(cb_s, HT * HT);
     cb_push_back(cb_w, HT);
 

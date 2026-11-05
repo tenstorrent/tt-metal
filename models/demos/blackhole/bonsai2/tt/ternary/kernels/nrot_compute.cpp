@@ -128,6 +128,15 @@ void kernel_main() {
     mul_reuse_dest_init<TO_A>(cb_c);
     mul_reuse_dest_tiles<TO_A>(cb_c, WB, 0);
     put_untilized(cb_xn);
+    // the same block tiled (c_20): the GDN step's a / b dot products read it (gdn_step.py ab_dot)
+    tile_regs_acquire();
+    fmt(cb_xt, cb_inv);
+    mul_init(cb_xt, cb_inv);
+    mul_tiles(cb_xt, cb_inv, 0, 0, 0);
+    fmt(cb_c, cb_c);
+    mul_reuse_dest_init<TO_A>(cb_c);
+    mul_reuse_dest_tiles<TO_A>(cb_c, WB, 0);
+    put(20, 1);
     tile_regs_acquire();
     fmt(cb_xt, cb_inv);
     mul_init(cb_xt, cb_inv);

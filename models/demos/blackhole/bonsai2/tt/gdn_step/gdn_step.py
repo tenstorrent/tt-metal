@@ -63,7 +63,13 @@ class GDNStep:
         self.device = device
         self.compute_defines = ()  # e.g. (("STEP_ZONES", "1"),): profiler zones per phase
 
-    def __call__(self, qkv, ab, z, conv_state, rec_state):
+    def __call__(self, qkv, ab, z, conv_state, rec_state, xnt=None, wab=None):
+        """xnt / wab (ab_dot): compute a and b in the op from the normalised input's tiled blocks
+        (rotate.NormRotation) and this layer's per-head [a | b] weight blocks (pack_ab_heads) instead of reading
+        the a / b projection's output (ab is then unused)."""
+        ab_dot = xnt is not None
+        if ab_dot:
+            ab = xnt
         device, nv, ht = self.device, self.nv, self.ht
         lead = list(z.shape)[:-1]
         out = ttnn.allocate_tensor_on_device(ttnn.Shape(lead + [nv * self.hd]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
@@ -78,11 +84,11 @@ class GDNStep:
             lc = device.worker_core_from_logical_core(coords[self.group * kh])
             leaders += [lc.x, lc.y]
         addrs = [t.buffer_address() for t in (qkv, z, ab, conv_state, rec_state, self.consts)]
-        rd_c = addrs + [grid.x] + leaders
+        rd_c = addrs + [grid.x] + leaders + ([wab.buffer_address()] if ab_dot else [])
         wr_c = [rec_state.buffer_address(), out.buffer_address(), grid.x]
         cp_c = self.consts_scalar + [grid.x] + [_f32_bits(v) for v in self.dt_bias] + [_f32_bits(v) for v in self.a_neg]
         rd_ct = [nv, self.qkv_tiles, ht, self.group]
-        for t in (qkv, z, ab, conv_state, rec_state, self.consts):
+        for t in (qkv, z, ab, conv_state, rec_state, self.consts) + ((wab,) if ab_dot else ()):
             rd_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         wr_ct = [ht] + ttnn.TensorAccessorArgs(rec_state).get_compile_time_args()
         wr_ct += ttnn.TensorAccessorArgs(out).get_compile_time_args()
@@ -100,8 +106,8 @@ class GDNStep:
             cb(0, bf, nch),  # X: conv inputs
             cb(1, bf, nch),  # taps
             cb(2, bf, ht),  # z
-            cb(3, bf, 1),  # a (row 0 = a_j)
-            cb(4, bf, 1),  # b
+            cb(3, f32 if ab_dot else bf, 1),  # a (row 0 = a_j; ab_dot: every element)
+            cb(4, f32 if ab_dot else bf, 1),  # b
             cb(5, bf, ht * ht),  # S
             cb(6, bf, ht),  # norm weight
             cb(7, bf, 1),  # E
@@ -122,7 +128,11 @@ class GDNStep:
             cb(22, f32, ht),  # o
             cb(23, f32, ht),  # silu(z)
             cb(24, f32, 1),  # o inverse norm
-        ]
+        ] + (
+            [cb(25, bf, 5), cb(26, bf, 10), cb(27, f32, 1), cb(28, f32, 1)]  # ab_dot: xn blocks, w blocks, sums
+            if ab_dot
+            else []
+        )
         program = ttnn.ProgramDescriptor(
             kernels=[
                 ttnn.KernelDescriptor(
@@ -131,6 +141,7 @@ class GDNStep:
                     compile_time_args=rd_ct,
                     runtime_args=rd,
                     common_runtime_args=rd_c,
+                    defines=[("STEP_AB_DOT", "1")] if ab_dot else [],
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
@@ -147,7 +158,7 @@ class GDNStep:
                     compile_time_args=[nv],
                     runtime_args=cp,
                     common_runtime_args=cp_c,
-                    defines=list(self.compute_defines),
+                    defines=list(self.compute_defines) + ([("STEP_AB_DOT", "1")] if ab_dot else []),
                     config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.HiFi4,
                         fp32_dest_acc_en=True,
@@ -159,7 +170,18 @@ class GDNStep:
             semaphores=[ttnn.SemaphoreDescriptor(id=0, core_ranges=crs, initial_value=0)],
             cbs=cbs,
         )
-        return ttnn.generic_op([qkv, z, ab, conv_state, rec_state, self.consts, out], program)
+        return ttnn.generic_op(
+            [qkv, z, ab, conv_state, rec_state, self.consts] + ([wab] if ab_dot else []) + [out], program
+        )
+
+
+def pack_ab_heads(ab_kn: torch.Tensor) -> torch.Tensor:
+    """[K, 2 nv] bf16 a / b projection -> [nv * 2 * (K / 1024) * 32, 32]: per head j its a then b column, each as
+    K / 1024 tiled blocks with element (jh, jl) of block b = w[1024 b + 32 jh + jl] (rotate.NormRotation's xnt)."""
+    K, two_nv = ab_kn.shape
+    nv = two_nv // 2
+    w = torch.stack([ab_kn[:, :nv].T, ab_kn[:, nv:].T], 1)  # [nv, 2, K]
+    return w.reshape(nv * 2 * (K // 1024) * 32, 32).contiguous()
 
 
 def reference_step(qkv, ab, z, conv, S, taps, dt_bias, a_neg, norm_w, nk, hk, hd, eps_o, eps_qk=1e-6):

@@ -45,3 +45,18 @@ def residual_added():
     added = bool(_RESID) and _RESID[1]
     _RESID.clear()
     return added
+
+
+_XNT = {}
+
+
+def put_xnt(xn, xnt):
+    """The normalised activation's blocks tiled (rotate.NormRotation), for the GDN step's a / b dot products."""
+    _XNT.clear()
+    _XNT[id(xn)] = (xn, xnt)
+
+
+def take_xnt(x):
+    """xnt for x, or None (removed: used once)."""
+    hit = _XNT.pop(id(x), None)
+    return hit[1] if hit is not None and hit[0] is x else None

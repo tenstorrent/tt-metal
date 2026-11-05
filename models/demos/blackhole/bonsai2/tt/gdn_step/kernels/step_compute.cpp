@@ -30,6 +30,7 @@
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/addcmul.h"  // SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS
+#include "api/compute/eltwise_binary_sfpu.h"
 
 #ifdef TRISC_MATH
 namespace ckernel::sfpu {
@@ -96,6 +97,54 @@ void kernel_main() {
     const uint32_t a_neg = get_common_arg_val<uint32_t>(5 + NV + j);
 
     compute_kernel_hw_startup(cb_a, cb_b, cb_decay);
+
+#ifdef STEP_AB_DOT
+    {
+        ZONE("TD-ab");
+        // a = xn . w_a, b = xn . w_b (this head's columns of the bf16 a / b projection) over the 5 tiled blocks:
+        // exact products (HiFi4), the 5 summed on the SFPU in fp32, then ONES @ (P @ ONES): the sum in every element
+        constexpr uint32_t cb_xnt = 25, cb_wab = 26, cb_pp = 27, cb_rr = 28, NBK = 5;
+        cb_wait_front(cb_xnt, NBK);
+        cb_wait_front(cb_wab, 2 * NBK);
+        cb_wait_front(cb_ones, 1);
+        for (uint32_t h = 0; h < 2; ++h) {
+            tile_regs_acquire();
+            fmt(cb_xnt, cb_wab);
+            mul_init(cb_xnt, cb_wab);
+            for (uint32_t t = 0; t < NBK; ++t) {
+                mul_tiles(cb_xnt, cb_wab, t, NBK * h + t, t);
+            }
+            add_binary_tile_init();
+            for (uint32_t t = 1; t < NBK; ++t) {
+                add_binary_tile(0, t, 0);
+            }
+            cb_reserve_back(cb_pp, 1);
+            pack_n(1, cb_pp, 0);
+            cb_push_back(cb_pp, 1);
+            cb_wait_front(cb_pp, 1);
+            tile_regs_acquire();
+            fmt_mm(cb_pp, cb_ones);
+            matmul_init(cb_pp, cb_ones);
+            matmul_tiles(cb_pp, cb_ones, 0, 0, 0);
+            cb_reserve_back(cb_rr, 1);
+            pack_n(1, cb_rr, 0);
+            cb_push_back(cb_rr, 1);
+            cb_pop_front(cb_pp, 1);
+            cb_wait_front(cb_rr, 1);
+            tile_regs_acquire();
+            fmt_mm(cb_ones, cb_rr);
+            matmul_init(cb_ones, cb_rr);
+            matmul_tiles(cb_ones, cb_rr, 0, 0, 0);
+            const uint32_t to = h ? cb_b : cb_a;
+            cb_reserve_back(to, 1);
+            pack_n(1, to, 0);
+            cb_push_back(to, 1);
+            cb_pop_front(cb_rr, 1);
+        }
+        cb_pop_front(cb_xnt, NBK);
+        cb_pop_front(cb_wab, 2 * NBK);
+    }
+#endif
 
     {
         ZONE("TD-gates");

@@ -9,6 +9,8 @@ rotated activation. The GGUF orders the v heads grouped by key head ("gdn_v_grou
 rows and the z rows are reordered on the host, as Alejandro's converter does. out_proj needs no reorder: the
 converter kept ssm_out as is (its column-reorder candidate scored lower against the base model; conversion report)."""
 
+import os
+
 import numpy as np
 import torch
 
@@ -157,10 +159,17 @@ class TernaryGDN:
             xr = self.rot_in(x)
         qkv, z = self.qkvz(xr, lead=lead, split=self.split)
         ttnn.deallocate(xr)
-        ab = ttnn.linear(x, self.ab_w, compute_kernel_config=self.ab_ckc, program_config=self.ab_pc)
-        o = self.step(qkv, ab, z, gdn.fused_conv_state, gdn.recurrent_state)
-        for t in (qkv, z, ab):
-            ttnn.deallocate(t)
+        xnt = prerot.take_xnt(x) if getattr(self, "wab", None) is not None else None
+        if xnt is not None and os.environ.get("BONSAI_STEP_AB", "1") == "1":
+            # a / b inside the step: dot products of the norm op's tiled blocks with this head's weight blocks
+            o = self.step(qkv, None, z, gdn.fused_conv_state, gdn.recurrent_state, xnt=xnt, wab=self.wab)
+            for t in (qkv, z):
+                ttnn.deallocate(t)
+        else:
+            ab = ttnn.linear(x, self.ab_w, compute_kernel_config=self.ab_ckc, program_config=self.ab_pc)
+            o = self.step(qkv, ab, z, gdn.fused_conv_state, gdn.recurrent_state)
+            for t in (qkv, z, ab):
+                ttnn.deallocate(t)
         y = self.out_proj(o)
         ttnn.deallocate(o)
         return y
@@ -226,13 +235,20 @@ def swap_in_ternary_gdn(model, gguf, cache_dir=None, prefill_rotations=None) -> 
             if t is not None:
                 ttnn.deallocate(t)
         # a / b in their exact bf16 values (the dense path's copy is bfloat8_b)
+        ab_kn = exact_ab(gguf, layer.layer_num)
         ab = ttnn.from_torch(
-            exact_ab(gguf, layer.layer_num), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ab_kn, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # fmt: skip
         ttnn.deallocate(w.ab_proj_weight)
         w.ab_proj_weight = ab
         gdn.ternary = TernaryGDN(
             device, packed, rot_in, rot_out, w.ab_proj_weight, step=make_gdn_step(gdn, nk, hk),
             prefill_rotations=prefill_rotations,
+        )  # fmt: skip
+        # per-head [a | b] weight blocks for the step's own a / b (gdn_step.pack_ab_heads)
+        from models.demos.blackhole.bonsai2.tt.gdn_step.gdn_step import pack_ab_heads
+
+        gdn.ternary.wab = ttnn.from_torch(
+            pack_ab_heads(ab_kn), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # fmt: skip
