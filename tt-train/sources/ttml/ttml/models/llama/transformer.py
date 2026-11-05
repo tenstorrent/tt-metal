@@ -107,6 +107,8 @@ class LlamaMLP(AbstractModuleBase):
                 has_bias=False,
                 gather_output=False,
                 axis_name="tp",
+                # Global segment sizes of the fused [gate | up] weight, so checkpoints can reshard it across TP sizes.
+                fused_segments=(intermediate_size, intermediate_size),
             )
             self.w2 = RowParallelLinear(
                 intermediate_size,

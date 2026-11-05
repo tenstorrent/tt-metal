@@ -86,6 +86,8 @@ class GroupedQueryAttention(AbstractModuleBase):
                 bias_init=ttml.init.zeros(),
                 gather_output=False,
                 axis_name="tp",
+                # Global segment sizes of the fused [Q | K | V] weight, so checkpoints can reshard it across TP sizes.
+                fused_segments=(num_heads * head_dim, num_groups * head_dim, num_groups * head_dim),
             )
             self.out_linear = RowParallelLinear(
                 embedding_size,
