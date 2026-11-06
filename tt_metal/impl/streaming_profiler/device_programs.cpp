@@ -134,10 +134,7 @@ bool can_capture(const Hal& hal, const llrt::RunTimeOptions& rtoptions) {
            hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
 }
 
-// A mock cluster builds kernels as silicon does, profiler code included, but runs nothing, so nothing captures there.
-bool can_capture(const MetalContext& mc) {
-    return can_capture(mc.hal(), mc.rtoptions()) && mc.get_cluster().get_target_device_type() != tt::TargetDevice::Mock;
-}
+bool can_capture(const MetalContext& mc) { return can_capture(mc.hal(), mc.rtoptions()); }
 
 CoreCoords locate_core(tt::Cluster& cluster, uint32_t chip, const CoreCoord& logical, CoreType type) {
     CoreCoord phys = cluster.get_physical_coordinate_from_logical_coordinates(chip, logical, type, /*no_warn=*/true);
@@ -231,13 +228,13 @@ bool DevicePrograms::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_d
     auto& cluster = mc_->get_cluster();
     const auto& hal = mc_->hal();
     const auto& rtopts = mc_->rtoptions();
-    if (cluster.get_target_device_type() == tt::TargetDevice::Mock) {
-        log_info(tt::LogMetal, "[streaming profiler] mock cluster: kernels are built with the profiler, nothing runs");
-        return false;
-    }
     if (!can_capture(*mc_)) {
         log_warning(
             tt::LogMetal, "[streaming profiler] not capturing: it needs Blackhole with DRAM programmable cores");
+        return false;
+    }
+    if (cluster.get_target_device_type() == tt::TargetDevice::Mock) {
+        log_info(tt::LogMetal, "[streaming profiler] mock cluster: kernels are built with the profiler, nothing runs");
         return false;
     }
     fabric_link_sync_ = mc_->get_fabric_config() != tt_fabric::FabricConfig::DISABLED;
