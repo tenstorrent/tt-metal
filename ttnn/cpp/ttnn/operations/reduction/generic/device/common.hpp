@@ -62,7 +62,7 @@ inline uint32_t dense_rm_padding_identity_bits(tt::DataFormat df, tt::tt_metal::
     return static_cast<uint32_t>(bf16);
 }
 
-// True for the 32-bit integer dtypes. Both reduce natively on the SFPU with the same steps.
+// True for the 32-bit integer dtypes. Both take the SFPU reduce path with the same steps.
 // They differ only in signed vs unsigned compare and in their pad sentinels.
 inline bool is_int_reduce_dtype(tt::tt_metal::DataType dtype) {
     return dtype == tt::tt_metal::DataType::INT32 || dtype == tt::tt_metal::DataType::UINT32;

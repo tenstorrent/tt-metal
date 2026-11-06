@@ -26,12 +26,12 @@ namespace compute_kernel_lib {
 namespace detail {
 
 // SFPU MAX fold
-// UInt32 folds do not exist on Quasar
+// UInt32 folds do not exist on Quasar.
 template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_init() {
     if constexpr (format == DataFormat::Int32) {
         binary_max_int32_tile_init();
-    } else if constexpr (format == DataFormat::UInt32) {
+    } else if constexpr (is_uint32_format(format)) {
 #ifndef ARCH_QUASAR
         binary_max_uint32_tile_init();
 #endif
@@ -44,7 +44,7 @@ template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     if constexpr (format == DataFormat::Int32) {
         binary_max_int32_tile(a, b, out);
-    } else if constexpr (format == DataFormat::UInt32) {
+    } else if constexpr (is_uint32_format(format)) {
 #ifndef ARCH_QUASAR
         binary_max_uint32_tile(a, b, out);
 #endif
@@ -58,7 +58,7 @@ template <DataFormat format>
 ALWI void sfpu_reduce_min_fold_init() {
     if constexpr (format == DataFormat::Int32) {
         binary_min_int32_tile_init();
-    } else if constexpr (format == DataFormat::UInt32) {
+    } else if constexpr (is_uint32_format(format)) {
 #ifndef ARCH_QUASAR
         binary_min_uint32_tile_init();
 #endif
@@ -71,7 +71,7 @@ template <DataFormat format>
 ALWI void sfpu_reduce_min_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     if constexpr (format == DataFormat::Int32) {
         binary_min_int32_tile(a, b, out);
-    } else if constexpr (format == DataFormat::UInt32) {
+    } else if constexpr (is_uint32_format(format)) {
 #ifndef ARCH_QUASAR
         binary_min_uint32_tile(a, b, out);
 #endif
