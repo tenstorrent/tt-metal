@@ -161,6 +161,7 @@ class Decoder:
         self.script = []
         self.replays = 0
         self.results = []
+        self.plans = []  # the sampling plan of every replay (None without GEMMA4_SPEC_SAMPLED_VERIFY)
         self.buffer = None  # the one verify-logits buffer; rewritten by every step and reseed
         self.readbacks = 0
         self.reseed_tables = []  # the [B_v, blocks] table of every serving_reseed call
@@ -272,7 +273,7 @@ class Decoder:
     def serving_step_phases(self):
         return {}
 
-    def serving_step(self, shape, rows, anchors, positions, page_tables, seed_cols):
+    def serving_step(self, shape, rows, anchors, positions, page_tables, seed_cols, sampling=None):
         self._check(shape)
         shape = tuple(shape)
         rows, anchors, positions, seed_cols = list(rows), list(anchors), list(positions), list(seed_cols)
@@ -282,6 +283,11 @@ class Decoder:
         width = self.width_for(shape, positions)
         if width is None:
             raise ValueError(f"no rung of {shape} covers positions {positions}")
+        # GEMMA4_SPEC_SAMPLED_VERIFY: the replay's SamplingRowsPlan (None = the argmax ids for every row), kept
+        # per replay beside the step event (the event tuple is what the tests compare)
+        if sampling is not None and (sampling.B, sampling.P) != (int(shape[0]), int(shape[1]) + 1):
+            raise ValueError(f"shape {shape}: the sampling plan is for {(sampling.B, sampling.P)}")
+        self.plans.append(sampling)
         self.replays += 1
         self.events.append(("step", shape, rows, anchors, positions, seed_cols, width, page_tables.tolist()))
         b_v, k_v = shape

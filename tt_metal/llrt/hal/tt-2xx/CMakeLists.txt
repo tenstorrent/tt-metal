@@ -14,6 +14,13 @@ set(HAL_INCLUDE_DIRS
 add_library(qa_hal OBJECT ${QA_HAL_SRC})
 add_dependencies(qa_hal hal_generate_dev_msgs_header)
 target_sources(qa_hal PRIVATE ${QA_HAL_SOURCES})
+set_source_files_properties(
+    ${QA_HAL_VARIANT_L1_SOURCES}
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            TRUE
+)
+target_sources(qa_hal PRIVATE ${QA_HAL_VARIANT_L1_SOURCES})
 target_include_directories(qa_hal BEFORE PRIVATE ${HAL_INCLUDE_DIRS})
 target_include_directories(
     qa_hal

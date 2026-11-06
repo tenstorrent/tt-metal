@@ -128,16 +128,19 @@ constexpr uint32_t cb_mailbox_writer = CT(CB_MAILBOX_WRITER);
 
 constexpr uint32_t RT_PEERS = 17;  // KGROUPS (vx, vy) pairs — the whole column, in row order
 constexpr uint32_t RT_HRECT = RT_PEERS + 2 * KGROUPS;
-// Per-expert weight bases, role-major: EXPERTS_PER_CHIP W_up addresses then EXPERTS_PER_CHIP
-// W_down addresses. Appended AFTER the mcast rectangle, so none of the offsets above moved. Absent
-// when the union kernel reads them from its weight table instead; see hybrid_weight_table.hpp.
-constexpr uint32_t RT_WEIGHTS = RT_HRECT + 4;
+// Buffer bases are COMMON runtime args both halves share: [4] output, and from [6] the per-expert weight bases,
+// role-major with EXPERTS_PER_CHIP addresses per role (gate, up, down, ...); see moe_fused_swiglu_reader.cpp.
+// The union kernel reads the weight bases from its weight table instead; see hybrid_weight_table.hpp.
+constexpr uint32_t CRT_OUT = 4;
 #ifdef HYB_WEIGHT_TABLE
 inline uint32_t w_up_addr(uint32_t e) { return hyb_weight_addr(HYB_W_UP, EXPERTS_PER_CHIP, e); }
 inline uint32_t w_down_addr(uint32_t e) { return hyb_weight_addr(HYB_W_DOWN, EXPERTS_PER_CHIP, e); }
 #else
-inline uint32_t w_up_addr(uint32_t e) { return get_arg_val<uint32_t>(RT_WEIGHTS + e); }
-inline uint32_t w_down_addr(uint32_t e) { return get_arg_val<uint32_t>(RT_WEIGHTS + EXPERTS_PER_CHIP + e); }
+constexpr uint32_t CRT_WEIGHTS = 6;
+inline uint32_t w_up_addr(uint32_t e) { return get_common_arg_val<uint32_t>(CRT_WEIGHTS + 1 * EXPERTS_PER_CHIP + e); }
+inline uint32_t w_down_addr(uint32_t e) {
+    return get_common_arg_val<uint32_t>(CRT_WEIGHTS + 2 * EXPERTS_PER_CHIP + e);
+}
 #endif
 constexpr bool kHMcastPosted = (H_MCAST_POSTED != 0);
 
@@ -226,7 +229,7 @@ void kernel_main() {
     CircularBuffer h_buf(cb_h);
     CircularBuffer mailbox_buf(cb_mailbox_writer);
     (void)get_arg_val<uint32_t>(0);  // retained runtime slot for cache-compatible argument layout
-    const uint32_t out_addr = get_arg_val<uint32_t>(2);
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(CRT_OUT);
     const uint32_t kr = get_arg_val<uint32_t>(4);
     const uint32_t kstart = get_arg_val<uint32_t>(5);
     const uint32_t hstart = get_arg_val<uint32_t>(6);

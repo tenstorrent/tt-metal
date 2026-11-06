@@ -19,6 +19,12 @@
 
 #include "combine_fabric2d_stream.hpp"
 
+namespace cmbf2d {
+// The program-semaphore id an optional handshake gets when the owning op has nothing to signal it: the
+// kernel compiles the wait out instead of spinning on a count nobody bumps.
+constexpr uint32_t NO_SEMAPHORE = 0xFFFFFFFFu;
+}  // namespace cmbf2d
+
 #ifndef KERNEL_BUILD
 #include <vector>
 
@@ -140,7 +146,8 @@ struct DramBuffers {
     tt::tt_metal::Buffer* counts = nullptr;
     tt::tt_metal::Buffer* region = nullptr;
     tt::tt_metal::Buffer* expert_offsets = nullptr;
-    // Null unless combine runs overlapped: only then is there an id table to read the walk order from.
+    // The table naming each ring chip's experts. Null when the caller gave none, and the experts are then
+    // laid out contiguously in dispatch-group order.
     tt::tt_metal::Buffer* expert_table = nullptr;
 };
 
@@ -152,12 +159,13 @@ struct KernelPlan {
     uint32_t ring_filled_slot = 0;
     uint32_t ring_freed_slot = 0;
     uint32_t final_arrived_addr = 0;
-    // Overlapped only: this ring's first row of global_expert_idx_table.
+    // This ring's first row of the expert id table, when there is one.
     uint32_t expert_table_page_base = 0;
-    // Standalone only: the launch credit's address, and the downstream chip's stream core that sends back to
-    // this chip, which this chip's sender grants it to. Per LAUNCH, and so orthogonal to the per-page channel
-    // credits below: this one says the downstream chip has finished the previous launch and its region may be
-    // written again at all, those say which pages of this launch's region are free.
+    // The launch credit's address, and the downstream chip's stream core that sends back to this chip, which
+    // this chip's sender grants it to. Per LAUNCH, and so orthogonal to the per-page channel credits below:
+    // this one says the downstream chip has finished the previous launch and its region may be written again
+    // at all, those say which pages of this launch's region are free. Zero when the op allocated no credit,
+    // and then the sender neither grants nor takes one.
     uint32_t launch_credit_addr = 0;
     tt::tt_metal::CoreCoord launch_credit_core;
     uint32_t credit_done_addr = 0;
@@ -184,17 +192,19 @@ struct ReaderUntilizers {
     std::vector<HandshakePeer> peers;
 };
 
-// The per-core values an untilizer needs that are not read off the arguments.
+// The values an untilizer group needs that are not read off the arguments. A core's position in the group and
+// its produced count are runtime arguments, since one kernel serves the whole group.
 struct UntilizerPlan {
     uint32_t my_expert_base = 0;
-    // Overlapped only: where the routed expert's id table starts, and the readiness count it publishes.
+    // This ring's first row of the expert id table, when there is one.
     uint32_t expert_table_page_base = 0;
-    uint32_t ready_sem = 0;
-    uint32_t my_index = 0;   // position in the group
+    // The count a producer still writing the dispatched buffer publishes as its experts complete, and its
+    // per-chunk release of one. NO_SEMAPHORE when every tile-row is written before the launch.
+    uint32_t ready_sem = cmbf2d::NO_SEMAPHORE;
+    uint32_t progress_sem = cmbf2d::NO_SEMAPHORE;
     uint32_t num_peers = 0;  // cores in the group
     uint32_t walks_down = 0;
     uint32_t control_addr = 0;
-    uint32_t produced_slot = 0;  // the counter this core owns on each of its consumers
     std::vector<HandshakePeer> consumers;
 };
 
@@ -225,8 +235,8 @@ constexpr uint32_t BATCH = NUM_L1_SLOTS / 2;
 constexpr uint32_t META_PREFETCH = 64;
 constexpr uint32_t META_PAD_STRIDE = 64;
 
-// Overlapped only: control-table rows are 64-byte aligned because a DRAM read needs an aligned L1
-// destination, and the id table follows the offsets a whole row at a time.
+// Control-table rows are 64-byte aligned because a DRAM read needs an aligned L1 destination, and the id
+// table follows the offsets a whole row at a time.
 constexpr uint32_t align_control(uint32_t bytes) { return (bytes + 63u) & ~63u; }
 constexpr uint32_t expert_table_row_stride(uint32_t experts_per_chip) {
     return align_control(experts_per_chip * static_cast<uint32_t>(sizeof(uint32_t)));

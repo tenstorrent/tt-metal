@@ -270,6 +270,41 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoLinked1x2Meshes_OnFour
         ::testing::UnorderedElementsAre(std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103}));
 }
 
+// Solving on a subset of a larger system: host1's ASIC 103 still reports its eth link to ASIC 104 on
+// host2, which is not part of the solve and so has no ASIC descriptor. That link leaves the graph
+// being solved against and must not reach the solver.
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_SubsetOfHosts_IgnoresLinksLeavingSubset) {
+    using namespace ::tt::tt_fabric;
+
+    auto pgd = unspecified_line_1x2_pgd();
+    auto mgd = two_1x2_meshes_mgd();
+    const auto full_psd = build_mock_psd({"host0", "host0", "host1", "host1", "host2", "host2"}, line_edges(6));
+    auto psd = restrict_mock_psd_to_hosts(full_psd, {"host0", "host1"});
+    ASSERT_FALSE(psd.find_physical_node_id(tt::tt_metal::AsicID{104}).has_value());
+
+    TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    const auto mapping = map_multi_mesh_to_physical(psd, pgd, mgd, config);
+    ASSERT_TRUE(mapping.success) << mapping.error_message;
+    EXPECT_EQ(mapping.fabric_node_to_physical.size(), 4u);
+    EXPECT_THAT(
+        mapped_asic_footprints(mapping, psd),
+        ::testing::UnorderedElementsAre(std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103}));
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildFlatAdjacencyMapFromPsd_SubsetOfHosts_PrunesLinksLeavingSubset) {
+    const auto full_psd =
+        build_mock_psd({"host0", "host0", "host1", "host1", "host2", "host2"}, line_edges(6), /*channels=*/2);
+    auto psd = restrict_mock_psd_to_hosts(full_psd, {"host0", "host1"});
+    auto node = [&](uint64_t asic_id) { return psd.get_physical_node_id(tt::tt_metal::AsicID{asic_id}); };
+
+    const auto flat_adj = build_flat_adjacency_map_from_psd(psd);
+
+    EXPECT_EQ(flat_adj.size(), 4u);
+    ASSERT_TRUE(flat_adj.contains(node(103)));
+    EXPECT_THAT(flat_adj.at(node(103)), ::testing::ElementsAre(node(102), node(102)));
+}
+
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_IncompatibleTopology_Fails) {
     using namespace ::tt::tt_fabric;
 

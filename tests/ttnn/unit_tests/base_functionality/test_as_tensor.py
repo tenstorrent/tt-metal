@@ -71,6 +71,45 @@ def test_as_tensor_with_cache(tmp_path, device, height, width):
     assert torch.allclose(torch_input_tensor, torch_output_tensor)
 
 
+def test_as_tensor_cache_hit_applies_requested_memory_config(tmp_path, device):
+    torch_input_tensor = torch.rand((64, 32), dtype=torch.float32)
+    kwargs = dict(
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        cache_file_name=tmp_path / "cache_file",
+    )
+
+    dram_tensor = ttnn.as_tensor(torch_input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kwargs)
+    assert ttnn.get_memory_config(dram_tensor) == ttnn.DRAM_MEMORY_CONFIG
+
+    # The second call hits the cache, so it ignores the zeros and still has to honor the requested config.
+    l1_tensor = ttnn.as_tensor(torch.zeros_like(torch_input_tensor), memory_config=ttnn.L1_MEMORY_CONFIG, **kwargs)
+    assert ttnn.get_memory_config(l1_tensor) == ttnn.L1_MEMORY_CONFIG
+    assert torch.allclose(ttnn.to_torch(l1_tensor), torch_input_tensor)
+
+
+def test_as_tensor_cache_hit_applies_requested_sharded_memory_config(tmp_path, device):
+    torch_input_tensor = torch.rand((64, 32), dtype=torch.float32)
+    kwargs = dict(
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        cache_file_name=tmp_path / "cache_file",
+    )
+
+    dram_tensor = ttnn.as_tensor(torch_input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kwargs)
+    assert ttnn.get_memory_config(dram_tensor) == ttnn.DRAM_MEMORY_CONFIG
+
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
+    shard_spec = ttnn.ShardSpec(shard_grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_l1 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    sharded_tensor = ttnn.as_tensor(torch.zeros_like(torch_input_tensor), memory_config=sharded_l1, **kwargs)
+    assert ttnn.get_memory_config(sharded_tensor) == sharded_l1
+    assert torch.allclose(ttnn.to_torch(sharded_tensor), torch_input_tensor)
+
+
 @pytest.mark.parametrize("height", [7])
 @pytest.mark.parametrize("width", [3])
 def test_as_tensor_with_cache_local_dump(tmp_path, device, height, width):
