@@ -14,68 +14,107 @@ To build and execute, you may use the following commands:
 
 ## Mesh setup
 
-Create a 1x1 mesh device, obtain the mesh command queue, construct a workload and coordinate range, and create a program.
+Create a 1x1 mesh device, obtain the mesh command queue, and construct a workload and coordinate range. The program is created later from a program spec.
 
 ```cpp
 constexpr int device_id = 0;
-auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 distributed::MeshWorkload workload;
 distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-Program program = CreateProgram();
 ```
 
-## Create buffers in DRAM and L1
+## Create tensors in DRAM and L1
 
-We allocate a single-tile L1 buffer and two DRAM buffers (each 50 tiles). Use a page size equal to one tile so transfers operate tile-by-tile.
+We allocate a single-tile L1 tensor and two DRAM tensors (each 50 tiles). Each row of a row-major tensor is one page, so a row of one tile's worth of elements gives a page size equal to one tile and transfers operate tile-by-tile.
 
 ```cpp
 constexpr uint32_t num_tiles = 50;
 constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
-constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
-constexpr uint32_t dram_buffer_size = tile_size_bytes * num_tiles;
 
-distributed::DeviceLocalBufferConfig l1_config{ .page_size = tile_size_bytes, .buffer_type = BufferType::L1 };
-distributed::DeviceLocalBufferConfig dram_config{ .page_size = tile_size_bytes, .buffer_type = BufferType::DRAM };
-distributed::ReplicatedBufferConfig l1_buffer_config{ .size = tile_size_bytes };
-distributed::ReplicatedBufferConfig dram_buffer_config{ .size = dram_buffer_size };
+TensorSpec dram_tensor_spec(
+    Shape({num_tiles, elements_per_tile}),
+    TensorLayout(
+        DataType::BFLOAT16,
+        PageConfig(Layout::ROW_MAJOR),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+TensorSpec l1_tensor_spec(
+    Shape({1, elements_per_tile}),
+    TensorLayout(
+        DataType::BFLOAT16,
+        PageConfig(Layout::ROW_MAJOR),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));  // This time we allocate on L1
 
-auto l1_buffer = distributed::MeshBuffer::create(l1_buffer_config, l1_config, mesh_device.get());
-auto input_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
-auto output_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
+MeshTensor l1_tensor = MeshTensor::allocate_on_device(*mesh_device, l1_tensor_spec);
+MeshTensor input_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+MeshTensor output_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
 ```
 
 ## Data movement kernel
 
-Declare the data movement kernel on core `{0,0}` that performs the copy.
+Describe the data movement kernel on core `{0,0}` that performs the copy. The kernel binds the program's tensor parameters `input` and `output` under the accessor names `src` and `dst`, and declares the names of its runtime arguments. A `ProgramSpec` collects the kernel, the tensor parameters, and the work unit (the cores the kernel runs on), and `MakeProgramFromSpec` creates the program.
 
 ```cpp
-constexpr CoreCoord core = {0, 0};
-std::vector<uint32_t> dram_copy_compile_time_args;
-TensorAccessorArgs(*input_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
-TensorAccessorArgs(*output_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
-auto dram_copy_kernel_id = CreateKernel(
-    program,
-    "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
-    core,
-    DataMovementConfig{ .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = dram_copy_compile_time_args });
+constexpr experimental::NodeCoord core = {0, 0};
+
+const experimental::KernelSpecName dram_copy_kernel{"dram_copy"};
+const experimental::TensorParamName input_tensor_param{"input"};
+const experimental::TensorParamName output_tensor_param{"output"};
+
+experimental::KernelSpec dram_copy_kernel_spec{
+    .unique_id = dram_copy_kernel,
+    .source = OVERRIDE_KERNEL_PREFIX "loopback/kernels/loopback_dram_copy.cpp",
+    .tensor_bindings =
+        {{.tensor_parameter_name = input_tensor_param, .accessor_name = "src"},
+         {.tensor_parameter_name = output_tensor_param, .accessor_name = "dst"}},
+    .runtime_arg_schema = {.runtime_arg_names = {"l1_buffer_addr", "num_tiles"}},
+    .hw_config =
+        experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+        },
+};
+
+experimental::ProgramSpec program_spec{
+    .name = "loopback",
+    .kernels = {dram_copy_kernel_spec},
+    .tensor_parameters =
+        {{.unique_id = input_tensor_param, .spec = dram_tensor_spec},
+         {.unique_id = output_tensor_param, .spec = dram_tensor_spec}},
+    .work_units = {{.name = "loopback", .kernels = {dram_copy_kernel}, .target_nodes = core}},
+};
+Program program = experimental::MakeProgramFromSpec(*mesh_device, program_spec);
 ```
 
 ## Upload input data
 
-Upload a randomly generated bfloat16 vector to the input DRAM buffer. Use non-blocking upload to overlap with host setup.
+Upload a randomly generated bfloat16 vector to the input DRAM tensor. The upload is non-blocking, to overlap with host setup.
 
 ```cpp
 std::vector<bfloat16> input_vec(elements_per_tile * num_tiles);
 // ... fill input_vec ...
-distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, /*blocking=*/false);
+HostTensor input_host_tensor = HostTensor::from_vector(input_vec, dram_tensor_spec);
+cq.enqueue_write_tensor(input_host_tensor, input_dram_tensor);
 ```
 
 ## Set runtime arguments
 
+Set the named runtime arguments of the kernel, and bind the DRAM tensors to the program's tensor parameters.
+
 ```cpp
-const std::vector<uint32_t> runtime_args = { l1_buffer->address(), input_dram_buffer->address(), output_dram_buffer->address(), num_tiles };
-SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
+experimental::ProgramRunArgs run_args{
+    .kernel_run_args = {{
+        .kernel = dram_copy_kernel,
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            core,
+            {{"l1_buffer_addr", static_cast<uint32_t>(l1_tensor.address())}, {"num_tiles", num_tiles}}),
+    }},
+    .tensor_args =
+        {{input_tensor_param, experimental::TensorArgument{input_dram_tensor}},
+         {output_tensor_param, experimental::TensorArgument{output_dram_tensor}}},
+};
+experimental::SetProgramRunArgs(program, run_args);
 ```
 
 ## Launch and wait
@@ -90,11 +129,10 @@ distributed::Finish(cq);
 
 ## Read back and verify
 
-Read the output buffer back from the shard at `{0,0}` and compare with the input.
+Read the output tensor back and compare with the input.
 
 ```cpp
-std::vector<bfloat16> result_vec;
-distributed::ReadShard(cq, result_vec, output_dram_buffer, distributed::MeshCoordinate(0, 0), /*blocking*/ true);
+std::vector<bfloat16> result_vec = cq.enqueue_read_tensor(output_dram_tensor).to_vector<bfloat16>();
 // compare result_vec to input_vec
 ```
 

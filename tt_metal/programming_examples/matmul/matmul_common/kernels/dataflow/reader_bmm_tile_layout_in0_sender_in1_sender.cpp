@@ -4,68 +4,65 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/semaphore.h"
+#include "experimental/kernel_args.h"
 #include "hostdevcommon/common_values.hpp"
 
 void kernel_main() {
     // in0 tensor args
-    uint32_t in0_tensor_addr = get_arg_val<uint32_t>(0);
-    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(1);
-    uint32_t in0_tensor_stride_w = get_arg_val<uint32_t>(2);
-    uint32_t in0_tensor_stride_h = get_arg_val<uint32_t>(3);
-    uint32_t in0_tensor_next_block_stride = get_arg_val<uint32_t>(4);
+    uint32_t in0_tensor_start_tile_id = get_arg(args::in0_tensor_start_tile_id);
+    uint32_t in0_tensor_stride_w = get_arg(args::in0_tensor_stride_w);
+    uint32_t in0_tensor_stride_h = get_arg(args::in0_tensor_stride_h);
+    uint32_t in0_tensor_next_block_stride = get_arg(args::in0_tensor_next_block_stride);
 
     // in0 block args
-    uint32_t in0_block_w = get_arg_val<uint32_t>(5);
-    uint32_t in0_block_h = get_arg_val<uint32_t>(6);
-    uint32_t in0_block_num_tiles = get_arg_val<uint32_t>(7);
+    uint32_t in0_block_w = get_arg(args::in0_block_w);
+    uint32_t in0_block_h = get_arg(args::in0_block_h);
+    uint32_t in0_block_num_tiles = get_arg(args::in0_block_num_tiles);
 
     // in1 tensor args
-    uint32_t in1_tensor_addr = get_arg_val<uint32_t>(8);
-    uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(9);
-    uint32_t in1_tensor_stride_w = get_arg_val<uint32_t>(10);
-    uint32_t in1_tensor_stride_h = get_arg_val<uint32_t>(11);
-    uint32_t in1_tensor_next_block_stride = get_arg_val<uint32_t>(12);
+    uint32_t in1_tensor_start_tile_id = get_arg(args::in1_tensor_start_tile_id);
+    uint32_t in1_tensor_stride_w = get_arg(args::in1_tensor_stride_w);
+    uint32_t in1_tensor_stride_h = get_arg(args::in1_tensor_stride_h);
+    uint32_t in1_tensor_next_block_stride = get_arg(args::in1_tensor_next_block_stride);
 
     // in1 block args
-    uint32_t in1_block_w = get_arg_val<uint32_t>(13);
-    uint32_t in1_block_h = get_arg_val<uint32_t>(14);
-    uint32_t in1_block_num_tiles = get_arg_val<uint32_t>(15);
+    uint32_t in1_block_w = get_arg(args::in1_block_w);
+    uint32_t in1_block_h = get_arg(args::in1_block_h);
+    uint32_t in1_block_num_tiles = get_arg(args::in1_block_num_tiles);
 
     // in0/in1 common args
-    uint32_t num_blocks = get_arg_val<uint32_t>(16);
+    uint32_t num_blocks = get_arg(args::num_blocks);
 
     // in0 mcast args
-    uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(17);
-    uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(18);
-    uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(19);
-    uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(20);
-    uint32_t in0_mcast_num_dests = get_arg_val<uint32_t>(21);
-    uint32_t in0_mcast_sender_noc_x = get_arg_val<uint32_t>(22);
-    uint32_t in0_mcast_sender_noc_y = get_arg_val<uint32_t>(23);
-    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(24));
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(25));
+    uint32_t in0_mcast_dest_noc_start_x = get_arg(args::in0_mcast_dest_noc_start_x);
+    uint32_t in0_mcast_dest_noc_start_y = get_arg(args::in0_mcast_dest_noc_start_y);
+    uint32_t in0_mcast_dest_noc_end_x = get_arg(args::in0_mcast_dest_noc_end_x);
+    uint32_t in0_mcast_dest_noc_end_y = get_arg(args::in0_mcast_dest_noc_end_y);
+    uint32_t in0_mcast_num_dests = get_arg(args::in0_mcast_num_dests);
+    uint32_t in0_mcast_sender_noc_x = get_arg(args::in0_mcast_sender_noc_x);
+    uint32_t in0_mcast_sender_noc_y = get_arg(args::in0_mcast_sender_noc_y);
 
     // in1 mcast args
-    uint32_t in1_mcast_dest_noc_start_x = get_arg_val<uint32_t>(26);
-    uint32_t in1_mcast_dest_noc_start_y = get_arg_val<uint32_t>(27);
-    uint32_t in1_mcast_dest_noc_end_x = get_arg_val<uint32_t>(28);
-    uint32_t in1_mcast_dest_noc_end_y = get_arg_val<uint32_t>(29);
-    uint32_t in1_mcast_num_dests = get_arg_val<uint32_t>(30);
-    uint32_t in1_mcast_sender_noc_x = get_arg_val<uint32_t>(31);
-    uint32_t in1_mcast_sender_noc_y = get_arg_val<uint32_t>(32);
-    uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(33));
-    uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(34));
+    uint32_t in1_mcast_dest_noc_start_x = get_arg(args::in1_mcast_dest_noc_start_x);
+    uint32_t in1_mcast_dest_noc_start_y = get_arg(args::in1_mcast_dest_noc_start_y);
+    uint32_t in1_mcast_dest_noc_end_x = get_arg(args::in1_mcast_dest_noc_end_x);
+    uint32_t in1_mcast_dest_noc_end_y = get_arg(args::in1_mcast_dest_noc_end_y);
+    uint32_t in1_mcast_num_dests = get_arg(args::in1_mcast_num_dests);
+    uint32_t in1_mcast_sender_noc_x = get_arg(args::in1_mcast_sender_noc_x);
+    uint32_t in1_mcast_sender_noc_y = get_arg(args::in1_mcast_sender_noc_y);
 
     // batch args
-    uint32_t MtKt = get_arg_val<uint32_t>(35);  // if 0
-    uint32_t KtNt = get_arg_val<uint32_t>(36);
-    uint32_t batch = get_arg_val<uint32_t>(37);
-    uint32_t bcast_B = get_arg_val<uint32_t>(38);
+    uint32_t MtKt = get_arg(args::MtKt);  // if 0
+    uint32_t KtNt = get_arg(args::KtNt);
+    uint32_t batch = get_arg(args::batch);
+    uint32_t bcast_B = get_arg(args::bcast_B);
 
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
 
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
+    const uint32_t single_tile_size_bytes = dfb_in0.get_entry_size();
 
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
@@ -74,40 +71,37 @@ void kernel_main() {
     uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
 
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_receiver_semaphore_addr);
-    *(in0_mcast_receiver_semaphore_addr_ptr) = VALID;
+    Semaphore in0_mcast_receiver_semaphore(sem::in0_mcast_receiver);
+    in0_mcast_receiver_semaphore.set(VALID);
 
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    volatile tt_l1_ptr uint32_t* in1_mcast_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
-    *(in1_mcast_receiver_semaphore_addr_ptr) = VALID;
+    Semaphore in1_mcast_receiver_semaphore(sem::in1_mcast_receiver);
+    in1_mcast_receiver_semaphore.set(VALID);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
-    volatile tt_l1_ptr uint32_t* in0_mcast_sender_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_addr);
+    Semaphore in0_mcast_sender_semaphore(sem::in0_mcast_sender);
 
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
-    volatile tt_l1_ptr uint32_t* in1_mcast_sender_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_sender_semaphore_addr);
+    Semaphore in1_mcast_sender_semaphore(sem::in1_mcast_sender);
 
-    constexpr auto s0_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(s0_args, in0_tensor_addr);
-    constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
-    const auto s1 = TensorAccessor(s1_args, in1_tensor_addr);
+    Noc noc;
+
+    // The input tensors are bound to this kernel by name in the host code.
+    const auto s0 = TensorAccessor(tensor::in0);
+    const auto s1 = TensorAccessor(tensor::in1);
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
         for (uint32_t block = 0; block < num_blocks; block++) {
-            cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-            l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+            dfb_in0.reserve_back(in0_block_num_tiles);
+            l1_write_addr_in0 = dfb_in0.get_write_ptr();
 
             uint32_t in0_start_address = l1_write_addr_in0;  // copy start address of block, to be used for mcasting
             uint32_t in0_block_size_bytes = 0;               // can be optimized later, pass it to kernel
 
-            // Copy in0 block into CB, as the default kernel
+            // Copy in0 block into DFB, as the default kernel
             uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_block_start_tile_id;
             for (uint32_t h = 0; h < in0_block_h; h++) {
                 uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
@@ -126,10 +120,10 @@ void kernel_main() {
 
             // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr (i.e. its value
             // should be in0_mcast_num_dests), then reset the semaphore_addr value back to zero for the next block
-            noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
-            noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
+            in0_mcast_sender_semaphore.wait(in0_mcast_num_dests);
+            in0_mcast_sender_semaphore.set(0);
 
-            // Now we have the block in the CB address, we can mcast to dests!
+            // Now we have the block in the DFB address, we can mcast to dests!
             uint64_t in0_multicast_data_addr = get_noc_multicast_addr(
                 in0_mcast_dest_noc_end_x,
                 in0_mcast_dest_noc_end_y,
@@ -150,26 +144,25 @@ void kernel_main() {
 #endif
 
             // We should also multicast the flag to destinations
-            uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
+            // num_dests must not include source, since we are NOT really doing a local copy!
+            in0_mcast_receiver_semaphore.set_multicast(
+                noc,
                 in0_mcast_dest_noc_end_x,
                 in0_mcast_dest_noc_end_y,
                 in0_mcast_dest_noc_start_x,
                 in0_mcast_dest_noc_start_y,
-                in0_mcast_receiver_semaphore_addr);
-            // num_dests must not include source, since we are NOT really doing a local copy!
-            noc_semaphore_set_multicast(
-                in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_dests);
+                in0_mcast_num_dests);
 
-            cb_push_back(cb_id_in0, in0_block_num_tiles);
+            dfb_in0.push_back(in0_block_num_tiles);
 
             // Operand 1
-            cb_reserve_back(cb_id_in1, in1_block_num_tiles);
-            l1_write_addr_in1 = get_write_ptr(cb_id_in1);
+            dfb_in1.reserve_back(in1_block_num_tiles);
+            l1_write_addr_in1 = dfb_in1.get_write_ptr();
 
             uint32_t in1_start_address = l1_write_addr_in1;  // copy start address of block, to be used for mcasting
             uint32_t in1_block_size_bytes = 0;               // can be optimized later, pass it to kernel
 
-            // Copy in1 block into CB, as the default kernel
+            // Copy in1 block into DFB, as the default kernel
             uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_block_start_tile_id;
             for (uint32_t h = 0; h < in1_block_h; h++) {
                 uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
@@ -188,10 +181,10 @@ void kernel_main() {
 
             // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr (i.e. its value
             // should be in0_mcast_num_dests), then reset the semaphore_addr value back to zero for the next block
-            noc_semaphore_wait(in1_mcast_sender_semaphore_addr_ptr, in1_mcast_num_dests);
-            noc_semaphore_set(in1_mcast_sender_semaphore_addr_ptr, 0);
+            in1_mcast_sender_semaphore.wait(in1_mcast_num_dests);
+            in1_mcast_sender_semaphore.set(0);
 
-            // Now we have the block in the CB address, we can mcast to dests!
+            // Now we have the block in the DFB address, we can mcast to dests!
             uint64_t in1_multicast_data_addr = get_noc_multicast_addr(
                 in1_mcast_dest_noc_end_x,
                 in1_mcast_dest_noc_end_y,
@@ -212,17 +205,16 @@ void kernel_main() {
 #endif
 
             // We should also multicast the flag to destinations
-            uint64_t in1_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
+            // num_dests must not include source, since we are NOT really doing a local copy!
+            in1_mcast_receiver_semaphore.set_multicast(
+                noc,
                 in1_mcast_dest_noc_end_x,
                 in1_mcast_dest_noc_end_y,
                 in1_mcast_dest_noc_start_x,
                 in1_mcast_dest_noc_start_y,
-                in1_mcast_receiver_semaphore_addr);
-            // num_dests must not include source, since we are NOT really doing a local copy!
-            noc_semaphore_set_multicast(
-                in1_mcast_receiver_semaphore_addr, in1_mcast_receiver_semaphore_noc_addr, in1_mcast_num_dests);
+                in1_mcast_num_dests);
 
-            cb_push_back(cb_id_in1, in1_block_num_tiles);
+            dfb_in1.push_back(in1_block_num_tiles);
         }
         if (bcast_B == 0) {
             in1_tensor_start_tile_id += KtNt;

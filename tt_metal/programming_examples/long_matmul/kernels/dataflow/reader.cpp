@@ -4,6 +4,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "../profile_markers.h"
 #include "../config.h"
 
@@ -18,26 +20,23 @@ constexpr bool kReaderIdle = false;
 #endif
 
 void kernel_main() {
-    uint32_t src0_addr = get_arg_val<uint32_t>(0);
-    uint32_t src1_addr = get_arg_val<uint32_t>(1);
-    uint32_t Kt = get_arg_val<uint32_t>(2);
-    uint32_t Nt = get_arg_val<uint32_t>(3);
-    uint32_t block_start_id = get_arg_val<uint32_t>(4);
-    uint32_t num_output_blocks = get_arg_val<uint32_t>(5);
-    uint32_t num_iterations = get_arg_val<uint32_t>(6);
-    uint32_t blocks_per_row = get_arg_val<uint32_t>(7);  // Nt / kBlockN
-    uint32_t total_output_blocks = get_arg_val<uint32_t>(8);
+    uint32_t Kt = get_arg(args::Kt);
+    uint32_t Nt = get_arg(args::Nt);
+    uint32_t block_start_id = get_arg(args::block_start_id);
+    uint32_t num_output_blocks = get_arg(args::num_output_blocks);
+    uint32_t num_iterations = get_arg(args::num_iterations);
+    uint32_t blocks_per_row = get_arg(args::blocks_per_row);  // Nt / kBlockN
+    uint32_t total_output_blocks = get_arg(args::total_output_blocks);
 
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
 
-    const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
+    const uint32_t in0_tile_bytes = dfb_in0.get_entry_size();
+    const uint32_t in1_tile_bytes = dfb_in1.get_entry_size();
 
-    constexpr auto a_args = TensorAccessorArgs<0>();
-    const auto a = TensorAccessor(a_args, src0_addr, in0_tile_bytes);
-    constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
-    const auto b = TensorAccessor(b_args, src1_addr, in1_tile_bytes);
+    // A and B are tensors bound to this kernel by name in the host code; their page size is one tile.
+    const auto a = TensorAccessor(tensor::a);
+    const auto b = TensorAccessor(tensor::b);
 
     namespace prof = long_matmul_profile;
     DeviceTimestampedData("READER_KERNEL_START", /*data=*/0);
@@ -56,7 +55,7 @@ void kernel_main() {
             const uint32_t col0 = block_col * kBlockN;  // first output tile column in the block
 
             for (uint32_t k = 0; k < Kt; k++) {
-                // When LONG_MATMUL_DISABLE_READER is set the reader keeps its full CB handshake --
+                // When LONG_MATMUL_DISABLE_READER is set the reader keeps its full DFB handshake --
                 // so compute still gets its tiles "delivered" every step and never deadlocks --
                 // but issues no DRAM traffic. In updated mode the first kRealStepsWhenIdle steps
                 // still read their slices for real, so compute works on real operands; in legacy
@@ -69,9 +68,9 @@ void kernel_main() {
                 {
                     // Column slice of A: rows row0..row0+kBlockM-1 at inner index k.
                     uint32_t t = prof::now();
-                    cb_reserve_back(cb_id_in0, kBlockM);
+                    dfb_in0.reserve_back(kBlockM);
                     prof::add_since(wait_cycles, t);
-                    uint32_t l1_addr = get_write_ptr(cb_id_in0);
+                    uint32_t l1_addr = dfb_in0.get_write_ptr();
                     if (read) {
                         t = prof::now();
                         for (uint32_t m = 0; m < kBlockM; m++) {
@@ -81,14 +80,14 @@ void kernel_main() {
                         noc_async_read_barrier();
                         prof::add_since(transfer_cycles, t);
                     }
-                    cb_push_back(cb_id_in0, kBlockM);
+                    dfb_in0.push_back(kBlockM);
                 }
                 {
                     // Row slice of B: inner index k, columns col0..col0+kBlockN-1.
                     uint32_t t = prof::now();
-                    cb_reserve_back(cb_id_in1, kBlockN);
+                    dfb_in1.reserve_back(kBlockN);
                     prof::add_since(wait_cycles, t);
-                    uint32_t l1_addr = get_write_ptr(cb_id_in1);
+                    uint32_t l1_addr = dfb_in1.get_write_ptr();
                     if (read) {
                         t = prof::now();
                         for (uint32_t n = 0; n < kBlockN; n++) {
@@ -98,7 +97,7 @@ void kernel_main() {
                         noc_async_read_barrier();
                         prof::add_since(transfer_cycles, t);
                     }
-                    cb_push_back(cb_id_in1, kBlockN);
+                    dfb_in1.push_back(kBlockN);
                 }
             }
         }

@@ -8,8 +8,10 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <bmm_op.hpp>
 #include <algorithm>
 #include "tt-metalium/core_coord.hpp"
@@ -73,7 +75,6 @@ void matmul_multicore_reuse_mcast(
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program{};
 
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
     tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
@@ -122,13 +123,10 @@ void matmul_multicore_reuse_mcast(
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2;  // double buffer
-    uint32_t in0_CB_size = in0_CB_tiles * single_tile_size;
     uint32_t in1_block_tiles = per_core_N * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles * 2;  // double buffer
-    uint32_t in1_CB_size = in1_CB_tiles * single_tile_size;
     uint32_t out_block_tiles = per_core_M * per_core_N;
     uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
-    uint32_t out_CB_size = out_CB_tiles * single_tile_size;
 
     // Compute kernel compile time args
     uint32_t num_blocks = (Kt / in0_block_w);
@@ -143,23 +141,22 @@ void matmul_multicore_reuse_mcast(
 
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    std::vector<uint32_t> compute_kernel_args = {
-        in0_block_w,             // in0_block_w
-        in0_num_subblocks,       // in0_num_subblocks
-        in0_block_num_tiles,     // in0_block_num_tiles
-        in0_subblock_num_tiles,  // in0_subblock_num_tiles
+    tt_metal::experimental::KernelSpec::CompileTimeArgs compute_kernel_args = {
+        {"in0_block_w", in0_block_w},
+        {"in0_num_subblocks", in0_num_subblocks},
+        {"in0_block_num_tiles", in0_block_num_tiles},
+        {"in0_subblock_num_tiles", in0_subblock_num_tiles},
 
-        in1_num_subblocks,    // in1_num_subblocks
-        in1_block_num_tiles,  // in1_block_num_tiles
-        in1_per_core_w,       // in1_per_core_w
+        {"in1_num_subblocks", in1_num_subblocks},
+        {"in1_block_num_tiles", in1_block_num_tiles},
+        {"in1_per_core_w", in1_per_core_w},
 
-        num_blocks,  // num_blocks
+        {"num_blocks", num_blocks},
 
-        out_subblock_h,          // out_subblock_h
-        out_subblock_w,          // out_subblock_w
-        out_subblock_num_tiles,  // out_subblock_num_tiles
-        B                        // batch
-    };
+        {"out_subblock_h", out_subblock_h},
+        {"out_subblock_w", out_subblock_w},
+        {"out_subblock_num_tiles", out_subblock_num_tiles},
+        {"batch", B}};
 
     /*
      * Multi-Core prep
@@ -205,137 +202,330 @@ void matmul_multicore_reuse_mcast(
 
     //////////////////////////////////////////////////
     /*
-     * Create DRAM Buffers for input and output vectors
-     * Writing data from input vectors to source buffers
+     * Create DRAM Tensors for input and output vectors
+     * Writing data from input vectors to source tensors
+     * Each row of a row-major tensor is one page, so a row of one tile's worth of elements gives a page size of one
+     * tile.
      */
 
-    uint32_t dram_buffer_A_size =
-        single_tile_size * Mt * Kt;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    uint32_t dram_buffer_B_size =
-        single_tile_size * Nt * Kt;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    uint32_t dram_buffer_C_size =
-        single_tile_size * Mt * Nt;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    distributed::ReplicatedBufferConfig buffer_config_A{.size = dram_buffer_A_size};
-    distributed::ReplicatedBufferConfig buffer_config_B{.size = dram_buffer_B_size};
-    distributed::ReplicatedBufferConfig buffer_config_C{.size = dram_buffer_C_size};
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+    uint32_t elements_per_tile = single_tile_size / sizeof(bfloat16);
+    auto make_dram_tensor_spec = [&](uint32_t num_tiles) {
+        return TensorSpec(
+            Shape({num_tiles, elements_per_tile}),
+            TensorLayout(
+                DataType::BFLOAT16,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    };
+    TensorSpec src0_tensor_spec =
+        make_dram_tensor_spec(Mt * Kt);  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    TensorSpec src1_tensor_spec =
+        make_dram_tensor_spec(Nt * Kt);  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    TensorSpec dst_tensor_spec =
+        make_dram_tensor_spec(Mt * Nt);  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src0_tensor_spec);
+    MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src1_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dst_tensor_spec);
+
+    // Names identify the kernels, the dataflow buffers, the semaphores and the tensor parameters within the program
+    // spec.
+    const tt_metal::experimental::KernelSpecName mm_reader_kernel_in0_sender_in1_sender{"reader_in0_sender_in1_sender"};
+    const tt_metal::experimental::KernelSpecName mm_reader_kernel_in0_sender_in1_receiver{
+        "reader_in0_sender_in1_receiver"};
+    const tt_metal::experimental::KernelSpecName mm_reader_kernel_in0_receiver_in1_sender{
+        "reader_in0_receiver_in1_sender"};
+    const tt_metal::experimental::KernelSpecName mm_reader_kernel_in0_receiver_in1_receiver{
+        "reader_in0_receiver_in1_receiver"};
+    const tt_metal::experimental::KernelSpecName unary_writer_kernel_noc0{"writer_noc0"};
+    const tt_metal::experimental::KernelSpecName unary_writer_kernel_noc1{"writer_noc1"};
+    const tt_metal::experimental::KernelSpecName compute_kernel{"compute"};
+    const tt_metal::experimental::DFBSpecName src0_dfb{"src0"};
+    const tt_metal::experimental::DFBSpecName src1_dfb{"src1"};
+    const tt_metal::experimental::DFBSpecName output_dfb{"output"};
+    const tt_metal::experimental::DFBSpecName interm0_dfb{"interm0"};
+    const tt_metal::experimental::SemaphoreSpecName in0_mcast_sender_semaphore{"in0_mcast_sender"};
+    const tt_metal::experimental::SemaphoreSpecName in0_mcast_receiver_semaphore{"in0_mcast_receiver"};
+    const tt_metal::experimental::SemaphoreSpecName in1_mcast_sender_semaphore{"in1_mcast_sender"};
+    const tt_metal::experimental::SemaphoreSpecName in1_mcast_receiver_semaphore{"in1_mcast_receiver"};
+    const tt_metal::experimental::TensorParamName src0_tensor_param{"src0"};
+    const tt_metal::experimental::TensorParamName src1_tensor_param{"src1"};
+    const tt_metal::experimental::TensorParamName dst_tensor_param{"dst"};
 
     /*
-     * Config of Circular Buffer in the device L1
+     * Config of Dataflow Buffer in the device L1
      * input tiles count is = 2 because it's single tile process, and double-buffer
      */
-    uint32_t src0_cb_index = CBIndex::c_0;  // 0
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(in0_CB_size, {{src0_cb_index, cb_data_format}})
-                                              .set_page_size(src0_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt_metal::experimental::DataflowBufferSpec src0_dfb_spec{
+        .unique_id = src0_dfb,
+        .entry_size = single_tile_size,
+        .num_entries = in0_CB_tiles,
+        .data_format_metadata = cb_data_format,
+    };
 
-    uint32_t src1_cb_index = CBIndex::c_1;  // 1
-    CircularBufferConfig cb_src1_config = CircularBufferConfig(in1_CB_size, {{src1_cb_index, cb_data_format}})
-                                              .set_page_size(src1_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt_metal::experimental::DataflowBufferSpec src1_dfb_spec{
+        .unique_id = src1_dfb,
+        .entry_size = single_tile_size,
+        .num_entries = in1_CB_tiles,
+        .data_format_metadata = cb_data_format,
+    };
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
-    uint32_t interm0_cb_index = 24;
-    std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
-        {output_cb_index, cb_data_format}, {interm0_cb_index, cb_data_format}};
-    CircularBufferConfig cb_output_config = CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
-                                                .set_page_size(output_cb_index, single_tile_size)
-                                                .set_page_size(interm0_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_output_config);
+    // The output and the intermediate dataflow buffers share the same memory (aliased).
+    tt_metal::experimental::DataflowBufferSpec output_dfb_spec{
+        .unique_id = output_dfb,
+        .entry_size = single_tile_size,
+        .num_entries = out_CB_tiles,
+        .data_format_metadata = cb_data_format,
+        .advanced_options = {.alias_with = {interm0_dfb}},
+    };
+    tt_metal::experimental::DataflowBufferSpec interm0_dfb_spec{
+        .unique_id = interm0_dfb,
+        .entry_size = single_tile_size,
+        .num_entries = out_CB_tiles,
+        .data_format_metadata = cb_data_format,
+        .advanced_options = {.alias_with = {output_dfb}},
+    };
 
-    ////////////////////////////
     /*
-     * Compile time arguments
+     * Semaphores used for the mcast handshake (initial value INVALID = 0)
      */
-    std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
-
-    std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
+    tt_metal::experimental::SemaphoreSpec in0_mcast_sender_semaphore_spec{
+        .unique_id = in0_mcast_sender_semaphore, .target_nodes = all_cores};
+    tt_metal::experimental::SemaphoreSpec in0_mcast_receiver_semaphore_spec{
+        .unique_id = in0_mcast_receiver_semaphore, .target_nodes = all_cores};
+    tt_metal::experimental::SemaphoreSpec in1_mcast_sender_semaphore_spec{
+        .unique_id = in1_mcast_sender_semaphore, .target_nodes = all_cores};
+    tt_metal::experimental::SemaphoreSpec in1_mcast_receiver_semaphore_spec{
+        .unique_id = in1_mcast_receiver_semaphore, .target_nodes = all_cores};
 
     /*
      * Create Kernels (Reader, Writer, Compute)
      */
     // Create reader and writer kernels per core group
+    // All 4 reader kernels take the same runtime arguments and access the same 4 semaphores.
+    const tt_metal::experimental::Group<std::string> reader_runtime_arg_names = {
+        "in0_tensor_start_tile_id",
+        "in0_tensor_stride_w",
+        "in0_tensor_stride_h",
+        "in0_tensor_next_block_stride",
+        "in0_block_w",
+        "in0_block_h",
+        "in0_block_num_tiles",
+        "in1_tensor_start_tile_id",
+        "in1_tensor_stride_w",
+        "in1_tensor_stride_h",
+        "in1_tensor_next_block_stride",
+        "in1_block_w",
+        "in1_block_h",
+        "in1_block_num_tiles",
+        "num_blocks",
+        "in0_mcast_dest_noc_start_x",
+        "in0_mcast_dest_noc_start_y",
+        "in0_mcast_dest_noc_end_x",
+        "in0_mcast_dest_noc_end_y",
+        "in0_mcast_num_dests",
+        "in0_mcast_sender_noc_x",
+        "in0_mcast_sender_noc_y",
+        "in1_mcast_dest_noc_start_x",
+        "in1_mcast_dest_noc_start_y",
+        "in1_mcast_dest_noc_end_x",
+        "in1_mcast_dest_noc_end_y",
+        "in1_mcast_num_dests",
+        "in1_mcast_sender_noc_x",
+        "in1_mcast_sender_noc_y",
+        "MtKt",
+        "KtNt",
+        "batch",
+        "bcast_B"};
+    const tt_metal::experimental::Group<tt_metal::experimental::SemaphoreBinding> reader_semaphore_bindings = {
+        {.semaphore_spec_name = in0_mcast_sender_semaphore, .accessor_name = "in0_mcast_sender"},
+        {.semaphore_spec_name = in0_mcast_receiver_semaphore, .accessor_name = "in0_mcast_receiver"},
+        {.semaphore_spec_name = in1_mcast_sender_semaphore, .accessor_name = "in1_mcast_sender"},
+        {.semaphore_spec_name = in1_mcast_receiver_semaphore, .accessor_name = "in1_mcast_receiver"}};
+    const tt_metal::experimental::TensorBinding in0_tensor_binding{
+        .tensor_parameter_name = src0_tensor_param, .accessor_name = "in0"};
+    const tt_metal::experimental::TensorBinding in1_tensor_binding{
+        .tensor_parameter_name = src1_tensor_param, .accessor_name = "in1"};
 
-    auto mm_reader_kernel_in0_sender_in1_sender_id = tt_metal::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_sender.cpp",
-        in0_sender_in1_sender,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = reader_compile_time_args});
+    tt_metal::experimental::KernelSpec mm_reader_kernel_in0_sender_in1_sender_spec{
+        .unique_id = mm_reader_kernel_in0_sender_in1_sender,
+        .source = OVERRIDE_KERNEL_PREFIX
+        "matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_sender.cpp",
+        .dfb_bindings =
+            {tt_metal::experimental::ProducerOf(src0_dfb, "in0"), tt_metal::experimental::ProducerOf(src1_dfb, "in1")},
+        .semaphore_bindings = reader_semaphore_bindings,
+        .tensor_bindings = {in0_tensor_binding, in1_tensor_binding},
+        .runtime_arg_schema = {.runtime_arg_names = reader_runtime_arg_names},
+        .hw_config =
+            tt_metal::experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    tt_metal::experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default},
+            },
+    };
 
-    auto mm_reader_kernel_in0_sender_in1_receiver_id = tt_metal::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX
+    tt_metal::experimental::KernelSpec mm_reader_kernel_in0_sender_in1_receiver_spec{
+        .unique_id = mm_reader_kernel_in0_sender_in1_receiver,
+        .source = OVERRIDE_KERNEL_PREFIX
         "matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver.cpp",
-        in0_sender_in1_receiver,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = reader_compile_time_args});
+        .dfb_bindings =
+            {tt_metal::experimental::ProducerOf(src0_dfb, "in0"), tt_metal::experimental::ProducerOf(src1_dfb, "in1")},
+        .semaphore_bindings = reader_semaphore_bindings,
+        .tensor_bindings = {in0_tensor_binding},
+        .runtime_arg_schema = {.runtime_arg_names = reader_runtime_arg_names},
+        .hw_config =
+            tt_metal::experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    tt_metal::experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default},
+            },
+    };
 
-    auto mm_reader_kernel_in0_receiver_in1_sender_id = tt_metal::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX
+    tt_metal::experimental::KernelSpec mm_reader_kernel_in0_receiver_in1_sender_spec{
+        .unique_id = mm_reader_kernel_in0_receiver_in1_sender,
+        .source = OVERRIDE_KERNEL_PREFIX
         "matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender.cpp",
-        in0_receiver_in1_sender,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
-            .compile_args = reader_compile_time_args});
+        .dfb_bindings =
+            {tt_metal::experimental::ProducerOf(src0_dfb, "in0"), tt_metal::experimental::ProducerOf(src1_dfb, "in1")},
+        .semaphore_bindings = reader_semaphore_bindings,
+        .tensor_bindings = {in1_tensor_binding},
+        .runtime_arg_schema = {.runtime_arg_names = reader_runtime_arg_names},
+        .hw_config =
+            tt_metal::experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    tt_metal::experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
+            },
+    };
 
-    auto mm_reader_kernel_in0_receiver_in1_receiver_id = tt_metal::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX
+    tt_metal::experimental::KernelSpec mm_reader_kernel_in0_receiver_in1_receiver_spec{
+        .unique_id = mm_reader_kernel_in0_receiver_in1_receiver,
+        .source = OVERRIDE_KERNEL_PREFIX
         "matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_receiver.cpp",
-        in0_receiver_in1_receiver,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
-            .compile_args = reader_compile_time_args});
+        .dfb_bindings =
+            {tt_metal::experimental::ProducerOf(src0_dfb, "in0"), tt_metal::experimental::ProducerOf(src1_dfb, "in1")},
+        .semaphore_bindings = reader_semaphore_bindings,
+        .runtime_arg_schema = {.runtime_arg_names = reader_runtime_arg_names},
+        .hw_config =
+            tt_metal::experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    tt_metal::experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
+            },
+    };
 
-    auto unary_writer_kernel_noc0_id = tt_metal::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
-        all_except_left_column,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = writer_compile_time_args});
+    const tt_metal::experimental::Group<std::string> writer_runtime_arg_names = {
+        "out_tensor_start_tile_id",
+        "out_tensor_stride_w",
+        "out_tensor_stride_h",
+        "out_tensor_next_subblock_stride_w",
+        "out_tensor_next_subblock_stride_h",
+        "out_subblock_w",
+        "out_subblock_h",
+        "out_subblock_tile_count",
+        "out_num_subblocks_w",
+        "out_num_subblocks_h",
+        "MtNt",
+        "batch"};
 
-    auto unary_writer_kernel_noc1_id = tt_metal::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
-        left_column,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_1_default,
-            .compile_args = writer_compile_time_args});
+    tt_metal::experimental::KernelSpec unary_writer_kernel_noc0_spec{
+        .unique_id = unary_writer_kernel_noc0,
+        .source = OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
+        .dfb_bindings = {tt_metal::experimental::ConsumerOf(output_dfb, "out0")},
+        .tensor_bindings = {{.tensor_parameter_name = dst_tensor_param, .accessor_name = "out"}},
+        .runtime_arg_schema = {.runtime_arg_names = writer_runtime_arg_names},
+        .hw_config =
+            tt_metal::experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    tt_metal::experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
+            },
+    };
 
-    // Create compute kernel
-    tt_metal::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/compute/bmm_large_block_zm.cpp",
-        all_cores,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args});
+    tt_metal::experimental::KernelSpec unary_writer_kernel_noc1_spec{
+        .unique_id = unary_writer_kernel_noc1,
+        .source = OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
+        .dfb_bindings = {tt_metal::experimental::ConsumerOf(output_dfb, "out0")},
+        .tensor_bindings = {{.tensor_parameter_name = dst_tensor_param, .accessor_name = "out"}},
+        .runtime_arg_schema = {.runtime_arg_names = writer_runtime_arg_names},
+        .hw_config =
+            tt_metal::experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    tt_metal::experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default},
+            },
+    };
 
-    auto in0_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    // Create compute kernel. The compute kernel both produces and consumes the intermediate dataflow buffer.
+    tt_metal::experimental::KernelSpec compute_kernel_spec{
+        .unique_id = compute_kernel,
+        .source = OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/compute/bmm_large_block_zm.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {tt_metal::experimental::ConsumerOf(src0_dfb, "in0"),
+             tt_metal::experimental::ConsumerOf(src1_dfb, "in1"),
+             tt_metal::experimental::ProducerOf(output_dfb, "out0"),
+             tt_metal::experimental::ProducerOf(interm0_dfb, "interm0"),
+             tt_metal::experimental::ConsumerOf(interm0_dfb, "interm0")},
+        .compile_time_args = compute_kernel_args,
+        .hw_config =
+            tt_metal::experimental::ComputeHardwareConfig{
+                .fpu_math_fidelity = math_fidelity,
+                .sfpu_precision_mode = Precision::Precise,
+            },
+    };
+
+    // One work unit per core group: each core group runs its own reader kernel, the writer kernel for its column,
+    // and the compute kernel.
+    tt_metal::experimental::ProgramSpec program_spec{
+        .name = "matmul_multicore_reuse_mcast",
+        .kernels =
+            {mm_reader_kernel_in0_sender_in1_sender_spec,
+             mm_reader_kernel_in0_sender_in1_receiver_spec,
+             mm_reader_kernel_in0_receiver_in1_sender_spec,
+             mm_reader_kernel_in0_receiver_in1_receiver_spec,
+             unary_writer_kernel_noc0_spec,
+             unary_writer_kernel_noc1_spec,
+             compute_kernel_spec},
+        .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, output_dfb_spec, interm0_dfb_spec},
+        .semaphores =
+            {in0_mcast_sender_semaphore_spec,
+             in0_mcast_receiver_semaphore_spec,
+             in1_mcast_sender_semaphore_spec,
+             in1_mcast_receiver_semaphore_spec},
+        .tensor_parameters =
+            {{.unique_id = src0_tensor_param, .spec = src0_tensor_spec},
+             {.unique_id = src1_tensor_param, .spec = src1_tensor_spec},
+             {.unique_id = dst_tensor_param, .spec = dst_tensor_spec}},
+        .work_units =
+            {{.name = "in0_sender_in1_sender",
+              .kernels = {mm_reader_kernel_in0_sender_in1_sender, unary_writer_kernel_noc1, compute_kernel},
+              .target_nodes = in0_sender_in1_sender},
+             {.name = "in0_sender_in1_receiver",
+              .kernels = {mm_reader_kernel_in0_sender_in1_receiver, unary_writer_kernel_noc1, compute_kernel},
+              .target_nodes = in0_sender_in1_receiver},
+             {.name = "in0_receiver_in1_sender",
+              .kernels = {mm_reader_kernel_in0_receiver_in1_sender, unary_writer_kernel_noc0, compute_kernel},
+              .target_nodes = in0_receiver_in1_sender},
+             {.name = "in0_receiver_in1_receiver",
+              .kernels = {mm_reader_kernel_in0_receiver_in1_receiver, unary_writer_kernel_noc0, compute_kernel},
+              .target_nodes = in0_receiver_in1_receiver}},
+    };
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, program_spec);
 
     /*
      * Kernels - Runtime arguments
      */
+    tt_metal::experimental::KernelRunArgs mm_reader_kernel_in0_sender_in1_sender_run_args{
+        .kernel = mm_reader_kernel_in0_sender_in1_sender};
+    tt_metal::experimental::KernelRunArgs mm_reader_kernel_in0_sender_in1_receiver_run_args{
+        .kernel = mm_reader_kernel_in0_sender_in1_receiver};
+    tt_metal::experimental::KernelRunArgs mm_reader_kernel_in0_receiver_in1_sender_run_args{
+        .kernel = mm_reader_kernel_in0_receiver_in1_sender};
+    tt_metal::experimental::KernelRunArgs mm_reader_kernel_in0_receiver_in1_receiver_run_args{
+        .kernel = mm_reader_kernel_in0_receiver_in1_receiver};
+    tt_metal::experimental::KernelRunArgs unary_writer_kernel_noc0_run_args{.kernel = unary_writer_kernel_noc0};
+    tt_metal::experimental::KernelRunArgs unary_writer_kernel_noc1_run_args{.kernel = unary_writer_kernel_noc1};
     for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
@@ -354,100 +544,116 @@ void matmul_multicore_reuse_mcast(
             auto top_core_plus_one_physical = mesh_device->worker_core_from_logical_core(top_core_plus_one);
             auto bottom_core_physical = mesh_device->worker_core_from_logical_core(bottom_core);
 
-            std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t)src0_dram_buffer->address(),   // in0_buffer_addr
-                (std::uint32_t)Kt * per_core_M * core_idx_y,  // in0_buffer_start_tile_id
-                (std::uint32_t)1,                             // in0_buffer_stride_w
-                (std::uint32_t)Kt,                            // in0_buffer_stride_h
-                (std::uint32_t)in0_block_w,                   // in0_buffer_next_block_stride
-
-                (std::uint32_t)in0_block_w,               // in0_block_w
-                (std::uint32_t)per_core_M,                // in0_block_h
-                (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
-
-                (std::uint32_t)src1_dram_buffer->address(),  // in1_buffer_addr
-                (std::uint32_t)per_core_N * core_idx_x,      // in1_buffer_start_tile_id
-                (std::uint32_t)1,                            // in1_buffer_stride_w
-                (std::uint32_t)Nt,                           // in1_buffer_stride_h
-                (std::uint32_t)in0_block_w * Nt,             // in1_buffer_next_block_stride
-
-                (std::uint32_t)per_core_N,                // in1_block_w
-                (std::uint32_t)in0_block_w,               // in1_block_h
-                (std::uint32_t)per_core_N * in0_block_w,  // in1_block_num_tiles
-
-                (std::uint32_t)Kt / in0_block_w,  // num_blocks
-
-                (std::uint32_t)right_core_physical.x,          // in0_mcast_dest_noc_start_x
-                (std::uint32_t)right_core_physical.y,          // in0_mcast_dest_noc_start_y
-                (std::uint32_t)left_core_plus_one_physical.x,  // in0_mcast_dest_noc_end_x
-                (std::uint32_t)left_core_plus_one_physical.y,  // in0_mcast_dest_noc_end_y
-                (std::uint32_t)(num_cores_c - 1),              // in0_mcast_num_dests
-                (std::uint32_t)left_core_physical.x,           // in0_mcast_sender_noc_x
-                (std::uint32_t)left_core_physical.y,           // in0_mcast_sender_noc_y
-                (std::uint32_t)in0_mcast_sender_semaphore_id,
-                (std::uint32_t)in0_mcast_receiver_semaphore_id,
-
-                (std::uint32_t)bottom_core_physical.x,        // in0_mcast_dest_noc_start_x
-                (std::uint32_t)bottom_core_physical.y,        // in0_mcast_dest_noc_start_y
-                (std::uint32_t)top_core_plus_one_physical.x,  // in0_mcast_dest_noc_end_x
-                (std::uint32_t)top_core_plus_one_physical.y,  // in0_mcast_dest_noc_end_y
-                (std::uint32_t)(num_cores_r - 1),             // in0_mcast_num_dests
-                (std::uint32_t)top_core_physical.x,           // in0_mcast_sender_noc_x
-                (std::uint32_t)top_core_physical.y,           // in0_mcast_sender_noc_y
-                (std::uint32_t)in1_mcast_sender_semaphore_id,
-                (std::uint32_t)in1_mcast_receiver_semaphore_id,
-
-                (std::uint32_t)Mt * Kt,     // MtKt
-                (std::uint32_t)Kt * Nt,     // KtNt
-                (std::uint32_t)B,           // batch
-                (std::uint32_t)bcast_batch  // bcast_B
-            };
-
-            std::vector<uint32_t> writer_args = {
-                (std::uint32_t)dst_dram_buffer->address(),                              // out_buffer_addr
-                (std::uint32_t)core_idx_x * per_core_N + core_idx_y * per_core_M * Nt,  // out_buffer_start_tile_id
-                (std::uint32_t)1,                                                       // out_buffer_stride_w
-                (std::uint32_t)Nt,                                                      // out_buffer_stride_h
-                (std::uint32_t)out_subblock_w,       // out_buffer_next_subblock_stride_w
-                (std::uint32_t)out_subblock_h * Nt,  // out_buffer_next_subblock_stride_h
-
-                (std::uint32_t)out_subblock_w,                     // out_subblock_w
-                (std::uint32_t)out_subblock_h,                     // out_subblock_h
-                (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
-                (std::uint32_t)(per_core_N / out_subblock_w),      // out_num_subblocks_w
-                (std::uint32_t)(per_core_M / out_subblock_h),      // out_num_subblocks_h
-
-                (std::uint32_t)Mt * Nt,  // MtNt
-                (std::uint32_t)B         // batch
-            };
-
+            // Pick the reader and writer kernels that run on this core.
+            tt_metal::experimental::KernelRunArgs* mm_reader_run_args = nullptr;
+            tt_metal::experimental::KernelRunArgs* writer_run_args = nullptr;
             if (core_idx_x == 0 and core_idx_y == 0) {
-                tt_metal::SetRuntimeArgs(
-                    program, mm_reader_kernel_in0_sender_in1_sender_id, core, mm_reader_args);      // RISCV_0_default
-                tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc1_id, core, writer_args);  // RISCV_1_default
+                mm_reader_run_args = &mm_reader_kernel_in0_sender_in1_sender_run_args;  // RISCV_0_default
+                writer_run_args = &unary_writer_kernel_noc1_run_args;                   // RISCV_1_default
             } else if (core_idx_x == 0 and core_idx_y != 0) {
-                tt_metal::SetRuntimeArgs(
-                    program, mm_reader_kernel_in0_sender_in1_receiver_id, core, mm_reader_args);    // RISCV_0_default
-                tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc1_id, core, writer_args);  // RISCV_1_default
+                mm_reader_run_args = &mm_reader_kernel_in0_sender_in1_receiver_run_args;  // RISCV_0_default
+                writer_run_args = &unary_writer_kernel_noc1_run_args;                     // RISCV_1_default
             } else if (core_idx_x != 0 and core_idx_y == 0) {
-                tt_metal::SetRuntimeArgs(
-                    program, mm_reader_kernel_in0_receiver_in1_sender_id, core, mm_reader_args);    // RISCV_1_default
-                tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc0_id, core, writer_args);  // RISCV_0_default
+                mm_reader_run_args = &mm_reader_kernel_in0_receiver_in1_sender_run_args;  // RISCV_1_default
+                writer_run_args = &unary_writer_kernel_noc0_run_args;                     // RISCV_0_default
             } else {
-                tt_metal::SetRuntimeArgs(
-                    program, mm_reader_kernel_in0_receiver_in1_receiver_id, core, mm_reader_args);  // RISCV_1_default
-                tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc0_id, core, writer_args);  // RISCV_0_default
+                mm_reader_run_args = &mm_reader_kernel_in0_receiver_in1_receiver_run_args;  // RISCV_1_default
+                writer_run_args = &unary_writer_kernel_noc0_run_args;                       // RISCV_0_default
             }
+
+            tt_metal::experimental::AddRuntimeArgsForNode(
+                mm_reader_run_args->runtime_arg_values,
+                core,
+                {
+                    {"in0_tensor_start_tile_id", (std::uint32_t)Kt * per_core_M * core_idx_y},
+                    {"in0_tensor_stride_w", (std::uint32_t)1},
+                    {"in0_tensor_stride_h", (std::uint32_t)Kt},
+                    {"in0_tensor_next_block_stride", (std::uint32_t)in0_block_w},
+
+                    {"in0_block_w", (std::uint32_t)in0_block_w},
+                    {"in0_block_h", (std::uint32_t)per_core_M},
+                    {"in0_block_num_tiles", (std::uint32_t)in0_block_w * per_core_M},
+
+                    {"in1_tensor_start_tile_id", (std::uint32_t)per_core_N * core_idx_x},
+                    {"in1_tensor_stride_w", (std::uint32_t)1},
+                    {"in1_tensor_stride_h", (std::uint32_t)Nt},
+                    {"in1_tensor_next_block_stride", (std::uint32_t)in0_block_w * Nt},
+
+                    {"in1_block_w", (std::uint32_t)per_core_N},
+                    {"in1_block_h", (std::uint32_t)in0_block_w},
+                    {"in1_block_num_tiles", (std::uint32_t)per_core_N * in0_block_w},
+
+                    {"num_blocks", (std::uint32_t)Kt / in0_block_w},
+
+                    {"in0_mcast_dest_noc_start_x", (std::uint32_t)right_core_physical.x},
+                    {"in0_mcast_dest_noc_start_y", (std::uint32_t)right_core_physical.y},
+                    {"in0_mcast_dest_noc_end_x", (std::uint32_t)left_core_plus_one_physical.x},
+                    {"in0_mcast_dest_noc_end_y", (std::uint32_t)left_core_plus_one_physical.y},
+                    {"in0_mcast_num_dests", (std::uint32_t)(num_cores_c - 1)},
+                    {"in0_mcast_sender_noc_x", (std::uint32_t)left_core_physical.x},
+                    {"in0_mcast_sender_noc_y", (std::uint32_t)left_core_physical.y},
+
+                    {"in1_mcast_dest_noc_start_x", (std::uint32_t)bottom_core_physical.x},
+                    {"in1_mcast_dest_noc_start_y", (std::uint32_t)bottom_core_physical.y},
+                    {"in1_mcast_dest_noc_end_x", (std::uint32_t)top_core_plus_one_physical.x},
+                    {"in1_mcast_dest_noc_end_y", (std::uint32_t)top_core_plus_one_physical.y},
+                    {"in1_mcast_num_dests", (std::uint32_t)(num_cores_r - 1)},
+                    {"in1_mcast_sender_noc_x", (std::uint32_t)top_core_physical.x},
+                    {"in1_mcast_sender_noc_y", (std::uint32_t)top_core_physical.y},
+
+                    {"MtKt", (std::uint32_t)Mt * Kt},
+                    {"KtNt", (std::uint32_t)Kt * Nt},
+                    {"batch", (std::uint32_t)B},
+                    {"bcast_B", (std::uint32_t)bcast_batch},
+                });
+
+            tt_metal::experimental::AddRuntimeArgsForNode(
+                writer_run_args->runtime_arg_values,
+                core,
+                {
+                    {"out_tensor_start_tile_id", (std::uint32_t)core_idx_x * per_core_N + core_idx_y * per_core_M * Nt},
+                    {"out_tensor_stride_w", (std::uint32_t)1},
+                    {"out_tensor_stride_h", (std::uint32_t)Nt},
+                    {"out_tensor_next_subblock_stride_w", (std::uint32_t)out_subblock_w},
+                    {"out_tensor_next_subblock_stride_h", (std::uint32_t)out_subblock_h * Nt},
+
+                    {"out_subblock_w", (std::uint32_t)out_subblock_w},
+                    {"out_subblock_h", (std::uint32_t)out_subblock_h},
+                    {"out_subblock_tile_count", (std::uint32_t)(out_subblock_w * out_subblock_h)},
+                    {"out_num_subblocks_w", (std::uint32_t)(per_core_N / out_subblock_w)},
+                    {"out_num_subblocks_h", (std::uint32_t)(per_core_M / out_subblock_h)},
+
+                    {"MtNt", (std::uint32_t)Mt * Nt},
+                    {"batch", (std::uint32_t)B},
+                });
         }
     }
 
-    /* Launch program & read in output buffer result into the host vector */
+    // Set the runtime args, and the tensors bound to the tensor parameters.
+    tt_metal::experimental::ProgramRunArgs run_args{
+        .kernel_run_args =
+            {mm_reader_kernel_in0_sender_in1_sender_run_args,
+             mm_reader_kernel_in0_sender_in1_receiver_run_args,
+             mm_reader_kernel_in0_receiver_in1_sender_run_args,
+             mm_reader_kernel_in0_receiver_in1_receiver_run_args,
+             unary_writer_kernel_noc0_run_args,
+             unary_writer_kernel_noc1_run_args},
+        .tensor_args =
+            {{src0_tensor_param, tt_metal::experimental::TensorArgument{src0_dram_tensor}},
+             {src1_tensor_param, tt_metal::experimental::TensorArgument{src1_dram_tensor}},
+             {dst_tensor_param, tt_metal::experimental::TensorArgument{dst_dram_tensor}}},
+    };
+    tt_metal::experimental::SetProgramRunArgs(program, run_args);
 
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    /* Launch program & read in output tensor result into the host vector */
+
+    HostTensor src0_host_tensor = HostTensor::from_vector(a, src0_tensor_spec);
+    HostTensor src1_host_tensor = HostTensor::from_vector(b, src1_tensor_spec);
+    cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
+    cq.enqueue_write_tensor(src1_host_tensor, src1_dram_tensor);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
+    output = cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 }
 
 ///////////////////////////////////////

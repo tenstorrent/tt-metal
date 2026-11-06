@@ -12,8 +12,10 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <cstdint>
 #include <vector>
 #include <memory>
@@ -31,14 +33,25 @@ using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::constants;
 using namespace std;
-using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
 
-std::shared_ptr<distributed::MeshBuffer> MakeBufferBFP16(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t n_tiles, bool sram) {
+// Each row of a row-major tensor is one page, so a row of page_tiles tiles gives a page size of page_tiles tiles.
+TensorSpec MakeTensorSpecBFP16(uint32_t n_tiles, bool sram) {
+    constexpr uint32_t tile_elements = TILE_WIDTH * TILE_HEIGHT;
+    const uint32_t page_tiles = sram ? n_tiles : 1;
+    return TensorSpec(
+        Shape({n_tiles / page_tiles, page_tiles * tile_elements}),
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, (sram ? BufferType::L1 : BufferType::DRAM)}));
+}
+
+// The buffer is allocated from the top of memory (bottom_up = false) and then wrapped in a tensor.
+MeshTensor MakeTensorBFP16(distributed::MeshDevice& mesh_device, uint32_t n_tiles, bool sram) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
     const uint32_t page_tiles = sram ? n_tiles : 1;
     const distributed::DeviceLocalBufferConfig device_local_config{
@@ -46,15 +59,20 @@ std::shared_ptr<distributed::MeshBuffer> MakeBufferBFP16(
         .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM),
         .bottom_up = false};
     const distributed::ReplicatedBufferConfig buffer_config{.size = tile_size * n_tiles};
-    return distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+    return MeshTensor::from_buffer(
+        std::move(*distributed::MeshBuffer::create(buffer_config, device_local_config, &mesh_device)),
+        MakeTensorSpecBFP16(n_tiles, sram));
 }
 
-CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t n_tiles) {
+tt_metal::experimental::DataflowBufferSpec MakeDataflowBufferSpecBFP16(
+    const tt_metal::experimental::DFBSpecName& dfb, uint32_t n_tiles) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
-    return CreateCircularBuffer(
-        program,
-        core,
-        CircularBufferConfig(n_tiles * tile_size, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, tile_size));
+    return tt_metal::experimental::DataflowBufferSpec{
+        .unique_id = dfb,
+        .entry_size = tile_size,
+        .num_entries = n_tiles,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
 }
 
 void VerifyDPRINTEnvironment(const std::string& program_path) {
@@ -168,14 +186,13 @@ int main(int /*argc*/, char** argv) {
     ////////// PROGRAM BLOCK //////////
     {
         distributed::MeshWorkload workload;
-        Program program = CreateProgram();
         const auto device_coord = distributed::MeshCoordinate(0, 0);
 
         ////////// TENSIX CORE SETUP //////////
-        // Define logical sender core and receiver core range (for kernel creation on the host).
-        CoreRange all_cores_logical = CoreRange({0, 0}, {3, 0});
-        CoreCoord sender_core_logical = {0, 0};
-        CoreRange receiver_cores_logical = CoreRange({1, 0}, {3, 0});
+        // Define logical sender core and receiver core range (for the kernel specs on the host).
+        tt_metal::experimental::NodeRange all_cores_logical = tt_metal::experimental::NodeRange({0, 0}, {3, 0});
+        tt_metal::experimental::NodeCoord sender_core_logical = {0, 0};
+        tt_metal::experimental::NodeRange receiver_cores_logical = tt_metal::experimental::NodeRange({1, 0}, {3, 0});
         // Convert logical coordinates to physical coordinates (necessary for multicasting).
         CoreCoord sender_core_physical = mesh_device->worker_core_from_logical_core(sender_core_logical);
         CoreRange receiver_cores_physical = CoreRange(
@@ -189,95 +206,170 @@ int main(int /*argc*/, char** argv) {
         // reference for num of receivers.
         size_t num_dests = receiver_cores_logical.size();
 
+        // Names identify the kernels, the dataflow buffers, the semaphores and the tensor parameter within the
+        // program spec.
+        const tt_metal::experimental::KernelSpecName coordinator_kernel{"coordinator"};
+        const tt_metal::experimental::KernelSpecName inbound_kernel{"inbound"};
+        const tt_metal::experimental::KernelSpecName outbound_kernel{"outbound"};
+        const tt_metal::experimental::KernelSpecName void_compute_kernel{"void_compute"};
+        const tt_metal::experimental::DFBSpecName in0_dfb{"in0"};
+        const tt_metal::experimental::DFBSpecName out0_dfb{"out0"};
+        const tt_metal::experimental::SemaphoreSpecName sender{"sender"};
+        const tt_metal::experimental::SemaphoreSpecName receiver{"receiver"};
+        const tt_metal::experimental::TensorParamName output_tensor_param{"output"};
+
         ////////// SEMAPHORE SETUP //////////
-        uint32_t sender = CreateSemaphore(program, all_cores_logical, 0);
-        uint32_t receiver = CreateSemaphore(program, all_cores_logical, 0);
+        tt_metal::experimental::SemaphoreSpec sender_semaphore_spec{
+            .unique_id = sender, .target_nodes = all_cores_logical};
+        tt_metal::experimental::SemaphoreSpec receiver_semaphore_spec{
+            .unique_id = receiver, .target_nodes = all_cores_logical};
 
         ////////// DRAM & SRAM BUFFERS SETUP //////////
         constexpr uint32_t num_tiles = 1;
         uint32_t dram_bank_id = 0;
-        auto src0_dram_buffer = MakeBufferBFP16(mesh_device, num_tiles, false);
-        auto output_dram_buffer = MakeBufferBFP16(mesh_device, num_dests * num_tiles, false);
-        MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_0, num_tiles);
-        MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_16, num_tiles);
+        TensorSpec src0_dram_tensor_spec = MakeTensorSpecBFP16(num_tiles, false);
+        TensorSpec output_dram_tensor_spec = MakeTensorSpecBFP16(static_cast<uint32_t>(num_dests * num_tiles), false);
+        MeshTensor src0_dram_tensor = MakeTensorBFP16(*mesh_device, num_tiles, false);
+        MeshTensor output_dram_tensor =
+            MakeTensorBFP16(*mesh_device, static_cast<uint32_t>(num_dests * num_tiles), false);
+        tt_metal::experimental::DataflowBufferSpec in0_dfb_spec = MakeDataflowBufferSpecBFP16(in0_dfb, num_tiles);
+        tt_metal::experimental::DataflowBufferSpec out0_dfb_spec = MakeDataflowBufferSpecBFP16(out0_dfb, num_tiles);
 
         ////////// DATA MOVEMENT CONFIG SETUP //////////
-        DataMovementConfig DataMovementConfigIn = {
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
-        std::vector<uint32_t> writer_compile_time_args;
-        TensorAccessorArgs(*output_dram_buffer).append_to(writer_compile_time_args);
-        DataMovementConfig DataMovementConfigOut = {
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = writer_compile_time_args};
+        tt_metal::experimental::DataMovementHardwareConfig DataMovementConfigIn{
+            .config_1xx =
+                tt_metal::experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+        };
+        tt_metal::experimental::DataMovementHardwareConfig DataMovementConfigOut{
+            .config_1xx =
+                tt_metal::experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
+        };
 
         ////////// COORDINATOR KERNEL SETUP //////////
-        KernelHandle coordinator_kernel_id = CreateKernel(
-            program,
-            "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/coordinator_kernel.cpp",
-            sender_core_logical,
-            DataMovementConfigIn);
+        // The coordinator kernel both fills and reads the "in0" dataflow buffer on the sender core.
+        tt_metal::experimental::KernelSpec coordinator_kernel_spec{
+            .unique_id = coordinator_kernel,
+            .source = "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/coordinator_kernel.cpp",
+            .dfb_bindings =
+                {tt_metal::experimental::ProducerOf(in0_dfb, "in0"),
+                 tt_metal::experimental::ConsumerOf(in0_dfb, "in0")},
+            .semaphore_bindings =
+                {{.semaphore_spec_name = sender, .accessor_name = "sender"},
+                 {.semaphore_spec_name = receiver, .accessor_name = "receiver"}},
+            .runtime_arg_schema =
+                {.runtime_arg_names =
+                     {"start_x",
+                      "start_y",
+                      "end_x",
+                      "end_y",
+                      "dram_bank_id",
+                      "src0_dram",
+                      "single_tile_size",
+                      "num_dests"}},
+            .hw_config = DataMovementConfigIn,
+        };
 
         ////////// DATAFLOW KERNELS SETUP //////////
-        KernelHandle inbound_kernel_id = CreateKernel(
-            program,
-            "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/inbound_kernel.cpp",
-            receiver_cores_logical,
-            DataMovementConfigIn);
-        KernelHandle outbound_kernel_id = CreateKernel(
-            program,
-            "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/outbound_kernel.cpp",
-            receiver_cores_logical,
-            DataMovementConfigOut);
+        // The inbound kernel both fills and reads the "in0" dataflow buffer on each receiver core.
+        tt_metal::experimental::KernelSpec inbound_kernel_spec{
+            .unique_id = inbound_kernel,
+            .source = "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/inbound_kernel.cpp",
+            .dfb_bindings =
+                {tt_metal::experimental::ProducerOf(in0_dfb, "in0"),
+                 tt_metal::experimental::ConsumerOf(in0_dfb, "in0"),
+                 tt_metal::experimental::ProducerOf(out0_dfb, "out0")},
+            .semaphore_bindings =
+                {{.semaphore_spec_name = sender, .accessor_name = "sender"},
+                 {.semaphore_spec_name = receiver, .accessor_name = "receiver"}},
+            .runtime_arg_schema = {.runtime_arg_names = {"start_x", "start_y"}},
+            .hw_config = DataMovementConfigIn,
+        };
+        tt_metal::experimental::KernelSpec outbound_kernel_spec{
+            .unique_id = outbound_kernel,
+            .source = "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/outbound_kernel.cpp",
+            .dfb_bindings = {tt_metal::experimental::ConsumerOf(out0_dfb, "out0")},
+            .tensor_bindings = {{.tensor_parameter_name = output_tensor_param, .accessor_name = "dst"}},
+            .runtime_arg_schema = {.runtime_arg_names = {"tile_offset"}},
+            .hw_config = DataMovementConfigOut,
+        };
 
         ////////// COMPUTE KERNEL SETUP //////////
-        vector<uint32_t> compute_kernel_args = {};
-        CreateKernel(
-            program,
-            "tt_metal/programming_examples/contributed/multicast/kernels/compute/void_compute_kernel.cpp",
-            receiver_cores_logical,
-            ComputeConfig{
-                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-                .fp32_dest_acc_en = false,
-                .math_approx_mode = false,
-                .compile_args = compute_kernel_args});
+        tt_metal::experimental::KernelSpec void_compute_kernel_spec{
+            .unique_id = void_compute_kernel,
+            .source = "tt_metal/programming_examples/contributed/multicast/kernels/compute/void_compute_kernel.cpp",
+            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .hw_config =
+                tt_metal::experimental::ComputeHardwareConfig{
+                    .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                    .sfpu_precision_mode = Precision::Precise,
+                    .enable_32_bit_dest = false,
+                },
+        };
+
+        // A program spec describes the program: its kernels, the dataflow buffers and semaphores they use, the
+        // tensor they write, and the cores the kernels run on (the work units).
+        tt_metal::experimental::ProgramSpec program_spec{
+            .name = "multicast",
+            .kernels = {coordinator_kernel_spec, inbound_kernel_spec, outbound_kernel_spec, void_compute_kernel_spec},
+            .dataflow_buffers = {in0_dfb_spec, out0_dfb_spec},
+            .semaphores = {sender_semaphore_spec, receiver_semaphore_spec},
+            .tensor_parameters = {{.unique_id = output_tensor_param, .spec = output_dram_tensor_spec}},
+            .work_units =
+                {{.name = "coordinator", .kernels = {coordinator_kernel}, .target_nodes = sender_core_logical},
+                 {.name = "receivers",
+                  .kernels = {inbound_kernel, outbound_kernel, void_compute_kernel},
+                  .target_nodes = receiver_cores_logical}},
+        };
+        Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, program_spec);
 
         ////////// IDENTITY MATRIX TILE SETUP //////////
         std::vector<bfloat16> identity_tile = create_identity_matrix(TILE_WIDTH, TILE_HEIGHT, TILE_WIDTH);
-        distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, identity_tile);
+        HostTensor src0_host_tensor = HostTensor::from_vector(identity_tile, src0_dram_tensor_spec);
+        cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
 
         ////////// RUNTIME ARGS SETUP //////////
         // Args for the sender core to multicast tile.
         // They must have access to coordinates of all receiver cores, to execute multicast operation.
-        SetRuntimeArgs(
-            program,
-            coordinator_kernel_id,
-            sender_core_logical,
-            {(uint32_t)(receiver_core_start.x),
-             (uint32_t)(receiver_core_start.y),
-             (uint32_t)(receiver_core_end.x),
-             (uint32_t)(receiver_core_end.y),
-             sender,
-             receiver,
-             dram_bank_id,
-             src0_dram_buffer->address(),
-             sizeof(bfloat16) * TILE_HW,
-             num_dests});
+        tt_metal::experimental::KernelRunArgs coordinator_run_args{
+            .kernel = coordinator_kernel,
+            .runtime_arg_values = tt_metal::experimental::MakeRuntimeArgsForSingleNode(
+                sender_core_logical,
+                {{"start_x", (uint32_t)(receiver_core_start.x)},
+                 {"start_y", (uint32_t)(receiver_core_start.y)},
+                 {"end_x", (uint32_t)(receiver_core_end.x)},
+                 {"end_y", (uint32_t)(receiver_core_end.y)},
+                 {"dram_bank_id", dram_bank_id},
+                 {"src0_dram", static_cast<uint32_t>(src0_dram_tensor.address())},
+                 {"single_tile_size", static_cast<uint32_t>(sizeof(bfloat16) * TILE_HW)},
+                 {"num_dests", static_cast<uint32_t>(num_dests)}}),
+        };
         // Args for the receiver cores to receive tile.
         // They must have access to coordinates of the sender core, to listen for multicast operation.
-        SetRuntimeArgs(
-            program,
-            inbound_kernel_id,
-            receiver_cores_logical,
-            {(uint32_t)(sender_core.x), (uint32_t)(sender_core.y), sender, receiver});
+        tt_metal::experimental::KernelRunArgs inbound_run_args{.kernel = inbound_kernel};
+        for (const tt_metal::experimental::NodeCoord& core : receiver_cores_logical) {
+            tt_metal::experimental::AddRuntimeArgsForNode(
+                inbound_run_args.runtime_arg_values,
+                core,
+                {{"start_x", (uint32_t)(sender_core.x)}, {"start_y", (uint32_t)(sender_core.y)}});
+        }
 
         // Args for the receiver cores to send tile back to DRAM.
+        tt_metal::experimental::KernelRunArgs outbound_run_args{.kernel = outbound_kernel};
         int tile_index = 0;
-        for (const CoreCoord& core : receiver_cores_logical) {
-            SetRuntimeArgs(
-                program, outbound_kernel_id, core, {output_dram_buffer->address(), static_cast<uint32_t>(tile_index)});
+        for (const tt_metal::experimental::NodeCoord& core : receiver_cores_logical) {
+            tt_metal::experimental::AddRuntimeArgsForNode(
+                outbound_run_args.runtime_arg_values, core, {{"tile_offset", static_cast<uint32_t>(tile_index)}});
             tile_index++;
         }
+
+        // The output tensor is bound to the outbound kernel's tensor parameter.
+        tt_metal::experimental::ProgramRunArgs run_args{
+            .kernel_run_args = {coordinator_run_args, inbound_run_args, outbound_run_args},
+            .tensor_args = {{output_tensor_param, tt_metal::experimental::TensorArgument{output_dram_tensor}}},
+        };
+        tt_metal::experimental::SetProgramRunArgs(program, run_args);
 
         ////////// PROGRAM LAUNCH AND CLOSE //////////
         VerifyDPRINTEnvironment(argv[0]);
@@ -302,11 +394,11 @@ int main(int /*argc*/, char** argv) {
         this_thread::sleep_for(chrono::milliseconds(200));
 
         ////////// TILE MULTICAST VERIFICATION //////////
-        std::vector<bfloat16> received_tiles(num_dests * TILE_HW);
-
         // We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1
-        //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
-        distributed::EnqueueReadMeshBuffer(cq, received_tiles, output_dram_buffer, true);
+        //  When the MeshDevice is 2 dimensional, the MeshBuffer read API can be used to target specific physical
+        //  devices
+        std::vector<bfloat16> received_tiles =
+            cq.enqueue_read_tensor(output_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
         bool verbose_verify =
             false;  // if enabled, the original and all multicast-received tiles are printed in full (32x32).
         verify_tiles(identity_tile, received_tiles, num_dests, verbose_verify);

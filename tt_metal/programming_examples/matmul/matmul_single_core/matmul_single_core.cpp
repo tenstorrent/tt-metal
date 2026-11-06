@@ -10,7 +10,9 @@
 #include <tt-metalium/distributed.hpp>
 #include <bmm_op.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include "tt-metalium/core_coord.hpp"
 
 using namespace tt::constants;
@@ -65,119 +67,179 @@ void matmul_single_core(
     uint32_t N,
     uint32_t K,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    // Set up mesh command queue, workload, device range, and program. This is a single-core example using core {0,0}.
+    // Set up mesh command queue, workload and device range. This is a single-core example using core {0,0}.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program{};
     // Core range from x: [0, 0] to y: [0, 0] (single core at {0, 0})
-    CoreCoord core({0, 0});
+    tt_metal::experimental::NodeCoord core({0, 0});
 
     // Calcaulate the number of tiles for each dimension.
     uint32_t Mt = M / TILE_HEIGHT;
     uint32_t Kt = K / TILE_WIDTH;
     uint32_t Nt = N / TILE_WIDTH;
 
-    // Create DRAM buffers for the input and output data.
+    // Create DRAM tensors for the input and output data.
     uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
+    uint32_t elements_per_tile = single_tile_size / sizeof(bfloat16);
 
-    // We allocate DRAM buffers for the input and output data (replicated per device across the mesh).
-    // Setting page_size to single_tile_size is the most common configuration for memory buffers in Metalium
-    // as it is generic, works for most cases and achieves good performance.
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+    // We allocate DRAM tensors for the input and output data (replicated per device across the mesh).
+    // Setting the page size to single_tile_size is the most common configuration for memory buffers in Metalium
+    // as it is generic, works for most cases and achieves good performance. Each row of a row-major tensor is one
+    // page, so a row of one tile's worth of elements gives a page size of one tile.
+    auto make_dram_tensor_spec = [&](size_t num_elements) {
+        return TensorSpec(
+            Shape({static_cast<uint32_t>(num_elements / elements_per_tile), elements_per_tile}),
+            TensorLayout(
+                DataType::BFLOAT16,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    };
+    TensorSpec src0_tensor_spec = make_dram_tensor_spec(a.size());
+    TensorSpec src1_tensor_spec = make_dram_tensor_spec(b.size());
+    TensorSpec dst_tensor_spec = make_dram_tensor_spec(output.size());
 
-    distributed::ReplicatedBufferConfig buffer_config_A{.size = sizeof(bfloat16) * a.size()};
-    distributed::ReplicatedBufferConfig buffer_config_B{.size = sizeof(bfloat16) * b.size()};
-    distributed::ReplicatedBufferConfig buffer_config_C{.size = sizeof(bfloat16) * output.size()};
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src0_tensor_spec);
+    MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src1_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dst_tensor_spec);
 
-    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
+    // Names identify the kernels, the dataflow buffers and the tensor parameters within the program spec.
+    const tt_metal::experimental::KernelSpecName reader_kernel{"reader"};
+    const tt_metal::experimental::KernelSpecName writer_kernel{"writer"};
+    const tt_metal::experimental::KernelSpecName compute_kernel{"compute"};
+    const tt_metal::experimental::DFBSpecName src0_dfb{"src0"};
+    const tt_metal::experimental::DFBSpecName src1_dfb{"src1"};
+    const tt_metal::experimental::DFBSpecName output_dfb{"output"};
+    const tt_metal::experimental::TensorParamName src0_tensor_param{"src0"};
+    const tt_metal::experimental::TensorParamName src1_tensor_param{"src1"};
+    const tt_metal::experimental::TensorParamName dst_tensor_param{"dst"};
 
-    // Create circular buffers for the input and output data.
-    // Using 2 tiles per circular buffer to allow for double buffering (data movement can be reading from one tile while
+    // Create dataflow buffers for the input and output data.
+    // Using 2 tiles per dataflow buffer to allow for double buffering (data movement can be reading from one tile while
     // the compute kernel is using the other tile). This number can be adjusted based on the use case. But geberally
     // diminishing returns observed after several tiles.
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
     tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
-    uint32_t src0_cb_index = CBIndex::c_0;
     uint32_t num_input_tiles = 2;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::experimental::DataflowBufferSpec src0_dfb_spec{
+        .unique_id = src0_dfb,
+        .entry_size = single_tile_size,
+        .num_entries = num_input_tiles,
+        .data_format_metadata = cb_data_format,
+    };
 
-    uint32_t src1_cb_index = CBIndex::c_1;
-    CircularBufferConfig cb_src1_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
-            .set_page_size(src1_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    tt_metal::experimental::DataflowBufferSpec src1_dfb_spec{
+        .unique_id = src1_dfb,
+        .entry_size = single_tile_size,
+        .num_entries = num_input_tiles,
+        .data_format_metadata = cb_data_format,
+    };
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 2;
-    CircularBufferConfig cb_output_config =
-        CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
-            .set_page_size(output_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::experimental::DataflowBufferSpec output_dfb_spec{
+        .unique_id = output_dfb,
+        .entry_size = single_tile_size,
+        .num_entries = num_output_tiles,
+        .data_format_metadata = cb_data_format,
+    };
 
-    // Create the data movement kernels and the compute kernel
-    std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
-    auto reader_id = tt_metal::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = reader_compile_time_args});
+    // Describe the data movement kernels and the compute kernel
+    tt_metal::experimental::KernelSpec reader_kernel_spec{
+        .unique_id = reader_kernel,
+        .source = OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
+        .dfb_bindings =
+            {tt_metal::experimental::ProducerOf(src0_dfb, "in0"), tt_metal::experimental::ProducerOf(src1_dfb, "in1")},
+        .tensor_bindings =
+            {{.tensor_parameter_name = src0_tensor_param, .accessor_name = "in0"},
+             {.tensor_parameter_name = src1_tensor_param, .accessor_name = "in1"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"Mt", "Kt", "Nt"}},
+        .hw_config =
+            tt_metal::experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    tt_metal::experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
+            },
+    };
 
-    std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
-    auto writer_id = tt_metal::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_compile_time_args});
+    tt_metal::experimental::KernelSpec writer_kernel_spec{
+        .unique_id = writer_kernel,
+        .source = OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",
+        .dfb_bindings = {tt_metal::experimental::ConsumerOf(output_dfb, "out0")},
+        .tensor_bindings = {{.tensor_parameter_name = dst_tensor_param, .accessor_name = "out0"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"Mt", "Nt"}},
+        .hw_config =
+            tt_metal::experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    tt_metal::experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+            },
+    };
 
     // Compile time arguments for the kernels
     // Note that these take effect at the kernel's compile time. Changing these values will require recompilation of the
     // kernel. Having arguments at compile time allows the compiler to optimize the kernel for the specific use case.
     // Like applying loop unrolling, constant folding, etc.. resulting in a more efficient kernel.
-    std::vector<uint32_t> compute_compile_time_args = {
-        Mt,  // Mt
-        Kt,  // Kt
-        Nt   // Nt
+    tt_metal::experimental::KernelSpec compute_kernel_spec{
+        .unique_id = compute_kernel,
+        .source = OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/compute/mm.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {tt_metal::experimental::ConsumerOf(src0_dfb, "in0"),
+             tt_metal::experimental::ConsumerOf(src1_dfb, "in1"),
+             tt_metal::experimental::ProducerOf(output_dfb, "out0")},
+        .compile_time_args = {{"Mt", Mt}, {"Kt", Kt}, {"Nt", Nt}},
+        .hw_config =
+            tt_metal::experimental::ComputeHardwareConfig{
+                .fpu_math_fidelity = math_fidelity,
+                .sfpu_precision_mode = Precision::Precise,
+            },
     };
-    tt_metal::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/compute/mm.cpp",
-        core,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_compile_time_args});
 
-    // Set kernel arguments
-    uint32_t src0_addr = src0_dram_buffer->address();
-    uint32_t src1_addr = src1_dram_buffer->address();
-    uint32_t dst_addr = dst_dram_buffer->address();
-    tt_metal::SetRuntimeArgs(program, reader_id, core, {src0_addr, src1_addr, Mt, Kt, Nt});
+    // A program spec describes the program: its kernels, the dataflow buffers between them, the tensors they
+    // operate on, and the cores the kernels run on (the work units).
+    tt_metal::experimental::ProgramSpec program_spec{
+        .name = "matmul_single_core",
+        .kernels = {reader_kernel_spec, writer_kernel_spec, compute_kernel_spec},
+        .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, output_dfb_spec},
+        .tensor_parameters =
+            {{.unique_id = src0_tensor_param, .spec = src0_tensor_spec},
+             {.unique_id = src1_tensor_param, .spec = src1_tensor_spec},
+             {.unique_id = dst_tensor_param, .spec = dst_tensor_spec}},
+        .work_units =
+            {{.name = "matmul_single_core",
+              .kernels = {reader_kernel, writer_kernel, compute_kernel},
+              .target_nodes = core}},
+    };
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, program_spec);
 
-    tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, Mt, Kt, Nt});
+    // Set kernel arguments, and the tensors bound to the tensor parameters.
+    tt_metal::experimental::ProgramRunArgs run_args{
+        .kernel_run_args =
+            {{.kernel = reader_kernel,
+              .runtime_arg_values =
+                  tt_metal::experimental::MakeRuntimeArgsForSingleNode(core, {{"Mt", Mt}, {"Kt", Kt}, {"Nt", Nt}})},
+             {.kernel = writer_kernel,
+              .runtime_arg_values =
+                  tt_metal::experimental::MakeRuntimeArgsForSingleNode(core, {{"Mt", Mt}, {"Nt", Nt}})}},
+        .tensor_args =
+            {{src0_tensor_param, tt_metal::experimental::TensorArgument{src0_dram_tensor}},
+             {src1_tensor_param, tt_metal::experimental::TensorArgument{src1_dram_tensor}},
+             {dst_tensor_param, tt_metal::experimental::TensorArgument{dst_dram_tensor}}},
+    };
+    tt_metal::experimental::SetProgramRunArgs(program, run_args);
     // NOTE: Note that we never set the runtime arguments for the compute kernel. This is because everything needed has
     // been set at compile time. The compute kernel does not need any runtime arguments to execute. And so we can skip
     // this step.
 
-    // Upload the input data to the DRAM buffers, execute the kernels, wait for the result to be read into the output
+    // Upload the input data to the DRAM tensors, execute the kernels, wait for the result to be read into the output
     // buffer
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    HostTensor src0_host_tensor = HostTensor::from_vector(a, src0_tensor_spec);
+    HostTensor src1_host_tensor = HostTensor::from_vector(b, src1_tensor_spec);
+    cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
+    cq.enqueue_write_tensor(src1_host_tensor, src1_dram_tensor);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
+    output = cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 }
 
 ///////////////////////////////////////

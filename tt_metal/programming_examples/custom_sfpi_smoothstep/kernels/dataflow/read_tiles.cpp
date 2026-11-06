@@ -4,40 +4,42 @@
 
 #include <cstdint>
 
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+
 void kernel_main() {
     // Read parameters from the kernel arguments
-    uint32_t in0_addr = get_arg_val<uint32_t>(0);
-    uint32_t n_tiles = get_arg_val<uint32_t>(1);
+    uint32_t n_tiles = get_arg(args::n_tiles);
 
-    // The circular buffers to read the tiles into
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+    // The dataflow buffers to read the tiles into
+    DataflowBuffer dfb_in0(dfb::in0);
 
-    // Get the tile size used in the circular buffers. We assume the
-    // circular buffers are created with the same tile size as the DRAM
+    // Get the tile size used in the dataflow buffers. We assume the
+    // dataflow buffers are created with the same tile size as the DRAM
     // buffers (This is most of the cases).
-    const uint32_t tile_size_bytes = get_tile_size(cb_in0);
+    const uint32_t tile_size_bytes = dfb_in0.get_entry_size();
 
     // Create address generators for the input buffers. Consider these the
     // pointers for interleaved buffers
     // Setting the page size to be tile_size_bytes works because we set it up
     // explicitly in host code. This is usually a good idea as it makes coding
     // easy.
-    constexpr auto in0_args = TensorAccessorArgs<0>();
-    const auto in0 = TensorAccessor(in0_args, in0_addr);
+    // The input tensor is bound to this kernel by name in the host code.
+    const auto in0 = TensorAccessor(tensor::in0);
 
-    // Loop over all the tiles and read them into the circular buffers
+    // Loop over all the tiles and read them into the dataflow buffers
     for (uint32_t i = 0; i < n_tiles; i++) {
-        // First make sure there is space in the circular buffers to be written to.
-        cb_reserve_back(cb_in0, 1);  // wait until we have 1 free slot. This blocks if the
-                                     // other kernels cannot consume the tiles fast enough.
-                                     // Deciding how large the buffer should be is a tradeoff.
-        uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-        noc_async_read_page(i, in0, cb_in0_addr);  // read the tile into the circular buffer
-                                                   // We can overlap async reads and writes
-                                                   // to reduce the data movement overhead.
+        // First make sure there is space in the dataflow buffers to be written to.
+        dfb_in0.reserve_back(1);  // wait until we have 1 free slot. This blocks if the
+                                  // other kernels cannot consume the tiles fast enough.
+                                  // Deciding how large the buffer should be is a tradeoff.
+        uint32_t dfb_in0_addr = dfb_in0.get_write_ptr();
+        noc_async_read_page(i, in0, dfb_in0_addr);  // read the tile into the dataflow buffer
+                                                    // We can overlap async reads and writes
+                                                    // to reduce the data movement overhead.
 
         noc_async_read_barrier();  // Wait until tile reads are done
-        cb_push_back(cb_in0, 1);   // mark the tiles as ready. From this point forward kernels
-                                   // calling `cb_wait_front` will see this tile
+        dfb_in0.push_back(1);      // mark the tiles as ready. From this point forward kernels
+                                   // calling `wait_front` will see this tile
     }
 }

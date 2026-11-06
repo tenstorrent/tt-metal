@@ -15,41 +15,70 @@ Then run the following:
 
 ## Mesh setup
 
-Create a 1x1 mesh device, get the mesh command queue, construct a workload and device range, and create a program.
+Create a 1x1 mesh device, get the mesh command queue, and construct a workload and device range.
 
 ```cpp
-constexpr CoreCoord core = {0, 0};
-auto mesh_device = distributed::MeshDevice::create_unit_mesh(0);
+constexpr experimental::NodeCoord core = {0, 0};
+std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
 distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 distributed::MeshWorkload workload;
 distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-Program program = CreateProgram();
 ```
 
 ## Data movement kernels
 
-There are two Data Movement cores per Tensix. For this example, we launch two identical kernels, one on each DM core (RISCV_0 on NOC 0 and RISCV_1 on NOC 1).
+There are two Data Movement cores per Tensix. For this example, we launch two identical kernels, one on each DM core (RISCV_0 on NOC 0 and RISCV_1 on NOC 1). Each kernel is a `KernelSpec` with the same kernel source; each one names its own Data Movement core and NoC.
 
 ```cpp
-KernelHandle void_dataflow_kernel_noc0_id = CreateKernel(
-    program,
-    "tt_metal/programming_examples/hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
-    core,
-    DataMovementConfig{ .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default });
+const experimental::KernelSpecName data_movement_kernel_0{"data_movement_kernel_0"};
+const experimental::KernelSpecName data_movement_kernel_1{"data_movement_kernel_1"};
 
-KernelHandle void_dataflow_kernel_noc1_id = CreateKernel(
-    program,
-    "tt_metal/programming_examples/hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
-    core,
-    DataMovementConfig{ .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default });
+experimental::KernelSpec data_movement_kernel_0_spec{
+    .unique_id = data_movement_kernel_0,
+    .source = OVERRIDE_KERNEL_PREFIX "hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
+    .hw_config =
+        experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+        },
+};
+
+experimental::KernelSpec data_movement_kernel_1_spec{
+    .unique_id = data_movement_kernel_1,
+    .source = OVERRIDE_KERNEL_PREFIX "hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
+    .hw_config =
+        experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
+        },
+};
 ```
 
-Set runtime arguments (none needed here), enqueue the program in a mesh workload (non-blocking), and wait for completion.
+A `ProgramSpec` lists both kernels and one work unit that runs them on core `{0, 0}`. `MakeProgramFromSpec` creates the program from it.
 
 ```cpp
-SetRuntimeArgs(program, void_dataflow_kernel_noc0_id, core, {});
-SetRuntimeArgs(program, void_dataflow_kernel_noc1_id, core, {});
-std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication." << std::endl;
+experimental::ProgramSpec program_spec{
+    .name = "hello_world_datamovement_kernel",
+    .kernels = {data_movement_kernel_0_spec, data_movement_kernel_1_spec},
+    .work_units =
+        {{.name = "hello_world_datamovement_kernel",
+          .kernels = {data_movement_kernel_0, data_movement_kernel_1},
+          .target_nodes = core}},
+};
+Program program = experimental::MakeProgramFromSpec(*mesh_device, program_spec);
+```
+
+Set the program run args (no runtime arguments needed here), enqueue the program in a mesh workload (non-blocking), and wait for completion.
+
+```cpp
+experimental::ProgramRunArgs run_args{
+    .kernel_run_args = {{.kernel = data_movement_kernel_0}, {.kernel = data_movement_kernel_1}},
+};
+experimental::SetProgramRunArgs(program, run_args);
+std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication."
+          << std::endl;
 
 workload.add_program(device_range, std::move(program));
 distributed::EnqueueMeshWorkload(cq, workload, false);

@@ -96,8 +96,8 @@ stale or garbage data is harmless. Do not use the idle modes for anything but po
 ### Idling a kernel
 
 To isolate *which* part of the pipeline actually costs power — NoC read, FPU compute, or NoC
-write — rather than just keeping a core alive and cycling its circular-buffer handshake, any
-kernel can be switched to "idle" mode. An idle kernel still performs its full CB handshake, so
+write — rather than just keeping a core alive and cycling its dataflow-buffer handshake, any
+kernel can be switched to "idle" mode. An idle kernel still performs its full dataflow-buffer handshake, so
 the other kernels move the same data and none of them deadlock; it just skips its real NoC
 transfer or FPU work.
 
@@ -105,7 +105,7 @@ Two side effects to keep in mind when comparing cases:
 
 - **Data.** In the default `updated` mode an idle reader still reads its first two slices for
   real and idle compute still computes its first two blocks, so both halves of each
-  double-buffered circular buffer hold real data, which the idle loop then recycles. In `legacy`
+  double-buffered dataflow buffer hold real data, which the idle loop then recycles. In `legacy`
   mode (see below) compute works on whatever the input buffers already hold in L1 and the writer
   sends output buffers that were never packed: zeros or an earlier run's data, so operand values
   (and with them switching power) depend on what ran before.
@@ -115,9 +115,9 @@ Two side effects to keep in mind when comparing cases:
 
 | Env var | Effect |
 |---|---|
-| `LONG_MATMUL_DISABLE_READER=1` | Reader keeps `cb_reserve_back`/`cb_push_back` on both input CBs but skips `noc_async_read_page` + barrier (after the first two slices, in `updated` mode). |
-| `LONG_MATMUL_DISABLE_COMPUTE=1` | Compute keeps its CB and tile-register handshake but skips the math + `pack_tile` (after the first two blocks, in `updated` mode). |
-| `LONG_MATMUL_DISABLE_WRITER=1` | Writer keeps `cb_wait_front`/`cb_pop_front` but skips `noc_async_write_page` + barrier. Output DRAM stays stale. |
+| `LONG_MATMUL_DISABLE_READER=1` | Reader keeps `reserve_back`/`push_back` on both input dataflow buffers but skips `noc_async_read_page` + barrier (after the first two slices, in `updated` mode). |
+| `LONG_MATMUL_DISABLE_COMPUTE=1` | Compute keeps its dataflow-buffer and tile-register handshake but skips the math + `pack_tile` (after the first two blocks, in `updated` mode). |
+| `LONG_MATMUL_DISABLE_WRITER=1` | Writer keeps `wait_front`/`pop_front` but skips `noc_async_write_page` + barrier. Output DRAM stays stale. |
 | `LONG_MATMUL_WRITE_AMPLIFICATION_PCT=<pct>` | The reader issues `Kt * (BLOCK_M + BLOCK_N) / (BLOCK_M * BLOCK_N)` NoC reads per output tile (`2*Kt` at the default 1x1 block) while the writer issues only 1. This re-writes each output tile `round((pct/100) * reads)` times (min 1) to load the write path symmetrically; `100` matches the reader's read volume. Unset/0 = normal. |
 
 ### `LONG_MATMUL_MODE` — `updated` (default) or `legacy`
@@ -132,7 +132,10 @@ the clock starts.
 | Amplified writes | every re-write waits for its own NoC barrier, so at 100% amplification the writer sets the pace | re-writes go out back to back, one barrier per tile |
 | Amplification count with blocking | `2*Kt` per tile whatever the block | matches the blocked reader rate |
 | Idle reader / idle compute data | whatever L1 already holds | the first two slices / blocks are real |
-| Timed interval | starts before `EnqueueMeshWorkload`, so it includes any kernel JIT compile and possibly the tail of the input uploads | waits for the uploads to finish, then starts after `EnqueueMeshWorkload` returns |
+| Timed interval | starts before `EnqueueMeshWorkload`, so it may include the tail of the input uploads | waits for the uploads to finish, then starts after `EnqueueMeshWorkload` returns |
+
+In both modes the kernels are compiled when the program is created (`MakeProgramFromSpec`),
+before the clock starts, so kernel compilation is never part of the timed interval.
 
 Measured on Wormhole n150, `1024 2048 2048 20`, 8x8, per-iteration time:
 
@@ -203,8 +206,8 @@ The checksum must not change with the block size; if it does, the tile indexing 
 | `exp`, `gelu`, `recip`, `silu`, `sigmoid` | `copy_tile` from A, then the SFPU op in place | SFPU |
 
 The reader and writer are identical for every value, so every op streams byte-identical DRAM
-traffic through the same circular buffers; the only thing that varies is what the math unit does
-with each tile pair. The unary SFPU ops still wait on and pop the second input CB so the
+traffic through the same dataflow buffers; the only thing that varies is what the math unit does
+with each tile pair. The unary SFPU ops still wait on and pop the second input dataflow buffer so the
 reader's traffic is unchanged. The ops also run at the same rate as long as the reader sets the
 pace: on n150 at `1024 2048 2048`, matmul, add and exp have the same reader time and
 per-iteration time at 1x1 and 2x4. With a compute-bound shape the cheaper ops (add runs at LoFi,
@@ -221,7 +224,7 @@ LONG_MATMUL_OP=exp POWER_CASE=1 ./build/programming_examples/metal_example_long_
 ## Profiling the kernels
 
 With the device profiler on, each kernel records when it starts and ends and how its time splits
-between waiting on circular buffers and doing real work. The tt-ember parser
+between waiting on dataflow buffers and doing real work. The tt-ember parser
 (`tools/tt-ember/parser.py`, added in #58134) turns these into a per-core wait / active /
 overhead breakdown for every grid.
 
@@ -233,9 +236,9 @@ The markers land in `generated/profiler/.logs/profile_log_device.csv`, read back
 
 | Kernel | Markers | Wait = blocked in | Active = time in |
 |---|---|---|---|
-| Reader | `READER_KERNEL_START/END`, `READER_WAIT_CYCLES`, `READER_TRANSFER_CYCLES` | `cb_reserve_back` | `noc_async_read_page` + barrier |
-| Compute | `COMPUTE_KERNEL_START/END`, `COMPUTE_WAIT_CYCLES`, `COMPUTE_COMPUTE_CYCLES` | `cb_wait_front` (TRISC0), `tile_regs_acquire` (TRISC1), `tile_regs_wait` + `cb_reserve_back` (TRISC2) | the math loop (TRISC1), `pack_tile` (TRISC2) |
-| Writer | `WRITER_KERNEL_START/END`, `WRITER_WAIT_CYCLES`, `WRITER_TRANSFER_CYCLES` | `cb_wait_front` | `noc_async_write_page` + barrier |
+| Reader | `READER_KERNEL_START/END`, `READER_WAIT_CYCLES`, `READER_TRANSFER_CYCLES` | `reserve_back` | `noc_async_read_page` + barrier |
+| Compute | `COMPUTE_KERNEL_START/END`, `COMPUTE_WAIT_CYCLES`, `COMPUTE_COMPUTE_CYCLES` | `wait_front` (TRISC0), `tile_regs_acquire` (TRISC1), `tile_regs_wait` + `reserve_back` (TRISC2) | the math loop (TRISC1), `pack_tile` (TRISC2) |
+| Writer | `WRITER_KERNEL_START/END`, `WRITER_WAIT_CYCLES`, `WRITER_TRANSFER_CYCLES` | `wait_front` | `noc_async_write_page` + barrier |
 
 Each kernel records these once per run, not per tile. The compute markers appear three times per
 core, once per TRISC, since all three run the same code. The timestamp reads are compiled in only

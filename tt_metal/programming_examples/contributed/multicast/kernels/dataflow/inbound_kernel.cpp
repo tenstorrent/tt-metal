@@ -4,10 +4,13 @@
 
 #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/semaphore.h"
+#include "experimental/kernel_args.h"
 #include "ckernel.h"  // ckernel::load_blocking
 
-// Copy a tile from one CB to another via L1, blocking until the tile has landed in L1.
-// The caller's cb_push_back() writes a credit to a STREAM register (a different memory region, so no
+// Copy a tile from one dataflow buffer to another via L1, blocking until the tile has landed in L1.
+// The caller's push_back() writes a credit to a STREAM register (a different memory region, so no
 // store-ordering guarantee vs these L1 stores); without the drain the consumer could see that credit
 // and NoC-read stale L1. load_blocking on the last written word stalls until it lands, and since
 // same-region stores are processed in order, draining the last drains all.
@@ -24,54 +27,55 @@ inline void copy_tile_between_cb(uint32_t src_addr, uint32_t dst_addr, uint32_t 
 // Ensure this is set: export TT_METAL_DPRINT_CORES='(0,0)-(3,0)'
 void kernel_main() {
     ////////// RUNTIME ARGS & VARS //////////
-    uint32_t start_x = get_arg_val<uint32_t>(0);
-    uint32_t start_y = get_arg_val<uint32_t>(1);
-    uint32_t sender_addr = get_semaphore(get_arg_val<uint32_t>(2));
-    uint32_t receiver_addr = get_semaphore(get_arg_val<uint32_t>(3));
+    uint32_t start_x = get_arg(args::start_x);
+    uint32_t start_y = get_arg(args::start_y);
 
     ////////// BUFFER SETUP //////////
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;    // index=0
-    constexpr uint32_t cb_id_out0 = tt::CB::c_out0;  // index=16
-    uint32_t ublock_size_bytes = get_tile_size(cb_id_in0);
-    uint32_t l1_addr_in = get_write_ptr(cb_id_in0);
-    uint32_t l1_addr_out = get_write_ptr(cb_id_out0);
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_out0(dfb::out0);
+    uint32_t ublock_size_bytes = dfb_in0.get_entry_size();
+    uint32_t l1_addr_in = dfb_in0.get_write_ptr();
+    uint32_t l1_addr_out = dfb_out0.get_write_ptr();
 
     ////////// SEMAPHORE SETUP //////////
-    volatile tt_l1_ptr uint32_t* receiver_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_addr);
-    volatile tt_l1_ptr uint32_t* sender_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_addr);
-    cb_reserve_back(cb_id_in0, 1);
-    noc_semaphore_set(receiver_addr_ptr, INVALID);
-    uint64_t remote_sender_semaphore_noc_addr = get_noc_addr(start_x, start_y, sender_addr);
+    Semaphore receiver_sem(sem::receiver);
+    Semaphore sender_sem(sem::sender);
+    Noc noc;
+    dfb_in0.reserve_back(1);
+    receiver_sem.set(INVALID);
 
     ////////// NOTIFY COORDINATOR CORE OF READINESS //////////
-    noc_semaphore_inc(remote_sender_semaphore_noc_addr, 1);
+    sender_sem.up(noc, start_x, start_y, 1);
 
     ////////// WAIT UNTIL COORDINATOR CORE MULTICASTS TILE TO RECEIVER CORES //////////
-    noc_semaphore_wait(receiver_addr_ptr, VALID);
+    receiver_sem.wait(VALID);
 
     // At this stage, the receiver cores should have now received the tile.
 
     ////////// PRINT TILE (8-ELEMENT-STRIDED TILE SLICE) //////////
     SliceRange sr =
         SliceRange{.h0 = static_cast<uint8_t>(0), .h1 = static_cast<uint8_t>(32), .hs = 8, .w0 = 0, .w1 = 32, .ws = 8};
-    DPRINT("Tile slice:\n{}\n", TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false));
+    DPRINT(
+        "Tile slice:\n{}\n",
+        TileSlice(static_cast<uint8_t>(dfb_in0.get_id()), 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false));
 
     ////////// PRINT TILE (FULL TILE) //////////
     // for (uint8_t r = 0; r < 32; ++r) {
     //     SliceRange sr = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r+1), .hs = 1, .w0 = 0,
     //     .w1 = 32, .ws = 1};
-    //     DPRINT_DATA0("{}\n", TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false));
+    //     DPRINT_DATA0("{}\n", TileSlice(static_cast<uint8_t>(dfb_in0.get_id()), 0, sr, TSLICE_INPUT_CB,
+    //     TSLICE_WR_PTR, true, false));
     // }
 
-    cb_push_back(cb_id_in0, 1);
+    dfb_in0.push_back(1);
 
     DPRINT(
         "CORE ({},{}): Inbound kernel has received and acknowledged its tile.\n\n",
         get_absolute_logical_x(),
         get_absolute_logical_y());
 
-    ////////// COPY TILE TO OUTBOUND KERNEL'S CB //////////
-    cb_reserve_back(cb_id_out0, 1);
-    copy_tile_between_cb(get_read_ptr(cb_id_in0), get_write_ptr(cb_id_out0), ublock_size_bytes);
-    cb_push_back(cb_id_out0, 1);
+    ////////// COPY TILE TO OUTBOUND KERNEL'S DATAFLOW BUFFER //////////
+    dfb_out0.reserve_back(1);
+    copy_tile_between_cb(dfb_in0.get_read_ptr(), dfb_out0.get_write_ptr(), ublock_size_bytes);
+    dfb_out0.push_back(1);
 }

@@ -7,82 +7,149 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::distributed;
 
+// Make a tensor over the memory of an existing mesh buffer, so that kernels can access the buffer through a tensor
+// binding. The tensor does not own the memory: the mesh buffer must stay alive while the tensor is in use.
+MeshTensor MakeTensorView(const std::shared_ptr<MeshBuffer>& buffer, const TensorSpec& per_device_spec) {
+    std::shared_ptr<MeshBuffer> view =
+        MeshBuffer::create(buffer->global_config(), buffer->device_local_config(), buffer->device(), buffer->address());
+    return MeshTensor::from_buffer(std::move(*view), per_device_spec);
+}
+
 Program CreateEltwiseAddProgram(
-    const std::shared_ptr<MeshBuffer>& a,
-    const std::shared_ptr<MeshBuffer>& b,
-    const std::shared_ptr<MeshBuffer>& c,
+    MeshDevice& mesh_device,
+    const MeshTensor& a,
+    const MeshTensor& b,
+    const MeshTensor& c,
     size_t tile_size_bytes,
     uint32_t num_tiles) {
-    auto program = CreateProgram();
-    auto target_tensix_core = CoreRange(CoreCoord{0, 0});
+    constexpr auto target_tensix_core = experimental::NodeCoord{0, 0};
 
-    // Add circular buffers for data movement
-    constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
+    // Names identify the kernels, the dataflow buffers and the tensor parameters within the program spec.
+    const experimental::KernelSpecName reader{"reader"};
+    const experimental::KernelSpecName writer{"writer"};
+    const experimental::KernelSpecName compute{"compute"};
+    const experimental::TensorParamName a_tensor_param{"a"};
+    const experimental::TensorParamName b_tensor_param{"b"};
+    const experimental::TensorParamName c_tensor_param{"c"};
+
+    // Add dataflow buffers for data movement
+    const experimental::DFBSpecName src0_dfb{"src0"};
     constexpr uint32_t num_input_tiles = 1;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(num_input_tiles * tile_size_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src0_cb_index, tile_size_bytes);
-    tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_src0_config);
+    experimental::DataflowBufferSpec dfb_src0_spec{
+        .unique_id = src0_dfb,
+        .entry_size = static_cast<uint32_t>(tile_size_bytes),
+        .num_entries = num_input_tiles,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
 
-    constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
-    CircularBufferConfig cb_src1_config =
-        CircularBufferConfig(num_input_tiles * tile_size_bytes, {{src1_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src1_cb_index, tile_size_bytes);
-    tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_src1_config);
+    const experimental::DFBSpecName src1_dfb{"src1"};
+    experimental::DataflowBufferSpec dfb_src1_spec{
+        .unique_id = src1_dfb,
+        .entry_size = static_cast<uint32_t>(tile_size_bytes),
+        .num_entries = num_input_tiles,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
 
-    constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
+    const experimental::DFBSpecName output_dfb{"output"};
     constexpr uint32_t num_output_tiles = 1;
-    CircularBufferConfig cb_output_config =
-        CircularBufferConfig(num_output_tiles * tile_size_bytes, {{output_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(output_cb_index, tile_size_bytes);
-    tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_output_config);
+    experimental::DataflowBufferSpec dfb_output_spec{
+        .unique_id = output_dfb,
+        .entry_size = static_cast<uint32_t>(tile_size_bytes),
+        .num_entries = num_output_tiles,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
 
     // Add data movement kernels
-    std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*a->get_reference_buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*b->get_reference_buffer()).append_to(reader_compile_time_args);
-    KernelHandle reader = CreateKernel(
-        program,
-        "tt_metal/programming_examples/contributed/vecadd/kernels/interleaved_tile_read.cpp",
-        target_tensix_core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = reader_compile_time_args});
+    experimental::KernelSpec reader_spec{
+        .unique_id = reader,
+        .source = "tt_metal/programming_examples/contributed/vecadd/kernels/interleaved_tile_read.cpp",
+        .dfb_bindings = {experimental::ProducerOf(src0_dfb, "in0"), experimental::ProducerOf(src1_dfb, "in1")},
+        .tensor_bindings =
+            {{.tensor_parameter_name = a_tensor_param, .accessor_name = "a"},
+             {.tensor_parameter_name = b_tensor_param, .accessor_name = "b"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
+            },
+    };
 
-    std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*c->get_reference_buffer()).append_to(writer_compile_time_args);
-    KernelHandle writer = CreateKernel(
-        program,
-        "tt_metal/programming_examples/contributed/vecadd/kernels/tile_write.cpp",
-        target_tensix_core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_compile_time_args});
+    experimental::KernelSpec writer_spec{
+        .unique_id = writer,
+        .source = "tt_metal/programming_examples/contributed/vecadd/kernels/tile_write.cpp",
+        .dfb_bindings = {experimental::ConsumerOf(output_dfb, "out0")},
+        .tensor_bindings = {{.tensor_parameter_name = c_tensor_param, .accessor_name = "c"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+            },
+    };
 
     // Create the eltwise binary kernel
-    auto compute = CreateKernel(
-        program,
-        "tt_metal/programming_examples/contributed/vecadd/kernels/add.cpp",
-        target_tensix_core,
-        ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
-            .math_approx_mode = false,
-            .compile_args = {},
-            .defines = {{"ELTWISE_OP", "add_tiles"}, {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"}}});
+    experimental::KernelSpec compute_spec{
+        .unique_id = compute,
+        .source = "tt_metal/programming_examples/contributed/vecadd/kernels/add.cpp",
+        .compiler_options =
+            {.defines = {{"ELTWISE_OP", "add_tiles"}, {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"}},
+             .opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {experimental::ConsumerOf(src0_dfb, "in0"),
+             experimental::ConsumerOf(src1_dfb, "in1"),
+             experimental::ProducerOf(output_dfb, "out0")},
+        .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+        .hw_config =
+            experimental::ComputeHardwareConfig{
+                .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                .sfpu_precision_mode = Precision::Precise,
+                .enable_32_bit_dest = false,
+            },
+    };
+
+    experimental::ProgramSpec program_spec{
+        .name = "distributed_eltwise_add",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {dfb_src0_spec, dfb_src1_spec, dfb_output_spec},
+        .tensor_parameters =
+            {{.unique_id = a_tensor_param, .spec = a.tensor_spec()},
+             {.unique_id = b_tensor_param, .spec = b.tensor_spec()},
+             {.unique_id = c_tensor_param, .spec = c.tensor_spec()}},
+        .work_units =
+            {{.name = "distributed_eltwise_add",
+              .kernels = {reader, writer, compute},
+              .target_nodes = target_tensix_core}},
+    };
+    Program program = experimental::MakeProgramFromSpec(mesh_device, program_spec);
 
     // Set runtime arguments for each device
-    SetRuntimeArgs(program, reader, target_tensix_core, {a->address(), b->address(), num_tiles});
-    SetRuntimeArgs(program, writer, target_tensix_core, {c->address(), num_tiles});
-    SetRuntimeArgs(program, compute, target_tensix_core, {num_tiles});
+    experimental::ProgramRunArgs run_args{
+        .kernel_run_args =
+            {{.kernel = reader,
+              .runtime_arg_values =
+                  experimental::MakeRuntimeArgsForSingleNode(target_tensix_core, {{"n_tiles", num_tiles}})},
+             {.kernel = writer,
+              .runtime_arg_values =
+                  experimental::MakeRuntimeArgsForSingleNode(target_tensix_core, {{"n_tiles", num_tiles}})},
+             {.kernel = compute,
+              .runtime_arg_values =
+                  experimental::MakeRuntimeArgsForSingleNode(target_tensix_core, {{"n_tiles", num_tiles}})}},
+        .tensor_args =
+            {{a_tensor_param, experimental::TensorArgument{a}},
+             {b_tensor_param, experimental::TensorArgument{b}},
+             {c_tensor_param, experimental::TensorArgument{c}}},
+    };
+    experimental::SetProgramRunArgs(program, run_args);
 
     return program;
 }
@@ -133,8 +200,21 @@ int main() {
     EnqueueWriteMeshBuffer(cq, a, a_data, false /* blocking */);
     EnqueueWriteMeshBuffer(cq, b, b_data, false /* blocking */);
 
+    // Each device holds one shard of the distributed buffers. The kernels access the shard through a tensor that
+    // views the buffer's memory. Each row of a row-major tensor is one page, so a row of one tile's worth of elements
+    // gives a page size of one tile.
+    TensorSpec shard_tensor_spec(
+        Shape({static_cast<uint32_t>(num_tiles), static_cast<uint32_t>(tile_size_bytes / sizeof(bfloat16))}),
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    MeshTensor a_tensor = MakeTensorView(a, shard_tensor_spec);
+    MeshTensor b_tensor = MakeTensorView(b, shard_tensor_spec);
+    MeshTensor c_tensor = MakeTensorView(c, shard_tensor_spec);
+
     // Create program for distributed computation
-    auto program = CreateEltwiseAddProgram(a, b, c, tile_size_bytes, num_tiles);
+    auto program = CreateEltwiseAddProgram(*mesh_device, a_tensor, b_tensor, c_tensor, tile_size_bytes, num_tiles);
 
     // Create mesh workload and broadcast the program across all devices
     auto mesh_workload = MeshWorkload();

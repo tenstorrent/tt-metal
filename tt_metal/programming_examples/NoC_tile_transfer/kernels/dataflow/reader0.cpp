@@ -3,29 +3,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 #include "api/debug/dprint.h"
 
 #include <cstdint>
 
 void kernel_main() {
-    // Runtime args
-    const uint32_t input_buffer_addr = get_arg_val<uint32_t>(0);
-
-    // Compile time args
-    constexpr uint32_t src0_cb_index = get_compile_time_arg_val(0);
+    // Dataflow buffer bindings
+    DataflowBuffer src0_dfb(dfb::src0);
 
     // Input data config
-    constexpr auto interleaved_accessor_args = TensorAccessorArgs<1>();
-    const auto interleaved_accessor = TensorAccessor(interleaved_accessor_args, input_buffer_addr);
+    const auto interleaved_accessor = TensorAccessor(tensor::input);
 
     // Constants
     constexpr uint32_t one_tile = 1;
 
     // Read input value data
     DPRINT("1. READER 0: Reading input data to L1 src0 CB\n");
-    cb_reserve_back(src0_cb_index, one_tile);
-    const uint32_t l1_write_addr = get_write_ptr(src0_cb_index);
+    src0_dfb.reserve_back(one_tile);
+    const uint32_t l1_write_addr = src0_dfb.get_write_ptr();
     noc_async_read_page(0, interleaved_accessor, l1_write_addr);
     noc_async_read_barrier();
 
@@ -33,6 +31,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
     DPRINT(" > Data in buffer: {}\n", ptr[0]);
 
-    cb_push_back(src0_cb_index, one_tile);
+    src0_dfb.push_back(one_tile);
     DPRINT("2. READER 0: Data in src0 CB pushed from reader0\n");
 }

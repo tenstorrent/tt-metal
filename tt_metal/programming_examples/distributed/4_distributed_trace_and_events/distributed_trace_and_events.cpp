@@ -8,6 +8,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -29,6 +30,7 @@ using namespace tt::tt_metal::distributed;
 // synchronization
 
 std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
+    MeshDevice& mesh_device,
     const std::shared_ptr<MeshBuffer>& src0_buf,
     const std::shared_ptr<MeshBuffer>& src1_buf,
     const std::shared_ptr<MeshBuffer>& output_buf,
@@ -48,72 +50,124 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
     const std::vector<std::string> op_id_to_op_type_define = {
         "EltwiseBinaryType::ELWADD", "EltwiseBinaryType::ELWMUL", "EltwiseBinaryType::ELWSUB"};
 
-    std::shared_ptr<Program> program = std::make_shared<Program>();
+    const experimental::KernelSpecName binary_reader_kernel{"binary_reader"};
+    const experimental::KernelSpecName unary_writer_kernel{"unary_writer"};
+    const experimental::KernelSpecName eltwise_binary_kernel{"eltwise_binary"};
+    const experimental::DFBSpecName src0_dfb{"src0"};
+    const experimental::DFBSpecName src1_dfb{"src1"};
+    const experimental::DFBSpecName output_dfb{"output"};
 
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 2;
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(*program, cores_for_program, cb_src0_config);
+    experimental::DataflowBufferSpec src0_dfb_spec{
+        .unique_id = src0_dfb,
+        .entry_size = single_tile_size,
+        .num_entries = num_input_tiles,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
 
-    uint32_t src1_cb_index = tt::CBIndex::c_1;
-    tt_metal::CircularBufferConfig cb_src1_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src1_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(*program, cores_for_program, cb_src1_config);
+    experimental::DataflowBufferSpec src1_dfb_spec{
+        .unique_id = src1_dfb,
+        .entry_size = single_tile_size,
+        .num_entries = num_input_tiles,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 2;
-    tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(
-            num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(output_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(*program, cores_for_program, cb_output_config);
+    experimental::DataflowBufferSpec output_dfb_spec{
+        .unique_id = output_dfb,
+        .entry_size = single_tile_size,
+        .num_entries = num_output_tiles,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
 
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(src0_buf).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(src1_buf).append_to(reader_compile_time_args);
-    auto binary_reader_kernel = tt_metal::CreateKernel(
-        *program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_8bank.cpp",
-        cores_for_program,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
-            .compile_args = reader_compile_time_args});
+    experimental::KernelSpec binary_reader_kernel_spec{
+        .unique_id = binary_reader_kernel,
+        .source =
+            "tt_metal/programming_examples/distributed/4_distributed_trace_and_events/kernels/"
+            "reader_dual_8bank.cpp",
+        .dfb_bindings = {experimental::ProducerOf(src0_dfb, "in0"), experimental::ProducerOf(src1_dfb, "in1")},
+        .runtime_arg_schema = {.runtime_arg_names = {"src0_addr", "src0_num_tiles", "src1_addr", "src1_num_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
+            },
+    };
+    // The buffers are mesh buffers (not tensors), so their accessor args are passed positionally.
+    binary_reader_kernel_spec.advanced_options.compile_time_varargs = reader_compile_time_args;
 
-    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(output_buf).append_to(writer_compile_time_args);
-    auto unary_writer_kernel = tt_metal::CreateKernel(
-        *program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
-        cores_for_program,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = writer_compile_time_args});
+    experimental::KernelSpec unary_writer_kernel_spec{
+        .unique_id = unary_writer_kernel,
+        .source =
+            "tt_metal/programming_examples/distributed/4_distributed_trace_and_events/kernels/"
+            "writer_unary_8bank.cpp",
+        .dfb_bindings = {experimental::ConsumerOf(output_dfb, "out")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "num_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
+            },
+    };
+    unary_writer_kernel_spec.advanced_options.compile_time_varargs = writer_compile_time_args;
 
-    std::vector<uint32_t> compute_kernel_args = {};
-
-    std::map<std::string, std::string> binary_defines = {
+    experimental::KernelSpec::CompilerOptions::Defines binary_defines = {
         {"ELTWISE_OP", op_id_to_op_define[eltwise_op_index]},
         {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op_index]}};
-    auto eltwise_binary_kernel = tt_metal::CreateKernel(
+    experimental::KernelSpec eltwise_binary_kernel_spec{
+        .unique_id = eltwise_binary_kernel,
+        .source = "tt_metal/programming_examples/distributed/4_distributed_trace_and_events/kernels/eltwise_binary.cpp",
+        .compiler_options = {.defines = binary_defines, .opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {experimental::ConsumerOf(src0_dfb, "in0"),
+             experimental::ConsumerOf(src1_dfb, "in1"),
+             experimental::ProducerOf(output_dfb, "out")},
+        .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt", "per_core_block_size"}},
+        .hw_config = experimental::ComputeHardwareConfig{},
+    };
+
+    experimental::ProgramSpec program_spec{
+        .name = "eltwise_binary",
+        .kernels = {binary_reader_kernel_spec, unary_writer_kernel_spec, eltwise_binary_kernel_spec},
+        .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, output_dfb_spec},
+        .work_units =
+            {{.name = "eltwise_binary",
+              .kernels = {binary_reader_kernel, unary_writer_kernel, eltwise_binary_kernel},
+              .target_nodes = cores_for_program}},
+    };
+    std::shared_ptr<Program> program =
+        std::make_shared<Program>(experimental::MakeProgramFromSpec(mesh_device, program_spec));
+
+    experimental::KernelRunArgs eltwise_binary_args{.kernel = eltwise_binary_kernel};
+    experimental::KernelRunArgs unary_writer_args{.kernel = unary_writer_kernel};
+    experimental::KernelRunArgs binary_reader_args{.kernel = binary_reader_kernel};
+    for (const experimental::NodeCoord& core : experimental::node_range_to_nodes(cores_for_program)) {
+        experimental::AddRuntimeArgsForNode(
+            eltwise_binary_args.runtime_arg_values,
+            core,
+            {{"per_core_block_cnt", num_tiles}, {"per_core_block_size", 1u}});
+        experimental::AddRuntimeArgsForNode(
+            unary_writer_args.runtime_arg_values,
+            core,
+            {{"dst_addr", static_cast<uint32_t>(output_buf->address())}, {"num_tiles", num_tiles}});
+        experimental::AddRuntimeArgsForNode(
+            binary_reader_args.runtime_arg_values,
+            core,
+            {{"src0_addr", static_cast<uint32_t>(src0_buf->address())},
+             {"src0_num_tiles", num_tiles},
+             {"src1_addr", static_cast<uint32_t>(src1_buf->address())},
+             {"src1_num_tiles", num_tiles}});
+    }
+    experimental::SetProgramRunArgs(
         *program,
-        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp",
-        cores_for_program,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
-
-    SetRuntimeArgs(*program, eltwise_binary_kernel, cores_for_program, {num_tiles, 1});
-
-    const std::array<uint32_t, 7> reader_args = {
-        src0_buf->address(), 0, num_tiles, src1_buf->address(), 0, num_tiles, 0};
-
-    const std::array<uint32_t, 3> writer_args = {output_buf->address(), 0, num_tiles};
-
-    SetRuntimeArgs(*program, unary_writer_kernel, cores_for_program, writer_args);
-    SetRuntimeArgs(*program, binary_reader_kernel, cores_for_program, reader_args);
+        experimental::ProgramRunArgs{.kernel_run_args = {eltwise_binary_args, unary_writer_args, binary_reader_args}});
 
     return program;
 }
@@ -185,6 +239,7 @@ int main() {
         MeshCoordinate{mesh_device->num_rows() - 1, mesh_device->num_cols() - 1});
     // Create three eltwise binary ops using a simple program generation function
     auto add_program = EltwiseBinaryProgramGenerator(
+        *mesh_device,
         add_src0_buf,
         add_src1_buf,
         add_output_buf,
@@ -193,6 +248,7 @@ int main() {
         single_tile_size,
         ADD_OP_ID);
     auto multiply_program = EltwiseBinaryProgramGenerator(
+        *mesh_device,
         mul_sub_src0_buf,
         mul_sub_src1_buf,
         mul_sub_output_buf,
@@ -201,6 +257,7 @@ int main() {
         single_tile_size,
         MULTIPLY_OP_ID);
     auto subtract_program = EltwiseBinaryProgramGenerator(
+        *mesh_device,
         mul_sub_src0_buf,
         mul_sub_src1_buf,
         mul_sub_output_buf,

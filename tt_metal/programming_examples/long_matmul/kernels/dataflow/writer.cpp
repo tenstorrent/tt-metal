@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "../profile_markers.h"
 #include "../config.h"
 
@@ -10,23 +12,22 @@
 // within the block.
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_output_blocks = get_arg_val<uint32_t>(1);
-    uint32_t block_start_id = get_arg_val<uint32_t>(2);
-    uint32_t num_iterations = get_arg_val<uint32_t>(3);
+    uint32_t num_output_blocks = get_arg(args::num_output_blocks);
+    uint32_t block_start_id = get_arg(args::block_start_id);
+    uint32_t num_iterations = get_arg(args::num_iterations);
     // Number of times each output tile is written. 1 = normal. Higher values re-write the same
     // tile to the same address to load the write-side NoC path up to the reader's read volume;
     // the host computes this from LONG_MATMUL_WRITE_AMPLIFICATION_PCT.
-    uint32_t write_repeats = get_arg_val<uint32_t>(4);
-    uint32_t blocks_per_row = get_arg_val<uint32_t>(5);  // Nt / kBlockN
-    uint32_t Nt = get_arg_val<uint32_t>(6);
-    uint32_t total_output_blocks = get_arg_val<uint32_t>(7);
+    uint32_t write_repeats = get_arg(args::write_repeats);
+    uint32_t blocks_per_row = get_arg(args::blocks_per_row);  // Nt / kBlockN
+    uint32_t Nt = get_arg(args::Nt);
+    uint32_t total_output_blocks = get_arg(args::total_output_blocks);
 
-    constexpr uint32_t cb_id_out = tt::CBIndex::c_16;
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
+    DataflowBuffer dfb_out(dfb::out);
+    const uint32_t tile_bytes = dfb_out.get_entry_size();
 
-    constexpr auto c_args = TensorAccessorArgs<0>();
-    const auto c = TensorAccessor(c_args, dst_addr, tile_bytes);
+    // C is a tensor bound to this kernel by name in the host code; its page size is one tile.
+    const auto c = TensorAccessor(tensor::c);
 
     namespace prof = long_matmul_profile;
     DeviceTimestampedData("WRITER_KERNEL_START", /*data=*/0);
@@ -40,13 +41,13 @@ void kernel_main() {
             const uint32_t row0 = (block_id / blocks_per_row) * kBlockM;
             const uint32_t col0 = (block_id % blocks_per_row) * kBlockN;
 
-            // When LONG_MATMUL_DISABLE_WRITER is set the writer keeps draining the output CB -- so
-            // compute never stalls on a full CB -- but issues no DRAM traffic, leaving the output
+            // When LONG_MATMUL_DISABLE_WRITER is set the writer keeps draining the output DFB -- so
+            // compute never stalls on a full DFB -- but issues no DRAM traffic, leaving the output
             // buffer stale. Harmless: the app never verifies its output.
             uint32_t t = prof::now();
-            cb_wait_front(cb_id_out, kBlockTiles);
+            dfb_out.wait_front(kBlockTiles);
             prof::add_since(wait_cycles, t);
-            uint32_t l1_read_addr = get_read_ptr(cb_id_out);
+            uint32_t l1_read_addr = dfb_out.get_read_ptr();
 #ifndef LONG_MATMUL_DISABLE_WRITER
             t = prof::now();
             for (uint32_t m = 0; m < kBlockM; m++) {
@@ -70,7 +71,7 @@ void kernel_main() {
             }
             prof::add_since(transfer_cycles, t);
 #endif
-            cb_pop_front(cb_id_out, kBlockTiles);
+            dfb_out.pop_front(kBlockTiles);
         }
     }
 

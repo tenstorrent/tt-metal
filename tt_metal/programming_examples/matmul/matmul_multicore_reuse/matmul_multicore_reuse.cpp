@@ -8,8 +8,10 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <bmm_op.hpp>
 #include <fmt/core.h>
 #include <iostream>
@@ -67,13 +69,12 @@ void matmul_multicore_reuse(
     uint32_t B,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     /*
-     * Set up Mesh API constructs: command queue, workload, device range, and program.
+     * Set up Mesh API constructs: command queue, workload and device range.
      * We'll distribute work across multiple cores using the device's compute grid.
      */
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program{};
 
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
     tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
@@ -122,13 +123,10 @@ void matmul_multicore_reuse(
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2;  // double buffer
-    uint32_t in0_CB_size = in0_CB_tiles * single_tile_size;
     uint32_t in1_block_tiles = per_core_N * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles * 2;  // double buffer
-    uint32_t in1_CB_size = in1_CB_tiles * single_tile_size;
     uint32_t out_block_tiles = per_core_M * per_core_N;
     uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
-    uint32_t out_CB_size = out_CB_tiles * single_tile_size;
 
     // Compute kernel compile time args
     uint32_t num_blocks = (Kt / in0_block_w);
@@ -143,23 +141,22 @@ void matmul_multicore_reuse(
 
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    std::vector<uint32_t> compute_kernel_args = {
-        in0_block_w,             // in0_block_w
-        in0_num_subblocks,       // in0_num_subblocks
-        in0_block_num_tiles,     // in0_block_num_tiles
-        in0_subblock_num_tiles,  // in0_subblock_num_tiles
+    tt_metal::experimental::KernelSpec::CompileTimeArgs compute_kernel_args = {
+        {"in0_block_w", in0_block_w},
+        {"in0_num_subblocks", in0_num_subblocks},
+        {"in0_block_num_tiles", in0_block_num_tiles},
+        {"in0_subblock_num_tiles", in0_subblock_num_tiles},
 
-        in1_num_subblocks,    // in1_num_subblocks
-        in1_block_num_tiles,  // in1_block_num_tiles
-        in1_per_core_w,       // in1_per_core_w
+        {"in1_num_subblocks", in1_num_subblocks},
+        {"in1_block_num_tiles", in1_block_num_tiles},
+        {"in1_per_core_w", in1_per_core_w},
 
-        num_blocks,  // num_blocks
+        {"num_blocks", num_blocks},
 
-        out_subblock_h,          // out_subblock_h
-        out_subblock_w,          // out_subblock_w
-        out_subblock_num_tiles,  // out_subblock_num_tiles
-        B                        // batch
-    };
+        {"out_subblock_h", out_subblock_h},
+        {"out_subblock_w", out_subblock_w},
+        {"out_subblock_num_tiles", out_subblock_num_tiles},
+        {"batch", B}};
 
     /*
      * Multi-Core prep
@@ -177,167 +174,269 @@ void matmul_multicore_reuse(
 
     //////////////////////////////////////////////////
     /*
-     * Create DRAM buffers for input and output matrices (replicated per device across the mesh).
-     * We'll upload input vectors into these mesh buffers prior to launching the program.
+     * Create DRAM tensors for input and output matrices (replicated per device across the mesh).
+     * We'll upload input vectors into these mesh tensors prior to launching the program.
+     * Each row of a row-major tensor is one page, so a row of one tile's worth of elements gives a page size of one
+     * tile.
      */
 
-    uint32_t dram_buffer_A_size =
-        single_tile_size * Mt * Kt;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    uint32_t dram_buffer_B_size =
-        single_tile_size * Nt * Kt;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    uint32_t dram_buffer_C_size =
-        single_tile_size * Mt * Nt;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    uint32_t elements_per_tile = single_tile_size / sizeof(bfloat16);
+    auto make_dram_tensor_spec = [&](uint32_t num_tiles) {
+        return TensorSpec(
+            Shape({num_tiles, elements_per_tile}),
+            TensorLayout(
+                DataType::BFLOAT16,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    };
+    TensorSpec src0_tensor_spec =
+        make_dram_tensor_spec(Mt * Kt);  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    TensorSpec src1_tensor_spec =
+        make_dram_tensor_spec(Nt * Kt);  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    TensorSpec dst_tensor_spec =
+        make_dram_tensor_spec(Mt * Nt);  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src0_tensor_spec);
+    MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src1_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dst_tensor_spec);
 
-    distributed::ReplicatedBufferConfig buffer_config_A{.size = dram_buffer_A_size};
-
-    distributed::ReplicatedBufferConfig buffer_config_B{.size = dram_buffer_B_size};
-
-    distributed::ReplicatedBufferConfig buffer_config_C{.size = dram_buffer_C_size};
-
-    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
+    // Names identify the kernels, the dataflow buffers and the tensor parameters within the program spec.
+    const tt_metal::experimental::KernelSpecName reader_kernel{"reader"};
+    const tt_metal::experimental::KernelSpecName writer_kernel{"writer"};
+    const tt_metal::experimental::KernelSpecName compute_kernel{"compute"};
+    const tt_metal::experimental::DFBSpecName src0_dfb{"src0"};
+    const tt_metal::experimental::DFBSpecName src1_dfb{"src1"};
+    const tt_metal::experimental::DFBSpecName output_dfb{"output"};
+    const tt_metal::experimental::DFBSpecName interm0_dfb{"interm0"};
+    const tt_metal::experimental::TensorParamName src0_tensor_param{"src0"};
+    const tt_metal::experimental::TensorParamName src1_tensor_param{"src1"};
+    const tt_metal::experimental::TensorParamName dst_tensor_param{"dst"};
 
     /*
-     * Config of Circular Buffer in the device L1
+     * Config of Dataflow Buffer in the device L1
      * input tiles count is = 2 because it's single tile process, and double-buffer
      */
-    uint32_t src0_cb_index = CBIndex::c_0;  // 0
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(in0_CB_size, {{src0_cb_index, cb_data_format}})
-                                              .set_page_size(src0_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt_metal::experimental::DataflowBufferSpec src0_dfb_spec{
+        .unique_id = src0_dfb,
+        .entry_size = single_tile_size,
+        .num_entries = in0_CB_tiles,
+        .data_format_metadata = cb_data_format,
+    };
 
-    uint32_t src1_cb_index = CBIndex::c_1;  // 1
-    CircularBufferConfig cb_src1_config = CircularBufferConfig(in1_CB_size, {{src1_cb_index, cb_data_format}})
-                                              .set_page_size(src1_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt_metal::experimental::DataflowBufferSpec src1_dfb_spec{
+        .unique_id = src1_dfb,
+        .entry_size = single_tile_size,
+        .num_entries = in1_CB_tiles,
+        .data_format_metadata = cb_data_format,
+    };
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
-    uint32_t interm0_cb_index = 24;
-    std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
-        {output_cb_index, cb_data_format}, {interm0_cb_index, cb_data_format}};
-    CircularBufferConfig cb_output_config = CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
-                                                .set_page_size(output_cb_index, single_tile_size)
-                                                .set_page_size(interm0_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
-
-    /*
-     * Compile time arguments
-     */
-    std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
-
-    std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
+    // The output and the intermediate dataflow buffers share the same memory (aliased).
+    tt_metal::experimental::DataflowBufferSpec output_dfb_spec{
+        .unique_id = output_dfb,
+        .entry_size = single_tile_size,
+        .num_entries = out_CB_tiles,
+        .data_format_metadata = cb_data_format,
+        .advanced_options = {.alias_with = {interm0_dfb}},
+    };
+    tt_metal::experimental::DataflowBufferSpec interm0_dfb_spec{
+        .unique_id = interm0_dfb,
+        .entry_size = single_tile_size,
+        .num_entries = out_CB_tiles,
+        .data_format_metadata = cb_data_format,
+        .advanced_options = {.alias_with = {output_dfb}},
+    };
 
     /*
      * Create Kernels (Reader, Writer, Compute)
      */
     // Create reader and writer kernels per core
-    auto reader_id = tt_metal::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout.cpp",
-        all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = reader_compile_time_args});
+    tt_metal::experimental::KernelSpec reader_kernel_spec{
+        .unique_id = reader_kernel,
+        .source = OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout.cpp",
+        .dfb_bindings =
+            {tt_metal::experimental::ProducerOf(src0_dfb, "in0"), tt_metal::experimental::ProducerOf(src1_dfb, "in1")},
+        .tensor_bindings =
+            {{.tensor_parameter_name = src0_tensor_param, .accessor_name = "in0"},
+             {.tensor_parameter_name = src1_tensor_param, .accessor_name = "in1"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"in0_tensor_start_tile_id",
+                  "in0_tensor_stride_w",
+                  "in0_tensor_stride_h",
+                  "in0_tensor_next_block_stride",
+                  "in0_block_w",
+                  "in0_block_h",
+                  "in0_block_num_tiles",
+                  "in1_tensor_start_tile_id",
+                  "in1_tensor_stride_w",
+                  "in1_tensor_stride_h",
+                  "in1_tensor_next_block_stride",
+                  "in1_block_w",
+                  "in1_block_h",
+                  "in1_block_num_tiles",
+                  "num_blocks",
+                  "MtKt",
+                  "KtNt",
+                  "batch",
+                  "bcast_B"}},
+        .hw_config =
+            tt_metal::experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    tt_metal::experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
+            },
+    };
 
-    auto writer_id = tt_metal::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
-        all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_compile_time_args});
+    tt_metal::experimental::KernelSpec writer_kernel_spec{
+        .unique_id = writer_kernel,
+        .source = OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
+        .dfb_bindings = {tt_metal::experimental::ConsumerOf(output_dfb, "out0")},
+        .tensor_bindings = {{.tensor_parameter_name = dst_tensor_param, .accessor_name = "out"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"out_tensor_start_tile_id",
+                  "out_tensor_stride_w",
+                  "out_tensor_stride_h",
+                  "out_tensor_next_subblock_stride_w",
+                  "out_tensor_next_subblock_stride_h",
+                  "out_subblock_w",
+                  "out_subblock_h",
+                  "out_subblock_tile_count",
+                  "out_num_subblocks_w",
+                  "out_num_subblocks_h",
+                  "MtNt",
+                  "batch"}},
+        .hw_config =
+            tt_metal::experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    tt_metal::experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+            },
+    };
 
-    // Create compute kernel
-    tt_metal::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/compute/bmm_large_block_zm.cpp",
-        all_cores,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args});
+    // Create compute kernel. The compute kernel both produces and consumes the intermediate dataflow buffer.
+    tt_metal::experimental::KernelSpec compute_kernel_spec{
+        .unique_id = compute_kernel,
+        .source = OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/compute/bmm_large_block_zm.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {tt_metal::experimental::ConsumerOf(src0_dfb, "in0"),
+             tt_metal::experimental::ConsumerOf(src1_dfb, "in1"),
+             tt_metal::experimental::ProducerOf(output_dfb, "out0"),
+             tt_metal::experimental::ProducerOf(interm0_dfb, "interm0"),
+             tt_metal::experimental::ConsumerOf(interm0_dfb, "interm0")},
+        .compile_time_args = compute_kernel_args,
+        .hw_config =
+            tt_metal::experimental::ComputeHardwareConfig{
+                .fpu_math_fidelity = math_fidelity,
+                .sfpu_precision_mode = Precision::Precise,
+            },
+    };
+
+    tt_metal::experimental::ProgramSpec program_spec{
+        .name = "matmul_multicore_reuse",
+        .kernels = {reader_kernel_spec, writer_kernel_spec, compute_kernel_spec},
+        .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, output_dfb_spec, interm0_dfb_spec},
+        .tensor_parameters =
+            {{.unique_id = src0_tensor_param, .spec = src0_tensor_spec},
+             {.unique_id = src1_tensor_param, .spec = src1_tensor_spec},
+             {.unique_id = dst_tensor_param, .spec = dst_tensor_spec}},
+        .work_units =
+            {{.name = "matmul_multicore_reuse",
+              .kernels = {reader_kernel, writer_kernel, compute_kernel},
+              .target_nodes = all_cores}},
+    };
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, program_spec);
 
     /*
      * Kernels - Runtime arguments
      */
+    tt_metal::experimental::KernelRunArgs reader_run_args{.kernel = reader_kernel};
+    tt_metal::experimental::KernelRunArgs writer_run_args{.kernel = writer_kernel};
     uint32_t num_blocks_read = 0;
     for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
         for (int output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
             int core_idx_x = num_blocks_read % num_cores_x;
             int core_idx_y = num_blocks_read / num_cores_x;
-            CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
+            tt_metal::experimental::NodeCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
 
             // Write runtime args to device
-            std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t)src0_dram_buffer->address(),     // in0_tensor_addr
-                (std::uint32_t)Kt * per_core_M * output_idx_y,  // in0_tensor_start_tile_id
-                (std::uint32_t)1,                               // in0_tensor_stride_w
-                (std::uint32_t)Kt,                              // in0_tensor_stride_h
-                (std::uint32_t)in0_block_w,                     // in0_tensor_next_block_stride
+            tt_metal::experimental::AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values,
+                core,
+                {
+                    {"in0_tensor_start_tile_id", (std::uint32_t)Kt * per_core_M * output_idx_y},
+                    {"in0_tensor_stride_w", (std::uint32_t)1},
+                    {"in0_tensor_stride_h", (std::uint32_t)Kt},
+                    {"in0_tensor_next_block_stride", (std::uint32_t)in0_block_w},
 
-                (std::uint32_t)in0_block_w,               // in0_block_w
-                (std::uint32_t)per_core_M,                // in0_block_h
-                (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
+                    {"in0_block_w", (std::uint32_t)in0_block_w},
+                    {"in0_block_h", (std::uint32_t)per_core_M},
+                    {"in0_block_num_tiles", (std::uint32_t)in0_block_w * per_core_M},
 
-                (std::uint32_t)src1_dram_buffer->address(),  // in1_tensor_addr
-                (std::uint32_t)per_core_N * output_idx_x,    // in1_tensor_start_tile_id
-                (std::uint32_t)1,                            // in1_tensor_stride_w
-                (std::uint32_t)Nt,                           // in1_tensor_stride_h
-                (std::uint32_t)in0_block_w * Nt,             // in1_tensor_next_block_stride
+                    {"in1_tensor_start_tile_id", (std::uint32_t)per_core_N * output_idx_x},
+                    {"in1_tensor_stride_w", (std::uint32_t)1},
+                    {"in1_tensor_stride_h", (std::uint32_t)Nt},
+                    {"in1_tensor_next_block_stride", (std::uint32_t)in0_block_w * Nt},
 
-                (std::uint32_t)per_core_N,                // in1_block_w
-                (std::uint32_t)in0_block_w,               // in1_block_h
-                (std::uint32_t)per_core_N * in0_block_w,  // in1_block_num_tiles
+                    {"in1_block_w", (std::uint32_t)per_core_N},
+                    {"in1_block_h", (std::uint32_t)in0_block_w},
+                    {"in1_block_num_tiles", (std::uint32_t)per_core_N * in0_block_w},
 
-                (std::uint32_t)Kt / in0_block_w,  // num_blocks
+                    {"num_blocks", (std::uint32_t)Kt / in0_block_w},
 
-                (std::uint32_t)Mt * Kt,     // MtKt
-                (std::uint32_t)Kt * Nt,     // KtNt
-                (std::uint32_t)B,           // batch
-                (std::uint32_t)bcast_batch  // bcast_B
-            };
+                    {"MtKt", (std::uint32_t)Mt * Kt},
+                    {"KtNt", (std::uint32_t)Kt * Nt},
+                    {"batch", (std::uint32_t)B},
+                    {"bcast_B", (std::uint32_t)bcast_batch},
+                });
 
-            std::vector<uint32_t> writer_args = {
-                (std::uint32_t)dst_dram_buffer->address(),  // out_buffer_addr
-                ((std::uint32_t)output_idx_x * per_core_N) +
-                    (output_idx_y * per_core_M * Nt),  // out_tensor_start_tile_id
-                (std::uint32_t)1,                      // out_tensor_stride_w
-                (std::uint32_t)Nt,                     // out_tensor_stride_h
-                (std::uint32_t)out_subblock_w,         // out_tensor_next_subblock_stride_w
-                (std::uint32_t)out_subblock_h * Nt,    // out_tensor_next_subblock_stride_h
+            tt_metal::experimental::AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values,
+                core,
+                {
+                    {"out_tensor_start_tile_id",
+                     ((std::uint32_t)output_idx_x * per_core_N) + (output_idx_y * per_core_M * Nt)},
+                    {"out_tensor_stride_w", (std::uint32_t)1},
+                    {"out_tensor_stride_h", (std::uint32_t)Nt},
+                    {"out_tensor_next_subblock_stride_w", (std::uint32_t)out_subblock_w},
+                    {"out_tensor_next_subblock_stride_h", (std::uint32_t)out_subblock_h * Nt},
 
-                (std::uint32_t)out_subblock_w,                     // out_subblock_w
-                (std::uint32_t)out_subblock_h,                     // out_subblock_h
-                (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
-                (std::uint32_t)(per_core_N / out_subblock_w),      // out_num_subblocks_w
-                (std::uint32_t)(per_core_M / out_subblock_h),      // out_num_subblocks_h
+                    {"out_subblock_w", (std::uint32_t)out_subblock_w},
+                    {"out_subblock_h", (std::uint32_t)out_subblock_h},
+                    {"out_subblock_tile_count", (std::uint32_t)(out_subblock_w * out_subblock_h)},
+                    {"out_num_subblocks_w", (std::uint32_t)(per_core_N / out_subblock_w)},
+                    {"out_num_subblocks_h", (std::uint32_t)(per_core_M / out_subblock_h)},
 
-                (std::uint32_t)Mt * Nt,  // MtNt
-                (std::uint32_t)B         // batch
-            };
-
-            tt_metal::SetRuntimeArgs(program, reader_id, core, mm_reader_args);
-            tt_metal::SetRuntimeArgs(program, writer_id, core, writer_args);
+                    {"MtNt", (std::uint32_t)Mt * Nt},
+                    {"batch", (std::uint32_t)B},
+                });
 
             num_blocks_read++;
         }
     }
 
+    // Set the runtime args, and the tensors bound to the tensor parameters.
+    tt_metal::experimental::ProgramRunArgs run_args{
+        .kernel_run_args = {reader_run_args, writer_run_args},
+        .tensor_args =
+            {{src0_tensor_param, tt_metal::experimental::TensorArgument{src0_dram_tensor}},
+             {src1_tensor_param, tt_metal::experimental::TensorArgument{src1_dram_tensor}},
+             {dst_tensor_param, tt_metal::experimental::TensorArgument{dst_dram_tensor}}},
+    };
+    tt_metal::experimental::SetProgramRunArgs(program, run_args);
+
     /* Launch program & read back results */
 
     // Non-blocking uploads allow overlapping host setup with device transfers
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    HostTensor src0_host_tensor = HostTensor::from_vector(a, src0_tensor_spec);
+    HostTensor src1_host_tensor = HostTensor::from_vector(b, src1_tensor_spec);
+    cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
+    cq.enqueue_write_tensor(src1_host_tensor, src1_dram_tensor);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     // Blocking read from shard {0,0} waits for completion and populates 'output'
-    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
+    output = cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 }
 
 ///////////////////////////////////////

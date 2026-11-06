@@ -7,9 +7,11 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -25,13 +27,12 @@ int main() {
     // Here, a row-major matrix of shape (M, N) is sharded across 4 cores along the M dimension, resulting in 4 shards
     // of shape (M/4, N).
 
-    // Select device 0 and create a command queue and program object for kernel/buffer management.
+    // Select device 0 and create a command queue and a program spec for kernel/buffer management.
     int device_id = 0;
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();           // Encapsulates kernels and buffers
 
     const char* dprint_env = std::getenv("TT_METAL_DPRINT_CORES");
     if (!dprint_env || std::string(dprint_env).empty()) {
@@ -67,7 +68,7 @@ int main() {
 
     static_assert(M % num_cores == 0, "M must be divisible by 4 (number of cores) for this example");
     const uint32_t num_values = M * N;                          // Total elements
-    tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;  // Data format for circular buffer
+    tt::DataFormat dfb_data_format = tt::DataFormat::Float16_b;  // Data format for dataflow buffer
     std::vector<bfloat16> src_vec(num_values, bfloat16(0.0f));  // Source vector
     for (uint32_t i = 0; i < src_vec.size(); i++) {
         src_vec[i] = bfloat16((float)(i + 1) * 2);  // Fill with {2, 4, ..., 32}
@@ -90,46 +91,80 @@ int main() {
     // The division by data_size ensures correct mapping of values to pages.
     uint32_t padded_offset_bytes = align(input_unit_size, mesh_device->allocator()->get_alignment(BufferType::DRAM));
 
-    // configure and create interleaved DRAM buffer to insert source data into
+    // configure and create interleaved DRAM tensor to insert source data into
+    // Each row of a row-major tensor is one page, so a row of input_unit_size bytes gives a page size of
+    // input_unit_size.
     uint32_t src_buffer_size = num_values * data_size;
-    distributed::DeviceLocalBufferConfig input_dram_config{
-        .page_size = input_unit_size, .buffer_type = tt_metal::BufferType::DRAM};
-    distributed::ReplicatedBufferConfig buffer_config{.size = src_buffer_size};
-    std::shared_ptr<distributed::MeshBuffer> src_buffer =
-        distributed::MeshBuffer::create(buffer_config, input_dram_config, mesh_device.get());
-    const uint32_t src_addr = src_buffer->address();
-    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, false);
+    TensorSpec src_tensor_spec(
+        Shape({src_buffer_size / input_unit_size, static_cast<uint32_t>(input_unit_size / data_size)}),
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, tt_metal::BufferType::DRAM}));
+    MeshTensor src_tensor = MeshTensor::allocate_on_device(*mesh_device, src_tensor_spec);
+    // The host tensor must stay alive until the non-blocking write is done.
+    HostTensor src_host_tensor = HostTensor::from_vector(src_vec, src_tensor_spec);
+    cq.enqueue_write_tensor(src_host_tensor, src_tensor);
 
-    // configure and create circular buffers with the same address on each of the designated cores
-    // Create a circular buffer on each core to hold its shard of data
-    uint32_t input_cb_index = CBIndex::c_0;
-    size_t cb_total_size = shard_size * input_unit_size;  // Total buffer size per core
-    CircularBufferConfig input_cb_config = CircularBufferConfig(cb_total_size, {{input_cb_index, cb_data_format}})
-                                               .set_page_size(input_cb_index, input_unit_size);
+    // Names identify the kernel, the dataflow buffer and the tensor parameter within the program spec.
+    const experimental::KernelSpecName reader{"reader"};
+    const experimental::DFBSpecName input_dfb{"input"};
+    const experimental::TensorParamName src_tensor_param{"src"};
 
-    CreateCircularBuffer(program, cores, input_cb_config);
+    // configure and create dataflow buffers with the same address on each of the designated cores
+    // Create a dataflow buffer on each core to hold its shard of data
+    size_t dfb_total_size = shard_size * input_unit_size;  // Total buffer size per core
+    experimental::DataflowBufferSpec input_dfb_spec{
+        .unique_id = input_dfb,
+        .entry_size = input_unit_size,
+        .num_entries = static_cast<uint32_t>(dfb_total_size / input_unit_size),
+        .data_format_metadata = dfb_data_format,
+    };
 
     // create data movement kernel to shard data
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_cb_index};
-    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    // The kernel only fills its dataflow buffer, so it is bound as both the producer and the consumer.
     const uint32_t values_per_stick = input_unit_size / data_size;  // Number of bfloat16 values per stick
-    auto reader_id = tt_metal::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "shard_data_rm/kernels/reader_sharded_rm.cpp",
-        cores,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = reader_compile_time_args});
+    experimental::KernelSpec reader_spec{
+        .unique_id = reader,
+        .source = OVERRIDE_KERNEL_PREFIX "shard_data_rm/kernels/reader_sharded_rm.cpp",
+        .dfb_bindings = {experimental::ProducerOf(input_dfb, "in0"), experimental::ConsumerOf(input_dfb, "in0")},
+        .tensor_bindings = {{.tensor_parameter_name = src_tensor_param, .accessor_name = "src"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"stick_size", "padded_offset_bytes", "start_id"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+            },
+    };
+
+    experimental::ProgramSpec program_spec{
+        .name = "shard_data_rm",
+        .kernels = {reader_spec},
+        .dataflow_buffers = {input_dfb_spec},
+        .tensor_parameters = {{.unique_id = src_tensor_param, .spec = src_tensor_spec}},
+        .work_units = {{.name = "shard_data_rm", .kernels = {reader}, .target_nodes = cores}},
+    };
+    Program program =
+        experimental::MakeProgramFromSpec(*mesh_device, program_spec);  // Encapsulates kernels and buffers
 
     // Set the parameters for each core to read its shard of data
+    experimental::KernelRunArgs reader_run_args{.kernel = reader};
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {0, i};
         uint32_t idx_h = i * shard_height;
         // stick_id is the index of the first stick in the shard (recall a stick is 2 bfloat16 values in this example)
         uint32_t stick_id = idx_h * shard_width / values_per_stick;
-        tt_metal::SetRuntimeArgs(program, reader_id, core, {src_addr, shard_size, padded_offset_bytes, stick_id});
+        experimental::AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"stick_size", shard_size}, {"padded_offset_bytes", padded_offset_bytes}, {"start_id", stick_id}});
     }
+    experimental::ProgramRunArgs run_args{
+        .kernel_run_args = {reader_run_args},
+        .tensor_args = {{src_tensor_param, experimental::TensorArgument{src_tensor}}},
+    };
+    experimental::SetProgramRunArgs(program, run_args);
 
     fmt::print("Original tensor values: ");
     for (auto val : src_vec) {

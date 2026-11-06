@@ -6,8 +6,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -16,29 +18,32 @@
 #include <vector>
 
 using namespace tt::tt_metal;
-using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
 constexpr uint32_t TILE_WIDTH = 32;
 constexpr uint32_t TILE_HEIGHT = 32;
 
-std::shared_ptr<distributed::MeshBuffer> MakeBuffer(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t size, uint32_t /*page_size*/, bool sram) {
+// Describe a tensor on DRAM or SRAM that holds n_tiles tiles of BFP16 data. The BFP16 values are stored in pairs,
+// packed into uint32 words. Each row of a row-major tensor is one page: one tile on DRAM, all tiles on SRAM.
+TensorSpec MakeTensorSpecBFP16(uint32_t n_tiles, bool sram) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
-    const uint32_t page_tiles = sram ? size : 1;
-    const distributed::DeviceLocalBufferConfig device_local_config{
-        .page_size = page_tiles * tile_size, .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM)};
-    const distributed::ReplicatedBufferConfig buffer_config{.size = tile_size * size};
-    return distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+    const uint32_t page_tiles = sram ? n_tiles : 1;
+    const uint32_t page_size = page_tiles * tile_size;
+    return TensorSpec(
+        Shape({n_tiles / page_tiles, page_size / static_cast<uint32_t>(sizeof(uint32_t))}),
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, (sram ? BufferType::L1 : BufferType::DRAM)}));
 }
 
-// Allocate a buffer on DRAM or SRAM. Assuming the buffer holds BFP16 data.
+// Allocate a tensor on DRAM or SRAM. Assuming the tensor holds BFP16 data.
 // A tile on Tenstorrent is 32x32 elements, given us using BFP16, we need 2 bytes per element.
 // Making the tile size 32x32x2 = 2048 bytes.
-// @param device: The device to allocate the buffer on.
+// @param device: The device to allocate the tensor on.
 // @param n_tiles: The number of tiles to allocate.
-// @param sram: If true, allocate the buffer on SRAM, otherwise allocate it on DRAM.
-std::shared_ptr<distributed::MeshBuffer> MakeBufferBFP16(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t n_tiles, bool sram) {
+// @param sram: If true, allocate the tensor on SRAM, otherwise allocate it on DRAM.
+// The buffer is allocated from the top of memory (bottom_up = false) and then wrapped in a tensor.
+MeshTensor MakeTensorBFP16(distributed::MeshDevice& mesh_device, uint32_t n_tiles, bool sram) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
     const uint32_t page_tiles = sram ? n_tiles : 1;
     const distributed::DeviceLocalBufferConfig device_local_config{
@@ -46,25 +51,26 @@ std::shared_ptr<distributed::MeshBuffer> MakeBufferBFP16(
         .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM),
         .bottom_up = false};
     const distributed::ReplicatedBufferConfig buffer_config{.size = tile_size * n_tiles};
-    return distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+    return MeshTensor::from_buffer(
+        std::move(*distributed::MeshBuffer::create(buffer_config, device_local_config, &mesh_device)),
+        MakeTensorSpecBFP16(n_tiles, sram));
 }
 
-CBHandle MakeCircularBuffer(
-    Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t size, uint32_t page_size, tt::DataFormat format) {
-    CircularBufferConfig cb_config = CircularBufferConfig(size, {{cb, format}}).set_page_size(cb, page_size);
-    return CreateCircularBuffer(program, core, cb_config);
+experimental::DataflowBufferSpec MakeDataflowBuffer(
+    const experimental::DFBSpecName& dfb, uint32_t size, uint32_t page_size, tt::DataFormat format) {
+    return experimental::DataflowBufferSpec{
+        .unique_id = dfb, .entry_size = page_size, .num_entries = size / page_size, .data_format_metadata = format};
 }
 
-// Circular buffers are Tenstorrent's way of communicating between the data movement and the compute kernels.
-// kernels queue tiles into the circular buffer and takes them when they are ready. The circular buffer is
-// backed by SRAM. There can be multiple circular buffers on a single Tensix core.
-// @param program: The program to create the circular buffer on.
-// @param core: The core to create the circular buffer on.
-// @param cb: Which circular buffer to create (c_in0, c_in1, c_out0, c_out1, etc..). This is just an ID
-// @param n_tiles: The number of tiles the circular buffer can hold.
-CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t n_tiles) {
+// Dataflow buffers are Tenstorrent's way of communicating between the data movement and the compute kernels.
+// kernels queue tiles into the dataflow buffer and takes them when they are ready. The dataflow buffer is
+// backed by SRAM. There can be multiple dataflow buffers on a single Tensix core.
+// A dataflow buffer is created on the cores of the kernels that produce into it and consume from it.
+// @param dfb: Which dataflow buffer to describe (in0, in1, out0, etc..). This is just an ID
+// @param n_tiles: The number of tiles the dataflow buffer can hold.
+experimental::DataflowBufferSpec MakeDataflowBufferBFP16(const experimental::DFBSpecName& dfb, uint32_t n_tiles) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
-    return MakeCircularBuffer(program, core, cb, n_tiles * tile_size, tile_size, tt::DataFormat::Float16_b);
+    return MakeDataflowBuffer(dfb, n_tiles * tile_size, tile_size, tt::DataFormat::Float16_b);
 }
 
 std::string next_arg(int& i, int argc, char** argv) {
@@ -111,36 +117,46 @@ int main(int argc, char** argv) {
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     distributed::MeshWorkload workload;
-    Program program = CreateProgram();
     // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
-    CoreCoord core = {0, 0};
-    const auto device_coord = distributed::MeshCoordinate(0, 0);
+    experimental::NodeCoord core = {0, 0};
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     const uint32_t n_tiles = 64;
     const uint32_t tile_size = TILE_WIDTH * TILE_HEIGHT;
-    // Create 3 buffers on DRAM. These will hold the input and output data. A and B are the input buffers, C is the
-    // output buffer.
-    auto a = MakeBufferBFP16(mesh_device, n_tiles, false);
-    auto b = MakeBufferBFP16(mesh_device, n_tiles, false);
-    auto c = MakeBufferBFP16(mesh_device, n_tiles, false);
+    // Create 3 tensors on DRAM. These will hold the input and output data. A and B are the input tensors, C is the
+    // output tensor.
+    MeshTensor a = MakeTensorBFP16(*mesh_device, n_tiles, false);
+    MeshTensor b = MakeTensorBFP16(*mesh_device, n_tiles, false);
+    MeshTensor c = MakeTensorBFP16(*mesh_device, n_tiles, false);
 
     std::mt19937 rng(seed);
     std::vector<uint32_t> a_data = create_random_vector_of_bfloat16(tile_size * n_tiles * 2, 10, rng());
     std::vector<uint32_t> b_data = create_random_vector_of_bfloat16(tile_size * n_tiles * 2, 10, rng());
 
-    const uint32_t tiles_per_cb = 4;
-    // Create 3 circular buffers. These will be used by the data movement kernels to stream data into the compute cores
-    // and for the compute cores to stream data out.
-    MakeCircularBufferBFP16(program, core, tt::CBIndex::c_0, tiles_per_cb);
-    MakeCircularBufferBFP16(program, core, tt::CBIndex::c_1, tiles_per_cb);
-    MakeCircularBufferBFP16(program, core, tt::CBIndex::c_16, tiles_per_cb);
+    // Names identify the kernels, the dataflow buffers and the tensor parameters within the program spec.
+    const experimental::KernelSpecName reader{"reader"};
+    const experimental::KernelSpecName writer{"writer"};
+    const experimental::KernelSpecName compute{"compute"};
+    const experimental::DFBSpecName in0_dfb{"in0"};
+    const experimental::DFBSpecName in1_dfb{"in1"};
+    const experimental::DFBSpecName out0_dfb{"out0"};
+    const experimental::TensorParamName a_tensor_param{"a"};
+    const experimental::TensorParamName b_tensor_param{"b"};
+    const experimental::TensorParamName c_tensor_param{"c"};
 
-    // We're writing to a shard allocated on MeshCoordinate 0, 0, since this is a 1x1 MeshDevice
-    //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
-    // The last argument indicates if the operation is blocking or not.
-    distributed::WriteShard(cq, a, a_data, device_coord, false);
-    distributed::WriteShard(cq, b, b_data, device_coord, false);
+    const uint32_t tiles_per_cb = 4;
+    // Describe 3 dataflow buffers. These will be used by the data movement kernels to stream data into the compute
+    // cores and for the compute cores to stream data out.
+    experimental::DataflowBufferSpec in0_dfb_spec = MakeDataflowBufferBFP16(in0_dfb, tiles_per_cb);
+    experimental::DataflowBufferSpec in1_dfb_spec = MakeDataflowBufferBFP16(in1_dfb, tiles_per_cb);
+    experimental::DataflowBufferSpec out0_dfb_spec = MakeDataflowBufferBFP16(out0_dfb, tiles_per_cb);
+
+    // We're writing to tensors on a 1x1 MeshDevice, so the data goes to the device at MeshCoordinate 0, 0.
+    // The writes do not block. The host tensors must stay alive until the writes are done.
+    HostTensor a_host = HostTensor::from_vector(a_data, a.tensor_spec());
+    HostTensor b_host = HostTensor::from_vector(b_data, b.tensor_spec());
+    cq.enqueue_write_tensor(a_host, a);
+    cq.enqueue_write_tensor(b_host, b);
 
     // A Tensix core is made up with 5 processors. 2 data movement processors, and 3 compute processors. The 2 data
     // movement processors act independent to other cores. And the 3 compute processors act together (hence 1 kernel for
@@ -149,42 +165,79 @@ int main(int argc, char** argv) {
     // operates on the data, and move it back to SRAM. The data movement processors moves data from the NoC, or in our
     // case, the DRAM, into the SRAM.
     //
-    // The vector add example consists of 3 kernels. `interleaved_tile_read` reads tiles from the input buffers A and B
-    // into 2 circular buffers. `add` reads tiles from the circular buffers, adds them together, and dumps the result
-    // into a third circular buffer. `tile_write` reads tiles from the third circular buffer and writes them to the
-    // output buffer C.
-    std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*a).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*b).append_to(reader_compile_time_args);
-    auto reader = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/interleaved_tile_read.cpp",
-        core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = reader_compile_time_args});
-    std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*c).append_to(writer_compile_time_args);
-    auto writer = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/tile_write.cpp",
-        core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = writer_compile_time_args});
-    auto compute = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/add.cpp",
-        core,
-        ComputeConfig{.math_approx_mode = false, .compile_args = {}, .defines = {}});
+    // The vector add example consists of 3 kernels. `interleaved_tile_read` reads tiles from the input tensors A and B
+    // into 2 dataflow buffers. `add` reads tiles from the dataflow buffers, adds them together, and dumps the result
+    // into a third dataflow buffer. `tile_write` reads tiles from the third dataflow buffer and writes them to the
+    // output tensor C.
+    experimental::KernelSpec reader_spec{
+        .unique_id = reader,
+        .source = OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/interleaved_tile_read.cpp",
+        .dfb_bindings = {experimental::ProducerOf(in0_dfb, "in0"), experimental::ProducerOf(in1_dfb, "in1")},
+        .tensor_bindings =
+            {{.tensor_parameter_name = a_tensor_param, .accessor_name = "a"},
+             {.tensor_parameter_name = b_tensor_param, .accessor_name = "b"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+            },
+    };
+    experimental::KernelSpec writer_spec{
+        .unique_id = writer,
+        .source = OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/tile_write.cpp",
+        .dfb_bindings = {experimental::ConsumerOf(out0_dfb, "out0")},
+        .tensor_bindings = {{.tensor_parameter_name = c_tensor_param, .accessor_name = "c"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
+            },
+    };
+    experimental::KernelSpec compute_spec{
+        .unique_id = compute,
+        .source = OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/add.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {experimental::ConsumerOf(in0_dfb, "in0"),
+             experimental::ConsumerOf(in1_dfb, "in1"),
+             experimental::ProducerOf(out0_dfb, "out0")},
+        .runtime_arg_schema = {.runtime_arg_names = {"n_tiles"}},
+        .hw_config = experimental::ComputeHardwareConfig{.sfpu_precision_mode = Precision::Precise},
+    };
 
-    // Set the runtime arguments for the kernels. This also registers
-    // the kernels with the program.
-    SetRuntimeArgs(program, reader, core, {a->address(), b->address(), n_tiles});
-    SetRuntimeArgs(program, writer, core, {c->address(), n_tiles});
-    SetRuntimeArgs(program, compute, core, {n_tiles});
+    // A program spec describes the program: its kernels, the dataflow buffers between them, the tensors they
+    // operate on, and the cores the kernels run on (the work units).
+    experimental::ProgramSpec program_spec{
+        .name = "vecadd",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {in0_dfb_spec, in1_dfb_spec, out0_dfb_spec},
+        .tensor_parameters =
+            {{.unique_id = a_tensor_param, .spec = a.tensor_spec()},
+             {.unique_id = b_tensor_param, .spec = b.tensor_spec()},
+             {.unique_id = c_tensor_param, .spec = c.tensor_spec()}},
+        .work_units = {{.name = "vecadd", .kernels = {reader, writer, compute}, .target_nodes = core}},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, program_spec);
+
+    // Set the runtime arguments for the kernels, and the tensors bound to the tensor parameters.
+    experimental::ProgramRunArgs run_args{
+        .kernel_run_args =
+            {{.kernel = reader,
+              .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, {{"n_tiles", n_tiles}})},
+             {.kernel = writer,
+              .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, {{"n_tiles", n_tiles}})},
+             {.kernel = compute,
+              .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, {{"n_tiles", n_tiles}})}},
+        .tensor_args =
+            {{a_tensor_param, experimental::TensorArgument{a}},
+             {b_tensor_param, experimental::TensorArgument{b}},
+             {c_tensor_param, experimental::TensorArgument{c}}},
+    };
+    experimental::SetProgramRunArgs(program, run_args);
 
     // We have setup the program. Now we can add it to the workload and queue it for execution.
     // The last argument to EnqueueMeshWorkload is a boolean that specifies whether
@@ -192,18 +245,16 @@ int main(int argc, char** argv) {
     // it to true. But alternatively, you can set it to false and call
     // `Finish(cq)` to wait for all programs to finish.
     // But it shouldn't matter in this case since we block on reading the output
-    // buffer.
+    // tensor.
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
     // distributed::Finish(cq);
     std::cout << "Kernel execution finished" << std::endl;
 
-    // Read the output buffer.
-    std::vector<uint32_t> c_data;
-
-    // We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1
-    //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
-    distributed::EnqueueReadMeshBuffer(cq, c_data, c, true);
+    // Read the output tensor.
+    // We're reading from the tensor on Device Coordinate 0, 0, since this is a 1x1 MeshDevice.
+    // The read blocks until the data is on the host.
+    std::vector<uint32_t> c_data = cq.enqueue_read_tensor(c, /*blocking=*/true).to_vector<uint32_t>();
 
     // Print partial results so we can see the output is correct (plus or minus some error due to BFP16 precision)
     std::cout << "Partial results: (note we are running under BFP16. It's going to be less accurate)\n";

@@ -7,23 +7,32 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t in0_block_w = get_compile_time_arg_val(0);              // inner block size in tiles
-    uint32_t in0_num_subblocks = get_compile_time_arg_val(1);        // outer row block size (in inner row blocks)
-    uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);      // out_subblock_h*in0_block_w*in0_num_subblocks;
-    uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);   // out_subblock_h*in0_block_w
-    uint32_t in1_num_subblocks = get_compile_time_arg_val(4);        // outer column block size (in inner column blocks)
-    uint32_t in1_block_num_tiles = get_compile_time_arg_val(5);      // out_subblock_w*in0_block_w* in1_num_subblocks;
-    uint32_t in1_per_core_w = get_compile_time_arg_val(6);           // out_subblock_w*in1_num_subblocks
-    uint32_t num_blocks = get_compile_time_arg_val(7);               // outer inner dim (in inner dim blocks)
-    uint32_t out_subblock_h = get_compile_time_arg_val(8);           // inner row block size in tiles
-    uint32_t out_subblock_w = get_compile_time_arg_val(9);           // inner column block size in tiles
-    uint32_t out_subblock_num_tiles = get_compile_time_arg_val(10);  // out_subblock_h * out_subblock_w;
-    uint32_t batch = get_compile_time_arg_val(11);                   // batch dim
+    uint32_t in0_block_w = get_arg(args::in0_block_w);                  // inner block size in tiles
+    uint32_t in0_num_subblocks = get_arg(args::in0_num_subblocks);      // outer row block size (in inner row blocks)
+    uint32_t in0_block_num_tiles = get_arg(args::in0_block_num_tiles);  // out_subblock_h*in0_block_w*in0_num_subblocks;
+    uint32_t in0_subblock_num_tiles = get_arg(args::in0_subblock_num_tiles);  // out_subblock_h*in0_block_w
+    uint32_t in1_num_subblocks = get_arg(args::in1_num_subblocks);  // outer column block size (in inner column blocks)
+    uint32_t in1_block_num_tiles =
+        get_arg(args::in1_block_num_tiles);                   // out_subblock_w*in0_block_w* in1_num_subblocks;
+    uint32_t in1_per_core_w = get_arg(args::in1_per_core_w);  // out_subblock_w*in1_num_subblocks
+    uint32_t num_blocks = get_arg(args::num_blocks);          // outer inner dim (in inner dim blocks)
+    uint32_t out_subblock_h = get_arg(args::out_subblock_h);  // inner row block size in tiles
+    uint32_t out_subblock_w = get_arg(args::out_subblock_w);  // inner column block size in tiles
+    uint32_t out_subblock_num_tiles = get_arg(args::out_subblock_num_tiles);  // out_subblock_h * out_subblock_w;
+    uint32_t batch = get_arg(args::batch);                                    // batch dim
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
-    matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
+    DataflowBuffer dfb_out0(dfb::out0);
+    // The intermediate buffer is both written and read by this kernel; it shares memory with the output buffer.
+    DataflowBuffer dfb_interm0(dfb::interm0);
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::in0, dfb::in1, dfb::out0);
+    matmul_init(dfb::in0, dfb::in1);
 
     for (uint32_t b = 0; b < batch; b++) {
         bool spill = num_blocks > 1;
@@ -33,8 +42,8 @@ void kernel_main() {
         for (uint32_t block = 0; block < num_blocks; block++) {
             bool last_out = block == (num_blocks - 1);
 
-            cb_wait_front(tt::CBIndex::c_0, in0_block_num_tiles);
-            cb_wait_front(tt::CBIndex::c_1, in1_block_num_tiles);
+            dfb_in0.wait_front(in0_block_num_tiles);
+            dfb_in1.wait_front(in1_block_num_tiles);
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                 int in1_index_subblock_offset = 0;
@@ -42,13 +51,13 @@ void kernel_main() {
                     tile_regs_acquire();
 
                     if (enable_reload) {
-                        copy_init(tt::CBIndex::c_24);
-                        cb_wait_front(tt::CBIndex::c_24, out_subblock_num_tiles);
+                        copy_init(dfb::interm0);
+                        dfb_interm0.wait_front(out_subblock_num_tiles);
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            copy_tile(tt::CBIndex::c_24, i, i);
+                            copy_tile(dfb::interm0, i, i);
                         }
-                        cb_pop_front(tt::CBIndex::c_24, out_subblock_num_tiles);
-                        matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
+                        dfb_interm0.pop_front(out_subblock_num_tiles);
+                        matmul_init(dfb::in0, dfb::in1);
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock
@@ -60,7 +69,7 @@ void kernel_main() {
                             for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                                 int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                                 int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, in0_index, in1_index, dst_index);
+                                matmul_tiles(dfb::in0, dfb::in1, in0_index, in1_index, dst_index);
                                 in1_index_inner_dim_offset += in1_per_core_w;
                             }
                             dst_index++;
@@ -73,23 +82,23 @@ void kernel_main() {
 
                     if (last_out) {
                         // Pack out to output buffer
-                        cb_reserve_back(tt::CBIndex::c_16, out_subblock_num_tiles);
+                        dfb_out0.reserve_back(out_subblock_num_tiles);
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            pack_tile(i, tt::CBIndex::c_16);
+                            pack_tile(i, dfb::out0);
                         }
-                        cb_push_back(tt::CBIndex::c_16, out_subblock_num_tiles);
+                        dfb_out0.push_back(out_subblock_num_tiles);
                     } else {
                         // Wait for tiles in output buffer to be written out since interm and output share memory
                         if (block == 0) {
-                            cb_reserve_back(tt::CBIndex::c_16, out_num_tiles_to_wait);
+                            dfb_out0.reserve_back(out_num_tiles_to_wait);
                             out_num_tiles_to_wait += out_subblock_num_tiles;
                         }
                         // Move partial result to interm buffer
-                        cb_reserve_back(tt::CBIndex::c_24, out_subblock_num_tiles);
+                        dfb_interm0.reserve_back(out_subblock_num_tiles);
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            pack_tile(i, tt::CBIndex::c_24);
+                            pack_tile(i, dfb::interm0);
                         }
-                        cb_push_back(tt::CBIndex::c_24, out_subblock_num_tiles);
+                        dfb_interm0.push_back(out_subblock_num_tiles);
                     }
 
                     tile_regs_release();
@@ -102,8 +111,8 @@ void kernel_main() {
                 enable_reload = true;
             }
 
-            cb_pop_front(tt::CBIndex::c_0, in0_block_num_tiles);
-            cb_pop_front(tt::CBIndex::c_1, in1_block_num_tiles);
+            dfb_in0.pop_front(in0_block_num_tiles);
+            dfb_in1.pop_front(in1_block_num_tiles);
         }
     }
 }

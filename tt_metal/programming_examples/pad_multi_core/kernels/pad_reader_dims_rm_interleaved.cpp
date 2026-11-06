@@ -5,42 +5,42 @@
 #include <stdint.h>
 #include <cstring>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
-inline __attribute__((always_inline)) void fill_pad_cb_with_val(
-    const uint32_t cb_id, const uint32_t num_bytes, const uint32_t val) {
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
+    const DataflowBuffer& dfb, const uint32_t num_bytes, const uint32_t val) {
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());
     for (uint32_t i = 0; i < num_bytes / sizeof(uint32_t); ++i) {
         ptr[i] = val;
     }
 }
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_sticks_per_core = get_arg_val<uint32_t>(1);
-    uint32_t num_sticks_per_barrier = get_arg_val<uint32_t>(2);
-    uint32_t start_id = get_arg_val<uint32_t>(3);
-    uint32_t front_pad_n = get_arg_val<uint32_t>(4);
-    uint32_t front_pad_c = get_arg_val<uint32_t>(5);
-    uint32_t front_pad_h = get_arg_val<uint32_t>(6);
+    uint32_t num_sticks_per_core = get_arg(args::num_sticks_per_core);
+    uint32_t num_sticks_per_barrier = get_arg(args::num_sticks_per_barrier);
+    uint32_t start_id = get_arg(args::start_id);
+    uint32_t front_pad_n = get_arg(args::front_pad_n);
+    uint32_t front_pad_c = get_arg(args::front_pad_c);
+    uint32_t front_pad_h = get_arg(args::front_pad_h);
 
-    constexpr uint32_t N = get_compile_time_arg_val(0);
-    constexpr uint32_t H = get_compile_time_arg_val(1);
-    constexpr uint32_t C = get_compile_time_arg_val(2);
-    constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t N_padded = get_compile_time_arg_val(4);
-    constexpr uint32_t H_padded = get_compile_time_arg_val(5);
-    constexpr uint32_t C_padded = get_compile_time_arg_val(6);
-    constexpr uint32_t stick_size_padded = get_compile_time_arg_val(7);
-    constexpr uint32_t stick_size_padded_front = get_compile_time_arg_val(8);
-    constexpr uint32_t stick_size_padded_end = get_compile_time_arg_val(9);
-    constexpr uint32_t num_zero_pad_sticks_read = get_compile_time_arg_val(10);
-    constexpr uint32_t last_zero_stick_size = get_compile_time_arg_val(11);
-    constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(18);
+    constexpr uint32_t N = get_arg(args::N);
+    constexpr uint32_t H = get_arg(args::H);
+    constexpr uint32_t C = get_arg(args::C);
+    constexpr uint32_t stick_size_bytes = get_arg(args::stick_size_bytes);
+    constexpr uint32_t N_padded = get_arg(args::N_padded);
+    constexpr uint32_t H_padded = get_arg(args::H_padded);
+    constexpr uint32_t C_padded = get_arg(args::C_padded);
+    constexpr uint32_t stick_size_padded = get_arg(args::stick_size_padded);
+    constexpr uint32_t stick_size_padded_front = get_arg(args::stick_size_padded_front);
+    constexpr uint32_t stick_size_padded_end = get_arg(args::stick_size_padded_end);
+    constexpr uint32_t num_zero_pad_sticks_read = get_arg(args::num_zero_pad_sticks_read);
+    constexpr uint32_t last_zero_stick_size = get_arg(args::last_zero_stick_size);
+    constexpr uint32_t stick_size_padded_aligned = get_arg(args::stick_size_padded_aligned);
 
-    constexpr bool not_pad_by_zero = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t front_padding = get_compile_time_arg_val(8);
-    constexpr bool unaligned = get_compile_time_arg_val(19) == 1;
-    constexpr auto src_args = TensorAccessorArgs<20>();
+    constexpr bool not_pad_by_zero = get_arg(args::not_pad_by_zero) == 1;
+    constexpr uint32_t front_padding = get_arg(args::stick_size_padded_front);
+    constexpr bool unaligned = get_arg(args::unaligned) == 1;
 
     uint32_t packed_pad_value = 0;
     uint32_t row_major_min_bytes = 0;
@@ -48,32 +48,32 @@ void kernel_main() {
     uint32_t num_end_pad_sticks_read = 0;
     uint32_t num_sticks_padded_read = 0;
     if constexpr (not_pad_by_zero) {
-        packed_pad_value = kernel_compile_time_args[13];
-        row_major_min_bytes = kernel_compile_time_args[14];
-        num_front_pad_sticks_read = kernel_compile_time_args[15];
-        num_end_pad_sticks_read = kernel_compile_time_args[16];
-        num_sticks_padded_read = kernel_compile_time_args[17];
+        packed_pad_value = get_arg(args::packed_pad_value);
+        row_major_min_bytes = get_arg(args::row_major_min_bytes);
+        num_front_pad_sticks_read = get_arg(args::num_front_pad_sticks_read);
+        num_end_pad_sticks_read = get_arg(args::num_end_pad_sticks_read);
+        num_sticks_padded_read = get_arg(args::num_sticks_padded_read);
     }
 
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_pad = tt::CBIndex::c_1;
-    constexpr uint32_t cb_pad_align = tt::CBIndex::c_2;
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_pad(dfb::pad);
+    DataflowBuffer dfb_pad_align(dfb::pad_align);
 
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(tensor::src);
 
     // Prepare pad pattern
-    fill_pad_cb_with_val(cb_pad, stick_size_padded, packed_pad_value);
-    uint64_t pad_val_addr = get_write_ptr(cb_pad);
+    fill_pad_dfb_with_val(dfb_pad, stick_size_padded, packed_pad_value);
+    uint64_t pad_val_addr = dfb_pad.get_write_ptr();
     uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);
 
-    uint64_t pad_align_addr = get_read_ptr(cb_pad_align);
+    uint64_t pad_align_addr = dfb_pad_align.get_read_ptr();
     uint64_t pad_align_noc_addr = get_noc_addr(pad_align_addr);
 
     uint32_t i_stick = start_id;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
     for (uint32_t iter = 0; iter < num_sticks_per_core;) {
-        cb_reserve_back(cb_in0, num_sticks_per_barrier);
-        uint32_t l1_write_addr = get_write_ptr(cb_in0);
+        dfb_in0.reserve_back(num_sticks_per_barrier);
+        uint32_t l1_write_addr = dfb_in0.get_write_ptr();
         for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
             bool read_stick = (curr_h >= front_pad_h and curr_h < H) and (curr_c >= front_pad_c and curr_c < C) and
                               (curr_n >= front_pad_n and curr_n < N);
@@ -82,19 +82,19 @@ void kernel_main() {
             *((volatile tt_l1_ptr uint32_t*)l1_write_addr) = packed_pad_value;
             if (read_stick) {
                 if constexpr (front_padding) {
-                    noc_async_read(read_noc_addr, get_write_ptr(cb_pad_align), stick_size_bytes);
+                    noc_async_read(read_noc_addr, dfb_pad_align.get_write_ptr(), stick_size_bytes);
                     noc_async_read_barrier();
                     memmove(
                         (void*)(l1_write_addr + stick_size_padded_front),
-                        (void*)(get_read_ptr(cb_pad_align)),
+                        (void*)(dfb_pad_align.get_read_ptr()),
                         (size_t)(stick_size_bytes));
                 } else if constexpr (unaligned) {
-                    noc_async_read(read_noc_addr, get_write_ptr(cb_pad_align), stick_size_bytes);
+                    noc_async_read(read_noc_addr, dfb_pad_align.get_write_ptr(), stick_size_bytes);
                     noc_async_read_barrier();
                     noc_async_read(pad_align_noc_addr, l1_write_addr, stick_size_bytes);
-                    // Drain this loop-back read out of cb_pad_align before the next stick's read-in
+                    // Drain this loop-back read out of dfb_pad_align before the next stick's read-in
                     // overwrites that shared scratch, else the read-in can land while this read is still
-                    // sourcing from it (WAR on cb_pad_align).
+                    // sourcing from it (WAR on dfb_pad_align).
                     noc_async_read_barrier();
                 } else {
                     noc_async_read(read_noc_addr, l1_write_addr, stick_size_bytes);
@@ -113,6 +113,6 @@ void kernel_main() {
             }
         }
         noc_async_read_barrier();
-        cb_push_back(cb_in0, num_sticks_per_barrier);
+        dfb_in0.push_back(num_sticks_per_barrier);
     }
 }
