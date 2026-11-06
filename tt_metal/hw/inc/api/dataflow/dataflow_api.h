@@ -2175,6 +2175,12 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
 
     // set semaphore value to val
     (*sem_addr) = val;
+#if defined(ARCH_QUASAR)
+    // Quasar: the NOC is driven by RoCC instructions and reads L1 directly, so nothing orders this store before a
+    // later NOC command that reads the same word (e.g. set_multicast of this semaphore). Without the fence the
+    // multicast can send the old value.
+    asm volatile("fence" ::: "memory");
+#endif
 }
 
 // clang-format off
