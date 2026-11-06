@@ -7,6 +7,8 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 #include <cmath>
 #include <random>
@@ -131,18 +133,20 @@ int main() {
     // and enables efficient operations on the accelerator.
     src_vec = tilize_nfaces(src_vec, constants::TILE_WIDTH, constants::TILE_HEIGHT);
 
-    // Dram buffer config
+    // Dram tensor config: one row-major row of one tile's worth of elements, so the page size is one tile
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * constants::TILE_HEIGHT * constants::TILE_WIDTH;
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
-    distributed::ReplicatedBufferConfig buffer_config{.size = sizeof(bfloat16) * src_vec.size()};
-    std::shared_ptr<distributed::MeshBuffer> src_dram_buffer =
-        distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());  // Input buffer
-    std::shared_ptr<distributed::MeshBuffer> dst_dram_buffer =
-        distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());  // Output buffer
+    TensorSpec dram_tensor_spec(
+        Shape({1, constants::TILE_HW}),
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    MeshTensor src_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);  // Input tensor
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);  // Output tensor
 
     // DRAM transfer
-    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, false);
+    HostTensor src_host_tensor = HostTensor::from_vector(src_vec, dram_tensor_spec);
+    cq.enqueue_write_tensor(src_host_tensor, src_dram_tensor);
 
     // L1 circular buffer setup
     constexpr uint32_t src_cb_index = CBIndex::c_0;
@@ -166,14 +170,14 @@ int main() {
     // Kernels setup
     // Data movement kernels
     std::vector<uint32_t> reader_compile_time_args = {src_cb_index, ones_cb_index};
-    TensorAccessorArgs(*src_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src_dram_tensor).append_to(reader_compile_time_args);
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "sfpu_eltwise_chain/kernels/dataflow/reader.cpp",
         core,
         tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
     std::vector<uint32_t> writer_compile_time_args = {result_cb_index};
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_dram_tensor).append_to(writer_compile_time_args);
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "sfpu_eltwise_chain/kernels/dataflow/writer.cpp",
@@ -189,8 +193,8 @@ int main() {
         tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
 
     // Runtime args setup
-    SetRuntimeArgs(program, reader_kernel_id, core, {src_dram_buffer->address()});
-    SetRuntimeArgs(program, writer_kernel_id, core, {dst_dram_buffer->address()});
+    SetRuntimeArgs(program, reader_kernel_id, core, {src_dram_tensor.address()});
+    SetRuntimeArgs(program, writer_kernel_id, core, {dst_dram_tensor.address()});
 
     // Program enqueue
     workload.add_program(device_range, std::move(program));
@@ -198,8 +202,7 @@ int main() {
     distributed::Finish(cq);
 
     // Data transfer back to host machine
-    std::vector<bfloat16> result_vec(constants::TILE_HW, 0);
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+    std::vector<bfloat16> result_vec = cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 
     // Reverse the tilization to get the result in the row-major format that the CPU expects
     result_vec = untilize_nfaces(result_vec, constants::TILE_WIDTH, constants::TILE_HEIGHT);

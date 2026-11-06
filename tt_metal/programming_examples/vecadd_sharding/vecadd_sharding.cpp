@@ -16,6 +16,8 @@
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt_stl/fmt.hpp>
 
 #include <cstddef>
@@ -38,35 +40,22 @@ struct DistributionConfig {
     uint32_t num_cores_x;
 };
 
-std::shared_ptr<distributed::MeshBuffer> MakeShardedL1MeshBufferBFP16(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    size_t size,
-    const DistributionConfig& config,
-    const ShardSpecBuffer& shard_config) {
-    BufferShardingArgs sharding_args = BufferShardingArgs(shard_config, config.layout);
-    distributed::DeviceLocalBufferConfig local_config{
-        .page_size = tt::constants::TILE_HW * sizeof(bfloat16),
-        .buffer_type = BufferType::L1,
-        .sharding_args = sharding_args,
-    };
-    distributed::ReplicatedBufferConfig buffer_config{
-        .size = size,
-    };
-    return distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
+// The tensor is a grid of n_tiles_y x n_tiles_x pages. Each page holds one tile worth of elements
+// (TILE_HW * sizeof(bfloat16) bytes), and each row of a row-major tensor is one page.
+TensorSpec MakeShardedL1TensorSpecBFP16(uint32_t n_tiles_y, uint32_t n_tiles_x, const NdShardSpec& shard_config) {
+    return TensorSpec(
+        Shape({n_tiles_y, n_tiles_x, tt::constants::TILE_HW}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig(BufferType::L1, shard_config)));
 }
 
 CBHandle MakeCircularBufferBFP16(
-    Program& program,
-    const CoreSpec& core,
-    tt::CBIndex cb,
-    uint32_t n_tiles,
-    const std::shared_ptr<distributed::MeshBuffer>& l1_buf) {
+    Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t n_tiles, const MeshTensor& l1_tensor) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * tt::constants::TILE_HW;
     CircularBufferConfig cb_config = CircularBufferConfig(n_tiles * tile_size, {{cb, tt::DataFormat::Float16_b}})
                                          .set_page_size(cb, tile_size)
                                          // IMPORTANT: assign L1 buffer address to circular buffer directly so that
                                          // no extra allocation and data copy
-                                         .set_globally_allocated_address(*(l1_buf->get_backing_buffer()));
+                                         .set_globally_allocated_address(l1_tensor);
     return CreateCircularBuffer(program, core, cb_config);
 }
 
@@ -168,26 +157,26 @@ int main(int argc, char** argv) {
     // Construct the L1 configuration. The configuration is very detailed to enable maximum performance.
     // The cores that the buffer will be sharded across.
     const CoreRange cores(CoreCoord(0, 0), CoreCoord(config.num_cores_y - 1, config.num_cores_x - 1));
-    // The sharing configuration for the buffer
-    ShardSpecBuffer spec(
-        // core_sets: The set of cores to shard the buffer across
-        cores,
-        // shard_shape: The size of each shard in the buffer
-        {uint32_t(num_tiles_per_core_x * tt::constants::TILE_HEIGHT),
-         uint32_t(num_tiles_per_core_y * tt::constants::TILE_WIDTH)},
-        // shard_orientation: The orientation of the shards in the buffer
-        ShardOrientation::ROW_MAJOR,
-        // page_shape: The shape of each page in the buffer (most likely equals to tile size as that's what the compute
-        // engines expect)
-        {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-        // tensor2d_shape_in_pages: The shape of the tensor in pages/(tiles)
-        {n_tiles_y, n_tiles_x});
+    // The tiles each core holds. Height sharding gives each core whole rows of tiles; width and block sharding give
+    // each core a block of num_tiles_per_core_x rows by num_tiles_per_core_y columns of tiles.
+    const bool height_sharded = config.layout == TensorMemoryLayout::HEIGHT_SHARDED;
+    const uint32_t shard_tiles_y = height_sharded ? num_tiles_per_core_y : num_tiles_per_core_x;
+    const uint32_t shard_tiles_x = height_sharded ? num_tiles_per_core_x : num_tiles_per_core_y;
+    // The sharing configuration for the tensor
+    NdShardSpec spec{
+        // shard_shape: The size of each shard in the tensor, in (rows of tiles, columns of tiles, elements per tile)
+        .shard_shape = Shape({shard_tiles_y, shard_tiles_x, tt::constants::TILE_HW}),
+        // grid: The set of cores to shard the tensor across
+        .grid = CoreRangeSet(cores),
+        // orientation: The orientation of the shards in the tensor
+        .orientation = ShardOrientation::ROW_MAJOR,
+    };
 
-    // Create the input and output buffers that lives on L1(SRAM)
-    size_t size_bytes = n_tiles_y * n_tiles_x * tt::constants::TILE_HW * sizeof(bfloat16);
-    auto a = MakeShardedL1MeshBufferBFP16(mesh_device, size_bytes, config, spec);
-    auto b = MakeShardedL1MeshBufferBFP16(mesh_device, size_bytes, config, spec);
-    auto c = MakeShardedL1MeshBufferBFP16(mesh_device, size_bytes, config, spec);
+    // Create the input and output tensors that lives on L1(SRAM)
+    TensorSpec l1_tensor_spec = MakeShardedL1TensorSpecBFP16(n_tiles_y, n_tiles_x, spec);
+    MeshTensor a = MeshTensor::allocate_on_device(*mesh_device, l1_tensor_spec);
+    MeshTensor b = MeshTensor::allocate_on_device(*mesh_device, l1_tensor_spec);
+    MeshTensor c = MeshTensor::allocate_on_device(*mesh_device, l1_tensor_spec);
 
     // Data to fill the input buffers.
     std::mt19937 rng(seed);
@@ -202,8 +191,8 @@ int main(int argc, char** argv) {
 
     size_t num_tiles_per_core = n_tiles_x * n_tiles_y / CoreRangeSet(cores).num_cores();
     // Create circular buffers so the compute APIs can access the data.
-    // NOTE: These are special circular buffers that have explicitly set L1 buffer address. As data already fully
-    // resides in L1, we can simply point the circular buffers to the L1 buffers and avoid any extra allocation or data
+    // NOTE: These are special circular buffers that have explicitly set L1 tensor address. As data already fully
+    // resides in L1, we can simply point the circular buffers to the L1 tensors and avoid any extra allocation or data
     // copy. This is an important optimization for performance. But hyper specific to use cases like this one.
     MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_0, num_tiles_per_core, a);
     MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_1, num_tiles_per_core, b);
@@ -220,9 +209,12 @@ int main(int argc, char** argv) {
             .compile_args = {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2}});
 
     // copy data from host to L1 directly
+    // The host tensors must stay alive until the non-blocking writes are done.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    EnqueueWriteMeshBuffer(cq, a, a_data, false);
-    EnqueueWriteMeshBuffer(cq, b, b_data, false);
+    HostTensor a_host = HostTensor::from_vector(a_data, l1_tensor_spec);
+    HostTensor b_host = HostTensor::from_vector(b_data, l1_tensor_spec);
+    cq.enqueue_write_tensor(a_host, a);
+    cq.enqueue_write_tensor(b_host, b);
 
     // Setup arguments and run the program.
     SetRuntimeArgs(program, compute, cores, {num_tiles_per_core});
@@ -231,9 +223,8 @@ int main(int argc, char** argv) {
 
     fmt::print("Kernel execution finished. Reading results...\n");
 
-    // Read the output buffer.
-    std::vector<bfloat16> c_data;
-    distributed::EnqueueReadMeshBuffer(cq, c_data, c, true);
+    // Read the output tensor.
+    std::vector<bfloat16> c_data = cq.enqueue_read_tensor(c, /*blocking=*/true).to_vector<bfloat16>();
 
     // Print partial results so we can see the output is correct (plus or minus
     // some error due to BFP16 precision)

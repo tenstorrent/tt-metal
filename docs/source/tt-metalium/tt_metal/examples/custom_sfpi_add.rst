@@ -23,7 +23,7 @@ Program setup
 
 This example assumes familiarity with basic Metalium concepts like device initialization, buffer creation, circular buffers, and kernel setup. If you're new to these concepts, we recommend starting with the :ref:`Eltwise sfpu example<Eltwise sfpu example>` for a gentler introduction to programming Metalium kernels.
 
-The host-side setup for this custom SFPI example follows the standard pattern: device initialization, DRAM buffer creation for two inputs and one output, circular buffer allocation for kernel communication, and kernel creation. The key difference from simpler examples is that we need two input circular buffers (``cb_in0``, ``cb_in1``) to handle the binary operation, plus the standard output buffer (``cb_out0``).
+The host-side setup for this custom SFPI example follows the standard pattern: device initialization, DRAM tensor creation for two inputs and one output, circular buffer allocation for kernel communication, and kernel creation. The key difference from simpler examples is that we need two input circular buffers (``cb_in0``, ``cb_in1``) to handle the binary operation, plus the standard output buffer (``cb_out0``).
 
 .. code-block:: cpp
 
@@ -33,10 +33,16 @@ The host-side setup for this custom SFPI example follows the standard pattern: d
 
     // Submit work via the mesh command queue: uploads/downloads and program execution
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    // Allocate mesh buffers: two inputs + one output (replicated across mesh)
-    auto src0_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
+    // Allocate mesh tensors: two inputs + one output (replicated across mesh)
+    TensorSpec dram_tensor_spec(
+        Shape({n_tiles, elements_per_tile}),
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+    MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
 
     Program program = CreateProgram();
 
@@ -228,13 +234,13 @@ Back on the host, we set the runtime arguments for the kernels. The reader and w
 
     // tt_metal/programming_examples/custom_sfpi_add/custom_sfpi_add.cpp
     SetRuntimeArgs(program, reader, core, {
-        src0_dram_buffer->address(),
-        src1_dram_buffer->address(),
+        src0_dram_tensor.address(),
+        src1_dram_tensor.address(),
         n_tiles
     });
 
     SetRuntimeArgs(program, writer, core, {
-        dst_dram_buffer->address(),
+        dst_dram_tensor.address(),
         n_tiles
     });
 
@@ -242,28 +248,30 @@ Back on the host, we set the runtime arguments for the kernels. The reader and w
         n_tiles
     });
 
-For mesh execution, we add the program to a mesh workload and enqueue it for execution across the mesh. We also upload input data using the mesh buffer API.
+For mesh execution, we add the program to a mesh workload and enqueue it for execution across the mesh. We also upload input data using the mesh tensor API.
 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_add/custom_sfpi_add.cpp
 
-    // Upload input data to mesh buffers (non-blocking)
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, /*blocking=*/false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, /*blocking=*/false);
+    // Upload input data to the mesh tensors (non-blocking)
+    HostTensor a_host_tensor = HostTensor::from_vector(a_data, dram_tensor_spec);
+    HostTensor b_host_tensor = HostTensor::from_vector(b_data, dram_tensor_spec);
+    cq.enqueue_write_tensor(a_host_tensor, src0_dram_tensor);
+    cq.enqueue_write_tensor(b_host_tensor, src1_dram_tensor);
 
     // Add program to mesh workload and execute
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     distributed::Finish(cq);
 
-Finally, we read back the results from the mesh buffer using the distributed API to verify correctness.
+Finally, we read back the results from the mesh tensor to verify correctness.
 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_add/custom_sfpi_add.cpp
-    std::vector<bfloat16> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
+    std::vector<bfloat16> result_vec =
+        cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 
     // Validation against golden output...
 

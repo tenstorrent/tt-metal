@@ -5,6 +5,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -36,14 +38,17 @@ int main() {
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
 
-    // Define and create a DRAM-backed replicated mesh buffer with float data type
-    // ReplicatedBufferConfig allocates an identical buffer per device in the mesh (unit mesh ⇒ single device)
+    // Define and create a DRAM-backed replicated mesh tensor with float data type
+    // The tensor is allocated identically on each device in the mesh (unit mesh ⇒ single device)
+    // Each row of a row-major tensor is one page, so a single row of buffer_size bytes gives one page of buffer_size.
     constexpr uint32_t buffer_size = 2 * 1024;
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = buffer_size, .buffer_type = tt_metal::BufferType::DRAM};
-    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
-    std::shared_ptr<distributed::MeshBuffer> dram_buffer =
-        distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    TensorSpec dram_tensor_spec(
+        Shape({1, buffer_size / sizeof(float)}),
+        TensorLayout(
+            DataType::FLOAT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    MeshTensor dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
 
     // Configure and create an L1 circular buffer (to move data from DRAM to L1)
     // Set page size equal to buffer_size so one page equals one transfer unit
@@ -60,12 +65,14 @@ int main() {
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    // Initialize Float data on host and upload to the DRAM buffer (non-blocking upload)
+    // Initialize Float data on host and upload to the DRAM tensor (non-blocking upload)
+    // Keep the host tensor alive until the upload is complete.
     std::vector<float> init_data(buffer_size / sizeof(float), 1.23);
-    distributed::EnqueueWriteMeshBuffer(cq, dram_buffer, init_data, false);
+    HostTensor init_host_tensor = HostTensor::from_vector(init_data, dram_tensor_spec);
+    cq.enqueue_write_tensor(init_host_tensor, dram_tensor);
 
     // Set runtime args, add program to mesh workload, and enqueue (non-blocking)
-    SetRuntimeArgs(program, data_reader_kernel_id, core, {dram_buffer->address()});
+    SetRuntimeArgs(program, data_reader_kernel_id, core, {dram_tensor.address()});
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 

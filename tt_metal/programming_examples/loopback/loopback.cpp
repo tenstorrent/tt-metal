@@ -10,6 +10,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 // This example demonstrates a simple data copy from DRAM into L1(SRAM) and to another place in DRAM.
 // The general flow is as follows:
@@ -41,26 +43,30 @@ int main() {
         // BFloat16 as the most well supported data type. Thus the tile size is 32x32x2 = 2048 bytes.
         constexpr uint32_t num_tiles = 50;
         constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
-        constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
-        constexpr uint32_t dram_buffer_size = tile_size_bytes * num_tiles;
 
-        // Configure mesh buffers. Use single-tile page size so transfers operate tile-by-tile.
-        distributed::DeviceLocalBufferConfig dram_config{
-            .page_size = tile_size_bytes,  // Number of bytes when round-robin between banks. Usually this is the same
-                                           // as the tile size for efficiency.
-            .buffer_type = tt::tt_metal::BufferType::DRAM};  // Type of buffer (DRAM or L1(SRAM))
-        distributed::DeviceLocalBufferConfig l1_config{
-            .page_size = tile_size_bytes, .buffer_type = tt::tt_metal::BufferType::L1};  // This time we allocate on L1
+        // Configure the tensors. Each row of a row-major tensor is one page, so a row of one tile's worth of
+        // elements gives a single-tile page size and transfers operate tile-by-tile. The page size is the number of
+        // bytes when round-robin between banks. Usually this is the same as the tile size for efficiency.
+        // The memory config selects the type of buffer (DRAM or L1(SRAM)).
+        // The shape gives the size per device (replicated across mesh). Since we are operating on a unit mesh this
+        // is the total size.
+        TensorSpec dram_tensor_spec(
+            Shape({num_tiles, elements_per_tile}),
+            TensorLayout(
+                DataType::BFLOAT16,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+        TensorSpec l1_tensor_spec(
+            Shape({1, elements_per_tile}),
+            TensorLayout(
+                DataType::BFLOAT16,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));  // This time we allocate on L1
 
-        distributed::ReplicatedBufferConfig dram_buffer_config{
-            .size = dram_buffer_size};  // Size per device (replicated across mesh). Since we are operating on a unit
-                                        // mesh this is the total size.
-        distributed::ReplicatedBufferConfig l1_buffer_config{.size = tile_size_bytes};
-
-        // Allocate the buffers (replicated across mesh; on unit mesh ⇒ single device allocation)
-        auto l1_buffer = distributed::MeshBuffer::create(l1_buffer_config, l1_config, mesh_device.get());
-        auto input_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
-        auto output_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
+        // Allocate the tensors (replicated across mesh; on unit mesh ⇒ single device allocation)
+        MeshTensor l1_tensor = MeshTensor::allocate_on_device(*mesh_device, l1_tensor_spec);
+        MeshTensor input_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+        MeshTensor output_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
 
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
         // same kernel at a given time. Metalium allows you to run different kernels on different cores
@@ -79,8 +85,8 @@ int main() {
         // `loopback_dram_copy.cpp` file for the actual implementation). The kernel is created on the Tensix core
         // {0, 0} and uses the default NoC.
         std::vector<uint32_t> dram_copy_compile_time_args;
-        TensorAccessorArgs(*input_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
-        TensorAccessorArgs(*output_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
+        TensorAccessorArgs(input_dram_tensor).append_to(dram_copy_compile_time_args);
+        TensorAccessorArgs(output_dram_tensor).append_to(dram_copy_compile_time_args);
         KernelHandle dram_copy_kernel_id = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "loopback/kernels/loopback_dram_copy.cpp",
@@ -98,16 +104,16 @@ int main() {
             val = bfloat16(distribution(rng));
         }
 
-        // Upload the data from host to the device. The final argument is set to false. This indicates to Metalium that
-        // the upload is non-blocking, an upload will be launched, but the function will return immediately, before the
-        // upload is complete. This is useful for performance reasons, as it allows the host to continue while the
-        // upload is in progress. Note that the host is responsible for ensuring that the upload is complete before the
-        // memory holding the data is freed.
-        distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, /*blocking=*/false);
+        // Upload the data from host to the device. The upload is non-blocking, an upload will be launched, but the
+        // function will return immediately, before the upload is complete. This is useful for performance reasons,
+        // as it allows the host to continue while the upload is in progress. Note that the host is responsible for
+        // ensuring that the upload is complete before the memory holding the data (the host tensor) is freed.
+        HostTensor input_host_tensor = HostTensor::from_vector(input_vec, dram_tensor_spec);
+        cq.enqueue_write_tensor(input_host_tensor, input_dram_tensor);
 
         // Set runtime arguments for the kernel.
         const std::vector<uint32_t> runtime_args = {
-            l1_buffer->address(), input_dram_buffer->address(), output_dram_buffer->address(), num_tiles};
+            l1_tensor.address(), input_dram_tensor.address(), output_dram_tensor.address(), num_tiles};
 
         SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
 
@@ -118,10 +124,8 @@ int main() {
         distributed::Finish(cq);
         // NOTE: The above is equivalent to a blocking enqueue of the workload.
 
-        // Read the result back from the shard at mesh coordinate {0,0}. Use blocking=true to wait for completion.
-        // The vector is automatically resized to fit the data.
-        std::vector<bfloat16> result_vec;
-        distributed::EnqueueReadMeshBuffer(cq, result_vec, output_dram_buffer, /*blocking*/ true);
+        // Read the result back from the output tensor. The read blocks by default, to wait for completion.
+        std::vector<bfloat16> result_vec = cq.enqueue_read_tensor(output_dram_tensor).to_vector<bfloat16>();
 
         // Compare the result with the input. The result should be the same as the input.
         TT_FATAL(

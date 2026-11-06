@@ -24,35 +24,39 @@ constexpr CoreCoord core = {0, 0};
 
 We create a 1x1 `MeshDevice` at mesh coordinate {0, 0}, obtain its `MeshCommandQueue` to submit work, define a `MeshWorkload` and its device range, create a `Program`, and indicate the `core` we intend to use at the coordinates `{0, 0}` for utilization in this example.
 
-## Configure DRAM and L1 buffers
+## Configure DRAM and L1 tensors
 
 ```cpp
 constexpr uint32_t buffer_size = sizeof(uint32_t);
-distributed::DeviceLocalBufferConfig dram_config{
-    .page_size = buffer_size,
-    .buffer_type = BufferType::DRAM};
-distributed::DeviceLocalBufferConfig l1_config{
-    .page_size = buffer_size,
-    .buffer_type = BufferType::L1};
-distributed::ReplicatedBufferConfig buffer_config{
-    .size = buffer_size,
-};
+constexpr uint32_t elements_per_page = buffer_size / sizeof(uint32_t);
+TensorSpec dram_tensor_spec(
+    Shape({1, elements_per_page}),
+    TensorLayout(
+        DataType::UINT32,
+        PageConfig(Layout::ROW_MAJOR),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+TensorSpec l1_tensor_spec(
+    Shape({1, elements_per_page}),
+    TensorLayout(
+        DataType::UINT32,
+        PageConfig(Layout::ROW_MAJOR),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));
 ```
 
-We configure DRAM and L1 buffers using `DeviceLocalBufferConfig`, and size them with `ReplicatedBufferConfig` for use across the mesh. The `ReplicatedBufferConfig` allows the user to seamlessly port a buffer configuration across an arbitrary-sized mesh of devices.
+We configure DRAM and L1 tensors using `TensorSpec`. The `MemoryConfig` selects the buffer type (DRAM or L1), and each row of a row-major tensor is one page, so a row of one integer gives a page size of `buffer_size`. A `MeshTensor` allocated from a `TensorSpec` is replicated across the mesh, which allows the user to seamlessly port the configuration across an arbitrary-sized mesh of devices.
 
-## Create buffers
+## Create tensors
 
 ```cpp
-auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-auto src0_l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
-auto src1_l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
-auto dst_l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+MeshTensor src0_l1_tensor = MeshTensor::allocate_on_device(*mesh_device, l1_tensor_spec);
+MeshTensor src1_l1_tensor = MeshTensor::allocate_on_device(*mesh_device, l1_tensor_spec);
+MeshTensor dst_l1_tensor = MeshTensor::allocate_on_device(*mesh_device, l1_tensor_spec);
 ```
 
-We create three DRAM buffers for inputs/outputs and three L1 buffers for on-core staging, all as `MeshBuffer`s on the same device.
+We create three DRAM tensors for inputs/outputs and three L1 tensors for on-core staging, all as `MeshTensor`s on the same device.
 
 ## Initialize source data and upload to DRAM
 
@@ -60,11 +64,13 @@ We create three DRAM buffers for inputs/outputs and three L1 buffers for on-core
 std::vector<uint32_t> src0_vec = {14};
 std::vector<uint32_t> src1_vec = {7};
 
-EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/false);
-EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, /*blocking=*/false);
+HostTensor src0_host_tensor = HostTensor::from_vector(src0_vec, dram_tensor_spec);
+HostTensor src1_host_tensor = HostTensor::from_vector(src1_vec, dram_tensor_spec);
+cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
+cq.enqueue_write_tensor(src1_host_tensor, src1_dram_tensor);
 ```
 
-We prepare two single-element host vectors and upload them asynchronously to the device.
+We prepare two single-element host vectors, wrap them in `HostTensor`s, and upload them asynchronously to the device. The host tensors must stay alive until the write is done.
 
 ## Create the Data Movement kernel
 
@@ -86,12 +92,12 @@ SetRuntimeArgs(
     kernel_id,
     core,
     {
-        src0_dram_buffer->address(),
-        src1_dram_buffer->address(),
-        dst_dram_buffer->address(),
-        src0_l1_buffer->address(),
-        src1_l1_buffer->address(),
-        dst_l1_buffer->address(),
+        static_cast<uint32_t>(src0_dram_tensor.address()),
+        static_cast<uint32_t>(src1_dram_tensor.address()),
+        static_cast<uint32_t>(dst_dram_tensor.address()),
+        static_cast<uint32_t>(src0_l1_tensor.address()),
+        static_cast<uint32_t>(src1_l1_tensor.address()),
+        static_cast<uint32_t>(dst_l1_tensor.address()),
     });
 
 workload.add_program(device_range, std::move(program));
@@ -144,9 +150,10 @@ In the kernel, tiles corresponding to each of the source vectors will be read fr
 ## Retrieve compute results
 
 ``` cpp
-std::vector<uint32_t> result_vec;
-distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
+std::vector<uint32_t> result_vec =
+    cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<uint32_t>();
+// ... verify result_vec ...
 mesh_device->close();
 ```
 
-We synchronously read back from the destination `MeshBuffer` using `ReadShard`, verify the result, and close the `MeshDevice`.
+We synchronously read back from the destination `MeshTensor` using `enqueue_read_tensor`, verify the result, and close the `MeshDevice`.

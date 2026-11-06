@@ -8,6 +8,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -44,21 +46,21 @@ int main(int /*argc*/, char** /*argv*/) {
         constexpr uint32_t n_tiles = 64;
         constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
-        constexpr uint32_t dram_buffer_size = tile_size_bytes * n_tiles;
 
-        // Configure mesh buffers. Use single-tile page size so transfers operate tile-by-tile.
-        distributed::DeviceLocalBufferConfig dram_config{
-            .page_size = tile_size_bytes,    // Number of bytes when round-robin between banks
-            .buffer_type = BufferType::DRAM  // Type of buffer (DRAM or L1)
-        };
-        distributed::ReplicatedBufferConfig dram_buffer_config{
-            // Size per device (replicated across mesh). Since we are operating on a unit mesh this is the total size.
-            .size = dram_buffer_size};
+        // Configure mesh tensors. Use single-tile page size so transfers operate tile-by-tile: each row of a
+        // row-major tensor is one page (number of bytes when round-robin between banks), so a row of one tile's
+        // worth of elements gives a page size of one tile. The tensors live in DRAM.
+        TensorSpec dram_tensor_spec(
+            Shape({n_tiles, elements_per_tile}),
+            TensorLayout(
+                DataType::BFLOAT16,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
 
-        // Allocate the buffers (replicated across mesh; on unit mesh ⇒ single device allocation)
-        // src0 is input buffer; dst is output buffer
-        auto src0_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
-        auto dst_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
+        // Allocate the tensors (replicated across mesh; on unit mesh ⇒ single device allocation)
+        // src0 is input tensor; dst is output tensor
+        MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+        MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
 
         // Initialize the input buffers with random data. For this example, src0 is a random vector of bfloat16 values
         std::mt19937 rng(std::random_device{}());
@@ -69,8 +71,10 @@ int main(int /*argc*/, char** /*argv*/) {
         }
 
 
-        // Upload the data from host to the device.
-        distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, false);
+        // Upload the data from host to the device. The tensor write is non-blocking, so a_host_tensor must stay alive
+        // until the upload is complete.
+        HostTensor a_host_tensor = HostTensor::from_vector(a_data, dram_tensor_spec);
+        cq.enqueue_write_tensor(a_host_tensor, src0_dram_tensor);
 
         // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are used to
         // move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute kernel to the writer
@@ -103,14 +107,14 @@ int main(int /*argc*/, char** /*argv*/) {
         // compute kernel. The compute kernel does math and pushes the result into the writer kernel. The writer kernel writes the result
         // back to DRAM.
         std::vector<uint32_t> reader_compile_time_args;
-        TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(src0_dram_tensor).append_to(reader_compile_time_args);
         auto reader = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "custom_sfpi_smoothstep/kernels/dataflow/read_tiles.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
         std::vector<uint32_t> writer_compile_time_args;
-        TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_compile_time_args);
+        TensorAccessorArgs(dst_dram_tensor).append_to(writer_compile_time_args);
         auto writer = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "custom_sfpi_smoothstep/kernels/dataflow/write_tile.cpp",
@@ -126,8 +130,8 @@ int main(int /*argc*/, char** /*argv*/) {
 
         // Set the runtime arguments for the kernels. This also registers
         // the kernels with the program.
-        SetRuntimeArgs(program, reader, core, {src0_dram_buffer->address(), n_tiles});
-        SetRuntimeArgs(program, writer, core, {dst_dram_buffer->address(), n_tiles});
+        SetRuntimeArgs(program, reader, core, {src0_dram_tensor.address(), n_tiles});
+        SetRuntimeArgs(program, writer, core, {dst_dram_tensor.address(), n_tiles});
         SetRuntimeArgs(program, compute, core, {n_tiles});
 
         // A MeshWorkload is a collection of programs that will be executed on the mesh. Each workload is
@@ -142,8 +146,8 @@ int main(int /*argc*/, char** /*argv*/) {
         // NOTE: The above is equivalent to a blocking enqueue of the workload.
 
         // Read the output buffer and compare it with the expected output.
-        std::vector<bfloat16> result_vec;
-        distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking*/ true);
+        std::vector<bfloat16> result_vec =
+            cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 
         constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16
         TT_FATAL(result_vec.size() == a_data.size(), "Result vector size mismatch");

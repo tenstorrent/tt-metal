@@ -79,17 +79,25 @@ Device initialization and parameter setup are similar to the single core example
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program{};
 
-    // Create DRAM buffers for input and output matrices (replicated per device across the mesh)
+    // Create DRAM tensors for input and output matrices (replicated per device across the mesh)
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
-    distributed::ReplicatedBufferConfig buffer_config_A{.size = single_tile_size * Mt * Kt};
-    distributed::ReplicatedBufferConfig buffer_config_B{.size = single_tile_size * Nt * Kt};
-    distributed::ReplicatedBufferConfig buffer_config_C{.size = single_tile_size * Mt * Nt};
+    constexpr uint32_t elements_per_tile = single_tile_size / sizeof(bfloat16);
 
-    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
+    auto make_dram_tensor_spec = [&](uint32_t num_tiles) {
+        return TensorSpec(
+            Shape({num_tiles, elements_per_tile}),
+            TensorLayout(
+                DataType::BFLOAT16,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    };
+    TensorSpec src0_tensor_spec = make_dram_tensor_spec(Mt * Kt);
+    TensorSpec src1_tensor_spec = make_dram_tensor_spec(Nt * Kt);
+    TensorSpec dst_tensor_spec = make_dram_tensor_spec(Mt * Nt);
+
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src0_tensor_spec);
+    MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src1_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dst_tensor_spec);
 
 Next, convert the source matrices to tiled format before preparing for execution on the device.
 
@@ -165,24 +173,32 @@ For example, if you need to split 81 output tiles across 11 cores, ``split_work_
 
     This model offers predictable performance and is well-suited for workloads that can be evenly distributed, but it requires more attention to work distribution for optimal efficiency.
 
-Buffer and Circular Buffer Allocation
+Tensor and Circular Buffer Allocation
 -------------------------------------
 
-Creating buffers and circular buffers in Metalium is similar to the single core example. For circular buffers, instead of creating them on a single core, you create them on all cores that will be used in the operation.
+Creating DRAM tensors and circular buffers in Metalium is similar to the single core example. For circular buffers, instead of creating them on a single core, you create them on all cores that will be used in the operation.
 
 .. code-block:: cpp
 
-    // Allocate DRAM buffers (shared resources on the device). Nothing changes here.
+    // Allocate DRAM tensors (shared resources on the device). Nothing changes here.
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
-    distributed::ReplicatedBufferConfig buffer_config_A{.size = single_tile_size * Mt * Kt};
-    distributed::ReplicatedBufferConfig buffer_config_B{.size = single_tile_size * Nt * Kt};
-    distributed::ReplicatedBufferConfig buffer_config_C{.size = single_tile_size * Mt * Nt};
+    constexpr uint32_t elements_per_tile = single_tile_size / sizeof(bfloat16);
 
-    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
+    auto make_dram_tensor_spec = [&](uint32_t num_tiles) {
+        return TensorSpec(
+            Shape({num_tiles, elements_per_tile}),
+            TensorLayout(
+                DataType::BFLOAT16,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    };
+    TensorSpec src0_tensor_spec = make_dram_tensor_spec(Mt * Kt);
+    TensorSpec src1_tensor_spec = make_dram_tensor_spec(Nt * Kt);
+    TensorSpec dst_tensor_spec = make_dram_tensor_spec(Mt * Nt);
+
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src0_tensor_spec);
+    MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src1_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dst_tensor_spec);
 
     // Create circular buffers on all participating cores
     const auto cb_data_format = tt::DataFormat::Float16_b;
@@ -209,7 +225,7 @@ Creating buffers and circular buffers in Metalium is similar to the single core 
 Partitioning Work in Kernels
 ----------------------------
 
-To support work distribution, the kernel is updated so that each core processes only its assigned portion of the output. Instead of having one core handle the entire matrix, we add parameters to the kernel that specify how many tiles each core should process and the starting tile index. This way, each core computes a subset of the output tiles. Below is the writer kernel, which writes the output tiles to the DRAM buffer:
+To support work distribution, the kernel is updated so that each core processes only its assigned portion of the output. Instead of having one core handle the entire matrix, we add parameters to the kernel that specify how many tiles each core should process and the starting tile index. This way, each core computes a subset of the output tiles. Below is the writer kernel, which writes the output tiles to the DRAM tensor:
 
 .. code-block:: cpp
 
@@ -278,7 +294,7 @@ The compute kernel does not handle IO directly and is not concerned with how wor
         }
     }
 
-The reader kernel is responsible for reading the input data from the DRAM buffers and pushing it into the circular buffers. It also needs to know how many tiles to read and the starting tile index for each core. Due to needing to calculate where to start reading from the DRAM buffer, it also needs to know the exact dimensions of the input matrices (Mt, Kt, Nt). Again the reader is almost identical to the single core version, except that it reads only the assigned number of tiles and uses the starting tile index to calculate the correct offset in the DRAM buffer:
+The reader kernel is responsible for reading the input data from the DRAM tensors and pushing it into the circular buffers. It also needs to know how many tiles to read and the starting tile index for each core. Due to needing to calculate where to start reading from the DRAM tensor, it also needs to know the exact dimensions of the input matrices (Mt, Kt, Nt). Again the reader is almost identical to the single core version, except that it reads only the assigned number of tiles and uses the starting tile index to calculate the correct offset in the DRAM tensor:
 
 .. code-block:: cpp
 
@@ -349,8 +365,8 @@ With the work distribution calculated, you can now create the kernels and set up
 
     tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;  // High fidelity math for accurate results
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src0_dram_tensor).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src1_dram_tensor).append_to(reader_compile_time_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/dataflow/reader_mm_output_tiles_partitioned.cpp",
@@ -361,7 +377,7 @@ With the work distribution calculated, you can now create the kernels and set up
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_dram_tensor).append_to(writer_compile_time_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
@@ -377,7 +393,7 @@ With the work distribution calculated, you can now create the kernels and set up
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = {}});
 
-Unlike OpenCL or CUDA, Metalium does not provide built-in parameters for work distribution on the device. You need to manually set the runtime arguments for each core. This is done by iterating through the work groups and assigning the correct arguments for each core, including buffer addresses, tile counts, and the amount of work assigned.
+Unlike OpenCL or CUDA, Metalium does not provide built-in parameters for work distribution on the device. You need to manually set the runtime arguments for each core. This is done by iterating through the work groups and assigning the correct arguments for each core, including tensor addresses, tile counts, and the amount of work assigned.
 
 .. code-block:: cpp
 
@@ -398,8 +414,8 @@ Unlike OpenCL or CUDA, Metalium does not provide built-in parameters for work di
                     program,
                     reader_id,
                     core,
-                    {src0_dram_buffer->address(),
-                     src1_dram_buffer->address(),
+                    {src0_dram_tensor.address(),
+                     src1_dram_tensor.address(),
                      Mt,
                      Kt,
                      Nt,
@@ -408,7 +424,7 @@ Unlike OpenCL or CUDA, Metalium does not provide built-in parameters for work di
 
                 // Set arguments for the writer kernel (data output)
                 tt_metal::SetRuntimeArgs(
-                    program, writer_id, core, {dst_dram_buffer->address(),
+                    program, writer_id, core, {dst_dram_tensor.address(),
                     work_per_core,                 // Amount of work for this core
                     work_offset});                 // Starting offset for this core's work
 
@@ -427,23 +443,25 @@ Unlike OpenCL or CUDA, Metalium does not provide built-in parameters for work di
 Program Execution, Receiving Results and Cleanup
 ------------------------------------------------
 
-This part is the same as in the single core example. You execute the program, wait for it to finish, and then download the results from the DRAM buffer. The cleanup process is also unchanged.
+This part is the same as in the single core example. You execute the program, wait for it to finish, and then download the results from the DRAM tensor. The cleanup process is also unchanged.
 
 See :ref:`Kernel execution and result verification in the single core matrix multiplication<mm_single_core_kernel_execution>` in the single core matrix multiplication example for details on how program execution, downloading results, untilize, verification, and cleanup are performed. There is no change in the API usage for these steps compared to the single core example.
 
 
 .. code-block:: cpp
 
-    // Upload input data to DRAM buffers using mesh API
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    // Upload input data to DRAM tensors using mesh API
+    HostTensor src0_host_tensor = HostTensor::from_vector(a, src0_tensor_spec);
+    HostTensor src1_host_tensor = HostTensor::from_vector(b, src1_tensor_spec);
+    cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
+    cq.enqueue_write_tensor(src1_host_tensor, src1_dram_tensor);
 
     // Add program to mesh workload and execute
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
-    // Download results from DRAM buffer to host
-    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
+    // Download results from DRAM tensor to host
+    output = cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 
     // outside of the function, `output` is returned as `result_vec`
     result_vec = untilize_nfaces(result_vec, M, N);

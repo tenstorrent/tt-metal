@@ -10,6 +10,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -90,15 +92,21 @@ int main() {
     // The division by data_size ensures correct mapping of values to pages.
     uint32_t padded_offset_bytes = align(input_unit_size, mesh_device->allocator()->get_alignment(BufferType::DRAM));
 
-    // configure and create interleaved DRAM buffer to insert source data into
+    // configure and create interleaved DRAM tensor to insert source data into
+    // Each row of a row-major tensor is one page, so a row of input_unit_size bytes gives a page size of
+    // input_unit_size.
     uint32_t src_buffer_size = num_values * data_size;
-    distributed::DeviceLocalBufferConfig input_dram_config{
-        .page_size = input_unit_size, .buffer_type = tt_metal::BufferType::DRAM};
-    distributed::ReplicatedBufferConfig buffer_config{.size = src_buffer_size};
-    std::shared_ptr<distributed::MeshBuffer> src_buffer =
-        distributed::MeshBuffer::create(buffer_config, input_dram_config, mesh_device.get());
-    const uint32_t src_addr = src_buffer->address();
-    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, false);
+    TensorSpec src_tensor_spec(
+        Shape({src_buffer_size / input_unit_size, static_cast<uint32_t>(input_unit_size / data_size)}),
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, tt_metal::BufferType::DRAM}));
+    MeshTensor src_tensor = MeshTensor::allocate_on_device(*mesh_device, src_tensor_spec);
+    const uint32_t src_addr = src_tensor.address();
+    // The host tensor must stay alive until the non-blocking write is done.
+    HostTensor src_host_tensor = HostTensor::from_vector(src_vec, src_tensor_spec);
+    cq.enqueue_write_tensor(src_host_tensor, src_tensor);
 
     // configure and create circular buffers with the same address on each of the designated cores
     // Create a circular buffer on each core to hold its shard of data
@@ -111,7 +119,7 @@ int main() {
 
     // create data movement kernel to shard data
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_cb_index};
-    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
     const uint32_t values_per_stick = input_unit_size / data_size;  // Number of bfloat16 values per stick
     auto reader_id = tt_metal::CreateKernel(
         program,

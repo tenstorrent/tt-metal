@@ -8,6 +8,8 @@
 #include <tt-metalium/bfloat16.hpp>
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -51,23 +53,25 @@ int main() {
     constexpr uint32_t n_elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_WIDTH;
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * n_elements_per_tile;
 
-    // MeshBuffer Creation:
-    // To create a MeshBuffer, we need to specify the page size, the buffer type, and the size of the buffer.
+    // MeshTensor Creation:
+    // To create a MeshTensor, we need to specify its shape, data type, layout, and memory config (which includes the
+    // buffer type). The page size and the size of the tensor follow from these.
     // For this example, we will be using a DRAM buffer.
-    // A DeviceLocalBufferConfig is a configuration object that specifies the properties of a buffer that is allocated
-    // on a single device. A ReplicatedBufferConfig is a configuration object that specifies the properties of a buffer
-    // that is replicated across all devices in the Mesh.
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size,  // Number of bytes when round-robin between banks. Usually this is the same
-                                        // as the tile size for efficiency.
-        .buffer_type = tt_metal::BufferType::DRAM};  // Type of buffer (DRAM or L1(SRAM))
-    distributed::ReplicatedBufferConfig distributed_buffer_config{
-        .size = single_tile_size  // Size of the buffer in bytes
-    };
-    // Create 3 buffers in DRAM to hold the 2 input tiles and 1 output tile.
-    auto src0_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
+    // A TensorSpec is a configuration object that specifies the properties of a tensor. The tensor is replicated
+    // across all devices in the Mesh.
+    // Each row of a row-major tensor is one page. The page size is the number of bytes when round-robin between
+    // banks. Usually this is the same as the tile size for efficiency, so a row holds one tile's worth of elements.
+    // The size of the buffer in bytes is the number of rows (1) times the page size.
+    TensorSpec dram_tensor_spec(
+        Shape({1, n_elements_per_tile}),
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));  // Type of buffer (DRAM or L1(SRAM))
+    // Create 3 tensors in DRAM to hold the 2 input tiles and 1 output tile.
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+    MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
 
     // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are
     // used to move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute
@@ -128,14 +132,15 @@ int main() {
         src1_vec[i] = bfloat16(dist2(rng));
     }
 
-    // Upload the data from host to the device. The last argument indicates if the operation is blocking or not.
-    // Setting it to false allows the function to immediately return after queuing the operation, enabling
+    // Upload the data from host to the device. The operation is not blocking.
+    // It allows the function to immediately return after queuing the operation, enabling
     // overlapping of data transfers with other operations. At the cost of user responsibility to ensure the data
-    // is not released before the operation is complete.
-    // In this case, we will wait for the program to finish eventually in the same scope, so we can set it
-    // to false safely.
-    EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, false);
-    EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, false);
+    // (the host tensor) is not released before the operation is complete.
+    // In this case, we will wait for the program to finish eventually in the same scope, so this is safe.
+    HostTensor src0_host_tensor = HostTensor::from_vector(src0_vec, dram_tensor_spec);
+    HostTensor src1_host_tensor = HostTensor::from_vector(src1_vec, dram_tensor_spec);
+    cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
+    cq.enqueue_write_tensor(src1_host_tensor, src1_dram_tensor);
 
     // Setup arguments for the kernels in the program.
     // Unlike OpenCL/CUDA, every kernel can have its own set of arguments.
@@ -143,20 +148,18 @@ int main() {
         program,
         binary_reader_kernel_id,
         core,
-        {(uint32_t)src0_dram_buffer->address(), (uint32_t)src1_dram_buffer->address()});
+        {(uint32_t)src0_dram_tensor.address(), (uint32_t)src1_dram_tensor.address()});
     SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
-    SetRuntimeArgs(program, unary_writer_kernel_id, core, {(uint32_t)dst_dram_buffer->address()});
+    SetRuntimeArgs(program, unary_writer_kernel_id, core, {(uint32_t)dst_dram_tensor.address()});
 
     // Add the program to the workload and execute it.
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
-    // Data can be read from a MeshBuffer using the ReadShard function. This function is used to read data from a
-    // specific shard of a MeshBuffer. The shard is specified by the MeshCoordinate. The last argument indicates if the
+    // Data can be read from a MeshTensor using the enqueue_read_tensor function. The last argument indicates if the
     // operation is blocking or not.
-    std::vector<bfloat16> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+    std::vector<bfloat16> result_vec = cq.enqueue_read_tensor(dst_dram_tensor, true).to_vector<bfloat16>();
 
     // compare the results with the expected values.
     bool success = true;

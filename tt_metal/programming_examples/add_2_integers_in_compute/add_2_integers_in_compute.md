@@ -23,26 +23,27 @@ constexpr CoreCoord core = {0, 0};
 
 We follow the standard procedure for the initial steps in setting up the host workload. The device that the workload will execute on is identified, and the corresponding command queue is accessed. The workload and program are initialized, and the core indicated for utilization in this example is at the coordinates `{0, 0}` in accordance with the logical mesh layout.
 
-## Configure and initialize DRAM buffer
+## Configure and initialize DRAM tensors
 
 ``` cpp
 constexpr uint32_t n_elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_WIDTH;
 constexpr uint32_t single_tile_size = sizeof(bfloat16) * n_elements_per_tile;
-distributed::DeviceLocalBufferConfig dram_config{
-    .page_size = single_tile_size,
-    .buffer_type = tt_metal::BufferType::DRAM};
-distributed::ReplicatedBufferConfig distributed_buffer_config{
-    .size = single_tile_size};
+TensorSpec dram_tensor_spec(
+    Shape({1, n_elements_per_tile}),
+    TensorLayout(
+        DataType::BFLOAT16,
+        PageConfig(Layout::ROW_MAJOR),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));  // Type of buffer (DRAM or L1(SRAM))
 ```
 
-We define the tile size to fit BFloat16 values before setting up the configuration for the DRAM buffer. Each tile is 32x32 = 1024 bytes; doubling this allows us to tile up BFloat16 values. We specify the page_size and type of the buffer in the `DeviceLocalBufferConfig`. Our DRAM configuration will be interleaved for this example, which makes the data layout row-based. The `ReplicatedBufferConfig` allows the user to seamlessly port a buffer configuration across an arbitrary-sized mesh of devices. Note that our choice of data format and buffer configuration has significant impact on the performance of the application, as we are able to reduce data traffic by packing values.
+We define the tile size to fit BFloat16 values before setting up the configuration for the DRAM tensors. Each tile is 32x32 = 1024 bytes; doubling this allows us to tile up BFloat16 values. We specify the data type, the page layout and the type of the buffer in the `TensorSpec`. Each row of a row-major tensor is one page, so a row of one tile's worth of elements gives a page size of one tile. Our DRAM configuration will be interleaved for this example, which makes the data layout row-based. A `MeshTensor` is replicated across all devices in the mesh, which allows the user to seamlessly port a tensor configuration across an arbitrary-sized mesh of devices. Note that our choice of data format and buffer configuration has significant impact on the performance of the application, as we are able to reduce data traffic by packing values.
 
-Next, we allocate memory for each buffer with the specified configuration for each of the input vectors and another buffer for the output vector. The source data will be sent to the corresponding DRAM buffers to be accessed by the cores, and the results of the computation will be sent to the DRAM to be read by the destination vector.
+Next, we allocate a tensor with the specified configuration for each of the input vectors and another tensor for the output vector. The source data will be sent to the corresponding DRAM tensors to be accessed by the cores, and the results of the computation will be sent to the DRAM to be read by the destination vector.
 
 ``` cpp
-auto src0_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
-auto src1_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
-auto dst_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
+MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
 ```
 
 ## Configure and Initialize Circular Buffers
@@ -103,16 +104,22 @@ for (size_t i = 0; i < n_elements_per_tile; ++i) {
     src1_vec[i] = bfloat16(dist2(rng));
 }
 
-EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, false);
-EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, false);
+HostTensor src0_host_tensor = HostTensor::from_vector(src0_vec, dram_tensor_spec);
+HostTensor src1_host_tensor = HostTensor::from_vector(src1_vec, dram_tensor_spec);
+cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
+cq.enqueue_write_tensor(src1_host_tensor, src1_dram_tensor);
 ```
 
-Next, we create two source vectors, each loaded with a constant value, before queueing the command to feed it to the corresponding DRAM buffers using `EnqueueWriteMeshBuffer`.
+Next, we create two source vectors, each loaded with random values, before queueing the command to feed them to the corresponding DRAM tensors using `enqueue_write_tensor`.
 
 ``` cpp
-SetRuntimeArgs(program, binary_reader_kernel_id, core, {src0_dram_buffer->address(), src1_dram_buffer->address()});
+SetRuntimeArgs(
+    program,
+    binary_reader_kernel_id,
+    core,
+    {(uint32_t)src0_dram_tensor.address(), (uint32_t)src1_dram_tensor.address()});
 SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
-SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address()});
+SetRuntimeArgs(program, unary_writer_kernel_id, core, {(uint32_t)dst_dram_tensor.address()});
 
 workload.add_program(device_range, std::move(program));
 distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -189,9 +196,9 @@ cb_pop_front(cb_id_out0, 1);
 At this point, the results of the addition are computed and stored in the circular buffers. We can now write these values to DRAM so that they can be accessed by the host.
 
 ``` cpp
-std::vector<bfloat16> result_vec;
-distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
+std::vector<bfloat16> result_vec = cq.enqueue_read_tensor(dst_dram_tensor, true).to_vector<bfloat16>();
+// ... compare result_vec with the expected values ...
 mesh_device->close();
 ```
 
-When the program is finished with execution, the output data is stored in the DRAM and must be read from the device using `ReadShard`.
+When the program is finished with execution, the output data is stored in the DRAM and must be read from the device using `enqueue_read_tensor`.

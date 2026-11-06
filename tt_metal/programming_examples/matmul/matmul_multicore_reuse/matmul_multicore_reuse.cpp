@@ -10,6 +10,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <bmm_op.hpp>
 #include <fmt/core.h>
 #include <iostream>
@@ -177,29 +179,31 @@ void matmul_multicore_reuse(
 
     //////////////////////////////////////////////////
     /*
-     * Create DRAM buffers for input and output matrices (replicated per device across the mesh).
-     * We'll upload input vectors into these mesh buffers prior to launching the program.
+     * Create DRAM tensors for input and output matrices (replicated per device across the mesh).
+     * We'll upload input vectors into these mesh tensors prior to launching the program.
+     * Each row of a row-major tensor is one page, so a row of one tile's worth of elements gives a page size of one
+     * tile.
      */
 
-    uint32_t dram_buffer_A_size =
-        single_tile_size * Mt * Kt;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    uint32_t dram_buffer_B_size =
-        single_tile_size * Nt * Kt;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    uint32_t dram_buffer_C_size =
-        single_tile_size * Mt * Nt;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    uint32_t elements_per_tile = single_tile_size / sizeof(bfloat16);
+    auto make_dram_tensor_spec = [&](uint32_t num_tiles) {
+        return TensorSpec(
+            Shape({num_tiles, elements_per_tile}),
+            TensorLayout(
+                DataType::BFLOAT16,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    };
+    TensorSpec src0_tensor_spec =
+        make_dram_tensor_spec(Mt * Kt);  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    TensorSpec src1_tensor_spec =
+        make_dram_tensor_spec(Nt * Kt);  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    TensorSpec dst_tensor_spec =
+        make_dram_tensor_spec(Mt * Nt);  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
-
-    distributed::ReplicatedBufferConfig buffer_config_A{.size = dram_buffer_A_size};
-
-    distributed::ReplicatedBufferConfig buffer_config_B{.size = dram_buffer_B_size};
-
-    distributed::ReplicatedBufferConfig buffer_config_C{.size = dram_buffer_C_size};
-
-    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
+    MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src0_tensor_spec);
+    MeshTensor src1_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, src1_tensor_spec);
+    MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dst_tensor_spec);
 
     /*
      * Config of Circular Buffer in the device L1
@@ -228,11 +232,11 @@ void matmul_multicore_reuse(
      * Compile time arguments
      */
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src0_dram_tensor).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src1_dram_tensor).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_dram_tensor).append_to(writer_compile_time_args);
 
     /*
      * Create Kernels (Reader, Writer, Compute)
@@ -275,7 +279,7 @@ void matmul_multicore_reuse(
 
             // Write runtime args to device
             std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t)src0_dram_buffer->address(),     // in0_tensor_addr
+                (std::uint32_t)src0_dram_tensor.address(),      // in0_tensor_addr
                 (std::uint32_t)Kt * per_core_M * output_idx_y,  // in0_tensor_start_tile_id
                 (std::uint32_t)1,                               // in0_tensor_stride_w
                 (std::uint32_t)Kt,                              // in0_tensor_stride_h
@@ -285,11 +289,11 @@ void matmul_multicore_reuse(
                 (std::uint32_t)per_core_M,                // in0_block_h
                 (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
 
-                (std::uint32_t)src1_dram_buffer->address(),  // in1_tensor_addr
-                (std::uint32_t)per_core_N * output_idx_x,    // in1_tensor_start_tile_id
-                (std::uint32_t)1,                            // in1_tensor_stride_w
-                (std::uint32_t)Nt,                           // in1_tensor_stride_h
-                (std::uint32_t)in0_block_w * Nt,             // in1_tensor_next_block_stride
+                (std::uint32_t)src1_dram_tensor.address(),  // in1_tensor_addr
+                (std::uint32_t)per_core_N * output_idx_x,   // in1_tensor_start_tile_id
+                (std::uint32_t)1,                           // in1_tensor_stride_w
+                (std::uint32_t)Nt,                          // in1_tensor_stride_h
+                (std::uint32_t)in0_block_w * Nt,            // in1_tensor_next_block_stride
 
                 (std::uint32_t)per_core_N,                // in1_block_w
                 (std::uint32_t)in0_block_w,               // in1_block_h
@@ -304,7 +308,7 @@ void matmul_multicore_reuse(
             };
 
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t)dst_dram_buffer->address(),  // out_buffer_addr
+                (std::uint32_t)dst_dram_tensor.address(),  // out_buffer_addr
                 ((std::uint32_t)output_idx_x * per_core_N) +
                     (output_idx_y * per_core_M * Nt),  // out_tensor_start_tile_id
                 (std::uint32_t)1,                      // out_tensor_stride_w
@@ -332,12 +336,14 @@ void matmul_multicore_reuse(
     /* Launch program & read back results */
 
     // Non-blocking uploads allow overlapping host setup with device transfers
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    HostTensor src0_host_tensor = HostTensor::from_vector(a, src0_tensor_spec);
+    HostTensor src1_host_tensor = HostTensor::from_vector(b, src1_tensor_spec);
+    cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
+    cq.enqueue_write_tensor(src1_host_tensor, src1_dram_tensor);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     // Blocking read from shard {0,0} waits for completion and populates 'output'
-    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
+    output = cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 }
 
 ///////////////////////////////////////

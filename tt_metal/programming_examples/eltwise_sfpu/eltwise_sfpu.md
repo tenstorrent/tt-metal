@@ -25,30 +25,33 @@ Program program = CreateProgram();
 constexpr CoreCoord core = {0, 0};
 ```
 
-## DRAM buffers (replicated)
+## DRAM tensors (replicated)
 
-Allocate one input and one output DRAM-backed buffer. The replicated config allocates identical buffers on each device. On a unit mesh this is a single device allocation. Set the page size to a single-tile size so transfers happen tile-by-tile.
+Allocate one input and one output DRAM-backed `MeshTensor`. Each tensor is replicated across the mesh. On a unit mesh this is a single device allocation. Each row of the row-major `TensorSpec` holds one tile's worth of elements, so the page size is a single tile and transfers happen tile-by-tile.
 
 ```cpp
 constexpr uint32_t n_tiles = 64;
 constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
 constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
 
-distributed::DeviceLocalBufferConfig dram_config{
-    .page_size = tile_size_bytes,
-    .buffer_type = tt_metal::BufferType::DRAM};
-distributed::ReplicatedBufferConfig buffer_config{ .size = tile_size_bytes * n_tiles };
+TensorSpec dram_tensor_spec(
+    Shape({n_tiles, elements_per_tile}),
+    TensorLayout(
+        DataType::BFLOAT16,
+        PageConfig(Layout::ROW_MAJOR),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
 
-auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-auto dst_dram_buffer  = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+MeshTensor src0_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+MeshTensor dst_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
 ```
 
-Upload host data into the input buffer (non-blocking to overlap with host setup):
+Upload host data into the input tensor (non-blocking to overlap with host setup):
 
 ```cpp
 std::vector<bfloat16> src0_vec(n_tiles * elements_per_tile);
 // ... fill src0_vec with random values ...
-distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/false);
+HostTensor src0_host_tensor = HostTensor::from_vector(src0_vec, dram_tensor_spec);
+cq.enqueue_write_tensor(src0_host_tensor, src0_dram_tensor);
 ```
 
 ## Circular buffers (L1 FIFOs)
@@ -76,7 +79,7 @@ Instantiate data-movement and compute kernels, then set runtime arguments. The r
 
 ```cpp
 std::vector<uint32_t> reader_compile_time_args;
-TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
+TensorAccessorArgs(src0_dram_tensor).append_to(reader_compile_time_args);
 auto unary_reader_kernel_id = CreateKernel(
     program,
     "tt_metal/programming_examples/eltwise_sfpu/kernels/dataflow/read_tile.cpp",
@@ -87,7 +90,7 @@ auto unary_reader_kernel_id = CreateKernel(
         .compile_args = reader_compile_time_args});
 
 std::vector<uint32_t> writer_compile_time_args;
-TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
+TensorAccessorArgs(dst_dram_tensor).append_to(writer_compile_time_args);
 auto unary_writer_kernel_id = CreateKernel(
     program,
     "tt_metal/programming_examples/eltwise_sfpu/kernels/dataflow/write_tile.cpp",
@@ -104,21 +107,20 @@ auto eltwise_sfpu_kernel_id = CreateKernel(
     ComputeConfig{ .math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .math_approx_mode = false });
 
 SetRuntimeArgs(program, eltwise_sfpu_kernel_id, core, { n_tiles });
-SetRuntimeArgs(program, unary_reader_kernel_id, core, { src0_dram_buffer->address(), n_tiles });
-SetRuntimeArgs(program, unary_writer_kernel_id, core, { dst_dram_buffer->address(), n_tiles });
+SetRuntimeArgs(program, unary_reader_kernel_id, core, { src0_dram_tensor.address(), n_tiles });
+SetRuntimeArgs(program, unary_writer_kernel_id, core, { dst_dram_tensor.address(), n_tiles });
 ```
 
 ## Launch and read back
 
-Enqueue the program in a mesh workload (non-blocking), then wait for completion and read back results from shard `{0, 0}`.
+Enqueue the program in a mesh workload (non-blocking), then wait for completion and read back results from the output tensor.
 
 ```cpp
 workload.add_program(device_range, std::move(program));
 distributed::EnqueueMeshWorkload(cq, workload, false);
 distributed::Finish(cq);
 
-std::vector<bfloat16> result_vec;
-distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
+std::vector<bfloat16> result_vec = cq.enqueue_read_tensor(dst_dram_tensor, /*blocking=*/true).to_vector<bfloat16>();
 ```
 
 Finally, close the mesh device after validation.

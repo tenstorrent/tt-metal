@@ -112,7 +112,7 @@ Reader:
 .. code-block:: cpp
 
     std::vector<uint32_t> mm_reader_args = {
-        (std::uint32_t)  src0_dram_buffer->address(), // in0_tensor_addr
+        (std::uint32_t)  src0_dram_tensor.address(), // in0_tensor_addr
         (std::uint32_t)  Kt * per_core_M * output_idx_y, // in0_tensor_start_tile_id
         (std::uint32_t)  1, // in0_tensor_stride_w
         (std::uint32_t)  Kt, // in0_tensor_stride_h
@@ -122,7 +122,7 @@ Reader:
         (std::uint32_t)  per_core_M, // in0_block_h
         (std::uint32_t)  in0_block_w * per_core_M, //in0_block_num_tiles
 
-        (std::uint32_t)  src1_dram_buffer->address(), // in1_tensor_addr
+        (std::uint32_t)  src1_dram_tensor.address(), // in1_tensor_addr
         (std::uint32_t)  per_core_N * output_idx_x, //in1_tensor_start_tile_id
         (std::uint32_t)  1, // in1_tensor_stride_w
         (std::uint32_t)  Nt, // in1_tensor_stride_h
@@ -145,7 +145,7 @@ Writer:
 .. code-block:: cpp
 
     std::vector<uint32_t> writer_args = {
-        (std::uint32_t) dst_dram_buffer->address(), // out_buffer_addr
+        (std::uint32_t) dst_dram_tensor.address(), // out_buffer_addr
         (std::uint32_t) output_idx_x * per_core_N + output_idx_y * per_core_M * Nt, // out_tensor_start_tile_id
         (std::uint32_t) 1, // out_tensor_stride_w
         (std::uint32_t) Nt,  // out_tensor_stride_h

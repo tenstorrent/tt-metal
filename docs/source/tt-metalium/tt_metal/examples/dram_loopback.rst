@@ -39,56 +39,54 @@ Operations in Metalium are almost always capable to be run asynchronously and th
 
 Next, we create a ``Program`` object that we will fill in later. A program is a set of kernels that are executed on the device. Unlike OpenCL where all cores must run identical kernels simultaneously, Metalium allows different kernels on different cores at the same time. However in this example, we're only using one core.
 
-Create buffers in DRAM and L1 (SRAM)
+Create tensors in DRAM and L1 (SRAM)
 ------------------------------------
 
-Next, we need to declare buffers that will hold the actual data and an intermediate buffer on chip,
+Next, we need to declare tensors that will hold the actual data and an intermediate buffer on chip,
 
-There's in total 3 buffers to be created:
+There's in total 3 tensors to be created:
 
-* An L1 (SRAM) buffer within the core itself that will act as temporary storage
-* A DRAM buffer that will house input data
-* A DRAM buffer that will be written to with output data
+* An L1 (SRAM) tensor within the core itself that will act as temporary storage
+* A DRAM tensor that will house input data
+* A DRAM tensor that will be written to with output data
 
 There are two types of buffers in the Tensix: L1 and DRAM. L1 is a misnomer as it can be mistaken as similar to L1 cache in a CPU. In fact, the L1 is a SRAM scratchpad on the Tensix. Each generation of Tenstorrent processors has a different amount of L1 memory per Tensix. Grayskull had 1MB and Wormhole/Blackhole has 1.5MB.
 
 Note that almost all operations on the Tensix are aligned with tiles. And a tile is a 32x32 grid of values. The data type used in this example is bfloat16 as it is what the math engine uses internally (though we won't touch the math engine in this example). Making each tile 32 x 32 x 2 bytes = 2048 bytes. And we wish to allocate 50 tiles in for each (input and output) DRAM buffer. Thus the total size of each DRAM buffer is 50 * 2048 = 102400 bytes. And a single tile worth of buffer on the L1 is 2048 bytes as well. So that we can copy a single tile at a time.
 
-Note the ``page_size`` argument in the buffer config. Both L1 and DRAM are split into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is tricky and not scalable. The default buffer allocation strategy simply round-robin the data across all banks every ``page_size`` bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Usually the page size is set to the tile size, which is 2048 bytes in this case. This enables easy programming while still maintaining high performance. Other values are also supported, but the programmer is then responsible for the performance implications and programming complexity.
+Note the page size of the tensors. Each row of a row-major tensor is one page, so a row of one tile's worth of elements gives a page size of one tile. Both L1 and DRAM are split into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is tricky and not scalable. The default buffer allocation strategy simply round-robin the data across all banks one page at a time. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Usually the page size is set to the tile size, which is 2048 bytes in this case. This enables easy programming while still maintaining high performance. Other values are also supported, but the programmer is then responsible for the performance implications and programming complexity.
 
-Mesh buffers use two configuration layers: ``DeviceLocalBufferConfig`` specifies properties like page size and buffer type, while ``ReplicatedBufferConfig`` handles distribution across the mesh. Since we're using a unit mesh (single device), "replicated" simply means allocated on that device.
+A ``TensorSpec`` specifies properties like the shape, data type, page layout and buffer type of a tensor, and ``MeshTensor::allocate_on_device`` allocates the tensor replicated across the mesh. Since we're using a unit mesh (single device), "replicated" simply means allocated on that device.
 
-The L1 buffer is created with a size equal to the size of a single tile (2048 bytes), which will act as a temporary buffer for copying data one tile at a time from input DRAM to output DRAM.
+The L1 tensor is created with a size equal to the size of a single tile (2048 bytes), which will act as a temporary buffer for copying data one tile at a time from input DRAM to output DRAM.
 
 .. code-block:: cpp
 
   constexpr uint32_t num_tiles = 50;
   constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
-  constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
-  constexpr uint32_t dram_buffer_size = tile_size_bytes * num_tiles;
 
-  // allocation properties within a device
-  distributed::DeviceLocalBufferConfig l1_config{
-      .page_size = tile_size_bytes,
-      .buffer_type = tt::tt_metal::BufferType::L1
-  };
+  TensorSpec l1_tensor_spec(
+      Shape({1, elements_per_tile}),
+      TensorLayout(
+          DataType::BFLOAT16,
+          PageConfig(Layout::ROW_MAJOR),
+          MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));  // This time we allocate on L1
 
-  // overall buffer size across all device in mesh
-  distributed::ReplicatedBufferConfig l1_buffer_config{.size = tile_size_bytes};
-  auto l1_buffer = distributed::MeshBuffer::create(l1_buffer_config, l1_config, mesh_device.get());
+  MeshTensor l1_tensor = MeshTensor::allocate_on_device(*mesh_device, l1_tensor_spec);
 
-The DRAM buffers differ from the L1 buffer in two ways: the ``BufferType`` (``BufferType::DRAM`` instead of ``BufferType::L1``) and the size (50 tiles for DRAM vs. 1 tile for L1). The L1 buffer acts as a temporary single-tile buffer while the kernel copies data tile-by-tile from input to output DRAM.
+The DRAM tensors differ from the L1 tensor in two ways: the ``BufferType`` (``BufferType::DRAM`` instead of ``BufferType::L1``) and the size (50 tiles for DRAM vs. 1 tile for L1). The L1 tensor acts as a temporary single-tile buffer while the kernel copies data tile-by-tile from input to output DRAM.
 
 .. code-block:: cpp
 
-  distributed::DeviceLocalBufferConfig dram_config{
-      .page_size = tile_size_bytes,
-      .buffer_type = tt::tt_metal::BufferType::DRAM
-  };
+  TensorSpec dram_tensor_spec(
+      Shape({num_tiles, elements_per_tile}),
+      TensorLayout(
+          DataType::BFLOAT16,
+          PageConfig(Layout::ROW_MAJOR),
+          MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
 
-  distributed::ReplicatedBufferConfig dram_buffer_config{.size = dram_buffer_size};
-  auto input_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
-  auto output_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
+  MeshTensor input_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
+  MeshTensor output_dram_tensor = MeshTensor::allocate_on_device(*mesh_device, dram_tensor_spec);
 
 Sending real data into DRAM
 ---------------------------
@@ -101,11 +99,13 @@ Sending real data into DRAM
   for (auto& val : input_vec) {
       val = bfloat16(distribution(rng));
   }
-  distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, false);
 
-Send in a randomly-generated BFP16 (Brain 16bit floating point) vector that will act as our input data tensor.
+  HostTensor input_host_tensor = HostTensor::from_vector(input_vec, dram_tensor_spec);
+  cq.enqueue_write_tensor(input_host_tensor, input_dram_tensor);
 
-Note the final ``false`` argument. This indicates to tt-Metalium that the upload is non-blocking. The function may return as soon as possible while data transfer is still in progress. This is useful for performance, but the program is responsible for ensuring that the the source buffer is not freed before the transfer is complete. In this case, there are future blocking calls/calls to ``Finish`` that will ensure commands are completed before the program exits, which is also when the source buffer is freed.
+Send in a randomly-generated BFP16 (Brain 16bit floating point) vector, wrapped in a ``HostTensor``, that will act as our input data tensor.
+
+Note that ``enqueue_write_tensor`` is non-blocking. The function may return as soon as possible while data transfer is still in progress. This is useful for performance, but the program is responsible for ensuring that the the source host tensor is not freed before the transfer is complete. In this case, there are future blocking calls/calls to ``Finish`` that will ensure commands are completed before the program exits, which is also when the source host tensor is freed.
 
 Creating a data movement kernel
 -------------------------------
@@ -116,8 +116,8 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
 
     constexpr CoreCoord core = {0, 0};
     std::vector<uint32_t> dram_copy_compile_time_args;
-    TensorAccessorArgs(*input_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
-    TensorAccessorArgs(*output_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
+    TensorAccessorArgs(input_dram_tensor).append_to(dram_copy_compile_time_args);
+    TensorAccessorArgs(output_dram_tensor).append_to(dram_copy_compile_time_args);
 
     KernelHandle dram_copy_kernel_id = CreateKernel(
         program,
@@ -198,9 +198,9 @@ Setting runtime arguments for the data movement kernel
 .. code-block:: cpp
 
   const std::vector<uint32_t> runtime_args = {
-      l1_buffer->address(),
-      input_dram_buffer->address(),
-      output_dram_buffer->address(),
+      l1_tensor.address(),
+      input_dram_tensor.address(),
+      output_dram_tensor.address(),
       num_tiles
   };
 
@@ -234,12 +234,11 @@ Download the result and verify output
 -------------------------------------
 
 Then we can finally read back the data from the output buffer and assert that
-it matches what we sent. Again the final ``true`` argument causes the data transfer to be blocking. Thus we know that the data is fully available when the function returns.
+it matches what we sent. ``enqueue_read_tensor`` is blocking by default. Thus we know that the data is fully available when the function returns.
 
 .. code-block:: cpp
 
-  std::vector<bfloat16> result_vec;
-  distributed::EnqueueReadMeshBuffer(cq, result_vec, output_dram_buffer, true);
+  std::vector<bfloat16> result_vec = cq.enqueue_read_tensor(output_dram_tensor).to_vector<bfloat16>();
 
   for (int i = 0; i < input_vec.size(); i++) {
     if (input_vec[i] != result_vec[i]) {

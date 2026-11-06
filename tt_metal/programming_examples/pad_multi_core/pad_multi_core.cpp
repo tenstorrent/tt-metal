@@ -8,6 +8,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -59,22 +61,26 @@ int main() {
     CoreRange cores(start_core, end_core);
     uint32_t num_cores = cores.size();
 
-    // configure and create DRAM buffers for input, pad, output
-    uint32_t src_buffer_size = packed_data_size * src_num_values_packed;
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = packed_data_size, .buffer_type = tt_metal::BufferType::DRAM};
-    distributed::ReplicatedBufferConfig input_buffer_config{.size = src_buffer_size};
-    auto src_buffer = distributed::MeshBuffer::create(input_buffer_config, dram_config, mesh_device.get());
-    uint32_t src_addr = src_buffer->address();
+    // configure and create DRAM tensors for input, pad, output
+    // Each row of a row-major tensor is one page, so a row of one packed uint32 gives a page size of packed_data_size.
+    auto dram_tensor_spec = [](uint32_t num_pages) {
+        return TensorSpec(
+            Shape({num_pages, 1}),
+            TensorLayout(
+                DataType::UINT32,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    };
+    TensorSpec src_tensor_spec = dram_tensor_spec(src_num_values_packed);
+    MeshTensor src_tensor = MeshTensor::allocate_on_device(*mesh_device, src_tensor_spec);
+    uint32_t src_addr = src_tensor.address();
 
-    uint32_t pad_buffer_size = packed_data_size * pad_vec.size();
-    distributed::ReplicatedBufferConfig pad_buffer_config{.size = pad_buffer_size};
-    auto pad_buffer = distributed::MeshBuffer::create(pad_buffer_config, dram_config, mesh_device.get());
+    TensorSpec pad_tensor_spec = dram_tensor_spec(pad_vec.size());
+    MeshTensor pad_tensor = MeshTensor::allocate_on_device(*mesh_device, pad_tensor_spec);
 
-    uint32_t dst_buffer_size = packed_data_size * dst_num_values_packed;
-    distributed::ReplicatedBufferConfig output_buffer_config{.size = dst_buffer_size};
-    auto dst_buffer = distributed::MeshBuffer::create(output_buffer_config, dram_config, mesh_device.get());
-    uint32_t dst_addr = dst_buffer->address();
+    TensorSpec dst_tensor_spec = dram_tensor_spec(dst_num_values_packed);
+    MeshTensor dst_tensor = MeshTensor::allocate_on_device(*mesh_device, dst_tensor_spec);
+    uint32_t dst_addr = dst_tensor.address();
 
     // configure circular buffers expected by TTNN reader/writer: c_0 (main), c_1 (pad), c_2 (align)
     constexpr uint32_t cb0 = CBIndex::c_0;
@@ -123,11 +129,11 @@ int main() {
     reader_compile_time_args.push_back(1);                    // num_sticks_padded_read per stick
     reader_compile_time_args.push_back(stick_size_padded_aligned); // stick_size_padded_aligned (32)
     reader_compile_time_args.push_back(0);                    // unaligned = false
-    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         cb0, stick_size_bytes, stick_size_padded_aligned};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     // create kernels (borrowed from TTNN production code)
     KernelHandle reader_id = CreateKernel(
@@ -188,11 +194,13 @@ int main() {
     printf("\n");
 
     // Upload inputs (non-blocking), enqueue mesh workload (non-blocking), read back result, then wait for completion
-    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, false);
-    distributed::EnqueueWriteMeshBuffer(cq, pad_buffer, pad_vec, false);
+    HostTensor src_host_tensor = HostTensor::from_vector(src_vec, src_tensor_spec);
+    cq.enqueue_write_tensor(src_host_tensor, src_tensor);
+    HostTensor pad_host_tensor = HostTensor::from_vector(pad_vec, pad_tensor_spec);
+    cq.enqueue_write_tensor(pad_host_tensor, pad_tensor);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::EnqueueReadMeshBuffer(cq, dst_vec, dst_buffer, true);
+    dst_vec = cq.enqueue_read_tensor(dst_tensor, /*blocking=*/true).to_vector<uint32_t>();
     distributed::Finish(cq);
 
     printf("Padded tensor with shape (%d, %d):\n", dst_M, dst_N);
