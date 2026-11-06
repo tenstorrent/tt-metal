@@ -7,7 +7,11 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import TernaryDecodeLinear3, pack_records_inline
+from models.demos.blackhole.bonsai2.tt.ternary.decode_linear3 import (
+    TernaryDecodeLinear3,
+    pack_records_inline,
+    reference,
+)
 
 SHAPES = [(17408, 5120), (6144, 5120), (5120, 16384)]
 
@@ -20,9 +24,16 @@ def test_tdec_model(device, K, N):
     s = (rng.random((N, K // 128)) * 0.02 + 0.005).astype(np.float16)
     rec, ppr = pack_records_inline(t, s)
     lin = TernaryDecodeLinear3.from_packed(device, rec, ppr, K, N)
+    x = torch.randn(K).bfloat16()
     act = ttnn.from_torch(
-        torch.randn(8, K).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        x.reshape(1, -1).repeat(8, 1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
+    if not ed:
+        y = ttnn.to_torch(lin(act)).float().reshape(-1, N)[0]
+        ref = reference(x, t, s)
+        rel = ((y - ref).norm() / ref.norm()).item()
+        print(f"TDEC_MODEL K={K} N={N} rel={rel:.5f}")
+        assert rel < 0.02, rel
     for _ in range(10):
         lin(act, extra_defines=ed, dm_defines=ed)
     ttnn.synchronize_device(device)
