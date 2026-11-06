@@ -341,6 +341,30 @@ std::optional<ResolvedMeshRoute> resolve_mesh_ring_plan(
     return std::nullopt;
 }
 
+ResolvedMeshRoute prove_full_mesh_route(
+    const ttnn::Tensor& tensor,
+    uint32_t num_links,
+    std::string_view operation_name,
+    uint32_t mesh_rows,
+    uint32_t mesh_cols) {
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const std::array<tt::tt_fabric::Topology, 2> axis_topology{
+        ttnn::ccl::get_axis_topology(tensor, fabric_config, 0), ttnn::ccl::get_axis_topology(tensor, fabric_config, 1)};
+    const auto route = resolve_mesh_ring_plan(
+        tensor, std::nullopt, num_links, axis_topology, true, operation_name, /*allow_open_path=*/true);
+    TT_FATAL(route.has_value(), "{} could not resolve a direct-neighbor full-mesh route", operation_name);
+    TT_FATAL(
+        route->plan.mesh_rows == mesh_rows && route->plan.mesh_cols == mesh_cols &&
+            route->plan.route_plan_hash.has_value(),
+        "{} full-mesh route {}x{} does not match the {}x{} mesh it was requested for",
+        operation_name,
+        route->plan.mesh_rows,
+        route->plan.mesh_cols,
+        mesh_rows,
+        mesh_cols);
+    return *route;
+}
+
 MeshRingPosition get_mesh_ring_position(
     const ttnn::Tensor& tensor,
     const ttnn::MeshCoordinate& coordinate,

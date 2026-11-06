@@ -722,28 +722,11 @@ operation_attributes_t resolve_full_mesh_route(const operation_attributes_t& arg
     }
     auto resolved = args;
     auto& fused = *resolved.fused_ring;
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
-    const std::array<tt::tt_fabric::Topology, 2> axis_topology{
-        ttnn::ccl::get_axis_topology(q, fabric_config, 0), ttnn::ccl::get_axis_topology(q, fabric_config, 1)};
-    const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
-        q,
-        std::nullopt,
-        fused.num_links,
-        axis_topology,
-        true,
-        "ring_indexer_score_dsa",
-        /*allow_open_path=*/true);
-    TT_FATAL(route.has_value(), "ring_indexer_score_dsa could not resolve a direct-neighbor full-mesh route");
-    TT_FATAL(
-        route->plan.mesh_rows == fused.mesh_rows && route->plan.mesh_cols == fused.mesh_cols,
-        "ring_indexer_score_dsa full-mesh route {}x{} does not match the {}x{} mesh it was requested for",
-        route->plan.mesh_rows,
-        route->plan.mesh_cols,
-        fused.mesh_rows,
-        fused.mesh_cols);
-    fused.topology = route->topology;
-    fused.snake_orientation = route->plan.orientation;
-    fused.route_plan_hash = route->plan.route_plan_hash;
+    const auto route = ttnn::operations::ccl::common::prove_full_mesh_route(
+        q, fused.num_links, "ring_indexer_score_dsa", fused.mesh_rows, fused.mesh_cols);
+    fused.topology = route.topology;
+    fused.snake_orientation = route.plan.orientation;
+    fused.route_plan_hash = route.plan.route_plan_hash;
     return resolved;
 }
 

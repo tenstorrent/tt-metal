@@ -3821,7 +3821,7 @@ void apply_full_mesh_route(RingJointSDPAParams& args, const FullMeshRoute& route
 // A full-mesh gather's route (snake orientation, Ring vs Linear closure) is proved here, on a program-cache miss,
 // instead of in invoke on every call: proving it walks the fabric control plane. The key need not hold it: the
 // program cache is per mesh device, and the device's fabric cannot change while it is open.
-std::optional<FullMeshRoute> prove_full_mesh_route(const RingJointSDPAParams& args, const Tensor& q) {
+std::optional<FullMeshRoute> full_mesh_route(const RingJointSDPAParams& args, const Tensor& q) {
     const auto& ag = args.all_gather_operation_attributes;
     if (!ag.full_mesh) {
         return std::nullopt;
@@ -3830,28 +3830,14 @@ std::optional<FullMeshRoute> prove_full_mesh_route(const RingJointSDPAParams& ar
     if (ag.route_plan_hash.has_value()) {
         return FullMeshRoute{ag.topology, ag.snake_orientation, *ag.route_plan_hash};
     }
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
-    const std::array<tt::tt_fabric::Topology, 2> axis_topology{
-        ttnn::ccl::get_axis_topology(q, fabric_config, 0), ttnn::ccl::get_axis_topology(q, fabric_config, 1)};
-    const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
-        q, std::nullopt, ag.num_links, axis_topology, true, "ring_mla", /*allow_open_path=*/true);
-    TT_FATAL(route.has_value(), "ring_mla could not resolve a direct-neighbor full-mesh route");
-    TT_FATAL(
-        route->plan.mesh_rows == ag.mesh_rows && route->plan.mesh_cols == ag.mesh_cols &&
-            route->plan.ring_size == ag.ring_size,
-        "ring_mla full-mesh route {}x{} does not match the {}x{} mesh of {} ranks it was requested for",
-        route->plan.mesh_rows,
-        route->plan.mesh_cols,
-        ag.mesh_rows,
-        ag.mesh_cols,
-        ag.ring_size);
-    TT_FATAL(route->plan.route_plan_hash.has_value(), "ring_mla full-mesh route carries no route hash");
-    return FullMeshRoute{route->topology, route->plan.orientation, *route->plan.route_plan_hash};
+    const auto route =
+        ttnn::operations::ccl::common::prove_full_mesh_route(q, ag.num_links, "ring_mla", ag.mesh_rows, ag.mesh_cols);
+    return FullMeshRoute{route.topology, route.plan.orientation, *route.plan.route_plan_hash};
 }
 
 RingJointSDPAParams with_full_mesh_route(const RingJointSDPAParams& args, const Tensor& q) {
     auto resolved = args;
-    if (const auto route = prove_full_mesh_route(args, q)) {
+    if (const auto route = full_mesh_route(args, q)) {
         apply_full_mesh_route(resolved, *route);
     }
     return resolved;
@@ -3882,7 +3868,7 @@ RingJointSDPAMeshWorkloadFactory::cached_mesh_workload_t RingJointSDPAMeshWorklo
     const RingJointSDPAInputs& tensor_args,
     RingJointSDPAResult& output_tensors) {
     // Program-cache miss: prove the full-mesh route once and keep it for the hits.
-    const auto route = CMAKE_UNIQUE_NAMESPACE::prove_full_mesh_route(unresolved_args, tensor_args.input_q);
+    const auto route = CMAKE_UNIQUE_NAMESPACE::full_mesh_route(unresolved_args, tensor_args.input_q);
     auto args = unresolved_args;
     if (route.has_value()) {
         CMAKE_UNIQUE_NAMESPACE::apply_full_mesh_route(args, *route);
