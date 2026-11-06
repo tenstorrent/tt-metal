@@ -14,7 +14,7 @@
 
 #include <fmt/base.h>
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // ============================================================================
 //  ArgValue
@@ -116,43 +116,40 @@ private:
     std::vector<ArgValue> values_;
 };
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal
 
 template <>
-struct std::hash<tt::tt_metal::experimental::ArgValue> {
-    std::size_t operator()(const tt::tt_metal::experimental::ArgValue& value) const noexcept {
+struct std::hash<tt::tt_metal::ArgValue> {
+    std::size_t operator()(const tt::tt_metal::ArgValue& value) const noexcept {
         return std::hash<std::uint32_t>{}(value.to_uint32());
     }
 };
 
 template <>
-struct fmt::formatter<tt::tt_metal::experimental::ArgValue> {
+struct fmt::formatter<tt::tt_metal::ArgValue> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
-    auto format(const tt::tt_metal::experimental::ArgValue& value, format_context& ctx) const
-        -> format_context::iterator {
+    auto format(const tt::tt_metal::ArgValue& value, format_context& ctx) const -> format_context::iterator {
         return fmt::format_to(ctx.out(), "{}", value.to_uint32());
     }
 };
 
 template <>
-struct std::hash<tt::tt_metal::experimental::ArrayArgValue> {
-    std::size_t operator()(const tt::tt_metal::experimental::ArrayArgValue& value) const noexcept {
+struct std::hash<tt::tt_metal::ArrayArgValue> {
+    std::size_t operator()(const tt::tt_metal::ArrayArgValue& value) const noexcept {
         std::size_t seed = value.size();
         for (std::size_t i = 0; i < value.size(); ++i) {
-            seed ^=
-                std::hash<tt::tt_metal::experimental::ArgValue>{}(value[i]) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+            seed ^= std::hash<tt::tt_metal::ArgValue>{}(value[i]) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
         }
         return seed;
     }
 };
 
 template <>
-struct fmt::formatter<tt::tt_metal::experimental::ArrayArgValue> {
+struct fmt::formatter<tt::tt_metal::ArrayArgValue> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
-    auto format(const tt::tt_metal::experimental::ArrayArgValue& value, format_context& ctx) const
-        -> format_context::iterator {
+    auto format(const tt::tt_metal::ArrayArgValue& value, format_context& ctx) const -> format_context::iterator {
         auto out = fmt::format_to(ctx.out(), "{{");
         for (std::size_t i = 0; i < value.size(); ++i) {
             out = fmt::format_to(out, "{}{}", i == 0 ? "" : ", ", value[i]);
