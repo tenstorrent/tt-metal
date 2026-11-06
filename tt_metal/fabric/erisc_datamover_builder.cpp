@@ -307,7 +307,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
         // counters are packed contiguously in memory, This can lead to resends of values but
         // this is safe for free running counters, which are enabled in this mode.
         size_t num_words_consumed_per_counter = tt::align(sizeof(uint32_t) * num_sender_channels, field_size);
-        // Only the multi-TXQ (counter) form needs the wider clear. Keep the single-TXQ clear at one word:
+        // Only the multi-TXQ (counter) form needs the wider clear here; a CCE clears the whole block (below).
+        // Keep the single-TXQ clear at one word:
         // the wider clear at an unaligned address changes how many Ethernet commands UMD issues per
         // remote write during bring-up, which shifts the Ethernet core UMD ends up using for all
         // subsequent remote reads.
@@ -405,6 +406,13 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
     auto buffer_region_start = (buffer_address + buffer_alignment) & ~(buffer_alignment - 1);  // Align
     auto available_channel_buffering_space = max_l1_loading_size - buffer_region_start;
     this->available_buffer_memory_regions.emplace_back(buffer_region_start, available_channel_buffering_space);
+
+    // A Keraunos CCE's software credits are counters the router reads against zero, and nothing else clears them in
+    // single-TXQ mode. Every Keraunos chip is MMIO-attached, so the UMD tunneling hazard above does not apply.
+    if (!hal.has_stream_registers()) {
+        this->router_block_clear_address = erisc_l1_unreserved_base;
+        this->router_buffer_clear_size_words = (buffer_region_start - erisc_l1_unreserved_base) / sizeof(uint32_t);
+    }
 }
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
