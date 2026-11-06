@@ -31,7 +31,7 @@ class GFR_LEAD(TemplateParameter):
 @pytest.mark.parametrize("lead", [1, 4, 16])
 def test_gathering_frozen_redirect(lead):
     if not TestConfig.gathering_build():
-        pytest.skip("needs instruction gathering on (TT_METAL_DISABLE_GATHERING unset)")
+        pytest.skip("needs instruction gathering on (TT_METAL_ENABLE_GATHERING=1)")
     src = torch.zeros(1024, dtype=torch.bfloat16)
     config = TestConfig(
         "sources/gathering_frozen_redirect_test.cpp",
