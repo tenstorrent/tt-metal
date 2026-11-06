@@ -25,6 +25,7 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
     interleave, then column-parallel shard on the 2N dim so each device holds its interleaved slice."""
     import torch
 
+    from models.demos.blackhole.qwen36.tt import tp_common as tpc
     from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
     def pack(gate):
@@ -40,7 +41,7 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
         preprocess=pack,
         dtype=ttnn.bfloat4_b,
         device=mesh,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1),
+        mesh_mapper=tpc.tp_shard_mapper(mesh, -1),
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_file_name=cache_path,
@@ -234,9 +235,64 @@ class Qwen36MLP:
         _silu_fused = False
         # Prefill: x is K-sharded (ff_norm skipped AG); fused AG + [gate|up] + SwiGLU
         _fused_gu = self._fuse_gateup_agmm and x.shape[-2] > ttnn.TILE_SIZE and w.w_gate_up is not None
-        if _fused_gu:
+        if _fused_gu and self._mlp_1d_decode and tpc.use_small_m(args, x.shape[-2]):
+            # Short S (args.prefill_small_m_max): the fused AGMM has a ~100 us floor, a separate all-gather + two 1D-mcast
+            # matmuls (SILU fused into the gate one, as the decode path; w1/w3 are interleaved under mlp_1d_decode) +
+            # mul is faster. `hidden` matches the AGMM swiglu output: [1,1,S,hidden/tp] bf16 DRAM. x stays the
+            # caller's (as in the AGMM helper): only the bf8 cast and the gather are freed here.
+            S = x.shape[-2]
+            x4 = ttnn.reshape(x, (1, 1, S, x.shape[-1]))
+            x8 = x4
+            if getattr(args, "prefill_agmm_bf8", False) and x4.dtype != ttnn.bfloat8_b:
+                x8 = ttnn.typecast(x4, ttnn.bfloat8_b, memory_config=x4.memory_config())
+            xg = tpc.tp_all_gather(
+                x8,
+                self.tt_ccl,
+                dim=3,
+                memory_config=tpc.prefill_act_mem(S, ttnn.L1_MEMORY_CONFIG),
+                topology=args.ccl_topology(),
+            )
+            if x8 is not x4:
+                ttnn.deallocate(x8)
+            _gw = getattr(args, "decode_grid_w", 8)
+            _act_mc = tpc.prefill_act_mem(S, ttnn.L1_MEMORY_CONFIG)
+            gate = tpc.small_m_matmul(
+                xg,
+                w.w1,
+                S,
+                args.dim,
+                w.w1.shape[-1],
+                num_cores=44,
+                compute_cfg=self.compute_kernel_config_agmm,
+                grid_w=_gw,
+                fused_activation=ttnn.UnaryOpType.SILU,
+                memory_config=_act_mc,
+            )
+            up = tpc.small_m_matmul(
+                xg,
+                w.w3,
+                S,
+                args.dim,
+                w.w3.shape[-1],
+                num_cores=44,
+                compute_cfg=self.compute_kernel_config_agmm,
+                grid_w=_gw,
+                memory_config=_act_mc,
+            )
+            ttnn.deallocate(xg)
+            hidden = ttnn.mul(gate, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(gate)
+            ttnn.deallocate(up)
+            _silu_fused = True
+        elif _fused_gu:
             hidden = tpc.all_gather_swiglu_prefill(
-                x, w.w_gate_up, self.tt_ccl, self.compute_kernel_config_agmm, args.ccl_topology()
+                x,
+                w.w_gate_up,
+                self.tt_ccl,
+                self.compute_kernel_config_agmm,
+                args.ccl_topology(),
+                act_bf8=getattr(args, "prefill_agmm_bf8", False),
+                config_override=tpc.agmm_config_override(args, x.shape[-2], "mlp_gateup"),
             )
             _silu_fused = True
         elif getattr(self, "_dram_sharded", False) and x.shape[-2] <= ttnn.TILE_SIZE:
@@ -295,13 +351,10 @@ class Qwen36MLP:
                 seq, args.dim, w.w3.shape[-1], max_cols=_gw, tuning=_pt
             )
             # L1 output (gate/up outputs; down output via mc_out below): +FPU, avoids the DRAM round-trip
-            # (test_mlp_matmul_sweep_prefill *_outL1). The [seq,N] tensors fit L1 at the prefill chunk.
-            w1_out = ttnn.linear(
-                x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-            w3_out = ttnn.linear(
-                x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
+            # (test_mlp_matmul_sweep_prefill *_outL1). The [seq,N] tensors fit L1 up to S=2048; DRAM above.
+            _act_mc = tpc.prefill_act_mem(seq, ttnn.L1_MEMORY_CONFIG)
+            w1_out = ttnn.linear(x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=_act_mc)
+            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=_act_mc)
             _silu_fused = True
         else:
             # Interleaved weights: auto matmul program for decode and prefill.
@@ -342,10 +395,19 @@ class Qwen36MLP:
             )
         # down-proj OUTPUT in L1 for the tuned prefill path (DRAM input `hidden` + L1 output = the
         # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial).
-        mc_w2_out = ttnn.L1_MEMORY_CONFIG if (x.shape[-2] <= ttnn.TILE_SIZE or _prefill_tuned) else mc
+        # (L1 only up to S=2048: at 3072 the [S, dim] partial clashes with the w2 matmul's CBs.)
+        mc_w2_out = (
+            tpc.prefill_act_mem(x.shape[-2], ttnn.L1_MEMORY_CONFIG)
+            if (x.shape[-2] <= ttnn.TILE_SIZE or _prefill_tuned)
+            else mc
+        )
         partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc)
         ttnn.deallocate(hidden)
 
+        if x.shape[-2] > ttnn.TILE_SIZE:  # prefill
+            return tpc.tp_reduce_scatter(
+                partial, self.device, self.tt_ccl, args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
         # tt_all_reduce on (1,4) mesh reduce-scatters to hidden dim (dim=3).
         out = tt_all_reduce(
             partial,
