@@ -343,3 +343,163 @@ def test_interleaved_to_sharded_rejects_pure_nd_with_preallocated_output(
 
     with expect_error(RuntimeError, r"interleaved_to_sharded does not support ND sharding"):
         ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config, preallocated_output=preallocated_output)
+
+
+def _grid(x, y):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(x - 1, y - 1))})
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, layout, dtype, input_mem_config, memory_layout, grid, shard_shape",
+    [
+        (
+            (1, 1, 8192, 16),
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (8, 8),
+            (128, 16),
+        ),
+        (
+            (1, 1, 1000, 48),
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (8, 8),
+            (16, 48),
+        ),
+        (
+            (1, 1, 200, 320),
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (4, 4),
+            (64, 96),
+        ),
+        (
+            (1, 1, 4096, 256),
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (8, 8),
+            (64, 256),
+        ),
+        (
+            (1, 1, 1024, 512),
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (8, 8),
+            (128, 64),
+        ),
+        (
+            (1, 1, 224, 320),
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (4, 4),
+            (64, 96),
+        ),
+        (
+            (1, 1, 2048, 256),
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (8, 8),
+            (32, 256),
+        ),
+        (
+            (1, 1, 4096, 128),
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (8, 4),
+            (128, 128),
+        ),
+        (
+            (1, 1, 64, 2048),
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (8, 4),
+            (64, 64),
+        ),
+        (
+            (1, 1, 2048, 256),
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (4, 4),
+            (512, 64),
+        ),
+        (
+            (1, 1, 4064, 64),
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (8, 8),
+            (96, 64),
+        ),
+        (
+            (1, 1, 1000, 72),
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (8, 4),
+            (35, 72),
+        ),
+        (
+            (1, 1, 128, 8192),
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (8, 8),
+            (128, 128),
+        ),
+        (
+            (1, 32, 32, 256),
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (8, 4),
+            (32, 256),
+        ),
+        (
+            (1, 1, 512, 64),
+            ttnn.TILE_LAYOUT,
+            ttnn.float32,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (4, 4),
+            (32, 64),
+        ),
+    ],
+)
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_interleaved_to_l1_sharded_exact(
+    device, tensor_shape, layout, dtype, input_mem_config, memory_layout, grid, shard_shape, shard_orientation
+):
+    torch.manual_seed(0)
+    torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device, memory_config=input_mem_config)
+    shard_spec = ttnn.ShardSpec(_grid(*grid), shard_shape, shard_orientation)
+    output_mem_config = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
+
+    expected = ttnn.to_torch(ttnn_input)
+    for _ in range(2):
+        output = ttnn.interleaved_to_sharded(ttnn_input, output_mem_config)
+        assert_equal(expected, ttnn.to_torch(output))
