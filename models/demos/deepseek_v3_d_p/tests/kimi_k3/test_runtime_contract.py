@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.demos.deepseek_v3_d_p.tt.kimi_k3 import attention as attention_module
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import (
     K3AttnContext,
+    KdaChunkScalars,
     TtK3KdaAttention,
     build_attention,
     build_kda_scalars,
@@ -177,7 +178,8 @@ def test_build_kda_scalars_uploads_eager_slot_and_bounds_once(monkeypatch, host_
     # Slot first, then the start; an absent end uploads nothing and stays `None` (full capacity).
     start = (device, 0 if host_start is None else host_start)
     end = None if host_end is None else (device, host_end)
-    assert scalars == ((device, 2), start, end)
+    assert isinstance(scalars, KdaChunkScalars)
+    assert scalars == KdaChunkScalars((device, 2), start, end)
     assert owned == tuple(scalar for scalar in scalars if scalar is not None)
 
 
@@ -185,9 +187,9 @@ def test_build_kda_scalars_borrows_traced_metadata(monkeypatch):
     upload = Mock()
     monkeypatch.setattr(attention_module, "device_scalar", upload)
     slot, start, end = object(), object(), object()
-    # The host ints are placeholders under trace; the metadata tensors are what replay rewrites.
+    # The host ints are placeholders under trace; the metadata tensors are what replay rewrites, borrowed.
     scalars, owned = build_kda_scalars(object(), (slot, start, end, object()), 7, 999, 999)
-    assert scalars == (slot, start, end)
+    assert scalars == KdaChunkScalars(slot, start, end)
     assert owned == ()
     upload.assert_not_called()
 
@@ -215,7 +217,11 @@ def test_kda_forward_loads_and_stores_its_slot_through_the_shared_scratch(monkey
     slabs, scratch = Mock(), object()
     # The host ints are MLA's; a KDA layer reads only the scalars and the slabs, the same objects on every layer.
     ctx = K3AttnContext(
-        actual_start=5120, actual_end=10240, cache_user_id=3, kda_scalars=(slot, start, end), kda_states=slabs
+        actual_start=5120,
+        actual_end=10240,
+        cache_user_id=3,
+        kda_scalars=KdaChunkScalars(slot, start, end),
+        kda_states=slabs,
     )
     hidden = object()
     for layer_idx, kda in enumerate(kdas):
@@ -223,8 +229,9 @@ def test_kda_forward_loads_and_stores_its_slot_through_the_shared_scratch(monkey
         slabs.reset_mock()
         assert TtK3KdaAttention(kda, layer_idx, 1, 1, ttnn.Topology.Linear, scratch).forward(hidden, ctx) is output
         # The carry is selected by the device slot, so a capture never pins the slot it was recorded on:
-        # load slot -> scratch, run on the scratch, store the replacement at the slot, free it.
-        slabs.import_layer.assert_called_once_with(scratch, slot, layer_idx)
+        # load slot (or zeros when the start reads 0, a request head) -> scratch, run on the scratch, store the
+        # replacement at the slot (nothing zeroed), free it.
+        slabs.import_layer.assert_called_once_with(scratch, slot, layer_idx, zero_fill_at_zero=start)
         kda.forward.assert_called_once_with(hidden, scratch, actual_start=start, actual_end=end)
         slabs.export_layer.assert_called_once_with(new_state, slot, layer_idx)
         assert [c.args for c in deallocate.call_args_list][-2:] == [(new_state.recurrent,), (new_state.convolution,)]
@@ -237,7 +244,10 @@ def test_kda_forward_loads_and_stores_its_slot_through_the_shared_scratch(monkey
     "ctx,message",
     [
         (K3AttnContext(actual_start=0, actual_end=64, kda_states=Mock()), "kda_scalars"),
-        (K3AttnContext(actual_start=0, actual_end=64, kda_scalars=(object(), object(), None)), "state slabs"),
+        (
+            K3AttnContext(actual_start=0, actual_end=64, kda_scalars=KdaChunkScalars(object(), object(), None)),
+            "state slabs",
+        ),
     ],
     ids=["no-scalars", "no-slabs"],
 )
@@ -250,18 +260,16 @@ def test_kda_forward_requires_scalars_and_slabs_before_device_work(monkeypatch, 
     gather.assert_not_called()
 
 
-def test_runtime_rejects_unaligned_start_before_reset_or_replay(monkeypatch, expect_error):
+def test_runtime_rejects_unaligned_start_before_replay(monkeypatch, expect_error):
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
     runtime = object.__new__(TtKimiK3Runtime)
-    runtime.model = Mock()
     parent_forward = create_autospec(TtPrefillRuntime.prefill_chunk)
     monkeypatch.setattr(TtPrefillRuntime, "prefill_chunk", parent_forward)
     # Positional arguments exercise the same binding used by the runner.
     with expect_error(ValueError, "32-token aligned"):
         runtime.prefill_chunk(object(), object(), 0, 33, 64)
-    runtime.model.reset_streams.assert_not_called()
     parent_forward.assert_not_called()
 
 
@@ -271,11 +279,9 @@ def test_runtime_accepts_unaligned_end(monkeypatch):
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
     runtime = object.__new__(TtKimiK3Runtime)
-    runtime.model = Mock()
     parent_forward = create_autospec(TtPrefillRuntime.prefill_chunk)
     monkeypatch.setattr(TtPrefillRuntime, "prefill_chunk", parent_forward)
     runtime.prefill_chunk(object(), object(), 0, 0, 33)
-    runtime.model.reset_streams.assert_called_once_with(0)
     parent_forward.assert_called_once()
 
 
@@ -329,18 +335,3 @@ def test_compile_rejects_slabs_that_do_not_match_the_runtime(monkeypatch, expect
         runtime.compile(SimpleNamespace(kda_states=SimpleNamespace(num_slots=num_slots, layer_ids=layer_ids)))
     assert runtime.model.kda_states is None
     parent_compile.assert_not_called()
-
-
-def test_reset_streams_zeroes_the_requested_slot_through_the_slabs(expect_error):
-    model = object.__new__(TtKimiK3Transformer)
-    # A rank without KDA layers has nothing to zero, whatever it was handed.
-    model.kda_scratch, model.kda_states = None, Mock()
-    model.reset_streams(3)
-    model.kda_states.zero_slot.assert_not_called()
-    # A rank with KDA layers cannot reset before the runtime hands the slabs over.
-    model.kda_scratch, model.kda_states = object(), None
-    with expect_error(RuntimeError, "no KDA state slabs"):
-        model.reset_streams(3)
-    model.kda_states = Mock()
-    model.reset_streams(3)
-    model.kda_states.zero_slot.assert_called_once_with(3)
