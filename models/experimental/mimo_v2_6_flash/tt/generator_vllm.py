@@ -306,6 +306,42 @@ def _check_pair_split_ops():
         )
 
 
+def _host_rope_tables(model, compact):
+    """``model.decode_rope_tables_host(compact)``, kept on disk under MIMO_HOST_CACHE (unset: always computed). The
+    file is the computed tables themselves, so a load is bitwise what the computation returns; it is keyed on every
+    input of the computation and on the source of the code that makes it (rope.py, decode_rope_tables_host) and the
+    torch version, so a change to any of them makes a new file."""
+    root = os.environ.get("MIMO_HOST_CACHE")
+    if not root:
+        return model.decode_rope_tables_host(compact)
+    import hashlib
+    import inspect
+
+    from . import rope as rope_module
+    from .model import TtMiMoModel
+
+    setups = [(n, s.head_dim, s.rope_dim, s.theta) for n, s in sorted(model.rope_setups.items())]
+    key = repr(
+        (model.max_seq_len, model.max_batch, compact, setups, torch.__version__)
+    ) + inspect.getsource(rope_module) + inspect.getsource(TtMiMoModel.decode_rope_tables_host)
+    path = os.path.join(root, f"rope_tables_{hashlib.sha256(key.encode()).hexdigest()[:20]}.npy")
+    if os.path.exists(path):
+        try:
+            return [torch.from_numpy(t) for t in np.load(path)]
+        except Exception as e:  # a torn or foreign file: recompute and rewrite it
+            logger.warning(f"MiMo vLLM: ignoring RoPE table cache {path}: {e}")
+    tables = model.decode_rope_tables_host(compact)
+    try:
+        os.makedirs(root, exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as f:
+            np.save(f, torch.stack(tables).numpy())
+        os.replace(tmp, path)
+    except OSError as e:
+        logger.warning(f"MiMo vLLM: could not write the RoPE table cache {path}: {e}")
+    return tables
+
+
 def _model_path(hf_config):
     path = getattr(hf_config, "_name_or_path", None)
     if path and os.path.exists(os.path.join(path, "config.json")):
@@ -803,7 +839,8 @@ class MiMoV2ForCausalLM:
         self.layer_groups = groups
         compact_rope = self.max_seq_len > ROPE_TABLE_FULL_WIDTH_MAX_LEN
         # The replicas' RoPE tables are equal: computed once on the host (~2.5 s at 1M), uploaded to each.
-        rope_host = self.models[0].decode_rope_tables_host(compact_rope) if DEVICE_ROPE else None
+        with st.stage("kv.rope_host"):
+            rope_host = _host_rope_tables(self.models[0], compact_rope) if DEVICE_ROPE else None
         self.kv_caches = []
         for model in self.models:
             buffers, caches = {}, []
@@ -815,11 +852,14 @@ class MiMoV2ForCausalLM:
                         self._buffer(model, buffers, ("v", t, attn.v_head_dim), num_blocks, attn.v_head_dim),
                     ]
                 )
-            model.setup_vllm_kv_cache(self.per_lane, caches, groups, table_widths, pair_split=self.pair_split)
+            with st.stage("kv.setup_vllm_kv_cache", model.mesh_device):
+                model.setup_vllm_kv_cache(self.per_lane, caches, groups, table_widths, pair_split=self.pair_split)
             if DEVICE_ROPE:
-                model.setup_decode_rope_tables(compact_rope, rope_host)
+                with st.stage("kv.rope_upload", model.mesh_device):
+                    model.setup_decode_rope_tables(compact_rope, rope_host)
             if model.mtp is not None:
-                model.mtp.setup_cache()  # after the RoPE tables: the backfill reads them
+                with st.stage("kv.mtp_setup_cache", model.mesh_device):
+                    model.mtp.setup_cache()  # after the RoPE tables: the backfill reads them
             if model.dflash is not None:
                 model.dflash.setup_cache()
             self.kv_caches.append(caches)
