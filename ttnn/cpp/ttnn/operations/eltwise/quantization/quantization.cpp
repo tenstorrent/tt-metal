@@ -394,11 +394,28 @@ Tensor requantize(
     constexpr ttsl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
 
     const bool has_axis = axis.has_value();
+    const ttnn::Shape& input_shape = input_tensor.logical_shape();
+    const int32_t rank = static_cast<int32_t>(input_shape.rank());
+    if (has_axis) {
+        const int32_t axis_v = axis.value();
+        TT_FATAL(axis_v >= -rank && axis_v < rank, "Axis {} is outside the range [{}, {}]", axis_v, -rank, rank - 1);
+    }
 
     const Tensor* in_scale_p = std::get_if<Tensor>(&in_scale);
     const Tensor* in_zero_point_p = std::get_if<Tensor>(&in_zero_point);
     const Tensor* out_scale_p = std::get_if<Tensor>(&out_scale);
     const Tensor* out_zero_point_p = std::get_if<Tensor>(&out_zero_point);
+
+    auto is_per_channel_tensor = [&](const Tensor* tensor_p) -> bool {
+        if (!has_axis || tensor_p == nullptr) {
+            return false;
+        }
+        const uint32_t axis_dim = input_shape[axis.value()];
+        if (tensor_p->logical_volume() == 1u) {
+            return axis_dim == 1u && tensor_p->logical_shape().rank() == 1;
+        }
+        return true;
+    };
 
     // Use the fused per-channel tensor path when axis is provided AND all params are tensors.
     // Mixed scalar/tensor cases will fall through to composite fallback.
@@ -408,13 +425,11 @@ Tensor requantize(
 
     if (has_axis && all_params_are_tensors) {
         const int32_t axis_v = axis.value();
-        const ttnn::Shape& input_shape = input_tensor.logical_shape();
-        const int32_t rank = input_shape.rank();
 
-        const bool in_scale_is_full_size = in_scale_p->logical_volume() == input_shape[axis_v];
-        const bool in_zero_point_is_full_size = in_zero_point_p->logical_volume() == input_shape[axis_v];
-        const bool out_scale_is_full_size = out_scale_p->logical_volume() == input_shape[axis_v];
-        const bool out_zero_point_is_full_size = out_zero_point_p->logical_volume() == input_shape[axis_v];
+        const bool in_scale_is_full_size = is_per_channel_tensor(in_scale_p);
+        const bool in_zero_point_is_full_size = is_per_channel_tensor(in_zero_point_p);
+        const bool out_scale_is_full_size = is_per_channel_tensor(out_scale_p);
+        const bool out_zero_point_is_full_size = is_per_channel_tensor(out_zero_point_p);
 
         TT_FATAL(
             in_scale_is_full_size == in_zero_point_is_full_size,
@@ -464,10 +479,12 @@ Tensor requantize(
             none,
             none,
             none);
-        return ttnn::typecast(
+        return narrow_composite_result(
             ttnn::add(
-                input_scaled, zero_point_full, std::nullopt, memory_config, optional_output_tensor, none, none, none),
-            c_dtype);
+                input_scaled, zero_point_full, DataType::FLOAT32, std::nullopt, std::nullopt, none, none, none),
+            c_dtype,
+            memory_config,
+            std::move(optional_output_tensor));
     }
 
     return std::visit(
@@ -505,15 +522,14 @@ Tensor requantize(
                     std::nullopt);
             },
             [&](const auto& in_scale, const auto& in_zero_point, const auto& out_scale, const auto& out_zero_point) {
-                // Pass axis only to operations that have tensor parameters.
-                constexpr bool has_tensor_in_scale = std::is_same_v<std::decay_t<decltype(in_scale)>, Tensor>;
-                constexpr bool has_tensor_out_scale = std::is_same_v<std::decay_t<decltype(out_scale)>, Tensor>;
-
-                const std::optional<int> dequant_axis = has_tensor_in_scale ? axis : std::nullopt;
-                const std::optional<int> quant_axis = has_tensor_out_scale ? axis : std::nullopt;
+                // Forward axis only to sides whose scale or zero-point tensor is per-channel along axis.
+                const std::optional<int> dequant_axis =
+                    (is_per_channel_tensor(in_scale_p) || is_per_channel_tensor(in_zero_point_p)) ? axis : std::nullopt;
+                const std::optional<int> quant_axis =
+                    (is_per_channel_tensor(out_scale_p) || is_per_channel_tensor(out_zero_point_p)) ? axis : std::nullopt;
 
                 const Tensor dequantized = dequantize(
-                    input_tensor, in_scale, in_zero_point, dequant_axis, std::nullopt, std::nullopt, std::nullopt);
+                    input_tensor, in_scale, in_zero_point, dequant_axis, DataType::FLOAT32, std::nullopt, std::nullopt);
                 return quantize(
                     dequantized, out_scale, out_zero_point, quant_axis, c_dtype, memory_config, optional_output_tensor);
             }},
