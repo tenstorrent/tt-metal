@@ -53,6 +53,7 @@ void bind_rmsnorm_pre_all_gather_operation(nb::module_& mod) {
               - :attr:`input_tensor` must be BFLOAT16.
               - Inputs must be interleaved memory layout when unsharded.
               - Inputs cannot be height-sharded; padded height must equal TILE_HEIGHT (32).
+              - :attr:`input_tensor` last dimension must be a multiple of TILE_WIDTH (32).
             )doc",
         &ttnn::experimental::wan_fused_rmsnorm_pre_allgather,
         nb::arg("input_tensor"),

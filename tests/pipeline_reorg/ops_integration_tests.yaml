@@ -22,7 +22,7 @@
   skus:
     wh_n150_civ2:
       timeout: 30
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U09AWQGLN77 # Konstantinos Fragkiadakis
   team: ttnn
   budget_type: integration
   category: ops_docs_check

@@ -56,29 +56,31 @@ FORCE_INLINE void drain(DFB& buffer) {
     buffer.pop_front(Rows * Vt);
 }
 
-// A rank with no head contributes the affine identity (I, 0): this value block writes its columns of I and of 0
-// into the packed [A | B] rows. One BF16 scratch tile is zeroed, written to every off-diagonal tile, then given
-// its diagonal and written to the diagonal tiles.
+// A slot without a valid segment holds the affine identity (I, 0): this value block writes its columns of I and of 0
+// into each such slot's packed [A | B] rows. One BF16 scratch tile is zeroed, written to every off-diagonal tile,
+// then given its diagonal and written to the diagonal tiles.
 template <uint32_t Kt, uint32_t Vt, uint32_t VtFull, typename Accessor, typename DFB>
-FORCE_INLINE void write_identity_summary(
-    const Accessor& packed, DFB& scratch, Noc& noc, uint32_t head, uint32_t value_block) {
+FORCE_INLINE void write_identity_slots(
+    const Accessor& packed, DFB& scratch, Noc& noc, const uint32_t* row_bases, uint32_t slots, uint32_t value_block) {
     constexpr uint32_t row_stride = Kt + VtFull;
     constexpr uint16_t bf16_one_bits = 0x3F80;
     constexpr uint32_t face_rows = tt::constants::FACE_HEIGHT;
     constexpr uint32_t face_cols = tt::constants::FACE_WIDTH;
     constexpr uint32_t bottom_right_face_offset = (tt::constants::TILE_WIDTH / face_cols + 1) * tt::constants::FACE_HW;
-    const uint32_t row_base = head * Kt * row_stride;
     const uint32_t first_column = value_block * Vt;
 
     scratch.reserve_back(1);
     const uint32_t tile_bytes = scratch.get_entry_size();
     noc.async_write_zeros(scratch, tile_bytes);
     noc.write_zeros_l1_barrier();
-    for (uint32_t row = 0; row < Kt; ++row) {
-        for (uint32_t column = first_column; column < first_column + Vt; ++column) {
-            noc.async_write(scratch, packed, tile_bytes, {}, {.page_id = row_base + row * row_stride + Kt + column});
-            if (row != column) {
-                noc.async_write(scratch, packed, tile_bytes, {}, {.page_id = row_base + row * row_stride + column});
+    for (uint32_t slot = 0; slot < slots; ++slot) {
+        for (uint32_t row = 0; row < Kt; ++row) {
+            const uint32_t row_page = row_bases[slot] + row * row_stride;
+            for (uint32_t column = first_column; column < first_column + Vt; ++column) {
+                noc.async_write(scratch, packed, tile_bytes, {}, {.page_id = row_page + Kt + column});
+                if (row != column) {
+                    noc.async_write(scratch, packed, tile_bytes, {}, {.page_id = row_page + column});
+                }
             }
         }
     }
@@ -88,62 +90,77 @@ FORCE_INLINE void write_identity_summary(
         halfwords[r * face_cols + r] = bf16_one_bits;
         halfwords[bottom_right_face_offset + r * face_cols + r] = bf16_one_bits;
     }
-    for (uint32_t row = first_column; row < first_column + Vt; ++row) {
-        noc.async_write(scratch, packed, tile_bytes, {}, {.page_id = row_base + row * row_stride + row});
+    for (uint32_t slot = 0; slot < slots; ++slot) {
+        for (uint32_t row = first_column; row < first_column + Vt; ++row) {
+            noc.async_write(scratch, packed, tile_bytes, {}, {.page_id = row_bases[slot] + row * row_stride + row});
+        }
     }
     noc.async_write_barrier();
 }
 
-template <uint32_t Kt, uint32_t Vt, uint32_t VtFull, bool PackedHead>
+// The packed summary is [S, BH, K, K+V]: slot 0 holds head transforms and, with Tail, slot 1 holds tail transforms.
+// Each row holds [A | B]: A at column 0 and B at column Kt of a (Kt + VtFull)-tile row.
+template <uint32_t Kt, uint32_t Vt, uint32_t VtFull, uint32_t BatchHeads, bool Tail, bool Init>
 FORCE_INLINE void write_summary(
     uint32_t head,
     uint32_t value_block,
     uint32_t group,
     uint32_t split_group,
     uint32_t split_in_group,
-    bool local_split) {
-    // A packed head binds final_state to the packed output too, so B lands at b_column of the same rows.
-    const auto head_a_accessor = TensorAccessor(tensor::output);
-    const auto head_b_accessor = TensorAccessor(tensor::final_state);
-    const auto tail_a_accessor = TensorAccessor(tensor::tail_output);
-    const auto tail_b_accessor = TensorAccessor(tensor::tail_final_state);
+    bool local_split,
+    bool has_valid_chunk) {
+    const auto packed = TensorAccessor(tensor::output);
     DataflowBuffer full_a(dfb::output);
     DataflowBuffer full_b(dfb::final_state);
     DataflowBuffer split_head_a(dfb::summary_head_output);
     DataflowBuffer split_head_b(dfb::summary_head_state);
     Noc noc;
 
-    const bool straddles = local_split && split_in_group != 0 && group == split_group;
-    const bool head_active = !local_split || group < split_group || straddles;
-    const bool tail_active = local_split && group >= split_group;
-    // Packed rows hold [A | B]: A at column 0 and B at column Kt of a (Kt + VtFull)-tile row.
-    constexpr uint32_t row_stride = PackedHead ? Kt + VtFull : VtFull;
-    const uint32_t row_base = head * Kt * row_stride;
+    constexpr uint32_t row_stride = Kt + VtFull;
+    constexpr uint32_t slot_tiles = BatchHeads * Kt * row_stride;
+    const uint32_t head_row_base = head * Kt * row_stride;
+    const uint32_t tail_row_base = slot_tiles + head_row_base;
     const uint32_t a_column = value_block * Vt;
-    const uint32_t b_column = (PackedHead ? Kt : 0) + value_block * Vt;
+    const uint32_t b_column = Kt + value_block * Vt;
 
-    // With one group per head a local split always straddles it (head_rows is a positive tile count below the
-    // group), so a packed head is always active; the identity is written only when the rank has no valid chunk.
+    // Compute publishes nothing for a group without a valid chunk; neither of its slots has a valid segment.
+    const bool straddles = has_valid_chunk && local_split && split_in_group != 0 && group == split_group;
+    const bool head_active = has_valid_chunk && (!local_split || group < split_group || straddles);
+    const bool tail_active = has_valid_chunk && local_split && group >= split_group;
+
     if (head_active) {
         // Split-head buffers hold one tile-row each. Drain the same packets
         // compute publishes instead of waiting for a full matrix to fit.
         if (straddles) {
-            write_value_slice<Kt, Vt, row_stride, 1>(head_a_accessor, split_head_a, noc, row_base, a_column);
-            write_value_slice<Kt, Vt, row_stride, 1>(head_b_accessor, split_head_b, noc, row_base, b_column);
+            write_value_slice<Kt, Vt, row_stride, 1>(packed, split_head_a, noc, head_row_base, a_column);
+            write_value_slice<Kt, Vt, row_stride, 1>(packed, split_head_b, noc, head_row_base, b_column);
         } else {
-            write_value_slice<Kt, Vt, row_stride, Kt>(head_a_accessor, full_a, noc, row_base, a_column);
-            write_value_slice<Kt, Vt, row_stride, Kt>(head_b_accessor, full_b, noc, row_base, b_column);
+            write_value_slice<Kt, Vt, row_stride, Kt>(packed, full_a, noc, head_row_base, a_column);
+            write_value_slice<Kt, Vt, row_stride, Kt>(packed, full_b, noc, head_row_base, b_column);
+        }
+    }
+    if (tail_active) {
+        if constexpr (Tail) {
+            write_value_slice<Kt, Vt, row_stride, Kt>(packed, full_a, noc, tail_row_base, a_column);
+            write_value_slice<Kt, Vt, row_stride, Kt>(packed, full_b, noc, tail_row_base, b_column);
+        } else {
+            drain<Kt, Vt>(full_a);
+            drain<Kt, Vt>(full_b);
         }
     }
 
-    if (tail_active) {
-        if constexpr (PackedHead) {
-            // The packed head serves single-group ranks, whose split tail no caller reads.
-            drain<Kt, Vt>(full_a);
-            drain<Kt, Vt>(full_b);
-        } else {
-            write_value_slice<Kt, Vt, VtFull, Kt>(tail_a_accessor, full_a, noc, row_base, a_column);
-            write_value_slice<Kt, Vt, VtFull, Kt>(tail_b_accessor, full_b, noc, row_base, b_column);
+    if constexpr (Init) {
+        uint32_t identity_rows[2];
+        uint32_t identity_slots = 0;
+        if (!head_active) {
+            identity_rows[identity_slots++] = head_row_base;
+        }
+        if (Tail && !tail_active) {
+            identity_rows[identity_slots++] = tail_row_base;
+        }
+        if (identity_slots != 0) {
+            DataflowBuffer scratch(dfb::identity_scratch);
+            write_identity_slots<Kt, Vt, VtFull>(packed, scratch, noc, identity_rows, identity_slots, value_block);
         }
     }
 }
@@ -246,8 +263,10 @@ template <
     uint32_t Kt,
     uint32_t Vt,
     uint32_t Vt_full,
+    uint32_t batch_heads,
     uint32_t summary,
-    uint32_t packed_head,
+    uint32_t tail,
+    uint32_t init,
     uint32_t late_on_writer,
     uint32_t has_actual_end>
 TT_KERNEL void writer(
@@ -270,25 +289,20 @@ TT_KERNEL void writer(
         chronology.pop_front(1);
         groups = topology.local_rows / tt::constants::TILE_HEIGHT / num_chunks;
         valid_chunks = topology.valid_chunks(group, groups);
-        if (valid_chunks == 0) {
-            if constexpr (packed_head) {
-                const auto packed = TensorAccessor(tensor::output);
-                DataflowBuffer scratch(dfb::identity_scratch);
-                Noc noc;
-                write_identity_summary<Kt, Vt, Vt_full>(packed, scratch, noc, head, value_block);
-            }
-            return;
-        }
     }
     if constexpr (summary) {
-        write_summary<Kt, Vt, Vt_full, packed_head != 0>(
+        write_summary<Kt, Vt, Vt_full, batch_heads, tail != 0, init != 0>(
             head,
             value_block,
             group,
             topology.split_group(groups),
             topology.split_in_group(groups),
-            topology.has_valid_tail());
+            topology.has_valid_tail(),
+            valid_chunks != 0);
     } else {
+        if (valid_chunks == 0) {
+            return;
+        }
         uint32_t final_head = head;
         if constexpr (has_actual_end) {
             if (group + 1 == topology.active_groups(groups)) {

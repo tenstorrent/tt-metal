@@ -6,7 +6,7 @@ import torch
 import pytest
 import torch.nn.functional as F
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc, assert_allclose
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     assert_all_nonfinite,

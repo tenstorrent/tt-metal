@@ -24,6 +24,8 @@
 #include "tensor/flatbuffer/tensor_file_layout.hpp"
 #include "tensor/flatbuffer/tensor_flatbuffer.hpp"
 #include "ttnn/distributed/host_ccl.hpp"
+#include "ttnn/tensor/topology_check.hpp"
+#include "ttnn/config.hpp"
 
 namespace ttnn {
 using tt::tt_metal::MemoryPin;
@@ -33,6 +35,8 @@ namespace {
 void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& tensor, DumpTensorMode mode) {
     Tensor cpu_tensor = tensor.cpu();
 
+    // to_flatbuffer checks the shards against the tensor topology unless that has been done here already.
+    bool verify_shards = true;
     if (mode == DumpTensorMode::DISTRIBUTED_GATHER) {
         // Dump tensor to disk from (global) rank 0 host.
         // Note we use global context as opposed to context embedded to the host-side tensor, since the tensor may
@@ -40,6 +44,11 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
         // rank, and each host will attempt to flush the serialized tensor file to disk.
         cpu_tensor = ttnn::distributed::host_ccl::all_gather(cpu_tensor);
         const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        // After the gather every rank holds every shard, so every rank reaches the same verdict and a rejected tensor
+        // throws on all of them, rather than on rank 0 alone while the others wait in the barrier below.
+        ttnn::verify_shards_match_topology(cpu_tensor, ttnn::CONFIG.get<"verify_replicated_shards_on_dump">());
+        verify_shards = false;
+        // Only rank 0 serializes and writes; the other ranks wait in the barrier below.
         if (ctx->rank() != tt::tt_metal::distributed::multihost::Rank(0)) {
             ctx->barrier();
             return;
@@ -48,7 +57,7 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
 
     std::vector<SerializedTensorBuffer> buffers;
     flatbuffers::FlatBufferBuilder builder;
-    auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
+    auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers, verify_shards);
     builder.Finish(tensor_offset);
 
     write_tensor_file(file_name, builder, buffers);

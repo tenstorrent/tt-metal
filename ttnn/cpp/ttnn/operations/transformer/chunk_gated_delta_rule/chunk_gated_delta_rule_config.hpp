@@ -36,15 +36,37 @@ struct ChunkGdnPhasedProgramConfig {
 // model's pick for (grid, BH, NC, Vt); pinning one of num_producers / num_receivers makes the model
 // fill the other so the pair still fits the grid.
 struct ChunkGdnFusedProgramConfig {
-    std::optional<uint32_t> num_producers;  // NP per head (clamped to the chunk count)
+    std::optional<uint32_t>
+        num_producers;  // NP per head (clamped to the chunk count); the pool size P with producer_pool
     std::optional<uint32_t> num_receivers;  // NV per head; must divide Vt = V / 32
     // Core map. true = row-local: one head per row with its producers east of its receivers, so no
     // two heads share a NoC link; false = row-major 1xNV receiver rectangles with the producers on the
-    // remaining cores. nullopt = row-local whenever the geometry has such a layout.
+    // remaining cores. nullopt = row-local whenever the geometry has such a layout. Ignored with producer_pool.
     std::optional<bool> row_local;
-    uint32_t handoff_depth = 2;  // hand-off ring slots per CB, 1..8: how many chunks a producer may run ahead
-    bool unicast = true;         // per-receiver unicast writes; false = the linked multicast chain
-    bool posted = false;         // posted unicast data writes, VALID ordered by in-order delivery; needs unicast
+    // Hand-off ring slots per CB, 1..8: how many chunks a producer may run ahead. nullopt = the model's pick.
+    std::optional<uint32_t> handoff_depth;
+    bool unicast = true;  // per-receiver unicast writes; false = the linked multicast chain
+    bool posted = false;  // posted unicast data writes, VALID ordered by in-order delivery; needs unicast
+    // One producer pool for every head instead of NP producers per head: the receivers and BH*NPH HOME
+    // producers take the row-local layout of the largest NPH the pool size allows, and every other core of
+    // the pool is an EXTRA producer serving all heads. num_producers is then the pool size P (default: every
+    // core the receivers leave free, at most BH*NC). nullopt = whichever of the two the model predicts faster.
+    std::optional<bool> producer_pool;
+    // Share of every head's chunks the extras take, in [0, 1]; nullopt = the model's choice between the
+    // balanced NX / P and 0.
+    std::optional<float> pool_extra_share;
+    // Debug: compile the hand-off protocol's run-time checks that need protocol-visible state into the two
+    // dataflow kernels (sequence-valued VALID flags, a per-slot data canary); they report through the watcher's
+    // ASSERT, so run with TT_METAL_WATCHER. Costs one extra 4-byte write per receiver per chunk. Hashed.
+    bool handoff_checks = false;
+    // Debug, with handoff_checks: compile one deliberate protocol breach into the kernels (gdn_handoff::HandoffFault:
+    // 1 double credit, 2 wrong canary, 3 short push, 4 wrong owner, 5 no credit) so the fault test can prove the named
+    // check trips. 0 = none. Hashed.
+    uint32_t handoff_fault = 0;
+    // Heads per launch: the BH heads run as ceil(BH / wave_heads) programs of (nearly) equal size, each with
+    // its own geometry for its head count. nullopt = the op's plan: one program up to 32 heads when a geometry
+    // fits, else the fewest waves of at most 24 heads.
+    std::optional<uint32_t> wave_heads;
 };
 
 using ChunkGdnProgramConfig =
