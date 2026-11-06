@@ -17,7 +17,9 @@ def _dev(t, device):
     )
 
 
-@pytest.mark.parametrize("T,C", [(160, 5120), (640, 1792), (640, 7168), (1, 7168), (4096, 1792)])
+@pytest.mark.parametrize(
+    "T,C", [(160, 5120), (640, 1792), (640, 7168), (1, 7168), (4096, 1792), (640, 3584), (320, 7168)]
+)
 def test_perf_plain_fp32(T, C, device):
     torch.manual_seed(0)
     f = torch.randn(1, 1, T, C)
@@ -51,3 +53,10 @@ def test_perf_bf16_packed(T, C, fidelity, mode, device):
     )
     ttnn.synchronize_device(device)
     assert out is not None
+
+
+@pytest.mark.parametrize("mode", ["plain", "collapse"])
+@pytest.mark.parametrize("T,C", [(4096, 1792), (640, 7168)])
+def test_perf_bf16_packed_large(T, C, mode, device):
+    """Large bf16 calls (many token rows per core): the DRAM-saturated regime, HiFi2."""
+    test_perf_bf16_packed(T, C, ttnn.MathFidelity.HiFi2, mode, device)

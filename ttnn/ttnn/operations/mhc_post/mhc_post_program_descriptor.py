@@ -70,9 +70,18 @@ COEF_MCAST = True
 # Fused SFPU mix (Refinement 5, kernels/mhc_post_mix_sfpu.hpp): once per row the compute packs the
 # broadcast coefficient columns into DEST-layout tiles (4 coefficients per tile), and every output
 # tile is 7 unpacks + 3 multi-term SFPU passes instead of 10 unpacks + 5 SFPU ops (+ y: 5 + 2 vs
-# 8 + 4). Bit-identical arithmetic. Needs the Blackhole SFPU lane mapping (one SFPU load = 4 dest
-# rows x 8 same-parity columns), so it is gated to Blackhole; False = the per-term chain.
+# 8 + 4); the mix block runs ~1.8x faster on TRISC (zone-measured). Bit-identical arithmetic. Needs
+# the Blackhole SFPU lane mapping (one SFPU load = 4 dest rows x 8 same-parity columns), so it is
+# gated to Blackhole; False = the per-term chain everywhere.
 MIX_FUSED = True
+# Stream dtypes (residual X) the fused mix is enabled for. Measured on device (Blackhole, per-term ->
+# fused): bf16 wins everywhere (T160 C5120 plain / stats / collapse -23 / -17 / -16 %, T640 C7168 and
+# T4096 C1792 -24..-26 %). fp32 streams: the per-term chain already paces a full-grid fp32 call at the
+# aggregate DRAM limit (~360 GB/s), so the faster mix has no headroom there and instead exposes a NoC
+# hotspot (the bottom-right cores straggle): T4096 C1792 736 -> 823 us, T640 C7168 454 -> 475,
+# T320 C7168 236 -> 260; small fp32 calls win (T160 C5120 105 -> 98.5, T640 C1792 148 -> 131,
+# T640 C3584 259 -> 233). fp32 is left on the per-term chain until the hotspot is fixed.
+MIX_FUSED_STREAM_DTYPES = (ttnn.bfloat16,)
 
 # CB indices (semantic names; any distinct values)
 CB_COEF_SRC = 0
@@ -445,7 +454,7 @@ def create_program_descriptor(
         _cb(CB_OUT_TILES, output_tensor.dtype, x_tile, n * block_c * OUT_DEPTH, core_ranges),
     ]
     fp32_copy_cbs = []  # Float32 CBs read only by CopyTile -> UnpackToDestFp32
-    mix_fused = MIX_FUSED and ttnn.device.is_blackhole(device)
+    mix_fused = MIX_FUSED and ttnn.device.is_blackhole(device) and residual.dtype in MIX_FUSED_STREAM_DTYPES
     if mix_fused:
         cbs.append(_cb(CB_COEF_PACKED, ttnn.float32, FP32_TILE_BYTES, _n_coef_packed(mode), core_ranges))
         fp32_copy_cbs.append(CB_COEF_PACKED)
