@@ -1352,6 +1352,7 @@ _GRID_MAIN_ROWS = (
     ("LoFi", True, False, "F32", "F32", "F32", 2, 2, 4, 0, False, 1),
     ("LoFi", True, False, "F32", "F32", "F32", 4, 1, 3, 0, False, 1),
     ("LoFi", True, False, "F32", "F32", "F32", 4, 1, 4, 0, False, 1),
+    ("LoFi", True, False, "F32", "F32", "F32", 7, 1, 3, 0, False, 1),
     # END generated
     ("HiFi2", True, True, "I8", "I8", "I32", 1, 1, 1, 0, False, 1),
     ("HiFi2", True, True, "U8", "U8", "I32", 1, 1, 1, 0, False, 1),

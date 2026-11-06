@@ -1172,6 +1172,7 @@ inline constexpr matmul_grid_main_cell matmul_grid_main_cells[] = {
     {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 2, 4, 0, false, 1},
     {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 4, 1, 3, 0, false, 1},
     {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 4, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 7, 1, 3, 0, false, 1},
     // END generated
     // 8-bit integer operands to Int32 at half sync, 1x1x1
     {MathFidelity::HiFi2, true, true, DataFormat::Int8, DataFormat::Int8, DataFormat::Int32, 1, 1, 1, 0, false, 1},
