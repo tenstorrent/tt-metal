@@ -637,6 +637,28 @@ def test_later_calls_write_new_common_runtime_args(device):
     assert torch.equal(result, initial)
 
 
+def test_other_array_lengths_compile_a_program_of_their_own(device):
+    expected, a, b, out = inputs(device, seed=9)
+    spec, run_args = mul_program(a, b, out, array_args=True)
+    entries = device.num_program_cache_entries()
+    E.generic_op([a, b, out], spec, run_args)
+
+    # Arrays of three values. Metal places each array by the length it compiled, so the program compiled for two
+    # values would reject these: this call compiles a program of its own.
+    kernels = spec.kernels
+    for index in (0, 2):
+        kernels[index].runtime_arg_schema.runtime_array_args = [E.ArrayArgDecl(name="work", size=3)]
+    spec.kernels = kernels
+    for kernel in ("reader", "writer"):
+        args = kernel_run_args(run_args, kernel)
+        work = {core: values + [0] for core, values in args.runtime_array_arg_values["work"].items()}
+        args.runtime_array_arg_values = {"work": work}
+        replace_kernel_run_args(run_args, kernel, args)
+    result = E.generic_op([a, b, out], spec, run_args)
+    assert device.num_program_cache_entries() == entries + 2
+    assert_with_pcc(expected, ttnn.to_torch(result), 0.9999)
+
+
 def test_dfb_run_overrides_stay_in_effect_on_later_calls(device, expect_error):
     expected, a, b, out = inputs(device, seed=10)
     spec, run_args = mul_program(a, b, out, aliased_buffer=True)
@@ -1026,6 +1048,27 @@ def test_a_mesh_run_args_subclass_setattr_cannot_drop_the_tensors(device):
     assert mesh_run_args.programs[0][1].tensor_args["a"] is a
 
 
+def test_a_mesh_run_args_keeps_its_tensor_owners(device, expect_error):
+    _, a, b, out = inputs(device)
+    _, run_args = mul_program(a, b, out)
+    mesh_run_args = E.MeshProgramRunArgs(programs=[(mesh_range(device), run_args)])
+    with expect_error(AttributeError, "'MeshProgramRunArgs' object attribute '_tensor_args' is read-only"):
+        del mesh_run_args._tensor_args
+    with expect_error(AttributeError, "'MeshProgramRunArgs' object attribute '__dict__' is read-only"):
+        mesh_run_args.__dict__ = {}
+    assert mesh_run_args.programs[0][1].tensor_args["a"] is a
+
+
+def test_a_mesh_run_args_takes_only_run_args(expect_error):
+    whole = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 0))
+    with expect_error(TypeError, r"programs\[0\] holds a ProgramSpec, not a ttnn.experimental.ProgramRunArgs"):
+        E.MeshProgramRunArgs(programs=[(whole, E.ProgramSpec(name="spec"))])
+    mesh_run_args = E.MeshProgramRunArgs()
+    with expect_error(TypeError, r"programs\[1\] holds a NoneType, not a ttnn.experimental.ProgramRunArgs"):
+        mesh_run_args.programs = [(whole, E.ProgramRunArgs()), (whole, None)]
+    assert mesh_run_args.programs == []
+
+
 def test_mesh_form_checks_its_ranges(device, expect_error):
     _, a, b, out = inputs(device)
     spec, run_args = mul_program(a, b, out)
@@ -1059,9 +1102,9 @@ SPEC = ttnn.TensorSpec((1, 1, 64, 64), ttnn.bfloat16, ttnn.TILE_LAYOUT)
 NODES = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
 
 
-def hash_schema(arrays=(("z", 2),), common_arrays=()):
+def hash_schema(names=("x", "y"), arrays=(("z", 2),), common_arrays=()):
     return E.KernelSpec.RuntimeArgSchema(
-        runtime_arg_names=["x", "y"],
+        runtime_arg_names=list(names),
         runtime_array_args=[E.ArrayArgDecl(name=name, size=size) for name, size in arrays],
         common_runtime_array_args=[E.ArrayArgDecl(name=name, size=size) for name, size in common_arrays],
     )
@@ -1120,12 +1163,12 @@ STRUCTURAL_EDITS = {
     ),
     "compile_time_arg_value": lambda: hash_spec(compile_time_args={"block": 1, "count": 3}),
     "compile_time_arg_name": lambda: hash_spec(compile_time_args={"block": 1, "other": 2}),
-    "runtime_arg_names": lambda: hash_spec(runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(runtime_arg_names=["x"])),
+    "runtime_arg_names": lambda: hash_spec(runtime_arg_schema=hash_schema(names=("x", "w"))),
     "compile_time_array_value": lambda: hash_spec(compile_time_array_args={"sizes": [1, 3], "steps": [4]}),
     "compile_time_array_name": lambda: hash_spec(compile_time_array_args={"sizes": [1, 2], "other": [4]}),
     "runtime_array_length": lambda: hash_spec(runtime_arg_schema=hash_schema(arrays=[("z", 3)])),
     "runtime_array_name": lambda: hash_spec(runtime_arg_schema=hash_schema(arrays=[("w", 2)])),
-    "common_runtime_array": lambda: hash_spec(runtime_arg_schema=hash_schema(arrays=[], common_arrays=[("z", 2)])),
+    "common_runtime_array": lambda: hash_spec(runtime_arg_schema=hash_schema(common_arrays=[("w", 2)])),
     "dfb_accessor": lambda: hash_spec(dfb_bindings=[E.producer_of("in", "other")]),
     "dfb_access_pattern": lambda: hash_spec(dfb_bindings=[E.blocked_producer_of("in", "in", 2)]),
     "tensor_accessor": lambda: hash_spec(
