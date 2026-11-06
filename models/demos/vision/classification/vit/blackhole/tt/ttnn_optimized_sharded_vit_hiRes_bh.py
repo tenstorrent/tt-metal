@@ -9,10 +9,7 @@ from ttnn.dot_access import DotAccessDict
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 import ttnn
-from models.demos.vision.classification.vit.blackhole.tt.ttnn_optimized_sharded_vit_bh import (
-    fuse_query_key_value,
-    largest_divisor_at_most,
-)
+from models.demos.vision.classification.vit.blackhole.tt.ttnn_optimized_sharded_vit_bh import largest_divisor_at_most
 
 try:
     from tracy import signpost
@@ -596,6 +593,20 @@ def vit(
     return classifier_output
 
 
+def fuse_query_key_value_by_projection(attention):
+    """One linear for q, k and v, all of q's columns first, then k's, then v's.
+
+    nlp_create_qkv_heads reads the fused output in that order and splits each part into heads itself,
+    unlike the standard model's split, which wants the columns grouped head by head.
+    """
+    qkv_weight = torch.cat([attention.q_proj.weight, attention.k_proj.weight, attention.v_proj.weight], dim=0)
+    qkv_bias = torch.cat([attention.q_proj.bias, attention.k_proj.bias, attention.v_proj.bias], dim=0)
+    return {
+        "weight": preprocess_linear_weight(qkv_weight, dtype=ttnn.bfloat8_b),
+        "bias": preprocess_linear_bias(qkv_bias, dtype=ttnn.bfloat8_b),
+    }
+
+
 def custom_preprocessor(torch_model, name):
     parameters = {}
     if isinstance(torch_model, transformers.models.vit.modeling_vit.ViTEmbeddings):
@@ -627,7 +638,7 @@ def custom_preprocessor(torch_model, name):
     if isinstance(torch_model, transformers.models.vit.modeling_vit.ViTAttention):
         # Returning parameters for a module stops ttnn from visiting its children, so o_proj goes here too.
         parameters = {
-            "query_key_value": fuse_query_key_value(torch_model),
+            "query_key_value": fuse_query_key_value_by_projection(torch_model),
             "o_proj": {
                 "weight": preprocess_linear_weight(torch_model.o_proj.weight, dtype=ttnn.bfloat8_b),
                 "bias": preprocess_linear_bias(torch_model.o_proj.bias, dtype=ttnn.bfloat8_b),
