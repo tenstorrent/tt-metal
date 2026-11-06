@@ -86,7 +86,16 @@ void kernel_main() {
     invalidate_l1_cache();
     volatile tt_l1_ptr int32_t* pos_l1 = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr);
     // CB_CSCR (512 B): cur_pos [0, POS_BYTES) (32 rows), the round message [POS_BYTES, + 64), the quotas after it
-    constexpr uint32_t MSG_OFF = mladsa::POS_BYTES, QUOTA_L1 = mladsa::POS_BYTES + 64;
+    constexpr uint32_t MSG_OFF = mladsa::POS_BYTES;
+#if defined(MLA_DSA_SHARD)
+    // the message slot holds the tie quotas of the NCHIPS merge helpers (dsa_shard.hpp QUOTA_SLOTS x 16 B: 32 at the
+    // 2x4, 128 at the 8x4); the per-core quotas follow it
+    constexpr uint32_t MSG_SLOT =
+        mlashard::QUOTA_SLOTS * mladsa::MSG_BYTES > 64 ? mlashard::QUOTA_SLOTS * mladsa::MSG_BYTES : 64;
+#else
+    constexpr uint32_t MSG_SLOT = 64;
+#endif
+    constexpr uint32_t QUOTA_L1 = MSG_OFF + MSG_SLOT;
     static_assert(QUOTA_L1 + ((C * 4 + 15) & ~15u) <= 512, "CB_CSCR");
     volatile tt_l1_ptr uint32_t* msg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr + MSG_OFF);
     volatile tt_l1_ptr uint32_t* quota = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr + QUOTA_L1);

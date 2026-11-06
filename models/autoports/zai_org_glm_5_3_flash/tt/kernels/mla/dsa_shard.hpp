@@ -70,6 +70,35 @@ inline uint32_t lane_tokens(uint32_t t_rows, uint32_t t0) {
 // tie quotas (one word per chunk core) at GQUOTA_OFF + t MAX_CHUNKS 4
 constexpr uint32_t GMSG_OFF = mladsa::MBOX_BYTES;
 constexpr uint32_t GQUOTA_OFF = GMSG_OFF + mladsa::T_MAX * mladsa::MSG_BYTES;
+// ---- TP8 (the 2x4 mesh): MLA_DSA_SHARD_LINE = the chips of a mesh row (the axis-1 line); the pair: 1
+// ---- TP32 (the 8x4 mesh, doc/perf/shard_8x4_design.md): MLA_DSA_SHARD_PAIR = the chips of a mesh column (the axis-0
+// line, 8); unset = 2 (the pair / the 2x4 column pair: every build before the port is unchanged)
+#if defined(MLA_DSA_SHARD_LINE)
+constexpr uint32_t LINE = MLA_DSA_SHARD_LINE;
+#else
+constexpr uint32_t LINE = 1;
+#endif
+#if defined(MLA_DSA_SHARD_PAIR)
+constexpr uint32_t PAIR = MLA_DSA_SHARD_PAIR;
+#else
+constexpr uint32_t PAIR = 2;
+#endif
+static_assert(LINE == 1 || LINE == 4, "shard: the pair (1) or the mesh rows of 4 chips (4)");
+static_assert(PAIR == 2 || (PAIR == 8 && LINE == 4), "shard: the pair / the 2x4 column pair (2) or the 8x4 column (8)");
+constexpr uint32_t NCHIPS = PAIR * LINE;                         // the axis-0 line x the axis-1 line
+constexpr uint32_t HPC = 64 / NCHIPS;                            // heads per chip (32 / 8 / 2)
+constexpr uint32_t PIECE_ROWS = NCHIPS > 2 ? 64 / NCHIPS : 32;   // q / o rows (heads) of one chip in a 32-row head tile
+constexpr uint32_t PIECES = NCHIPS > 2 ? NCHIPS / 2 : 1;         // chips whose pieces form one head tile (4 / 16)
+constexpr uint32_t RS1_ROWS = PAIR > 2 ? 64 / PAIR : 32;         // 8x4 round 1: the column slice rows per chip (8)
+constexpr uint32_t RS2_ROWS = RS1_ROWS / LINE;                   // round 2: the row slice rows (2x4: 8; 8x4: 2)
+inline uint32_t pair_pos(uint32_t rank) { return rank / LINE; }  // the mesh row (2x4 / 8x4) / the pair position (TP2)
+inline uint32_t line_pos(uint32_t rank) { return rank % LINE; }  // the mesh column (2x4 / 8x4) / 0 (TP2)
+inline uint32_t tile_of(uint32_t rank) { return pair_pos(rank) / (PAIR / 2); }     // the chip's 32-head tile (0 / 1)
+inline uint32_t piece_of(uint32_t rank) { return rank - tile_of(rank) * PIECES; }  // its piece (rows PIECE_ROWS j ..)
+// y_ag block of chip `rank`: the PAIR chips of a column are adjacent (the round-2 bundle of column c = blocks PAIR c
+// .. PAIR c + PAIR - 1); the pair: block = rank
+inline uint32_t ag_blk(uint32_t rank) { return line_pos(rank) * PAIR + pair_pos(rank); }
+
 // rev 59: the global merge's messages to the merge helpers (owner chunk cores c < NCHIPS of group 0; helper q holds
 // chip q's candidate list): per token MERGE_MSGS 16-B slots -- 0 start, 1 + r round r's (prefix, k_rem, done), then the
 // tie quotas of the NCHIPS helpers (2 slots: 8 words)
@@ -111,34 +140,6 @@ inline uint32_t ag_cand_page(uint32_t T, uint32_t blk, uint32_t t, uint32_t byte
 inline uint32_t rs_base(uint32_t T, uint32_t blk, uint32_t t) { return (blk * T + t) * RS_CHUNKS * RS_PPC; }
 constexpr uint32_t RS_PAGES = RS_CHUNKS * RS_PPC;  // 36 pages = 72 KiB = 16 x 4 KiB (O) + 2 x 4 KiB (m, l) exactly
 
-// ---- TP8 (the 2x4 mesh): MLA_DSA_SHARD_LINE = the chips of a mesh row (the axis-1 line); the pair: 1
-// ---- TP32 (the 8x4 mesh, doc/perf/shard_8x4_design.md): MLA_DSA_SHARD_PAIR = the chips of a mesh column (the axis-0
-// line, 8); unset = 2 (the pair / the 2x4 column pair: every build before the port is unchanged)
-#if defined(MLA_DSA_SHARD_LINE)
-constexpr uint32_t LINE = MLA_DSA_SHARD_LINE;
-#else
-constexpr uint32_t LINE = 1;
-#endif
-#if defined(MLA_DSA_SHARD_PAIR)
-constexpr uint32_t PAIR = MLA_DSA_SHARD_PAIR;
-#else
-constexpr uint32_t PAIR = 2;
-#endif
-static_assert(LINE == 1 || LINE == 4, "shard: the pair (1) or the mesh rows of 4 chips (4)");
-static_assert(PAIR == 2 || (PAIR == 8 && LINE == 4), "shard: the pair / the 2x4 column pair (2) or the 8x4 column (8)");
-constexpr uint32_t NCHIPS = PAIR * LINE;                         // the axis-0 line x the axis-1 line
-constexpr uint32_t HPC = 64 / NCHIPS;                            // heads per chip (32 / 8 / 2)
-constexpr uint32_t PIECE_ROWS = NCHIPS > 2 ? 64 / NCHIPS : 32;   // q / o rows (heads) of one chip in a 32-row head tile
-constexpr uint32_t PIECES = NCHIPS > 2 ? NCHIPS / 2 : 1;         // chips whose pieces form one head tile (4 / 16)
-constexpr uint32_t RS1_ROWS = PAIR > 2 ? 64 / PAIR : 32;         // 8x4 round 1: the column slice rows per chip (8)
-constexpr uint32_t RS2_ROWS = RS1_ROWS / LINE;                   // round 2: the row slice rows (2x4: 8; 8x4: 2)
-inline uint32_t pair_pos(uint32_t rank) { return rank / LINE; }  // the mesh row (2x4 / 8x4) / the pair position (TP2)
-inline uint32_t line_pos(uint32_t rank) { return rank % LINE; }  // the mesh column (2x4 / 8x4) / 0 (TP2)
-inline uint32_t tile_of(uint32_t rank) { return pair_pos(rank) / (PAIR / 2); }     // the chip's 32-head tile (0 / 1)
-inline uint32_t piece_of(uint32_t rank) { return rank - tile_of(rank) * PIECES; }  // its piece (rows PIECE_ROWS j ..)
-// y_ag block of chip `rank`: the PAIR chips of a column are adjacent (the round-2 bundle of column c = blocks PAIR c
-// .. PAIR c + PAIR - 1); the pair: block = rank
-inline uint32_t ag_blk(uint32_t rank) { return line_pos(rank) * PAIR + pair_pos(rank); }
 // the TP8 AG block: per token ONE chunk of AG8_PPC pages ([T x 32, 320] bf16 tensors): pages [0, AG8_QPAGES) = the
 // chip's q piece (q_lat rows 0..7 of tile d = 2 face-row runs of 256 B at page d / 4, offset (d % 4) 512 (+ 256)),
 // then the candidate records (header + CAND_MAX records = 5 pages), then a pad page (page pairs)
