@@ -121,12 +121,12 @@ void kernel_main() {
     // (test_sampling_low_digit_reaches_the_tail).
     constexpr uint32_t RAND_HI_ELEMENT = 0;
     constexpr uint32_t RAND_LO_ELEMENT = 1;
-    constexpr float RAND_DIGIT_MAX = 255.0f;
     constexpr float RAND_LATTICE_SCALE = 1.0f / 65536.0f;
-    float rand_hi = bf16_to_f32(rand_values[RAND_HI_ELEMENT]);
-    float rand_lo = bf16_to_f32(rand_values[RAND_LO_ELEMENT]);
-    rand_hi = rand_hi > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : rand_hi;
-    rand_lo = rand_lo > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : rand_lo;
+    // FP32-level resolution: keep the full float32 values carried by the packed random digits
+    // instead of clamping to an 8-bit (255/256) maximum; the lattice scale provides FP32 precision.
+    const float hi_f = bf16_to_f32(rand_values[RAND_HI_ELEMENT]);
+    const float lo_f = bf16_to_f32(rand_values[RAND_LO_ELEMENT]);
+    const float rand_f = (hi_f * 256.0f + lo_f) * RAND_LATTICE_SCALE;
     // wait for compute kernel
     dfb_final_indices.wait_front(num_users);
     dfb_local_values.wait_front(1);
@@ -199,7 +199,6 @@ void kernel_main() {
     }
 
     // Stochastic sampling in float32
-    const float rand_f = (rand_hi * 256.0f + rand_lo) * RAND_LATTICE_SCALE;
     float cum_sum_f = 0.0f;
     uint32_t sampled_index = final_indices[local_indices[start_id_local_phase_0]];
     bool index_found = false;
