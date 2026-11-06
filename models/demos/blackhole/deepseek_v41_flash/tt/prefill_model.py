@@ -117,6 +117,13 @@ def engram_reduce_scatter(cat8, cc, free_after=()):
 class DSV41PrefillModel:
     def __init__(self, md, layers, embedding, head, engram=None, host_rows=None, users_per_row=4):
         """layers: list of (layer_id, DSV41PrefillLayer); engram: {layer_id: DSV41DeviceEngram}; host_rows: HostEngramRows."""
+        if (
+            type(getattr(embedding, "weight", None)).__name__ == "ShardedEmbeddingTable"
+        ):  # DSV41_EMBED_SHARD=1: own copy (shares the table) that knows when the ids differ per mesh column
+            import copy
+
+            embedding = copy.copy(embedding)
+            embedding.colsplit_src = self
         self.md, self.layers, self.embedding, self.head = md, layers, embedding, head
         self.engram, self.host_rows = engram or {}, host_rows
         self.rows, self.cols = tuple(md.shape)

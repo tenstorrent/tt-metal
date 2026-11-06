@@ -59,8 +59,49 @@ class ShardedEmbeddingTable:
         """the model's mesh config / CCL manager: the gather then runs as ``all_gather_async`` on the model's (lean) ping-pong semaphores (20-25 us instead of 50-80 us of the sync op)."""
         self.mc, self.ccl = mesh_config, ccl
 
-    def lookup_rm(self, tokens):
-        """token ids [T, 1] -> the full rows [T, 1, D] bf16 ROW_MAJOR (local lookup of the D / cols slice, then one all_gather over the columns)."""
+    def _ag(self, x):
+        """all_gather of a 4D tensor over the mesh columns along dim 3 (model CCL when set_ccl was called, else the sync op)."""
+        mc = getattr(self, "mc", None)
+        if mc is None:
+            return ttnn.all_gather(x, dim=3, cluster_axis=1, num_links=1, topology=ttnn.Topology.Ring)
+        kw = {"lean_ag": True} if getattr(mc, "_dsv41_lean", False) else {}
+        return mc.allgather(x, self.ccl, axis=1, dim=3, **kw)
+
+    def _own_idx(self, T):
+        """[T, 1] uint32 per device: column c holds the row numbers c*T .. (c+1)*T - 1 (its own tokens inside the gathered [cols*T] block)."""
+        cache = self.__dict__.setdefault("_own", {})
+        if T not in cache:
+            rows, cols = tuple(self.md.shape)
+            cache[T] = ttnn.from_torch(
+                torch.arange(cols * T, dtype=torch.int32).reshape(cols * T, 1),
+                device=self.md,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.md, dims=(None, 0), mesh_shape=(rows, cols)),
+            )
+        return cache[T]
+
+    def lookup_rm_colsplit(self, tokens):
+        """Like ``lookup_rm`` for token ids that DIFFER per mesh column (column-split prefill: column c owns the 32-token chunks i % 8 == c). Every column holds only a D / cols slice of
+        the table, so (1) the ids of all columns are gathered, (2) every column looks all of them up in its slice, (3) the slices are gathered into full rows of all ``cols * T``
+        tokens, (4) each column picks its own T rows with a row gather (``_own_idx``). Rows are bit-identical to the replicated lookup.
+        """
+        T = tokens.shape[0]
+        rows, cols = tuple(self.md.shape)
+        ids = self._ag(ttnn.reshape(tokens, [1, 1, 1, T]))  # [1, 1, 1, cols * T], column-major blocks of T ids
+        e = ttnn.embedding(
+            ttnn.reshape(ids, [1, cols * T]), self.weight, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
+        )  # [1, cols*T, D/cols]
+        g = self._ag(ttnn.reshape(e, [1, 1, cols * T, e.shape[-1]]))  # [1, 1, cols*T, D]
+        tab = ttnn.reshape(g, [cols * T, g.shape[-1]])
+        return ttnn.embedding(self._own_idx(T), tab, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)  # [T, 1, D]
+
+    def lookup_rm(self, tokens, colsplit=False):
+        """token ids [T, 1] -> the full rows [T, 1, D] bf16 ROW_MAJOR (local lookup of the D / cols slice, then one all_gather over the columns).
+        ``colsplit``: the ids differ per mesh column (column-split prefill): see ``lookup_rm_colsplit``."""
+        if colsplit:
+            return self.lookup_rm_colsplit(tokens)
         T = tokens.shape[0]
         e = ttnn.embedding(tokens, self.weight, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)  # [T, 1, D / cols]
         mc = getattr(self, "mc", None)
@@ -72,8 +113,8 @@ class ShardedEmbeddingTable:
         g = mc.allgather(e, self.ccl, axis=1, dim=3, **kw)
         return ttnn.reshape(g, [T, 1, g.shape[-1]])
 
-    def lookup(self, tokens, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
-        g = self.lookup_rm(tokens)
+    def lookup(self, tokens, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, colsplit=False):
+        g = self.lookup_rm(tokens, colsplit)
         return g if layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.to_layout(g, layout)
 
 
@@ -88,10 +129,10 @@ def embed_rm_on():
     return os.environ.get("DSV41_EMBED_RM", "0") == "1" or embed_shard_on()
 
 
-def embed_lookup(table, tokens, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
-    """ttnn.embedding on a replicated table, or the sharded lookup (+ all_gather) of a ``ShardedEmbeddingTable``."""
+def embed_lookup(table, tokens, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, colsplit=False):
+    """ttnn.embedding on a replicated table, or the sharded lookup (+ all_gather) of a ``ShardedEmbeddingTable`` (``colsplit``: the token ids differ per mesh column)."""
     if isinstance(table, ShardedEmbeddingTable):
-        return table.lookup(tokens, layout, dtype)
+        return table.lookup(tokens, layout, dtype, colsplit)
     return ttnn.embedding(tokens, table, layout=layout, dtype=dtype)
 
 
@@ -154,12 +195,17 @@ class DSV41DeviceEmbedding:
         of a prompt take the vision encoder's rows instead of the table row of the image token id (``emb * keep + override`` is exact: keep is 0 / 1).
         """
         T = tokens.shape[0]
+        src = getattr(
+            self, "colsplit_src", None
+        )  # the column-split prefill model (its embedding is a copy sharing the table): the ids differ per mesh column
+        cs = bool(src is not None and getattr(src, "cs", False))
         if override is None and embed_rm_on():
             e = ttnn.reshape(
-                embed_lookup(self.weight, tokens, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16), [T, 1, 1, DIM]
+                embed_lookup(self.weight, tokens, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, colsplit=cs),
+                [T, 1, 1, DIM],
             )
             return ttnn.to_layout(ttnn.concat([e] * HC, dim=2), ttnn.TILE_LAYOUT, dtype=ttnn.float32), self.pre
-        emb = embed_lookup(self.weight, tokens, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [T,1,D]
+        emb = embed_lookup(self.weight, tokens, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, colsplit=cs)  # [T,1,D]
         if override is not None:
             e2 = ttnn.add(ttnn.multiply(ttnn.reshape(emb, [1, 1, T, emb.shape[-1]]), keep), override)
             emb = ttnn.reshape(e2, [T, 1, emb.shape[-1]])
