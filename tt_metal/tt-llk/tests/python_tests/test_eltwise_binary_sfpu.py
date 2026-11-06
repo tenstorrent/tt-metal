@@ -2454,7 +2454,9 @@ _BINARY_EDGE_OPS = sorted(
 )
 
 # Ops whose kernel exists on Blackhole only; the edges sweep has no arch skip of its own.
-_BLACKHOLE_ONLY_EDGE_OPS = frozenset({MathOperation.SfpuGegluTanh})
+_BLACKHOLE_ONLY_EDGE_OPS = frozenset(
+    {MathOperation.SfpuGegluTanh, MathOperation.SfpuSiluGlu}
+)
 
 assert _BINARY_EDGE_OPS, (
     "no float binary op reaching sfpu_binary() has an entry in "

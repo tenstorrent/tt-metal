@@ -164,9 +164,7 @@ def test_swiglu_runs_silu_glu(device, dim):
 @pytest.mark.skipif(is_slow_dispatch(), reason="sub-device managers are unsupported with slow dispatch")
 @pytest.mark.parametrize("dim", [-1])
 def test_swiglu_keeps_its_composite_with_sub_devices_loaded(device, dim):
-    """With two sub-devices loaded ttnn.swiglu keeps its unary and multiply, as on main, and launches no SILU_GLU
-    program. Sub-device 0 holds every column but the last, so the split's and the unary's few cores (column-major
-    from (0, 0)) and binary_ng's sub-device-0 cores all lie in it, as the composite needs."""
+    """With two sub-devices loaded ttnn.swiglu keeps its composite and launches no SILU_GLU program."""
     _skip_unless_routed(device)
     x = _operands((1, 1, 64, 128))
     expected = ttnn.to_torch(

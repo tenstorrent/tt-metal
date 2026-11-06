@@ -1486,6 +1486,9 @@ SfpuMask:
 - {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 2k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 2k lanes'}
+SfpuSiluGlu:
+- {input: Float16_b, output: Float16_b, dest: 'No', measured: 1, note: 'bh: 1 stored ULP; bit model max 0.523 ULP over the scored BF16 (gate, up) pairs'}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 1, note: 'bh: 1 stored ULP; bit model max 0.523 ULP over the scored BF16 (gate, up) pairs'}
 SfpuSnakeBeta:
 - {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 4 variants / 16384 lanes'}
 - {output: Float32, metric: TOLERANCE, measured: 4, note: 'wh figure, no bh driver reaches this row; max 4 ULP, 2 variants / 8192 lanes'}
