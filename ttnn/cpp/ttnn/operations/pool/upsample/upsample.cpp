@@ -68,6 +68,7 @@ static tt::tt_metal::MemoryConfig compute_bilinear_autoshard_memory_config(const
 
     const uint32_t total_input_sticks = input_shape[0] * input_shape[1] * input_shape[2];
     const uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
+    TT_FATAL(total_input_sticks > 0, "upsample: input shape {} must be non-empty", input_shape);
     const uint32_t num_shards = std::min(max_num_cores, total_input_sticks);
     const uint32_t shard_height = tt::round_up(total_input_sticks, num_shards) / num_shards;
 
