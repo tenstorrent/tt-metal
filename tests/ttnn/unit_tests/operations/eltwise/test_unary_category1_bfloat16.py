@@ -841,6 +841,6 @@ def test_log10_bf16_special_and_normal_inputs(device):
     spacing = 2.0 ** (torch.floor(torch.log2(reference[finite].abs().clamp(min=2.0**-126))) - 7)
     error = (actual[finite] - reference[finite]).abs()
     # 1.0 maps to an exact 0, which has no spacing of its own.
-    assert torch.all((error <= spacing) | ((reference[finite] == 0) & (actual[finite] == 0))), (
-        f"max error {(error / spacing).max().item():.3f} BF16 ULP"
-    )
+    assert torch.all(
+        (error <= spacing) | ((reference[finite] == 0) & (actual[finite] == 0))
+    ), f"max error {(error / spacing).max().item():.3f} BF16 ULP"
