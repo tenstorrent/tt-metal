@@ -626,7 +626,8 @@
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_sparse_push_plan.py -vvv --tb=short &&
         python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -vvv --tb=short &&
-        python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_real_topk_matches_gather -vvv --tb=short
+        python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_real_topk_matches_gather -vvv --tb=short &&
+        python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_dense_mode_matches_gather -vvv --tb=short
       '
     )
 
@@ -2297,6 +2298,7 @@
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and full_mesh and ((test_gather and bf16) or test_slot_select_partial_extent or test_pages_larger_than_payload)" || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and (test_metadata_traced or test_subdevice_external_semaphores)" || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_glm_perf -q -s || rc=1
+      python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_dense_mode_perf -q -s || rc=1
       exit $rc
     '
   test_type: high_bw_all_gather_sparse_kv_push_perf

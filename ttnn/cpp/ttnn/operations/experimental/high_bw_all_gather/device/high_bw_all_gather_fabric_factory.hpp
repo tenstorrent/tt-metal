@@ -22,7 +22,8 @@ struct ChipShardPageGeometry {
     uint32_t local_gather_dim_length = 0;       // this chip's (input) length of the gather dim
     uint32_t gather_dim_elements_per_page = 1;  // tile height / width when gathering a tile dim, else 1
     uint32_t num_ranks = 0;
-    uint32_t pages_per_kv_slab = 0;  // valid pages per outer slice per KV slab (prefix metadata path)
+    uint32_t pages_per_kv_slab = 0;             // valid pages per outer slice per KV slab (prefix metadata path)
+    uint32_t output_pages_per_outer_slice = 0;  // a rank's output slot per outer slice
 };
 
 struct HighBwAllGatherFabricFactory {
