@@ -231,7 +231,13 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
                 if (forward_fabric_node_id.has_value()) {
                     const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
                     tt::tt_fabric::append_fabric_connection_rt_args(
-                        src_fabric_node_id, forward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
+                        *mesh_device,
+                        src_fabric_node_id,
+                        forward_fabric_node_id.value(),
+                        link,
+                        program,
+                        {core},
+                        writer_rt_args);
                 }
                 writer_rt_args.push_back(false);
             } else {
@@ -240,7 +246,13 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
                 if (backward_fabric_node_id.has_value()) {
                     const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
                     tt::tt_fabric::append_fabric_connection_rt_args(
-                        src_fabric_node_id, backward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
+                        *mesh_device,
+                        src_fabric_node_id,
+                        backward_fabric_node_id.value(),
+                        link,
+                        program,
+                        {core},
+                        writer_rt_args);
                 }
             }
             tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel_id, {core}, writer_rt_args);
