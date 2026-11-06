@@ -235,14 +235,13 @@ power limits differ between systems.
 
 ### Full matrix
 
-`run_matrix.sh` runs every case worth comparing, at 5, 10 and 15 s (17 runs per length, appended to
+`run_matrix.sh` runs every case worth comparing, at 5, 10 and 15 s (16 runs per length, appended to
 `results_tt.jsonl`, then one table):
 
 | Backend | Settings | dtypes |
 |---|---|---|
 | `fa` | dense baseline, at the working point and at the VSA / cube rung (`{"rung": "ladder"}`) | bf16 |
 | `sol_attn` | `tau` 1.0, 1.5, 2.0 (higher keeps fewer blocks) | bf16, and LoFi with bf8 K/V |
-| `sol_attn` | `tau` 1.0 with `dense_prefix_queries` and `sink_tokens` = `"prefix"` (prefix rows and keys dense, as VSA) | bf16 |
 | `video_sparse_attn` | `VSA_sparsity` 0.9 (base H3) and 0.8 (distilled), exempt prefix, balanced layout | bf16; 0.9 also LoFi with bf8 K/V |
 | `cube_sparse_attn` | `topk_ratio` 0.5, 0.6, 0.7, 0.8 (the ratios of SGLang's example schedule [1.0, 1.0, 0.8, 0.7, 0.6, 0.5, 0.5]; 1.0 steps are dense, i.e. `fa`), balanced layout | bf16; 0.5 also LoFi with bf8 K/V |
 

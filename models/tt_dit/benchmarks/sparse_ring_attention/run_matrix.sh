@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The benchmark matrix on a 4x8 Blackhole Galaxy: dense, Sol (tau sweep, bf16 and LoFi / bf8 K/V, dense prefix rows),
+# The benchmark matrix on a 4x8 Blackhole Galaxy: dense, Sol (tau sweep, bf16 and LoFi / bf8 K/V),
 # VSA (two sparsities, bf16 and LoFi / bf8 K/V) and cube sparse attention (four top-k ratios, bf16 and LoFi / bf8 K/V),
 # at 5, 10 and 15 s of synthetic input. Sparse times are on-device scoring + attention.
 #   LENGTHS="5 10" ./run_matrix.sh        # a subset of the lengths
@@ -24,9 +24,6 @@ for len in $LENGTHS; do
         run --attention-backend sol_attn --attention-backend-config "{\"tau\": $tau}"
         run --attention-backend sol_attn --attention-backend-config "{\"tau\": $tau}" --lofi --kv-dtype bf8
     done
-    # non-video prefix rows and keys dense, as VSA does: rows through the mask, keys as sink columns
-    run --attention-backend sol_attn \
-        --attention-backend-config '{"tau": 1.0, "sink_tokens": "prefix", "dense_prefix_queries": true}'
     # VSA, exempt prefix tiles, on the shard-balanced tile layout
     for sparsity in 0.9 0.8; do
         run --attention-backend video_sparse_attn --attention-backend-config "{\"VSA_sparsity\": $sparsity}"
