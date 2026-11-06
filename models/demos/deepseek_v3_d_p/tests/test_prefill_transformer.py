@@ -80,7 +80,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     tokenize_prompt_to_isl,
     trace_first_token_id,
 )
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 
 @dataclass(frozen=True)

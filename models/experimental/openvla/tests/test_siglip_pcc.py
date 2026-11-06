@@ -15,7 +15,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.common.utility_functions import torch_random
 from models.experimental.openvla.tt import tt_optimized_openvla_vision as ttnn_siglip
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def load_siglip_torch_model():

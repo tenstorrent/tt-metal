@@ -7,7 +7,7 @@ import ttnn
 
 from models.experimental.audiox.reference.oobleck import DecoderBlock, OobleckDecoder, ResidualUnit, SnakeBeta
 from models.experimental.audiox.tt.oobleck import TtDecoderBlock, TtOobleckDecoder, TtResidualUnit, TtSnakeBeta
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 PCC_THRESHOLD = 0.99

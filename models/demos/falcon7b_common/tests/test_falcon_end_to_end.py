@@ -24,7 +24,7 @@ from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b_common.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.falcon7b_common.tt.model_config import get_model_config
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
 
 
 def get_inputs_on_device(llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len):

@@ -21,7 +21,7 @@ from models.demos.blackhole.paddleocr_vl.tests.generate_goldens import INTERMEDI
 from models.demos.blackhole.paddleocr_vl.tt.vision.model import DropInVisionTransformer
 from models.demos.blackhole.paddleocr_vl.tt.vision.vision_model_config import VisionModelArgs
 from models.demos.blackhole.paddleocr_vl.tt.weight_mapping import map_vision_state_dict
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 PCC_TARGET = 0.98
 # Unpadded images below the gate since bring-up; strict, so a fix shows up as XPASS.

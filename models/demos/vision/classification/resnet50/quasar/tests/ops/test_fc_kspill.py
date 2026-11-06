@@ -25,7 +25,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_quasar, nearest_32
 from models.demos.vision.classification.resnet50.quasar.tt.ttnn_functional_resnet50 import fit_fc_grid
-from tests.ttnn.utils_for_testing import assert_allclose, assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_allclose, assert_with_pcc
 
 TILE = 32
 

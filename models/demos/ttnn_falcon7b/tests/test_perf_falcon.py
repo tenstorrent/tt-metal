@@ -20,7 +20,7 @@ from models.demos.ttnn_falcon7b.tt.common import (
 from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
 from models.perf.perf_utils import prep_perf_report
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
 
 
 # TODO: Replace this with actual Falcon application-level tests

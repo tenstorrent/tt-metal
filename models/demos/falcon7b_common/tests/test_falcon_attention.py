@@ -17,7 +17,7 @@ from models.demos.falcon7b_common.tests.test_utils import (
 from models.demos.falcon7b_common.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
 from models.demos.falcon7b_common.tt.model_config import get_model_config
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
 
 
 class PytorchFalconAttentionModel(torch.nn.Module):

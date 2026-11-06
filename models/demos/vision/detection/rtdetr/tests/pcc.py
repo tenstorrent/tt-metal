@@ -61,7 +61,7 @@ from models.demos.vision.detection.rtdetr.tt.encoder import (
     TtRTDetrSelfAttention,
 )
 from models.demos.vision.detection.rtdetr.tt.model import TtRTDetrModel
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 MODEL_NAME = "PekingU/rtdetr_r50vd"
 V2_MODEL_NAME = "PekingU/rtdetr_v2_r50vd"

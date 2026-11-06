@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import ttnn
 from loguru import logger
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 UNET_FULL_MODEL_PCC = 0.99840
 UNET_FULL_MODEL_PCC_BH = 0.99780

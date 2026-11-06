@@ -7,7 +7,7 @@ import ttnn
 
 from models.experimental.audiox.reference.sampler import sample_discrete_euler as ref_sample, sample_rf as ref_sample_rf
 from models.experimental.audiox.tt.sampler import sample_discrete_euler as tt_sample, sample_rf as tt_sample_rf
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 PCC_THRESHOLD = 0.99

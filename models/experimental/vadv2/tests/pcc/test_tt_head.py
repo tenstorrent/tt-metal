@@ -9,7 +9,7 @@ import torch.nn as nn
 import numpy as np
 from models.experimental.vadv2.reference import head
 from models.experimental.vadv2.tt.tt_head import TtVADHead
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from models.experimental.vadv2.reference.resnet import ResNet
 from models.experimental.vadv2.reference.encoder import BEVFormerEncoder
 from models.experimental.vadv2.reference.transformer import VADPerceptionTransformer

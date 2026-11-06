@@ -7,7 +7,7 @@ import ttnn
 import pytest
 from models.experimental.mobileNetV3.tt.ttnn_squeezeExcitation import ttnn_SqueezeExcitation
 from ttnn.model_preprocessing import preprocess_model_parameters
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from torchvision import models
 from models.experimental.mobileNetV3.tt.custom_preprocessor import create_custom_preprocessor
 

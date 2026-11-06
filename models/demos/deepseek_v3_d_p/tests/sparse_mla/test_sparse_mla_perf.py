@@ -147,7 +147,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program
 
 CACHE_TOKENS = int(os.environ.get("DS_PERF_CACHE", 51200))  # 50 * 1024 already cached
 CHUNK_TOKENS = int(os.environ.get("DS_PERF_CHUNK", 5120))  # 5 * 1024 processed this step

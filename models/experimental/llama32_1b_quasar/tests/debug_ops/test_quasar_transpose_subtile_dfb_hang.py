@@ -45,7 +45,7 @@ import torch
 import ttnn
 
 from loguru import logger
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 # W=224 -> 448 B row-major stick, well under the 2048 B DFB tile, so every reader NOC read is sub-tile ->

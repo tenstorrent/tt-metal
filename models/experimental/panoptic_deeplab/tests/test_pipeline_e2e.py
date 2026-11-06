@@ -34,7 +34,7 @@ from models.tt_cnn.tt.executor import (
 from models.experimental.panoptic_deeplab.tt.tt_custom_pipeline import (
     CustomTracedModelExecutor,
 )
-from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from models.experimental.panoptic_deeplab.tests.pcc.common import skip_if_not_blackhole_20_cores
 
 
 @dataclass

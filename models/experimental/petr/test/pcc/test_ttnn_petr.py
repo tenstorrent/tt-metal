@@ -10,7 +10,7 @@ import ttnn
 from models.experimental.petr.reference.petr import PETR
 from models.experimental.petr.tt.ttnn_petr import ttnn_PETR
 from models.experimental.petr.tt.common import get_parameters, generate_petr_inputs
-from tests.ttnn.utils_for_testing import check_with_pcc, assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import check_with_pcc, assert_with_pcc
 
 
 def prepare_inputs():
@@ -42,12 +42,16 @@ def prepare_torch_model():
 
 def verify_output(torch_output, ttnn_output):
     ttnn_output = {
-        "all_cls_scores": ttnn.to_torch(ttnn_output["all_cls_scores"])
-        if isinstance(ttnn_output["all_cls_scores"], ttnn.Tensor)
-        else ttnn_output["all_cls_scores"],
-        "all_bbox_preds": ttnn.to_torch(ttnn_output["all_bbox_preds"])
-        if isinstance(ttnn_output["all_bbox_preds"], ttnn.Tensor)
-        else ttnn_output["all_bbox_preds"],
+        "all_cls_scores": (
+            ttnn.to_torch(ttnn_output["all_cls_scores"])
+            if isinstance(ttnn_output["all_cls_scores"], ttnn.Tensor)
+            else ttnn_output["all_cls_scores"]
+        ),
+        "all_bbox_preds": (
+            ttnn.to_torch(ttnn_output["all_bbox_preds"])
+            if isinstance(ttnn_output["all_bbox_preds"], ttnn.Tensor)
+            else ttnn_output["all_bbox_preds"]
+        ),
     }
 
     passed, pcc_cls = check_with_pcc(torch_output["all_cls_scores"], ttnn_output["all_cls_scores"], pcc=0.97)

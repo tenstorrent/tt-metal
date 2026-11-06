@@ -35,7 +35,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule, _weights_have_output_channel_dim
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 REDUCE_MESH_PARAMS = [
     pytest.param(

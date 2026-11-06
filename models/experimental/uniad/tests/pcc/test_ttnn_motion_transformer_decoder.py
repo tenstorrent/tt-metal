@@ -31,7 +31,7 @@ from ttnn.model_preprocessing import (
 from models.experimental.uniad.tests.pcc.test_ttnn_interaction import (
     custom_preprocessor as custom_preprocessor_interations,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 import ttnn
 

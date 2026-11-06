@@ -106,7 +106,7 @@ def cache_half_pccs(golden: torch.Tensor, dev: torch.Tensor, split: int, pe_inte
     golden's HF half-split RoPE is re-based to the device Meta interleave. This is the single home for the
     cache-compare convention: KVPE = [nope | pe] (split=kv_lora, pe_interleave=True); indexer-K =
     [rope | nope] (split=index_head_dim//2, pe_interleave=False -- GLM indexer RoPE is natively interleaved)."""
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     _, pcc_first = comp_pcc(golden[:, :split], dev[:, :split])
     ref_second = golden[:, split:]

@@ -16,7 +16,7 @@ import ttnn
 from models.common.utility_functions import enable_memory_reports
 from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.resnet50_test_infra import load_resnet50_model
 from models.demos.vision.classification.resnet50.ttnn_resnet.tt.ttnn_functional_resnet50_large import resnet50
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def preprocess_conv_parameter(parameter, *, dtype):

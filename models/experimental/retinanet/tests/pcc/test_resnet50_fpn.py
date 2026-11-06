@@ -9,7 +9,7 @@ from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_Re
 from PIL import Image
 from torchvision import transforms
 from ttnn.model_preprocessing import preprocess_model_parameters
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 from models.experimental.retinanet.tt.tt_fpn import resnet50Fpn, fpn_optimisations
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
 

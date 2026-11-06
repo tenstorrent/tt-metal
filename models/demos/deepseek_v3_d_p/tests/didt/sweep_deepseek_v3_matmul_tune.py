@@ -36,7 +36,7 @@ from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import (
     SHARED_EXPERT_MATMUL_PARAMS,
     TILE_SIZE,
 )
-from tests.didt.op_test_base import OpParameter, OpTestBase
+from tt_py_test_utils_common.op_test_base import OpParameter, OpTestBase
 
 # ---------------------------------------------------------------------------
 # Compute utilization: ideal cycles vs actual cycles (same as test_benchmark.py)

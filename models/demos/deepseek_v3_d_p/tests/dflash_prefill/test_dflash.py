@@ -32,7 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rot
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_dflash_kv_cache
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD = 0.999
 # PCC is scale-invariant, so a K off by a constant (e.g. a missing yarn cos/sin amplitude) still passes it.

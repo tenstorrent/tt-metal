@@ -28,7 +28,7 @@ from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_hca import _MESH_CONFIGS, 
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged
 
 _CHUNK = PREFILL_CHUNK_TOKENS
 _CHUNKS = 2

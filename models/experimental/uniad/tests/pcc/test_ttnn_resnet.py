@@ -9,7 +9,7 @@ import pytest
 import ttnn
 from models.experimental.uniad.reference.resnet import ResNet, ModulatedDeformConv2dPack
 from models.experimental.uniad.tt.ttnn_resnet import TtBottleneck, TtResLayer, TtResNet
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 from ttnn.model_preprocessing import (
     infer_ttnn_module_args,

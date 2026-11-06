@@ -9,7 +9,7 @@ from models.experimental.audiox.reference.rotary import RotaryEmbedding
 from models.experimental.audiox.reference.transformer_block import TransformerBlock
 from models.experimental.audiox.tt.rotary import precompute_rotary_cos_sin
 from models.experimental.audiox.tt.transformer_block import TtTransformerBlock
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 PCC_THRESHOLD = 0.99

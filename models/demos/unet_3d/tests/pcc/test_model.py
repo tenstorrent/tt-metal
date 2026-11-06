@@ -8,7 +8,7 @@ import torch
 import ttnn
 from models.demos.unet_3d.torch_impl.model import UNet3DTch
 from models.demos.unet_3d.ttnn_impl.model import UNet3D
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(

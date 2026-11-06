@@ -42,7 +42,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rot
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 SPARSE_OUTPUT_PCC = 0.98
 SPARSE_KVPE_PCC = 0.99

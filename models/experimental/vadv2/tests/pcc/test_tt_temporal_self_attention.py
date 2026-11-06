@@ -8,7 +8,7 @@ import ttnn
 from loguru import logger
 from models.experimental.vadv2.reference import temporal_self_attention
 from models.experimental.vadv2.tt import tt_temporal_self_attention
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from models.experimental.vadv2.reference.resnet import ResNet
 from models.experimental.vadv2.reference.temporal_self_attention import TemporalSelfAttention
 from ttnn.model_preprocessing import (

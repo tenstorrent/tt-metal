@@ -18,7 +18,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_experts_matmul.op import DRAMStreamingExpertsMatmul
 from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul.op import DRAMStreamingMatmul
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
 
 
 def pad_to_dram_banks(num, tile_w, lcm):

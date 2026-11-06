@@ -13,7 +13,7 @@ from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import from_channel_last_ttnn, to_channel_last_ttnn
 from models.demos.stable_diffusion_xl_base.tt.tt_upsample2d import TtUpsample2D
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
