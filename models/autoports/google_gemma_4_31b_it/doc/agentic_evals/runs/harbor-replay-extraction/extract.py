@@ -1,4 +1,5 @@
 """Strict offline mini2.2.8 reconstruction; never an exact HTTP capture."""
+
 import argparse
 import ast
 import copy
@@ -28,17 +29,31 @@ def formatter():
     return namespace["_prepare_messages_for_api"], tool
 
 
-def reconstruct(data):
+def reconstruct(data, allow_recorded_subset=False):
     info = data["info"]
     config = info["config"]
     assert info["mini_version"] == "2.2.8"
     assert data["trajectory_format"] == "mini-swe-agent-1.1"
     assert config["model_type"] == "minisweagent.models.litellm_model.LitellmModel"
-    assert config["agent_type"] == "minisweagent.agents.default.DefaultAgent"
+    assert config["agent_type"] in {
+        "minisweagent.agents.default.DefaultAgent",
+        "minisweagent.agents.interactive.InteractiveAgent",
+    }
+    if config["agent_type"].endswith(".InteractiveAgent"):
+        assert config["agent"]["mode"] == "yolo"
     settings = config["model"]
     kwargs = copy.deepcopy(settings.get("model_kwargs", {}))
     # Transport configuration is omitted explicitly; never serialize credentials.
-    transport = {"api_key", "api_base", "base_url", "timeout", "request_timeout", "num_retries"}
+    transport = {
+        "api_key",
+        "api_base",
+        "base_url",
+        "timeout",
+        "request_timeout",
+        "num_retries",
+        "drop_params",
+        "extra_headers",
+    }
     allowed = {
         "temperature",
         "top_p",
@@ -79,7 +94,9 @@ def reconstruct(data):
                 **copy.deepcopy(kwargs),
             )
         )
-    assert len(rows) == info["model_stats"]["api_calls"], "Missing/unrecorded calls; cannot reconstruct faithfully"
+    assert (
+        len(rows) == info["model_stats"]["api_calls"] or allow_recorded_subset
+    ), "Missing/unrecorded calls; cannot reconstruct faithfully"
     assert rows
     return rows, omitted
 
@@ -88,15 +105,19 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("source", type=Path)
     p.add_argument("output", type=Path)
+    p.add_argument("--allow-recorded-subset", action="store_true")
     args = p.parse_args()
     private = Path("bringup/artifacts").resolve()
     assert args.output.resolve().is_relative_to(private), "Raw histories must stay under bringup/artifacts"
-    rows, omitted = reconstruct(json.loads(args.source.read_text()))
+    data = json.loads(args.source.read_text())
+    rows, omitted = reconstruct(data, args.allow_recorded_subset)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
     metadata = dict(
         kind="reconstructed_litellm_input_not_http_capture",
         calls=len(rows),
+        recorded_subset=args.allow_recorded_subset,
+        api_calls=data["info"]["model_stats"]["api_calls"],
         source_sha256=hashlib.sha256(args.source.read_bytes()).hexdigest(),
         output_sha256=hashlib.sha256(args.output.read_bytes()).hexdigest(),
         omitted_transport_field_names=omitted,

@@ -1,0 +1,22 @@
+{
+  "terminal": [],
+  "swe": [],
+  "pairs": [
+    {
+      "baseline": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/ci-phase-autoexport/baseline/paired-0.json",
+      "candidate": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/ci-phase-autoexport/candidate/paired-0.json",
+      "baseline_tokens": 168,
+      "candidate_tokens": 168,
+      "exact_token_ids": true,
+      "same_finish_reason": true
+    },
+    {
+      "baseline": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/ci-phase-autoexport/baseline/paired-1.json",
+      "candidate": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/ci-phase-autoexport/candidate/paired-1.json",
+      "baseline_tokens": 168,
+      "candidate_tokens": 168,
+      "exact_token_ids": true,
+      "same_finish_reason": true
+    }
+  ]
+}

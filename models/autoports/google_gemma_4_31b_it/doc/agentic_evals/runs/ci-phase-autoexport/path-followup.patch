@@ -1,0 +1,58 @@
+diff --git a/models/autoports/google_gemma_4_31b_it/tests/test_benchmark_phases.py b/models/autoports/google_gemma_4_31b_it/tests/test_benchmark_phases.py
+index b41a7939..bfdfa4f3 100644
+--- a/models/autoports/google_gemma_4_31b_it/tests/test_benchmark_phases.py
++++ b/models/autoports/google_gemma_4_31b_it/tests/test_benchmark_phases.py
+@@ -110,6 +110,29 @@ class AutoExportTests(unittest.TestCase):
+         step = recorder.begin("decode", batch_size=1, sampling_mode="device", **kwargs)
+         recorder.complete(step)
+ 
++    def test_template_paths_are_unique_and_private_without_overwrite(self):
++        from unittest.mock import patch
++
++        template = str(Path(self.directory.name) / "phase-{pid}-{time_ns}.jsonl")
++        with patch.object(phases.time, "time_ns", side_effect=[100, 101]):
++            first = phases.PhaseRecorder(template, {}, auto_export_interval=3600)
++            second = phases.PhaseRecorder(template, {}, auto_export_interval=3600)
++        for recorder in (first, second):
++            self.addCleanup(lambda r=recorder: Path(r.socket_path).unlink(missing_ok=True))
++            self.addCleanup(lambda r=recorder: r.export_stream.close() if r.export_stream else None)
++            self.step(recorder)
++            recorder._export(automatic=True)
++            self.assertEqual(recorder.path.stat().st_mode & 0o777, 0o600)
++            self.assertEqual(len(json.loads(recorder.path.read_text())["events"]), 2)
++        self.assertNotEqual(first.path, second.path)
++        self.assertNotEqual(first.socket_path, second.socket_path)
++        self.assertNotIn("{", str(first.path))
++        self.assertEqual(first.socket_path, phases.socket_path(first.path))
++        before = second.path.read_bytes()
++        self.step(first)
++        first._export(automatic=True)
++        self.assertEqual(second.path.read_bytes(), before)
++
+     def test_background_export_creates_private_file_without_client(self):
+         import time
+ 
+diff --git a/models/autoports/google_gemma_4_31b_it/tt/benchmark_phases.py b/models/autoports/google_gemma_4_31b_it/tt/benchmark_phases.py
+index 6f3a76e0..0aaafcf7 100644
+--- a/models/autoports/google_gemma_4_31b_it/tt/benchmark_phases.py
++++ b/models/autoports/google_gemma_4_31b_it/tt/benchmark_phases.py
+@@ -50,7 +50,9 @@ class PhaseRecorder:
+         self.export_failed = False
+         self.file_exhausted = False
+         self.truncated = False
+-        self.path = Path(path)
++        # Resolve only documented placeholders; ordinary paths stay literal.
++        resolved_path = str(path).replace("{pid}", str(os.getpid())).replace("{time_ns}", str(time.time_ns()))
++        self.path = Path(resolved_path)
+         self.identity = identity
+         self.max_events = max_events
+         self.lock = threading.Lock()
+@@ -63,7 +65,7 @@ class PhaseRecorder:
+         self.positions = None
+         self.window_start_ns = time.perf_counter_ns()
+         self.path.parent.mkdir(parents=True, exist_ok=True)
+-        self.socket_path = socket_path(path)
++        self.socket_path = socket_path(self.path)
+         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+         # Never remove a socket that may belong to another live server.
+         self.server.bind(self.socket_path)

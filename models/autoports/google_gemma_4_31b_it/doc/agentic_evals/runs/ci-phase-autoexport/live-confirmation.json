@@ -1,0 +1,14 @@
+{
+  "phase_events": 340,
+  "complete_steps": 170,
+  "errors": [],
+  "pending": 0,
+  "file_mode": "0o600",
+  "max_effective_position": 909,
+  "expected_last_position": 909,
+  "measurement_end": "2026-11-06T09:50:50.844644+00:00",
+  "candidate_device_hours": 0.052225473333333335,
+  "baseline_device_hours": 0.05167654555555556,
+  "raw": "bringup/artifacts/stage12-autoexport-candidate-phases.jsonl",
+  "scope": "Initial candidate window before real-history replay, complete170steps; asyncsubmittedsteps not emittedtoken count"
+}

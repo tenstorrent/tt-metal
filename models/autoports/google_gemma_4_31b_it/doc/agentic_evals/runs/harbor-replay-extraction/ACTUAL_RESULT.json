@@ -1,0 +1,133 @@
+{
+  "status": "actual_history_extraction_complete_replay_not_run",
+  "used_device_hours": 0,
+  "samples": [
+    {
+      "task": "django__django-11265__ohWF75G",
+      "api_calls": 126,
+      "recorded_responses": 115,
+      "unrecorded_calls": 11,
+      "request_prompt_tokens_min_max": [
+        2206,
+        107474
+      ],
+      "completion_tokens_min_max": [
+        29,
+        32768
+      ],
+      "peak_prompt_plus_completion_tokens": 107585,
+      "release_output_cap": 32768,
+      "max_recorded_reasoning_tokens": 2871,
+      "finish_reasons": [
+        "tool_calls"
+      ],
+      "last3_usage": [
+        {
+          "completion_tokens": 326,
+          "prompt_tokens": 103509,
+          "total_tokens": 103835,
+          "completion_tokens_details": {
+            "reasoning_tokens": 2
+          },
+          "prompt_tokens_details": null
+        },
+        {
+          "completion_tokens": 239,
+          "prompt_tokens": 105535,
+          "total_tokens": 105774,
+          "completion_tokens_details": {
+            "reasoning_tokens": 2
+          },
+          "prompt_tokens_details": null
+        },
+        {
+          "completion_tokens": 111,
+          "prompt_tokens": 107474,
+          "total_tokens": 107585,
+          "completion_tokens_details": {
+            "reasoning_tokens": 2
+          },
+          "prompt_tokens_details": null
+        }
+      ],
+      "private_history": "bringup/artifacts/stage12-real-histories/swe/django__django-11265__ohWF75G.jsonl",
+      "private_peak3": "bringup/artifacts/stage12-real-histories/swe-peak3/django__django-11265__ohWF75G.jsonl",
+      "source_sha256": "c7349884cf21f5ee694daa0312114895415aa9809ac1bc202433ebab9508418a",
+      "history_sha256": "d568000d348532d32a075cfe9b9ba89c2e90061e5a932be1208383da57d2cc5b"
+    },
+    {
+      "task": "pylint-dev__pylint-7080__CJczXtL",
+      "api_calls": 35,
+      "recorded_responses": 35,
+      "unrecorded_calls": 0,
+      "request_prompt_tokens_min_max": [
+        9698,
+        33461
+      ],
+      "completion_tokens_min_max": [
+        39,
+        2622
+      ],
+      "peak_prompt_plus_completion_tokens": 33500,
+      "release_output_cap": 32768,
+      "max_recorded_reasoning_tokens": 2360,
+      "finish_reasons": [
+        "tool_calls"
+      ],
+      "last3_usage": [
+        {
+          "completion_tokens": 420,
+          "prompt_tokens": 32090,
+          "total_tokens": 32510,
+          "completion_tokens_details": {
+            "reasoning_tokens": 41
+          },
+          "prompt_tokens_details": null
+        },
+        {
+          "completion_tokens": 779,
+          "prompt_tokens": 32580,
+          "total_tokens": 33359,
+          "completion_tokens_details": {
+            "reasoning_tokens": 400
+          },
+          "prompt_tokens_details": null
+        },
+        {
+          "completion_tokens": 39,
+          "prompt_tokens": 33461,
+          "total_tokens": 33500,
+          "completion_tokens_details": {
+            "reasoning_tokens": 13
+          },
+          "prompt_tokens_details": null
+        }
+      ],
+      "private_history": "bringup/artifacts/stage12-real-histories/swe/pylint-dev__pylint-7080__CJczXtL.jsonl",
+      "private_peak3": "bringup/artifacts/stage12-real-histories/swe-peak3/pylint-dev__pylint-7080__CJczXtL.jsonl",
+      "source_sha256": "87bd37bcb0a4d9855b351dc88c2168dd53021157934430c796dc1f9078283c55",
+      "history_sha256": "4ef4e2d13c8e34b46bffe6b60fafd43cc723834015a6afc2a6fa60fb83404970"
+    }
+  ],
+  "method": "Stock mini2.2.8 InteractiveAgent yolo query delegates DefaultAgent. Added guarded support; transport/provider options drop_params/extra_headers omitted with api_base/timeout. Payloads remain reconstructed LiteLLM input, not exact wire requests.",
+  "django_gap": "126 attempted model calls but115 recorded assistant responses. Strict extraction rejected this correctly; explicit recorded-subset mode emits115 known query prefixes only and records11missing calls. Never invent absent responses.",
+  "usage_basis": "Per-response saved LiteLLM usage, not retokenized guesses; source payload provenance retained.",
+  "replay_proposal": {
+    "planned_clients": 2,
+    "batch": 8,
+    "histories": 2,
+    "calls": 6,
+    "selection": "Last3 recorded request prefixes per distinct real task, chronological; private swe-peak3. Targets observed large working sets and repeat prefix reuse without full150-callreplay.",
+    "expected_seconds": 180,
+    "box_device_hours": 0.25,
+    "command": "timeout 600 python_env/bin/python /home/mvasiljevic/.codex-gemma4-v3/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.23/scripts/agent_replay.py --base-url http://localhost:8000/v1 --histories bringup/artifacts/stage12-real-histories/swe-peak3 --agents 2 --model google/gemma-4-31B-it --time-cap-s 480 --request-timeout-s 3600 --out bringup/artifacts/stage12-real-histories/swe-peak3-result.json",
+    "requires": "Coordinator admission/queue, B8 full60 same native parsers plus enable-prompt-tokens-details; runtime observe actual overlapping rows, cache/pool metrics. Script alone does not prove simultaneous peak residency.",
+    "limits": "Diagnostic overrides one token/temp0; original32768cap remains in private history. Not scored task traffic or declared real-task capacity."
+  },
+  "remaining_validation": [
+    "Pinned tokenizer/rendered counts versus recorded request usage before launch, to detect provider normalization differences",
+    "Actual replay result and runtime overlap/cache evidence",
+    "Django11missing-call causes belong to separate validity audit; extraction cannot recover them"
+  ],
+  "no_raw_task_content_in_compact_evidence": true
+}

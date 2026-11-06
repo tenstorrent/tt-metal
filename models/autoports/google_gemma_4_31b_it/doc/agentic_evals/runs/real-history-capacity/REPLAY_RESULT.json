@@ -1,0 +1,129 @@
+{
+  "status": "pass_diagnostic_only",
+  "used_device_hours": 0.01613386,
+  "startup_charged": false,
+  "server_lifecycle": "Reused full60 B8 server; coordinator reports idle then clean SIGINT closure.",
+  "planned_clients": 2,
+  "captured_batch": 8,
+  "source": "bringup/artifacts/stage12-real-histories/swe-peak3-result.json",
+  "source_sha256": "005be8f8809f033988a2178b023064a32d679427580ee9ac7509a0e0eceaa40f",
+  "calls_completed": 6,
+  "errors": 0,
+  "client_wall_seconds": 58.0,
+  "preemptions": 0.0,
+  "api_prompt_counts_match_original_recorded_usage": true,
+  "api_prompt_tokens": [
+    103509,
+    32090,
+    105535,
+    32580,
+    107474,
+    33461
+  ],
+  "earlier_retokenization_delta": "Host reconstructed count was1token low on each body; live API usage exactly matches all six original recorded prompt counts.",
+  "phase_source": "bringup/artifacts/stage12-autoexport-candidate-phases.jsonl",
+  "phase_steps_inclusive": [
+    171,
+    241
+  ],
+  "excluded_steps": "1\u2013170 belong to separate paired workload.",
+  "submission_completion_pairs": 71,
+  "prefilled_tokens": 141049,
+  "final_context_tokens": 140935,
+  "prefilled_per_final_context": 1.0008088835278675,
+  "phase_grouping": [
+    {
+      "task": "django",
+      "call": 0,
+      "start": 0,
+      "end": 103509,
+      "steps": [
+        171,
+        221
+      ],
+      "prefilled_tokens": 103509
+    },
+    {
+      "task": "pylint",
+      "call": 0,
+      "start": 0,
+      "end": 32090,
+      "steps": [
+        221,
+        237
+      ],
+      "prefilled_tokens": 32090
+    },
+    {
+      "task": "django",
+      "call": 1,
+      "start": 103488,
+      "end": 105535,
+      "steps": [
+        237,
+        238
+      ],
+      "prefilled_tokens": 2047
+    },
+    {
+      "task": "pylint",
+      "call": 1,
+      "start": 32064,
+      "end": 32580,
+      "steps": [
+        239,
+        239
+      ],
+      "prefilled_tokens": 516
+    },
+    {
+      "task": "django",
+      "call": 2,
+      "start": 105472,
+      "end": 107474,
+      "steps": [
+        240,
+        240
+      ],
+      "prefilled_tokens": 2002
+    },
+    {
+      "task": "pylint",
+      "call": 2,
+      "start": 32576,
+      "end": 33461,
+      "steps": [
+        241,
+        241
+      ],
+      "prefilled_tokens": 885
+    }
+  ],
+  "grouping_basis": "Follow contiguous starts/ends within each prefill chain; final ends uniquely match six known API prompt lengths. Two mixed steps221/237 contain separate row intervals. Request IDs are null; grouping is shape/continuity attribution, not ID-level tracing.",
+  "api_cached_tokens": null,
+  "derived_cache": {
+    "inferred_skipped_prefix_tokens": 273600,
+    "basis": "API prompt sum414649 minus actual phase interval lengths141049 =273600; these are skipped-prefix tokens, not API cache counters.",
+    "returning_prompt_ceiling_tokens": 273714,
+    "returning_hit_fraction": 0.9995835068721366,
+    "final_two_requests_hit_fraction": 0.9995148970061181,
+    "final_two_basis": "Last turn of each distinct history: skipped starts105472+32576 over previous prompt lengths105535+32580. This is a last-turn proxy, not exact final-quarter timing metric.",
+    "late_quarter_hit_fraction": null
+  },
+  "observed_simultaneous_prefill_rows": 2,
+  "capacity_limitations": [
+    "Two worker histories and two mixed prefills demonstrate overlapping work, not continuous simultaneous residency of both terminal peak contexts.",
+    "Final prompt sum140935 is a workload aggregate, not measured peak physical KV allocation.",
+    "No exact API cached_tokens or per-request peak allocator snapshot; do not fabricate cache counters or maximum residency.",
+    "Django includes115recorded responses of126attempts; selectedlast3 are real known prefixes, not full126-calltrajectory.",
+    "Quarantined task scores do not prevent diagnostic use of observed histories; this replay makes no score or validity claim.",
+    "One-token deterministic replay does not validate long decode, tool execution, or capacity at larger concurrency."
+  ],
+  "prediction": {
+    "seconds": 180,
+    "actual_seconds": 58,
+    "device_box_hours": 0.25,
+    "release_savings_hours": 0
+  },
+  "confirmation": "Six bounded recorded-prefix requests completed; prompt usage parity, phase-derived reuse and zero preemptions observed. Conservative C2 diagnostic supported; C8 or physical peak-capacity claim not supported."
+}

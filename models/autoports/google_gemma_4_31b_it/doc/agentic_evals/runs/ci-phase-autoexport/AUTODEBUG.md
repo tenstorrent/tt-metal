@@ -1,0 +1,5 @@
+# Source diagnosis
+
+Existing generator_vllm.py enables PhaseRecorder with GEMMA4_BENCHMARK_PHASE_LOG. benchmark_phases.py only opens/writes the file inside command(drain/flush); normal stock TTI agentic workflow never invokes its local Unix socket. Thus configuring a mounted artifact path alone produces no evidence, while events accumulate to the1M-event buffer cap. Default manual benchmark clients explicitly drain and must retain their behavior.
+
+The existing socket thread offers a host-only background export point. State snapshots must be separated from file I/O so request-path begin/complete never wait on a disk write under the state lock. Concurrent manual and periodic drains require single export ownership to avoid dropped/duplicate events. Bound file output and signal incomplete windows explicitly; no performance claim is valid after overflow/export failure. Existing collector records host boundaries/positions, not device timings or scheduler KV occupancy. Stock persistent cache_root/logs is collected into workflow artifacts, but automatic export and privacy guarantees are currently missing.

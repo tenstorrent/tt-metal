@@ -1,0 +1,21 @@
+{
+  "repository": "swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-7080",
+  "manifest_digest": "sha256:d81b3855816c07747fbfd694352ce24fb8152cec70d136b292de55ff6afe2db6",
+  "config_digest": "sha256:947026ad5ca54dbbf6cc676543bf6c2299484dd9f50e746b8e027f46c44f4da4",
+  "env": [
+    "PATH=/opt/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "TZ=Etc/UTC"
+  ],
+  "entrypoint": null,
+  "cmd": [
+    "/bin/bash"
+  ],
+  "working_dir": "/testbed/",
+  "setup_history": [
+    "RUN |1 DEBIAN_FRONTEND=noninteractive /bin/sh -c wget 'https://repo.anaconda.com/miniconda/Miniconda3-py311_23.11.0-2-Linux-x86_64.sh' -O miniconda.sh     && bash miniconda.sh -b -p /opt/miniconda3 # buildkit",
+    "ENV PATH=/opt/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "RUN |1 DEBIAN_FRONTEND=noninteractive /bin/sh -c conda init --all # buildkit",
+    "RUN |1 DEBIAN_FRONTEND=noninteractive /bin/sh -c conda config --append channels conda-forge # buildkit",
+    "RUN |1 DEBIAN_FRONTEND=noninteractive /bin/sh -c echo \"source /opt/miniconda3/etc/profile.d/conda.sh && conda activate testbed\" > /root/.bashrc # buildkit"
+  ]
+}

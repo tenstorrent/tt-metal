@@ -1,0 +1,119 @@
+{
+  "status": "complete_observed_workload_summary",
+  "used_device_hours": 0,
+  "source": "Native mini2.2.8 extra.response.usage in smoke2-swe-native-parser collected trajectories",
+  "usage_basis": "Saved response API usage; no retokenization or async submission inference. Includes reasoning tokens in completion usage.",
+  "percentile_method": "Median arithmetic middle pair for even counts; p95 nearest-rank ceil(.95*n), one-based.",
+  "observed_concurrency": 2,
+  "supported_batch_used": 8,
+  "recorded_usage_rows": 150,
+  "attempted_calls": 161,
+  "coverage": {
+    "django": {
+      "recorded": 115,
+      "attempted": 126,
+      "missing": 11
+    },
+    "pylint": {
+      "recorded": 35,
+      "attempted": 35,
+      "missing": 0
+    }
+  },
+  "per_task": [
+    {
+      "task": "django__django-11265__ohWF75G",
+      "recorded_usage_rows": 115,
+      "attempted_calls": 126,
+      "missing_usage_rows": 11,
+      "prompt_tokens": {
+        "count": 115,
+        "min": 2206,
+        "median": 35977,
+        "p95_nearest_rank": 97387,
+        "max": 107474
+      },
+      "completion_tokens": {
+        "count": 115,
+        "min": 29,
+        "median": 107,
+        "p95_nearest_rank": 868,
+        "max": 32768
+      },
+      "prompt_plus_completion_tokens": {
+        "count": 115,
+        "min": 2409,
+        "median": 36054,
+        "p95_nearest_rank": 97982,
+        "max": 107585
+      },
+      "source_sha256": "c7349884cf21f5ee694daa0312114895415aa9809ac1bc202433ebab9508418a"
+    },
+    {
+      "task": "pylint-dev__pylint-7080__CJczXtL",
+      "recorded_usage_rows": 35,
+      "attempted_calls": 35,
+      "missing_usage_rows": 0,
+      "prompt_tokens": {
+        "count": 35,
+        "min": 9698,
+        "median": 18244,
+        "p95_nearest_rank": 32580,
+        "max": 33461
+      },
+      "completion_tokens": {
+        "count": 35,
+        "min": 39,
+        "median": 94,
+        "p95_nearest_rank": 2143,
+        "max": 2622
+      },
+      "prompt_plus_completion_tokens": {
+        "count": 35,
+        "min": 9831,
+        "median": 19457,
+        "p95_nearest_rank": 33359,
+        "max": 33500
+      },
+      "source_sha256": "87bd37bcb0a4d9855b351dc88c2168dd53021157934430c796dc1f9078283c55"
+    }
+  ],
+  "pooled": {
+    "prompt_tokens": {
+      "count": 150,
+      "min": 2206,
+      "median": 31755.0,
+      "p95_nearest_rank": 94242,
+      "max": 107474
+    },
+    "completion_tokens": {
+      "count": 150,
+      "min": 29,
+      "median": 99.0,
+      "p95_nearest_rank": 1255,
+      "max": 32768
+    },
+    "prompt_plus_completion_tokens": {
+      "count": 150,
+      "min": 2409,
+      "median": 32042.5,
+      "p95_nearest_rank": 94828,
+      "max": 107585
+    }
+  },
+  "conservative_observed_per_agent_working_set_tokens": 107585,
+  "sum_per_task_peak_prompt_plus_completion_tokens": 141085,
+  "limits": [
+    "Task peaks may occur at different times; sum of peaks is a conservative observed demand sum, not measured simultaneous occupancy.",
+    "Missing11Django responses have unknown token usage; observed maxima are not a full-trajectory bound.",
+    "Two histories are not a population estimate or capacity proof for higher concurrency.",
+    "Task scores are quarantined and unusable; request-shape measurements remain diagnostic only.",
+    "Long cap-hit output can dominate demand; limits are observations, not recommended reductions of modelcontext or releasecaps."
+  ],
+  "suggested_workload_fields": {
+    "target_concurrency": 2,
+    "typical_context_tokens_observed_median": 31755.0,
+    "working_set_tokens_observed_max": 107585,
+    "source": "150 saved usage rows from two real SWE histories;11 missing attempts, quarantined scores; conditional observed-workload values only"
+  }
+}

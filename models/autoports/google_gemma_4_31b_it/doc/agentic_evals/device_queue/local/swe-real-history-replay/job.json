@@ -1,0 +1,31 @@
+{
+  "arm": "swe-real-history-replay",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "completed",
+  "start": "2026-11-06T09:54:18.917035+00:00",
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "predicted_hours": 0.05,
+  "prediction_basis": "6knownrealprefix requests to107474tokens;180s clientguess from84Ki35sprefill plusreuse",
+  "timeout_seconds": 600,
+  "box_device_hours": 0.25,
+  "regime": "serial full60 mesh1x4",
+  "source": "Existingstockagent_replay;6knownlastprefixes2realhistories; Django11missingcalls excluded",
+  "limitations": "Priorrequestsnetworkquarantined forscore; thesearecapacityinputs only. Hostrender1tokenbelowAPIusageunresolved. One-tokenresponses maynotprove simultaneouspeakoccupancy.",
+  "server_reused_from": "ci-phase-autoexport-candidate",
+  "phase_start_step_id": 171,
+  "end": "2026-11-06T09:55:16.998931+00:00",
+  "exit_status": 0,
+  "actual_hours": 0.01613386,
+  "shutdown_idle": {
+    "vllm:num_requests_running": [
+      0.0
+    ],
+    "vllm:num_requests_waiting": [
+      0.0
+    ]
+  },
+  "result": "6/6stockreplaycalls,0errors/preemptions,58sclient; cachetokenusage absent,phaseanalysispending"
+}

@@ -1144,6 +1144,127 @@
       "problem_status": "open",
       "confirmed": "Ten prefills,max2active rows;29488device decode submissions; full-state/per-request tail unavailable",
       "evidence": "runs/gpqa-nightly-runtime-analysis/RESULT.json"
+    },
+    {
+      "problem": "ci-phase-autoexport",
+      "owner": "harness_registration",
+      "goal": "Persist model-owned phase observations on stockCI without plugin/harness changes",
+      "plan": "runs/ci-phase-autoexport/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0.15,
+        "basis": "guess",
+        "reason": "Two warmB8 startups and paired168token outputs; no speedgain expected"
+      },
+      "unblocks": [
+        "release_measurement_validity"
+      ],
+      "confirm": {
+        "method": "Concurrent recorder host tests, unchanged defaultAPI, localfull60 two exact168token output pairs with opt-in persistence; stockCI mount/artifact sourceproof",
+        "success": "No added synchronization; exactoutputs; bounded private persistent phasefile with explicit accounting failures"
+      },
+      "box_hours": 0.35,
+      "status": "done",
+      "evidence": "runs/ci-phase-autoexport/result.json; runs/ci-phase-autoexport/path-followup-result.json",
+      "used_device_hours": 0.1039020188888889,
+      "change": "kept",
+      "problem_status": "open",
+      "confirmed": {
+        "host_tests": 13,
+        "exact_pairs": 2,
+        "tokens_per_pair": 168,
+        "complete_phase_steps": 170,
+        "errors": 0,
+        "file_mode": "0600",
+        "CI_artifact_collection": "pendingnormalrung",
+        "path_uniqueness": "explicitpid/timeplaceholdershostverified"
+      }
+    },
+    {
+      "problem": "swe-network-validity",
+      "owner": "suite_registration",
+      "goal": "Diagnose and repair stock SWE agent environment activation if causal; preserve stockroute and quarantine networktasks",
+      "plan": "runs/swe-network-validity/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "swe_bench_verified": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "swe_bench_verified"
+      ],
+      "confirm": {
+        "method": "Source causalcheck, genericdefectbranch hosttests then same2-task normalrung",
+        "success": "Taskusespreparedtestbedinterpreter/dependencies and no agentnetworkdownloads; validtrajectories"
+      },
+      "box_hours": 0,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "kept",
+      "problem_status": "open",
+      "confirmed": {
+        "host_tests": "7focused;3771passed15skipped fullsuite andhooks",
+        "generic_commit": "91e38023e0561504443361df8c8a21ed88c58b16",
+        "published_commit": "e368f08a23516f5594a7ed853b9e3d776a3a42fe",
+        "live_confirmation": "same2smoke42200513517pending; devicecostchargedtorung"
+      },
+      "evidence": "runs/swe-network-validity/AUTOFIX.md"
+    },
+    {
+      "problem": "django-cap-loop-diagnosis",
+      "owner": "harness_registration",
+      "goal": "Distinguish actual32768token repetitivefailure from still-progress cutoff; diagnose pinnedHF vsTT on realprefix beforeprecisionchange",
+      "plan": "runs/django-cap-loop-diagnosis/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "swe_bench_verified": 0
+        },
+        "device_hours": 0.25,
+        "basis": "guess"
+      },
+      "unblocks": [
+        "representative_agent_score"
+      ],
+      "confirm": {
+        "method": "Actualtrajectorycap/repetitionaudit, then feasiblepinnedHF/TTlongprefixdiscriminator",
+        "success": "Evidenceclassifiescause or explicitremaininguncertainty; neverhidecapfailurebyfinish_reason"
+      },
+      "box_hours": 0.5,
+      "status": "running"
+    },
+    {
+      "problem": "real-history-capacity-replay",
+      "owner": "local_serving_check",
+      "goal": "Replay recorded long SWE histories at conservativeC2 and quantify prefix reuse without maximum-capacity claims.",
+      "plan": "runs/real-history-capacity/plan.md",
+      "predicted": {
+        "saving_hours": {},
+        "device_hours": 0.05,
+        "basis": "guess"
+      },
+      "confirm": {
+        "method": "Stockagent_replay with six actual prefixes; check usage parity, phase intervals and preemptions",
+        "success": "6/6 complete,0errors/preemptions; distinguish peak residency limitation"
+      },
+      "box_hours": 0.25,
+      "status": "done",
+      "used_device_hours": 0.01613386,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": {
+        "calls": 6,
+        "errors": 0,
+        "preemptions": 0,
+        "client_seconds": 58,
+        "higher_capacity": "unproven"
+      },
+      "evidence": "runs/real-history-capacity/REPLAY_RESULT.json"
     }
   ],
   "rankings": [
@@ -2307,6 +2428,199 @@
       ],
       "basis": "hostfix0; future diagnosticcost guesses, no unmeasuredspeedcredit",
       "reason": "Validity first; C8 capacity remains unproved, so next rung proceeds C2 without waiting for speed effort. Tool smoke validity and dry route remain ahead of speed. Costs for future device work are guesses; zero speed savings credited."
+    },
+    {
+      "after": "ci-phase-persistence-gap",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-phase-autoexport",
+          "unblocks": [
+            "release_measurement_validity"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.15
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Validity first. Missing phase exports prevent representative release-cost accounting; opt-in model-owned repair uses idlelocaldevice while allqueuedrungs continue. Future costs guessed, no unmeasuredspeedcredit."
+    },
+    {
+      "after": "swe-smoke-both-network-quarantined",
+      "order": [
+        {
+          "problem": "swe-network-validity",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-phase-autoexport",
+          "unblocks": [
+            "release_measurement_validity"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.15
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "BothSWEtrajectoriesnetworkquarantined; activationvalidityrepair first. Runninglocalexactnesseffortcontinues; no nightlyadvance withoutvalidsmoke."
+    },
+    {
+      "after": "phase-exactness-and-real-history-replay",
+      "order": [
+        {
+          "problem": "swe-network-validity",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Validityfirst: SWEactivationrepair confirmedhostawaitssamesmoke; actualrepetitivecapfound. Exportexactnessaccepted; realC2historyreplaypasses but noC8claim. Futurecostsguessed; no unmeasuredspeedcredit."
+    },
+    {
+      "after": "swe-activation-repair-dispatched-and-C2-replay-banked",
+      "order": [
+        {
+          "problem": "swe-network-validity",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Validity remains first. Same SWE2 retry proceeds immediately; no rung waits for loop diagnosis. CI phase export accepted from local exactness; artifact confirmation on next run. Zero speed savings credited without evidence."
     }
   ],
   "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

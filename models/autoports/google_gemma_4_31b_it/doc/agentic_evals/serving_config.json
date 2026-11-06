@@ -107,6 +107,13 @@
       "reason": "Smallest validated batch>=2; C8 not admitted",
       "pool_basis": "Conservative observedC2: prior full-context physical envelope and actual nightly10 completed at max2 active rows. Not a C8 or maximum-capacity claim. GPQA has no Docker task sandboxes.",
       "host_limit_basis": "No task sandboxes for GPQA; observedC2 stock client"
+    },
+    "smoke2-swe-activation-repair": {
+      "eval": "swe_bench_verified",
+      "batch": 8,
+      "planned_clients": 2,
+      "max_num_seqs": 8,
+      "reason": "Smallest validated batch at or above2; original task resources unchanged."
     }
   },
   "release_limits": {

@@ -1,0 +1,63 @@
+{
+  "status": "invalid_smoke_quarantined",
+  "run_id": 42173587147,
+  "functional_at": 0,
+  "completed_trials": 2,
+  "valid_scored_trials": 0,
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "raw_score": {
+    "correct": 0,
+    "total": 2,
+    "fraction": 0,
+    "wilson95_fraction": [
+      0,
+      0.6576280471103807
+    ],
+    "eligible_for_stage_score": false
+  },
+  "quarantined_tasks": [
+    {
+      "task": "django__django-11265",
+      "raw_reward": 0.0,
+      "status": "quarantined",
+      "reason": "Agent-initiated pip operation downloaded packages over network",
+      "agent_seconds": 7271.530568,
+      "exit_status": "Submitted",
+      "exception": null,
+      "evidence": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T073358/django__django-11265__ohWF75G/agent/mini-swe-agent.trajectory.json"
+    },
+    {
+      "task": "pylint-dev__pylint-7080",
+      "raw_reward": 0.0,
+      "status": "quarantined",
+      "reason": "Agent-initiated pip operation downloaded packages over network",
+      "agent_seconds": 487.653862,
+      "exit_status": "Submitted",
+      "exception": null,
+      "evidence": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T073358/pylint-dev__pylint-7080__CJczXtL/agent/mini-swe-agent.trajectory.json"
+    }
+  ],
+  "limits": {
+    "agent_seconds": 21600,
+    "request_seconds": 3600,
+    "max_output_tokens": 32768
+  },
+  "resources": "No blanket overrides in actual Harbor configs; task definitions govern CPU/memory/storage",
+  "audit": {
+    "network": "Django native message6 pip install-e downloaded pytz/sqlparse; pylint message40 pip install-r downloaded astroid/typing-extensions and others. Positive download output with returncode0, not mereURLtext or cachedonly speculation.",
+    "fetched_fix": "No fetched reference patch observed; network rule independently requires quarantine.",
+    "cutoff": "Both agents submitted, neither hit agent time limit. Individual malformed-response/cap episodes require separate investigation; no full cutoff count claimed.",
+    "harness": "Fresh autoport full60 on1x4, stock mini2.2.8 and Harbor pinned sourceobserved; no infrastructure exceptions reported"
+  },
+  "timing": {
+    "evaluation_seconds": 7306.65975,
+    "evaluation_hours": 2.0296277083333334,
+    "total_agent_seconds": 7759.18443,
+    "device_job_hours": 2.415277777777778,
+    "workflow_hours": 3.2983333333333333
+  },
+  "decision": "Do not advance rung. Diagnose network validity, then repeat same frozen smoke if fix supported; no customnetworkpolicy or taskselector.",
+  "reference": "NA"
+}

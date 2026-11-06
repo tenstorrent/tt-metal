@@ -1,0 +1,63 @@
+{
+  "base": "e368f08a23516f5594a7ed853b9e3d776a3a42fe",
+  "nightly_limits": {
+    "r1_gpqa_diamond": 0,
+    "swe_bench_verified": 2,
+    "terminal_bench_2_1": 0
+  },
+  "datasets": [
+    {
+      "name": "swebench-verified",
+      "n_tasks": 2,
+      "task_names": [
+        "pylint-dev__pylint-7080",
+        "django__django-11265"
+      ]
+    }
+  ],
+  "planned_clients": 2,
+  "max_num_seqs": "8",
+  "agent": {
+    "model_name": "openai/google/gemma-4-31B-it",
+    "override_timeout_sec": 21600,
+    "kwargs": {
+      "version": "2.2.8",
+      "max_tokens": 32768,
+      "config": {
+        "model": {
+          "model_kwargs": {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "extra_body": {
+              "top_k": 20,
+              "chat_template_kwargs": {
+                "enable_thinking": true
+              }
+            },
+            "drop_params": true,
+            "timeout": 3600
+          },
+          "cost_tracking": "ignore_errors"
+        }
+      }
+    },
+    "name": "mini-swe-agent",
+    "env": {
+      "BASH_ENV": "/root/.bashrc",
+      "OPENAI_BASE_URL": "http://172.17.0.1:8000/v1",
+      "OPENAI_API_BASE": "http://172.17.0.1:8000/v1"
+    }
+  },
+  "model_env": {
+    "MESH_DEVICE": "P300x2",
+    "ARCH_NAME": "blackhole",
+    "GEMMA4_BENCHMARK_PHASE_LOG": "/home/container_app_user/cache_root/logs/gemma4-phase-{pid}-{time_ns}.jsonl",
+    "GEMMA4_PHASE_AUTOEXPORT_SECONDS": "1",
+    "HF_HUB_CACHE": "/home/container_app_user/cache_root/weights/hub",
+    "TT_METAL_CACHE": "/home/container_app_user/cache_root/tt-metal-jit",
+    "TT_MODEL_CLASS_OVERRIDES": "TTGemma4ForConditionalGeneration=models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM,TTGemma4ForCausalLM=models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM"
+  },
+  "harbor_git_ref": "e76c762fca5267dfb36e1f900f0a7724ed72e735",
+  "tt_metal_dispatch_ref": "439c22b0e991e5af626efafa7224edf28f84795b",
+  "vllm_git_ref": "ca7a18246e4111629ed6cb4a7d1192002749fccf"
+}

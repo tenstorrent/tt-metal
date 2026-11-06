@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-06T09:47:05.596859+00:00",
+  "metrics": {
+    "vllm:num_requests_running": [
+      0.0
+    ],
+    "vllm:num_requests_waiting": [
+      0.0
+    ]
+  },
+  "owned_api_pid": 72279
+}

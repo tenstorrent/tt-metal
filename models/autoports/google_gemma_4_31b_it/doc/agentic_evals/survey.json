@@ -67,8 +67,13 @@
       "test": "Stock2-task smoke with trajectory audit and adapter metrics"
     },
     "prefix_hits": {
-      "not_measured": "Tool-suite smoke and full agent-call accounting pending; GPQA smoke measured separately below.",
-      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+      "value": {
+        "swe_known_prefix_replay_returning_hit_fraction": 0.9995835068721366,
+        "final_turn_pair_hit_fraction": 0.9995148970061181
+      },
+      "healthy": true,
+      "reason": "Derived fromactualphaseprefillstarts; not APIcachecounter orfulltrajectorypeakcapacity",
+      "evidence": "runs/real-history-capacity/REPLAY_RESULT.json"
     },
     "cache_pressure": {
       "evidence": "runs/gpqa-workload/RESULT.json",
@@ -89,10 +94,12 @@
     },
     "cutoffs": {
       "evidence": "runs/nightly-gpqa-explicit-autoport/audit.json",
-      "limitation": "Exact finish_reason absent from sample schema; tool trajectories pending.",
+      "limitation": "Django one recorded32768cap output repeats a fragment8140times, counts as model loopfailure independentofquarantinedscore;11unrecordedcalls unknown. BothtaskscompletedviaSubmitted beforeagenttimeout.",
       "value": {
         "gpqa_nightly_complete_final_answers": 10,
-        "observed_timeouts": 0
+        "observed_timeouts": 0,
+        "swe_django_recorded_repetitive_cap_calls": 1,
+        "swe_accepted_scores": 0
       },
       "not_measured": "Tool trajectories pending; GPQA completed answers but exact finish reason absent.",
       "test": "Audit Harbor terminal conditions and complete task trajectories."
@@ -104,7 +111,8 @@
         "terminal_bench_2_1"
       ],
       "value": {
-        "r1_gpqa_diamond": "valid_nightly10"
+        "r1_gpqa_diamond": "valid_nightly10",
+        "swe_bench_verified": "bothsmoketasksnetworkquarantined"
       },
       "not_measured": "Tool-suite trajectories pending; GPQA smoke valid.",
       "test": "Collect active CI tool runs and audit network/fetched fixes and harness outcomes."
@@ -239,5 +247,5 @@
       "evidence": "runs/prefill-under-load/RESULT.md"
     }
   ],
-  "last_updated": "2026-11-06T09:36:27.643712+00:00"
+  "last_updated": "2026-11-06T10:02:30.826022+00:00"
 }

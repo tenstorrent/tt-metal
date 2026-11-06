@@ -1,0 +1,19 @@
+{
+  "status": "host_confirmed",
+  "integration_discovery": "Persistent CI volume with repeated identical SHAs makes a fixed exclusive export path collide; in-container retry can reuse a socket path.",
+  "change": "Resolve explicit {pid} and {time_ns} once before deriving Path and socket; other braces and ordinary paths stay literal.",
+  "commit": "a3ae35c983316a7a0987ffa1d331165803f55e57",
+  "parent": "9696637efd0104177ffe8f17a85a4161bdb10938",
+  "branch": "fix/phase-recorder-autoexport",
+  "incremental_patch": "path-followup.patch",
+  "ci_env_path": "/home/container_app_user/cache_root/logs/gemma4-phase-{pid}-{time_ns}.jsonl",
+  "host_tests_passed": 13,
+  "confirmation": "Two template instances resolve distinct files/sockets, create0600files, preserve other instance evidence; all original manual API tests pass. Commit hooks passed.",
+  "additional_device_hours": 0,
+  "live_claim": "No new device or numerical claim. Prior automatic-export paired exactness retained; CI artifact confirmation still pending.",
+  "evidence": [
+    "path-followup-plan.md",
+    "bringup/artifacts/stage12-phase-path-host.log",
+    "bringup/artifacts/stage12-phase-path-hooks.log"
+  ]
+}

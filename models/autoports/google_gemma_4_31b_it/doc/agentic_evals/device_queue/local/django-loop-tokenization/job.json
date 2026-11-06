@@ -1,0 +1,17 @@
+{
+  "arm": "django-loop-tokenization",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "running",
+  "start": "2026-11-06T10:12:58.068526+00:00",
+  "planned_clients": 1,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "batch_reason": "Match originalC2/B8 serving route for prompt reconstruction; no throughput claim",
+  "predicted_hours": 0.055,
+  "prediction_basis": "PreviousfreshB8startupandpair0.0522h; tokenizationonlythenclose",
+  "timeout_seconds": 1260,
+  "box_device_hours": 0.5,
+  "regime": "serial full60 mesh1x4",
+  "device_owners": []
+}

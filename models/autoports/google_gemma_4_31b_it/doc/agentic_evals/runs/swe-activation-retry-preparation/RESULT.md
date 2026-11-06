@@ -1,0 +1,11 @@
+# SWE activation retry candidate confirmed
+
+Model-only patch `swe2-phase-export.patch`, SHA256 d9b8b606a62ed8ac9107be64c2f1470fd4e582ed92f5974120b7b543310da405, applies to TTI e368f08a23516f5594a7ed853b9e3d776a3a42fe. Isolated worktree `/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-swe-activation-retry`, branch `prep/swe-activation-retry`; no commit/push/dispatch or active publication changes.
+
+Stock resolved CI_NIGHTLY selection: SWE2 only, tasks `pylint-dev__pylint-7080` and `django__django-11265`, planned_clients2, B8/maxseq8; GPQA0 and Terminal0. Agent-scoped BASH_ENV=/root/.bashrc is inherited from the generic base repair. Release caps remain agent21600s/request3600s/output32768, sampling temperature1/top_p.95/top_k20 with thinking true. Task CPU/memory overrides remain absent. Fresh autoport, native parsers, persistent cache paths, context and Harbor SHA unchanged.
+
+Model env additions: GEMMA4_BENCHMARK_PHASE_LOG=/home/container_app_user/cache_root/logs/gemma4-phase-{pid}-{time_ns}.jsonl and GEMMA4_PHASE_AUTOEXPORT_SECONDS=1. No generic source changes. Stock resolution captured in `resolved.json`; endpoint host discovery warned that local Docker was unavailable, so this host-only capture uses the existing fallback endpoint and does not claim live container reachability.
+
+Focused model/suite/Harbor pin tests:38 passed. Following one affected reference-test expectation update, model/suite/reference tests:34 passed. Final full hooks (ruff,ruff-format,pytest,copyright) all pass in `bringup/artifacts/stage12-swe-activation-retry-hooks-final2.log`. Earlier runs exposed formatting and model-specific disabled-GPQA expectations, now corrected. `git diff --check` passes.
+
+Apply from publication base with `git apply /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/swe-activation-retry-preparation/swe2-phase-export.patch`. Coordinator dispatch route remains stock agentic, ci-nightly, SWE suite, C2/B8. Pin TT source439c22b0e991e5af626efafa7224edf28f84795b and vLLM plugin ca7a18246e4111629ed6cb4a7d1192002749fccf explicitly. Live activation/trajectory validity and phase-file collection remain for the normal same-two-task retry. Predicted and actual device hours0; no speed credit claimed.

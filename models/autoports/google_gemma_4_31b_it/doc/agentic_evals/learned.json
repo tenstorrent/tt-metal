@@ -84,6 +84,14 @@
       "fact": "Long prefills can materially stall client-visible decode delivery even with chunked prefill and async scheduling enabled. Isolated decode rate alone does not project agent completion.",
       "measurement": "Synthetic C2/B8:84Ki prefill35.41s and maximum decoder event gap2.43s; no device-time claim, short sequential baselines.",
       "evidence": "runs/prefill-under-load/RESULT.md"
+    },
+    {
+      "fact": "OfficialSWEimages activate testbed through /root/.bashrc; MiniLocalEnvironment childshells inherit launchingenv. Baseconda execution caused missingdeps and agentnetworkdownloads; scopedBASH_ENV fix awaitingliveconfirmation.",
+      "evidence": "runs/swe-network-validity/AUTOFIX.md"
+    },
+    {
+      "fact": "Gemma native tool_calls finish_reason can coexist with completion_tokens32768 and visibly truncated repetition; inspect usage andcontent, not finish_reasonalone.",
+      "evidence": "SWE Django native trajectory message148; prompt42823,command57451chars,8140 repeated a fragments."
     }
   ],
   "suite_timings": [
@@ -115,6 +123,21 @@
         0.9821237869049271
       ],
       "evidence": "runs/nightly-gpqa-explicit-autoport/audit.json"
+    },
+    {
+      "run_id": 42173587147,
+      "eval": "swe_bench_verified",
+      "tasks": 2,
+      "agents": 2,
+      "batch": 8,
+      "wall_hours": 2.0296277083333334,
+      "agent_hours": 2.155329008333333,
+      "timeouts": null,
+      "score": null,
+      "raw_score": 0,
+      "valid": false,
+      "reason": "Both tasks networkquarantined",
+      "evidence": "runs/smoke2-swe-native-parser/audit.json"
     }
   ],
   "generic_fixes": [
@@ -136,6 +159,19 @@
       "fix": "Supervise delayed Docker startup with existing model budget; exact owned cleanup and fail-closed pending creation prevent overlapping retries.",
       "evidence": "runs/ci-container-startup/AUTOFIX.md",
       "live_confirmation": "pending42190891568"
+    },
+    {
+      "branch": "fix/swe-agent-environment-activation",
+      "sha": "91e38023e0561504443361df8c8a21ed88c58b16",
+      "fix": "ScopedagentBASH_ENV sourcesofficialSWEtestbedactivation; no staticPATH ornetworkpolicy",
+      "confirmation": "7hosttests/fullhooks; livepending"
+    },
+    {
+      "branch": "fix/swe-agent-environment-activation",
+      "sha": "91e38023e0561504443361df8c8a21ed88c58b16",
+      "fix": "StockDockerSWE mini-agent launched via noninteractivebash misses testbedactivation. DefaultBASH_ENV=/root/.bashrc for standardSWEmini path preservesexplicitoverride.",
+      "evidence": "runs/swe-network-validity/AUTOFIX.md",
+      "live_confirmation": "pending42200513517"
     }
   ]
 }

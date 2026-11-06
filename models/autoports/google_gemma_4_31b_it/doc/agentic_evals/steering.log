@@ -11,3 +11,4 @@
 2026-11-06T08:22:22.615507+00:00 Prefill-under-load boundary: inputs unchanged; no steering.md; local diagnostic only, CI rungs proceed unchanged.
 2026-11-06T08:41:13.089354+00:00 Docker startup failure boundary: inputs unchanged; no steering.md; generic defect investigation under autofix, no workflow modification or foreign process termination.
 2026-11-06T09:16:56.345845+00:00 GPQA observed-state capacity planning: inputs unchanged, no steering.md; no invented followup or duplicated history; device launch pendingactual10samples and validatedreconstruction.
+2026-11-06T10:11:33.237066+00:00 Autoexport/replay/activation boundary: inputs reread, extended48h/run12h/CI6 unchanged, no steering.md. Preserve pending dry-run and checker questions; same SWE2 retry published only from separate checkout.

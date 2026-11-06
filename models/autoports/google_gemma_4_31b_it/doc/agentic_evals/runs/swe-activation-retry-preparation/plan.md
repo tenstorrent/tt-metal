@@ -1,0 +1,3 @@
+# SWE activation retry registration
+
+Host-only, zero device hours. Isolated model config patch on TTI e368f08a23516f5594a7ed853b9e3d776a3a42fe, retaining generic activation fix. Enable original frozen SWE2 at C2/B8; GPQA and Terminal CI_NIGHTLY limits zero. Preserve all task limits, parsers, caches and immutable pins. Add model-owned phase log unique path and one-second periodic autoexport, matching TT source 439c22b0e991e5af626efafa7224edf28f84795b. Verify stock resolved task/config and model env with focused tests and full hooks. No dispatch/publication or task cohort edits. Coordinator applies patch and dispatches immutable references with vLLM plugin ca7a18246e4111629ed6cb4a7d1192002749fccf.

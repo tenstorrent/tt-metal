@@ -1,0 +1,3 @@
+# Unique CI path follow-up
+
+Integration discovery: same immutable CI SHAs may run repeatedly against the persistent named model volume. A fixed path would correctly fail exclusive creation, but lose evidence; same socket name could collide on an in-container retry. Resolve explicit {pid}/{time_ns} placeholders once in PhaseRecorder before deriving file and socket paths. Leave ordinary paths and default manual API unchanged. Confirm two instances get distinct private files/sockets and do not overwrite; existing tests must pass. Path-only change,0additionaldevicehours, no new numerical/device claim. Return incremental patch against accepted autoexport source.

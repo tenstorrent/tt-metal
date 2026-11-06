@@ -29,7 +29,7 @@
     "Stage gate pass"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-06T07:19:19.897569+00:00",
+  "updated_at": "2026-11-06T10:12:21.186963+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -37,11 +37,11 @@
   ],
   "live_wait": {
     "run_ids": [
-      42173587147,
-      42182632490,
-      42182664252
+      42190891568,
+      42196060694,
+      42200513517
     ],
-    "status": "SWE correct-autoport devicejobactive; corrected explicit-autoport Terminalsmoke and GPQAnightly dispatched; oldGPQA arm disqualified",
+    "status": "Terminaldevicejobrunning,GPQAserver-sizedbuilding,SWEactivationretryqueued",
     "monitor": "bringup/artifacts/stage12-monitor-ci.py"
   },
   "release_route_decision_request": {
@@ -112,8 +112,15 @@
     "ready": true,
     "snapshot_last_time": "2026-11-06T09:14:08Z",
     "evidence": "bringup/artifacts/stage12-gpqa-explicit-0914.log",
-    "note": "Exact10doc_ids/C2/release caps/pinnedrevision command observed; score pending.",
+    "note": "Completednightly10 valid9/10; see runs/nightly-gpqa-explicit-autoport/audit.json",
     "ready_at": "2026-11-06T09:06:04Z",
     "eval_started_at": "2026-11-06T09:06:12Z"
+  },
+  "swe_network_validity": {
+    "status": "host_fix_passed_same_smoke_retry_queued",
+    "run_id": 42173587147,
+    "reason": "Bothtasksdownloadedpackages; suspectedstockagentbase-vs-testbedenvironment mismatch",
+    "evidence": "runs/swe-network-validity/AUTOFIX.md",
+    "retry_run_id": 42200513517
   }
 }

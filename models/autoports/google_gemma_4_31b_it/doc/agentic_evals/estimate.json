@@ -21,7 +21,7 @@
     },
     "swe_bench_verified": {
       "decision": "stop",
-      "reason": "Correct fresh-autoport smoke is actively running on CI; no completed scored trajectories or measured release projection yet. Provisional release exclusion, not a capacity/accuracy stop.",
+      "reason": "Both smoke tasks quarantined for agent-initiated network downloads. Raw0/2 is not validstage score. Generic environment/activation diagnosis active; same smoke must be rerun if repaired.",
       "functional_at": 0,
       "projected_hours": null,
       "score": null,

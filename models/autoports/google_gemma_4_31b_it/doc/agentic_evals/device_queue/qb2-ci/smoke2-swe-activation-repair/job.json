@@ -1,0 +1,30 @@
+{
+  "arm": "smoke2-swe-activation-repair",
+  "eval": "swe_bench_verified",
+  "device": "qb2-ci",
+  "owner": "coordinator",
+  "status": "queued",
+  "workflow": "agentic",
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "tasks": 2,
+  "task_ids": [
+    "pylint-dev__pylint-7080",
+    "django__django-11265"
+  ],
+  "tt_metal_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
+  "tti_sha": "2d738ec3910f7f13d1614e6196d9ff5f646b6fe1",
+  "plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+  "predicted_hours": 4.5,
+  "predicted_evaluation_seconds": 7306.65975,
+  "prediction_basis": "Previous same2/C2 evaluation2.02963h, totalworkflow3.29833h;4.5h forecast includes36percent margin. No activation speedup assumed;6h agent ceiling unchanged.",
+  "run_timeout_hours": 12,
+  "ci_job_timeout_hours": 18,
+  "created_at": "2026-11-06T10:09:30.775559+00:00",
+  "reason": "Repeat original quarantined smoke after generic testbed activation repair; periodic phase export locally exact. No rung advance.",
+  "score_valid": null,
+  "run_id": 42200513517,
+  "submitted_at": "2026-11-06T10:09:43Z",
+  "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42200513517"
+}

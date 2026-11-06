@@ -1,0 +1,41 @@
+{
+  "status": "missing_automatic_persistence_capability",
+  "used_device_hours": 0,
+  "source_changes": [],
+  "publication_or_dispatch": false,
+  "candidate_env": {
+    "GEMMA4_BENCHMARK_PHASE_LOG": "/home/container_app_user/cache_root/logs/phase-<unique-run-id>.jsonl"
+  },
+  "route": {
+    "env": "Runtime spec JSON mounted readonly by workflows/run_docker_server.py:760; vllm-tt-metal/src/run_vllm_api_server.py:1004 sets model env before server starts.",
+    "mount": "workflows/setup_host.py:112 cache_root; workflows/run_docker_server.py:648 mounts persistent named model volume there in default CI.",
+    "collection": "run.py:1429 calls collect_tt_triage_logs after workflow on success or failure. workflows/run_docker_server.py:329 copies cache_root/logs regular files into workflow_logs/tt_triage and filters stale mtime.",
+    "upload": "setup/shield-run-tests.yml:676 uploads workflow_logs. Path is artifact-backed, not source publication or telemetry."
+  },
+  "blockers": [
+    "PhaseRecorder only opens/appends output on command(drain/flush); no automatic flush, periodic writer or shutdown persistence. Existing stock TTI/Harbor route has no socket command caller. Env alone cannot yield phase evidence.",
+    "In-memory event list capped1000000 events, not byte-capped; overflow records error and discards future events. No run-specific filename interpolation or output file chmod in recorder. Persistent path should be unique and permissions explicitly private, which is not established by existing env alone.",
+    "Each drain appends all buffered events; no total file size cap. Long normal rungs could overflow before any export."
+  ],
+  "measurement_scope": {
+    "available_if_exported": [
+      "phase submit/completion perf_counter_ns",
+      "prefill starts/ends/active_rows",
+      "decode authoritative effective_positions/active_rows",
+      "sampling mode and supported batch",
+      "identity layers/precision/device IDs/context"
+    ],
+    "generation_share": "Can derive host-boundary decode share from complete windows; plugin host work and idle intervals fall between adapter boundaries. Not device time.",
+    "pool_occupancy": "Not recorded: request_ids=None; no scheduler used/free KV block counts. Positions/active rows do not establish physical block occupancy with prefix sharing/eviction. Existing serving_memory allocator logs give allocation footprint, not live block occupancy.",
+    "synchronization": "benchmark_phases.py uses only host clock/lock/socket/file operations. generator_vllm.py:446-460 binds existing readback identity and completes after existing conversion/readback wait; no extra device synchronization."
+  },
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/tt/benchmark_phases.py:24",
+    "models/autoports/google_gemma_4_31b_it/tt/benchmark_phases.py:117",
+    "models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py:66",
+    "models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py:319",
+    "models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py:375",
+    "models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py:446"
+  ],
+  "conclusion": "Storage/artifact route exists, but no complete bounded private automatic recorder route with existing settings. Requires separately authorized model-owned persistence design and host/live confirmation; no wrapper/plugin/workflow changes proposed here. Do not enable env alone expecting evidence."
+}

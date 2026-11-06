@@ -1,0 +1,55 @@
+{
+  "status": "accepted_local_confirmation_ci_artifact_pending",
+  "goal": "Opt-in bounded private automatic phase persistence on stock CI route",
+  "branch": "fix/phase-recorder-autoexport",
+  "base": "d37346f7efafd17d5630b6bcad33e38bceb6bdf2",
+  "commit": "9696637efd0104177ffe8f17a85a4161bdb10938",
+  "source_changes": [
+    "models/autoports/google_gemma_4_31b_it/tt/benchmark_phases.py",
+    "models/autoports/google_gemma_4_31b_it/tests/test_benchmark_phases.py"
+  ],
+  "predicted_device_hours": 0.15,
+  "device_hour_box": 0.35,
+  "baseline_device_hours": 0.05167654555555556,
+  "candidate_device_hours": 0.052225473333333335,
+  "used_device_hours": 0.10390201888888889,
+  "validation": {
+    "host_tests_passed": 12,
+    "lint": "Ruff format/check and commit pre-commit hooks passed",
+    "exactness": "Two concurrent B8 full60 responses each168 token IDs equal fresh baseline, same stop finish",
+    "automatic_export": {
+      "phase_events": 340,
+      "complete_steps": 170,
+      "errors": [],
+      "pending": 0,
+      "file_mode": "0o600",
+      "max_effective_position": 909,
+      "expected_last_position": 909,
+      "measurement_end": "2026-11-06T09:50:50.844644+00:00",
+      "candidate_device_hours": 0.052225473333333335,
+      "baseline_device_hours": 0.05167654555555556,
+      "raw": "bringup/artifacts/stage12-autoexport-candidate-phases.jsonl",
+      "scope": "Initial candidate window before real-history replay, complete170steps; asyncsubmittedsteps not emittedtoken count"
+    },
+    "control_flush_called": false,
+    "candidate_pair_http_seconds": 4.8998,
+    "baseline_pair_http_seconds": 4.89645,
+    "performance_claim": "none; single pair is exactness/export confirmation, not speed evidence"
+  },
+  "accepted_change": "Opt-in background export, private exclusive0600 files,1024-event chunks,4GiB configurable cap with terminal truncated status, unchanged default manual API; no request-path file I/O or extra device synchronization.",
+  "remaining": [
+    "Normal CI artifact collection not yet observed.",
+    "Abrupt termination can lose unexported tail; only complete persisted windows support timing claims.",
+    "Buffer/file overflow or IO/accounting errors invalidate timing window explicitly.",
+    "Physical scheduler KV block occupancy still unavailable."
+  ],
+  "accounting": "Only baseline+candidate confirmation charged; subsequent idle/server reuse/SWE replay excluded.",
+  "evidence": [
+    "AUTODEBUG.md",
+    "AUTOFIX.md",
+    "autoexport.patch",
+    "paired-audit.json",
+    "live-confirmation.json",
+    "bringup/artifacts/stage12-phase-autoexport-host.log"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "arm": "ci-phase-autoexport-baseline",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "completed",
+  "start": "2026-11-06T09:43:00.882073+00:00",
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "predicted_hours": 0.075,
+  "prediction_basis": "Prior warmB8 cache check189.996s;270s allowance for startup/two168-token requests/shutdown.",
+  "box_device_hours": 0.35,
+  "timeout_seconds": 1260,
+  "regime": "serial full60 mesh1x4",
+  "command": "timeout1260 bash tests/run_serving.sh --stages serve --max-num-seqs8 --enable-prefix-caching",
+  "purpose": "Exactness baseline for opt-in automatic phase persistence, no score/benchmark",
+  "end": "2026-11-06T09:46:06.917637+00:00",
+  "exit_status": 1,
+  "exit_reason": "Intentional SIGINT to owned idleAPI after two requests; readinessrunner exits1; clients complete and0running/0waiting before stop",
+  "actual_hours": 0.05167654555555556,
+  "shutdown_completed_at": "2026-11-06T09:47:42.830695+00:00"
+}

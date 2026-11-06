@@ -1,0 +1,71 @@
+{
+  "source_normalizer": "bringup/artifacts/vllm-benchmark-client-src/vllm/entrypoints/chat_utils.py:_postprocess_messages",
+  "rows": [
+    {
+      "task": "django__django-11265__ohWF75G",
+      "selected_turn": 0,
+      "reconstructed_prompt_tokens": 103508,
+      "recorded_prompt_tokens": 103509,
+      "difference": -1
+    },
+    {
+      "task": "django__django-11265__ohWF75G",
+      "selected_turn": 1,
+      "reconstructed_prompt_tokens": 105534,
+      "recorded_prompt_tokens": 105535,
+      "difference": -1
+    },
+    {
+      "task": "django__django-11265__ohWF75G",
+      "selected_turn": 2,
+      "reconstructed_prompt_tokens": 107473,
+      "recorded_prompt_tokens": 107474,
+      "difference": -1
+    },
+    {
+      "task": "pylint-dev__pylint-7080__CJczXtL",
+      "selected_turn": 0,
+      "reconstructed_prompt_tokens": 32089,
+      "recorded_prompt_tokens": 32090,
+      "difference": -1
+    },
+    {
+      "task": "pylint-dev__pylint-7080__CJczXtL",
+      "selected_turn": 1,
+      "reconstructed_prompt_tokens": 32579,
+      "recorded_prompt_tokens": 32580,
+      "difference": -1
+    },
+    {
+      "task": "pylint-dev__pylint-7080__CJczXtL",
+      "selected_turn": 2,
+      "reconstructed_prompt_tokens": 33460,
+      "recorded_prompt_tokens": 33461,
+      "difference": -1
+    }
+  ],
+  "raw_payload_arguments_unchanged": true,
+  "http_histories": "bringup/artifacts/stage12-real-histories/swe-peak3-http",
+  "http_payload_adaptation": [
+    {
+      "file": "django__django-11265__ohWF75G.jsonl",
+      "source_sha256": "d35a6a315b6254633a136690e2c5185676ad077f1568008117ce69b5af8a623e",
+      "http_sha256": "4937e2477ba1b16b8bec563c297c90be6eece8d36dd735ec05c747e2cb069fea",
+      "flattened_keys": [
+        "top_k",
+        "chat_template_kwargs"
+      ]
+    },
+    {
+      "file": "pylint-dev__pylint-7080__CJczXtL.jsonl",
+      "source_sha256": "3395760362e8fef40baa298b1310cc4fa0049b8a9a0e03668bd00d8bbe079bf0",
+      "http_sha256": "1bf03299991e5ff27ec36f067400ebbffed87d6e2d88ada7fd58c1965a5c051d",
+      "flattened_keys": [
+        "top_k",
+        "chat_template_kwargs"
+      ]
+    }
+  ],
+  "count_delta_reason": "Consistent one-token reconstruction difference; exact provider/template boundary remains unproven. Do not label BOS; tokenizer reports no added special tokens. Live replay usage must be compared.",
+  "command": "timeout 600 python_env/bin/python /home/mvasiljevic/.codex-gemma4-v3/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.23/scripts/agent_replay.py --base-url http://localhost:8000/v1 --histories bringup/artifacts/stage12-real-histories/swe-peak3-http --agents 2 --model google/gemma-4-31B-it --time-cap-s 480 --request-timeout-s 3600 --out bringup/artifacts/stage12-real-histories/swe-peak3-result.json"
+}
