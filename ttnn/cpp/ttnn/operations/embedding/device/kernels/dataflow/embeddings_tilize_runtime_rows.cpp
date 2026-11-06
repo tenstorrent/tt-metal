@@ -4,8 +4,7 @@
 
 // Reader for the runtime-rows tilized-output embedding program: gathers each block's weight rows
 // into the row-major staging buffer that the tilize compute kernel drains. The block range comes
-// from the static core index and the common row count (32-index blocks per index row), so a new
-// sequence length rewrites one word.
+// from the static core index and the common row count (32-index blocks per index row).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -20,6 +19,7 @@
 void kernel_main() {
     Noc noc;
 
+    // COMPILE TIME ARGS
     constexpr uint32_t weight_block_size = get_arg(args::weight_block_size);
     constexpr uint32_t tiles_per_chunk = get_arg(args::tiles_per_chunk);
     constexpr uint32_t input_block_size_bytes = get_arg(args::input_block_size_bytes);
@@ -28,8 +28,10 @@ void kernel_main() {
     constexpr uint32_t batch = get_arg(args::batch);
     constexpr uint32_t num_cores = get_arg(args::num_cores);
 
+    // RUNTIME ARGS
     const uint32_t core_idx = get_arg(args::core_idx);
     const uint32_t blocks_per_batch = get_arg(args::blocks_per_batch);
+
     const auto [start_block, end_block] = embeddings_fused_block_range(core_idx, blocks_per_batch, batch, num_cores);
     const uint32_t input_start_id = start_block / blocks_per_batch;
     const uint32_t input_start_offset = (start_block % blocks_per_batch) * input_block_size_bytes;
@@ -37,7 +39,7 @@ void kernel_main() {
     const uint32_t input_page_size = blocks_per_batch * input_block_size_bytes;
     // Interleaved output: every core reads whole weight rows.
     constexpr uint32_t weight_offset = 0;
-    // A core past the end of a short input has nothing to stage, so it skips the weight cache fill.
+    // A core past the end of a short input has nothing to stage.
     if (num_blocks == 0) {
         return;
     }

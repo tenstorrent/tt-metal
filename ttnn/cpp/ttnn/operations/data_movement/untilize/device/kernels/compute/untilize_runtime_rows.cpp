@@ -12,15 +12,17 @@
 #include "ttnn/operations/data_movement/untilize/device/kernels/untilize_row_split.hpp"
 
 void kernel_main() {
+    // RUNTIME ARGS
     const uint32_t core_idx = get_arg(args::core_idx);
     const uint32_t num_tile_rows = get_arg(args::num_tile_rows);
+
+    // COMPILE TIME ARGS
     constexpr uint32_t num_cores = get_arg(args::num_cores);
     constexpr auto per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
 
     const auto [row_start, row_end] = untilize_row_range(core_idx, num_tile_rows, num_cores);
     const uint32_t per_core_block_cnt = row_end - row_start;
 
-    // The kernel_lib untilize asserts num_blocks > 0, so a core past the end of a short input returns.
     if (per_core_block_cnt == 0) {
         return;
     }
