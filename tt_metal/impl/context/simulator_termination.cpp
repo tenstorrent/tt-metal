@@ -120,14 +120,20 @@ extern "C" void handle_fault_during_shutdown(int signal_number) {
     ::raise(signal_number);
 }
 
-// Async-signal-safe: installs the fault handlers, bounds teardown, and wakes the shutdown thread.
-void begin_shutdown(int exit_code) {
-    shutdown_exit_code.store(exit_code);
+void install_fault_handlers() {
     std::signal(SIGSEGV, handle_fault_during_shutdown);
     std::signal(SIGABRT, handle_fault_during_shutdown);
-    arm_teardown_alarm();
-    (void)::sem_post(&shutdown_semaphore);
 }
+
+// Async-signal-safe. Arm before writing any diagnostics: stderr can block on a full pipe, and the
+// grace alarm is what releases the simulator if it does.
+void arm_shutdown(int exit_code) {
+    shutdown_exit_code.store(exit_code);
+    install_fault_handlers();
+    arm_teardown_alarm();
+}
+
+void wake_shutdown_thread() { (void)::sem_post(&shutdown_semaphore); }
 
 extern "C" void handle_simulator_termination(int signal_number) {
     // Whoever is signalling has stopped waiting for a clean release.
@@ -138,20 +144,21 @@ extern "C" void handle_simulator_termination(int signal_number) {
     }
     std::signal(signal_number, SIG_DFL);
 
+    arm_shutdown(128 + signal_number);
+
     // exit() is already running the teardown. Starting a second one concurrently is undefined and
     // races the handler that releases the simulator, so only bound the one in flight.
     if (exit_in_progress.load() != 0) {
         write_stderr_number(
             "[tt-metal] signal ", signal_number, ": already releasing the simulator (signal again to kill).\n");
-        shutdown_exit_code.store(128 + signal_number);
-        arm_teardown_alarm();
         return;
     }
 
     write_stderr_number(
         "[tt-metal] signal ", signal_number, ": releasing the simulator (signal again to kill immediately).\n");
-    // Return so the interrupted call can drop SimulationChip::device_lock, which teardown needs.
-    begin_shutdown(128 + signal_number);
+    // Wake last: the interrupted call has to return and drop SimulationChip::device_lock before
+    // teardown can take it.
+    wake_shutdown_thread();
 }
 
 std::terminate_handler previous_terminate = nullptr;
@@ -176,6 +183,8 @@ void report_simulator_released() {
 
 void note_exit_started() {
     teardown_tid.store(current_tid());
+    // A plain exit() releases the simulator too, so a fault on another thread must not kill it.
+    install_fault_handlers();
     exit_in_progress.store(1);
 }
 
@@ -184,6 +193,12 @@ void run_shutdown_thread() {
         if (errno != EINTR) {
             _exit(shutdown_exit_code.load());
         }
+    }
+    // exit() became visible only after the handler decided to wake this thread. Running the exit
+    // handlers a second time, concurrently, is undefined, so let the one in flight finish; the
+    // handler already armed the grace alarm in case it wedges.
+    if (exit_in_progress.load() != 0) {
+        park_until_process_exits();
     }
     // std::exit runs MetalContext's atexit handler, which destroys the cluster and tells the
     // simulator to exit. Returning from main would not: the signal interrupted it.
@@ -296,6 +311,12 @@ bool release_simulator_session(int exit_code, const char* reason) {
         return false;
     }
 
+    // Arm before the diagnostics, for the same reason the signal handler does.
+    const bool owns_shutdown = handlers_installed && shutdown_requested.exchange(1) == 0;
+    if (owns_shutdown) {
+        arm_shutdown(exit_code);
+    }
+
     write_stderr("[tt-metal] ");
     write_stderr(reason);
     write_stderr(" Releasing the simulator.\n");
@@ -305,8 +326,8 @@ bool release_simulator_session(int exit_code, const char* reason) {
     if (!handlers_installed) {
         std::exit(exit_code);
     }
-    if (shutdown_requested.exchange(1) == 0) {
-        begin_shutdown(exit_code);
+    if (owns_shutdown) {
+        wake_shutdown_thread();
     }
     // The context is unusable, so this thread has nothing left to do but let teardown finish.
     park_until_process_exits();

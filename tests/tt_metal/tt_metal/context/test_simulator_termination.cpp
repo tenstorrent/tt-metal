@@ -17,6 +17,8 @@
 
 #include "impl/context/simulator_termination.hpp"
 
+extern char** environ;
+
 namespace simulator_termination_test {
 
 // Exit code the release-path children ask for, to tell a real release from an incidental exit.
@@ -92,22 +94,58 @@ int die_from_signal_in_fork_child() {
     return (WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM) ? 0 : 1;
 }
 
+// Everything the child needs, built in the parent. snprintf and setenv are not async-signal-safe,
+// and between fork() and exec() a multithreaded parent can leave their locks held by a thread that
+// was not copied.
+class ChildLaunch {
+public:
+    ChildLaunch(const char* mode, int write_fd) {
+        (void)snprintf(mode_var_, sizeof(mode_var_), "TT_METAL_SIM_TERM_CHILD=%s", mode);
+        (void)snprintf(fd_var_, sizeof(fd_var_), "TT_METAL_SIM_TERM_FD=%d", write_fd);
+        for (char** entry = environ; *entry != nullptr && count_ < kMaxEnv - 3; ++entry) {
+            if (std::strncmp(*entry, "TT_METAL_SIM_TERM_", 18) != 0) {
+                envp_[count_++] = *entry;
+            }
+        }
+        envp_[count_++] = mode_var_;
+        if (write_fd >= 0) {
+            envp_[count_++] = fd_var_;
+        }
+        envp_[count_] = nullptr;
+    }
+
+    // Runs in the forked child. Only async-signal-safe calls from here to exec.
+    [[noreturn]] void exec(int write_fd) const {
+        if (write_fd >= 0) {
+            (void)fcntl(write_fd, F_SETFD, 0);
+        }
+        struct sigaction default_action{};
+        default_action.sa_handler = SIG_DFL;
+        (void)sigaction(SIGINT, &default_action, nullptr);
+        (void)sigaction(SIGTERM, &default_action, nullptr);
+        char program[] = "simterm-child";
+        char* argv[] = {program, nullptr};
+        execve("/proc/self/exe", argv, const_cast<char**>(envp_));
+        _exit(127);
+    }
+
+private:
+    static constexpr int kMaxEnv = 512;
+    char mode_var_[64] = {};
+    char fd_var_[48] = {};
+    const char* envp_[kMaxEnv] = {};
+    int count_ = 0;
+};
+
 // gtest is already multithreaded. A child that only fork()s inherits locks held by threads that
 // were not copied, and std::exit then deadlocks, so every scenario runs in a fresh image.
-[[noreturn]] void exec_child(const char* mode, int write_fd) {
-    if (write_fd >= 0) {
-        (void)fcntl(write_fd, F_SETFD, 0);
-        char fd_text[16];
-        (void)snprintf(fd_text, sizeof(fd_text), "%d", write_fd);
-        setenv("TT_METAL_SIM_TERM_FD", fd_text, 1);
+pid_t spawn_child(const char* mode, int write_fd) {
+    const ChildLaunch launch(mode, write_fd);
+    const pid_t pid = fork();
+    if (pid == 0) {
+        launch.exec(write_fd);
     }
-    setenv("TT_METAL_SIM_TERM_CHILD", mode, 1);
-    struct sigaction default_action{};
-    default_action.sa_handler = SIG_DFL;
-    (void)sigaction(SIGINT, &default_action, nullptr);
-    (void)sigaction(SIGTERM, &default_action, nullptr);
-    execl("/proc/self/exe", "simterm-child", nullptr);
-    _exit(127);
+    return pid;
 }
 
 void run_child_mode() {
@@ -155,6 +193,11 @@ void run_child_mode() {
         std::atexit(fault_other_thread_then_mark);
         tt::tt_metal::install_simulator_exit_guard();
         tt::tt_metal::release_simulator_session(kReleaseExitCode, "dispatch_core_manager");
+    } else if (std::strcmp(mode, "fault-during-normal-exit") == 0) {
+        std::thread(raise_sigsegv_when_requested).detach();
+        std::atexit(fault_other_thread_then_mark);
+        tt::tt_metal::install_simulator_exit_guard();
+        std::exit(kNormalExitCode);
     } else if (std::strcmp(mode, "signal-during-exit") == 0) {
         std::atexit(slow_teardown_then_mark);
         tt::tt_metal::install_simulator_exit_guard();
@@ -209,13 +252,10 @@ void kill_and_reap(pid_t pid) {
 // the expected status.
 void expect_marker_and_exit_status(const char* mode, int expected_status) {
     int pipe_fds[2];
-    ASSERT_EQ(pipe(pipe_fds), 0);
-    const pid_t pid = fork();
+    // The child clears CLOEXEC on the write end only, so the read end does not leak into it.
+    ASSERT_EQ(pipe2(pipe_fds, O_CLOEXEC), 0);
+    const pid_t pid = spawn_child(mode, pipe_fds[1]);
     ASSERT_NE(pid, -1) << "fork() failed";
-    if (pid == 0) {
-        close(pipe_fds[0]);
-        exec_child(mode, pipe_fds[1]);
-    }
     close(pipe_fds[1]);
 
     pollfd ready{.fd = pipe_fds[0], .events = POLLIN, .revents = 0};
@@ -244,11 +284,8 @@ TEST(SimulatorTermination, SigintRunsAtexitWhenSimulatorIsSet) {
 }
 
 TEST(SimulatorTermination, SigintKillsWhenSimulatorIsUnset) {
-    const pid_t pid = fork();
+    const pid_t pid = simulator_termination_test::spawn_child("sigint-without-simulator", -1);
     ASSERT_NE(pid, -1) << "fork() failed";
-    if (pid == 0) {
-        simulator_termination_test::exec_child("sigint-without-simulator", -1);
-    }
 
     int status = 0;
     ASSERT_TRUE(simulator_termination_test::wait_for_child(pid, &status));
@@ -257,11 +294,8 @@ TEST(SimulatorTermination, SigintKillsWhenSimulatorIsUnset) {
 }
 
 TEST(SimulatorTermination, LeavesAnExistingHandlerInPlace) {
-    const pid_t pid = fork();
+    const pid_t pid = simulator_termination_test::spawn_child("existing-handler", -1);
     ASSERT_NE(pid, -1) << "fork() failed";
-    if (pid == 0) {
-        simulator_termination_test::exec_child("existing-handler", -1);
-    }
 
     int status = 0;
     ASSERT_TRUE(simulator_termination_test::wait_for_child(pid, &status));
@@ -270,11 +304,8 @@ TEST(SimulatorTermination, LeavesAnExistingHandlerInPlace) {
 }
 
 TEST(SimulatorTermination, ReleaseSessionNoopsWhenSimulatorIsUnset) {
-    const pid_t pid = fork();
+    const pid_t pid = simulator_termination_test::spawn_child("release-without-simulator", -1);
     ASSERT_NE(pid, -1) << "fork() failed";
-    if (pid == 0) {
-        simulator_termination_test::exec_child("release-without-simulator", -1);
-    }
 
     int status = 0;
     ASSERT_TRUE(simulator_termination_test::wait_for_child(pid, &status));
@@ -291,6 +322,13 @@ TEST(SimulatorTermination, FaultOnAnotherThreadDuringTeardownStillRunsAtexit) {
         "fault-during-teardown", simulator_termination_test::kReleaseExitCode);
 }
 
+// A plain exit() releases the simulator through the same atexit handler, with no signal involved,
+// so it needs the same protection from a fault on another thread.
+TEST(SimulatorTermination, FaultOnAnotherThreadDuringNormalExitStillRunsAtexit) {
+    simulator_termination_test::expect_marker_and_exit_status(
+        "fault-during-normal-exit", simulator_termination_test::kNormalExitCode);
+}
+
 // A signal landing while exit() is already running teardown must not start a second exit: that is
 // undefined, and it races the handler that releases the simulator.
 TEST(SimulatorTermination, SignalDuringExitDoesNotStartASecondExit) {
@@ -300,11 +338,8 @@ TEST(SimulatorTermination, SignalDuringExitDoesNotStartASecondExit) {
 
 // The first signal hands over to teardown; the next one, of either kind, kills immediately.
 TEST(SimulatorTermination, SecondTerminationSignalKillsImmediately) {
-    const pid_t pid = fork();
+    const pid_t pid = simulator_termination_test::spawn_child("second-signal", -1);
     ASSERT_NE(pid, -1) << "fork() failed";
-    if (pid == 0) {
-        simulator_termination_test::exec_child("second-signal", -1);
-    }
 
     int status = 0;
     ASSERT_TRUE(simulator_termination_test::wait_for_child(pid, &status));
@@ -314,11 +349,8 @@ TEST(SimulatorTermination, SecondTerminationSignalKillsImmediately) {
 
 // A forked child does not own the simulator session, so it must not run the parent's teardown.
 TEST(SimulatorTermination, ForkChildKeepsDefaultSignalBehaviour) {
-    const pid_t pid = fork();
+    const pid_t pid = simulator_termination_test::spawn_child("fork-child", -1);
     ASSERT_NE(pid, -1) << "fork() failed";
-    if (pid == 0) {
-        simulator_termination_test::exec_child("fork-child", -1);
-    }
 
     int status = 0;
     ASSERT_TRUE(simulator_termination_test::wait_for_child(pid, &status));
