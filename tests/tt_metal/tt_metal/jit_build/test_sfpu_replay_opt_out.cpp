@@ -6,8 +6,8 @@
 // kernel define that compiles a compute kernel's TRISC binaries with -mno-tt-tensix-optimize-replay
 // (tenstorrent/tt-metal#58433).
 //
-//  - Define absent: a TRISC compile recipe carries the flag only when instruction gathering is on (the
-//    Blackhole default, which needs the flag in every compile), and not otherwise.
+//  - Define absent: a TRISC compile recipe carries the flag only when instruction gathering is on
+//    (TT_METAL_ENABLE_GATHERING=1, which needs the flag in every compile), and not otherwise.
 //  - Define present: all three TRISC recipes (unpack, math, pack) carry it, nothing else in their cflags
 //    changes, and the kernel's JIT cache key changes. The kernel still compiles.
 //  - ProgramDescriptor: the define in KernelDescriptor::defines reaches the kernel.

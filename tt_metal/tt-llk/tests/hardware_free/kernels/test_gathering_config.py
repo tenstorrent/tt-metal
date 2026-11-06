@@ -5,11 +5,11 @@
 Regression: the LLK test firmware must configure Blackhole instruction gathering
 the same way tt-metal firmware does.
 
-Blackhole boots with instruction gathering enabled, and tt-metal leaves it on: the build
-defines ENABLE_GATHERING unless TT_METAL_DISABLE_GATHERING=1. With the define,
-``ckernel.h``'s ``load_replay_buf()`` brackets every replay-record window with
-disable/enable. Without it, firmware disables gathering on every RISC around Tensix
-(``configure_gathering()`` in ``tt_metal/hw/inc/internal/firmware_common.h``).
+Blackhole boots with instruction gathering enabled. By default tt-metal firmware disables
+it on every RISC around Tensix (``configure_gathering()`` in
+``tt_metal/hw/inc/internal/firmware_common.h``). With TT_METAL_ENABLE_GATHERING=1 the build
+defines ENABLE_GATHERING: firmware leaves gathering on and ``ckernel.h``'s
+``load_replay_buf()`` brackets every replay-record window with disable/enable.
 
 Those are two halves of one contract: either gathering is off globally, or it is on
 and the record window is bracketed. The test firmware must implement the same one as
@@ -86,8 +86,8 @@ def _has_gathering_sequence(words):
 
 @blackhole_only
 def test_firmware_gathering_matches_build_config():
-    """With gathering disabled (TT_METAL_DISABLE_GATHERING=1), every RISC's firmware must carry
-    tt-metal's gathering-disable sequence; with gathering on (the default), BRISC's must not.
+    """With gathering off (the default), every RISC's firmware must carry tt-metal's
+    gathering-disable sequence; with gathering on (TT_METAL_ENABLE_GATHERING=1), BRISC's must not.
 
     BRISC only: it records nothing, so a disable_gathering() bracket around a record cannot
     look like the boot sequence there. run_hardware_free.sh runs this test in both
@@ -407,8 +407,8 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
     )
 
 
-# One test variant per recording kernel path, built with gathering on (the Blackhole default)
-# under --compile-producer; every record in its ELF must be bracketed. (kernel, node id, ELF)
+# One test variant per recording kernel path, built under TT_METAL_ENABLE_GATHERING=1 with
+# --compile-producer; every record in its ELF must be bracketed. (kernel, node id, ELF)
 GATHERING_BUILD_VARIANTS = [
     (
         "transpose_dest 32-bit",
@@ -570,7 +570,7 @@ GATHERING_BUILD_VARIANTS = [
 def test_kernel_replay_records_are_gathering_bracketed(
     kernel, node_id, recording_elf, tmp_path
 ):
-    """Built with gathering on, every replay record in the kernel's ELFs must sit
+    """Built under TT_METAL_ENABLE_GATHERING=1, every replay record in the kernel's ELFs must sit
     inside disable_gathering()/enable_gathering(): the record is the one known incompatibility
     with instruction gathering, and only the binary shows whether the bracket is there.
     """
@@ -578,8 +578,7 @@ def test_kernel_replay_records_are_gathering_bracketed(
     import sys
 
     python_tests = TestConfig.LLK_ROOT / "tests" / "python_tests"
-    env = dict(os.environ, RUNNER_TEMP=str(tmp_path))
-    env.pop("TT_METAL_DISABLE_GATHERING", None)
+    env = dict(os.environ, TT_METAL_ENABLE_GATHERING="1", RUNNER_TEMP=str(tmp_path))
     # An ordinary --compile-producer session in a private build tree, not another hardware-free
     # session (that would build under its own run id instead of RUNNER_TEMP/tt-llk-build).
     env.pop("LLK_HARDWARE_FREE", None)
@@ -610,8 +609,10 @@ def test_kernel_replay_records_are_gathering_bracketed(
         build.returncode == 0
     ), f"{kernel}: the gathering build of {node_id} failed:\n{build.stdout[-4000:]}\n{build.stderr[-2000:]}"
 
-    # Gathering on is the default tree (TestConfig.resolve_artefacts_path).
-    elf_dirs = sorted((tmp_path / "tt-llk-build" / "sources").glob("*/*/elf"))
+    # The gathering configuration builds into its own tree (TestConfig.resolve_artefacts_path).
+    elf_dirs = sorted(
+        (tmp_path / "tt-llk-build" / "gathering" / "sources").glob("*/*/elf")
+    )
     assert elf_dirs, f"{kernel}: no ELF directory produced under {tmp_path}"
     recording_elf_records = 0
     unbracketed = []
