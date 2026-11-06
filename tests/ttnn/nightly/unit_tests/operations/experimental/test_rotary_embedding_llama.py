@@ -16,6 +16,7 @@ from models.tt_transformers.tt.common import (
     precompute_freqs,
     get_rot_transformation_mat,
 )
+from models.tt_transformers.tt.model_config import qk_fused_core_ranges
 from models.tt_transformers.tt.rope import RotarySetup
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 
@@ -181,41 +182,26 @@ def run_test_rotary_embedding_llama(
         # inp: [seq_len, batch, n_heads, head_dim]
 
         if fuse_qk:
-            # Set up rope with 2 * batch size (for fused qk) (no scaling)
+            # Set the rope up the way the model does: RotarySetup doubles the batch itself and
+            # shards cos/sin/trans_mat over Q's cores followed by K's cores.
             rope_setup_decode = RotarySetup(
-                device, batch * 2, head_dim, max_seq_len, rope_theta=10000, rope_scaling=None
+                device, batch, head_dim, max_seq_len, rope_theta=10000, rope_scaling=None, use_qk_fused=True
             )
             tt_model.transformation_mat = rope_setup_decode.transformation_mat
             with device.cache_entries_counter.measure():
-                cos, sin = rope_setup_decode.get_rot_mats(position_ids.repeat(2))
+                cos, sin = rope_setup_decode.get_rot_mats(position_ids)
 
-            assert (
-                batch % 8 == 0 or batch == 1
-            ), "Batch size must be a multiple of 8 or less than 8 for fused_qk rotary embedding"
-            if batch == 1:
-                q_core_grid_start = (0, 0)
-                q_core_grid_end = (0, 0)
-                k_core_grid_start = (1, 0)
-                k_core_grid_end = (1, 0)
-            else:
-                q_core_grid_start = (0, 0)
-                q_core_grid_end = ((batch - 1) % 8, (batch // 8) - 1)
-                k_core_grid_start = (0, (batch // 8))
-                k_core_grid_end = ((batch - 1) % 8, (batch // 8) * 2 - 1)
+            q_range, k_range = qk_fused_core_ranges(batch)
             q_input_mem_config = ttnn.create_sharded_memory_config(
                 shape=(nearest_32(n_heads), head_dim),
-                core_grid=ttnn.CoreRangeSet(
-                    {ttnn.CoreRange(ttnn.CoreCoord(*q_core_grid_start), ttnn.CoreCoord(*q_core_grid_end))}
-                ),
+                core_grid=ttnn.CoreRangeSet({q_range}),
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
             k_input_mem_config = ttnn.create_sharded_memory_config(
                 shape=(nearest_32(n_kv_heads), head_dim),
-                core_grid=ttnn.CoreRangeSet(
-                    {ttnn.CoreRange(ttnn.CoreCoord(*k_core_grid_start), ttnn.CoreCoord(*k_core_grid_end))}
-                ),
+                core_grid=ttnn.CoreRangeSet({k_range}),
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
