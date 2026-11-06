@@ -252,7 +252,9 @@ def apply_vgg_backbone(
             )
 
             if kernel_size == (1, 1) and stride == (1, 1) and padding == (0, 0):
-                if isinstance(weight, ttnn.Tensor):
+                if "weight_2d" in layer:
+                    weight_2d = layer["weight_2d"]
+                elif isinstance(weight, ttnn.Tensor):
                     weight_reshaped = ttnn.reshape(weight, (out_channels, in_channels))
                     weight_2d = ttnn.permute(weight_reshaped, (1, 0))
                     if weight_2d.layout != ttnn.TILE_LAYOUT:
@@ -288,7 +290,9 @@ def apply_vgg_backbone(
                 output_tensor = ttnn.reshape(out_flat, (batch_size, current_h, current_w, out_channels))
 
                 if bias is not None:
-                    if isinstance(bias, ttnn.Tensor):
+                    if "bias_1d" in layer:
+                        bias_1d = ttnn.to_memory_config(layer["bias_1d"], layer_memory_config)
+                    elif isinstance(bias, ttnn.Tensor):
                         bias_reshaped = ttnn.reshape(bias, (out_channels,))
                         if device is not None:
                             bias_1d = ttnn.to_layout(bias_reshaped, ttnn.TILE_LAYOUT)
