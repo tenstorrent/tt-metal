@@ -336,7 +336,7 @@ def run_chunked_block(
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
 
     profiler.start("tt_block_creation")
-    block = TtPrefillBlock(**block_kwargs)
+    block = TtPrefillBlock(**block_kwargs, moe_impl="ttmoe")  # (TtMoe: tt/moe_impl.py)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_block_creation")
 
@@ -639,7 +639,7 @@ def run_chunked_block_multiuser(
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
-    block = TtPrefillBlock(**block_kwargs)
+    block = TtPrefillBlock(**block_kwargs, moe_impl="ttmoe")  # (TtMoe: tt/moe_impl.py)
     ttnn.synchronize_device(mesh_device)
 
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
@@ -869,7 +869,7 @@ def run_chunked_block_padded(
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
 
     profiler.start("tt_block_creation")
-    block = TtPrefillBlock(**block_kwargs)
+    block = TtPrefillBlock(**block_kwargs, moe_impl="ttmoe")  # (TtMoe: tt/moe_impl.py)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_block_creation")
 
@@ -1280,6 +1280,7 @@ def run_chunked_block_glm_indexer(
     ), f"TTNN cache incomplete for layer {layer_idx} at {effective_cache_path}"
 
     block = TtPrefillBlock(
+        moe_impl="ttmoe",  # (TtMoe: tt/moe_impl.py)
         mesh_device=mesh_device,
         config=config,
         model_cfg=variant.model_config,

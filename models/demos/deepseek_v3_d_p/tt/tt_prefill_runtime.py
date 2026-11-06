@@ -112,6 +112,10 @@ class TtPrefillRuntimeConfig:
     overlap_shared_expert_with_dispatch: bool = True
     # KV dedup, must match the cache allocation. None: sparse dedups, dense does not.
     tp_shard_kv: Optional[bool] = None
+    # The MoE (tt/moe_impl.py): None = the model's default ($MOE_IMPL first) - the MoE block for GLM-5.3 and Kimi-K3;
+    # "block" / "ttmoe" force one. The runner opens its mesh with the block's L1_SMALL and fabric payload
+    # (moe_impl.moe_block_mesh_params).
+    moe_impl: Optional[str] = None
 
     @property
     def sp_factor(self) -> int:
@@ -308,6 +312,7 @@ class TtPrefillRuntime:
             overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
             mtp_predictor=self.mtp_predictor,
             tp_shard_kv=self.config.tp_shard_kv,
+            moe_impl=self.config.moe_impl,
         )
         self.model_built = True
 
