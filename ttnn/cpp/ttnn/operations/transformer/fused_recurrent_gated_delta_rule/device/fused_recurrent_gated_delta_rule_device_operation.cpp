@@ -92,7 +92,27 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
     check(in.beta, "beta", {BHT, 1u, 1u});
     // Ring mode: initial_state is the [BH*T,K,V] ring (also the in-place state output); otherwise [BH,K,V].
     const bool ring = in.initial_state_block_idx.has_value();
-    if (in.initial_state.has_value()) {
+    TT_FATAL(
+        !attrs.inplace_final_state || (in.initial_state.has_value() && !ring && !attrs.output_per_token_state),
+        "fused_recurrent_gated_delta_rule: inplace_final_state requires initial_state and excludes ring mode and the "
+        "per-token state");
+    if (in.initial_state.has_value() && attrs.inplace_final_state) {
+        // In place: the state output is this tensor. [Bs, HV, K, V] with Bs*HV >= BH; head h's tiles are its pages
+        // h*kv .. h*kv + kv - 1 in either rank, so the reader and the writer address it exactly as the [BH, K, V] form
+        // (the reader reads head h's pages before the writer's only write to them, after the last token).
+        const Tensor& s = *in.initial_state;
+        const auto& ss = s.logical_shape();
+        TT_FATAL(
+            s.storage_type() == StorageType::DEVICE && s.is_allocated() && s.device() == device && !s.is_sharded() &&
+                s.layout() == Layout::TILE && s.dtype() == DataType::FLOAT32 && ss.rank() == 4 &&
+                static_cast<uint32_t>(ss[0]) * static_cast<uint32_t>(ss[1]) >= attrs.BH &&
+                static_cast<uint32_t>(ss[2]) == K && static_cast<uint32_t>(ss[3]) == V,
+            "fused_recurrent_gated_delta_rule: with inplace_final_state, initial_state must be fp32 TILE interleaved "
+            "[Bs, HV, K, V] with Bs*HV >= {} on q's device, got {} {}",
+            attrs.BH,
+            s.dtype(),
+            ss);
+    } else if (in.initial_state.has_value()) {
         check(
             *in.initial_state,
             "initial_state",
@@ -135,6 +155,12 @@ FusedRecurrentGatedDeltaRuleDeviceOperation::compute_output_specs(
     const auto layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
     // o: [BH*T, 1, V]  (one row per (head, token); host folds to [B,T,HV,V]).
     ttnn::Shape o_shape({attrs.BH * attrs.T, 1, attrs.val_dim});
+    if (attrs.inplace_final_state) {
+        TT_FATAL(
+            in.initial_state.has_value(),
+            "fused_recurrent_gated_delta_rule: inplace_final_state requires initial_state");
+        return {tt::tt_metal::TensorSpec(o_shape, layout), in.initial_state->tensor_spec()};
+    }
     if (in.initial_state_block_idx.has_value()) {
         // create_output_tensors runs before validate_on_program_cache_miss, so check before dereferencing.
         TT_FATAL(
@@ -156,8 +182,9 @@ FusedRecurrentGatedDeltaRuleDeviceOperation::create_output_tensors(
     std::vector<Tensor> outs;
     outs.reserve(specs.size());
     outs.push_back(create_device_tensor(specs[0], device));
-    // Ring mode: the state output aliases the caller's ring (the adapter allows an output buffer to alias an input).
-    if (in.initial_state_block_idx.has_value()) {
+    // Ring mode and the in-place final state: the state output aliases the caller's tensor (the adapter allows an
+    // output buffer to alias an input).
+    if (in.initial_state_block_idx.has_value() || attrs.inplace_final_state) {
         outs.push_back(*in.initial_state);
     } else {
         outs.push_back(create_device_tensor(specs[1], device));
@@ -176,6 +203,7 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     uint32_t T,
     bool output_final_state,
     bool output_per_token_state,
+    bool inplace_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     using OperationType = FusedRecurrentGatedDeltaRuleDeviceOperation;
@@ -198,6 +226,7 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
         .val_dim = v_shape[2],
         .output_final_state = output_final_state,
         .output_per_token_state = output_per_token_state,
+        .inplace_final_state = inplace_final_state,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };

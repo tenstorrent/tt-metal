@@ -28,6 +28,9 @@ struct FusedRecurrentGatedDeltaRuleParams {
     uint32_t val_dim;  // V (multiple of 32)
     bool output_final_state;
     bool output_per_token_state;  // emit S after EVERY token (spec-decode verify slots)
+    // The state output IS initial_state, written in place: a [Bs, HV, K, V] tensor whose rows [0:B] are the batch.
+    // Head h's tiles are its pages h*kv .. h*kv + kv - 1 in either rank, so the kernels address it as [BH, K, V].
+    bool inplace_final_state;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -39,7 +42,8 @@ struct FusedRecurrentGatedDeltaRuleParams {
 //   v    : [BH*T, 1, V]
 //   g    : [BH*T, 1, 1]   (the log decay g_t, one scalar per (head, token) in tile element [0,0])
 //   beta : [BH*T, 1, 1]
-//   initial_state: [BH, K, V] or absent (zeros).
+//   initial_state: [BH, K, V] or absent (zeros); with inplace_final_state the caller's [Bs, HV, K, V] (Bs*HV >= BH),
+//                  which is also the state output.
 //
 // "Ring" mode (initial_state_block_idx present): initial_state is the [BH*T, K, V] ring and also the state output;
 // see the Python binding for the contract.
