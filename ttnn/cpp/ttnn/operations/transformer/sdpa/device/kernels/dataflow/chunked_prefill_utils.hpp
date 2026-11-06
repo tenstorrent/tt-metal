@@ -174,8 +174,7 @@ inline uint32_t chunked_kv_global_tile_for_local(uint32_t ring_id, uint32_t loca
     return chunked_kv_global_tile_for_local(ring_id, local_tile_idx, chunk_size_t, kv_region_Nt);
 }
 
-// The per-chip geometry is a runtime value on the dynamic-length path and a compile-time constant elsewhere;
-// the template forms below forward to these so both share one formula.
+// Runtime-geometry forms; the template forms below forward to these so both paths share one formula.
 template <bool chunked_enabled>
 inline uint32_t kv_global_tile_for_local(
     uint32_t ring_id,
