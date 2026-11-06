@@ -157,7 +157,7 @@ class ChainKernel:
             checks += (("ring_pages_rm", cd.ring_pages_rm, ttnn.uint32, B, cd.T * G * Nv),)
         if ChainKernel.moves(cd):
             if getattr(cd, "ring_windows_rm", None) is None:
-                return "QWEN36_MAMBA_CHAIN_MOVES without the uint32 window table (ring_windows_rm)"
+                return "chained state moves without the uint32 window table (ring_windows_rm)"
             checks += (("ring_windows_rm", cd.ring_windows_rm, ttnn.uint32, B, cd.T * G * cd.T * Nv),)
             checks += tuple(
                 (f"ring_idx_outs[{g}]", t, ttnn.uint32, B, cd.T * Nv) for g, t in enumerate(cd.ring_idx_outs)
@@ -176,8 +176,7 @@ class ChainKernel:
 
     @staticmethod
     def moves(cd):
-        """True when the chain also writes each group's ring_page_idx from the window table
-        (QWEN36_MAMBA_CHAIN_MOVES)."""
+        """True when the chain also writes each group's ring_page_idx from the window table (chained state moves)."""
         return getattr(cd, "ring_windows", None) is not None
 
     @staticmethod

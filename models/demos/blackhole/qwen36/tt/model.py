@@ -2054,7 +2054,7 @@ class Qwen36Model:
 
         ``vision_tokens`` (multimodal prompt: packed vision rows, see Qwen36ForCausalLM._compute_vision_tokens): the M-RoPE
         table is built with the grid and each chunk splices its own rows. A multimodal prompt is never prefix-cached:
-        ``plan`` is None, or (QWEN36_MAMBA_PREFILL_CKPT) a from-0 plan whose save points are vLLM's checkpoints.
+        ``plan`` is None, or (QWEN36_MAMBA_SPEC) a from-0 plan whose save points are vLLM's checkpoints.
 
         ``final`` False (MTP chunked prefill, a non-final chunk; needs ``plan``): the GDN state is only snapshotted at the plan's
         save points (+ the chunk end L when ``save_end``: Option B exact resume); nothing is written to decode row ``slot``
@@ -2141,7 +2141,7 @@ class Qwen36Model:
                 vision_tokens=vision_tokens,
             )
             if not last:
-                if isinstance(points, CheckpointPoints):  # QWEN36_MAMBA_PREFILL_CKPT: into vLLM's checkpoint block
+                if isinstance(points, CheckpointPoints):  # QWEN36_MAMBA_SPEC: into vLLM's checkpoint block
                     points.save(seg_end)
                 else:
                     cache.save(

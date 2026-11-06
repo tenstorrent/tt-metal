@@ -73,50 +73,11 @@ def kv_block_size():
 def mamba_spec_enabled():
     """QWEN36_MAMBA_SPEC (default "0"): the vLLM classes declare their KV cache layout to vLLM (get_kv_cache_spec): one
     FullAttentionSpec per attention layer and one MambaSpec per GDN layer, instead of the plugin's single
-    FullAttentionSpec. Off keeps the plugin's fallback."""
+    FullAttentionSpec. Off keeps the plugin's fallback. On, the spec class also declares prefill checkpoints in mode
+    align (get_kv_cache_spec) and chained state moves (supports_mamba_chained_state_moves), the prefill traces carry
+    the in-replay GDN snapshots (prefill_intrace_snap_enabled), and the GDN block writes and copies replay captured
+    traces (SpecGdnBlockState._prepare_block_traces)."""
     return os.environ.get("QWEN36_MAMBA_SPEC", "0") == "1"
-
-
-def mamba_prefill_checkpoints_enabled():
-    """QWEN36_MAMBA_PREFILL_CKPT (default "1" under QWEN36_MAMBA_SPEC=1, "0" turns it off; mode align, the spec class):
-    the GDN MambaSpec declares one prefill checkpoint block, so vLLM no longer ends a prefill chunk at the prompt's last
-    full block. The prefill then also writes the GDN state after each of vLLM's checkpoint positions into the block
-    vLLM names."""
-    return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_PREFILL_CKPT", "1") == "1"
-
-
-def mamba_ckpt_snapshots_enabled():
-    """QWEN36_MAMBA_CKPT_SNAP (default "1" with QWEN36_MAMBA_PREFILL_CKPT, "0" turns it off): the prefill traces carry
-    the in-replay GDN snapshots (as QWEN36_PREFILL_INTRACE_SNAP=1 does, which the flag does not need), and a prefill
-    checkpoint strictly inside a replay is written from that replay's snapshot instead of ending a segment there. A
-    later 16k chunk holds four checkpoints (the previous chunk's three draft blocks and vLLM's checkpoint), so the split
-    cost about 0.5 s per chunk. Where the snapshot path cannot serve a call (the eager prefill, a checkpoint in an eager
-    replay or 1 or 2 rows before a short replay's end, more than GDN_SNAP_SLOTS checkpoints in one replay, a request
-    that owns the trash block, or a split the cost model finds cheaper) the checkpoints still end segments."""
-    return mamba_prefill_checkpoints_enabled() and os.environ.get("QWEN36_MAMBA_CKPT_SNAP", "1") == "1"
-
-
-def mamba_chain_moves_enabled():
-    """QWEN36_MAMBA_CHAIN_MOVES (default "1" under QWEN36_MAMBA_SPEC=1, "0" turns it off; the fused chain): the spec
-    class declares supports_mamba_chained_state_moves, so a chained verify in mode align runs its state moves on the
-    device (the chain body selects each row's start block and state window by the pending verify's accepted count) and
-    block boundaries no longer break the chain."""
-    return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_CHAIN_MOVES", "1") == "1"
-
-
-def mamba_write_trace_enabled():
-    """QWEN36_MAMBA_WRITE_TRACE (default "1" under QWEN36_MAMBA_SPEC=1, "0" turns it off): the write of a prefill's GDN
-    state into its vLLM blocks (every GDN layer's recurrent pages and conv history from the bound B=1 scratch) replays
-    one captured trace through per-group page-table buffers instead of about 550 eager ops."""
-    return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_WRITE_TRACE", "1") == "1"
-
-
-def mamba_copy_trace_enabled():
-    """QWEN36_MAMBA_COPY_TRACE (default "1" under QWEN36_MAMBA_SPEC=1, "0" turns it off): the GDN block copies (whole
-    block, or page by page between blocks of different phase), the chained copies, the conv history writes from the
-    verify window and the prefill block restore replay captured traces (device-indexed slices and page tables restaged
-    per call) instead of about 60 to 500 eager ops each."""
-    return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_COPY_TRACE", "1") == "1"
 
 
 def verify_device_topk_m():
@@ -387,12 +348,12 @@ def prefill_intrace_snap_enabled():
     such a saved snapshot differs in its low bits; the downstream prefill outputs were bit-identical in every device
     test (see the module docstring of prefill_plan.py). Needs the KDA conv (QWEN_GDN_CONV=kda) and the fused chunk op;
     TP spec engine with B > 1 only. Read once (the traces capture whichever body is active at warm-up).
-    Also on with QWEN36_MAMBA_SPEC=1 and QWEN36_MAMBA_CKPT_SNAP (its default), for vLLM's prefill checkpoints."""
+    Also on with QWEN36_MAMBA_SPEC=1, for vLLM's prefill checkpoints: a checkpoint strictly inside a replay is written
+    from that replay's snapshot instead of ending a segment there (a later 16k chunk holds four checkpoints, and the
+    split cost about 0.5 s per chunk; _CheckpointSnapRun)."""
     global _PREFILL_INTRACE_SNAP
     if _PREFILL_INTRACE_SNAP is None:
-        _PREFILL_INTRACE_SNAP = (
-            os.environ.get("QWEN36_PREFILL_INTRACE_SNAP", "0") == "1" or mamba_ckpt_snapshots_enabled()
-        )
+        _PREFILL_INTRACE_SNAP = os.environ.get("QWEN36_PREFILL_INTRACE_SNAP", "0") == "1" or mamba_spec_enabled()
     return _PREFILL_INTRACE_SNAP
 
 

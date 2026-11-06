@@ -953,9 +953,9 @@ class _SnapRun:
 
 
 class _CheckpointSnapRun(_SnapRun):
-    """_SnapRun for vLLM's prefill checkpoints (QWEN36_MAMBA_PREFILL_CKPT): a checkpoint strictly inside a replay is
-    written into its vLLM block from the replay's in-replay snapshot, one at a replay end from the bound state, so the
-    prefill call runs as one segment instead of splitting at every checkpoint."""
+    """_SnapRun for vLLM's prefill checkpoints (QWEN36_MAMBA_SPEC=1, mode align): a checkpoint strictly inside a
+    replay is written into its vLLM block from the replay's in-replay snapshot, one at a replay end from the bound
+    state, so the prefill call runs as one segment instead of splitting at every checkpoint."""
 
     def __init__(self, model, points):
         super().__init__(model, None, None, points)
@@ -2181,7 +2181,7 @@ class MTPSpecEngine:
                 self._prepare_fused()
 
         if self._paged_state() is not None:
-            # the fused steps' result buffers: QWEN36_MAMBA_COPY_TRACE selects chained copies from their counts
+            # the fused steps' result buffers: the copy traces select chained copies from their counts
             self._paged_state().chain_results = [d.result_out for d in (self._fa, self._fs) if d is not None]
             self._paged_state().warmup()
         ttnn.synchronize_device(self.mesh)
@@ -2251,10 +2251,9 @@ class MTPSpecEngine:
             kw["ring_pages"] = (paged.pages_dev, paged.G)
             if paged.pages_rm_dev is not None:  # QWEN36_SPEC_CHAIN_KERNEL
                 kw["ring_pages_rm"] = paged.pages_rm_dev
-            if paged.windows_dev is not None:  # QWEN36_MAMBA_CHAIN_MOVES
-                kw["ring_windows"] = (paged.windows_dev, list(paged._idx_dev))
-                if paged.windows_rm_dev is not None:  # QWEN36_SPEC_CHAIN_KERNEL
-                    kw["ring_windows_rm"] = paged.windows_rm_dev
+            kw["ring_windows"] = (paged.windows_dev, list(paged._idx_dev))  # chained state moves
+            if paged.windows_rm_dev is not None:  # QWEN36_SPEC_CHAIN_KERNEL
+                kw["ring_windows_rm"] = paged.windows_rm_dev
         Nv = int(model._vfy_Nv)
         ch_g = ch_s = None
         try:
@@ -3021,10 +3020,10 @@ class MTPSpecEngine:
         Recompute from 0 when start_pos is 0, off the 128 grid or off a KV block boundary (paged_fill_cache writes a
         segment from the first row of its first block), or leaves fewer than 3 tokens: the cached KV is rewritten with
         the same values. A multimodal prompt always recomputes.
-        vLLM's prefill checkpoints of the request (QWEN36_MAMBA_PREFILL_CKPT) become the save points: the prompt runs
-        as segments that end at them, and each one's state goes into vLLM's block (CheckpointPoints). A multimodal
-        prompt does the same from position 0 (its segments splice their vision rows), so no checkpoint block it gets
-        is left unwritten: vLLM can match a block before the first image to a text prompt."""
+        vLLM's prefill checkpoints of the request (mode align) become the save points: the prompt runs as segments
+        that end at them, and each one's state goes into vLLM's block (CheckpointPoints). A multimodal prompt does the
+        same from position 0 (its segments splice their vision rows), so no checkpoint block it gets is left
+        unwritten: vLLM can match a block before the first image to a text prompt."""
         paged = self._paged_state()
         ckpts = [] if gdn_req is None or gdn_req == WARMUP_REQ else paged.prefill_checkpoints(gdn_req)
         s = 0 if vision_tokens is not None else int(start_pos or 0)
@@ -3058,9 +3057,9 @@ class MTPSpecEngine:
     def _stage_gdn_windows(self, gdn_windows, start0, active):
         """Stage one step's GDN state windows (QWEN36_MAMBA_SPEC). ``gdn_windows`` = ([G] int64 [B, 1 + K] block windows,
         int64 [B] state_accepted_counts[, moves]), runner slots; ``start0`` / ``active`` in engine rows. Rows the step
-        does not compute are held (ctrl page HOLD). ``moves`` (QWEN36_MAMBA_CHAIN_MOVES, a chained step): ([G] start
-        blocks [B, 1 + K], [G] windows [B, 1 + K, 1 + K][, [G] block copies [B, 1 + K, 2] or None]) per accepted count
-        of the pending verify, for the chained rows (state_accepted_counts -1)."""
+        does not compute are held (ctrl page HOLD). ``moves`` (supports_mamba_chained_state_moves, a chained step):
+        ([G] start blocks [B, 1 + K], [G] windows [B, 1 + K, 1 + K][, [G] block copies [B, 1 + K, 2] or None]) per
+        accepted count of the pending verify, for the chained rows (state_accepted_counts -1)."""
         paged = self._paged_state()
         if gdn_windows is None:
             raise ValueError("QWEN36_MAMBA_SPEC: decode_forward needs gdn_windows (state_block_windows_per_layer)")
@@ -3527,7 +3526,7 @@ class MTPSpecEngine:
                     if self.ckpt_split_prefills == 1:
                         logger.warning(
                             f"[spec_engine] prefill checkpoints {list(points)} of [{s0}, {Tp}) end segments: the "
-                            "in-replay snapshot path does not serve this call (QWEN36_MAMBA_CKPT_SNAP=0, a checkpoint in "
+                            "in-replay snapshot path does not serve this call (no snapshot traces, a checkpoint in "
                             "an eager replay or 1 or 2 rows before a short replay's end, too many in one replay, a trash "
                             "block collision, or a cheaper split); counted in ckpt_split_prefills"
                         )
@@ -5728,7 +5727,7 @@ class MTPSpecEngine:
         chain = dict(chain, lo=lo, hi=hi)
         paged = self._paged_state()
         moved = paged is not None and bool(paged.book.moves)
-        if moved:  # QWEN36_MAMBA_CHAIN_MOVES: conv write of the count that starts at a block's last position
+        if moved:  # chained state moves: conv write of the count that starts at a block's last position
             paged.chain_boundaries(lo)
         if paged is not None and paged.chain_copies:  # behind the pending step, before this one: its count selects them
             prev = chain["prev"]

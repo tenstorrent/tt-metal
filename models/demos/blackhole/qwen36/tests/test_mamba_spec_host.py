@@ -828,10 +828,11 @@ def _checkpoint_run(tmp_path, retention, checkpoint):
 
 @pytest.mark.parametrize("retention", [0, None])
 def test_prefill_checkpoints_run_each_prompt_in_one_step(tmp_path, retention):
-    """QWEN36_MAMBA_PREFILL_CKPT: vLLM no longer ends a prompt's chunk at its last full block; the prefill writes the
-    state there into vLLM's checkpoint block (a segment ends there, CheckpointPoints). Against the same requests
-    without checkpoints: every prompt in one prefill step, fewer steps overall, every follow-up hit at least as long,
-    and every resume reads exactly the state of its tokens (the harness asserts each read)."""
+    """vLLM's prefill checkpoints (QWEN36_MAMBA_SPEC=1, mode align): vLLM no longer ends a prompt's chunk at its last
+    full block; the prefill writes the state there into vLLM's checkpoint block (a segment ends there,
+    CheckpointPoints). Against the same requests without checkpoints: every prompt in one prefill step, fewer steps
+    overall, every follow-up hit at least as long, and every resume reads exactly the state of its tokens (the harness
+    asserts each read)."""
     split = _checkpoint_run(tmp_path / "split", retention, False)
     h = _checkpoint_run(tmp_path / "ckpt", retention, True)
     firsts = [f"a{n}" for n in CKPT_LENGTHS]
@@ -873,26 +874,19 @@ def test_in_replay_checkpoints_come_from_the_snapshot_and_replay_ends_from_the_s
 
 @pytest.mark.parametrize(
     "env, on",
-    [
-        (dict(QWEN36_MAMBA_SPEC="1"), True),
-        (dict(QWEN36_MAMBA_SPEC="1", QWEN36_MAMBA_CKPT_SNAP="0"), False),
-        (dict(QWEN36_MAMBA_SPEC="1", QWEN36_MAMBA_PREFILL_CKPT="0"), False),
-        ({}, False),
-        (dict(QWEN36_PREFILL_INTRACE_SNAP="1"), False),
-    ],
+    [(dict(QWEN36_MAMBA_SPEC="1"), True), ({}, False), (dict(QWEN36_PREFILL_INTRACE_SNAP="1"), True)],
 )
-def test_checkpoint_snapshots_are_on_by_default_with_the_flag(monkeypatch, env, on):
-    """QWEN36_MAMBA_CKPT_SNAP defaults on with QWEN36_MAMBA_SPEC=1 and its prefill checkpoints, and then turns on the
-    in-replay snapshot traces without QWEN36_PREFILL_INTRACE_SNAP; flag off keeps that variable's own meaning."""
+def test_the_spec_flag_turns_on_the_in_replay_snapshots(monkeypatch, env, on):
+    """QWEN36_MAMBA_SPEC=1 turns on the in-replay snapshot traces (for vLLM's prefill checkpoints) without
+    QWEN36_PREFILL_INTRACE_SNAP; without it that variable keeps its own meaning."""
     from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
-    for k in ("QWEN36_MAMBA_SPEC", "QWEN36_MAMBA_CKPT_SNAP", "QWEN36_MAMBA_PREFILL_CKPT", "QWEN36_PREFILL_INTRACE_SNAP"):
+    for k in ("QWEN36_MAMBA_SPEC", "QWEN36_PREFILL_INTRACE_SNAP"):
         monkeypatch.delenv(k, raising=False)
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     monkeypatch.setattr(tpc, "_PREFILL_INTRACE_SNAP", None)
-    assert tpc.mamba_ckpt_snapshots_enabled() is on
-    assert tpc.prefill_intrace_snap_enabled() is (on or env.get("QWEN36_PREFILL_INTRACE_SNAP") == "1")
+    assert tpc.prefill_intrace_snap_enabled() is on
 
 
 def test_a_checkpoint_off_the_block_grid_or_outside_the_prefill_is_refused():
@@ -924,28 +918,35 @@ def test_a_multimodal_row_writes_its_checkpoints_from_position_0():
     assert eng._paged_plan(1024, 3000, "VISION", True, 0) is None
 
 
-@pytest.mark.parametrize(
-    "env, on",
-    [({}, True), ({"QWEN36_MAMBA_SPEC": "0"}, False), ({"X": "0"}, False)],
-)
-def test_the_tested_sub_flags_default_on_with_the_spec_flag(monkeypatch, env, on):
-    """QWEN36_MAMBA_SPEC=1 turns on chained moves, prefill checkpoints and the write / copy traces unless each is set
-    to 0; without QWEN36_MAMBA_SPEC they stay off."""
-    from models.demos.blackhole.qwen36.tt import tp_common as tc
+@pytest.mark.parametrize("mode", ["none", "align"])
+def test_only_the_spec_class_declares_prefill_checkpoints_and_only_in_mode_align(monkeypatch, mode):
+    """QWEN36_MAMBA_SPEC=1: the spec class's MambaSpec declares block-aligned prefill checkpoints in mode align; mode
+    none and the non-spec class declare none."""
+    from models.demos.blackhole.qwen36.tt import kv_cache_spec as kcs
+    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM, Qwen36MTPContractForCausalLM
 
-    names = {
-        "QWEN36_MAMBA_CHAIN_MOVES": tc.mamba_chain_moves_enabled,
-        "QWEN36_MAMBA_PREFILL_CKPT": tc.mamba_prefill_checkpoints_enabled,
-        "QWEN36_MAMBA_WRITE_TRACE": tc.mamba_write_trace_enabled,
-        "QWEN36_MAMBA_COPY_TRACE": tc.mamba_copy_trace_enabled,
-    }
-    monkeypatch.setenv("QWEN36_MAMBA_SPEC", env.get("QWEN36_MAMBA_SPEC", "1"))
-    for n in names:
-        monkeypatch.delenv(n, raising=False)
-    if "X" in env:
-        for n in names:
-            monkeypatch.setenv(n, "0")
-    assert {n: f() for n, f in names.items()} == {n: on for n in names}
+    seen = []
+    monkeypatch.setenv("QWEN36_MAMBA_SPEC", "1")
+    monkeypatch.setattr(kcs, "qwen36_kv_cache_spec", lambda *a, **k: seen.append(k["prefill_checkpoint_alignment"]))
+    vc = SimpleNamespace(
+        model_config=SimpleNamespace(hf_config=SimpleNamespace(), max_model_len=8192),
+        cache_config=SimpleNamespace(mamba_cache_mode=mode, block_size=2048),
+    )
+    Qwen36MTPContractForCausalLM.get_kv_cache_spec(vc)
+    Qwen36ForCausalLM.get_kv_cache_spec(vc)
+    assert seen == [2048 if mode == "align" else None, None]
+
+
+def test_the_block_state_allocates_both_trace_sets_in_warmup(monkeypatch):
+    """_prepare_block_traces allocates the write trace's and the copy traces' control tensors once (the eager warmup
+    calls it before any trace exists)."""
+    made = []
+    monkeypatch.setattr(sbs, "_WriteTrace", lambda st: made.append("write") or "W")
+    monkeypatch.setattr(sbs, "_CopyTraces", lambda st: made.append("copy") or "C")
+    st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
+    st._prepare_block_traces()
+    st._prepare_block_traces()
+    assert made == ["write", "copy"] and (st._wt_pending, st._ct_pending) == ("W", "C")
 
 
 @pytest.mark.parametrize("mode", ["none", "align"])
@@ -1192,9 +1193,10 @@ def test_spec_state_device_writes_land_where_the_verify_reads(monkeypatch, geo):
 
 
 # ------------------------------------------------------------------------------------- chained state moves
-# QWEN36_MAMBA_CHAIN_MOVES: on a chained step the plugin sends, per accepted count c of the pending verify, each row's
-# start block and state window. The chain body gathers both tables (SpecBlockBook.pages_cat / windows_cat) at column
-# c - 1; the host adopts the window of the actual count once it has the count.
+# Chained state moves (supports_mamba_chained_state_moves): on a chained step the plugin sends, per accepted count c
+# of the pending verify, each row's start block and state window. The chain body gathers both tables
+# (SpecBlockBook.pages_cat / windows_cat) at column c - 1; the host adopts the window of the actual count once it has
+# the count.
 
 
 def _moves_case(G=2):
@@ -1506,7 +1508,7 @@ class _AddrFT(_FT):
 
 
 def test_write_trace_replays_the_scratch_into_each_target_block(monkeypatch):
-    """QWEN36_MAMBA_WRITE_TRACE: the captured prefill block write restages its page tables for the target blocks and
+    """_WriteTrace: the captured prefill block write restages its page tables for the target blocks and
     lands the bound scratch's state and conv history there; a moved scratch address makes the caller write eagerly."""
     import ttnn
 

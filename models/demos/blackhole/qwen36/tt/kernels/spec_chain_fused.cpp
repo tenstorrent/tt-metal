@@ -18,7 +18,7 @@
 // With G > 0, one more input:
 //   pages       uint32 [B, T*G*NV]      row u, column t*G*NV + g*NV + h = the first page of head h of group g for start
 //                                       column t (SpecBlockBook.pages_cat, as words)
-// With MOVES (QWEN36_MAMBA_CHAIN_MOVES), one more input and G more outputs:
+// With MOVES (chained state moves), one more input and G more outputs:
 //   windows     uint32 [B, T*G*T*NV]    row u, column c*G*T*NV + g*T*NV + t*NV + h = the first page of head h of
 //                                       the block that takes the state after query token t, for accepted count c + 1
 //                                       (SpecBlockBook.windows_cat, as words)

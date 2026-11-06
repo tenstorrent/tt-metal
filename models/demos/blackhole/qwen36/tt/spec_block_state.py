@@ -439,7 +439,7 @@ class SpecBlockBook:
         return pages
 
     def windows_cat(self):
-        """float32 [B, T * G * T * Nv]: the chain body's window-page table (QWEN36_MAMBA_CHAIN_MOVES), gathered at
+        """float32 [B, T * G * T * Nv]: the chain body's window-page table (chained state moves), gathered at
         accepted count c = mi' + 1: column (c - 1) * G * T * Nv + g * T * Nv + t * Nv + h = the first page of head h of
         the block that takes the state after query token t, the staged window for every count on a row without chained
         state moves."""
@@ -701,14 +701,12 @@ class SpecGdnBlockState:
         self.pages_dev = ttnn.from_torch(
             self.book.pages_cat(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
         )
-        # QWEN36_MAMBA_CHAIN_MOVES: the chain body's window-page table (SpecBlockBook.windows_cat), selected by count
-        from models.demos.blackhole.qwen36.tt.tp_common import mamba_chain_moves_enabled, spec_chain_kernel_enabled
+        # the chain body's window-page table for chained state moves (SpecBlockBook.windows_cat), selected by count
+        from models.demos.blackhole.qwen36.tt.tp_common import spec_chain_kernel_enabled
 
-        self.windows_dev = None
-        if mamba_chain_moves_enabled():
-            self.windows_dev = ttnn.from_torch(
-                self.book.windows_cat(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
-            )
+        self.windows_dev = ttnn.from_torch(
+            self.book.windows_cat(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
+        )
         # QWEN36_SPEC_CHAIN_KERNEL: pages_dev's words as uint32 RM [B, T * G * Nv], the chain kernel's start-page table
         self.pages_rm_dev = None
         if spec_chain_kernel_enabled():
@@ -719,10 +717,9 @@ class SpecGdnBlockState:
                 device=mesh,
                 mesh_mapper=rep,
             )
-        # QWEN36_SPEC_CHAIN_KERNEL with QWEN36_MAMBA_CHAIN_MOVES: windows_dev's words as uint32 RM (the kernel's window
-        # table)
+        # QWEN36_SPEC_CHAIN_KERNEL: windows_dev's words as uint32 RM (the kernel's window table)
         self.windows_rm_dev = None
-        if self.windows_dev is not None and spec_chain_kernel_enabled():
+        if spec_chain_kernel_enabled():
             self.windows_rm_dev = ttnn.from_torch(
                 as_u32_words(self.book.windows_cat().to(torch.int64)),
                 dtype=ttnn.uint32,
@@ -762,13 +759,14 @@ class SpecGdnBlockState:
             )
 
     def _upload_tables(self):
-        """pages_dev (and windows_dev) from the book, each only when it differs from its last upload."""
+        """pages_dev and windows_dev from the book, each only when it differs from its last upload."""
         import ttnn
 
         rep = ttnn.ReplicateTensorToMesh(self.mesh)
-        tables = [("pages", self.book.pages_cat(), self.pages_dev)]
-        if self.windows_dev is not None:
-            tables.append(("windows", self.book.windows_cat(), self.windows_dev))
+        tables = [
+            ("pages", self.book.pages_cat(), self.pages_dev),
+            ("windows", self.book.windows_cat(), self.windows_dev),
+        ]
         for name, host, dev in tables:
             if name in self._up and torch.equal(self._up[name], host):
                 continue
@@ -786,8 +784,6 @@ class SpecGdnBlockState:
 
     def set_moves(self, starts, windows, rows):
         """A chained step's state moves (SpecBlockBook.set_moves), engine rows; the chain body's tables follow."""
-        if self.windows_dev is None:
-            raise RuntimeError("chained state moves without QWEN36_MAMBA_CHAIN_MOVES=1 (no window-page table)")
         self.book.set_moves(starts, windows, rows)
         self._upload_tables()
 
@@ -913,7 +909,7 @@ class SpecGdnBlockState:
             total = lay.conv_pages_total
             q = lambda page: page if page < total else page - total
             ctab = selected(m, q(cd), q(c0), lay.conv_pages)
-            if ct is not None and ct.chained(src, u, t, g, {**tabs, "conv": ctab}):  # QWEN36_MAMBA_COPY_TRACE
+            if ct is not None and ct.chained(src, u, t, g, {**tabs, "conv": ctab}):  # the copy traces
                 continue
             for dn in self._slot_layers.values():  # every slot's views: the bytes of src belong to group g in each slot
                 for k, (view, h0, h1, off) in enumerate(self._pools(dn)):
@@ -1013,7 +1009,7 @@ class SpecGdnBlockState:
         import ttnn
 
         ct = getattr(self, "_copy_traces", None)
-        if ct is not None:  # QWEN36_MAMBA_COPY_TRACE
+        if ct is not None:  # the copy traces (_CopyTraces.restore)
             with self._timed("prefill block restores (trace)", len(self.layers)):
                 if ct.restore([self.book.prefill_block(g, u) for g in range(self.G)]):
                     return
@@ -1070,8 +1066,9 @@ class SpecGdnBlockState:
                 ttnn.deallocate(rm)
 
     def _replay_write(self, blocks, kind):
-        """QWEN36_MAMBA_WRITE_TRACE: write the bound prefill scratch into ``blocks`` ([G] ids) by the captured trace;
-        False when there is none or it does not apply (the caller writes eagerly)."""
+        """Write the bound prefill scratch into ``blocks`` ([G] ids) by the captured write trace (_WriteTrace); False
+        when there is none (before capture_write_trace, or its capture failed) or it does not apply (the caller writes
+        eagerly)."""
         wt = getattr(self, "_write_trace", None)
         if wt is None:
             return False
@@ -1083,26 +1080,24 @@ class SpecGdnBlockState:
         return True
 
     def _prepare_block_traces(self):
-        """QWEN36_MAMBA_WRITE_TRACE / QWEN36_MAMBA_COPY_TRACE: allocate the traces' control tensors in the eager warmup,
-        before any trace exists. A buffer allocated after a trace's capture can sit where that trace's replay writes
-        its intermediates (seen: verify replays overwrote copy-trace controls allocated at capture time). The traces
-        are captured last (capture_write_trace, capture_copy_traces)."""
+        """Allocate the write and copy traces' control tensors (_WriteTrace, _CopyTraces) in the eager warmup, before
+        any trace exists. A buffer allocated after a trace's capture can sit where that trace's replay writes its
+        intermediates (seen: verify replays overwrote copy-trace controls allocated at capture time). The traces are
+        captured last (capture_write_trace, capture_copy_traces)."""
         from loguru import logger
 
-        from models.demos.blackhole.qwen36.tt.tp_common import mamba_copy_trace_enabled, mamba_write_trace_enabled
-
         try:
-            if mamba_write_trace_enabled() and getattr(self, "_wt_pending", None) is None:
+            if getattr(self, "_wt_pending", None) is None:
                 self._wt_pending = _WriteTrace(self)
-            if mamba_copy_trace_enabled() and getattr(self, "_ct_pending", None) is None:
+            if getattr(self, "_ct_pending", None) is None:
                 self._ct_pending = _CopyTraces(self)
         except Exception as e:  # noqa: BLE001
             logger.error(f"[mamba_spec] block trace buffers not allocated ({e!r}): eager block operations")
 
     def capture_write_trace(self):
-        """QWEN36_MAMBA_WRITE_TRACE: capture the prefill block write (_WriteTrace, its tables allocated in warmup) on the
-        bound scratch. Call after every other trace is captured (MTPSpecEngine.capture_decode). A failed capture
-        leaves the eager write in charge."""
+        """Capture the prefill block write (_WriteTrace, its tables allocated in warmup) on the bound scratch, so the
+        write replays one trace instead of about 550 eager ops. Call after every other trace is captured
+        (MTPSpecEngine.capture_decode). A failed capture leaves the eager write in charge."""
         from loguru import logger
 
         wt = getattr(self, "_wt_pending", None)
@@ -1120,9 +1115,9 @@ class SpecGdnBlockState:
             model._unbind_gdn_prefill_scratch(prev)
 
     def capture_copy_traces(self):
-        """QWEN36_MAMBA_COPY_TRACE: capture the block copy, page copy, conv write and restore traces (_CopyTraces, its
-        controls allocated in warmup). Call after every other trace is captured (MTPSpecEngine.capture_decode). A
-        failed capture leaves the eager ops in charge."""
+        """Capture the block copy, page copy, conv write and restore traces (_CopyTraces, its controls allocated in
+        warmup), so each of these replays instead of running about 60 to 500 eager ops. Call after every other trace
+        is captured (MTPSpecEngine.capture_decode). A failed capture leaves the eager ops in charge."""
         from loguru import logger
 
         ct = getattr(self, "_ct_pending", None)
@@ -1192,7 +1187,8 @@ class SpecGdnBlockState:
                     self.materialize(*op[1:], pts)
 
     def _copy_block(self, src, dst):
-        """Whole-block copy src -> dst in every layer slot's K and V (copy_kv_blocks; QWEN36_MAMBA_COPY_TRACE: replayed)."""
+        """Whole-block copy src -> dst in every layer slot's K and V (copy_kv_blocks; replayed once the copy traces are
+        captured)."""
         from models.demos.blackhole.qwen36.tt.gdn_block_state import copy_kv_blocks
 
         ct = getattr(self, "_copy_traces", None)
@@ -1205,7 +1201,7 @@ class SpecGdnBlockState:
         import ttnn
 
         ct = getattr(self, "_copy_traces", None)
-        if ct is not None and ct.copy(src, dst):  # QWEN36_MAMBA_COPY_TRACE
+        if ct is not None and ct.copy(src, dst):  # the copy traces
             return
 
         lay, mc = self.layout, ttnn.DRAM_MEMORY_CONFIG
@@ -1282,7 +1278,7 @@ class SpecGdnBlockState:
         import ttnn
 
         ct = getattr(self, "_copy_traces", None)
-        if ct is not None and ct.conv(u, t, g, dst, table):  # QWEN36_MAMBA_COPY_TRACE
+        if ct is not None and ct.conv(u, t, g, dst, table):  # the copy traces
             return
         mc = ttnn.DRAM_MEMORY_CONFIG
         for _, dn, gg in self.layers:
@@ -1406,10 +1402,10 @@ class SpecGdnBlockState:
 
 
 class _WriteTrace:
-    """QWEN36_MAMBA_WRITE_TRACE: the captured write of the bound prefill scratch into one block per GDN group
-    (SpecGdnBlockState.write_prefill), through persistent page tables: per group one int32 table per recurrent pool
-    and one for the conv history, restaged per write. Valid while the scratch keeps the addresses the capture baked
-    and the target blocks keep their conv history in the captured views."""
+    """The captured write of the bound prefill scratch into one block per GDN group (SpecGdnBlockState.write_prefill),
+    through persistent page tables: per group one int32 table per recurrent pool and one for the conv history,
+    restaged per write. Valid while the scratch keeps the addresses the capture baked and the target blocks keep their
+    conv history in the captured views."""
 
     def __init__(self, state):
         import ttnn
@@ -1495,14 +1491,13 @@ class _WriteTrace:
 
 
 class _CopyTraces:
-    """QWEN36_MAMBA_COPY_TRACE: the block operations that read at a position the host picks, as replays of traces
-    captured once: ``block`` = a whole-block copy of every layer slot's K and V (copy_kv_blocks), ``copy`` = the
-    page-by-page state copy (SpecGdnBlockState._relayout: head pages of each pool and the conv history), ``conv`` = the
-    conv rows after token t of engine row u's verify window into a block of group g (materialize; one trace per group,
-    window parity and t). Reads use device-indexed slices (ttnn.slice with start tensors), writes use page tables; the
-    host restages the small control tensors that changed and replays. Valid while the window buffers keep the
-    addresses the capture baked and the blocks keep their conv history in the captured view (else the caller runs
-    the eager ops)."""
+    """The block operations that read at a position the host picks, as replays of traces captured once: ``block`` = a
+    whole-block copy of every layer slot's K and V (copy_kv_blocks), ``copy`` = the page-by-page state copy
+    (SpecGdnBlockState._relayout: head pages of each pool and the conv history), ``conv`` = the conv rows after token t
+    of engine row u's verify window into a block of group g (materialize; one trace per group, window parity and t).
+    Reads use device-indexed slices (ttnn.slice with start tensors), writes use page tables; the host restages the
+    small control tensors that changed and replays. Valid while the window buffers keep the addresses the capture
+    baked and the blocks keep their conv history in the captured view (else the caller runs the eager ops)."""
 
     def __init__(self, state):
         import ttnn
@@ -1968,7 +1963,7 @@ class _LayerViews:
     group: int
     two_pool: bool
     idx: object = None
-    k: object = None  # the slot's K and V buffers the views alias (QWEN36_MAMBA_COPY_TRACE aliases them again)
+    k: object = None  # the slot's K and V buffers the views alias (_CopyTraces aliases them again)
     v: object = None
 
     def conv_at(self, page, total):

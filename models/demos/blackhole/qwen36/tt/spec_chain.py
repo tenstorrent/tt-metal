@@ -254,7 +254,7 @@ class ChainDevice:
                         [2 + G, W_v] with ``ring_pages`` (QWEN36_MAMBA_SPEC: the fp32 [B, T*G*Nv] start-page table of
                         the G GDN groups, SpecBlockBook.pages_cat): one ctrl page per group, start pages gathered at
                         column mi' (chain_reference with ring_idx)
-             ring_windows  with ``ring_windows`` (QWEN36_MAMBA_CHAIN_MOVES): each group's ring_page_idx (uint32 RM
+             ring_windows  with ``ring_windows`` (chained state moves): each group's ring_page_idx (uint32 RM
                         [B, T*Nv]) = the fp32 window-page table [B, T*G*T*Nv] (SpecBlockBook.windows_cat) at accepted
                         count mi' + 1, so the verify writes the window of the count the pending verify accepted
              next_aux_out = aux_prev_in itself (int32 [7, W_a]): every value is read before the final copy.
@@ -458,7 +458,7 @@ class ChainDevice:
                 )
                 acc = term if acc is None else ttnn.add(acc, term)  # [B, G*Nv]
             blks = [ttnn.slice(acc, [0, g * Nv], [B, (g + 1) * Nv]) for g in range(self.G)]
-            if self.ring_windows is not None:  # QWEN36_MAMBA_CHAIN_MOVES: the window of count mi' + 1, per group
+            if self.ring_windows is not None:  # chained state moves: the window of count mi' + 1, per group
                 GTN = self.G * T * Nv
                 win = None
                 for t in range(T):

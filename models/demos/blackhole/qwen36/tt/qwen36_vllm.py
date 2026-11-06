@@ -33,8 +33,6 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     fabric_router_config,
     kv_block_size,
     kv_cache_bf8_enabled,
-    mamba_chain_moves_enabled,
-    mamba_prefill_checkpoints_enabled,
     mamba_spec_enabled,
     spec_chain_enabled,
     spec_device_logprobs_enabled,
@@ -238,7 +236,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     _tt_allow_decode_trace_buffer_reuse = True
     decode_input_update_contract = 1
     _ENABLE_MTP = False  # MTP contract subclass overrides
-    # Whose prefill_forward writes vLLM's prefill checkpoint states (QWEN36_MAMBA_PREFILL_CKPT)
+    # Whose prefill_forward writes vLLM's prefill checkpoint states (QWEN36_MAMBA_SPEC=1, mode align)
     _PREFILL_CHECKPOINTS = False
 
     # QWEN36_SERVE_DEVICE_DECODE=0: supports_async_decode=False -- the decode inputs (host-packed RoPE, [B,1] token
@@ -282,7 +280,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # Mode none: one state block per request and group, as upstream resolves mamba_block_size = max_model_len.
         max_len = int(vllm_config.model_config.max_model_len)
         # A multimodal prompt writes its checkpoints too (MTPSpecEngine._paged_plan), so images and video keep them on.
-        ckpt = mode == "align" and cls._PREFILL_CHECKPOINTS and mamba_prefill_checkpoints_enabled()
+        ckpt = mode == "align" and cls._PREFILL_CHECKPOINTS
         return qwen36_kv_cache_spec(
             tc,
             _mesh_tp(),
@@ -1349,11 +1347,11 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         "supports_prefill_over_pending_spec": bool(
             spec_chain_enabled() and spec_fused_enabled() and spec_prefill_overlap_enabled()
         ),
-        # QWEN36_MAMBA_CHAIN_MOVES=1: a chained verify in mode align gets state_chain_start_blocks_per_layer and
+        # QWEN36_MAMBA_SPEC=1: a chained verify in mode align gets state_chain_start_blocks_per_layer and
         # state_chain_windows_per_layer (one entry per accepted count of the pending verify) and the chain body selects
         # them on the device; state_chain_copies_per_layer runs as block copies whose count the device selects
         "supports_mamba_chained_state_moves": bool(
-            spec_chain_enabled() and spec_fused_enabled() and mamba_chain_moves_enabled()
+            spec_chain_enabled() and spec_fused_enabled() and mamba_spec_enabled()
         ),
         # decode_forward(finishing_slots=[runner slots]): requests left out of a step only because the step in flight ends them at
         # max_tokens. The engine frees their rows without parking (spec_engine._apply_finishing). Only meaningful with spec.

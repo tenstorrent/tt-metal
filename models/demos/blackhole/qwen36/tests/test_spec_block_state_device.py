@@ -312,7 +312,7 @@ def test_chained_copies_select_dst_by_the_device_count(device, geo_block_layout)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 16_000_000}], indirect=True)
 @pytest.mark.parametrize("geo_block_layout", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}_{c[2]}")
 def test_copy_traces_match_the_eager_block_ops(device, geo_block_layout):
-    """QWEN36_MAMBA_COPY_TRACE: the replayed whole-block copy, page-by-page copy (blocks of either phase), conv write
+    """_CopyTraces: the replayed whole-block copy, page-by-page copy (blocks of either phase), conv write
     from either window half and the chained copy with device-selected pages leave what the eager ops leave."""
     from models.demos.blackhole.qwen36.tt.spec_chain import RES_COUNTS
 

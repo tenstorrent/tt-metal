@@ -329,7 +329,7 @@ def test_prefill_for_spec_b1_threads_vision(monkeypatch, expect_error):
 
 
 def test_checkpoint_segments_of_a_multimodal_prompt_splice_their_vision_rows(monkeypatch):
-    """QWEN36_MAMBA_PREFILL_CKPT with images allowed: a multimodal prompt with a vLLM checkpoint at 1024 runs as the
+    """vLLM prefill checkpoints with images allowed: a multimodal prompt with a vLLM checkpoint at 1024 runs as the
     segments [0, 1024) and [1024, L) from position 0 (the eager path); every chunk and tail stages its own vision rows
     (the image straddles the checkpoint) and the checkpoint state is written after the first segment."""
     from models.demos.blackhole.qwen36.tt.spec_block_state import CheckpointPoints

@@ -379,7 +379,7 @@ def test_chain_kernel_matches_with_block_pages(mesh, G):
 
 @pytest.mark.parametrize("G", [1, 3])
 def test_chain_kernel_matches_with_moves(mesh, G):
-    """QWEN36_MAMBA_CHAIN_MOVES: the chain also writes each group's ring_page_idx from the window table at count column
+    """Chained state moves: the chain also writes each group's ring_page_idx from the window table at count column
     mi' (fp32 TILE for the op graph, uint32 RM for the kernel): kernel == op graph on every output, and each
     ring_page_idx row is the window table row at that row's mi' (read back from the ctrl page)."""
     n_cases = 0
