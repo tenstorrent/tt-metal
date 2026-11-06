@@ -265,6 +265,7 @@ class TtV4Transformer(LightweightModule):
         provided_levels: int = 0,
         mtp_geometry=None,
         chunks: Optional[list] = None,
+        mtp_unions: Optional[list] = None,
     ):
         """Run one chunk through this rank's layers.
 
