@@ -4252,7 +4252,6 @@ HiFi2,Float32,Bfp8_b,Bfp4_b,1,6,8,0,False,False,1,perf_matmul_grid(fix3),0.53,,T
 HiFi3,Float16_b,Bfp4_b,Bfp4_b,1,4,1,2,False,True,1,perf_matmul_llkx(fix3),0.68,,True,True,main,Half,
 HiFi3,Float16_b,Bfp8_b,Bfp4_b,1,4,1,2,False,True,1,perf_matmul_llkx(fix3),0.68,,True,True,main,Half,
 HiFi3,Float16_b,Float16_b,Bfp4_b,4,1,1,2,False,True,1,perf_matmul_llkx(fix3),0.71,,True,True,main,Half,
-LoFi,Bfp8,Bfp8,Bfp8,4,1,3,0,False,True,1,perf_matmul_llkx(fix3),0.24,,True,True,main,Half,
 LoFi,Float32,Bfp8_b,Float32,1,2,3,0,False,True,1,perf_matmul_grid(fix3),0.17,,True,True,main,Half,
 LoFi,Float32,Bfp8_b,Float32,1,2,4,0,False,True,1,perf_matmul_mix(fix3),0.18,,True,True,main,Half,
 LoFi,Float32,Float32,Bfp4_b,2,2,1,2,False,True,1,perf_matmul_llkx(fix3),0.35,,True,True,main,Half,

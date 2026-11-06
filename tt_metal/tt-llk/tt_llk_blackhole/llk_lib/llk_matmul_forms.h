@@ -876,7 +876,6 @@ inline constexpr matmul_grid_main_cell matmul_grid_main_cells[] = {
     {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 7, 1, 3, 0, false, 1},
     {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 8, 1, 3, 0, false, 1},
     {MathFidelity::LoFi, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Bfp8, 2, 1, 8, 0, false, 1},
-    {MathFidelity::LoFi, true, true, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Bfp8, 4, 1, 3, 0, false, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Bfp2_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
     {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Bfp2_b, DataFormat::Float32, 6, 1, 3, 0, false, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
