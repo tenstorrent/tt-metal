@@ -379,3 +379,60 @@ def test_xielu_large_negative(alpha_p, alpha_n, dtype, device):
         assert_allclose(torch_output, ttnn_output, rtol=6e-05, atol=1e-06)
     else:
         assert_with_ulp(expected_result=torch_output, actual_result=ttnn_output, ulp_threshold=1)
+
+
+@pytest.mark.parametrize(
+    "alpha_n, x_crossing",
+    [
+        (0.6, -5.9694357),
+        (0.8, -2.4324841),
+        (1.0, -1.5936242),
+        (1.25, -1.1212264),
+        (1.5, -0.8742191),
+        (2.0, -0.6058606),
+        (2.5, -0.46209812),
+    ],
+)
+def test_xielu_fp32_zero_crossing(alpha_n, x_crossing, device):
+    """Regression test for #58670: xielu FLOAT32 accuracy across the negative-branch zero crossing.
+
+    Near x*(alpha_n), alpha_n * (expm1(x) - x) and 0.5 * x cancel by up to 23 bits; an uncompensated
+    exp + MAD loses thousands to millions of fp32 ULP and flips sign near x*. Verify ULP <= 8 against
+    the float64 spec (with float32 scalar parameters) across a 1024-ULP window around x*, the exact
+    bfloat16/float32 reproducer points, and the -0.5 / -1e-6 branch boundaries.
+    """
+    alpha_p = 0.8
+    center_bits = torch.tensor(x_crossing, dtype=torch.float32).view(torch.int32).item()
+    crossing_window = (torch.arange(-480, 480, dtype=torch.int32) + center_bits).view(torch.float32)
+
+    b_neg_half = torch.tensor(-0.5, dtype=torch.float32).view(torch.int32).item()
+    b_eps = torch.tensor(-1e-6, dtype=torch.float32).view(torch.int32).item()
+    boundary_pts = torch.cat(
+        [
+            (torch.arange(-16, 16, dtype=torch.int32) + b_neg_half).view(torch.float32),
+            (torch.arange(-16, 16, dtype=torch.int32) + b_eps).view(torch.float32),
+            torch.tensor(
+                [-5.96875, -2.4375, -2.432484, -1.59375, -1.125, -0.875, -0.60546875, -0.462890625],
+                dtype=torch.float32,
+            )[:32],
+        ]
+    )
+    # Pad to 1024 elements (32x32 tile)
+    pad = torch.full((1024 - crossing_window.numel() - boundary_pts.numel(),), x_crossing, dtype=torch.float32)
+    torch_input = torch.cat([crossing_window, boundary_pts, pad]).reshape(32, 32)
+
+    ap64 = float(torch.tensor(alpha_p, dtype=torch.float32).item())
+    an64 = float(torch.tensor(alpha_n, dtype=torch.float32).item())
+    x64 = torch_input.to(torch.float64)
+    pos64 = ap64 * x64 * x64 + 0.5 * x64
+    neg64 = an64 * torch.expm1(torch.clamp(x64, max=-1e-6)) - an64 * x64 + 0.5 * x64
+    golden_fp32 = torch.where(x64 > 0.0, pos64, neg64).to(torch.float32)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.to_torch(ttnn.xielu(ttnn_input, alpha_p=alpha_p, alpha_n=alpha_n))
+
+    nonzero = golden_fp32 != 0.0
+    assert torch.equal(
+        torch.signbit(ttnn_output[nonzero]), torch.signbit(golden_fp32[nonzero])
+    ), f"Sign disagreement near x*={x_crossing} for alpha_n={alpha_n}"
+    assert_with_ulp(expected_result=golden_fp32, actual_result=ttnn_output, ulp_threshold=8)
