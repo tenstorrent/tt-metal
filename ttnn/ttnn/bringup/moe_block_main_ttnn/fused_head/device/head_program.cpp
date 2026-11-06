@@ -654,6 +654,7 @@ std::shared_ptr<const HeadModel> make_head_model(
     ea.router_iters = lay.NIT;
     ea.arena_max = arena_cap_of(config.l1_free, config.cb_floor);
     ea.w_dtype = sh.w_dtype;
+    ea.x_dtype = sh.x_dtype;
     ea.xring = lay.xdram ? 2 : 0;
     h.eng.emplace(ea);
     const SeEngineSizing& e = *h.eng;
@@ -1163,6 +1164,10 @@ private:
         return Arg(bufs.addresses[SRC_WORD0 + i], int32_t(SRC_WORD0 + i), 0);
     }
     Arg A(const std::string& region) const { return base + u32(e.at(region)); }
+    // the engine's and the gather's x (resident layouts): x itself, or xq when the shared expert's x is bf8
+    HeadSrc xsrc() const { return e.xtb != 2048 ? SRC_XQ : SRC_X; }
+    tt::DataFormat xfmt() const { return e.xtb != 2048 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b; }
+    tt::DataFormat hfmt() const { return e.htb != 2048 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b; }
     Arg RA(const std::string& region) const { return base + u32(region_of_router(region)); }
     int64_t region_of_router(const std::string& k) const {
         for (const auto& [n, v] : h.roff) {
@@ -1415,7 +1420,7 @@ std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>> ChipPr
             const uint32_t hh = pos / 2;
             const uint32_t slot = f ? n0 + hh / e.S1 : hh / e.S0;
             out.emplace_back(
-                (((m % e.XR) * nown + slot) * MT + r) * KB * 2048, KB, 0, row0 + (Rr - p * RBo) * 32, j * KB * 64);
+                (((m % e.XR) * nown + slot) * MT + r) * KB * e.xtb, KB, 0, row0 + (Rr - p * RBo) * 32, j * KB * 64);
         }
     }
     return out;
@@ -1488,16 +1493,16 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
     const uint32_t GX = e.GX, GY = e.GY, MT = e.MT;
     const auto allc = h.engine_cores();
     const bool xdram = h.cfg.lay.xdram;
-    Buffer* x = xdram ? bufs[SRC_X_FULL] : bufs[SRC_X];
-    const Arg xa = S(xdram ? SRC_X_FULL : SRC_X);
+    Buffer* x = xdram ? bufs[SRC_X_FULL] : bufs[xsrc()];
+    const Arg xa = S(xdram ? SRC_X_FULL : xsrc());
     const auto bf16 = tt::DataFormat::Float16_b, fp32 = tt::DataFormat::Float32;
     auto cb = [&](uint8_t i, const std::string& key, int64_t size, tt::DataFormat dt, uint32_t page) {
         cbs.push_back(arena_cb(i, e.at(key), u32(size), dt, page, allc));
     };
-    cb(XIN, "xin", 2 * MT * e.KB * 2048, bf16, 2048);
+    cb(XIN, "xin", 2 * MT * e.KB * e.xtb, xfmt(), e.xtb);
     cb(WIN, "win", kNws * e.WSLOT * e.wtb, w_format(h.cfg.w_dtype), e.wtb);
-    cb(HOWN, "hown", MT * e.POMAX * 2048, bf16, 2048);
-    cb(HALL, "hall", e.HSL * GX * MT * e.POMAX * 2048, bf16, 2048);
+    cb(HOWN, "hown", MT * e.POMAX * e.htb, hfmt(), e.htb);
+    cb(HALL, "hall", e.HSL * GX * MT * e.POMAX * e.htb, hfmt(), e.htb);
     auto rsz = [&](const std::string& k) {
         for (const auto& [n, v] : e.rs_sizes) {
             if (n == k) {
@@ -1523,8 +1528,9 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
         const std::string pk = e.LT ? "lat" : "xown";
         const int64_t pend =
             e.LT ? e.at("latz") + int64_t(e.shards - 1) * MT * e.LWMAX * 2048 + int64_t(e.NCH - 1) * e.LATP * 2048
-                 : e.at("xown") + e.xown_t * 2048;
-        cb(kPrepPu, pk, pend - e.at(pk), bf16, 2048);
+                 : e.at("xown") + e.xown_t * e.xtb;
+        // (the units' source: the latent (bf16), or x own as stored)
+        cb(kPrepPu, pk, pend - e.at(pk), e.LT ? bf16 : xfmt(), e.LT ? 2048u : e.xtb);
         cb(kPrepPo, "po", 2 * e.PFULL * 2048, bf16, 2048);
         if (e.LT) {
             cb(kPrepLrdy, "lrdy", e.lrdy_bytes(), bf16, 16);
@@ -1651,6 +1657,10 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
     // the defines every engine kernel takes (`nd`)
     std::vector<std::pair<std::string, std::string>> nd = {
         {"SE_HSL", iv(e.HSL)}, {"SE_ACCP", uv(e.acc_pages)}, {"SE_DT", iv(kDestTiles)}};
+    // (x / h tile bytes: MoEDtypes.shared_activations; the dispatch prep's source tiles: the latent's, or x own's)
+    nd.emplace_back("SE_XTB", uv(e.xtb));
+    nd.emplace_back("SE_HTB", uv(e.htb));
+    nd.emplace_back("SE_PREP_TB", uv(e.LT ? 2048 : e.xtb));
     if (e.NCH > 1 && e.shards > 1) {
         nd.emplace_back("SE_GROW_OWN_CR", iv(e.CR / e.shards));
         nd.emplace_back("SE_GROW_OWN_RT", iv(e.rows / 32 / e.shards));
@@ -1718,7 +1728,7 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
     }
     nd.emplace_back("RXS_ID", iv(kRxs));
     nd.emplace_back("SE_KC", iv(e.KC));
-    if (!e.xring) {
+    if (!e.xring && e.xtb == 2048) {  // (the router's x from x own's L1 only while x own is the router's bf16 x)
         nd.emplace_back("SE_RTRX_L1", "");
         nd.emplace_back("XRL_ID", iv(kXrl));
     }
@@ -1771,6 +1781,8 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
             .math_fidelity = h.cfg.fidelity,
             .fp32_dest_acc_en = true,
             .dst_full_sync_en = kDestTiles == 8,
+            .bfp8_pack_precise =
+                h.cfg.pack_precise,  // (h packed to bfp8 in one rounding: MoEDtypes.shared_pack_precise)
             .math_approx_mode = false,
         };
         comp.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
@@ -1800,6 +1812,9 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
         compute.compile_time_args = {
             MT, e.KB, e.NPG, e.NCH, e.POMAX, e.KBD, e.NSD, e.NPD, e.WSLOT, so[1], so[0], GX, u32(common_c.size())};
         define(compute, "SE_GLU", iv(glu_code));
+        if (h.cfg.pack_precise) {  // (keeps the two binaries apart whatever the kernel cache keys on)
+            define(compute, "SE_PACK_PRECISE");
+        }
         for (const auto& [k, v] : glu_vals) {
             define(compute, k, float_literal(v));
         }
@@ -2041,13 +2056,15 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
     const std::string la_chl = uv(e.NCH > 1 ? e.LATP * 2048 : 0);
     auto reader = kernel("dataflow/xg_reader.cpp", pset, dm(DataMovementProcessor::RISCV_0, NOC::RISCV_1_default));
     reader.compile_time_args = ct;
-    append_accessor(reader.compile_time_args, bufs[SRC_X]);
+    append_accessor(reader.compile_time_args, bufs[xdram ? SRC_X : xsrc()]);
     define(reader, "XG_HS", uv(h.HS));
+    define(reader, "XTB", uv(e.xtb));  // (x's tile bytes: the engine's; the staging CB keeps 2048 B slots)
     define(reader, "LA_CHL", la_chl);
     define(reader, "RS_NPASS", uv(npass));
     auto sender = kernel("dataflow/xg_sender.cpp", pset, dm(DataMovementProcessor::RISCV_1, NOC::RISCV_0_default));
     sender.compile_time_args = ct;
     define(sender, "XG_HS", uv(h.HS));
+    define(sender, "XTB", uv(e.xtb));
     define(sender, "LS_FIRST", iv(h.logits_first()));
     define(sender, "LA_CHL", la_chl);
     define(sender, "RS_NPASS", uv(npass));
@@ -2070,7 +2087,7 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
             ent_s.insert(ent_s.end(), {q, part, npk});
         }
         const Args rsb = rs_block(d, v);
-        Args rd = {S(SRC_X)};
+        Args rd = {S(xdram ? SRC_X : xsrc())};
         add(rd, Args{xown, v, arrival, u32(pl.mine.size()), pl.up_ipc});
         add(rd, ent_r);
         add(rd, T);

@@ -1128,10 +1128,13 @@ class TtDS41Model:
 
         t0 = time.time()
         assert settings.get("CKV_FORMAT") == "bfp4_rows", "DECODER_SKIP=replay128: the shared table is history only"
-        from .moe_block_adapter import reserve_l1
+        if settings.get("MOE_BLOCK_SRC") == "carried":
+            from .moe_block_adapter import reserve_l1
 
-        # (before this model's MoE block is built: the tail block's persistent words go above the main block's)
-        reserve_l1(self.mesh, TAIL_L1_RESERVE)
+            # (before this model's MoE block is built: the tail block's persistent words go above the main block's.
+            # MOE_BLOCK_SRC=main: each block's persistent words are in L1_SMALL and its arena is allocated a call -
+            # no L1 baked across blocks, nothing to reserve)
+            reserve_l1(self.mesh, TAIL_L1_RESERVE)
         tail = TtDS41Model(
             self.mesh,
             self.path,

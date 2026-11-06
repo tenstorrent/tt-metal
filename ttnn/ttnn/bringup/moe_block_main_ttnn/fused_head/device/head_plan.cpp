@@ -375,6 +375,7 @@ HeadSized head_size(const HeadShape& shape, const HeadLayout& lay, int64_t cap) 
         a.router_iters = lay.NIT;
         a.arena_max = cap;
         a.w_dtype = shape.w_dtype;
+        a.x_dtype = shape.x_dtype;
         a.xring = lay.xdram ? 2 : 0;
         eng.emplace(a);
     } catch (const ArenaTooLarge& err) {

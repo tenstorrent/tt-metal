@@ -3237,3 +3237,69 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
 - galaxy spec paths.tt_cache_shared = /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/tt_cache: the master; the
   orchestrator pulls it into art/tt_cache at run start and pushes new layers in the background
   (`python -m models.demos.common.bringup.core.weight_cache status|pull|push --spec <galaxy spec>`).
+
+## P.37 perf (8x4, 2026-11-06): the carried block's features on MOE_BLOCK_SRC=main
+- **What each feature needed in the main block** (C++ fork ttnn/ttnn/bringup/moe_block_main_ttnn, Python
+  models/demos/moe_block_main, adapter tt/moe_block_main_adapter.py; fork CHANGELOG "MoEDtypes.shared_activations bf8
+  and shared_pack_precise"):
+  - GEMM_INPUTS=bfp8 in the head (FIX.9, DS41-132; prerequisite of SE_PACK_PRECISE): main's C++ head never read
+    MoEDtypes.shared_activations, so main ran the shared expert's x / h in bf16 (DS41-211). Ported se_engine3's
+    x_dtype / h_dtype: HeadShape / SeEngineArgs x_dtype, 1088 B tiles in the engine's regions and CBs, SE_XTB /
+    SE_HTB / SE_PREP_TB / XTB defines in se_brisc, se_compute, the x gather; a new head input xq (bf8 x; the engine's
+    own-shard load and the gather read it, the router keeps bf16 x from DRAM: SE_RTRX_L1 off with bf8 x own).
+  - SE_PACK_PRECISE (DS41-137): MoEDtypes.shared_pack_precise -> HeadProgramConfig.pack_precise -> the SE compute's
+    bfp8_pack_precise + define SE_PACK_PRECISE; in the program hash and the plan / setup keys.
+  - NORM_INTO_MOE (P.21): input_buffers() returns a persistent bf16 x and the block's persistent bf8 xq (pinned);
+    ffn_norm writes both (rms_norm bfp8_twin), __call__(xq_ready=True) hands xq to MoEBlock(xq=). Off: MoEBlock.to_xq
+    (one typecast on the capped grid). As on carried, model.py engages it only with OWN_ROWS=off (the default OWN_ROWS=on
+    feeds the head from a TP all-to-all: one typecast a layer, both blocks).
+  - DECODER_SKIP=replay128 (P.31): at_chunk builds the (mesh, 1024)'s own MoEBlock; the routed weights are shared when
+    the tail block's flat plan has the same weight-layout facts (_WEIGHT_KEYS; 8x4: shared for all 20 tail layers),
+    else laid out for it; the head weights per block at first call. model.build_tail reserves the 48 KB L1 only for
+    carried (main keeps its words in L1_SMALL and allocates its arena a call; the reservation was never given back).
+  - EXPERTS_PRECISION: main now asserts glm like carried.
+- **Audit** (every setting the carried block / adapter / its _RoutedWeights reads; value: works / ported / out of scope):
+  | setting | values | main |
+  |---|---|---|
+  | MOE_IMPL | block / flat | works (block selects the adapter) |
+  | MOE_BLOCK_SRC | carried / main | works |
+  | MOE_HEAD | fused | works; ops: NOT ported (main has no ops head: the fused head alone writes the dispatch's route / plan tensors; asserts) |
+  | MOE_TAIL | ops / fused | works: main has one tail (C++ fused_tail; OWN_ROWS: the local tail), both values run it |
+  | GEMM_INPUTS | bfp8 / bf16 | ported (bf8 x / h in the head; bf16 = the source's program) |
+  | SE_PACK_PRECISE | on / off | ported |
+  | NORM_INTO_MOE | on / off | ported (bit-identical, test_moe_block_main_parity.py) |
+  | DECODER_SKIP | off / exact / replay128 | off, exact work; replay128 ported (at_chunk) |
+  | OWN_ROWS | on / off | works (pre-existing own-rows path; off: MoEBlock's forward) |
+  | GLUE_FOLD | on / off | works |
+  | MAX_WORKER_CORES | Galaxy 110 | works (set_max_grid; the new typecast takes the same cap) |
+  | EXPERTS_IMPL | bfp4 / bfp4_mse / bfp8 | works; bfp8_down4: out of scope (owner) |
+  | EXPERTS_PRECISION | glm | ported (assert, as carried); full: refused on both |
+  | EXPERTS_WEIGHT_CACHE | on / off | works (expert_cache_prefix) |
+  | EXPERTS_LAYOUT | marko / legacy | works: placement of carried's flat op only; main's op plans its own layout (same math) |
+  | EXPERTS_PREFETCH | on / off | works: carried's bank-major read-ahead; main reads its own cache files (no result change) |
+  | EXPERTS_SUM, COMBINE_ACC, COMBINE_PLANNER, MATMUL_FIDELITY | all | n/a: read by TtExperts for its weighted combine, which the carried block never calls |
+  | TAIL_A2A_PREPARED, PREPARED_ALL, HOST_ALLOC (+ FORK_OUT_BUFFERS / ROPE_CHAINS / TINY_KERNELS via host_alloc) | all | out of scope (owner): the C++ ops patch addresses on cache hits |
+- **Tests added**: fork `ttnn/ttnn/bringup/moe_block_main_ttnn/tests/test_fused_head_bf8.py` (bf8 accuracy +
+  determinism; the packed h bit for bit, both options: crafted x / selection weights so h = silu(10) u exactly and the
+  output = h; 1,777,311 decided values, 232,605 telling one rounding from two: 0 mismatches each way). DS41
+  `tests/test_moe_block_main_parity.py`: SE_PACK_PRECISE on / off through the adapter's block_dtypes / block_dims (same
+  bit check), NORM_INTO_MOE on vs off on layer 0 of s10240 chunk 0 (OWN_ROWS=off): max |diff| 0.0, xq_ready taken.
+- Re-run: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/moe_block_main_ttnn/tests/test_fused_head_bf8.py`;
+  `scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_block_main_parity.py`.
+- Gotchas: the fork builds into build_Release; python loads the installed copies (cmake --build build --target
+  install). make_head_model builds its own SeEngineArgs beside head_plan's: a new engine arg goes in both (DS41-211).
+  The fork test needs mesh_device parametrized (8, 4): the default fixture opens 1x32 and the torus tie check refuses.
+- Rule 18: no new op on more than the cap (the head's programs are the fork's, inside set_max_grid; the xq typecast on
+  set_max_grid's 11 x 10). Pre-existing on main's OWN_ROWS path: ttnn.to_layout / ttnn.add without sub_core_grids
+  (not changed here).
+- Note for the A/B: GEMM_INPUTS=bfp8 now reaches main's head on both sides (on and off differ in SE_PACK_PRECISE /
+  NORM_INTO_MOE only); main's "before" numbers (2.91 / 1.24 ms) were with bf16 x / h.
+- **Measured** (`orchestrator measure --task P.37`, change on: MOE_BLOCK_SRC=main SE_PACK_PRECISE=on NORM_INTO_MOE=on,
+  OWN_ROWS=on default; ab/P.37/new): quick: every layer and state within its limit, host_transfers_per_layer 0,
+  chunk wall 185.0 ms. p51200: chunk wall 194.0 ms, device 177.27 ms, experts section 106.8 ms = 2.67 ms a layer
+  (main before 2.91, carried 2.39); host: the MoE layer's _own_rows 49.19 ms cum / 40 = 1.23 ms a layer (main before
+  1.24, carried 1.70). The device gain is the head's bf8 x / h (GEMM_INPUTS reaching it), not the switch: the off side
+  (SE_PACK_PRECISE=off NORM_INTO_MOE=off) has bf8 x / h too; under OWN_ROWS=on NORM_INTO_MOE does not engage (as on
+  carried). Short turn (gate unit, replay128 on main): final hidden rel 0.14151 (limit 0.24219), top-1 / top-5 hit.
+- P.37 attempt 2 (F113 stock-call check):
+- stock ttnn.all_gather instead of ttnn.bringup.combine_rf.<module>: main's fused head contract takes x_full (the mesh row's x, bf8 xq when GEMM_INPUTS=bfp8) gathered over the TP axis in DRAM only when its planner picks the x-in-DRAM fallback (blk.x_dram); this is the source block's own call (models/demos/moe_block_main/tt/moe_block.py MoEBlock forward, unchanged since 494262dfccb apart from gathering xq), and combine_rf's fabric all-gather is a Python ProgramDescriptor builder sized for the carried block's token-split path, not a drop-in for a [1, 1, rows, H] DRAM gather. No code change in attempt 2; the measure results of attempt 1 stand.

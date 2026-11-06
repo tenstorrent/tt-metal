@@ -476,7 +476,7 @@ TABLE = {
         "sends; the same output (bf16 TILE, then GLUE_FOLD's typecast as for ops)",
     ),
     "MOE_BLOCK_SRC": Setting(
-        "carried",
+        "main",
         ("carried", "main"),
         "MOE_IMPL=block, MOE_HEAD=fused only: which MoE block runs the layer (owner 2026-11-06). carried = the block "
         "this branch runs since P.17 (models/demos/moe_block: Python ProgramDescriptor ops, the routed experts' gate / "
@@ -484,9 +484,12 @@ TABLE = {
         "reworked block from mstaletovic/moe-block-main @ 0c0bbe59d98 as a separate copy (models/demos/moe_block_main "
         "on the C++ ops ttnn.bringup.moe_block_main: the gate/up cores read their own weights, no DRISC, which the "
         "serving framework's prefill runner also uses; tt/moe_block_main_adapter.py): [N, K] expert tiles "
-        "(weights_nk), the core cap (MAX_WORKER_CORES), COMBINE_SNAP, the shared expert at LoFi / GEMM_INPUTS; "
-        "OWN_ROWS through a TP all-to-all into its head and a local tail; not NORM_INTO_MOE's in-place x, the "
-        "carried block's prepared / HOST_ALLOC hooks, SE_PACK_PRECISE, DECODER_SKIP=replay128, EXPERTS_IMPL=bfp8_down4. "
+        "(weights_nk), the core cap (MAX_WORKER_CORES), COMBINE_SNAP, the shared expert at LoFi with GEMM_INPUTS' "
+        "bfloat8_b x / h inside the fused head (P.37: MoEDtypes.shared_activations, the head's xq), SE_PACK_PRECISE "
+        "(P.37: shared_pack_precise), NORM_INTO_MOE (P.37: ffn_norm writes the block's x and the head's bfp8 xq), "
+        "DECODER_SKIP=replay128 (P.37: at_chunk, the tail chunk's own block, routed weights shared), OWN_ROWS through a "
+        "TP all-to-all into its head and a local tail; not (owner, P.37 out of scope) the carried block's prepared / "
+        "HOST_ALLOC hooks, EXPERTS_IMPL=bfp8_down4; not MOE_HEAD=ops (no ops head on the main ops). "
         "Its routed weights are laid out from the checkpoint (cached beside the carried block's: "
         "<expert cache>.moe_main.<plan>.{w_gu,w_d}.tensorbin)",
     ),

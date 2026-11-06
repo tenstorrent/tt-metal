@@ -68,3 +68,25 @@ API port to this tree (main's API of 2026-11-06 that this base, origin/main `b78
   `fused_head/fused_head.cpp`, `fused_head/device/head_program.cpp`, `flat_routed_expert/device/flat_routed_expert_plan.cpp`,
   `routed_experts_combine/routed_experts_combine.cpp`, `routed_experts_combine/device/combine_program.cpp`,
   `fused_tail/device/fused_tail_plan.cpp`
+
+### MoEDtypes.shared_activations bf8 and shared_pack_precise: the fused head's shared expert at the reference's precision (2026-11-06, deepseek_v41_flash_d_p P.37)
+- What: `shared_activations = BFLOAT8_B` (the field existed, unused): `HeadShape.x_dtype` / `SeEngineArgs.x_dtype`
+  size x own / x in / h own / h all at 1088 B tiles (`SeEngineSizing.xtb / htb`), the engine's CBs take Bfp8_b, the
+  kernels' tile bytes come from host defines (`SE_XTB`, `SE_HTB`, `SE_PREP_TB` in se_brisc / se_compute, `XTB` in the
+  x gather's reader / sender / walk; default 2048 = the source's), the engine's own-shard load and the gather read the
+  new input `xq` (`HeadSrc::SRC_XQ`, `fused_head(..., xq=)`; required exactly when bf8, validated), the router keeps
+  bf16 x (SE_RTRX_L1 off when x own is bf8: the router's x from DRAM). `shared_pack_precise` (new):
+  `HeadProgramConfig.pack_precise` -> the SE compute's `bfp8_pack_precise` (+ define `SE_PACK_PRECISE`); in the program
+  hash and the head's plan / setup keys. `MoEBlock(xq=)` in models/demos/moe_block_main: the caller's xq, else one
+  typecast a head call on the capped grid (`to_xq`, `xq_buffer`).
+- Why: DeepSeek-V4.1's reference fp8-quantizes the shared expert's x and h (FIX.9, DS41-132; owner rule 7: never above
+  the reference) and casts h once (SE_PACK_PRECISE, DS41-137): the carried block's se_engine3 x_dtype / h_dtype /
+  pack_precise, ported to the C++ head.
+- Tests: `tests/test_fused_head_bf8.py` (8x4: bf8 accuracy and determinism; the packed h bit for bit, precise and
+  default). Defaults unchanged (bf16, False): the source's programs.
+- Needed by: deepseek_v41_flash_d_p (DS41_MOE_BLOCK_SRC=main: GEMM_INPUTS=bfp8, SE_PACK_PRECISE, NORM_INTO_MOE)
+- Files: `common/moe_block_config.hpp`, `common/common_nanobind.cpp`, `fused_head/fused_head.{hpp,cpp}`,
+  `fused_head/fused_head_nanobind.cpp`, `fused_head/device/{head_plan,head_program,head_sizing}.{hpp,cpp}`,
+  `fused_head/device/fused_head_device_operation{.cpp,_types.hpp}`, `fused_head/device/kernels/{se_defs.hpp,xg_walk.hpp}`,
+  `fused_head/device/kernels/dataflow/{se_brisc,xg_reader,xg_sender}.cpp`, `fused_head/device/kernels/compute/se_compute.cpp`,
+  `tests/test_fused_head_bf8.py`; models/demos/moe_block_main/tt/moe_block.py

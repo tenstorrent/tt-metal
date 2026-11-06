@@ -52,7 +52,8 @@ struct FusedHeadParams {
 
 struct FusedHeadInputs {
     Tensor x{};                    // [1, 1, rows, H / TP] bf16 TILE, DRAM: this chip's shard of the residual
-    std::optional<Tensor> x_full;  // the DRAM fallback: x gathered over TP [1, 1, rows, H]
+    std::optional<Tensor> x_full;  // the DRAM fallback: x gathered over TP [1, 1, rows, H] (the engine's x format)
+    std::optional<Tensor> xq;      // x in the shared expert's bf8 format (MoEDtypes.shared_activations bf8)
     Tensor w{};                    // the shared expert's weights (prepare_fused_head_weights)
     Tensor w_router{};             // W_r^T [E, H / TP] bf16 TILE
     Tensor router_bias{};          // [E, 32] fp32 TILE

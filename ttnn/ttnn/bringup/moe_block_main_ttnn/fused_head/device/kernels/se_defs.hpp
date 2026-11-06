@@ -20,3 +20,16 @@
 // nothing is shared), then this address at index 2 + n. Only expanded by the dataflow kernels (the compute never names
 // it).
 #define SE_EW (get_common_arg_val<uint32_t>(2 + get_common_arg_val<uint32_t>(1)))
+
+// SE_XTB / SE_HTB: the bytes of one tile of the shared expert's x / h in L1 (MoEDtypes.shared_activations: bf16 2048,
+// bf8 1088); SE_PREP_TB: the dispatch prep's source tiles (x own's, or the latent's bf16). The host always defines
+// them.
+#ifndef SE_XTB
+#define SE_XTB 2048u
+#endif
+#ifndef SE_HTB
+#define SE_HTB 2048u
+#endif
+#ifndef SE_PREP_TB
+#define SE_PREP_TB 2048u
+#endif

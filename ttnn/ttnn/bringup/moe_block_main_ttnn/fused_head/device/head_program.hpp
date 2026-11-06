@@ -61,6 +61,7 @@ struct HeadProgramConfig {
     ExpertActivation glu;
     tt::tt_metal::MathFidelity fidelity = tt::tt_metal::MathFidelity::HiFi2;
     tt::tt_metal::DataType w_dtype = tt::tt_metal::DataType::BFLOAT8_B;
+    bool pack_precise = false;  // MoEDtypes.shared_pack_precise: bfp8 h packed in one rounding (bfp8_pack_precise)
     float route_scale = 1.0f;
     bool sqrtsoftplus = false;              // router score sqrt(softplus); else sigmoid
     uint32_t handoff_bytes = 16;            // MoEBlockConfig.handoff_bytes()
@@ -102,6 +103,7 @@ enum HeadSrc : uint16_t {
     SRC_ARENA,  // the arena (L1)
     SRC_START,  // a padded chunk's actual_start (main's chunk metadata scalar: one uint32, DRAM; absent: all real)
     SRC_END,    // its actual_end
+    SRC_XQ,  // x in the shared expert's activation format (MoEDtypes.shared_activations bf8): the engine's / gather's x
     SRC_WORD0,  // the persistent words, in head_words order
 };
 

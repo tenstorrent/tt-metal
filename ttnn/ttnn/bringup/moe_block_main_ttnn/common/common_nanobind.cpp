@@ -117,6 +117,7 @@ void bind_config(nb::module_& mod) {
         .def_rw("shared_weights", &MoEDtypes::shared_weights)
         .def_rw("shared_activations", &MoEDtypes::shared_activations)
         .def_rw("shared_fidelity", &MoEDtypes::shared_fidelity)
+        .def_rw("shared_pack_precise", &MoEDtypes::shared_pack_precise)
         .def_rw("projection_weights", &MoEDtypes::projection_weights)
         .def_rw("tail_fidelity", &MoEDtypes::tail_fidelity)
         .def_rw("router_weights", &MoEDtypes::router_weights);

@@ -23,7 +23,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* xloaded = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(xl0));
     const uint32_t xl_need = get_arg_val<uint32_t>(xl0 + 1);
     bool xl = false;
-    const auto x = TensorAccessor(x_args, x_addr, 2048);
+    const auto x = TensorAccessor(x_args, x_addr, XTB);
     volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival);
     uint32_t batch = 0, wptr = 0;
     for (uint32_t m = 0; m < NCH; ++m) {
@@ -45,11 +45,11 @@ void kernel_main() {
                         xl = true;
                     }
                     const Dst d = dst_of(T, xown, m, R, j, kk0);
-                    noc_async_read(get_noc_addr(d.x, d.y, d.addr), dst, np * 2048);
+                    noc_async_read(get_noc_addr(d.x, d.y, d.addr), dst, np * XTB);  // (2048 B slots, XTB tiles)
                 } else {  // relay: upstream's packet idx of (chunk m, its entry k - 1) landed here
                     noc_semaphore_wait_min(arrived, m * up_ipc + up_base + idx / INC + 1);
                     const Dst d = dst_of(T, xown, m, R, j, kk0);
-                    noc_async_read(get_noc_addr(d.x, d.y, d.addr), dst, np * 2048);
+                    noc_async_read(get_noc_addr(d.x, d.y, d.addr), dst, np * XTB);  // (2048 B slots, XTB tiles)
                 }
                 ++batch;
                 ++done;

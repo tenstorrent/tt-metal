@@ -1032,6 +1032,13 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) : args(a) {
         case WeightDtype::Bf4: wtb = 576; break;
         case WeightDtype::Bf16: wtb = 2048; break;
     }
+    if (a.x_dtype != WeightDtype::Bf16 && a.x_dtype != WeightDtype::Bf8) {
+        throw SizingError("the shared expert's x / h: bf16 or bf8");
+    }
+    if (a.x_dtype == WeightDtype::Bf8 && a.latent) {
+        throw SizingError("bf8 x / h with a latent: the latent's units are bf16 (not ported)");
+    }
+    xtb = htb = a.x_dtype == WeightDtype::Bf8 ? 1088u : 2048u;
     wown_t = 0;
     for (uint32_t c = 0; c < GX; ++c) {
         for (uint32_t cy = 0; cy < GY; ++cy) {
@@ -1114,12 +1121,12 @@ SeEngineSizing::SeEngineSizing(const SeEngineArgs& a) : args(a) {
             rsr.erase(rsr.begin(), rsr.begin() + 1);
         }
         Regions seq = {
-            {"xown", xown_t * 2048},
+            {"xown", xown_t * xtb},
             {"wown", (WRING ? int64_t(WRING) * WSLOT : wown_t) * wtb},
             {"win", int64_t(3) * WSLOT * wtb},  // (NWS W slots)
-            {"hown", int64_t(MT) * POMAX * 2048},
-            {"hall", int64_t(HSL) * GX * MT * POMAX * 2048},
-            {"xin", int64_t(2) * MT * KB * 2048},
+            {"hown", int64_t(MT) * POMAX * htb},
+            {"hall", int64_t(HSL) * GX * MT * POMAX * htb},
+            {"xin", int64_t(2) * MT * KB * xtb},
             {"acc", acc_pages * 4096},
             {"words", 256},
             {"xfree", xfree ? 16 * int64_t(NCH) : 0},

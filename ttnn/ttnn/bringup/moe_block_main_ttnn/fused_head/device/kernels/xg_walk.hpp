@@ -6,6 +6,9 @@
 // A fragment the including kernel inlines: it relies on what that kernel declared before it (included once a
 // kernel).
 #pragma once
+#ifndef XTB
+#define XTB 2048u  // (x's tile bytes in x own: the host defines it - bf16 2048, bf8 1088)
+#endif
 constexpr uint32_t PPS = (KB + RP - 1) / RP, RPR = SPS * PPS;  // (packets a K step, a row tile)
 // chunk m of shard q, link v: row tile R of the chunk (link (R / 2) % NV; part 1 / 2: even / odd R), step j, first
 // tile kk0 within the step, n tiles; idx: the run's index in the link's full (part 0) walk of the chunk's shard
@@ -42,6 +45,6 @@ FORCE_INLINE Dst dst_of(uint32_t T, uint32_t xown, uint32_t m, uint32_t R, uint3
     const uint32_t nown = get_arg_val<uint32_t>(t + 2 * col), b1 = get_arg_val<uint32_t>(t + 2 * col + 1);
     const uint32_t slot = f ? b1 + h / S1 : h / S0;
     const uint32_t lr = R - m * CR;
-    const uint32_t addr = xown + (((m * nown + slot) * MT + lr % MT) * KB + kk0) * 2048;
+    const uint32_t addr = xown + (((m * nown + slot) * MT + lr % MT) * KB + kk0) * XTB;  // (XTB: x's tile bytes)
     return {get_arg_val<uint32_t>(t + 2 * GX + col), get_arg_val<uint32_t>(t + 3 * GX + lr / MT), addr};
 }
