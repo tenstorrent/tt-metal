@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <array>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -26,6 +27,7 @@ namespace {
 
 using test_helpers::MakeBorrowedDFBProgramSpecForRunArgs;
 using test_helpers::MakeKernelRunArgs;
+using test_helpers::ProgramRunArgsTestGen1;
 using test_helpers::ProgramRunArgsTestQuasar;
 
 // These tests cover the runtime attach path for DataflowBuffers that borrow their L1 storage
@@ -193,6 +195,74 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_ResizingBorrowedDFBBey
     EXPECT_THAT(
         [&] { UpdateProgramRunArgs(program, upd); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds the borrowed")));
+}
+
+// Gen1 does not impose Quasar's DFB size limits, so the backing-capacity check must
+// account for the full product even when entry_size * num_entries exceeds uint32_t.
+void CheckBorrowedDFBCapacity(distributed::MeshDevice& mesh_device, bool partial_update) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
+    spec.kernels[0].hw_config = test_helpers::MakeMinimalGen1DMKernel("producer").hw_config;
+    spec.kernels[1].hw_config =
+        test_helpers::MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1).hw_config;
+
+    MeshTensor tensor = MeshTensor::allocate_on_device(mesh_device, spec.tensor_parameters[0].spec);
+    struct SizeCase {
+        uint32_t entry_size;
+        uint32_t num_entries;
+        uint64_t total_bytes;
+    };
+    constexpr std::array<SizeCase, 5> sizes{{
+        {16, 2, 32},
+        {16, 4, 64},                           // Exact fit.
+        {16, 6, 96},                           // Ordinary oversize.
+        {1'048'576, 4'096, 4'294'967'296ULL},  // Product wraps to zero in uint32_t.
+        {2'147'483'664, 2, 4'294'967'328ULL},  // Product wraps to a size that fits.
+    }};
+    for (bool skip_validation : {false, true}) {
+        SCOPED_TRACE(skip_validation);
+        for (const auto& size : sizes) {
+            SCOPED_TRACE(size.total_bytes);
+            Program program = MakeProgramFromSpec(mesh_device, spec);
+            program.impl().finalize_dataflow_buffer_configs();
+            ProgramRunArgs setup = MakeBorrowedDFBRunArgs();
+            setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+            if (partial_update) {
+                ASSERT_NO_THROW(SetProgramRunArgs(program, setup));
+            }
+            ProgramRunArgs args = partial_update ? ProgramRunArgs{} : setup;
+            args.tensor_args = setup.tensor_args;
+            args.dfb_run_overrides.push_back(
+                {.dfb = DFBSpecName{"dfb"}, .entry_size = size.entry_size, .num_entries = size.num_entries});
+            auto bind = [&] {
+                if (partial_update) {
+                    UpdateProgramRunArgs(program, args, skip_validation);
+                } else {
+                    SetProgramRunArgs(program, args, skip_validation);
+                }
+            };
+            if (size.total_bytes <= 64) {
+                EXPECT_NO_THROW(bind());
+                EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb"), tensor.address());
+                const auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb"));
+                EXPECT_EQ(dfb->config.entry_size, size.entry_size);
+                EXPECT_EQ(dfb->config.num_entries, size.num_entries);
+            } else {
+                EXPECT_THAT(
+                    bind,
+                    ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+                        "has total size " + std::to_string(size.total_bytes) +
+                        " B, which exceeds the borrowed Buffer's per-bank size of 64 B")));
+            }
+        }
+    }
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_SetProgramRunArgs_BorrowedDFBCapacity) {
+    CheckBorrowedDFBCapacity(*mesh_device_, /*partial_update=*/false);
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_UpdateProgramRunArgs_BorrowedDFBCapacity) {
+    CheckBorrowedDFBCapacity(*mesh_device_, /*partial_update=*/true);
 }
 
 }  // namespace
