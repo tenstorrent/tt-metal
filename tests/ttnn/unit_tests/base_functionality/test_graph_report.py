@@ -11,6 +11,7 @@ This tests the decoupled workflow:
 """
 
 import contextlib
+import errno
 import fcntl
 import gc
 import hashlib
@@ -995,6 +996,69 @@ class TestImportReportFreshDatabase:
         finally:
             os.close(fd)
         assert self._importing_files(output_dir) == sorted(kept)
+
+    @staticmethod
+    def _make_flock_raise(monkeypatch, error_number):
+        def flock(fd, operation):
+            raise OSError(error_number, os.strerror(error_number))
+
+        monkeypatch.setattr(graph_report.fcntl, "flock", flock)
+
+    @pytest.mark.parametrize(
+        "error_number", sorted(graph_report._FLOCK_UNSUPPORTED_ERRNOS), ids=lambda n: errno.errorcode[n]
+    )
+    def test_import_works_where_the_filesystem_cannot_flock(
+        self, tmp_path, monkeypatch, only_this_process_is_alive, error_number
+    ):
+        """A report directory shared by the hosts of a multi-host run is often on NFS or Lustre, where flock can be
+        unsupported. The import goes ahead without the lock, and orphans of a dead process on this host are still
+        removed by their pid."""
+        self._make_flock_raise(monkeypatch, error_number)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        orphaned = f".db.sqlite.importing-{socket.gethostname()}-{self._DEAD_PID}-0123abcd"
+        (output_dir / orphaned).write_bytes(b"partial")
+        name, report = _rank_capture(0, 1)
+        report["cluster_descriptor"] = "cluster: first"
+        _write_reports(tmp_path / "reports_in", [(name, report)])
+        for _ in range(2):
+            db_path = graph_report.import_report(tmp_path / "reports_in", output_dir)
+        assert _query_db(db_path, "SELECT COUNT(*) FROM operations") == [(1,)]
+        assert (output_dir / "cluster_descriptor.yaml").read_text() == "cluster: first"
+        assert self._importing_files(output_dir) == []
+
+    def test_an_unexpected_flock_error_fails_the_import_and_leaves_no_importing_file(
+        self, tmp_path, monkeypatch, expect_error
+    ):
+        """An error other than an unsupported filesystem's is raised, and the file it was taken on is removed rather
+        than left hidden beside the database."""
+        _write_reports(tmp_path / "reports_in", [_rank_capture(0, 1)])
+        db_path = graph_report.import_report(tmp_path / "reports_in", tmp_path / "output")
+        before = db_path.read_bytes()
+        self._make_flock_raise(monkeypatch, errno.EIO)
+        with expect_error(OSError, os.strerror(errno.EIO)):
+            graph_report.import_report(tmp_path / "reports_in", tmp_path / "output")
+        assert db_path.read_bytes() == before
+        assert self._importing_files(tmp_path / "output") == []
+
+    def test_orphan_clean_up_skips_a_file_it_cannot_lock(self, tmp_path, monkeypatch, only_this_process_is_alive):
+        """The clean-up is best effort: an unexpected error locking an orphan leaves that file, not the import."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        orphaned = f".db.sqlite.importing-{socket.gethostname()}-{self._DEAD_PID}-0123abcd"
+        (output_dir / orphaned).write_bytes(b"partial")
+        real_flock = fcntl.flock
+
+        def flock(fd, operation):
+            if operation & fcntl.LOCK_NB:
+                raise OSError(errno.EIO, os.strerror(errno.EIO))
+            real_flock(fd, operation)
+
+        monkeypatch.setattr(graph_report.fcntl, "flock", flock)
+        _write_reports(tmp_path / "reports_in", [_rank_capture(0, 1)])
+        db_path = graph_report.import_report(tmp_path / "reports_in", output_dir)
+        assert _query_db(db_path, "SELECT COUNT(*) FROM operations") == [(1,)]
+        assert self._importing_files(output_dir) == [orphaned]
 
     def test_pid_is_alive(self, monkeypatch):
         assert graph_report._pid_is_alive(os.getpid())

@@ -27,6 +27,7 @@ captured in a sidecar JSON file. The importer consumes that sidecar offline and
 populates the visualizer comparison tables.
 """
 
+import errno
 import fcntl
 import hashlib
 import json
@@ -429,11 +430,28 @@ _YAML_BESIDE_DATABASE_RE = re.compile(
 )
 
 
+# What flock raises on a filesystem that doesn't support it: some NFS mounts (ENOLCK) and Lustre mounted without
+# -o flock (ENOSYS), both common for a report directory shared by the hosts of a multi-host run.
+_FLOCK_UNSUPPORTED_ERRNOS = frozenset({errno.ENOLCK, errno.ENOSYS, errno.EOPNOTSUPP, errno.ENOTSUP})
+
+
+def _flock(fd: int, operation: int) -> bool:
+    """``fcntl.flock(fd, operation)``; False, with no lock taken, where the filesystem doesn't support it."""
+    try:
+        fcntl.flock(fd, operation)
+    except OSError as e:
+        if e.errno in _FLOCK_UNSUPPORTED_ERRNOS:
+            return False
+        raise
+    return True
+
+
 def _create_importing_file(path: Path) -> tuple[Path, int]:
     """Create an empty hidden sibling of ``path`` that an import writes first and moves onto ``path`` once it succeeds.
 
     Returns its path and a descriptor holding an exclusive ``flock`` on it, which the caller closes once the file is
-    published or removed; while it is held, ``_remove_orphaned_importing_files`` leaves the file alone.
+    published or removed; while it is held, ``_remove_orphaned_importing_files`` leaves the file alone. Where the
+    filesystem doesn't support ``flock``, the descriptor holds no lock and the file is protected by its pid alone.
 
     Created exclusively, so a file or link already at that name is never followed, and with a random part, so
     overlapping imports into the same directory don't share one. The host and pid in the name let a later import
@@ -448,19 +466,22 @@ def _create_importing_file(path: Path) -> tuple[Path, int]:
             fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
         except FileExistsError:
             continue
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        if os.fstat(fd).st_nlink == 0:
-            # Another import took it for an orphan and removed it before the lock was taken.
-            os.close(fd)
-            continue
         try:
-            os.fchmod(fd, stat.S_IMODE(path.stat().st_mode) | stat.S_IRUSR | stat.S_IWUSR)
-        except FileNotFoundError:
-            pass
+            _flock(fd, fcntl.LOCK_EX)
+            # Another import took it for an orphan and removed it before the lock was taken.
+            removed = os.fstat(fd).st_nlink == 0
+            if not removed:
+                try:
+                    os.fchmod(fd, stat.S_IMODE(path.stat().st_mode) | stat.S_IRUSR | stat.S_IWUSR)
+                except FileNotFoundError:
+                    pass
         except BaseException:
             os.close(fd)
             candidate.unlink(missing_ok=True)
             raise
+        if removed:
+            os.close(fd)
+            continue
         return candidate, fd
 
 
@@ -481,7 +502,9 @@ def _remove_orphaned_importing_files(directory: Path) -> None:
 
     Files of live processes, and of other hosts sharing the directory, are left alone. So is a file whose ``flock`` is
     still held (for a SQLite journal, the database's): a process in another PID namespace on the same host, such as
-    another container sharing the host's network and this directory, can be alive although its pid isn't here.
+    another container sharing the host's network and this directory, can be alive although its pid isn't here. Where
+    the filesystem doesn't support ``flock``, the dead pid is all there is to go by. The clean-up is best effort: a
+    file it can't lock or remove is left, and the import goes ahead.
     """
     host = socket.gethostname()
     for path in list(directory.glob(f".*{_IMPORTING_INFIX}*")):
@@ -496,11 +519,10 @@ def _remove_orphaned_importing_files(directory: Path) -> None:
         except OSError:  # A link, or a file this user can't open: not this importer's to remove.
             continue
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            continue
-        else:
+            _flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             path.unlink(missing_ok=True)
+        except OSError:  # BlockingIOError: still locked, so its import is alive.
+            continue
         finally:
             os.close(fd)
 
