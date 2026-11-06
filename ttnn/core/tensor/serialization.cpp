@@ -19,6 +19,7 @@
 
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/cleanup.hpp>
+#include <tt-metalium/experimental/memory_pin_access.hpp>
 
 #include "tensor/tensor_spec.hpp"
 #include "tensor/flatbuffer/tensor_file_layout.hpp"
@@ -87,6 +88,10 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, tt::tt_metal::distri
     // Mmap the file to read tensor data lazily.
     std::shared_ptr<void> mapping = map_tensor_file(fd, file_size, file_name);
     MemoryPin memory_pin(mapping);
+
+    // The mapping is PROT_READ and owned here, so nothing in this process can write it while the pin lives; uploads
+    // may then return before the device has finished reading it.
+    tt::tt_metal::experimental::MemoryPinMarkDeviceImmutable(memory_pin);
 
     auto* file_data = static_cast<std::byte*>(mapping.get());
     uint64_t header_size = 0;

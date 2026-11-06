@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -23,17 +25,28 @@ public:
 
     bool is_empty() const noexcept;
 
+    // See experimental::MemoryPinMarkDeviceImmutable. Shared by every copy.
+    void mark_device_immutable();
+    bool is_device_immutable() const noexcept;
+
 private:
-    struct FinalReleaseState {
+    // State every copy of an impl shares. The last copy to go, on whichever thread, destroys it, which runs the
+    // final-release callbacks exactly once; the shared_ptr release orders every add before that run.
+    struct SharedState {
+        ~SharedState();
+
+        // Copies on different threads may add callbacks at the same time.
+        std::mutex callbacks_mutex;
         std::vector<std::function<void()>> callbacks;
-        bool ran = false;
+        std::atomic<bool> device_immutable{false};
     };
 
-    void maybe_run_final_release_callbacks();
+    // Created on first use for an impl constructed without one.
+    SharedState& shared_state();
 
     std::function<void()> inc_;
     std::function<void()> dec_;
-    std::shared_ptr<FinalReleaseState> final_release_state_;
+    std::shared_ptr<SharedState> shared_state_;
 };
 
 }  // namespace tt::tt_metal

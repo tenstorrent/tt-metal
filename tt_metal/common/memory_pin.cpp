@@ -4,33 +4,48 @@
 
 #include <tt-metalium/memory_pin.hpp>
 #include "common/memory_pin_impl.hpp"
+#include <tt-metalium/experimental/memory_pin_access.hpp>
 
 #include <tt_stl/assert.hpp>
 
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <utility>
+#include <vector>
 
 namespace tt::tt_metal {
 
 MemoryPinImpl::MemoryPinImpl(std::function<void()> increment_ref_count, std::function<void()> decrement_ref_count) :
     inc_(std::move(increment_ref_count)),
     dec_(std::move(decrement_ref_count)),
-    final_release_state_(std::make_shared<FinalReleaseState>()) {
+    shared_state_(std::make_shared<SharedState>()) {
     maybe_increment();
 }
 
 MemoryPinImpl::MemoryPinImpl(std::shared_ptr<void> resource) :
     inc_([]() {}),
     dec_([ref = std::move(resource)]() mutable { ref.reset(); }),
-    final_release_state_(std::make_shared<FinalReleaseState>()) {}
+    shared_state_(std::make_shared<SharedState>()) {}
+
+MemoryPinImpl::SharedState::~SharedState() {
+    for (const auto& callback : callbacks) {
+        callback();
+    }
+}
+
+MemoryPinImpl::SharedState& MemoryPinImpl::shared_state() {
+    if (!shared_state_) {
+        shared_state_ = std::make_shared<SharedState>();
+    }
+    return *shared_state_;
+}
 
 void MemoryPinImpl::add_final_release_callback(std::function<void()> callback) {
-    if (!final_release_state_) {
-        final_release_state_ = std::make_shared<FinalReleaseState>();
-    }
-    final_release_state_->callbacks.push_back(std::move(callback));
+    auto& state = shared_state();
+    std::lock_guard lock(state.callbacks_mutex);
+    state.callbacks.push_back(std::move(callback));
 }
 
 void MemoryPinImpl::maybe_increment() {
@@ -40,20 +55,17 @@ void MemoryPinImpl::maybe_increment() {
 }
 
 void MemoryPinImpl::maybe_decrement() {
-    maybe_run_final_release_callbacks();
+    // Dropped before dec_ so that, when this is the last copy, the final-release callbacks run first.
+    shared_state_.reset();
     if (dec_) {
         dec_();
     }
 }
 
-void MemoryPinImpl::maybe_run_final_release_callbacks() {
-    if (!final_release_state_ || final_release_state_.use_count() != 1 || final_release_state_->ran) {
-        return;
-    }
-    final_release_state_->ran = true;
-    for (const auto& callback : final_release_state_->callbacks) {
-        callback();
-    }
+void MemoryPinImpl::mark_device_immutable() { shared_state().device_immutable.store(true, std::memory_order_release); }
+
+bool MemoryPinImpl::is_device_immutable() const noexcept {
+    return shared_state_ != nullptr && shared_state_->device_immutable.load(std::memory_order_acquire);
 }
 
 bool MemoryPinImpl::is_empty() const noexcept { return !inc_ && !dec_; }
@@ -121,5 +133,16 @@ bool operator==(const MemoryPin& pin, std::nullptr_t) noexcept { return pin.impl
 bool operator==(std::nullptr_t, const MemoryPin& pin) noexcept { return pin == nullptr; }
 bool operator!=(const MemoryPin& pin, std::nullptr_t) noexcept { return !(pin == nullptr); }
 bool operator!=(std::nullptr_t, const MemoryPin& pin) noexcept { return !(nullptr == pin); }
+
+namespace experimental {
+
+void MemoryPinMarkDeviceImmutable(MemoryPin& pin) {
+    TT_FATAL(pin != nullptr, "Cannot mark an empty MemoryPin device-immutable: it keeps no memory alive.");
+    pin.impl().mark_device_immutable();
+}
+
+bool MemoryPinIsDeviceImmutable(const MemoryPin& pin) { return pin != nullptr && pin.impl().is_device_immutable(); }
+
+}  // namespace experimental
 
 }  // namespace tt::tt_metal
