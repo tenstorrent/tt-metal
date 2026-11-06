@@ -749,6 +749,9 @@ def test_sparse_sdpa_deepseek_attention_sink(device, scale):
         (64, 160, 1024, 512, 128, "mixed"),  # sentinel tails: empty HEAD segments, masks in either segment
         (32, 250, 1024, 512, 128, "causal"),  # 2+ tokens/core, prefill-like valid counts
         (64, None, 1024, 256, 64, "mixed"),  # 1 token + a sliver per core: S = cores + 10
+        (128, 160, 1024, 512, 128, "mixed"),  # Sqt=4: the merge fills DST
+        (96, 160, 1024, 512, 128, "mixed"),  # Sqt=3
+        (128, 160, 4096, 1536, 384, "mixed"),  # split-K CBs over the L1 budget: whole-token split
     ],
 )
 def test_sparse_sdpa_scaled_fp8_split_k(device, H, S, T, TOPK, kc, nv_id):
