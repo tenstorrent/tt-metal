@@ -120,22 +120,23 @@ FORCE_INLINE void setup_send(uint32_t q_num, uint32_t dest) {
     set_dest_cmdbuf<kCmdBuf>(sram_local_addr(eth_link().peer_tile, dest));
 }
 
-// Copy @p num_bytes from @p src to @p dest on the link peer on TX queue @p q_num; returns once issued.
-// Assumes !txq_busy(q_num).
-FORCE_INLINE void send_bytes(uint32_t q_num, uint32_t src, uint32_t dest, uint32_t num_bytes) {
+// Copy @p num_bytes from @p src to @p dest on the link peer on TX queue @p q_num; returns once issued. With @p snoop
+// the peer's NIU snoops its cache for the write. Assumes !txq_busy(q_num).
+FORCE_INLINE void send_bytes(uint32_t q_num, uint32_t src, uint32_t dest, uint32_t num_bytes, bool snoop = false) {
     // A core store to the source must reach SRAM before the copy reads it.
     asm volatile("fence" ::: "memory");
     setup_send(q_num, dest);
     set_src_cmdbuf<kCmdBuf>(sram_local_addr(hsio_tile(), src));
     set_len_cmdbuf<kCmdBuf>(num_bytes);
     setup_max_bytes_in_packet_cmdbuf<kCmdBuf>(kMaxBytesInPacket);
-    setup_packet_tags_cmdbuf<kCmdBuf>(PacketTags{});
+    setup_packet_tags_cmdbuf<kCmdBuf>(PacketTags{.snoop = snoop});
     issue_cmdbuf<kCmdBuf>();
 }
 
 // Write @p val to the 8-byte-aligned @p dest on the link peer as an inline write on TX queue @p q_num; returns once
-// issued. Assumes !txq_busy(q_num). Halts if @p dest is misaligned or @p val is not below 2^kInlineValueBits.
-FORCE_INLINE void send_dword(uint32_t q_num, uint32_t dest, uint64_t val) {
+// issued. With @p snoop the peer's NIU snoops its cache for the write. Assumes !txq_busy(q_num). Halts if @p dest is
+// misaligned or @p val is not below 2^kInlineValueBits.
+FORCE_INLINE void send_dword(uint32_t q_num, uint32_t dest, uint64_t val, bool snoop = false) {
     if (dest % sizeof(val) != 0) {
         halt(HaltCode::RemoteRegMisaligned, dest);
     }
@@ -148,8 +149,10 @@ FORCE_INLINE void send_dword(uint32_t q_num, uint32_t dest, uint64_t val) {
     TT_ROCC_CMD_BUF_AXI_OPT_1_reg_u axi_opt_1;
     axi_opt_1.val = TT_ROCC_CMD_BUF_AXI_OPT_1_REG_DEFAULT;
     set_axi_opt_1_cmdbuf<kCmdBuf>(kInlineSrcProtocol, axi_opt_1.f.decouple_aw);
-    setup_packet_tags_cmdbuf<kCmdBuf>(PacketTags{});
+    setup_packet_tags_cmdbuf<kCmdBuf>(PacketTags{.snoop = snoop});
     issue_cmdbuf<kCmdBuf>();
+    // Puts the copy protocol back, as chippy compat's cce_eth_send_counter does.
+    set_axi_opt_1_cmdbuf<kCmdBuf>(0, axi_opt_1.f.decouple_aw);
 }
 
 }  // namespace internal_::cce_eth
