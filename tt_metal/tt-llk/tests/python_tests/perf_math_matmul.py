@@ -7,9 +7,10 @@ import pytest
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
+    DEST_ACC_MODES,
     DestAccumulation,
     DestSync,
-    MathFidelity,
     PerfRunType,
     StochasticRounding,
 )
@@ -22,7 +23,7 @@ from helpers.matmul_sweep import (
     skip_matmul_combination,
     sweep_tiny_tiles_matmul,
 )
-from helpers.param_config import DEST_SYNC_TILE_LIMITS, input_output_formats
+from helpers.param_config import input_output_formats, max_dest_tiles
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
@@ -49,27 +50,14 @@ MATMUL_FORMATS = input_output_formats(
         DataFormat.Float32,
     ]
 )
-DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
 STOCHASTIC_ROUNDING_MODES = [StochasticRounding.No]
-MATH_FIDELITIES = [
-    MathFidelity.LoFi,
-    MathFidelity.HiFi2,
-    MathFidelity.HiFi3,
-    MathFidelity.HiFi4,
-]
 
 # Dest-fill RT x CT from dest capacity, dest occupancy blocks, and half-dest
 # mid-fill when they fit. KT 1 and 4 (long-K lives on perf_matmul).
 PERF_KT_DIMS = (1, 4)
 THROTTLE_LEVELS = (0, 5)
 DEST_HANDOFF_NUM_BLOCKS = 4
-
-
-def _dest_capacity(dest_sync, dest_acc) -> int:
-    return DEST_SYNC_TILE_LIMITS[dest_sync] // (
-        2 if dest_acc == DestAccumulation.Yes else 1
-    )
 
 
 def _dest_fill_rt_ct_pairs(max_tiles):
@@ -89,7 +77,7 @@ def _fits_tiny_perf_tile_shape(cfg) -> bool:
     rt_dim = cfg.tile_dimensions.rt_dim
     ct_dim = cfg.tile_dimensions.ct_dim
     kt_dim = cfg.tile_dimensions.kt_dim
-    max_tiles = _dest_capacity(cfg.dest_sync, cfg.dest_acc)
+    max_tiles = max_dest_tiles(cfg.dest_acc, cfg.dest_sync)
     half = max_tiles // 2
     return (
         cfg.dst_index == 0
@@ -123,7 +111,7 @@ def generate_perf_matmul_combinations():
                 continue
 
             for dest_sync in DEST_SYNC_MODES:
-                max_tiles = _dest_capacity(dest_sync, dest_acc)
+                max_tiles = max_dest_tiles(dest_acc, dest_sync)
                 for stochastic_mode in STOCHASTIC_ROUNDING_MODES:
                     for rt_dim, ct_dim in _dest_fill_rt_ct_pairs(max_tiles):
                         for kt_dim in PERF_KT_DIMS:
@@ -176,18 +164,18 @@ ALL_TEST_PARAMS = list(
         (
             (fidelity, cfg, throttle, 1)
             for fidelity, cfg, throttle in product(
-                MATH_FIDELITIES, MATMUL_COMBINATIONS, THROTTLE_LEVELS
+                ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS, THROTTLE_LEVELS
             )
         ),
         (
             (fidelity, cfg, 0, 1)
             for fidelity, cfg in product(
-                MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
+                ALL_MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
             )
         ),
         (
             (fidelity, cfg, 0, DEST_HANDOFF_NUM_BLOCKS)
-            for fidelity, cfg in product(MATH_FIDELITIES, MATMUL_COMBINATIONS)
+            for fidelity, cfg in product(ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS)
             if cfg.tile_dimensions.kt_dim == 1
         ),
     )

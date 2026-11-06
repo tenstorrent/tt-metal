@@ -7,12 +7,10 @@
 3. ``test_decode_width_scaling_traced`` (device): traced step time vs decode width.
 """
 
-import importlib.util
 import os
 import statistics
-import sys
 import time
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -20,6 +18,7 @@ from loguru import logger
 from ttnn.tools import trace_allocation_tracker
 
 import ttnn
+from models.common.tests.vllm_stubs import stub_vllm_if_missing
 from models.common.utility_functions import comp_pcc
 from models.demos.blackhole.qwen36.tests.test_factory import parametrize_mesh_tp
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
@@ -55,30 +54,8 @@ def _padded_decode_batch(num_active, width):
 
 
 def _import_qwen36_vllm(monkeypatch):
-    """Import the vLLM adapter where vLLM is not installed (the tt-metal unit-test runner) by stubbing
-    only the names qwen36_vllm takes from vllm at module scope; a real vLLM install is used as is."""
-    if "vllm" not in sys.modules and importlib.util.find_spec("vllm") is None:
-
-        class _Stub:
-            pass
-
-        registry = SimpleNamespace(register_processor=lambda *args, **kwargs: (lambda cls: cls))
-        stubs = {
-            "vllm": {},
-            "vllm.model_executor": {},
-            "vllm.model_executor.models": {},
-            "vllm.model_executor.models.interfaces": {"SupportsMultiModal": _Stub},
-            "vllm.model_executor.models.qwen3_5": {
-                "Qwen3_5ProcessingInfo": _Stub,
-                "Qwen3VLDummyInputsBuilder": _Stub,
-                "Qwen3VLMultiModalProcessor": _Stub,
-            },
-            "vllm.multimodal": {"MULTIMODAL_REGISTRY": registry},
-        }
-        for name, attrs in stubs.items():
-            module = ModuleType(name)
-            module.__dict__.update(attrs)
-            monkeypatch.setitem(sys.modules, name, module)
+    """Import the vLLM adapter, stubbing vLLM where it is not installed (the tt-metal unit-test runner)."""
+    stub_vllm_if_missing(monkeypatch)
     from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
 
     return Qwen36ForCausalLM

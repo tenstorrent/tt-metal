@@ -41,7 +41,7 @@ def _advertised_device_sampling_capabilities(relative_path):
 @pytest.mark.parametrize(
     "relative_path",
     [
-        "models/tt_transformers/tt/generator_vllm.py",
+        "models/ttt_compat/tt/generator_vllm.py",
         "models/demos/llama3_70b_galaxy/tt/generator_vllm.py",
     ],
 )
@@ -54,7 +54,7 @@ def test_device_sampling_capabilities_declare_the_exact_limit(relative_path):
 
 @pytest.mark.parametrize("class_name", ["LlamaForCausalLM", "QwenForCausalLM", "MistralForCausalLM"])
 def test_device_grammar_generators_retain_sampling_capabilities(class_name):
-    relative_path = "models/tt_transformers/tt/generator_vllm.py"
+    relative_path = "models/ttt_compat/tt/generator_vllm.py"
     source = (REPOSITORY_ROOT / relative_path).read_text(encoding="utf-8")
     tree = ast.parse(source, filename=relative_path)
     class_node = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name)

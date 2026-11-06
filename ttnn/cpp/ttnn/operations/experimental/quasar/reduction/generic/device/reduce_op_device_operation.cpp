@@ -34,7 +34,7 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         tensor_args.storage_type() == StorageType::DEVICE,
         "Operands to reduce need to be on device! Got storage type: {}",
         tensor_args.storage_type());
-    TT_FATAL(tensor_args.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
+    TT_FATAL(tensor_args.is_allocated(), "Operands to reduce need to be allocated in buffers on device!");
     // MIN reduce is lowered to math_op=MAX + negate=true, whose fused compute kernels rely on the
     // negative_tile LLK. That LLK is an unported empty stub on Quasar, so reject negate on ALL paths
     // before any factory is selected.

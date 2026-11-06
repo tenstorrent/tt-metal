@@ -65,6 +65,19 @@ def test_request_sent_mid_step_misses_that_steps_completions():
     assert c.cached == 0, "C saw B's blocks, which were inserted after C was sent"
 
 
+@pytest.mark.parametrize(
+    "align, start, busy",
+    [("chunk", 0, 2.0), ("resume", 5 * BLOCK, 2.5), ("exact", 5 * BLOCK, 2.5)],
+)
+def test_align_rounds_the_resume_and_mid_chunk_steps_cost_more(align, start, busy):
+    """B resumes on A's 5 cached blocks inside one 8-block unit: chunk alignment rounds the start down to 0; resume
+    (a slab, unit / 8 = one block) and exact keep it, and then B's step starts mid-unit and costs 1 + mid_cost."""
+    session = [_node(5 * BLOCK, [1, 2, 3, 4, 5]), _node(6 * BLOCK, [1, 2, 3, 4, 5, 6], deps=[0])]
+    res = run(_OneSecondSteps(), [session], 8 * BLOCK, 8 * BLOCK, "fcfs", 1, align=align, mid_cost=0.5)
+    assert next(x for x in res["_stats"] if x.n_in == 6 * BLOCK).start == start
+    assert res["busy_s"] == pytest.approx(busy)
+
+
 @pytest.mark.parametrize("cfg", ["2048x8192:pack", "8192x8192:fcfs", "16384x16384:fcfs", "1024x4096:fcfs"])
 def test_parse_config_accepts_measured_units(cfg):
     parse_config(cfg, Model.load())
@@ -113,6 +126,31 @@ def test_main_request_joins_only_sub_agents_that_ended_before_it(tmp_path):
     sub_node = next(i for i, n in enumerate(nodes) if n["t"] == 1.0)
     assert nodes[mains[1]]["deps"] == [mains[0]]
     assert sorted(nodes[mains[2]]["deps"]) == sorted([mains[1], sub_node])
+
+
+def test_resume_rewinds_so_the_last_padded_chunk_fits_the_slot():
+    """B has 15 of its 16 blocks cached in a 16-block slot: resuming at block 15 would pad its 8-block chunk past the
+    slot, which the runtime rejects, so it resumes at block 8 and its last chunk ends at the slot's end."""
+    session = [_node(15 * BLOCK, list(range(1, 16))), _node(16 * BLOCK, list(range(1, 17)), deps=[0])]
+    res = run(_OneSecondSteps(), [session], 8 * BLOCK, 8 * BLOCK, "fcfs", 1, align="resume", max_seq_len=16 * BLOCK)
+    b = next(x for x in res["_stats"] if x.n_in == 16 * BLOCK)
+    assert b.start == 8 * BLOCK and b.start + b.rows <= 16 * BLOCK
+
+
+def test_ttft_exports_from_before_mid_cost_plot_with_new_ones(tmp_path):
+    """An export without mid_cost loads as no cost, so it plots beside a run that has one."""
+    res = run(_OneSecondSteps(), [[_node(BLOCK, [1])]], BLOCK, BLOCK, "fcfs", 1)
+    knobs = dict(config="64x64:fcfs", concurrency=32, cache="inf", align="chunk", max_think_s=60.0)
+    path = tmp_path / "ttft.jsonl"
+    path.write_text(
+        json.dumps(ttft_record(knobs, res["_stats"]))
+        + "\n"
+        + json.dumps(ttft_record({**knobs, "align": "resume", "mid_cost": 0.045}, res["_stats"]))
+        + "\n"
+    )
+    runs = load_runs([str(path)], [])
+    assert [r["mid_cost"] for r in runs] == [0.0, 0.045]
+    assert labels(runs)[0][1].endswith("mid-chunk cost +4.5%")
 
 
 def test_json_record_is_strict_json_for_empty_buckets():

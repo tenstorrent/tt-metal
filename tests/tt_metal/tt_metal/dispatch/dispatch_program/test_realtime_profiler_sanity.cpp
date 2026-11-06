@@ -95,7 +95,7 @@ std::string make_sanity_kernel_source(uint32_t runtime_id) {
 // out by the host-side receiver).
 void enqueue_sanity_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t runtime_id, const CoreRange& all_cores) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     const std::string kernel_src = make_sanity_kernel_source(runtime_id);
 
@@ -367,7 +367,7 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
     CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
 
     const std::string kernel_src = make_sanity_kernel_source(kTraceRuntimeId);
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     CreateKernelFromString(
         program,
         kernel_src,
