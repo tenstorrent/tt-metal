@@ -11,7 +11,6 @@
 #include <llrt/hal.hpp>  // Hal — full definition needed to call hal().get_*() via MetalContext
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
-#include <tt-metalium/allocator.hpp>
 #include "impl/device/firmware/firmware_initializer.hpp"
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "context_types.hpp"
@@ -40,6 +39,7 @@ namespace inspector {
 class Data;
 }
 
+class BuildEnvManager;
 class ContextDescriptor;
 class DataCollector;
 class DeviceManager;
@@ -49,6 +49,7 @@ class DispatchQueryManager;
 class DPrintServer;
 class WatcherServer;
 class DispatchMemMap;
+class HostTransferStats;
 class NOCDebugState;
 
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
@@ -146,10 +147,14 @@ public:
 
     std::unique_ptr<ProfilerStateManager>& profiler_state_manager() { return profiler_state_manager_; }
     std::unique_ptr<DataCollector>& data_collector() { return data_collector_; }
+    // Lives as long as the context; teardown logs and clears it.
+    HostTransferStats& host_transfer_stats() { return *host_transfer_stats_; }
     std::unique_ptr<DeviceManager>& device_manager() { return device_manager_; }
     bool is_device_manager_initialized() const { return device_manager_ != nullptr; }
 
     std::unique_ptr<NOCDebugState>& noc_debug_state() { return noc_debug_state_; }
+
+    BuildEnvManager& build_env_manager() { return *build_env_manager_; }
 
     void initialize_device_manager(
         const std::vector<ChipId>& device_ids,
@@ -278,6 +283,10 @@ private:
     bool env_owned_ = false;
     ContextId context_id_;
 
+    // Declared before the other components so it is destroyed after them: their teardown may still read build envs.
+    // Not reset by teardown(); build envs persist across re-initialization of this context.
+    std::unique_ptr<BuildEnvManager> build_env_manager_;
+
     std::unique_ptr<internal::ServiceCoreManager> service_core_manager_;
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
@@ -286,6 +295,7 @@ private:
     std::unique_ptr<WatcherServer> watcher_server_;
     std::unique_ptr<ProfilerStateManager> profiler_state_manager_;
     std::unique_ptr<DataCollector> data_collector_;
+    std::unique_ptr<HostTransferStats> host_transfer_stats_;
     std::unique_ptr<DeviceManager> device_manager_;
     std::unique_ptr<NOCDebugState> noc_debug_state_;
     // The context descriptor used for runtime components.

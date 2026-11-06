@@ -6581,7 +6581,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     if (in0_is_sharded) {
         in0_shard_height_in_tiles = in0_tensor.shard_spec()->shape[0] / in0_tile.get_height();
         in0_shard_width_in_tiles = in0_tensor.shard_spec()->shape[1] / in0_tile.get_width();
-        if (in0_shard_width_in_tiles / in0_block_w > 1) {
+        // Do a real per-block copy (not point the in0 buffer at L1) when K needs splitting, or when there's more
+        // than 1 row-block AND col-block: a row-block's data is needed twice, but advancing lands on the wrong one.
+        if (in0_shard_width_in_tiles / in0_block_w > 1 || (in0_num_blocks_y > 1 && in1_num_blocks_x > 1)) {
             extract_shard_sub_blocks = true;
         }
     }

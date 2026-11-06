@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_allclose, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import comp_allclose, skip_for_blackhole
 from tests.ttnn.nightly.unit_tests.operations.moreh.test_moreh_layer_norm import (
     make_input_tensors,
     run_moreh_layer_norm,
@@ -245,3 +245,16 @@ def test_moreh_layer_norm_rejects_mismatched_gamma_beta(device, affine_shape, af
             bad if affine == "beta" else good,
             compute_kernel_config=get_compute_kernel_options(False),
         )
+
+
+@pytest.mark.parametrize(
+    "out_dtype, out_shape",
+    [(ttnn.float32, (1, 1, 64, 64)), (ttnn.bfloat8_b, (1, 1, 64, 64)), (ttnn.bfloat16, (1, 1, 32, 64))],
+    ids=["fp32_output", "bfp8_output", "small_output"],
+)
+def test_moreh_layer_norm_rejects_mismatched_output(device, out_dtype, out_shape, expect_error):
+    # Every buffer, the output one included, uses the input's format and size.
+    x = ttnn.from_torch(torch.randn(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(torch.zeros(out_shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must match the input"):
+        ttnn.operations.moreh.layer_norm(x, 1, 1e-5, output=out)
