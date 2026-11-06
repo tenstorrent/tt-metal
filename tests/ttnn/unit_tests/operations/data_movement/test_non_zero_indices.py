@@ -8,6 +8,13 @@ import torch
 import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 
 
 def run_nonzero_and_validate(torch_input, ttnn_input, device):
@@ -510,3 +517,28 @@ def test_nonzero_sharded_row_major_row_distinct_pattern(shape, grid_shape, shard
     ), f"orientation landed as {actual.shard_spec.orientation}, expected {orientation}"
 
     run_nonzero_and_validate(torch_input, ttnn_input, device)
+
+
+@pytest.mark.parametrize("output_buffer_type", docstring_interleaved_buffer_type_params(ttnn.nonzero, label="Output"))
+@pytest.mark.parametrize("input_buffer_type", docstring_interleaved_buffer_type_params(ttnn.nonzero, label="Input"))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.nonzero))
+def test_nonzero_docstring_supported_inputs(dtype, layout, input_buffer_type, output_buffer_type, device):
+    """Runs every dtype, layout and interleaved input and output buffer type the ttnn.nonzero docstring lists."""
+    check_readable(dtype, layout, input_buffer_type, output_buffer_type)
+    x = full_range_input((1, 2, 32, 64), dtype)
+    x.view(-1)[::3] = 0
+    input_tensor = ttnn.from_torch(
+        x, dtype=dtype, layout=layout, device=device, memory_config=interleaved_memory_config(input_buffer_type)
+    )
+    count_tensor, indices_tensor = ttnn.nonzero(
+        input_tensor, memory_config=interleaved_memory_config(output_buffer_type)
+    )
+
+    for output in (count_tensor, indices_tensor):
+        assert output.memory_config().buffer_type == output_buffer_type
+    # torch.nonzero has no UINT32 kernel, so search a float64 copy.
+    expected = torch.nonzero(ttnn.to_torch(input_tensor).to(torch.float64), as_tuple=False)
+    count = int(ttnn.to_torch(count_tensor)[0, 0, 0, 0].item())
+    assert count == expected.shape[0]
+    indices = ttnn.to_torch(indices_tensor)[0, 0, 0, : count * 4].reshape(count, 4)
+    assert_exact(expected, indices)
