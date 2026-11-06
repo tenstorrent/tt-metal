@@ -25,6 +25,21 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq i
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 
+#: QWEN36_GDN_TAP=<k>: debug taps of the k-th GDN layer of a forward (group prefill): host fp32 tensors in GDN_TAP["data"]
+GDN_TAP = {"seen": 0, "active": False, "data": {}}
+
+
+def gdn_tap_reset():
+    GDN_TAP["seen"], GDN_TAP["active"], GDN_TAP["data"] = 0, False, {}
+
+
+def _gdn_tap(name, t, dim=-1):
+    if not GDN_TAP["active"]:
+        return
+    mesh = t.device()
+    ttnn.synchronize_device(mesh)
+    GDN_TAP["data"][name] = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=dim)).float()
+
 
 def gdn_fused_decode_enabled():
     """QWEN36_GDN_FUSED_DECODE (default "1"): single-user (max batch 1) GDN decode through the fused kernels
@@ -2249,6 +2264,7 @@ class TPGatedDeltaNet:
                 epsilon=1e-6,
                 output_dtype=ttnn.bfloat16,
                 memory_config=_gmc,
+                **({"compute_kernel_config": tpc.norm_compute_cfg()} if tpc.norm_exact_enabled() else {}),
             )
             ttnn.deallocate(o)
             gated = ttnn.multiply(normed, z3, memory_config=_gmc, dtype=_gdt)
@@ -2285,6 +2301,7 @@ class TPGatedDeltaNet:
             # QWEN36_GDN_GATED_BF8=1 (with the bf8 AGMM): the gate multiply emits the bf8 the gather sends (no cast op)
             _gdt = ttnn.bfloat8_b if (_bf8 and os.environ.get("QWEN36_GDN_GATED_BF8", "0") == "1") else ttnn.bfloat16
             gated = _silu_mul(out_f, z, _L1, dtype=_gdt)
+            _gdn_tap("gated", gated)
             ttnn.deallocate(out_f)
             ttnn.deallocate(z)
             # TODO(#57458): switch to the op's barrier_semaphore once it is wired up (see tpc.agmm_gather_buffer).
@@ -2450,6 +2467,14 @@ class TPGatedDeltaNet:
         qkv_f, z, a, b = self._project_qkvzab(
             x, M, out_mc=ttnn.L1_MEMORY_CONFIG if os.environ.get("QWEN36_GDN_PROJ_L1", "0") == "1" else None
         )
+        _tk = os.environ.get("QWEN36_GDN_TAP")
+        GDN_TAP["active"] = _tk is not None and GDN_TAP["seen"] == int(_tk)
+        GDN_TAP["seen"] += 1
+        _gdn_tap("x_in", x)
+        _gdn_tap("qkv", qkv_f)
+        _gdn_tap("z", z)
+        _gdn_tap("a", a)
+        _gdn_tap("b", b)
         qkv = ttnn.reshape(qkv_f, (Bg, Tb, C))
         # init (resumed rows): {"rec": [Bg,Nv,Dk,Dv] fp32 initial state, "pad": [Bg,32,C] conv-history block}
         if Bg == 1 and init is not None and init.get("hist") is not None:
@@ -2503,6 +2528,9 @@ class TPGatedDeltaNet:
                 hist_first=init is not None,
             )
         ttnn.deallocate(qkv)
+        _gdn_tap("cq", q)
+        _gdn_tap("ck", k)
+        _gdn_tap("cv", v)
         if self._gdn_flat_qkv:
             _qkv_head_dims = (Nk, Dk, Nv, Dv)
         else:
@@ -2514,6 +2542,8 @@ class TPGatedDeltaNet:
         ttnn.deallocate(b)
         g = ttnn.reshape(_gdn_gate(self.tw, a), (Bg, Tb, Nv))
         ttnn.deallocate(a)
+        _gdn_tap("beta", beta)
+        _gdn_tap("g", g)
 
         o, final_state = chunk_gated_delta_rule_fused_adapter(
             q,
@@ -2552,7 +2582,11 @@ class TPGatedDeltaNet:
                 ttnn.copy(src, scratch.conv[m])
         ttnn.deallocate(conv_new_state)
 
-        return self._prefill_out_tail(o, z, M, o_head_major=self._gdn_fuse_out, B=Bg, return_gated=return_gated)
+        _gdn_tap("o", o, dim=0 if self._gdn_fuse_out else -2)
+        _out = self._prefill_out_tail(o, z, M, o_head_major=self._gdn_fuse_out, B=Bg, return_gated=return_gated)
+        _gdn_tap("out", _out)
+        GDN_TAP["active"] = False
+        return _out
 
     def forward_prefill_collect(self, x, chunk_size=128, valid_len=None):
         """Per-user prefill that stashes this user's B=1 state for later assembly.
