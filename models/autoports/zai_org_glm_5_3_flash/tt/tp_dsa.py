@@ -166,6 +166,29 @@ class TPMoE:
         f.probe()
         return f
 
+    def _cb_map(self, prog, t: int, top: int = 8) -> None:
+        """GLM53_MK_CB_REPORT (any value): the per-core static CB totals of chip 0's MoE program at t rows (the L1
+        floor binder at t = 16: program.cpp validate_circular_buffer_region throws when a CB core range ends above the
+        mesh-wide lowest L1 buffer), the `top` cores by total; once per t"""
+        seen = self.__dict__.setdefault("_cb_reported", set())
+        if t in seen:
+            return
+        seen.add(t)
+        try:
+            per = {}
+            for cb in prog.cbs:
+                idx = tuple(int(f.buffer_index) for f in cb.format_descriptors)
+                for rg in cb.core_ranges.ranges():
+                    for x in range(rg.start.x, rg.end.x + 1):
+                        for y in range(rg.start.y, rg.end.y + 1):
+                            d = per.setdefault((x, y), {})
+                            d[idx] = d.get(idx, 0) + int(cb.total_size)
+            for core, d in sorted(per.items(), key=lambda kv: -sum(kv[1].values()))[:top]:
+                print(f"MK_CB_REPORT moe t={t} core={core} total={sum(d.values())} "
+                      + " ".join(f"{'/'.join(map(str, k))}:{v}" for k, v in sorted(d.items())), flush=True)  # fmt: skip
+        except Exception as e:  # noqa: BLE001
+            print(f"MK_CB_REPORT moe t={t} error {str(e)[:160]}", flush=True)
+
     def _hooked(self, io, desc, t: int):
         """The captured MkMoE program + the fabric phase -> MeshProgramDescriptor (one program per chip: the lanes'
         arguments and the weight streamer's e_lo differ)."""
@@ -212,6 +235,8 @@ class TPMoE:
                 prog = ttnn.ProgramDescriptor(kernels=kernels + lk, semaphores=list(desc.semaphores),
                                               cbs=list(desc.cbs) + lcbs)  # fmt: skip
                 fab.add_connections(prog, r, c, send_kernel_index=len(kernels))
+                if rank == 0 and os.environ.get("GLM53_MK_CB_REPORT"):
+                    self._cb_map(prog, t)
                 m = ttnn.MeshCoordinate(r, c)
                 mpd[ttnn.MeshCoordinateRange(m, m)] = prog
         return list(io) + fab.io(), mpd

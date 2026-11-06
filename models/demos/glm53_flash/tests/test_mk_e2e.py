@@ -274,8 +274,12 @@ def test_mk_e2e(mesh_device, monkeypatch):
     ep = os.environ.get("GLM53_MK_EP", "1") == "1"
     native = os.environ.get("GLM53_MK_NATIVE_T", "1" if B > 4 else "0") == "1"
     t0 = time.perf_counter()
+    # GLM53_MK_WEIGHT_CACHE=1: the served construction's weight cache (an empty dict this run fills): the sparse_dsa
+    # layers then carry fabric phases for every t <= 4 besides the chunk (the speculative step's MTP layer shares
+    # them at ts = (1, K + 1)) and the narrow widths (GLM53_STACK_NARROW_WIDTHS) are honoured
+    wcache = {} if os.environ.get("GLM53_MK_WEIGHT_CACHE") == "1" else None
     backend = StackBackend(mesh_device, max_batch=B, layers=layers, hf_config=cfg, topk=1, sample=False, ep_weights=ep,
-                           native_t=native)  # fmt: skip
+                           native_t=native, weight_cache=wcache)  # fmt: skip
     logger.info(f"StackBackend built in {time.perf_counter() - t0:.0f} s: mesh {MESH}, {len(layers)} layers, B {B}")
     gen = Glm53Generator(backend, tokenizer=tok, max_batch=B, max_seq_len=SEQ)
     t0 = time.perf_counter()
