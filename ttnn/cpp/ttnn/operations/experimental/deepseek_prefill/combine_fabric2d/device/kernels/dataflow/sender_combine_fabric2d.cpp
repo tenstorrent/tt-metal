@@ -28,16 +28,6 @@
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "combine_fabric2d_sender_ct_args.hpp"
 
-// Guard genuinely different BEHAVIOUR with CMBF2D_OVERLAPPED; anything that differs only in where a value
-// lives belongs behind an accessor on the compile-time arguments instead.
-
-// The overlapped op does not allocate a launch credit, so its sender neither grants nor takes one.
-#ifdef CMBF2D_OVERLAPPED
-constexpr bool LAUNCH_CREDIT = false;
-#else
-constexpr bool LAUNCH_CREDIT = true;
-#endif
-
 // Forwarded tokens between semaphore bumps to the downstream reader. A chunk's last page forces a bump
 // regardless, so this only sets how finely that reader can pipeline within a chunk.
 constexpr uint32_t FWD_BUMP_EVERY = 32;
@@ -46,6 +36,9 @@ constexpr uint32_t FWD_BUMP_EVERY = 32;
 // the stream ends.
 constexpr uint32_t FINAL_BUMP_EVERY = 32;
 constexpr ::cmbf2d::SenderCtArgs ct{};
+
+// An op that allocates no launch credit passes a zero address, and its sender neither grants nor takes one.
+constexpr bool LAUNCH_CREDIT = ct.launch_credit_addr != 0;
 
 // One prebuilt header per packet of each ring slot. Every send is a single hop, so the route is constant for
 // the whole run; only the write address varies per token, and a slot's headers are untouched until the ring
@@ -153,14 +146,10 @@ uint32_t wait_for_filled(FabricSender& fabric, uint32_t sent, uint32_t* fwd_sinc
         if (avail > 0) {
             return avail;
         }
-        // Nothing of ours to send, so announce what we already sent. A channel is only vc_pages deep while
-        // the bump batch is FWD_BUMP_EVERY, so a producer that fills a channel without completing a batch
-        // would never tell the consumer those pages are there -- and that consumer is the only source of
-        // the credits the producer is now waiting on. Deadlock, and exactly the one a chunk-ending forward
-        // used to rule out by forcing a bump on a chunk's last page. Channels have no chunk ends, so this
-        // announce is what rules it out instead.
-        //
-        // Once per idle spell rather than per spin, or announcing becomes the busy-wait.
+        // Nothing of ours to send, so announce what we already sent. A producer that fills a channel without
+        // completing a bump batch would never tell the consumer those pages are there -- and that consumer is
+        // the only source of the credits the producer is now waiting on. This announce is what rules out that
+        // deadlock. Once per idle spell rather than per spin, or announcing becomes the busy-wait.
         if (!announced) {
             for (uint32_t v = 0; v < ct.num_vcs; v++) {
                 if (fwd_since_bump[v] > 0) {
@@ -377,10 +366,8 @@ void kernel_main() {
     // by noc_async_writes_flushed above. It must land before the kernel exits, and so must the launch credit
     // taken above.
     noc_async_atomic_barrier();
-    // Whether the ring counters need zeroing depends on where they live, which is the owning op's choice.
-    ct.reset_ring_counters();
-    // The courier's counters are this op's either way: they never leave this chip, and the opposite reader
-    // that writes them has already raised credit_done, which is the last thing it does to any of them.
+    // The courier's counters are this op's to zero: they never leave this chip, and the opposite reader that
+    // writes them has already raised credit_done, which is the last thing it does to any of them.
     for (uint32_t v = 0; v < ct.num_vcs; v++) {
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.vc_outbox_addr(v)), 0);
     }

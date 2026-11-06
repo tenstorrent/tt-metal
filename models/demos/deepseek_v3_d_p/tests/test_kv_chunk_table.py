@@ -76,3 +76,12 @@ def test_kimi_k3_kda_config_names_match_decode(tmp_path, monkeypatch):
 
     assert [table.config_name(i) for i in range(table.num_configs())] == ["00", "01", "02"]
     assert table.config(0).num_layers == 2
+    # The KDA configs reach the KV Manager as one Snapshot window each; kvpe stays a token cache.
+    tensor_type = ttnn.experimental.disaggregation.KvChunkTensorType
+    assert [table.config(i).tensor_type for i in range(3)] == [
+        tensor_type.Kv,
+        tensor_type.Snapshot,
+        tensor_type.Snapshot,
+    ]
+    assert [table.config(i).max_sequence_length for i in (1, 2)] == [36_864, 36_864]
+    assert [table.config(i).chunk_n_tokens for i in (1, 2)] == [96, 64]

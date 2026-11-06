@@ -171,6 +171,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             sp_axis=sequence_parallel_axis,
             tp_axis=tensor_parallel_axis,
             config=case.config,
+            page_channels=layer.convolution_page_channels,
             label=f"Synthetic Kimi-K3 T{sequence} {layout} {interval} start={actual_start} length={length}",
             state_linf_threshold=None,
             pcc_threshold=_PCC_THRESHOLD,
@@ -208,6 +209,9 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     finally:
         for tensor in (output, recurrent, convolution, hidden_tt, valid_rows, actual_start_tt, actual_end_tt):
             ttnn.deallocate(tensor)
+
+
+_REAL_WEIGHTS_NRMSE = LayerNrmseThresholds(output=0.026, recurrent=0.021, convolution=0.0095)
 
 
 @pytest.mark.parametrize(
@@ -275,9 +279,10 @@ def test_kimi_k3_layer_1_real_weights_accuracy(
             output,
             mesh_device,
             tensor_parallel_axis,
+            page_channels=layer.convolution_page_channels,
             pcc_threshold=0.9995,
             valid_length=length,
-            nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.02, convolution=KIMI_K3_CONVOLUTION_NRMSE),
+            nrmse=_REAL_WEIGHTS_NRMSE,
         )
         for tensor in (hidden_tt, end_tt, output, state.recurrent, state.convolution):
             ttnn.deallocate(tensor)
