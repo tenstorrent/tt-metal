@@ -172,6 +172,7 @@ TEST_F(ServerCachePrunerTest, DeletesLeastRecentlyUsedFirstAcrossBuildKeysUntilE
     EXPECT_TRUE(fs::exists(second.parent_path()));
     ASSERT_EQ(logs_.size(), 1u);
     EXPECT_NE(logs_[0].find("deleted 2 kernel directories"), std::string::npos) << logs_[0];
+    EXPECT_NE(logs_[0].find("; free space now "), std::string::npos) << logs_[0];
 }
 
 TEST_F(ServerCachePrunerTest, NeverDeletesRecentlyUsedKernelsFirmwareOrPch) {
