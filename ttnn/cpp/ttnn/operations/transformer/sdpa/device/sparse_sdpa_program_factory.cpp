@@ -205,7 +205,8 @@ SparseSDPAOperation::SparseSDPAProgramFactory::Plan SparseSDPAOperation::SparseS
     const uint32_t Sqt = t.q.logical_shape()[1] / tt::constants::TILE_HEIGHT;
     const uint32_t n_chunks = t.indices.logical_shape()[3] / attrs.k_chunk_size;
     const uint32_t num_cores = attrs.worker_core_grid.num_cores();
-    // BF16 and plain FP8 KV: split-K measured faster only when every token gets two cores (2S <= cores).
+    // BF16 and plain FP8 KV: split-K only when every token gets two cores (2S <= cores); with more rows it was
+    // slower in most measured shapes.
     const bool split_k_ok =
         !t.attention_sink.has_value() && Sqt <= 4 && n_chunks > 1 && (attrs.has_scaled_kv() || 2 * S <= num_cores);
     Plan plan{.split_k = split_k_ok && S > num_cores && (S % num_cores) != 0, .num_used = num_cores};
