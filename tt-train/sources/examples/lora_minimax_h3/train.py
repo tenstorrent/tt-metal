@@ -28,6 +28,7 @@ import numpy as np
 import ttml
 
 from ttml.common.performance import get_device_peak_tflops_bf16
+from ttml.common.schedulers import LambdaScheduler, linear_warmup_lambda
 from ttml.models.minimax_h3 import (
     AUDIO_CHANNELS,
     AUDIO_LATENTS,
@@ -174,6 +175,7 @@ def main(argv=None) -> int:
 
     opt_config = ttml.optimizers.AdamWFullPrecisionConfig.make(args.lr, 0.9, 0.99, 1e-8, args.weight_decay, False)
     optimizer = ttml.optimizers.AdamWFullPrecision(trainable, opt_config)
+    scheduler = LambdaScheduler(optimizer, linear_warmup_lambda(args.warmup))
     ema = Ema(lora, args.ema_decay) if args.ema_decay > 0 else None
 
     def save(folder: Path, step: int) -> None:
@@ -262,9 +264,9 @@ def main(argv=None) -> int:
         grad_norm = clip_grad_norm(lora, args.max_grad_norm)
         samples_log.write(json.dumps({"step": step, "grad_norm": grad_norm}) + "\n")
         samples_log.flush()
-        lr_now = args.lr * min(1.0, step / args.warmup) if args.warmup else args.lr
-        optimizer.set_lr(lr_now)
+        lr_now = scheduler.get_last_lrs()[0]
         optimizer.step()
+        scheduler.step()
         if ema is not None:
             ema.update(step)
 
