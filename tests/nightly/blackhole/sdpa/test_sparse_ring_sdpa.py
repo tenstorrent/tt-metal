@@ -402,6 +402,12 @@ class Case:
         rows = sum(n for _, n in dense_q_slabs(self.geo, self.S, ranges))
         return self._upload(torch.zeros(1, self.H, rows, D), self.dims(None, 1), dtype=self.q_dtype)
 
+    def dense_partials_buffer(self, ranges):
+        """A zeroed dense_partials_debug buffer for dense_blocks `ranges` (one raw partial per dense unit)."""
+        units = HEADS_PER_DEVICE * sum(len(b) for _, b in dense_units(self.geo, self.S, ranges))
+        rows = units * PARTIAL_TILES * 32
+        return self._upload(torch.zeros(1, 1, rows, 32), self.dims(None, None))
+
     def read_dense_q(self, buf):
         """[S, H, rows, D]: every device's dense-Q buffer, by SP index."""
         dims = [None, None]
@@ -448,11 +454,13 @@ class Case:
         dense_blocks=None,
         dense_keys=True,
         dense_q_buf=None,
+        dense_partials=None,
     ):
         """pooled=False omits pooled K / V (kept blocks only). dense_floor=True (with want_ref="slice") also computes
         the exact dense reference on the slice. counts: the block_counts input ([S * nb_pad]), also used by the
         pooling and the reference. dense_blocks / dense_keys go to the op only (the reference uses `mask`), with
-        dense_q_buf (default: a new dense_q_buffer), returned as "dense_q"."""
+        dense_q_buf (default: a new dense_q_buffer), returned as "dense_q"; dense_partials: a dense_partials_debug
+        buffer (stage-2 test path)."""
         rt, geo = self.rt, self.geo
         if dense_blocks is not None and dense_q_buf is None:
             dense_q_buf = self.dense_q_buffer(dense_blocks)
@@ -484,6 +492,7 @@ class Case:
             dense_blocks=dense_blocks,
             dense_keys=dense_keys,
             persistent_output_buffer_dense_q=dense_q_buf,
+            dense_partials_debug=dense_partials,
         )
         sparse = ttnn.to_torch(out, mesh_composer=self.composer).float()
         dense = None
@@ -826,6 +835,97 @@ def _dense_ranges(name, geo, S):
     }[name]
 
 
+# Tiles of one raw dense partial: out (2 x 4), per-column sums (2), row max (2), for 64-row blocks of D = 128.
+PARTIAL_TILES = (BLOCK // 32) * (D // 32) + 2 * (BLOCK // 32)
+
+
+def dense_units(geo, S, ranges):
+    """[(owner shard, its dense local Q blocks)], in the op's unit order (owner, then head, then block)."""
+    nb, nb_pad = geo.nb(), geo.nb_pad()
+    out = []
+    for s in range(S):
+        blocks = [b for b in range(nb) if any(a <= s * nb_pad + b < e for a, e in ranges)]
+        if blocks:
+            out.append((s, blocks))
+    return out
+
+
+def merge_partials(case, parts, ranges):
+    """Host merge of every device's raw dense partials (dense_partials_debug read back as [S, TP, rows, 32]) into the
+    dense rows' output, [1, H, S * rows, D] (NaN elsewhere): out = sum_d e^(scale (m_d - M)) o_d / sum_d e^(scale (m_d
+    - M)) s_d, M = max_d m_d. The op's 2^-28 exp scale is in both o_d and s_d."""
+    geo, S = case.geo, case.S
+    sq, vt = BLOCK // 32, D // 32
+    out = torch.full((1, case.H, S * geo.rows, D), float("nan"))
+    tp = parts.shape[1]
+    u = 0
+    for o, blocks in dense_units(geo, S, ranges):
+        for h in range(HEADS_PER_DEVICE):
+            for b in blocks:
+                for t in range(tp):
+                    tiles = parts[:, t, u * PARTIAL_TILES * 32 : (u + 1) * PARTIAL_TILES * 32].double()
+                    tiles = tiles.reshape(S, PARTIAL_TILES, 32, 32)
+                    o_raw = tiles[:, : sq * vt].reshape(S, sq, vt, 32, 32).permute(0, 1, 3, 2, 4).reshape(S, BLOCK, D)
+                    s_raw = tiles[:, sq * vt : sq * vt + sq].sum(-1).reshape(S, BLOCK)
+                    m = tiles[:, sq * vt + sq :, :, 0].reshape(S, BLOCK)
+                    w = torch.exp(case.scale * (m - m.max(0).values))
+                    res = (w[..., None] * o_raw).sum(0) / (w * s_raw).sum(0)[:, None]
+                    r0 = o * geo.rows + b * BLOCK
+                    n = min(BLOCK, geo.rows - b * BLOCK)
+                    out[0, t * HEADS_PER_DEVICE + h, r0 : r0 + n] = res[:n].float()
+                u += 1
+    return out
+
+
+def _dense_row_masks(geo, S, ranges):
+    """([S * rows] rows of a dense Q block, [S * rows] rows on a shard that owns dense blocks)."""
+    nb_pad = geo.nb_pad()
+    tok = torch.arange(S * geo.rows)
+    g = (tok // geo.rows) * nb_pad + (tok % geo.rows) // BLOCK
+    dense = torch.zeros(S * geo.rows, dtype=torch.bool)
+    for a, e in ranges:
+        dense |= (g >= a) & (g < e)
+    owners = torch.zeros(S * geo.rows, dtype=torch.bool)
+    for o, _ in dense_units(geo, S, ranges):
+        owners[o * geo.rows : (o + 1) * geo.rows] = True
+    return dense, owners
+
+
+# The dense rows split across devices (H) round each partial to bf16 once per ring hop it is merged on (at most
+# S / 2); the explicit-mask run rounds only the output. Their error vs the fp64 reference may grow to twice the
+# explicit run's plus 1e-3 (rel-L2); PCC and the fitted scale must stay at bf16 level.
+DENSE_SPLIT_PCC_MIN = 0.9999
+DENSE_SPLIT_SCALE_TOL = 2e-3
+
+
+def _check_dense_split(tag, case, ranges, explicit, ref, out, *, dense_rows_out=None):
+    """out (dense_blocks, H) vs explicit (the explicit mask's output, same inputs) and ref (its fp64 reference):
+    rows on shards owning no dense block bit-equal; the owners' other rows as the explicit run's to 1e-5 PCC (same
+    math, another work split); the dense rows (dense_rows_out, default out's) within the DENSE_SPLIT bounds."""
+    n = case.geo.logical_n
+    dense, owners = (m[:n] for m in _dense_row_masks(case.geo, case.S, ranges))
+    others = ~owners
+    if others.any():
+        diff = (out[0][:, others] - explicit[0][:, others]).abs().max().item()
+        assert torch.equal(out[0][:, others], explicit[0][:, others]), f"{tag}: non-owner rows differ by {diff:.3e}"
+    owner_rest = owners & ~dense
+    if owner_rest.any():
+        p = _pcc(explicit[0][:, owner_rest], out[0][:, owner_rest])
+        logger.info(f"[{tag}] owners' other rows vs the explicit run: pcc {p:.6f}")
+        assert p > 0.99999, f"{tag}: owners' other rows pcc {p:.6f} vs the explicit run"
+    d_out = (out if dense_rows_out is None else dense_rows_out)[0][:, dense]
+    d_ref, d_exp = ref[0][:, dense], explicit[0][:, dense]
+    p, e, e_exp = _pcc(d_ref, d_out), _rel_l2(d_ref, d_out), _rel_l2(d_ref, d_exp)
+    scale = _fit_scale(d_ref, d_out)
+    logger.info(
+        f"[{tag}] dense rows vs reference: pcc {p:.6f}, rel-L2 {e:.5f} (explicit {e_exp:.5f}), scale {scale:.5f}"
+    )
+    assert torch.isfinite(d_out).all(), f"{tag}: non-finite dense rows"
+    assert p > DENSE_SPLIT_PCC_MIN, f"{tag}: dense rows pcc {p:.6f}"
+    assert e <= 2 * e_exp + 1e-3, f"{tag}: dense rows rel-L2 {e:.5f} vs explicit {e_exp:.5f}"
+    assert abs(scale - 1) < DENSE_SPLIT_SCALE_TOL, f"{tag}: dense rows scale {scale:.5f}"
+
+
 def dense_q_slabs(geo, S, ranges):
     """Per shard, (first local Q row, rows) of its dense-Q slab: from its first to its last Q block in a range."""
     nb, nb_pad = geo.nb(), geo.nb_pad()
@@ -842,7 +942,8 @@ def dense_q_slabs(geo, S, ranges):
 @pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
 @pytest.mark.parametrize("geom", ["r1024k256", "r1184k256"])
 def test_dense_blocks(runtime, geom, pooled, ranges, dense_keys):
-    """dense_blocks gives the same bits as the explicit mask it stands for, and matches that mask's reference."""
+    """Stage 3, end to end: dense_blocks (dense rows split across devices, merged hop by hop into the owner) against
+    the explicit mask it stands for (_check_dense_split) and that mask's reference."""
     geo = GEOMETRIES[geom]
     case = Case(runtime, geo)
     dense = _dense_ranges(ranges, geo, case.S)
@@ -856,8 +957,55 @@ def test_dense_blocks(runtime, geom, pooled, ranges, dense_keys):
     )["sparse"]
     tag = f"dense blocks {ranges} {'rows+keys' if dense_keys else 'rows'} {_mode(pooled)} {geom}"
     _check(tag, {**r, "sparse": out}, _density(explicit, geo, case.S), dense_min=None, ref_min=0.999)
-    diff = (out - r["sparse"]).abs().max().item()
-    assert torch.equal(out, r["sparse"]), f"{tag}: vs the explicit mask, max |diff| {diff:.3e}"
+    _check_dense_split(tag, case, dense, r["sparse"], r["ref"], out)
+
+
+@pytest.mark.parametrize("ranges", ["start", "end", "two"])
+@pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
+@pytest.mark.parametrize("geom", ["r1024k256", "r1184k256"])
+def test_dense_partials(runtime, geom, pooled, ranges):
+    """Stage 2: every device's raw dense partials (dense_partials_debug, nothing moved between devices), merged on
+    the host, against the reference's dense rows; the other rows as with the explicit mask (_check_dense_split)."""
+    geo = GEOMETRIES[geom]
+    case = Case(runtime, geo)
+    dense = _dense_ranges(ranges, geo, case.S)
+    mask = make_mask(geo, case.S, case.H, density=0.1, seed=32)
+    explicit = dense_blocks_mask(mask, geo, case.S, dense)
+    q, k, v = case.inputs(32)
+    r = case.run(q, k, v, explicit, want_dense=False, pooled=pooled)
+    parts = case.dense_partials_buffer(dense)
+    out = case.run(
+        q, k, v, mask, want_dense=False, want_ref=False, pooled=pooled, dense_blocks=dense, dense_partials=parts
+    )["sparse"]
+    merged = merge_partials(case, case.read_dense_q(parts), dense)
+    tag = f"dense partials {ranges} {_mode(pooled)} {geom}"
+    _check_dense_split(tag, case, dense, r["sparse"], r["ref"], out, dense_rows_out=merged[:, :, : geo.logical_n])
+    ttnn.deallocate(parts)
+
+
+@pytest.mark.parametrize("ranges", ["end", "two"])
+def test_dense_blocks_passes(runtime, ranges):
+    """Stage 3 with two Q passes: the dense batches follow the last pass."""
+    geo = ALIGNED["r1024k256"]
+    case = Case(runtime, geo)
+    q_blocks_per_pass = case.q_blocks_per_pass_for(2)
+    dense = _dense_ranges(ranges, geo, case.S)
+    mask = make_mask(geo, case.S, case.H, density=0.1, seed=33)
+    explicit = dense_blocks_mask(mask, geo, case.S, dense)
+    q, k, v = case.inputs(33)
+    r = case.run(q, k, v, explicit, want_dense=False, pooled=False, q_blocks_per_pass=q_blocks_per_pass)
+    out = case.run(
+        q,
+        k,
+        v,
+        mask,
+        want_dense=False,
+        want_ref=False,
+        pooled=False,
+        q_blocks_per_pass=q_blocks_per_pass,
+        dense_blocks=dense,
+    )["sparse"]
+    _check_dense_split(f"dense blocks passes 2 {ranges}", case, dense, r["sparse"], r["ref"], out)
 
 
 def _check_dense_q_gather(tag, case, q, ranges, got):
@@ -892,23 +1040,22 @@ def _check_dense_q_gather(tag, case, q, ranges, got):
 @pytest.mark.parametrize("ranges", ["start", "end", "two"])
 @pytest.mark.parametrize("geom", ["r1024k256", "r1184k256"])
 def test_dense_q_gather(runtime, geom, ranges):
-    """The dense rows' Q rides the fused gather into persistent_output_buffer_dense_q (read back from every device,
-    exact) and the output stays bit-equal to the explicit mask's. The second call is a program cache hit into another
-    buffer."""
+    """Stage 1: the dense rows' Q rides the fused gather into persistent_output_buffer_dense_q (read back from every
+    device, exact). The output is checked as in test_dense_blocks; the second call is a program cache hit into another
+    buffer (and reuses the cached workload's hop buffers and semaphores)."""
     geo = GEOMETRIES[geom]
     case = Case(runtime, geo)
     dense = _dense_ranges(ranges, geo, case.S)
     mask = make_mask(geo, case.S, case.H, density=0.1, seed=31)
     q, k, v = case.inputs(31)
     explicit = dense_blocks_mask(mask, geo, case.S, dense)
-    want = case.run(q, k, v, explicit, want_dense=False, want_ref=False, pooled=False)["sparse"]
+    want = case.run(q, k, v, explicit, want_dense=False, pooled=False)
     bufs = [case.dense_q_buffer(dense) for _ in range(2)]
     for call, buf in enumerate(bufs):
         tag = f"dense q gather {ranges} {geom} call {call}"
         r = case.run(q, k, v, mask, want_dense=False, want_ref=False, pooled=False, dense_blocks=dense, dense_q_buf=buf)
         _check_dense_q_gather(tag, case, q, dense, case.read_dense_q(buf))
-        diff = (r["sparse"] - want).abs().max().item()
-        assert torch.equal(r["sparse"], want), f"{tag}: vs the explicit mask, max |diff| {diff:.3e}"
+        _check_dense_split(tag, case, dense, want["sparse"], want["ref"], r["sparse"])
     for buf in bufs:
         ttnn.deallocate(buf)
 

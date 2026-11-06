@@ -31,7 +31,9 @@ namespace ttnn::transformer {
 //   dense_blocks  optional, at most 8 disjoint [start, end) ranges of global blocks s * nb_pad + b: a Q block in a
 //                 range keeps every block (its mask row is ignored); with dense_keys every Q block also keeps them
 //   persistent_output_buffer_dense_q  required iff dense_blocks: [1, H, >= dense rows, D] TILE, q's dtype (= k's);
-//                 the gather lands each shard's dense-Q slab in it (dense_q_slabs)
+//                 the gather lands each shard's dense-Q slab in it (dense_q_slabs). Every device then computes the
+//                 dense rows against its own K/V shard and the partials are merged hop by hop into the owner's rows.
+//   dense_partials_debug  test only: each device's raw dense partials, not moved or merged
 // Returns [1, H, N/ring_size, D], same layout as q.
 ttnn::Tensor sparse_ring_sdpa(
     const ttnn::Tensor& input_tensor_q,
@@ -60,6 +62,7 @@ ttnn::Tensor sparse_ring_sdpa(
     const std::optional<ttnn::Tensor>& block_counts = std::nullopt,
     const std::optional<std::vector<std::pair<uint32_t, uint32_t>>>& dense_blocks = std::nullopt,
     bool dense_keys = true,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer_dense_q = std::nullopt);
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_dense_q = std::nullopt,
+    const std::optional<ttnn::Tensor>& dense_partials_debug = std::nullopt);
 
 }  // namespace ttnn::transformer

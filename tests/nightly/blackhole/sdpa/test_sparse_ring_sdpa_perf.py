@@ -177,7 +177,7 @@ class Bench:
 
         return fn
 
-    def sparse(self, t_mask, k_chunk, pooled):
+    def sparse(self, t_mask, k_chunk, pooled, dense_blocks=None, dense_q_buf=None):
         rt, case = self.rt, self.case
         q, k, v = self.tensors
         pk, pv = self.pooled if pooled else (None, None)
@@ -210,6 +210,8 @@ class Bench:
             ccl_core_grid_offset=(rt.ccl_column, 0),
             use_column_major_ccl=True,
             block_size=BLOCK,
+            dense_blocks=dense_blocks,
+            persistent_output_buffer_dense_q=dense_q_buf,
         )
 
     def baseline(self, rows, logical_n=None):
@@ -264,9 +266,20 @@ def record(results_file, rows, mode, times, *, k_chunk=None, density=None, dense
     return rec
 
 
-def time_mask(bench, results_file, rows, make, k_chunk, pooled, structure="random", logical_n=None, lofi=False):
+def time_mask(
+    bench,
+    results_file,
+    rows,
+    make,
+    k_chunk,
+    pooled,
+    structure="random",
+    logical_n=None,
+    lofi=False,
+    dense_blocks=None,
+):
     """Time the sparse op on the mask `make(case)` builds and record it against the bf16 dense op and the gather of
-    the same inputs."""
+    the same inputs; dense_blocks (with its dense-Q buffer) go to the op."""
     dense, gather = bench.baseline(rows, logical_n)
     if lofi:
         gather = bench.lofi_gather(rows, logical_n)
@@ -275,10 +288,13 @@ def time_mask(bench, results_file, rows, make, k_chunk, pooled, structure="rando
     block_density = _density(mask, case.geo, case.S)
     t_mask = case._upload(mask, case.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
     del mask
+    dense_q_buf = None if dense_blocks is None else case.dense_q_buffer(dense_blocks)
     try:
-        times = traced_ms(case.rt.mesh_device, bench.sparse(t_mask, k_chunk, pooled))
+        times = traced_ms(case.rt.mesh_device, bench.sparse(t_mask, k_chunk, pooled, dense_blocks, dense_q_buf))
     finally:
         ttnn.deallocate(t_mask)
+        if dense_q_buf is not None:
+            ttnn.deallocate(dense_q_buf)
     mode = ("sparse" if pooled else "kept") + ("-lofi" if lofi else "")
     return record(
         results_file,
@@ -372,19 +388,35 @@ def dense_tail_mask(geo, S, H, *, tail_tokens, position, variant, density=0.2, s
     return mask * full
 
 
+def dense_tail_range(geo, S, *, tail_tokens, position):
+    """The dense_blocks range of dense_tail_mask's tail."""
+    nb, nb_pad, n = geo.nb(), geo.nb_pad(), tail_tokens // BLOCK
+    return [(0, n)] if position == "start" else [((S - 1) * nb_pad + nb - n, (S - 1) * nb_pad + nb)]
+
+
 @pytest.mark.parametrize("pooled", [True, False], ids=["sparse", "kept"])
 @pytest.mark.parametrize("tail_tokens", TAIL_TOKENS, ids=[f"T{t}" for t in TAIL_TOKENS])
-@pytest.mark.parametrize("variant", ["rows_cols", "cols"])
+@pytest.mark.parametrize("variant", ["rows_cols", "cols", "dense_blocks"])
 @pytest.mark.parametrize("position", ["start", "end"])
 @pytest.mark.parametrize("rows", list(TAIL_POINTS), ids=list(TAIL_POINTS.values()))
 def test_dense_tail_perf(bench, results_file, rows, position, variant, tail_tokens, pooled):
     """The sparse op at the production k_chunk on density-0.2 video blocks with a dense text / audio tail on one
-    device (dense_tail_mask)."""
+    device: in the mask (dense_tail_mask: rows and columns, or columns only), or as dense_blocks (rows split across
+    the devices, columns by dense_keys) on the plain density-0.2 mask."""
 
     def make(case):
+        if variant == "dense_blocks":
+            mask = make_mask(case.geo, case.S, case.H, density=0.2, seed=rows)
+            return mask * (_block_lengths(case.geo, case.S) == BLOCK).reshape(-1).to(mask.dtype)
         return dense_tail_mask(
             case.geo, case.S, case.H, tail_tokens=tail_tokens, position=position, variant=variant, seed=rows
         )
 
+    case = bench.shape(rows)
+    dense = (
+        dense_tail_range(case.geo, case.S, tail_tokens=tail_tokens, position=position)
+        if variant == "dense_blocks"
+        else None
+    )
     structure = f"dense_tail_{position}_{variant}_T{tail_tokens}"
-    time_mask(bench, results_file, rows, make, FAMILY_K_CHUNK, pooled, structure=structure)
+    time_mask(bench, results_file, rows, make, FAMILY_K_CHUNK, pooled, structure=structure, dense_blocks=dense)

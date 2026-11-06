@@ -116,6 +116,9 @@ struct SparseRingSDPAParams {
 //                 geometric lengths.
 //   gathered_dense_q  with dense_blocks only, tile [1, NH, >= dense_q_rows, DH] in q's dtype: the fused gather lands
 //                 every other shard's dense-Q slab (dense_q_slabs) in it; this shard's own slab is not copied.
+//   dense_partials_debug  test only, with dense_blocks: every device writes its own raw dense-unit partials here
+//                 (bf16 tiles, [1, 1, units x partial tiles x 32, 32]) and nothing moves between devices; the owners'
+//                 dense output rows are left unwritten.
 struct SparseRingSDPAInputs {
     Tensor input_q;
     Tensor input_k;
@@ -127,6 +130,7 @@ struct SparseRingSDPAInputs {
     std::optional<Tensor> pooled_v;
     std::optional<Tensor> block_counts;
     std::optional<Tensor> gathered_dense_q;
+    std::optional<Tensor> dense_partials_debug;
 
     // The pooled route (Sol-Attn's correction for the dropped blocks) runs iff pooled K / V are given.
     bool pooled_route() const { return pooled_k.has_value(); }

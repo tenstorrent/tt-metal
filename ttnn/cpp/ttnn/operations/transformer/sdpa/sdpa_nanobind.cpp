@@ -194,7 +194,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
     const std::optional<ttnn::Tensor>& block_counts,
     const std::optional<std::vector<std::pair<uint32_t, uint32_t>>>& dense_blocks,
     bool dense_keys,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer_dense_q) {
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_dense_q,
+    const std::optional<ttnn::Tensor>& dense_partials_debug) {
     return ttnn::transformer::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -223,7 +224,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
         block_counts,
         dense_blocks,
         dense_keys,
-        persistent_output_buffer_dense_q);
+        persistent_output_buffer_dense_q,
+        dense_partials_debug);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -926,7 +928,13 @@ void bind_sdpa(nb::module_& mod) {
             persistent_output_buffer_dense_q (ttnn.Tensor, optional): required with dense_blocks, and only then.
                 [1, H, >= R, D] TILE DRAM in q's dtype, which must be k's. Shard s's dense-Q slab is its local Q rows
                 from its first to its last block in a range (R = the slabs' rows summed); the fused gather writes the
-                slabs of the other shards in shard order, each after the earlier shards' rows.
+                slabs of the other shards in shard order, each after the earlier shards' rows. Every device then
+                computes the dense rows against its own K/V shard; the partial softmax states move to the owner one
+                ring hop at a time, are merged on the way, and the owner normalizes them.
+            dense_partials_debug (ttnn.Tensor, optional): test only. bf16 tile [1, 1, >= U x P x 32, 32] (U = heads x
+                dense blocks, P = 2 x block tiles + block tiles x D / 32): each device writes its own raw partial per
+                dense unit (out, per-column sums, row max) and nothing is moved or merged; the owners' dense output
+                rows are left unwritten.
 
         Returns:
             ttnn.Tensor: [1, H, N/ring_size, D], same layout as input_tensor_q.
@@ -959,7 +967,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_counts").noconvert() = nb::none(),
         nb::arg("dense_blocks") = nb::none(),
         nb::arg("dense_keys") = true,
-        nb::arg("persistent_output_buffer_dense_q").noconvert() = nb::none());
+        nb::arg("persistent_output_buffer_dense_q").noconvert() = nb::none(),
+        nb::arg("dense_partials_debug").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

@@ -14,6 +14,9 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_kv_chains.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/sparse_dense_units.hpp"
+#include <ttnn/global_semaphore.hpp>
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <algorithm>
 #include <array>
@@ -25,8 +28,10 @@
 #include <optional>
 #include <cmath>
 #include <limits>
+#include <memory>
 
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -239,6 +244,60 @@ namespace ttnn::prim {
 
 namespace {
 
+// dense_blocks split across devices (sparse_dense_units.hpp): the hop staging and receive buffers and the ready /
+// arrival semaphores, made once per cached workload (not with dense_partials_debug).
+struct DenseResources {
+    std::shared_ptr<Tensor> staging;
+    std::shared_ptr<Tensor> recv;
+    GlobalSemaphore ready_plus;
+    GlobalSemaphore ready_minus;
+    GlobalSemaphore arrival;
+};
+
+// Dense units of the op: one plan per owner shard (a shard with a Q block in a range), in shard order.
+struct DenseOwnerPlan {
+    uint32_t shard;
+    uint32_t n_blocks;
+    uint32_t unit_start;
+    uint32_t slab_out_row;
+    uint32_t slab_row_start;
+    uint32_t slab_rows;
+};
+
+std::vector<DenseOwnerPlan> dense_owner_plans(
+    const SparseRingSDPAParams& args, const SparseRingSDPAInputs& tensor_args, uint32_t& n_units) {
+    std::vector<DenseOwnerPlan> plans;
+    n_units = 0;
+    if (!tensor_args.gathered_dense_q.has_value()) {
+        return plans;
+    }
+    const uint32_t ring_size = static_cast<uint32_t>(args.ring_size);
+    const uint32_t nb_pad = tensor_args.block_mask.logical_shape()[3] / ring_size;
+    const uint32_t local_tiles = tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT;
+    const uint32_t nb = tt::div_up(local_tiles, args.block_tiles());
+    const uint32_t NH = tensor_args.input_q.logical_shape()[1];
+    const auto slabs = dense_q_slabs(args.dense_blocks, ring_size, nb_pad, local_tiles, args.block_tiles());
+    uint32_t out_row = 0;
+    for (uint32_t s = 0; s < ring_size; ++s) {
+        uint32_t n = 0;
+        for (uint32_t b = 0; b < nb; ++b) {
+            const uint32_t g = s * nb_pad + b;
+            n += std::any_of(
+                     args.dense_blocks.begin(),
+                     args.dense_blocks.end(),
+                     [g](const auto& r) { return g >= r.first && g < r.second; })
+                     ? 1u
+                     : 0u;
+        }
+        if (n > 0) {
+            plans.push_back({s, n, n_units, out_row, slabs[s].row_start, slabs[s].rows});
+            n_units += NH * n;
+        }
+        out_row += slabs[s].rows;
+    }
+    return plans;
+}
+
 // Per-coord ProgramDescriptor build, looped over coords by create_workload_descriptor().
 //
 // The kernels keep the dense ring op's argument layout: positional compile-time and runtime args for features this
@@ -249,7 +308,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const SparseRingSDPAParams& args,
     const SparseRingSDPAInputs& tensor_args,
     SparseRingSDPAResult& output_tensors,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
+    const DenseResources* dense_res) {
     TT_FATAL(
         mesh_dispatch_coordinate.has_value(),
         "build_sparse_ring_sdpa_program_descriptor requires mesh_dispatch_coordinate");
@@ -370,6 +430,68 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t num_local_q_chunks = tt::div_up(q_local_padded_N, q_chunk_size);
     const uint32_t num_local_k_chunks = tt::div_up(kv_local_padded_N, k_chunk_size);
 
+    // dense_blocks split across devices: every device computes every dense unit (owner shard, head, dense Q block)
+    // against its own K/V shard, and this shard's dense Q blocks leave its resident split (res_remap).
+    const bool dense_h = tensor_args.gathered_dense_q.has_value();
+    const bool dense_debug = tensor_args.dense_partials_debug.has_value();
+    // One partial (sparse_dense::partial_tiles): out, per-column sums, row max.
+    const uint32_t partial_tiles = Sq_chunk_t * vDHt + 2 * Sq_chunk_t;
+    uint32_t dense_units = 0;
+    const auto owner_plans = dense_owner_plans(args, tensor_args, dense_units);
+    // The dense-Q buffer's tile rows per head (its page layout; the slabs fill a prefix).
+    const uint32_t dense_q_rows_t =
+        dense_h ? tensor_args.gathered_dense_q->padded_shape()[2] / tt::constants::TILE_HEIGHT : 0;
+    uint32_t own_dense_blocks = 0;
+    for (const auto& o : owner_plans) {
+        if (o.shard == transport_rank) {
+            own_dense_blocks = o.n_blocks;
+        }
+    }
+    if (dense_h) {
+        TT_FATAL(
+            own_dense_blocks < num_local_q_chunks,
+            "SparseRingSDPA: every shard must keep a Q block outside dense_blocks (shard {} has {} of {} dense)",
+            transport_rank,
+            own_dense_blocks,
+            num_local_q_chunks);
+        TT_FATAL(
+            logical_nt > (ring_size - 1) * kv_local_padded_Nt,
+            "SparseRingSDPA: dense_blocks need a real token in every shard (logical_n {})",
+            args.logical_n);
+    }
+    const uint32_t num_res_q_chunks = num_local_q_chunks - own_dense_blocks;
+    const bool res_remap = own_dense_blocks > 0;
+    // Each device's role for each owner's units: normalize (the owner) or emit toward it, one hop along the shorter
+    // way round (ties: +); and which neighbours' partials arrive here.
+    const bool ring_topology = args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring;
+    const auto route = [&](uint32_t n, uint32_t o) -> int {
+        if (ring_topology) {
+            return (o + ring_size - n) % ring_size <= (n + ring_size - o) % ring_size ? 1 : -1;
+        }
+        return o > n ? 1 : -1;
+    };
+    std::vector<uint32_t> dense_records;
+    for (const auto& o : owner_plans) {
+        const uint32_t d = transport_rank;
+        uint32_t up_sides = 0;
+        const bool has_minus = ring_topology || d > 0;
+        const bool has_plus = ring_topology || d + 1 < ring_size;
+        const uint32_t m = (d + ring_size - 1) % ring_size;
+        const uint32_t p = (d + 1) % ring_size;
+        if (has_minus && m != o.shard && route(m, o.shard) == 1) {
+            up_sides |= 1u;
+        }
+        if (has_plus && p != o.shard && p != m && route(p, o.shard) == -1) {
+            up_sides |= 2u;
+        }
+        const uint32_t role = d == o.shard             ? sparse_dense::kRoleOwner
+                              : route(d, o.shard) == 1 ? sparse_dense::kRoleEmitPlus
+                                                       : sparse_dense::kRoleEmitMinus;
+        dense_records.insert(
+            dense_records.end(),
+            {o.shard, o.n_blocks, o.unit_start, o.slab_out_row, o.slab_row_start, o.slab_rows, up_sides, role});
+    }
+
     log_debug(tt::LogOp, "B: {}, NH: {}, NHK: {}, NHV: {}, DH: {}, vDH: {}", B, NH, NHK, NHV, DH, vDH);
     log_debug(tt::LogOp, "q_local_padded_N: {}, kv_local_padded_N: {}", q_local_padded_N, kv_local_padded_N);
     log_debug(
@@ -439,7 +561,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         mesh_device->compute_with_storage_grid_size().x * mesh_device->compute_with_storage_grid_size().y);
 
     // The (batch, head, Q block) units are divided evenly across the cores, in flat order.
-    const uint32_t all_heads_num_q_chunks = B * NH * num_local_q_chunks;
+    const uint32_t all_heads_num_q_chunks = B * NH * num_res_q_chunks;
     const uint32_t max_q_per_core = tt::div_up(all_heads_num_q_chunks, num_cores);
 
     log_debug(tt::LogOp, "max_q_per_core: {}", max_q_per_core);
@@ -596,7 +718,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         0,  // num_joint_q_chunks
         num_local_k_chunks,
         0,  // num_joint_k_chunks
-        num_local_q_chunks,
+        num_res_q_chunks,
         ring_size,
         qk_out_subblock_h,
         0,  // is_causal
@@ -644,6 +766,13 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     TensorAccessorArgs(pooled_k_buf).append_to(reader_compile_time_args);
     TensorAccessorArgs(pooled_v_buf).append_to(reader_compile_time_args);
     TensorAccessorArgs(block_counts_buf).append_to(reader_compile_time_args);
+    tt::tt_metal::Buffer* const dense_q_buf = dense_h ? tensor_args.gathered_dense_q->buffer() : nullptr;
+    tt::tt_metal::Buffer* const dense_recv_buf = dense_res != nullptr ? dense_res->recv->buffer() : nullptr;
+    tt::tt_metal::Buffer* const dense_partials_buf =
+        dense_debug ? tensor_args.dense_partials_debug->buffer()
+                    : (dense_res != nullptr ? dense_res->staging->buffer() : nullptr);
+    TensorAccessorArgs(dense_q_buf).append_to(reader_compile_time_args);
+    TensorAccessorArgs(dense_recv_buf).append_to(reader_compile_time_args);
 
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
@@ -739,7 +868,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         0,  // num_joint_q_chunks
         num_local_k_chunks,
         0,  // num_joint_k_chunks
-        num_local_q_chunks,
+        num_res_q_chunks,
         packed_identity_scalar,
         scale_packed,
         ring_size,
@@ -766,6 +895,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dense_partials_buf).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         NH,
@@ -782,7 +912,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         num_local_q_chunks,
         num_local_k_chunks,
         0,  // num_joint_k_chunks
-        num_local_q_chunks,
+        num_res_q_chunks,
         ring_size,
         qk_in0_block_w,
         qk_out_subblock_w,
@@ -895,7 +1025,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         (has_block_counts || args.logical_n % tt::constants::TILE_WIDTH != 0) ? 2 * (Sk_chunk_t / block_tiles) : 0u;
     struct CbLayout {
         uint32_t q_in, k_in, v_in, identity_scale_in, col_identity, qk_im, max_A, exp_max_diff, out, stats_in, prev_out,
-            recip_scratch, sum_in, sparse_plan, pooled_bias, block_counts, key_bias, sum_identity;
+            recip_scratch, sum_in, sparse_plan, pooled_bias, block_counts, key_bias, sum_identity, dense_in;
     };
     const auto lay_out_cbs = [&](uint32_t slots, uint32_t kv_pages, bool pairs, const auto& alloc) -> CbLayout {
         const auto tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) {
@@ -936,6 +1066,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         // only with block_counts or a logical_n off a tile boundary.
         l.key_bias = key_bias_tiles > 0 ? tile_cb(key_bias_tiles, mask_tile_size, mask_df)
                                         : std::numeric_limits<uint32_t>::max();  // inactive
+        // One arriving dense partial (bf16, the output's format), merged one at a time.
+        l.dense_in = dense_h && !dense_debug ? tile_cb(partial_tiles, out_tile_size, out_df)
+                                             : std::numeric_limits<uint32_t>::max();  // inactive
         return l;
     };
     const auto cb_bytes_for_slots = [&](uint32_t slots, uint32_t kv_pages, bool pairs) -> uint64_t {
@@ -1147,8 +1280,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         work.physical_core = mesh_device->worker_core_from_logical_core(core);
         work.global_q_start = next_global_chunk;
         work.global_q_count = chunk_count;
-        ring_joint::append_head_work(
-            core_work, head_segments, i, next_global_chunk, chunk_count, num_local_q_chunks, NH);
+        ring_joint::append_head_work(core_work, head_segments, i, next_global_chunk, chunk_count, num_res_q_chunks, NH);
 
         next_global_chunk += chunk_count;
     }
@@ -1313,6 +1445,14 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"key_bias_tiles", key_bias_tiles},
         {"cb_key_bias", cb_key_bias},
         {"cb_sum_identity", cbs.sum_identity},
+        // dense_blocks split across devices (sparse_dense_units.hpp): owner records, partials to dense_partials_debug
+        // instead of the hop path, this shard's resident blocks skip its dense ones.
+        {"dense_owners", static_cast<uint32_t>(owner_plans.size())},
+        {"dense_debug", dense_debug ? 1u : 0u},
+        {"res_remap", res_remap ? 1u : 0u},
+        {"cb_dense_in", dense_h && !dense_debug ? cbs.dense_in : cbs.q_in},
+        {"dense_units", dense_units},
+        {"dense_q_rows_t", dense_q_rows_t},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = named_args;
@@ -1325,6 +1465,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     reader_kernel.named_compile_time_args.emplace_back(
         "dense_n_ranges", static_cast<uint32_t>(args.dense_blocks.size()));
     reader_kernel.named_compile_time_args.emplace_back("dense_keys", args.dense_keys ? 1u : 0u);
+    writer_kernel.named_compile_time_args.emplace_back(
+        "dense_n_ranges", static_cast<uint32_t>(args.dense_blocks.size()));
     compute_kernel.defines = kernel_defines;
     // Built at O2 to fit the kernel config buffer.
     compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
@@ -1429,9 +1571,19 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         }
     }
 
+    // Dense units: base or base + 1 per core, the first dense_units_extra cores one more, in flat core order.
+    const uint32_t dense_units_base = dense_units / num_cores;
+    const uint32_t dense_units_extra = dense_units % num_cores;
+    const uint32_t ready_plus_addr = dense_res != nullptr ? static_cast<uint32_t>(dense_res->ready_plus.address()) : 0;
+    const uint32_t ready_minus_addr =
+        dense_res != nullptr ? static_cast<uint32_t>(dense_res->ready_minus.address()) : 0;
+    const uint32_t arrival_addr = dense_res != nullptr ? static_cast<uint32_t>(dense_res->arrival.address()) : 0;
+
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
+        const uint32_t du_start = i * dense_units_base + std::min(i, dense_units_extra);
+        const uint32_t du_end = du_start + dense_units_base + (i < dense_units_extra ? 1u : 0u);
 
         const auto& work = core_work.at(i);
         const uint32_t global_q_start = work.global_q_start;
@@ -1508,7 +1660,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                 for (uint32_t s = 0; s < seg.head_work_index; ++s) {
                     flat += w.head_work[s].q_chunk_count;
                 }
-                const uint32_t start_in_head = flat % num_local_q_chunks;
+                const uint32_t start_in_head = flat % num_res_q_chunks;
                 const uint32_t count = w.head_work[seg.head_work_index].q_chunk_count;
                 if (seg.core_idx == i) {
                     sparse_my_start = start_in_head;
@@ -1528,6 +1680,15 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         for (const auto& [start, end] : args.dense_blocks) {
             reader_args.push_back(start);
             reader_args.push_back(end);
+        }
+        if (dense_h) {
+            // [first unit, end unit, arrival semaphore, dense-Q buffer, receive buffer], the owner records.
+            reader_args.push_back(du_start);
+            reader_args.push_back(du_end);
+            reader_args.push_back(arrival_addr);
+            reader_args.push_back(dense_q_buf);
+            reader_args.push_back(dense_recv_buf);
+            reader_args.append(dense_records);
         }
         for (const auto& [start, count] : group_members) {
             reader_args.push_back(start);
@@ -1555,6 +1716,19 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         std::vector<uint32_t> writer_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
+        // dense_blocks ranges, then [first unit, end unit, partials buffer, ready semaphores + / -], the records.
+        for (const auto& [start, end] : args.dense_blocks) {
+            writer_args.push_back(start);
+            writer_args.push_back(end);
+        }
+        if (dense_h) {
+            writer_args.push_back(du_start);
+            writer_args.push_back(du_end);
+            writer_args.push_back(dense_partials_buf);
+            writer_args.push_back(ready_plus_addr);
+            writer_args.push_back(ready_minus_addr);
+            writer_args.append(dense_records);
+        }
         writer_kernel.emplace_runtime_args(core, writer_args.args);
 
         // Compute args
@@ -1576,6 +1750,17 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             runtime_arg_layout.compute_q_valid_tile_count, kUnusedQMappingWord, "compute.q_valid_tile_count");
         compute_args.push_checked(
             runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
+        if (dense_h) {
+            compute_args.push_back(du_start);
+            compute_args.push_back(du_end);
+            compute_args.append(dense_records);
+        }
+        TT_FATAL(
+            reader_args.size <= tt::tt_metal::max_runtime_args,
+            "SparseRingSDPA: core {} needs {} reader runtime args (at most {})",
+            i,
+            reader_args.size,
+            tt::tt_metal::max_runtime_args);
         compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
 
@@ -1609,6 +1794,44 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         all_gather_output_tensors.push_back(*tensor_args.gathered_dense_q);
     }
     // Append the all-gather portion to `desc`. Buffer addresses are auto-patched on cache hits.
+    // The gather writers forward the dense partials one hop after the gather (not with dense_partials_debug).
+    std::optional<RingAttentionDenseReturn> dense_return;
+    if (dense_res != nullptr) {
+        RingAttentionDenseReturn dr;
+        dr.staging = dense_res->staging->buffer();
+        dr.recv = dense_res->recv->buffer();
+        dr.ready_plus_addr = ready_plus_addr;
+        dr.ready_minus_addr = ready_minus_addr;
+        dr.arrival_addr = arrival_addr;
+        dr.n_cores = num_cores;
+        dr.units_base = dense_units_base;
+        dr.units_extra = dense_units_extra;
+        for (uint32_t x = 0; x < grid_size.x; ++x) {
+            dr.core_x.push_back(mesh_device->worker_core_from_logical_core({x, 0}).x);
+        }
+        for (uint32_t y = 0; y < grid_size.y; ++y) {
+            dr.core_y.push_back(mesh_device->worker_core_from_logical_core({0, y}).y);
+        }
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            const CoreCoord v = mesh_device->worker_core_from_logical_core({i % grid_size.x, i / grid_size.x});
+            TT_FATAL(
+                v.x == dr.core_x[i % grid_size.x] && v.y == dr.core_y[i / grid_size.x],
+                "SparseRingSDPA dense return: the SDPA grid's NoC coordinates are not a product of rows and columns");
+        }
+        dr.n_units = dense_units;
+        dr.partial_tiles = partial_tiles;
+        for (uint32_t k = 0; k < owner_plans.size(); ++k) {
+            const uint32_t role = dense_records[k * sparse_dense::kRecordWords + 7];
+            const std::array<uint32_t, 3> send = {
+                k, owner_plans[k].unit_start, owner_plans[k].unit_start + NH * owner_plans[k].n_blocks};
+            if (role == sparse_dense::kRoleEmitPlus) {
+                dr.sends_plus.push_back(send);
+            } else if (role == sparse_dense::kRoleEmitMinus) {
+                dr.sends_minus.push_back(send);
+            }
+        }
+        dense_return = std::move(dr);
+    }
     ring_attention_all_gather_async_multi_core_with_workers_helper(
         desc,
         all_gather_input_tensors,
@@ -1638,7 +1861,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         sdpa_fused_op_signaler->split_forwarding_enabled,
         /*partial_readiness_enabled=*/false,
         rank_mapping,
-        dense_q_rank_slabs);
+        dense_q_rank_slabs,
+        dense_return);
 
     return desc;
 }
@@ -1656,8 +1880,42 @@ tt::tt_metal::WorkloadDescriptor SparseRingSDPAProgramFactory::create_workload_d
     tt::tt_metal::WorkloadDescriptor wd;
     const auto coords = tensor_coords.coords();
     wd.programs.reserve(coords.size());
+    // The dense hop path's buffers and semaphores, owned by the cached workload. Made before the per-coord builds so
+    // their L1 counts in the CB fit.
+    std::optional<DenseResources> dense_res;
+    if (tensor_args.gathered_dense_q.has_value() && !tensor_args.dense_partials_debug.has_value()) {
+        auto* mesh = tensor_args.input_q.device();
+        uint32_t n_units = 0;
+        dense_owner_plans(args, tensor_args, n_units);
+        const uint32_t sq_t = args.block_tiles();
+        const uint32_t vdh_t = tensor_args.input_v.logical_shape()[3] / tt::constants::TILE_WIDTH;
+        const uint32_t pages = n_units * (sq_t * vdh_t + 2 * sq_t);
+        const auto make_buffer = [&](uint32_t n_pages) {
+            const tt::tt_metal::TensorSpec spec(
+                ttnn::Shape({1, 1, n_pages * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
+                tt::tt_metal::TensorLayout(
+                    DataType::BFLOAT16,
+                    tt::tt_metal::PageConfig(Layout::TILE),
+                    tt::tt_metal::MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+            return std::make_shared<Tensor>(create_device_tensor(spec, mesh));
+        };
+        const CoreCoord grid = args.program_config.compute_with_storage_grid_size;
+        const CoreRangeSet sdpa_cores(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+        const auto make_sem = [&] {
+            return ttnn::global_semaphore::create_global_semaphore(mesh, sdpa_cores, 0, BufferType::L1);
+        };
+        dense_res = DenseResources{make_buffer(pages), make_buffer(2 * pages), make_sem(), make_sem(), make_sem()};
+        tt::tt_metal::distributed::Synchronize(*mesh, std::nullopt, {});
+        for (const auto& t : {dense_res->staging, dense_res->recv}) {
+            wd.buffers.push_back({t, t->buffer()});
+        }
+        for (const auto* sem : {&dense_res->ready_plus, &dense_res->ready_minus, &dense_res->arrival}) {
+            wd.semaphores.push_back(*sem);
+        }
+    }
     for (const auto& coord : coords) {
-        auto desc = build_sparse_ring_sdpa_program_descriptor(args, tensor_args, output_tensors, coord);
+        auto desc = build_sparse_ring_sdpa_program_descriptor(
+            args, tensor_args, output_tensors, coord, dense_res.has_value() ? &*dense_res : nullptr);
         wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return wd;

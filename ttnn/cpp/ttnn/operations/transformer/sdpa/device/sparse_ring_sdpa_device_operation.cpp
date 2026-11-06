@@ -402,6 +402,29 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
             DH,
             dq_shape);
     }
+    if (tensor_args.dense_partials_debug.has_value()) {
+        TT_FATAL(dense_q.has_value(), "SparseRingSDPA: dense_partials_debug needs dense_blocks");
+        const auto& dbg = *tensor_args.dense_partials_debug;
+        uint32_t dense_blocks_total = 0;
+        for (uint32_t s = 0; s < args.ring_size; ++s) {
+            for (uint32_t b = 0; b < tt::div_up(N_local_q, block_size); ++b) {
+                const uint32_t g = s * nb_pad + b;
+                dense_blocks_total += std::any_of(
+                    dense.begin(), dense.end(), [g](const auto& r) { return g >= r.first && g < r.second; });
+            }
+        }
+        const uint32_t bt = args.block_tiles();
+        const uint32_t pages = NQH * dense_blocks_total * (bt * (DH / tt::constants::TILE_WIDTH) + 2 * bt);
+        TT_FATAL(
+            dbg.layout() == Layout::TILE && dbg.dtype() == DataType::BFLOAT16 && dbg.buffer() != nullptr &&
+                dbg.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                dbg.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                dbg.padded_shape()[-1] == tt::constants::TILE_WIDTH &&
+                dbg.padded_shape().volume() >= static_cast<uint64_t>(pages) * tt::constants::TILE_HW,
+            "dense_partials_debug must be bf16 tile DRAM-interleaved [1, 1, >= {} x 32, 32], got {}",
+            pages,
+            dbg.logical_shape());
+    }
     const uint32_t nqb = tt::div_up(N_local_q, block_size);
     TT_FATAL(
         mask.logical_shape()[0] == 1 && mask.logical_shape()[1] == NQH && mask.logical_shape()[2] >= nqb &&
@@ -458,6 +481,9 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
     if (tensor_args.gathered_dense_q.has_value()) {
         input_tensors.push_back(*tensor_args.gathered_dense_q);
     }
+    if (tensor_args.dense_partials_debug.has_value()) {
+        input_tensors.push_back(*tensor_args.dense_partials_debug);
+    }
     // logical_n is baked into the kernels (compile-time args and the bias generator), so it is keyed.
     // The slots per pass and the K/V CB depth are derived from these inputs plus the live L1 top
     // (lowest_occupied_compute_l1_address), which is not keyed: a cached program keeps the choice of the call that
@@ -479,7 +505,8 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         tensor_args.pooled_k.has_value(),
         tensor_args.pooled_v.has_value(),
         tensor_args.block_counts.has_value(),
-        tensor_args.gathered_dense_q.has_value());
+        tensor_args.gathered_dense_q.has_value(),
+        tensor_args.dense_partials_debug.has_value());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> SparseRingSDPADeviceOperation::create_op_performance_model(
@@ -546,7 +573,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
     const std::optional<ttnn::Tensor>& block_counts,
     const std::vector<std::pair<uint32_t, uint32_t>>& dense_blocks,
     const bool dense_keys,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer_dense_q) {
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_dense_q,
+    const std::optional<ttnn::Tensor>& dense_partials_debug) {
     using OperationType = ttnn::prim::SparseRingSDPADeviceOperation;
     // Checked before the launch: a cache hit skips the miss-path validation.
     TT_FATAL(
@@ -624,7 +652,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
         .pooled_k = pooled_k,
         .pooled_v = pooled_v,
         .block_counts = block_counts,
-        .gathered_dense_q = persistent_output_buffer_dense_q};
+        .gathered_dense_q = persistent_output_buffer_dense_q,
+        .dense_partials_debug = dense_partials_debug};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
