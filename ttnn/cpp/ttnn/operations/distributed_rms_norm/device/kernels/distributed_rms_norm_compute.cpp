@@ -56,6 +56,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "ttnn/cpp/ttnn/operations/distributed_rms_norm/device/kernels/distributed_rms_norm_args.hpp"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_sqrt.h"
 #endif
@@ -68,6 +69,7 @@
 #endif
 
 namespace ckl = compute_kernel_lib;
+namespace drms = distributed_rms_norm;
 
 // ---- Column-vector SFPU tile ops for finalize_wave (raw LLK, documented deviation) ----
 // The kernel_lib SFPU elements (AddBinary, MulUnary, AddUnary, Rsqrt) run VectorMode::RC (all 4 faces). The finalize
@@ -155,27 +157,29 @@ ALWI void drms_finalize_fused_tile(uint32_t idst, uint32_t inv_w_bits, uint32_t 
 
 namespace {
 
-constexpr uint32_t cb_x_tiles = 1;
-constexpr uint32_t cb_reduce_scaler = 2;
-constexpr uint32_t cb_sumsq_partial = 3;
-constexpr uint32_t cb_inv_rms = 4;
-constexpr uint32_t cb_gamma_tiles = 6;
-constexpr uint32_t cb_x_gamma = 7;
-constexpr uint32_t cb_partial_col = 9;
-constexpr uint32_t cb_gather = 10;
-constexpr uint32_t cb_rms_root = 11;
-constexpr uint32_t cb_sumsq_last = 12;
-constexpr uint32_t cb_sumsq_acc = 13;
-constexpr uint32_t cb_output = 16;
-constexpr uint32_t cb_dev_partial = 17;
-constexpr uint32_t cb_stats_gather = 18;
+constexpr uint32_t cb_x_tiles = drms::cb::X_TILES;
+constexpr uint32_t cb_reduce_scaler = drms::cb::REDUCE_SCALER;
+constexpr uint32_t cb_sumsq_partial = drms::cb::SUMSQ_PARTIAL;
+constexpr uint32_t cb_inv_rms = drms::cb::INV_RMS;
+constexpr uint32_t cb_gamma_tiles = drms::cb::GAMMA_TILES;
+constexpr uint32_t cb_x_gamma = drms::cb::X_GAMMA;
+constexpr uint32_t cb_partial_col = drms::cb::PARTIAL_COL;
+constexpr uint32_t cb_gather = drms::cb::GATHER;
+constexpr uint32_t cb_rms_root = drms::cb::RMS_ROOT;
+constexpr uint32_t cb_sumsq_last = drms::cb::SUMSQ_LAST;
+constexpr uint32_t cb_sumsq_acc = drms::cb::SUMSQ_ACC;
+constexpr uint32_t cb_output = drms::cb::OUTPUT;
+constexpr uint32_t cb_dev_partial = drms::cb::DEV_PARTIAL;
+constexpr uint32_t cb_stats_gather = drms::cb::STATS_GATHER;
 
 // Compact finalize tile (host FIN_COMPACT_MAX_G, CT arg 14): every slot's 32-word record fits one tile (4 faces x 4
 // slots of 2 face-rows each), so the host sets it only for G <= 16.
 template <uint32_t G>
 constexpr bool fin_compact() {
-    static_assert(get_compile_time_arg_val(14) == 0 || G <= 16, "compact finalize tile holds at most 16 slots");
-    return get_compile_time_arg_val(14) != 0;
+    static_assert(
+        get_compile_time_arg_val(drms::compute_ct::FIN_COMPACT) == 0 || G <= 16,
+        "compact finalize tile holds at most 16 slots");
+    return get_compile_time_arg_val(drms::compute_ct::FIN_COMPACT) != 0;
 }
 
 template <ckl::Dst In0, ckl::Dst In1, ckl::Dst Out>
@@ -553,26 +557,27 @@ FORCE_INLINE void run(
 }  // namespace
 
 void kernel_main() {
-    constexpr bool has_gamma = get_compile_time_arg_val(0) != 0;
-    constexpr uint32_t block_rows = get_compile_time_arg_val(1);
-    constexpr uint32_t w_chunk_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t num_w_chunks = get_compile_time_arg_val(3);
-    constexpr uint32_t x_row_stride = get_compile_time_arg_val(4);  // WS
-    constexpr bool sharded = get_compile_time_arg_val(5) != 0;
-    constexpr bool combine = get_compile_time_arg_val(6) != 0;
-    constexpr bool masked_cfg = get_compile_time_arg_val(7) != 0;
-    constexpr uint32_t group_cores = get_compile_time_arg_val(8);  // G_w
-    constexpr uint32_t scale_block_tiles = get_compile_time_arg_val(9);
-    constexpr uint32_t wave_rows = get_compile_time_arg_val(10);      // Rw
-    constexpr uint32_t group_devices = get_compile_time_arg_val(12);  // G
-    constexpr bool gamma_resident = get_compile_time_arg_val(13) != 0;
+    namespace ct = drms::compute_ct;
+    constexpr bool has_gamma = get_compile_time_arg_val(ct::HAS_GAMMA) != 0;
+    constexpr uint32_t block_rows = get_compile_time_arg_val(ct::BLOCK_ROWS);
+    constexpr uint32_t w_chunk_tiles = get_compile_time_arg_val(ct::W_CHUNK_TILES);
+    constexpr uint32_t num_w_chunks = get_compile_time_arg_val(ct::NUM_W_CHUNKS);
+    constexpr uint32_t x_row_stride = get_compile_time_arg_val(ct::WS);  // WS
+    constexpr bool sharded = get_compile_time_arg_val(ct::OUT_NATIVE) != 0;
+    constexpr bool combine = get_compile_time_arg_val(ct::COMBINE) != 0;
+    constexpr bool masked_cfg = get_compile_time_arg_val(ct::MASKED) != 0;
+    constexpr uint32_t group_cores = get_compile_time_arg_val(ct::G_W);  // G_w
+    constexpr uint32_t scale_block_tiles = get_compile_time_arg_val(ct::SCALE_BLOCK_TILES);
+    constexpr uint32_t wave_rows = get_compile_time_arg_val(ct::WAVE_ROWS);          // Rw
+    constexpr uint32_t group_devices = get_compile_time_arg_val(ct::GROUP_DEVICES);  // G
+    constexpr bool gamma_resident = get_compile_time_arg_val(ct::GAMMA_RESIDENT) != 0;
 
-    const uint32_t rows_this_core = get_arg_val<uint32_t>(0);
-    const uint32_t inv_w_bits = get_arg_val<uint32_t>(1);
-    const uint32_t eps_bits = get_arg_val<uint32_t>(2);
-    const uint32_t slice_valid = get_arg_val<uint32_t>(3);
-    const bool is_root = get_arg_val<uint32_t>(4) != 0;
-    const bool masked_core = get_arg_val<uint32_t>(5) != 0;
+    const uint32_t rows_this_core = get_arg_val<uint32_t>(drms::compute_rt::ROWS);
+    const uint32_t inv_w_bits = get_common_arg_val<uint32_t>(drms::compute_common::INV_W_BITS);
+    const uint32_t eps_bits = get_common_arg_val<uint32_t>(drms::compute_common::EPS_BITS);
+    const uint32_t slice_valid = get_arg_val<uint32_t>(drms::compute_rt::SLICE_VALID);
+    const bool is_root = get_arg_val<uint32_t>(drms::compute_rt::IS_ROOT) != 0;
+    const bool masked_core = get_arg_val<uint32_t>(drms::compute_rt::MASKED_CORE) != 0;
 
     compute_kernel_hw_startup(cb_x_tiles, cb_x_tiles, cb_sumsq_partial);
 

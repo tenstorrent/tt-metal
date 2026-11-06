@@ -7,31 +7,53 @@ exchange of the per-row Σx² partials over the fabric (op_design.md).
 Every device p of a group of G devices along `cluster_axis` holds x[p] (..., M, W_local) and returns
     out[p] = x[p] * rsqrt(Σ_g Σ_w x[g]^2 / (G * W_local) + eps) * gamma[p].
 
-ONE ttnn.generic_op dispatch per call (one MeshProgramDescriptor, one program per chip): the local half is the base
-op rms_norm's blocking (R1 / R3-i / R1-HS / R3-s on the grid left after the port cores), the cross-device half is a
-relay all-gather of one fp32 record (32 words) per tile-row and device, driven by 2L port cores per chip.
+The operation is the native C++ ttnn.distributed_rms_norm (ttnn/cpp/ttnn/operations/distributed_rms_norm): one
+program per chip, the local half the base op rms_norm's blocking (R1 / R3-i / R1-HS / R3-s on the grid left after
+the port cores), the cross-device half an all-gather of one fp32 record (32 words) per tile-row and device, driven
+by 2L port cores per chip. It checks this support contract itself and refuses with the same exceptions.
 
-Registry model: INPUT_TAGGERS / SUPPORTED / EXCLUSIONS / validate() below drive both the runtime gate and the
-golden-test xfail decisions.
+Registry model: INPUT_TAGGERS / SUPPORTED / EXCLUSIONS / validate() below drive the golden-test xfail decisions;
+validate() checks a call against the contract without dispatching it.
 """
 
 from __future__ import annotations
-
-from typing import Optional
 
 import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 from ttnn.operations.ccl import Topology
 
-from .distributed_rms_norm_program_descriptor import (
-    EXCHANGE_MODE,
-    EXCHANGE_MODES,
-    is_2d_fabric,
-    build_groups,
-    create_mesh_program_descriptor,
-    usable_links,
-)
+# The cross-device schedules of the Σx² records (every mode gives the same output); None selects EXCHANGE_MODE.
+EXCHANGE_MODES = ("direct", "relay", "mcast")
+EXCHANGE_MODE = "direct"
+
+
+def is_2d_fabric(cfg=None) -> bool:
+    """True for the 2D fabric configs (routing by destination node); False for the 1D ones."""
+    cfg = ttnn.get_fabric_config() if cfg is None else cfg
+    return "2D" in str(cfg)
+
+
+def build_groups(mesh_shape, cluster_axis):
+    """Ordered lists of mesh coords, one per group (position p = index)."""
+    rows, cols = mesh_shape
+    if cluster_axis == 0:
+        return [[(r, c) for r in range(rows)] for c in range(cols)]
+    return [[(r, c) for c in range(cols)] for r in range(rows)]
+
+
+def usable_links(mesh, groups, ring):
+    """min over every hop of every group (incl. the wrap hop of a ring) of the forwarding link count."""
+    node = lambda coord: mesh.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
+    counts = []
+    for grp in groups:
+        hops = [(grp[i], grp[i + 1]) for i in range(len(grp) - 1)]
+        if ring:
+            hops.append((grp[-1], grp[0]))
+        for a, b in hops:
+            counts.append(len(ttnn.get_forwarding_link_indices(node(a), node(b))))
+            counts.append(len(ttnn.get_forwarding_link_indices(node(b), node(a))))
+    return min(counts) if counts else 0
 
 
 # ---------------------------------------------------------------------------
@@ -239,65 +261,8 @@ def validate(
 
 
 # ---------------------------------------------------------------------------
-# Public entry point
+# Public entry point: the registered C++ operation
 # ---------------------------------------------------------------------------
 
-
-def distributed_rms_norm(
-    input_tensor: ttnn.Tensor,
-    *,
-    cluster_axis: int,
-    gamma: Optional[ttnn.Tensor] = None,
-    epsilon: float = 1e-6,
-    topology=Topology.Linear,
-    num_links: Optional[int] = None,
-    compute_kernel_config: Optional[ttnn.ComputeConfigDescriptor] = None,
-    memory_config: Optional[ttnn.MemoryConfig] = None,
-    exchange_mode: Optional[str] = None,
-) -> ttnn.Tensor:
-    """`exchange_mode`: the cross-device schedule of the Σx² records, "direct" (multi-hop unicast per destination,
-    the default), "relay" (balanced store-and-forward) or "mcast" (line multicast hemispheres; 1D fabrics only).
-    None takes the module default (`EXCHANGE_MODE`, env DRMS_EXCHANGE_MODE). Every mode gives the same output."""
-    cfg, G, L, ring = validate(
-        input_tensor,
-        cluster_axis=cluster_axis,
-        gamma=gamma,
-        topology=topology,
-        num_links=num_links,
-        compute_kernel_config=compute_kernel_config,
-        memory_config=memory_config,
-        exchange_mode=exchange_mode,
-    )
-    mesh = input_tensor.device()
-    in_mc = input_tensor.memory_config()
-    if in_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
-        output_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
-    else:
-        output_memory_config = memory_config if memory_config is not None else in_mc
-    # allocate_tensor_on_device takes positional args only.
-    output_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(list(input_tensor.shape)),
-        input_tensor.dtype,
-        input_tensor.layout,
-        mesh,
-        output_memory_config,
-    )
-    mesh_desc, landing = create_mesh_program_descriptor(
-        input_tensor,
-        output_tensor,
-        gamma=gamma,
-        epsilon=epsilon,
-        compute_kernel_config=cfg,
-        cluster_axis=cluster_axis,
-        G=G,
-        num_links=L,
-        ring=ring,
-        exchange_mode=exchange_mode,
-    )
-    io_tensors = [input_tensor] + ([gamma] if gamma is not None else []) + [landing, output_tensor]
-    # Output tensor must be last.
-    output = ttnn.generic_op(io_tensors, mesh_desc)
-    # The landing is this call's intermediate: freed once the program is enqueued (in-order queue; the ready fence keeps
-    # every peer write inside this call's program lifetime).
-    ttnn.deallocate(landing)
-    return output
+distributed_rms_norm = ttnn.distributed_rms_norm
+distributed_rms_norm_scratch_tensor = ttnn.distributed_rms_norm_scratch_tensor

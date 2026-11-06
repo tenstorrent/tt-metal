@@ -46,6 +46,9 @@
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "ttnn/cpp/ttnn/operations/distributed_rms_norm/device/kernels/distributed_rms_norm_args.hpp"
+
+namespace drms = distributed_rms_norm;
 
 // Measurement-only per-stage zones (host DRMS_ZONES=1 -> define; never set in production).
 #ifdef DRMS_ZONES
@@ -56,32 +59,32 @@
 
 namespace {
 
-constexpr uint32_t cb_x_tiles = 1;
-constexpr uint32_t cb_reduce_scaler = 2;
-constexpr uint32_t cb_inv_rms = 4;
-constexpr uint32_t cb_partial_col = 9;
-constexpr uint32_t cb_gather = 10;
-constexpr uint32_t cb_rms_root = 11;
-constexpr uint32_t cb_dev_partial = 17;
-constexpr uint32_t cb_stats_gather = 18;
-constexpr uint32_t cb_stats_record = 19;
+constexpr uint32_t cb_x_tiles = drms::cb::X_TILES;
+constexpr uint32_t cb_reduce_scaler = drms::cb::REDUCE_SCALER;
+constexpr uint32_t cb_inv_rms = drms::cb::INV_RMS;
+constexpr uint32_t cb_partial_col = drms::cb::PARTIAL_COL;
+constexpr uint32_t cb_gather = drms::cb::GATHER;
+constexpr uint32_t cb_rms_root = drms::cb::RMS_ROOT;
+constexpr uint32_t cb_dev_partial = drms::cb::DEV_PARTIAL;
+constexpr uint32_t cb_stats_gather = drms::cb::STATS_GATHER;
+constexpr uint32_t cb_stats_record = drms::cb::STATS_RECORD;
 
 // Program semaphore ids (mirror the host). SEM_GATHER_BASE + k: member partial arrivals of wave k of a block — one
 // counter per wave, because G_w - 1 members send each wave and a single cumulative counter could be satisfied by a fast
 // member's wave k+1 before a slow member's wave k landed.
-constexpr uint32_t SEM_INV = 0;
-constexpr uint32_t SEM_OWN_STATS = 1;
-constexpr uint32_t SEM_LANDED_FWD = 2;
-constexpr uint32_t SEM_LANDED_BWD = 3;
-constexpr uint32_t SEM_OWN_COUNTED = 4;
-constexpr uint32_t SEM_GATHER_BASE = 5;
+constexpr uint32_t SEM_INV = drms::sem::INV;
+constexpr uint32_t SEM_OWN_STATS = drms::sem::OWN_STATS;
+constexpr uint32_t SEM_LANDED_FWD = drms::sem::LANDED_FWD;
+constexpr uint32_t SEM_LANDED_BWD = drms::sem::LANDED_BWD;
+constexpr uint32_t SEM_OWN_COUNTED = drms::sem::OWN_COUNTED;
+constexpr uint32_t SEM_GATHER_BASE = drms::sem::GATHER_BASE;
 // On a PORT core: the "wave freed" reports of the bounded landing (SEM_INV's id is unused on a port core).
-constexpr uint32_t SEM_PORT_FREED = 0;
-constexpr uint32_t MAX_WAVES_PER_BLOCK = 8;
+constexpr uint32_t SEM_PORT_FREED = drms::sem::PORT_FREED;
+constexpr uint32_t MAX_WAVES_PER_BLOCK = drms::sem::MAX_WAVES_PER_BLOCK;
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
-constexpr uint32_t RECORD_BYTES = TILE_DIM * 4;
+constexpr uint32_t RECORD_BYTES = drms::RECORD_BYTES;
 
 // Raw wall-clock register read (Perf 2, early small wave): no dataflow helper offers a timed start relative to kernel
 // launch. It gates the first x read of a later-wave row-group so the first wave owns the DRAM read bandwidth; measured
@@ -273,43 +276,44 @@ FORCE_INLINE void tile_slot0_to_col0(uint32_t src_addr, uint32_t dst_addr) {
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t R = get_compile_time_arg_val(0);
-    constexpr uint32_t C = get_compile_time_arg_val(1);
-    constexpr uint32_t num_w_chunks = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt = get_compile_time_arg_val(3);
-    constexpr uint32_t WS = get_compile_time_arg_val(4);
-    constexpr bool sharded = get_compile_time_arg_val(6) != 0;
-    constexpr bool combine = get_compile_time_arg_val(7) != 0;
-    constexpr uint32_t G_w = get_compile_time_arg_val(8);
-    constexpr uint32_t Rw = get_compile_time_arg_val(9);
-    constexpr uint32_t nwpb = get_compile_time_arg_val(10);
-    constexpr uint32_t G = get_compile_time_arg_val(11);
-    constexpr uint32_t T_in = get_compile_time_arg_val(12);
-    constexpr uint32_t T_i = get_compile_time_arg_val(13);
-    constexpr uint32_t w_valid_last = get_compile_time_arg_val(14);
-    constexpr uint32_t es = get_compile_time_arg_val(15);  // 0: Bfp8_b (never W-pad zeroed: excluded)
-    constexpr bool masked_cfg = get_compile_time_arg_val(16) != 0;
-    constexpr uint32_t num_waves_total = get_compile_time_arg_val(17);
-    constexpr bool interm_fp32 = get_compile_time_arg_val(18) != 0;
+    using namespace drms::reader_ct;
+    constexpr uint32_t R = get_compile_time_arg_val(BLOCK_ROWS);
+    constexpr uint32_t C = get_compile_time_arg_val(W_CHUNK_TILES);
+    constexpr uint32_t num_w_chunks = get_compile_time_arg_val(NUM_W_CHUNKS);
+    constexpr uint32_t Wt = get_compile_time_arg_val(WT);
+    constexpr uint32_t WS = get_compile_time_arg_val(drms::reader_ct::WS);
+    constexpr bool sharded = get_compile_time_arg_val(SHARDED) != 0;
+    constexpr bool combine = get_compile_time_arg_val(COMBINE) != 0;
+    constexpr uint32_t G_w = get_compile_time_arg_val(drms::reader_ct::G_W);
+    constexpr uint32_t Rw = get_compile_time_arg_val(WAVE_ROWS);
+    constexpr uint32_t nwpb = get_compile_time_arg_val(WAVES_PER_BLOCK);
+    constexpr uint32_t G = get_compile_time_arg_val(GROUP_DEVICES);
+    constexpr uint32_t T_in = get_compile_time_arg_val(drms::reader_ct::T_IN);
+    constexpr uint32_t T_i = get_compile_time_arg_val(drms::reader_ct::T_I);
+    constexpr uint32_t w_valid_last = get_compile_time_arg_val(W_VALID_LAST);
+    constexpr uint32_t es = get_compile_time_arg_val(ES_ZERO);  // 0: Bfp8_b (never W-pad zeroed: excluded)
+    constexpr bool masked_cfg = get_compile_time_arg_val(MASKED) != 0;
+    constexpr uint32_t num_waves_total = get_compile_time_arg_val(NUM_WAVES);
+    constexpr bool interm_fp32 = get_compile_time_arg_val(INTERM_FP32) != 0;
     // Wave-ordered reads (host READ_WAVE_GATE): the reads of a wave's rows are issued only once this core's previous
     // wave is reduced locally, so the grid's wave-0 reads get the DRAM first (the exchange starts after the slowest
     // root publishes wave 0) instead of competing with the fast cores' wave-1 reads.
-    constexpr bool read_wave_gate = get_compile_time_arg_val(19) != 0;
+    constexpr bool read_wave_gate = get_compile_time_arg_val(READ_WAVE_GATE) != 0;
     // Bounded landing (Refinement 4, host LANDING_RING_WAVES): K wave slots reused across waves (wave w in slot w mod
     // K). A root publishes wave w only after it collected wave w - K, and reports every collected wave to the ports
     // that return the credits (SEM_PORT_FREED). K == num_waves_total: the credit-free fast path (compiled out).
-    constexpr uint32_t landing_waves = get_compile_time_arg_val(20);
+    constexpr uint32_t landing_waves = get_compile_time_arg_val(LANDING_WAVES);
     constexpr bool ring = landing_waves < num_waves_total;
     // Output NoC split (writer.cpp: the same CT values; 0 / 0 = off).
-    constexpr uint32_t out_split_x = get_compile_time_arg_val(21);
-    constexpr uint32_t noc0_banks_west = get_compile_time_arg_val(22);
-    constexpr uint32_t noc0_banks_east = get_compile_time_arg_val(23);
-    constexpr uint32_t sem_out_ready = get_compile_time_arg_val(24);
-    constexpr uint32_t sem_out_done = get_compile_time_arg_val(25);
-    constexpr uint32_t sem_out_addr = get_compile_time_arg_val(26);
-    constexpr uint32_t T_out = get_compile_time_arg_val(27);
+    constexpr uint32_t out_split_x = get_compile_time_arg_val(OUT_SPLIT_X);
+    constexpr uint32_t noc0_banks_west = get_compile_time_arg_val(NOC0_BANKS_WEST);
+    constexpr uint32_t noc0_banks_east = get_compile_time_arg_val(NOC0_BANKS_EAST);
+    constexpr uint32_t sem_out_ready = get_compile_time_arg_val(SEM_OUT_READY);
+    constexpr uint32_t sem_out_done = get_compile_time_arg_val(SEM_OUT_DONE);
+    constexpr uint32_t sem_out_addr = get_compile_time_arg_val(SEM_OUT_ADDR);
+    constexpr uint32_t T_out = get_compile_time_arg_val(drms::reader_ct::T_OUT);
     constexpr bool out_split = (noc0_banks_west != 0 || noc0_banks_east != 0);
-    constexpr auto input_args = TensorAccessorArgs<28>();
+    constexpr auto input_args = TensorAccessorArgs<drms::reader_ct::COUNT>();
     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     static_assert(num_w_chunks * C == WS || sharded, "interleaved rows are pushed as whole Wp windows");
     // Compact finalize (Perf 1, G <= 16): one cb_stats_gather tile per tile-row holds every slot's record, and the root
@@ -320,44 +324,51 @@ void kernel_main() {
     constexpr bool direct = compact && interm_fp32;
     constexpr uint32_t TPR = compact ? 1 : G;
 
-    uint32_t a = 0;
-    const uint32_t input_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t start_tile_row = get_arg_val<uint32_t>(a++);
-    const uint32_t rows = get_arg_val<uint32_t>(a++);
-    const uint32_t w0 = get_arg_val<uint32_t>(a++);
-    const uint32_t V = get_arg_val<uint32_t>(a++);
-    const bool is_root = get_arg_val<uint32_t>(a++) != 0;
-    const uint32_t my_index = get_arg_val<uint32_t>(a++);
-    const uint32_t root_x = get_arg_val<uint32_t>(a++);
-    const uint32_t root_y = get_arg_val<uint32_t>(a++);
-    const uint32_t landing = get_arg_val<uint32_t>(a++);
-    const uint32_t seg_stride = get_arg_val<uint32_t>(a++);
-    const uint32_t rec_off = get_arg_val<uint32_t>(a++);
-    const uint32_t n_send = get_arg_val<uint32_t>(a++);
-    const uint32_t send_port[2] = {get_arg_val<uint32_t>(a), get_arg_val<uint32_t>(a + 1)};
-    a += 2;
-    const uint32_t n_in_fwd = get_arg_val<uint32_t>(a++);
-    const uint32_t n_in_bwd = get_arg_val<uint32_t>(a++);
-    const uint32_t my_slot = get_arg_val<uint32_t>(a++);
-    [[maybe_unused]] const uint32_t out_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t input_addr = get_common_arg_val<uint32_t>(drms::reader_common::INPUT_ADDR);
+    const uint32_t landing = get_common_arg_val<uint32_t>(drms::reader_common::LANDING_ADDR);
+    const uint32_t seg_stride = get_common_arg_val<uint32_t>(drms::reader_common::SEG_STRIDE);
+    [[maybe_unused]] const uint32_t out_addr = get_common_arg_val<uint32_t>(drms::reader_common::OUTPUT_ADDR);
+    const uint32_t start_tile_row = get_arg_val<uint32_t>(drms::reader_rt::START_TILE_ROW);
+    const uint32_t rows = get_arg_val<uint32_t>(drms::reader_rt::ROWS);
+    const uint32_t w0 = get_arg_val<uint32_t>(drms::reader_rt::W0);
+    const uint32_t V = get_arg_val<uint32_t>(drms::reader_rt::V);
+    const bool is_root = get_arg_val<uint32_t>(drms::reader_rt::IS_ROOT) != 0;
+    const uint32_t my_index = get_arg_val<uint32_t>(drms::reader_rt::MY_INDEX);
+    const uint32_t root_x = get_arg_val<uint32_t>(drms::reader_rt::ROOT_X);
+    const uint32_t root_y = get_arg_val<uint32_t>(drms::reader_rt::ROOT_Y);
+    const uint32_t rec_off = get_arg_val<uint32_t>(drms::reader_rt::REC_OFF);
+    const uint32_t n_send = get_common_arg_val<uint32_t>(drms::reader_common::N_SEND);
+    const uint32_t n_in_fwd = get_common_arg_val<uint32_t>(drms::reader_common::N_IN_FWD);
+    const uint32_t n_in_bwd = get_common_arg_val<uint32_t>(drms::reader_common::N_IN_BWD);
+    const uint32_t my_slot = get_common_arg_val<uint32_t>(drms::reader_common::MY_SLOT);
+    uint32_t a = drms::reader_rt::COUNT;
     // Early small wave (Perf 2, OVERLAP; host esw_rule): this core's row-group starts at global wave wave_off (every
     // wave below it is empty for the group), and its x reads start read_start cycles after kernel start, so the
     // groups of the first wave own the DRAM read bandwidth and their inv_rms (and the output write burst) comes early,
     // overlapping the later groups' reads. Compiled in only when the host gave some group an offset.
 #ifdef DRMS_ESW_OFFSETS
-    const uint32_t wave_off = get_arg_val<uint32_t>(a++);
-    const uint32_t read_start = get_arg_val<uint32_t>(a++);
+    const uint32_t wave_off = get_arg_val<uint32_t>(a + drms::esw_rt::WAVE_OFF);
+    const uint32_t read_start = get_arg_val<uint32_t>(a + drms::esw_rt::READ_START);
+    a += drms::esw_rt::COUNT;
 #else  // every group at offset 0 (host): the op's current scheme, nothing to compute
     constexpr uint32_t wave_off = 0;
     constexpr uint32_t read_start = 0;
 #endif
-    const uint32_t n_free = get_arg_val<uint32_t>(a++);  // ports I report collected waves to (bounded landing)
-    const uint32_t free_port[2] = {get_arg_val<uint32_t>(a), get_arg_val<uint32_t>(a + 1)};
-    a += 2;
-    const uint32_t slot_port_idx = a;  // G packed port coords: where slot q lands on this chip
-    a += G;
-    const uint32_t entry_slot_idx = a;  // n_in_fwd + n_in_bwd slot ids: entry i of a direction (landing order)
-    a += n_in_fwd + n_in_bwd;
+    // common: n_in_fwd + n_in_bwd slot ids, entry i of a direction (landing order)
+    constexpr uint32_t entry_slot_idx = drms::reader_common::COUNT;
+    // common: this core's link row, its sending and freed-report ports, then G packed port coords (where slot q
+    // lands on this chip)
+    const uint32_t link_row_idx = entry_slot_idx + n_in_fwd + n_in_bwd +
+                                  get_arg_val<uint32_t>(drms::reader_rt::LINK) * (drms::reader_link_row::COUNT + G);
+    const uint32_t send_port[2] = {
+        get_common_arg_val<uint32_t>(link_row_idx + drms::reader_link_row::SEND_PORT_0),
+        get_common_arg_val<uint32_t>(link_row_idx + drms::reader_link_row::SEND_PORT_1)};
+    // ports I report collected waves to (bounded landing; roots only)
+    const uint32_t n_free = get_common_arg_val<uint32_t>(link_row_idx + drms::reader_link_row::N_FREE);
+    const uint32_t free_port[2] = {
+        get_common_arg_val<uint32_t>(link_row_idx + drms::reader_link_row::FREE_PORT_0),
+        get_common_arg_val<uint32_t>(link_row_idx + drms::reader_link_row::FREE_PORT_1)};
+    const uint32_t slot_port_idx = link_row_idx + drms::reader_link_row::COUNT;
     // root only: the members as row-runs (logical rectangles of one row): [n_runs, then per run lo, hi (packed
     // virtual coords), count]
     const uint32_t member_idx = a;
@@ -633,7 +644,7 @@ void kernel_main() {
     const uint32_t n_in[2] = {n_in_fwd, n_in_bwd};
     auto read_slot = [&](uint32_t q, uint32_t n) {
         DRMS_ZONE("rt_collect");
-        const uint32_t pp = get_arg_val<uint32_t>(slot_port_idx + q);
+        const uint32_t pp = get_common_arg_val<uint32_t>(slot_port_idx + q);
         if constexpr (direct) {
             // packed fp32: slot q's record IS 32 contiguous words of the tile (face q/4, rows 4(q%4)..+1)
             const uint32_t dst = stats_cb.get_write_ptr() + slot_index(q, 0) * 4;
@@ -683,7 +694,7 @@ void kernel_main() {
             for (uint32_t d = 0; d < 2 && !stepped; ++d) {
                 if (seen[d] < (wc + 1) * n_in[d] && sem_value(SEM_LANDED_FWD + d) > seen[d]) {
                     const uint32_t i = seen[d] - wc * n_in[d];
-                    read_slot(get_arg_val<uint32_t>(entry_slot_idx + (d == 0 ? 0 : n_in_fwd) + i), wave_n(wc));
+                    read_slot(get_common_arg_val<uint32_t>(entry_slot_idx + (d == 0 ? 0 : n_in_fwd) + i), wave_n(wc));
                     ++seen[d];
                     stepped = true;
                 }
@@ -745,9 +756,10 @@ void kernel_main() {
         const uint32_t sem_inv = get_semaphore(SEM_INV);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_inv) = ++inv_sent;
         for (uint32_t r = 0; r < n_runs; ++r) {
-            const uint32_t lo = get_arg_val<uint32_t>(member_idx + 1 + 3 * r);
-            const uint32_t hi = get_arg_val<uint32_t>(member_idx + 2 + 3 * r);
-            const uint32_t cnt = get_arg_val<uint32_t>(member_idx + 3 + 3 * r);
+            const uint32_t run = member_idx + 1 + drms::MEMBER_RUN_WORDS * r;
+            const uint32_t lo = get_arg_val<uint32_t>(run);
+            const uint32_t hi = get_arg_val<uint32_t>(run + 1);
+            const uint32_t cnt = get_arg_val<uint32_t>(run + 2);
             auto mc = [&](uint32_t l1) -> uint64_t {
                 if constexpr (noc_index == 1) {
                     return get_noc_multicast_addr(unpack_x(hi), unpack_y(hi), unpack_x(lo), unpack_y(lo), l1);

@@ -79,6 +79,7 @@
 #include "ttnn/operations/prefetcher/prefetcher_nanobind.hpp"
 #include "ttnn/operations/reduction/reduction_nanobind.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_nanobind.hpp"
+#include "ttnn/operations/distributed_rms_norm/distributed_rms_norm_nanobind.hpp"
 #include "ttnn/operations/transformer/transformer_nanobind.hpp"
 #include "ttnn/operations/uniform/uniform_nanobind.hpp"
 #include "ttnn/operations/rand/rand_nanobind.hpp"
@@ -221,6 +222,9 @@ void py_module(nb::module_& mod) {
 
     auto m_randn = mod.def_submodule("randn", "ttnn randn operation");
     randn::bind_randn_operation(m_randn);
+
+    auto m_distributed_rms_norm = mod.def_submodule("distributed_rms_norm", "distributed_rms_norm operation");
+    distributed_rms_norm::bind_distributed_rms_norm_operation(m_distributed_rms_norm);
 }
 }  // namespace ttnn::operations
 

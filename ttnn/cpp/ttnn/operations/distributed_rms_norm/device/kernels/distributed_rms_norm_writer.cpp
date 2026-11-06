@@ -30,6 +30,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "ttnn/cpp/ttnn/operations/distributed_rms_norm/device/kernels/distributed_rms_norm_args.hpp"
+
+namespace drms = distributed_rms_norm;
 
 // Measurement-only per-stage zones (host DRMS_ZONES=1 -> define; never set in production).
 #ifdef DRMS_ZONES
@@ -39,42 +42,43 @@
 #endif
 
 namespace {
-constexpr uint32_t cb_gamma_tiles = 6;
-constexpr uint32_t cb_output = 16;
+constexpr uint32_t cb_gamma_tiles = drms::cb::GAMMA_TILES;
+constexpr uint32_t cb_output = drms::cb::OUTPUT;
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
 }  // namespace
 
 void kernel_main() {
-    constexpr bool has_gamma = get_compile_time_arg_val(0) != 0;
-    constexpr bool gamma_is_tile = get_compile_time_arg_val(1) != 0;
-    constexpr uint32_t R = get_compile_time_arg_val(2);
-    constexpr uint32_t C = get_compile_time_arg_val(3);
-    constexpr uint32_t num_w_chunks = get_compile_time_arg_val(4);
-    constexpr uint32_t Wt = get_compile_time_arg_val(5);
-    constexpr bool sharded = get_compile_time_arg_val(7) != 0;  // output native (zero-copy shard)
-    constexpr uint32_t T_out = get_compile_time_arg_val(8);
-    constexpr uint32_t T_g = get_compile_time_arg_val(9);
-    constexpr uint32_t es_g = get_compile_time_arg_val(10);
-    constexpr uint32_t Wp = get_compile_time_arg_val(11);
-    constexpr bool gamma_resident = get_compile_time_arg_val(12) != 0;
+    namespace ct = drms::writer_ct;
+    constexpr bool has_gamma = get_compile_time_arg_val(ct::HAS_GAMMA) != 0;
+    constexpr bool gamma_is_tile = get_compile_time_arg_val(ct::GAMMA_IS_TILE) != 0;
+    constexpr uint32_t R = get_compile_time_arg_val(ct::BLOCK_ROWS);
+    constexpr uint32_t C = get_compile_time_arg_val(ct::W_CHUNK_TILES);
+    constexpr uint32_t num_w_chunks = get_compile_time_arg_val(ct::NUM_W_CHUNKS);
+    constexpr uint32_t Wt = get_compile_time_arg_val(ct::WT);
+    constexpr bool sharded = get_compile_time_arg_val(ct::OUT_NATIVE) != 0;  // output native (zero-copy shard)
+    constexpr uint32_t T_out = get_compile_time_arg_val(ct::T_OUT);
+    constexpr uint32_t T_g = get_compile_time_arg_val(ct::T_G);
+    constexpr uint32_t es_g = get_compile_time_arg_val(ct::ES_G);
+    constexpr uint32_t Wp = get_compile_time_arg_val(ct::WP);
+    constexpr bool gamma_resident = get_compile_time_arg_val(ct::GAMMA_RESIDENT) != 0;
     // Output NoC split (0 / 0: off, every tile on this NoC). The same CT values reach the reader.
-    constexpr uint32_t out_split_x = get_compile_time_arg_val(13);
-    constexpr uint32_t noc0_banks_west = get_compile_time_arg_val(14);
-    constexpr uint32_t noc0_banks_east = get_compile_time_arg_val(15);
-    constexpr uint32_t sem_out_ready = get_compile_time_arg_val(16);  // writer -> reader: quanta posted
-    constexpr uint32_t sem_out_done = get_compile_time_arg_val(17);   // reader -> writer: quanta flushed
-    constexpr uint32_t sem_out_addr = get_compile_time_arg_val(18);   // L1 address of the posted quantum
+    constexpr uint32_t out_split_x = get_compile_time_arg_val(ct::OUT_SPLIT_X);
+    constexpr uint32_t noc0_banks_west = get_compile_time_arg_val(ct::NOC0_BANKS_WEST);
+    constexpr uint32_t noc0_banks_east = get_compile_time_arg_val(ct::NOC0_BANKS_EAST);
+    constexpr uint32_t sem_out_ready = get_compile_time_arg_val(ct::SEM_OUT_READY);  // writer -> reader: quanta posted
+    constexpr uint32_t sem_out_done = get_compile_time_arg_val(ct::SEM_OUT_DONE);    // reader -> writer: quanta flushed
+    constexpr uint32_t sem_out_addr = get_compile_time_arg_val(ct::SEM_OUT_ADDR);    // L1 address of the posted quantum
     constexpr bool out_split = (noc0_banks_west != 0 || noc0_banks_east != 0) && !sharded;
-    constexpr auto output_args = TensorAccessorArgs<19>();
+    constexpr auto output_args = TensorAccessorArgs<ct::COUNT>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
-    const uint32_t out_addr = get_arg_val<uint32_t>(0);
-    [[maybe_unused]] const uint32_t gamma_addr = get_arg_val<uint32_t>(1);
-    const uint32_t start_tile_row = get_arg_val<uint32_t>(2);
-    const uint32_t rows = get_arg_val<uint32_t>(3);
-    const uint32_t w0 = get_arg_val<uint32_t>(4);
-    const uint32_t V = get_arg_val<uint32_t>(5);
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(drms::writer_common::OUTPUT_ADDR);
+    [[maybe_unused]] const uint32_t gamma_addr = get_common_arg_val<uint32_t>(drms::writer_common::GAMMA_ADDR);
+    const uint32_t start_tile_row = get_arg_val<uint32_t>(drms::writer_rt::START_TILE_ROW);
+    const uint32_t rows = get_arg_val<uint32_t>(drms::writer_rt::ROWS);
+    const uint32_t w0 = get_arg_val<uint32_t>(drms::writer_rt::W0);
+    const uint32_t V = get_arg_val<uint32_t>(drms::writer_rt::V);
 
     // ---- γ supply ----
     // Read row 0 of γ tiles [c*C, min(c*C + C, V)) of the window into the C pages at l1_chunk (page j = tile c*C + j);

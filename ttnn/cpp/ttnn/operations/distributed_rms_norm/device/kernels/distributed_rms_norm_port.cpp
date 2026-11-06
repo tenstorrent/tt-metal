@@ -44,6 +44,9 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "ttnn/cpp/ttnn/operations/distributed_rms_norm/device/kernels/distributed_rms_norm_args.hpp"
+
+namespace drms = distributed_rms_norm;
 
 #ifndef DRMS_ABLATE_EXCHANGE
 #define DRMS_ABLATE_EXCHANGE 0
@@ -99,53 +102,56 @@ inline void route_to(
 
 // RT records (host: port args). One packet header per distinct destination chip, routed once at setup (a 2D route
 // lookup per packet sits on every relay / send latency chain).
-constexpr uint32_t DEST_WORDS = 4;  // chip id, mesh id, hops, mcast (0 = unicast)
-constexpr uint32_t SEND_WORDS =
-    4;  // slot q, destination header, destination arrival address, wait (0 own, j+1 relay j)
-constexpr uint32_t READY_WORDS = 3;  // destination header, target port x, target port y
+constexpr uint32_t DEST_WORDS = drms::PORT_DEST_WORDS;  // chip id, mesh id, hops, mcast (0 = unicast)
+// slot q, destination header, destination arrival address, wait (0 own, j+1 relay j)
+constexpr uint32_t SEND_WORDS = drms::PORT_SEND_WORDS;
+constexpr uint32_t READY_WORDS = drms::PORT_READY_WORDS;  // destination header, target port x, target port y
 
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t G = get_compile_time_arg_val(0);
-    constexpr uint32_t num_waves = get_compile_time_arg_val(1);
-    constexpr uint32_t payload = get_compile_time_arg_val(2);
-    constexpr uint32_t num_headers = get_compile_time_arg_val(3);
-    constexpr uint32_t sem_own_stats_id = get_compile_time_arg_val(4);
-    constexpr uint32_t sem_counted_id = get_compile_time_arg_val(5);
+    namespace ct = drms::port_ct;
+    constexpr uint32_t G = get_compile_time_arg_val(ct::GROUP_DEVICES);
+    constexpr uint32_t num_waves = get_compile_time_arg_val(ct::NUM_WAVES);
+    constexpr uint32_t payload = get_compile_time_arg_val(ct::PAYLOAD);
+    constexpr uint32_t num_headers = get_compile_time_arg_val(ct::NUM_HEADERS);
+    constexpr uint32_t sem_own_stats_id = get_compile_time_arg_val(ct::SEM_OWN_STATS);
+    constexpr uint32_t sem_counted_id = get_compile_time_arg_val(ct::SEM_OWN_COUNTED);
     // Own segment of wave w+1 may go ahead of wave w's relays (true) or strictly (w, k) order (false).
-    constexpr bool own_ahead = get_compile_time_arg_val(6) != 0;
-    constexpr uint32_t landing_waves = get_compile_time_arg_val(7);  // K wave slots in the landing
-    constexpr bool ring = landing_waves < num_waves;                 // bounded landing: credit protocol on
+    constexpr bool own_ahead = get_compile_time_arg_val(ct::OWN_AHEAD) != 0;
+    constexpr uint32_t landing_waves = get_compile_time_arg_val(ct::LANDING_WAVES);  // K wave slots in the landing
+    constexpr bool ring = landing_waves < num_waves;  // bounded landing: credit protocol on
     // SEM_INV's id: unused on a port core, it counts the "wave freed" reports of the link's roots and sibling port.
-    constexpr uint32_t sem_port_freed_id = 0;
+    constexpr uint32_t sem_port_freed_id = drms::sem::PORT_FREED;
     auto slot_wave = [](uint32_t w) -> uint32_t { return ring ? w % landing_waves : w; };
     static_assert(num_headers >= 1 && num_headers <= 12, "packet header pool: <= 12 headers per RISC");
 
-    size_t a = 0;
-    const uint32_t landing = get_arg_val<uint32_t>(a++);
-    const uint32_t seg_stride = get_arg_val<uint32_t>(a++);
-    const uint32_t ready_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t n_dest = get_arg_val<uint32_t>(a++);       // distinct destination chips (one header each)
-    const uint32_t n_send = get_arg_val<uint32_t>(a++);       // send items per wave
-    const uint32_t n_in = get_arg_val<uint32_t>(a++);         // entries landing on this port per wave
-    const uint32_t n_roots = get_arg_val<uint32_t>(a++);      // roots publishing into my own slot (0 if I send nothing)
-    const uint32_t n_ready_out = get_arg_val<uint32_t>(a++);  // ready packets this port sends
-    const uint32_t n_ready_wait = get_arg_val<uint32_t>(a++);  // readies to wait for (destination chips)
-    const uint32_t my_x = get_arg_val<uint32_t>(a++);      // this port's virtual coords = the destination port's (every
-    const uint32_t my_y = get_arg_val<uint32_t>(a++);      // chip uses the same logical port cores)
-    const uint32_t n_notify = get_arg_val<uint32_t>(a++);  // roots I notify per entry (0 if I receive nothing)
-    const bool has_conn = get_arg_val<uint32_t>(a++) != 0;
-    const uint32_t n_counted = get_arg_val<uint32_t>(a++);  // roots to signal counted(w) (0 if I send nothing / 1 wave)
+    namespace rt = drms::port_rt;
+    const uint32_t landing = get_common_arg_val<uint32_t>(drms::port_common::LANDING_ADDR);
+    const uint32_t seg_stride = get_common_arg_val<uint32_t>(drms::port_common::SEG_STRIDE);
+    const uint32_t ready_addr = get_common_arg_val<uint32_t>(drms::port_common::READY_ADDR);
+    const uint32_t n_dest = get_arg_val<uint32_t>(rt::N_DEST);    // distinct destination chips (one header each)
+    const uint32_t n_send = get_arg_val<uint32_t>(rt::N_SEND);    // send items per wave
+    const uint32_t n_in = get_arg_val<uint32_t>(rt::N_IN);        // entries landing on this port per wave
+    const uint32_t n_roots = get_arg_val<uint32_t>(rt::N_ROOTS);  // roots publishing into my own slot
+    const uint32_t n_ready_out = get_arg_val<uint32_t>(rt::N_READY_OUT);    // ready packets this port sends
+    const uint32_t n_ready_wait = get_arg_val<uint32_t>(rt::N_READY_WAIT);  // readies to wait for (destination chips)
+    const uint32_t my_x =
+        get_arg_val<uint32_t>(rt::MY_X);  // this port's virtual coords = the destination port's (every
+    const uint32_t my_y = get_arg_val<uint32_t>(rt::MY_Y);          // chip uses the same logical port cores)
+    const uint32_t n_notify = get_arg_val<uint32_t>(rt::N_NOTIFY);  // roots I notify per entry (0 if I receive nothing)
+    const bool has_conn = get_arg_val<uint32_t>(rt::HAS_CONN) != 0;
+    const uint32_t n_counted = get_arg_val<uint32_t>(rt::N_COUNTED);  // roots to signal counted(w)
     // Notify quantum: 1 = per landed entry (lamp L4), n_in = once per wave (every entry of the wave landed).
-    const uint32_t notify_quantum = get_arg_val<uint32_t>(a++);
+    const uint32_t notify_quantum = get_arg_val<uint32_t>(rt::NOTIFY_QUANTUM);
     // My own landed semaphore on the roots (one per direction: each port's notifies are counted separately, in order).
-    const uint32_t landed_sem_addr = get_semaphore(get_arg_val<uint32_t>(a++));
+    const uint32_t landed_sem_addr = get_semaphore(get_arg_val<uint32_t>(rt::LANDED_SEM_ID));
     // Bounded landing (all 0 on the fast path):
-    const uint32_t n_credit_out = get_arg_val<uint32_t>(a++);   // credits I send to the upstream port (waves)
-    const uint32_t credit_thr = get_arg_val<uint32_t>(a++);     // freed reports per wave (roots + relaying sibling)
-    const uint32_t relay_done_to = get_arg_val<uint32_t>(a++);  // packed sibling port E I report flushed relays to
-    const uint32_t n_credit_in = get_arg_val<uint32_t>(a++);    // credits my destination returns (waves)
+    const uint32_t n_credit_out = get_arg_val<uint32_t>(rt::N_CREDIT_OUT);    // credits I send upstream (waves)
+    const uint32_t credit_thr = get_arg_val<uint32_t>(rt::CREDIT_THR);        // freed reports per wave
+    const uint32_t relay_done_to = get_arg_val<uint32_t>(rt::RELAY_DONE_TO);  // packed sibling port E
+    const uint32_t n_credit_in = get_arg_val<uint32_t>(rt::N_CREDIT_IN);      // credits my destination returns
+    size_t a = rt::COUNT;
     const uint32_t arrival_idx = a;  // n_in arrival counter addresses (entry i)
     a += n_in;
     const uint32_t dest_idx = a;
