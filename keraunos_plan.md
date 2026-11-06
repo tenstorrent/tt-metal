@@ -208,3 +208,4 @@ Fabric-shaped tests:
 - **Pause for user review** after the Phase 5 device API header is drafted, before writing the fabric-shaped tests.
 - **Also stop for:** CCE1 facts that can't be determined, and Mimir regressions with no obvious fix.
 - **Parked paths:** report them with a chippy reproduction, then carry on with the paths that don't depend on them.
+- **UMD repo rules** (`tt_metal/third_party/umd/CLAUDE.md`, which take precedence there): leave UMD changes unstaged with a PR-description draft in an untracked file, never commit them without the user's review, record design assumptions when running unattended, and run pre-commit plus a full build before handing back.

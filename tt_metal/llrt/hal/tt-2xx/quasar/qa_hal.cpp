@@ -104,18 +104,22 @@ public:
         // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
         flags += "-Wl,--no-relax ";
         if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
-            const DeviceAddr text = MEM_IERISC_FIRMWARE_BASE;
-            const DeviceAddr data = MEM_IERISC_GLOBAL_BASE;
-            const DeviceAddr tls = MEM_IERISC_LOCAL_BASE;
+            // processor_id is the firmware index (= CCE) for firmware and the processor (2 * hart + cce)
+            // for kernels. Each CCE's image is linked into its own SRAM.
+            const uint32_t cce = params.processor_id % MEM_IERISC_CCES;
+            const uint32_t hart = params.processor_id / MEM_IERISC_CCES;
+            const DeviceAddr cce_base = MEM_IERISC_CCE_BASE(cce);
+            const DeviceAddr text = cce_base + MEM_IERISC_FIRMWARE_BASE;
+            const DeviceAddr data = cce_base + MEM_IERISC_GLOBAL_BASE;
+            const DeviceAddr tls = cce_base + MEM_IERISC_LOCAL_BASE;
             if (params.is_fw) {
                 flags += fmt::format("-Wl,--defsym=__fw_text={} ", text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_IERISC_FIRMWARE_SIZE);
             } else {
-                const DeviceAddr kn_text = MEM_IERISC_KERNEL_BASE + params.processor_id * MEM_IERISC_KERNEL_SIZE;
+                const DeviceAddr kn_text = cce_base + MEM_IERISC_KERNEL_BASE + hart * MEM_IERISC_KERNEL_SIZE;
                 flags += fmt::format("-Wl,--defsym=__kn_text={} ", kn_text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_IERISC_KERNEL_SIZE);
-                flags += fmt::format(
-                    "-Wl,--defsym=__kn_data={} ", data + MEM_IERISC_GLOBAL_SIZE * (1 + params.processor_id));
+                flags += fmt::format("-Wl,--defsym=__kn_data={} ", data + MEM_IERISC_GLOBAL_SIZE * (1 + hart));
             }
             flags += fmt::format("-Wl,--defsym=__fw_data={} ", data);
             flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_IERISC_GLOBAL_SIZE);
@@ -403,6 +407,10 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
+            // Which CCE of the HSIO tile this firmware or kernel image runs on (see qa_hal_idle_eth.cpp).
+            defines.push_back(fmt::format("PHYSICAL_CCE_ID={}", params.processor_id % MEM_IERISC_CCES));
+        }
         // ttsim does not model the tensix global semaphore registers. UMD picks ttsim over RTL
         // emulation by the same .so test.
         if (params.rtoptions.get_simulator_path().extension() == ".so") {
@@ -540,7 +548,8 @@ public:
 
     std::string target_name(const Params& params) const override {
         if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
-            return params.is_fw ? "erisc" : fmt::format("erisc{}", params.processor_id);
+            return params.is_fw ? idle_eth_firmware_name(params.processor_id)
+                                : fmt::format("erisc{}", params.processor_id);
         }
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             // build.cpp used to distinguish "active_erisc" and "erisc" and use
@@ -553,9 +562,16 @@ public:
 
     std::string weakened_firmware_target_name(const Params& params) const override {
         if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
-            return "erisc";
+            return idle_eth_firmware_name(params.processor_id);
         }
         return HalJitBuildQueryBase::weakened_firmware_target_name(params);
+    }
+
+private:
+    // One firmware image per CCE; a kernel links against the image of the CCE its processor is on.
+    static std::string idle_eth_firmware_name(uint32_t processor_id) {
+        const uint32_t cce = processor_id % MEM_IERISC_CCES;
+        return cce == 0 ? "erisc" : fmt::format("erisc_cce{}", cce);
     }
 };
 

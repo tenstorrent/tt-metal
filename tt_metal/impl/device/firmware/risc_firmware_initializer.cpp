@@ -5,6 +5,7 @@
 #include "risc_firmware_initializer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <chrono>
 #include <future>
@@ -1446,17 +1447,21 @@ void RiscFirmwareInitializer::initialize_firmware(
                 }
             }
             if (quasar_ethernet) {
-                // All eight harts start together, and the completion word is 0. The L1 wipe leaves it at 0, so seed
-                // INIT or hart 0 treats the other harts as finished before they have written their slots.
+                // All harts start together, and the completion slots are 0. The L1 wipe leaves them at 0, so seed
+                // INIT or hart 0 treats the other harts as finished before they have written their slots. Each
+                // subordinate (processors 1..N-1) has one byte; idle_erisc.cc reads them as two words.
                 const auto factory = hal_.get_dev_msgs_factory(core_type);
                 const uint64_t mailbox_addr = hal_.get_dev_addr(core_type, HalL1MemAddrType::MAILBOX);
                 const uint64_t subordinate_sync_addr =
                     mailbox_addr +
                     factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::subordinate_sync);
-                const uint64_t subordinate_init = dev_msgs::RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT;
+                std::array<uint8_t, 2 * sizeof(uint64_t)> subordinate_init{};
+                const uint32_t subordinates = hal_.get_num_risc_processors(core_type) - 1;
+                TT_ASSERT(subordinates <= subordinate_init.size());
+                std::fill_n(subordinate_init.begin(), subordinates, dev_msgs::RUN_SYNC_MSG_INIT);
                 cluster_.write_core(
-                    &subordinate_init,
-                    sizeof(subordinate_init),
+                    subordinate_init.data(),
+                    subordinate_init.size(),
                     tt_cxy_pair(device_id, virtual_core),
                     subordinate_sync_addr);
             }
@@ -1480,6 +1485,17 @@ void RiscFirmwareInitializer::initialize_firmware(
                     &jit_build_config.fw_launch_addr_value,
                     tt_cxy_pair(device_id, virtual_core),
                     jit_build_config.fw_launch_addr);
+                if (quasar_ethernet) {
+                    // A Keraunos core has one image and reset vector per CCE; the first is written above.
+                    const uint32_t images = hal_.get_processor_class_num_fw_binaries(core_type_idx, 0);
+                    for (uint32_t image = 1; image < images; image++) {
+                        const auto& image_config = hal_.get_jit_build_config(core_type_idx, 0, image);
+                        cluster_.write_reg(
+                            &image_config.fw_launch_addr_value,
+                            tt_cxy_pair(device_id, virtual_core),
+                            image_config.fw_launch_addr);
+                    }
+                }
             } else {
                 constexpr uint32_t mailbox_index = 0;
                 tt::llrt::internal_::send_msg_to_eth_mailbox(

@@ -149,8 +149,9 @@ TEST(KeraunosEmu, AllHartsRunEthernetKernelWritesLocalSram) {
     }
 
     const auto& hal = MetalContext::instance().hal();
-    const uint32_t num_harts = hal.get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
-    ASSERT_EQ(num_harts, 8u);
+    // Sixteen harts, CCE0 and CCE1 interleaved. EthernetConfig names processors 0-7: harts 0-3 of each CCE.
+    ASSERT_EQ(hal.get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH), 16u);
+    constexpr uint32_t num_harts = 8;
 
     const uint32_t result_dev_base =
         MEM_IERISC_UNCACHED_BASE + hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
