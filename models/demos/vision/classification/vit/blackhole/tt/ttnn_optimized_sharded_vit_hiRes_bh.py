@@ -32,15 +32,14 @@ def block_sharded_grid_width(dim_t, limit):
 
 
 def update_model_config(config, batch_size, sequence_size, device):
-    # In case of < 6 cores per batch, we need to do move in attention to remove defragmentation
+    # Reallocate the value heads after the split to undo L1 fragmentation before SDPA.
     should_reallocate_in_attention = True
     device_grid = device.compute_with_storage_grid_size()
 
     # INPUTS
     TILE_HEIGHT = 32
     seqL = sequence_size  # 1024, 2048, 3072
-    dim_t = config.hidden_size // TILE_HEIGHT  # 24, 36, 48, 72
-    head_num = config.num_attention_heads  # 16
+    dim_t = config.hidden_size // TILE_HEIGHT  # 16, 32, 48, 72
     class_t = 1152 // TILE_HEIGHT  # 1000 classes padded to 1152
 
     if batch_size == 1:
@@ -49,40 +48,27 @@ def update_model_config(config, batch_size, sequence_size, device):
         core_grid = ttnn.CoreGrid(y=min(10, device_grid.y), x=largest_divisor_at_most(class_t, device_grid.x))
 
     # BLOCK SHARDED
-    # Up to a 1024 hidden size 8 columns avoid padding the hidden dim; 8 rows avoid padding the sequence.
+    # Both sides are exact divisors, so no dimension is padded. Rows are capped at 8, and so are columns up to
+    # a 1024 hidden size, the grid the hi-res configs were tuned on; on Blackhole's 11- to 13-wide grids the
+    # exact divisors of the swept sizes come out at or below 8 anyway.
     block_width_limit = 8 if config.hidden_size <= 1024 else device_grid.x
     core_grid_BLOCK_SHARDED = ttnn.CoreGrid(
         y=largest_divisor_at_most(batch_size * (seqL // TILE_HEIGHT), min(8, device_grid.y)),
         x=block_sharded_grid_width(dim_t, min(block_width_limit, device_grid.x)),
     )
 
-    # SPLIT HEADS SHARDED
-    # ttnn.transformer.split_query_key_value_and_split_heads
-    # assert -> Batch size 1 must be equal to num cores 8
-    # x = 8 so 2 heads per core
-    core_grid_SPLIT_HEADS_SHARDED = ttnn.CoreGrid(y=batch_size, x=8)
-
-    # HEIGHT SHARDED
-    H_x = 8
-    H_y = min(batch_size * head_num // H_x, 8)
-    core_grid_HEIGHT_SHARDED = ttnn.CoreGrid(y=H_y, x=H_x)
-
     seqL_t = seqL // TILE_HEIGHT  # 32, 64, 96
     seqL_t__y = (batch_size * seqL_t) // core_grid_BLOCK_SHARDED.y  # 4, 8, 12
-    dim_t__x = dim_t // core_grid_BLOCK_SHARDED.x  # 2, 3, 4, 6
+    dim_t__x = dim_t // core_grid_BLOCK_SHARDED.x  # 2, 4, 6, 8 on an 11-wide grid
 
     # When ff1 does not fit, only the qkv, output and MLP projections go through DRAM; their outputs return
     # to the block-sharded grid, and the rest of the layer stays in L1.
     projections_in_dram = ff1_exceeds_l1_budget(device, seqL_t__y, dim_t__x)
 
-    head_seqL_t__x = (batch_size * head_num * seqL_t) // (
-        core_grid_HEIGHT_SHARDED.x * core_grid_HEIGHT_SHARDED.y
-    )  # 64, 128, 192
-    head_size_t = dim_t // head_num  # 1, 2, 3, 4
     # 1000 classes padded to 1152
     class__x = class_t // core_grid.x
     class_subb_w = class__x
-    if class_subb_w > 8:  # max ratio of sub_block_w / sub_block_h = 8
+    if class_subb_w > 8:  # an output subblock holds at most 8 tiles
         if class_subb_w % 3 == 0:
             class_subb_w = class__x // 3
         elif class_subb_w % 2 == 0:
@@ -94,93 +80,66 @@ def update_model_config(config, batch_size, sequence_size, device):
     program_configs = {
         "layernorm_before_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid_BLOCK_SHARDED.x, core_grid_BLOCK_SHARDED.y),
-            # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
-            subblock_w=dim_t__x,  #
-            block_h=seqL_t__y,  #
-            block_w=dim_t__x,  #
+            subblock_w=dim_t__x,
+            block_h=seqL_t__y,
+            block_w=dim_t__x,
             inplace=False,
         ),
-        # shard_spec = [224, 96]
         "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid_BLOCK_SHARDED.x, core_grid_BLOCK_SHARDED.y),
             # shard_shape_is = [seqL_t__y, dim_t__x], in tiles
             in0_block_w=dim_t__x,
             out_subblock_h=1,
-            out_subblock_w=dim_t__x,  #
-            per_core_M=seqL_t__y,  #
-            per_core_N=3 * dim_t__x,  #
+            out_subblock_w=dim_t__x,
+            per_core_M=seqL_t__y,
+            per_core_N=3 * dim_t__x,
             transpose_mcast=False,
             fused_activation=None,
         ),
-        "query_by_key_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=(core_grid_HEIGHT_SHARDED.x, core_grid_HEIGHT_SHARDED.y),
-            in0_block_w=head_size_t,  # 2,
-            out_subblock_h=1,
-            out_subblock_w=8,  # 7,
-            per_core_M=head_seqL_t__x,  ##int((head_num//) * seqL_t),  # 14,
-            per_core_N=seqL_t,  # 7,
-        ),
-        "softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid_HEIGHT_SHARDED.x, core_grid_HEIGHT_SHARDED.y),
-            subblock_w=seqL_t__y,  # 7,
-            block_h=head_seqL_t__x,  # 14,
-            block_w=seqL_t__y,  # 7,
-        ),
-        "attention_probabilities_by_value_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=(core_grid_HEIGHT_SHARDED.x, core_grid_HEIGHT_SHARDED.y),
-            in0_block_w=head_seqL_t__x,  # 7,
-            out_subblock_h=1,
-            out_subblock_w=head_size_t,  # 2,
-            per_core_M=head_seqL_t__x,  # 14,
-            per_core_N=head_size_t,  # 2,
-        ),
         "self_output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid_BLOCK_SHARDED.x, core_grid_BLOCK_SHARDED.y),
-            # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
             in0_block_w=dim_t__x,
             out_subblock_h=1,
-            out_subblock_w=dim_t__x,  # 3
-            per_core_M=seqL_t__y,  # 7,
-            per_core_N=dim_t__x,  # 3,
+            out_subblock_w=dim_t__x,
+            per_core_M=seqL_t__y,
+            per_core_N=dim_t__x,
             transpose_mcast=False,
             fused_activation=None,
         ),
         "layernorm_after_output_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid_BLOCK_SHARDED.x, core_grid_BLOCK_SHARDED.y),
-            subblock_w=dim_t__x,  #
-            block_h=seqL_t__y,  #
-            block_w=dim_t__x,  #
+            subblock_w=dim_t__x,
+            block_h=seqL_t__y,
+            block_w=dim_t__x,
             inplace=False,
         ),
         "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid_BLOCK_SHARDED.x, core_grid_BLOCK_SHARDED.y),
-            # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
-            in0_block_w=dim_t__x // 2,  # 96 == 3 tiles,
+            in0_block_w=dim_t__x // 2,
             out_subblock_h=1,
-            out_subblock_w=min(4, (dim_t__x * 4) // 2),  # 6,
-            per_core_M=seqL_t__y,  # 7,
-            per_core_N=dim_t__x * 4,  # 12,
+            out_subblock_w=min(4, (dim_t__x * 4) // 2),
+            per_core_M=seqL_t__y,
+            per_core_N=dim_t__x * 4,
             transpose_mcast=False,
             fused_activation=(ttnn.UnaryOpType.GELU, True),
         ),
         "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid_BLOCK_SHARDED.x, core_grid_BLOCK_SHARDED.y),
-            # shard shape is [seqL_t, dim_t__x_full_grid * 4], in tiles
-            in0_block_w=dim_t__x * 2,  # 12
+            in0_block_w=dim_t__x * 2,
             out_subblock_h=1,
             out_subblock_w=dim_t__x,
-            per_core_M=seqL_t__y,  # 7,
-            per_core_N=dim_t__x,  # 3
+            per_core_M=seqL_t__y,
+            per_core_N=dim_t__x,
             transpose_mcast=False,
             fused_activation=None,
         ),
         "classifer_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=dim_t__x // 2,  # 1,
+            in0_block_w=dim_t__x // 2,
             out_subblock_h=1,
             out_subblock_w=class_subb_w,
-            per_core_M=seqL_t,  # 7,
-            per_core_N=class__x,  # 6,
+            per_core_M=seqL_t,
+            per_core_N=class__x,
             transpose_mcast=False,
             fused_activation=None,
         ),
@@ -193,7 +152,7 @@ def update_model_config(config, batch_size, sequence_size, device):
     }
 
     # properties are not in the output of config.to_dict() but can be used later in the model
-    # e.g. https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/configuration_utils.py#L368-L378
+    # e.g. https://github.com/huggingface/transformers/blob/v5.12.1/src/transformers/configuration_utils.py
     property_names = [name for name, value in inspect.getmembers(config.__class__) if isinstance(value, property)]
     properties = {}
     for _prop_name in property_names:
@@ -209,9 +168,7 @@ def update_model_config(config, batch_size, sequence_size, device):
             **(config.to_dict() | properties),
             core_grid=core_grid,
             device_grid=ttnn.CoreGrid(y=device_grid.y, x=device_grid.x),
-            core_grid_HEIGHT_SHARDED=core_grid_HEIGHT_SHARDED,
             core_grid_BLOCK_SHARDED=core_grid_BLOCK_SHARDED,
-            core_grid_SPLIT_HEADS_SHARDED=core_grid_SPLIT_HEADS_SHARDED,
             should_reallocate_in_attention=should_reallocate_in_attention,
             projections_in_dram=projections_in_dram,
             program_configs=program_configs,
