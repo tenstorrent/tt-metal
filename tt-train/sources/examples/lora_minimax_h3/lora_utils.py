@@ -85,23 +85,24 @@ def assign_like(param: ttml.autograd.Tensor, value: np.ndarray) -> None:
     )
 
 
-def device_to_hf(name: str, arr: np.ndarray, config: H3Config) -> np.ndarray:
-    """Device row order -> diffusers row order for the B matrices whose base rows were re-laid at load."""
+def device_to_hf(name: str, arr: np.ndarray, config: H3Config, tp: int | None = None) -> np.ndarray:
+    """Device row order -> diffusers row order for the B matrices whose base rows were re-laid at load.
+    `tp` defaults to the open mesh's."""
     if name.endswith("lora_B") and (".to_q." in name or ".to_k." in name):
         return unpermute_qk_rows(arr, config.num_attention_heads, config.attention_head_dim, config.rotary_dim)
     if name.endswith("ff.proj.lora_B"):
-        tp = _tp()
+        tp = _tp() if tp is None else tp
         per = arr.shape[0] // (2 * tp)
         blocks = arr.reshape(tp, 2, per, arr.shape[1])  # per shard [gate | value]
         return np.concatenate([blocks[:, 1].reshape(-1, arr.shape[1]), blocks[:, 0].reshape(-1, arr.shape[1])])
     return arr
 
 
-def hf_to_device(name: str, arr: np.ndarray, config: H3Config) -> np.ndarray:
+def hf_to_device(name: str, arr: np.ndarray, config: H3Config, tp: int | None = None) -> np.ndarray:
     if name.endswith("lora_B") and (".to_q." in name or ".to_k." in name):
         return permute_qk_rows(arr, config.num_attention_heads, config.attention_head_dim, config.rotary_dim)
     if name.endswith("ff.proj.lora_B"):
-        return interleave_halves_per_shard(arr, _tp())
+        return interleave_halves_per_shard(arr, _tp() if tp is None else tp)
     return arr
 
 
