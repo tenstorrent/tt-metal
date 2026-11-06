@@ -2471,9 +2471,9 @@ uint32_t relay_cable_lanes(const RelayLocal& relay, uint32_t p) {
 // for a free slot. On a middle rank of a chain, the pairs at risk are the entry relay's
 // forward lanes and the exit relay's credit connections, and a plain receiver's credit link
 // and a plain sender's lanes. A chip's receiver-side service is created
-// before its sender-side one, so receiver-side optional second lanes leave one link of their
-// direction free for the sender side's single-link connections; the sender side, created
-// last, claims what is left. A connection that needs one link and finds none fails here,
+// before its sender-side one, so when a sender side follows (reserve_links_for_later_service),
+// receiver-side optional second lanes leave one link of their direction free for the sender
+// side's single-link connections; the sender side, created last, claims what is left. A connection that needs one link and finds none fails here,
 // before anything is built, naming the service that holds each router.
 void claim_relay_links(
     const distributed::MeshDevice& mesh,
@@ -2553,7 +2553,8 @@ void claim_relay_links(
             claims)
                                          .front();
         // Forward lanes per direction: the most any target that way can use (one each if two lanes would not fit
-        // the core's semaphores), but a second lane only while another link of that direction stays free.
+        // the core's semaphores). When a later service on this chip needs a router
+        // (reserve_links_for_later_service), a second lane only while another link of that direction stays free.
         const bool two_fit = relay_entry_two_lanes_fit(mesh, relay, p);
         std::map<tt::tt_fabric::RoutingDirection, std::pair<tt::tt_fabric::FabricNodeId, uint32_t>> want;
         for (const auto& t : cable.slots) {
@@ -2581,7 +2582,7 @@ void claim_relay_links(
                         D2DServiceRole::EntryRelayForward,
                         group,
                         claims,
-                        /*keep_free=*/1)));
+                        /*keep_free=*/cfg.reserve_links_for_later_service ? 1u : 0u)));
         }
         for (const auto& t : cable.slots) {
             if (t == e) {
