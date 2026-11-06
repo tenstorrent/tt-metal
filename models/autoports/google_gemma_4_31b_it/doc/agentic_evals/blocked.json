@@ -1,5 +1,5 @@
 {
-  "status": "local_release_blocked_secondary_smoke_pending",
+  "status": "blocked_on_local_release_prerequisite",
   "blockers": [
     {
       "id": "local-sandbox-runtime",
@@ -56,5 +56,19 @@
     ],
     "reason": "agentic-serving Devices requires local dry/release absent operator exception",
     "no_assumed_authorization": true
+  },
+  "blocked_audit": {
+    "at": "2026-11-06T05:14:15.787610+00:00",
+    "same_blocker_persisted_over_three_goal_turns": true,
+    "current_revalidation": {
+      "docker_cli": false,
+      "daemon_socket": false,
+      "DOCKER_HOST_set": false,
+      "operator_route_exception_received": false
+    },
+    "autofix": "setup/AUTOFIX.md: no source-level or in-container repair; host provisioning required",
+    "independent_work_completed": "source packaging, publication, registry, cohorts, smoke dispatch and collector setup",
+    "ci_status": "three live queued smoke builds, not failed and not cancelled",
+    "resume": "Revalidate existing job IDs and collect their outcomes; do not redispatch queued jobs. Provision local runtime or apply explicit operator route instruction before dry/release."
   }
 }

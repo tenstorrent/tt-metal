@@ -43,7 +43,7 @@
     "Stage11 accepted complete by operator decision7.",
     "Reused stage11 headline: eight serial requests, full60-layer model, pinned HF revision842da3794eaa0b77d5f08bae87a17459d91ff475.",
     "No new benchmark or profiler run for telemetry.",
-    "Stage12 functional_at0; three authorized CI smoke2 jobs queued:42166117505,42166151590,42166175324. Local Docker unavailable; no release.",
+    "Stage12 blocked on mandatory local release Docker prerequisite after AutoFix failed. Functional_at0; CI smoke jobs42166117505,42166151590,42166175324 remain queued, not cancelled. No release.",
     "Source packaging repaired with host checks; selected policy and generator class bodies unchanged. No new live performance claim."
   ]
 }

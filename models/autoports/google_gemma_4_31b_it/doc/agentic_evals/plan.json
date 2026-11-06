@@ -150,9 +150,9 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42166175324"
     }
   ],
-  "status": "secondary_smoke_queued_local_route_blocked",
-  "last_updated": "2026-11-06T05:04:23.720597+00:00",
-  "stop_reason": "AutoFix cannot provide missing host Docker backend from current container; local release route unavailable.",
+  "status": "blocked_on_local_release_prerequisite_secondary_smokes_live",
+  "last_updated": "2026-11-06T05:14:15.787610+00:00",
+  "stop_reason": "AutoFix failed to provide mandatory local Docker backend; operator route decision pending. Independent CI smoke jobs remain live.",
   "actual_runs": [],
   "continuations": [
     {
