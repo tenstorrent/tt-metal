@@ -15,6 +15,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <internal/mesh_device.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
@@ -42,11 +43,13 @@ void run_single_host_loopback_pipeline(
     auto intermed_device_coord_3 = MeshCoordinate(0, 1);
     auto end_device_coord = MeshCoordinate(0, 0);
 
-    log_info(tt::LogTest, "Start Device ID: {}", mesh_device->get_device(start_device_coord)->id());
-    log_info(tt::LogTest, "Intermed Device ID: {}", mesh_device->get_device(intermed_device_coord)->id());
-    log_info(tt::LogTest, "Intermed Device 2 ID: {}", mesh_device->get_device(intermed_device_coord_2)->id());
-    log_info(tt::LogTest, "Intermed Device 3 ID: {}", mesh_device->get_device(intermed_device_coord_3)->id());
-    log_info(tt::LogTest, "End Device ID: {}", mesh_device->get_device(end_device_coord)->id());
+    log_info(tt::LogTest, "Start Device ID: {}", internal::get_device(*mesh_device, start_device_coord)->id());
+    log_info(tt::LogTest, "Intermed Device ID: {}", internal::get_device(*mesh_device, intermed_device_coord)->id());
+    log_info(
+        tt::LogTest, "Intermed Device 2 ID: {}", internal::get_device(*mesh_device, intermed_device_coord_2)->id());
+    log_info(
+        tt::LogTest, "Intermed Device 3 ID: {}", internal::get_device(*mesh_device, intermed_device_coord_3)->id());
+    log_info(tt::LogTest, "End Device ID: {}", internal::get_device(*mesh_device, end_device_coord)->id());
 
     // Create connections for:
     // Stage 0 -> 1
@@ -157,7 +160,7 @@ void run_single_host_loopback_pipeline(
     Synchronize(*mesh_device, std::nullopt);
 
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto start_device_id = mesh_device->get_device(start_device_coord)->id();
+    auto start_device_id = internal::get_device(*mesh_device, start_device_coord)->id();
     auto start_core_coord = mesh_device->worker_core_from_logical_core(sender_logical_coord);
     std::vector<uint64_t> latencies = std::vector<uint64_t>(NUM_ITERATIONS, 0);
     cluster.read_core(
@@ -209,10 +212,10 @@ void run_single_host_rate_pipeline(
     auto fwd_device_coord_2 = MeshCoordinate(1, 1);
     auto recv_device_coord = MeshCoordinate(0, 1);
 
-    log_info(tt::LogTest, "Sender Device ID: {}", mesh_device->get_device(sender_device_coord)->id());
-    log_info(tt::LogTest, "Fwd 1 Device ID: {}", mesh_device->get_device(fwd_device_coord_1)->id());
-    log_info(tt::LogTest, "Fwd 2 Device ID: {}", mesh_device->get_device(fwd_device_coord_2)->id());
-    log_info(tt::LogTest, "Recv Device ID: {}", mesh_device->get_device(recv_device_coord)->id());
+    log_info(tt::LogTest, "Sender Device ID: {}", internal::get_device(*mesh_device, sender_device_coord)->id());
+    log_info(tt::LogTest, "Fwd 1 Device ID: {}", internal::get_device(*mesh_device, fwd_device_coord_1)->id());
+    log_info(tt::LogTest, "Fwd 2 Device ID: {}", internal::get_device(*mesh_device, fwd_device_coord_2)->id());
+    log_info(tt::LogTest, "Recv Device ID: {}", internal::get_device(*mesh_device, recv_device_coord)->id());
 
     // Socket connections for linear pipeline
     SocketConnection socket_connection_01 = SocketConnection(

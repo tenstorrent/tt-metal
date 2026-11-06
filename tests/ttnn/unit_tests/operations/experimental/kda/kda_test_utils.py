@@ -249,6 +249,11 @@ def assert_bit_identical(expected: torch.Tensor, actual: torch.Tensor, *, name: 
         raise AssertionError(f"{name} bit patterns differ")
 
 
+def all_zero_bits(tensor: torch.Tensor) -> bool:
+    """Whether every byte is zero; unlike a value check, ``-0.0`` fails it."""
+    return not torch.any(tensor.detach().contiguous().view(torch.uint8))
+
+
 def collect_accuracy_and_determinism_results(
     device: ttnn.Device,
     run: Callable[[], Sequence[ttnn.Tensor]],

@@ -17,6 +17,7 @@
 #include "internal/tt-2xx/quasar/noc/att/configs/grendel_qsr1_att_config.h"
 #include "internal/tt-2xx/quasar/noc/att/configs/horizon_2x3_att_config.h"
 #include "internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_att_config.h"
+#include "internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_uncapped_att_config.h"
 
 namespace {
 
@@ -235,6 +236,69 @@ TEST(QuasarAttAetherConfig, SelectorTablesMatchAetherUtils) {
 TEST(QuasarAttAetherConfig, WindowsAreDisjoint) {
     EXPECT_TRUE(
         windows_disjoint(quasar_aether_2x3_att_config::LOCAL_WINDOW, quasar_aether_2x3_att_config::REMOTE_WINDOW));
+}
+
+// ---------------------------------------------------------------------------
+// Aether 2x3 uncapped variant: the base map plus a 1 GiB DRAM window
+// ---------------------------------------------------------------------------
+
+TEST(QuasarAttAetherUncappedConfig, DramWindowCarriesTheDescriptorsGigabyte) {
+    constexpr const Window& w = quasar_aether_2x3_uncapped_att_config::DRAM_WINDOW;
+    EXPECT_EQ(w.compare, 0x1400000000ull);
+    EXPECT_EQ(w.mask_bits, 31);
+    EXPECT_EQ(w.endpoint_shift, 30);
+    EXPECT_EQ(w.endpoint_size, 1);
+    EXPECT_EQ(w.endpoint_table_offset, 7);
+    EXPECT_TRUE(w.translate_address);
+    // Two banks of 1 GiB: the DRAM the 2x3 soc descriptor declares per channel.
+    EXPECT_EQ(w.local_address_limit(), 1ull << 30);
+    EXPECT_EQ(w.selector_limit(), 2u);
+    static_assert(quasar_aether_2x3_uncapped_att_config::DRAM_WINDOW.make_address(1, 0x3FFFFFFCull) == 0x147FFFFFFCull);
+    static_assert(quasar_aether_2x3_uncapped_att_config::DRAM_WINDOW.selector(0x147FFFFFFCull) == 1);
+    static_assert(quasar_aether_2x3_uncapped_att_config::DRAM_WINDOW.local_address(0x147FFFFFFCull) == 0x3FFFFFFCull);
+    static_assert(quasar_aether_2x3_uncapped_att_config::DRAM_WINDOW.endpoint_index(0x147FFFFFFCull) == 8);
+    static_assert((0x1400000000ull & noc_att::low_mask(31)) == 0);
+}
+
+TEST(QuasarAttAetherUncappedConfig, WindowsAreDisjoint) {
+    constexpr const Window& local = quasar_aether_2x3_uncapped_att_config::LOCAL_WINDOW;
+    constexpr const Window& remote = quasar_aether_2x3_uncapped_att_config::REMOTE_WINDOW;
+    constexpr const Window& dram = quasar_aether_2x3_uncapped_att_config::DRAM_WINDOW;
+    EXPECT_TRUE(windows_disjoint(local, remote));
+    EXPECT_TRUE(windows_disjoint(local, dram));
+    EXPECT_TRUE(windows_disjoint(remote, dram));
+    EXPECT_GE(dram.endpoint_table_offset, remote.endpoint_table_offset + 6);
+}
+
+TEST(QuasarAttAetherUncappedConfig, OnlyTheDramRoleDiffersFromTheBaseMap) {
+    constexpr const noc_att::MapData& base = quasar_aether_2x3_att_config::MAP;
+    constexpr const noc_att::MapData& map = quasar_aether_2x3_uncapped_att_config::MAP;
+    static_assert(noc_att::local_window_base(map) == noc_att::local_window_base(base));
+    using noc_att::WindowClass;
+    for (WindowClass role :
+         {WindowClass::LoopbackScratch, WindowClass::Worker, WindowClass::FullTile, WindowClass::Local}) {
+        EXPECT_TRUE(noc_att::same_window(noc_att::map_window(map, role), noc_att::map_window(base, role)))
+            << "window class " << static_cast<int>(role);
+    }
+    EXPECT_TRUE(noc_att::same_window(
+        noc_att::map_window(map, WindowClass::Dram), quasar_aether_2x3_uncapped_att_config::DRAM_WINDOW));
+    EXPECT_EQ(map.local_window_class, base.local_window_class);
+    EXPECT_EQ(map.worker_origin_x, base.worker_origin_x);
+    EXPECT_EQ(map.worker_origin_y, base.worker_origin_y);
+    EXPECT_EQ(map.worker_grid_x, base.worker_grid_x);
+    EXPECT_EQ(map.worker_grid_y, base.worker_grid_y);
+    EXPECT_EQ(map.node_id_offset_x, base.node_id_offset_x);
+    EXPECT_EQ(map.node_id_offset_y, base.node_id_offset_y);
+    EXPECT_EQ(map.worker_selectors.data, base.worker_selectors.data);
+    EXPECT_EQ(map.worker_endpoint_words.data, base.worker_endpoint_words.data);
+    EXPECT_EQ(map.full_tile_endpoint_words.data, base.full_tile_endpoint_words.data);
+    EXPECT_EQ(map.dispatch_entries.data, base.dispatch_entries.data);
+    ASSERT_EQ(map.dram_selectors.size(), 2u);
+    EXPECT_EQ(map.dram_selectors[0], 0);
+    EXPECT_EQ(map.dram_selectors[1], 1);
+    ASSERT_EQ(map.dram_endpoint_words.size(), 2u);
+    EXPECT_EQ(map.dram_endpoint_words[0], 0x00);
+    EXPECT_EQ(map.dram_endpoint_words[1], 0x01);
 }
 
 // ---------------------------------------------------------------------------

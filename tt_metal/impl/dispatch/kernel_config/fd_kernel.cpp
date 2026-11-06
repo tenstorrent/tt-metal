@@ -13,21 +13,19 @@
 #include "device.hpp"
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
-#include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
-#include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "prefetch.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "kernels/kernel.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/debug/dprint_server.hpp>
 
 using namespace tt::tt_metal;
 
-ChipId FDKernel::GetUpstreamDeviceId(const ContextDescriptor& descriptor, ChipId device_id) {
+tt::ChipId FDKernel::GetUpstreamDeviceId(const ContextDescriptor& descriptor, ChipId device_id) {
     ChipId mmio_device_id = descriptor.cluster().get_associated_mmio_device(device_id);
     for (auto tunnel : descriptor.cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
         for (int idx = 0; idx < tunnel.size(); idx++) {
@@ -41,7 +39,7 @@ ChipId FDKernel::GetUpstreamDeviceId(const ContextDescriptor& descriptor, ChipId
     return device_id;
 }
 
-ChipId FDKernel::GetDownstreamDeviceId(const ContextDescriptor& descriptor, ChipId device_id, int tunnel) {
+tt::ChipId FDKernel::GetDownstreamDeviceId(const ContextDescriptor& descriptor, ChipId device_id, int tunnel) {
     ChipId mmio_device_id = descriptor.cluster().get_associated_mmio_device(device_id);
     auto tunnels = descriptor.cluster().get_tunnels_from_mmio_device(mmio_device_id);
     if (tunnel < -1 || tunnel >= static_cast<int>(tunnels.size())) {
