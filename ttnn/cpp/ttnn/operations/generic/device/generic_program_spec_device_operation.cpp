@@ -409,45 +409,6 @@ ttsl::hash::hash_t hash_data_formats_set(const m2::ProgramSpec& spec) {
     return hash;
 }
 
-// Everything that run args refer to by name, the nodes each kernel runs on, and each kernel's array lengths and vararg
-// counts. On a later call Metal writes run args into the cached program by these names, keeps whatever they leave out,
-// and places arrays and varargs by the lengths and counts it compiled. So the key includes them even when a custom hash
-// replaces the spec hash, and a cached program whose arguments, array lengths, vararg counts, tensor parameters,
-// buffers, pipes or nodes differ from the spec's is never reused.
-ttsl::hash::hash_t hash_run_args_schema(const m2::ProgramSpec& spec) {
-    ttsl::hash::hash_t hash = spec.kernels.size();
-    for (const auto& kernel : spec.kernels) {
-        const auto& options = kernel.advanced_options;
-        // The schema holds the argument names, and each array's name and length.
-        hash = ttsl::hash::hash_objects(
-            hash,
-            kernel.unique_id,
-            kernel.runtime_arg_schema,
-            options.num_runtime_varargs,
-            options.num_common_runtime_varargs,
-            options.num_runtime_varargs_per_node);
-    }
-    hash = ttsl::hash::hash_objects(hash, spec.tensor_parameters.size());
-    for (const auto& parameter : spec.tensor_parameters) {
-        hash = ttsl::hash::hash_objects(hash, parameter.unique_id);
-    }
-    hash = ttsl::hash::hash_objects(hash, spec.dataflow_buffers.size());
-    for (const auto& dfb : spec.dataflow_buffers) {
-        hash = ttsl::hash::hash_objects(hash, dfb.unique_id);
-    }
-    const auto& pipe_parameters = spec.advanced_options.prefetcher_pipe_parameters;
-    hash = ttsl::hash::hash_objects(hash, pipe_parameters.size());
-    for (const auto& parameter : pipe_parameters) {
-        hash = ttsl::hash::hash_objects(hash, parameter.unique_id);
-    }
-    // The nodes each kernel runs on: a cached program keeps the values of nodes the run args do not cover.
-    hash = ttsl::hash::hash_objects(hash, spec.work_units.size());
-    for (const auto& work_unit : spec.work_units) {
-        hash = ttsl::hash::hash_objects(hash, work_unit.kernels, work_unit.target_nodes);
-    }
-    return hash;
-}
-
 }  // namespace
 
 ttsl::hash::hash_t compute_program_spec_hash(const m2::ProgramSpec& spec) {
@@ -516,16 +477,13 @@ void GenericProgramSpecDeviceOperation::validate_on_program_cache_hit(
 
 ttsl::hash::hash_t GenericProgramSpecDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
-    // The framework adds the op's type to the key. Each program's spec hash, or the custom hash in its place, is
-    // combined with its range and run-args schema. One custom hash stands in for the spec of every program, so passing
-    // compute_program_spec_hash(spec) as the custom hash gives the default key when every program runs that spec.
+    // The framework adds the op's type to the key. Each program's spec hash is combined with its range. The spec hash
+    // covers what run args refer to: on a later call Metal writes run args into the cached program by name, keeps
+    // whatever they leave out, and places arrays and varargs by the lengths and counts it compiled, so a cached program
+    // whose arguments, array lengths, vararg counts, tensor parameters, buffers, pipes or nodes differ is never reused.
     ttsl::hash::hash_t hash = 0;
     for (const auto& program : operation_attributes.programs) {
-        const auto& spec = *program.spec;
-        const ttsl::hash::hash_t spec_hash = operation_attributes.custom_program_hash.has_value()
-                                                 ? *operation_attributes.custom_program_hash
-                                                 : compute_program_spec_hash(spec);
-        hash = ttsl::hash::hash_objects(hash, program.range, spec_hash, hash_run_args_schema(spec));
+        hash = ttsl::hash::hash_objects(hash, program.range, compute_program_spec_hash(*program.spec));
     }
     return hash;
 }
@@ -604,9 +562,8 @@ ttnn::MeshCoordinateRangeSet tensor_ranges(const GenericProgramSpecOperation::te
 GenericProgramSpecOperation::operation_attributes_t program_spec_attributes(
     const tt::tt_metal::experimental::ProgramSpec& spec,
     const tt::tt_metal::experimental::ProgramRunArgs& run_args,
-    std::optional<uint64_t> custom_program_hash,
     const GenericProgramSpecOperation::tensor_args_t& tensor_args) {
-    GenericProgramSpecOperation::operation_attributes_t attributes{.custom_program_hash = custom_program_hash};
+    GenericProgramSpecOperation::operation_attributes_t attributes;
     const auto ranges = tensor_ranges(tensor_args);
     for (const auto& range : ranges.ranges()) {
         attributes.programs.push_back({.range = range, .spec = &spec, .run_args = &run_args});
@@ -639,21 +596,19 @@ GenericProgramSpecOperation::operation_attributes_t with_prefetcher_pipes(
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::ProgramSpec& spec,
-    const tt::tt_metal::experimental::ProgramRunArgs& run_args,
-    std::optional<uint64_t> custom_program_hash) {
+    const tt::tt_metal::experimental::ProgramRunArgs& run_args) {
     const auto tensor_args = make_program_spec_tensor_args(io_tensors);
     return ttnn::device_operation::launch<GenericProgramSpecOperation>(
-        with_prefetcher_pipes(program_spec_attributes(spec, run_args, custom_program_hash, tensor_args)), tensor_args);
+        with_prefetcher_pipes(program_spec_attributes(spec, run_args, tensor_args)), tensor_args);
 }
 
 void prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::ProgramSpec& spec,
-    const tt::tt_metal::experimental::ProgramRunArgs& run_args,
-    std::optional<uint64_t> custom_program_hash) {
+    const tt::tt_metal::experimental::ProgramRunArgs& run_args) {
     const auto tensor_args = make_program_spec_tensor_args(io_tensors);
     ttnn::device_operation::prepare<GenericProgramSpecOperation>(
-        with_prefetcher_pipes(program_spec_attributes(spec, run_args, custom_program_hash, tensor_args)), tensor_args);
+        with_prefetcher_pipes(program_spec_attributes(spec, run_args, tensor_args)), tensor_args);
 }
 
 Tensor generic_op(

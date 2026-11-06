@@ -792,35 +792,6 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecChecksVarargCountsOnEveryC
             HasSubstr("kernel 'reader' declares 0 common runtime varargs, but its run args give 1")));
 }
 
-// Metal writes a later call's varargs by position into argument memory sized for the counts it compiled, so a program
-// compiled for two varargs per core must not run with three: under the same custom hash, the second call compiles a
-// program of its own.
-TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecCustomHashStillKeysOnVarargCounts) {
-    if (this->device_->arch() == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "ttnn::add, which these checks compare with, does not run on Quasar";
-    }
-    const auto [a, b, out] = make_add_tensors(this->device_, 4);
-    const auto program = make_add_program(a, b, out, /*varargs=*/true);
-    const auto entries = this->device_->num_program_cache_entries();
-    ttnn::experimental::generic_op({a, b, out}, program.spec, program.run_args, /*custom_program_hash=*/777);
-
-    auto three_varargs = program;
-    for (auto& kernel : three_varargs.spec.kernels) {
-        if (kernel.advanced_options.num_runtime_varargs == 2) {
-            kernel.advanced_options.num_runtime_varargs = 3;
-        }
-    }
-    for (auto& kernel_args : three_varargs.run_args.kernel_run_args) {
-        for (auto& [node, values] : kernel_args.advanced_options.runtime_varargs) {
-            values.push_back(0);
-        }
-    }
-    ttnn::experimental::generic_op(
-        {a, b, out}, three_varargs.spec, three_varargs.run_args, /*custom_program_hash=*/777);
-    EXPECT_EQ(this->device_->num_program_cache_entries(), entries + 2);
-    EXPECT_TRUE(ttnn::allclose<bfloat16>(ttnn::add(a, b).cpu(), out.cpu()));
-}
-
 // The matmul case of test_generic_op.cpp, with the Metal 2.0 kernels of ttnn's multi-core matmul: [3, 1, 320, 64] times
 // [3, 1, 64, 128], one output tile after another, split over the full grid in core groups that differ in tile count.
 TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecMatmul) {
@@ -951,7 +922,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecMatmul) {
 
 // A program binds a PrefetcherPipe parameter to the first pipe it gets, and the cache key does not hold the pipe, so a
 // later call that passes a pipe of another space is rejected, with validate_program_args on or off. A caller that needs
-// another pipe gives the parameter another name, or the program its own custom_program_hash.
+// another pipe gives the parameter another name.
 TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecLaterCallRejectsADifferentPrefetcherPipe) {
     // A space must outlive its pipes, and a pipe every program bound to it: the cleanup empties the program cache
     // before the pipes go.
