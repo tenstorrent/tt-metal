@@ -650,7 +650,7 @@
       export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
       # Packed forwards on two pipeline ranks vs one (eager and traced), on a 4-layer GLM-5.3 (dense, MoE + full
       # indexer, MoE + shared indexer; random weights). The pipeline test is 8x4-only; the other multi-user
-      # tests run on the 4x4 stage below. ~9 min (exabox job 180495).
+      # tests run on the 4x4 stage below. 9-11 min (exabox jobs 180495, 181171).
       timeout -k 2m 15m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_glm_prefill_multiuser.py -k "torus-xy-8x4 and pipeline" -vvv --tb=short
