@@ -139,14 +139,15 @@ void kernel_main() {
                     copy_init(cb::S);
                     if constexpr (VARIANT == 6) {
                         copy_tile(cb::ecol32, 0, 0);
-                        gdn_decode_sfpu::load_scalar(0);
+                        ckernel::sfpu_bcast_scalar_init();
+                        ckernel::sfpu_bcast_scalar_load(0);
                     }
                     for (uint32_t jj = 0; jj < nn; jj++) {
                         copy_tile(cb::S, i * VT + j0 + jj, jj);
                     }
                     if constexpr (VARIANT == 6) {
                         for (uint32_t jj = 0; jj < nn; jj++) {
-                            gdn_decode_sfpu::mul_loaded_scalar<32>(jj);
+                            ckernel::sfpu_mul_bcast_scalar(jj);
                         }
                     } else {
                         matmul_init(cb::kT16, cb::u16, 0);
