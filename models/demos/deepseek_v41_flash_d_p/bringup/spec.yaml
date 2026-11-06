@@ -94,6 +94,11 @@ state:
   fixed: [window_kv, compress_partial, engram_tail]   # not growing along the sequence (topk_idx, candidates: per position)
 golden: {keep_fp32: [compress_partial]}
 tests:
+  fork_waivers:  # owner 2026-11-06: until an SFPI without the internal compiler error (report: rebase/sfpi_ice_report.md)
+    ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_row_bfp4.py::test_full_window_equals_bf16_on_the_same_values[32-dest16]: 'owner 2026-11-06: SFPI 7.90-7.93 internal compiler error (gimple-rvtt-synth.cc:470) building the sparse_sdpa row_bfp4 compute kernel at H=32, triggered by the new base''s compute headers (old fork kernels too; no -O level avoids it); H=64 (DS41 8x4) builds. Until a fixed SFPI.'
+    ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_row_bfp4.py::test_full_window_equals_bf16_on_the_same_values[32-dest32]: 'owner 2026-11-06: SFPI 7.90-7.93 internal compiler error (gimple-rvtt-synth.cc:470) building the sparse_sdpa row_bfp4 compute kernel at H=32, triggered by the new base''s compute headers (old fork kernels too; no -O level avoids it); H=64 (DS41 8x4) builds. Until a fixed SFPI.'
+    ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_row_bfp4.py::test_row_bfp8_window_only_equals_bf16[32]: 'owner 2026-11-06: SFPI 7.90-7.93 internal compiler error (gimple-rvtt-synth.cc:470) building the sparse_sdpa row_bfp4 compute kernel at H=32, triggered by the new base''s compute headers (old fork kernels too; no -O level avoids it); H=64 (DS41 8x4) builds. Until a fixed SFPI.'
+    ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_row_bfp4.py::test_row_bfp8_window_only_blocks_equal_records[32]: 'owner 2026-11-06: SFPI 7.90-7.93 internal compiler error (gimple-rvtt-synth.cc:470) building the sparse_sdpa row_bfp4 compute kernel at H=32, triggered by the new base''s compute headers (old fork kernels too; no -O level avoids it); H=64 (DS41 8x4) builds. Until a fixed SFPI.'
   waivers:                         # owner waivers (F85), signed 2026-10-16: noise-floor checks reported WAIVED, never hidden
     attn_hc: &hc_waiver "hc_fn is fp32 in the official model; the FPU holds at most 10 mantissa bits of a matmul weight (9 at HiFi4), and its fixed rounding is a per-column bias no single-pass format removes (DS41-43; split matmuls ruled out). Debug once the model produces tokens."
     ffn_hc: *hc_waiver

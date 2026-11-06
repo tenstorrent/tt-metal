@@ -30,6 +30,40 @@ pushing because one item matches a stop rule (a failure I cannot fix at its caus
    have the complete list; anything new it finds is added below.
 Branch commits on the new base: 70075e3e7a1 906d3fbe4b7 3b9ed4635b1 020b0fb7556 47fc755acfe d8b010327de dd280fa68d9.
 
+## For the QuietBox (2x2 Blackhole): tests the Galaxy cannot run (keep this list current)
+1. The full fork suite (`python -m models.demos.common.bringup.testing.fork_suite`): every 2x2 / 1x4 case the
+   Galaxy skips ("exact match of requested num devices", 110 in DS41's committed cases alone).
+2. indexer_score's 7 2x2 ring cases (fabric init timeout on a Galaxy 2x2 submesh, old build too).
+3. combine's ernie45 1x4 model case (the Galaxy cannot open a 1x4 mesh); say if the QuietBox cannot either.
+4. DS41's committed fork cases: `fork_cases --capture models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls.json
+   models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls_block.json --model deepseek_v41_flash_d_p --run-tests`.
+5. moe_grouped_topk fork retired (owner 2026-11-06): DS41's router accuracy case against the STOCK op (the test that
+   replaces the fork's case; path added when the retirement lands). Fails = fork the latest stock and re-apply only
+   what the test shows missing.
+6. Stock moe_grouped_topk's carried fp32 weight normalization (66e17107625, now behind its fp32_selection option;
+   #60550 always selects in fp32): GLM-5.3's router component tests (tests/bringup/test_c_kda_moe_router.py,
+   test_c_dsa_moe_router.py) and DS41's stock-router case (item 5) with fp32_selection on and off. Off passes = drop
+   the carried change (stock = upstream), remove the option from the callers; only on passes = keep it (an upstream
+   PR candidate) (owner 2026-11-06).
+7. prepare_chunk_recurrence (GLM-5.3 only): GLM's KDA attention component tests (tests/bringup/test_c_kda_dense_attention.py,
+   test_c_kda_moe_attention.py) with GLM_KDA_DECAY=kernel (the new stock op, #63309). Pass (worst head <= 0.05) =
+   retire the fork, GLM on stock; fail = fork the latest stock and re-apply precise_gate_factors on #63309's batched
+   pipeline (owner 2026-11-06).
+
+8. fabric_all_gather fork retired if the 8x4 A/B passes (stock high_bw_all_gather = the same program, #61387):
+   glm53_flash_d_p_lb's all-gather MoE (GLM_EXPERTS_MODE=ag) on stock; the fork kept an EMULE_FABRIC_2D routing
+   path, stock routes via worker_routing_utils (owner 2026-11-06).
+
+9. fabric_all_gather C++ fork retired (8x4 A/B: DS41's 7 calls bit-exact, stock +0.15 ms a chunk, owner accepted):
+   its 19 bit-exact model cases now test the stock high_bw_all_gather:
+   models/demos/deepseek_v41_flash_d_p/tests/test_all_gather_stock.py, models/demos/glm53_flash_d_p/tests/test_all_gather_stock.py.
+
+## Tracked, not queued (owner 2026-11-06)
+- Galaxy O.1: 8x4 fork cases for the model's 195 distinct fork calls (16 forks; mhc_pre_xing 81+2,
+  update_padded_kv_cache 25, prepared_program 17+17, rms_norm 9, rope 8, fabric_all_gather 7, ...). Estimate: writing
+  ~half a day to a day (agent, device iterations); one run ~1-1.5 h on the 8x4. Run as the ledger's O.1 through the
+  orchestrator on the rebased branch when the owner says.
+
 ## Bases
 - Old base: `6b80daf43e3` (old llk_helper_library tip; llk_helper_library was force-pushed since, so
   `git merge-base` gives an older main commit, 48444d1f8a1 — wrong).
@@ -167,3 +201,25 @@ Branch commits on the new base: 70075e3e7a1 906d3fbe4b7 3b9ed4635b1 020b0fb7556 
   resident X.3 gate is to be re-run on the 8x4 after the fork suite.
 - 05:00 owner: 2x2 / 1x4 cases cannot run on the Galaxy; they will be run on the QuietBox (2x2 Blackhole). That was
   the only stop item: push authorized. Pushed dnijemcevic/model_bringup_rebased (new branch, no force).
+- 09:14 full fork suite (8x4, rebased build): 3340 passed, 219 failed, 308 skipped; classification (box / rebase /
+  pre-existing, old-build reruns) in progress.
+- 09:39 **stock hybrid combine (combine_fabric2d, the merge kept the branch's per-mesh semaphores + upstream's #62312
+  VC channels): test_hybrid_routed_expert_combine.py HANGS in its first case on the rebased build** (host waiting on
+  a completion-queue event 19+ min; stopped). Not on DS41's default path (deepseek_v3_d_p MoE / gemma4). Old build
+  run queued; merge under review. The push to dnijemcevic/model_bringup waits for this.
+- 09:55 test_hybrid_routed_expert_combine.py hangs the same way on the OLD build (first case, completion-queue wait;
+  stopped): pre-existing, not the merge. Not on DS41's default path.
+- 10:05 hybrid combine: review: the merge is consistent (the only caller passes channel semaphores; the per-mesh
+  path is unused); committed taking upstream's file (7e2f8146513, side worktree). The hang (old and new builds alike)
+  stalls in the real run after the collect-only pass: next, the first case without the precompile plugin on both
+  builds (harness vs op). Pre-existing failures are fixed or waived like any other (owner rule).
+- 10:05 sdpa row_bfp4 H=32: SFPI 7.93.0 internal compiler error (H=64, DS41's 8x4 call, builds): a rebase
+  regression for DS41 on a 2x2 (32 heads a chip); kernel workaround in progress, upstream report drafted for the owner.
+- 10:45 fork-suite classification (219 = failed 47 + error 158 + not_run 7 + collect 7; old-build reruns):
+  BOX 162 (fabric init timeout on 2x2 / 1x4 / 2x4 / 4x1 submeshes of the Galaxy, old build too; ernie45 1x4;
+  indexer_score source grid-dependent; topk faster than its two-sided band), PRE-EXISTING 40 (missing `eval` module
+  = tt_ops_code_gen submodule not checked out: 34 incl. 7 fake not-run from a fork_suite parsing bug; flat_routed_expert
+  perf / planner 4; moe_ag perf 2), REBASE 17 (moe_grouped_topk 12: retired; rotary 1: test regex after #63498, patch;
+  sdpa row_bfp4 H=32 4: SFPI 7.9x internal compiler error triggered by the new base's compute headers, not the fork's
+  changes; -O levels don't avoid it). 70 source tests "missing" vs stale baselines (upstream renames): re-record.
+  Patches / repro: /scratch/dnijemcevic/rebase/fsclass/.
