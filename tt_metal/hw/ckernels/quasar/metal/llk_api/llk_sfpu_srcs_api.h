@@ -20,6 +20,7 @@
 // 32x32 tile spans slice_count(mode) slices, each YDIM >> 1 SFPU rows (SFP_ROWS == 2).
 // Ternary ops (experimental) unpack their third input into the result slice; see
 // llk_sfpu_srcs_ternary_impl for why that path runs one slice at a time.
+// Not recommended for production: ~2x slower than Dest where. Use Dest for ternary ops.
 //
 // Unary drives UNP_S from the auto-loop: one UNPACR2 per tile, replayed in HW. Issuing one per
 // slice instead deadlocks the instruction buffer at 16 slices (32-bit SrcS). Binary has to issue
@@ -130,6 +131,8 @@ inline void llk_sfpu_srcs_binary_init(
  * Like llk_sfpu_srcs_binary_init, with a third input unpacked into SrcS slice 2
  * (@ref _llk_unpack_srcs_ternary_mop_config_). No auto-loops: @ref llk_sfpu_srcs_ternary_impl drives UNP_S
  * and PACK1 one slice at a time.
+ *
+ * Not recommended for production: ~2x slower than Dest where. Use Dest for ternary ops.
  *
  * @param l1_in0_addr_16B: L1 first input address (16B units).
  * @param l1_in1_addr_16B: L1 second input address (16B units).
