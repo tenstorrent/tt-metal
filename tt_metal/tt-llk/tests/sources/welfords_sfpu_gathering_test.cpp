@@ -3,12 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Welford SFPU init with ENABLE_GATHERING defined for the whole translation unit, as tt-metal
-// builds Blackhole kernels by default. Build-only: test_gathering_config.py
+// builds kernels under TT_METAL_ENABLE_GATHERING=1. Build-only: test_gathering_config.py
 // inspects the math ELF and never runs it.
 
-#ifndef ENABLE_GATHERING // the harness defines it on Blackhole unless TT_METAL_DISABLE_GATHERING=1
 #define ENABLE_GATHERING
-#endif
 
 #include <cstdint>
 
