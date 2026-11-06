@@ -42,6 +42,11 @@ RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
 
 
 class Flux3KleinAttention(Attention):
+    # Ring SDPA on the streaming compute path while keeping fp32 dest accumulation (bf16 score block): 4K model time
+    # -13.6 %, 2K + ref -11.4 %; not bit-identical, golden mean 43.57 vs 43.93 dB (perf exp 11). False restores the
+    # compute_common.hpp path (fp32 score block).
+    ring_sdpa_streaming_fp32_dest = True
+
     def forward(self, *, sequence_1: ttnn.Tensor, **kwargs):
         self._local_rows = int(sequence_1.shape[-2])
         return super().forward(sequence_1=sequence_1, **kwargs)
@@ -49,16 +54,20 @@ class Flux3KleinAttention(Attention):
     def get_ring_sdpa_program_config(self, per_device_seq_len: int) -> ttnn.SDPAProgramConfig:
         chunks = RING_SDPA_CHUNKS_BY_LOCAL_ROWS.get(getattr(self, "_local_rows", None))
         if chunks is None:
-            return super().get_ring_sdpa_program_config(per_device_seq_len)
-        key = ("local", self._local_rows)
-        if key not in self.ring_sdpa_program_config:
-            self.ring_sdpa_program_config[key] = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.get_ring_sdpa_core_grid(per_device_seq_len),
-                q_chunk_size=chunks[0],
-                k_chunk_size=chunks[1],
-                exp_approx_mode=self.ring_sdpa_exp_approx,
-            )
-        return self.ring_sdpa_program_config[key]
+            config = super().get_ring_sdpa_program_config(per_device_seq_len)
+        else:
+            key = ("local", self._local_rows)
+            if key not in self.ring_sdpa_program_config:
+                self.ring_sdpa_program_config[key] = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=self.get_ring_sdpa_core_grid(per_device_seq_len),
+                    q_chunk_size=chunks[0],
+                    k_chunk_size=chunks[1],
+                    exp_approx_mode=self.ring_sdpa_exp_approx,
+                )
+            config = self.ring_sdpa_program_config[key]
+        # The cache dict is per instance, so setting the field here touches only Klein's configs.
+        config.streaming_fp32_dest = self.ring_sdpa_streaming_fp32_dest
+        return config
 
 
 class Flux3KleinTransformerBlock(Module):
