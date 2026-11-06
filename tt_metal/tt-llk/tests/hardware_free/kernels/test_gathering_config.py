@@ -182,6 +182,33 @@ def test_harness_gathering_sequence_matches_tt_metal():
     )
 
 
+def _sw(rs2, rs1=2, imm=0):
+    """sw rs2, imm(rs1)"""
+    return (
+        ((imm >> 5) << 25)
+        | (rs2 << 20)
+        | (rs1 << 15)
+        | (0b010 << 12)
+        | ((imm & 0x1F) << 7)
+        | 0x23
+    )
+
+
+def test_runtime_record_is_the_store_of_the_composed_value():
+    """A runtime-composed record is the sw of the register that holds the REPLAY word, not the
+    first sw after it: a spill of another register in between must not be taken for the record.
+    """
+    from helpers.replay_record_scan import _runtime_replay_records
+
+    t0, t1, a0 = 5, 6, 10
+    lui = (0x04000 << 12) | (t0 << 7) | 0x37  # lui t0, REPLAY in bits 31:24
+    addi = (1 << 20) | (t0 << 15) | (t0 << 7) | 0x13  # addi t0, t0, 1 (load_mode)
+    words = [lui, addi, _sw(t1), _sw(t0, a0)]
+    assert _runtime_replay_records(words) == [(3, None)]
+    # The value never stored from t0 (moved first): the first sw still stands in for the record.
+    assert _runtime_replay_records([lui, addi, _sw(t1, a0)]) == [(2, None)]
+
+
 # _calculate_where_'s plain-SFPLOAD path (DISABLE_SFPLOADMACRO) records 6 instructions: three
 # SFPLOADs, SFPSETCC, SFPENCC, SFPSTORE. Its SFPLOADMACRO paths record 3 and 4, so the length
 # tells the site under test apart from the two that were already bracketed.
