@@ -13,6 +13,7 @@ CASES = [
         "task": "O.1",
         "sig": "4278aef645",
         "mesh": [2, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # input [1, 1, 1280, 16384] bf16 TILE DRAM interleaved (per device)
         "input": {"shape": [1, 1, 1280, 16384], "dtype": "BFLOAT16", "layout": "TILE"},
@@ -37,6 +38,7 @@ CASES = [
         "task": "O.1",
         "sig": "412af7ea2f",
         "mesh": [2, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # input [1, 1, 1280, 16384] bf16 TILE DRAM interleaved (per device)
         "input": {"shape": [1, 1, 1280, 16384], "dtype": "BFLOAT16", "layout": "TILE"},
@@ -61,6 +63,7 @@ CASES = [
         "task": "O.1",
         "sig": "c69667d8a4",
         "mesh": [2, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # input [1, 1, 1280, 16384] bf16 TILE DRAM interleaved (per device)
         "input": {"shape": [1, 1, 1280, 16384], "dtype": "BFLOAT16", "layout": "TILE"},
@@ -85,6 +88,7 @@ CASES = [
         "task": "O.1",
         "sig": "e2ec8b2136",
         "mesh": [2, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # input [1, 1, 1280, 16384] bf16 TILE DRAM interleaved (per device)
         "input": {"shape": [1, 1, 1280, 16384], "dtype": "BFLOAT16", "layout": "TILE"},
@@ -109,6 +113,7 @@ CASES = [
         "task": "O.1",
         "sig": "05e486525c",
         "mesh": [2, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # input [1, 1, 1280, 16384] bf16 TILE DRAM interleaved (per device)
         "input": {"shape": [1, 1, 1280, 16384], "dtype": "BFLOAT16", "layout": "TILE"},
@@ -133,6 +138,7 @@ CASES = [
         "task": "O.1",
         "sig": "73dc6905cb",
         "mesh": [2, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # input [1, 1, 1280, 16384] bf16 TILE DRAM interleaved (per device)
         "input": {"shape": [1, 1, 1280, 16384], "dtype": "BFLOAT16", "layout": "TILE"},
@@ -157,6 +163,7 @@ CASES = [
         "task": "O.1",
         "sig": "a6019c38e9",
         "mesh": [2, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # input [1, 1, 1280, 16384] bf16 TILE DRAM interleaved (per device)
         "input": {"shape": [1, 1, 1280, 16384], "dtype": "BFLOAT16", "layout": "TILE"},
@@ -181,6 +188,7 @@ CASES = [
         "task": "O.1",
         "sig": "3f5ad27553",
         "mesh": [2, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # input [1, 1, 1280, 16384] bf16 TILE DRAM interleaved (per device)
         "input": {"shape": [1, 1, 1280, 16384], "dtype": "BFLOAT16", "layout": "TILE"},
@@ -205,6 +213,7 @@ CASES = [
         "task": "O.1",
         "sig": "fd47e88a7e",
         "mesh": [2, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # input [1, 1, 1280, 16384] bf16 TILE DRAM interleaved (per device)
         "input": {"shape": [1, 1, 1280, 16384], "dtype": "BFLOAT16", "layout": "TILE"},
@@ -229,6 +238,7 @@ CASES = [
         "task": "O.1",
         "sig": "0d6d3e6b41",
         "mesh": [2, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         # input [1, 1, 1280, 16384] bf16 TILE DRAM interleaved (per device)
         "input": {"shape": [1, 1, 1280, 16384], "dtype": "BFLOAT16", "layout": "TILE"},

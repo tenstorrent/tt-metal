@@ -10,7 +10,8 @@ streams -> y), "both" (reduced row + streams -> hc and y). The coefficient input
 projection (x @ fn^T, sum x^2 over n*H = 4 x 3584 columns), so the rsqrt scale and the logits are realistic.
 Limits: measured rel L2 <= 3e-7 (hc parts, y, sum x^2) on seeds 0-3; a 1e-4 scale of any output fails them."""
 
-_MESH = {"mesh": [4, 2], "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576}}
+# F256: every case of this file passed on a Galaxy 8x4 subset (fork suite, 2026-11-06): submesh_ok
+_MESH = {"mesh": [4, 2], "submesh_ok": True, "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576}}
 _XING = {"n": 4, "hidden": 3584, "norm_eps": 1e-6, "hc_eps": 1e-6, "sinkhorn_iters": 20, "clamp": [-30.0, 30.0]}
 _LIMITS = {"pcc": 0.99999, "max_rel": {"pre": 1e-5, "post": 1e-5, "comb": 1e-5, "y": 1e-5, "ss": 1e-5}}
 
@@ -2484,7 +2485,11 @@ for _i, (_sig, _scale, _base) in enumerate(_O1_COEF):
 # the checkpoint's hc_{attn,ffn}_scale / base of layers 0 and 1 (hf_scaled/quietbox_2x2; L0 attn has comb bases down
 # to -25.5 and up to 13.4: tiny comb entries). Random reduced row as for the other coef cases. Limits as above.
 _DS41 = {"n": 4, "hidden": 5120, "norm_eps": 1e-6, "hc_eps": 1e-6, "sinkhorn_iters": 20, "clamp": [-30.0, 30.0]}
-_DS41_MESH = {"mesh": [2, 2], "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576}}
+_DS41_MESH = {
+    "mesh": [2, 2],
+    "submesh_ok": True,
+    "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+}
 _DS41_COEF = [
     (
         "L0-attn",

@@ -16,6 +16,7 @@ CASES = [
         "sig": "3ec3d15624",
         "op": "chunked_scaled_dot_product_attention",
         "mesh": [1, 4],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         "q": [1, 16, 5120, 192],
         "k": [880, 1, 64, 192],  # paged [blocks, nkv, block, D]
@@ -53,6 +54,7 @@ CASES = [
         "sig": "3cd893eaad",
         "op": "scaled_dot_product_attention",
         "mesh": [1, 4],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         "q": [1, 16, 5248, 192],
         "k": [1, 2, 5248, 192],
@@ -207,6 +209,7 @@ CASES = [
         "sig": "dfd9514ea7",
         "op": "ring_mla",
         "mesh": [4, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
         "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
         "q": [1, 16, 1280, 576],
         "kv": [1, 1, 14080, 576],
