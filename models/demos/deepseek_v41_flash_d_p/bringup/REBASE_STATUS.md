@@ -235,3 +235,7 @@ Branch commits on the new base: 70075e3e7a1 906d3fbe4b7 3b9ed4635b1 020b0fb7556 
 - 10:24 re-verification after landing the retirements (stock high_bw_all_gather in the model) + rebuild: ladder rung
   last PASS, 200 accuracy metrics bit-identical to the first rebased run, 104 limited metrics in limit; clean warm
   chunk with DS41_ENGRAM_TABLE=resident: 172.8 ms (spread 7.1; P tasks' resident ~195-207). Pushed.
+- 10:40 owner: published. dnijemcevic/model_bringup force-with-lease f2e9420851b -> 21fb5be47b8 (= model_bringup_rebased);
+  old tip backed up as dnijemcevic/model_bringup_backup_20261106. Branches off the old tip: `git rebase --onto
+  origin/dnijemcevic/model_bringup origin/dnijemcevic/model_bringup_backup_20261106 <branch>`. Full fork suite rerun
+  stopped by the owner (no time); the QuietBox list above is next. Not done here: ~/repos/tt-metal still on the old tip.
