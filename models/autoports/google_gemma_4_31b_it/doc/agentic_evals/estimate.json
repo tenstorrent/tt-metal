@@ -1,5 +1,5 @@
 {
-  "status": "gpqa_nightly_terminal_smoke_valid_swe_retry_running",
+  "status": "all_suites_valid_smoke_larger_rungs_running",
   "evals": {
     "r1_gpqa_diamond": {
       "decision": "go",
@@ -21,12 +21,22 @@
       }
     },
     "swe_bench_verified": {
-      "decision": "stop",
-      "reason": "Both smoke tasks quarantined for agent-initiated network downloads. Raw0/2 is not validstage score. Generic environment/activation diagnosis active; same smoke must be rerun if repaired.",
-      "functional_at": 0,
+      "decision": "go",
+      "reason": "Original frozen2 valid after generic environment activation repair; both submitted normally without external retrieval or limits. Nightly5 dispatched42210467509; release not frozen.",
+      "functional_at": 2,
       "projected_hours": null,
-      "score": null,
-      "confidence_interval_95": null
+      "score": 0,
+      "confidence_interval_95": [
+        0,
+        0.6576197724933469
+      ],
+      "next_rung": {
+        "tasks": 5,
+        "planned_clients": 2,
+        "batch": 8,
+        "run_id": 42210467509,
+        "projected_workflow_hours": 7.821522817361111
+      }
     },
     "terminal_bench_2_1": {
       "decision": "go",

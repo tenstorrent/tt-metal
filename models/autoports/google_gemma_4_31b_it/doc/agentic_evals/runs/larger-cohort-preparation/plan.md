@@ -1,0 +1,3 @@
+# Deterministic larger tool cohorts
+
+Reproduce the original recorded SHA256(seed + NUL + name) sorted-strata/sorted-tasks round-robin rule using exact pinned task catalogs. Confirm original SWE5 and Terminal10 prefixes before emitting candidate sizes SWE10/20/40/80/160/320/500 and Terminal20/40/80/89. Confirm uniqueness, nesting, complete catalog counts and task.toml CPU/memory resources. Read only task metadata, never solutions; no score-based selection, cohort mutation or dispatch. Host-only/device0, no claimed speed savings. If reproduction fails, preserve diagnosis rather than replace algorithm.

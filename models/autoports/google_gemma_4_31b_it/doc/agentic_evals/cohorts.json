@@ -267,6 +267,13 @@
         "psf__requests-1766",
         "pydata__xarray-4966",
         "astropy__astropy-14598"
+      ],
+      "nightly-swe-observable": [
+        "pylint-dev__pylint-7080",
+        "django__django-11265",
+        "psf__requests-1766",
+        "pydata__xarray-4966",
+        "astropy__astropy-14598"
       ]
     },
     "selected_before_scores_at": "2026-11-06T04:49:25.562736+00:00",

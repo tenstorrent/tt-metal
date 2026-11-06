@@ -236,9 +236,9 @@
     },
     {
       "problem": "Mixed intermediate prefill uses accepted stock host sampler",
-      "hours": 0,
-      "reason": "GPQA smoke observed no host-sampled steps; zero observed cost for this rung only. Tool-suite/release mixed-prefill frequency pending.",
-      "evidence": "runs/gpqa-workload/RESULT.json"
+      "hours": null,
+      "reason": "Valid SWE smoke observed9 host-compatible of98 prefill steps; all9582decode steps device sampled. Separate host-sampling cost and release frequency unknown. Earlier GPQA observed zero only within that rung.",
+      "evidence": "runs/swe-phase-accounting-confirmation/result.json"
     },
     {
       "problem": "long-prefill-decode-interference",

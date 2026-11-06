@@ -130,6 +130,13 @@
       "max_num_seqs": 8,
       "batch_reason": "Smallest validated batch at or above2; larger real concurrency not admitted",
       "run_id": 42208934357
+    },
+    "nightly-swe-observable": {
+      "eval": "swe_bench_verified",
+      "batch": 8,
+      "planned_clients": 2,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest validated batch>=2; original task resources unchanged"
     }
   },
   "release_limits": {
@@ -276,7 +283,7 @@
       "reason": "Measured C2; C8 reconstruction unavailable"
     },
     "swe_bench_verified": {
-      "functional_at": 0,
+      "functional_at": 2,
       "planned_clients": 2,
       "observed_working_set_tokens": 107585,
       "typical_context_tokens": 31755,
@@ -286,7 +293,10 @@
       "replay_completed": 6,
       "replay_preemptions": 0,
       "evidence": "runs/real-history-capacity/workload-result.json; runs/real-history-capacity/REPLAY_RESULT.json",
-      "limitation": "No continuouslysimultaneouspeakresidency orhighercapacityclaim"
+      "limitation": "No continuouslysimultaneouspeakresidency orhighercapacityclaim",
+      "latest_valid_score": 0,
+      "latest_valid_audit": "runs/smoke2-swe-activation-repair/audit.json",
+      "prior_workload_score_quarantined": true
     }
   },
   "cache_routing": {
@@ -312,6 +322,6 @@
     "path": "/home/container_app_user/cache_root/logs/gemma4-phase-{pid}-{time_ns}.jsonl",
     "file_cap_bytes": 4294967296,
     "local_exactness": "runs/ci-phase-autoexport/paired-audit.json",
-    "live_ci_artifact_confirmation": null
+    "live_ci_artifact_confirmation": "runs/swe-phase-accounting-confirmation/result.json"
   }
 }

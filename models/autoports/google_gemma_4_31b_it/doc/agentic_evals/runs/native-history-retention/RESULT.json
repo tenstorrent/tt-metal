@@ -1,0 +1,33 @@
+{
+  "status": "supported_export_only_option_with_coverage_limits",
+  "used_device_hours": 0,
+  "candidate_agent_kwargs": {
+    "store_all_messages": true
+  },
+  "harness_path": [
+    "TTI llm_module/agentic/harbor.py:_get_agent_kwargs deep-copies agent_kwargs, applies defaults only for mini-swe; Terminus options pass unchanged",
+    "TTI harbor.py:347 job agent kwargs;573 CLI serializes kwargs",
+    "Harbor Terminus2 constructor store_all_messages=False option -> self.options.store_all_messages",
+    "Harbor terminus_2.py:1865 copies self._chat.messages to context.metadata.all_messages at finalization"
+  ],
+  "retention": "Native Chat messages preserve exact initial prompt, raw assistant content, and exact observation prompt strings actually appended; reasoning_content is retained iff interleaved_thinking originally enabled, matching resend behavior. No need to enable thinking interleaving or change it.",
+  "paired_confirmation": {
+    "test": "check_export.py",
+    "result": "pass",
+    "basis": "Executes stock pinned Chat class and exact stock store_all_messages export AST branch using mocked LLM. Enabled/disabled arms have identical call kwargs and native messages; only exportedmetadata differs. Exact observation whitespace/raw assistant JSON/reasoning preserved.",
+    "scope": "Host fixture, not live task rerun or wire capture."
+  },
+  "coverage_limits": [
+    "Final Chat list is lossless for retained messages, not necessarily all historical calls. Summarization replaces chat._messages at terminus_2.py:1153; context-window recovery can remove recent pairs at:798.",
+    "Require summarization_count0 and no unwind/recovery deletion evidence before treating final list as complete fullhistory; otherwise only replay known retained suffix with explicit missing-prefix/call coverage.",
+    "Requests that fail before successful Chat append may not appear; compare successful response count and attempted API count.",
+    "Final message list is input at Harbor LLM boundary, not exact HTTP request; reconstruct provider formatting and verify API usage parity as with SWE.",
+    "This cannot restore already completed artifacts lacking metadata.all_messages; current immutable nightly remains unchanged."
+  ],
+  "raw_content_option": "trajectory_config.raw_content preserves raw response rather than ATIF Analysis/Plan, but does not alone prove every exact historical request through summary/recovery. Prefer store_all_messages for retained native chat rather than reconstructing from ATIF.",
+  "recommendation": "For a future model-specific Terminal server-sized config, add agent_kwargs.store_all_messages=true only. Preserve all other limits, sampling, network/task/scheduler settings and run rung without waiting for new source changes. Validate resulting metadata and coverage before constructing distinct C4 replay. No current config or source modification made.",
+  "source_commits": {
+    "harbor": "e76c762fca5267dfb36e1f900f0a7724ed72e735"
+  },
+  "no_raw_content_in_result": true
+}

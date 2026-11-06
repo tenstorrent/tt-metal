@@ -1,0 +1,140 @@
+{
+  "status": "valid_smoke_activation_confirmed",
+  "run_id": 42200513517,
+  "functional_at": 2,
+  "nightly5_eligible": true,
+  "reason": "Exact original frozen2 now have complete normally submitted trajectories using prepared environment; no agent external retrieval or limit termination. Scores reported, not gated.",
+  "score": {
+    "correct": 0,
+    "completed_samples": 2,
+    "value": 0.0,
+    "unit": "fraction",
+    "wilson95": [
+      0,
+      0.6576197724933469
+    ],
+    "reference": null,
+    "reference_reason": "No verified same-suite/version reference provided."
+  },
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "timing": {
+    "evaluation_seconds": 374.988095,
+    "evaluation_hours": 0.10416335972222222,
+    "device_job_seconds": 803.0,
+    "workflow_seconds": 4195.0,
+    "workflow_timing_source": "Monitor completed record updated_at minus created_at; manifest was stale at audit start.",
+    "predicted_evaluation_seconds": 7306.65975,
+    "prior_quarantined_eval_seconds": 7306.65975,
+    "comparison_note": "Earlier run is quarantined; shorter new trajectory is observed, not isolated causal serving-speed measurement."
+  },
+  "pins": {
+    "tt_metal": "439c22b0e991e5af626efafa7224edf28f84795b",
+    "tt_inference_server": "2d738ec3910f7f13d1614e6196d9ff5f646b6fe1",
+    "plugin": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+    "plugin_basis": "Full dispatch manifest, collected report/runtime shortca7a182 corroboration.",
+    "harbor": {
+      "version": "0.25.0",
+      "git_commit_hash": "e76c762fca5267dfb36e1f900f0a7724ed72e735",
+      "is_editable": true
+    },
+    "mini_version": "2.2.8",
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "task_source": "harbor-datasets@86723674f04e4209ac479d0fb75d9d9f44b4377e"
+  },
+  "autoport": {
+    "adapter": "models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM",
+    "layers": 60,
+    "indices_verified": "0..59",
+    "mesh": "MeshShape([1, 4])",
+    "context": 262144,
+    "native_parsers": {
+      "reasoning_parser": "gemma4",
+      "tool_call_parser": "gemma4"
+    }
+  },
+  "limits": {
+    "agent_seconds": 21600,
+    "request_seconds": 3600,
+    "output_tokens": 32768,
+    "tool_default_seconds": 30,
+    "cpu_memory": "task definitions; no blanket overrides"
+  },
+  "tasks": [
+    {
+      "task": "django__django-11265",
+      "task_id": {
+        "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+        "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+        "path": "datasets/swebench-verified/django__django-11265"
+      },
+      "valid": true,
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "message_count": 97,
+      "model_calls": 47,
+      "finish_reason_counts": {
+        "tool_calls": 47
+      },
+      "output_tokens": 8448,
+      "max_completion_tokens": 971,
+      "max_prompt_tokens": 35925,
+      "agent_seconds": 307.649815,
+      "trial_seconds": 332.204385,
+      "verifier_seconds": 5.068783,
+      "network_retrieval_observed": false,
+      "fetched_fix_observed": false,
+      "limits_hit": false,
+      "activation_evidence": "Django tool message15 stack uses /opt/miniconda3/envs/testbed/lib/python3.6; message25 baseline31tests succeeds.",
+      "source": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T111257/django__django-11265__HSZ9dBa/agent/mini-swe-agent.trajectory.json",
+      "trajectory_sha256": "d780c172337ea184c70e69a759756e945413313aab00f0c5c62eb647b051c844"
+    },
+    {
+      "task": "pylint-dev__pylint-7080",
+      "task_id": {
+        "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+        "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+        "path": "datasets/swebench-verified/pylint-dev__pylint-7080"
+      },
+      "valid": true,
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "message_count": 91,
+      "model_calls": 44,
+      "finish_reason_counts": {
+        "tool_calls": 44
+      },
+      "output_tokens": 9491,
+      "max_completion_tokens": 1272,
+      "max_prompt_tokens": 26898,
+      "agent_seconds": 342.937653,
+      "trial_seconds": 374.869093,
+      "verifier_seconds": 13.326497,
+      "network_retrieval_observed": false,
+      "fetched_fix_observed": false,
+      "limits_hit": false,
+      "activation_evidence": "Tool messages5/15 pylint --version succeeds: Python3.9.20,astroid2.11.7; message9 actual pylint analysis succeeds without missing dependency. Combined with scoped BASH_ENV proves prepared environment behavior; no direct PATH dump.",
+      "source": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T111257/pylint-dev__pylint-7080__h9DadJx/agent/mini-swe-agent.trajectory.json",
+      "trajectory_sha256": "a59ec024acde981fb10182762ddfc30f35802bd1ddf8ad4104c2746abd20e9a8"
+    }
+  ],
+  "activation_confirmed": true,
+  "network_audit": {
+    "all_messages_reviewed": 188,
+    "external_agent_downloads_observed": false,
+    "verifier_downloads": "Official verifier setup downloads packages after agent completion; these are not agent trajectory retrieval.",
+    "urls_in_observations": "Installed source license/documentation URLs are not fetched.",
+    "scope": "Trajectory evidence, not packet capture."
+  },
+  "termination_note": "Mini records synthetic action-was-not-executed returncode-1 for final submission because Submitted unwinds environment execution. Explicit command+exit role+info Submitted confirm normal termination, not execution failure.",
+  "remaining_limits": [
+    "Both model patches fail official verifier; scores remain0, not blocked.",
+    "Model makes local edits including repository tests; official verifier runs its task procedure. No harness or evaluator fixes were made.",
+    "No raw packet audit; no claim that all possible outbound traffic is measured.",
+    "Original pre-repair two trajectories remain quarantined and are not rescored.",
+    "No serving speed credit inferred from changed task trajectories."
+  ],
+  "device_hours_for_audit": 0
+}

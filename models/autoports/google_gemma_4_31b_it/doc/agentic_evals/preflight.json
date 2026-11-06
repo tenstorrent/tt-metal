@@ -76,7 +76,7 @@
     "device": "qb2-ci"
   },
   "smoke": {
-    "ok": false,
+    "ok": true,
     "runs": [
       {
         "eval": "r1_gpqa_diamond",
@@ -87,10 +87,11 @@
       },
       {
         "eval": "swe_bench_verified",
-        "run_id": 42173587147,
-        "ok": false,
-        "reason": "Completedbutbothnetworkquarantined; activationrepairretry42200513517pending",
-        "trajectory_audit": "runs/smoke2-swe-native-parser/audit.json"
+        "run_id": 42200513517,
+        "ok": true,
+        "reason": "Exact original frozen2 now have complete normally submitted trajectories using prepared environment; no agent external retrieval or limit termination. Scores reported, not gated.",
+        "trajectory_audit": "runs/smoke2-swe-activation-repair/audit.json",
+        "tasks": 2
       },
       {
         "eval": "terminal_bench_2_1",
@@ -102,6 +103,6 @@
       }
     ],
     "trajectory_audit": "runs/smoke2-r1_gpqa_diamond/audit.json",
-    "reason": "GPQA and Terminal valid; SWE network-validity retry pending."
+    "reason": "All three suites have valid original two-task smoke trajectories."
   }
 }

@@ -104,6 +104,14 @@
     {
       "fact": "Terminal ATIF does not retain raw native conversation by default; raw_content mode affects exported assistant representation. Exact C4 replay from2SWE+2Terminal histories is unavailable; do not invent assistant JSON. All47 API durations/usage are available and reconciled.",
       "evidence": "runs/agent-capacity-and-contention/plan.md; runs/terminal-smoke-runtime-analysis/result.json"
+    },
+    {
+      "fact": "Stock Terminus supports agent_kwargs.store_all_messages=true, exporting final chat into agent_result.metadata.all_messages without changing LLM calls. Complete-history replay additionally requires no summary/recovery deletion or missing calls.",
+      "evidence": "runs/native-history-retention/RESULT.md"
+    },
+    {
+      "fact": "Collected normal SWE CI phase export has9680 consecutive matched steps,98prefill including9host-compatible sampling steps,9582device-sampled decode steps; zero errors/truncation/pending at final snapshot. Consecutive host-boundary intervals include plugin work and idle gaps, not device time.",
+      "evidence": "runs/swe-phase-accounting-confirmation/result.json"
     }
   ],
   "suite_timings": [
@@ -185,6 +193,22 @@
       ],
       "evidence": "runs/server-sized-gpqa-c2/audit.json",
       "limitation": "Visible answers byte-identical to priornightly; do not pool as20independent samples. Individual request slowtail unrecorded."
+    },
+    {
+      "run_id": 42200513517,
+      "eval": "swe_bench_verified",
+      "tasks": 2,
+      "agents": 2,
+      "batch": 8,
+      "wall_hours": 0.10416335972222222,
+      "agent_hours": 0.1807187411111111,
+      "timeouts": 0,
+      "score": 0,
+      "confidence_interval_95": [
+        0,
+        0.6576197724933469
+      ],
+      "evidence": "runs/smoke2-swe-activation-repair/audit.json"
     }
   ],
   "generic_fixes": [
