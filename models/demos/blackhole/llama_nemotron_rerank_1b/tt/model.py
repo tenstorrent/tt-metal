@@ -54,6 +54,9 @@ from models.demos.blackhole.llama_nemotron_rerank_1b.tt.model_config import (
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.weights import WeightLoader
 from models.tt_transformers.tt.common import gather_cos_sin, get_rot_transformation_mat, precompute_freqs
 
+# Largest bf16 resident-residual shard per core that leaves room for the fused ops' circular buffers in L1.
+RESIDENT_SHARD_MAX_BYTES = 600_000
+
 # Matmuls with more rows than this are split into row blocks so each fits on device.
 MAX_MM_ROWS = 2048
 MASK_NEG = -1e9
@@ -572,6 +575,14 @@ class NemotronReranker:
         fused = self.cfg.fuse_add_norm and B * S >= self.cfg.fuse_add_norm_min_rows
         resid_l1 = fused and self.cfg.residual_l1
         resident = fused and self.cfg.resident_residual
+        if resident:
+            # The resident residual shard must fit beside the fused ops' static circular buffers. A Blackhole Galaxy
+            # chip has a 12 x 10 grid, so 32 x 512 pads to 48 x 7 tiles per core (688 KB) and its CBs clash with it;
+            # P150's 13 x 10 grid gives 40 x 7 (573 KB). Above RESIDENT_SHARD_MAX_BYTES the fused DRAM-residual path runs.
+            mpc = m_tiles_per_core(B * S // 32, self.grid.x, RESIDUAL_M_MIN_BLOCK)
+            npc = -(-(self.cfg.dim // 32) // self.grid.y)
+            if mpc * npc * 2048 > RESIDENT_SHARD_MAX_BYTES:
+                resident = False
         if resident and self.cfg.embed_gather and S % 32 == 0:
             # The residual stream stays in L1 (sharded like matmul_add_norm's grid); WO and FF2 add
             # into it in place and write the following RMSNorm's output. Each core gathers its slice
