@@ -3087,6 +3087,46 @@ tasks:
       short_turn_device_ms: '> 0'
       acks_early: == 0
       contract_checks_failed: == 0
+- id: P.40
+  title: 'Index keys the indexer scores: bf16 vs bfp8 vs bfp4 (INDEX_K_FORMAT gains bfp8), accuracy and indexer time'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.39
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-07: an A/B of the index-key format the indexer stores and scores with, three arms: INDEX_K_FORMAT=bf16 (no rounding step; exists), bfp4 (today''s default, rounded to bfloat4_b to mimic the reference''s fp4; exists) and a NEW option bfp8 (the tiled key slab rounded to bfloat8_b with ttnn.bringup.bfp_round and the ring''s key buffer bfloat8_b, read by ring_indexer_score_dsa through the unpacker, the same way bfp4 is done today). Add bfp8 behind the existing switch; bf16 and bfp4 behave exactly as today; the default stays bfp4 (the owner decides after reading the table). The served index keys are not in scope: they stay INDEX_K_SERVED=fp8_row192 (Blaze rows) in every arm. Measure all three arms on the same code and report one table: err_final_hidden, top5_overlap, err_state_topk_idx_L* and overlap_state_topk_idx_L* (every index layer), err_state_index_k_L*, device_ms_indexer, device_ms_total, chunk_wall_ms, plus the ring key-buffer bytes a chip per arm. The orchestrator''s quick A/B compares bfp4 (env) with bfp8 (change); measure the bf16 arm with the same tooling at the same position and add it to the table. Never loosen any check. Agent rules 18 and 19 hold. Do not profile the model yourself beyond the A/B: the orchestrator measures at 51200. Report in plain language, short, every term defined.'
+  ab:
+    env:
+      INDEX_K_FORMAT: bfp4
+      ENGRAM_TABLE: resident
+    change:
+      INDEX_K_FORMAT: bfp8
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+      short_turn_ms: '> 0'
+      short_turn_device_ms: '> 0'
+      acks_early: == 0
+      contract_checks_failed: == 0
 - id: O.1
   hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
