@@ -2596,3 +2596,12 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
 - Fix: fork_suite.source returns an empty tally for a fork without the manifest, unless its CHANGELOG names a stock
   source under ttnn/cpp that exists, which counts as a failure.
 - Selftest: test_fork_cases.py::test_the_fork_suite_runs_on_past_a_fork_without_a_stock_source.
+
+## F255: the tt-d-gen driver passed chunk_size to a build that dropped it (rebase onto 107f838f379, 2026-11-06)
+- Problem: the new base writes H2DStreamServiceDescriptor v3 (#58175), which the pinned tt-d-gen (a9701ce6675) cannot
+  read; tt-d-gen main (d8a194417) can, but its device_prefill_pipeline no longer takes chunk_size (1d4deb1a1, #1766:
+  several chunks per forward; the size comes from the RuntimeConfig), so the driver exited with a TypeError and the
+  runner contract / smoke failed with "engine driver exited 1".
+- Fix: dgen_prefill_driver.device_pipeline_args passes chunk_size, like layers_per_chunk, only to a build whose
+  signature declares it.
+- Selftest: test_engine_wait.py::test_the_engine_driver_names_its_pipeline_arguments.

@@ -67,7 +67,8 @@ def test_the_specs_server_repo_expands_like_its_other_paths(monkeypatch, tmp_pat
 
 def test_the_engine_driver_names_its_pipeline_arguments():
     """tt-d-gen 1cf343887 dropped device_prefill_pipeline's layers_per_chunk: positional arguments shifted the timeout
-    into sp_factor. The driver passes keywords, layers_per_chunk only to a build that declares it."""
+    into sp_factor; 1d4deb1a1 (#1766) dropped chunk_size (F255). The driver passes keywords, layers_per_chunk and
+    chunk_size only to a build that declares them."""
     from models.demos.common.bringup.testing.dgen_prefill_driver import device_pipeline_args
 
     new = "device_prefill_pipeline(service_id: str, ack_shm_name: str, chunk_size: int, connect_timeout_ms: int = 30000, sp_factor: int = 1, num_mtp_tokens: int = 0) -> PipelineConfig"
@@ -75,6 +76,10 @@ def test_the_engine_driver_names_its_pipeline_arguments():
     want = dict(service_id="s", ack_shm_name="a", chunk_size=5120, connect_timeout_ms=1800000, sp_factor=8)
     assert device_pipeline_args(new + "\n\nOn-device", "s", "a", 5120, 40, 1800000, 8) == want
     assert device_pipeline_args(old, "s", "a", 5120, 40, 1800000, 8) == {**want, "layers_per_chunk": 40}
+    newer = "device_prefill_pipeline(service_id: str, ack_shm_name: str, connect_timeout_ms: int = 30000, sp_factor: int = 1, num_mtp_tokens: int = 0) -> tt_engine._tt_engine.PipelineConfig"
+    assert device_pipeline_args(newer, "s", "a", 5120, 40, 1800000, 8) == {
+        k: v for k, v in want.items() if k != "chunk_size"
+    }
 
 
 def test_the_engine_attaches_to_the_runners_completion_ring():
