@@ -146,6 +146,9 @@ int main(int argc, char* argv[]) {
             asm volatile("nop; nop; nop; nop; nop");
 #endif
             invalidate_l1_cache();
+            // Tells the core it's waiting (Zihintpause). On Blackhole it's a fence, on Wormhole a no-op, and ttsim
+            // stops stepping the core for a while, which matters with hundreds of idle cores.
+            __builtin_riscv_pause();
         }
         DeviceZoneScopedMainN("TRISC-FW");
 
