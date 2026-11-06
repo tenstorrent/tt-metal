@@ -7,7 +7,6 @@ namespace ckernel::sfpu {
 struct AtanhBf16Config {
     static constexpr uint32_t kNumDegree = 11u;
     static constexpr uint32_t kDenDegree = 4u;
-    // Fit: degree-11/4 rational on [-0.999, 0.999], 1 segment, max pure (continuous) ULP 0.723.
     static constexpr float kNumerator[] = {
         __builtin_bit_cast(float, 0x00000000u),
         __builtin_bit_cast(float, 0x3f800000u),
@@ -56,13 +55,9 @@ inline void calculate_atanh_bf16_body() {
 }
 // The constants stock's init also sets hold the kernel's own values for its call only.
 template <int ITERATIONS = 32>
-inline void calculate_atanh_bf16() {
+__attribute__((noinline)) inline void calculate_atanh_bf16() {
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x40000000u);
     calculate_atanh_bf16_body<ITERATIONS>();
-    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x33b17218u);
-}
-inline void init_atanh_bf16() {
-    ckernel::sfpu::bf16::atanh::init_rational_parity<ckernel::sfpu::AtanhBf16Config>();
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x33b17218u);
 }
 

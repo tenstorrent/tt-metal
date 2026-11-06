@@ -7,7 +7,6 @@ namespace ckernel::sfpu {
 struct AtanhBf16Config {
     static constexpr uint32_t kNumDegree = 11u;
     static constexpr uint32_t kDenDegree = 4u;
-    // Fit: degree-11/4 rational on [-0.999, 0.999], 1 segment, max pure (continuous) ULP 0.723.
     static constexpr float kNumerator[] = {
         __builtin_bit_cast(float, 0x00000000u),
         __builtin_bit_cast(float, 0x3f800000u),
@@ -55,18 +54,14 @@ inline void calculate_atanh_bf16_body() {
     ckernel::sfpu::bf16::atanh::calculate_rational_parity<ckernel::sfpu::AtanhBf16Config, ITERATIONS>();
 }
 // The constants stock's init also sets hold the kernel's own values for its call only.
+// Each call records replay slots 0-31, overwriting what an init recorded there (matmul and reduce
+// record from replay_buf_offset = 16).
 template <int ITERATIONS = 32>
-inline void calculate_atanh_bf16() {
+__attribute__((noinline)) inline void calculate_atanh_bf16() {
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x3ea57ebbu);
     sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0x3fba2e90u);
     sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0x4007c1f2u);
     calculate_atanh_bf16_body<ITERATIONS>();
-    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x33b17218u);
-    sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0x3eba2000u);
-    sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0xbf004000u);
-}
-inline void init_atanh_bf16() {
-    ckernel::sfpu::bf16::atanh::init_rational_parity<ckernel::sfpu::AtanhBf16Config>();
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x33b17218u);
     sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0x3eba2000u);
     sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0xbf004000u);

@@ -19,7 +19,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 // Access to internal API: ProgramImpl::get_sem_base_addr, get_sem_size, num_kernels, get_kernel
@@ -93,7 +93,7 @@ void check_semaphores_are_initialized(
 TEST_F(UnitMeshFixture, CoreRangeSet) {
     auto device_range = distributed::MeshCoordinateRange(this->device().shape());
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, CreateProgram());
+    workload.add_program(device_range, CreateProgram(this->device()));
     Program& program = workload.get_programs().at(device_range);
 
     CoreRange core_range_one({0, 0}, {1, 1});

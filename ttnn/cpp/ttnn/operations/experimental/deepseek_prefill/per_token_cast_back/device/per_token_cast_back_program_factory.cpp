@@ -12,7 +12,6 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
 
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
 

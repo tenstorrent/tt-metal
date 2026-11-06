@@ -1095,7 +1095,7 @@ Two mechanisms recur. (1) Integer-granularity rounding: an instruction, loop or 
 - grep -nE '(convert<[^>]+>|int32_to_float|float_to_(fp16[ab]|u?int(8|16)))\(' over SFPU kernels and keep calls with no RoundMode argument; also `TTI_SFP_STOCH_RND\(\s*1`, `RoundMode::NearestStochastic` outside stochastic_round ops
 - `& 0x7FFE` or other tie-to-even bit tricks after a narrow integer conversion, in rounding ops
 
-**Where it clusters:** tt_metal/tt-llk/tt_llk_quasar/llk_lib (eltwise binary, binary broadcast, unary datacopy, unary broadcast MOP configs); tt_metal/tt-llk/tt_llk_*/common/inc/ckernel.h (replay-buffer helpers); tt_metal/hw/ckernels/{wormhole_b0,blackhole,quasar}/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h; tt_metal/hw/ckernels/*/metal/llk_api/llk_sfpu/ckernel_sfpu_conversions.h (RNE helper); tt-llk SFPU rounding ops (ckernel_sfpu_rounding_ops.h) and any SFPU kernel doing int/float conversion; tiny-tile (face_r_dim < 16, num_faces < 4) code paths in the MOP/pack/math configs
+**Where it clusters:** tt_metal/tt-llk/tt_llk_quasar/llk_lib (eltwise binary, binary broadcast, unary datacopy, unary broadcast MOP configs); tt_metal/tt-llk/tt_llk_*/common/inc/ckernel.h (replay-buffer helpers); tt_metal/hw/ckernels/{wormhole_b0,blackhole,quasar}/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h; tt_metal/hw/ckernels/*/metal/llk_api/llk_sfpu/ckernel_sfpu_conversions.h (RNE helper); SFPU rounding ops (llk_sfpu/ckernel_sfpu_rounding_ops.h) and any SFPU kernel doing int/float conversion; tiny-tile (face_r_dim < 16, num_faces < 4) code paths in the MOP/pack/math configs
 
 **How fixes for this class went incomplete**
 
@@ -1213,7 +1213,6 @@ Code that is right on one arch or boot path is silently wrong on another, becaus
 **Candidate sites** (unverified leads)
 
 - tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel.h:685: load_replay_buf brackets the record window with disable/enable_gathering only under the ENABLE_GATHERING build macro, and many BH replay records bypass this helper entirely
-- tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_where.h:34: direct lltt::record(0, 6) outside load_replay_buf, so it is unprotected when gathering is enabled
 - tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary_bcast.h:202: direct lltt::record outside the gathering bracket
 - tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_transpose_dest.h:283: direct record in transpose_dest, the same kernel family already shown to wedge under gathering
 - tt_metal/tt-llk/tt_llk_blackhole/llk_lib/experimental/llk_math_reduce_custom.h:149: three direct lltt::record calls (also at 178 and 217) outside load_replay_buf; the same pattern appears in llk_math_reduce_runtime_custom.h:171

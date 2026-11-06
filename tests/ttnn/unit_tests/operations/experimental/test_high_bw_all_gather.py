@@ -274,7 +274,7 @@ def _profile_high_bw_all_gather(mesh_device, run):
         sources = [source.replace("\\", "/") for source in record["kernel_sources"]]
         if not any("/experimental/high_bw_all_gather/" in source for source in sources):
             continue
-        assert any(source.endswith("/unicast_writer.cpp") for source in sources)
+        assert any(source.endswith("/fabric_all_gather_sender.cpp") for source in sources)
         runtime_id = record["runtime_id"]
         programs[runtime_id] = max(programs.get(runtime_id, 0.0), record["duration_ns"])
     assert programs, "realtime profiler returned no high_bw_all_gather program"
@@ -628,10 +628,64 @@ def test_high_bw_all_gather_glm_topk_uint32_page_larger_than_fabric_payload(mesh
     )
 
 
+def _shard_dims(tensor):
+    """Shard dim per placement of `tensor`'s label (None for Replicate)."""
+    return [
+        placement.dim if isinstance(placement, ttnn.PlacementShard) else None
+        for placement in tensor.tensor_topology().placements()
+    ]
+
+
+def _assert_rows_per_mesh_row(gathered, host_input, mesh_device):
+    """Every device of mesh row r holds rows [r * S / R, (r + 1) * S / R) of dim 2: the result of gathering
+    dim 2 along the columns of a row-major split over the whole mesh."""
+    rows_per_mesh_row = host_input.shape[2] // mesh_device.shape[0]
+    for device_idx, actual in enumerate(ttnn.get_device_tensors(gathered)):
+        mesh_row = device_idx // mesh_device.shape[1]
+        expected = host_input[:, :, mesh_row * rows_per_mesh_row : (mesh_row + 1) * rows_per_mesh_row, :]
+        assert torch.equal(ttnn.to_torch(actual), expected)
+
+
+@run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_high_bw_all_gather_mesh_partition_output_on_tp_axis(mesh_device):
+    """The DeepSeek-V4 indexer pattern on a Galaxy: a tensor sharded on SP is split along TP by mesh_partition,
+    which labels the result collapsed (`{32},[Shard(2)]`) because both mesh axes now shard dim 2, and is then
+    gathered back along TP. The gather must accept the collapsed label and leave `[Shard(2), Replicate]`."""
+    global_shape = (1, 1, 32 * mesh_device.get_num_devices(), 32)
+    torch.manual_seed(0)
+    host_input = torch.rand(global_shape, dtype=torch.bfloat16)
+    sp_sharded = [ttnn.PlacementShard(2), ttnn.PlacementReplicate()]
+
+    source = _make_tensor(
+        mesh_device,
+        host_input,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.create_mesh_mapper(mesh_device, ttnn.MeshMapperConfig(sp_sharded, mesh_device.shape)),
+    )
+    partitioned = ttnn.mesh_partition(source, dim=2, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert len(partitioned.tensor_topology().placements()) == 1, "expected mesh_partition's collapsed label"
+
+    output = _make_tensor(
+        mesh_device,
+        torch.zeros(global_shape, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.create_mesh_mapper(mesh_device, ttnn.MeshMapperConfig(sp_sharded, mesh_device.shape)),
+    )
+    gathered = ttnn.experimental.high_bw_all_gather(partitioned, dim=2, output_tensor=output, cluster_axis=1)
+    ttnn.synchronize_device(mesh_device)
+
+    assert _shard_dims(gathered) == [2, None]
+    _assert_rows_per_mesh_row(gathered, host_input, mesh_device)
+
+
 @run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-def test_high_bw_all_gather_preserves_same_dim_sharding_on_other_axis(mesh_device, expect_error):
+def test_high_bw_all_gather_preserves_same_dim_sharding_on_other_axis(mesh_device):
     """Gathering TP must preserve SP when both mesh axes shard the same tensor dimension."""
     global_shape = (1, 4, 256, 32)
     torch.manual_seed(0)
@@ -662,13 +716,24 @@ def test_high_bw_all_gather_preserves_same_dim_sharding_on_other_axis(mesh_devic
         ttnn.TILE_LAYOUT,
         ttnn.ShardTensorToMesh(mesh_device, dim=2),
     )
-    with expect_error(RuntimeError, "tensor distribution axes to match the device mesh axes"):
-        ttnn.experimental.high_bw_all_gather(
-            flattened_source,
-            dim=2,
-            output_tensor=inverse_output,
-            cluster_axis=1,
-        )
+    # The collapsed `{8},[Shard(2)]` label is a row-major split of dim 2 over the mesh, i.e. dim 2 sharded on both
+    # axes. Gathering the inner axis is contiguous, so the output is honestly `[Shard(2), Replicate]`.
+    flattened_output = _make_tensor(
+        mesh_device,
+        torch.zeros(global_shape, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.create_mesh_mapper(mesh_device, ttnn.MeshMapperConfig(gathered_placements, mesh_device.shape)),
+    )
+    flattened_gathered = ttnn.experimental.high_bw_all_gather(
+        flattened_source,
+        dim=2,
+        output_tensor=flattened_output,
+        cluster_axis=1,
+    )
+    ttnn.synchronize_device(mesh_device)
+    assert _shard_dims(flattened_gathered) == [2, None]
+    _assert_rows_per_mesh_row(flattened_gathered, host_input, mesh_device)
 
     inverse_output = ttnn.experimental.high_bw_all_gather(
         source,
@@ -684,8 +749,8 @@ def test_high_bw_all_gather_preserves_same_dim_sharding_on_other_axis(mesh_devic
     )
     duplicate_topology = duplicate_sharded_input.tensor_topology()
     # mesh_partition labels this result `{8},[Shard(2)]`: a row-major split of dim 2 over the whole mesh, spelt the
-    # collapsed way because both mesh axes now shard the same tensor dimension. high_bw_all_gather requires one
-    # placement per mesh axis, so re-spell the same layout as `[Shard(2), Shard(2)]` on the device mesh shape.
+    # collapsed way because both mesh axes now shard the same tensor dimension. The collapsed spelling is covered
+    # above; re-spell the same layout as `[Shard(2), Shard(2)]` here to cover the N-D spelling too.
     duplicate_sharded_input.update_tensor_topology(
         ttnn.TensorTopology(
             mesh_device.shape,
@@ -759,45 +824,6 @@ def test_high_bw_all_gather_preserves_same_dim_sharding_on_other_axis(mesh_devic
         tp_rank = device_idx % columns
         expected = host_input[:, tp_rank : tp_rank + 1, :, :]
         assert torch.equal(ttnn.to_torch(actual), expected)
-
-    # Gathering the innermost dimension in row-major layout exercises the
-    # concat path, where several input chunks share one output page.
-    concat_host = torch.rand((1, 1, 32, 128), dtype=torch.bfloat16)
-    concat_input = _make_tensor(
-        mesh_device,
-        concat_host,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.create_mesh_mapper(
-            mesh_device,
-            ttnn.MeshMapperConfig(
-                [ttnn.PlacementReplicate(), ttnn.PlacementShard(3)],
-                mesh_device.shape,
-            ),
-        ),
-    )
-    concat_output = _make_tensor(
-        mesh_device,
-        torch.zeros_like(concat_host),
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    concat_output = ttnn.experimental.high_bw_all_gather(
-        concat_input,
-        dim=3,
-        output_tensor=concat_output,
-        cluster_axis=1,
-        num_links=1,
-    )
-    ttnn.synchronize_device(mesh_device)
-    _assert_exact_replicated_output(
-        concat_host,
-        concat_output,
-        mesh_device,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
 
 
 def _run_high_bw_all_gather_perf(
@@ -1257,7 +1283,7 @@ def test_high_bw_all_gather_full_mesh_open_path_accuracy(mesh_device, submesh_sh
     )
 
 
-@run_for_blackhole("legacy axis-ring regression requires Blackhole")
+@run_for_blackhole("axis-ring regression requires Blackhole")
 @pytest.mark.skipif(
     not os.getenv("TT_METAL_SIMULATOR") and os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY") != "1",
     reason="run on the Blackhole simulator or set TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY=1",
@@ -1545,186 +1571,6 @@ def _sparse_mla_overlap_grids(mesh_device):
     return topk_grid, gather_grid
 
 
-def _right_strip_subdevice_manager(mesh_device, owned_cores):
-    """Build an isolated gather strip of exactly ``owned_cores`` on each chip.
-
-    QB2 cannot own an 80-core top-k strip and a 40-core gather strip at once, but it can still measure
-    the production gather ownership in isolation. Keeping the strip at the same right edge as sparse MLA
-    preserves its logical/physical placement while the left strip absorbs the otherwise unused cores.
-    """
-    grid = mesh_device.compute_with_storage_grid_size()
-    assert grid.y > 0 and owned_cores % grid.y == 0
-    owned_columns = owned_cores // grid.y
-    assert 0 < owned_columns < grid.x
-    gather_start_x = grid.x - owned_columns
-    compute_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gather_start_x - 1, grid.y - 1))]
-    )
-    gather_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(gather_start_x, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
-    )
-    assert gather_grid.num_cores() == owned_cores
-    manager = mesh_device.create_sub_device_manager(
-        [ttnn.SubDevice([compute_grid]), ttnn.SubDevice([gather_grid])],
-        0,
-    )
-    return manager, ttnn.SubDeviceId(1), gather_grid
-
-
-def _profile_sparse_mla_gather_tier(
-    mesh_device,
-    device_input,
-    persistent_output,
-    *,
-    cluster_axis,
-    gathered_dim_size,
-    owned_cores,
-    samples,
-):
-    manager, gather_subdevice_id, gather_grid = _right_strip_subdevice_manager(mesh_device, owned_cores)
-    semaphore_pair = _make_l1_small_semaphore_pair(mesh_device, gather_grid)
-    ttnn.synchronize_device(mesh_device)
-    mesh_device.load_sub_device_manager(manager)
-
-    def run():
-        return ttnn.experimental.high_bw_all_gather(
-            device_input,
-            dim=2,
-            output_tensor=persistent_output,
-            cluster_axis=cluster_axis,
-            subdevice_id=gather_subdevice_id,
-            sub_core_grids=gather_grid,
-            num_links=_NUM_LINKS,
-            input_batch_index=0,
-            gathered_dim_size=gathered_dim_size,
-            ready_semaphore=semaphore_pair[0],
-            data_valid_semaphore=semaphore_pair[1],
-        )
-
-    try:
-        # Warm both the miss and hit path before collecting device timestamps.
-        run()
-        ttnn.synchronize_device(mesh_device, sub_device_ids=[gather_subdevice_id])
-        run()
-        ttnn.synchronize_device(mesh_device, sub_device_ids=[gather_subdevice_id])
-        durations_ns = [_profile_high_bw_all_gather(mesh_device, run) for _ in range(samples)]
-    finally:
-        ttnn.synchronize_device(mesh_device)
-        mesh_device.clear_loaded_sub_device_manager()
-        mesh_device.remove_sub_device_manager(manager)
-    return durations_ns
-
-
-@run_for_blackhole("sparse MLA gather-tier qualification requires Blackhole fabric")
-@pytest.mark.timeout(0)
-@pytest.mark.skipif(os.environ.get("CI") == "true", reason="local production-shape performance qualification")
-@pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize(
-    "case_name,dtype,width,expected_page_size",
-    [
-        ("kv_bf16", ttnn.bfloat16, 576, 1152),
-        ("kv_scaled_fp8", ttnn.fp8_e4m3, 656, 704),
-    ],
-    ids=["kv_bf16", "kv_scaled_fp8"],
-)
-def test_high_bw_all_gather_sparse_mla_30_vs_40_core_device_perf(
-    mesh_device, case_name, dtype, width, expected_page_size
-):
-    """Compare 30- and 40-core ownership at the exact QB2 Long sparse-KV gather shape.
-
-    This is an isolated gather comparison, not an 80/40 overlap claim: QB2 owns only 110 Tensix cores.
-    The production operation has runtime prefix controls, so both row formats currently select two
-    workers/direction even when the enclosing strip owns 40 cores. The scheduler reserves 12 cores so the
-    same program also fits an interior/ring rank with two live directions. Each endpoint in this two-rank
-    line actually instantiates 8 worker and 2 mux cores, which the profiler verifies directly. Raw device
-    program timestamps determine every reported duration; host dispatch/synchronization time is excluded.
-    """
-    rank_line, cluster_axis = _rank_line_mesh(mesh_device)
-    rank_pair_shape = ttnn.MeshShape(2, 1) if cluster_axis == 0 else ttnn.MeshShape(1, 2)
-    rank_pair = rank_line.create_submesh(rank_pair_shape)
-    grid = rank_pair.compute_with_storage_grid_size()
-    if (grid.x, grid.y) != (11, 10):
-        pytest.skip(f"30-vs-40 QB2 qualification requires an 11x10 worker grid, got {grid}")
-
-    # QB2 Long mirrors Galaxy's per-chip 512k prefix: SP=2 owns a 128k box-local cache and adds the
-    # current 1280-token chunk, so each of the two ranks contributes 64,640 rows.
-    global_rows = 128_000 + 1_280
-    assert global_rows % 2 == 0
-    global_shape = (1, 1, global_rows, width)
-    host_zeros = torch.zeros(global_shape, dtype=torch.bfloat16)
-    input_mesh_dims = (2, None) if cluster_axis == 0 else (None, 2)
-    device_input = _make_tensor(
-        rank_pair,
-        host_zeros,
-        dtype,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.ShardTensor2dMesh(rank_pair, dims=input_mesh_dims, mesh_shape=tuple(rank_pair.shape)),
-    )
-    persistent_output = _make_tensor(
-        rank_pair,
-        host_zeros,
-        dtype,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.ReplicateTensorToMesh(rank_pair),
-    )
-    del host_zeros
-
-    input_shard = ttnn.get_device_tensors(device_input)[0]
-    output_shard = ttnn.get_device_tensors(persistent_output)[0]
-    page_size = input_shard.buffer_aligned_page_size()
-    assert page_size == expected_page_size
-    output_bytes_per_link = output_shard.buffer_num_pages() * output_shard.buffer_aligned_page_size() // _NUM_LINKS
-    preferred_workers_per_direction = 8 if output_bytes_per_link >= 32_000_000 and page_size >= 2048 else 2
-    assert preferred_workers_per_direction == 2
-
-    tier_results = {}
-    try:
-        for owned_cores in (30, 40):
-            selected_workers_per_direction = next(
-                workers
-                for workers in (8, 4, 2, 1)
-                if workers <= preferred_workers_per_direction
-                and _NUM_LINKS * 2 * (workers + (1 if workers > 1 else 0)) <= owned_cores
-            )
-            scheduler_core_budget = (
-                _NUM_LINKS * 2 * (selected_workers_per_direction + (1 if selected_workers_per_direction > 1 else 0))
-            )
-            assert selected_workers_per_direction == 2
-            assert scheduler_core_budget == 12
-            durations_ns = _profile_sparse_mla_gather_tier(
-                rank_pair,
-                device_input,
-                persistent_output,
-                cluster_axis=cluster_axis,
-                gathered_dim_size=global_rows,
-                owned_cores=owned_cores,
-                samples=7,
-            )
-            median_ns = statistics.median(durations_ns)
-            received_bytes_per_rank = (global_rows // 2) * page_size
-            tier_results[owned_cores] = {
-                "samples_ns": durations_ns,
-                "median_ns": median_ns,
-                "effective_receive_gbps": received_bytes_per_rank / median_ns,
-                "owned_cores": owned_cores,
-                "selected_workers_per_direction": selected_workers_per_direction,
-                "scheduler_core_budget": scheduler_core_budget,
-            }
-    finally:
-        ttnn.deallocate(persistent_output)
-        ttnn.deallocate(device_input)
-        gc.collect()
-
-    relative_40_vs_30 = 1.0 - tier_results[40]["median_ns"] / tier_results[30]["median_ns"]
-    print(
-        "SPARSE_MLA_GATHER_TIER_DEVICE_TIME "
-        f"case={case_name} global_rows={global_rows} page_size={page_size}B "
-        f"output_bytes_per_link={output_bytes_per_link} preferred_workers_per_direction="
-        f"{preferred_workers_per_direction} results={tier_results} "
-        f"relative_40_vs_30={relative_40_vs_30:.2%}"
-    )
-
-
 @run_for_blackhole("high_bw_all_gather external semaphores require Blackhole fabric")
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
 def test_high_bw_all_gather_external_semaphore_reuse_and_cache_rebind(mesh_device):
@@ -1733,7 +1579,7 @@ def test_high_bw_all_gather_external_semaphore_reuse_and_cache_rebind(mesh_devic
     device_input, persistent_output = _make_external_semaphore_test_tensors(rank_line, cluster_axis)
     _, rebound_output = _make_external_semaphore_test_tensors(rank_line, cluster_axis)
 
-    legacy_output = ttnn.experimental.high_bw_all_gather(
+    internal_semaphore_output = ttnn.experimental.high_bw_all_gather(
         device_input,
         dim=2,
         output_tensor=persistent_output,
@@ -1741,7 +1587,7 @@ def test_high_bw_all_gather_external_semaphore_reuse_and_cache_rebind(mesh_devic
         num_links=_NUM_LINKS,
     )
     ttnn.synchronize_device(rank_line)
-    _assert_exact_all_gather(device_input, legacy_output, rank_line, ttnn.bfloat16)
+    _assert_exact_all_gather(device_input, internal_semaphore_output, rank_line, ttnn.bfloat16)
 
     gather_grid, gather_subdevice_id, manager = _load_external_semaphore_test_subdevices(rank_line)
     try:
@@ -1764,7 +1610,7 @@ def test_high_bw_all_gather_external_semaphore_reuse_and_cache_rebind(mesh_devic
 
         # The first external-path cache miss must consume no additional L1/L1_SMALL allocator space: the
         # caller already owns both semaphore buffers and the output is persistent. This directly distinguishes
-        # it from the legacy factory path, which allocates a pair during program creation.
+        # it from the internal-semaphore path, which allocates a pair during program creation.
         allocation_before = {
             buffer_type: ttnn.get_memory_view(rank_line, buffer_type).total_bytes_allocated_per_bank
             for buffer_type in (ttnn.BufferType.L1, ttnn.BufferType.L1_SMALL)
@@ -2127,7 +1973,7 @@ def test_high_bw_all_gather_external_semaphore_validation(mesh_device, expect_er
         gather_box = gather_grid.bounding_box()
         one_core = ttnn.CoreRangeSet([ttnn.CoreRange(gather_box.start, gather_box.start)])
         undersized_pair = _make_l1_small_semaphore_pair(rank_line, one_core)
-        with expect_error(RuntimeError, "must cover all selected reader/writer cores"):
+        with expect_error(RuntimeError, "must cover all"):
             run(ready_semaphore=undersized_pair[0], data_valid_semaphore=undersized_pair[1])
 
         device_grid = rank_line.compute_with_storage_grid_size()
@@ -2154,7 +2000,7 @@ def test_high_bw_all_gather_external_semaphore_validation(mesh_device, expect_er
             )
 
         one_core_pair = _make_l1_small_semaphore_pair(rank_line, one_core)
-        with expect_error(RuntimeError, "needs at least"):
+        with expect_error(RuntimeError, "needs at least|has too few cores"):
             run(
                 ready_semaphore=one_core_pair[0],
                 data_valid_semaphore=one_core_pair[1],

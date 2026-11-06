@@ -57,6 +57,7 @@ static_assert(
     hashable_v<KernelSpec::CompilerOptions>, "KernelSpec::CompilerOptions must be hashable via ttsl reflection");
 static_assert(
     hashable_v<KernelSpec::RuntimeArgSchema>, "KernelSpec::RuntimeArgSchema must be hashable via ttsl reflection");
+static_assert(hashable_v<ArrayArgDecl>, "ArrayArgDecl must be hashable via ttsl reflection");
 static_assert(hashable_v<DFBBinding>, "DFBBinding must be hashable via ttsl reflection");
 static_assert(hashable_v<SemaphoreBinding>, "SemaphoreBinding must be hashable via ttsl reflection");
 static_assert(hashable_v<TensorBinding>, "TensorBinding must be hashable via ttsl reflection");
@@ -74,9 +75,13 @@ static_assert(hashable_v<ComputeHardwareConfig>, "ComputeHardwareConfig must be 
 static_assert(
     hashable_v<ComputeHardwareConfig::Compute1XXConfig>, "Compute1XXConfig must be hashable via ttsl reflection");
 static_assert(
+    hashable_v<ComputeHardwareConfig::Compute12XConfig>, "Compute12XConfig must be hashable via ttsl reflection");
+static_assert(
     hashable_v<ComputeHardwareConfig::Compute2XXConfig>, "Compute2XXConfig must be hashable via ttsl reflection");
 
 // Per-spec advanced options
+static_assert(hashable_v<ScratchpadAdvancedOptions>, "ScratchpadAdvancedOptions must be hashable via ttsl reflection");
+static_assert(std::is_aggregate_v<ScratchpadAdvancedOptions>, "ScratchpadAdvancedOptions must remain an aggregate");
 static_assert(hashable_v<KernelAdvancedOptions>, "KernelAdvancedOptions must be hashable via ttsl reflection");
 static_assert(hashable_v<DFBAdvancedOptions>, "DFBAdvancedOptions must be hashable via ttsl reflection");
 static_assert(hashable_v<SemaphoreAdvancedOptions>, "SemaphoreAdvancedOptions must be hashable via ttsl reflection");
@@ -142,6 +147,8 @@ static_assert(std::is_aggregate_v<ComputeHardwareConfig>, "ComputeHardwareConfig
 static_assert(
     std::is_aggregate_v<ComputeHardwareConfig::Compute1XXConfig>, "Compute1XXConfig must remain an aggregate");
 static_assert(
+    std::is_aggregate_v<ComputeHardwareConfig::Compute12XConfig>, "Compute12XConfig must remain an aggregate");
+static_assert(
     std::is_aggregate_v<ComputeHardwareConfig::Compute2XXConfig>, "Compute2XXConfig must remain an aggregate");
 static_assert(
     std::is_aggregate_v<KernelSpec::CompilerOptions>,
@@ -154,6 +161,8 @@ static_assert(
 static_assert(
     std::is_aggregate_v<KernelSpec::RuntimeArgSchema>,
     "RuntimeArgSchema must remain an aggregate to support designated initializers");
+static_assert(
+    std::is_aggregate_v<ArrayArgDecl>, "ArrayArgDecl must remain an aggregate to support designated initializers");
 
 // These tests document the intended construction pattern using designated initializers.
 // They serve as living documentation and will fail to compile if aggregate status is broken.
