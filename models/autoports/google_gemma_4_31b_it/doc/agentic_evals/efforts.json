@@ -1601,7 +1601,31 @@
         "success": "All5 complete; anchor live through overlap; honest host-wall comparison, no device timing substitution."
       },
       "box_hours": 0.35,
-      "status": "running"
+      "status": "done",
+      "used_device_hours": 0.1090498825,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": {
+        "requests": 5,
+        "client_seconds": 166.855,
+        "cold_ttft_ms": [
+          782.8310740878806,
+          8284.344288986176,
+          48065.079889958724
+        ],
+        "overlap": {
+          "input_tokens": 107585,
+          "concurrent_decode_requests": 1,
+          "window_seconds": 49.25943780597299,
+          "other_delivered_tokens": 28,
+          "other_output_tokens_per_second": 0.5684189923216062,
+          "all_anchors_live_through_window": true,
+          "timing_boundary": "long request submit through first token, including scheduler wait"
+        },
+        "configuration_match": true,
+        "causal_speedup_claim": false
+      },
+      "evidence": "runs/measured-workload-idle-regime/RESULT.md"
     }
   ],
   "rankings": [
@@ -3707,6 +3731,54 @@
         }
       ],
       "reason": "Release/disk/checker validity remains first. Loop cause open after bounded non-reproducing diagnosis; no further stochastic probes until captured normal-rung recurrence. Idle-host protocol measures unresolved host regime, no speed credit; rungs do not wait."
+    },
+    {
+      "after": "idle-regime-workload-complete",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Validity issues unchanged. Idle-host cold/overlap measurements complete; release overlap frequency still unknown, no numerical speed credit. Capacity remains first speed candidate awaiting4distinct native histories."
     }
   ],
   "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

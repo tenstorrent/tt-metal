@@ -982,7 +982,7 @@
     }
   ],
   "status": "valid_gpqa_nightly_terminal_smoke_swe_repair_inflight",
-  "last_updated": "2026-11-06T11:50:44.090784+00:00",
+  "last_updated": "2026-11-06T11:54:06.969835+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -1293,6 +1293,29 @@
         0.6576197724933469
       ],
       "audit": "runs/smoke2-swe-activation-repair/audit.json"
+    },
+    {
+      "arm": "measured-workload-idle-regime",
+      "owner": "coordinator",
+      "device": "local",
+      "status": "completed",
+      "queued_at": "2026-11-06T11:46:58.004182+00:00",
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "predicted_hours": 0.2,
+      "box_hours": 0.35,
+      "timeout_seconds": 1260,
+      "regime": "Serial TT mesh1x4, HF CPU reference finished; ordinary host activity recorded",
+      "owner_check": [],
+      "prediction_basis": "Prior .2758h included CPU-contended startup and failed client retry; .20h current guess, exact previous successful protocol.",
+      "start": "2026-11-06T11:47:34.390258+00:00",
+      "end": "2026-11-06T11:54:06.969835+00:00",
+      "exit_status": 0,
+      "wrapper_exit_status": 1,
+      "wrapper_exit_reason": "Intentional idle API SIGINT; device owners empty",
+      "actual_hours": 0.10904988249999999,
+      "owner_check_after": []
     }
   ],
   "local_idle_intervals": [
@@ -1318,6 +1341,11 @@
       "reason": "Two native replays completed without loop; stopped seed probing by plan. Await full-prefix HF comparison before choosing further device work; no faithful C4 histories available. CI carries three active task/eval jobs.",
       "end": "2026-11-06T11:47:34.390258+00:00",
       "resolution": "HF reference completed; useful same-protocol idle-host measurement now scheduled."
+    },
+    {
+      "start": "2026-11-06T11:54:06.969835+00:00",
+      "end": null,
+      "reason": "No4distinct native histories yet; capacity work awaits normal nightly artifacts. Existing requested local measurements complete."
     }
   ]
 }

@@ -1,0 +1,26 @@
+{
+  "at": "2026-11-06T11:53:52.403900+00:00",
+  "metrics": [
+    "vllm:num_requests_running{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0",
+    "vllm:num_requests_waiting{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0"
+  ],
+  "loadavg": "4.26 5.86 10.61 1/2086 112856\n",
+  "processes": [
+    "    PID    PPID %CPU   RSS COMMAND",
+    " 111080  111019  312 2785332 VLLM::EngineCor",
+    " 111019  110986  4.2 1926152 python",
+    " 110986  110984  1.1 561692 python",
+    "    154       7  0.5 310656 codex",
+    "      1       0  0.0   748 docker-init",
+    "      7       1  0.0 31576 python",
+    "    305     154  0.0 24324 codex-code-mode",
+    "  98434     154  0.0 16776 python",
+    " 102413     154  0.0 16436 python",
+    " 104275     154  0.0 16312 python",
+    " 110982     154  0.0  1968 timeout",
+    " 110984  110982  0.0  2044 timeout",
+    " 111079  111019  0.0 15484 python",
+    " 112854     154  0.0  3648 bash"
+  ],
+  "ordinary_host_activity": "Coordinator read-only commands and short local evidence pre-commit hooks; no HF reference or CPU stress workers."
+}

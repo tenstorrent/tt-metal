@@ -243,8 +243,8 @@
     {
       "problem": "long-prefill-decode-interference",
       "hours": null,
-      "reason": "Measured107585-token cold prefill72.683s and overlap TTFT78.910s under concurrent HF CPU load; anchor delivered28tokens during overlap. Actual release overlap frequency and generation-only share remain unavailable, so no fabricated hours saved.",
-      "evidence": "runs/measured-workload-prefill/RESULT.md; runs/terminal-smoke-runtime-analysis/result.json"
+      "reason": "Idle-host107585 cold48.065s/overlap49.259s; anchor28tokens. Prior HF-contended72.683/78.910s preserved. Actual release overlap frequency/generation share unknown; no fabricated release saving.",
+      "evidence": "runs/measured-workload-idle-regime/RESULT.md; runs/measured-workload-prefill/RESULT.md"
     }
   ],
   "last_updated": "2026-11-06T10:02:30.826022+00:00",

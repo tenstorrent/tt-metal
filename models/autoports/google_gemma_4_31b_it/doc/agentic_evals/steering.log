@@ -15,3 +15,4 @@
 2026-11-06T10:56:20.156922+00:00 Terminal valid smoke and native replay boundary: inputs extended48h/run12h/CI6 unchanged; no new steering. Advance Terminal nightly; one further native seed only, diagnosis box1h.
 2026-11-06T11:36:29.137500+00:00 SWE valid-smoke and cohort-preparation boundaries: inputs reread; extended48h/run12h/CI6 unchanged; no steering.md. Nightly dispatched without effort delay; no new release-route exception inferred.
 2026-11-06T11:47:50.054692+00:00 Django diagnosis/retention boundary: inputs unchanged extended48h/run12h/CI6; no steering.md. Stop stochastic probes; preserve loop as failure. Repeat existing workload under idle-host regime after HF completion; no runtime change.
+2026-11-06T11:55:58.959673+00:00 Idle-regime effort boundary: inputs48h/run12h/CI6 unchanged, no steering.md. Keep same runtime; await normal-rung history evidence for capacity.

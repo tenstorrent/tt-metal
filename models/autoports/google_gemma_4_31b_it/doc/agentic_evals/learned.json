@@ -112,6 +112,10 @@
     {
       "fact": "Collected normal SWE CI phase export has9680 consecutive matched steps,98prefill including9host-compatible sampling steps,9582device-sampled decode steps; zero errors/truncation/pending at final snapshot. Consecutive host-boundary intervals include plugin work and idle gaps, not device time.",
       "evidence": "runs/swe-phase-accounting-confirmation/result.json"
+    },
+    {
+      "fact": "At observed107585-token stress length, B8 idle-host coldTTFT48.065s and overlap49.259s; concurrent anchor delivered28tokens. Prior16-threadHF regime took72.683/78.910s. Single protocol repeats with fresh UUID prefixes; host regime matters, no causal speedup or release saving inferred.",
+      "evidence": "runs/measured-workload-idle-regime/RESULT.md"
     }
   ],
   "suite_timings": [

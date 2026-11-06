@@ -1,0 +1,22 @@
+[
+  "timeout",
+  "600",
+  "python_env/bin/python",
+  "models/autoports/google_gemma_4_31b_it/tests/check_serving_load_costs.py",
+  "--engine-pid",
+  "111080",
+  "--server-log",
+  "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/measured-workload-idle-regime/server/server.log",
+  "--output",
+  "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/measured-workload-idle-regime/result.json",
+  "--workload",
+  "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/measured-workload-idle-regime/workload.json",
+  "--batch",
+  "2",
+  "--stages",
+  "prefill,overlap",
+  "--overlap-decode-tokens",
+  "2048",
+  "--request-timeout",
+  "600"
+]

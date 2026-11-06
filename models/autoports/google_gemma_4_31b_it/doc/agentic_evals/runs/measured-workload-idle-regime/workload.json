@@ -1,0 +1,8 @@
+{
+  "workload": {
+    "target_concurrency": 2,
+    "typical_context_tokens": 31755,
+    "working_set_tokens": 107585,
+    "source": "runs/real-history-capacity/workload-result.json: pooled median prompt and maximum prompt+completion across150 saved SWE usage rows;11 missing attempts; scores quarantined. Diagnostic sizing, not universal capacity bounds."
+  }
+}

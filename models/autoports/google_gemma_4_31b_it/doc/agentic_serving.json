@@ -1542,32 +1542,41 @@
       "measurements": [
         {
           "input_tokens": 4096,
-          "ttft_ms": 871.7964639654383,
-          "input_tokens_per_second": 4698.344360527692,
+          "ttft_ms": 782.8310740878806,
+          "input_tokens_per_second": 5232.291021115218,
           "status": "pass",
           "prefix_cache_bypass": "reset while idle plus unique initial prefix"
         },
         {
-          "input_tokens": 32768,
-          "ttft_ms": 9063.113720039837,
-          "input_tokens_per_second": 3615.5344633429104,
+          "input_tokens": 31755,
+          "ttft_ms": 8284.344288986176,
+          "input_tokens_per_second": 3833.1337873315406,
+          "status": "pass",
+          "prefix_cache_bypass": "reset while idle plus unique initial prefix"
+        },
+        {
+          "input_tokens": 107585,
+          "ttft_ms": 48065.079889958724,
+          "input_tokens_per_second": 2238.319383766916,
           "status": "pass",
           "prefix_cache_bypass": "reset while idle plus unique initial prefix"
         }
       ],
-      "server_max_num_seqs": 32,
+      "server_max_num_seqs": 8,
       "request_concurrency": 1,
+      "planned_clients_peak": 2,
       "decode_during_working_set_prefill": {
-        "input_tokens": 32768,
-        "concurrent_decode_requests": 31,
-        "window_seconds": 9.734427768969908,
-        "other_delivered_tokens": 279,
-        "other_output_tokens_per_second": 28.66116084289602,
+        "input_tokens": 107585,
+        "concurrent_decode_requests": 1,
+        "window_seconds": 49.25943780597299,
+        "other_delivered_tokens": 28,
+        "other_output_tokens_per_second": 0.5684189923216062,
         "all_anchors_live_through_window": true,
         "timing_boundary": "long request submit through first token, including scheduler wait"
       },
-      "evidence": "readiness_vllm/stage10_final_load_v2/load_costs.json",
-      "timing": "HTTP TTFT/input rate, not device time; typical context4096 shares the4096 row."
+      "evidence": "doc/agentic_evals/runs/measured-workload-idle-regime/RESULT.md",
+      "timing": "Host HTTP TTFT and delivery; no device timing. No HF/stress load; ordinary coordinator and brief hooks. Same protocol, freshUUID prefixes.",
+      "prior_contended_evidence": "doc/agentic_evals/runs/measured-workload-prefill/RESULT.md"
     },
     "host_contention": {
       "idle": {
@@ -1647,7 +1656,38 @@
       8,
       16,
       32
-    ]
+    ],
+    "prior_stage10_prefill_by_length": {
+      "measurements": [
+        {
+          "input_tokens": 4096,
+          "ttft_ms": 871.7964639654383,
+          "input_tokens_per_second": 4698.344360527692,
+          "status": "pass",
+          "prefix_cache_bypass": "reset while idle plus unique initial prefix"
+        },
+        {
+          "input_tokens": 32768,
+          "ttft_ms": 9063.113720039837,
+          "input_tokens_per_second": 3615.5344633429104,
+          "status": "pass",
+          "prefix_cache_bypass": "reset while idle plus unique initial prefix"
+        }
+      ],
+      "server_max_num_seqs": 32,
+      "request_concurrency": 1,
+      "decode_during_working_set_prefill": {
+        "input_tokens": 32768,
+        "concurrent_decode_requests": 31,
+        "window_seconds": 9.734427768969908,
+        "other_delivered_tokens": 279,
+        "other_output_tokens_per_second": 28.66116084289602,
+        "all_anchors_live_through_window": true,
+        "timing_boundary": "long request submit through first token, including scheduler wait"
+      },
+      "evidence": "readiness_vllm/stage10_final_load_v2/load_costs.json",
+      "timing": "HTTP TTFT/input rate, not device time; typical context4096 shares the4096 row."
+    }
   },
   "datatype_sweep_stage_review": "datatype_sweep/stage_review.md",
   "optimized_vllm_ledger": {

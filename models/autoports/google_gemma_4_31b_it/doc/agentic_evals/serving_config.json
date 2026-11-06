@@ -244,6 +244,13 @@
         "--tool-call-parser gemma4",
         "--enable-auto-tool-choice"
       ]
+    },
+    {
+      "arm": "measured-workload-idle-regime",
+      "planned_clients": 2,
+      "batch": 8,
+      "result": "pass5requests",
+      "evidence": "runs/measured-workload-idle-regime/RESULT.md"
     }
   ],
   "ci_confirmation_runs": [
