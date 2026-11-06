@@ -48,9 +48,13 @@ ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, 
     }
     const ttsl::SmallVector<int> kv_seq_dims =
         tensors.page_table.has_value() ? ttsl::SmallVector<int>{} : ttsl::SmallVector<int>{2};
+    // A sharded output bakes its tile shape into the writer's and compute kernel's accessor compile-time args,
+    // so its Q tile count stays in the key. An interleaved accessor carries no shape.
+    const uint32_t sharded_output_q_tiles = attrs.output_mem_config.is_sharded() ? geo.valid_Sqt : 0u;
     return tt::tt_metal::operation::hash_operation<SDPAOperation>(
         keyed,
         geo.q_num_chunks,
+        sharded_output_q_tiles,
         geo.kernel_padding_mask,
         geo.k_partial_col,
         attrs.is_causal && sdpa_causal_pairs_uniform(geo),

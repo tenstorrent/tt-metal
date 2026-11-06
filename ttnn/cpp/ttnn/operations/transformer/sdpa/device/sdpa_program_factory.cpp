@@ -553,6 +553,23 @@ SDPASeqGeometry sdpa_seq_geometry(const SDPAParams& attrs, const SDPAInputs& ten
     const std::size_t q_chunk_size = attrs.program_config ? attrs.program_config->q_chunk_size : 32;
     const std::size_t k_chunk_size = attrs.program_config ? attrs.program_config->k_chunk_size : 32;
 
+    // compute_program_hash calls this before validate_on_program_cache_miss runs, so everything the helper
+    // divides by or dereferences is checked here first, with the validator's messages.
+    TT_FATAL(tensors.q.device() != nullptr, "Operands to SDPA need to be allocated in buffers on device");
+    TT_FATAL(
+        q_chunk_size > 0 && q_chunk_size % TILE_HEIGHT == 0,
+        "q_chunk_size must be a positive multiple of TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
+        q_chunk_size,
+        TILE_HEIGHT);
+    TT_FATAL(
+        k_chunk_size > 0 && k_chunk_size % TILE_HEIGHT == 0,
+        "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
+        k_chunk_size,
+        TILE_HEIGHT);
+    TT_FATAL(
+        !attrs.chunk_start_idx_tensor.has_value() || tensors.page_table.has_value(),
+        "chunk_start_idx_tensor requires a page_table");
+
     SDPASeqGeometry g;
     g.Sq = q_shape[2];
     if (attrs.chunk_start_idx_tensor.has_value()) {

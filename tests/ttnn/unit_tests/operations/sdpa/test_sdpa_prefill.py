@@ -333,6 +333,7 @@ def run_sdpa_noncausal(
     bcast_mask_batch_dim=False,
     bcast_mask_head_dim=True,
     fp32_dest_acc_en=False,
+    output_memory_config=None,
 ):
     torch.manual_seed(1234)
     if sk is None:
@@ -384,6 +385,7 @@ def run_sdpa_noncausal(
         attn_mask=tt_mask,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
+        memory_config=output_memory_config,
     )
     tt_back = ttnn.to_torch(tt_back)
     # Slice out any tile-padding
@@ -618,6 +620,7 @@ def test_sdpa_noncausal_k_len_shares_program(
     device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, fp32_dest_acc_en, sks
 ):
     """A dense mask and a different K length each call: the length is a runtime argument, so one program serves all."""
+    entries_after_first = None
     for sk in sks:
         run_sdpa_noncausal(
             device,
@@ -632,7 +635,47 @@ def test_sdpa_noncausal_k_len_shares_program(
             sk=sk,
             fp32_dest_acc_en=fp32_dest_acc_en,
         )
-    assert device.num_program_cache_entries() == 1
+        if entries_after_first is None:
+            # The first length builds SDPA's program and the public wrapper's mask-prescale multiply.
+            entries_after_first = device.num_program_cache_entries()
+    assert device.num_program_cache_entries() == entries_after_first, (
+        f"A new K length must not build a new program, got {device.num_program_cache_entries()} entries "
+        f"vs {entries_after_first} after the first length"
+    )
+
+
+@pytest.mark.parametrize("q_chunk_size, k_chunk_size", [(128, 128)], ids=["q128_k128"])
+@pytest.mark.parametrize("b, nh, nkv, sk, d", ([1, 2, 1, 1024, 128],))
+@pytest.mark.parametrize("sqs", [(1024, 900)], ids=["sq1024_900"])
+def test_sdpa_noncausal_sharded_output_keys_q_len(device, b, nh, nkv, sk, d, q_chunk_size, k_chunk_size, sqs):
+    """Both Q lengths pad to the same chunk count, but a height-sharded output bakes its tile shape into the
+    writer's accessor, so each Q length needs its own program. Both calls must still match torch."""
+    # 16-tile shards: b * nh * tile-padded sq rows (2048 and 1856) span the same four shards for both lengths,
+    # so the shard spec and grid match and only the output's tile count differs.
+    shard_rows = 512
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_rows, d), ttnn.ShardOrientation.ROW_MAJOR)
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    entries = []
+    for sq in sqs:
+        run_sdpa_noncausal(
+            device,
+            b,
+            nh,
+            nkv,
+            sq,
+            d,
+            q_chunk_size,
+            k_chunk_size,
+            ttnn.bfloat16,
+            sk=sk,
+            output_memory_config=output_memory_config,
+        )
+        entries.append(device.num_program_cache_entries())
+    assert entries[1] == entries[0] + 1, (
+        f"A sharded output must key the program on the Q tile count, got {entries[1]} entries after the second "
+        f"length vs {entries[0]} after the first"
+    )
 
 
 def run_sdpa_noncausal_randn_bias(device, b, nh, s, d, torch_dtype, ttnn_dtype):
