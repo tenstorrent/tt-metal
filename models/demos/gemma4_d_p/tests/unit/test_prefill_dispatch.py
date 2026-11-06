@@ -18,6 +18,7 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
     hidden = SimpleNamespace(shape=(1, 1, 1024, 64), is_sharded=lambda: False)
     model = object.__new__(Gemma4Model)
     model.mesh_device = object()
+    model.dflash = None
     model.hf_config = SimpleNamespace(layer_types=("sliding_attention", "full_attention"))
     model.tt_kv_cache = [None, None]
     model._prefill_metadata_external = True

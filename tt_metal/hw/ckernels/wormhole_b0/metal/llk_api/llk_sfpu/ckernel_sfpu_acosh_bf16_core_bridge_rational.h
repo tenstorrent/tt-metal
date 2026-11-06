@@ -13,13 +13,6 @@
 #endif
 #include "ckernel_sfpu_acosh_bf16_min_max.h"
 namespace ckernel::sfpu::bf16::acosh {
-template <typename Config>
-inline void init_core_bridge_rational() {
-#if defined(TRISC_MATH)
-    ckernel::llk_math_sfpu_init_once();
-#endif
-    ckernel::sfpu::sfpu_reciprocal_init<false>();
-}
 template <typename Config, int Iterations = 32>
 inline void calculate_core_bridge_rational() {
     static_assert(Iterations == 32, "selected rational program owns a complete tile");

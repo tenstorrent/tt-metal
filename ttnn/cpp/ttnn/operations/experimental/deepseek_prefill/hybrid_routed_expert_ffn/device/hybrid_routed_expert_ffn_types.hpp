@@ -327,11 +327,16 @@ struct HybridRoutedExpertFfnParams {
     std::optional<GlobalSemaphore> fwd_arrived;
     std::optional<GlobalSemaphore> final_arrived;
     std::optional<GlobalSemaphore> expert_go;
-    // Every address combine bakes into its compile-time arguments: the three semaphores and the per-call L1
+    // Combine's per-channel credit counters, caller-owned for the same reason and one more: the L1 arena
+    // below has taken every free byte by the time combine is built, so there is nothing left to allocate
+    // them from. combine::channel_semaphore_count says how many, and what order they are read in.
+    std::vector<GlobalSemaphore> channel_semaphores;
+    // Every address combine bakes into its compile-time arguments: the semaphores and the per-call L1
     // arena its layout is placed in. Hashed, so a cached program is only ever reused over the same layout.
     uint32_t fwd_arrived_addr = 0;
     uint32_t final_arrived_addr = 0;
     uint32_t expert_go_addr = 0;
+    std::vector<uint32_t> channel_semaphore_addrs;
     uint32_t l1_arena_addr = 0;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
@@ -350,6 +355,7 @@ struct HybridRoutedExpertFfnParams {
         "fwd_arrived_addr",
         "final_arrived_addr",
         "expert_go_addr",
+        "channel_semaphore_addrs",
         "l1_arena_addr");
 
     auto attribute_values() const {
@@ -369,6 +375,7 @@ struct HybridRoutedExpertFfnParams {
             fwd_arrived_addr,
             final_arrived_addr,
             expert_go_addr,
+            channel_semaphore_addrs,
             l1_arena_addr);
     }
 };

@@ -101,10 +101,6 @@
             TT_PROGRAM_RATIONAL_LATE_RAW_CORE_PEAK_LIVE <= TT_PROGRAM_RATIONAL_LATE_RAW_LREG_CAPACITY &&
                 TT_PROGRAM_RATIONAL_LATE_RAW_SUFFIX_PEAK_LIVE <= TT_PROGRAM_RATIONAL_LATE_RAW_LREG_CAPACITY,
             "rational selected core or raw-only suffix exceeds SFPU capacity");
-        // The ordinary selected Horner/reconstruction has retired, while the
-        // BF16 destination source row is still byte-exact.  Materialize raw
-        // classifier state only now and let it take terminal precedence over
-        // the decoded +Inf policy before the unchanged RNE/store.
         vUInt raw_u16 = dst_reg[d].mode<DataLayout::U16>();
         finalize_encoded_raw_domain_actions(raw_u16, result);
 #endif

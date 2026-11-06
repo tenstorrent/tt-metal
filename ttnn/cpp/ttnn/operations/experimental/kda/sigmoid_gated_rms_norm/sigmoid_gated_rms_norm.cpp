@@ -18,7 +18,7 @@ ttnn::Tensor sigmoid_gated_rms_norm(
     DataType output_dtype,
     uint32_t gate_column_offset) {
     TT_FATAL(
-        input.storage_type() == StorageType::DEVICE && input.buffer() != nullptr,
+        input.storage_type() == StorageType::DEVICE && input.is_allocated(),
         "sigmoid_gated_rms_norm: input must be an allocated device tensor");
     const auto output_memory_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     const auto kernel_config = init_device_compute_kernel_config(
