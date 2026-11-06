@@ -100,6 +100,7 @@ def _run(
     in0_rows=32,
     in0_image=None,
     fidelity=MathFidelity.HiFi2,
+    page_rows=0,
 ):
     in0_faces = 2 if in0_rows <= 16 else 4
     in0_image = in0_image if in0_image is not None else bytes(TILE_BYTES_BF16)
@@ -114,6 +115,7 @@ def _run(
                 matmul=matmul,
                 in0_rows=in0_rows,
                 in0_faces=in0_faces,
+                page_rows=page_rows,
             ),
             MATH_FIDELITY(fidelity),
             DEST_SYNC(DestSync.Full),
@@ -270,6 +272,33 @@ def test_gguf_decode_mm(fmt, rows):
     _assert_matmul(device, in0.to(torch.float32), in1, MathFidelity.HiFi2)
 
 
+@parametrize(fmt=["Q4_K", "Q5_K", "Q4_0"])
+def test_gguf_decode_mm_page_rows(fmt):
+    """The decode (and Q4_K / Q5_K's group step) with a DEST row offset: rows = 64 one tile lower."""
+    (fmt,) = fmt
+    f = FORMATS[fmt]
+    n, k = TILE, max(_k_unit(f), 8 * TILE)
+    nt, kt = n // TILE, k // TILE
+    rng = np.random.default_rng(4000 + f.id)
+    blocks = random_blocks(f, n, k, rng, wide_scales=False)
+    in0 = torch.from_numpy(
+        rng.uniform(-1.0, 1.0, size=(TILE, k)).astype(np.float32)
+    ).to(torch.bfloat16)
+    device = _run(
+        f.id,
+        kt,
+        nt,
+        _weight_pages(f, blocks),
+        DataFormat.UInt32,
+        nt,
+        matmul=True,
+        in0_image=_in0_tiles(in0.to(torch.float32).numpy()),
+        page_rows=64,
+    )
+    in1 = torch.from_numpy(dequantize(f, blocks)).T.contiguous()
+    _assert_matmul(device, in0.to(torch.float32), in1, MathFidelity.HiFi2)
+
+
 @parametrize(
     fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
     rows=[5, 16, 32],
@@ -306,3 +335,4 @@ def test_dest_srca_mm(fidelity, rows, kt):
         fidelity=fidelity,
     )
     _assert_matmul(device, in0.to(torch.float32), in1, fidelity)
+
