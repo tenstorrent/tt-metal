@@ -1,6 +1,6 @@
 {
-  "status": "review_complete_local_checkpoint_pending",
-  "active": "local checkpoint",
+  "status": "complete",
+  "active": null,
   "completed": [
     "coldburst candidate gate andCI-shaped before/after",
     "all15full60bucketcalibrations atcontext262144",
@@ -17,9 +17,9 @@
     "Full60 async mixed68requests match tracked synchronous control",
     "Growing160requests to32768tokens passed; lateprefixreuse99.65%",
     "Corrected load costs98requests pass, all stress workers cleaned",
-    "Independent stage review clean-pass; no required work"
+    "Independent stage review clean-pass; no required work",
+    "Local source checkpoint a785c2626c4552af083c4cc190c325d615d392c3",
+    "Exact-ID compact telemetry finalized"
   ],
-  "remaining": [
-    "Local stage-owned commits, log SHAs, finalize compact telemetry"
-  ]
+  "remaining": []
 }
