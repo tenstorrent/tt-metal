@@ -815,8 +815,9 @@ class Qwen36Model:
 
     def vision_rows_host(self, vision_tokens):
         """The packed vision rows as one host bf16 tensor [num_image_tokens, dim] (what _set_vision_merge splices); a
-        host tensor passes through. A prefill that replays traces before its last vision splice reads the rows once,
-        first: the device rows were allocated after the traces were captured, so a replay can overwrite them."""
+        host tensor passes through. A traced prefill reads the rows once, before its first replay: the vision tower
+        allocates the device rows per request, after the traces were captured, so a replay can overwrite them before
+        a later chunk splices them."""
         if vision_tokens is None or isinstance(vision_tokens, torch.Tensor):
             return vision_tokens
         if self.num_devices > 1:
@@ -7525,6 +7526,7 @@ class Qwen36Model:
         persistent output), and must enqueue its reads before returning (the next replay overwrites it).
         When on_chunk is given the short-trace shortcut is skipped (it has no per-chunk hidden to hand out)."""
         chunk_size = self._chunked_chunk_size or 2048
+        vision_tokens = self.vision_rows_host(vision_tokens)  # before the first replay (see vision_rows_host)
         if (
             on_chunk is None
             and actual_len < chunk_size
