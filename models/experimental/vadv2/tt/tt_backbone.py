@@ -20,15 +20,16 @@ class TtResnet50:
             act_block_h=32,
         )
 
-        # Layer 1
+        # Layer 1, at the highest resolution: its circular buffers with float32 accumulation do not fit L1.
         self.layer1_0 = TtBottleneck(
             conv_args.layer1[0],
             conv_pth.layer1_0,
             device=self.device,
             is_downsample=True,
+            fp32_dest_acc=False,
         )
-        self.layer1_1 = TtBottleneck(conv_args.layer1[1], conv_pth.layer1_1, device=self.device)
-        self.layer1_2 = TtBottleneck(conv_args.layer1[2], conv_pth.layer1_2, device=self.device)
+        self.layer1_1 = TtBottleneck(conv_args.layer1[1], conv_pth.layer1_1, device=self.device, fp32_dest_acc=False)
+        self.layer1_2 = TtBottleneck(conv_args.layer1[2], conv_pth.layer1_2, device=self.device, fp32_dest_acc=False)
 
         # Layer 2
         self.layer2_0 = TtBottleneck(
