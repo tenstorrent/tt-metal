@@ -21,6 +21,11 @@ This skill covers three related workflows:
 - **Sweep coverage**: choose tile shapes and dest-fill matrices with the
   shared helpers in `helpers/param_config.py`.
 
+The architecture-neutral contract lives in `perf-test`: one kernel and one
+runner for functional and perf, the same INIT and buffers for every run type,
+and isolates that run the `L1_TO_L1` loop body with only cross-thread sync
+removed. Apply it here as well; this skill adds what is Quasar-specific.
+
 ## Choose the workflow
 
 1. If `tests/python_tests/quasar/perf_[op]_quasar.py` does not exist, follow
@@ -47,7 +52,8 @@ This skill covers three related workflows:
    from test_[op]_quasar import test_[op]_quasar as run_[op]_quasar
    ```
 
-6. Use a narrow perf-oriented sweep:
+6. Use a perf sweep that is a documented subset of the functional sweep.
+   Never add values the functional test lacks:
    - `run_types=PERF_RUN_TYPES_QUASAR` from `helpers.llk_params`
    - a fixed `loop_factor=32`, unless the operation has an established value
    - a fixed `is_perf=True`
@@ -131,6 +137,12 @@ In `tests/sources/quasar/[op]_quasar_test.cpp`:
 - Branch with compile-time `if constexpr (PERF_RUN_TYPE == ...)`.
 - End each profiled zone with `PROFILER_SYNC()`.
 - Preserve the functional `L1_TO_L1` path.
+- Run one INIT for every run type, with no per-run-type reordering and no
+  isolate prefill.
+- Read and write the real stimuli buffers in every run type.
+- Share each thread's per-block loop body between `L1_TO_L1` and its isolate,
+  so the branches differ only in sync.
+- Select parameters only on `SPEED_OF_LIGHT`, never on `LLK_PROFILER`.
 - Use current Quasar LLK signatures and TensorShape APIs; do not copy stale
   call signatures from older perf branches.
 
