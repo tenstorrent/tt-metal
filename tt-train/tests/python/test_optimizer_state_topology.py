@@ -41,7 +41,7 @@ import ttml
 import ttnn
 from ttml import checkpointing
 from ttml.modules import AbstractModuleBase, LinearLayer
-from tp_block import fresh_tp, make_adamw, train_step, trained_tp
+from tp_block import assert_identical_across_devices, device_slices, fresh_tp, make_adamw, train_step, trained_tp
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
@@ -134,20 +134,6 @@ def _moment_mismatches(opt, expected: dict) -> list:
     return mismatches
 
 
-def _device_slices(tensor: ttml.autograd.Tensor) -> list:
-    """Each device's slice of ``tensor`` as a numpy array, in mesh order. No composer is involved, so nothing here
-    trusts the tensor's topology label."""
-    value = tensor.get_value(NATIVE)
-    return [ttnn.to_torch(shard).float().numpy() for shard in ttnn.get_device_tensors(value)]
-
-
-def _assert_identical_across_devices(tensor: ttml.autograd.Tensor, what: str) -> None:
-    """Every device holds the same bytes of ``tensor``; read through ``_device_slices``, so no label is trusted."""
-    slices = _device_slices(tensor)
-    for dev, other in enumerate(slices[1:], start=1):
-        assert np.array_equal(slices[0], other), f"{what}: device {dev} differs from device 0"
-
-
 def _checkpointed_tensors(params, opt):
     yield from ((("model", name), t) for name, t in params.items())
     yield from ((("optimizer", *path, name), m) for path, name, m in _state_tensors(opt.get_state_dict()))
@@ -155,7 +141,7 @@ def _checkpointed_tensors(params, opt):
 
 def _snapshot(params: "ttml.NamedParameters", opt) -> dict:
     """{("model", name) | ("optimizer", *path, name): per-device slices} for everything a checkpoint of them holds."""
-    return {key: _device_slices(t) for key, t in _checkpointed_tensors(params, opt)}
+    return {key: device_slices(t.get_value(NATIVE)) for key, t in _checkpointed_tensors(params, opt)}
 
 
 def _assert_checkpoint_round_trips(path: str, params: "ttml.NamedParameters", opt, fresh) -> None:
@@ -288,7 +274,7 @@ class TestTP:
                     mislabel,
                 )
                 assert list(grad.get_value(NATIVE).shape) == local_shape
-                _assert_identical_across_devices(grad, f"precondition: gradient of {name}")
+                assert_identical_across_devices(grad.get_value(NATIVE), f"precondition: gradient of {name}")
                 grad_layout = _layout(grad)
                 assert grad_layout[0][tp_axis] == ("shard", 3), f"precondition: Shard(3) gradient, got {grad_layout}"
                 assert grad_layout != before[name], "precondition: gradient label must differ from the parameter's"
@@ -310,9 +296,9 @@ class TestTP:
             # The Replicate label stays true: identical gradients on every device leave identical parameters and
             # state on every device.
             for name, t in params.items():
-                _assert_identical_across_devices(t, f"step {step}: parameter {name}")
+                assert_identical_across_devices(t.get_value(NATIVE), f"step {step}: parameter {name}")
             for path, name, m in _state_tensors(opt.get_state_dict()):
-                _assert_identical_across_devices(m, f"step {step}: state {'/'.join(path)}[{name}]")
+                assert_identical_across_devices(m.get_value(NATIVE), f"step {step}: state {'/'.join(path)}[{name}]")
 
 
 # --- FSDP -----------------------------------------------------------------------------------------------------

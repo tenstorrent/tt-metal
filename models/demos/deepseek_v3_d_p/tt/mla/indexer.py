@@ -349,6 +349,11 @@ class TtIndexerBase:
             index_topk=config.index_topk,
             index_rope_interleave=config.index_rope_interleave,
         )
+        # Indexer rope width: absent -> 64 (DS-V3.2 / GLM); 0 -> NoPE indexer (Kimi-K3.1), no rope tables read.
+        self._index_rope_dim = getattr(config, "index_rope_dim", None)
+        if self._index_rope_dim is None:
+            self._index_rope_dim = 64
+        assert self._index_rope_dim in (0, 64), f"indexer rope width must be 0 (NoPE) or 64; got {self._index_rope_dim}"
         self.seq_len = seq_len
         # Keep the index tensor width fixed at the configured maximum, except on small-cache test /
         # deployment configurations where the cache itself cannot contain that many entries.  This
@@ -426,7 +431,7 @@ class TtIndexerBase:
         # is natively interleaved -> no permute. NOTE: the stored key is then in interleaved layout —
         # reindex by rope.interleaved_to_halfsplit_perm to compare it against a half-split reference.
         self._rope_perm = None
-        if not self.index_args.index_rope_interleave:
+        if self._index_rope_dim and not self.index_args.index_rope_interleave:
             # rope.interleaved_perm_matrix owns the half-split -> interleaved convention (single source).
             self._rope_perm = ttnn.from_torch(
                 interleaved_perm_matrix(64).to(torch.bfloat16),
@@ -572,7 +577,10 @@ class TtIndexerBase:
         block-cyclic global position on-device from kv_actual_global, exactly as MLA's _apply_rope_padded,
         so keys land at the same positions update_padded_kv_cache writes them to. For DS (half-split
         weights) self._rope_perm first reorders the rope half into the interleaved arrangement so this
-        interleaved op matches the DS reference (the permutation cancels in q·k, applied to both q and k)."""
+        interleaved op matches the DS reference (the permutation cancels in q·k, applied to both q and k).
+        A NoPE indexer returns x itself."""
+        if self._index_rope_dim == 0:
+            return x
         if self._rope_perm is None:
             assert x.shape[-1] == self.index_args.index_head_dim, "Indexer input width must match index_head_dim"
             return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
