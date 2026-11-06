@@ -364,6 +364,6 @@ dashboard:
 paths:
   art: /scratch/$USER/bringup                       # node-local: weight cache, runs, checkpoint
   hf: hf_full                                       # under art (HF rev 5254448, re-downloaded per host)
-  golden: /data/$USER/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4   # shared NFS: survives a change of galaxy
+  golden: /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4   # shared NFS master (owner 2026-11-06: fixed path, readable by others; each box reads a local mirror, F260)
 reference:
   shipped_dtype: bfloat16
