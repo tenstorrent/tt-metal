@@ -58,6 +58,8 @@ def _state(device, g, block, num_blocks, layout):
         conv_k=ttnn.experimental.alias_view(k, [lay.conv_pages_total, 1, 32, 32], ttnn.bfloat16, check_slices=False),
         group=0,
         two_pool=lay.heads_in_k < g.Nv,
+        k=k,
+        v=v,
     )
     dn = SimpleNamespace(Nv=g.Nv, Nk=g.Nk, Dk=128, Dv=128, K=4, qkv_dim_tp=g.C, _spec_paged=views)
     st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
@@ -305,3 +307,81 @@ def test_chained_copies_select_dst_by_the_device_count(device, geo_block_layout)
     assert torch.equal(conv_at(9), window[2:3, 2:5]), "row 2: selected copy, conv rows after token 1"
     assert torch.equal(rec_at(12), recs[12]) and torch.equal(conv_at(12), carries[12]), "row 5: dst changed"
     assert torch.equal(rec_at(32), recs[32]) and torch.equal(rec_at(21), recs[21]), "a source changed"
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 16_000_000}], indirect=True)
+@pytest.mark.parametrize("geo_block_layout", CASES, ids=lambda c: f"{c[0].id}_b{c[1]}_{c[2]}")
+def test_copy_traces_match_the_eager_block_ops(device, geo_block_layout):
+    """QWEN36_MAMBA_COPY_TRACE: the replayed whole-block copy, page-by-page copy (blocks of either phase), conv write
+    from either window half and the chained copy with device-selected pages leave what the eager ops leave."""
+    from models.demos.blackhole.qwen36.tt.spec_chain import RES_COUNTS
+
+    g, block, layout = geo_block_layout
+    st, dn, k, v = _state(device, g, block, 40, layout)
+    st.model = SimpleNamespace(_paged_kv_caches=[(k, v)], mesh_device=device)
+    st._slot_layers, st.moves_counts, st.chain_copies = {0: dn}, None, []
+    B = 8
+    st.book = sbs.SpecBlockBook(st.layout, 1, B, T, "align", block)
+    torch.manual_seed(7)
+    recs = {b: torch.randn(1, g.Nv, 128, 128) for b in (7, 21, 12)}
+    carries = {b: torch.randn(1, 3, g.C).bfloat16() for b in (7, 21, 12)}
+    with sbs._PageTables(st) as pts:
+        for b in recs:
+            st._write_rec(
+                dn, b, ttnn.from_torch(recs[b], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device), pts
+            )
+            rm = ttnn.from_torch(carries[b], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            st._write_carry(dn, b, rm, pts)
+    windows = [torch.randn(B, 3 + T, g.C).bfloat16() for _ in range(2)]
+    dn._verify_win_pair = [
+        ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for w in windows
+    ]
+    dn._spec_win_par = 0
+    dn.verify_win_cur = lambda: dn._verify_win_pair[dn._spec_win_par]
+    zeros = lambda shape, dt: ttnn.from_torch(torch.zeros(shape), dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
+    dn.rec_state, dn.conv_carry = zeros((1, g.Nv, 128, 128), ttnn.float32), zeros((1, 3, g.C), ttnn.bfloat16)
+    ct = sbs._CopyTraces(st)
+    ct.capture()
+    ct.capture_restore()
+    st._copy_traces = ct
+    rec_at = lambda b: ttnn.to_torch(st._read_rec(dn, b)).reshape(1, g.Nv, 128, 128).float()
+    conv_at = lambda b: ttnn.to_torch(st._read_carry(dn, b)).reshape(1, 3, g.C)
+    # restore of a block into the scratch
+    for b in (7, 12):
+        st.book.set_prefill_blocks([torch.tensor([b])])
+        st.restore(0)
+        assert torch.equal(ttnn.to_torch(dn.rec_state).reshape(recs[b].shape).float(), recs[b]), f"restore {b}: state"
+        assert torch.equal(ttnn.to_torch(dn.conv_carry).reshape(1, 3, g.C), carries[b]), f"restore {b}: conv"
+    raw = lambda t, b: ttnn.to_torch(ttnn.slice(t, (b, 0, 0, 0), [b + 1] + [int(x) for x in list(t.shape)[1:]])).float()
+    # bit-equal blocks (state bytes read as BF8 include nan, which torch.equal never matches)
+    same = lambda a, b: torch.allclose(a, b, rtol=0, atol=0, equal_nan=True)
+    # whole-block copy: every byte of K and V
+    st._copy_block(7, 9)
+    assert same(raw(k, 9), raw(k, 7)) and same(raw(v, 9), raw(v, 7)), "whole-block copy"
+    # page-by-page copies into blocks of both phases
+    for dst in (10, 13):
+        with sbs._PageTables(st) as pts:
+            st._relayout(21, dst, pts)
+        assert torch.equal(rec_at(dst), recs[21]) and torch.equal(conv_at(dst), carries[21]), f"21 -> {dst}"
+    # conv rows of a window column, both window halves
+    for par, (u, t, dst) in ((0, (2, 1, 15)), (1, (5, 3, 16))):
+        dn._spec_win_par = par
+        with sbs._PageTables(st) as pts:
+            st.materialize(u, t, 0, dst, pts)
+        assert torch.equal(conv_at(dst), windows[par][u : u + 1, t + 1 : t + 4]), f"window half {par}"
+    dn._spec_win_par = 0
+    # chained copy with the count on the device: row 2 selects its copy (column 1, block 21 -> 18)
+    w = torch.zeros(B, T, dtype=torch.int64)
+    w[2] = torch.tensor([20, 21, 22, 23])
+    st.book.set_step([w], torch.zeros(B, dtype=torch.int64), [2])
+    cp = torch.zeros(B, T, 2, dtype=torch.int64)
+    cp[2, 1:] = torch.tensor([21, 18])
+    st.capture_chain_copies([cp], [2])
+    res = torch.zeros(3, 32, dtype=torch.int32)
+    res[RES_COUNTS, 2] = 3
+    st.run_chain_copies(result=ttnn.from_torch(res, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device))
+    assert torch.equal(rec_at(18), recs[21]), "chained copy: state"
+    assert torch.equal(conv_at(18), windows[0][2:3, 2:5]), "chained copy: conv rows"
+    assert torch.equal(rec_at(12), recs[12]) and torch.equal(
+        conv_at(12), carries[12]
+    ), "a block outside the copies changed"

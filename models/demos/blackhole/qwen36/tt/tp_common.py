@@ -99,6 +99,14 @@ def mamba_write_trace_enabled():
     return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_WRITE_TRACE", "0") == "1"
 
 
+def mamba_copy_trace_enabled():
+    """QWEN36_MAMBA_COPY_TRACE (default "0"; needs QWEN36_MAMBA_SPEC=1): the GDN block copies (whole block, or page by
+    page between blocks of different phase), the chained copies, the conv history writes from the verify window and
+    the prefill block restore replay captured traces (device-indexed slices and page tables restaged per call) instead
+    of about 60 to 500 eager ops each."""
+    return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_COPY_TRACE", "0") == "1"
+
+
 def verify_device_topk_m():
     """Device-side top-k for the sampled verify (QWEN36_VERIFY_DEVICE_TOPK, default 1 = on; 0 turns it off): 0 when off, else
     M = QWEN36_VERIFY_TOPK_M (default 64) candidates per vocab shard. Read by the model (third verify trace),

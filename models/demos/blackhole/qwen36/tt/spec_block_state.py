@@ -640,6 +640,8 @@ class SpecGdnBlockState:
                 ),
                 group=g,
                 two_pool=lay.heads_in_k < dn.Nv,
+                k=k,
+                v=v,
             )
             self.layers.append((i, dn, g))
             self._slot_layers.setdefault(per_layer_specs[i][2], dn)  # its views cover the slot's K and V
@@ -805,11 +807,9 @@ class SpecGdnBlockState:
             self.book.forget_block(e[3])
         with self._timed("chained block copies", len(todo)), _PageTables(self) as pts:
             if result is None:
-                from models.demos.blackhole.qwen36.tt.gdn_block_state import copy_kv_blocks
-
                 for u, g, src, dst, t, _ in todo:
                     if self.layout.phase(src) == self.layout.phase(dst):
-                        copy_kv_blocks(self.model, [(src, dst)])
+                        self._copy_block(src, dst)
                     else:
                         self._relayout(src, dst, pts)
                     if t is not None:
@@ -824,10 +824,14 @@ class SpecGdnBlockState:
         f32, mc, lay = ttnn.float32, ttnn.DRAM_MEMORY_CONFIG, self.layout
         rep = ttnn.ReplicateTensorToMesh(self.mesh)
         W = int(result.shape[1])
-        row = ttnn.slice(result, [RES_COUNTS, 0], [RES_COUNTS + 1, W], memory_config=mc)
-        cnt = ttnn.typecast(ttnn.to_layout(row, ttnn.TILE_LAYOUT), f32)  # [1, W]: integers, exact in fp32
-        ttnn.deallocate(row)
-        owned = [cnt]
+        owned = []
+
+        def counts_row():
+            row = ttnn.slice(result, [RES_COUNTS, 0], [RES_COUNTS + 1, W], memory_config=mc)
+            cnt = ttnn.typecast(ttnn.to_layout(row, ttnn.TILE_LAYOUT), f32)  # [1, W]: integers, exact in fp32
+            ttnn.deallocate(row)
+            owned.append(cnt)
+            return cnt
 
         def selected(m, dst0, null0, n):
             """int32 ROW_MAJOR [1, n] page table: pages dst0 .. dst0 + n - 1 where m is 1, null0 .. where m is 0."""
@@ -840,8 +844,11 @@ class SpecGdnBlockState:
             return out
 
         heads = lambda b: lay.head_pages(torch.tensor([b]))[0]
+        ct = getattr(self, "_copy_traces", None)
         for u, g, src, dst, t, cs in todo:
-            cu = ttnn.slice(cnt, [0, u], [1, u + 1])  # [1, 1]
+            # per entry: a trace replay may overwrite buffers allocated after its capture, so nothing computed before
+            # one entry's replays is read after them
+            cu = ttnn.slice(counts_row(), [0, u], [1, u + 1])  # [1, 1]
             m = None
             for c in cs:
                 e = ttnn.typecast(ttnn.to_layout(ttnn.eq(cu, float(c)), ttnn.TILE_LAYOUT), f32)
@@ -849,25 +856,28 @@ class SpecGdnBlockState:
             owned.extend((cu, m))
             ps, pd, p0 = heads(src), heads(dst), heads(0)
             tabs = {}  # pool -> its page table: a block names the same pages in every slot's views
-            for dn in self._slot_layers.values():  # every slot's views: the bytes of src belong to group g in each slot
-                for k, (view, h0, h1, off) in enumerate(self._pools(dn)):
-                    if h1 <= h0:
-                        continue
+            for k, (_, h0, h1, off) in enumerate(self._pools(next(iter(self._slot_layers.values())))):
+                if h1 > h0:
                     n = 2 * (h1 - h0)
-                    s0 = (int(ps[h0]) - off) // HALF_PAGES
-                    if k not in tabs:
-                        tabs[k] = selected(m, (int(pd[h0]) - off) // HALF_PAGES, (int(p0[h0]) - off) // HALF_PAGES, n)
-                    tab = tabs[k]
-                    part = ttnn.slice(view, (s0, 0, 0, 0), (s0 + n, 1, dn.Dk // 2, dn.Dv), memory_config=mc)
-                    x = ttnn.reshape(part, (1, 1, n * dn.Dk // 2, dn.Dv))
-                    ttnn.experimental.paged_fill_cache(view, x, tab, batch_idx=0)
-                    ttnn.deallocate(part)
+                    tabs[k] = selected(m, (int(pd[h0]) - off) // HALF_PAGES, (int(p0[h0]) - off) // HALF_PAGES, n)
             cd, c0 = lay.conv_page(dst), lay.conv_page(0)
             if (cd < lay.conv_pages_total) != (c0 < lay.conv_pages_total):
                 raise RuntimeError(f"block {dst} and the null block keep their conv history in different views")
             total = lay.conv_pages_total
             q = lambda page: page if page < total else page - total
             ctab = selected(m, q(cd), q(c0), lay.conv_pages)
+            if ct is not None and ct.chained(src, u, t, g, {**tabs, "conv": ctab}):  # QWEN36_MAMBA_COPY_TRACE
+                continue
+            for dn in self._slot_layers.values():  # every slot's views: the bytes of src belong to group g in each slot
+                for k, (view, h0, h1, off) in enumerate(self._pools(dn)):
+                    if h1 <= h0:
+                        continue
+                    n = 2 * (h1 - h0)
+                    s0 = (int(ps[h0]) - off) // HALF_PAGES
+                    part = ttnn.slice(view, (s0, 0, 0, 0), (s0 + n, 1, dn.Dk // 2, dn.Dv), memory_config=mc)
+                    x = ttnn.reshape(part, (1, 1, n * dn.Dk // 2, dn.Dv))
+                    ttnn.experimental.paged_fill_cache(view, x, tabs[k], batch_idx=0)
+                    ttnn.deallocate(part)
             if t is None:  # src's block holds its conv history: copy it
                 for dn in self._slot_layers.values():
                     vs, qs = dn._spec_paged.conv_at(lay.conv_page(src), total)
@@ -955,6 +965,11 @@ class SpecGdnBlockState:
         fp32, conv_carry [1, K - 1, C] bf16). Same contract as GdnPrefixStateCache.restore."""
         import ttnn
 
+        ct = getattr(self, "_copy_traces", None)
+        if ct is not None:  # QWEN36_MAMBA_COPY_TRACE
+            with self._timed("prefill block restores (trace)", len(self.layers)):
+                if ct.restore([self.book.prefill_block(g, u) for g in range(self.G)]):
+                    return
         with self._timed("prefill block restores", len(self.layers)):
             for _, dn, g in self.layers:
                 b = self.book.prefill_block(g, u)
@@ -1023,6 +1038,29 @@ class SpecGdnBlockState:
         finally:
             model._unbind_gdn_prefill_scratch(prev)
 
+    def capture_copy_traces(self):
+        """QWEN36_MAMBA_COPY_TRACE: capture the block copy, page copy and conv write traces (_CopyTraces). Call after
+        every other trace is captured (MTPSpecEngine.capture_decode). A failed capture leaves the eager ops in charge.
+        """
+        from loguru import logger
+
+        from models.demos.blackhole.qwen36.tt.tp_common import mamba_copy_trace_enabled
+
+        if getattr(self, "_copy_traces", None) is not None or not mamba_copy_trace_enabled():
+            return
+        try:
+            ct = _CopyTraces(self)
+            ct.capture()
+            prev = self.model._bind_gdn_prefill_scratch()
+            try:
+                ct.capture_restore()
+            finally:
+                self.model._unbind_gdn_prefill_scratch(prev)
+            self._copy_traces = ct
+            logger.info(f"[mamba_spec] block copy traces captured ({len(ct.tids)} traces)")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"[mamba_spec] block copy trace capture failed ({e!r}): eager copies")
+
     def warmup(self):
         """Run every eager program of the block paths once on vLLM's null block 0 (prefill write and restore on the
         bound B=1 scratch, the conv write from the window, the whole-block copy and zeroing), so none compiles after
@@ -1061,24 +1099,34 @@ class SpecGdnBlockState:
 
     # ---------------------------------------------------------------- block hooks
     def copy_blocks(self, copies):
-        from models.demos.blackhole.qwen36.tt.gdn_block_state import copy_kv_blocks
-
         self.resolve_moves()
         ops = self.book.copy_plan(copies)
         n_conv = sum(1 for op in ops if op[0] == "conv")
         with self._timed(f"block copies ({n_conv} with conv writes)", len(ops) - n_conv), _PageTables(self) as pts:
             for op in ops:
                 if op[0] == "copy":
-                    copy_kv_blocks(self.model, [(op[1], op[2])])
+                    self._copy_block(op[1], op[2])
                 elif op[0] == "relayout":
                     self._relayout(op[1], op[2], pts)
                 else:
                     self.materialize(*op[1:], pts)
 
+    def _copy_block(self, src, dst):
+        """Whole-block copy src -> dst in every layer slot's K and V (copy_kv_blocks; QWEN36_MAMBA_COPY_TRACE: replayed)."""
+        from models.demos.blackhole.qwen36.tt.gdn_block_state import copy_kv_blocks
+
+        ct = getattr(self, "_copy_traces", None)
+        if ct is None or not ct.block(src, dst):
+            copy_kv_blocks(self.model, [(src, dst)])
+
     def _relayout(self, src, dst, pts):
         """Copy block src's state into block dst page by page with the layout of each (the blocks hold their whole
         fp32 pages at different offsets): in every layer slot, the head pages of each pool and the conv history."""
         import ttnn
+
+        ct = getattr(self, "_copy_traces", None)
+        if ct is not None and ct.copy(src, dst):  # QWEN36_MAMBA_COPY_TRACE
+            return
 
         lay, mc = self.layout, ttnn.DRAM_MEMORY_CONFIG
         ps, pd = lay.head_pages(torch.tensor([src]))[0], lay.head_pages(torch.tensor([dst]))[0]
@@ -1153,6 +1201,9 @@ class SpecGdnBlockState:
         table to write through instead of dst's conv pages, in dst's view)."""
         import ttnn
 
+        ct = getattr(self, "_copy_traces", None)
+        if ct is not None and ct.conv(u, t, g, dst, table):  # QWEN36_MAMBA_COPY_TRACE
+            return
         mc = ttnn.DRAM_MEMORY_CONFIG
         for _, dn, gg in self.layers:
             if gg != g:
@@ -1363,6 +1414,353 @@ class _WriteTrace:
         return True
 
 
+class _CopyTraces:
+    """QWEN36_MAMBA_COPY_TRACE: the block operations that read at a position the host picks, as replays of traces
+    captured once: ``block`` = a whole-block copy of every layer slot's K and V (copy_kv_blocks), ``copy`` = the
+    page-by-page state copy (SpecGdnBlockState._relayout: head pages of each pool and the conv history), ``conv`` = the
+    conv rows after token t of engine row u's verify window into a block of group g (materialize; one trace per group,
+    window parity and t). Reads use device-indexed slices (ttnn.slice with start tensors), writes use page tables; the
+    host restages the small control tensors that changed and replays. Valid while the window buffers keep the
+    addresses the capture baked and the blocks keep their conv history in the captured view (else the caller runs
+    the eager ops)."""
+
+    def __init__(self, state):
+        import ttnn
+
+        self.state = st = state
+        lay, mesh = st.layout, st.mesh
+        self._rep = ttnn.ReplicateTensorToMesh(mesh)
+        self.host, self.dev = {}, {}
+        dn0 = next(iter(st._slot_layers.values()))
+        self.pools = [(k, h0, h1, off) for k, (_, h0, h1, off) in enumerate(st._pools(dn0)) if h1 > h0]
+        self.conv_v = lay.conv_page(0) < lay.conv_pages_total  # the conv view the traces read and write
+        cp = lay.conv_pages
+        alias = lambda t, shape, dtype: ttnn.experimental.alias_view(t, shape, dtype, check_slices=False)
+        # slice sources: views of the slot's K / V (a view of a view is refused) whose dim 0 is a multiple of the rows a
+        # call takes (the device-indexed slice's output is dim 0 / parts); pool 0 lies in K, pool 1 in V
+        self.sviews, self.parts = {}, {}
+        dns = {id(dn): dn for _, dn, _ in st.layers}
+        dns.update({id(dn): dn for dn in st._slot_layers.values()})
+        for k, h0, h1, _ in self.pools:
+            n = 2 * (h1 - h0)
+            V = lay.pool1_pages // HALF_PAGES
+            self.parts[k] = V // n
+            self.sviews[k] = {
+                i: alias((dn._spec_paged.k, dn._spec_paged.v)[k], [V // n * n, 1, dn.Dk // 2, dn.Dv], ttnn.float32)
+                for i, dn in dns.items()
+            }
+            self._ctl(f"src{k}", torch.zeros(4, dtype=torch.int32))
+            self._ctl(f"end{k}", torch.tensor([n, 1, dn0.Dk // 2, dn0.Dv], dtype=torch.int32))
+            self._ctl(f"dst{k}", torch.zeros(1, n, dtype=torch.int32))
+        P = lay.conv_pages_total
+        self.cparts = P // cp
+        cbase = lambda dn: dn._spec_paged.v if self.conv_v else dn._spec_paged.k  # conv lies in V, else in K
+        self.sconv = {i: alias(cbase(dn), [P // cp * cp, 1, 32, 32], ttnn.bfloat16) for i, dn in dns.items()}
+        self._ctl("csrc", torch.zeros(4, dtype=torch.int32))
+        self._ctl("cend", torch.tensor([cp, 1, 32, 32], dtype=torch.int32))
+        self._ctl("cdst", torch.zeros(1, cp, dtype=torch.int32))
+        # whole-block copy: every K and V buffer of every layer slot
+        self.kv = [t for kv in st.model._paged_kv_caches for t in kv]
+        nb = int(self.kv[0].shape[0])
+        self._ctl("bsrc", torch.zeros(4, dtype=torch.int32))
+        self._ctl("bend", torch.tensor([1] + [int(x) for x in list(self.kv[0].shape)[1:]], dtype=torch.int32))
+        self._ctl("bdst", torch.zeros(1, 1, dtype=torch.int32))
+        self.bparts = nb
+        # conv rows from the window: row u of the [B, kc - 1 + T, C] pair (device-indexed), rows t + 1 .. t + kc - 1
+        dnw = st.layers[0][1]
+        Bw, L, C = (int(x) for x in list(dnw._verify_win_pair[0].shape))
+        Lp = -(-L // 32) * 32  # the indexed slice takes whole tile rows: each window row is one tile row high
+        self.win_shape, self.kc = (Bw, L, C), dnw.K
+        self.wviews = {
+            (id(dn), par): alias(dn._verify_win_pair[par], [Bw, Lp, C], dn._verify_win_pair[par].dtype)
+            for _, dn, _ in st.layers
+            for par in (0, 1)
+        }
+        self._ctl("u", torch.zeros(3, dtype=torch.int32))
+        self._ctl("uend", torch.tensor([1, Lp, C], dtype=torch.int32))
+        self._ctl("mdst", torch.zeros(1, cp, dtype=torch.int32))
+        # restore: block pages of each group into the bound prefill scratch
+        for g in range(st.G):
+            for k, _, _, _ in self.pools:
+                self._ctl(f"r{g}src{k}", torch.zeros(4, dtype=torch.int32))
+            self._ctl(f"r{g}csrc", torch.zeros(4, dtype=torch.int32))
+        self.tids = {}
+        self.fp = None
+        self.restore_fp = None
+
+    def _ctl(self, name, t, dtype=None, layout=None):
+        import ttnn
+
+        dtype = ttnn.int32 if dtype is None else dtype
+        layout = ttnn.ROW_MAJOR_LAYOUT if layout is None else layout
+        self.host[name] = (t.clone(), dtype, layout)
+        self.dev[name] = ttnn.from_torch(
+            t,
+            dtype=dtype,
+            layout=layout,
+            device=self.state.mesh,
+            mesh_mapper=self._rep,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _stage(self, name, t):
+        import ttnn
+
+        prev, dtype, layout = self.host[name]
+        if prev is not None and torch.equal(prev, t):
+            return
+        h = ttnn.from_torch(t, dtype=dtype, layout=layout, mesh_mapper=self._rep)
+        ttnn.copy_host_to_device_tensor(h, self.dev[name])
+        self.host[name] = (t.clone(), dtype, layout)
+
+    def _set_dev(self, name, src):
+        """Write a device page table computed on the device into control ``name`` (its host mirror is then unknown)."""
+        import ttnn
+
+        ttnn.copy(src, self.dev[name])
+        self.host[name] = (None,) + self.host[name][1:]
+
+    def _conv_view(self, dn):
+        return dn._spec_paged.conv if self.conv_v else dn._spec_paged.conv_k
+
+    def fingerprint(self):
+        return [tuple(w.buffer_address() for w in dn._verify_win_pair) for _, dn, _ in self.state.layers]
+
+    # ------------------------------------------------------------------ bodies
+    def _block_body(self):
+        import ttnn
+
+        for t in self.kv:
+            x = ttnn.slice(t, self.dev["bsrc"], self.dev["bend"], slice_dim=0, num_devices=self.bparts)
+            ttnn.experimental.paged_fill_cache(t, x, self.dev["bdst"], batch_idx=0)
+            ttnn.deallocate(x)
+
+    def _copy_body(self):
+        import ttnn
+
+        st, cp = self.state, self.state.layout.conv_pages
+        for dn in st._slot_layers.values():
+            for k, h0, h1, _ in self.pools:
+                n = 2 * (h1 - h0)
+                x = ttnn.slice(
+                    self.sviews[k][id(dn)],
+                    self.dev[f"src{k}"],
+                    self.dev[f"end{k}"],
+                    slice_dim=0,
+                    num_devices=self.parts[k],
+                )
+                y = ttnn.reshape(x, (1, 1, n * dn.Dk // 2, dn.Dv))
+                ttnn.experimental.paged_fill_cache(st._pools(dn)[k][0], y, self.dev[f"dst{k}"], batch_idx=0)
+                ttnn.deallocate(x)
+            x = ttnn.slice(self.sconv[id(dn)], self.dev["csrc"], self.dev["cend"], slice_dim=0, num_devices=self.cparts)
+            y = ttnn.reshape(x, (1, 1, cp * 32, 32))
+            ttnn.experimental.paged_fill_cache(self._conv_view(dn), y, self.dev["cdst"], batch_idx=0)
+            ttnn.deallocate(x)
+
+    def _conv_body(self, g, par, t):
+        """materialize's ops for every layer of group g, window half ``par``, token column ``t``; row u by index."""
+        import ttnn
+
+        st, mc = self.state, ttnn.DRAM_MEMORY_CONFIG
+        _, L, C = self.win_shape
+        for _, dn, gg in st.layers:
+            if gg != g:
+                continue
+            row = ttnn.slice(
+                self.wviews[(id(dn), par)], self.dev["u"], self.dev["uend"], slice_dim=0, num_devices=self.win_shape[0]
+            )
+            rm = ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
+            ttnn.deallocate(row)
+            carry = ttnn.slice(rm, (0, t + 1, 0), (1, t + self.kc, C), memory_config=mc)
+            ttnn.deallocate(rm)
+            st._write_carry(dn, 0, carry, None, self.dev["mdst"])  # block 0: the captured conv view
+            ttnn.deallocate(carry)
+
+    def capture(self):
+        import ttnn
+
+        mesh = self.state.mesh
+        bodies = {"block": self._block_body, "copy": self._copy_body}
+        for g in range(self.state.G):
+            for par in (0, 1):
+                for t in range(self.state.T):
+                    bodies[("conv", g, par, t)] = lambda g=g, par=par, t=t: self._conv_body(g, par, t)
+        for key, body in bodies.items():
+            body()  # compiles every program and allocates its outputs before the capture (block 0 onto itself)
+            ttnn.synchronize_device(mesh)
+            tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+            try:
+                body()
+            finally:
+                ttnn.end_trace_capture(mesh, tid, cq_id=0)
+            self.tids[key] = tid
+        ttnn.synchronize_device(mesh)
+        self.fp = self.fingerprint()
+
+    def _restore_body(self):
+        """SpecGdnBlockState.restore's ops for every GDN layer, each group's block by index, into the bound scratch."""
+        import ttnn
+
+        st, mc = self.state, ttnn.DRAM_MEMORY_CONFIG
+        cp = st.layout.conv_pages
+        for _, dn, g in st.layers:
+            parts = []
+            for k, h0, h1, _ in self.pools:
+                x = ttnn.slice(
+                    self.sviews[k][id(dn)],
+                    self.dev[f"r{g}src{k}"],
+                    self.dev[f"end{k}"],
+                    slice_dim=0,
+                    num_devices=self.parts[k],
+                )
+                parts.append(ttnn.reshape(x, (1, h1 - h0, dn.Dk, dn.Dv)))
+            rec = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=1, memory_config=mc)
+            ttnn.copy(rec, dn.rec_state)
+            for x in parts:
+                ttnn.deallocate(x)
+            if rec is not parts[0]:
+                ttnn.deallocate(rec)
+            t = ttnn.slice(
+                self.sconv[id(dn)], self.dev[f"r{g}csrc"], self.dev["cend"], slice_dim=0, num_devices=self.cparts
+            )
+            rm = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
+            ttnn.deallocate(t)
+            n_rows = (dn.K - 1) * dn.qkv_dim_tp // 32
+            rows = ttnn.slice(ttnn.reshape(rm, (cp * 32, 32)), (0, 0), (n_rows, 32), memory_config=mc)
+            ttnn.deallocate(rm)
+            carry = ttnn.to_layout(ttnn.reshape(rows, (1, dn.K - 1, dn.qkv_dim_tp)), ttnn.TILE_LAYOUT, memory_config=mc)
+            ttnn.deallocate(rows)
+            ttnn.copy(carry, dn.conv_carry)
+            ttnn.deallocate(carry)
+
+    def scratch_fingerprint(self):
+        return [(dn.rec_state.buffer_address(), dn.conv_carry.buffer_address()) for _, dn, _ in self.state.layers]
+
+    def capture_restore(self):
+        """The restore trace, on the bound prefill scratch (the caller binds it)."""
+        import ttnn
+
+        mesh = self.state.mesh
+        self._restore_body()
+        ttnn.synchronize_device(mesh)
+        tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+        try:
+            self._restore_body()
+        finally:
+            ttnn.end_trace_capture(mesh, tid, cq_id=0)
+        ttnn.synchronize_device(mesh)
+        self.tids["restore"] = tid
+        self.restore_fp = self.scratch_fingerprint()
+
+    def restore(self, blocks):
+        """Load ``blocks`` ([G] ids) into the bound prefill scratch (SpecGdnBlockState.restore); False when the trace
+        does not apply."""
+        lay = self.state.layout
+        if "restore" not in self.tids or self.scratch_fingerprint() != self.restore_fp:
+            return False
+        qs = [self._conv_q(b) for b in blocks]
+        if any(q is None for q in qs):
+            return False
+        for g, b in enumerate(blocks):
+            ps = lay.head_pages(torch.tensor([int(b)]))[0]
+            for k, h0, _, off in self.pools:
+                self._stage(
+                    f"r{g}src{k}", torch.tensor([(int(ps[h0]) - off) // HALF_PAGES, 0, 0, 0], dtype=torch.int32)
+                )
+            self._stage(f"r{g}csrc", torch.tensor([qs[g], 0, 0, 0], dtype=torch.int32))
+        self._replay("restore")
+        return True
+
+    def _replay(self, key):
+        import ttnn
+
+        ttnn.execute_trace(self.state.mesh, self.tids[key], cq_id=0, blocking=False)
+
+    # ------------------------------------------------------------------ calls
+    def _conv_q(self, b):
+        """The first page of block b's conv history in the captured view, or None when it lies in the other view."""
+        lay = self.state.layout
+        page = lay.conv_page(b)
+        if (page < lay.conv_pages_total) != self.conv_v:
+            return None
+        return page if page < lay.conv_pages_total else page - lay.conv_pages_total
+
+    def block(self, src, dst):
+        """Whole-block copy src -> dst in every K and V buffer (copy_kv_blocks)."""
+        self._stage("bsrc", torch.tensor([int(src), 0, 0, 0], dtype=torch.int32))
+        self._stage("bdst", torch.tensor([[int(dst)]], dtype=torch.int32))
+        self._replay("block")
+        return True
+
+    def copy(self, src, dst, tables=None):
+        """Page-by-page state copy src -> dst (_relayout). ``tables`` ({pool: device page table, "conv": ...}): write
+        through those instead of dst's pages (the chained copies' device-selected destination)."""
+        lay = self.state.layout
+        qs = self._conv_q(src)
+        qd = None if tables is not None else self._conv_q(dst)
+        if qs is None or (tables is None and qd is None):
+            return False
+        ps = lay.head_pages(torch.tensor([int(src)]))[0]
+        pd = None if tables is not None else lay.head_pages(torch.tensor([int(dst)]))[0]
+        for k, h0, h1, off in self.pools:
+            n = 2 * (h1 - h0)
+            self._stage(f"src{k}", torch.tensor([(int(ps[h0]) - off) // HALF_PAGES, 0, 0, 0], dtype=torch.int32))
+            if tables is None:
+                first = (int(pd[h0]) - off) // HALF_PAGES
+                self._stage(f"dst{k}", (first + torch.arange(n, dtype=torch.int32)).reshape(1, n))
+            else:
+                self._set_dev(f"dst{k}", tables[k])
+        self._stage("csrc", torch.tensor([qs, 0, 0, 0], dtype=torch.int32))
+        if tables is None:
+            self._stage("cdst", (qd + torch.arange(lay.conv_pages, dtype=torch.int32)).reshape(1, -1))
+        else:
+            self._set_dev("cdst", tables["conv"])
+        self._replay("copy")
+        return True
+
+    def chained(self, src, u, t, g, tables):
+        """A chained copy with its destination selected on the device: src's state (and, when ``t`` is not None, the
+        conv rows of window column t of row u) through ``tables`` ({pool: page table, "conv": page table}). Every
+        control is written before either replay, so no replay can overwrite a table that is still to be read."""
+        qs = self._conv_q(src)
+        par = {dn._spec_win_par for _, dn, _ in self.state.layers}
+        if qs is None or len(par) != 1 or (t is not None and self.fingerprint() != self.fp):
+            return False
+        ps = self.state.layout.head_pages(torch.tensor([int(src)]))[0]
+        for k, h0, _, off in self.pools:
+            self._stage(f"src{k}", torch.tensor([(int(ps[h0]) - off) // HALF_PAGES, 0, 0, 0], dtype=torch.int32))
+            self._set_dev(f"dst{k}", tables[k])
+        self._stage("csrc", torch.tensor([qs, 0, 0, 0], dtype=torch.int32))
+        self._set_dev("cdst", tables["conv"])
+        if t is not None:
+            self._stage("u", torch.tensor([int(u), 0, 0], dtype=torch.int32))
+            self._set_dev("mdst", tables["conv"])
+        self._replay("copy")
+        if t is not None:
+            self._replay(("conv", int(g), par.pop(), int(t)))
+        return True
+
+    def conv(self, u, t, g, dst, table=None):
+        """The conv rows after token t of engine row u's latest verify into block dst of group g (materialize);
+        ``table``: a device page table to write through instead of dst's conv pages."""
+        if self.fingerprint() != self.fp:
+            return False
+        lay = self.state.layout
+        qd = None if table is not None else self._conv_q(dst)
+        if table is None and qd is None:
+            return False
+        par = {dn._spec_win_par for _, dn, _ in self.state.layers}
+        if len(par) != 1:
+            return False
+        self._stage("u", torch.tensor([int(u), 0, 0], dtype=torch.int32))
+        if table is None:
+            self._stage("mdst", (qd + torch.arange(lay.conv_pages, dtype=torch.int32)).reshape(1, -1))
+        else:
+            self._set_dev("mdst", table)
+        self._replay(("conv", int(g), par.pop(), int(t)))
+        return True
+
+
 class _PageTables:
     """The page tables of one block operation, each built once and shared by every GDN layer (a block id names the
     same pages in each layer slot's views); freed on exit."""
@@ -1396,6 +1794,8 @@ class _LayerViews:
     group: int
     two_pool: bool
     idx: object = None
+    k: object = None  # the slot's K and V buffers the views alias (QWEN36_MAMBA_COPY_TRACE aliases them again)
+    v: object = None
 
     def conv_at(self, page, total):
         """(bf16 view, page in it) of a two-pool conv page (SpecBlockLayout.conv_page)."""
