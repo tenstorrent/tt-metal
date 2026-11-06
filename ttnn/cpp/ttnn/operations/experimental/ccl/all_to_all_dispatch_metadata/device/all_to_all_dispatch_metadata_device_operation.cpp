@@ -273,7 +273,8 @@ all_to_all_dispatch_metadata(
             .worker_mode = worker_mode,
             .mux_core_range_set = mux_core_range_set,
             .dispatch_algorithm = dispatch_algorithm,
-            .cross_device_semaphore = cross_device_semaphore},
+            .cross_device_semaphore = cross_device_semaphore,
+            .has_cross_device_semaphore = cross_device_semaphore.has_value()},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices_tensor = expert_indices_tensor,

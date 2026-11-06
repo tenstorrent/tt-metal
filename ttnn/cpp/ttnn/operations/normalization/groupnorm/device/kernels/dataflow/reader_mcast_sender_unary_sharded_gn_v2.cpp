@@ -108,6 +108,9 @@ void kernel_main() {
         noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(7 + num_mcast_cores));
     }
 
+    const bool has_mid_receivers = num_mcast_cores_mid_group != 0;
+    const bool has_first_receivers = has_mcast_first_group && num_mcast_cores_first_group != 0;
+
     const Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
@@ -223,28 +226,30 @@ void kernel_main() {
 
                 const uint32_t l1_read_addr_ex = dfb_ex.get_read_ptr();
                 const MulticastEndpoint mcast_dst;
-                noc.async_write_multicast(
-                    CoreLocalMem<uint32_t>(l1_read_addr_ex),
-                    mcast_dst,
-                    num_bytes_read,
-                    num_mcast_cores_mid_group,
-                    {},
-                    {.noc_x_start = mcast_dest_noc_start_x,
-                     .noc_y_start = mcast_dest_noc_start_y,
-                     .noc_x_end = mcast_dest_noc_end_x,
-                     .noc_y_end = mcast_dest_noc_end_y,
-                     .addr = l1_read_addr_ex},
-                    true);
-                reduce_sender_sem.set_multicast(
-                    noc,
-                    mcast_dest_noc_start_x,
-                    mcast_dest_noc_start_y,
-                    mcast_dest_noc_end_x,
-                    mcast_dest_noc_end_y,
-                    num_mcast_cores_mid_group,
-                    false);
+                if (has_mid_receivers) {
+                    noc.async_write_multicast(
+                        CoreLocalMem<uint32_t>(l1_read_addr_ex),
+                        mcast_dst,
+                        num_bytes_read,
+                        num_mcast_cores_mid_group,
+                        {},
+                        {.noc_x_start = mcast_dest_noc_start_x,
+                         .noc_y_start = mcast_dest_noc_start_y,
+                         .noc_x_end = mcast_dest_noc_end_x,
+                         .noc_y_end = mcast_dest_noc_end_y,
+                         .addr = l1_read_addr_ex},
+                        true);
+                    reduce_sender_sem.set_multicast(
+                        noc,
+                        mcast_dest_noc_start_x,
+                        mcast_dest_noc_start_y,
+                        mcast_dest_noc_end_x,
+                        mcast_dest_noc_end_y,
+                        num_mcast_cores_mid_group,
+                        false);
+                }
 
-                if (has_mcast_first_group) {
+                if (has_first_receivers) {
                     noc.async_write_multicast(
                         CoreLocalMem<uint32_t>(l1_read_addr_ex),
                         mcast_dst,

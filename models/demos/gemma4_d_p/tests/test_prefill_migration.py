@@ -15,6 +15,10 @@ import pytest
 
 import ttnn
 from models.common.weight_cache import weight_cache_is_complete
+from models.demos.common.prefill.runners.layer_completion_ring_reader import (
+    connect_layer_completion_channel,
+    start_layer_completion_drain,
+)
 from models.demos.gemma4_d_p.tt.common import weight_cache_identity
 from models.demos.gemma4_d_p.tt.precision import Gemma4Precision
 from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4PrefillAdapter, Gemma4ServiceConfig
@@ -238,6 +242,18 @@ def run_migration_case(gate, context_len, output_dir):
         return table, device_map
 
     def checked_loop(runtime, kv_cache, *args, **kwargs):
+        # With CHECK_PCC off the producer only feeds tokens, and no migration driver runs in the mock case, so
+        # nothing consumes the layer completions. The completion rings are bounded: a 256k prompt at 4096-token
+        # chunks acks 3840 layers, more than they hold, and a full ring stalls the device.
+        drain = None
+        if gate == "mock":
+            channel = connect_layer_completion_channel(timeout_s=30)
+            assert channel is not None, "could not attach to the layer-completion ring; the device would stall"
+            drain = start_layer_completion_drain(
+                channel,
+                num_layers=runtime.num_ack_layers,
+                chunk_layers=runtime.num_ack_layers,
+            )
         with (output_dir / "producer.log").open("w") as log, ThreadPoolExecutor(1) as setup:
             producer = subprocess.Popen(command, env=client_env, stdout=log, stderr=subprocess.STDOUT)
             table_and_map = setup.submit(load_table_and_open_umd)
@@ -249,6 +265,8 @@ def run_migration_case(gate, context_len, output_dir):
                         f"Producer exited with code {producer_returncode}. See {output_dir / 'producer.log'}."
                     )
                 assert runtime.slot_ends == [context_len] + [0] * (Gemma4ServiceConfig.MAX_USER_SLOTS - 1)
+                if drain is not None:
+                    drain.wait_for(context_len // Gemma4ServiceConfig.CHUNK_SIZE * runtime.num_ack_layers)
                 table, device_map = table_and_map.result()
                 staging = {}
 
@@ -269,6 +287,11 @@ def run_migration_case(gate, context_len, output_dir):
                 if producer.poll() is None:
                     producer.terminate()
                     producer.wait(timeout=30)
+                if drain is not None:
+                    try:
+                        drain.stop()
+                    except BaseException as error:
+                        failures.append(error.with_traceback(None))
 
     with patch.object(prefill_runner, "run_request_loop", checked_loop):
         prefill_runner.main()

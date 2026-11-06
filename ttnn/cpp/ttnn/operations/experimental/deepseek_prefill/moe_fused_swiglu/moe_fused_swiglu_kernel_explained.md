@@ -835,6 +835,11 @@ lifetimes do not overlap:
 GATHER_GATE -> H_SLICE -> OUT_TILES
 ```
 
+H_SLICE's lifetime ends at the writer's NoC read of this core's h fragment, not at compute's push.
+On a full-M row-mode block nothing else orders output rows below `my_row` after that read, so
+compute reserves H_SLICE's whole capacity on PACK before the row loop, which waits for the
+writer's pop.
+
 Their cross-block lifetimes can overlap: a peer might start block `b+1` gather while this core's
 writer still has block `b` output DMA reading the same SRAM. After the writer drains output DMA, it
 publishes `SEM_PHASE_FREE = b+1`; the reader waits for this before issuing the next gather invites.

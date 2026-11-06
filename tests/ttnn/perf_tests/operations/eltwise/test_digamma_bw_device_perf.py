@@ -8,11 +8,7 @@ Device kernel time of ttnn.digamma_bw's fused program against the composite it r
 Both run in one profiled process on the same BF16 operands, a gradient in L1 beside an input in
 DRAM: without an output placement that call keeps the composite, and with the composite's output
 placement it runs the fused program, so both write the same memory. A call's time is the device
-kernel duration summed over the programs it launches, the median of REPEATS calls. The fused
-program must be faster by more than MARGIN.
-
-The fused program serves the other memory layouts too, where no call of this build runs the
-composite; the layout test times each one.
+kernel duration summed over the programs it launches, the median of REPEATS calls.
 """
 
 import pandas as pd

@@ -38,11 +38,7 @@ def test_bw_digamma(input_shapes, device):
 # The SFPU may read a subnormal operand as zero, so torch is evaluated both at the operands and at
 # the operands with subnormals flushed, and an output may match either. The BF16 compute and pack
 # path stores NaN as +inf and -0 as +0, so classes are compared as stored. Each output must have
-# the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
-# below 1. A +0 where torch's own float64 result is below the smallest normal is torch's result as
-# stored, since the BF16 output cannot hold a subnormal. Each case logs one ULP line: the largest
-# pure ULP error against torch and the lanes of another class, for the output and for the
-# composite's on the same operands.
+# the reference's class and a pure ULP error below 1.
 # The output is 0 wherever f'(x) alone is below the smallest normal BF16 value, as the composite this
 # program replaces computes it; torch keeps the exact product.
 # The output is grad times an infinity wherever f'(x) alone is beyond the largest finite value, and 0
@@ -96,8 +92,8 @@ def _digamma_bw_torch_reference(grad, x, flush):
         )
 
 
-def _digamma_bw_reference(grad, x, flush, board):
-    """Torch, except on the declared lanes in the module docstring."""
+def _digamma_bw_reference(grad, x, flush):
+    """Torch, except on the declared lanes in the comment above DIGAMMA_BW_GRADS."""
     result = _digamma_bw_torch_reference(grad, x, flush)
     unit = _digamma_bw_torch_reference(torch.ones_like(grad), x, flush)
     g = _digamma_bw_flush(grad.to(torch.float64)) if flush else grad.to(torch.float64)
@@ -179,14 +175,14 @@ def test_digamma_bw_exhaustive_bfloat16(grad, device):
         f"ours_class_mismatches={ours_classes} stock_class_mismatches={composite_classes} grad={grad}"
     )
     ulp = torch.minimum(
-        _digamma_bw_pure_ulp(_digamma_bw_reference(g, x, False, board), actual),
-        _digamma_bw_pure_ulp(_digamma_bw_reference(g, x, True, board), actual),
+        _digamma_bw_pure_ulp(_digamma_bw_reference(g, x, False), actual),
+        _digamma_bw_pure_ulp(_digamma_bw_reference(g, x, True), actual),
     )
     worst = ulp.argmax()
     assert ulp.max().item() < 1.0, (
         f"{(ulp >= 1.0).sum().item()} outputs at or beyond 1 ulp or of the wrong class; worst at "
         f"x={x.flatten()[worst].item()}, grad={g.flatten()[worst].item()}: "
-        f"expected {_digamma_bw_reference(g, x, False, board).flatten()[worst].item()}, got {actual.flatten()[worst].item()}"
+        f"expected {_digamma_bw_reference(g, x, False).flatten()[worst].item()}, got {actual.flatten()[worst].item()}"
     )
 
 
@@ -332,7 +328,6 @@ def test_digamma_bw_runs_the_fused_program_only_where_it_applies(call, device):
     layouts = {"row_major": (ttnn.ROW_MAJOR_LAYOUT,) * 2, "mixed_layouts": (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT)}
     grad_layout, input_layout = layouts.get(call, (ttnn.TILE_LAYOUT,) * 2)
     placements = _digamma_bw_placements(shape)
-    shard = placements["height_sharded"][0]
     grad_memory, input_memory, output_memory = placements.get(
         call, (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, None)
     )

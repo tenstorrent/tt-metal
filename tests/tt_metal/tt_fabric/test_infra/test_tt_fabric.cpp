@@ -226,6 +226,14 @@ int main(int argc, char** argv) {
             continue;
         }
 
+        // MGD-default (no topology): open_devices passed MGD_DEFAULT and the control plane resolved this rank's
+        // concrete config, which open_devices read back into the fixture's topology. Mirror it into test_config so the
+        // build/skip phase below (which reads fabric_setup.topology for sync/traffic generation) matches the live
+        // fabric.
+        if (test_config.fabric_setup.fabric_config_from_mgd) {
+            test_config.fabric_setup.topology = fixture->get_topology();
+        }
+
         // Validate device frequencies for performance tests. Validation runs only once
         // since device frequencies are cached in TestFixture for its lifetime.
         if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
