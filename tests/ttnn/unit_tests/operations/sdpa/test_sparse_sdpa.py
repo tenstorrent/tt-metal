@@ -67,20 +67,20 @@ def make_scaled_kv_cache(device, batch, T, seed, round_scale):
     return tt_packed, reconstructed
 
 
-def split_k_ran(device, tt_q, tt_kv, tt_idx, kv_format, kc):
+def split_k_ran(device, tt_q, tt_kv, tt_idx, kv_format, kc, v_dim=V_DIM):
     """True if the program has the split-K merge CBs: more CBs than the whole-token split at S = cores.
     On a cache miss, NO_DISPATCH builds the program without compiling, running, or caching it.
     On a cache hit, it reports the cached program."""
     grid = device.compute_with_storage_grid_size()
-    H, topk = tt_q.shape[1], tt_idx.shape[3]
-    whole_q = to_dev(torch.zeros(1, H, grid.x * grid.y, K_DIM, dtype=torch.bfloat16), device, ttnn.bfloat16)
+    H, k_dim, topk = tt_q.shape[1], tt_q.shape[3], tt_idx.shape[3]
+    whole_q = to_dev(torch.zeros(1, H, grid.x * grid.y, k_dim, dtype=torch.bfloat16), device, ttnn.bfloat16)
     whole_idx = to_dev(torch.zeros(1, 1, grid.x * grid.y, topk, dtype=torch.int32), device, ttnn.uint32)
 
     def num_cbs(q, idx):
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
         try:
             ttnn.transformer.sparse_sdpa(
-                q, tt_kv, idx, V_DIM, kv_format=kv_format, scale=K_DIM**-0.5, k_chunk_size=kc
+                q, tt_kv, idx, v_dim, kv_format=kv_format, scale=k_dim**-0.5, k_chunk_size=kc
             )
         finally:
             graph = ttnn.graph.end_graph_capture()
@@ -847,6 +847,51 @@ def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, H, S, T, TOPK, kc, nv_id
         k_chunk_size=kc,
     )
     expected = golden(q, reconstructed, indices, K_DIM**-0.5, V_DIM)
+    actual = ttnn.to_torch(out)
+    score = pcc(actual, expected)
+    worst = min(pcc(actual[:, :, s], expected[:, :, s]) for s in range(S))
+    assert score >= 0.999 and worst >= 0.995, f"PCC {score:.5f}, worst token {worst:.5f}"
+
+
+# ---- BF16 and plain FP8 KV: split-K only when every token gets two cores (2S <= cores), e.g. Qwen 3.8 QSA ----
+@run_for_blackhole()
+@pytest.mark.parametrize("kv_dtype", [ttnn.bfloat16, ttnn.fp8_e4m3], ids=["bf16", "fp8"])
+@pytest.mark.parametrize(
+    "H,S,T,TOPK,k_dim,v_dim,kc,nv_id,split",
+    [
+        (64, 32, 4096, 2048, K_DIM, V_DIM, 128, "all", True),  # GLM chunk 1024 per chip: half a token per core
+        (64, 32, 1024, 512, K_DIM, V_DIM, 128, "mixed", True),  # sentinel tails
+        (64, 40, 1024, 512, K_DIM, V_DIM, 128, "causal", True),  # prefill-like valid counts
+        (128, 16, 1024, 512, K_DIM, V_DIM, 64, "mixed", True),  # Sqt=4
+        (32, 1, 4096, 2048, 512, 256, 32, "all", True),  # Qwen 3.8 QSA decode: 1 row, 64 chunks on 2 cores
+        (32, 5, 4096, 2080, 512, 256, 32, "mixed", True),  # QSA rows with 65 chunks: 32 + 33 per token
+        (64, 64, 1024, 512, K_DIM, V_DIM, 128, "all", False),  # 2S > cores: whole-token split
+        (64, 160, 1024, 512, K_DIM, V_DIM, 128, "mixed", False),  # S > cores: whole-token split
+    ],
+)
+def test_sparse_sdpa_split_k_kv_formats(device, kv_dtype, H, S, T, TOPK, k_dim, v_dim, kc, nv_id, split):
+    """BF16 and plain FP8 KV must use split-K only when 2S <= cores and match the torch golden (PCC)."""
+    grid = device.compute_with_storage_grid_size()
+    cores = grid.x * grid.y
+    if split != (2 * S <= cores):
+        pytest.skip(f"case needs 2S {'<=' if split else '>'} cores ({cores})")
+    nv_fn = {
+        "all": lambda s: TOPK,
+        "mixed": lambda s: 1 + (s * 37) % TOPK,
+        "causal": lambda s: min(TOPK, 1 + s * 3),
+    }[nv_id]
+    q, kv, indices = make_inputs(H, S, T, TOPK, k_dim, nv_fn, seed=77)
+    fp8 = kv_dtype == ttnn.fp8_e4m3
+    kv_format = FP8_KV if fp8 else BF16_KV
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_kv = to_dev(kv if fp8 else kv.to(torch.bfloat16), device, kv_dtype)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    assert split_k_ran(device, tt_q, tt_kv, tt_idx, kv_format, kc, v_dim) == split, f"expected split-K {split}"
+    out = ttnn.transformer.sparse_sdpa(
+        tt_q, tt_kv, tt_idx, v_dim, kv_format=kv_format, scale=k_dim**-0.5, k_chunk_size=kc
+    )
+    kv_held = kv.to(torch.float8_e4m3fn if fp8 else torch.bfloat16).float()
+    expected = golden(q, kv_held, indices, k_dim**-0.5, v_dim)
     actual = ttnn.to_torch(out)
     score = pcc(actual, expected)
     worst = min(pcc(actual[:, :, s], expected[:, :, s]) for s in range(S))
