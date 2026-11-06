@@ -82,6 +82,7 @@
 #include "ttnn/operations/uniform/uniform_nanobind.hpp"
 #include "ttnn/operations/rand/rand_nanobind.hpp"
 #include "ttnn/operations/randn/randn_nanobind.hpp"
+#include "ttnn/operations/distributed_rms_norm/distributed_rms_norm_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 
 namespace nb = nanobind;
@@ -223,6 +224,9 @@ void py_module(nb::module_& mod) {
 
     auto m_randn = mod.def_submodule("randn", "ttnn randn operation");
     randn::bind_randn_operation(m_randn);
+
+    auto m_distributed_rms_norm = mod.def_submodule("distributed_rms_norm", "distributed_rms_norm operation");
+    distributed_rms_norm::bind_distributed_rms_norm_operation(m_distributed_rms_norm);
 
     auto m_point_to_point = mod.def_submodule("point_to_point", "point_to_point operations");
     point_to_point::bind_point_to_point(m_point_to_point);
