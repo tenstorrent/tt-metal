@@ -88,7 +88,15 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     environment: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'mainline' || '' }}
-    timeout-minutes: ${{ matrix.test-group.timeout }}
+    # A backstop against a wedged runner, NOT the test gate -- the per-test budget from
+    # the tests yaml gates the "Run examples" step alone (see below). GitHub starts the
+    # *job* clock at job start, so the budget cannot be reused here: it would charge the
+    # test for "Set up job" and "Initialize containers", ~9 min of runner and container
+    # setup that cancelled a job whose every step had already passed
+    # (actions/runs/42098094543, merge queue for #64528). Flat, because expressions have
+    # no arithmetic; comfortably above the 30 min pr_gate ceiling in time_budget.yaml so
+    # it never binds before the step timeout does.
+    timeout-minutes: 50
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
       # A prebuilt image already carries the packages and needs no Harbor prefix.
@@ -183,6 +191,8 @@ jobs:
       - name: Run examples
         id: test
         working-directory: ${{ github.workspace }}
+        # The test budget applies here, to the test alone -- the job ceiling above only
+        # backstops a hung runner, so a slow setup can no longer eat the test's time.
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           PRODUCT: ${{ inputs.product }}
