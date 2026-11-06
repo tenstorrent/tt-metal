@@ -67,22 +67,6 @@ set_source_files_properties(
 # Add the generated protobuf files to your target
 target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
 
-# The fabric manifest records the commit tt-metal was built from and its build type, read from the version header that
-# tt_metal_version_header refreshes on every build. The one file that reads it stays out of the unity build, so a
-# new commit recompiles only that file. The header takes the build type from TT_METAL_BUILD_TYPE, as ttnn_core sets it.
-target_include_directories(fabric PRIVATE ${PROJECT_BINARY_DIR}/generated)
-if(TARGET tt_metal_version_header)
-    add_dependencies(fabric tt_metal_version_header)
-endif()
-set_source_files_properties(
-    debug/visualizer/manifest/fabric_manifest_build_identity.cpp
-    PROPERTIES
-        SKIP_UNITY_BUILD_INCLUSION
-            TRUE
-        COMPILE_DEFINITIONS
-            "TT_METAL_BUILD_TYPE=\"$<CONFIG>\""
-)
-
 target_include_directories(fabric PRIVATE .)
 target_include_directories(
     fabric
@@ -108,6 +92,7 @@ target_link_libraries(
         FlatBuffers::FlatBuffers
         protobuf::libprotobuf
         cadical::cadical
+        fabric_visualizer_build_identity
 )
 
 tt_reuse_precompile_headers(fabric TT::CommonPCH)
@@ -136,3 +121,4 @@ install(
 )
 
 add_subdirectory(experimental/x280)
+add_subdirectory(debug/visualizer/common)
