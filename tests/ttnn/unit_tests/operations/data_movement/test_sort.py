@@ -1709,8 +1709,7 @@ def test_sort_unstable_fp32_ties(width, layout, descending, device):
 def test_sort_unstable_tall_tie_heavy(shape, layout, descending, device):
     """Multi-row coverage: spanning tile pairs recur across the Ht loop, and a
     non-multiple-of-32 height exercises the H-pad rows. ROW_MAJOR heights past
-    32 are pinned separately below — the CrossCore RM path corrupts the values
-    of every tile-row block after the first (pre-existing, all stabilities)."""
+    32 are covered separately below."""
     input_tensor = _tie_heavy_tensor(shape, [-1.5, -0.5, -0.5, 0.0, 0.5, 1.5], seed=11)
     ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=layout, device=device)
     ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
@@ -1750,14 +1749,6 @@ def test_sort_unstable_stable_cache_alternation(device):
     assert entries[-1] == 2, f"Expected 2 program cache entries (stable + unstable), found {entries[-1]}"
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="https://github.com/tenstorrent/tt-metal/issues/54309: pre-existing — CrossCore "
-    "ROW_MAJOR inputs with more than 32 rows return wrong VALUES for every tile-row block "
-    "after the first (indices stay a valid permutation; TILE layout unaffected; reproduces "
-    "with stable=True and stable=False alike, so it is unrelated to the CrossCore "
-    "comparator pin). Non-strict: the cell passes on grids that route W=4096 away from CrossCore.",
-)
 @pytest.mark.parametrize("descending", [False, True])
 def test_sort_unstable_row_major_multi_tile_row_values(descending, device):
     input_tensor = _tie_heavy_tensor((64, 4096), [-1.5, -0.5, -0.5, 0.0, 0.5, 1.5], seed=11)
