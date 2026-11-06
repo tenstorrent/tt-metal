@@ -14,6 +14,9 @@
 
 namespace ckernel::sfpu {
 
+// Whether BF16 DEST runs the generated mish kernel as one call over the whole tile.
+inline constexpr bool mish_bf16_whole_tile = false;
+
 /**
  * Mish activation function:  mish(x) = x * tanh(softplus(x)) = x * tanh(log(1+exp(x)))
  *
