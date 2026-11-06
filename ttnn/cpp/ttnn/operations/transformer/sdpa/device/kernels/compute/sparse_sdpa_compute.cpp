@@ -15,7 +15,6 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/bcast.h"  // add_tiles_bcast_rows (mask add)
-#include "api/compute/binary_max_min.h"  // split-K merge: elementwise max of two running-max tiles
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
 constexpr bool EXP_APPROX_MODE = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::MATH_APPROX_MODE) != 0;
 // compute_streaming.hpp needs declarations from compute_common.hpp (LightweightMaskContext, reduce helpers,
@@ -565,25 +564,11 @@ void kernel_main() {
                     CircularBuffer mmax(cb_mmax), corr2(cb_corr2);
                     recv_max.wait_front(Sqt);
                     max_cur.wait_front(Sqt);
-                    mmax.reserve_back(Sqt);
                     reconfig_data_format_srca(cb_recv_max);
                     pack_reconfig_data_format(cb_mmax);
                     pack_reconfig_l1_acc(0);
                     configure_single_tile_pack(cb_mmax);
-                    for (uint32_t r = 0; r < Sqt; ++r) {
-                        tile_regs_acquire();
-                        copy_init(max_cur.get_cb_id());
-                        copy_tile(max_cur.get_cb_id(), r, 0);
-                        copy_init(cb_recv_max);
-                        copy_tile(cb_recv_max, r, 1);
-                        binary_max_tile_init();
-                        binary_max_tile(0, 1, 0);
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile(0, cb_mmax);
-                        tile_regs_release();
-                    }
-                    mmax.push_back(Sqt);
+                    max_block_sfpi(max_cur.get_cb_id(), cb_recv_max, cb_mmax, Sqt);
                     exp_packthread_tile_init<EXP_APPROX_MODE>();
                     corr_cb.reserve_back(Sqt);
                     sub_exp_first_col_blocks<false, scale_fp32>(max_cur.get_cb_id(), cb_mmax, cb_corr, 0, Sqt);
