@@ -93,6 +93,9 @@ inline void scale_macro(uint32_t z, uint32_t m, uint32_t r0 = 0) {
         T2_ROW(13);
         T2_ROW(14);
         T2_ROW(15);
+#ifdef T2_HALFROWS
+        continue;
+#endif
         T2_ROW(16);
         T2_ROW(17);
         T2_ROW(18);
@@ -142,6 +145,9 @@ constexpr uint32_t S2F = ckernel::semaphore::UNPACK_MATH_DONE;  // not used by t
 // the math thread's wait on S2F must also hold the SEMGET after it (a sync instruction): with STALL_MATH alone the
 // SEMGET runs at once on a zero semaphore, the count runs ahead, and the FPU adds into rows the SFPU is still scaling
 ALWI void s2f_take() {
+#ifdef T2_NOSYNC
+    return;
+#endif
     MATH((TTI_SEMWAIT(p_stall::STALL_MATH | p_stall::STALL_SYNC, semaphore::t6_sem(S2F), p_stall::STALL_ON_ZERO)));
     MATH((t6_semaphore_get(S2F)));
 }
@@ -149,13 +155,18 @@ ALWI void s2f_take() {
 // (except after the pass's last kb: the next pass starts from the packed, cleared DEST)
 ALWI void pk_scale_half(uint32_t j, uint32_t r0, uint32_t cnt, bool signal) {
 #ifdef TRISC_PACK
+#ifndef T2_NOSYNC
     t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU);
+#endif
     // this thread's SFPU dest base: DEST tile r0 (full-sync DEST); set once its previous pass is done
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, r0 * 64 + ckernel::packer::get_packer_dest_offset());
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 #ifndef T2_NOSCALE
     ckernel::sfpu::scale_macro(j, cnt, r0);
+#endif
+#ifdef T2_NOSYNC
+    return;
 #endif
     t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU);
     if (signal) {
@@ -198,7 +209,11 @@ void kernel_main() {
         return;
     }
     compute_kernel_hw_startup(cb_w, cb_x, cb_acc);  // SrcA = in1 (weights), SrcB = in0 (x')
+#ifdef T2_NOSPLIT
+    const bool split = false;
+#else
     const bool split = m >= 2;
+#endif
     const uint32_t h = (m + 1) / 2;
     // matmul_block_init's rt fixes the operand reuse (reuse_a = ct >= rt, ct = 1): the pass starts with rt = m, so a
     // half whose reuse differs (1 row, with m > 1: m = 2, 3) re-inits before each half
@@ -233,10 +248,12 @@ void kernel_main() {
             for (uint32_t c = 0; c < nb; ++c) {
                 tile_regs_acquire();
                 // the column's ratio tile for the whole group (scales.pack_ratio_group) into DEST tile 7
+#ifndef T2_NORATIO
                 copy_init(cb_s);
                 scale_tile_srca();
                 copy_tile(cb_s, c, 7);
                 reconfig_data_format_srca(cb_w);
+#endif
                 matmul_block_init(cb_x, cb_w, 0, 1, m, 4 * KPC);
                 ternary_srca();
                 for (uint32_t j = 0; j < KPC; ++j) {
@@ -253,7 +270,9 @@ void kernel_main() {
                             matmul_block(cb_x, cb_w, j * 4 + i, (c * KPC + j) * 4 + i, 0, 0, 1, h, 4 * KPC);
                         }
 #endif
+#ifndef T2_NOSYNC
                         MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
+#endif
                         if (j > 0) {
                             s2f_take();  // half B of kb j - 1 is scaled
                         }
@@ -267,7 +286,9 @@ void kernel_main() {
                                 cb_x, cb_w, h * 4 * KPC + j * 4 + i, (c * KPC + j) * 4 + i, h, 0, 1, m - h, 4 * KPC);
                         }
 #endif
+#ifndef T2_NOSYNC
                         MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
+#endif
                         pk_scale_half(j, 0, h, j + 1 < KPC);
                         if (j + 1 == KPC) {
                             // the pass's last kb: half A is final, pack it while the FPU computes half B (only

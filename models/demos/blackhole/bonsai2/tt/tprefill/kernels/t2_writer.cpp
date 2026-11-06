@@ -28,7 +28,9 @@ void kernel_main() {
     // t2_reader.cpp (ready count at the sender, valid flag at the receivers)
     const uint32_t is_wsender = get_arg_val<uint32_t>(4), nrecv = get_arg_val<uint32_t>(5);
     const uint32_t ws_x = get_arg_val<uint32_t>(6), ws_y = get_arg_val<uint32_t>(7);
-    const uint32_t mx = get_arg_val<uint32_t>(8), my0 = get_arg_val<uint32_t>(9), my1 = get_arg_val<uint32_t>(10);
+    // then the receivers' rectangles: count, then per rectangle x0, y0, x1, y1, destinations (a line of cores, split
+    // where the virtual coordinates jump)
+    const uint32_t nrect = get_arg_val<uint32_t>(8);
     constexpr uint32_t NBLK = get_compile_time_arg_val(0);
     // fixed CB slots per kb (2 per ring), so a block of fewer columns never wraps a ring mid-slot
     constexpr uint32_t WSLOT = NBLK * 4;
@@ -70,9 +72,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* wready_p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wready);
     volatile tt_l1_ptr uint32_t* wvalid_p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wvalid);
     const uint64_t wready_noc = get_noc_addr(ws_x, ws_y, wready);
-    auto mcast = [&](uint32_t l1) {  // NOC 1 runs the other way: its rectangle starts at the far corner
-        return noc_index == 0 ? get_noc_multicast_addr(mx, my0, mx, my1, l1)
-                              : get_noc_multicast_addr(mx, my1, mx, my0, l1);
+    auto mcast = [&](uint32_t q, uint32_t l1) {  // NOC 1 runs the other way: its rectangle starts at the far corner
+        const uint32_t x0 = get_arg_val<uint32_t>(9 + 5 * q), y0 = get_arg_val<uint32_t>(10 + 5 * q);
+        const uint32_t x1 = get_arg_val<uint32_t>(11 + 5 * q), y1 = get_arg_val<uint32_t>(12 + 5 * q);
+        return noc_index == 0 ? get_noc_multicast_addr(x0, y0, x1, y1, l1) : get_noc_multicast_addr(x1, y1, x0, y0, l1);
     };
     for (uint32_t c0 = 0; c0 < n_count; c0 += NBLK) {
         const uint32_t nb = n_count - c0 < NBLK ? n_count - c0 : NBLK;
@@ -104,9 +107,12 @@ void kernel_main() {
                     noc_semaphore_wait(wready_p, nrecv);
                     noc_semaphore_set(wready_p, 0);
                     *wvalid_p = 1;
-                    noc_async_write_multicast(lw, mcast(lw), nb * J * 1024, nrecv);
-                    noc_async_write_multicast(ls, mcast(ls), nb * 2048, nrecv);
-                    noc_semaphore_set_multicast(wvalid, mcast(wvalid), nrecv);
+                    for (uint32_t q = 0; q < nrect; ++q) {
+                        const uint32_t nd = get_arg_val<uint32_t>(13 + 5 * q);
+                        noc_async_write_multicast(lw, mcast(q, lw), nb * J * 1024, nd);
+                        noc_async_write_multicast(ls, mcast(q, ls), nb * 2048, nd);
+                        noc_semaphore_set_multicast(wvalid, mcast(q, wvalid), nd);
+                    }
                     noc_async_write_barrier();
                 }
             } else {

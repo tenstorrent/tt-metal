@@ -22,9 +22,9 @@ from pathlib import Path
 import torch
 from loguru import logger
 
-ISL = 4096  # prompt tokens: two full 2048-token prefill chunks
+ISL = 4096  # prompt tokens: one 4096-token prefill chunk (BONSAI_CHUNK=2048: two)
 GEN = 100  # gate positions: the prefill's last position + 99 teacher-forced decode steps
-CHUNK = 2048
+CHUNK = int(os.environ.get("BONSAI_CHUNK", "4096"))  # prefill chunk tokens
 BLOCK_SIZE = 64
 DECODE_CALLS = 129  # perf: 1 untimed call (compiles the argmax) + 128 timed decode steps
 PREFILL_SAMPLES = 3  # perf: timed traced prefills after one untimed one

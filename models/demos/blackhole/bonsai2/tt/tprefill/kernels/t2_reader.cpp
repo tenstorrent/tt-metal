@@ -22,7 +22,7 @@ void kernel_main() {
     constexpr uint32_t KPC = get_compile_time_arg_val(0);  // kbs per multicast chunk
     constexpr auto x_args = TensorAccessorArgs<1>();
     constexpr uint32_t cb_x = tt::CBIndex::c_0;
-    constexpr uint32_t TB = 2048;
+    const uint32_t TB = get_tile_size(cb_x);  // bf16 or bfp8 x' tiles
     const uint32_t KB = Kt / 4;
     const uint32_t CHT = m_count * 4 * KPC;  // tiles per chunk, laid out [row][k]
     const uint32_t XSLOT = m_max * 4 * KPC;  // fixed CB slot per chunk (every row group's slots line up)
