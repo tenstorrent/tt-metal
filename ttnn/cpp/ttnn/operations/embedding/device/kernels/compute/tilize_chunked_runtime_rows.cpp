@@ -19,19 +19,22 @@
 #include "ttnn/operations/embedding/device/kernels/embeddings_fused_split.hpp"
 
 void kernel_main() {
+    // RUNTIME ARGS
     const uint32_t core_idx = get_arg(args::core_idx);
     const uint32_t blocks_per_batch = get_arg(args::blocks_per_batch);
+
+    // COMPILE TIME ARGS
     constexpr uint32_t batch = get_arg(args::batch);
     constexpr uint32_t num_cores = get_arg(args::num_cores);
-    const auto [start_block, end_block] = embeddings_fused_block_range(core_idx, blocks_per_batch, batch, num_cores);
-    const uint32_t per_core_block_cnt = end_block - start_block;
-    // The kernel_lib tilize asserts num_blocks > 0, so a core past the end of a short input returns.
-    if (per_core_block_cnt == 0) {
-        return;
-    }
     constexpr uint32_t tiles_per_chunk = get_arg(args::tiles_per_chunk);
     constexpr uint32_t num_chunks = get_arg(args::num_chunks);
     constexpr uint32_t last_chunk_tiles = get_arg(args::last_chunk_tiles);
+
+    const auto [start_block, end_block] = embeddings_fused_block_range(core_idx, blocks_per_batch, batch, num_cores);
+    const uint32_t per_core_block_cnt = end_block - start_block;
+    if (per_core_block_cnt == 0) {
+        return;
+    }
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
     // Process the block in chunks to fit within L1 memory limits.

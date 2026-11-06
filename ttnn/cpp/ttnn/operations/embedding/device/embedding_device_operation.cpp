@@ -18,7 +18,7 @@ namespace ttnn::prim {
 
 namespace {
 // The runtime-rows factory serves the fused tilized gather with an interleaved output; only that
-// configuration hashes without the index length and the table row count. A sharded preallocated
+// configuration takes the index length and the table row count at runtime. A sharded preallocated
 // output stays on the fused factory, which reads the shard spec off the output tensor.
 bool row_free_configuration(
     const EmbeddingsDeviceOperation::operation_attributes_t& operation_attributes,
@@ -142,7 +142,7 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_hit(
         validate_on_program_cache_miss(operation_attributes, tensor_args);
         return;
     }
-    // Only the row-dependent invariants: the index length and the table rows are not in the hash.
+    // Only the row-dependent invariants.
     const auto& a = tensor_args.input_tensor_arg;
     const auto& weights = tensor_args.weight_arg;
     TT_FATAL(
