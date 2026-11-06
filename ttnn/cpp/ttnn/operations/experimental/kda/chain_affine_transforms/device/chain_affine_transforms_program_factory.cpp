@@ -36,9 +36,9 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
     const uint32_t Kt = attrs.key_dim / tt::constants::TILE_WIDTH;
     const uint32_t Vt_full = attrs.value_dim / tt::constants::TILE_WIDTH;
 
-    // Each step's update S = A S + B is independent per value column, so a head's columns are split across value
-    // block cores. A is value-independent: value block 0 reads it once per step and multicasts it to the head's
-    // other blocks, so DRAM traffic does not scale with the blocks (re-reading A per block was DRAM-bound).
+    // Each step's update S + (E S + B) is independent per value column, so a head's columns are split across value
+    // block cores. E is value-independent: value block 0 reads it once per step and multicasts it to the head's
+    // other blocks, so DRAM traffic does not scale with the blocks (re-reading it per block was DRAM-bound).
     const auto dist = kda_factory_detail::distribute_value_blocks(device.compute_with_storage_grid_size(), BH, Vt_full);
     const uint32_t Vt = dist.value_tiles_per_core;
     const uint32_t value_blocks = dist.value_blocks;
@@ -46,8 +46,9 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
 
     const m2::KernelSpecName dataflow_kernel_name{"dataflow"};
     const m2::KernelSpecName compute_kernel_name{"compute"};
-    const m2::DFBSpecName initial_dfb{"initial"};
-    const m2::DFBSpecName a_dfb{"a"};
+    const m2::DFBSpecName initial_exact_dfb{"initial_exact"};
+    const m2::DFBSpecName state_exact_dfb{"state_exact"};
+    const m2::DFBSpecName e_dfb{"e"};
     const m2::DFBSpecName b_dfb{"b"};
     const m2::DFBSpecName product_dfb{"product"};
     const m2::DFBSpecName state_dfb{"state"};
@@ -69,12 +70,14 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
     };
     const auto transform_format = tt::tt_metal::datatype_to_dataformat_converter(in.transforms.dtype());
     constexpr auto fp32 = tt::DataFormat::Float32;
-    const uint32_t a_tiles = Kt * Kt;
+    const uint32_t e_tiles = Kt * Kt;
     const uint32_t state_tiles = Kt * Vt;
-    // 384 KiB per core at the production K = V = 128; validation checks chain_affine_transforms_l1_bytes against L1.
+    // 512 KiB per core (BF16 transforms) at the production K = V = 128; validation checks
+    // chain_affine_transforms_l1_bytes against L1.
     m2::Group<m2::DataflowBufferSpec> dfbs = {
-        make_dfb(initial_dfb, state_tiles, fp32),
-        make_dfb(a_dfb, chain_affine_transforms_transform_buffers * a_tiles, transform_format),
+        make_dfb(initial_exact_dfb, state_tiles, fp32),
+        make_dfb(state_exact_dfb, 2 * state_tiles, fp32),
+        make_dfb(e_dfb, chain_affine_transforms_transform_buffers * e_tiles, transform_format),
         make_dfb(b_dfb, chain_affine_transforms_transform_buffers * state_tiles, transform_format),
         make_dfb(product_dfb, state_tiles, fp32),
         make_dfb(state_dfb, state_tiles, fp32),
@@ -88,8 +91,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
             "reader_writer_chain_affine_transforms.cpp",
         .dfb_bindings =
             {
-                m2::ProducerOf(initial_dfb, "initial"),
-                m2::ProducerOf(a_dfb, "a"),
+                m2::ProducerOf(initial_exact_dfb, "initial_exact"),
+                m2::ProducerOf(e_dfb, "e"),
                 m2::ProducerOf(b_dfb, "b"),
                 m2::ConsumerOf(out_dfb, "out"),
             },
@@ -112,11 +115,13 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
-    // Matmul operands unpack to source registers; the product unpacks losslessly to DST for the FP32 SFPU add.
+    // Matmul operands unpack to source registers; the product and the exact state views unpack losslessly to DST for
+    // the FP32 SFPU add and the initial copy.
     auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
-    compute_hw.unpack_modes[initial_dfb] = tt::tt_metal::UnpackMode::UnpackToSrc;
     compute_hw.unpack_modes[state_dfb] = tt::tt_metal::UnpackMode::UnpackToSrc;
     compute_hw.unpack_modes[product_dfb] = tt::tt_metal::UnpackMode::UnpackToDest;
+    compute_hw.unpack_modes[initial_exact_dfb] = tt::tt_metal::UnpackMode::UnpackToDest;
+    compute_hw.unpack_modes[state_exact_dfb] = tt::tt_metal::UnpackMode::UnpackToDest;
     m2::KernelSpec compute{
         .unique_id = compute_kernel_name,
         .source =
@@ -125,8 +130,10 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
         .compiler_options = {.opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
-                m2::ConsumerOf(initial_dfb, "initial"),
-                m2::ConsumerOf(a_dfb, "a"),
+                m2::ConsumerOf(initial_exact_dfb, "initial_exact"),
+                m2::ProducerOf(state_exact_dfb, "state_exact"),
+                m2::ConsumerOf(state_exact_dfb, "state_exact"),
+                m2::ConsumerOf(e_dfb, "e"),
                 m2::ConsumerOf(b_dfb, "b"),
                 m2::ProducerOf(product_dfb, "product"),
                 m2::ConsumerOf(product_dfb, "product"),
