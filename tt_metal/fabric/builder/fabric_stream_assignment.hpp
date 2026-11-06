@@ -30,6 +30,9 @@ struct CreditTransportPlan {
     // the completed table's declared extent (positions 0..8), so counters are the only transport
     // that can carry its credits today; stream_requirements enforces that.
     bool vc2_uses_counters = false;
+    // False on a core with no stream registers (a Keraunos CCE): the kernel then keeps every credit in software
+    // counters whatever the per-VC flags say, and the ack and completion tables name no register.
+    bool stream_registers_available = true;
 
     bool any_vc_uses_counters() const { return vc0_uses_counters || vc1_uses_counters || vc2_uses_counters; }
 };
@@ -158,7 +161,8 @@ public:
     bool has(StreamRole role, uint32_t vc, uint32_t index) const;
 
     // The full declared set as one ordered vector of (name, value) -- the host mirror of
-    // fabric_erisc_router_ct_args.hpp's stream-register reads. Allocated entries carry their id;
+    // fabric_erisc_router_ct_args.hpp's stream-register reads. Allocated entries carry their id (the
+    // ack and completion tables only with stream registers);
     // everything else carries the out-of-range sentinel. Completeness is checked as SET equality
     // against the declared set: a duplicate paired with an omission has the right count and must
     // not pass.
