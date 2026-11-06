@@ -170,6 +170,10 @@
     {
       "fact": "Direct forced-token incrementalB8 full60 decode on exact capturedGPQA paths matchesHF/prefill top1 at6checkpoints; originalvLLM scheduler/sampler/APC state not reproduced. No automatic seed/precision sweep justified.",
       "evidence": "runs/gpqa-decode-state-discriminator/RESULT.json"
+    },
+    {
+      "fact": "KV capacity is batchconfiguration-specific: currentB8 sharedpool10248IDs; ledger1Mtokens describesB32. Eight131KGPQArequests need16384globalIDs before sliding/reserves, so C8 rejected without devicecost.",
+      "evidence": "runs/gpqa-c8-capacity/RESULT.json"
     }
   ],
   "suite_timings": [

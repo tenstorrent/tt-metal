@@ -1,0 +1,69 @@
+{
+  "status": "completed_host_no_run",
+  "question_status": "Eight independent131072token histories cannot simultaneously reside in unchanged B8 pool",
+  "decision": "C8 unavailable at required worst-case context on current B8; no device experiment or B16 pursuit",
+  "runtime_publication_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+  "planned_clients": 8,
+  "supported_batch_examined": 8,
+  "max_num_seqs": 8,
+  "actual_b8_allocator": {
+    "normalized_shared_ids": 10248,
+    "unique_kv_buffer_pairs": 10,
+    "bytes_per_id_per_device": 696320,
+    "kv_bytes_per_device": 7135887360,
+    "full_attention_groups": 1,
+    "full_attention_tokens_per_normalized_block": 64,
+    "sliding_groups": 5,
+    "sliding_tokens_per_block": 32,
+    "sliding_window_tokens": 1024
+  },
+  "minimum_demand": {
+    "independent_requests": 8,
+    "context_tokens_each": 131072,
+    "full_attention_ids_alone": 16384,
+    "deficit_before_sliding_reserves": 6136
+  },
+  "illustrative_conservative_demand": {
+    "sliding_boundary_ids": 1320,
+    "aggregate_async_reserve_ids": 640,
+    "null_ids": 1,
+    "total_ids": 18345,
+    "deficit": 8097,
+    "scope": "Illustrative reserves, not an allocator peak measurement; full-attention-only lower bound already proves no fit"
+  },
+  "ledger_distinction": {
+    "pool_tokens": 1048576,
+    "applies_to": "B32 measured32x32768 target with prior-turn APC reserve",
+    "b32_normalized_ids": 36896,
+    "not_b8_capacity": true
+  },
+  "b16": {
+    "pool_ids": 18448,
+    "illustrative_remaining_ids": 103,
+    "validated_for_eight131k_histories": false,
+    "decision": "Not pursued; different pool/batch regime requires independent admission and scored comparison, with no established current20tail benefit"
+  },
+  "device_cost_hours": 0,
+  "proposed_device_forecast_hours": 0.15,
+  "proposed_box_hours": 0.3,
+  "admitted_device_hours": 0,
+  "changes": [],
+  "predicted_release_saving": {
+    "prior_guess_hours": 0.4,
+    "status": "retired_not_credited",
+    "measured_saving_hours": null,
+    "reason": "Hypothetical earlier-tail admission on provisional40; target currentB8 capacity impossible and no current20tail benefit established"
+  },
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py:get_max_tokens_all_users/get_kv_cache_spec",
+    "models/autoports/google_gemma_4_31b_it/doc/vllm_integration/pool_plan.json:batch8 allocation",
+    "bringup/artifacts/gpqa-loop-onset-native-capture/server/server.log:serving_cache_allocation/num_gpu_blocks_override10248",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_serving.json:ledger pool_tokens basis32x32768"
+  ],
+  "limitations": [
+    "No synthetic or scored C8 run performed; no C8 score/runtime measurement.",
+    "No conclusion that eight shorter mixed-context requests cannot fit; that would be a different narrower target.",
+    "No shorter context, shared artificial prefixes, pool change or release-cap reduction substituted for requested goal.",
+    "Normal rung progression remains independent; no new B16 or scored pair allocated."
+  ]
+}

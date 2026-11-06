@@ -3100,5 +3100,11 @@
     "status": "waiting_for_actual_failure_evidence",
     "goal": "Causal native replay of first retained failing GPQA/SWE request if completed normal rung requires it",
     "reason": "All current local capacity/source/batch prerequisites measured; do not spend long device runs on invented original seeds or blind repetition. CI normal runs continue under operator Docker/dataset exception."
+  },
+  "next_rung_admission_policy": {
+    "updated_at": "2026-11-06T17:48:16.171357+00:00",
+    "normal_rung": "Use measured aggregate completed current-rung wall time scaled by nested task count, measured setup and queue, explicit uncertainty; require projection before firstdry hour22. Track actual progress and stop nonfit. Do not promise full-tail worst-case completion from an average.",
+    "release": "Additionally include full agent/request slow-tail allowance with margin within12h; frozen lastvalidlist only.",
+    "reason": "Distinguish measured normal-rung forecast from conservative release tail budget; no outputlimit reduction or score-directed task choice."
   }
 }

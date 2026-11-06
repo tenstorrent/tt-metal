@@ -564,5 +564,13 @@
       "source": "runs/singleton-batch-comparison/RESULT.json",
       "scored_acceptance": false
     }
+  },
+  "concurrency_exclusions": {
+    "gpqa_c8_b8": {
+      "reason": "8x131072 requires16384fullattentionIDs alone, B8 has10248; measuredB32ledger1Mtokens notapplicable",
+      "evidence": "runs/gpqa-c8-capacity/RESULT.json",
+      "changes": "none",
+      "chosen_clients": 4
+    }
   }
 }
