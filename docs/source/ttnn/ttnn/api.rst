@@ -640,6 +640,7 @@ Generic
    :template: function.rst
 
    ttnn.generic_op
+   ttnn.experimental.generic_op
 
 KV Cache
 ========
