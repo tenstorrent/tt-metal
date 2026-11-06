@@ -1728,6 +1728,7 @@ void write_block_row_grouped_trid(
 
 template <uint32_t tile_bytes>
 void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t source_tile_addr) {
+    static_assert(tile_bytes == 1024 * sizeof(uint16_t), "attention sink CB must be BF16");
     /*
     Fill num_tiles tiles in the CB by copying the first element from the source tile
     to the first element of every row in each destination tile.

@@ -437,6 +437,10 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                     attention_sink.dtype() == DataType::BFLOAT4_B,
                 "Attention sink must be in BF16, BFP8, or BFP4 dataformat");
             TT_FATAL(
+                attention_sink.dtype() == DataType::BFLOAT16 || !get_fp32_dest_acc_en(attrs.compute_kernel_config),
+                "Attention sink must be BF16 when fp32_dest_acc_en=true (non-streaming compute), got {}",
+                attention_sink.dtype());
+            TT_FATAL(
                 attention_sink.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
                 "Attention sink must be in DRAM");
 

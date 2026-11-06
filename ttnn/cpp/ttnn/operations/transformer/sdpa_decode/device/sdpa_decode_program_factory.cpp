@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <string>
 
@@ -199,8 +200,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     TT_FATAL(num_cores_available >= B, "Cores available ({}) must be >= batch size ({})", num_cores_available, B);
 
     // ========== Core Allocation ==========
-    const uint32_t max_cores_per_head =
-        program_config.has_value() ? program_config->max_cores_per_head_batch : num_cores_available;
+    const uint32_t max_cores_per_head = program_config.has_value()
+                                            ? program_config->max_cores_per_head_batch
+                                            : std::min<uint32_t>(num_cores_available, 1u << MAX_TREE_REDUCTION_ROUNDS);
     TT_FATAL(max_cores_per_head > 0, "max_cores_per_head_batch must be > 0");
     const uint32_t max_num_cores_for_compute = max_cores_per_head * B * num_kv_heads;
     const uint32_t num_cores_per_batch_uncapped = std::min(num_cores_available, max_num_cores_for_compute) / B;
@@ -462,19 +464,16 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
 
     // Matmul block/subblock configuration for output (QK * V)
     uint32_t out_in0_block_w = Sk_chunk_t > 0 ? Sk_chunk_t : 0;
-    const uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
+    // The subblock width must divide vDHt for the same reason: vDHt / subblock_w truncates otherwise.
+    const uint32_t out_out_subblock_w = largest_divisor_at_most(vDHt, dst_size);
     // Same divisibility requirement as the QK subblock height above.
     const uint32_t out_out_subblock_h =
         (out_out_subblock_w == vDHt) ? largest_divisor_at_most(PNHt, dst_size / out_out_subblock_w) : 1;
     const uint32_t out_in0_num_subblocks = PNHt / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
 
-    // DHt granularity for compute loops (must be power of 2)
-    uint32_t dht_granularity = std::min(DHt, dst_size);
-    uint32_t log2_dht_granularity = static_cast<uint32_t>(std::log2(dht_granularity));
-    if (dht_granularity != (1u << log2_dht_granularity)) {
-        dht_granularity = 1;
-    }
+    // DHT_GRANULARITY chunks the vDHt-wide normalisation loops, so it must divide vDHt (and DHt).
+    const uint32_t dht_granularity = largest_divisor_at_most(std::gcd(DHt, vDHt), dst_size);
 
     // ========== Tile Counts for Circular Buffers ==========
     const uint32_t q_tiles = PNHt * DHt;
