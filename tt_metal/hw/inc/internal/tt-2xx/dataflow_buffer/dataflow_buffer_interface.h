@@ -226,3 +226,9 @@ static_assert(
 static_assert(
     offsetof(TxnDFBDescriptor, finish) == offsetof(dfb_dm0_txn_descriptor_image_t, finish),
     "TxnDFBDescriptor finish must match dfb_dm0_txn_descriptor_image_t finish");
+// DM0's init copy carries the image's threshold byte into this struct, so it must land past every
+// counter the ISR can read.
+static_assert(
+    offsetof(dfb_dm0_txn_descriptor_image_t, threshold) >=
+        offsetof(TxnDFBDescriptor, tile_counters) + sizeof(TxnDFBDescriptor::tile_counters),
+    "the copied threshold byte must not land on a TxnDFBDescriptor tile counter");

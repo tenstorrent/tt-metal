@@ -355,6 +355,15 @@ FORCE_INLINE DfbImplicitSyncTxnMasks setup_dfb_implicit_sync(uint32_t tt_l1_ptr*
             uint8_t* d = static_cast<uint8_t*>(__builtin_assume_aligned(&g_txn_dfb_descriptor[txn_id], 32));
             // Word 0 holds the counter count, the finish record and counters 0-2: the common case is
             // this one copy.
+            static_assert(
+                8u - offsetof(TxnDFBDescriptor, tile_counters) == 3u, "word 0 must hold exactly counters 0-2");
+            static_assert(
+                16u - offsetof(TxnDFBDescriptor, tile_counters) == 11u, "words 0-1 must hold exactly counters 0-10");
+            static_assert(
+                offsetof(TxnDFBDescriptor, tile_counters) + dfb::MAX_TILE_COUNTERS_PER_SIDE <= 24u,
+                "the 3-word copy must cover every counter");
+            static_assert(
+                dfb_dm0_compact_desc_max_counters(16u) <= 11u, "a 16B slot must never need word 2");
             uint64_t w0;
             __builtin_memcpy(&w0, s, 8);
             __builtin_memcpy(d, &w0, 8);

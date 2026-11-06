@@ -177,8 +177,9 @@ struct dfb_global_header_t {
 // stride code), [39:16] producer txn-id mask >> DFB_TXN_ID_BASE, [63:40] consumer txn-id mask >>
 // DFB_TXN_ID_BASE. DFB txn ids are confined to [DFB_TXN_ID_BASE, HW_TXN_ID_MAX] = [8, 31], so each
 // mask fits in 24 bits; the host TT_FATALs on any bit below DFB_TXN_ID_BASE.
-static_assert(HW_TXN_ID_MAX - DFB_TXN_ID_BASE + 1 <= 24, "DFB txn-id masks no longer fit dm0_packed");
 constexpr uint32_t DFB_DM0_PACKED_MASK_BITS = 24u;
+static_assert(
+    HW_TXN_ID_MAX - DFB_TXN_ID_BASE + 1 <= DFB_DM0_PACKED_MASK_BITS, "DFB txn-id masks no longer fit dm0_packed");
 // dm0_packed bits [1:0]: 0 = 32 B, 1 = 16 B, 2 = 8 B.
 inline uint32_t dfb_dm0_desc_stride_code(uint32_t stride) {
     if (stride == 8u) {
@@ -425,15 +426,15 @@ static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size changed â
 // tiles_to_post_or_ack in bytes 0-1, then the 3-byte kernel-exit finish record every implicit-sync side
 // needs, then counters from byte 5, so the first 8B carry everything for <= 3 counters.
 //
-// The CMDBUF tiles-to-process threshold travels in the descriptor (byte 23 of the full 32B image)
-// rather than in a separate threshold pool, so DM0 programs each txn id in the same walk that copies
-// its descriptor. The ISR never reads it.
+// The CMDBUF tiles-to-process threshold travels in the descriptor rather than in a separate
+// threshold pool, so DM0 programs each txn id in the same walk that copies its descriptor. The ISR
+// never reads it.
 //
 // In the config, each descriptor slot is only as wide as the core needs: 8B (<= 2 counters), 16B
 // (<= 10) or 32B, the same for every txn id on the core, with the threshold in the slot's last byte
-// (dfb_dm0_desc_stride_for / dfb_dm0_desc_threshold_offset). DM0's D$ is blocking, so every pool line
-// it reads is a full stall. The destination g_txn_dfb_descriptor keeps its 32B stride; the extra byte
-// copied there lands in a counter slot the ISR never reads.
+// (32B: the first byte after the counters). DM0 copies a slot into g_txn_dfb_descriptor in whole 8B
+// words, so the threshold byte can be copied too. It is always past the slot's last possible counter,
+// so it only lands in a counter entry beyond num_counters or in padding, neither of which the ISR reads.
 
 // What DM0 needs to finish one implicit-sync DFB side at kernel exit (dfb_dm0_flush_side). Every txn id of
 // the side carries the same copy.
@@ -451,9 +452,9 @@ struct dfb_dm0_txn_descriptor_image_t {
     uint8_t num_counters;
     uint8_t tiles_to_post_or_ack;  // union post/ack share offset in TxnDFBDescriptor
     dfb_dm0_finish_info_t finish;  // DM0 kernel-exit flush only
-    uint8_t tile_counters[18];
-    uint8_t threshold;  // DM0 init only; lands in TxnDFBDescriptor padding
-    uint8_t _pad[8];
+    uint8_t tile_counters[dfb::MAX_TILE_COUNTERS_PER_SIDE];
+    uint8_t threshold;  // DM0 init only; past every counter, so the ISR never reads it
+    uint8_t _pad[32 - 6 - dfb::MAX_TILE_COUNTERS_PER_SIDE];
 };
 
 // One entry per producer RISC that uses the remapper.
@@ -498,15 +499,17 @@ static_assert(sizeof(dfb_dm1_remapper_slot_t) == 12, "dfb_dm1_remapper_slot_t mu
 constexpr uint32_t DFB_DM1_CACHED_PAYLOAD_OFFSET = 0u;
 constexpr uint32_t DFB_DM0_CACHED_PAYLOAD_OFFSET = 0u;
 static_assert(sizeof(dfb_dm0_txn_descriptor_image_t) == 32, "dfb_dm0_txn_descriptor_image_t must be 32 bytes");
-// DM0 takes the threshold out of the source slot's byte 23 at the full 32B stride.
-static_assert(offsetof(dfb_dm0_txn_descriptor_image_t, threshold) == 23, "threshold must be byte 23 of the image");
-
-// Smallest source stride holding num_counters counters (bytes 5..) plus the threshold in the last byte.
+// Counters a compact (8 / 16 B) slot holds: everything between the counter array and the threshold
+// in its last byte.
+constexpr uint32_t dfb_dm0_compact_desc_max_counters(uint32_t stride) {
+    return stride - 1u - static_cast<uint32_t>(offsetof(dfb_dm0_txn_descriptor_image_t, tile_counters));
+}
+// Smallest source stride holding max_counters counters plus the threshold.
 inline uint32_t dfb_dm0_desc_stride_for(uint32_t max_counters) {
-    if (max_counters <= 2u) {
+    if (max_counters <= dfb_dm0_compact_desc_max_counters(8u)) {
         return 8u;
     }
-    return max_counters <= 10u ? 16u : 32u;
+    return max_counters <= dfb_dm0_compact_desc_max_counters(16u) ? 16u : 32u;
 }
 inline uint32_t dfb_dm0_desc_threshold_offset(uint32_t stride) {
     return stride == 32u ? static_cast<uint32_t>(offsetof(dfb_dm0_txn_descriptor_image_t, threshold)) : stride - 1u;
