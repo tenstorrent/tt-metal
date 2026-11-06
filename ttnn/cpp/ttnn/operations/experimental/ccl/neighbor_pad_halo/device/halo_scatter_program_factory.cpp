@@ -49,7 +49,7 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
     Tensor& tensor_return_value) {
     Program program{};
 
-    Buffer* compact = tensor_args.compact_buffer.buffer();  // [total_sticks, C] (border source)
+    const auto* compact = &tensor_args.compact_buffer.mesh_buffer();  // [total_sticks, C] (border source)
     Buffer* dst = tensor_return_value.buffer();          // padded output (allocated) or in-place (border_only)
     // border_only: no interior reads; x_src unused (point it at dst, harmless). repack: unpadded interior.
     Buffer* x_src = op.border_only ? dst : tensor_args.interior_src.buffer();

@@ -102,9 +102,9 @@ KernelIds build_kernels_and_cbs(
     const uint32_t output_e4m3_page_bytes = tile_h * tile_w;         // cb_output_e4m3 page = one tile
     const uint32_t scale_aligned_page_bytes = output_scale.mesh_buffer().aligned_page_size();
 
-    auto* src_buffer = input.buffer();
-    auto* dst_e4m3_buffer = output_e4m3.buffer();
-    auto* dst_scale_buffer = output_scale.buffer();
+    const auto* src_buffer = &input.mesh_buffer();
+    const auto* dst_e4m3_buffer = &output_e4m3.mesh_buffer();
+    const auto* dst_scale_buffer = &output_scale.mesh_buffer();
 
     const DataFormat input_df = datatype_to_dataformat_converter(input.dtype());
     const DataFormat fp32_df = DataFormat::Float32;

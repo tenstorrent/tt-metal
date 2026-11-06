@@ -1724,9 +1724,9 @@ void append_to_descriptor(
     // kernels build a per-expert accessor from that descriptor + the per-expert
     // base address (passed as a runtime-arg).
     auto* x_buffer = t.x.buffer();
-    auto* gate_buffer = t.gate_projs[0].buffer();
-    auto* up_buffer = t.up_projs[0].buffer();
-    auto* down_buffer = t.down_projs[0].buffer();
+    const auto* gate_buffer = &t.gate_projs[0].mesh_buffer();
+    const auto* up_buffer = &t.up_projs[0].mesh_buffer();
+    const auto* down_buffer = &t.down_projs[0].mesh_buffer();
     auto* counts_buffer = t.counts.buffer();
     auto* idx_buffer = t.global_expert_idx_table.buffer();
     auto* out_buffer = tensor_return_value.buffer();

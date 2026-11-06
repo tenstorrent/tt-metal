@@ -5,6 +5,7 @@
 #include "move_program_factory.hpp"
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation_types.hpp"

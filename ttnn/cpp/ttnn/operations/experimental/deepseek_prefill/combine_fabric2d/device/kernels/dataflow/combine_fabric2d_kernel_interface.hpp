@@ -30,6 +30,7 @@ constexpr uint32_t NO_SEMAPHORE = 0xFFFFFFFFu;
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "../../combine_fabric2d_placement.hpp"
 #include "../../combine_fabric2d_types.hpp"

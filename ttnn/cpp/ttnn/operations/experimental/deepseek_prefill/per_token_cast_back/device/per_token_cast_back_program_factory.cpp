@@ -121,9 +121,9 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const DataFormat fp32_df = DataFormat::Float32;
     const DataFormat output_df = datatype_to_dataformat_converter(operation_attributes.output_dtype);
 
-    auto* src_e4m3_buffer = input_e4m3.buffer();
-    auto* src_scale_buffer = input_scale.buffer();
-    auto* dst_buffer = output.buffer();
+    const auto* src_e4m3_buffer = &input_e4m3.mesh_buffer();
+    const auto* src_scale_buffer = &input_scale.mesh_buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
     auto* region_buffer = token_count_aware ? expert_region_offsets->buffer() : nullptr;
     auto* counts_buffer = token_count_aware ? expert_token_counts->buffer() : nullptr;
     auto* table_buffer = token_count_aware ? global_expert_idx_table->buffer() : nullptr;

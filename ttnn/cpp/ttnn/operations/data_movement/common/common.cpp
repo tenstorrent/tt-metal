@@ -19,6 +19,7 @@
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 namespace ttnn::operations::data_movement {
 
