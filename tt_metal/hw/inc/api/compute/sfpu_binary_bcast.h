@@ -7,6 +7,7 @@
 #include "api/compute/common_globals.h"
 
 #ifdef TRISC_MATH
+#include "ckernel_sfpu_bcast_scalar.h"
 #include "ckernel_sfpu_binary_bcast.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
@@ -421,6 +422,129 @@ ALWI void sfpu_normalize_bcast_scalar(
              dst_data_idx,
              VectorMode::None,
              dst_inv_std_scalar_idx)));
+}
+
+// ============================================================================
+// BCAST_SCALAR: element [0, 0] of a DEST tile parked in an SFPU register, then
+// DEST tiles multiplied by it in place
+// ============================================================================
+
+// clang-format off
+/**
+ * Initialise SFPU state for the parked-scalar multiply: the shared SFPU
+ * configuration and the zero-stride address modifier. Call once before
+ * `sfpu_bcast_scalar_load()`, and again after any init that reprograms them.
+ * Neither the column-broadcast mask nor its replay program is touched, so the
+ * two families coexist.
+ *
+ * Not supported on Quasar: a kernel that calls it fails to build.
+ *
+ * Return value: None
+ */
+// clang-format on
+ALWI void sfpu_bcast_scalar_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::_sfpu_bcast_scalar_init_))); }
+
+// clang-format off
+/**
+ * Broadcast element [0, 0] of `dst_scalar_idx` to every SFPU lane and park it in
+ * programmable constant register 2 (LREG14, sfpi's vConstFloatPrgm2), bit for
+ * bit (-0.0, NaN payloads and denormals included). Only element [0, 0] is read;
+ * the tile may be overwritten right after the call. The parked value is
+ * consumed by `sfpu_mul_bcast_scalar()` and stays valid across any number of
+ * tiles and across the `sfpu_*_bcast_*` operations, until an init that
+ * programs the constant registers LREG12..14 runs (`exp_tile_init`,
+ * `sfpu_normalize_bcast_scalar`, the sqrt / rsqrt inits): after such an init
+ * call `sfpu_bcast_scalar_init()` and load again. The load itself runs sfpi
+ * code and may use LREG0..7, so it invalidates the persistent column-broadcast
+ * lane mask: a column-broadcast op that follows a load runs its init first,
+ * which leaves the parked value alone. The scalar tile and DEST must be FP32
+ * and DEST acquired.
+ *
+ * Not supported on Quasar: a kernel that calls it fails to build.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                           | Type     | Valid Range                                           | Required |
+ * |-----------------|-------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | dst_scalar_idx  | The tile in DST whose element [0, 0] is the scalar    | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void sfpu_bcast_scalar_load(uint32_t dst_scalar_idx) {
+    MATH((SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _sfpu_bcast_scalar_load_,
+        dst_scalar_idx,
+        dst_scalar_idx,
+        dst_scalar_idx,
+        VectorMode::None)));
+}
+
+// clang-format off
+/**
+ * Multiply `dst_data_idx` in place by the scalar parked by
+ * `sfpu_bcast_scalar_load()`:
+ *
+ *     DST[dst_data_idx][r][c] *= scalar
+ *
+ * over the faces `vector_mode` names (`VectorMode::RC` the whole tile,
+ * `VectorMode::R` rows 0..15, `VectorMode::C` columns 0..15) and the first
+ * `ITERATIONS` SFPU vectors of each face (iteration k is face rows
+ * 4 * (k / 2) .. +3, one column parity): 8 is the face, 2 is its rows 0..3, so
+ * `<2>(idst, VectorMode::R)` scales rows 0..3 of all 32 columns. Everything
+ * else is untouched. The multiply is the column broadcast's own instruction,
+ * so the result is bit-identical to `sfpu_mul_bcast_col` with a column tile
+ * that holds the scalar in every row. FP32 DEST only; DEST must be acquired.
+ *
+ * Not supported on Quasar: a kernel that calls it fails to build.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                         | Type       | Valid Range                                           | Required |
+ * |----------------|---------------------------------------------------------------------|------------|-------------------------------------------------------|----------|
+ * | ITERATIONS     | SFPU vectors per face (template): 8 is the face, 2 its rows 0..3    | int        | 1 to 8                                                | False    |
+ * | dst_data_idx   | The index of the data tile in DST (result is written back in-place) | uint32_t   | Must be less than the size of the DST register buffer | True     |
+ * | vector_mode    | The faces: VectorMode::RC (all), R (rows 0..15), C (columns 0..15)  | VectorMode | RC, R, C                                              | False    |
+ */
+// clang-format on
+template <int ITERATIONS = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void sfpu_mul_bcast_scalar(uint32_t dst_data_idx, VectorMode vector_mode = VectorMode::RC) {
+    static_assert(is_fp32_dest_acc_en, "sfpu_mul_bcast_scalar: the parked scalar and the tiles are fp32 DEST only");
+    static_assert(ITERATIONS >= 1 && ITERATIONS <= 8, "sfpu_mul_bcast_scalar: ITERATIONS is 1..8 vectors per face");
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        _calculate_mul_bcast_scalar_,
+        (ITERATIONS),
+        dst_data_idx,
+        dst_data_idx,
+        dst_data_idx,
+        VectorMode::None,
+        vector_mode)));
+}
+
+// clang-format off
+/**
+ * `sfpu_bcast_scalar_load(dst_scalar_idx)` followed by
+ * `sfpu_mul_bcast_scalar<ITERATIONS>(dst_data_idx, vector_mode)`: one tile
+ * scaled by element [0, 0] of another, the scalar left parked for further
+ * tiles. See both for the preconditions.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                         | Type       | Valid Range                                           | Required |
+ * |-----------------|---------------------------------------------------------------------|------------|-------------------------------------------------------|----------|
+ * | ITERATIONS      | SFPU vectors per face (template)                                    | int        | 1 to 8                                                | False    |
+ * | dst_data_idx    | The index of the data tile in DST (result is written back in-place) | uint32_t   | Must be less than the size of the DST register buffer | True     |
+ * | dst_scalar_idx  | The tile in DST whose element [0, 0] is the scalar                  | uint32_t   | Must be less than the size of the DST register buffer | True     |
+ * | vector_mode     | The faces, as sfpu_mul_bcast_scalar                                 | VectorMode | RC, R, C                                              | False    |
+ */
+// clang-format on
+template <int ITERATIONS = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void sfpu_mul_bcast_scalar(
+    uint32_t dst_data_idx, uint32_t dst_scalar_idx, VectorMode vector_mode = VectorMode::RC) {
+    sfpu_bcast_scalar_load(dst_scalar_idx);
+    sfpu_mul_bcast_scalar<ITERATIONS, is_fp32_dest_acc_en>(dst_data_idx, vector_mode);
 }
 
 // ============================================================================
