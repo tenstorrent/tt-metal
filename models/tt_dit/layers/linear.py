@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from typing import NamedTuple
 
 import torch
 
@@ -165,6 +166,17 @@ def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
     return tmp
 
 
+class AGMMOverride(NamedTuple):
+    """A measured all-gather-matmul config for one (M, K, N), set per layer in `ColParallelLinear.agmm_overrides`.
+
+    `config.compute_with_storage_grid_size` is the matmul worker grid, which must leave free the mux axis that
+    `force_transpose` implies (a row when transposed, a column when not; see `agmm_worker_grid`).
+    """
+
+    config: ttnn.MinimalMatmulConfig
+    force_transpose: bool
+
+
 class ColParallelLinear(Module):
     """
     Linear layer with column parallel weights
@@ -249,6 +261,11 @@ class ColParallelLinear(Module):
         )
 
         self._mesh_axis_size = self.mesh_device.shape[self.mesh_axis] if self.mesh_axis is not None else 1
+
+        # Opt-in per-layer AGMM configs keyed by the (M, K, N) of the ring all-gather-matmul path. A hit
+        # replaces the core grid, blocking and force_transpose the call would otherwise resolve; the
+        # number of workers per link follows from the grid as in `get_agmm_config`.
+        self.agmm_overrides: dict[tuple[int, int, int], AGMMOverride] = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight = state.pop("weight", None)
@@ -409,7 +426,8 @@ class ColParallelLinear(Module):
             # Restricted to chunks==1; other shapes fall through to the all_gather_minimal_matmul_async
             # path below. The op gathers on dim 3 of a rank-4 input, so every dim above the matmul's
             # (M, K) must be unit; _forward_fabric_agmm widens rank-3 activations to satisfy that.
-            fabric_cfg = get_fabric_agmm_config(M, K, N, (self.chunks or 1), full_grid)
+            override = self.agmm_overrides.get((M, K, N))
+            fabric_cfg = get_fabric_agmm_config(M, K, N, (self.chunks or 1), full_grid) if override is None else None
             has_unit_batch = len(x.padded_shape) <= 4 and all(d == 1 for d in list(x.padded_shape)[:-2])
             if fabric_cfg is not None and self.chunks in (None, 1) and has_unit_batch and addcmul_a is None:
                 return self._forward_fabric_agmm(
@@ -422,20 +440,26 @@ class ColParallelLinear(Module):
             # get_agmm_config resolves grid, blocking and workers together: an explicit core_grid /
             # default_block_size and swept (M, K, N) table entries keep the legacy derivation,
             # unswept shapes go through the v3 rule engine (see utils/agmm_rules.py).
-            core_grid, matmul_config, num_workers_per_link = get_agmm_config(
-                M,
-                K,
-                N,
-                full_grid=full_grid,
-                cluster_size=parallel_config.tensor_parallel.factor,
-                num_links=self.ccl_manager.num_links,
-                core_grid=core_grid,
-                default_block_size=default_block_size,
-                use_heuristic=use_heuristic_mmcfg,
-                fuse_swiglu=self.fuse_swiglu,
-                use_addcmul=addcmul_a is not None,
-                force_transpose=force_transpose,
-            )
+            if override is not None:
+                matmul_config, force_transpose = override
+                core_grid = matmul_config.compute_with_storage_grid_size
+                in0_axis = core_grid.x if (force_transpose or M > N) else core_grid.y
+                num_workers_per_link = math.ceil(in0_axis / self.ccl_manager.num_links)
+            else:
+                core_grid, matmul_config, num_workers_per_link = get_agmm_config(
+                    M,
+                    K,
+                    N,
+                    full_grid=full_grid,
+                    cluster_size=parallel_config.tensor_parallel.factor,
+                    num_links=self.ccl_manager.num_links,
+                    core_grid=core_grid,
+                    default_block_size=default_block_size,
+                    use_heuristic=use_heuristic_mmcfg,
+                    fuse_swiglu=self.fuse_swiglu,
+                    use_addcmul=addcmul_a is not None,
+                    force_transpose=force_transpose,
+                )
 
             tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
             ag_persistent_buffer = (

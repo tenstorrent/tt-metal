@@ -11,9 +11,10 @@ import torch
 import ttnn
 
 from ....blocks.attention_opt import Attention
-from ....layers.linear import ColParallelLinear, RowParallelLinear
+from ....layers.linear import AGMMOverride, ColParallelLinear, RowParallelLinear
 from ....layers.module import Module
 from ....layers.normalization import DistributedLayerNorm
+from ....utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs
 from ....utils.tensor import prepare_weight_for_concatenated_input
 
 if TYPE_CHECKING:
@@ -25,6 +26,52 @@ HEADS = 24
 HEAD_DIM = 128
 MLP_RATIO = 3
 SDPA_Q_CHUNK_MAX = 128
+
+
+def _agmm(grid: tuple[int, int], blocks: tuple[int, int, int], subblock: tuple[int, int], *, transpose: bool):
+    return AGMMOverride(
+        ttnn.MinimalMatmulConfig(
+            M_block_size=blocks[0],
+            K_block_size=blocks[1],
+            N_block_size=blocks[2],
+            subblock_h=subblock[0],
+            subblock_w=subblock[1],
+            compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
+        ),
+        transpose,
+    )
+
+
+# Swept on a BH Galaxy 4x8 (SP8 on axis 1 x TP4 on axis 0, Ring, 2 links) with the production op calls; device
+# kernel duration, median over the 32 devices, us. Rows per device: 576 = 1024x1024 with 512 text rows,
+# 1024 = 1024x1024 with 4096 text rows, 1536 = the same plus a 1024x1024 reference. Applied only on the 12x10
+# Blackhole device grid they were measured on; every other shape keeps the shared resolution.
+# QKV (M, K, N/dev) all-gather-matmul, 3 output chunks.
+QKV_AGMM_CONFIGS = {
+    (576, HIDDEN, 2304): _agmm((11, 9), (2, 8, 7), (2, 1), transpose=False),  # 125.6 -> 77.7
+    (1024, HIDDEN, 2304): _agmm((12, 9), (3, 6, 8), (1, 4), transpose=True),  # 137.9 -> 129.2
+    (1536, HIDDEN, 2304): _agmm((12, 8), (4, 8, 9), (4, 1), transpose=True),  # 173.9 -> 168.6
+}
+# proj_mlp (M, K, N/dev) all-gather-matmul with fused SwiGLU (N is the packed [up | gate] width).
+MLP_AGMM_CONFIGS = {
+    (576, HIDDEN, 4608): _agmm((11, 9), (2, 8, 8), (1, 4), transpose=False),  # 288.7 -> 149.7
+    (1024, HIDDEN, 4608): _agmm((11, 8), (4, 4, 14), (2, 2), transpose=False),  # 328.5 -> 203.1
+    (1536, HIDDEN, 4608): _agmm((12, 9), (4, 4, 16), (1, 4), transpose=True),  # 308.2 -> 268.0
+}
+# proj_out (M, K/dev, N) fused matmul + reduce-scatter + addcmul over the concatenated [attn | mlp] input.
+# FusedMMRSConfig(mm grid, M_block, K_block, N_block, sub_h, sub_w, buffers, chunk width, workers/link, window)
+register_fused_mmrs_configs(
+    {
+        ttnn.CoreCoord(12, 10): {
+            # 215.9 -> 145.9
+            (576, HIDDEN, HIDDEN): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 3, 4, 8, 1, 4, None, 1, None, None),
+            # 236.7 -> 190.7; the reduce-scatter runs on the 3 rows above the 7-row matmul grid
+            (1024, HIDDEN, HIDDEN): FusedMMRSConfig(ttnn.CoreCoord(12, 7), 3, 8, 8, 1, 4, None, 1, 8, 2),
+            # 267.4 -> 228.0
+            (1536, HIDDEN, HIDDEN): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 3, 8, 8, 1, 4, None, 1, 4, 2),
+        }
+    }
+)
 
 
 class Flux3KleinTransformerBlock(Module):
@@ -107,6 +154,11 @@ class Flux3KleinTransformerBlock(Module):
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
         )
+
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) == (12, 10):
+            self.attn.to_qkv.agmm_overrides = QKV_AGMM_CONFIGS
+            self.proj_mlp.agmm_overrides = MLP_AGMM_CONFIGS
 
         self._mlp_hidden_dim = mlp_hidden_dim
         self._tp_factor = parallel_config.tensor_parallel.factor
