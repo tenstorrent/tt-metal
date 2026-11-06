@@ -20,9 +20,9 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "dispatch/dispatch_query_manager.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
 #include "mesh_device.hpp"

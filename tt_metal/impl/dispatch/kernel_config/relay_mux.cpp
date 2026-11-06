@@ -7,7 +7,7 @@
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include <bit>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/math.hpp>

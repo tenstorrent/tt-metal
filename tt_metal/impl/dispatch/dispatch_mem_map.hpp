@@ -9,7 +9,7 @@
 
 #include <tt-umd/types/core_coordinates.hpp>
 #include "command_queue_common.hpp"
-#include "dispatch_core_common.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "dispatch_settings.hpp"
 
 namespace tt::llrt {

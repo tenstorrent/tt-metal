@@ -10,7 +10,7 @@
 #include <mesh_workload.hpp>
 #include <mesh_command_queue.hpp>
 #include <tt_metal.hpp>
-#include "tt_metal_profiler.hpp"
+#include "impl/profiler/tt_metal_profiler.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -34,8 +34,8 @@
 
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
-#include "core_coord.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "hostdev/profiler_common.h"
 #include "context/context_types.hpp"
 #include "context/metal_context.hpp"
@@ -50,7 +50,7 @@
 #include "profiler_analysis.hpp"
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
-#include "profiler_types.hpp"
+#include "impl/profiler/profiler_types.hpp"
 #include "profiler_state_manager.hpp"
 #include "program.hpp"
 #include "program/program_impl.hpp"
