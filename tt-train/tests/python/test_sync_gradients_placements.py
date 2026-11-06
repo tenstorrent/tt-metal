@@ -95,7 +95,7 @@ class TestTP:
         forged = _input((1, 1, DIM, DIM)).get_value(NATIVE)
         coords = list(forged.tensor_topology().mesh_coords())
         forged.update_tensor_topology(ttnn.TensorTopology(ttnn.MeshShape([1]), [ttnn.PlacementShard(0)], coords[:1]))
-        with expect_error(RuntimeError, "cannot tell whether the tensor is sharded"):
+        with expect_error(RuntimeError, "cannot read the tensor's placement per mesh axis"):
             is_sharded_on_axis(forged, tp)
 
     def test_constant_inits_are_labelled_per_axis(self, tp_mesh):
@@ -198,7 +198,7 @@ class TestFSDP:
         )
         assert len(_placements(weight)) == 1, "precondition: collapsed 1-D label"
         for axis in range(len(mesh_shape)):
-            fsdp_reading = fsdp_module._already_fsdp_sharded(_placements(weight), axis, mesh_shape)
+            fsdp_reading = isinstance(fsdp_module._param_placements(linear.weight)[axis], ttnn.PlacementShard)
             assert fsdp_reading == is_sharded_on_axis(weight, axis), f"mesh axis {axis}"
         with expect_error(RuntimeError, "already sharded on mesh axis 'fsdp'"):
             ttml.fsdp.fully_shard(linear)

@@ -22,7 +22,7 @@ class TPBlock(AbstractModuleBase):
         super().__init__()
         self.inp = LinearLayer(dim, dim)
         self.up = ColumnParallelLinear(dim, dim, has_bias=True)
-        self.down = RowParallelLinear(dim, dim, has_bias=True, input_is_parallel=True)
+        self.down = RowParallelLinear(dim, dim, has_bias=True)
 
     def forward(self, x):
         return self.down(self.up(self.inp(x)))

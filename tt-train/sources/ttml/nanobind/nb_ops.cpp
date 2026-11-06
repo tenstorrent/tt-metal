@@ -229,12 +229,7 @@ void py_module(nb::module_& m) {
 
     {
         auto py_dropout = static_cast<nb::module_>(m.attr("dropout"));
-        py_dropout.def(
-            "dropout",
-            &ttml::ops::dropout,
-            nb::arg("tensor"),
-            nb::arg("probability"),
-            nb::arg("use_per_device_seed") = false);
+        py_dropout.def("dropout", &ttml::ops::dropout, nb::arg("tensor"), nb::arg("probability"));
     }
 
     {
@@ -642,8 +637,7 @@ void py_module(nb::module_& m) {
             nb::arg("w1"),
             nb::arg("w2"),
             nb::arg("w3"),
-            nb::arg("dropout_prob") = 0.0F,
-            nb::arg("use_per_device_seed") = true);
+            nb::arg("dropout_prob") = 0.0F);
     }
 
     {

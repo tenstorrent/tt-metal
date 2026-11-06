@@ -17,6 +17,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
@@ -188,9 +189,23 @@ ttnn::Tensor reduce_scatter(const ttnn::Tensor& tensor, const int dim, const std
 }
 
 ttnn::Tensor mesh_partition(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
-    // ttnn::mesh_partition already returns the input unchanged when the axis size is 1,
-    // so no single-device guard is needed here.
-    return ttnn::mesh_partition(tensor, dim, cluster_axis, /* memory_config */ std::nullopt);
+    // Works around https://github.com/tenstorrent/tt-metal/issues/64626: ttnn::mesh_partition gives every device but
+    // the first the wrong elements when a device's share of a TILE tensor ends inside a tile, so such shares are cut in
+    // ROW_MAJOR. Remove this once the issue is fixed.
+    const auto& shape = tensor.logical_shape();
+    const int rank = static_cast<int>(shape.rank());
+    const int normalized_dim = dim < 0 ? dim + rank : dim;
+    const auto mesh_shape = tensor.device()->shape();
+    const uint32_t parts = cluster_axis.has_value() ? mesh_shape[*cluster_axis] : mesh_shape.mesh_size();
+    const bool in_tile_dims = normalized_dim >= rank - 2 && normalized_dim < rank;
+    const uint32_t tile_extent = normalized_dim == rank - 1 ? tt::constants::TILE_WIDTH : tt::constants::TILE_HEIGHT;
+    if (tensor.layout() != ttnn::Layout::TILE || parts == 1 || !in_tile_dims ||
+        (shape[normalized_dim] / parts) % tile_extent == 0) {
+        return ttnn::mesh_partition(tensor, dim, cluster_axis, /* memory_config */ std::nullopt);
+    }
+    auto partitioned = ttnn::mesh_partition(
+        ttnn::to_layout(tensor, ttnn::Layout::ROW_MAJOR), dim, cluster_axis, /* memory_config */ std::nullopt);
+    return ttnn::to_layout(partitioned, ttnn::Layout::TILE);
 }
 
 ttnn::Tensor ring_shift(

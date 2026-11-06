@@ -27,9 +27,9 @@ class TensorMetadata:
 
     ``mapper`` (optional ``ttnn.CppTensorToMesh``): the distribution plan used
     when ``materialize`` runs. Downstream consumers — notably
-    ``ttml.fsdp.fully_shard`` — can introspect the existing sharding via
-    ``mapper.config().placements`` and build a new combined mapper without
-    round-tripping the not-yet-allocated tensor through host. ``None`` means
+    ``ttml.fsdp.fully_shard`` — can read its placement on each mesh axis with
+    ``ttml.core.distributed.placements_per_axis(mapper.config())`` and build a
+    new combined mapper without allocating the tensor. ``None`` means
     "no explicit mapper; treat as fully replicated" (default replicate mapper
     is installed by :func:`ttml.materialize_module`).
     """

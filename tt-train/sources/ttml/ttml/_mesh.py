@@ -6,7 +6,7 @@ import functools, operator, os, re
 from typing import Iterable
 import ttnn
 import ttml
-from .parallel import is_sequence_parallel
+from .parallel import partial_axes
 
 
 def prod(x: Iterable[int]) -> int:
@@ -235,7 +235,7 @@ def mesh() -> Mesh:
 def sync_gradients(parameters):
     """Turn each device's local gradient into the global one; call once per step."""
     average_gradients(parameters, axis_names=("dp", "fsdp"))
-    sum_sp_gradients(parameters, axis_name="tp")
+    sum_partial_gradients(parameters)
 
 
 def average_gradients(parameters, axis_names: tuple[str, ...]):
@@ -290,19 +290,25 @@ def _param_is_fsdp_sharded(param, axis_index: int) -> bool:
     return False
 
 
-def sum_sp_gradients(parameters, axis_name: str):
-    """Sum the gradients of sequence-parallel parameters across the tensor-parallel axis.
-    No-op when ``axis_name`` is absent or has size 1.
+def sum_partial_gradients(parameters):
+    """Sum each gradient across the mesh axes its parameter is marked partial on (``ttml.parallel.mark_partial``).
+
+    Axes the mesh lacks, or of size 1, are skipped.
 
     Args:
         parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
-        axis_name: The tensor-parallel mesh axis name.
     """
     m = maybe_mesh()
-    if m is None or not m.has_axis(axis_name) or m.axis_size(axis_name) == 1:
+    if m is None:
         return
-    axis = m.axis_index(axis_name)
 
     for _, param in parameters.items():
-        if is_sequence_parallel(param) and param.is_grad_initialized():
-            param.set_grad(ttml.core.distributed.all_reduce(param.get_grad(), cluster_axis=axis))
+        if not param.is_grad_initialized():
+            continue
+        axes = [m.axis_index(name) for name in partial_axes(param) if m.has_axis(name) and m.axis_size(name) > 1]
+        if not axes:
+            continue
+        grad = param.get_grad()
+        for axis in axes:
+            grad = ttml.core.distributed.all_reduce(grad, cluster_axis=axis)
+        param.set_grad(grad)

@@ -271,15 +271,11 @@ step.
 
 ### Initial sharding (`fully_shard` time)
 
-Each replicated parameter is replaced with its local shard via a
-host-roundtrip:
-
-1. The full tensor is composed from the mesh as a `float32` numpy array.
-2. A new `MeshMapperConfig` is built with the existing placements
-   preserved on every other axis (so a TP-sharded weight stays
-   TP-sharded), with `Shard{shard_dim}` installed on the FSDP axis.
-3. The numpy array is redistributed back to the mesh through a fresh
-   `from_numpy` call with that mapper.
+Each replicated parameter is replaced with its local shard, keeping its
+placement on every other axis, so a TP-sharded weight stays TP-sharded. A
+materialized parameter is partitioned on device (`ttnn.mesh_partition`). A
+lazy one gets a mapper with `Shard{shard_dim}` on the FSDP axis instead, so
+`ttml.materialize_module` allocates it already sharded.
 
 ---
 
@@ -417,9 +413,8 @@ roughly the order I'd tackle them:
   grads, all-reduce the squared-sums on the FSDP axis, take the global
   sqrt, then scale per-rank shards by `min(1, max_norm / global_norm)`.
 
-- [ ] **Lazy init.** The
-  current host-roundtrip path is correct but spends ~`num_devices * total_params`
-  bytes of host RAM transiently at `fully_shard` time. Plus it doesn't allow for a model with
+- [ ] **Lazy init.** An eagerly built model holds every parameter in full
+  before `fully_shard` partitions it, which doesn't allow for a model with
   weights not fitting in a single chip memory. Need lazy init infra to enable training of a model
   like Qwen-32B or Llama-70B on a single galaxy.
 

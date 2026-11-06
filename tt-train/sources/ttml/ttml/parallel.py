@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tensor-parallel strategy for TTML models, and the marker for sequence-parallel parameters."""
+"""Tensor-parallel strategy for TTML models, and the marker for parameters with partial gradients."""
 
 from __future__ import annotations
 
@@ -55,23 +55,29 @@ class TPStrategy(Enum):
         return self is TPStrategy.TENSOR_SEQUENCE
 
 
-def mark_sequence_parallel(target: Parameter | AbstractModuleBase) -> None:
-    """Flag a parameter, or every parameter of a module, as applied to the sequence-sharded stream.
+def mark_partial(target: Parameter | AbstractModuleBase, axis_name: str) -> None:
+    """Mark a parameter, or every parameter of a module, as having a partial gradient across mesh axis ``axis_name``.
 
-    Each rank sees only its slice of the sequence, so the gradient is partial and
-    :func:`ttml.sync_gradients` sums it over the tp axis. Mark a whole module only when all its
-    parameters are tp-replicated (the norms): a tp-sharded weight must not be summed.
+    Such a parameter is replicated across the axis, but each rank sees only part of the data.
+    Each rank's gradient is then a partial sum, and :func:`ttml.sync_gradients` adds them up. The mark says what the
+    gradient's label cannot, since a placement is only Replicate or Shard
+    (https://github.com/tenstorrent/tt-metal/issues/62347).
+    Mark a module only if all its parameters are replicated on the axis.
     """
     if isinstance(target, Parameter):
-        target.add_post_materialize_callback(lambda p: setattr(p.tensor, "_sequence_parallel", True))
+        target.add_post_materialize_callback(lambda p: _add_partial_axis(p.tensor, axis_name))
         return
     for _, module in target.named_modules():
         if isinstance(module, AbstractModuleBase):
             for value in vars(module).values():
                 if isinstance(value, Parameter):
-                    mark_sequence_parallel(value)
+                    mark_partial(value, axis_name)
 
 
-def is_sequence_parallel(param_tensor: Any) -> bool:
-    """True if :func:`mark_sequence_parallel` flagged this parameter tensor."""
-    return getattr(param_tensor, "_sequence_parallel", False)
+def partial_axes(param_tensor: Any) -> frozenset[str]:
+    """The names of the mesh axes :func:`mark_partial` marked this parameter tensor with."""
+    return getattr(param_tensor, "_partial_axes", frozenset())
+
+
+def _add_partial_axis(param_tensor: Any, axis_name: str) -> None:
+    param_tensor._partial_axes = partial_axes(param_tensor) | {axis_name}

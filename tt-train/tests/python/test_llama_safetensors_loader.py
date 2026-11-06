@@ -180,18 +180,16 @@ class TestPlacementWithoutTensorParallelism:
         monkeypatch.setattr(ttml, "maybe_mesh", lambda: mesh)
         assert _tp_axis() is None
 
-    def test_rejects_a_shard_over_another_axis(self, monkeypatch, expect_error):
+    def test_rejects_a_shard_over_another_axis(self, expect_error):
         """Assigning the whole tensor to a dp-sharded parameter would silently undo the sharding."""
         sharded = SimpleNamespace(placements=[ttnn.PlacementShard(ROW_DIM)])
-        monkeypatch.setattr(ttml.Sharding, "from_tensor", lambda _: sharded)
         with expect_error(RuntimeError, "Llama/fc/weight: sharded over mesh axis 0"):
-            _sharded_dim(object(), None, "Llama/fc/weight")
+            _sharded_dim(sharded, None, "Llama/fc/weight")
 
-    def test_rejects_a_tp_shard_on_neither_rows_nor_columns(self, monkeypatch, expect_error):
+    def test_rejects_a_tp_shard_on_neither_rows_nor_columns(self, expect_error):
         sharded = SimpleNamespace(placements=[ttnn.PlacementReplicate(), ttnn.PlacementShard(1)])
-        monkeypatch.setattr(ttml.Sharding, "from_tensor", lambda _: sharded)
         with expect_error(RuntimeError, "Llama/fc/weight: sharded on dim 1 over 'tp'"):
-            _sharded_dim(object(), _TpAxis(index=1, size=2), "Llama/fc/weight")
+            _sharded_dim(sharded, _TpAxis(index=1, size=2), "Llama/fc/weight")
 
 
 class HeadersOnly:
@@ -206,17 +204,23 @@ class HeadersOnly:
 
 
 class TestLoadPlan:
-    """Runs without a device: placements are stubbed, and shapes come from ``HeadersOnly``."""
+    """Runs without a device: each parameter's layout is stubbed, and the checkpoint's shapes come from
+    ``HeadersOnly``."""
 
     @staticmethod
     def param(rows: int, cols: int):
-        return SimpleNamespace(shape=lambda: [1, 1, rows, cols])
+        """A parameter whose stubbed layout reports a global shape of ``[rows, cols]``."""
+        return SimpleNamespace(global_shape=[1, 1, rows, cols])
 
     @pytest.fixture
     def placements(self, monkeypatch):
         """The placements every parameter reports; a test may change them in place."""
         current = [ttnn.PlacementReplicate()]
-        monkeypatch.setattr(ttml.Sharding, "from_tensor", lambda _: SimpleNamespace(placements=current))
+        monkeypatch.setattr(
+            ttml.Sharding,
+            "from_tensor",
+            lambda param: SimpleNamespace(placements=current, global_shape=param.global_shape),
+        )
         return current
 
     def test_without_a_source_shape_requires_the_parameter_shape(self, placements, expect_error):
@@ -234,11 +238,12 @@ class TestLoadPlan:
             _load_plan(rule, self.param(128, 3), None, 1, HeadersOnly({"a": (120, 3)}))
 
     def test_a_row_shard_expects_the_global_shape(self, placements):
+        """Each of the 2 tp ranks holds 64 rows, so the checkpoint must supply all 128."""
         placements[:] = [ttnn.PlacementReplicate(), ttnn.PlacementShard(ROW_DIM)]
         tp = _TpAxis(index=1, size=2)
         rule = _Rule("w_gate_up", ("gate", "up"), block_rows=(64, 64))
         headers = HeadersOnly({"gate": (64, HIDDEN), "up": (64, HIDDEN)})
-        assert _load_plan(rule, self.param(64, HIDDEN), tp, 2, headers) == (ROW_DIM, (128, HIDDEN))
+        assert _load_plan(rule, self.param(128, HIDDEN), tp, 2, headers) == (ROW_DIM, (128, HIDDEN))
 
     @pytest.mark.parametrize(
         "suffix,rows",

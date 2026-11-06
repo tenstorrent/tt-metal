@@ -13,7 +13,7 @@ import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer, ColumnParallelLinear, RowParallelLinear
 
 from .gqattn import GroupedQueryAttention
-from ttml.parallel import TPStrategy, mark_sequence_parallel
+from ttml.parallel import TPStrategy, mark_partial
 
 
 def compute_swiglu_intermediate_size(hidden_size: int, multiple_of: int = 256) -> int:
@@ -79,10 +79,6 @@ class LlamaMLP(AbstractModuleBase):
 
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
-        # Classic TP replicates activations across tp ranks, which must then drop the same units; one
-        # boolean cannot also decorrelate DP groups: https://github.com/tenstorrent/tt-metal/issues/55947.
-        # Under SP every rank holds different tokens.
-        self._per_device_dropout_seed = not use_tp or sequence_parallel
 
         if intermediate_size is None:
             intermediate_size = compute_swiglu_intermediate_size(embedding_size)
@@ -121,7 +117,6 @@ class LlamaMLP(AbstractModuleBase):
                 embedding_size,
                 has_bias=False,
                 weight_init=down_proj_init,
-                input_is_parallel=True,
                 sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
@@ -152,7 +147,7 @@ class LlamaMLP(AbstractModuleBase):
         x = self.w2(h)
 
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            x = ttml.ops.dropout.dropout(x, self.dropout_prob, use_per_device_seed=self._per_device_dropout_seed)
+            x = ttml.ops.dropout.dropout(x, self.dropout_prob)
 
         return x
 
@@ -188,8 +183,9 @@ class LlamaBlock(AbstractModuleBase):
         self.attention_norm = RMSNormLayer(hidden_size, rms_norm_eps)
         self.mlp_norm = RMSNormLayer(hidden_size, rms_norm_eps)
         if tp_strategy.sequence_parallel:
-            mark_sequence_parallel(self.attention_norm)
-            mark_sequence_parallel(self.mlp_norm)
+            # They normalize the sequence-sharded stream, so each sees only its rank's tokens.
+            mark_partial(self.attention_norm, "tp")
+            mark_partial(self.mlp_norm, "tp")
         self.attention = GroupedQueryAttention(
             embedding_size=hidden_size,
             num_heads=num_attention_heads,

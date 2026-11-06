@@ -16,7 +16,7 @@ import ttml
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
 from ttml.modules import LoraColumnParallelLinear, LoraConfig, LoraModel
-from ttml.parallel import TPStrategy, is_sequence_parallel
+from ttml.parallel import TPStrategy, partial_axes
 from bf16_ulp import assert_within_bf16_ulp
 
 TP_AXIS_SIZE = 2  # the 'tp' extent of conftest's tp_mesh fixture
@@ -168,14 +168,12 @@ class TestMatchesTensorParallel:
             for optimizer in optimizers:
                 optimizer.step()
 
-    @pytest.mark.parametrize("dropout", [0.0, 0.1])
-    def test_lora(self, dropout):
+    def test_lora(self):
         tp_model, sp_model = paired_models()
         lora = LoraConfig(
             rank=8,
             target_modules=["qkv_linear", "out_linear", "w_gate_up", "w2"],
             trainable_modules=["_norm", "ln_fc"],
-            lora_dropout=dropout,
         )
         wrapped = []
         for model in (tp_model, sp_model):
@@ -197,18 +195,18 @@ class TestMatchesTensorParallel:
                 grads = per_rank(module.lora_A.tensor.get_grad_tensor())
                 assert np.abs(grads).max() > 0, f"{name}: a zero gradient would prove nothing"
                 np.testing.assert_array_equal(grads[:, 0], grads[:, 1], err_msg=f"{name}: tp ranks disagree")
-        if dropout == 0.0:  # SP draws a mask per sequence shard, so with dropout the two sample different masks
-            assert_same_grads(sp_lora, tp_lora)
+        assert_same_grads(sp_lora, tp_lora)
 
     def test_marks_the_parameters_of_the_sequence_sharded_region(self):
-        """Exactly the norm gains and the row-parallel bias see a per-rank slice of the sequence."""
+        """Exactly the norm gains and the row-parallel bias see a per-rank slice of the sequence, so their gradients
+        are partial across tp."""
         tp_model, sp_model = paired_models(attention_bias=True)
-        assert not any(is_sequence_parallel(p) for _, p in tp_model.parameters().items())
+        assert not any(partial_axes(p) for _, p in tp_model.parameters().items())
 
-        marked = {name for name, p in sp_model.parameters().items() if is_sequence_parallel(p)}
+        marked = {name: partial_axes(p) for name, p in sp_model.parameters().items() if partial_axes(p)}
         per_block = ("attention_norm/gamma", "mlp_norm/gamma", "attention/out_linear/bias")
         expected = {f"Llama/blocks/{i}/{suffix}" for i in range(N_LAYERS) for suffix in per_block}
-        assert marked == set.union(expected, {"Llama/ln_fc/gamma"})
+        assert marked == {name: {"tp"} for name in expected | {"Llama/ln_fc/gamma"}}
 
 
 @pytest.mark.requires_device
@@ -218,6 +216,21 @@ class TestValidation:
         model = Llama(config(SP))
         with expect_error(ValueError, "input sequence length divisible by"):
             model(token_ids(1, 32, seed=5), causal_mask(32))
+
+    def test_dropout_keeps_the_tp_copies_identical(self):
+        model = Llama(config(TP, attention_dropout=0.1, mlp_dropout=0.1))
+        backward(model, token_ids(1, SEQ_LEN, seed=8), causal_mask(SEQ_LEN))
+        grad = per_rank(model.parameters()["Llama/blocks/0/mlp_norm/gamma"].get_grad_tensor())
+        np.testing.assert_array_equal(grad[:, 0], grad[:, 1])
+
+    def test_lora_dropout_keeps_the_tp_copies_identical(self):
+        model = LoraModel(Llama(config(TP)), LoraConfig(rank=8, target_modules=["w_gate_up"], lora_dropout=0.1))
+        perturb_lora_B(model)
+        backward(model, token_ids(1, SEQ_LEN, seed=8), causal_mask(SEQ_LEN))
+        lora_A = next(p for name, p in model.parameters().items() if name.endswith("w_gate_up/lora_A"))
+        grad = per_rank(lora_A.get_grad_tensor())
+        assert grad.any(), "precondition: lora_A has a gradient"
+        np.testing.assert_array_equal(grad[:, 0], grad[:, 1])
 
     def test_rejects_kv_cache(self, expect_error):
         """Single-token decode has no sequence to shard, so the model refuses before any collective."""

@@ -46,7 +46,6 @@ class DeepSeekMLP(AbstractModuleBase):
                 inter_dim,
                 dim,
                 has_bias=False,
-                input_is_parallel=True,
                 axis_name=tp_axis_name,
             )
         else:

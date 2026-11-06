@@ -20,8 +20,8 @@ class GroupedQueryAttention(AbstractModuleBase):
 
     Under tensor parallelism the fused QKV projection uses ``ColumnParallelLinear``
     (output features sharded) with ``gather_output=False``, and the output projection
-    uses ``RowParallelLinear`` with ``input_is_parallel=True``. This avoids redundant
-    communication between the two matmuls.
+    uses ``RowParallelLinear``, which takes the heads sharded as they are. This avoids
+    redundant communication between the two matmuls.
 
     ``use_composite_sdpa`` selects ``scaled_dot_product_attention_composite``,
     which also accepts non-broadcast masks such as ``(B, 1, S, S)``.
@@ -54,9 +54,6 @@ class GroupedQueryAttention(AbstractModuleBase):
         self.dropout_prob = dropout
         self.rope_params = rope_params
         self.sequence_parallel = sequence_parallel
-        # Identical masks across tp ranks that hold identical activations,
-        # per-device masks once SP gives each rank its own tokens.
-        self._per_device_dropout_seed = not use_tp or sequence_parallel
         self.sdpa_op = (
             ttml.ops.attention.scaled_dot_product_attention_composite
             if use_composite_sdpa
@@ -101,7 +98,6 @@ class GroupedQueryAttention(AbstractModuleBase):
                 has_bias=bias_linears,
                 weight_init=out_proj_init,
                 bias_init=ttml.init.zeros(),
-                input_is_parallel=True,
                 sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
@@ -134,7 +130,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         out = self.out_linear(attention)
 
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob, use_per_device_seed=self._per_device_dropout_seed)
+            out = ttml.ops.dropout.dropout(out, self.dropout_prob)
 
         return out
 
@@ -180,7 +176,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         out = self.out_linear(attention)
 
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob, use_per_device_seed=self._per_device_dropout_seed)
+            out = ttml.ops.dropout.dropout(out, self.dropout_prob)
 
         return out
 
