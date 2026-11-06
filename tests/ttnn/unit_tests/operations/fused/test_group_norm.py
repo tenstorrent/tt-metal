@@ -2307,21 +2307,41 @@ GN_SHARDED_CONFIGS = [
     for in_dtype in (ttnn.float32, ttnn.bfloat16)
     for gb_dtype in (ttnn.bfloat16, ttnn.float32)
 ]
-# Sanity keeps every (statistics backend, layout, input dtype) combination and alternates the gamma/beta
-# dtype across them, so each gamma/beta dtype still meets every backend, layout and input dtype. The
-# gamma/beta dtype only sets the format of the gamma/beta buffer. The other 8 run nightly (#62486).
-GN_SHARDED_SANITY_CONFIGS = [
-    c
-    for c in GN_SHARDED_CONFIGS
-    if (c[0] + (c[1] == ttnn.TILE_LAYOUT) + (c[2] == ttnn.float32) + (c[3] == ttnn.float32)) % 2 == 0
+
+
+def _gn_sharded_case_id(shape, config):
+    N, C, H, W, num_groups, grid_y, grid_x = shape
+    return (
+        f"{_gn_sharded_config_id(*config)}-N={N}-C={C}-H={H}-W={W}-num_groups={num_groups}"
+        f"-grid_y={grid_y}-grid_x={grid_x}"
+    )
+
+
+def _gn_sharded_case_in_sanity(shape_index, config):
+    use_welford, layout, in_dtype, gb_dtype = config
+    flips = use_welford + (layout == ttnn.TILE_LAYOUT) + (in_dtype == ttnn.float32) + (gb_dtype == ttnn.float32)
+    return (shape_index + flips) % 2 == 0
+
+
+# Every (shape, config) pair: 8 shapes x 16 configs. Sanity runs half of them (#62486). Each shape runs
+# every statistics backend x layout x input dtype once, and the gamma/beta dtype each one gets flips from
+# one shape to the next. So all 16 configs still run in sanity, each on 4 of the 8 shapes. That includes
+# every mixed input/gamma-beta dtype pair, the only case where the gamma multiply and beta add take
+# operands of two formats; the gamma/beta dtype also sets the gamma/beta CB format and the writer's
+# gamma/beta stick size. The other half runs nightly.
+GN_SHARDED_CASES = [(shape, config) for shape in GN_SHARDED_SHAPES for config in GN_SHARDED_CONFIGS]
+GN_SHARDED_SANITY_CASES = [
+    (shape, config)
+    for i, shape in enumerate(GN_SHARDED_SHAPES)
+    for config in GN_SHARDED_CONFIGS
+    if _gn_sharded_case_in_sanity(i, config)
 ]
 
 
-@pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", GN_SHARDED_SHAPES)
 @pytest.mark.parametrize(
-    "use_welford, layout, in_dtype, gb_dtype",
-    GN_SHARDED_SANITY_CONFIGS,
-    ids=[_gn_sharded_config_id(*c) for c in GN_SHARDED_SANITY_CONFIGS],
+    "use_welford, layout, in_dtype, gb_dtype, N, C, H, W, num_groups, grid_y, grid_x",
+    [(*config, *shape) for shape, config in GN_SHARDED_SANITY_CASES],
+    ids=[_gn_sharded_case_id(shape, config) for shape, config in GN_SHARDED_SANITY_CASES],
 )
 def test_group_norm_sharded_all_config(
     device, use_welford, layout, in_dtype, gb_dtype, N, C, H, W, num_groups, grid_y, grid_x

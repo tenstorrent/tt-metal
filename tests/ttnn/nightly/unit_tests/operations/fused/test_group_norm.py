@@ -362,7 +362,7 @@ def test_group_norm_no_input_mask_specified(device, N, C, H, W, num_groups, use_
     base.test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, specify_grid)
 
 
-_GN_SHARDED_CONFIGS_NIGHTLY_ONLY = [c for c in base.GN_SHARDED_CONFIGS if c not in base.GN_SHARDED_SANITY_CONFIGS]
+_GN_SHARDED_CASES_NIGHTLY_ONLY = [c for c in base.GN_SHARDED_CASES if c not in base.GN_SHARDED_SANITY_CASES]
 _TILE_ALIGNED_GROUPS_PADDING_VALUES_NIGHTLY_ONLY = [
     v for v in base.TILE_ALIGNED_GROUPS_PADDING_VALUES if v not in base.TILE_ALIGNED_GROUPS_SANITY_PADDING_VALUES
 ]
@@ -371,11 +371,10 @@ _BF16_NEGATIVE_MASK_NIGHTLY_ONLY = [
 ]
 
 
-@pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", base.GN_SHARDED_SHAPES)
 @pytest.mark.parametrize(
-    "use_welford, layout, in_dtype, gb_dtype",
-    _GN_SHARDED_CONFIGS_NIGHTLY_ONLY,
-    ids=[base._gn_sharded_config_id(*c) for c in _GN_SHARDED_CONFIGS_NIGHTLY_ONLY],
+    "use_welford, layout, in_dtype, gb_dtype, N, C, H, W, num_groups, grid_y, grid_x",
+    [(*config, *shape) for shape, config in _GN_SHARDED_CASES_NIGHTLY_ONLY],
+    ids=[base._gn_sharded_case_id(shape, config) for shape, config in _GN_SHARDED_CASES_NIGHTLY_ONLY],
 )
 def test_group_norm_sharded_all_config(
     device, use_welford, layout, in_dtype, gb_dtype, N, C, H, W, num_groups, grid_y, grid_x
