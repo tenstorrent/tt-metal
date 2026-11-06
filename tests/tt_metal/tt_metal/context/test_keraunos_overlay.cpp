@@ -100,11 +100,12 @@ TEST_F(KeraunosOverlay, AddrgenStridedIdma) {
     EXPECT_EQ(read_words(*core, kDstOffset, kCount * words_per_elem), expected);
 }
 
-// Every hart issues its own copy at the same time. Each CPU has its own command buffer registers.
+// Every hart EthernetConfig can name (processors 0-7: harts 0-3 of CCE0 and of CCE1) issues its own copy
+// at the same time. Each CPU has its own command buffer registers.
 TEST_F(KeraunosOverlay, AllHartsIdmaCopyInParallel) {
     const auto core = hsio_core(0);
     ASSERT_TRUE(core.has_value());
-    const uint32_t harts = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
+    constexpr uint32_t harts = 8;
     constexpr uint32_t kBytes = 256;
     const auto pattern = stage(*core, 0xA7, harts * kBytes);
     for (uint32_t h = 0; h < harts; h++) {
@@ -138,6 +139,52 @@ TEST_F(KeraunosOverlay, IdmaCopyReadVcs) {
         {.src = global_addr(*core, kSrcOffset), .dst = global_addr(*core, kDstOffset), .len = 256, .write_vcs = false},
         0xAF);
 }
+
+// Exploratory, last: IDMA L1 atomic accumulate with the API defaults (format 0, operation 9), the
+// candidate remote-credit primitive (Blackhole fabric's atomic increment). The source block is all ones
+// and is applied three times to a destination that starts at 100 + i, so an integer add leaves 103 + i.
+// The test prints what lands either way: the encodings are not documented.
+class KeraunosAtomics : public KeraunosCceTest {
+protected:
+    void expect_accumulate(uint32_t dst_hsio) {
+        const auto a = hsio_core(0);
+        const auto b = hsio_core(dst_hsio);
+        ASSERT_TRUE(a.has_value() && b.has_value());
+        constexpr uint32_t kWords = 16;
+        constexpr uint32_t kRepeats = 3;
+        std::vector<uint32_t> start(kWords);
+        std::vector<uint32_t> expected(kWords);
+        for (uint32_t i = 0; i < kWords; i++) {
+            start[i] = 100 + i;
+            expected[i] = 100 + i + kRepeats;
+        }
+        write_words(*a, kSrcOffset, std::vector<uint32_t>(kWords, 1));
+        write_words(*b, kDstOffset, start);
+        write_words(*a, kStatusOffset, std::vector<uint32_t>(kStatusWords, 0));
+        Program program = CreateProgram();
+        const KernelHandle k = CreateKernel(
+            program,
+            std::string(kKernelDir) + "cce_idma_atomic_accum.cpp",
+            a->logical,
+            EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0});
+        std::vector<uint32_t> args = split(global_addr(*a, kSrcOffset));
+        const auto dst = split(global_addr(*b, kDstOffset));
+        args.insert(args.end(), dst.begin(), dst.end());
+        args.insert(args.end(), {kWords * 4, kRepeats, /*fmt=*/0, /*op=*/9, unreserved_ + kStatusOffset});
+        SetRuntimeArgs(program, k, a->logical, args);
+        launch(program, *a);
+        const auto status = read_words(*a, kStatusOffset, kStatusWords);
+        EXPECT_EQ(status[4], kAcked) << fmt::format("status: {:#010x}", fmt::join(status, " "));
+        const auto got = read_words(*b, kDstOffset, kWords);
+        EXPECT_EQ(got, expected) << fmt::format("destination: {}", fmt::join(got, " "));
+    }
+};
+
+// Disabled: on MMK emulation (2026-11-06) both complete and are acked, but the destination reads 1 1 1 ...:
+// format 0 / operation 9 acts as a plain copy. The format and operation encodings for an accumulate are
+// not documented; re-enable with the right values once SysEng confirms them.
+TEST_F(KeraunosAtomics, DISABLED_IdmaAtomicAccumulateOwnSram) { expect_accumulate(0); }
+TEST_F(KeraunosAtomics, DISABLED_IdmaAtomicAccumulateOtherTileSram) { expect_accumulate(1); }
 
 }  // namespace
 }  // namespace tt::tt_metal
