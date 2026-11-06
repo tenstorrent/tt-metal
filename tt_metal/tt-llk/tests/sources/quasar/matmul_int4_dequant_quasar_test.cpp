@@ -136,7 +136,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             _perf_math_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
         }
@@ -440,7 +440,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr ckernel::TensorShape output_shape = ckernel::make_tensor_shape(in0_face_r_dim, in1_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_B);
 #endif
 
-    constexpr bool active = PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION;
+    constexpr bool active = PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE;
     {
         START_PERF_MEASURE("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
