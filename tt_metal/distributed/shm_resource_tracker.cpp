@@ -15,7 +15,6 @@
 #include <dirent.h>
 #include <fstream>
 #include <sys/mman.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 

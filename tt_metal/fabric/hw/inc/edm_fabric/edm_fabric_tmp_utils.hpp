@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
 #include <tuple>
 
 namespace tt::tt_fabric {

@@ -27,6 +27,10 @@ bool is_supported_dtype(DataType dtype) {
 std::string_view op_name_of(BinaryBackwardOpType op_type) {
     switch (op_type) {
         case BinaryBackwardOpType::MUL_BW: return "MUL_BW";
+        case BinaryBackwardOpType::ADD_BW: return "ADD_BW";
+        case BinaryBackwardOpType::SUB_BW: return "SUB_BW";
+        case BinaryBackwardOpType::RSUB_BW: return "RSUB_BW";
+        case BinaryBackwardOpType::DIV_BW: return "DIV_BW";
     }
     return "BINARY_BW";
 }
@@ -168,8 +172,7 @@ std::optional<std::string> BinaryBackwardDeviceOperation::soft_fallback_reason(
     const std::optional<Tensor>& preallocated_other_grad) {
     const auto op_name = op_name_of(op_type);
 
-    // MUL_BW's first-cut contract: both grads must be requested. Partial-mask callers
-    // fall back to the composite path in binary_backward.cpp.
+    // All 5 ops: both grads must be requested; partial-mask callers fall to composite in binary_backward.cpp.
     if (!(are_required_outputs[0] && are_required_outputs[1])) {
         return fmt::format(
             "{} operation currently requires both grads; got are_required_outputs=[{}, {}]",

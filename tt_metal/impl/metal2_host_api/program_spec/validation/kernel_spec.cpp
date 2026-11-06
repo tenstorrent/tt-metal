@@ -15,6 +15,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
+#include "impl/kernels/kernel.hpp"  // max_runtime_args_tensix
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/resource/resource.hpp"
 
@@ -22,9 +23,9 @@ namespace tt::tt_metal::experimental {
 
 namespace {
 
-// Named RTA/CRTA schema and named CTAs
+// Named RTA/CRTA schema and named CTAs, scalar and array
 void ValidateKernelArguments(const KernelSpec& kernel) {
-    // All three kinds share the args:: namespace — their names must be mutually unique.
+    // All kinds share the args:: namespace — their names must be mutually unique.
     std::unordered_map<std::string, const char*> seen;  // name -> kind
     auto check_name = [&](const std::string& name, const char* kind) {
         TT_FATAL(
@@ -51,6 +52,47 @@ void ValidateKernelArguments(const KernelSpec& kernel) {
     for (const auto& [name, value] : kernel.compile_time_args) {
         (void)value;
         check_name(name, "named CTA");
+    }
+
+    // Arrays
+    // Each RTA/CRTA array occupies `size` words of the kernel's runtime args. Total the declared words
+    // here, so that an absurd size (e.g. a byte count) fails now with a clear message, rather than as an
+    // oversized buffer allocation when the args are first set. (The exact limit, which also counts tensor
+    // bindings and varargs, is enforced when the args are set.)
+    auto check_array_decl = [&](const ArrayArgDecl& decl, const char* kind) {
+        check_name(decl.name, kind);
+        TT_FATAL(
+            decl.size > 0,
+            "KernelSpec '{}' {} '{}' has size 0. An array argument must have at least one element.",
+            kernel.unique_id,
+            kind,
+            decl.name);
+    };
+    uint64_t runtime_words =
+        kernel.runtime_arg_schema.runtime_arg_names.size() + kernel.runtime_arg_schema.common_runtime_arg_names.size();
+    for (const auto& decl : kernel.runtime_arg_schema.runtime_array_args) {
+        check_array_decl(decl, "RTA array");
+        runtime_words += decl.size;
+    }
+    for (const auto& decl : kernel.runtime_arg_schema.common_runtime_array_args) {
+        check_array_decl(decl, "CRTA array");
+        runtime_words += decl.size;
+    }
+    TT_FATAL(
+        runtime_words <= max_runtime_args_tensix,
+        "KernelSpec '{}' declares {} words of named runtime args (RTAs and CRTAs, including arrays), but a kernel "
+        "may have at most {}.",
+        kernel.unique_id,
+        runtime_words,
+        max_runtime_args_tensix);
+
+    for (const auto& [name, value] : kernel.compile_time_array_args) {
+        check_name(name, "CTA array");
+        TT_FATAL(
+            value.size() > 0,
+            "KernelSpec '{}' CTA array '{}' is empty. An array argument must have at least one element.",
+            kernel.unique_id,
+            name);
     }
 }
 
