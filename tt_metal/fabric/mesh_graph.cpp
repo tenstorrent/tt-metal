@@ -560,6 +560,12 @@ void MeshGraph::initialize_from_mgd(
 
         MeshShape host_shape(mesh_desc->host_topology().dims().at(0), mesh_desc->host_topology().dims().at(1));
 
+        TT_FATAL(
+            host_shape[0] > 0 && host_shape[1] > 0,
+            "MeshGraph: Host shape dimensions must be positive, got {}x{}",
+            host_shape[0],
+            host_shape[1]);
+
         // Validate that mesh shape is divisible by host shape before processing
         TT_FATAL(
             mesh_shape[0] % host_shape[0] == 0 && mesh_shape[1] % host_shape[1] == 0,
