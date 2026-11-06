@@ -26,7 +26,7 @@
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/program_spec_hw_fixture.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 namespace {
 
 using test_helpers::BindTensorParameterToKernel;
@@ -208,7 +208,7 @@ void kernel_main() {
     spec.work_units =
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"reader", "writer", "compute"})};
 
-    auto workload = MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    auto workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
     Program& program = workload.get_programs().begin()->second;
 
     ProgramRunArgs params;
@@ -221,7 +221,7 @@ void kernel_main() {
         {TensorParamName{"b"}, TensorArgument{b_tensor}},
         {TensorParamName{"c"}, TensorArgument{c_tensor}},
     };
-    SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     constexpr float kA = 2.0f;
     constexpr float kB = 3.0f;
@@ -302,7 +302,7 @@ void kernel_main() {
     spec.tensor_parameters = {a_param, b_param, c_param};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"compute"})};
 
-    auto workload = MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    auto workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
     Program& program = workload.get_programs().begin()->second;
 
     ProgramRunArgs params;
@@ -311,7 +311,7 @@ void kernel_main() {
         {TensorParamName{"b"}, TensorArgument{b_tensor}},
         {TensorParamName{"c"}, TensorArgument{c_tensor}},
     };
-    SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     constexpr float kA = 2.0f;
     constexpr float kB = 4.0f;
@@ -440,14 +440,14 @@ void kernel_main() {
     spec.tensor_parameters = {c_param};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"writer", "compute"})};
 
-    auto workload = MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    auto workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
     Program& program = workload.get_programs().begin()->second;
 
     ProgramRunArgs params;
     params.tensor_args = {
         {TensorParamName{"c"}, TensorArgument{c_tensor}},
     };
-    SetProgramRunArgs(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     // Must match kAWord / kBWord in the compute kernel.
     constexpr float kA = 2.0f;
@@ -461,4 +461,4 @@ void kernel_main() {
 }
 
 }  // namespace
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal
