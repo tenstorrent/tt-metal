@@ -318,7 +318,9 @@ void bind_resources(nb::module_& mod) {
         "DataflowBufferSpec",
         "A dataflow buffer (DFB): a FIFO between a producer kernel and a consumer kernel on each node. "
         "data_format_metadata is a ttnn data type; ttnn.int8 is stored as the UInt8 format, as in ttnn's own ops, and "
-        "reads back as ttnn.uint8. advanced_options refers into this object. See dataflow_buffer_spec.hpp.")
+        "reads back as ttnn.uint8. borrowed_from, when set, names the tensor parameter whose memory the buffer uses "
+        "instead of its own, as for a buffer on a sharded tensor's shards. advanced_options refers into this object. "
+        "See dataflow_buffer_spec.hpp.")
         .def(
             "__init__",
             [](m2::DataflowBufferSpec* self,
@@ -580,9 +582,10 @@ void bind_kernel_spec(nb::module_& mod) {
         "KernelSpec",
         "One compiled kernel: its source, compiler options, the buffers, semaphores, scratchpads and tensors it "
         "binds by name, its compile-time arguments and arrays, and the names of its runtime arguments and arrays. "
-        "compiler_options and runtime_arg_schema refer into this object, so writes through them change the kernel; "
-        "source and hw_config are copies. Varargs (advanced_options) are C++ only: use array arguments instead. See "
-        "kernel_spec.hpp.");
+        "compiler_options and runtime_arg_schema refer into this object, so setting one of their fields changes the "
+        "kernel. Lists and dicts, there and on the kernel, are copied in and out: to change one, assign the whole "
+        "field (k.compile_time_args = {...}, not k.compile_time_args[\"n\"] = 4). source and hw_config are copies. "
+        "Varargs (advanced_options) are C++ only: use array arguments instead. See kernel_spec.hpp.");
 
     nb::class_<m2::KernelSpec::SourceCode>(kernel_spec, "SourceCode", "Kernel source code, given inline.")
         .def(
@@ -617,7 +620,8 @@ void bind_kernel_spec(nb::module_& mod) {
         kernel_spec,
         "RuntimeArgSchema",
         "The names of a kernel's runtime arguments, and the names and lengths of its runtime arrays. Their values "
-        "come in each call's KernelRunArgs; common ones have one value for every node.");
+        "come in each call's KernelRunArgs; common ones have one value for every node. Its lists are copied in and "
+        "out: assign a whole list to change it.");
 
     nb::class_<m2::ArrayArgDecl>(
         schema,
@@ -930,7 +934,7 @@ void bind_program_run_args(nb::module_& mod) {
         "One kernel's runtime argument values: runtime_arg_values maps each name to {node: value}, and "
         "common_runtime_arg_values maps each name to one value for every node. runtime_array_arg_values maps each "
         "array's name to {node: [values]}, and common_runtime_array_arg_values maps each array's name to one list "
-        "for every node.")
+        "for every node. The dicts are copied in and out: assign a whole dict to change values.")
         .def(
             "__init__",
             [](m2::KernelRunArgs* self,
