@@ -561,3 +561,22 @@ def test_create_width_shard_by_head(
             n_local_kv_heads,
             head_dim,
         )
+
+
+@pytest.mark.parametrize("batch_offset", (0, 8))
+def test_create_head_interleaved_rejects_batch_offset(device, batch_offset, expect_error):
+    # The interleaved path reads every user from row 0, so a slice would silently return the wrong users.
+    proj_output = torch.rand(1, 1, 32, 64 * (16 + 2 * 4)).bfloat16()
+    proj_output_tt = ttnn.from_torch(proj_output, device=device, layout=ttnn.TILE_LAYOUT)
+    batch_offset_tt = ttnn.from_torch(
+        torch.tensor([batch_offset], dtype=torch.int32), device=device, layout=ttnn.TILE_LAYOUT
+    )
+    with expect_error(RuntimeError, "require a sharded input"):
+        ttnn.experimental.nlp_create_qkv_heads_decode(
+            proj_output_tt,
+            num_heads=16,
+            num_kv_heads=4,
+            batch_offset=batch_offset_tt,
+            slice_size=8,
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        )
