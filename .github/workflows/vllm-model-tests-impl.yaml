@@ -250,6 +250,28 @@ jobs:
               google/gemma-4-*) uv pip install -r models/demos/gemma4/requirements.txt ;;
             esac
 
+      - name: 📦 Locate model snapshot
+        # Offline hub lookups of a bare hub id need refs/main; a pinned revision may be the only snapshot.
+        if: ${{ matrix.test-group.hf-snapshot-revision }}
+        run: |
+          m="${{ matrix.test-group.model }}"
+          d="$HF_HUB_CACHE/models--${m//\//--}"
+          ls -la "$d" "$d/refs" "$d/snapshots" || true
+          rev="${{ matrix.test-group.hf-snapshot-revision }}"
+          if [ -d "$d/snapshots/$rev" ]; then
+            p="$d/snapshots/$rev"
+          elif [ -f "$d/refs/main" ]; then
+            p="$d/snapshots/$(cat "$d/refs/main")"
+          else
+            p="$(ls -d "$d"/snapshots/*/ 2>/dev/null | head -1)"
+          fi
+          if [ -z "$p" ] || [ ! -f "${p%/}/config.json" ]; then
+            echo "❌ No snapshot of ${{ matrix.test-group.model }} under $HF_HUB_CACHE on this runner"
+            exit 1
+          fi
+          echo "Serving from ${p%/}"
+          echo "HF_MODEL_LOCAL=${p%/}" >> "$GITHUB_ENV"
+
       - name: ⬇️ Checkout vLLM benchmark sources
         # The structured-output benchmark is a script under benchmarks/, which the
         # published vLLM distribution does not install. Fetch the tree at exactly
@@ -406,9 +428,16 @@ jobs:
             done
           fi
 
+          # A located snapshot dir is served under the hub id, so clients keep using the hub id.
+          SERVED_NAME_ARGS=()
+          if [ -n "${HF_MODEL_LOCAL:-}" ]; then
+            export HF_MODEL="$HF_MODEL_LOCAL"
+            SERVED_NAME_ARGS=(--served-model-name "${{ matrix.test-group.model }}")
+          fi
+
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS
-          VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
+          VLLM_SERVER_ARGS+=(--model "$HF_MODEL" "${SERVED_NAME_ARGS[@]}")
           # Placed before the per-entry args so an entry can override it.
           VLLM_SERVER_ARGS+=("${DEFAULT_TOP_K_ARGS[@]}")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
@@ -654,6 +683,14 @@ jobs:
               print(f"✅ Prefix-caching gate passed: resume correct, {hits:.0f}/{queried:.0f} tokens from cache, TTFT {warm_ttft:.2f}s vs cold {cold_ttft:.2f}s")
           sys.exit(0 if ok else 1)
           EOF
+
+      - name: 🔁 Run greedy A/B dump
+        if: ${{ !cancelled() && matrix.test-group.greedy-dump }}
+        timeout-minutes: 45
+        run: |
+          python3 .github/scripts/vllm/qwen38_galaxy_ab_client.py \
+            --model "${{ matrix.test-group.model }}" \
+            --out output/greedy_dump.json
 
       - name: 📐 Run structured output benchmark
         if: ${{ matrix.test-group.structured-output }}
