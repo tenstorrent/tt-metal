@@ -151,11 +151,15 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
     return tt::tt_fabric::Topology::Linear;
 }
 
-size_t FabricContext::compute_packet_header_size_bytes(const ControlPlane& control_plane) const {
-    const PacketHeaderConfig config{
+PacketHeaderConfig FabricContext::get_packet_header_config() const {
+    return {
         .is_2d = is_2D_routing_enabled_,
         .extension_words = routing_1d_extension_words_,
         .route_buffer_size = routing_2d_buffer_size_};
+}
+
+size_t FabricContext::compute_packet_header_size_bytes(const ControlPlane& control_plane) const {
+    const PacketHeaderConfig config = get_packet_header_config();
     const size_t header_size =
         visit_packet_header_type(config, []<typename Header>(std::type_identity<Header>) { return sizeof(Header); });
 

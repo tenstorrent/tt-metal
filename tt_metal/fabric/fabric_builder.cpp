@@ -8,12 +8,15 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
+#include "tt_metal/fabric/builder/connection_registry.hpp"
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_published_chips.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/fmt.hpp>
+#include <algorithm>
 #include <set>
 
 namespace tt::tt_fabric {
@@ -105,6 +108,9 @@ void FabricBuilder::discover_channels() {
 void FabricBuilder::create_routers() {
     const auto& control_plane = fabric_context_.get_control_plane();
     const auto& cluster = fabric_context_.get_cluster();
+    if (fabric_context_.get_rtoptions().get_generate_fabric_manifest()) {
+        connection_registry_ = std::make_shared<ConnectionRegistry>();
+    }
 
     // Create router builders
     for (const auto& [direction, eth_channels] : channels_by_direction_) {
@@ -124,7 +130,14 @@ void FabricBuilder::create_routers() {
                 device_->id(), eth_chan, control_plane.routing_direction_to_eth_direction(direction));
 
             auto router_builder = FabricRouterBuilder::create(
-                fabric_context_, dispatch_core_type_, device_, program_, local_node_, location, chip_facts_);
+                fabric_context_,
+                dispatch_core_type_,
+                device_,
+                program_,
+                local_node_,
+                location,
+                chip_facts_,
+                connection_registry_);
             routers_.insert({eth_chan, std::move(router_builder)});
         }
     }
@@ -281,7 +294,7 @@ void FabricBuilder::create_kernels() {
         router_channels_mask |= (1 << static_cast<uint32_t>(router_chan));
     }
 
-    KernelCreationContext ctx{
+    kernel_creation_context_ = KernelCreationContext{
         .is_2D_routing = fabric_context_.is_2D_routing_enabled(),
         .master_router_chan = master_router_chan_,
         .num_local_fabric_routers = routers_.size(),
@@ -289,8 +302,35 @@ void FabricBuilder::create_kernels() {
     };
 
     for (auto& [eth_chan, router_builder] : routers_) {
-        router_builder->create_kernel(program_, ctx);
+        router_builder->create_kernel(program_, kernel_creation_context_);
     }
+}
+
+void FabricBuilder::publish_manifest_chip() const {
+    const auto& ctx = kernel_creation_context_;
+
+    // Create the chip manifest
+    manifest::Chip chip{
+        .z_port_role = z_role_of(chip_facts_.per_direction_capabilities),
+        .local_sync =
+            manifest::LocalSync{
+                .master_eth_chan = ctx.master_router_chan,
+                .num_routers = static_cast<uint32_t>(ctx.num_local_fabric_routers),
+                .router_channels_mask = ctx.router_channels_mask,
+            },
+        .routers = {},
+    };
+
+    // Add the routers to the manifest
+    chip.routers.reserve(routers_.size());
+    for (const auto& [eth_chan, router_builder] : routers_) {
+        chip.routers.push_back(router_builder->collect_manifest_router(chip_facts_));
+    }
+    std::sort(chip.routers.begin(), chip.routers.end(), [](const manifest::Router& a, const manifest::Router& b) {
+        return a.identity.eth_chan < b.identity.eth_chan;
+    });
+    builder_context_.get_manifest_chips().publish(
+        device_->id(), std::move(chip), builder_context_.get_num_fabric_initialized_routers(device_->id()));
 }
 
 }  // namespace tt::tt_fabric
