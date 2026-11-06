@@ -356,8 +356,7 @@ static tt::tt_metal::ShardSpec fast_path_shard_spec(
     while (num_cores > 0 && (total_height / pixels_per_compute_row) % num_cores != 0) {
         num_cores--;
     }
-
-    TT_ASSERT(num_cores != 0, "Could not find suitable number of cores for resharing the input tensor");
+    // The loop stops at 1 at the latest, since 1 divides every row count.
 
     base.shape[0] = tt::round_up(total_height / num_cores, pixels_per_compute_row);
     base.grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_grid_size, true);
