@@ -17,6 +17,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     compare_cpu_device,
     distributed_prefix,
     kda_device_params,
+    pack_complement,
     reconstruct_state_at_sp_rank,
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
@@ -535,14 +536,9 @@ def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
         )
         return ttnn.reshape(tensor, (1, 32, 32))
 
-    # Each rank's packed complement form [E | B], E = A - I (exact in BF16 here), as the reduction publishes it.
-    packed = ttnn.from_torch(
-        torch.cat([a - torch.eye(32), b], dim=-1),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(2, 4)),
-    )
+    # Each rank's packed complement form [E | B], E = A - I (exact in BF16 here), as the packed summary head
+    # publishes it.
+    packed = pack_complement(a, b, mesh_device, ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(2, 4)))
     entry, final = distributed_prefix(
         packed,
         to_mesh(initial, (None, 1)),

@@ -19,6 +19,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     distributed_prefix,
     kda_mesh_param,
     median_device_us,
+    pack_complement,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _RelayFinalCarry, _sp_links
 from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix, reset_persistent_semaphores
@@ -85,7 +86,7 @@ class _Transforms:
         # A BF16-representable E and B make the BF16 transport exact for both paths; A = E + I exactly.
         e, self.b = (a - torch.eye(_KEY)).bfloat16().float(), b.bfloat16().float()
         self.a = e + torch.eye(_KEY)
-        self.packed = _pack(mesh_device, e, self.b)
+        self.packed = _pack(mesh_device, self.a, self.b)
         self.initial_tt = ttnn.from_torch(
             self.initial,
             dtype=ttnn.float32,
@@ -152,15 +153,11 @@ class _Transforms:
                 assert_matches_chain(got_final, ttnn.to_torch(local_chained_final), carry, f"final {name}")
 
 
-def _pack(mesh_device, e: torch.Tensor, b: torch.Tensor) -> ttnn.Tensor:
-    """Each rank's [sp_size, heads, K, K] E and B as its BF16 [1, heads, K, 2K] rows of [E | B], replicated over TP."""
+def _pack(mesh_device, a: torch.Tensor, b: torch.Tensor) -> ttnn.Tensor:
+    """Each rank's [sp_size, heads, K, K] A and B as its BF16 [1, heads, K, 2K] rows of [E | B], replicated over TP."""
     sp_size, tp_size = tuple(mesh_device.shape)
-    return ttnn.from_torch(
-        torch.cat([e, b], dim=-1),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=(sp_size, tp_size)),
+    return pack_complement(
+        a, b, mesh_device, ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=(sp_size, tp_size))
     )
 
 
@@ -215,7 +212,7 @@ def test_relay_affine_prefix_applies_the_complement_form(mesh_device):
     if sp_size == 8:
         assert entries == [10.0, 6.0, 5.0, 5.5, 5.5, 7.75, 9.875, 11.9375] and carry == 13.96875
     actual_start = make_actual_start(mesh_device, 0)
-    entry, final = _relay(mesh_device)(_pack(mesh_device, e, b), initial, actual_start)
+    entry, final = _relay(mesh_device)(_pack(mesh_device, e + eye, b), initial, actual_start)
     tp_size = tuple(mesh_device.shape)[1]
     for index, (local_entry, local_final) in enumerate(
         zip(ttnn.get_device_tensors(entry), ttnn.get_device_tensors(final), strict=True)
@@ -254,7 +251,7 @@ def test_relay_affine_prefix_adds_the_entry_state_and_b_in_fp32(mesh_device):
         entries.append(carry)
         carry = carry + b[rank]
     actual_start = make_actual_start(mesh_device, 0)
-    entry, final = _relay(mesh_device)(_pack(mesh_device, torch.zeros_like(b), b), initial_tt, actual_start)
+    entry, final = _relay(mesh_device)(_pack(mesh_device, torch.eye(_KEY).expand_as(b), b), initial_tt, actual_start)
     for index, (local_entry, local_final) in enumerate(
         zip(ttnn.get_device_tensors(entry), ttnn.get_device_tensors(final), strict=True)
     ):
