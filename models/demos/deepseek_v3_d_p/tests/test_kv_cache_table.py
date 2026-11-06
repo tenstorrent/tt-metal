@@ -1098,8 +1098,9 @@ def test_glm53_index_cache_pipeline_stage_addresses():
     logger.info(f"[glm53] merged 2-stage index-cache table matches the per-rank walk over {len(merged)} entries")
 
 
+@pytest.mark.parametrize("chunk", [PREFILL_CHUNK_TOKENS, 2560], ids=["c5120", "c2560"])
 @pytest.mark.parametrize("sp, tp", [(2, 4), (4, 4)], ids=["sp2-tp4", "sp4-tp4"])
-def test_kvpe_pipeline_stage_addresses_sp_axis_1(sp, tp):
+def test_kvpe_pipeline_stage_addresses_sp_axis_1(sp, tp, chunk):
     """SP on mesh axis 1 (a 4x4 tray-half stage) must publish the table SP on axis 0 publishes.
 
     Each chip is labelled by its LOGICAL (sp, tp) position and placed at its mesh coordinate for the
@@ -1144,6 +1145,7 @@ def test_kvpe_pipeline_stage_addresses_sp_axis_1(sp, tp):
             chunk_size_bytes=chunk_size_bytes,
             num_users=num_users,
             stage_layout=[stage(rank, first, count, sp_axis) for rank, (first, count) in enumerate(stage_ranges)],
+            chunk_size_global=chunk,
         )
         return table.entries
 
@@ -1153,18 +1155,22 @@ def test_kvpe_pipeline_stage_addresses_sp_axis_1(sp, tp):
     assert not mismatched, f"{len(mismatched)} entries differ at sp_axis=1, e.g. {list(mismatched.items())[:2]}"
     # The group of any token is one SP row: tp chips, all labelled with that row's SP index.
     for (_, _, position, _), (_, _, group) in sp1.items():
-        expected_sp = (position % PREFILL_CHUNK_TOKENS) // (PREFILL_CHUNK_TOKENS // sp)
+        expected_sp = (position % chunk) // (chunk // sp)
         assert sorted(chip // tp for _, chip in group) == [expected_sp] * tp, (position, group)
 
 
-def test_glm53_tp_sharded_pipeline_stage_addresses():
-    rows, cols, sp_axis, tp_axis = 8, 4, 0, 1
+# Each stage shape at its production chunk: 5,120 tokens on 8x4 and 2,560 on 4x4 (160 rows per chip either way).
+@pytest.mark.parametrize(
+    "rows, cols, chunk", [(8, 4, PREFILL_CHUNK_TOKENS), (4, 4, 2560)], ids=["8x4-c5120", "4x4-c2560"]
+)
+def test_glm53_tp_sharded_pipeline_stage_addresses(rows, cols, chunk):
+    sp_axis, tp_axis = 0, 1
     num_users, seq_len, num_banks = 2, 2 * PREFILL_CHUNK_TOKENS, BH_NUM_DRAM_BANKS
     CHUNK_SIZE_BYTES = 19584
     stage_ranges = [(0, 18), (18, 20)]
     num_layers = sum(count for _, count in stage_ranges)
     base_addrs = [0x1000_0000, 0x2000_0000]
-    tokens_per_device = PREFILL_CHUNK_TOKENS // (rows * cols)
+    tokens_per_device = chunk // (rows * cols)
 
     def stage(rank, first_layer, count):
         return {
@@ -1193,6 +1199,7 @@ def test_glm53_tp_sharded_pipeline_stage_addresses():
             num_users=num_users,
             stage_layout=stage_layout,
             tp_axis=tp,
+            chunk_size_global=chunk,
         )
         return table.entries
 
@@ -1219,9 +1226,9 @@ def test_glm53_tp_sharded_pipeline_stage_addresses():
 
     for (_, layer, position, _), (noc_addr, size_bytes, group) in merged.items():
         rank = 0 if layer < stage_ranges[0][1] else 1
-        offset_in_chunk = position % PREFILL_CHUNK_TOKENS
-        row = offset_in_chunk // (PREFILL_CHUNK_TOKENS // rows)
-        col = (offset_in_chunk % (PREFILL_CHUNK_TOKENS // rows)) // tokens_per_device
+        offset_in_chunk = position % chunk
+        row = offset_in_chunk // (chunk // rows)
+        col = (offset_in_chunk % (chunk // rows)) // tokens_per_device
         assert group == ((rank, row * cols + col),), (
             f"layer {layer} position {position} is owned by {group}, expected the single device "
             f"(mesh {rank}, chip {row * cols + col}) that holds that 32-token shard"
