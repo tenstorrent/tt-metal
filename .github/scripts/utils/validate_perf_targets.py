@@ -27,6 +27,7 @@ LOWER_IS_BETTER_METRICS = {
     "prefill_time_to_token",
     "compile_prefill",
     "compile_decode",
+    "rtf",
 }
 
 TARGETS_YAML_RELATIVE_PATH = Path("models/model_targets.yaml")
@@ -58,6 +59,8 @@ METRIC_NAME_MAP = {
     # Vision classifiers. Reported from a plain "inference" step rather than
     # inference_decode, since there is no decode phase to attribute them to.
     "fps": ("inference", "fps"),
+    # Speech. Real-time factor (generation time / audio duration); lower is better.
+    "rtf": ("inference", "rtf"),
 }
 
 # Metrics that can be satisfied by more than one (step_name, measurement_name) pair.
@@ -86,6 +89,7 @@ ALLOWED_TARGET_METRIC_NAMES = {
     "text_image_pcc",
     "edit_image_pcc",
     "fps",
+    "rtf",
 }
 
 PREFILL_TIME_TO_TOKEN_KEY = "prefill_time_to_token"
@@ -365,6 +369,11 @@ def _validate_targets_schema(targets_yaml: dict[str, Any]) -> list[str]:
                     errors.append(
                         f"Model '{model_name}' sku '{sku_name}' entry #{idx} has invalid status '{entry.get('status')}'"
                     )
+                if "enforce_perf" in entry and not isinstance(entry.get("enforce_perf"), bool):
+                    errors.append(
+                        f"Model '{model_name}' sku '{sku_name}' entry #{idx} has non-bool 'enforce_perf' "
+                        f"'{entry.get('enforce_perf')}'"
+                    )
                 dims = (entry.get("batch_size"), entry.get("seq_len"))
                 if dims in seen_entry_dims:
                     errors.append(
@@ -596,6 +605,12 @@ def validate(
         seq_len = run.get("input_sequence_length")
         seq_len = int(seq_len) if _is_number(seq_len) else None
 
+        measured = _measurement_lookup(run)
+        is_accuracy_run = _is_accuracy_run(measured)
+        # Benchmark measurement pairs already covered by a target so the no-target pass below
+        # does not re-report them.
+        covered_pairs: set[tuple[str, str]] = set()
+
         entry = model_targets.resolve_target_entry(
             model_name=model_name,
             sku=sku,
@@ -603,71 +618,101 @@ def validate(
             seq_len=seq_len,
             include_todo=True,
         )
+        # Missing and TODO entries still contribute Measured rows below. Skipping them here
+        # used to drop the number from the step summary, so the dashboard never saw it.
+        # Single-pass detection uses the entry when one exists; measurements still identify
+        # the workload when the entry is missing.
+        is_single_pass_run = _is_single_pass_run(measured, entry if isinstance(entry, dict) else {})
         if entry is None:
             result.missing_entries.append(
                 f"{benchmark_file.name}: no target entry for model={model_name}, sku={sku}, batch_size={batch_size}, seq_len={seq_len}"
             )
-            continue
-
-        if str(entry.get("status", "active")).lower() == "todo":
+        elif str(entry.get("status", "active")).lower() == "todo":
             result.missing_entries.append(
                 f"{benchmark_file.name}: target entry is TODO for model={model_name}, sku={sku}, batch_size={batch_size}, seq_len={seq_len}"
             )
-            continue
-
-        measured = _measurement_lookup(run)
-        is_accuracy_run = _is_accuracy_run(measured)
-        is_single_pass_run = _is_single_pass_run(measured, entry)
-        thresholds: dict[str, Any] = {}
-        perf = entry.get("perf", {})
-        accuracy = entry.get("accuracy", {})
-        if isinstance(perf, dict):
-            thresholds.update(perf)
-        if isinstance(accuracy, dict):
-            thresholds.update(accuracy)
-        thresholds = _normalize_ttft_thresholds(
-            thresholds=thresholds,
-            benchmark_file_name=benchmark_file.name,
-            model_name=model_name,
-            sku=sku,
-        )
-
-        hard_failures_prefix = (
-            f"{benchmark_file.name}, model={model_name}, sku={sku}, batch_size={batch_size}, seq_len={seq_len}"
-        )
-
-        # Benchmark measurement pairs already covered by a target so the no-target pass below
-        # does not re-report them.
-        covered_pairs: set[tuple[str, str]] = set()
-        for metric_name, expected in thresholds.items():
-            if model_targets.is_tolerance_key(metric_name):
-                continue
-            if not _is_number(expected):
-                continue
-            # Validate accuracy metrics only on accuracy (token-matching) runs, and
-            # perf metrics only on perf (eval) runs. This prevents teacher-forcing
-            # throughput/latency from a token-matching run being checked against perf
-            # targets (and vice versa).
-            if not is_single_pass_run and (metric_name in ACCURACY_TARGET_METRIC_NAMES) != is_accuracy_run:
-                continue
-            if metric_name in METRIC_NAME_MAP:
-                covered_pairs.add(METRIC_NAME_MAP[metric_name])
-            for _alias_pair in METRIC_NAME_ALIASES.get(metric_name, ()):
-                covered_pairs.add(_alias_pair)
-            tolerance = model_targets.resolve_metric_tolerance(
-                metric_name=metric_name,
+        else:
+            # Omitted enforce_perf means the historical default: perf misses fail the job.
+            # Accuracy is unaffected by this flag.
+            enforce_perf = entry.get("enforce_perf", True)
+            if not isinstance(enforce_perf, bool):
+                enforce_perf = True
+            thresholds: dict[str, Any] = {}
+            perf = entry.get("perf", {})
+            accuracy = entry.get("accuracy", {})
+            if isinstance(perf, dict):
+                thresholds.update(perf)
+            if isinstance(accuracy, dict):
+                thresholds.update(accuracy)
+            thresholds = _normalize_ttft_thresholds(
                 thresholds=thresholds,
-                default_tolerance=model_targets.DEFAULT_PERF_TOLERANCE,
+                benchmark_file_name=benchmark_file.name,
+                model_name=model_name,
+                sku=sku,
             )
-            try:
-                measured_value = _extract_metric_value(metric_name, measured)
-            except ValueError as exc:
-                result.hard_failures.append(f"{hard_failures_prefix}: ambiguous metric '{metric_name}': {exc}")
-                continue
-            if measured_value is None or math.isnan(measured_value):
-                result.hard_failures.append(
-                    f"{hard_failures_prefix}: metric '{metric_name}' missing in benchmark payload for measured={measured}"
+
+            hard_failures_prefix = (
+                f"{benchmark_file.name}, model={model_name}, sku={sku}, batch_size={batch_size}, seq_len={seq_len}"
+            )
+
+            for metric_name, expected in thresholds.items():
+                if model_targets.is_tolerance_key(metric_name):
+                    continue
+                if not _is_number(expected):
+                    continue
+                # Validate accuracy metrics only on accuracy (token-matching) runs, and
+                # perf metrics only on perf (eval) runs. This prevents teacher-forcing
+                # throughput/latency from a token-matching run being checked against perf
+                # targets (and vice versa).
+                if not is_single_pass_run and (metric_name in ACCURACY_TARGET_METRIC_NAMES) != is_accuracy_run:
+                    continue
+                if metric_name in METRIC_NAME_MAP:
+                    covered_pairs.add(METRIC_NAME_MAP[metric_name])
+                for _alias_pair in METRIC_NAME_ALIASES.get(metric_name, ()):
+                    covered_pairs.add(_alias_pair)
+                tolerance = model_targets.resolve_metric_tolerance(
+                    metric_name=metric_name,
+                    thresholds=thresholds,
+                    default_tolerance=model_targets.DEFAULT_PERF_TOLERANCE,
                 )
+                # Perf-only switch. Accuracy stays a hard failure on an active entry.
+                enforced = enforce_perf or metric_name in ACCURACY_TARGET_METRIC_NAMES
+                try:
+                    measured_value = _extract_metric_value(metric_name, measured)
+                except ValueError as exc:
+                    result.hard_failures.append(f"{hard_failures_prefix}: ambiguous metric '{metric_name}': {exc}")
+                    continue
+                if measured_value is None or math.isnan(measured_value):
+                    if enforced:
+                        result.hard_failures.append(
+                            f"{hard_failures_prefix}: metric '{metric_name}' missing in benchmark payload for measured={measured}"
+                        )
+                    result.reported_metrics.append(
+                        _make_report_record(
+                            model_name=model_name,
+                            sku=sku,
+                            batch_size=batch_size,
+                            seq_len=seq_len,
+                            metric_name=metric_name,
+                            measured=None,
+                            expected=float(expected),
+                            tolerance=tolerance,
+                            status="missing-measurement",
+                        )
+                    )
+                    continue
+                metric_failure = _check_metric(
+                    metric_name=metric_name,
+                    expected_value=float(expected),
+                    measured_value=float(measured_value),
+                    tolerance=tolerance,
+                )
+                if metric_failure and enforced:
+                    result.hard_failures.append(f"{hard_failures_prefix}: {metric_failure}")
+                if enforced:
+                    row_status = "fail" if metric_failure else "pass"
+                else:
+                    row_status = "report-only"
                 result.reported_metrics.append(
                     _make_report_record(
                         model_name=model_name,
@@ -675,34 +720,12 @@ def validate(
                         batch_size=batch_size,
                         seq_len=seq_len,
                         metric_name=metric_name,
-                        measured=None,
+                        measured=float(measured_value),
                         expected=float(expected),
                         tolerance=tolerance,
-                        status="missing-measurement",
+                        status=row_status,
                     )
                 )
-                continue
-            metric_failure = _check_metric(
-                metric_name=metric_name,
-                expected_value=float(expected),
-                measured_value=float(measured_value),
-                tolerance=tolerance,
-            )
-            if metric_failure:
-                result.hard_failures.append(f"{hard_failures_prefix}: {metric_failure}")
-            result.reported_metrics.append(
-                _make_report_record(
-                    model_name=model_name,
-                    sku=sku,
-                    batch_size=batch_size,
-                    seq_len=seq_len,
-                    metric_name=metric_name,
-                    measured=float(measured_value),
-                    expected=float(expected),
-                    tolerance=tolerance,
-                    status="fail" if metric_failure else "pass",
-                )
-            )
 
         # Always surface measured e2e numbers, even when no target exists for them, so the
         # report is a single place to read results. Only known metrics are reported (service
