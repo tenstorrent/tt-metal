@@ -32,6 +32,8 @@ The optional expanded batch-8 cache passed local capacity confirmation: eight in
 
 GPQA40 startup confirms the frozen40 list, full60 autoport, C4/B8/maxseq8, context262144 and unchanged sampling/output/request limits. The stockCI INFO filter removed native request/reply records. The model-only hex formatter passed three exact native pairs/583 decode IDs and a lossless roundtrip through that filter; its two local runs used0.12060device hours versus0.18predicted. ActualCI confirmation42302118669 is building on published eef534/483509; no clean dry claim. A separate timestamp observer repair passed9 host tests and parsed the actual seven-digit CI timestamp without changing evidence.
 
+The published eef534 benchmark arm passed eight exact4096/128 B1/C1 requests:754.113ms TTFT and35.3152tokens/s/user. All eight texts match both prior baselines. The unchanged stage11 matrix completed8/8 in27.2148seconds. The first attempt had valid client results but a stale final phase snapshot; an observation-only idle drain fixed the private closer, and the repeated run retained2185complete pairs with no pending steps. Combined device cost0.153864hours against0.152693forecast; no causal speed claim. See `runs/hex-runtime-benchmark/RESULT.json`.
+
 ## Effort predictions and results
 
 Device costs include the device job, not build/queue. Release savings are forecasts on the then-planned lists; guesses are marked. Later measured stops can retire those savings. Complete confirmations and their original scope remain in each result linked by efforts.json.
@@ -137,6 +139,7 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | ci-response-log-propagation | 0.09000 (guess) / 0.12060 | 0.00000 | kept/open: local exactness: True; expected decode ids exact: 583; full native json equal: True; filter roundtrip: True |
 | ci-response-log-publication | 0.00000 / 0.00000 | 0.00000 | kept/solved: tt sha: eef534e5cd6bcaf37957647de4d8d4eff4f0e047; tti sha: 483509781a0898395208fe0fdc14f54eb3ff8857; published: source-only FF separate checkouts, dedicated branches; host tests: 37 |
 | ci-native-log-confirmation | 0.18296 / unknown | 0.00000 | running/pending: Pending |
+| hex-runtime-benchmark | 0.07605 / 0.15386 | 0.00000 | kept/solved: headline ttft ms: 754.1133353515761; headline decode tps: 35.31515153764353; native texts exact: 8; matrix completed: 8 |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 

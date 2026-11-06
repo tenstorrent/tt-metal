@@ -29,9 +29,9 @@
     "decode_device_us": null,
     "prefill_flops_pct": null,
     "decode_dram_pct": null,
-    "ttft_ms": 753.7608764978359,
-    "decode_tps": 35.32100514361217,
-    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/phase-archive-runtime-benchmark/RESULT.json; publicationab2730c27e557b09b2eafe3494e47790adc210aa; full60/B1/C1 eight exact4096/128 serial requests"
+    "ttft_ms": 754.1133353515761,
+    "decode_tps": 35.31515153764353,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/hex-runtime-benchmark/RESULT.json; publication eef534e5cd6bcaf37957647de4d8d4eff4f0e047; full60/B1/C1 eight exact4096/128 serial requests"
   },
   "accuracy": [
     {
@@ -83,7 +83,7 @@
     "release": "No frozen dry/release yet. CI INFO log filter diagnosed; model-only lossless logging repair passed local3/583ID exactness. ActualCI originalsmoke2 confirmation42302118669 pending; no-score dry remains unproven."
   },
   "notes": [
-    "Repaired runtime ab2730c measured; no frozen release yet. No vLLM profiling.",
+    "Published runtime eef534 measured with complete idle-drained accounting; no frozen release yet. No vLLM profiling.",
     "C4 same-ten scored pair9/10 each; C4 642.445722s versus C2 938.039050s. Repeated tasks are not additional independent accuracy samples.",
     "Default-off model-owned token retention accepted by exact native paired outputs and583matched decode IDs; no client-emission identity claim.",
     "Local execution checkout remains without remotes; source-only publication uses separate authorized checkouts.",
@@ -91,6 +91,6 @@
     "Six full60 conditional HF/TT prefill and forced incremental-decode checkpoints support captured loop continuations; no originalservedstate or autonomousHF claim. Evidence: runs/gpqa-loop-logits-discriminator/RESULT.json and runs/gpqa-decode-state-discriminator/RESULT.json.",
     "SWE retained5: raw1/5 (Wilson95%3.62\u201362.45%), invalid Xarray external retrieval; functional2 retained, no retry/advance. Eval8190.434942s; native Astropy cap32768 with18047-token periodic suffix. Nine discarded outputs and failed phase archive limit attribution. Evidence: runs/nightly-swe-decode-retention/audit.json.",
     "Selected headline remains unbuffered B1. Stock response debug buffers SSE (measured experiment excluded from decoderateclaims); enabled only for nonstreamingGPQA. Evidence: runs/response-logging-runtime-benchmark/AUTOFIX.md.",
-    "Optional expandedB8 capacity and native/B1 exactness passed. Same20 C8 comparison42293808766 building, unselected with zero speed saving credited. Normal40 run42296943044 uses accepted C4 and proven image. Evidence: runs/gpqa-b8-expanded-pool/{local-confirmation,benchmark-confirmation,timing-baseline}.json."
+    "Optional expandedB8 capacity and native/B1 exactness passed. Same20 C8 comparison42293808766 running, unselected with zero speed saving credited. Normal40 run42296943044 uses accepted C4 and proven image. Evidence: runs/gpqa-b8-expanded-pool/{local-confirmation,benchmark-confirmation,timing-baseline}.json."
   ]
 }

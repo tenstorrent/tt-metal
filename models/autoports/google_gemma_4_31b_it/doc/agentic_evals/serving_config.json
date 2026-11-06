@@ -351,6 +351,18 @@
       "batch": 8,
       "max_num_seqs": 8,
       "batch_reason": "Two original smoke tasks; smallest validated batch>=2, current C4 ceiling unchanged"
+    },
+    "hex-runtime-benchmark": {
+      "planned_clients": 1,
+      "batch": 1,
+      "max_num_seqs": 1,
+      "batch_reason": "Exact required headline and unchanged stage11 matrix C1/B1"
+    },
+    "hex-runtime-benchmark-drain-confirmation": {
+      "planned_clients": 1,
+      "batch": 1,
+      "max_num_seqs": 1,
+      "batch_reason": "Exact required headline and unchanged stage11 matrix C1/B1"
     }
   },
   "release_limits": {
@@ -585,19 +597,20 @@
   "output_cap_tokens": 32768,
   "flat_limits_scope": "Common minimum across applicable suite settings for checker interoperability, not a uniform dispatch setting. Exact per-suite release_limits and agent_time_limit/request_time_limit/output_cap maps remain authoritative; GPQA request14400/output126976, no agent timeout.",
   "current_runtime_benchmark": {
-    "evidence": "runs/phase-archive-runtime-benchmark/RESULT.json",
+    "evidence": "runs/hex-runtime-benchmark/RESULT.json",
+    "publication": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
     "headline": {
       "source": "vllm",
+      "completed": 8,
+      "failed": 0,
+      "client_seconds": 34.80486502102576,
+      "ttft_ms": 754.1133353515761,
+      "mean_tpot_ms": 28.316457850508403,
+      "decode_tps": 35.31515153764353,
       "input_tokens": 4096,
       "output_tokens": 128,
       "requests": 8,
       "concurrency": 1,
-      "completed": 8,
-      "failed": 0,
-      "client_seconds": 34.79740667401347,
-      "ttft_ms": 753.7608764978359,
-      "mean_tpot_ms": 28.31176507956345,
-      "decode_tps": 35.32100514361217,
       "prefill_device_us": null,
       "decode_device_us": null,
       "prefill_flops_pct": null,
@@ -605,28 +618,31 @@
     },
     "stage11_matrix": {
       "source": "tti",
+      "completed": 8,
+      "failed": 0,
+      "client_seconds": 27.21482825197745,
+      "ttft_ms": 128.01694698282517,
+      "mean_tpot_ms": 25.77519361110767,
+      "decode_tps": 38.79699276319134,
       "nominal_input_tokens": 128,
       "output_tokens": 128,
       "requests": 8,
       "concurrency": 1,
-      "completed": 8,
-      "failed": 0,
-      "client_seconds": 27.09793480101507,
-      "ttft_ms": 113.65553336509038,
-      "mean_tpot_ms": 25.773314048268457,
-      "decode_tps": 38.79982209999042,
       "actual_adapter_prompt_lengths": [
         141,
         141,
-        141,
         142,
         141,
         141,
-        142,
+        141,
+        141,
         142
       ],
-      "note": "Stock chat template increases nominal input length; matrix unchanged."
-    }
+      "evidence": "bringup/artifacts/stage12-hex-runtime-benchmark-retry/__home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_benchmarks/llm/benchmark___home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_2026-11-06_22-46-56-515182_isl-128_osl-128_maxcon-1_n-8.json"
+    },
+    "logging_debug": false,
+    "request_logging": false,
+    "custom_logging_config": null
   },
   "max_concurrency_scope": "Maximum accepted per-suite: GPQA4; tool suites2. Four131072-input contexts tested, not four full262144 contexts.",
   "concurrency_by_eval": {

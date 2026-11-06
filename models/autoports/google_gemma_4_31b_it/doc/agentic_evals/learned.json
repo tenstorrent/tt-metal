@@ -211,6 +211,10 @@
     {
       "fact": "Stock shield Docker live-log forwarding removes every line matching INFO case-insensitively, including request records and response text. Removing severity label alone is insufficient. Model-only lossless hex formatter selected through supported logging config passed local exact3/583ID and exactfilter checks; actual CI confirmation pending42302118669.",
       "evidence": "runs/ci-response-log-propagation/RESULT.json"
+    },
+    {
+      "fact": "Periodic phase export may precede final client output even after idle. Existing collector drain at confirmed idle persists observed boundaries without device synchronization; then close server.",
+      "evidence": "runs/hex-runtime-benchmark/RESULT.json"
     }
   ],
   "suite_timings": [
@@ -587,6 +591,52 @@
         "runs/gpqa-b8-expanded-pool/benchmark-confirmation.json",
         "runs/gpqa-b8-expanded-pool/timing-baseline.json"
       ]
+    },
+    {
+      "evidence": "runs/hex-runtime-benchmark/RESULT.json",
+      "publication": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
+      "headline": {
+        "source": "vllm",
+        "completed": 8,
+        "failed": 0,
+        "client_seconds": 34.80486502102576,
+        "ttft_ms": 754.1133353515761,
+        "mean_tpot_ms": 28.316457850508403,
+        "decode_tps": 35.31515153764353,
+        "input_tokens": 4096,
+        "output_tokens": 128,
+        "requests": 8,
+        "concurrency": 1,
+        "prefill_device_us": null,
+        "decode_device_us": null,
+        "prefill_flops_pct": null,
+        "decode_dram_pct": null
+      },
+      "stage11_matrix": {
+        "source": "tti",
+        "completed": 8,
+        "failed": 0,
+        "client_seconds": 27.21482825197745,
+        "ttft_ms": 128.01694698282517,
+        "mean_tpot_ms": 25.77519361110767,
+        "decode_tps": 38.79699276319134,
+        "nominal_input_tokens": 128,
+        "output_tokens": 128,
+        "requests": 8,
+        "concurrency": 1,
+        "actual_adapter_prompt_lengths": [
+          141,
+          141,
+          142,
+          141,
+          141,
+          141,
+          141,
+          142
+        ],
+        "evidence": "bringup/artifacts/stage12-hex-runtime-benchmark-retry/__home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_benchmarks/llm/benchmark___home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_2026-11-06_22-46-56-515182_isl-128_osl-128_maxcon-1_n-8.json"
+      },
+      "device_hours": 0.15386382062085127
     }
   ],
   "diagnostic_confirmations": [

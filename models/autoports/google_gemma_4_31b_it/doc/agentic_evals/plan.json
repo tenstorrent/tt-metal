@@ -75,11 +75,11 @@
       "Qwen/Qwen3-32B"
     ],
     "benchmark_current_runtime_measurement": {
-      "source": "runs/phase-archive-runtime-benchmark/RESULT.json",
-      "client_seconds": 27.09793480101507,
-      "device_job_hours": 0.07605465913249645,
-      "runtime": "ab2730c27e557b09b2eafe3494e47790adc210aa",
-      "note": "Normal validation incl separate headline/startup; not frozen release."
+      "source": "runs/hex-runtime-benchmark/RESULT.json",
+      "client_seconds": 27.21482825197745,
+      "device_job_hours": 0.07722610789111867,
+      "runtime": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
+      "note": "Normal validation includes headline/startup; not frozen release; supported idle drain completes accounting."
     },
     "go_evals": [
       "r1_gpqa_diamond"
@@ -99,10 +99,11 @@
       },
       "benchmarks": {
         "response_debug": "false",
-        "request_logging": "default disabled",
+        "request_logging": false,
         "stream": true,
-        "evidence": "runs/phase-archive-runtime-benchmark/RESULT.json",
-        "reason": "Preserve token-out streaming; response debugbuffersentireSSE, provenbyruns/response-logging-runtime-benchmark/RESULT.json"
+        "evidence": "runs/hex-runtime-benchmark/RESULT.json",
+        "reason": "Preserve token-out streaming; response debugbuffersentireSSE, provenbyruns/response-logging-runtime-benchmark/RESULT.json",
+        "custom_logging_config": null
       }
     },
     "per_arm_logging_status": "Selected, not finalfreeze; sameeacharm settingsmustbeusedindryandrelease"
@@ -2519,7 +2520,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42293808766",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T22:00:23.184612+00:00",
+      "last_observed_at": "2026-11-06T22:49:02.353324+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-wlxtq",
       "build_started_at": "2026-11-06T21:05:42Z",
       "build_completed_at": "2026-11-06T21:59:13Z",
@@ -2630,7 +2631,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42296943044",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T22:00:41.835530+00:00",
+      "last_observed_at": "2026-11-06T22:49:18.139391+00:00",
       "runner": "qb2-120-p05t02",
       "device_job_id": 128164656843,
       "device_job_started_at": "2026-11-06T21:28:17Z",
@@ -2730,11 +2731,86 @@
       "prepared_at": "2026-11-06T22:06:33.610360+00:00",
       "run_id": 42302118669,
       "submitted_at": "2026-11-06T22:06:35Z",
-      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42302118669"
+      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42302118669",
+      "workflow_status": "in_progress",
+      "workflow_conclusion": null,
+      "last_observed_at": "2026-11-06T22:49:27.452334+00:00",
+      "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-hzfl4",
+      "build_started_at": "2026-11-06T22:06:53Z",
+      "build_completed_at": null
+    },
+    {
+      "arm": "hex-runtime-benchmark",
+      "owner": "local_serving_check",
+      "device": "local",
+      "status": "clients_valid_phase_incomplete",
+      "queued_at": "2026-11-06T22:36:01.229117+00:00",
+      "planned_clients": 1,
+      "batch": 1,
+      "max_num_seqs": 1,
+      "batch_reason": "Exact required headline and unchanged stage11 matrix C1/B1",
+      "predicted_hours": 0.076055,
+      "box_hours": 0.15,
+      "tt_metal_sha": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
+      "response_logging": false,
+      "request_logging": false,
+      "static_native_logging_config": null,
+      "head_workload": {
+        "input_tokens": 4096,
+        "output_tokens": 128,
+        "requests": 8
+      },
+      "release_matrix": "doc/benchmark/release_benchmark_matrix.json unchanged",
+      "plan": "runs/hex-runtime-benchmark/plan.md",
+      "scope": "Published source benchmark-arm measurement, no eval score/profiling/spec tests",
+      "started_at": "2026-11-06T22:35:54.191360+00:00",
+      "forecast_hours": 0.076055,
+      "ended_at": "2026-11-06T22:40:30.087102+00:00",
+      "server_exit": 0,
+      "actual_device_hours": 0.0766377127297326,
+      "remaining_owners": [],
+      "phase_issue": "Archive ends .303806s before last client token; no invented completions",
+      "start": "2026-11-06T22:35:54.191360+00:00",
+      "end": "2026-11-06T22:40:30.087102+00:00",
+      "actual_hours": 0.0766377127297326,
+      "exit_status": 0,
+      "audit": "runs/hex-runtime-benchmark/RESULT.json"
+    },
+    {
+      "arm": "hex-runtime-benchmark-drain-confirmation",
+      "owner": "local_serving_check",
+      "device": "local",
+      "status": "valid_complete",
+      "queued_at": "2026-11-06T22:44:03.550310+00:00",
+      "planned_clients": 1,
+      "batch": 1,
+      "max_num_seqs": 1,
+      "batch_reason": "Exact required headline and unchanged stage11 matrix C1/B1",
+      "predicted_hours": 0.076638,
+      "box_hours": 0.15,
+      "tt_metal_sha": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
+      "response_logging": false,
+      "request_logging": false,
+      "static_native_logging_config": null,
+      "head_workload": {
+        "input_tokens": 4096,
+        "output_tokens": 128,
+        "requests": 8
+      },
+      "release_matrix": "doc/benchmark/release_benchmark_matrix.json unchanged",
+      "plan": "runs/hex-runtime-benchmark/plan.md",
+      "scope": "Same existing benchmark clients with supported observation drain afteridle before shutdown",
+      "forecast_hours": 0.076638,
+      "effort_total_box_hours": 0.25,
+      "start": "2026-11-06T22:43:50.907246+00:00",
+      "end": "2026-11-06T22:48:28.921214+00:00",
+      "actual_hours": 0.07722610789111867,
+      "exit_status": 0,
+      "audit": "runs/hex-runtime-benchmark/RESULT.json"
     }
   ],
   "status": "SWE5_completed_validity_audit_GPQA20_repair_building",
-  "last_updated": "2026-11-06T22:01:18.024059+00:00",
+  "last_updated": "2026-11-06T22:49:29.279442+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -3480,6 +3556,29 @@
       "ratio_actual_predicted": 0.6795566403860352,
       "result": "Exact native3 and clean closure; candidate hex transport passes offline filter",
       "evidence": "runs/ci-response-log-propagation/RESULT.json"
+    },
+    {
+      "arm": "hex-runtime-benchmark",
+      "device": "local",
+      "planned_clients": 1,
+      "batch": 1,
+      "predicted_device_hours": 0.076055,
+      "device_job_hours": 0.0766377127297326,
+      "result": "Client measurements valid/exact8texts; phase export incomplete; supporteddrain retry admitted",
+      "evidence": "runs/hex-runtime-benchmark/RESULT.json",
+      "started_at": "2026-11-06T22:35:54.191360+00:00",
+      "ended_at": "2026-11-06T22:40:30.087102+00:00",
+      "status": "clients_valid_phase_incomplete"
+    },
+    {
+      "arm": "hex-runtime-benchmark-drain-confirmation",
+      "planned_clients": 1,
+      "batch": 1,
+      "device_job_hours": 0.07722610789111867,
+      "started_at": "2026-11-06T22:43:50.907246+00:00",
+      "ended_at": "2026-11-06T22:48:28.921214+00:00",
+      "evidence": "runs/hex-runtime-benchmark/RESULT.json",
+      "status": "valid_complete"
     }
   ],
   "local_idle_intervals": [
@@ -3707,11 +3806,52 @@
     }
   },
   "current_runtime_benchmark": {
-    "evidence": "runs/current-runtime-benchmark/result.json",
-    "matrix_seconds": 27.087501666974276,
-    "headline_seconds": 34.81444410898257,
-    "device_hours": 0.08735316444444444,
-    "release": false
+    "evidence": "runs/hex-runtime-benchmark/RESULT.json",
+    "publication": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
+    "headline": {
+      "source": "vllm",
+      "completed": 8,
+      "failed": 0,
+      "client_seconds": 34.80486502102576,
+      "ttft_ms": 754.1133353515761,
+      "mean_tpot_ms": 28.316457850508403,
+      "decode_tps": 35.31515153764353,
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "requests": 8,
+      "concurrency": 1,
+      "prefill_device_us": null,
+      "decode_device_us": null,
+      "prefill_flops_pct": null,
+      "decode_dram_pct": null
+    },
+    "stage11_matrix": {
+      "source": "tti",
+      "completed": 8,
+      "failed": 0,
+      "client_seconds": 27.21482825197745,
+      "ttft_ms": 128.01694698282517,
+      "mean_tpot_ms": 25.77519361110767,
+      "decode_tps": 38.79699276319134,
+      "nominal_input_tokens": 128,
+      "output_tokens": 128,
+      "requests": 8,
+      "concurrency": 1,
+      "actual_adapter_prompt_lengths": [
+        141,
+        141,
+        142,
+        141,
+        141,
+        141,
+        141,
+        142
+      ],
+      "evidence": "bringup/artifacts/stage12-hex-runtime-benchmark-retry/__home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_benchmarks/llm/benchmark___home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_2026-11-06_22-46-56-515182_isl-128_osl-128_maxcon-1_n-8.json"
+    },
+    "logging_debug": false,
+    "request_logging": false,
+    "custom_logging_config": null
   },
   "partial_projection_observation": {
     "at": "2026-11-06T12:54:39.416699+00:00",
@@ -4058,7 +4198,7 @@
   ],
   "next_local_job": {
     "status": "idle",
-    "reason": "C4 timing completed, CIpaired20running/building"
+    "reason": "Accepted source benchmark complete; no new device experiment admitted while CI rungs measure release workload"
   },
   "next_rung_admission_policy": {
     "updated_at": "2026-11-06T17:48:16.171357+00:00",

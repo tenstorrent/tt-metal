@@ -9,6 +9,10 @@
   "build_hours": 0.8919444444444444,
   "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:979802869694a2eabe132506325de6476c228ea75c20797b4ab2559f7a2487e2",
   "evidence": "Private build.log lines39833-39843: manifest list, matching tag and successful push; source pins in build run",
-  "actual_device_pull_confirmation": "pending published device log",
+  "actual_device_pull_confirmation": {
+    "digest": "sha256:979802869694a2eabe132506325de6476c228ea75c20797b4ab2559f7a2487e2",
+    "at": "2026-11-06T22:02:15.0855705Z",
+    "evidence": "private CIcurrent.log Digest lines at22:02:04 and22:02:15"
+  },
   "selected": false
 }

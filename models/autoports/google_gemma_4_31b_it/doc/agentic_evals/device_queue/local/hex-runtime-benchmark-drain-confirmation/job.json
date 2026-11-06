@@ -1,0 +1,32 @@
+{
+  "arm": "hex-runtime-benchmark-drain-confirmation",
+  "owner": "local_serving_check",
+  "device": "local",
+  "status": "valid_complete",
+  "queued_at": "2026-11-06T22:44:03.550310+00:00",
+  "planned_clients": 1,
+  "batch": 1,
+  "max_num_seqs": 1,
+  "batch_reason": "Exact required headline and unchanged stage11 matrix C1/B1",
+  "predicted_hours": 0.076638,
+  "box_hours": 0.15,
+  "tt_metal_sha": "eef534e5cd6bcaf37957647de4d8d4eff4f0e047",
+  "response_logging": false,
+  "request_logging": false,
+  "static_native_logging_config": null,
+  "head_workload": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "requests": 8
+  },
+  "release_matrix": "doc/benchmark/release_benchmark_matrix.json unchanged",
+  "plan": "runs/hex-runtime-benchmark/plan.md",
+  "scope": "Same existing benchmark clients with supported observation drain afteridle before shutdown",
+  "forecast_hours": 0.076638,
+  "effort_total_box_hours": 0.25,
+  "start": "2026-11-06T22:43:50.907246+00:00",
+  "end": "2026-11-06T22:48:28.921214+00:00",
+  "actual_hours": 0.07722610789111867,
+  "exit_status": 0,
+  "audit": "runs/hex-runtime-benchmark/RESULT.json"
+}
