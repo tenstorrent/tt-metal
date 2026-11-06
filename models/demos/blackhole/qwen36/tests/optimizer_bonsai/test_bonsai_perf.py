@@ -122,14 +122,24 @@ def test_bonsai_perf(mesh_device, device_params):
     generator = make_generator(model, device)
     prime_decode(generator, model, first, P, page_table)
     token, pos, tokens, step_ms = first, P, [first], []
+    split = os.environ.get("BONSAI_TIME_SPLIT") == "1"
+    fwd_ms = []
     for call in range(DECODE_CALLS):
         t = time.perf_counter()
         out = decode_step(generator, token, pos, page_table, trace=True, read=False)
+        if split:  # the traced forward alone, then the argmax (BONSAI_TIME_SPLIT=1)
+            ttnn.synchronize_device(device)
+            if call > 0:
+                fwd_ms.append((time.perf_counter() - t) * 1000.0)
         token = device_argmax(out, vocab)
         if call > 0:
             step_ms.append((time.perf_counter() - t) * 1000.0)
         tokens.append(token)
         pos += 1
+    if split:
+        print(
+            f"TIME_SPLIT forward_ms={statistics.fmean(fwd_ms):.4f} total_ms={statistics.fmean(step_ms):.4f}", flush=True
+        )
     per_token_ms = statistics.fmean(step_ms)
     from transformers import AutoTokenizer
 
