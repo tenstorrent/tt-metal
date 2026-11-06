@@ -204,10 +204,14 @@
       "status": "done",
       "used_device_hours": 0,
       "change": "kept",
-      "problem_status": "open",
+      "problem_status": "solved",
       "confirmed": {
         "host_tests_passed": 110,
-        "live_validation": false
+        "live_validation": false,
+        "live_confirmation": {
+          "evidence": "runs/current-runtime-benchmark/result.json",
+          "result": "Current full60 runtime exact stock TTI matrix completed8/8; real suite jobs import autoport"
+        }
       },
       "evidence": "runs/harness-registration/result.json"
     },
@@ -238,10 +242,18 @@
       "status": "done",
       "used_device_hours": 0,
       "change": "kept",
-      "problem_status": "open",
+      "problem_status": "solved",
       "confirmed": {
         "host_tests_passed": 7,
-        "live_validation": false
+        "live_validation": false,
+        "live_confirmation": {
+          "evidence": [
+            "runs/server-sized-gpqa-c2/audit.json",
+            "runs/smoke2-swe-activation-repair/audit.json",
+            "runs/smoke2-terminal-lifecycle-repair/audit.json"
+          ],
+          "result": "All three suites now have valid original smoke; frozen selections/limits confirmed"
+        }
       },
       "evidence": "runs/suite-registration/RESULT.md"
     },
@@ -550,8 +562,14 @@
       "status": "done",
       "used_device_hours": 0,
       "change": "none",
-      "problem_status": "open",
-      "confirmed": "Host diagnosis excludes mesh alias error; physical channel deficit observed; recovery pending retry42175367781",
+      "problem_status": "solved",
+      "confirmed": {
+        "original_result": "Host diagnosis excludes mesh alias error; physical channel deficit observed; recovery pending retry42175367781",
+        "live_confirmation": {
+          "evidence": "runs/smoke2-terminal-lifecycle-repair/audit.json",
+          "result": "Later authorized stock CI runner completed valid Terminal smoke; no claim original faulty runner repaired"
+        }
+      },
       "evidence": "runs/ci-topology/result.json",
       "prediction_reconciliation": {
         "at": "2026-11-06T08:19:21.396893+00:00",
@@ -666,8 +684,14 @@
       "evidence": "runs/release-dependency-pins/AUTOFIX.md",
       "used_device_hours": 0,
       "change": "kept",
-      "problem_status": "open",
-      "confirmed": "Fullhosthooks pass; generic optionalpin locallyintegrated. Modelpin/actualCIcheckout confirmation pending.",
+      "problem_status": "solved",
+      "confirmed": {
+        "original_result": "Fullhosthooks pass; generic optionalpin locallyintegrated. Modelpin/actualCIcheckout confirmation pending.",
+        "live_confirmation": {
+          "evidence": "runs/smoke2-terminal-lifecycle-repair/audit.json",
+          "result": "Actual completed run lock confirms model-scoped pinned Harbor source; transitive dependencies not claimed frozen"
+        }
+      },
       "prediction_reconciliation": {
         "at": "2026-11-06T08:19:21.396893+00:00",
         "original_unavailable_fields": {
@@ -811,8 +835,18 @@
       "status": "done",
       "used_device_hours": 0,
       "change": "kept",
-      "problem_status": "open",
-      "confirmed": "Host resolves explicit implementation correctly; replacement CI jobs dispatched. Existing SWE logs prove same explicit route loadsautoport. Replacement completion pending.",
+      "problem_status": "solved",
+      "confirmed": {
+        "original_result": "Host resolves explicit implementation correctly; replacement CI jobs dispatched. Existing SWE logs prove same explicit route loadsautoport. Replacement completion pending.",
+        "live_confirmation": {
+          "evidence": [
+            "runs/smoke2-terminal-lifecycle-repair/audit.json",
+            "runs/server-sized-gpqa-c2/audit.json",
+            "runs/smoke2-swe-activation-repair/audit.json"
+          ],
+          "result": "Explicit implementation confirmed in full60 autoport imports and valid completed suite runs"
+        }
+      },
       "evidence": "runs/ci-implementation-selection/result.json"
     },
     {
