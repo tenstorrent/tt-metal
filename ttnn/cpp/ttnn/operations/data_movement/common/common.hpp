@@ -549,14 +549,14 @@ Tensor launch_with_aligned_shard_rows(
         }
     }
     // Skipping the output-spec check when neither config may split rows relies on no operation deriving a WIDTH,
-    // BLOCK or ND output from a HEIGHT or interleaved config. Fold passes its input's config here as a stand-in for
-    // the output config it synthesizes, which keeps the input's layout. Debug builds check the output it made.
+    // BLOCK or ND output from a HEIGHT or interleaved config. None of the wrapped operations does: they keep the
+    // given config's layout and reindex into ND only from an ND config. Fold passes its input's config here as a
+    // stand-in for the output config it synthesizes, which keeps the input's layout. The output is checked in every
+    // build, so an operation that breaks this fails instead of returning wrong values.
     Tensor output = launch(input, std::nullopt);
-#ifdef DEBUG
-    TT_ASSERT(
+    TT_FATAL(
         input.layout() != tt::tt_metal::Layout::ROW_MAJOR || !has_subaligned_split_row(output.tensor_spec()),
         "An operation launched without staging produced a row-major output with sub-aligned split rows");
-#endif
     return output;
 }
 
