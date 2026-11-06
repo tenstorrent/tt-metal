@@ -3528,7 +3528,8 @@ class MTPSpecEngine:
                         logger.warning(
                             f"[spec_engine] prefill checkpoints {list(points)} of [{s0}, {Tp}) end segments: the "
                             "in-replay snapshot path does not serve this call (QWEN36_MAMBA_CKPT_SNAP=0, a checkpoint in "
-                            "an eager replay, too many in one replay, or a cheaper split); counted in ckpt_split_prefills"
+                            "an eager replay or 1 or 2 rows before a short replay's end, too many in one replay, a trash "
+                            "block collision, or a cheaper split); counted in ckpt_split_prefills"
                         )
             host, saved, a = None, [], s0
             for i, b in enumerate(bounds):

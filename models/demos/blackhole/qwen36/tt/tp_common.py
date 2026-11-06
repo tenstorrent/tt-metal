@@ -91,7 +91,8 @@ def mamba_ckpt_snapshots_enabled():
     checkpoint strictly inside a replay is written from that replay's snapshot instead of ending a segment there. A
     later 16k chunk holds four checkpoints (the previous chunk's three draft blocks and vLLM's checkpoint), so the split
     cost about 0.5 s per chunk. Where the snapshot path cannot serve a call (the eager prefill, a checkpoint in an eager
-    replay, more than GDN_SNAP_SLOTS checkpoints in one replay) the checkpoints still end segments."""
+    replay or 1 or 2 rows before a short replay's end, more than GDN_SNAP_SLOTS checkpoints in one replay, a request
+    that owns the trash block, or a split the cost model finds cheaper) the checkpoints still end segments."""
     return mamba_prefill_checkpoints_enabled() and os.environ.get("QWEN36_MAMBA_CKPT_SNAP", "1") == "1"
 
 
