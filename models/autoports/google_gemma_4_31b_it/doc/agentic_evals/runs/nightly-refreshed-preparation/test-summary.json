@@ -1,0 +1,10 @@
+[
+  {
+    "suite": "swe_bench_verified",
+    "exit_status": 0
+  },
+  {
+    "suite": "terminal_bench_2_1",
+    "exit_status": 0
+  }
+]

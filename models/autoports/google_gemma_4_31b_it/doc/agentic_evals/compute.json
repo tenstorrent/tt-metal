@@ -88,7 +88,7 @@
           "arm": "local-long-context",
           "owner": "local_serving_check",
           "device": "local",
-          "status": "measurement_completed_server_reused",
+          "status": "completed_server_reused",
           "planned_clients": 2,
           "batch": 8,
           "max_num_seqs": 8,
@@ -98,8 +98,8 @@
           "purpose": "Check cache reuse and pool admission past32768 up to131072 per conversation for smoke2 history envelope; synthetic not accuracy",
           "depends_on": "local-host-contention devices closed",
           "start": "2026-11-06T05:48:33.328934+00:00",
-          "end": null,
-          "exit_status": null,
+          "end": "2026-11-06T06:03:47.779193+00:00",
+          "exit_status": 0,
           "timeout_seconds": 1800,
           "phases": [
             {
@@ -124,11 +124,14 @@
               "predicted_seconds": 600,
               "prediction_basis": "conservative~4x measured131072 phase140.415s for doubled attentionlength; guess, not release projection",
               "timeout_seconds": 1000,
-              "status": "starting",
-              "start": "2026-11-06T05:54:48.889994+00:00"
+              "status": "pass",
+              "start": "2026-11-06T05:54:48.889994+00:00",
+              "elapsed_seconds": 443.72461584897246
             }
           ],
-          "measurement_end": "2026-11-06T06:03:47.779193+00:00"
+          "measurement_end": "2026-11-06T06:03:47.779193+00:00",
+          "idle_after_measurement": "Await host-only protocol investigation for next queued APIcheck; this gap not charged to effort",
+          "ownership_note": "Measurement ended; server retained idle until parser baseline. Not an active context job."
         },
         {
           "arm": "parser-protocol-baseline",
@@ -180,7 +183,7 @@
           "box_device_hours": 0.25,
           "queued_at": "2026-11-06T06:16:09.490250+00:00",
           "purpose": "Confirm exact stage11 TTI benchmark matrix after nativeparser registration; not release",
-          "end": "2026-11-06T06:32:20.327395+00:00",
+          "end": "2026-11-06T06:26:35.337640+00:00",
           "exit_status": 0,
           "start": "2026-11-06T06:16:57.768819+00:00",
           "timeout_seconds": 1200,
@@ -205,9 +208,10 @@
               "reason": "Parser flags changed servingconfiguration; refresh exact requested headline afterconfigchange"
             }
           ],
-          "measurement_end": "2026-11-06T06:26:35.337640+00:00",
-          "client_exit_status": 0,
-          "server_exit_status": 1
+          "server_exit_status": 1,
+          "shutdown": "Idle API SIGTERM after successor roundtrip; both benchmark clients succeeded",
+          "server_closed_at": "2026-11-06T06:31:04.895253+00:00",
+          "ownership_note": "Server ownership transferred to native-tool-roundtrip at its registered start; do not count its time twice."
         },
         {
           "arm": "native-tool-roundtrip",
@@ -223,10 +227,12 @@
           "purpose": "Actualmini secondturn payload acceptance using synthetic harmless toolresult; no taskscore or commands executed",
           "measurement_seconds": 1.8671444079373032,
           "measurement_end": "2026-11-06T06:26:37.204784+00:00",
-          "end": "2026-11-06T06:31:04.895253+00:00",
+          "end": "2026-11-06T06:26:37.204784+00:00",
           "exit_status": 0,
           "used_device_hours": 0.0005186512244270287,
-          "shutdown": "Owned idle API gracefully stopped; server wrapper exit1 is expected shutdown, clients passed"
+          "shutdown": "Owned idle API gracefully stopped; server wrapper exit1 is expected shutdown, clients passed",
+          "server_closed_at": "2026-11-06T06:31:04.895253+00:00",
+          "ownership_note": "Idle server after measurement not charged to effort."
         },
         {
           "arm": "cache-env-validation",
@@ -274,13 +280,13 @@
           "actual_hours": 0.5772222222222222,
           "run_timeout_hours": 12,
           "ci_job_timeout_hours": 18,
-          "start": null,
+          "start": "2026-11-06T06:06:08Z",
           "end": "2026-11-06T06:40:46Z",
           "exit_status": 0,
           "created_at": "2026-11-06T04:57:29.302524+00:00",
           "submitted_at": "2026-11-06T05:03:52.538961+00:00",
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42166117505",
-          "last_observed_at": "2026-11-06T06:37:55.384782+00:00",
+          "last_observed_at": "2026-11-06T06:40:57.728403+00:00",
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-hmpdl",
           "build_started_at": "2026-11-06T05:13:39Z",
           "submission_to_build_start_seconds": 605.0,
@@ -289,18 +295,19 @@
           "runner": "qb2-120-p05t02",
           "device_job_started_at": "2026-11-06T06:06:08Z",
           "device_job_id": 127742759927,
-          "workflow_status": "in_progress",
-          "workflow_conclusion": null,
-          "actual_hours_basis": "CI device job including setup/server/client; pure eval163.384s",
+          "workflow_status": "completed",
+          "workflow_conclusion": "success",
+          "actual_hours_basis": "Device CI job including setup, server and clients; evaluation time recorded separately",
           "functional_at": 2,
           "score": 1.0,
-          "audit": "runs/smoke2-r1_gpqa_diamond/audit.json"
+          "audit": "runs/smoke2-r1_gpqa_diamond/audit.json",
+          "device_job_completed_at": "2026-11-06T06:40:46Z"
         },
         {
           "arm": "smoke2-swe_bench_verified",
           "device": "qb2-ci",
           "owner": "coordinator",
-          "status": "cancellation_requested",
+          "status": "cancelled",
           "run_id": 42166151590,
           "workflow": "agentic",
           "planned_clients": 2,
@@ -330,7 +337,8 @@
           "cancellation_at": "2026-11-06T06:10:11.226462+00:00",
           "score_valid": false,
           "workflow_status": "completed",
-          "workflow_conclusion": "cancelled"
+          "workflow_conclusion": "cancelled",
+          "build_completed_at": "2026-11-06T06:07:16Z"
         },
         {
           "arm": "smoke2-terminal_bench_2_1",
@@ -351,7 +359,7 @@
           "actual_hours": 0.21916666666666668,
           "run_timeout_hours": 12,
           "ci_job_timeout_hours": 18,
-          "start": null,
+          "start": "2026-11-06T06:11:13Z",
           "end": "2026-11-06T06:24:22Z",
           "exit_status": 1,
           "created_at": "2026-11-06T04:57:29.302524+00:00",
@@ -371,14 +379,15 @@
           "evidence": "bringup/artifacts/stage12-terminal-job.log",
           "workflow_status": "completed",
           "workflow_conclusion": "failure",
-          "device_job_completed_at": "2026-11-06T06:24:22Z"
+          "device_job_completed_at": "2026-11-06T06:24:22Z",
+          "actual_hours_basis": "Device CI job including setup, server and clients; evaluation time recorded separately"
         },
         {
           "arm": "smoke2-swe-native-parser",
           "eval": "swe_bench_verified",
           "device": "qb2-ci",
           "owner": "coordinator",
-          "status": "queued",
+          "status": "device_job_in_progress",
           "run_id": 42173587147,
           "workflow": "agentic",
           "planned_clients": 2,
@@ -397,22 +406,29 @@
           "run_timeout_hours": 12,
           "ci_job_timeout_hours": 18,
           "created_at": "2026-11-06T06:18:20.635121+00:00",
-          "start": null,
+          "start": "2026-11-06T07:11:20Z",
           "end": null,
           "exit_status": null,
           "supersedes_run_id": 42166151590,
           "reason": "Native-tool registration repaired: baselineHTTP400,candidate200actualminiparser;paired2x168tokenIDs exact;hosthooks pass",
           "submitted_at": "2026-11-06T06:18:22Z",
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42173587147",
-          "last_observed_at": "2026-11-06T06:37:03.790027+00:00",
+          "last_observed_at": "2026-11-06T07:21:41.448720+00:00",
           "workflow_status": "in_progress",
-          "workflow_conclusion": null
+          "workflow_conclusion": null,
+          "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-pf57w",
+          "build_started_at": "2026-11-06T06:18:39Z",
+          "build_completed_at": "2026-11-06T07:11:18Z",
+          "runner": "qb2-120-p05t02",
+          "device_job_id": 127764661156,
+          "device_job_started_at": "2026-11-06T07:11:20Z",
+          "device_job_completed_at": null
         },
         {
           "arm": "smoke2-terminal-infra-retry",
           "device": "qb2-ci",
           "owner": "coordinator",
-          "status": "queued",
+          "status": "building_or_queued",
           "eval": "terminal_bench_2_1",
           "planned_clients": 2,
           "batch": 8,
@@ -435,15 +451,18 @@
           "run_id": 42175367781,
           "submitted_at": "2026-11-06T06:35:10Z",
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42175367781",
-          "last_observed_at": "2026-11-06T06:37:24.816519+00:00",
+          "last_observed_at": "2026-11-06T07:20:57.822774+00:00",
           "workflow_status": "in_progress",
-          "workflow_conclusion": null
+          "workflow_conclusion": null,
+          "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-kvrfr",
+          "build_started_at": "2026-11-06T06:35:26Z",
+          "build_completed_at": null
         },
         {
           "arm": "nightly-r1_gpqa_diamond",
           "device": "qb2-ci",
           "owner": "coordinator",
-          "status": "queued",
+          "status": "building_or_queued",
           "eval": "r1_gpqa_diamond",
           "workflow": "evals",
           "planned_clients": 2,
@@ -478,7 +497,13 @@
           },
           "run_id": 42176391791,
           "submitted_at": "2026-11-06T06:44:47Z",
-          "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42176391791"
+          "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42176391791",
+          "workflow_status": "in_progress",
+          "workflow_conclusion": null,
+          "last_observed_at": "2026-11-06T07:21:41.292538+00:00",
+          "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-s9xmv",
+          "build_started_at": "2026-11-06T06:45:04Z",
+          "build_completed_at": null
         }
       ]
     }
@@ -501,6 +526,12 @@
     {
       "run_id": 42175367781,
       "session_id": 56328,
+      "script": "bringup/artifacts/stage12-monitor-ci.py",
+      "role": "read-only observation and artifact collection"
+    },
+    {
+      "run_id": 42176391791,
+      "session_id": 52200,
       "script": "bringup/artifacts/stage12-monitor-ci.py",
       "role": "read-only observation and artifact collection"
     }

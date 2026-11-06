@@ -1,0 +1,77 @@
+{
+  "status": "prepared_no_device_run",
+  "decision": "defer_replay_until_real_multi_turn_histories",
+  "used_device_hours": 0,
+  "box_hours": 0.25,
+  "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/smoke2-r1_gpqa_diamond/collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/evals/google__gemma-4-31B-it_p300x2_evals/eval-attempt-0c80aea405fa4dd596ee141b6f60c959/eval_id_gemma4-31b-autoport-v3_gemma-4-31B-it_p300x2/google__gemma-4-31B-it/samples_r1_gpqa_diamond_2026-11-06T06-40-19.407298.jsonl",
+  "source_sha256": "e2744d42265870e50a1c293dee89484c1fdfbcbdfd4c14e41245e3f7d532b197",
+  "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "tokenization": "Pinned local snapshot; encode(add_special_tokens=False). Saved prompt and response text re-tokenization, not exact API token IDs or usage. Concatenation omits any missing transport/chat-template framing.",
+  "samples": [
+    {
+      "sample_id": 152,
+      "recorded_requests": 1,
+      "reconstructed_prompt_tokens": 492,
+      "reconstructed_response_tokens": 5477,
+      "reconstructed_concatenated_tokens": 5969,
+      "generation_config": {
+        "until": [],
+        "do_sample": true,
+        "max_gen_toks": 126976,
+        "temperature": 1.0,
+        "top_k": 20,
+        "top_p": 0.95,
+        "n": 1,
+        "stream": false,
+        "seed": 42
+      }
+    },
+    {
+      "sample_id": 189,
+      "recorded_requests": 1,
+      "reconstructed_prompt_tokens": 311,
+      "reconstructed_response_tokens": 3148,
+      "reconstructed_concatenated_tokens": 3459,
+      "generation_config": {
+        "until": [],
+        "do_sample": true,
+        "max_gen_toks": 126976,
+        "temperature": 1.0,
+        "top_k": 20,
+        "top_p": 0.95,
+        "n": 1,
+        "stream": false,
+        "seed": 42
+      }
+    }
+  ],
+  "why_not_gpqa_replay": [
+    "Only two single-turn requests exist; no returned response appears in a subsequent recorded request.",
+    "Installed agent_replay.py overrides max_tokens=1 and temperature=0; replay would exercise short initial prompts, not the thousands of generated history tokens.",
+    "Repeating two histories four times would create duplicated cache hits and would not constitute eight distinct real agents.",
+    "Adding a synthetic follow-up would change the recorded workload; existing synthetic full-context checks already cover a stronger admission envelope."
+  ],
+  "future_harbor_extraction": {
+    "private_destination": "bringup/artifacts/stage12-real-histories/<suite>/<task_id>.jsonl",
+    "format": "One actual chat-completions request body per line in chronological order; one file per real task conversation.",
+    "preserve": [
+      "Exact message sequence and content, system prompt, tool calls, tool results and tools schema",
+      "Recorded sampling and request metadata in private source sidecar; original release values retained",
+      "Actual token usage when available, separately from pinned-tokenizer reconstruction",
+      "Source trial/task ID and source artifact digest"
+    ],
+    "do_not": [
+      "Copy raw task/prompt/response contents into compact reports or publication commits",
+      "Invent missing request messages from narrative logs",
+      "Clone tasks to reach concurrency8",
+      "Treat script exit0 as success without checking calls_done/errors/preemptions"
+    ],
+    "launch_gate": "Coordinator reviews at least8 distinct histories if testingC8, measured max concurrent working-set demand against pool, and max_num_seqs8; nightly rung ordering remains separate. For fewer histories, replay only observed concurrency.",
+    "replay_requirements": "Server --enable-prompt-tokens-details to expose cached tokens; original installed agent_replay.py --agents8 --time-cap-s600 --request-timeout-s3600 only after admission and remaining device-box checks. Script forces one-token replay responses: explicitly diagnostic, not scored release settings. Preserve original release caps/timeouts in source metadata."
+  },
+  "steering": "inputs.json reread; no steering.md found in bringup or model agentic_evals search",
+  "missing_reasons": {
+    "exact_api_usage": "Saved text may not retain all reasoning/control token IDs or chat framing; re-tokenized counts are reconstructions.",
+    "C8_capacity": "Only two single-turn GPQA histories; no defensible real multi-turn C8 workload yet."
+  }
+}

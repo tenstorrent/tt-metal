@@ -1,0 +1,36 @@
+{
+  "status": "prepared_not_applied",
+  "base_sha": "eac746513e4ced539f4462d0dc5762d76e04fc56",
+  "used_device_hours": 0,
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "variants": {
+    "swe_bench_verified": {
+      "tasks": 5,
+      "patch": "swe_bench_verified-nightly.patch",
+      "host_tests_passed": 10
+    },
+    "terminal_bench_2_1": {
+      "tasks": 10,
+      "patch": "terminal_bench_2_1-nightly.patch",
+      "host_tests_passed": 10
+    }
+  },
+  "confirmation": [
+    "Exact frozen nightly task lists selected, smoke lists unchanged",
+    "Only selected CI_NIGHTLY suite enabled, other twozero",
+    "Agent21600s/request3600s/output32768 limits unchanged",
+    "B8/revisionpins/nativeparsers/persistentcacheenv preserved",
+    "Patches touch model-specific eval_config.py block only; generic Harbor immutable pin support untouched"
+  ],
+  "source": "../../cohorts.json default_rule lists frozen before scoring",
+  "inputs_read": "bringup/agentic_evals/inputs.json; no steering.md present",
+  "notes": [
+    "Independent patches each apply to stated base, not atop eachother.",
+    "Preparation does not authorize dispatch before preceding valid smoke.",
+    "Initial external testpath loaded execution-repo conftest and failed import; tests were moved into isolated TTI worktree and both10-test sets passed. No device opened."
+  ],
+  "active_publication_modified": false,
+  "committed_or_pushed": false
+}

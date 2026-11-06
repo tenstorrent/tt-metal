@@ -2,7 +2,7 @@
   "arm": "smoke2-terminal-infra-retry",
   "device": "qb2-ci",
   "owner": "coordinator",
-  "status": "queued",
+  "status": "building_or_queued",
   "eval": "terminal_bench_2_1",
   "planned_clients": 2,
   "batch": 8,
@@ -24,5 +24,11 @@
   "reason": "Infrastructure retry after premodel fabric mapping failed; same frozen smoke2 tasks, native parser registration retained",
   "run_id": 42175367781,
   "submitted_at": "2026-11-06T06:35:10Z",
-  "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42175367781"
+  "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42175367781",
+  "last_observed_at": "2026-11-06T07:20:57.822774+00:00",
+  "workflow_status": "in_progress",
+  "workflow_conclusion": null,
+  "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-kvrfr",
+  "build_started_at": "2026-11-06T06:35:26Z",
+  "build_completed_at": null
 }

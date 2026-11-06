@@ -2,7 +2,7 @@
   "arm": "local-long-context",
   "owner": "local_serving_check",
   "device": "local",
-  "status": "starting",
+  "status": "completed_server_reused",
   "planned_clients": 2,
   "batch": 8,
   "max_num_seqs": 8,
@@ -12,8 +12,8 @@
   "purpose": "Check cache reuse and pool admission past32768 up to131072 per conversation for smoke2 history envelope; synthetic not accuracy",
   "depends_on": "local-host-contention devices closed",
   "start": "2026-11-06T05:48:33.328934+00:00",
-  "end": null,
-  "exit_status": null,
+  "end": "2026-11-06T06:03:47.779193+00:00",
+  "exit_status": 0,
   "timeout_seconds": 1800,
   "phases": [
     {
@@ -44,5 +44,6 @@
     }
   ],
   "measurement_end": "2026-11-06T06:03:47.779193+00:00",
-  "idle_after_measurement": "Await host-only protocol investigation for next queued APIcheck; this gap not charged to effort"
+  "idle_after_measurement": "Await host-only protocol investigation for next queued APIcheck; this gap not charged to effort",
+  "ownership_note": "Measurement ended; server retained idle until parser baseline. Not an active context job."
 }

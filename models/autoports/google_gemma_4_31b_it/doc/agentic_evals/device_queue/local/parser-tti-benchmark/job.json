@@ -10,7 +10,7 @@
   "box_device_hours": 0.25,
   "queued_at": "2026-11-06T06:16:09.490250+00:00",
   "purpose": "Confirm exact stage11 TTI benchmark matrix after nativeparser registration; not release",
-  "end": "2026-11-06T06:31:04.895253+00:00",
+  "end": "2026-11-06T06:26:35.337640+00:00",
   "exit_status": 0,
   "start": "2026-11-06T06:16:57.768819+00:00",
   "timeout_seconds": 1200,
@@ -36,5 +36,7 @@
     }
   ],
   "server_exit_status": 1,
-  "shutdown": "Idle API SIGTERM after successor roundtrip; both benchmark clients succeeded"
+  "shutdown": "Idle API SIGTERM after successor roundtrip; both benchmark clients succeeded",
+  "server_closed_at": "2026-11-06T06:31:04.895253+00:00",
+  "ownership_note": "Server ownership transferred to native-tool-roundtrip at its registered start; do not count its time twice."
 }

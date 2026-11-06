@@ -6,19 +6,23 @@
       "test": "Stock2-task smoke with trajectory audit and adapter metrics"
     },
     "busy_rows": {
-      "measured": {
+      "evidence": "runs/gpqa-workload/RESULT.json",
+      "limitation": "Submission rows are not emitted token counts.",
+      "value": {
         "eval": "r1_gpqa_diamond",
         "peak_active_rows": 2,
         "decode_submission_rows_histogram": {
           "2": 3151,
           "1": 2329
-        }
+        },
+        "mean_active_rows_over_batch": 0.196875
       },
-      "evidence": "runs/gpqa-workload/RESULT.json",
-      "limitation": "Submission rows are not emitted token counts."
+      "healthy": false,
+      "reason": "C2 smoke on minimum supportedB8 leaves padding. Capacity effort awaits representative histories."
     },
     "live_prefill_rows": {
-      "measured": {
+      "evidence": "runs/gpqa-workload/RESULT.json",
+      "value": {
         "logical": [
           485,
           298
@@ -26,18 +30,21 @@
         "physical": [
           512,
           320
-        ]
+        ],
+        "useful_fraction": 0.9411057692307693
       },
-      "evidence": "runs/gpqa-workload/RESULT.json"
+      "healthy": true
     },
     "trace_captures": {
-      "measured": {
+      "evidence": "runs/gpqa-workload/RESULT.json",
+      "limitation": "Final completion counter missing; no observed workload recapture.",
+      "value": {
         "startup_captures": 3,
         "captures_after_second_prefill": 3,
         "workload_prepare_events": 0
       },
-      "evidence": "runs/gpqa-workload/RESULT.json",
-      "limitation": "Final completion counter missing; no observed workload recapture."
+      "not_measured": "End-of-run counter not exported; partial counters and absent prepare events support no observed recapture.",
+      "test": "Read complete real-agent runtime snapshots when available."
     },
     "served_step": {
       "not_measured": "Tool-suite smoke and full agent-call accounting pending; GPQA smoke measured separately below.",
@@ -48,11 +55,13 @@
       "test": "Stock2-task smoke with trajectory audit and adapter metrics"
     },
     "cache_pressure": {
-      "measured": {
+      "evidence": "runs/gpqa-workload/RESULT.json",
+      "limitation": "Rounded periodic logger, not exact allocator peak.",
+      "value": {
         "maximum_periodic_logged_kv_usage_percent": 4.3
       },
-      "evidence": "runs/gpqa-workload/RESULT.json",
-      "limitation": "Rounded periodic logger, not exact allocator peak."
+      "not_measured": "Exact peak allocator occupancy/evictions unavailable; periodic rounded KV use recorded only.",
+      "test": "Replay real task histories against local runtime counter exporter."
     },
     "cache_bytes": {
       "not_measured": "Tool-suite smoke and full agent-call accounting pending; GPQA smoke measured separately below.",
@@ -63,33 +72,39 @@
       "test": "Stock2-task smoke with trajectory audit and adapter metrics"
     },
     "cutoffs": {
-      "measured": {
+      "evidence": "runs/smoke2-r1_gpqa_diamond/audit.json",
+      "limitation": "Exact finish_reason absent from sample schema; tool trajectories pending.",
+      "value": {
         "gpqa_smoke_complete_final_answers": 2,
         "observed_timeouts": 0
       },
-      "evidence": "runs/smoke2-r1_gpqa_diamond/audit.json",
-      "limitation": "Exact finish_reason absent from sample schema; tool trajectories pending."
+      "not_measured": "Tool trajectories pending; GPQA completed answers but exact finish reason absent.",
+      "test": "Audit Harbor terminal conditions and complete task trajectories."
     },
     "eval_validity": {
-      "measured": {
-        "r1_gpqa_diamond": "valid_smoke2"
-      },
       "evidence": "runs/smoke2-r1_gpqa_diamond/audit.json",
       "remaining": [
         "swe_bench_verified",
         "terminal_bench_2_1"
-      ]
+      ],
+      "value": {
+        "r1_gpqa_diamond": "valid_smoke2"
+      },
+      "not_measured": "Tool-suite trajectories pending; GPQA smoke valid.",
+      "test": "Collect active CI tool runs and audit network/fetched fixes and harness outcomes."
     },
     "accuracy_drift": {
-      "measured": {
+      "evidence": "runs/smoke2-r1_gpqa_diamond/audit.json",
+      "limitation": "n=2 cannot distinguish full-suite reference or precision effects.",
+      "value": {
         "gpqa_accuracy_fraction": 1,
         "wilson95": [
           0.34237195288961925,
           1
         ]
       },
-      "evidence": "runs/smoke2-r1_gpqa_diamond/audit.json",
-      "limitation": "n=2 cannot distinguish full-suite reference or precision effects."
+      "not_measured": "Score is not long-prefix KL; no real tool prefixes available yet.",
+      "test": "If real trajectories suggest quality drift, compare pinned HF and TT on the same long prefixes before changing precision."
     },
     "generation_share": {
       "not_measured": "Tool-suite smoke and full agent-call accounting pending; GPQA smoke measured separately below.",
@@ -100,13 +115,15 @@
       "test": "Stock2-task smoke with trajectory audit and adapter metrics"
     },
     "host_contention": {
-      "measured": {
+      "evidence": "../agentic_serving.json serving.host_contention",
+      "limitation": "Real task CPU contention and generation share pending.",
+      "value": {
         "regime": "local synthetic C32",
         "idle_output_tokens_per_second": 985.554416731418,
         "busy_output_tokens_per_second": 645.0344483642087
       },
-      "evidence": "../agentic_serving.json serving.host_contention",
-      "limitation": "Real task CPU contention and generation share pending."
+      "not_measured": "Real task CPU contention still unavailable; local synthetic contention measurement recorded.",
+      "test": "Correlate actual tool call/agent durations with serving telemetry when tool smoke completes."
     }
   },
   "calculations": {

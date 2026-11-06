@@ -2,7 +2,7 @@
   "arm": "smoke2-swe_bench_verified",
   "device": "qb2-ci",
   "owner": "coordinator",
-  "status": "cancellation_requested",
+  "status": "cancelled",
   "run_id": 42166151590,
   "workflow": "agentic",
   "planned_clients": 2,
@@ -23,12 +23,15 @@
   "created_at": "2026-11-06T04:57:29.302524+00:00",
   "submitted_at": "2026-11-06T05:04:06.619874+00:00",
   "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42166151590",
-  "last_observed_at": "2026-11-06T05:32:56.918587+00:00",
+  "last_observed_at": "2026-11-06T06:07:29.119355+00:00",
   "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-jhxps",
   "build_started_at": "2026-11-06T05:14:04Z",
   "submission_to_build_start_seconds": 610.0,
   "queue_measurement_note": "Includes preliminary resolver jobs plus build-runner queue; not device/suite time.",
   "cancellation_reason": "Confirmed native tool protocol HTTP400; obsolete registration cannot score. Not cancelled for queueing.",
   "cancellation_at": "2026-11-06T06:10:11.226462+00:00",
-  "score_valid": false
+  "score_valid": false,
+  "workflow_status": "completed",
+  "workflow_conclusion": "cancelled",
+  "build_completed_at": "2026-11-06T06:07:16Z"
 }

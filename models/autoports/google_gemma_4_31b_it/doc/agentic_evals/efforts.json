@@ -44,7 +44,9 @@
         "r1_gpqa_diamond"
       ],
       "status": "not_run",
-      "reason": "Operator decision8 authorizes gated dataset on qb2-ci; smoke job42166117505 building. No local credential requested."
+      "reason": "Operator keeps local credential unavailable; valid GPQA smoke on authorized CI resolves dataset access for this stage. No local credential effort needed.",
+      "problem_status": "solved",
+      "evidence": "runs/smoke2-r1_gpqa_diamond/audit.json"
     },
     {
       "problem": "agent-capacity-and-contention",
@@ -467,6 +469,55 @@
       "change": "kept",
       "problem_status": "open",
       "confirmed": "Fullhosthooks pass; generic optionalpin locallyintegrated. Modelpin/actualCIcheckout confirmation pending."
+    },
+    {
+      "problem": "nightly-current-base-preparation",
+      "owner": "harness_registration",
+      "goal": "Prepare exact next nightly tool lists on current best without delaying valid-smoke advancement",
+      "plan": "runs/nightly-refreshed-preparation/plan.md",
+      "predicted": {
+        "saving_hours": null,
+        "device_hours": 0,
+        "basis": "calculated host-only preparation"
+      },
+      "unblocks": [
+        "swe_bench_verified",
+        "terminal_bench_2_1"
+      ],
+      "confirm": {
+        "method": "Host source and frozen-evidence checks",
+        "success": "Frozen cohorts selected exactly, peers0,C2/B8,release limits/parser/cache/pin support preserved"
+      },
+      "box_hours": 0,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": "Each independent candidate passed10 host tests on eac7465; no publication edits or dispatch",
+      "evidence": "runs/nightly-refreshed-preparation/result.json"
+    },
+    {
+      "problem": "real-history-capacity-preparation",
+      "owner": "local_serving_check",
+      "goal": "Choose a meaningful recorded-history capacity check before spending device time",
+      "plan": "runs/real-history-capacity/plan.md",
+      "predicted": {
+        "saving_hours": null,
+        "device_hours": 0,
+        "basis": "calculated host-only preparation"
+      },
+      "unblocks": [],
+      "confirm": {
+        "method": "Host source and frozen-evidence checks",
+        "success": "Pinned-tokenizer reconstruction labeled correctly; only actual distinct multi-turn histories admitted for replay"
+      },
+      "box_hours": 0.25,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "open",
+      "confirmed": "GPQA each single-turn; reconstructed counts differ from API, so no meaningful multi-turn replay. Tool history extraction requirements prepared; capacity remains open",
+      "evidence": "runs/real-history-capacity/RESULT.json"
     }
   ],
   "rankings": [
@@ -1037,6 +1088,60 @@
         }
       ],
       "reason": "Host-only frozen-source validity defect ranks ahead of speed; liveCIrungs unchanged."
+    },
+    {
+      "after": "cache-confirmed_harbor-host-fix_and_next-rung-preparation",
+      "order": [
+        {
+          "problem": "immutable-harbor-release-source",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1",
+            "release"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-fabric-topology",
+          "unblocks": [
+            "terminal_bench_2_1"
+          ],
+          "device_hours": 0.2167,
+          "saving_hours": null
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": null,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-cache-routing",
+          "unblocks": [],
+          "device_hours": 0.05277675944444444,
+          "saving_hours": null
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "unblocks": [],
+          "saving_hours": null,
+          "device_hours": null,
+          "basis": "unknown until actual tool histories and generation share"
+        }
+      ],
+      "reason": "Validity remains ahead of speed. Completed host pin repair still needs live pin confirmation; running smoke/nightly jobs proceed without waiting. Real capacity and contention savings cannot yet be priced from two single-turn GPQA samples."
     }
   ]
 }

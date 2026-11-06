@@ -2,7 +2,7 @@
   "arm": "nightly-r1_gpqa_diamond",
   "device": "qb2-ci",
   "owner": "coordinator",
-  "status": "queued",
+  "status": "building_or_queued",
   "eval": "r1_gpqa_diamond",
   "workflow": "evals",
   "planned_clients": 2,
@@ -37,5 +37,11 @@
   },
   "run_id": 42176391791,
   "submitted_at": "2026-11-06T06:44:47Z",
-  "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42176391791"
+  "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42176391791",
+  "workflow_status": "in_progress",
+  "workflow_conclusion": null,
+  "last_observed_at": "2026-11-06T07:21:41.292538+00:00",
+  "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-s9xmv",
+  "build_started_at": "2026-11-06T06:45:04Z",
+  "build_completed_at": null
 }

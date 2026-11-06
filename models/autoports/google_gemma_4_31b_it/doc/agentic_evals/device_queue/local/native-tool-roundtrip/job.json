@@ -12,8 +12,10 @@
   "purpose": "Actualmini secondturn payload acceptance using synthetic harmless toolresult; no taskscore or commands executed",
   "measurement_seconds": 1.8671444079373032,
   "measurement_end": "2026-11-06T06:26:37.204784+00:00",
-  "end": "2026-11-06T06:31:04.895253+00:00",
+  "end": "2026-11-06T06:26:37.204784+00:00",
   "exit_status": 0,
   "used_device_hours": 0.0005186512244270287,
-  "shutdown": "Owned idle API gracefully stopped; server wrapper exit1 is expected shutdown, clients passed"
+  "shutdown": "Owned idle API gracefully stopped; server wrapper exit1 is expected shutdown, clients passed",
+  "server_closed_at": "2026-11-06T06:31:04.895253+00:00",
+  "ownership_note": "Idle server after measurement not charged to effort."
 }
