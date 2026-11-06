@@ -279,6 +279,9 @@ class TtMTPModule(LightweightModule):
             topology=topology,
             tp_axis=tp_axis,
             weight_cache_path=weight_cache_path,
+            # (the MTP layer's MoE: the model's default (tt/moe_impl.py; GLM-5.3 the MoE block - its gate / shared expert
+            # from the checkpoint's layer mtp_layer_idx, its routed experts from this cache's TtMoe tensorbins) unless the
+            # caller passes moe_impl)
             **block_kwargs,
         )
 
