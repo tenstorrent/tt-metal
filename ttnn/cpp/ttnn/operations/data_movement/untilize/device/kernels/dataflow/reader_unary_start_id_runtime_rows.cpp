@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Interleaved reader of the multi-core untilize whose tile range follows the common row count:
-// this core's tile rows times the tiles per row, so a new height rewrites one word.
+// Interleaved reader of the multi-core untilize. Its tile range follows the common row count:
+// this core's tile rows times the tiles per row.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -14,8 +14,11 @@
 #include "ttnn/operations/data_movement/untilize/device/kernels/untilize_row_split.hpp"
 
 void kernel_main() {
+    // RUNTIME ARGS
     const uint32_t core_idx = get_arg(args::core_idx);
     const uint32_t num_tile_rows = get_arg(args::num_tile_rows);
+
+    // COMPILE TIME ARGS
     constexpr uint32_t tiles_per_row = get_arg(args::tiles_per_row);
     constexpr uint32_t num_cores = get_arg(args::num_cores);
 

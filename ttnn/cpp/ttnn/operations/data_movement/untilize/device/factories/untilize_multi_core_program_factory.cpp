@@ -23,8 +23,8 @@ using namespace tt::tt_metal::experimental;
 namespace ttnn::prim {
 
 namespace {
-// Interleaved input: the one common runtime word, tile rows of the input. Reader, compute and writer
-// derive their per-core row range from it and a static core index.
+// The one common runtime arg: the input's row count in tiles. Each kernel derives its per-core row
+// range from it and its core index.
 constexpr const char* kLengthArg = "num_tile_rows";
 
 uint32_t untilize_num_tile_rows(const Tensor& input) {
@@ -102,8 +102,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
          num_rows_per_full_core,
          num_rows_per_cliff_core] = ttnn::split_blocks_for_tilize(grid_size, num_tiles_per_col);
 
-    // Opt-in with interleaved input and output: the program owns the full grid and every core derives
-    // its row range on device from the common row count, so one program serves every height.
+    // Under runtime rows the program gets the full grid and each core derives its row range on device
+    // from the common row count, instead of host-computed per-core ranges. Interleaved input and output only.
     const bool runtime_rows = operation_attributes.runtime_rows && !input_is_sharded && !output.is_sharded();
     if (runtime_rows) {
         num_compute_cores = grid_size.x * grid_size.y;
@@ -192,7 +192,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     TensorParameter input_param{.unique_id = INPUT, .spec = a.tensor_spec()};
     TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
     if (runtime_rows) {
-        // The hash drops the height; the row-major output keeps its width as a static page size.
+        // The height varies per call; the row-major output keeps its width as a static page size.
         input_param.relaxations = {.dynamic_tensor_shape = true};
         output_param.relaxations = {.dynamic_tensor_shape = true, .match_page_size = true};
     }
@@ -320,7 +320,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
             .name = "wu_cliff", .kernels = {READER, WRITER, COMPUTE_CLIFF}, .target_nodes = cliff_compute_core_range});
     }
 
-    // Run-time args.
+    // Runtime args.
     KernelRunArgs reader_run{.kernel = READER};
     KernelRunArgs writer_run{.kernel = WRITER};
     KernelRunArgs compute_full_run{.kernel = COMPUTE_FULL};
@@ -467,8 +467,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-// A hit re-binds the two tensors and, under runtime rows, rewrites the common row count the three
-// kernels derive their per-core ranges from (the hash leaves the row count out).
 tt::tt_metal::experimental::ProgramRunArgs UntilizeMultiCoreProgramFactory::override_runtime_arguments(
     const UntilizeOperationAttributes& operation_attributes,
     const UntilizeTensorArgs& tensor_args,
