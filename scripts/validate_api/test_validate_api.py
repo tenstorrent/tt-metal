@@ -292,6 +292,12 @@ class ApiValidationTests(unittest.TestCase):
         (self.root / "tt-metalium/alias.hpp").symlink_to("../internal/private.hpp")
         self.assertTrue(any("must not include internal" in error for error in self.errors()))
 
+    def test_directory_symlink_does_not_hide_internal_target(self):
+        self.header("internal/private.hpp")
+        self.header("tt-metalium/a.hpp", "#pragma once\n#include <tt-metalium/alias/private.hpp>\n")
+        (self.root / "tt-metalium/alias").symlink_to("../internal")
+        self.assertTrue(any("must not include internal" in error for error in self.errors()))
+
     def test_macro_include_cannot_silently_escape_check(self):
         self.header("tt-metalium/a.hpp", "#pragma once\n#include PRIVATE_HEADER\n")
         self.assertTrue(any("literal #include" in error for error in self.errors()))

@@ -9,6 +9,8 @@ See scripts/validate_api/README.md for its scope and the compiler-based follow-u
 
 import argparse
 import json
+import os
+import posixpath
 import re
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
@@ -321,6 +323,56 @@ def include_target(api_root: Path, source: Path, name: str, quoted: bool) -> str
         return None
 
 
+class ApiTree:
+    """Files under the API root, indexed once so that include_target needs no per-include stat.
+
+    Each call to resolve() or is_file() is a filesystem round trip, which is slow on network
+    mounts. Only file symlinks are resolved up front. A directory symlink, or a target that
+    leaves the root, falls back to include_target.
+    """
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.real_root = root.resolve()
+        self.files: dict[str, str | None] = {}
+        self.has_dir_links = False
+        if root.is_dir():
+            self._scan(root, "")
+
+    def _scan(self, directory: Path | str, prefix: str) -> None:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                rel = prefix + entry.name
+                if entry.is_dir(follow_symlinks=False):
+                    self._scan(entry.path, rel + "/")
+                elif entry.is_symlink():
+                    if os.path.isdir(entry.path):
+                        self.has_dir_links = True
+                    elif os.path.isfile(entry.path):
+                        try:
+                            self.files[rel] = Path(entry.path).resolve().relative_to(self.real_root).as_posix()
+                        except ValueError:
+                            self.files[rel] = None
+                elif entry.is_file():
+                    self.files[rel] = rel
+
+    def paths(self) -> list[Path]:
+        return [self.root / rel for rel in self.files]
+
+    def target(self, source: Path, name: str, quoted: bool) -> str | None:
+        candidates = [posixpath.normpath(name)]
+        if quoted:
+            source_dir = source.parent.relative_to(self.root).as_posix()
+            candidates.insert(0, posixpath.normpath(posixpath.join(source_dir, name)))
+        for candidate in candidates:
+            if candidate in self.files:
+                return self.files[candidate]
+        fallback = candidates[-1] if name.startswith(("tt-metalium/", "internal/")) else candidates[0]
+        if self.has_dir_links or fallback in (".", "..") or fallback.startswith(("../", "/")):
+            return include_target(self.root, source, name, quoted)
+        return fallback
+
+
 def load_exceptions(path: Path) -> set[tuple[str, str]]:
     entries = json.loads(path.read_text())
     if not isinstance(entries, list):
@@ -408,7 +460,8 @@ def validate(
     used_exceptions = set()
     prefix_counts = defaultdict(int)
     suffixes = set(CPP_EXTENSIONS) | HEADER_SUFFIXES
-    source_files = sorted(p for p in api_root.rglob("*") if p.is_file() and p.suffix in suffixes)
+    tree = ApiTree(api_root)
+    source_files = sorted(p for p in tree.paths() if p.suffix in suffixes)
     if not source_files:
         return [f"{api_root}: no API headers or sources found; check the directory"], 0
     header_count = 0
@@ -448,7 +501,7 @@ def validate(
                 )
             if not is_header:
                 continue
-            target = include_target(api_root, source_file, include.path, include.quoted)
+            target = tree.target(source_file, include.path, include.quoted)
             target_tier = tier(target) if target else None
             if target and target.startswith("tt-metalium/internal/"):
                 errors.append(

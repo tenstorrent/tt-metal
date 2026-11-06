@@ -372,7 +372,12 @@ def test_diff_parser_counts_only_additions(monkeypatch):
     )
     monkeypatch.delenv("PRE_COMMIT_FROM_REF", raising=False)
     monkeypatch.delenv("PRE_COMMIT_TO_REF", raising=False)
+    monkeypatch.delenv("PRE_COMMIT", raising=False)
     monkeypatch.setattr(chk, "_git_diff", lambda args: head_diff if args == ["HEAD"] else None)
+    assert chk.commit_added_lines() == {"ttnn/a.cpp": {1}, "ttnn/b.cpp": {3}}
+
+    monkeypatch.setenv("PRE_COMMIT", "1")
+    monkeypatch.setattr(chk, "_git_diff", lambda args: head_diff if args == ["--cached"] else None)
     assert chk.commit_added_lines() == {"ttnn/a.cpp": {1}, "ttnn/b.cpp": {3}}
 
 

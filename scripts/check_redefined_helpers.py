@@ -757,6 +757,10 @@ def commit_added_lines():
         if safe_from is None or safe_to is None:
             return None
         diff = _git_diff([safe_from, safe_to])
+    elif os.environ.get("PRE_COMMIT"):
+        # pre-commit has stashed unstaged changes, so the index is the commit. Diffing it
+        # against HEAD skips the stat of every work tree file that `git diff HEAD` pays.
+        diff = _git_diff(["--cached"])
     else:
         diff = _git_diff(["HEAD"])
         if diff is None:

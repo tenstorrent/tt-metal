@@ -34,6 +34,7 @@ import argparse
 import glob
 import os
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -44,6 +45,12 @@ TREE_GLOB = os.path.join(LLK, "tt_llk_*", "**", "*.h")
 # Op-local copies of LLK headers that ttnn kernels include by relative path.
 COPIES_GLOB = os.path.join(
     LLK, "..", "..", "ttnn", "**", "kernel_includes", "**", "*.h"
+)
+REPO = os.path.normpath(os.path.join(LLK, "..", ".."))
+# The same two globs as git pathspecs, relative to REPO.
+TREE_PATHSPECS = (
+    ":(glob)tt_metal/tt-llk/tt_llk_*/**/*.h",
+    ":(glob)ttnn/**/kernel_includes/**/*.h",
 )
 
 # (move, the valid bit that must be waited on)
@@ -242,6 +249,35 @@ def scan(path, providers):
             yield line + 1, move, vld, kind, lines[sig].strip()[:76]
 
 
+def tree_headers():
+    """The LLK headers and their ttnn copies. Listed from the git index when it can answer:
+    walking all of ttnn/ for kernel_includes/ directories is slow on a network mount."""
+    try:
+        res = subprocess.run(
+            ["git", "-C", REPO, "ls-files", "-z", "--", *TREE_PATHSPECS],
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode == 0 and res.stdout:
+            return sorted(
+                os.path.normpath(os.path.join(REPO, p))
+                for p in res.stdout.split("\0")
+                if p
+            )
+    except OSError:
+        pass
+    return sorted(
+        os.path.normpath(p)
+        for g in (TREE_GLOB, COPIES_GLOB)
+        for p in glob.glob(g, recursive=True)
+    )
+
+
+def _has_move(path):
+    with open(path, errors="ignore") as f:
+        return "MOVD2" in f.read()
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -251,11 +287,12 @@ def main():
     )
     args = ap.parse_args()
 
-    tree = sorted(
-        os.path.normpath(p)
-        for g in (TREE_GLOB, COPIES_GLOB)
-        for p in glob.glob(g, recursive=True)
-    )
+    # A file without a move has nothing to report, so the whole-tree provider pass is skipped.
+    if args.files and not any(
+        f.endswith((".h", ".hpp")) and _has_move(f) for f in args.files
+    ):
+        return 0
+    tree = tree_headers()
     files = args.files or tree
     # Wait helpers live in shared headers a commit seldom touches, so find them in the whole tree.
     providers = wait_providers(sorted(set(tree) | set(files)))
