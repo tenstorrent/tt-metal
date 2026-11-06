@@ -220,6 +220,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #line 201
 
 #if defined(ARCH_BLACKHOLE)
+// The W base and its tile index (pack_block 6): llk_pack_w_take programs the base again where the next block would pass the reach of the W offset.
+static std::uint32_t w_page_words = 0;
+static std::uint32_t w_base_tile  = 0;
+#line 203
 // The block pack of one block. Default (pack_block 1 and 2): the calls llk_pack_block makes with the W offset on (the plain block with the W offset, the closed
 // block with the W offset for block-float outputs), the output programmed once by _llk_pack_block_w_init_. pack_block_w (3) and pack_block_fast (4) are library
 // forms on purpose: the W offset forms behind _llk_pack_block_fast_init_, and the fast forms of the matmul harness.
@@ -233,6 +237,19 @@ inline void pack_block_call(
     std::uint32_t out_tile = 0,
     bool closed_no_w       = false)
 {
+    if constexpr (pack_block_far)
+    {
+        if (!closed_no_w)
+        {
+            if (out_tile < w_base_tile || !_llk_pack_block_w_reach_(out_tile - w_base_tile + num_tiles, w_page_words))
+            {
+                _llk_pack_block_w_init_(address, w_page_words << 4);
+                w_base_tile = out_tile;
+            }
+            out_tile -= w_base_tile;
+        }
+    }
+#line 216
     if constexpr (pack_block_w)
     {
         if (bfp)
@@ -320,6 +337,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(ARCH_BLACKHOLE)
         if constexpr (pack_block_en)
         {
+            if constexpr (pack_block_far)
+            {
+                w_page_words = L1_ADDRESS(buffer_Res[1]) - L1_ADDRESS(buffer_Res[0]);
+                w_base_tile  = 0;
+            }
+#line 303
             if constexpr (pack_block_w || pack_block_fast)
             {
                 _llk_pack_block_fast_init_<false>();

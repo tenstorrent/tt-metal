@@ -233,18 +233,48 @@ inline bool llk_pack_block_is_contiguous(const std::uint32_t output_id) {
     return get_local_cb_interface(output_id).fifo_page_size == tile_words;
 }
 
-// The CB page must fit the packer's W stride.
+// Which outputs pack 4 byte datums: two constant masks, like llk_pack_dst_bfp_mask.
+constexpr std::uint32_t llk_pack_dst_wide_mask(const std::uint32_t first) {
+    std::uint32_t mask = 0;
+    for (std::uint32_t i = 0; i < 32; i++) {
+        if (!IS_BFP_FORMAT(pack_dst_format[first + i]) && datum_size_in_bytes(pack_dst_format[first + i]) == 4) {
+            mask |= 1u << i;
+        }
+    }
+    return mask;
+}
+inline bool llk_pack_dst_is_wide(const std::uint32_t output_id) {
+    constexpr std::uint32_t low = llk_pack_dst_wide_mask(0);
+    constexpr std::uint32_t high = llk_pack_dst_wide_mask(32);
+    return (((output_id < 32 ? low : high) >> (output_id & 31)) & 1) != 0;
+}
+
+// The largest page of a block pack, in 16 byte words: a 32x32 tile of 4 or 2 byte datums. Block floats and small tiles
+// are smaller. Then 64 wide or 127 narrow tiles stay inside the 256 KB reach of the channel-1 W offset
+// (_llk_pack_block_w_reach_), and a block of at most 16 tiles inside it too.
+constexpr std::uint32_t LLK_PACK_PAGE_WORDS_WIDE = 256;
+constexpr std::uint32_t LLK_PACK_PAGE_WORDS_NARROW = 128;
+static_assert(16 * LLK_PACK_PAGE_WORDS_WIDE <= PACK_W_REACH_WORDS);
+constexpr std::uint32_t LLK_PACK_W_MAX_TILES_WIDE = PACK_W_REACH_WORDS / LLK_PACK_PAGE_WORDS_WIDE;
+
+// The CB page must fit the packer's W stride and the W offset reach.
 inline bool llk_pack_block_is_closable(const std::uint32_t output_id) {
-    return get_local_cb_interface(output_id).fifo_page_size < 0x1000;
+    return get_local_cb_interface(output_id).fifo_page_size <=
+           (llk_pack_dst_is_wide(output_id) ? LLK_PACK_PAGE_WORDS_WIDE : LLK_PACK_PAGE_WORDS_NARROW);
 }
 
 #ifdef LLK_PACK_W_OFFSET
-// W offset block packs: program the output base and the tile stride once per output and move the output of each block call with the packer W counter of channel 1.
-// The base is programmed again when the output changes, the CB write pointer does not continue the last block (wrap, other packs into the CB), another pack wrote
-// L1_Dest_addr or the channel-1 W stride in between (LLK_PACK_W_INVALIDATE), or the offset would pass LLK_PACK_W_MAX_TILES.
+// W offset block packs: program the output base and the tile stride once per output and move the output of each block
+// call with the packer W counter of channel 1. The base is programmed again when the output changes, the CB write
+// pointer does not continue the last block (wrap, other packs into the CB), another pack wrote L1_Dest_addr or the
+// channel-1 W stride in between (LLK_PACK_W_INVALIDATE), or the offset would pass LLK_PACK_W_MAX_TILES or the 256 KB
+// reach of the W offset.
 #ifndef LLK_PACK_W_MAX_TILES
 #define LLK_PACK_W_MAX_TILES 127
 #endif
+static_assert(LLK_PACK_W_MAX_TILES * LLK_PACK_PAGE_WORDS_NARROW <= PACK_W_REACH_WORDS);
+constexpr std::uint32_t LLK_PACK_W_MAX_TILES_W =
+    LLK_PACK_W_MAX_TILES < LLK_PACK_W_MAX_TILES_WIDE ? LLK_PACK_W_MAX_TILES : LLK_PACK_W_MAX_TILES_WIDE;
 // Returns whether this block takes the W offset path (out_tile is its tile offset). The first block of an output after another output packs as before: the base is
 // programmed from the second block in a row on, so an output that alternates with another (partials and out of a spilled matmul) never pays the programming.
 inline bool llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t addr, const std::uint32_t page, const std::uint32_t ntiles, std::uint32_t& out_tile) {
@@ -253,7 +283,9 @@ inline bool llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t ad
         pack_w_last = output_id;
         return false;
     }
-    const bool cont = pack_w_valid && pack_w_out == output_id && pack_w_page == page && pack_w_next == addr && pack_w_tiles + ntiles <= LLK_PACK_W_MAX_TILES;
+    const std::uint32_t max_tiles = llk_pack_dst_is_wide(output_id) ? LLK_PACK_W_MAX_TILES_W : LLK_PACK_W_MAX_TILES;
+    const bool cont = pack_w_valid && pack_w_out == output_id && pack_w_page == page && pack_w_next == addr &&
+                      pack_w_tiles + ntiles <= max_tiles;
     if (!cont) {
         _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
         program_packer_destination(addr);

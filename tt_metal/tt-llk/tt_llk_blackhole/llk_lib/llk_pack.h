@@ -854,6 +854,17 @@ inline void _llk_pack_block_w_init_(const std::uint32_t address, const std::uint
     pack_ch1_w_stride = tile_stride;
 }
 
+// The packer adds the channel-1 W counter times its stride to the output address and wraps at 256 KB (the 16 byte words below).
+constexpr std::uint32_t PACK_W_REACH_WORDS = 1 << 14;
+
+/**
+ * Whether W offset blocks up to tile tiles_end (out_tile + num_tiles) of pages of page_words 16 byte words stay inside the reach of one programmed base.
+ */
+constexpr bool _llk_pack_block_w_reach_(const std::uint32_t tiles_end, const std::uint32_t page_words)
+{
+    return tiles_end * page_words <= PACK_W_REACH_WORDS;
+}
+
 /**
  * Same as _llk_pack_block_fast_ with the output at out_tile tiles from the address of _llk_pack_block_w_init_.
  */
