@@ -41,7 +41,18 @@ DECODE_GEOMETRY = {
     "gate_up": (56, 2, 3),
     "o": (8, 2, 8),
     "down": (8, 2, 21),
+    # Shared gate/up (GEMMA_EXPERIMENT_SHARE_BF8_GATE_UP=1): one reader per bank keeps
+    # the packed matmul's per-worker work (21 N tiles, K blocks of 3) unchanged.
+    "gate": (56, 1, 3),
+    "up": (56, 1, 3),
 }
+
+
+def share_gate_up_enabled():
+    value = os.environ.get("GEMMA_EXPERIMENT_SHARE_BF8_GATE_UP", "0")
+    if value not in ("0", "1"):
+        raise ValueError("Invalid gate/up weight sharing flag")
+    return value == "1"
 
 
 class Decoder:
@@ -217,12 +228,27 @@ class Decoder:
         if not self.sliding:
             self.qk = tensor(packed(q, k), projection_dtype("self_attn.qk"), dim=1)
         self.o = linear("self_attn.o_proj")
-        self.gate, self.up, self.down = (linear("mlp." + name + "_proj") for name in ("gate", "up", "down"))
-        self.gate_up = tensor(
-            packed(sd["mlp.gate_proj.weight"], sd["mlp.up_proj.weight"]),
-            projection_dtype("mlp.gate_up"),
-            dim=1,
-            decode_only="gate_up",
+        self.share_gate_up = share_gate_up_enabled()
+        if self.share_gate_up:
+            # Prefill and decode share one native DRAM width-sharded owner per
+            # projection, built directly in its final layout (no interleaved
+            # temporary). Per device the columns equal the packed gate_up halves.
+            self.gate, self.up = (
+                tensor(sd["mlp." + name + "_proj.weight"].T, projection_dtype("mlp." + name + "_proj"), dim=1,
+                       decode_only=name)
+                for name in ("gate", "up")
+            )
+            self.down = linear("mlp.down_proj")
+        else:
+            self.gate, self.up, self.down = (linear("mlp." + name + "_proj") for name in ("gate", "up", "down"))
+            self.gate_up = tensor(
+                packed(sd["mlp.gate_proj.weight"], sd["mlp.up_proj.weight"]),
+                projection_dtype("mlp.gate_up"),
+                dim=1,
+                decode_only="gate_up",
+            )
+        self.decode_weight_names = (
+            ("qkv", "gate", "up", "o", "down") if self.share_gate_up else ("qkv", "gate_up", "o", "down")
         )
         self.norms = {
             name: tensor(sd[name + ".weight"].reshape(1, 1, 1, -1))
@@ -292,7 +318,7 @@ class Decoder:
         dg = mesh_device.dram_grid_size()
         banks = dg.x * dg.y
         grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dg.x - 1, dg.y - 1))})
-        for name in DECODE_GEOMETRY:
+        for name in self.decode_weight_names:
             weight = getattr(self, name)
             kdim, ndim = list(weight.shape)[-2:]
             readers = DECODE_GEOMETRY[name][1]
@@ -330,7 +356,15 @@ class Decoder:
             self.down = owner
         # Separate prefill gate/up weights are already resident. Decode
         # owns its DRAM-sharded packed copy; retain no unused duplicate.
-        del self.gate_up
+        if self.share_gate_up:
+            for name in ("gate", "up"):
+                owner = self.decode_weights[name]
+                assert owner.buffer_unique_id() == getattr(self, name).buffer_unique_id()
+                assert banks == 8 and tuple(owner.memory_config().shard_spec.shape) == (5376, 672)
+                assert owner.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+                assert owner.memory_config().buffer_type == ttnn.BufferType.DRAM
+        else:
+            del self.gate_up
         if not self.sliding:
             # Tied full-attention prefill consumes qk. Decode already owns
             # its separate DRAM-sharded qkv; this setup copy has no reader.
@@ -767,8 +801,11 @@ class Decoder:
         residual = ttnn.to_memory_config(residual, mem)
         x = ttnn.add(residual, post, memory_config=mem, dtype=self.residual_dtype)
         n = self._input_norm(x, "pre_feedforward_layernorm", True)
-        packed = self._dlinear(n, "gate_up")
-        gate, up = packed[..., :5376], packed[..., 5376:]
+        if self.share_gate_up:
+            gate, up = self._dlinear(n, "gate"), self._dlinear(n, "up")
+        else:
+            packed = self._dlinear(n, "gate_up")
+            gate, up = packed[..., :5376], packed[..., 5376:]
         product = ttnn.multiply(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.GELU_TANH])
         post = self._resnorm(
             self._decode_reduce(self._dlinear(product, "down"), "down"), "post_feedforward_layernorm", True
