@@ -232,6 +232,8 @@ private:
     // The built entries of buffers_ by linear index, read by get_device_buffer() without its lock; cleared on
     // deallocation.
     std::unique_ptr<std::atomic<Buffer*>[]> built_device_buffers_;
+    // MeshDeviceImpl::close_generation() when the entries were last checked against a live MeshDevice.
+    mutable std::atomic<uint64_t> cache_generation_ = 0;
 
     friend tt::tt_metal::distributed::MeshBuffer
     tt::tt_metal::experimental::per_core_allocation::create_sram_buffer_view(
