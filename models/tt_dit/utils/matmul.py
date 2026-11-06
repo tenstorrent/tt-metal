@@ -11,6 +11,32 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 
+# The model calls these resolvers once per layer per step with the same shapes. The register_* functions clear the
+# caches; a direct write to a table bypasses them, so call _clear_config_caches() after one.
+_config_caches: list[dict] = []
+
+
+def _per_shape_cache(fn):
+    cache: dict = {}
+    _config_caches.append(cache)
+
+    def cached(*args, **kwargs):
+        key = tuple((a.x, a.y) if isinstance(a, ttnn.CoreCoord) else a for a in args) + tuple(
+            (k, (v.x, v.y) if isinstance(v, ttnn.CoreCoord) else v) for k, v in sorted(kwargs.items())
+        )
+        if key not in cache:
+            cache[key] = fn(*args, **kwargs)
+        return cache[key]
+
+    cached.__wrapped__ = fn
+    cached.__doc__ = fn.__doc__
+    return cached
+
+
+def _clear_config_caches() -> None:
+    for cache in _config_caches:
+        cache.clear()
+
 # Track unique warning signatures to avoid stdout spam
 _warned_matmul_signatures = set()
 _logged_m_per_core_signatures = set()
@@ -803,6 +829,7 @@ def _ring_safe_k_block(config, M, K, N, cluster_size):
 _logged_agmm_v3_signatures = set()
 
 
+@_per_shape_cache
 def get_agmm_config(
     M,
     K,
@@ -1100,6 +1127,7 @@ fused_mmrs_configs = {
 _logged_mmrs_rule_signatures = set()
 
 
+@_per_shape_cache
 def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
     """Resolve the fused MM+RS parameter dict for a shape.
 
@@ -1199,6 +1227,7 @@ def register_matmul_configs(configs: dict) -> None:
             },
         })
     """
+    _clear_config_caches()
     grid_map = {
         "8x8": grid_88_configs,
         "8x9": grid_89_configs,
@@ -1232,6 +1261,7 @@ def register_fused_mmrs_configs(configs: dict) -> None:
             },
         })
     """
+    _clear_config_caches()
     for core_grid, entries in configs.items():
         fused_mmrs_configs.setdefault(core_grid, {}).update(entries)
 
@@ -1334,5 +1364,6 @@ def register_fabric_agmm_configs(configs: dict) -> None:
             },
         })
     """
+    _clear_config_caches()
     for core_grid, entries in configs.items():
         fabric_agmm_configs.setdefault(core_grid, {}).update(entries)
