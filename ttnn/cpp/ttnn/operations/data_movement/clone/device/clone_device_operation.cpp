@@ -84,13 +84,16 @@ ttnn::Tensor clone(
     const Tensor& input,
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::operations::data_movement::clone::CloneOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             dtype.value_or(input.dtype()),
             memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4),
+            init_device_compute_kernel_config(
+                input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4),
+            sub_core_grids,
         },
         OperationType::tensor_args_t{input});
 }

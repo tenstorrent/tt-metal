@@ -946,6 +946,10 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
                 " (NOC read lands in a local register; on Quasar the NIU can strand the response and stall L1 "
                 "writes, reads must land in L1).";
             break;
+        case dev_msgs::DebugSanitizeNocMulticastOutsideNodeSet:
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
+            error_msg += " (multicast rectangle reaches nodes outside the destination).";
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
@@ -1170,12 +1174,14 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
         code = 'W';
     } else if (state == dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
         code = 'S';
+    } else if (state == dev_msgs::RUN_SYNC_MSG_DFB_DRAINING) {
+        code = 'E';
     }
     if (code == 'U') {
         LogRunningKernels();
         TT_THROW(
-            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, {}, {}, {}, {}, or "
-            "{})",
+            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, {}, {}, {}, {}, {}, "
+            "or {})",
             virtual_coord_.str(),
             state,
             dev_msgs::RUN_MSG_INIT,
@@ -1186,7 +1192,8 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
             dev_msgs::RUN_MSG_REPLAY_TRACE,
             dev_msgs::RUN_SYNC_MSG_LOAD,
             dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET,
-            dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS);
+            dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS,
+            dev_msgs::RUN_SYNC_MSG_DFB_DRAINING);
     } else {
         fprintf(reader_.f, "%c", code);
     }

@@ -24,12 +24,16 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_QKV_L1_BYTES_PER_CORE,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
+    convolution_tail_shape,
     decay_projection_program_config,
     l1_when_it_fits,
     tuned_projection_matmul_configs,
+    validate_convolution_page_channels,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
+from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import persistent_semaphores
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
@@ -109,8 +113,6 @@ class _HistoryExchange:
             mesh_device.compute_with_storage_grid_size()
         )
         exchange_cores = ttnn.CoreRangeSet({ttnn.CoreRange(exchange_core, exchange_core)})
-        l1_small = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL)
-        semaphore_buffer_type = ttnn.BufferType.L1_SMALL if l1_small.total_bytes_per_bank > 0 else ttnn.BufferType.L1
         return cls(
             buffer=ttnn.zeros(
                 (1, KDA_HISTORY_EXCHANGE_ROWS, width),
@@ -119,10 +121,7 @@ class _HistoryExchange:
                 device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ),
-            semaphores=[
-                ttnn.create_global_semaphore(mesh_device, exchange_cores, 0, semaphore_buffer_type)
-                for _ in range(KDA_HISTORY_EXCHANGE_SEMAPHORES)
-            ],
+            semaphores=persistent_semaphores(mesh_device, KDA_HISTORY_EXCHANGE_SEMAPHORES, exchange_cores),
         )
 
 
@@ -134,9 +133,9 @@ class KdaState:
     """Caller-owned KDA carries.
 
     ``recurrent`` is TP-local and must be replicated across the SP axis.
-    ``convolution`` is the BF16 row-major DRAM stream tail with shape
-    ``[B, kernel_size - 1, Q_local + K_local + V_local]``. Its channels are
-    sharded across TP and the complete tail is replicated across SP. This history
+    ``convolution`` is the BF16 row-major DRAM stream tail, the last ``kernel_size - 1`` rows of
+    ``Q_local + K_local + V_local`` channels, token- or channel-paged as ``KDAProgramConfig.convolution_page_channels``
+    (``tt/kda/config.py``) chooses. Its channels are sharded across TP and the complete tail is replicated across SP. This history
     seeds the logical sequence start; the halo exchange supplies predecessor
     histories from projected tokens for the other segments. Construct state with
     :meth:`ttKDA.allocate_state` or reuse a state returned by :meth:`ttKDA.forward`.
@@ -225,7 +224,13 @@ class ttKDA:
         self._recurrent_state_shape = ttnn.Shape(
             [1, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim]
         )
-        self._convolution_state_shape = ttnn.Shape([1, self.config.conv_kernel_size - 1, self._convolution_width])
+        validate_convolution_page_channels(program_config.convolution_page_channels, self.config)
+        self.convolution_page_channels = program_config.convolution_page_channels
+        self._convolution_state_shape = ttnn.Shape(
+            convolution_tail_shape(
+                self.config.conv_kernel_size - 1, self._convolution_width, self.convolution_page_channels
+            )
+        )
         qkv_channel_chunk_size = _effective_qkv_channel_chunk_size(
             self._convolution_width, program_config.qkv_channel_chunk_size
         )
@@ -241,6 +246,12 @@ class ttKDA:
             mesh_device,
             self.active_seq_len_local * self.config.v_dim * output_element_bytes,
             KDA_NORM_OUTPUT_L1_BYTES_PER_CORE,
+        )
+        self._fused_output_reduce_scatter = (
+            self.tensor_parallel_size > 1
+            and self.gated_rms_output_dtype == ttnn.bfloat16
+            and self.weights.output_projection.dtype in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b)
+            and self.weights.output_projection.shape[-1] % (ttnn.TILE_SIZE * self.tensor_parallel_size) == 0
         )
         # The partial sums only feed the reduce-scatter; a single TP rank returns the projection itself.
         self.partial_output_memory_config = (
@@ -295,8 +306,8 @@ class ttKDA:
         self.decay_logits_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * decay_width * 4, KDA_DECAY_LOGITS_L1_BYTES_PER_CORE
         )
-        # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
-        # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
+        # Experimental KDA operations reject packer_l1_acc=True: kernels that accumulate in L1 enable it
+        # themselves. Keep this separate from projection matmuls, which accept the flag.
         self.kda_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -322,6 +333,29 @@ class ttKDA:
             packer_l1_acc=True,
         )
         self._history_exchange = _HistoryExchange.shared(mesh_device, self._convolution_width)
+        if self._fused_output_reduce_scatter:
+            self.fused_output_projection_compute_config = ttnn.ComputeConfigDescriptor(
+                math_fidelity=program_config.output_projection_math_fidelity
+            )
+            # a ring splits each device's output block over two halves, so it needs at least two tiles
+            block_tiles = (self.active_seq_len_local // ttnn.TILE_SIZE) * (
+                self.weights.output_projection.shape[-1] // (ttnn.TILE_SIZE * self.tensor_parallel_size)
+            )
+            ring = (
+                block_tiles >= 2
+                and self.tp_ccl_topology == ttnn.Topology.Ring
+                and per_axis_topology()[self.tensor_parallel_axis] == ttnn.Topology.Ring
+                and ttnn.get_usable_topology(
+                    self.weights.output_projection, ttnn.Topology.Ring, self.tensor_parallel_axis
+                )
+                == ttnn.Topology.Ring
+            )
+            self._fused_output_ccl_kwargs = dict(
+                cluster_axis=self.tensor_parallel_axis,
+                scatter_dim=-1,
+                topology=ttnn.Topology.Ring if ring else ttnn.Topology.Linear,
+                num_links=min(self._tp_num_links, 2),
+            )
 
     @property
     def _convolution_width(self) -> int:
@@ -340,7 +374,7 @@ class ttKDA:
                 memory_config=KDA_OUTPUT_MEMORY_CONFIG,
             ),
             convolution=ttnn.zeros(
-                (batch_size, self.config.conv_kernel_size - 1, self._convolution_width),
+                self._convolution_state_shape,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
@@ -435,8 +469,10 @@ class ttKDA:
         # sigmoid(r @ (A f_b) + A dt_bias) with A folded into the weights: FP32 logits plus the FP32 offset, one rounding
         # to the BF16 gate; see _FP32_ARTIFACTS in tt/kda/weights.py. The gate is allocated before the logits so that
         # the freed logits leave their L1 next to the circular buffers rather than below the gate.
+        # Indexed, not iterated: iterating a ttnn.Shape ends in an exception.
+        projected_shape = projected.shape
         gate = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([*list(projected.shape)[:-1], weights.decay_output_projection.shape[-1]]),
+            ttnn.Shape([projected_shape[0], projected_shape[1], weights.decay_output_projection.shape[-1]]),
             ttnn.bfloat16,
             ttnn.TILE_LAYOUT,
             self.device,
@@ -451,17 +487,13 @@ class ttKDA:
             compute_kernel_config=self.compute_config,
             in0_column_offset=decay_rank_offset,
         )
-        # The add reads the offset row for every output tile; a per-call L1 copy (a few KiB per core) spares those reads
-        # their DRAM round trip without holding L1 between calls.
-        offset = ttnn.to_memory_config(weights.decay_bias_flat, ttnn.L1_MEMORY_CONFIG)
         ttnn.add(
             logits,
-            offset,
+            weights.decay_bias_flat,
             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)],
             memory_config=self.decay_memory_config,
             output_tensor=gate,
         )
-        ttnn.deallocate(offset)
         ttnn.deallocate(logits)
         return gate
 
@@ -502,6 +534,14 @@ class ttKDA:
     ) -> ttnn.Tensor:
         """Project normalized heads and perform the required TP reduction."""
         weights = self.weights
+        if self._fused_output_reduce_scatter:
+            return ttnn.experimental.matmul_reduce_scatter_prefill(
+                output,
+                weights.output_projection,
+                **self._fused_output_ccl_kwargs,
+                compute_kernel_config=self.fused_output_projection_compute_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         output = ttnn.linear(
             output,
             weights.output_projection,
@@ -547,6 +587,10 @@ class ttKDA:
         self._validate_forward(hidden_states, state, actual_start)
         if actual_end is not None:
             self._validate_runtime_bound(actual_end, "actual_end")
+        # The SP predecessor's relay can write into this rank's landing buffer before its own recurrence starts. The
+        # convolution's history-exchange entry barrier below keeps every rank from relaying until all have reserved it:
+        # keep an SP barrier between this reservation and the recurrence.
+        self.recurrence.reserve_affine_relay()
         inputs = self._project_inputs(hidden_states)
         q, k, v, new_convolution = ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
             inputs.projected,
@@ -562,6 +606,10 @@ class ttKDA:
             actual_end=actual_end,
             sequence_parallel_axis=self.sequence_parallel_axis,
             memory_config=self.qkv_memory_config,
+            page_channels=self.convolution_page_channels,
+            # FP32 DST accumulates the four taps in FP32; BF16 DST biases q/k/v by about one BF16 ulp where taps
+            # cancel large activations.
+            compute_kernel_config=self.kda_compute_config,
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
         result = self.recurrence(
@@ -577,6 +625,7 @@ class ttKDA:
             release_gate=True,
         )
         output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset)
+        ttnn.deallocate(result.output)
         # The norm read the output gate, the projection's last columns in use.
         ttnn.deallocate(inputs.projected)
         output = self._project_output(output)

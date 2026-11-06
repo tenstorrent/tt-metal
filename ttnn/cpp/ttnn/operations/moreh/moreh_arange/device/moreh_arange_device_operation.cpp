@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_arange_device_operation.hpp"
+
+#include <cmath>
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -21,6 +23,19 @@ void MorehArangeOperation::validate_inputs(
         "Upper bound and larger bound inconsistent with step sign.");
 
     const auto& dtype = operation_attributes.dtype;
+    if (dtype == DataType::INT32) {
+        // INT32 values are generated with integer arithmetic on device, so start and step must be integral
+        // and every generated value must fit in int32.
+        constexpr double k_int32_limit = 2147483648.0;  // 2^31
+        TT_FATAL(
+            start == std::trunc(start) && step == std::trunc(step),
+            "moreh arange with int32 dtype requires integral start and step, got start={} step={}.",
+            start,
+            step);
+        TT_FATAL(
+            std::abs(start) < k_int32_limit && std::abs(end) <= k_int32_limit && std::abs(step) < k_int32_limit,
+            "moreh arange with int32 dtype requires start, end and step to fit in int32.");
+    }
     TT_FATAL(dtype != DataType::BFLOAT8_B, "moreh arange not support bfloat8_b dtype.");
     TT_FATAL(dtype != DataType::UINT32, "moreh arange not support uint32 dtype.");
 
@@ -84,9 +99,9 @@ MorehArangeOperation::tensor_return_value_t MorehArangeOperation::create_output_
 namespace ttnn::prim {
 
 ttnn::operations::moreh::moreh_arange::MorehArangeOperation::tensor_return_value_t moreh_arange(
-    float start,
-    float end,
-    float step,
+    double start,
+    double end,
+    double step,
     ttnn::MeshDevice* mesh_device,
     const std::optional<Tensor>& output,
     bool untilize_out,
