@@ -78,11 +78,49 @@ def chat_prompt(tok, isl: int, user: int = 0) -> list[int]:
 
 
 class MkTileCacheSource(TileCacheSource):
-    """GLM53_MK_TILE_CACHE_V3=<dir>: the reference-format tile cache (tools/build_tile_cache.py: one .tensorbin per
+    """GLM53_MK_TILE_CACHE_V3=<dir>: the reference-format tile cache (tools/tile_cache_build.py: one .tensorbin per
     tensor in its cache dtype + manifest.json): the stack's own loaders read it directly (TileCacheSource.device/host,
     fused_decoder.load_fused_experts / load_xsl_experts cut the expert files byte-exactly), no host packing at load
     time. The head's entries (mk_head: source.tensors[name] -> source._load(e)) are the manifest's "lm_head.weight" /
-    "norm.weight" / "embed_tokens.weight"."""
+    "norm.weight" / "embed_tokens.weight". SELF-EXTENDING: a tensor the manifest lacks (e.g. the MTP layer 45, which
+    only the speculative step asks for) is built on demand from the HF source (`inner`), dumped and added to the
+    manifest, so the cache grows with what the stack asks."""
+
+    def __init__(self, cache_dir: str, manifest_path: str, inner=None):
+        super().__init__(cache_dir, manifest_path)
+        self.inner, self.manifest_path = inner, manifest_path
+        self._added = 0
+
+    def _entry(self, layer_idx: int, name: str) -> dict:
+        key = f"layers.{layer_idx}.{name}"
+        if key not in self.tensors:
+            if self.inner is None:
+                raise KeyError(f"{key} not in the weight-cache manifest")
+            import hashlib
+
+            t = self.inner.host(layer_idx, name)
+            dt = cache_dtype(name)
+            h = ttnn.from_torch(t.to(torch.float32 if dt == ttnn.float32 else torch.bfloat16), dtype=dt,
+                                layout=ttnn.TILE_LAYOUT)  # fmt: skip
+            rel = os.path.join(f"L{layer_idx:02d}", f"{name}.tensorbin")
+            full = os.path.join(self.cache_dir, rel)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            ttnn.dump_tensor(full, h, mode=ttnn.DumpTensorMode.LOCAL)
+            self.tensors[key] = {"path": rel, "shape": [int(v) for v in t.shape], "dtype": str(dt).split(".")[-1].lower(),
+                                 "layout": "TILE", "sha256": hashlib.sha256(key.encode()).hexdigest(),
+                                 "bytes": os.path.getsize(full)}  # fmt: skip
+            self._added += 1
+            if self._added % 64 == 1 or name.endswith("down_proj") and ".experts.287." in name:
+                self.save_manifest()
+            if self._added == 1:
+                logger.info(f"MkTileCacheSource: building layer {layer_idx} on demand from the HF source ({name} ...)")
+        return self.tensors[key]
+
+    def save_manifest(self) -> None:
+        tmp = self.manifest_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"tensors": self.tensors, "tt_metal_sha": self.tt_metal_sha}, f)
+        os.replace(tmp, self.manifest_path)
 
     def _load(self, e: dict, device=None) -> ttnn.Tensor:
         t = ttnn.load_tensor(os.path.join(self.cache_dir, e["path"]))
@@ -225,7 +263,7 @@ def test_mk_e2e(mesh_device, monkeypatch):
     tok = load_tokenizer(snapshot)
     v3 = os.environ.get("GLM53_MK_TILE_CACHE_V3")
     if v3 and os.path.isfile(os.path.join(v3, "COMPLETE")):  # the reference-format tile cache (MkTileCacheSource)
-        source = MkTileCacheSource(v3, os.path.join(v3, "manifest.json"))
+        source = MkTileCacheSource(v3, os.path.join(v3, "manifest.json"), inner=HFSource(snapshot, cfg))
         logger.info(f"MkTileCacheSource {v3}: {len(source.tensors)} entries")
     else:
         source = HFSource(snapshot, cfg)
@@ -245,7 +283,10 @@ def test_mk_e2e(mesh_device, monkeypatch):
     ttnn.synchronize_device(mesh_device)
     logger.info(f"generator warm-up (prefill buckets, decode, traces) {time.perf_counter() - t0:.1f} s")
     ids = chat_prompt(tok, ISL)
-    prompts = [list(chat_prompt(tok, ISL, user=u)) for u in range(B)]
+    # GLM53_MK_LIVE=n (default B): the live users of the run on a backend built for B rows (the speculative step,
+    # GLM53_SPEC_K, serves ONE live user in slot 0 of a backend whose max_batch >= K + 1)
+    live = int(os.environ.get("GLM53_MK_LIVE", str(B)))
+    prompts = [list(chat_prompt(tok, ISL, user=u)) for u in range(live)]
     logger.info(f"prompt {len(ids)} tokens (ISL target {ISL}; per user {[len(p) for p in prompts]}); OSL {OSL}; "
                 f"cache {B} x {SEQ}; distinct {os.environ.get('GLM53_MK_DISTINCT', '0')}")  # fmt: skip
     # TTFT: prefill of every user + the first token (the generator's prefill chunks + one sampler step)
@@ -263,8 +304,9 @@ def test_mk_e2e(mesh_device, monkeypatch):
     same = all(o == outs[0] for o in outs)
     text = tok.decode([t for t in outs[0] if 0 <= t < tok.vocab_size])
     logger.info(
-        f"MK_E2E: mesh {MESH} {len(layers)} layers B {B} ISL {len(ids)} OSL {OSL}: TTFT {ttft_s * 1e3:.0f} ms "
-        f"(all {B} users), decode {step_ms:.1f} ms/step = {1e3 / step_ms:.1f} tok/s/u, generated {n_gen}, "
+        f"MK_E2E: mesh {MESH} {len(layers)} layers B {B} live {live} spec_k {os.environ.get('GLM53_SPEC_K', '0')} "
+        f"ISL {len(ids)} OSL {OSL}: TTFT {ttft_s * 1e3:.0f} ms "
+        f"(all {live} users), decode {step_ms:.1f} ms/step = {1e3 / step_ms:.1f} tok/s/u, generated {n_gen}, "
         f"users agree {same}, first {first[0][:1]} ids {outs[0][:24]}"
     )
     logger.info(f"MK_E2E_TEXT: {text!r}")
@@ -272,3 +314,6 @@ def test_mk_e2e(mesh_device, monkeypatch):
     assert n_gen >= 1
     if isinstance(source, TileCache) and not source.ready:
         source.complete()  # the e2e passed on the tiles it dumped: READ mode from the next run
+    if isinstance(source, MkTileCacheSource) and source._added:
+        source.save_manifest()
+        logger.info(f"MkTileCacheSource: {source._added} tensors added to the manifest")

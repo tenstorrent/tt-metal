@@ -45,6 +45,8 @@ UNIT, POOL_PAGE, TB, PPC = HDR["UNIT"], HDR["POOL_PAGE"], HDR["TB"], HDR["PPC"]
 REC_BYTES, REC_HDR, RS_CHUNKS, T_MAX, ST_TILES = (HDR[k] for k in ("REC_BYTES", "REC_HDR", "RS_CHUNKS", "T_MAX",
                                                                    "ST_TILES"))  # fmt: skip
 AG8_PPC, AG8_QPAGES, RS2_PPC, RS_PPC = HDR["AG8_PPC"], HDR["AG8_QPAGES"], HDR["RS2_PPC"], HDR["RS_PPC"]
+AG32_PPC, AG32_QPAGES = HDR.get("AG32_PPC", 6), HDR.get("AG32_QPAGES", 1)  # 8x4 (shard_8x4_design.md section 2)
+RS2B_PPC = HDR.get("RS2B_PPC", 4)  # 8x4 round 2: 2-row slices (16 x 256 B + 2 x 256 B = 4.5 KB -> 3 pages + pad)
 TL_MAX = HDR["TL_MAX"]  # rev 60: tokens per token lane (the lane-local mailbox / kept blocks / CB_ASEL pages)
 MAX_CHUNKS = 64  # dsa_common.hpp MAX_CHUNKS
 CAND_MAX = 512  # dsa_shard.hpp CAND_MAX = mladsa::TOPK (not a plain literal there)
@@ -83,8 +85,15 @@ class Geometry:
             self.pair_axis, self.line_axis, self.L = (1 if self.C == 2 else 0), None, 1
         elif (self.R, self.C) == (2, 4):
             self.pair_axis, self.line_axis, self.L = 0, 1, 4
+        elif (self.R, self.C) == (8, 4):  # the 32-chip Galaxy (shard_8x4_design.md): the column is the pair axis
+            self.pair_axis, self.line_axis, self.L = 0, 1, 4
         else:
-            raise ValueError(f"shard: the pair (1x2 / 2x1) or the 2x4 mesh, not {R}x{C}")
+            raise ValueError(f"shard: the pair (1x2 / 2x1), the 2x4 or the 8x4 mesh, not {R}x{C}")
+        self.P = self.n // self.L  # chips along the pair axis (2: the pair / the 2x4 column pair; 8: the 8x4 column)
+        self.hpc = 64 // self.n  # heads per chip
+        self.piece_rows = 32 // (self.n // 2) if self.n > 2 else 32  # a chip's q / o rows in a 32-head tile
+        self.rs1_rows = 64 // self.P if self.P > 2 else 32  # round 1: the 8x4 column slice rows (the pair: whole tiles)
+        self.rs2_rows = self.rs1_rows // self.L  # round 2: the row slice rows (2x4: 8; 8x4: 2)
 
     # ---- ranks
     def rank(self, r: int, c: int) -> int:
@@ -99,14 +108,28 @@ class Geometry:
     def line_pos(self, rank: int) -> int:
         return rank % self.L
 
+    def tile(self, rank: int) -> int:
+        """the 32-head tile this chip's heads belong to (2x4: the mesh row; 8x4: rows 0-3 -> 0, rows 4-7 -> 1)"""
+        return self.pair_pos(rank) // (self.P // 2)
+
+    def piece(self, rank: int) -> int:
+        """the chip's piece index in its tile: rows [piece_rows j, +piece_rows) (2x4: the column; 8x4: rank - 16 g)"""
+        return rank - self.tile_ranks(self.tile(rank))[0]
+
     def ag_blk(self, rank: int) -> int:
-        """y_ag block of chip `rank` (kernels/mla/dsa_shard.hpp ag_blk)"""
-        return self.line_pos(rank) * 2 + self.pair_pos(rank)
+        """y_ag block of chip `rank` (kernels/mla/dsa_shard.hpp ag_blk): the pair-axis chips of a line are adjacent"""
+        return self.line_pos(rank) * self.P + self.pair_pos(rank)
 
     def pair_peer(self, rank: int) -> int:
-        """the other chip of the rank's pair-axis pair (2x4: the column peer)"""
+        """the other chip of the rank's pair-axis pair (2x4: the column peer); P = 2 only"""
+        assert self.P == 2, "pair_peer: the pair / the 2x4 mesh (the 8x4 column has 7 peers: column_peers)"
         g, j = self.pair_pos(rank), self.line_pos(rank)
         return (1 - g) * self.L + j
+
+    def column_peers(self, rank: int) -> list:
+        """the other chips of the rank's pair-axis line (its column), in position order"""
+        j = self.line_pos(rank)
+        return [i * self.L + j for i in range(self.P) if i != self.pair_pos(rank)]
 
     def line_peers(self, rank: int) -> list:
         g, j = self.pair_pos(rank), self.line_pos(rank)
@@ -116,12 +139,13 @@ class Geometry:
         return range(hr * rank, hr * (rank + 1))
 
     def tile_ranks(self, g: int) -> list:
-        """the chips whose q pieces form head tile g (heads [32 g, 32 g + 32)), in row order"""
-        return [g * self.L + j for j in range(self.L)]
+        """the chips whose q pieces form head tile g (heads [32 g, 32 g + 32)), in rank order"""
+        per = self.n // 2
+        return list(range(g * per, (g + 1) * per))
 
     def pass_tile(self, rank: int, pass_: int) -> int:
-        """the head tile pass 0 (the OTHER pair position's) / pass 1 (this chip's) attends with"""
-        g = self.pair_pos(rank)
+        """the head tile pass 0 (the OTHER tile) / pass 1 (this chip's tile) attends with"""
+        g = self.tile(rank)
         return 1 - g if pass_ == 0 else g
 
     def axis_pos(self, r: int, c: int, axis: int) -> tuple:
@@ -136,26 +160,49 @@ class Geometry:
         """32-row chunks of one chip's AG block"""
         return t if self.L > 1 else 2 * t
 
+    @property
+    def ag_ppc(self) -> int:
+        """pages per AG chunk: the pair's 16 (whole q rows), the 2x4's AG8 (8-row q piece 4 pages + 5 candidate pages +
+        pad), the 8x4's AG32 (2-row q piece 1 page + 5 candidate pages: 6)"""
+        if self.L == 1:
+            return PPC
+        return AG8_PPC if self.P == 2 else AG32_PPC
+
     def ag_width(self) -> int:
-        return 32 * (AG8_PPC if self.L > 1 else PPC)
+        return 32 * self.ag_ppc
+
+    @property
+    def rs1_ppc(self) -> int:
+        """pages per x_rs1 / y_rs1 chunk: the pair exchange's RS_PPC (3 chunks = the 36-page fp32 message); the 8x4
+        column scatter's 8-row slice = the 2x4 RS2 format (RS2_PPC)"""
+        return RS2_PPC if self.P > 2 else RS_PPC
+
+    @property
+    def rs2_ppc(self) -> int:
+        """pages per x_rs2 / y_rs2 chunk: 8-row slices (2x4) RS2_PPC; 2-row slices (8x4) RS2B_PPC"""
+        return RS2_PPC if self.rs2_rows == 8 else RS2B_PPC
 
     def streams(self, t: int) -> dict:
         """name -> dict(axis, kind, chunks (per block), width, link, blocks_in_y, src_blocks_in_x)"""
         out = {"ag1": dict(axis=self.pair_axis, kind="ag", chunks=self.ag_chunks(t), width=self.ag_width(), link=0,
-                           y_blocks=self.n, x_blocks=1),
-               "rs1": dict(axis=self.pair_axis, kind="rs2", chunks=t * RS_CHUNKS, width=32 * RS_PPC, link=1,
-                           y_blocks=1, x_blocks=2)}  # fmt: skip
+                           y_blocks=self.n, x_blocks=1)}  # fmt: skip
+        if self.P == 2:  # the pair exchange of the whole pass-0 partial (the pair / the 2x4 column pair)
+            out["rs1"] = dict(axis=self.pair_axis, kind="rs2", chunks=t * RS_CHUNKS, width=32 * RS_PPC, link=1,
+                              y_blocks=1, x_blocks=2)  # fmt: skip
+        else:  # 8x4: the column reduce-scatter of 8-row slices (per-destination unicasts, as the 2x4 round 2)
+            out["rs1"] = dict(axis=self.pair_axis, kind="scatter", chunks=t, width=32 * self.rs1_ppc, link=1,
+                              y_blocks=self.P, x_blocks=self.P)  # fmt: skip
         if self.L > 1:
             out["ag2"] = dict(
                 axis=self.line_axis,
                 kind="ag",
-                chunks=2 * self.ag_chunks(t),
+                chunks=self.P * self.ag_chunks(t),
                 width=self.ag_width(),
                 link=0,
                 y_blocks=self.L,
                 x_blocks=self.L,
-            )  # (bundles: x = y = y_ag)  # fmt: skip
-            out["rs2"] = dict(axis=self.line_axis, kind="scatter", chunks=t, width=32 * RS2_PPC, link=1,
+            )  # (bundles: x = y = y_ag; the bundle = the column's P blocks)  # fmt: skip
+            out["rs2"] = dict(axis=self.line_axis, kind="scatter", chunks=t, width=32 * self.rs2_ppc, link=1,
                               y_blocks=self.L, x_blocks=self.L)  # fmt: skip
         return out
 
@@ -170,11 +217,11 @@ class Geometry:
         up, dn = n - 1 - p, p
         if name == "ag1":  # this chip's block -> y_ag block ag_blk (line-major: blk = line n + p)
             return dict(p=p, src=0, dst=(line * n + p) * ch, local=True, up=up, dn=dn, dsts=[])
-        if name == "ag2":  # the column's 2-block bundle, already in y_ag at bundle p, multicast along the row
+        if name == "ag2":  # the column's P-block bundle, already in y_ag at bundle p, multicast along the row
             return dict(p=p, src=p * ch, dst=p * ch, local=False, up=up, dn=dn, dsts=[])
-        if name == "rs1":  # the pair exchange: the peer's block of x_rs1 -> its y_rs1
+        if name == "rs1" and sp["kind"] == "rs2":  # the pair exchange: the peer's block of x_rs1 -> its y_rs1
             return dict(p=p, src=(1 - p) * ch, dst=0, local=False, up=up, dn=dn, dsts=[])
-        if name == "rs2":  # per-destination unicast: x_rs2 block q -> peer q's y_rs2 block p
+        if name in ("rs1", "rs2"):  # per-destination unicast: x block q -> peer q's y block p
             dsts = [(q, q * ch, 0 if q > p else 1, abs(q - p)) for q in range(n) if q != p]
             return dict(p=p, src=None, dst=p * ch, local=False, up=up, dn=dn, dsts=dsts)
         raise KeyError(name)
@@ -400,6 +447,31 @@ def emulate_exchange(geo: Geometry, q, parts_fn, *, junk=None):
     tiles = {g: torch.cat([y_ag[geo.ag_blk(rr)] for rr in geo.tile_ranks(g)]) for g in (0, 1)}
     p0 = {r: parts_fn(r, tiles[geo.pass_tile(r, 0)]) for r in range(n)}
     p1 = {r: parts_fn(r, tiles[geo.pass_tile(r, 1)]) for r in range(n)}
+    if geo.P > 2:  # 8x4 (shard_8x4_design.md): two reduce-scatters, own slice first then the peers in position order
+        full = {}  # the 64-head partial in head order (tile 0 rows, then tile 1 rows)
+        for r in range(n):
+            a, b = (p1[r], p0[r]) if geo.tile(r) == 0 else (p0[r], p1[r])
+            full[r] = tuple(torch.cat([x, y]) for x, y in zip(a, b))
+        col = {}  # round 1 along the column: chip (i, c) combines the slice [rs1_rows i, +rs1_rows) of its column
+        for r in range(n):
+            i = geo.pair_pos(r)
+            rows = slice(geo.rs1_rows * i, geo.rs1_rows * (i + 1))
+            cur = None
+            for src in [r] + geo.column_peers(r):
+                sl = tuple(v[rows] for v in full[src])
+                cur = tuple(v.clone() for v in sl) if cur is None else combine(cur, sl)
+            col[r] = cur
+        out = {}  # round 2 along the row: chip (i, j) combines the sub-slice [rs2_rows j, +rs2_rows) of its row
+        for r in range(n):
+            j = geo.line_pos(r)
+            rows = slice(geo.rs2_rows * j, geo.rs2_rows * (j + 1))
+            cur = None
+            for src in [r] + sorted(geo.line_peers(r), key=geo.line_pos):
+                sl = tuple(v[rows] for v in col[src])
+                cur = tuple(v.clone() for v in sl) if cur is None else combine(cur, sl)
+            m, l_, O = cur
+            out[r] = O / l_[:, None]
+        return out
     # round 1: chip r lands p0 of its pair peer (that partial covers r's tile), combine(own pass 1, landed)
     col = {r: combine(p1[r], p0[geo.pair_peer(r)]) for r in range(n)}
     out = {}
@@ -425,10 +497,14 @@ def emulate_exchange(geo: Geometry, q, parts_fn, *, junk=None):
 
 
 # ------------------------------------------------------------------ rev 60 (W): token lanes at t > 4
-def lanes_reasons(t: int, lanes: int, chunks: int = 64, line: int = 1, groups: int = 1) -> list:
+def lanes_reasons(
+    t: int, lanes: int, chunks: int = 64, line: int = 1, groups: int = 1, nchips: int | None = None
+) -> list:
     """why a t-row launch on `lanes` token lanes cannot run the sharded phase (tt/mk_mla.py shard_lanes_check's rules,
-    host-only): [] = it can"""
+    host-only): [] = it can. nchips: the merge helpers (default 2 line = the pair / the 2x4; the 8x4 passes 32)"""
     why = []
+    if nchips is None:
+        nchips = 2 * line
     if t > T_MAX:
         why.append(f"t <= {T_MAX}")
     if groups != 1:
@@ -439,8 +515,8 @@ def lanes_reasons(t: int, lanes: int, chunks: int = 64, line: int = 1, groups: i
     if -(-t // lanes) > TL_MAX:
         why.append(f"<= {TL_MAX} tokens per lane")
     cl = chunks // lanes
-    if cl < 2 * line:
-        why.append(f"{2 * line} merge helpers among {cl} lane chunk cores")
+    if cl < nchips:
+        why.append(f"{nchips} merge helpers among {cl} lane chunk cores")
     return why
 
 
