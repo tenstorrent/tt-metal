@@ -672,7 +672,7 @@ def _build_plan(
     prefill = []
     for sequence_length in prefill_sequence_lengths:
         # phi-3.5-mini S11: TT_PHI35_PREFILL_BATCH_ALL=1 covers batched prefill at every warmed length (vLLM batches arrivals)
-        batches = warmup.prefill_batch_sizes if (sequence_length == 128 or __import__('os').environ.get('TT_PHI35_PREFILL_BATCH_ALL') == '1') else (1,)
+        batches = warmup.prefill_batch_sizes if (sequence_length == 128 or (__import__('os').environ.get('TT_PHI35_PREFILL_BATCH_ALL') == '1' and sequence_length <= int(__import__('os').environ.get('TT_PHI35_BATCH_MAX_LEN', '0') or 1 << 30))) else (1,)
         for batch_size in batches:
             if batch_size <= lane_batch_size:
                 batch_sampling_paths = sampling_paths + (

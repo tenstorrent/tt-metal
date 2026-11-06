@@ -500,6 +500,8 @@ def _batched_prefill_size(
         return None
     if sequence_length > max_prefill_chunk_size:
         return None
+    if sequence_length > int(__import__("os").environ.get("TT_PHI35_BATCH_MAX_LEN", "0") or 1 << 30):
+        return None
     padded_batch = _next_supported_prefill_batch_size(batch_size)
     if (
         padded_batch is None

@@ -165,7 +165,7 @@ def _trace_seq_lens(num_devices: int, max_prefill_chunk_size: int, max_seq_len: 
     if num_devices != 1:
         raise ValueError(f"Phi-3.5-mini supports single-device (P150) lanes only, got {num_devices} devices")
     step = int(os.environ.get("TT_PHI35_PREFILL_STEP", "0") or 0)
-    lengths = tuple(range(step, 1025, step)) if step else (128, 1024)
+    lengths = tuple(range(step, 1025, step)) + (2048, 4096, 8192, 16384, 32768) if step else (128, 1024)
     return tuple(length for length in lengths if length <= min(max_prefill_chunk_size, max_seq_len))
 
 

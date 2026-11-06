@@ -350,8 +350,10 @@ class PrefillInputStager:
             chunk_start_idx=chunk.chunk_start_idx,
             last_token_idx=max(request.last_token_indices),
         )
+        if host_inputs.row_map is not None:
+            raise ValueError("chunked prefill refresh does not support packed row maps")
         copy_into_device_tensors(
-            host_inputs.values(),
+            host_inputs.values()[:5],
             (
                 device_inputs.tokens,
                 device_inputs.position_indices,
