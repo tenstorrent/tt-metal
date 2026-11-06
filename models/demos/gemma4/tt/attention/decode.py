@@ -234,6 +234,88 @@ def packed_kv_write_loop(
     ttnn.deallocate(tt_v_bp)
 
 
+KV_FUSED_UPDATE_ENV = "GEMMA4_KV_FUSED_UPDATE"
+# Mesh shapes where the fused K+V cache write is the default (measured: see kv_fused_update_default).
+KV_FUSED_UPDATE_DEFAULT_SHAPES = ((1, 4),)
+KV_FUSED_STATS = {"fused": 0}  # fused-program calls (unit-test hook)
+_KV_FUSED_NOTED = set()
+
+
+def kv_fused_update_default(mesh_device) -> bool:
+    """Whether the decode K and V cache writes run as ONE ``paged_fused_update_cache`` program per layer (item 11 of
+    the gemma4_12b_qb2 port) instead of two ``paged_update_cache`` programs.
+
+    ``GEMMA4_KV_FUSED_UPDATE=1|0`` overrides. Policy when unset: on for the mesh shapes in
+    ``KV_FUSED_UPDATE_DEFAULT_SHAPES`` (those where the served A/B measured a win with the PCC gates intact; the
+    12B 1x4 QB2 block is the measured basis), off everywhere else (the Galaxy (1,8) line and the lane / fractured
+    meshes await their own A/B). The fused program needs V on cores disjoint from K's, which the composite head path
+    gives for free and ``QkvHeadsNormRope`` emits on request; the ``QkvNormRope`` form (the MoE and lane builds) keeps
+    K and V on one grid and stays on two programs regardless (``kv_fused_update_reason``)."""
+    env = os.environ.get(KV_FUSED_UPDATE_ENV, "").strip().lower()
+    if env:
+        return env in ("1", "true", "yes", "on")
+    shape = tuple(int(s) for s in mesh_device.shape) if hasattr(mesh_device, "shape") else ()
+    return shape in KV_FUSED_UPDATE_DEFAULT_SHAPES
+
+
+def kv_fused_update_reason(k_cache, v_cache, config, num_local_kv_heads, *, batch, page_table, sequential, qkv_path):
+    """Why the two-program K / V cache write serves a decode call: None when the fused program can.
+
+    ``paged_fused_update_cache`` has no ``block_size`` / ``num_kv_heads`` / ``cache_position_modulo`` overrides: it
+    reads the block size and the head count off the cache tensor and wants the input's head_dim equal to the cache's,
+    so a cache allocated for another layer type's view (vLLM's hybrid kv-cache groups sharing one buffer between the
+    sliding and the full layers) or a bounded sliding ring keeps the two ``paged_update_cache`` programs. The
+    speculative verify's per-position loop (one single-core slice per candidate), the non-paged legacy cache and the
+    ``QkvNormRope`` head path (K and V on one grid; the fused program places one kernel set per input on that
+    input's shard cores) stay on two programs as well.
+    """
+    if page_table is None:
+        return "non-paged cache (legacy path)"
+    if sequential and int(batch) > 1:
+        return "speculative verify writes each candidate position with its own program"
+    if qkv_path == "qkv_norm_rope":
+        return "QkvNormRope keeps K and V on one shard grid"
+    if getattr(config, "cache_position_modulo", None) is not None:
+        return "bounded sliding ring (cache_position_modulo)"
+    head_dim = int(config.head_dim)
+    eff_bs = effective_block_size(k_cache, head_dim, num_local_kv_heads)
+    k_shape = tuple(int(s) for s in k_cache.padded_shape)
+    if eff_bs != k_shape[2] or int(num_local_kv_heads) != k_shape[1] or head_dim != k_shape[-1]:
+        return (
+            f"cache view {k_shape} differs from the layer's (block {eff_bs}, {num_local_kv_heads} heads x {head_dim})"
+        )
+    if tuple(int(s) for s in v_cache.padded_shape) != k_shape or v_cache.dtype != k_cache.dtype:
+        return "K and V caches differ in shape or dtype"
+    return None
+
+
+def _note_kv_fused(config, qkv_path, batch, reason):
+    """One INFO line per (layer type, head path, batch, reason) the fused-write decision takes."""
+    key = (bool(config.is_sliding), int(config.head_dim), qkv_path, int(batch), reason)
+    if key in _KV_FUSED_NOTED:
+        return
+    _KV_FUSED_NOTED.add(key)
+    layer = "sliding" if config.is_sliding else "full"
+    if reason is None:
+        logger.info(f"{KV_FUSED_UPDATE_ENV}: fused K+V cache write on the {layer} layers ({qkv_path}, batch {batch})")
+    else:
+        logger.info(
+            f"{KV_FUSED_UPDATE_ENV}: two-program K / V write on the {layer} layers ({qkv_path}, batch {batch}): {reason}"
+        )
+
+
+def _kv_grids_disjoint(tt_k, tt_v) -> bool:
+    """Whether K's and V's shard grids share no core (the fused write's placement rule)."""
+    try:
+        from models.demos.gemma4.custom_ops.qkv_heads_norm_rope.op import shard_cores
+
+        k_cores = {(c.x, c.y) for c in shard_cores(tt_k.memory_config().shard_spec.grid)}
+        v_cores = {(c.x, c.y) for c in shard_cores(tt_v.memory_config().shard_spec.grid)}
+    except Exception:  # noqa: BLE001 - an interleaved tensor has no shard spec
+        return False
+    return bool(k_cores) and bool(v_cores) and not (k_cores & v_cores)
+
+
 def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
     """Hashable key for the q_sharded_mem cache. Captures every input that
     affects ``nlp_create_qkv_heads_decode``'s output shard spec."""
@@ -322,6 +404,37 @@ def decode_forward(
         and not xqkv.is_sharded()
         and xqkv.memory_config().buffer_type == ttnn.BufferType.L1
     )
+    # GEMMA4_KV_FUSED_UPDATE: one paged_fused_update_cache program for K and V, decided before the head split since
+    # V then has to come out on cores disjoint from K's (kv_fused_v_mem: V's layout when the fused write serves).
+    kv_fused, kv_fused_v_mem = False, None
+    if kv_cache is not None and not is_kv_shared and kv_fused_update_default(mesh_device):
+        # the head path the else-branch below picks (same predicate as its ``fused_qkv``)
+        _qkv_norm_rope_path = (
+            not heads_fused
+            and decode_flag("GEMMA4_QKV_NORM_ROPE_FUSED") == "1"
+            and fused_rope_ok
+            and (int(config.head_dim) <= 256 or QkvNormRope.in_place())
+        )
+        _qkv_path = "heads_fused" if heads_fused else ("qkv_norm_rope" if _qkv_norm_rope_path else "composite")
+        _nkv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
+        _reason = kv_fused_update_reason(
+            kv_cache[0],
+            kv_cache[1],
+            config,
+            _nkv_local,
+            batch=batch_rows,
+            page_table=page_table,
+            sequential=sequential_kv_write,
+            qkv_path=_qkv_path,
+        )
+        if _reason is None:
+            from models.demos.gemma4.custom_ops.qkv_heads_norm_rope.op import heads_v_disjoint_memory_config
+
+            kv_fused_v_mem = heads_v_disjoint_memory_config(mesh_device, batch_rows, int(config.head_dim))
+            if kv_fused_v_mem is None:
+                _reason = "the grid holds fewer than 2 x batch cores"
+        kv_fused = _reason is None
+        _note_kv_fused(config, _qkv_path, batch_rows, _reason)
     if heads_fused:
         from models.demos.gemma4.custom_ops.qkv_heads_norm_rope import QkvHeadsNormRope
 
@@ -336,6 +449,7 @@ def decode_forward(
             cos_cache,
             sin_cache,
             config.rms_norm_eps,
+            v_memory_config=kv_fused_v_mem,
         )
         xqkv.deallocate(True)
         q_sharded_mem = tt_q.memory_config()
@@ -466,7 +580,8 @@ def decode_forward(
                 # op's k / v already are; the earlier `and not fused_qkv` on this branch skipped the whole cache
                 # update for the fused path, so no decode token's K / V ever reached the cache: decode gate 12/64.)
                 tt_k = ttnn.to_memory_config(tt_k, q_sharded_mem)
-                tt_v = ttnn.to_memory_config(tt_v, q_sharded_mem)
+                # the fused K+V write wants V apart from K: the same reshard, onto the next ``batch`` cores
+                tt_v = ttnn.to_memory_config(tt_v, kv_fused_v_mem if kv_fused else q_sharded_mem)
 
             if page_table is not None:
                 # Per-device kv-head count of the layer's input view. When the cache
@@ -534,6 +649,14 @@ def decode_forward(
                             t.deallocate(True)
                     k_seq.deallocate(True)
                     v_seq.deallocate(True)
+                elif kv_fused and _kv_grids_disjoint(tt_k, tt_v):
+                    # one program writes both caches (K's kernels on K's shard cores, V's on V's); the block
+                    # size and head count come off the cache, which kv_fused_update_reason checked equal to the
+                    # layer's view
+                    ttnn.experimental.paged_fused_update_cache(
+                        k_cache, tt_k, v_cache, tt_v, update_idxs_tensor=cache_pos, page_table=page_table
+                    )
+                    KV_FUSED_STATS["fused"] += 1
                 else:
                     ttnn.experimental.paged_update_cache(
                         k_cache,
