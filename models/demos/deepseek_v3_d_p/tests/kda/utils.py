@@ -137,6 +137,18 @@ def assert_device_time(median_us: float, reference_us: float, margin: float, lab
     )
 
 
+def pack_complement(a: torch.Tensor, b: torch.Tensor, mesh_device, mesh_mapper) -> ttnn.Tensor:
+    """Host transforms (A, B) as the packed summary publishes them: BF16 TILE rows of the complement form [E | B],
+    E = A - I."""
+    return ttnn.from_torch(
+        torch.cat([a - torch.eye(a.shape[-1]), b], dim=-1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=mesh_mapper,
+    )
+
+
 def distributed_prefix(
     packed: ttnn.Tensor,
     initial_state: ttnn.Tensor,
