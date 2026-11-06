@@ -1343,41 +1343,52 @@ void GraphProcessor::begin_graph_capture(RunMode mode = RunMode::NORMAL) {
 
 namespace {
 
-// Returns the capture that end_graph_capture and end_graph_capture_to_file end: the processor on top of this thread's
-// tracker stack. Throws, popping nothing, unless a capture is active and is on top. The checks matter because a process
-// that has opened a device keeps the device's memory tracker (ShmTrackingProcessor) on the stack for good: popping
-// unchecked would remove that tracker when no capture is active, or when a device opened after begin_graph_capture
-// sits above the capture.
-GraphProcessor& capture_to_end(tt::tt_metal::GraphTracker& tracker) {
-    TT_FATAL(
-        tracker.is_enabled(), "Cannot end graph capture: no graph capture is active; call begin_graph_capture first");
-    auto* processor = dynamic_cast<GraphProcessor*>(tracker.get_processors().back().get());
-    TT_FATAL(
-        processor != nullptr,
-        "Cannot end graph capture: the innermost graph tracking processor is not a GraphProcessor. A device opened "
-        "after begin_graph_capture puts its memory tracker above the capture; open devices before beginning the "
-        "capture");
-    return *processor;
+// The capture that end_graph_capture and end_graph_capture_to_file end: the innermost GraphProcessor on this thread's
+// tracker stack. It need not be on top. The first device opened in a process pushes the device's memory tracker
+// (ShmTrackingProcessor), which stays for good, so a device opened after begin_graph_capture (as when a capture begins
+// before tt-train or a test opens its device) sits above the capture. Throws, changing nothing, when no capture is
+// active: popping the top unchecked would then remove that memory tracker.
+std::shared_ptr<GraphProcessor> innermost_graph_capture() {
+    const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
+    for (auto it = processors.rbegin(); it != processors.rend(); ++it) {
+        if (auto capture = std::dynamic_pointer_cast<GraphProcessor>(*it)) {
+            return capture;
+        }
+    }
+    TT_THROW("Cannot end graph capture: no graph capture is active; call begin_graph_capture first");
+}
+
+// Takes `capture` off the tracker stack, leaving the processors above it in place and in order.
+void remove_graph_capture(const std::shared_ptr<GraphProcessor>& capture) {
+    auto& tracker = tt::tt_metal::GraphTracker::instance();
+    std::vector<std::shared_ptr<tt::tt_metal::IGraphProcessor>> above;
+    while (tracker.get_processors().back() != capture) {
+        above.push_back(tracker.get_processors().back());
+        tracker.pop_processor();
+    }
+    tracker.pop_processor();
+    for (auto it = above.rbegin(); it != above.rend(); ++it) {
+        tracker.push_processor(*it);
+    }
 }
 
 }  // namespace
 
 nlohmann::json GraphProcessor::end_graph_capture() {
-    auto& tracker = tt::tt_metal::GraphTracker::instance();
-    auto& processor = capture_to_end(tracker);
+    auto capture = innermost_graph_capture();
     // End the capture even if finalizing it throws; see end_graph_capture_to_file.
-    auto pop_capture = ttnn::make_guard([&tracker]() { tracker.pop_processor(); });
-    return processor.end_capture();
+    auto remove_capture = ttnn::make_guard([capture]() { remove_graph_capture(capture); });
+    return capture->end_capture();
 }
 
 nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::path& report_path) {
-    auto& tracker = tt::tt_metal::GraphTracker::instance();
-    auto& processor = capture_to_end(tracker);
+    auto capture = innermost_graph_capture();
+    auto& processor = *capture;
 
     // End the capture even if writing the report throws (unwritable path, full disk): a capture left active keeps
     // recording the caller's later operations and nests the next begin_graph_capture inside itself. (The graph report
     // fixture's other ranks still wait for a rank whose write fails; see tenstorrent/ttnn-visualizer#2205.)
-    auto pop_capture = ttnn::make_guard([&tracker]() { tracker.pop_processor(); });
+    auto remove_capture = ttnn::make_guard([capture]() { remove_graph_capture(capture); });
 
     // Finalize the graph, then build the report via the shared get_report() path
     auto graph_json = processor.end_capture();

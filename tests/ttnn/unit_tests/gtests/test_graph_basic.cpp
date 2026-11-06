@@ -1411,20 +1411,44 @@ TEST_F(GraphCaptureEnd, CaptureEndsAndNoPartialReportIsLeftWhenTheReportCannotBe
     EXPECT_FALSE(partial_report_left(report_path));
 }
 
-TEST_F(GraphCaptureEnd, CaptureUnderAnotherProcessorIsNotEndedAndNothingIsPopped) {
+// A device opened after begin_graph_capture (tt-train's MemoryUsageTracker begins its capture before tt-train opens
+// the device) leaves its memory tracker above the capture. Ending the capture ends that capture and keeps the tracker.
+TEST_F(GraphCaptureEnd, CaptureUnderAnotherProcessorIsEndedAndTheProcessorAboveIsKept) {
     const auto report_path = report_dir_ / "report.json";
+    auto below = std::make_shared<NonCaptureProcessor>();
+    tracker().push_processor(below);
+    ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NORMAL);
+    ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NORMAL);
+    auto above = std::make_shared<NonCaptureProcessor>();
+    tracker().push_processor(above);
+    auto top = std::make_shared<NonCaptureProcessor>();
+    tracker().push_processor(top);
+
+    // The inner capture first, then the outer one, each from under the two processors pushed after it.
+    EXPECT_TRUE(ttnn::graph::GraphProcessor::end_graph_capture().is_array());
+    EXPECT_TRUE(tracker().is_enabled());
+    ttnn::graph::GraphProcessor::end_graph_capture_to_file(report_path);
+
+    EXPECT_FALSE(tracker().is_enabled());
+    EXPECT_TRUE(std::filesystem::exists(report_path));
+    const std::vector<std::shared_ptr<tt::tt_metal::IGraphProcessor>> expected = {below, above, top};
+    const auto& processors = tracker().get_processors();
+    ASSERT_EQ(processors.size(), depth_ + expected.size());
+    EXPECT_TRUE(std::equal(expected.begin(), expected.end(), processors.end() - expected.size()));
+}
+
+TEST_F(GraphCaptureEnd, CaptureUnderAnotherProcessorEndsWhenTheReportCannotBeWritten) {
+    const auto report_path = report_dir_ / "report.json";
+    std::filesystem::create_directories(report_path);  // A directory where the report should go: the rename fails.
     ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NORMAL);
     auto above = std::make_shared<NonCaptureProcessor>();
     tracker().push_processor(above);
 
-    expect_throw_containing([] { ttnn::graph::GraphProcessor::end_graph_capture(); }, "not a GraphProcessor");
     expect_throw_containing(
-        [&] { ttnn::graph::GraphProcessor::end_graph_capture_to_file(report_path); }, "not a GraphProcessor");
+        [&] { ttnn::graph::GraphProcessor::end_graph_capture_to_file(report_path); },
+        "Failed to move graph report into place");
 
-    EXPECT_EQ(tracker().get_processors().back(), above);
-    EXPECT_TRUE(tracker().is_enabled());
-    EXPECT_FALSE(std::filesystem::exists(report_path));
-    tracker().pop_processor();
-    ttnn::graph::GraphProcessor::end_graph_capture();
     EXPECT_FALSE(tracker().is_enabled());
+    EXPECT_EQ(tracker().get_processors().size(), depth_ + 1);
+    EXPECT_EQ(tracker().get_processors().back(), above);
 }

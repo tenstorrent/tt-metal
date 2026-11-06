@@ -724,7 +724,7 @@ def full_graph_capture(report_path: str, *, run_mode=None, slow_dispatch: bool =
             try:
                 end_graph_capture()
             except Exception as exception:
-                # E.g. a device opened in the body put its memory tracker above the capture, which then can't end.
+                # Finalizing the capture threw. It has still ended; the body's own error is the one to raise.
                 logger.warning(f"full_graph_capture could not end its graph capture: {exception}")
         if not prev_buffer_tracing:
             disable_detailed_buffer_tracing()
