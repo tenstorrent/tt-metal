@@ -441,7 +441,17 @@ class MuseGlimmerAttention:
         return self._gate_oproj(attn, gate)
 
     def forward_decode(
-        self, x, current_pos, rope, kv_cache, page_table, sdpa_inputs=None, kv_write_rows=None, sdpa_rows=None
+        self,
+        x,
+        current_pos,
+        rope,
+        kv_cache,
+        page_table,
+        sdpa_inputs=None,
+        kv_write_rows=None,
+        sdpa_rows=None,
+        kv_write_page_table=None,
+        kv_write_batch=1,
     ):
         a = self.args
         k_cache, v_cache = kv_cache
@@ -501,9 +511,10 @@ class MuseGlimmerAttention:
                 k,
                 v,
                 kv_write_rows,
-                page_table,
+                kv_write_page_table,
                 num_kv_heads=a.kv_heads_local,
                 block_size=a.block_size,
+                batch=kv_write_batch,
             )
         else:
             k = ttnn.to_memory_config(k, kv_memcfg(batch, a.head_dim))

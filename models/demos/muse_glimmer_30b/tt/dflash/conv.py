@@ -34,19 +34,29 @@ def _expand_matrix(mesh_device, hidden, group_size):
     return _EXPAND_CACHE[key]
 
 
+def block_shift_matrix(block_rows: int, rows: int = 32) -> torch.Tensor:
+    """0/1 matrix [rows, rows] for the causal shift of several users' blocks in one decode tile.
+
+    Row t of (S @ x) is the previous row of the same block (x[t-1]), or zero at the first row of a block. Rows
+    [u*block_rows, (u+1)*block_rows) belong to user u, so a block never reads the last row of the user before it."""
+    s = torch.zeros(rows, rows, dtype=torch.bfloat16)
+    for t in range(1, rows):
+        if t % block_rows:
+            s[t, t - 1] = 1
+    return s
+
+
 def _shift_matrix(mesh_device, block_rows):
-    """0/1 matrix [32, 32]: S[t, t-1] = 1 for 1 <= t < block_rows."""
+    """block_shift_matrix(block_rows) as a replicated [1, 1, 32, 32] device tensor, cached per block size."""
     key = (id(mesh_device), block_rows)
     if key not in _SHIFT_CACHE:
-        s = torch.zeros(32, 32, dtype=torch.bfloat16)
-        for t in range(1, block_rows):
-            s[t, t - 1] = 1
+        s = block_shift_matrix(block_rows)
         _SHIFT_CACHE[key] = as_tt(s.view(1, 1, 32, 32), mesh_device, dtype=ttnn.bfloat16)
     return _SHIFT_CACHE[key]
 
 
 class TtDynamicCausalConv:
-    """DFlash2 grouped dynamic causal convolution for one block of `block_rows` rows inside a 32-row decode tile.
+    """DFlash2 grouped dynamic causal convolution on blocks of `block_rows` rows (one block per user) inside a 32-row decode tile.
     Weights are replicated on every device; inputs and outputs are replicated [1, 1, 32, H] bf16."""
 
     def __init__(
@@ -87,6 +97,10 @@ class TtDynamicCausalConv:
         self.shift = _shift_matrix(mesh_device, block_rows)
         self.proj_cfg = matmul_compute_config(mesh_device)
         self.exact_cfg = _exact_config(mesh_device)
+
+    def set_block_rows(self, block_rows):
+        """Switch to blocks of `block_rows` rows; the shift matrices are cached and shared by all conv layers."""
+        self.shift = _shift_matrix(self.mesh_device, block_rows)
 
     def _convolve(self, v, dyn, stage):
         if v.memory_config().is_sharded():

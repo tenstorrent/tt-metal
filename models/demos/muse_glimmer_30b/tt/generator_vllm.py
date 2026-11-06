@@ -4,21 +4,27 @@
 
 """vLLM (vllm-tt-plugin) speculative-decode contract adapter for Muse Glimmer 30B with the DFlash2 drafter.
 
-Wraps `DFlash2Generator` (batch 1, TP4) on the plugin's spec-decode contract (vllm-tt-plugin
+Wraps `DFlash2BatchGenerator` (up to 8 sequences, TP4) on the plugin's spec-decode contract (vllm-tt-plugin
 docs/SPEC_DECODE_CONTRACT.md): the plugin owns scheduling, sampling and the accept walk; this class owns the device
-engine, its KV cache and the drafter.
+engine, its KV cache and the drafter. K (drafts per row) follows the number of live rows (`_K_BY_ROWS`, published as
+the plan's `k_by_rows`); the engine verifies R = K + 1 rows per sequence in one 32-row step.
 
 Select it with (the checkpoint architecture is MuseGlimmerForConditionalGeneration; the plugin prefixes `TT`):
 
     TT_MODEL_CLASS_OVERRIDES="TTMuseGlimmerForConditionalGeneration=models.demos.muse_glimmer_30b.tt.generator_vllm:MuseGlimmerDFlash2ForCausalLM"
 
-Model-owned KV: the engine runs on the model's own identity-paged KV cache (user 0). vLLM's block tables and block ids
-are bookkeeping only and are ignored; `get_kv_cache_spec` only has to make the scheduler admit `max_model_len` tokens.
+Model-owned KV: engine slot u owns target page row u of the model's own cache and drafter ring u. vLLM's block tables
+and block ids are bookkeeping only and are ignored; `get_kv_cache_spec` and `get_max_tokens_all_users` only have to
+make the scheduler admit max_num_seqs sequences of max_model_len tokens.
 
-Engine state follows the plugin's call sequence (verify, accept walk on the host, propose). The engine commits a
-verify lazily: `_outstanding` says the last verify has not been committed yet, and the next call that learns how many
-tokens the plugin accepted (`propose_draft_tokens` through `accepted_counts`, or `decode_forward` through
-`start_pos`) commits it first.
+Slots: the plugin names a request's state by a slot (`empty_slots` at prefill, `slot_remap` when it compacts rows,
+`release_request`). A request keeps its engine slot for life; `phys[plugin_slot]` maps to it, and a `slot_remap` is
+applied to that map only (no KV moves), once, when the decode that carries it succeeds.
+
+Engine state follows the plugin's call sequence (verify, accept walk on the host, propose). A verify is committed
+lazily: `_outstanding` holds the engine slots whose last verify is not committed yet, and the next call that learns
+how many tokens the plugin accepted for a row (`propose_draft_tokens` through `accepted_counts`, or `decode_forward`
+through `start_pos`) commits it first.
 """
 
 import functools
@@ -35,6 +41,8 @@ _SEQ_ALIGN = 256
 _MAX_CONTEXT = 131072
 _SUPPORTED_TP = (4,)
 _TIMING = os.environ.get("MUSE_VLLM_TIMING") == "1"  # read once; log one MUSE_TIMING line per adapter entry
+_K_BY_ROWS = ((2, 15), (4, 7), (8, 3))  # (max live rows, drafts per row): the plugin's draft cap and the engine's R - 1
+_MAX_SEQS = _K_BY_ROWS[-1][0]
 
 
 def _round_up(x, m):
@@ -57,26 +65,11 @@ def _check_served_seq_len(max_model_len):
     return s
 
 
-def build_dflash_engine(mesh, args, model, enable_trace=True):
-    """DFlash2 drafter + selector + generator for batch 1 on `model` (user 0 owns the identity page-table row)."""
-    import ttnn
-    from models.demos.muse_glimmer_30b.tt.dflash.drafter import TtDFlash2Drafter
-    from models.demos.muse_glimmer_30b.tt.dflash.generator import DFlash2Generator
-    from models.demos.muse_glimmer_30b.tt.dflash.selector import HostCandidateSelector
+def build_dflash_engine(model, enable_trace=True):
+    """DFlash2 batch engine on `model` for args.max_batch_size sequences (engine slot u owns target page row u)."""
+    from models.demos.muse_glimmer_30b.tt.dflash.batch_generator import build_batch_generator
 
-    drafter = TtDFlash2Drafter(mesh, args, model.ccl, model.rope)
-    selector = HostCandidateSelector.from_checkpoint()
-    nb = args.max_num_blocks_per_user
-    pt = torch.arange(nb, dtype=torch.int32).reshape(1, nb)
-    pt_tt = ttnn.from_torch(
-        pt,
-        device=mesh,
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    return DFlash2Generator(model, drafter, selector, pt, pt_tt, list(args.eos_token_ids), enable_trace=enable_trace)
+    return build_batch_generator(model, model.args.max_batch_size, enable_trace=enable_trace, k_by_users=_K_BY_ROWS)
 
 
 class MuseGlimmerDFlash2ForCausalLM:
@@ -102,8 +95,10 @@ class MuseGlimmerDFlash2ForCausalLM:
     def __init__(self, engine, kv_handles=None):
         self.engine = engine
         self.kv_handles = kv_handles
-        self._outstanding = False  # the engine's last verify is not committed yet
-        self._last_drafts = None  # drafts the last propose offered (for the mismatch warning)
+        self.n_slots = int(engine.max_users)
+        self.phys = list(range(self.n_slots))  # plugin state slot -> engine slot (see the module docstring)
+        self._outstanding = set()  # engine slots whose last verify is not committed yet
+        self._last_drafts = {}  # engine slot -> drafts the last propose offered (for the mismatch warning)
 
     @classmethod
     def _from_engine(cls, engine, kv_handles=None):
@@ -126,30 +121,35 @@ class MuseGlimmerDFlash2ForCausalLM:
         """Config-time plan; never raises and never touches a device."""
         from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
 
-        if int(max_num_seqs) != 1:
+        n = int(max_num_seqs)
+        if not 1 <= n <= _MAX_SEQS:
             return SpecReject(
-                reason=f"the DFlash2 engine serves one sequence (batch 1), got max_num_seqs={max_num_seqs}",
+                reason=f"the DFlash2 engine serves at most {_MAX_SEQS} sequences (K by live rows {_K_BY_ROWS}), "
+                f"got max_num_seqs={n}",
                 supported_k=(),
             )
+        k = max(1, min(int(requested_k), _MAX_DRAFTS))
         return SpecPlan(
-            effective_k=max(1, min(int(requested_k), _MAX_DRAFTS)),
+            effective_k=k,
             lanes_per_request=1,
             extra_bytes_per_seq=0,  # drafter KV and verify buffers are allocated by the engine, not budgeted here
             extra_bytes_per_token=0,
             accept_modes=("argmax_ids", "logits"),
             drafter_state="internal",
             supports_narrow_decode=True,
+            k_by_rows=tuple((rows, min(kr, k)) for rows, kr in _K_BY_ROWS),
         )
 
     @classmethod
     def get_max_tokens_all_users(cls, *, max_model_len=None, max_num_seqs=1, **kwargs):
-        """The model owns one identity-mapped cache for one sequence, so the scheduler pool covers max_model_len."""
-        if int(max_num_seqs) != 1:
-            raise ValueError(f"{cls.__name__} supports max_num_seqs=1, got {max_num_seqs}")
+        """The model owns one cache row of max_model_len tokens per sequence, so the scheduler pool covers them all."""
+        n = int(max_num_seqs)
+        if not 1 <= n <= _MAX_SEQS:
+            raise ValueError(f"{cls.__name__} supports max_num_seqs in [1, {_MAX_SEQS}], got {max_num_seqs}")
         if max_model_len is None:
-            return _MAX_CONTEXT
+            return n * _MAX_CONTEXT
         _check_served_seq_len(max_model_len)
-        return int(max_model_len)
+        return n * int(max_model_len)
 
     @classmethod
     def get_kv_cache_spec(cls, vllm_config):
@@ -172,8 +172,11 @@ class MuseGlimmerDFlash2ForCausalLM:
     def initialize_vllm_model(
         cls, hf_config, mesh_device, max_batch_size, max_seq_len=None, tt_data_parallel=1, optimizations=None
     ):
-        if int(max_batch_size) != 1:
-            raise ValueError(f"{cls.__name__} supports one sequence; launch with --max-num-seqs 1")
+        n = int(max_batch_size)
+        if not 1 <= n <= _MAX_SEQS:
+            raise ValueError(
+                f"{cls.__name__} serves at most {_MAX_SEQS} sequences; launch with --max-num-seqs <= {_MAX_SEQS}"
+            )
         if tt_data_parallel != 1:
             raise ValueError(
                 f"{cls.__name__} does not support data parallelism, got tt_data_parallel={tt_data_parallel}"
@@ -197,16 +200,16 @@ class MuseGlimmerDFlash2ForCausalLM:
         ckpt = checkpoint_dir()
         logger.info(
             f"[muse dflash2] target {ckpt}, drafter {dflash_checkpoint_dir()}, "
-            f"max_model_len={max_seq_len} -> model max_seq_len={seq_len}"
+            f"max_model_len={max_seq_len} -> model max_seq_len={seq_len}, max_num_seqs={n}"
         )
         args = MuseGlimmerModelArgs.from_checkpoint(
-            ckpt, mesh_device=mesh_device, max_batch_size=1, max_seq_len=seq_len, max_prefill_len=seq_len
+            ckpt, mesh_device=mesh_device, max_batch_size=n, max_seq_len=seq_len, max_prefill_len=seq_len
         )
         text_config = getattr(hf_config, "text_config", hf_config)
         if int(text_config.vocab_size) != int(args.vocab_size):
             logger.warning(f"hf_config vocab_size {text_config.vocab_size} != model vocab_size {args.vocab_size}")
         model = MuseGlimmerModel(args, mesh_device)
-        engine = build_dflash_engine(mesh_device, args, model, enable_trace=True)
+        engine = build_dflash_engine(model, enable_trace=True)
         return cls._from_engine(engine, kv_handles=[list(kv) for kv in model.kv_caches])
 
     # ---- KV: the model owns it
@@ -226,48 +229,65 @@ class MuseGlimmerDFlash2ForCausalLM:
         return None
 
     # ---- engine state reconciliation
-    def _commit(self, count, last):
+    def _commit(self, e, count, last):
         count, last = int(count), int(last)
         if not 1 <= count <= _ROWS:
-            raise RuntimeError(f"cannot commit {count} tokens; the last verify ran {_ROWS} rows")
-        self.engine.commit(count, last)
-        self._outstanding = False
+            raise RuntimeError(f"cannot commit {count} tokens in engine slot {e}; a verify runs at most {_ROWS} rows")
+        self.engine.commit_slot(e, count, last)
+        self._outstanding.discard(e)
 
-    def _commit_from_decode(self, tokens, start_pos):
-        """A decode call follows an uncommitted verify: the plugin's position and token say what it committed."""
-        q = int(start_pos[0, 0])
-        count = q - int(self.engine.p)
-        if not 1 <= count <= _ROWS:
-            raise RuntimeError(f"decode at position {q} implies {count} committed tokens (engine at {self.engine.p})")
-        self._commit(count, tokens[0, 0])
+    def _remapped(self, slot_remap):
+        """phys after `slot_remap` (slot i now names the state that slot slot_remap[i] named). Bookkeeping only: each
+        request keeps its engine slot, so no KV moves."""
+        if slot_remap is None:
+            return list(self.phys)
+        idx = [int(j) for j in torch.as_tensor(slot_remap).reshape(-1).tolist()]
+        if sorted(idx) != list(range(self.n_slots)):
+            raise RuntimeError(f"slot_remap {idx} is not a permutation of the {self.n_slots} slots")
+        return [self.phys[j] for j in idx]
 
-    def _commit_from_propose(self, committed_tokens, accepted_counts):
-        count = int(accepted_counts[0])
-        if not 1 <= count <= committed_tokens.shape[1]:
-            raise RuntimeError(
-                f"accepted_counts[0]={count} outside the committed block {tuple(committed_tokens.shape)}"
-            )
-        self._commit(count, committed_tokens[0, count - 1])
+    def _engine_slot(self, phys, row):
+        if row >= self.n_slots:
+            raise RuntimeError(f"live row {row} is beyond the {self.n_slots} engine slots")
+        e = phys[row]
+        if e not in self.engine.slots:
+            raise RuntimeError(f"row {row} (engine slot {e}) has no prefilled request")
+        return e
+
+    def _settle(self, phys, live):
+        """The decode is accepted: its slot_remap takes effect and every live row has an uncommitted verify."""
+        self.phys = phys
+        self._outstanding.update(live.values())
 
     # ---- prefill / decode
     def prefill_forward(self, tokens, page_table=None, kv_cache=None, prompt_lens=None, **kwargs):
-        if tokens.shape[0] != 1:
-            raise ValueError(f"prefill serves one sequence, got {tokens.shape[0]}")
+        tokens = torch.as_tensor(tokens)
+        n_rows = int(tokens.shape[0])
+        empty_slots = kwargs.get("empty_slots")
+        slots = list(range(n_rows)) if empty_slots is None else [int(s) for s in empty_slots]
+        if len(slots) != n_rows or any(not 0 <= s < self.n_slots for s in slots):
+            raise ValueError(f"empty_slots {slots} do not name {n_rows} of the {self.n_slots} slots")
         start_pos = kwargs.get("start_pos")
-        if start_pos is not None and int(torch.as_tensor(start_pos).flatten()[0]) != 0:
+        if start_pos is not None and any(int(x) != 0 for x in torch.as_tensor(start_pos).reshape(-1).tolist()):
             raise ValueError("chunked prefill and prefix caching are not supported (start_pos must be 0)")
         for name in ("pixel_values", "pixel_values_videos"):
             if kwargs.get(name) is not None and any(v is not None for v in kwargs[name]):
                 raise ValueError(f"{type(self).__name__} is text-only; {name} is not supported")
-        n = int(prompt_lens[0]) if prompt_lens is not None else int(tokens.shape[1])
+        lens = [int(prompt_lens[r]) if prompt_lens is not None else int(tokens.shape[1]) for r in range(n_rows)]
         max_seq_len = int(self.engine.model.args.max_seq_len)
-        if n + _ROWS > max_seq_len:
-            raise ValueError(f"prompt of {n} tokens does not fit the model context {max_seq_len} (needs {_ROWS} spare)")
-        prompt_ids = [int(t) for t in tokens[0, :n].tolist()]
-        logits = self.engine.start(prompt_ids, return_logits=True)
-        self._outstanding = False
-        self._last_drafts = None
-        return logits.float().reshape(1, 1, -1)  # host logits [B=1, 1, V]
+        for n in lens:
+            if n + _ROWS > max_seq_len:
+                raise ValueError(
+                    f"prompt of {n} tokens does not fit the model context {max_seq_len} (needs {_ROWS} spare)"
+                )
+        out = []
+        for r, (s, n) in enumerate(zip(slots, lens)):
+            e = self.phys[s]
+            self._outstanding.discard(e)
+            self._last_drafts.pop(e, None)
+            logits = self.engine.start_slot(e, [int(t) for t in tokens[r, :n].tolist()], return_logits=True)
+            out.append(logits.float().reshape(1, -1))
+        return torch.stack(out)  # host logits [N, 1, V]
 
     def decode_forward(
         self,
@@ -279,53 +299,67 @@ class MuseGlimmerDFlash2ForCausalLM:
         num_valid_drafts=None,
         accepted_counts=None,
         spec_mode=None,
+        slot_remap=None,
         **kwargs,
     ):
         from vllm_tt_plugin.spec_decode import VerifyOutput
 
         tokens = torch.as_tensor(tokens)
-        start_pos = torch.as_tensor(start_pos)
         rows = int(tokens.shape[0])
-        start_pos = start_pos.reshape(rows, -1)
         tokens = tokens.reshape(rows, -1)
-        if int(start_pos[0, 0]) < 0:
-            raise RuntimeError("decode row 0 is inactive; the engine serves one sequence in row 0")
-        if self._outstanding:
-            self._commit_from_decode(tokens, start_pos)
-        if int(start_pos[0, 0]) != int(self.engine.p):
-            raise RuntimeError(f"decode at position {int(start_pos[0, 0])} but the engine is at {self.engine.p}")
+        start_pos = torch.as_tensor(start_pos).reshape(rows, -1)
+        phys = self._remapped(slot_remap)
         eng = self.engine
+        vocab = int(eng.model.args.vocab_size)
+        live = {i: self._engine_slot(phys, i) for i in range(rows) if int(start_pos[i, 0]) >= 0}
+        for i, e in live.items():
+            q = int(start_pos[i, 0])
+            if e in self._outstanding:  # the plugin's position and token say what it committed
+                self._commit(e, q - eng.slots[e].p, tokens[i, 0])
+            if q != eng.slots[e].p:
+                raise RuntimeError(f"decode row {i} at position {q} but engine slot {e} is at {eng.slots[e].p}")
 
         if spec_mode is None:
-            # Ordinary decode: a one-row verify, host logits [B, 1, V] for the plugin's host sampler.
-            lg = eng.verify([int(tokens[0, 0])], "logits")
-            self._outstanding = True
-            self._last_drafts = None
-            out = torch.zeros(rows, 1, lg.shape[-1], dtype=torch.float32)
-            out[0, 0] = lg[0]
+            # Ordinary decode: a one-row verify per live row, host logits [B, 1, V] for the plugin's host sampler.
+            lg = eng.verify_slots({e: [int(tokens[i, 0])] for i, e in live.items()}, "logits") if live else {}
+            out = torch.zeros(rows, 1, vocab, dtype=torch.float32)
+            for i, e in live.items():
+                out[i, 0] = lg[e][0]
+                self._last_drafts.pop(e, None)
+            self._settle(phys, live)
             return out
 
         width = int(tokens.shape[1])
         if width > _ROWS:
             raise ValueError(f"verify block of {width} columns exceeds the engine's {_ROWS} rows")
-        n = int(torch.as_tensor(num_valid_drafts)[0])
-        if not 0 <= n <= width - 1:
-            raise ValueError(f"num_valid_drafts[0]={n} outside [0, {width - 1}]")
-        toks = [int(t) for t in tokens[0, : 1 + n].tolist()]
-        if self._last_drafts is not None and toks[1:] != self._last_drafts[:n]:
-            logger.warning(f"verify drafts {toks[1:]} differ from the proposed {self._last_drafts[:n]}")
-        self._last_drafts = None
+        nv = torch.as_tensor(num_valid_drafts).reshape(-1)
+        req = {}
+        for i, e in live.items():
+            n = int(nv[i])
+            if not 0 <= n <= width - 1:
+                raise ValueError(f"num_valid_drafts[{i}]={n} outside [0, {width - 1}]")
+            toks = [int(t) for t in tokens[i, : 1 + n].tolist()]
+            offered = self._last_drafts.pop(e, None)
+            if offered is not None and toks[1:] != offered[:n]:
+                logger.warning(f"row {i}: verify drafts {toks[1:]} differ from the proposed {offered[:n]}")
+            req[e] = toks
         if spec_mode == "argmax_ids":
-            am = eng.verify(toks, "argmax")
-            self._outstanding = True
+            am = eng.verify_slots(req, "argmax") if req else {}
             ids = torch.zeros(rows, width, dtype=torch.int32)
-            ids[0] = torch.tensor([int(a) for a in am[:width]], dtype=torch.int32)
+            for i, e in live.items():
+                c = min(len(am[e]), width)
+                ids[i, :c] = torch.tensor([int(a) for a in am[e][:c]], dtype=torch.int32)
+            self._settle(phys, live)
             return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids)
         if spec_mode == "logits":
-            lg = eng.verify(toks, "logits")
-            self._outstanding = True
-            out = torch.zeros(rows, width, lg.shape[-1], dtype=torch.float32)
-            out[0] = lg[:width].float()
+            lg = eng.verify_slots(req, "logits") if req else {}
+            # The plugin reads live rows up to their bonus column only; the rest stays unwritten (a zeroed
+            # [B, 1+K, V] float block is ~134 MB at 8 rows).
+            out = torch.empty(rows, width, vocab, dtype=torch.float32)
+            for i, e in live.items():
+                c = min(lg[e].shape[0], width)
+                out[i, :c] = lg[e][:c].float()
+            self._settle(phys, live)
             return VerifyOutput(spec_mode="logits", logits=out)
         raise ValueError(f"unsupported spec_mode {spec_mode!r}")
 
@@ -333,38 +367,48 @@ class MuseGlimmerDFlash2ForCausalLM:
         from vllm_tt_plugin.spec_decode import DraftOutput
 
         committed_tokens = torch.as_tensor(committed_tokens)
-        accepted_counts = torch.as_tensor(accepted_counts)
         rows = int(committed_tokens.shape[0])
+        committed_tokens = committed_tokens.reshape(rows, -1)
+        committed_positions = torch.as_tensor(committed_positions).reshape(rows, -1)
+        accepted_counts = torch.as_tensor(accepted_counts).reshape(-1)
         k = int(num_drafts)
         if k > _MAX_DRAFTS:
             raise ValueError(f"num_drafts={k} exceeds the drafter's {_MAX_DRAFTS}")
-        if self._outstanding:
-            self._commit_from_propose(committed_tokens, accepted_counts)
         eng = self.engine
+        live = {i: self._engine_slot(self.phys, i) for i in range(rows) if int(committed_positions[i, 0]) >= 0}
+        for i, e in live.items():
+            if e in self._outstanding:
+                count = int(accepted_counts[i])
+                if not 1 <= count <= committed_tokens.shape[1]:
+                    raise RuntimeError(
+                        f"accepted_counts[{i}]={count} outside the committed block {tuple(committed_tokens.shape)}"
+                    )
+                self._commit(e, count, committed_tokens[i, count - 1])
         ids = torch.zeros(rows, k, dtype=torch.int32)
         num_valid = torch.zeros(rows, dtype=torch.int32)
-        if eng.anchor is None or eng.p + _ROWS > int(eng.model.args.max_seq_len):
-            self._last_drafts = None  # nothing to continue from, or no room for the 16-row verify
-            return DraftOutput(draft_token_ids=ids, num_valid=num_valid)
-        drafts = [int(t) for t in eng.propose()[0]][:k]
-        self._last_drafts = drafts
-        ids[0, : len(drafts)] = torch.tensor(drafts, dtype=torch.int32)
-        num_valid[0] = len(drafts)
+        # A row without an anchor (prefilled, not verified yet) or without room for a 16-row verify gets no drafts.
+        limit = int(eng.model.args.max_seq_len) - _ROWS
+        ready = {i: e for i, e in live.items() if eng.slots[e].anchor is not None and eng.slots[e].p <= limit}
+        drafts = eng.propose_slots(sorted(ready.values())) if ready else {}
+        for e in set(live.values()) - set(ready.values()):
+            self._last_drafts.pop(e, None)
+        for i, e in ready.items():
+            d = [int(t) for t in drafts[e][0]][:k]
+            self._last_drafts[e] = d
+            ids[i, : len(d)] = torch.tensor(d, dtype=torch.int32)
+            num_valid[i] = len(d)
         return DraftOutput(draft_token_ids=ids, num_valid=num_valid)
 
     # ---- lifecycle
     def release_request(self, slot):
-        eng = self.engine
-        eng.p = 0
-        eng.anchor = None
-        eng.pending = None
-        self._outstanding = False
-        self._last_drafts = None
+        e = self.phys[int(slot)]
+        self.engine.release_slot(e)
+        self._outstanding.discard(e)
+        self._last_drafts.pop(e, None)
 
     def note_state_slots_moved(self, moves):
-        """Batch 1: the only slot is 0, so a move other than the identity is a bug."""
-        if any(int(old) != int(new) for old, new in dict(moves).items()):
-            raise RuntimeError(f"single-slot adapter was asked to move state slots: {moves}")
+        """decode_forward already applied the matching slot_remap to `phys`; nothing moves on the device."""
+        del moves
 
     def release_persistent_capture(self):
         self.engine.release_traces()
@@ -378,7 +422,7 @@ def _install_timing():
     def wrap_engine(engine):
         if getattr(engine, "_muse_timed", False):
             return
-        for name in ("start", "commit", "verify", "propose"):
+        for name in ("start_slot", "commit_slot", "verify_slots", "propose_slots"):
             fn = getattr(engine, name, None)
             if fn is None:
                 continue
@@ -409,7 +453,7 @@ def _install_timing():
                 state["last_return"] = t1
                 logger.info(
                     f"MUSE_TIMING kind={kind_of(kwargs)} engine_ms={state['engine_s'] * 1e3:.2f} "
-                    f"adapter_ms={(t1 - t0) * 1e3:.2f} gap_ms={gap:.2f} p={getattr(self.engine, 'p', None)}"
+                    f"adapter_ms={(t1 - t0) * 1e3:.2f} gap_ms={gap:.2f} slots={len(getattr(self.engine, 'slots', {}))}"
                 )
 
         setattr(cls, name, inner)

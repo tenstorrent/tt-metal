@@ -218,3 +218,21 @@ def test_dflash_checkpoint_dir(monkeypatch, tmp_path):
         assert calls == [mc.DFLASH_REPO_ID]
     finally:
         mc._hf_snapshot.cache_clear()
+
+
+def test_batch_layout_policy(expect_error):
+    from models.demos.muse_glimmer_30b.tt.dflash.batch_generator import plan_layout, rows_for_users
+
+    assert [rows_for_users(n) for n in (1, 2, 3, 4, 5, 8)] == [16, 16, 8, 8, 4, 4]
+    with expect_error(ValueError, "use plain decode"):
+        rows_for_users(9)
+    lay = plan_layout([0, 1, 2], 8)
+    assert lay.slots == (0, 1, 2, None)
+    # same R: slots keep their groups; a new slot takes the lowest free group
+    lay = plan_layout([0, 2, 5], 8, lay)
+    assert lay.slots == (0, 5, 2, None)
+    # new R: slots keep their old group order, new slots after them (by slot id)
+    lay = plan_layout([2, 5, 0, 7, 6], 4, lay)
+    assert lay.slots == (0, 5, 2, 6, 7, None, None, None)
+    lay = plan_layout([5, 2], 16, lay)
+    assert lay.slots == (5, 2)

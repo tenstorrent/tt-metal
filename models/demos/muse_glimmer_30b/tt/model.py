@@ -397,8 +397,9 @@ class MuseGlimmerModel:
     def decode_forward(self, tokens_tt, current_pos_tt, rope_idx_tt, page_table_tt, verify=None, taps=None):
         """One decode step for the padded batch; returns sharded logits [1,1,32,vocab_local] (no host reads).
 
-        verify: DFlash2 verify object (rows, kv_write_rows, sliding_page_table): rows 0..rows-1 are consecutive
-        positions of one user; K/V rows are written with PagedUpdateRows and SDPA runs on the first `rows` rows.
+        verify: DFlash2 verify object (rows, kv_write_rows, kv_write_batch, sliding_page_table, kv_write_page_table,
+        kv_write_sliding_page_table): row groups of consecutive positions per user (RowLayout); K/V rows are written
+        with PagedUpdateRows (compact page tables, one row per group) and SDPA runs on the first `rows` rows.
         taps: {layer_idx: persistent DRAM bf16 [1,1,32,H]}; the output of those layers is copied into them."""
         a = self.args
         x = self.embed(tokens_tt)
@@ -406,11 +407,13 @@ class MuseGlimmerModel:
         if verify is None:
             sb = min(a.max_batch_size, DECODE_B_PAD)
             tables = {False: page_table_tt, True: self.sliding_page_table}  # keyed by is_sliding
-            kv_write_rows, sdpa_rows = None, None
+            kv_write_rows, sdpa_rows, write_tables, write_batch = None, None, {}, 1
         else:
             sb = verify.rows
             tables = {False: page_table_tt, True: verify.sliding_page_table}
             kv_write_rows, sdpa_rows = verify.kv_write_rows, sb
+            write_tables = {False: verify.kv_write_page_table, True: verify.kv_write_sliding_page_table}
+            write_batch = verify.kv_write_batch
         sdpa_inputs = {}
         if sb < DECODE_B_PAD:  # SDPA decode splits its cores over all user slots
             pos = ttnn.slice(current_pos_tt, [0], [sb])
@@ -426,6 +429,8 @@ class MuseGlimmerModel:
                 sdpa_inputs.get(s),
                 kv_write_rows,
                 sdpa_rows,
+                write_tables.get(s),
+                write_batch,
             )
             ttnn.deallocate(x)
             x = nx

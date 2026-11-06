@@ -35,7 +35,6 @@ pytestmark = pytest.mark.skipif(
 PCC = 0.99
 CONV_PCC = 0.999
 H = 6656
-ROWS = 16
 _CONV_CKPT = os.path.join(dflash_checkpoint_dir(), "model.safetensors")
 _mesh_params = mesh_test_params()
 
@@ -51,7 +50,7 @@ def _to_tt(x, mesh_device):
     )
 
 
-def _read_cache(cache_tt, mesh_device, n_ring, block, positions):
+def _read_cache(cache_tt, mesh_device, n_ring, block, positions, slot=0):
     """Per-device ring cache -> [C, 8 kv heads, hd] float for the given positions (device d holds heads 2d, 2d+1)."""
     devs = ttnn.get_device_tensors(cache_tt)
     outs = []
@@ -59,7 +58,7 @@ def _read_cache(cache_tt, mesh_device, n_ring, block, positions):
         outs.append(ttnn.to_torch(d).float())  # [n_ring, kv_local, block, hd]
     rows = []
     for pos in positions:
-        blk, row = (pos // block) % n_ring, pos % block
+        blk, row = slot * n_ring + (pos // block) % n_ring, pos % block
         rows.append(torch.cat([o[blk, :, row, :] for o in outs], dim=0))  # [8, hd]
     return torch.stack(rows)
 
@@ -118,16 +117,16 @@ def test_context_pass(mesh_device, tp):
 ANCHOR, MASK = 1234, 201818
 
 
-def _build(sub, num_layers=None):
+def _build(sub, num_layers=None, max_users=1):
     from models.demos.muse_glimmer_30b.tt.dflash.drafter import TtDFlash2Drafter
 
     target_args = MuseGlimmerModelArgs.from_checkpoint(mesh_device=sub, max_seq_len=8192, max_batch_size=1)
     ccl = MuseCCL(sub)
     rope = RopeTables(sub, target_args.head_dim, target_args.rope_theta, target_args.max_seq_len)
-    return target_args, TtDFlash2Drafter(sub, target_args, ccl, rope, num_layers=num_layers)
+    return target_args, TtDFlash2Drafter(sub, target_args, ccl, rope, num_layers=num_layers, max_users=max_users)
 
 
-def _run_context(drafter, sub, taps, P0):
+def _run_context(drafter, sub, taps, P0, slot=None):
     C, H = taps.shape[1], taps.shape[2] // 5
     for start in range(0, C, 32):
         n = min(32, C - start)
@@ -138,7 +137,10 @@ def _run_context(drafter, sub, taps, P0):
             tap_tt.append(_to_tt(x.bfloat16(), sub))
         rope_idx = drafter.make_rope_idx(range(P0 + start, P0 + start + n))
         widx = drafter.make_write_idxs(P0 + start, n, valid=n)
-        drafter.context_pass(tap_tt, rope_idx, widx)
+        if slot is None:
+            drafter.context_pass(tap_tt, rope_idx, widx)
+        else:
+            drafter.context_pass(tap_tt, rope_idx, widx, drafter.fill_table(slot), 1)
 
 
 def _block_inputs(drafter, sub, noise_rows, C, P0, H):
@@ -282,8 +284,9 @@ def _to_torch(t, mesh_device):
 
 @_mesh_params
 @pytest.mark.timeout(900)
+@pytest.mark.parametrize("block_rows", [16, 8, 4])
 @pytest.mark.parametrize("prefix", ["layers.0.attention_conv", "layers.4.mlp_conv"])
-def test_dynamic_causal_conv(mesh_device, tp, prefix):
+def test_dynamic_causal_conv(mesh_device, tp, prefix, block_rows):
     sub = skip_and_submesh(mesh_device, tp)
     from models.demos.muse_glimmer_30b.tt.dflash.conv import TtDynamicCausalConv
 
@@ -298,21 +301,139 @@ def test_dynamic_causal_conv(mesh_device, tp, prefix):
     torch.manual_seed(0)
     h = torch.randn(1, 32, H)
     x = torch.randn(1, 32, H)
+    starts = range(0, 32, block_rows)  # one block per user; a block must not read the block before it
     with torch.no_grad():
-        ref_out, ref_dyn = ref.prepare(h[:, :ROWS])
-        ref_fin = ref.finish(x[:, :ROWS], ref_dyn)
+        ref_out, ref_fin = [], []
+        for r0 in starts:
+            o, d = ref.prepare(h[:, r0 : r0 + block_rows])
+            ref_out.append(o[0])
+            ref_fin.append(ref.finish(x[:, r0 : r0 + block_rows], d)[0])
 
-    conv = TtDynamicCausalConv(sub, base, proj, group_size=16, block_rows=ROWS)
+    conv = TtDynamicCausalConv(sub, base, proj, group_size=16, block_rows=16)
+    conv.set_block_rows(block_rows)
     h_tt = _to_tt(h.bfloat16().view(1, 1, 32, H), sub)
     x_tt = _to_tt(x.bfloat16().view(1, 1, 32, H), sub)
     out, dyn = conv.prepare(h_tt)
     fin = conv.finish(x_tt, dyn)
 
-    out_t = _to_torch(out, sub)[0, 0, :ROWS]
-    fin_t = _to_torch(fin, sub)[0, 0, :ROWS]
-    ok1, msg1 = comp_pcc(ref_out[0], out_t, CONV_PCC)
-    ok2, msg2 = comp_pcc(ref_fin[0], fin_t, CONV_PCC)
-    logger.info(f"{prefix} prepare: {msg1}")
-    logger.info(f"{prefix} finish: {msg2}")
-    assert ok1, f"prepare: {msg1}"
-    assert ok2, f"finish: {msg2}"
+    out_t = _to_torch(out, sub)[0, 0]
+    fin_t = _to_torch(fin, sub)[0, 0]
+    for i, r0 in enumerate(starts):
+        rows = slice(r0, r0 + block_rows)
+        ok1, msg1 = comp_pcc(ref_out[i], out_t[rows], CONV_PCC)
+        ok2, msg2 = comp_pcc(ref_fin[i], fin_t[rows], CONV_PCC)
+        logger.info(f"{prefix} R={block_rows} rows {r0}-{r0 + block_rows - 1}: prepare {msg1}, finish {msg2}")
+        assert ok1, f"prepare rows {r0}-{r0 + block_rows - 1}: {msg1}"
+        assert ok2, f"finish rows {r0}-{r0 + block_rows - 1}: {msg2}"
+
+
+def _i32(drafter, values):
+    return ttnn.from_torch(
+        torch.tensor(values, dtype=torch.int32),
+        device=drafter.mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(drafter.mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _group_inputs(drafter, sub, layout, starts, rows_x, valid=None):
+    """Pass inputs for `layout`: group g (slot u) has R rows at positions starts[u] + p. rows_x: {slot: [R, H]};
+    valid: {slot: n} writes only rows p < n (default all). -> (x_tt, rope_idx, write_idxs (R tensors [groups]),
+    sdpa_pos)."""
+    R, H = layout.R, drafter.hidden
+    x = torch.zeros(1, 1, 32, H)
+    pos, sdpa = [0] * 32, [-1] * 32
+    widx = [[-1] * layout.groups for _ in range(R)]
+    for g, u in enumerate(layout.slots):
+        if u is None:
+            continue
+        x[0, 0, g * R : (g + 1) * R] = rows_x[u]
+        n = R if valid is None else valid[u]
+        for p in range(R):
+            pos[g * R + p] = starts[u] + p
+            sdpa[g * R + p] = starts[u] + R - 1
+            if p < n:
+                widx[p][g] = starts[u] + p
+    return _to_tt(x.bfloat16(), sub), drafter.make_rope_idx(pos), [_i32(drafter, w) for w in widx], _i32(drafter, sdpa)
+
+
+def _group_taps(sub, layout, taps_rows, H):
+    """5 tap tensors [1,1,32,H]: group g's rows hold taps_rows[slot] ([R, 5H]); other rows are zero."""
+    out = []
+    for t in range(5):
+        x = torch.zeros(1, 1, 32, H)
+        for g, u in enumerate(layout.slots):
+            if u in taps_rows:
+                x[0, 0, g * layout.R : (g + 1) * layout.R] = taps_rows[u][:, t * H : (t + 1) * H]
+        out.append(_to_tt(x.bfloat16(), sub))
+    return out
+
+
+@_mesh_params
+@pytest.mark.timeout(1800)
+def test_drafter_multi_user(mesh_device, tp):
+    """Multi-user block and context passes (row groups of a RowLayout) equal single-user passes, per slot."""
+    sub = skip_and_submesh(mesh_device, tp)
+    from models.demos.muse_glimmer_30b.tt.dflash.layout import RowLayout
+
+    target_args, drafter = _build(sub, max_users=4)
+    H, n_ring, blk = drafter.hidden, drafter.n_ring, drafter.block_size
+    table = target_args.load_embedding_weight()
+    torch.manual_seed(0)
+    ctx_len = {0: 40, 1: 75, 2: 33, 3: 2100}
+    p0 = {0: 0, 1: 500, 2: 100, 3: 3000}  # slot 3 wraps its ring
+    for u in range(4):
+        _run_context(drafter, sub, torch.randn(1, ctx_len[u], 5 * H) * 0.5, p0[u], slot=u)
+    end = {u: p0[u] + ctx_len[u] for u in range(4)}
+
+    def read_rows(out, rows):
+        return ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()[0, 0, rows]
+
+    for layout in (RowLayout(16, (1, 3)), RowLayout(8, (2, 0, None, 3)), RowLayout(4, (3, None, 1, 0, 2))):
+        R = layout.R
+        used = [u for u in layout.slots if u is not None]
+        rows_x = {u: table[[ANCHOR + u] + [MASK] * (R - 1)].float() for u in used}
+        drafter.set_layout(layout)
+        out = drafter.block_forward(*_group_inputs(drafter, sub, layout, end, rows_x))
+        multi = {u: read_rows(out, list(layout.rows(layout.group_of(u)))) for u in used}
+        for u in used:
+            single = RowLayout(R, (u,))
+            drafter.set_layout(single)
+            got = read_rows(drafter.block_forward(*_group_inputs(drafter, sub, single, end, rows_x)), list(range(R)))
+            ok, msg = comp_pcc(got, multi[u], 0.9999)
+            logger.info(f"block R={R} slot {u}: {msg}, max abs diff {(got - multi[u]).abs().max().item():.3g}")
+            assert ok, f"block R={R} slot {u}: {msg}"
+
+    # Multi-user context pass: group g writes rows p < produced[slot] at end[slot] + p of its slot, nothing else.
+    layout = RowLayout(8, (2, 0, None, 3))
+    produced = {2: 5, 0: 8, 3: 1}
+    taps_rows = {u: torch.randn(8, 5 * H) * 0.5 for u in produced}
+    zeros_x = {u: torch.zeros(8, H) for u in produced}
+
+    def read_kv(u):
+        out = []
+        for li in (0, drafter.num_layers - 1):
+            for cache in drafter.kv_caches[li]:
+                out.append(_read_cache(cache, sub, n_ring, blk, range(end[u], end[u] + 8), slot=u))
+        return torch.stack(out)  # [4, 8 rows, 8 kv heads, hd]
+
+    before = {u: read_kv(u) for u in produced}
+    drafter.set_layout(layout)
+    _, rope_idx, widx, _ = _group_inputs(drafter, sub, layout, end, zeros_x, valid=produced)
+    drafter.context_pass(_group_taps(sub, layout, taps_rows, H), rope_idx, widx)
+    after_multi = {u: read_kv(u) for u in produced}
+    for u, n in produced.items():
+        single = RowLayout(8, (u,))
+        drafter.set_layout(single)
+        _, rope_idx, widx, _ = _group_inputs(drafter, sub, single, end, zeros_x, valid={u: n})
+        drafter.context_pass(_group_taps(sub, single, {u: taps_rows[u]}, H), rope_idx, widx)
+        after_single = read_kv(u)
+        assert torch.equal(after_multi[u][:, n:], before[u][:, n:]), f"slot {u}: rows >= {n} were written"
+        assert not torch.equal(after_multi[u][:, :n], before[u][:, :n]), f"slot {u}: rows < {n} were not written"
+        ok, msg = comp_pcc(after_single, after_multi[u], 0.9999)
+        logger.info(
+            f"context slot {u} produced {n}: {msg}, max abs diff {(after_single - after_multi[u]).abs().max().item():.3g}"
+        )
+        assert ok, f"context slot {u}: {msg}"

@@ -39,6 +39,7 @@ class DFlash2Generator:
         self.mesh = model.mesh_device
         self.mapper = replicate_mapper(self.mesh)
         # Persistent per-round inputs (updated with copy_host_to_device_tensor; never created inside a capture).
+        self.verifier = TargetVerifier(model, self.cfg.target_layer_ids, page_table)
         self.block_tokens_tt = ttnn.from_torch(
             torch.zeros(1, DECODE_B_PAD, dtype=torch.int32),
             dtype=ttnn.uint32,
@@ -49,12 +50,11 @@ class DFlash2Generator:
         )
         self.block_rope_idx = drafter.make_rope_idx([])
         self.ctx_rope_idx = drafter.make_rope_idx([])
-        self.block_write_rows = drafter.make_write_idxs(0, self.rows, valid=0)  # shared with the verifier
+        self.block_write_rows = (
+            self.verifier.kv_write_rows
+        )  # shared with the verify pass (same positions; the verifier owns them)
         self.ctx_write_rows = drafter.make_write_idxs(0, self.rows, valid=0)
         self.sdpa_pos = drafter.make_sdpa_pos(0)
-        self.verifier = TargetVerifier(
-            model, self.cfg.target_layer_ids, page_table[0], rows=self.rows, shared_write_rows=self.block_write_rows
-        )
         self.p = 0
         self.anchor = None
         self.pending = None
@@ -62,7 +62,6 @@ class DFlash2Generator:
         self.traces = {}  # "draft" / "verify_argmax" / "verify_topk" / "verify_logits" -> trace id
         self.trace_out = {}  # same keys -> the output tensor(s) of the captured run
         self._seen = set()  # trace keys that already ran eager once
-        self._rows_p = None  # position the shared KV write rows were last set for
         self._t_draft = self._t_select = self._t_verify = 0.0
         self._t_capture = 0.0  # trace capture time inside the current round (not counted in the round timers)
         self.sp = None  # normalised sampling (temperature, top_p, k) or None for greedy
@@ -96,7 +95,7 @@ class DFlash2Generator:
             self._copy_i32([v], d)
 
     def _set_block_inputs(self):
-        """Block pass inputs for anchor at position p (shared write rows = p..p+15)."""
+        """Block pass inputs for anchor at position p (block write rows = p..p+15)."""
         p, cfg = self.p, self.cfg
         toks = torch.zeros(1, DECODE_B_PAD, dtype=torch.int32)
         toks[0, 0] = self.anchor
@@ -106,8 +105,7 @@ class DFlash2Generator:
             self.block_tokens_tt,
         )
         self._copy_rope(range(p, p + self.rows), self.block_rope_idx)
-        self._copy_write_rows([p + i for i in range(self.rows)], self.block_write_rows)
-        self._rows_p = p
+        self.verifier.write_rows(list(range(p, p + self.rows)) + [-1] * (DECODE_B_PAD - self.rows))
         t = torch.full((DECODE_B_PAD,), -1, dtype=torch.int32)
         t[: self.rows] = p + self.rows - 1
         ttnn.copy_host_to_device_tensor(
@@ -129,7 +127,6 @@ class DFlash2Generator:
         self.gen = torch.Generator().manual_seed(seed) if self.sp is not None else None
         self.pending = None
         self._ctx_done = True
-        self._rows_p = None
         m, d, cfg = self.model, self.drafter, self.cfg
         prompt = torch.tensor(list(prompt_ids), dtype=torch.int64)
         ids = list(cfg.target_layer_ids)
@@ -230,7 +227,6 @@ class DFlash2Generator:
             self.block_rope_idx,
             self.ctx_rope_idx,
             self.sdpa_pos,
-            *self.block_write_rows,
             *self.ctx_write_rows,
         ]:
             ttnn.deallocate(t)
@@ -313,11 +309,8 @@ class DFlash2Generator:
             self._ctx_done = True
         tokens += [tokens[-1]] * (self.rows - len(tokens))
         self.anchor = tokens[0]
-        if self._rows_p != self.p:  # the shared KV write rows (also set by propose())
-            self._copy_write_rows([self.p + i for i in range(self.rows)], self.block_write_rows)
-            self._rows_p = self.p
         v = self.verifier
-        v.prepare(tokens, self.p)
+        v.prepare_single(tokens, self.p)
         key = f"verify_{mode}"
         plan = self._plan(key)
         if plan == "capture":

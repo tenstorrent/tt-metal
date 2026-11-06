@@ -289,3 +289,82 @@ def test_dflash2_decline_then_steps(mesh_device, tp):
     assert agreement >= 0.99, f"agreement {agreement:.3f}"
     assert agree2 >= 0.99, f"decline agreement {agree2:.3f}"
     assert len(out2) >= MAX_NEW or out2[-1] in gen.stop_ids
+
+
+def _first_diff(got, want):
+    d = next((i for i, (a, b) in enumerate(zip(got, want)) if a != b), None)
+    return min(len(got), len(want)) if d is None and len(got) != len(want) else d
+
+
+BATCH_NEW = 512
+
+
+@pytest.mark.timeout(5400)
+@_mesh_params
+def test_dflash2_batch(mesh_device, tp):
+    """Several users per step (K by user count): each user's greedy tokens equal the one-user batch tokens of its
+    prompt (2, 4 and 8 users; logs the total decode rate). A sampled 4-user run repeats with the same seeds."""
+    sub = skip_and_submesh(mesh_device, tp)
+    from models.demos.muse_glimmer_30b.tt.dflash.batch_generator import build_batch_generator
+    from models.demos.muse_glimmer_30b.tt.model import MuseGlimmerModel
+
+    tokenizer = load_tokenizer(checkpoint_dir())
+    prompts = {isl: _isl_prompt(tokenizer, isl, reserve=BATCH_NEW + _DFLASH_BLOCK) for isl in (128, 8192)}
+    max_seq_len = -(-(max(len(p) for p in prompts.values()) + BATCH_NEW + _DFLASH_BLOCK) // 256) * 256
+    args = MuseGlimmerModelArgs.from_checkpoint(
+        mesh_device=sub, max_batch_size=8, max_seq_len=max_seq_len, max_prefill_len=max_seq_len
+    )
+    model = MuseGlimmerModel(args, sub)
+    gen = build_batch_generator(model, 8, enable_trace=True)
+    # References: one user on the batch path. The batch path runs SDPA on 32 rows and the single-user path on 16, so
+    # their reduction orders differ and a near-tie can flip a late token: the single path is only compared in the log.
+    ref = {}
+    for isl, prompt in prompts.items():
+        single, _ = gen.generate(prompt, BATCH_NEW)
+        (ref[isl],), st = gen.generate_batch([prompt], BATCH_NEW)
+        d, gap = _first_diff(ref[isl], single), None
+        if d is not None:
+            ctx = torch.tensor(prompt + ref[isl][:d], dtype=torch.int64)
+            if model.prefill_is_new(ctx.numel()):
+                gen.release_traces(keep_seen=True)
+            lg_tt = model.prefill_forward_logits_tt(ctx, 0, gen.page_table_tt)
+            top = torch.topk(model.logits_to_torch(lg_tt, 1)[0].float(), 2)
+            ttnn.deallocate(lg_tt)
+            gap = round(float(top.values[0] - top.values[1]), 4)
+        logger.info(
+            f"BATCHREF isl={isl}: one-user batch vs single path first_diff={d} (prefill top-2 gap there {gap}), "
+            f"mean_accept={st['mean_accept'][0]:.2f}"
+        )
+    order = [128, 8192] * 4
+    diffs = {}
+    for users in (2, 4, 8):
+        isls = order[:users]
+        tokens, stats = gen.generate_batch([prompts[i] for i in isls], BATCH_NEW)
+        for u, isl in enumerate(isls):
+            got, want = tokens[u], ref[isl]
+            first = _first_diff(got, want)
+            diffs[(users, u)] = first
+            logger.info(
+                f"BATCHCHECK users={users} slot={u} isl={isl} equal={first is None} first_diff={first} "
+                f"len={len(got)}/{len(want)} mean_accept={stats['mean_accept'][u]:.2f}"
+            )
+        logger.info(
+            f"BATCHRESULT users={users} R={stats['R']} full_tok_s={stats['full_tok_s']:.1f} "
+            f"full_rounds={stats['full_rounds']}/{stats['rounds']} all_tok_s={stats['decode_tok_s_all']:.1f} "
+            f"ms={stats['mean_ms']}"
+        )
+    sampling = dict(temperature=1.0, top_p=0.95, top_k=32)
+    runs = [
+        gen.generate_batch([prompts[i] for i in order[:4]], 128, sampling=sampling, seeds=[11, 12, 13, 14])
+        for _ in range(2)
+    ]
+    repeat = runs[0][0] == runs[1][0]
+    logger.info(
+        f"BATCHSAMPLED users=4 repeat_equal={repeat} mean_accept={[round(a, 2) for a in runs[0][1]['mean_accept']]} "
+        f"full_tok_s={runs[0][1]['full_tok_s']:.1f}"
+    )
+    gen.close()
+    bad = {k: v for k, v in diffs.items() if v is not None}
+    assert not bad, f"greedy divergence (users, slot) -> first diff: {bad}"
+    assert repeat, "the sampled batch run does not repeat with the same seeds"
+    assert min(runs[0][1]["mean_accept"]) >= 2.0, runs[0][1]["mean_accept"]

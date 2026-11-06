@@ -14,10 +14,11 @@ from safetensors import safe_open
 
 import ttnn
 from models.demos.muse_glimmer_30b.reference.dflash2 import DFlash2Config
-from models.demos.muse_glimmer_30b.tt.attention import MuseLinear, heads_memcfg
+from models.demos.muse_glimmer_30b.tt.attention import MuseLinear, heads_memcfg, kv_page_table
 from models.demos.muse_glimmer_30b.tt.common import as_tt, decode_memcfg, replicate_mapper, sdpa_compute_config
 from models.demos.muse_glimmer_30b.tt.dflash.conv import TtDynamicCausalConv
 from models.demos.muse_glimmer_30b.tt.dflash.kv_rows import write_kv_rows
+from models.demos.muse_glimmer_30b.tt.dflash.layout import RowLayout
 from models.demos.muse_glimmer_30b.tt.dflash.topk import device_topk, make_vocab_bias, read_topk
 from models.demos.muse_glimmer_30b.tt.mlp import MuseGlimmerMLP
 from models.demos.muse_glimmer_30b.tt.model import DECODE_B_PAD
@@ -39,6 +40,7 @@ class TtDFlash2Drafter:
         ckpt_dir=None,
         weight_dtype=ttnn.bfloat8_b,
         num_layers=None,
+        max_users=1,
     ):
         t0 = time.time()
         self.mesh_device = mesh_device
@@ -55,6 +57,7 @@ class TtDFlash2Drafter:
         self.hd = hd = cfg.head_dim
         self.hidden = H = cfg.hidden_size
         self.num_layers = num_layers or cfg.num_hidden_layers
+        self.max_users = max_users
         self.weight_dtype = dt = weight_dtype
         self.dargs = dargs = MuseGlimmerModelArgs.from_checkpoint(
             target_args.ckpt_dir,
@@ -165,13 +168,14 @@ class TtDFlash2Drafter:
             )
             logger.info(f"DFlash2 layer {i + 1}/{self.num_layers} built ({time.time() - t0:.0f}s)")
 
-        # KV ring per layer: [n_ring, kv_local, block_size, hd] bf16 zeros, per-device contents after fill.
+        # KV ring per layer: [max_users * n_ring, kv_local, block_size, hd] bf16 zeros (per-device contents after
+        # fill); slot u owns blocks [u * n_ring, (u + 1) * n_ring).
         self.kv_caches = []
         for _ in range(self.num_layers):
             self.kv_caches.append(
                 tuple(
                     ttnn.as_tensor(
-                        torch.zeros(self.n_ring, self.kv_local, self.block_size, hd),
+                        torch.zeros(max_users * self.n_ring, self.kv_local, self.block_size, hd),
                         device=mesh_device,
                         layout=ttnn.TILE_LAYOUT,
                         dtype=ttnn.bfloat16,
@@ -182,15 +186,16 @@ class TtDFlash2Drafter:
                 )
             )
         nb = dargs.max_num_blocks_per_user
-        ring_row = (torch.arange(nb) % self.n_ring).to(torch.int32)
-        self.page_table_tt = ttnn.from_torch(
-            ring_row[None, :].repeat(DECODE_B_PAD, 1).contiguous(),
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=replicate_mapper(mesh_device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        self.ring_rows = kv_page_table(dargs, max_users, sliding=True)  # host [max_users, nb]: slot u's ring row
+        zeros_pt = torch.zeros(DECODE_B_PAD, nb, dtype=torch.int32)
+        self.page_table_tt = self._table(zeros_pt)  # SDPA: row r -> the ring of row r's slot
+        self.write_page_table_tt = self._table(zeros_pt)  # KV write: row g -> the ring of group g's slot
+        # slot -> [32, nb] table, every row = the slot's ring (batch-1 context fill); all slots before any trace capture
+        self._fill_tables = {
+            u: self._table(self.ring_rows[u].repeat(DECODE_B_PAD, 1).contiguous()) for u in range(max_users)
+        }
+        self.layout = None
+        self.set_layout(RowLayout(16, (0,)))
         # Draft head: vocab padding mask (sharded like the lm_head) and the selector's hidden projection.
         padded_vocab = dargs.padded_vocab_size
         self.vocab_local = dargs.vocab_local
@@ -204,6 +209,47 @@ class TtDFlash2Drafter:
         )
         self.init_seconds = time.time() - t0
         logger.info(f"TtDFlash2Drafter init {self.init_seconds:.1f}s")
+
+    def set_block_rows(self, block_rows):
+        """Set the drafter block size per user (R = K + 1) in every conv layer."""
+        for layer in self.layers:
+            layer["attention_conv"].set_block_rows(block_rows)
+            layer["mlp_conv"].set_block_rows(block_rows)
+
+    def _table(self, t):
+        return ttnn.from_torch(
+            t,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=replicate_mapper(self.mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def set_layout(self, layout):
+        """Rows follow `layout` (host copies only): the 32-row SDPA table, the compact write table (batch = groups)
+        and the conv block size. Rows and groups without a slot keep slot 0's ring (SDPA skips them: position -1)."""
+        assert all(u is None or 0 <= u < self.max_users for u in layout.slots), (layout, self.max_users)
+        sdpa = self.ring_rows[0].repeat(DECODE_B_PAD, 1)
+        write = sdpa.clone()
+        for r in range(layout.n_rows):
+            u = layout.slot_of_row(r)
+            if u is not None:
+                sdpa[r] = self.ring_rows[u]
+        for g, u in enumerate(layout.slots):
+            if u is not None:
+                write[g] = self.ring_rows[u]
+        mapper = replicate_mapper(self.mesh_device)
+        for t, dev in ((sdpa, self.page_table_tt), (write, self.write_page_table_tt)):
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(t, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mapper), dev
+            )
+        self.set_block_rows(layout.R)
+        self.layout = layout
+
+    def fill_table(self, slot):
+        """[32, nb] device page table, every row = slot's ring: batch-1 writes into one slot (its context fill)."""
+        return self._fill_tables[slot]
 
     def _set_precise(self, lin):
         lin.hifi_cfg = lin.decode_cfg = self.precise_cfg
@@ -265,9 +311,11 @@ class TtDFlash2Drafter:
         g.deallocate(True)
         return ctx
 
-    def context_pass(self, taps, rope_idx_tt, write_idxs):
+    def context_pass(self, taps, rope_idx_tt, write_idxs, page_table=None, batch=None):
         """Write K/V rows for up to 32 context rows into every layer's ring cache.
-        taps: 5 tensors [1,1,32,H]; rows 0..P-1 valid. write_idxs: list of device idx tensors (see make_write_idxs)."""
+        taps: 5 tensors [1,1,32,H]; rows 0..P-1 valid. write_idxs: list of device idx tensors (see make_write_idxs).
+        page_table / batch: the write table and batch of write_kv_rows (default: the layout's compact table and group count; the batch-1 fill of one slot passes fill_table(slot), 1).
+        """
         assert len(taps) == len(self.cfg.target_layer_ids)
         ctx = self.context_features(taps)
         cos, sin = self.rope.decode(rope_idx_tt, memory_config=heads_memcfg(DECODE_B_PAD, self.hd))
@@ -295,14 +343,14 @@ class TtDFlash2Drafter:
                 is_decode_mode=True,
             )
             k_i.deallocate(True)
-            self._write_kv(li, k, v, write_idxs)
+            self._write_kv(li, k, v, write_idxs, page_table, batch)
             k.deallocate(True)
             v.deallocate(True)
         cos.deallocate(True)
         sin.deallocate(True)
         ctx.deallocate(True)
 
-    def _write_kv(self, li, k, v, write_idxs):
+    def _write_kv(self, li, k, v, write_idxs, page_table=None, batch=None):
         """k, v: [1, 32, kv_local, hd] heads layout -> rows written into layer li's ring cache."""
         k_cache, v_cache = self.kv_caches[li]
         write_kv_rows(
@@ -311,9 +359,10 @@ class TtDFlash2Drafter:
             k,
             v,
             write_idxs,
-            self.page_table_tt,
+            self.write_page_table_tt if page_table is None else page_table,
             num_kv_heads=self.kv_local,
             block_size=self.block_size,
+            batch=self.layout.groups if batch is None else batch,
         )
 
     def make_sdpa_pos(self, pos, rows=None):
@@ -366,7 +415,7 @@ class TtDFlash2Drafter:
         return out
 
     def block_forward(self, x, rope_idx_tt, write_idxs, sdpa_pos_tt):
-        """x [1,1,32,H] bf16 replicated (rows 0..15 = block input; not freed). Returns norm(hidden) [1,1,32,H] DRAM."""
+        """x [1,1,32,H] bf16 replicated (the row groups of self.layout = block inputs; not freed). Returns norm(hidden) [1,1,32,H] DRAM."""
         H = self.hidden
         dmem = decode_memcfg(H, self.mesh_device)
         cos, sin = self.rope.decode(rope_idx_tt, memory_config=heads_memcfg(DECODE_B_PAD, self.hd))
@@ -484,3 +533,16 @@ class TtDFlash2Drafter:
         )
         hp = ttnn.to_torch(ttnn.get_device_tensors(hp_tt)[0]).float()[0, 0, rows]
         return scores, cands, hp
+
+    def read_draft_groups(self, vals_tt, ids_tt, hp_tt):
+        """Host draft candidates per used group of self.layout: {slot: (scores [R-1,16], cands [R-1,16], hp
+        [R-1,256])} for the draft rows g*R+1 .. g*R+R-1 (row g*R is the slot's anchor). One device read."""
+        lay = self.layout
+        groups = [(g, u) for g, u in enumerate(lay.slots) if u is not None]
+        rows = [r for g, _ in groups for r in list(lay.rows(g))[1:]]
+        scores, cands, hp = self.read_draft(vals_tt, ids_tt, hp_tt, rows)
+        n = lay.R - 1
+        return {
+            u: (scores[i * n : (i + 1) * n], cands[i * n : (i + 1) * n], hp[i * n : (i + 1) * n])
+            for i, (_, u) in enumerate(groups)
+        }
