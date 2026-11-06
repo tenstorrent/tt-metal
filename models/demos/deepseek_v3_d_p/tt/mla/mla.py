@@ -212,7 +212,10 @@ class ttMLA:
                 )
             local = ttnn.mesh_partition(replicated, dim=2, cluster_axis=tp_axis)
             row = ttnn.reshape(local, (1, 1, 1, q_lora_rank // mesh_device.shape[tp_axis]))
-            return ttnn.to_layout(row, ttnn.TILE_LAYOUT)
+            tiled = ttnn.to_layout(row, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(row)
+            ttnn.deallocate(local)
+            return tiled
 
         # KV-branch weights (always loaded). The kv-only forward path only
         # needs these; the rest are gated below on `kv_only`.
