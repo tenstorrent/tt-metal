@@ -98,12 +98,19 @@ public:
         std::array<int64_t, kNumProcessors> processor_end_ns{};
         std::set<uint32_t> cores;                 // physical (y << 16) | x
         std::vector<std::string> kernel_sources;  // filled by records()
+        // Sums over the program's "*-KERNEL" zones, for the average device clock while it ran.
+        uint64_t zone_cycles = 0;
+        int64_t zone_ns = 0;
 
         ProgramRecord() {
             processor_start_ns.fill(std::numeric_limits<int64_t>::max());
             processor_end_ns.fill(std::numeric_limits<int64_t>::min());
         }
         double duration_ns() const { return end_ns > start_ns ? static_cast<double>(end_ns - start_ns) : 0.0; }
+        // Average device clock over the program's kernels, GHz (cycles per ns); below nominal when the chip throttled.
+        double clock_ghz() const {
+            return zone_ns > 0 ? static_cast<double>(zone_cycles) / static_cast<double>(zone_ns) : 0.0;
+        }
     };
 
     StreamingProgramCollector() = default;
@@ -187,6 +194,8 @@ private:
             const int64_t end_ns = zone.end_time().time_since_epoch().count();
             record.start_ns = std::min(record.start_ns, start_ns);
             record.end_ns = std::max(record.end_ns, end_ns);
+            record.zone_cycles += zone.end_device_cycles() - zone.start_device_cycles();
+            record.zone_ns += end_ns - start_ns;
             record.start_cycles = std::min(record.start_cycles, zone.start_device_cycles());
             record.end_cycles = std::max(record.end_cycles, zone.end_device_cycles());
             if (processor < kNumProcessors) {
@@ -346,7 +355,12 @@ void py_device_module_types(nb::module_& m_device) {
         .def_ro("start_cycles", &StreamingProgramRecord::start_cycles)
         .def_ro("end_cycles", &StreamingProgramRecord::end_cycles)
         .def_ro("kernel_sources", &StreamingProgramRecord::kernel_sources, "Kernel source paths of the program")
-        .def_prop_ro("duration_ns", &StreamingProgramRecord::duration_ns, "First kernel start to last kernel end")
+        .def_prop_ro(
+            "duration_ns",
+            &StreamingProgramRecord::duration_ns,
+            "First kernel start to last kernel end, elapsed host time (includes clock throttling)")
+        .def_prop_ro(
+            "clock_ghz", &StreamingProgramRecord::clock_ghz, "Average device clock over the program's kernels, GHz")
         .def_prop_ro("num_cores", [](const StreamingProgramRecord& record) { return record.cores.size(); })
         .def_prop_ro(
             "processor_duration_ns",

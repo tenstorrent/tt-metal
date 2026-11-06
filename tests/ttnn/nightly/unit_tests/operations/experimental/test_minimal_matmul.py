@@ -1107,7 +1107,7 @@ def test_performance(device):
     expected_ns = perf_model(M, K, N, core_count, 2)
 
     util = expected_ns / duration_ns
-    logger.info(f"Utilization: {util*100:.1f}%")
+    logger.info(f"Utilization: {util*100:.1f}% (elapsed {duration_ns / 1e3:.1f} us at {record['clock_ghz']:.3f} GHz)")
 
     if ttnn.device.is_blackhole():
         expected_util = 0.895

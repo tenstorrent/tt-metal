@@ -524,11 +524,15 @@ def test_performance_split(device, chunks, shape):
         "An unattributed record set would grade whichever dispatch happened to be faster."
     )
     # runtime_id increases with dispatch order, so the measured dispatch is the later of the two.
-    duration_ns = max(records, key=lambda record: record["runtime_id"])["duration_ns"]
+    record = max(records, key=lambda record: record["runtime_id"])
+    duration_ns = record["duration_ns"]
     expected_ns = perf_model(M, K, N, core_count, 2)
 
     util = expected_ns / duration_ns
-    logger.info(f"Chunks: {chunks}, Utilization: {util*100:.1f}%")
+    logger.info(
+        f"Chunks: {chunks}, Utilization: {util*100:.1f}% "
+        f"(elapsed {duration_ns / 1e3:.1f} us at {record['clock_ghz']:.3f} GHz)"
+    )
 
     if ttnn.device.is_blackhole():
         # The 9472x5120x3840 shape runs ~5% below the 4096-class shapes: measured 84.5% on two

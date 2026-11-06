@@ -11,8 +11,11 @@ from loguru import logger
 # Device program timing for perf tests, from the streaming profiler (TT_METAL_STREAMING_PROFILER=1). The streaming
 # profiler drains every kernel's firmware "*-KERNEL" zone to the host while it runs; a C++ collector
 # (ttnn.device.StreamingProgramCollector) folds them into one record per program launch per chip: first kernel start
-# to last kernel end over every core and RISC. Kernels run instrumented in this mode, so durations include the
-# zone-marker cost (measured negligible for ms-scale ops). Recommended setup for perf jobs:
+# to last kernel end over every core and RISC, as ELAPSED time on the host timeline: when the chip lowers AICLK under
+# load (DVFS), the duration grows with it. ("clock_ghz" is the average device clock the program ran at.) The real-time
+# profiler this replaced converted cycles at a clock fitted over seconds (~nominal), so it did not see throttling;
+# baselines calibrated under it read low for ops that throttle. Kernels run instrumented in this mode, so durations
+# include the zone-marker cost (measured negligible for ms-scale ops). Recommended setup for perf jobs:
 #   TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16
 # (direct push: no GDDR spool reservation, small host FIFOs; same delivery latency).
 
@@ -46,8 +49,8 @@ def profile_realtime_program(
 ) -> tuple:
     """Run measured device work and return (result, record or records), records ordered by start time.
 
-    Each record is {"runtime_id", "chip_id", "duration_ns", "kernel_sources", "num_cores", "processor_duration_ns",
-    "execution"}; without ``collect_all`` it is the first program that started in the measured region. Programs
+    Each record is {"runtime_id", "chip_id", "duration_ns" (elapsed), "clock_ghz", "kernel_sources", "num_cores",
+    "processor_duration_ns", "execution"}; without ``collect_all`` it is the first program that started in the measured region. Programs
     still in flight to the host from before the region are excluded by host time."""
     import ttnn
 
@@ -102,6 +105,7 @@ def profile_realtime_program(
             "runtime_id": int(record.runtime_id),
             "chip_id": int(record.chip_id),
             "duration_ns": float(record.duration_ns),
+            "clock_ghz": float(record.clock_ghz),
             "kernel_sources": tuple(str(source) for source in record.kernel_sources),
             "num_cores": int(record.num_cores),
             "processor_duration_ns": dict(record.processor_duration_ns),
