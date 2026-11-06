@@ -168,7 +168,7 @@
   cmd: pytest tests/ttnn/tracy/test_streaming_profiler_sync.py::test_streaming_profiler_torus_routers_fit
   skus:
     cpu_medium:
-      timeout: 5
+      timeout: 3
   team: runtime
   budget_type: profiler
   arch: wormhole_b0

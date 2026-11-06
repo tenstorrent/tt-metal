@@ -386,18 +386,20 @@ TORUS_MOCK_CLUSTER = (
 )
 TORUS_OPEN = Path(__file__).with_name("streaming_profiler_torus_open.py")
 TORUS_RANKS = 4
-TORUS_TIMEOUT_S = 540
+TORUS_TIMEOUT_S = 150
 # A mock cluster reports no firmware bundle, so without the DRAM-core override tt-metal builds the routers without the
 # link sync port, about 2.4 KB smaller than on silicon.
 TORUS_ENV = {
     "TT_METAL_STREAMING_PROFILER": "1",
     "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES": "1",
     "TT_METAL_SLOW_DISPATCH_MODE": "1",
+    # The mock profiler line below is logged at info; the CPU-only lane runs at warn.
+    "TT_LOGGER_LEVEL": "info",
 }
 MOCK_PROFILER = "[streaming profiler] mock cluster"
 
 
-@pytest.mark.timeout(TORUS_TIMEOUT_S + 60)
+@pytest.mark.timeout(TORUS_TIMEOUT_S + 20)
 def test_streaming_profiler_torus_routers_fit():
     """With the profiler on, every fabric router fits its kernel config buffer (MEM_ERISC_KERNEL_CONFIG_SIZE). The
     routers are built on a mock cluster, which fails the same way as silicon when one overflows."""
