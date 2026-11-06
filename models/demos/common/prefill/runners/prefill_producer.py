@@ -1410,7 +1410,11 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         mins["mtp"] = mtp_min
     if _has_index_config(table):
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
-        index_hadamard = normalized_hadamard_matrix(index_head_dim).float()
+        # The cache holds keys in the decode basis: Hadamard-rotated (GLM), or the model's own (K3.1).
+        if getattr(ADAPTER.model_config, "INDEX_HADAMARD", True):
+            index_hadamard = normalized_hadamard_matrix(index_head_dim).float()
+        else:
+            index_hadamard = torch.eye(index_head_dim)
         n_index_layers = table.config(1).num_layers
         full_layers = _full_indexer_layer_indices(NUM_LAYERS)
         index_rows = []

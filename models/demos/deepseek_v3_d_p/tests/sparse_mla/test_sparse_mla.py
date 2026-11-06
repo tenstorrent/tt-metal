@@ -36,7 +36,11 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import (
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
 from models.demos.deepseek_v3_d_p.tt.mla import mla as mla_module
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix, num_full_indexer_layers
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
+    index_hadamard_basis,
+    normalized_hadamard_matrix,
+    num_full_indexer_layers,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -289,8 +293,9 @@ def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk, 
     # The Sylvester Hadamard matrix is symmetric and self-inverse, so applying it again restores the
     # pre-transform key. Do this before the DS RoPE-frame permutation because the transform was applied
     # while the key was still in the device's interleaved frame.
-    hadamard = normalized_hadamard_matrix(nat.shape[-1])
-    nat = (nat.float() @ hadamard.float()).to(torch.bfloat16)
+    if index_hadamard_basis(config):
+        hadamard = normalized_hadamard_matrix(nat.shape[-1])
+        nat = (nat.float() @ hadamard.float()).to(torch.bfloat16)
     if not getattr(config, "index_rope_interleave", False):  # DS: device interleaved -> reference half-split
         rope_dim = config.qk_rope_head_dim
         perm = interleaved_to_halfsplit_perm(rope_dim)
