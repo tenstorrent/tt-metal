@@ -278,6 +278,18 @@
       "planned_clients": 2,
       "batch": 8,
       "batch_reason": "Match capturedB8 numerical regime; directforcedtoken diagnostic, not serving performance"
+    },
+    "phase-archive-runtime-benchmark": {
+      "batch": 1,
+      "planned_clients": 1,
+      "max_num_seqs": 1,
+      "batch_reason": "Exact headline and unchanged stage11 matrix each require one client"
+    },
+    "larger-gpqa20-c4-retention-retry": {
+      "batch": 8,
+      "planned_clients": 4,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest validated batch>=4; C4 accepted on paired frozen10 and retention lifecycle validated on current runtime."
     }
   },
   "release_limits": {

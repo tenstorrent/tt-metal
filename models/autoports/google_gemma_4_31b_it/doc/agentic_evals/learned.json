@@ -496,6 +496,13 @@
       ],
       "scope": "two replay inputs, no originalhiddensequence or accuracy claim",
       "evidence": "runs/gpqa-empty-response-replay/RESULT.json"
+    },
+    {
+      "name": "phase_archive_idle_race",
+      "evidence": "runs/phase-archive-idle-race/RESULT.json",
+      "finding": "Stock tar collector discards entire archive on changed-file exit1. Periodic recorder appended unchanged idle snapshots. Model-owned semantic-state dedup removes idle churn and preserves event and terminal metadata exports. Actual CI collection pending.",
+      "runtime_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
+      "local_device_hours": 0.05904627083333333
     }
   ]
 }

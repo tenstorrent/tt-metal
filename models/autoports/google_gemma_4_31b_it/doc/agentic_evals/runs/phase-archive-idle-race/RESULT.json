@@ -1,0 +1,98 @@
+{
+  "status": "accepted_minimal_model_owned_idle_export_repair_CI_confirmation_pending",
+  "change": "Automatic empty export skipped only if semantic metadata equals last successfully persisted snapshot; event exports/manual drains/final status transitions retained",
+  "problem_status": "Unnecessary idle file churn repaired and locally confirmed; actual CI archive collection pending",
+  "priority": "Validity ahead of speed",
+  "unblocks": [
+    "GPQA phase-evidence collection",
+    "SWE phase-evidence collection"
+  ],
+  "runtime_candidate_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
+  "baseline_runtime_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+  "runtime_file_sha256": "659d7a4aa043f30dc1313a0cfedd68265a3d17b03db7a2a2bf9b5be253f46f9e",
+  "files": [
+    "tt/benchmark_phases.py",
+    "tests/test_phase_idle_export.py"
+  ],
+  "diagnosis": {
+    "baseline_host_idle_size_delta_bytes": 4265,
+    "baseline_host_tar_returncode": 1,
+    "candidate_host_idle_size_delta_bytes": 0,
+    "candidate_host_tar_returncode": 0,
+    "causal_chain": "Idle periodic append mutates JSONL; GNUtar returns1; stock named-volume collector rejects whole archive before extracting stdout. This is collection failure, not deletion of sourcefiles.",
+    "exact_CI_colliding_append_contents_unknown": true
+  },
+  "confirmation": {
+    "planned_clients": 2,
+    "batch": 8,
+    "max_num_seqs": 8,
+    "full_layers": 60,
+    "native_request_pairs": 3,
+    "native_semantic_tool_usage_token_fields_exact": true,
+    "matched_decode_ids": 583,
+    "excluded_prefill_tokens": 3,
+    "extra_active_samples_not_emitted": 2,
+    "overlapping_decode_steps": 200,
+    "nonidentity_remaps": 3,
+    "host_sampled_prefill_steps": 5,
+    "loss": false,
+    "errors": [],
+    "pending_steps": 0,
+    "idle_archive": {
+      "stable_seconds": 3.2,
+      "autoexport_seconds": 1,
+      "size_bytes": 402892,
+      "mtime_unchanged": true,
+      "tar_returncode": 0,
+      "archive_bytes_exact": true,
+      "jsonl_records": 18,
+      "final_buffered_events": 0,
+      "final_pending_steps": 0,
+      "errors": [],
+      "loss": false,
+      "no_final_manual_flush": true
+    },
+    "closed": true,
+    "remaining_owners": []
+  },
+  "tests": {
+    "new_idle_state_tests": 6,
+    "existing_recorder_tests": 13,
+    "existing_retention_tests": 15,
+    "all_pass": true,
+    "all_applicable_hooks": "pass execution isolated worktree and source-only publication checkout",
+    "baseline_guard": "Exact3request bodies, full60/B8/context/async baseline, all other model source matches11a387"
+  },
+  "cost": {
+    "predicted_device_hours": 0.12,
+    "actual_device_hours": 0.05904627083333333,
+    "device_box_hours": 0.25,
+    "actual_over_forecast": 0.49205225694444443,
+    "baseline_reused": true,
+    "baseline_new_device_cost": 0,
+    "release_hours_saved": null
+  },
+  "limitations": [
+    "Periodic metadata must first settle. Finalgenuineevent/status writes, explicit drains/resets and newrequests can still race collection; no atomicarchive handshake or universalguarantee.",
+    "Actual qb2-ci artifact confirmation on newsource/image pending; oldGPQA20 missingphases not recovered or banked by this repair.",
+    "Diskfailure/cap/partialwrite semantics unchanged; errors may prevent writing their own terminalstate, and partial JSONL tail can remain invalid.",
+    "Native exactness covers3seeded requests; recorded2extra active samples are not asserted emitted,3firstprefilltokens excluded. No requestID association invented.",
+    "No numerical/runtime sampler policy change, performance speedup or suite score claim.",
+    "Only model recorder and hosttest changed; stockcollector/plugin/harness unchanged."
+  ],
+  "evidence": [
+    "AUTODEBUG.md",
+    "AUTOFIX.md",
+    "baseline-reproduction.json",
+    "candidate-reproduction.json",
+    "runtime.patch",
+    "hooks-final.log",
+    "publication-checkout-hooks.log",
+    "publication-candidate.json",
+    "bringup/artifacts/phase-archive-idle-race/baseline-guard.json",
+    "bringup/artifacts/phase-archive-idle-race/native-pair-audit.json",
+    "bringup/artifacts/phase-archive-idle-race/candidate/idle-archive-audit.json",
+    "bringup/artifacts/phase-archive-idle-race/candidate/idle-shutdown.json",
+    "doc/agentic_evals/device_queue/local/phase-archive-idle-race/job.json"
+  ]
+}

@@ -1,9 +1,9 @@
 {
-  "status": "GPQA20 and SWE5 retained-runtime repairs active; Terminal measured stop",
+  "status": "GPQA20 artifactrepair required; SWE5 running; Terminal measuredstop",
   "evals": {
     "r1_gpqa_diamond": {
       "decision": "go",
-      "reason": "Valid10 retained. Completed20 raw16/20 unbanked due two empty capped outputs lacking hidden-token evidence. Same20 retained-runtime C4 repair active; full198 measured stop retained.",
+      "reason": "Same20 completedraw16/20 in1.512h but stocktar discarded privatephaseexport during idleappend; actualcapendings unclassified. Valid10retained. AutoFix repairs collection evidence path before any repeat;40held.",
       "functional_at": 10,
       "projected_hours": null,
       "score": 0.9,
@@ -15,12 +15,14 @@
         "tasks": 20,
         "planned_clients": 4,
         "batch": 8,
-        "status": "running_retention_repair",
+        "status": "completed_unbanked_artifact_loss",
         "run_id": 42256121890,
         "projected_workflow_hours": 6.75,
         "source": "runs/larger-gpqa20-c4-retained/manifest.json",
         "latest_censored_projection_hours": 5.242063492063492,
-        "progress_evidence": "runs/larger-gpqa20-c4-retained/progress-14.json"
+        "progress_evidence": "runs/larger-gpqa20-c4-retained/progress-14.json",
+        "raw_score": 0.8,
+        "eval_hours": 1.511982668724894
       },
       "full_suite_decision": "stop",
       "full_suite_stop_evidence": "runs/full-gpqa-observable/stop.json"

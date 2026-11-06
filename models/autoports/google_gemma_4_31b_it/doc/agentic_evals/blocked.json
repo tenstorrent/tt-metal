@@ -15,6 +15,14 @@
       "unblocks": [
         "r1_gpqa_diamond"
       ]
+    },
+    {
+      "id": "phase-archive-idle-race",
+      "unblocks": [
+        "r1_gpqa_diamond",
+        "swe_bench_verified"
+      ],
+      "reason": "Local AutoFix passes exact native pair and stable idle tar; accepted ab2730c2 published. Actual CI collection confirmation pending retry42273660905."
     }
   ],
   "permissions": {
@@ -29,7 +37,7 @@
     "Closure review and stage gate"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-06T17:45:09.270296+00:00",
+  "updated_at": "2026-11-06T18:47:15.457318+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -38,9 +46,9 @@
   "live_wait": {
     "run_ids": [
       42247098210,
-      42256121890
+      42273660905
     ],
-    "status": "Retained-runtime GPQA20 and SWE5 continue; latestavailableprogress17/20 and3/5. Localreplays confirmedtwo loops; conditionalHF/prefill/incremental comparisons foundno actionable discrepancy. Nooriginalunretainedtrajectory claim."
+    "status": "SWE5 running, GPQA20 same-cohort retry building accepted archive repair"
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",

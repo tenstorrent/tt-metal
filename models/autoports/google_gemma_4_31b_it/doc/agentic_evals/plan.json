@@ -1666,7 +1666,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42247098210",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T17:27:20.234311+00:00",
+      "last_observed_at": "2026-11-06T18:30:17.805933+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-wvng9",
       "build_started_at": "2026-11-06T15:54:10Z",
       "build_completed_at": "2026-11-06T16:47:21Z",
@@ -1827,7 +1827,7 @@
       "host_limit_basis": "HTTP-only GPQA; no Docker task sandboxes; same normal CI route",
       "arm": "larger-gpqa20-c4-retained",
       "workflow": "evals",
-      "status": "device_job_in_progress",
+      "status": "completed_unbanked",
       "queued_at": "2026-11-06T16:49:45.168856+00:00",
       "planned_clients": 4,
       "tt_metal_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
@@ -1858,14 +1858,36 @@
       "run_id": 42256121890,
       "submitted_at": "2026-11-06T16:50:39Z",
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42256121890",
-      "workflow_status": "in_progress",
-      "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T17:27:26.810735+00:00",
+      "workflow_status": "completed",
+      "workflow_conclusion": "success",
+      "last_observed_at": "2026-11-06T18:30:15.537559+00:00",
       "runner": "120-qb2-p04t07",
       "device_job_id": 128023825841,
       "device_job_started_at": "2026-11-06T16:51:00Z",
-      "device_job_completed_at": null,
+      "device_job_completed_at": "2026-11-06T18:29:57Z",
       "start": "2026-11-06T16:51:00Z",
+      "live_startup": {
+        "autoport_layers": 60,
+        "full_context_tokens": 262144,
+        "generate_until_started_at": "2026-11-06T16:58:50Z",
+        "evidence": "bringup/artifacts/stage12-gpqa20-c4-retained-current.log"
+      },
+      "latest_progress_projection": {
+        "observed_at": "2026-11-06T17:16:57.641802+00:00",
+        "log_through": "2026-11-06T17:12:20Z",
+        "reported_completed": 6,
+        "tasks": 20,
+        "progress_elapsed_seconds": 721,
+        "eval_projection_hours": 0.6675925925925926,
+        "full_request_tail_hours": 4,
+        "setup_allowance_hours": 0.15,
+        "queue_margin_hours": 0.5,
+        "projected_hours": 5.317592592592593,
+        "max_observed_active_rows": 4,
+        "decision": "continue",
+        "qualification": "Early censored completion-rate projection; long unfinished requests can dominate. Full4h tail retained; no cap classification/score claim.",
+        "evidence": "bringup/artifacts/stage12-gpqa20-c4-retained-current.log"
+      },
       "latest_progress": {
         "observed_at": "2026-11-06T17:33:15.300990+00:00",
         "log_through": "2026-11-06T17:28:09Z",
@@ -1881,7 +1903,17 @@
         "decision": "continue",
         "qualification": "Censored completion-rate projection; full4h tail retained. No score or loop classification claimed.",
         "evidence": "bringup/artifacts/stage12-gpqa20-c4-retained-current.log"
-      }
+      },
+      "end": "2026-11-06T18:29:57Z",
+      "exit_status": 0,
+      "actual_hours": 1.6491666666666667,
+      "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+      "workflow_wall_hours": 1.6552777777777778,
+      "audit": "runs/larger-gpqa20-c4-retained/audit.json",
+      "validity_blocker": "Stocktar collection discarded phasefile changed by periodicexport; twoemptyanswers remain unclassified",
+      "functional_at": 10,
+      "raw_score": 0.8,
+      "eval_hours": 1.511982668724894
     },
     {
       "arm": "gpqa-empty-response-replay",
@@ -2016,10 +2048,127 @@
       "exit_status": 0,
       "actual_device_hours": 0.07783478684723377,
       "owner_check_after": []
+    },
+    {
+      "arm": "phase-archive-runtime-benchmark",
+      "owner": "coordinator",
+      "device": "local",
+      "status": "running",
+      "started_at": "2026-11-06T18:45:36.976918+00:00",
+      "queued_at": "2026-11-06T18:45:36.976918+00:00",
+      "planned_clients": 1,
+      "batch": 1,
+      "max_num_seqs": 1,
+      "batch_reason": "Exact headline and unchanged stage11 matrix each require one client",
+      "predicted_hours": 0.0966789076586,
+      "box_hours": 0.18,
+      "command": {
+        "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+        "env": {
+          "GEMMA4_BENCHMARK_PHASE_LOG": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-phase-archive-runtime-benchmark/phase-events.json",
+          "GEMMA4_PHASE_AUTOEXPORT_SECONDS": "1",
+          "GEMMA4_RETAIN_DECODE_TOKENS": "1"
+        },
+        "argv": [
+          "timeout",
+          "648",
+          "bash",
+          "models/autoports/google_gemma_4_31b_it/tests/run_serving.sh",
+          "--stages",
+          "serve",
+          "--max-num-seqs",
+          "1",
+          "--enable-prefix-caching",
+          "--output-dir",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-phase-archive-runtime-benchmark/server"
+        ]
+      },
+      "owner_check": [],
+      "source_snapshot": "bringup/artifacts/stage12-phase-archive-runtime-benchmark/source-launch.json"
+    },
+    {
+      "eval": "r1_gpqa_diamond",
+      "device": "qb2-ci",
+      "owner": "coordinator",
+      "batch": 8,
+      "max_num_seqs": 8,
+      "vllm_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+      "implementation": "gemma4-31b-autoport-v3",
+      "task_count": 20,
+      "tasks": [
+        152,
+        189,
+        46,
+        87,
+        52,
+        181,
+        31,
+        185,
+        50,
+        187,
+        153,
+        135,
+        81,
+        93,
+        7,
+        42,
+        24,
+        168,
+        20,
+        28
+      ],
+      "run_timeout_hours": 12,
+      "job_timeout_hours": 18,
+      "request_timeout_seconds": 14400,
+      "max_output_tokens": 126976,
+      "host_limit_basis": "HTTP-only GPQA; no Docker task sandboxes; same normal CI route",
+      "workflow": "evals",
+      "planned_clients": 4,
+      "tti_sha": "37ee508969c730320c01259fafe340e6c2c14d4e",
+      "batch_reason": "Smallest validated batch>=4; C4 accepted on paired frozen10 and retention lifecycle validated on current runtime.",
+      "capacity_evidence": "runs/retention-c4-lifecycle/RESULT.json",
+      "retention_enabled": true,
+      "arm": "larger-gpqa20-c4-retention-retry",
+      "status": "submitted",
+      "queued_at": "2026-11-06T18:46:01.548044+00:00",
+      "tt_metal_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
+      "predicted_hours": 3.049166666666667,
+      "projection_components_hours": {
+        "measured_same20_eval": 1.511982668724894,
+        "measured_device_setup": 0.1371839979417726,
+        "new_image_build_guess": 0.9,
+        "queue_margin_guess": 0.5
+      },
+      "scope": "Same frozen20 after confirmed recorder idle archive repair. Prior20 unbanked; no scored-cohort selection or rung advancement.",
+      "confirmation": "runs/phase-archive-idle-race/RESULT.json; native pair and untouched idle tar passed",
+      "previous_run_id": 42256121890,
+      "run_id": 42273660905,
+      "submitted_at": "2026-11-06T18:46:03Z",
+      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42273660905"
+    },
+    {
+      "arm": "phase-archive-idle-race",
+      "owner": "coordinator",
+      "device": "local",
+      "status": "completed",
+      "queued_at": "2026-11-06T18:35:54.715432+00:00",
+      "planned_clients": 2,
+      "batch": 8,
+      "batch_reason": "Smallestvalidatedbatch>=2; exactcurrentnative baselinepair",
+      "predicted_hours": 0.12,
+      "box_hours": 0.25,
+      "confirmation": "Provenancecheckedexactnativepair plus unforcedperiodicexportstableidleandstockstyletarvalidity",
+      "baseline_runtime_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+      "started_at": "2026-11-06T18:41:38.092147+00:00",
+      "owners_before": [],
+      "ended_at": "2026-11-06T18:45:10.658722+00:00",
+      "exit_status": 0,
+      "client_completed": 3,
+      "actual_device_hours": 0.05904627083333333
     }
   ],
-  "status": "retained_GPQA20_and_SWE5_running_before_freeze",
-  "last_updated": "2026-11-06T17:43:21.100979+00:00",
+  "status": "same20_archive_repair_retry_and_SWE5_running",
+  "last_updated": "2026-11-06T18:35:33.107785+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -2668,6 +2817,20 @@
       "planned_clients": 2,
       "batch": 8,
       "queue_evidence": "device_queue/local/gpqa-decode-state-discriminator/job.json"
+    },
+    {
+      "arm": "larger-gpqa20-c4-retained",
+      "run_id": 42256121890,
+      "planned_clients": 4,
+      "batch": 8,
+      "device_job_hours": 1.6491666666666667,
+      "workflow_wall_hours": 1.6552777777777778,
+      "predicted_workflow_hours": 6.75,
+      "workflow_conclusion": "success",
+      "eval_hours": 1.511982668724894,
+      "raw_score": 0.8,
+      "valid": false,
+      "audit": "runs/larger-gpqa20-c4-retained/audit.json"
     }
   ],
   "local_idle_intervals": [
@@ -2803,8 +2966,8 @@
     ]
   },
   "active_runs": [
-    42256121890,
-    42247098210
+    42247098210,
+    42273660905
   ],
   "latest_live_progress": {
     "gpqa20_retained": {
@@ -3097,14 +3260,29 @@
     }
   ],
   "next_local_job": {
-    "status": "waiting_for_actual_failure_evidence",
-    "goal": "Causal native replay of first retained failing GPQA/SWE request if completed normal rung requires it",
-    "reason": "All current local capacity/source/batch prerequisites measured; do not spend long device runs on invented original seeds or blind repetition. CI normal runs continue under operator Docker/dataset exception."
+    "status": "running",
+    "arm": "phase-archive-runtime-benchmark",
+    "goal": "Bind accepted repaired source to headline and release matrix measurements"
   },
   "next_rung_admission_policy": {
     "updated_at": "2026-11-06T17:48:16.171357+00:00",
     "normal_rung": "Use measured aggregate completed current-rung wall time scaled by nested task count, measured setup and queue, explicit uncertainty; require projection before firstdry hour22. Track actual progress and stop nonfit. Do not promise full-tail worst-case completion from an average.",
     "release": "Additionally include full agent/request slow-tail allowance with margin within12h; frozen lastvalidlist only.",
     "reason": "Distinguish measured normal-rung forecast from conservative release tail budget; no outputlimit reduction or score-directed task choice."
+  },
+  "artifact_repair_schedule": {
+    "recorded_at": "2026-11-06T18:35:33.107774+00:00",
+    "status": "live_pass_published_retry_submitted",
+    "forecast_components_hours": {
+      "host_and_local_confirmation": 0.35,
+      "new_image_build_guess": 0.9,
+      "same20_eval_measured": 1.511982668724894,
+      "measured_device_setup": 0.1371839979417726,
+      "queue_margin": 0.5
+    },
+    "next40_forecast_if20valid": 3.6611493353915607,
+    "constraint": "Repair plus same20 followedby40 muststillproject before firstdryhour22; no blindrepeat or skippedrung. Re-evaluate afterlocalconfirmation and actualCIqueue.",
+    "retry_run_id": 42273660905,
+    "retry_submitted_at": "2026-11-06T18:46:03Z"
   }
 }

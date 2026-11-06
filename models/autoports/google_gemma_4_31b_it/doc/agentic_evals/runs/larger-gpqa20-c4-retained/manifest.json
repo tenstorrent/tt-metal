@@ -36,7 +36,7 @@
   "host_limit_basis": "HTTP-only GPQA; no Docker task sandboxes; same normal CI route",
   "arm": "larger-gpqa20-c4-retained",
   "workflow": "evals",
-  "status": "device_job_in_progress",
+  "status": "completed_unbanked",
   "queued_at": "2026-11-06T16:49:45.168856+00:00",
   "planned_clients": 4,
   "tt_metal_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
@@ -67,13 +67,13 @@
   "run_id": 42256121890,
   "submitted_at": "2026-11-06T16:50:39Z",
   "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42256121890",
-  "workflow_status": "in_progress",
-  "workflow_conclusion": null,
-  "last_observed_at": "2026-11-06T17:27:26.810735+00:00",
+  "workflow_status": "completed",
+  "workflow_conclusion": "success",
+  "last_observed_at": "2026-11-06T18:30:15.537559+00:00",
   "runner": "120-qb2-p04t07",
   "device_job_id": 128023825841,
   "device_job_started_at": "2026-11-06T16:51:00Z",
-  "device_job_completed_at": null,
+  "device_job_completed_at": "2026-11-06T18:29:57Z",
   "start": "2026-11-06T16:51:00Z",
   "live_startup": {
     "autoport_layers": 60,
@@ -112,5 +112,15 @@
     "decision": "continue",
     "qualification": "Censored completion-rate projection; full4h tail retained. No score or loop classification claimed.",
     "evidence": "bringup/artifacts/stage12-gpqa20-c4-retained-current.log"
-  }
+  },
+  "end": "2026-11-06T18:29:57Z",
+  "exit_status": 0,
+  "actual_hours": 1.6491666666666667,
+  "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+  "workflow_wall_hours": 1.6552777777777778,
+  "audit": "runs/larger-gpqa20-c4-retained/audit.json",
+  "validity_blocker": "Stocktar collection discarded phasefile changed by periodicexport; twoemptyanswers remain unclassified",
+  "functional_at": 10,
+  "raw_score": 0.8,
+  "eval_hours": 1.511982668724894
 }

@@ -377,6 +377,28 @@
         102,
         182,
         173
+      ],
+      "larger-gpqa20-c4-retention-retry": [
+        152,
+        189,
+        46,
+        87,
+        52,
+        181,
+        31,
+        185,
+        50,
+        187,
+        153,
+        135,
+        81,
+        93,
+        7,
+        42,
+        24,
+        168,
+        20,
+        28
       ]
     },
     "selected_before_scores_at": "2026-11-06T04:49:25.562725+00:00",
@@ -407,6 +429,13 @@
       "candidate_tti_sha": "6efe6739e6513d0edbf49a8ef39527b80a23784d",
       "status": "held_until20valid",
       "mapping_evidence": "runs/gpqa40-preparation/cohort.json"
+    },
+    "repeat_runs": {
+      "larger-gpqa20-c4-retention-retry": {
+        "source": "same frozen larger20 list from larger-gpqa20-c4-retained",
+        "selected_at": "2026-11-06T18:46:01.548044+00:00",
+        "reason": "Same frozen20 after confirmed recorder idle archive repair. Prior20 unbanked; no scored-cohort selection or rung advancement."
+      }
     }
   },
   "swe_bench_verified": {

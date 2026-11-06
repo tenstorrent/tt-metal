@@ -1,0 +1,10 @@
+{
+  "idle_seconds": 0.25,
+  "size_before": 8389462,
+  "size_after": 8393727,
+  "mtime_changed": true,
+  "tar_returncode": 1,
+  "tar_stderr": "tar: ./phases.jsonl: file changed as we read it\n",
+  "fixture": "8MiB blank whitespace; periodic snapshot append; GNUtar slowed at checkpoints; no model/device imports",
+  "source": "models/autoports/google_gemma_4_31b_it/tt/benchmark_phases.py"
+}
