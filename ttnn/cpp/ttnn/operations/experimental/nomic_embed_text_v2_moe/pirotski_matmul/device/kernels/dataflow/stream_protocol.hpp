@@ -90,4 +90,37 @@ FORCE_INLINE uint32_t valid_rows(uint32_t first_row, uint32_t end_row, uint32_t 
     return end_row - first_row < block_rows ? end_row - first_row : block_rows;
 }
 
+// The output rows of a core, in the order it computes them (row_table): runtime arguments `count`, then `count`
+// output tile rows; kNoRow marks a padding row, computed and never read or written.
+constexpr uint32_t kNoRow = 0xFFFFFFFF;
+constexpr uint32_t kMaxTableRows = 32;
+
+struct RowTable {
+    uint32_t count = 0;
+    uint32_t rows[kMaxTableRows];
+
+    // Reads the table at runtime argument `arg`, which it advances.
+    FORCE_INLINE void read(uint32_t& arg) {
+        count = get_arg_val<uint32_t>(arg++);
+        ASSERT(count <= kMaxTableRows);
+        for (uint32_t i = 0; i < count; ++i) {
+            rows[i] = get_arg_val<uint32_t>(arg++);
+        }
+    }
+    FORCE_INLINE uint32_t operator[](uint32_t local) const { return local < count ? rows[local] : kNoRow; }
+};
+
+// A drain piece (drain_plan): `count` tiles of the last block's local row `row`, from `n_offset` tiles into the
+// core's N block, bound for contiguous pages of one core: one write. Runtime arguments `pieces`, then one word a
+// piece, row << 16 | n_offset << 8 | count, in row order; each data-movement RISC takes its own list.
+constexpr uint32_t kMaxPieces = 64;
+
+struct DrainPiece {
+    uint32_t row;
+    uint32_t n_offset;
+    uint32_t count;
+};
+
+FORCE_INLINE DrainPiece unpack_piece(uint32_t word) { return {word >> 16, (word >> 8) & 0xFF, word & 0xFF}; }
+
 }  // namespace pirotski_matmul

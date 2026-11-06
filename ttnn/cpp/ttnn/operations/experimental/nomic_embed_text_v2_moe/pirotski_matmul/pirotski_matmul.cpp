@@ -19,7 +19,9 @@ Tensor pirotski_matmul(
     bool resident_weights,
     uint32_t strip_m_tiles,
     bool strip_read_ahead,
-    bool read_ahead) {
+    bool read_ahead,
+    bool drain_plan,
+    bool strided_rows) {
     // minimal_matmul's defaults, so the two ops compare bit for bit on the same arguments.
     const auto kernel_config = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
@@ -41,7 +43,9 @@ Tensor pirotski_matmul(
         resident_weights,
         strip_m_tiles,
         strip_read_ahead,
-        read_ahead);
+        read_ahead,
+        drain_plan,
+        strided_rows);
 }
 
 }  // namespace ttnn::experimental::nomic_embed_text_v2_moe

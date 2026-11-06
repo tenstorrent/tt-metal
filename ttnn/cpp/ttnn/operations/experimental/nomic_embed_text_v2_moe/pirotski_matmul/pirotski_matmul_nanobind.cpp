@@ -65,6 +65,18 @@ void bind_pirotski_matmul(nb::module_& mod) {
                 block b. Defaults to False.
             read_ahead (bool): the same for the config grid's rows; needs one M block and one N block a core and
                 streamed weights. Defaults to False.
+            drain_plan (bool): for a sharded L1 output other than the grid's block-sharded layout (such as the
+                generated layer norm's ND layout): the host splits the last block's drain into pieces, each a run of
+                a row's tiles bound for one core's consecutive pages, and gives each piece to the RISC (so the NoC)
+                that keeps the core's hop-weighted write load (bytes x hops) the lower, instead of even rows on
+                RISCV_1 / NOC1 and odd rows on RISCV_0 / NOC0. By the same cost it picks whether the grid's rows take
+                the N shares in order or reversed (the strip's lanes too). Defaults to False.
+            strided_rows (bool): for the same outputs: core column x computes the output rows whose tile at a
+                reference N column lands in grid column x, instead of a contiguous M share, where every column then
+                holds at most its M share (otherwise the contiguous split stays). With drain_plan the reference is
+                the middle, first or last tile column, whichever plans cheapest (the last with a strip); without, the
+                middle. Only where each tile is computed and written changes: the output is the same bit for bit.
+                Defaults to False.
 
         Returns:
             ttnn.Tensor: (..., M, N) TILE.
@@ -81,7 +93,9 @@ void bind_pirotski_matmul(nb::module_& mod) {
         nb::arg("resident_weights") = false,
         nb::arg("strip_m_tiles") = 0,
         nb::arg("strip_read_ahead") = false,
-        nb::arg("read_ahead") = false);
+        nb::arg("read_ahead") = false,
+        nb::arg("drain_plan") = false,
+        nb::arg("strided_rows") = false);
 }
 
 }  // namespace ttnn::experimental::nomic_embed_text_v2_moe

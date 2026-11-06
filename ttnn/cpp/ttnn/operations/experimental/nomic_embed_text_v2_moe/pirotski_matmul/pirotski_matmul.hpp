@@ -25,6 +25,8 @@ Tensor pirotski_matmul(
     bool resident_weights = false,
     uint32_t strip_m_tiles = 0,
     bool strip_read_ahead = false,
-    bool read_ahead = false);
+    bool read_ahead = false,
+    bool drain_plan = false,
+    bool strided_rows = false);
 
 }  // namespace ttnn::experimental::nomic_embed_text_v2_moe

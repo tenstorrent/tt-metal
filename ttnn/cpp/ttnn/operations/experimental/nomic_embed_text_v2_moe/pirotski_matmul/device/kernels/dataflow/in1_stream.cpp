@@ -13,7 +13,9 @@
 // b - 1 by then, since it pushes a block before it needs the next block's first K block. The last block goes out
 // row by row as compute pushes it; with split_drain RISCV_0 writes its odd rows. With direct_pack the output ring
 // is the output's own shard and nothing here writes or pops it. A strip core of a sharded output (shard_drain)
-// writes each row's tiles into the shards of its column's main cores, N_tiles_per_shard to a shard.
+// writes each row's tiles into the shards of its column's main cores, N_tiles_per_shard to a shard. With drain_plan
+// the last block goes out as two lists of pieces (stream_protocol.hpp), this RISC's on NOC1 and RISCV_0's on NOC0:
+// each row is posted to RISCV_0 once compute has pushed it. With row_table the core's rows are the table's.
 
 #include <cstdint>
 
@@ -47,6 +49,9 @@ void kernel_main() {
     constexpr bool read_ahead = get_named_compile_time_arg_val("read_ahead") == 1;
     static_assert(!read_ahead || (M_blocks_per_core == 1 && N_blocks_per_core == 1 && !resident));
     static_assert(!shard_drain || !(direct_pack || split_drain));
+    constexpr bool row_table = get_named_compile_time_arg_val("row_table") == 1;
+    constexpr bool drain_plan = get_named_compile_time_arg_val("drain_plan") == 1;
+    static_assert(!drain_plan || !(direct_pack || split_drain || shard_drain));
     constexpr uint32_t in1_cb_id = get_named_compile_time_arg_val("in1_cb");
     constexpr uint32_t out_cb_id = get_named_compile_time_arg_val("out_cb");
     constexpr uint32_t bias_cb_id = get_named_compile_time_arg_val("bias_cb");
@@ -92,6 +97,27 @@ void kernel_main() {
             shard_y[shard] = get_arg_val<uint32_t>(arg++);
         }
     }
+    pirotski_matmul::RowTable table;
+    if constexpr (row_table) {
+        table.read(arg);
+    }
+    // The output tile row of the core's local row: the table's, or the contiguous range's.
+    auto global_row = [&](uint32_t local) -> uint32_t {
+        if constexpr (row_table) {
+            return table[local];
+        } else {
+            const uint32_t row = M_start_tile + local;
+            return row < M_end_tile ? row : pirotski_matmul::kNoRow;
+        }
+    };
+    // The valid rows of the block starting at local row `first`: a prefix of it (a table pads only at its end).
+    auto block_rows = [&](uint32_t first) -> uint32_t {
+        uint32_t rows = 0;
+        while (rows < M_block_tiles && global_row(first + rows) != pirotski_matmul::kNoRow) {
+            ++rows;
+        }
+        return rows;
+    };
     // A deferred write at or past the last K block never pops its block: the last rows would go out stale.
     ASSERT(M_blocks_per_core * N_blocks_per_core == 1 || resident || direct_pack || defer_write_k_block < K_num_blocks);
 
@@ -115,23 +141,20 @@ void kernel_main() {
             }
         }
     };
+    // Local rows [first_row, end_row).
     auto write_rows = [&](uint32_t read_address, uint32_t first_row, uint32_t end_row, uint32_t n_tile) {
         for (uint32_t row = first_row; row < end_row; ++row) {
-            uint32_t page = row * N_tiles + n_tile;
+            uint32_t page = global_row(row) * N_tiles + n_tile;
             for (uint32_t n = 0; n < N_block_tiles; ++n, ++page) {
                 noc.async_write(CoreLocalMem<uint32_t>(read_address), out, out_tile_bytes, {}, {.page_id = page});
                 read_address += out_tile_bytes;
             }
         }
     };
-    // An earlier output block, whole, once compute has pushed it.
-    auto write_block = [&](uint32_t m_tile, uint32_t n_tile) {
+    // An earlier output block, whole, once compute has pushed it; m_local is its first local row.
+    auto write_block = [&](uint32_t m_local, uint32_t n_tile) {
         out_cb.wait_front(out_block_tiles);
-        write_rows(
-            out_cb.get_read_ptr(),
-            m_tile,
-            m_tile + pirotski_matmul::valid_rows(m_tile, M_end_tile, M_block_tiles),
-            n_tile);
+        write_rows(out_cb.get_read_ptr(), m_local, m_local + block_rows(m_local), n_tile);
         noc.async_writes_flushed();
         out_cb.pop_front(out_block_tiles);
     };
@@ -142,7 +165,7 @@ void kernel_main() {
     uint32_t previous_n_tile = 0;
     [[maybe_unused]] uint32_t bias_slot = 0;
     for (uint32_t m_block = 0; m_block < M_blocks_per_core; ++m_block) {
-        const uint32_t m_tile = M_start_tile + m_block * M_block_tiles;
+        const uint32_t m_tile = m_block * M_block_tiles;  // local
         bool k_forward = true;
         for (uint32_t n_block = 0; n_block < N_blocks_per_core; ++n_block, ++output_block, k_forward = !k_forward) {
             const uint32_t n_tile = N_start_tile + n_block * N_block_tiles;
@@ -211,42 +234,69 @@ void kernel_main() {
 
     // The last block, row by row; flushed before each pop, since compute refills a popped row. With split_drain
     // rows go in pairs: RISCV_0 writes the second once posted, and the pair is popped once it is done.
-    const uint32_t last = M_start_tile + (M_blocks_per_core - 1) * M_block_tiles;
+    const uint32_t last = (M_blocks_per_core - 1) * M_block_tiles;  // local
     const uint32_t last_n_tile = N_start_tile + (N_blocks_per_core - 1) * N_block_tiles;
-    const uint32_t rows = pirotski_matmul::valid_rows(last, M_end_tile, M_block_tiles);
+    const uint32_t rows = block_rows(last);
     Semaphore<> drain_posted(get_named_compile_time_arg_val("drain_posted"));
     Semaphore<> drain_done(get_named_compile_time_arg_val("drain_done"));
-    constexpr uint32_t rows_a_step = split_drain ? 2 : 1;
-    for (uint32_t row = 0; row < (direct_pack ? 0 : M_block_tiles); row += rows_a_step) {
-        const uint32_t step = row + rows_a_step <= M_block_tiles ? rows_a_step : M_block_tiles - row;
-        out_cb.wait_front(step * N_block_tiles);
-        const bool shared = split_drain && row + 1 < rows;
-        if (shared) {
-            drain_posted.set(row / 2 + 1);
-        }
-        if (row < rows) {
-            if constexpr (shard_drain) {
-                uint32_t address = out_cb.get_read_ptr();
-                const uint32_t bytes = N_tiles_per_shard * out_tile_bytes;
-                for (uint32_t shard = 0; shard < shards; ++shard, address += bytes) {
-                    noc.async_write(
-                        CoreLocalMem<uint32_t>(address),
-                        UnicastEndpoint{},
-                        bytes,
-                        {},
-                        {.noc_x = shard_x[shard],
-                         .noc_y = shard_y[shard],
-                         .addr = out_address + (shard_row + row) * bytes});
+    if constexpr (drain_plan) {
+        // Every row is posted (rows in the ring, counted) as compute pushes it; each RISC writes its own pieces. The
+        // last block is never refilled, so nothing is popped or flushed before the final write barrier.
+        const uint32_t pieces = get_arg_val<uint32_t>(arg++);
+        ASSERT(pieces <= pirotski_matmul::kMaxPieces);
+        const uint32_t base = out_cb.get_read_ptr();
+        uint32_t next = 0;
+        auto piece = next < pieces ? pirotski_matmul::unpack_piece(get_arg_val<uint32_t>(arg + next))
+                                   : pirotski_matmul::DrainPiece{M_block_tiles, 0, 0};
+        for (uint32_t row = 0; row < rows; ++row) {
+            out_cb.wait_front((row + 1) * N_block_tiles);
+            drain_posted.set(row + 1);
+            for (; next < pieces && piece.row == row;) {
+                const uint32_t page = global_row(last + row) * N_tiles + last_n_tile + piece.n_offset;
+                noc_async_write(
+                    base + (row * N_block_tiles + piece.n_offset) * out_tile_bytes,
+                    out.get_noc_addr(page),
+                    piece.count * out_tile_bytes);
+                ++next;
+                if (next < pieces) {
+                    piece = pirotski_matmul::unpack_piece(get_arg_val<uint32_t>(arg + next));
                 }
-            } else {
-                write_rows(out_cb.get_read_ptr(), last + row, last + row + 1, last_n_tile);
             }
         }
-        noc.async_writes_flushed();
-        if (shared) {
-            drain_done.wait_min(row / 2 + 1);
+        ASSERT(next == pieces);
+    } else {
+        constexpr uint32_t rows_a_step = split_drain ? 2 : 1;
+        for (uint32_t row = 0; row < (direct_pack ? 0 : M_block_tiles); row += rows_a_step) {
+            const uint32_t step = row + rows_a_step <= M_block_tiles ? rows_a_step : M_block_tiles - row;
+            out_cb.wait_front(step * N_block_tiles);
+            const bool shared = split_drain && row + 1 < rows;
+            if (shared) {
+                drain_posted.set(row / 2 + 1);
+            }
+            if (row < rows) {
+                if constexpr (shard_drain) {
+                    uint32_t address = out_cb.get_read_ptr();
+                    const uint32_t bytes = N_tiles_per_shard * out_tile_bytes;
+                    for (uint32_t shard = 0; shard < shards; ++shard, address += bytes) {
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(address),
+                            UnicastEndpoint{},
+                            bytes,
+                            {},
+                            {.noc_x = shard_x[shard],
+                             .noc_y = shard_y[shard],
+                             .addr = out_address + (shard_row + row) * bytes});
+                    }
+                } else {
+                    write_rows(out_cb.get_read_ptr(), last + row, last + row + 1, last_n_tile);
+                }
+            }
+            noc.async_writes_flushed();
+            if (shared) {
+                drain_done.wait_min(row / 2 + 1);
+            }
+            out_cb.pop_front(step * N_block_tiles);
         }
-        out_cb.pop_front(step * N_block_tiles);
     }
     noc.async_write_barrier();
     noc.async_atomic_barrier();

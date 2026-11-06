@@ -481,3 +481,72 @@ def test_invalid_calls_raise(device, expect_error, case):
             strip_read_ahead=overrides.get("strip_read_ahead", False),
             read_ahead=overrides.get("read_ahead", False),
         )
+
+
+# The generated layer norm's ND layout (tt/common.py nd_norm_layout), as out_proj and fc2 write it: (batch, S, K,
+# M block, K block, strip rows, strip read-ahead, read-ahead, fidelity, input dtype) of the model's calls at 8x512,
+# 4x512 and 2x512, plus 3x512 (G = 2 shards, 5-row shares) and 8x384 (a strided split would overfill a column there,
+# so the contiguous one stays).
+ND_CALLS = {
+    "out_proj_8x512": (8, 512, HIDDEN, 10, 3, 2, False, False, ttnn.MathFidelity.HiFi3, ttnn.bfloat16),
+    "fc2_8x512": (8, 512, INTERMEDIATE, 10, 4, 2, True, False, ttnn.MathFidelity.HiFi2, ttnn.bfloat8_b),
+    "out_proj_4x512": (4, 512, HIDDEN, 6, 3, 0, False, False, ttnn.MathFidelity.HiFi3, ttnn.bfloat16),
+    "fc2_4x512": (4, 512, INTERMEDIATE, 6, 4, 0, False, False, ttnn.MathFidelity.HiFi2, ttnn.bfloat8_b),
+    "out_proj_2x512": (2, 512, HIDDEN, 3, 6, 0, False, False, ttnn.MathFidelity.HiFi3, ttnn.bfloat16),
+    "fc2_2x512": (2, 512, INTERMEDIATE, 3, 12, 0, False, True, ttnn.MathFidelity.HiFi2, ttnn.bfloat8_b),
+    "out_proj_3x512": (3, 512, HIDDEN, 5, 3, 0, False, False, ttnn.MathFidelity.HiFi3, ttnn.bfloat16),
+    "out_proj_8x384": (8, 384, HIDDEN, 9, 3, 0, False, False, ttnn.MathFidelity.HiFi3, ttnn.bfloat16),
+}
+
+
+@pytest.mark.parametrize("drain_plan, strided_rows", [(False, False), (True, False), (False, True), (True, True)])
+@pytest.mark.parametrize("name", ND_CALLS.keys())
+def test_nd_output_drain_modes_match_minimal_matmul(device, name, drain_plan, strided_rows):
+    """Each drain option changes only which core computes a row and which RISC writes a piece: every output tile keeps
+    its K order, so the output is minimal_matmul's bit for bit, with no tile left unwritten."""
+    from ttnn.operations.nomic_residual_layer_norm import input_memory_config
+
+    batch, seqlen, k, m_block, k_block, strip, strip_ra, read_ahead, fidelity, input_dtype = ND_CALLS[name]
+    shape = (batch, 1, seqlen, k)
+    output_memory = input_memory_config((batch, 1, seqlen, HIDDEN), device)
+    tensors, torch_operands = operands(device, shape, HIDDEN, input_dtype, ttnn.L1_MEMORY_CONFIG, seed=len(name) + k)
+    matmul_config = config(m_block, k_block, 3, (1, 3), (11, 8))
+    kernel_config = compute_config(device, fidelity)
+
+    expected = reference(tensors, matmul_config, ttnn.bfloat16, output_memory, kernel_config)
+    expected_values = ttnn.from_torch(ttnn.to_torch(expected), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn.deallocate(expected)
+
+    def run():
+        return pirotski_matmul(
+            tensors["input_tensor"],
+            tensors["weight"],
+            config=matmul_config,
+            dtype=ttnn.bfloat16,
+            bias=tensors["bias"],
+            memory_config=output_memory,
+            compute_kernel_config=kernel_config,
+            strip_m_tiles=strip,
+            strip_read_ahead=strip_ra,
+            read_ahead=read_ahead,
+            drain_plan=drain_plan,
+            strided_rows=strided_rows,
+        )
+
+    actual = poisoned(device, (batch, 1, seqlen, HIDDEN), ttnn.bfloat16, output_memory, run)
+    assert_bit_identical(expected_values, actual, torch_operands)
+
+
+def test_drain_options_need_a_sharded_l1_output(device, expect_error):
+    tensors, _ = operands(device, (4, 1, 512, HIDDEN), HIDDEN, ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG, seed=7)
+    with expect_error(RuntimeError, "need a sharded L1 output"):
+        pirotski_matmul(
+            tensors["input_tensor"],
+            tensors["weight"],
+            config=config(6, 3, 3, (1, 3), (11, 8)),
+            dtype=ttnn.bfloat16,
+            bias=tensors["bias"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=compute_config(device, ttnn.MathFidelity.HiFi3),
+            drain_plan=True,
+        )

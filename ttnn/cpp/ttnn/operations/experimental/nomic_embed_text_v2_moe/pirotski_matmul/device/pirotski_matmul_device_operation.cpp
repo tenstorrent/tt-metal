@@ -24,6 +24,8 @@ using tt::tt_metal::ShardOrientation;
 using tt::tt_metal::TensorMemoryLayout;
 
 constexpr uint32_t kTileSize = tt::constants::TILE_HEIGHT;
+// The kernels' row table holds at most this many rows (stream_protocol.hpp kMaxTableRows).
+constexpr uint32_t kMaxCoreRows = 32;
 
 void check_tile_operand(const Tensor& tensor, std::string_view name) {
     TT_FATAL(
@@ -233,6 +235,19 @@ PirotskiMatmulLayout PirotskiMatmulDeviceOperation::compute_layout(
                              spec.shape[1] == n_tiles_per_core * kTileSize &&
                              layout.main_m_tiles % config.M_block_size == 0 && n_blocks_per_core == 1;
     }
+    if (attributes.drain_plan || attributes.strided_rows) {
+        // Both work from the output buffer's page mapping, which a sharded L1 layout has; a direct-packed output
+        // is never drained.
+        TT_FATAL(
+            output_memory.is_sharded() && output_memory.buffer_type() == BufferType::L1 && !layout.direct_pack,
+            "pirotski_matmul: drain_plan and strided_rows need a sharded L1 output other than the grid's own "
+            "block-sharded layout");
+        TT_FATAL(
+            layout.m_tiles_per_core <= kMaxCoreRows,
+            "pirotski_matmul: drain_plan and strided_rows take at most {} rows a core, the M share is {}",
+            kMaxCoreRows,
+            layout.m_tiles_per_core);
+    }
     return layout;
 }
 
@@ -272,7 +287,9 @@ Tensor pirotski_matmul(
     bool resident_weights,
     uint32_t strip_m_tiles,
     bool strip_read_ahead,
-    bool read_ahead) {
+    bool read_ahead,
+    bool drain_plan,
+    bool strided_rows) {
     using Operation = ttnn::experimental::nomic_embed_text_v2_moe::PirotskiMatmulDeviceOperation;
     return ttnn::device_operation::launch<Operation>(
         Operation::operation_attributes_t{
@@ -283,7 +300,9 @@ Tensor pirotski_matmul(
             .resident_weights = resident_weights,
             .strip_m_tiles = strip_m_tiles,
             .strip_read_ahead = strip_read_ahead,
-            .read_ahead = read_ahead},
+            .read_ahead = read_ahead,
+            .drain_plan = drain_plan,
+            .strided_rows = strided_rows},
         Operation::tensor_args_t{.input = input, .weight = weight, .bias = bias});
 }
 

@@ -55,6 +55,12 @@ struct PirotskiMatmulDeviceOperation {
         uint32_t strip_m_tiles = 0;
         bool strip_read_ahead = false;
         bool read_ahead = false;
+        // A sharded output that is not packed directly (an L1 layout other than the block grid's): drain_plan has
+        // the host give each piece of the last block's drain (a run of a row's tiles bound for one core) to the RISC
+        // whose NoC keeps the busiest link and RISC least loaded; strided_rows has core column x compute the rows
+        // whose output lands around grid column x (pirotski_matmul_program_factory.cpp).
+        bool drain_plan = false;
+        bool strided_rows = false;
     };
 
     struct tensor_args_t {
@@ -94,6 +100,8 @@ Tensor pirotski_matmul(
     bool resident_weights,
     uint32_t strip_m_tiles,
     bool strip_read_ahead,
-    bool read_ahead);
+    bool read_ahead,
+    bool drain_plan = false,
+    bool strided_rows = false);
 
 }  // namespace ttnn::prim

@@ -6,7 +6,8 @@
 // (M block, K block) of the column's rows and multicasts it down the column. With several N blocks a core, compute
 // keeps the last K block of an N block for the next one, which runs K the other way, as minimal_matmul's does; that
 // block is not sent again. With split_drain it then writes the last output block's odd rows as RISCV_1 posts them
-// (in1_stream.cpp).
+// (in1_stream.cpp); with drain_plan, its own list of the last block's pieces (stream_protocol.hpp), each once
+// RISCV_1 has posted its row. With row_table the core's rows are the table's, in its order, not a contiguous range.
 
 #include <cstdint>
 
@@ -31,6 +32,9 @@ void kernel_main() {
     // the column's core at NoC row shard_noc_y[s], at the input's address, row-major, M_tiles_per_core rows high.
     constexpr uint32_t shard_width = get_named_compile_time_arg_val("shard_width");
     constexpr bool split_drain = get_named_compile_time_arg_val("split_drain") == 1;
+    constexpr bool row_table = get_named_compile_time_arg_val("row_table") == 1;
+    constexpr bool drain_plan = get_named_compile_time_arg_val("drain_plan") == 1;
+    static_assert(!(split_drain && drain_plan));
     constexpr auto in0_args = TensorAccessorArgs<0>();
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     constexpr uint32_t block_tiles = M_block_tiles * K_block_tiles;
@@ -54,6 +58,21 @@ void kernel_main() {
     for (uint32_t shard = 0; shard < shards; ++shard) {
         shard_noc_y[shard] = get_arg_val<uint32_t>(arg++);
     }
+    const uint32_t out_address = get_arg_val<uint32_t>(arg++);
+    const uint32_t N_start_tile = get_arg_val<uint32_t>(arg++);
+    pirotski_matmul::RowTable table;
+    if constexpr (row_table) {
+        table.read(arg);
+    }
+    // The output tile row of the core's local row: the table's, or the contiguous range's.
+    auto global_row = [&](uint32_t local) -> uint32_t {
+        if constexpr (row_table) {
+            return table[local];
+        } else {
+            const uint32_t row = M_start_tile + local;
+            return row < M_end_tile ? row : pirotski_matmul::kNoRow;
+        }
+    };
 
     const Noc noc;
     DataflowBuffer in0_cb(in0_cb_id);
@@ -62,11 +81,21 @@ void kernel_main() {
     const auto in0 = TensorAccessor(in0_args, in0_address);
     constexpr uint32_t tile_bytes = get_tile_size(in0_cb_id);
 
-    // Rows past the core's end are left as they are: they feed output rows nobody writes.
-    auto read_block = [&](uint32_t m_tile, uint32_t k_block, uint32_t address) {
-        const uint32_t m_tile_end = m_tile + M_block_tiles < M_end_tile ? m_tile + M_block_tiles : M_end_tile;
+    // Rows past the core's end (or a table's padding rows) are left as they are: they feed output rows nobody
+    // writes.
+    auto read_block = [&](uint32_t m_local, uint32_t k_block, uint32_t address) {
         const uint32_t k_start = k_block * K_block_tiles;
-        for (uint32_t row = m_tile; row < m_tile_end; ++row) {
+        for (uint32_t local = m_local; local < m_local + M_block_tiles;
+             ++local, address += K_block_tiles * tile_bytes) {
+            const uint32_t row = global_row(local);
+            if (row == pirotski_matmul::kNoRow) {
+                if constexpr (row_table) {
+                    continue;
+                } else {
+                    break;
+                }
+            }
+            uint32_t row_address = address;
             if constexpr (shard_width > 0) {
                 // A row's tiles in one shard are contiguous: one read a row a shard.
                 const uint32_t shard_row = (row - M_start_tile) * shard_width;
@@ -77,20 +106,20 @@ void kernel_main() {
                         (shard_end < k_start + K_block_tiles ? shard_end : k_start + K_block_tiles) - k;
                     noc.async_read(
                         UnicastEndpoint{},
-                        CoreLocalMem<uint32_t>(address),
+                        CoreLocalMem<uint32_t>(row_address),
                         run * tile_bytes,
                         {.noc_x = sender_x,
                          .noc_y = shard_noc_y[shard],
                          .addr = in0_address + (shard_row + k % shard_width) * tile_bytes},
                         {});
-                    address += run * tile_bytes;
+                    row_address += run * tile_bytes;
                     k += run;
                 }
             } else {
                 uint32_t page = row * K_tiles + k_start;
                 for (uint32_t col = 0; col < K_block_tiles; ++col, ++page) {
-                    noc.async_read(in0, CoreLocalMem<uint32_t>(address), tile_bytes, {.page_id = page}, {});
-                    address += tile_bytes;
+                    noc.async_read(in0, CoreLocalMem<uint32_t>(row_address), tile_bytes, {.page_id = page}, {});
+                    row_address += tile_bytes;
                 }
             }
         }
@@ -99,7 +128,7 @@ void kernel_main() {
 
     uint32_t block = 0;
     for (uint32_t m_block = 0; m_block < M_blocks_per_core; ++m_block) {
-        const uint32_t m_tile = M_start_tile + m_block * M_block_tiles;
+        const uint32_t m_local = m_block * M_block_tiles;
         bool k_forward = true;
         for (uint32_t n_block = 0; n_block < N_blocks_per_core; ++n_block, k_forward = !k_forward) {
             for (uint32_t k_iter = n_block > 0 ? 1 : 0; k_iter < K_num_blocks; ++k_iter, ++block) {
@@ -107,7 +136,7 @@ void kernel_main() {
                 in0_cb.reserve_back(block_tiles);
                 const uint32_t slot = in0_cb.get_write_ptr();
                 if (is_sender) {
-                    read_block(m_tile, k_block, slot);
+                    read_block(m_local, k_block, slot);
                     // Compute reads the slot while the multicast does; send_block returns once the slot is read.
                     in0_cb.push_back(block_tiles);
                     if (receivers.count > 0) {
@@ -121,31 +150,50 @@ void kernel_main() {
             }
         }
     }
-
-    if constexpr (split_drain) {
-        // The last output block's odd rows, as RISCV_1 posts them. The output ring holds one block, so the last
-        // block starts at its base.
+    if constexpr (split_drain || drain_plan) {
         constexpr uint32_t N_tiles = get_named_compile_time_arg_val("N_tiles");
         constexpr uint32_t N_block_tiles = get_named_compile_time_arg_val("N_block_tiles");
         constexpr uint32_t out_cb_id = get_named_compile_time_arg_val("out_cb");
         constexpr uint32_t out_tile_bytes = get_tile_size(out_cb_id);
-        const uint32_t out_address = get_arg_val<uint32_t>(arg++);
-        const uint32_t N_start_tile = get_arg_val<uint32_t>(arg++);
         const auto out = TensorAccessor(out_args, out_address);
+        // The output ring holds one block, so the last block starts at its base.
         const uint32_t out_base = DataflowBuffer(out_cb_id).get_read_ptr();
         Semaphore<> drain_posted(get_named_compile_time_arg_val("drain_posted"));
-        Semaphore<> drain_done(get_named_compile_time_arg_val("drain_done"));
-        const uint32_t last = M_start_tile + (M_blocks_per_core - 1) * M_block_tiles;
-        const uint32_t rows = pirotski_matmul::valid_rows(last, M_end_tile, M_block_tiles);
-        for (uint32_t row = 1; row < rows; row += 2) {
-            drain_posted.wait_min(row / 2 + 1);
-            uint32_t address = out_base + row * N_block_tiles * out_tile_bytes;
-            uint32_t page = (last + row) * N_tiles + N_start_tile + (N_blocks_per_core - 1) * N_block_tiles;
-            for (uint32_t n = 0; n < N_block_tiles; ++n, ++page, address += out_tile_bytes) {
-                noc.async_write(CoreLocalMem<uint32_t>(address), out, out_tile_bytes, {}, {.page_id = page});
+        const uint32_t last = (M_blocks_per_core - 1) * M_block_tiles;
+        const uint32_t last_n_tile = N_start_tile + (N_blocks_per_core - 1) * N_block_tiles;
+        if constexpr (split_drain) {
+            // The last output block's odd rows, as RISCV_1 posts them. A block's valid rows are a prefix of it (a
+            // table pads only at its end), so the first padding row ends them, as in in1_stream.cpp.
+            Semaphore<> drain_done(get_named_compile_time_arg_val("drain_done"));
+            for (uint32_t row = 1; row < M_block_tiles; row += 2) {
+                const uint32_t global = global_row(last + row);
+                if (global == pirotski_matmul::kNoRow) {
+                    break;
+                }
+                drain_posted.wait_min(row / 2 + 1);
+                uint32_t address = out_base + row * N_block_tiles * out_tile_bytes;
+                uint32_t page = global * N_tiles + last_n_tile;
+                for (uint32_t n = 0; n < N_block_tiles; ++n, ++page, address += out_tile_bytes) {
+                    noc.async_write(CoreLocalMem<uint32_t>(address), out, out_tile_bytes, {}, {.page_id = page});
+                }
+                noc.async_writes_flushed();
+                drain_done.set(row / 2 + 1);
             }
-            noc.async_writes_flushed();
-            drain_done.set(row / 2 + 1);
+        } else {
+            // drain_plan: this RISC's pieces, each once RISCV_1 has posted that its row is in the ring (count of rows
+            // posted). The last block is never refilled, so nothing here is flushed or popped before the final write
+            // barrier.
+            const uint32_t pieces = get_arg_val<uint32_t>(arg++);
+            ASSERT(pieces <= pirotski_matmul::kMaxPieces);
+            for (uint32_t i = 0; i < pieces; ++i) {
+                const auto piece = pirotski_matmul::unpack_piece(get_arg_val<uint32_t>(arg++));
+                drain_posted.wait_min(piece.row + 1);
+                const uint32_t page = global_row(last + piece.row) * N_tiles + last_n_tile + piece.n_offset;
+                noc_async_write(
+                    out_base + (piece.row * N_block_tiles + piece.n_offset) * out_tile_bytes,
+                    out.get_noc_addr(page),
+                    piece.count * out_tile_bytes);
+            }
         }
     }
     noc.async_write_barrier();
