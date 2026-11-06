@@ -2605,3 +2605,9 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
 - Fix: dgen_prefill_driver.device_pipeline_args passes chunk_size, like layers_per_chunk, only to a build whose
   signature declares it.
 - Selftest: test_engine_wait.py::test_the_engine_driver_names_its_pipeline_arguments.
+
+## F257: `dgen_engine find` ignored the spec (rebase onto 107f838f379, 2026-11-06)
+- Problem: the CLI called find_build() without a spec, so it looked at /localdev/$USER/tt-d-gen while the runner
+  tests (with the spec's serving.server_repo) found the engine; "not found" for a working setup.
+- Fix: with BRINGUP_SPEC set, the CLI loads the spec and passes it to find_build.
+- Selftest: none (CLI wiring); checked by hand: prints the engine at /scratch/$USER/tt-d-gen.

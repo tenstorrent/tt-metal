@@ -181,7 +181,12 @@ if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "shutdown":
         send_shutdown(sys.argv[2])
     elif len(sys.argv) == 2 and sys.argv[1] == "find":
-        b, why = find_build()
+        spec = None
+        if os.environ.get("BRINGUP_SPEC"):  # F257: the spec's serving.server_repo, as the runner tests use
+            from models.demos.common.bringup.core.spec import Spec
+
+            spec = Spec.load(os.environ["BRINGUP_SPEC"])
+        b, why = find_build(spec)
         print(b.describe() if b else f"not found: {why}")
     else:
         sys.exit("usage: python -m models.demos.common.bringup.testing.dgen_engine shutdown <service_id> | find")
