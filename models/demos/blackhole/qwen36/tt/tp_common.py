@@ -281,7 +281,12 @@ PREFILL_L1_MAX_SEQ = 2048
 
 def prefill_act_mem(seq_len, l1_cfg=ttnn.L1_MEMORY_CONFIG):
     """Placement of a prefill activation whose size scales with S: `l1_cfg` up to PREFILL_L1_MAX_SEQ rows, else DRAM."""
-    return l1_cfg if seq_len <= PREFILL_L1_MAX_SEQ else ttnn.DRAM_MEMORY_CONFIG
+    # QWEN36_PREFILL_ACT_L1_MAX: this placement threshold alone (not the matmul blocking, which keeps PREFILL_L1_MAX_SEQ)
+    return (
+        l1_cfg
+        if seq_len <= int(os.environ.get("QWEN36_PREFILL_ACT_L1_MAX", PREFILL_L1_MAX_SEQ))
+        else ttnn.DRAM_MEMORY_CONFIG
+    )
 
 
 def is_2d_mesh(mesh):

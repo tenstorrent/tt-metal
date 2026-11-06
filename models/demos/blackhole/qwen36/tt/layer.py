@@ -57,7 +57,10 @@ def tokpar_a2a(x, to_tokens):
         out_dim=out_dim,
         num_links=2,
         topology=ttnn.Topology.Ring,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # QWEN36_TOKPAR_A2A_L1=1: the all-to-all outputs in L1
+        memory_config=ttnn.L1_MEMORY_CONFIG
+        if os.environ.get("QWEN36_TOKPAR_A2A_L1", "0") == "1"
+        else ttnn.DRAM_MEMORY_CONFIG,
     )
 
 
@@ -80,20 +83,25 @@ def _load_tokpar_mlp(mesh, mlp_state, cache_dir):
     return {"w1": load("gate_proj"), "w3": load("up_proj"), "w2": load("down_proj")}
 
 
-def _tokpar_pc(m, k, n, bw, act=None):
-    """2D mcast prefill config on the full 12x10 grid: per_core_M = M tiles / 10 rows, per_core_N = N tiles / 12."""
+def _tokpar_pc(m, k, n, bw, act=None, lim=4, prefer_h=False):
+    """2D mcast prefill config on the full 12x10 grid: per_core_M = M tiles / 10 rows, per_core_N = N tiles / 12.
+    lim: max subblock tiles (4 with fp32 dest accumulation, 8 without); prefer_h: subblock height pm (x 1) when the
+    width has no divisor (the down projection: pn = 11)."""
     import math
 
     gx, gy = 12, 10
     mt, kt, nt = m // 32, k // 32, n // 32
     pm, pn = math.ceil(mt / gy), math.ceil(nt / gx)
-    sw = max(d for d in (4, 3, 2, 1) if pn % d == 0)
+    sw = max(d for d in (8, 6, 4, 3, 2, 1) if pn % d == 0 and d <= lim)
+    sh = 1
+    if prefer_h and sw == 1 and pm <= lim:
+        sh = pm
     while kt % bw:
         bw -= 1
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(gx, gy),
         in0_block_w=bw,
-        out_subblock_h=1,
+        out_subblock_h=sh,
         out_subblock_w=sw,
         out_block_h=pm,
         out_block_w=pn,
@@ -400,15 +408,28 @@ class Qwen36DecoderLayer:
         # multiply (input activation) instead of the gate matmul's packer
         act_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("QWEN36_TOKPAR_MLP_L1", "0") == "1" else dram
         silu_mul = os.environ.get("QWEN36_TOKPAR_SILU_MUL", "0") == "1"
+        # QWEN36_TOKPAR_MLP_CFG2=1 (session 5 sweep, mb_mlp5.py): gate/up with bf16 dest accumulation and 1x8 subblocks,
+        # down with in0_block_w 16 / 3x1 subblocks, bf16 dest (263 vs 267-273 us and 242 vs ~258 us at M=672)
+        cfg2 = os.environ.get("QWEN36_TOKPAR_MLP_CFG2", "0") == "1"
+        if cfg2:
+            ck = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ck.math_fidelity, fp32_dest_acc_en=False, packer_l1_acc=True
+            )
         gate = ttnn.linear(
             x8,
             w["w1"],
             compute_kernel_config=ck,
             memory_config=act_mc,
-            program_config=_tokpar_pc(M, K, F, 8, act=None if silu_mul else ttnn.UnaryOpType.SILU),
+            program_config=_tokpar_pc(
+                M, K, F, 8, act=None if silu_mul else ttnn.UnaryOpType.SILU, lim=8 if cfg2 else 4
+            ),
         )
         up = ttnn.linear(
-            x8, w["w3"], compute_kernel_config=ck, memory_config=act_mc, program_config=_tokpar_pc(M, K, F, 8)
+            x8,
+            w["w3"],
+            compute_kernel_config=ck,
+            memory_config=act_mc,
+            program_config=_tokpar_pc(M, K, F, 8, lim=8 if cfg2 else 4),
         )
         if x8 is not x:
             ttnn.deallocate(x8)
@@ -424,7 +445,11 @@ class Qwen36DecoderLayer:
             hidden = ttnn.mul(gate, up, memory_config=act_mc, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
-        pc_d = tpc.create_prefill_mlp_matmul_program_config(M, F, K, max_cols=12)
+        pc_d = (
+            _tokpar_pc(M, F, K, 16, lim=8, prefer_h=True)
+            if cfg2
+            else tpc.create_prefill_mlp_matmul_program_config(M, F, K, max_cols=12)
+        )
         out = ttnn.linear(hidden, w["w2"], compute_kernel_config=ck, memory_config=dram, program_config=pc_d)
         ttnn.deallocate(hidden)
         return out
