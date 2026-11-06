@@ -96,7 +96,6 @@ def test_cumprod_backward(dim, shape, dtypes, device):
     if dim < len(shape) and -len(shape) <= dim:
         _, ttnn_dtype = dtypes
 
-        # Factors in {-2, -1, 1, 2} keep every product a nonzero signed power of two, exact in bfloat16
         torch_input = torch.tensor([-2.0, -1.0, 1.0, 2.0], dtype=torch.bfloat16)[torch.randint(0, 4, shape)]
         torch_output = torch.flip(torch.cumprod(torch.flip(torch_input.float(), [dim]), dim), [dim])
 
