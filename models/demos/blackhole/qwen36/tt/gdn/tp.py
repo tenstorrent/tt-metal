@@ -2232,6 +2232,9 @@ class TPGatedDeltaNet:
             _gdt = ttnn.bfloat8_b if os.environ.get("QWEN36_TOKPAR_A2A_BF8", "0") == "1" else ttnn.bfloat16
             z3 = ttnn.reshape(z, (1, M, self.value_dim_tp))
             o3 = ttnn.reshape(o, (Nv, M, Dv)) if len(o.shape) != 3 else o
+            _gmc = (
+                ttnn.L1_MEMORY_CONFIG if os.environ.get("QWEN36_TOKPAR_A2A_L1", "0") == "1" else ttnn.DRAM_MEMORY_CONFIG
+            )
             normed = ttnn.experimental.kda.sigmoid_gated_rms_norm(
                 o3,
                 z3,
@@ -2239,10 +2242,10 @@ class TPGatedDeltaNet:
                 Nv,
                 epsilon=1e-6,
                 output_dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_gmc,
             )
             ttnn.deallocate(o)
-            gated = ttnn.multiply(normed, z3, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=_gdt)
+            gated = ttnn.multiply(normed, z3, memory_config=_gmc, dtype=_gdt)
             ttnn.deallocate(normed)
             ttnn.deallocate(z)
             return gated
@@ -2437,7 +2440,10 @@ class TPGatedDeltaNet:
         assert M == Bg * Tb, (M, Bg, Tb)
 
         # Projection is per token: run it over all M rows, then split the user dim back out (DRAM outputs).
-        qkv_f, z, a, b = self._project_qkvzab(x, M)
+        # QWEN36_GDN_PROJ_L1=1: the in-proj output and its qkv / a / b slices in L1 (z stays DRAM: _project_qkvzab)
+        qkv_f, z, a, b = self._project_qkvzab(
+            x, M, out_mc=ttnn.L1_MEMORY_CONFIG if os.environ.get("QWEN36_GDN_PROJ_L1", "0") == "1" else None
+        )
         qkv = ttnn.reshape(qkv_f, (Bg, Tb, C))
         # init (resumed rows): {"rec": [Bg,Nv,Dk,Dv] fp32 initial state, "pad": [Bg,32,C] conv-history block}
         if Bg == 1 and init is not None and init.get("hist") is not None:
@@ -2452,6 +2458,7 @@ class TPGatedDeltaNet:
                 (kd, kd, self.value_dim_tp),
                 self._kda_actual_start,
                 emit_state=False,
+                chunk_cap=int(os.environ.get("QWEN36_GDN_CONV_CAP", "512")),  # smaller = more cores
             )
             # QWEN36_GDN_CONVSEL_TAIL=W (rows, a tile multiple): the selected rows valid_len-3..valid_len-1 are known to
             # lie in the bucket's last W rows (the caller guarantees valid_len - 3 >= Tb - W): select from those
