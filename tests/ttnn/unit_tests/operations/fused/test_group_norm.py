@@ -2547,8 +2547,9 @@ def test_group_norm_sharded_dirty_padding_tile_aligned_groups(
 
 
 # Grid for the fp32 accuracy tests below (wide groups with fp32 DEST, FLOAT32 input with narrow groups, and the user
-# compute_kernel_config's fp32_dest_acc_en). 4x4 fits every supported device (the smallest is the 20-core Blackhole
-# SKU, 5x4, and Wormhole with dispatch on a worker row is 8x7) and still reaches both the mcast and no-mcast factories.
+# compute_kernel_config's fp32_dest_acc_en). 4x4 fits the smaller worker grids some devices have, such as the 5x4
+# Blackhole configuration and the harvested Wormhole n300 board (7x8, or 8x7 with dispatch on a row), and still reaches
+# both the mcast and no-mcast factories. skip_if_grid_too_small skips the tests on any smaller grid.
 SMALL_DEVICE_GRID = ttnn.CoreGrid(y=4, x=4)
 
 
