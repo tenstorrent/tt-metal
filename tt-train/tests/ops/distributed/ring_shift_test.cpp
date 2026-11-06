@@ -211,10 +211,9 @@ TEST_F(GalaxyRingShiftTest, BackwardBig) {
         16, 1024, 8192, /*cluster_axis=*/1, /*shard_dim=*/3, RingShiftDirection::Forward, /*test_backward_grad=*/true);
 }
 
-// Back-to-back shifts with no host synchronization in between, the way the ring attention loop issues them: the
-// socket FIFO state has to carry over from one shift to the next on device. With both_directions a second tensor is
-// shifted the other way at the same time, so both directions (separate sockets) are in flight at once. Only the
-// final values are read back.
+// Back-to-back shifts with no host synchronization in between: the socket FIFO state has to carry over from one
+// shift to the next on device. With both_directions a second tensor is shifted the other way, alternating with the
+// first, so both directions (separate sockets) are in flight at once. Only the final values are read back.
 static void TestChainedRingShifts(
     const size_t batch,
     const size_t seq,
@@ -295,9 +294,10 @@ TEST_F(GalaxyRingShiftTest, ChainedShiftsAlongColumnsNoHostSync) {
 
 // The intra-mesh sockets ring_shift uses have an 80 MiB FIFO per receiver (fifo_size in
 // core/distributed/socket_manager.cpp). A 45056 x 1024 bf16 shard is 88 MiB per device, so each shift is a single
-// transfer larger than the FIFO: within one send/recv op the FIFO wraps and the sender is flow-controlled by its
-// receiver's credits (bytes_acked), with the next shift queued behind it and no host sync in between.
-// 3 shifts, so the data ends 3 hops away.
+// transfer larger than the FIFO (22528 blocks of 4096 B against 20480): within one send/recv op the FIFO wraps and
+// the sender is flow-controlled by its receiver's credits (bytes_acked), with the next shift queued behind it and
+// no host sync in between. These cases depend on that constant: raising fifo_size above 88 MiB would make them
+// stop exceeding the FIFO. 3 shifts, so the data ends 3 hops away.
 TEST_F(GalaxyRingShiftTest, ChainedShiftsLargerThanSocketFifoAlongRows) {
     TestChainedRingShifts(
         1, 8 * 45056, 1024, /*cluster_axis=*/0, /*shard_dim=*/2, /*num_shifts=*/3, /*both_directions=*/false);

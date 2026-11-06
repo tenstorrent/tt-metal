@@ -252,16 +252,17 @@ ttnn::Tensor ring_shift(
     // state and the peers update each other's counters over the fabric, so a device waits only for its ring
     // neighbours rather than for the whole mesh, and the host keeps enqueuing while the data moves. The data itself
     // goes through a FIFO in the receiver's DRAM.
-    // The two phases are what keep this deadlock-free when a send has to block on FIFO space: in phase 1 the recv
-    // it waits for is the odd receiver's first op of this shift, and in phase 2 the even receiver's recv only
-    // follows its own phase-1 send, which in turn only waits on such a first op.
+    // Deadlock freedom when a send blocks on FIFO space rests on every device issuing the same sequence of socket
+    // ops: per shift, exactly one send or recv per phase, phase 1 before phase 2. A sender can run several shifts
+    // ahead of its receiver on a socket, but every op it waits on is earlier in that global order, so no wait cycle
+    // can form. Any reordering of the sends and recvs below needs this re-checked.
     // Block-size invariant: a sender can start the next shift on a socket while its receiver still holds unread data
     // from this one. Each send/recv op aligns the socket's write/read pointer up to its block size and does not count
     // the skipped bytes in bytes_sent/bytes_acked (set_*_socket_page_size in socket_api.h). If consecutive ops on a
-    // socket use different block sizes, the sender can see more free space than there is and, filling the FIFO,
-    // overwrite the oldest unread data. A block is as many whole pages as fit in the fabric max payload
-    // (send_async_op_program_factory.cpp): with the default 4352 B payload, both the bf16 and the fp32 tiles ring
-    // attention shifts use 4096 B blocks.
+    // socket use different block sizes, the sender sees more free space than there is until the receiver's next recv
+    // makes the same skip; a sender that fills the FIFO in that window overwrites the oldest unread data. A block is
+    // as many whole pages as fit in the fabric max payload (send_async_op_program_factory.cpp): at the default 4352 B
+    // the bf16 and fp32 tile shifts of ring attention both use 4096 B, at 15232 B they would not (14336 vs 12288 B).
     // Phase 1: Even positions send, odd positions receive
     const core::distributed::IntraMeshParameters even_to_odd_params{even_to_odd_connections};
     socket_manager.send(tensor, inter_host_params, even_to_odd_params);
