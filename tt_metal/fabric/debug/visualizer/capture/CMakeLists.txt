@@ -26,3 +26,15 @@ target_link_libraries(
     PRIVATE
         BLAKE3::blake3
 )
+
+# fabric_capture_umd is capture's only UMD code: the reader and the cluster facts for real chips. It links UMD and still
+# no tt_metal.
+add_library(fabric_capture_umd STATIC)
+target_sources(fabric_capture_umd PRIVATE fabric_capture_umd.cpp)
+target_link_libraries(
+    fabric_capture_umd
+    PUBLIC
+        fabric_capture_core
+    PRIVATE
+        umd::tt-umd
+)
