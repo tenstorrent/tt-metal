@@ -17,9 +17,12 @@ commit, and the exact command that produced it. Record all four.
 
 ## Related skills
 
-- `quasar-perf-test` — create or repair the perf test and its `PerfRunType`
-  paths, and choose tile/dimension coverage. Use it first when the test does
-  not exist, hangs, reports implausible metrics, or needs sweep-axis changes.
+- `perf-test` — create, unify, or repair a Wormhole/Blackhole perf test so it
+  matches its functional test. Use it first when the test does not exist,
+  hangs, reports implausible metrics, or drifts from functional.
+- `quasar-perf-test` — the same for Quasar, plus tile/dimension coverage.
+- `perf-regression-check` — compare against the branch point and read
+  deterministic layout-driven deltas.
 - `perf-parameter-impact` — analyze a finished `.post.csv`.
 - `run-test` — the repository test-runner workflow.
 
@@ -98,11 +101,14 @@ Rules:
 - `pytest_sessionfinish` calls `combine_perf_reports()`, which merges the
   per-worker files into `perf_data/runs/<tag>/<module>/<module>.csv`,
   `<module>.post.csv`, and `<module>.counters.csv`, sorts them, and deletes
-  the per-worker files. Each run writes its own `runs/<tag>/` directory and
+  the per-worker files. `perf_data/` is at the `tt-llk` root
+  (`tt_metal/tt-llk/perf_data/`), not under `tests/python_tests`. Each run
+  writes its own `runs/<tag>/` directory and
   `perf_data/latest` is repointed at it, so a rerun neither overwrites an
   earlier report nor leaves part of one behind. `PERF_KEEP_RUNS` (default 10)
-  bounds how many runs are retained. `PERF_RUN_TAG` sets the tag; off CI it
-  defaults to `local-<utc timestamp>`.
+  bounds how many runs are retained. Raise it for an A/B or repeat series of
+  more than 10 runs, or the oldest are pruned mid-analysis. `PERF_RUN_TAG`
+  sets the tag; off CI it defaults to `local-<utc timestamp>`.
 - The producer phase writes no report and skips combining.
 - The raw CSV holds per-marker means. The `.post.csv` divides the `mean(...)`
   and `std(...)` columns of `TILE_LOOP` rows by `loop_factor * tile_cnt`,
@@ -139,8 +145,18 @@ finish, or every selected test was skipped.
 4. **Plausibility.** Inspect `marker == TILE_LOOP`.
    Values near 2048, 4096, or 8192, an isolate
    orders of magnitude above the real stage, or a healthy first variant
-   followed by slow ones all indicate handshake or wait-mask bugs — switch to
-   `quasar-perf-test`.
+   followed by slow ones all indicate handshake or wait-mask bugs. Switch to
+   `perf-test` (Wormhole/Blackhole) or `quasar-perf-test`.
+   Across run types of one config, when isolates are slices of `L1_TO_L1`
+   (see `perf-test`):
+   - every isolate is at or below `L1_TO_L1`;
+   - `L1_TO_L1` is at or above the slowest isolate. The gap is the
+     cross-thread handshake, largest for one-tile blocks.
+
+   An isolate above `L1_TO_L1` means it does extra work: a prefill, a
+   different loop shape, or a stand-in slower than the real partner.
+   Rerun one build: on Wormhole its cycles are normally identical. Spread
+   within one build points to sticky state or a race.
 5. **Freshness.** Compare CSV columns with the current test axes. Missing axes
    mean the report predates the test; regenerate instead of analyzing.
 6. **Completeness, by report kind.** A timing report carries a

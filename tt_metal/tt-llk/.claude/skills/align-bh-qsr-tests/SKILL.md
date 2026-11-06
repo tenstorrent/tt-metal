@@ -16,7 +16,7 @@ Make one LLK op comparable across:
 
 Priority is always (1), then (2) and (3). Do not edit Blackhole sweeps just to green a Quasar compare. Do not invent axes or mathops the other ISA cannot run.
 
-Related: `quasar-perf-test` (create/repair a Quasar perf harness), `perf-report` (run a sweep), `run-test` (execute tests). This skill is the coverage-alignment layer on top of those.
+Related: `perf-test` (one kernel and one runner for functional and perf; isolates as slices of `L1_TO_L1`), `quasar-perf-test` (create/repair a Quasar perf harness), `perf-report` (run a sweep), `run-test` (execute tests). This skill is the coverage-alignment layer on top of those.
 
 ## How the comparer works
 
