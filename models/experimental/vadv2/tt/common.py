@@ -48,11 +48,13 @@ class TtConv2D:
         )
         if act_block_h is not None:
             self.conv_config.act_block_h_override = act_block_h
-        if conv_pth.bias is not None:
-            self.bias = conv_pth.bias
-        else:
-            self.bias = None
-
+        # conv2d prepares the raw weight and bias together only when both are on the host; a raw
+        # device bias would be left unprepared next to the prepared weight.
+        for tensor in (conv_pth.weight, conv_pth.bias):
+            assert tensor is None or not ttnn.is_tensor_storage_on_device(
+                tensor
+            ), "raw conv weights and biases must stay on the host until conv2d prepares them"
+        self.bias = conv_pth.bias
         self.weight = conv_pth.weight
 
     def __call__(self, x):
