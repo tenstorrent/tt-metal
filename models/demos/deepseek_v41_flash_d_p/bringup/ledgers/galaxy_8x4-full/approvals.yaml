@@ -27,3 +27,9 @@ shared:
     - ttnn/ttnn/bringup
     - models/demos/moe_block_main
     note: 'owner 2026-11-06: one task for SE_PACK_PRECISE, NORM_INTO_MOE, replay128 on the main MoE block; run right away; P.35 / P.36 later'
+  P.38:
+    by: dnijemcevic
+    at: '2026-11-06T20:10:00'
+    paths:
+    - ttnn/ttnn/bringup
+    note: 'owner 2026-11-06: bf16 compressed KV and bf16 window KV (compute, not only serve) for now; back to 4-bit later'
