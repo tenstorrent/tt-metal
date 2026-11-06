@@ -1316,7 +1316,10 @@ class ttMLA:
                 num_links=self.ccl_num_links,
             )
             if self._q_distnorm:
-                return self._q_a_latent_distnorm(qr, seq_len_local)
+                qr = self._q_a_latent_distnorm(qr, seq_len_local)
+                if norm_memory_config.buffer_type == ttnn.BufferType.L1:
+                    qr = ttnn.to_memory_config(qr, norm_memory_config)
+                return qr
             qr = self._tp_all_gather(qr, self._q_a_latent_gather_output, seq_len_local)
         else:
             qr = ttnn.linear(
@@ -1455,7 +1458,7 @@ class ttMLA:
             self.q_b_proj_weight,
             **self._get_mm_kwargs("q_b_proj", seq_len_local),
         )
-        if not self._q_distnorm:
+        if not self._q_distnorm or qr.memory_config().buffer_type == ttnn.BufferType.L1:
             ttnn.deallocate(qr)
 
         # The Q stem uses interleaved head creation. Write the two channel regions directly.
