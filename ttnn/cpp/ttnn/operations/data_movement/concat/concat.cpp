@@ -274,6 +274,19 @@ ttnn::Tensor concat_native(
     const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     const ttnn::Tensor& first_tensor = input_tensors.front();
     const int rank = first_tensor.logical_shape().rank();
+    // Checked here: concat padded on its dim untilizes first, so the device op only sees row-major tensors.
+    for (const auto& input_tensor : input_tensors) {
+        if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+            const auto& tile = input_tensor.tensor_spec().tile();
+            TT_FATAL(
+                tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+                "Concat TILE input requires tile shape {}x{}, got: {}x{}",
+                tt::constants::TILE_HEIGHT,
+                tt::constants::TILE_WIDTH,
+                tile.get_height(),
+                tile.get_width());
+        }
+    }
 
     auto compute_output_shape = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Shape {
         ttnn::Shape shape_out = tensors[0].logical_shape();
