@@ -53,7 +53,10 @@ inline uint32_t bounded_cache_batch_idx(
 }
 
 inline uint32_t bounded_kv_actual_isl(
-    uint32_t kv_actual_isl, uint32_t chunk_global_tile_rows, uint32_t cache_global_tile_rows) {
+    uint32_t kv_actual_isl,
+    uint32_t chunk_global_tile_rows,
+    uint32_t cache_global_tile_rows,
+    uint32_t circular_kv_slab_count = 0) {
     constexpr uint32_t tile_height = 32;
     const bool tile_aligned = kv_actual_isl % tile_height == 0;
     const uint32_t kv_actual_tile_rows = kv_actual_isl / tile_height;
@@ -61,7 +64,13 @@ inline uint32_t bounded_kv_actual_isl(
     // The metadata identifies the existing KV prefix, not the number of valid rows in the current Q
     // chunk. A partially filled final chunk may start less than one padded chunk from the cache end;
     // validate the start here and clamp the derived logical extent below.
-    const bool metadata_valid = geometry_valid && tile_aligned && kv_actual_tile_rows < cache_global_tile_rows;
+    // A circular_kv_slab_count n of 2 or more makes the cache circular, and chunk group g lives in
+    // local slab g % n. kv_actual_isl must start on a chunk-group boundary.
+    const bool start_valid = circular_kv_slab_count > 1
+                                 ? cache_global_tile_rows == circular_kv_slab_count * chunk_global_tile_rows &&
+                                       kv_actual_tile_rows % chunk_global_tile_rows == 0
+                                 : kv_actual_tile_rows < cache_global_tile_rows;
+    const bool metadata_valid = geometry_valid && tile_aligned && start_valid;
     ASSERT(metadata_valid);
     // Treat invalid metadata as the first chunk when device assertions are disabled. Every metadata
     // consumer uses this fallback, keeping CCL producer/consumer counts and SDPA work masks consistent.
@@ -70,10 +79,17 @@ inline uint32_t bounded_kv_actual_isl(
 
 // Metadata does not carry the current chunk's valid-row count. Its padded extent is authoritative except
 // at the physical cache boundary, where the remaining cache rows describe a partially filled final chunk.
+// A circular cache has no such boundary.
 inline uint32_t logical_tile_rows_clamped_to_cache(
-    uint32_t kv_actual_isl, uint32_t chunk_global_tile_rows, uint32_t cache_global_tile_rows) {
+    uint32_t kv_actual_isl,
+    uint32_t chunk_global_tile_rows,
+    uint32_t cache_global_tile_rows,
+    uint32_t circular_kv_slab_count = 0) {
     constexpr uint32_t tile_height = 32;
     const uint32_t kv_actual_tile_rows = kv_actual_isl / tile_height;
+    if (circular_kv_slab_count > 1) {
+        return kv_actual_tile_rows + chunk_global_tile_rows;
+    }
     const uint32_t remaining_tile_rows = cache_global_tile_rows - kv_actual_tile_rows;
     return kv_actual_tile_rows +
            (chunk_global_tile_rows < remaining_tile_rows ? chunk_global_tile_rows : remaining_tile_rows);
@@ -96,11 +112,13 @@ inline uint32_t bounded_sliding_kv_actual_isl(
     uint32_t q_local_tile_rows,
     uint32_t ring_size,
     uint32_t cache_local_tile_rows,
-    uint32_t halo_slot_count) {
+    uint32_t halo_slot_count,
+    uint32_t circular_kv_slab_count = 0) {
     const uint32_t group_rows = q_local_tile_rows * ring_size;
     const uint32_t cache_rows = cache_local_tile_rows * ring_size;
-    kv_actual_isl = bounded_kv_actual_isl(kv_actual_isl, group_rows, cache_rows);
-    const uint32_t end = logical_tile_rows_clamped_to_cache(kv_actual_isl, group_rows, cache_rows);
+    kv_actual_isl = bounded_kv_actual_isl(kv_actual_isl, group_rows, cache_rows, circular_kv_slab_count);
+    const uint32_t end =
+        logical_tile_rows_clamped_to_cache(kv_actual_isl, group_rows, cache_rows, circular_kv_slab_count);
     const bool halo_fits = halo_slot_count >= 2 || !ttnn::operations::transformer::sdpa::ring_joint::chunked_q_wraps(
                                                        kv_actual_isl / 32, end, q_local_tile_rows, ring_size);
     ASSERT(halo_fits);

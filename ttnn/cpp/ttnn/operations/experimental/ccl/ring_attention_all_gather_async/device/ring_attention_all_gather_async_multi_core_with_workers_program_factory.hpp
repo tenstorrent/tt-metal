@@ -179,6 +179,8 @@ struct RingAttentionNeighborHaloConfig {
     uint32_t kv_cache_layer_idx = 0;
     uint32_t q_local_tile_rows = 0;
     uint32_t halo_tile_rows = 0;
+    // Circular sliding KV cache slab count (0 = unbounded). Must match the SDPA reader's.
+    uint32_t circular_kv_slab_count = 0;
     uint32_t source_device = 0;
 
     bool derives_cache_batch_on_device() const { return slot_id != nullptr; }

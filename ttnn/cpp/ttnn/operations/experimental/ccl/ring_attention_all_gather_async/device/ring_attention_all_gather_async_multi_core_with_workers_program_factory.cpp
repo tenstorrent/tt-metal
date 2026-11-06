@@ -625,6 +625,7 @@ void ring_attention_neighbor_halo_exchange_helper(
                     args.push_back(halo.halo_tile_rows);
                     args.push_back(cache_local_tile_rows);
                     args.push_back(halo_slot_count);
+                    args.push_back(halo.circular_kv_slab_count);
                     args.push_back(halo.source_device);
                     if (with_ring_size) {
                         args.push_back(ring_size);
