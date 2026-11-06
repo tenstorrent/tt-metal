@@ -14,6 +14,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/global_semaphore.hpp"
 
 #include "strided_all_gather_async_device_operation_types.hpp"
@@ -41,6 +42,8 @@ struct StridedAllGatherAsync {
     static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
         const operation_attributes_t&, const tensor_args_t&);
 
+    // Leaves out `semaphore`; StridedAllGatherAsyncProgramFactory::override_runtime_arguments
+    // re-applies every semaphore address on a cache hit.
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::experimental::prim

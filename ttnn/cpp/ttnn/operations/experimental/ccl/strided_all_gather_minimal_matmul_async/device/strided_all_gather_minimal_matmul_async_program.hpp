@@ -4,6 +4,12 @@
 
 #pragma once
 
+#include <optional>
+#include <vector>
+
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+
 #include "strided_all_gather_minimal_matmul_async_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_fabric_bound_program_factory.hpp"
@@ -11,30 +17,21 @@
 namespace ttnn::experimental::prim {
 
 struct StridedAllGatherMinimalMatmulAsyncProgramFactory {
-    struct shared_variables_t {
-        StridedAllGatherAsyncProgramFactory::shared_variables_t ag_shared_variables;
-        MinimalMatmulFabricBoundProgramFactory::shared_variables_t mm_shared_variables;
-    };
-
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
+    // Per-coord program build: the matmul kernels come first, then the strided all-gather pipeline.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const StridedAllGatherMinimalMatmulAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const StridedAllGatherMinimalMatmulAsyncInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
+        std::vector<Tensor>& output_tensors,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 
-    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const StridedAllGatherMinimalMatmulAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const StridedAllGatherMinimalMatmulAsyncInputs& tensor_args,
-        std::vector<Tensor>& output_tensor);
-
+    // Re-applies every tensor address by role (the all-gather output is also the matmul input) and every
+    // caller-supplied semaphore address, which StridedAllGatherMinimalMatmulAsync::compute_program_hash leaves out.
     static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+        tt::tt_metal::Program& program,
         const StridedAllGatherMinimalMatmulAsyncParams& operation_attributes,
         const StridedAllGatherMinimalMatmulAsyncInputs& tensor_args,
-        std::vector<Tensor>& output_tensor);
+        std::vector<Tensor>& output_tensors,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim

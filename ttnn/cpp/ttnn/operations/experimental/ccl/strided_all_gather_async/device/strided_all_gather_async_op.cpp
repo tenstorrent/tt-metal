@@ -48,6 +48,8 @@ std::vector<tt::tt_metal::TensorTopology> StridedAllGatherAsync::compute_output_
 tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "StridedAllGatherAsync::compute_program_hash is called");
+    // `semaphore` is not hashed: its addresses are re-applied by
+    // StridedAllGatherAsyncProgramFactory::override_runtime_arguments.
     return tt::tt_metal::operation::hash_operation<StridedAllGatherAsync>(
         attributes.dim,
         attributes.num_links,
