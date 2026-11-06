@@ -1,0 +1,2 @@
+
+{"event":"friction","surface":"prompt","ref":"verifier agent prompt: Testing Protocol §2 (python3 -m eval.verify_supported)","what":"The documented verifier CLI command fails with ModuleNotFoundError: ttnn.operations.<op> unless python_env is activated first; eval_test_runner.sh works without it, so the failure looks like an op packaging problem.","cost":"low","suggest":"Prefix the command with `source python_env/bin/activate &&` in the verifier prompt (or have verify_supported.py print a hint when the op import fails).","ts":"2026-11-06T17:20:25+00:00"}
