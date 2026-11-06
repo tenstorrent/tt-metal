@@ -196,9 +196,9 @@ void kernel_main() {
         // tilize Q rows -> [Sqt, DHt]
         compute_kernel_lib::tilize<DHt, cb_q_rm, cb_q_in>(/*num_blocks=*/Sqt, /*total_input_pages=*/H);
 
-        // Per-token control from the reader: num_active_chunks (>=1; all-sentinel chunks are skipped) and
-        // num_valid_keys (last chunk's mask boundary). read_tile_value mailbox-distributes the UNPACK read so
-        // all three threads see the same loop bound / mask branches.
+        // Per-segment control from the reader: num_active_chunks (all-sentinel chunks are skipped; 0 for an empty
+        // split-K HEAD) and num_valid_keys (the token's mask boundary). read_tile_value mailbox-distributes the
+        // UNPACK read so all three threads see the same loop bound / mask branches.
         ctrl_cb.wait_front(1);
         const uint32_t num_active_chunks = ckernel::read_tile_value(
             cb_ctrl, /*tile=*/0, /*element_offset=*/sparse_sdpa::control_message::ACTIVE_CHUNKS);

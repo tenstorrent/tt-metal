@@ -40,7 +40,7 @@ enum SparseCB : uint32_t {
     cb_out_im,          // fixed pre-untilize copy of the final out [Sqt, vDHt]
     cb_out_rm,          // untilized row-major out (compute -> writer)
     cb_idx,             // reader-internal: one token's index row (uint32)
-    cb_ctrl,            // reader -> compute: [active chunk count (=ceil(valid_keys/k_chunk)), valid_keys] per token
+    cb_ctrl,            // reader -> compute: per-segment control_message (active chunk count is 0 for an empty HEAD)
     cb_col_identity,    // ones-in-col0 (writer-built): finalizes the partial row-sum via matmul_reduce
     cb_recip_scratch,   // 1-tile reciprocal scratch for normalize_row_streaming
     cb_kreq,            // reader->writer K-gather handoff (dual-NoC split)
