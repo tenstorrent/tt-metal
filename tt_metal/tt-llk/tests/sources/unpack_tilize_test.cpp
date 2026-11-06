@@ -109,7 +109,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+            return;
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             if constexpr (unpack_to_dest)
             {
@@ -177,13 +181,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
-void run_kernel(RUNTIME_PARAMETERS params)
+__attribute__((aligned(32))) void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const Operand& buffer_Res = params.buffer_Res;
+    const Operand& buffer_Res                          = params.buffer_Res;
+    [[maybe_unused]] const std::uint32_t perf_tile_cnt = params.BLOCK_RT_DIM * params.BLOCK_CT_DIM;
+#else
+    [[maybe_unused]] static constexpr std::uint32_t perf_tile_cnt = TILE_CNT;
 #endif
     static constexpr bool UNTILIZE = false;
     static constexpr bool is_perf  = LOOP_FACTOR > 1;
@@ -213,19 +220,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            static constexpr bool sync_with_math = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
+            // Keep PACK_ISOLATE focused on pack work and preserve stable perf comparisons.
+            // tt-metal #63690 tracks aligning isolate accounting with L1_TO_L1 block traversal.
+            static constexpr std::uint32_t max_tiles_dest = get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t tile = 0; tile < perf_tile_cnt; ++tile)
+                {
+                    const std::uint32_t tile_index = tile % max_tiles_dest;
+                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
+                }
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE)
+        {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t block = 0; block < NUM_BLOCKS; ++block)
                 {
                     const std::uint32_t block_start      = block * NUM_TILES_IN_BLOCK;
                     const std::uint32_t tiles_this_block = std::min(NUM_TILES_IN_BLOCK, TILE_CNT - block_start);
-                    if constexpr (sync_with_math)
-                    {
-                        _llk_packer_wait_for_math_done_();
-                    }
+                    _llk_packer_wait_for_math_done_();
                     for (std::uint32_t tile = 0; tile < tiles_this_block; ++tile)
                     {
                         LLK_ASSERT(
@@ -242,10 +259,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         }
                         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile, output_address);
                     }
-                    if constexpr (sync_with_math)
-                    {
-                        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-                    }
+                    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
             }
         }
