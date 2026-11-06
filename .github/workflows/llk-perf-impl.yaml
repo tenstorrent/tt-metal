@@ -439,9 +439,13 @@ jobs:
             ${{ env.LLK_PATH }}/tests/python_tests/test_run*.log
             ${{ env.LLK_PATH }}/tests/python_tests/test_errors*.log
 
+      # Neither this nor the publish below feeds the gate, and the gate refuses to
+      # compare when a measuring leg did not complete. A stalled report upload must
+      # not cost the architecture a verdict it already measured.
       - name: Upload JUnit report
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
+        continue-on-error: true
         with:
           name: perf-junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
           path: |
@@ -453,6 +457,7 @@ jobs:
       - name: Publish Test Results
         uses: mikepenz/action-junit-report@v5
         if: always()
+        continue-on-error: true
         with:
           report_paths: |
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-compile.xml

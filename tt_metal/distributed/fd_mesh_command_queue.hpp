@@ -6,6 +6,7 @@
 
 #include "mesh_command_queue_base.hpp"
 
+#include <functional>
 #include <unordered_map>
 
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
@@ -216,7 +217,27 @@ private:
     // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
 
+    // Records a host-notify event; the completion queue reader calls `on_complete` once it has read the event.
+    MeshEvent record_event_to_host_nolock(
+        ttsl::Span<const SubDeviceId> sub_device_ids,
+        const std::optional<MeshCoordinateRange>& device_range,
+        std::function<void(std::chrono::steady_clock::time_point)> on_complete);
+
+    // Whether the open transfer records start and end events. Set and read under lock_api_function_().
+    bool transfer_stats_events_ = false;
+    // When the open transfer's start event completed. Set and read only by the completion queue reader.
+    std::chrono::steady_clock::time_point transfer_stats_start_;
+
 protected:
+    void begin_transfer_stats(
+        HostTransferCategory category,
+        const std::optional<MeshCoordinateRange>& device_range,
+        ttsl::Span<const SubDeviceId> sub_device_ids) override;
+    void end_transfer_stats(
+        HostTransferCategory category,
+        uint64_t bytes,
+        const std::optional<MeshCoordinateRange>& device_range,
+        ttsl::Span<const SubDeviceId> sub_device_ids) override;
     bool write_shard_to_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
@@ -298,13 +319,16 @@ public:
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
-    // Enqueue a command list without entering the mesh-trace lifecycle.
+    // Enqueue a command list without entering the mesh-trace lifecycle. `before_submit`, if set, runs under the API
+    // lock after the list is accepted and before its commands are submitted, so work it queues elsewhere is ordered
+    // with these commands against concurrent replays. It must not take the API lock.
     void enqueue_command_list(
         const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
         const std::vector<SubDeviceId>& sub_device_ids,
         const MeshBuffer& buffer,
         SubDeviceManagerId sub_device_manager_id,
-        bool blocking);
+        bool blocking,
+        const std::function<void()>& before_submit);
     // Overwrite parts of a command-list buffer. Ordered after earlier replays, and later replays read the new bytes.
     void enqueue_command_list_patch(const MeshBuffer& buffer, ttsl::Span<const MeshBufferPatch> patches);
     // Wait until this host's queued device work completes.

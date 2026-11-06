@@ -5,13 +5,11 @@
 #include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <buffer_types.hpp>
-#include <circular_buffer_constants.h>
 #include <core_coord.hpp>
 #include <device.hpp>
 #include <global_circular_buffer.hpp>
 #include <host_api.hpp>
 #include "impl/buffers/global_circular_buffer_impl.hpp"
-#include "impl/context/context_types.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/math.hpp>
@@ -30,11 +28,8 @@
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>
-#include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "llrt/tt_cluster.hpp"
-#include <tt-umd/types/xy_pair.hpp>
-
 namespace tt::tt_metal::experimental {
 
 GlobalCircularBufferImpl::GlobalCircularBufferImpl(

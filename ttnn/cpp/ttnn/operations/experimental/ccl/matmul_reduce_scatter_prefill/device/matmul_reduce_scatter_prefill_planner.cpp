@@ -4,7 +4,6 @@
 #include "matmul_reduce_scatter_prefill_planner.hpp"
 
 #include <algorithm>
-#include <limits>
 #include <map>
 #include <mutex>
 #include <set>
@@ -32,7 +31,7 @@ struct GeometryMiss : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-// bf16 tile: finished / arrival / zero slots of the staging tensor
+// bf16 tile: finished / arrival / zero slots
 constexpr uint64_t kStageTileBytes = tt::tile_size(tt::DataFormat::Float16_b);
 // fp32 tile: cb::PARTIAL_HOLD's page
 constexpr uint64_t kHoldTileBytes = tt::tile_size(tt::DataFormat::Float32);
@@ -182,7 +181,6 @@ struct Geo {
     std::array<uint32_t, 2> hold_depths{};           // [resident]
     std::array<WavePlan, 2> waves_of;                // [resident]
     uint32_t zone_sets = 1;
-    uint64_t staging_floor = 0;  // PlanInputs::staging_floor
 };
 
 uint64_t footprint(
@@ -201,14 +199,10 @@ uint64_t footprint(
     const uint64_t w = uint64_t{geo.tW} * (rW ? uint64_t{Kt} * geo.core_n : uint64_t{dW} * kb * wv.win_n);
     const uint64_t hold = kHoldTileBytes * geo.hold_depths[resident ? 1 : 0] * P;
     const auto& sl = geo.slots[resident ? 1 : 0];
-    uint64_t staging = kStageTileBytes * ((kDepthHandoff + uint64_t{geo.zone_sets} * (sl[0] + sl[1])) * P);
-    if (geo.staging_floor > 0) {
-        if (staging > geo.staging_floor) {
-            return std::numeric_limits<uint64_t>::max();  // the held staging cannot hold this plan's slots
-        }
-        staging = geo.staging_floor;  // the held staging occupies its whole size
-    }
-    return a + w + hold + staging + kStageTileBytes;
+    const uint64_t staging = kStageTileBytes * ((kDepthHandoff + uint64_t{geo.zone_sets} * (sl[0] + sl[1])) * P);
+    // port cores hold the staging too, plus PORT_CHUNKS (2 * kPortGroup chunks of at most P tiles)
+    const uint64_t port = staging + kStageTileBytes * 2 * kPortGroup * P;
+    return std::max(a + w + hold + staging + kStageTileBytes, port);
 }
 
 struct KBlock {
@@ -347,7 +341,6 @@ Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& i
     geo.tW = in.tW;
     geo.scatter_dim = in.scatter_dim;
     geo.zone_sets = pl.zone_sets;
-    geo.staging_floor = in.staging_floor;
     std::array<Transport, 2> sched_of;
     for (uint32_t r = 0; r < 2; ++r) {
         geo.waves_of[r] = wave_plan(gd.core_m, gd.core_n);
@@ -609,8 +602,7 @@ const Plan& solve_plan(const PlanInputs& in) {
         in.tA,
         in.tW,
         in.scatter_dim,
-        in.budget,
-        in.staging_floor);
+        in.budget);
     static std::mutex solved_mutex;
     static std::map<std::remove_const_t<decltype(key)>, Plan> solved;
     const std::lock_guard<std::mutex> lock(solved_mutex);

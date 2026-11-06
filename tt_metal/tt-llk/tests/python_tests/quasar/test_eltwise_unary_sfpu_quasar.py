@@ -46,7 +46,7 @@ from helpers.sfpu_dispatch_constants import (
     RELU_MIN_THRESHOLD,
     UNARY_MAX_MIN_VALUE,
 )
-from helpers.sfpu_domains import op_edge_points, sfpu_unary_ops
+from helpers.sfpu_domains import for_op, op_edge_points, sfpu_unary_ops
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -437,11 +437,10 @@ def prepare_inputs_for_operation(
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
     elif mathop == MathOperation.Softplus:
-        # Span both signs and past the linear threshold (20) so the kernel's polynomial region, the
-        # negative saturation region, and the linear passthrough (t > threshold -> softplus ~= x) are
-        # all covered (mirrors sfpu_domains' Softplus spec).
-        min_val = -8.0
-        max_val = 30.0
+        # for_op spans the t < -5 tail and the linear threshold.
+        spec = for_op(mathop, input_format).spec_A
+        min_val = spec.low
+        max_val = spec.high
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
     elif mathop in ROUNDING_OPS:
@@ -1338,6 +1337,17 @@ def run_eltwise_unary_sfpu_quasar(
         formats.output_format,
     ), "Assert against golden failed"
 
+    if mathop == MathOperation.Softplus:
+        # atol 0.05 lets a flush to 0 through. Require t < -5 to stay positive
+        # where the output format's golden is still positive (Float16 underflows below ~-16).
+        tail = src_A.to(torch.float32) < -5.0
+        assert bool(tail.any()), "softplus stimulus never reaches t < -5"
+        kept = golden_tensor.to(torch.float32)[tail] > 0
+        assert bool(kept.any()), "softplus golden is 0 across the whole negative tail"
+        assert torch.all(
+            res_tensor.to(torch.float32)[tail][kept] > 0
+        ), "softplus flushed the negative tail to 0"
+
 
 @pytest.mark.quasar
 @parametrize(
@@ -1589,7 +1599,7 @@ def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
     so both the input and the output permutation are load-bearing: an untilized row-major
     reading of Dest cannot satisfy this oracle.
     """
-    (formats, dest_acc) = cumsum_formats_dest_acc[0]
+    formats, dest_acc = cumsum_formats_dest_acc[0]
 
     input_dimensions = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
     src_A = _cumsum_detector_stimulus().to(format_dict[formats.input_format])

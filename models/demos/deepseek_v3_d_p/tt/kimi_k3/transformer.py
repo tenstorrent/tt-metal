@@ -29,7 +29,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX, load_attn_res_weights
-from models.demos.deepseek_v3_d_p.tt.kda.config import KIMI_K3_PROJECTION_DTYPE
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, allocate_native_state
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, build_attention, build_kda_scalars
@@ -79,8 +78,8 @@ class TtKimiK3Transformer(LightweightModule):
         stale = [idx for idx in layers if layer_is_stale(Path(cache_path), idx, model_cfg)]
         if stale:
             logger.warning(
-                f"Kimi-K3 cache at {cache_path}: layers {stale} lack {KIMI_K3_PROJECTION_DTYPE.name} KDA projections; "
-                f"rebuild them from the checkpoint (test_transformer_depth does this, rebuilding only the projections)"
+                f"Kimi-K3 cache at {cache_path}: layers {stale} lack current-format KDA weights; rebuild them from "
+                f"the checkpoint (test_transformer_depth does this, rebuilding only the KDA weights)"
             )
         return all(layer_is_cached(Path(cache_path), idx, model_cfg) for idx in layers)
 
@@ -399,16 +398,6 @@ class TtKimiK3Transformer(LightweightModule):
         sealed = ttnn.slice(packed, [0, 1, 0, 0], [1, planes, tokens, width]) if planes > 1 else None
         return live, sealed
 
-    def reset_streams(self, slot: int = 0) -> None:
-        """Zero the KDA carries for a new request. Call outside any captured region."""
-        if self.kda_scratch is None:
-            return
-        if self.kda_states is None:
-            raise RuntimeError(
-                "no KDA state slabs on the model; the runtime hands kv_caches.kda_states over at compile()"
-            )
-        self.kda_states.zero_slot(slot)
-
     def forward(
         self,
         token_ids,
@@ -487,8 +476,9 @@ class TtKimiK3Transformer(LightweightModule):
             f"snapshots, expected {self.inbound_planes - 1}"
         )
 
-        # The KDA layers' slot and bounds, built once per chunk: borrowed from `metadata` when traced,
-        # uploaded from the host ints when eager (and freed below). A rank without KDA layers uploads nothing.
+        # The KDA layers' slot and bounds, built once per chunk: borrowed
+        # from `metadata` when traced, uploaded from the host ints when eager; what was built here is freed
+        # below. A rank without KDA layers builds nothing.
         kda_scalars, owned_scalars = (
             build_kda_scalars(self.mesh_device, metadata, cache_user_id, actual_start, actual_end)
             if self.kda_scratch is not None
