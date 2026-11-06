@@ -1,0 +1,12 @@
+# Context = the built tt-metal checkout; keep out what the image does not need or must not carry.
+.git
+**/.git
+python_env
+.cache
+.cpmcache
+generated
+logs
+**/__pycache__
+**/*.pyc
+build_Release/CMakeFiles
+build_Release/**/CMakeFiles

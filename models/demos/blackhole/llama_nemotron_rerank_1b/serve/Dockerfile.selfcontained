@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Self-contained llama-nemotron-rerank-1b-v2 rerank server image: the built tt-metal tree, its Python
+# dependencies and serve/rerank_server.py are all inside, so a host needs only `docker pull` and `docker run`
+# (chip, hugepages, one writable volume for weights and kernel cache). Runs as uid 1000.
+#
+# Build from the root of a tt-metal checkout that has been built (./build_metal.sh --build-type Release):
+#   docker build -f models/demos/blackhole/llama_nemotron_rerank_1b/serve/Dockerfile.selfcontained \
+#                -t nemotron-rerank-server .
+# Dockerfile.selfcontained.dockerignore keeps the host venv, git metadata and caches out of the context.
+ARG BASE_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64@sha256:c46c06c570db88136ee7926c4a8d6738e4915b395fda3fbedeb27dd303dda009
+FROM ${BASE_IMAGE}
+SHELL ["/bin/bash", "-c"]
+
+COPY models/demos/blackhole/llama_nemotron_rerank_1b/serve/requirements.txt /tmp/nemotron-rerank/requirements.txt
+RUN source /opt/venv/bin/activate && \
+    uv pip install --python /opt/venv/bin/python3 -r /tmp/nemotron-rerank/requirements.txt && \
+    (getent group 1000 || groupadd -g 1000 container_app_user) && \
+    (getent passwd 1000 || useradd -m -u 1000 -g 1000 -s /bin/bash container_app_user) && \
+    mkdir -p /cache && chown 1000:1000 /cache
+
+COPY --chown=1000:1000 . /opt/tt-metal
+COPY --chown=1000:1000 models/demos/blackhole/llama_nemotron_rerank_1b/serve/rerank_server.py \
+     models/demos/blackhole/llama_nemotron_rerank_1b/serve/rerank_batcher.py \
+     models/demos/blackhole/llama_nemotron_rerank_1b/serve/rerank_client.py /opt/nemotron-rerank/
+COPY models/demos/blackhole/llama_nemotron_rerank_1b/serve/entrypoint_selfcontained.sh /usr/local/bin/nemotron-rerank-entrypoint.sh
+RUN chmod 755 /usr/local/bin/nemotron-rerank-entrypoint.sh
+
+ENV PATH=/opt/venv/bin:$PATH \
+    ARCH_NAME=blackhole \
+    TT_METAL_HOME=/opt/tt-metal \
+    PYTHONPATH=/opt/nemotron-rerank:/opt/tt-metal/ttnn:/opt/tt-metal:/opt/tt-metal/tools \
+    LD_LIBRARY_PATH=/opt/tt-metal/build/lib \
+    HOME=/cache/home \
+    TT_CACHE_PATH=/cache/weights \
+    TT_METAL_CACHE=/cache/tt-metal \
+    HF_HOME=/cache/hf \
+    TOKENIZERS_PARALLELISM=false \
+    TT_MM_THROTTLE_PERF=0 \
+    TT_LOGGER_LEVEL=ERROR \
+    NEMOTRON_RERANK_REVISION=828765652b05bd439c9789d2a6d093db1caa1443 \
+    RR_PORT=8000
+
+USER 1000:1000
+WORKDIR /opt/nemotron-rerank
+EXPOSE 8000
+ENTRYPOINT ["/usr/local/bin/nemotron-rerank-entrypoint.sh"]
