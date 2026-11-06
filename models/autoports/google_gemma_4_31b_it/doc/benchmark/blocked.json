@@ -1,7 +1,11 @@
 {
-  "status": "resolved",
-  "resolution": "AGENTS.md decisions 4–6: model-owned consecutive completion boundaries accepted; GPQA local noncoverage authorized; fresh profiles authorized.",
+  "status": "awaiting_operator_exception",
+  "resolution": "AGENTS.md decisions 4\u20136: model-owned consecutive completion boundaries accepted; GPQA local noncoverage authorized; fresh profiles authorized.",
   "prior_evidence": "attempts/incomplete-96fb930d/blocked.json",
   "plugin_completion_patch": "rejected and unapplied",
-  "remaining_integration_issue": "Installed outer checker has stale budget/nonempty-accuracy assumptions; corrected local checker and generic source patch retained."
+  "remaining_integration_issue": "Installed outer checker has stale budget/nonempty-accuracy assumptions; corrected local checker and generic source patch retained.",
+  "prior_accounting_and_dataset_blockers": "resolved by AGENTS.md decisions 4\u20136",
+  "current_blocker": "Installed outer checker rejects explicitly authorized accuracy noncoverage. Applying the tested generic patch requires the pending installed-package read-only exception.",
+  "validation": "setup/checker-patch-validation.json",
+  "consecutive_goal_turns_with_current_blocker": 2
 }

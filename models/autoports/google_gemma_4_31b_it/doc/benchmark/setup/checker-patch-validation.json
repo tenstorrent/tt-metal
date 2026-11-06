@@ -1,0 +1,26 @@
+{
+  "installed_source_sha256": "a92dea8224c7bf476d1d07816060d692b71408aabc9a4cdbd7eee887fdf8aa58",
+  "patched_source_sha256": "a5792f4a66b97972e1ebbf5ef59d23be28c961eeb273a3070df01ec591b6821a",
+  "patch_applies": true,
+  "full_evidence_check": "passed",
+  "negative_tests": [
+    {
+      "case": "missing_selected_evals",
+      "rejected": true,
+      "error": "empty accuracy requires explicit coverage of every selected eval"
+    },
+    {
+      "case": "missing_coverage",
+      "rejected": true,
+      "error": "empty accuracy requires explicit coverage of every selected eval"
+    },
+    {
+      "case": "missing_authority",
+      "rejected": true,
+      "error": "r1_gpqa_diamond: missing noncoverage reason or authority"
+    }
+  ],
+  "installed_package_modified": false,
+  "benchmarks_or_device_calls": false,
+  "observed_unix": 1793937698.884068
+}
