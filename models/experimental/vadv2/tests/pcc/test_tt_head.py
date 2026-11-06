@@ -584,6 +584,7 @@ def test_vadv2_head(
     mlvl_feats = []
     c = ttnn.from_torch(c, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
     mlvl_feats.append(c)
+    tt_model.prepare_frame(img_metas)
     ttnn_outputs = tt_model(mlvl_feats, img_metas)
 
     assert_with_pcc(model_outputs["bev_embed"], ttnn.to_torch(ttnn_outputs["bev_embed"]).float(), 0.99)

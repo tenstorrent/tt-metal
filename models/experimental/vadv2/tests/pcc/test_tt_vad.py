@@ -672,8 +672,8 @@ def test_vadv2(
     timing = os.environ.get("TT_VADV2_TIMING") == "1"
     memory_report = os.environ.get("TT_VADV2_MEMORY_REPORT") == "1"
 
-    # forward_test mutates img_metas[*]["can_bus"] in place and updates
-    # tt_model.prev_frame_info from the previous call. Snapshot both so each
+    # prepare_frame mutates img_metas[*]["can_bus"] in place and the forward
+    # updates tt_model.prev_frame_info. Snapshot both so each
     # warm iteration sees the same first-frame input as the cold call.
     pristine_img_metas = copy.deepcopy(input_dict["img_metas"])
     pristine_prev_frame_info = copy.deepcopy(tt_model.prev_frame_info)
@@ -703,6 +703,7 @@ def test_vadv2(
         # Re-upload img: forward deallocates the device tensor, so the same
         # ttnn handle can't be reused for the next call.
         img = [ttnn.from_torch(torch_img, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)]
+        tt_model.prepare_frame(input_dict["img_metas"])
         t0 = time.perf_counter()
         ttnn_outputs = _forward()
         dt_ms = (time.perf_counter() - t0) * 1000.0

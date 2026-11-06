@@ -384,6 +384,7 @@ def test_vadv2_transformer(
 
     bev_pos = ttnn.from_torch(bev_pos, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
+    ttnn_model.refill_frame(img_metas, grid_length)
     ttnn_outputs = ttnn_model(
         mlvl_feats,
         bev_queries,
