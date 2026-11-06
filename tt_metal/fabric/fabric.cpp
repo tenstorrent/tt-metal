@@ -602,14 +602,32 @@ void SetFabricConfig(
         router_config);
 }
 
-std::optional<eth_chan_directions> get_eth_forwarding_direction(
-    FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+namespace {
+
+std::optional<eth_chan_directions> eth_forwarding_direction(
+    const ControlPlane& control_plane, FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) {
     auto routing_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
     if (!routing_direction.has_value()) {
         return std::nullopt;
     }
     return control_plane.routing_direction_to_eth_direction(routing_direction.value());
+}
+
+}  // namespace
+
+std::optional<eth_chan_directions> get_eth_forwarding_direction(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    FabricNodeId src_fabric_node_id,
+    FabricNodeId dst_fabric_node_id) {
+    return eth_forwarding_direction(
+        mesh_device.impl().metal_env().get_control_plane(), src_fabric_node_id, dst_fabric_node_id);
+}
+
+std::optional<eth_chan_directions> get_eth_forwarding_direction(
+    FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) {
+    // TODO(#52020): resolves the default context; deprecated in favour of the MeshDevice form.
+    return eth_forwarding_direction(
+        tt::tt_metal::MetalContext::instance().get_control_plane(), src_fabric_node_id, dst_fabric_node_id);
 }
 
 bool is_1d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
@@ -769,10 +787,10 @@ std::vector<tt::tt_fabric::MeshId> get_all_fabric_mesh_ids() {
     return tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph().get_mesh_ids();
 }
 
-// Query the kernel defines required by the current fabric configuration.
-// Pure query — no PD mutation, no side effects. Call before kernel compilation.
-std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::tt_fabric::FabricApiType api_type) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+namespace {
+
+std::vector<std::pair<std::string, std::string>> fabric_kernel_defines(
+    const tt::tt_fabric::ControlPlane& control_plane, tt::tt_fabric::FabricApiType api_type) {
     const auto& fabric_context = control_plane.get_fabric_context();
 
     std::vector<std::pair<std::string, std::string>> defines;
@@ -790,6 +808,20 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
         defines.push_back({"FABRIC_2D", "1"});
     }
     return defines;
+}
+
+}  // namespace
+
+// Query the kernel defines required by the current fabric configuration.
+// Pure query — no PD mutation, no side effects. Call before kernel compilation.
+std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, tt::tt_fabric::FabricApiType api_type) {
+    return fabric_kernel_defines(mesh_device.impl().metal_env().get_control_plane(), api_type);
+}
+
+std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::tt_fabric::FabricApiType api_type) {
+    // TODO(#52020): resolves the default context; deprecated in favour of the MeshDevice form.
+    return fabric_kernel_defines(tt::tt_metal::MetalContext::instance().get_control_plane(), api_type);
 }
 
 namespace {
@@ -816,11 +848,17 @@ size_t fabric_connection_rt_args_size(
         mesh_device.impl().metal_env().get_control_plane().get_fabric_context(), num_connections);
 }
 
+namespace {
+
 // Compute fabric connection RT args without any PD mutation.
 // The two per-connection semaphore values are copied through verbatim; sem_args_are_l1_addresses
 // only says what they are, so they can be validated here.
 // Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
-std::vector<uint32_t> compute_fabric_connection_rt_args(
+//
+// Reads the HAL, routing and RT-arg size from `control_plane`, not through the public queries, which
+// each do their own lookup.
+std::vector<uint32_t> compute_fabric_connection_rt_args_impl(
+    const tt::tt_fabric::ControlPlane& control_plane,
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
@@ -842,10 +880,6 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
             (connection_link_indices.size() == 1 || connection_link_indices.size() == dst_nodes.size()),
         "connection_link_indices must be empty or have size 1 or the same size as dst_nodes");
 
-    // TODO(#52020): resolves the default context, because this tt-blaze API has no device or env
-    // parameter to resolve from. Read the HAL, routing and RT-arg size from this control plane below,
-    // not through the public queries, which each do their own lookup.
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
 
     const std::pair<const std::vector<uint32_t>&, const char*> sem_arg_arrays[] = {
@@ -959,6 +993,44 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
         dst_nodes.size());
 
     return worker_args;
+}
+
+}  // namespace
+
+std::vector<uint32_t> compute_fabric_connection_rt_args(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+    const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
+    const std::vector<uint32_t>& connection_link_indices,
+    const std::vector<uint32_t>& teardown_sem_args,
+    const std::vector<uint32_t>& buffer_index_sem_args,
+    bool sem_args_are_l1_addresses) {
+    return compute_fabric_connection_rt_args_impl(
+        mesh_device.impl().metal_env().get_control_plane(),
+        src_fabric_node_id,
+        dst_nodes,
+        connection_link_indices,
+        teardown_sem_args,
+        buffer_index_sem_args,
+        sem_args_are_l1_addresses);
+}
+
+std::vector<uint32_t> compute_fabric_connection_rt_args(
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+    const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
+    const std::vector<uint32_t>& connection_link_indices,
+    const std::vector<uint32_t>& teardown_sem_args,
+    const std::vector<uint32_t>& buffer_index_sem_args,
+    bool sem_args_are_l1_addresses) {
+    // TODO(#52020): resolves the default context; deprecated in favour of the MeshDevice form.
+    return compute_fabric_connection_rt_args_impl(
+        tt::tt_metal::MetalContext::instance().get_control_plane(),
+        src_fabric_node_id,
+        dst_nodes,
+        connection_link_indices,
+        teardown_sem_args,
+        buffer_index_sem_args,
+        sem_args_are_l1_addresses);
 }
 
 // No-defines variant: allocates semaphores + computes RT args, but does NOT inject kernel defines.

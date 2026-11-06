@@ -448,10 +448,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     // computed, since 2D ignores it and 1D never reaches this block.
     if (::tt::tt_fabric::is_2d_fabric_config(operation_attributes.fabric_config)) {
         const auto self_node = mesh_device->get_fabric_node_id(sender_device_coord);
-        const auto fwd_dir =
-            tt::tt_fabric::pipeline_get_forwarding_direction(self_node, mesh_device->get_fabric_node_id(*fwd_coord));
-        const auto bwd_dir =
-            tt::tt_fabric::pipeline_get_forwarding_direction(self_node, mesh_device->get_fabric_node_id(*bwd_coord));
+        const auto fwd_dir = tt::tt_fabric::pipeline_get_forwarding_direction(
+            *mesh_device, self_node, mesh_device->get_fabric_node_id(*fwd_coord));
+        const auto bwd_dir = tt::tt_fabric::pipeline_get_forwarding_direction(
+            *mesh_device, self_node, mesh_device->get_fabric_node_id(*bwd_coord));
 
         auto assert_single_hop = [&](const ttnn::MeshCoordinate& neighbor_coord,
                                      const std::optional<tt::tt_fabric::RoutingDirection>& dir,
@@ -462,7 +462,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
                 "reduce_scatter_minimal_direct: no fabric route to the {} ring neighbour (chip {})",
                 which,
                 neighbor.chip_id);
-            const auto neighbors = tt::tt_fabric::pipeline_get_chip_neighbors(self_node, *dir);
+            const auto neighbors = tt::tt_fabric::pipeline_get_chip_neighbors(*mesh_device, self_node, *dir);
             const auto it = neighbors.find(*neighbor.mesh_id);
             const bool adjacent = it != neighbors.end() &&
                                   std::find(it->second.begin(), it->second.end(), neighbor.chip_id) != it->second.end();
@@ -482,7 +482,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
 
         for (auto& d : dests) {
             const auto dir = tt::tt_fabric::pipeline_get_forwarding_direction(
-                self_node, tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{d.mesh_id}, d.chip_id));
+                *mesh_device, self_node, tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{d.mesh_id}, d.chip_id));
             TT_FATAL(
                 dir.has_value(),
                 "no fabric route from this device to ring member {} (chip {}) on a 2D fabric",

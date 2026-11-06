@@ -59,22 +59,24 @@ const ControlPlane& mesh_control_plane(const tt::tt_metal::distributed::MeshDevi
 
 }  // namespace
 
-std::optional<RoutingDirection> pipeline_get_forwarding_direction(FabricNodeId src, FabricNodeId dst) {
-    return forwarding_direction(tt::tt_metal::MetalContext::instance().get_control_plane(), src, dst);
-}
-
 std::optional<RoutingDirection> pipeline_get_forwarding_direction(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, FabricNodeId src, FabricNodeId dst) {
     return forwarding_direction(mesh_control_plane(mesh_device), src, dst);
 }
 
-std::map<uint32_t, std::vector<uint32_t>> pipeline_get_chip_neighbors(FabricNodeId src, RoutingDirection direction) {
-    return chip_neighbors(tt::tt_metal::MetalContext::instance().get_control_plane(), src, direction);
+std::optional<RoutingDirection> pipeline_get_forwarding_direction(FabricNodeId src, FabricNodeId dst) {
+    // TODO(#52020): resolves the default context; deprecated in favour of the MeshDevice form.
+    return forwarding_direction(tt::tt_metal::MetalContext::instance().get_control_plane(), src, dst);
 }
 
 std::map<uint32_t, std::vector<uint32_t>> pipeline_get_chip_neighbors(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, FabricNodeId src, RoutingDirection direction) {
     return chip_neighbors(mesh_control_plane(mesh_device), src, direction);
+}
+
+std::map<uint32_t, std::vector<uint32_t>> pipeline_get_chip_neighbors(FabricNodeId src, RoutingDirection direction) {
+    // TODO(#52020): resolves the default context; deprecated in favour of the MeshDevice form.
+    return chip_neighbors(tt::tt_metal::MetalContext::instance().get_control_plane(), src, direction);
 }
 
 // ------------------------------------------------------------------
@@ -87,7 +89,8 @@ using detail::InternalChip;
 
 /// Discover all direct ethernet links between every ordered pair of submeshes.
 /// All valid link pairs are collected (not just the first) to enable deconfliction.
-detail::DirectLinks discover_submesh_links(const std::vector<std::vector<InternalChip>>& chips) {
+detail::DirectLinks discover_submesh_links(
+    const ControlPlane& control_plane, const std::vector<std::vector<InternalChip>>& chips) {
     detail::DirectLinks submesh_links;
     using NeighborKey = std::tuple<uint32_t, uint32_t, RoutingDirection>;
     std::map<NeighborKey, std::map<uint32_t, std::vector<uint32_t>>> neighbor_cache;
@@ -99,7 +102,7 @@ detail::DirectLinks discover_submesh_links(const std::vector<std::vector<Interna
             }
             for (const auto& ca : chips[i]) {
                 for (const auto& cb : chips[j]) {
-                    auto dir_opt = pipeline_get_forwarding_direction(ca.fid, cb.fid);
+                    auto dir_opt = forwarding_direction(control_plane, ca.fid, cb.fid);
                     if (!dir_opt) {
                         continue;
                     }
@@ -107,7 +110,7 @@ detail::DirectLinks discover_submesh_links(const std::vector<std::vector<Interna
                     auto [cached, inserted] =
                         neighbor_cache.try_emplace(NeighborKey{*ca.fid.mesh_id, ca.fid.chip_id, *dir_opt});
                     if (inserted) {
-                        cached->second = pipeline_get_chip_neighbors(ca.fid, *dir_opt);
+                        cached->second = chip_neighbors(control_plane, ca.fid, *dir_opt);
                     }
                     const auto& neighbors = cached->second;
                     uint32_t b_mesh = *cb.fid.mesh_id;
@@ -168,6 +171,25 @@ std::vector<std::string> topological_sort(
 }  // anonymous namespace
 
 GraphLayoutResult resolve_graph_layout(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const std::vector<std::string>& nodes,
+    const std::vector<EdgeInputTuple>& edges,
+    const std::vector<std::vector<ChipTuple>>& submesh_chips,
+    const std::map<std::string, uint32_t>& node_chip_counts,
+    const std::map<std::string, uint32_t>& node_pipeline_core_counts,
+    std::optional<uint32_t> pipeline_core_count) {
+    return resolve_graph_layout(
+        mesh_control_plane(mesh_device),
+        nodes,
+        edges,
+        submesh_chips,
+        node_chip_counts,
+        node_pipeline_core_counts,
+        pipeline_core_count);
+}
+
+GraphLayoutResult resolve_graph_layout(
+    const ControlPlane& control_plane,
     const std::vector<std::string>& nodes,
     const std::vector<EdgeInputTuple>& edges,
     const std::vector<std::vector<ChipTuple>>& submesh_chips,
@@ -175,10 +197,36 @@ GraphLayoutResult resolve_graph_layout(
     const std::map<std::string, uint32_t>& node_pipeline_core_counts,
     std::optional<uint32_t> pipeline_core_count) {
     return detail::resolve_graph_layout_with_connections(
-        nodes, edges, submesh_chips, node_chip_counts, node_pipeline_core_counts, pipeline_core_count, nullptr);
+        &control_plane,
+        nodes,
+        edges,
+        submesh_chips,
+        node_chip_counts,
+        node_pipeline_core_counts,
+        pipeline_core_count,
+        nullptr);
+}
+
+GraphLayoutResult resolve_graph_layout(
+    const std::vector<std::string>& nodes,
+    const std::vector<EdgeInputTuple>& edges,
+    const std::vector<std::vector<ChipTuple>>& submesh_chips,
+    const std::map<std::string, uint32_t>& node_chip_counts,
+    const std::map<std::string, uint32_t>& node_pipeline_core_counts,
+    std::optional<uint32_t> pipeline_core_count) {
+    // TODO(#52020): resolves the default context; deprecated in favour of the MeshDevice form.
+    return resolve_graph_layout(
+        tt::tt_metal::MetalContext::instance().get_control_plane(),
+        nodes,
+        edges,
+        submesh_chips,
+        node_chip_counts,
+        node_pipeline_core_counts,
+        pipeline_core_count);
 }
 
 GraphLayoutResult detail::resolve_graph_layout_with_connections(
+    const ControlPlane* control_plane,
     const std::vector<std::string>& nodes,
     const std::vector<EdgeInputTuple>& edges,
     const std::vector<std::vector<ChipTuple>>& submesh_chips,
@@ -251,7 +299,10 @@ GraphLayoutResult detail::resolve_graph_layout_with_connections(
     }
 
     // Discover physical connections between all submesh pairs
-    const auto submesh_links = direct_links ? *direct_links : discover_submesh_links(chips);
+    if (!direct_links && control_plane == nullptr) {
+        throw std::runtime_error("resolve_graph_layout: need a control plane to discover the links");
+    }
+    const auto submesh_links = direct_links ? *direct_links : discover_submesh_links(*control_plane, chips);
 
     GraphLayoutResult result = detail::resolve_pipeline_placement(
         stage_order, edges, submesh_links, stage_chip_counts, chips, stage_pipeline_core_counts);
