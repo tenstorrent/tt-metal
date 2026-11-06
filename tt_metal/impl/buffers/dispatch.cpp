@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <tt_stl/span.hpp>
 #include <device.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -37,6 +40,16 @@
 #include "tt_metal/api/tt-metalium/experimental/pinned_memory.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+
+// TT_METAL_H2D_TIMING=1: print the host-side cost of every interleaved buffer write of 1 MB or more
+// (memcpy into the issue queue vs. waiting for fetch queue space), to find writes whose page layout
+// makes the device-side dispatch the bottleneck.
+static bool h2d_timing_enabled() {
+    static const bool enabled = std::getenv("TT_METAL_H2D_TIMING") != nullptr;
+    return enabled;
+}
+static double g_h2d_fetchq_wait_ms = 0;
+static uint32_t g_h2d_fetchq_waits = 0;
 
 namespace tt::tt_metal::buffer_dispatch {
 
@@ -992,7 +1005,18 @@ void issue_buffer_dispatch_command_sequence(
         command_sequence.write_offset_bytes());
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
-    sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
+    if (h2d_timing_enabled()) {
+        const auto fq0 = std::chrono::steady_clock::now();
+        sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
+        const double fqms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - fq0).count();
+        if (fqms > 0.02) {
+            g_h2d_fetchq_waits++;
+        }
+        g_h2d_fetchq_wait_ms += fqms;
+    } else {
+        sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
+    }
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
 
     if (use_pinned_memory) {
@@ -1030,7 +1054,18 @@ void issue_buffer_dispatch_command_sequence(
                 dispatch_params.pinned_src_noc_xy, relay_data_size, relay_src_addr);
         }
         sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
+        if (h2d_timing_enabled()) {
+        const auto fq0 = std::chrono::steady_clock::now();
         sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
+        const double fqms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - fq0).count();
+        if (fqms > 0.02) {
+            g_h2d_fetchq_waits++;
+        }
+        g_h2d_fetchq_wait_ms += fqms;
+    } else {
+        sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
+    }
         sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
     }
 }
@@ -1058,6 +1093,13 @@ void write_interleaved_buffer_to_device(
         }
         issue_buffer_dispatch_command_sequence(src, buffer, dispatch_params, sub_device_ids, dispatch_core_type);
     } else {
+        const bool h2d_timing = h2d_timing_enabled();
+        const auto w_t0 = std::chrono::steady_clock::now();
+        const uint32_t w_pages = dispatch_params.total_pages_to_write;
+        uint32_t w_iters = 0, w_wraps = 0;
+        double w_issue_ms = 0;
+        const double fq_ms0 = g_h2d_fetchq_wait_ms;
+        const uint32_t fq_n0 = g_h2d_fetchq_waits;
         // Prefetcher will read from hugepage in one or more iterations depending on transfer size
         while (dispatch_params.total_pages_to_write > 0) {
             // Ensure page offset can fit in uint16_t
@@ -1070,6 +1112,7 @@ void write_interleaved_buffer_to_device(
             if (num_pages_available_in_cq <= 0) {
                 SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
                 sysmem_manager.wrap_issue_queue_wr_ptr(dispatch_params.cq_id);
+                w_wraps++;
                 continue;
             }
 
@@ -1077,8 +1120,24 @@ void write_interleaved_buffer_to_device(
                 tt::LogDispatch, "write_interleaved_buffer_to_device for command queue {}", dispatch_params.cq_id);
 
             dispatch_params.calculate_num_pages_for_write_transaction(num_pages_available_in_cq);
-            issue_buffer_dispatch_command_sequence(src, buffer, dispatch_params, sub_device_ids, dispatch_core_type);
+            if (h2d_timing) {
+                const auto i_t0 = std::chrono::steady_clock::now();
+                issue_buffer_dispatch_command_sequence(src, buffer, dispatch_params, sub_device_ids, dispatch_core_type);
+                w_issue_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - i_t0).count();
+            } else {
+                issue_buffer_dispatch_command_sequence(src, buffer, dispatch_params, sub_device_ids, dispatch_core_type);
+            }
+            w_iters++;
             dispatch_params.update_params_after_write_transaction();
+        }
+        if (h2d_timing) {
+            const double total_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - w_t0).count();
+            const uint64_t bytes = uint64_t(w_pages) * buffer.page_size();
+            if (bytes >= (1u << 20)) {
+                std::fprintf(stderr, "[H2D] write_interleaved bytes=%lu page=%lu pages=%u iters=%u wraps=%u issue=%.2f ms fetchq_wait=%.2f ms (%u waits) total=%.2f ms (%.2f GB/s)\n",
+                             (unsigned long)bytes, (unsigned long)buffer.page_size(), w_pages, w_iters, w_wraps, w_issue_ms,
+                             g_h2d_fetchq_wait_ms - fq_ms0, g_h2d_fetchq_waits - fq_n0, total_ms, bytes / total_ms / 1e6);
+            }
         }
     }
 }

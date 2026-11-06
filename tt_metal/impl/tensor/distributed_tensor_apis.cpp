@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <algorithm>
 #include <cstring>
 #include <functional>
@@ -210,6 +213,8 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
         input_size_bytes,
         expected_packed_buffer_size_bytes);
 
+    static const bool h2d_timing = std::getenv("TT_METAL_H2D_TIMING") != nullptr;
+    const auto h2d_t0 = std::chrono::steady_clock::now();
     auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
     auto* mesh_device = mesh_buffer->device();
 
@@ -253,6 +258,10 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
         command_queue.enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
     }
 
+    if (h2d_timing) {
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - h2d_t0).count();
+        std::fprintf(stderr, "[H2D] replicate_1x1 bytes=%zu use_pinned=%d enqueue=%.3f ms (%.2f GB/s)\n", data_to_write.size(), (int)use_pinned, ms, data_to_write.size() / ms / 1e6);
+    }
     const auto& mesh_device_shape = mesh_buffer->device()->shape();
     auto topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape);
     const auto& old_spec = host_tensor.tensor_spec();
