@@ -82,14 +82,15 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
             .core_ranges = cores,
             .format_descriptors = {{fmt_desc(idx)}}});
     };
-    // A state CB: two buffer indices over one allocation, `idx_utd` (UnpackToDestFp32, read by copy_tile) and `idx_mm`
-    // (default unpack, the read-pass matmul in1); see fused_recurrent_gdn_cb.hpp. Producers and consumers move both
-    // ids in lockstep, so the two read/write pointers always address the same tiles.
-    auto add_state_cb = [&](uint32_t idx_utd, uint32_t idx_mm, uint32_t n_tiles) {
+    // A state CB: one allocation under its two ids, `utd` (UnpackToDestFp32, all the flow control, read by copy_tile)
+    // and `mm` (the read-pass matmul's format view, never pushed or popped). The view relies on the CB holding exactly
+    // one state, so the pointers of both ids address the same tiles every token; see fused_recurrent_gdn_cb.hpp.
+    auto add_state_cb = [&](cb::StateCb s, uint32_t n_tiles) {
+        TT_FATAL(n_tiles == kv, "a state CB holds exactly one state ({} tiles), got {}", kv, n_tiles);
         desc.cbs.push_back(CBDescriptor{
-            .total_size = n_tiles * cb::tile_bytes(cb::tile_dims[idx_utd]),
+            .total_size = n_tiles * cb::tile_bytes(cb::tile_dims[s.utd]),
             .core_ranges = cores,
-            .format_descriptors = {{fmt_desc(idx_utd), fmt_desc(idx_mm)}}});
+            .format_descriptors = {{fmt_desc(s.utd), fmt_desc(s.mm)}}});
     };
 
     // reader -> compute (the per-token tiles hold token_cb_nbuf tokens so the reader runs a token ahead)
@@ -99,7 +100,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     add_cb(cb::v16, Vt, cb::token_cb_nbuf);
     add_cb(cb::gcol32, 1, cb::token_cb_nbuf);
     add_cb(cb::bcol16, 1, cb::token_cb_nbuf);
-    add_state_cb(cb::S, cb::S_mm, kv);
+    add_state_cb(cb::state_S, kv);
     add_cb(cb::ones32, 1);
     add_cb(cb::zero32, 1);
     // compute -> compute (c_10 r16 and c_12 ccol32 are not allocated: the fused read+vector pass keeps r in DEST
@@ -108,8 +109,8 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     add_cb(cb::craw16, 1);
     add_cb(cb::ebc16, 1);
     add_cb(cb::u16, Vt);
-    add_state_cb(cb::s2, cb::s2_mm, kv);
-    add_state_cb(cb::s3, cb::s3_mm, kv);
+    add_state_cb(cb::state_s2, kv);
+    add_state_cb(cb::state_s3, kv);
     // compute -> writer
     add_cb(cb::out16, Vt, 2);
     add_cb(cb::state_out, kv, 2);
