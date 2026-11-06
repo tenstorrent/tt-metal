@@ -317,6 +317,56 @@ def sampling_trace_default(mesh_device, mesh_config=None) -> bool:
     return shape in SAMPLING_TRACE_DEFAULT_SHAPES
 
 
+SHARE_PAGE_TABLES_ENV = "GEMMA4_SHARE_PAGE_TABLES"
+# Mesh shapes where the per-group page-table buffers are the default (measured: see share_page_tables_default).
+SHARE_PAGE_TABLES_DEFAULT_SHAPES = ()
+
+
+def page_table_group_slots(layer_types, kv_shared_layer_map=None):
+    """vLLM's hybrid KV-cache grouping as one slot per layer: ``spec_decode.serving_kv_group_slots`` over the layers
+    that own a cache (the 12B: five sliding groups of 8 layers and one full group, disjoint block ids), a KV-shared
+    layer taking its source's slot (it has no cache and the generator hands it the source's table,
+    ``_apply_kv_share_to_per_layer_page_tables``). Returns ``(slot_per_layer, n_slots)``."""
+    from models.demos.gemma4.tt.spec_decode import serving_kv_group_slots
+
+    shared = {int(k): int(v) for k, v in (kv_shared_layer_map or {}).items()}
+    owners = [i for i in range(len(layer_types)) if i not in shared]
+    owner_slots, n_slots = serving_kv_group_slots([layer_types[i] for i in owners])
+    slots = [None] * len(layer_types)
+    for i, slot in zip(owners, owner_slots):
+        slots[i] = slot
+    for i, source in shared.items():
+        slots[i] = slots[source] if 0 <= source < len(slots) else None
+    return slots, n_slots
+
+
+def share_page_tables_default(mesh_device, mesh_config=None, *, bounded_sliding=False, kv_shared=False) -> bool:
+    """Whether the layers of one vLLM KV-cache group share one persistent page-table device buffer (item 5 of the
+    gemma4_12b_qb2 port): an install then costs one H2D copy per group (six on the 12B) instead of one per layer
+    (48), the host cost that sat at 9-16 ms of a 128-token prefill on the QB2 block (every served prefill follows
+    a decode step, which forces the re-upload). The buffers are keyed on the model's group slots
+    (``page_table_group_slots``), never on the host objects a call carries: the warmup broadcasts one legacy table
+    to every layer, so the earlier host-identity sharing put all 48 layers on one buffer and had to rebuild them
+    under the captured decode traces and the speculative records at the first real request (the 2026-11-05 hang).
+    ``GEMMA4_SHARE_PAGE_TABLES=1|0`` overrides. Policy when unset: on for the mesh shapes in
+    ``SHARE_PAGE_TABLES_DEFAULT_SHAPES`` (those where the served A/B measured a win with the PCC gates intact; the
+    12B 1x4 QB2 block is the measured basis), off elsewhere. Never on the lane engine or a fractured mesh (the
+    device layout is per layer), under bounded sliding (the ring remap is per layer) or with KV-shared layers (the
+    grouping is unverified there), whatever the env says.
+    """
+    if mesh_config is not None and (
+        getattr(mesh_config, "lane_sharded", False) or getattr(mesh_config, "weight_fracture", False)
+    ):
+        return False
+    if bounded_sliding or kv_shared:
+        return False
+    env = os.environ.get(SHARE_PAGE_TABLES_ENV, "").strip().lower()
+    if env:
+        return env in ("1", "true", "yes", "on")
+    shape = tuple(int(s) for s in mesh_device.shape) if hasattr(mesh_device, "shape") else ()
+    return shape in SHARE_PAGE_TABLES_DEFAULT_SHAPES
+
+
 class Gemma4Model:
     # Generator-interface flag. PLI models (E2B/E4B) recompute host per-layer
     # inputs from the token every step, so their decode-trace input buffers
@@ -443,6 +493,18 @@ class Gemma4Model:
                 logger.info(f"KV sharing enabled: {len(self.kv_shared_layer_map)} layers share KV from earlier layers")
 
         _inject_missing_kv_shared_attention_weights(state_dict, hf_config, self.kv_shared_layer_map)
+
+        # GEMMA4_SHARE_PAGE_TABLES: one persistent page-table device buffer per vLLM KV-cache group slot
+        # (share_page_tables_default); the slots follow the model structure (page_table_group_slots).
+        self._page_table_slots, self._page_table_n_slots = page_table_group_slots(
+            list(hf_config.layer_types[:n_layers]), self.kv_shared_layer_map
+        )
+        self._share_page_tables = share_page_tables_default(
+            mesh_device,
+            mesh_config,
+            bounded_sliding=bool(bounded_sliding_kv_cache),
+            kv_shared=bool(self.kv_shared_layer_map),
+        )
 
         # RoPE caches per layer type (sliding vs global)
         # Needs real HF text config (set by create_tt_model via _hf_text_config)
@@ -2002,16 +2064,12 @@ class Gemma4Model:
                     "grow" if needs_grow else f"new batch key {batch_key} (keys {sorted(by_batch)})"
                 )
             persistent = []
-            # Layers handed the same host table (one per kv-cache group) share one
-            # device buffer: an update then costs one H2D per group, not per layer.
-            # Lane-sharded layouts depend on the layer, so they keep per-layer buffers.
-            # Opt-in (GEMMA4_SHARE_PAGE_TABLES=1): warmup broadcasts one legacy table to
-            # every layer, so the first real per-group tables diverge and the rebuild
-            # lands under live decode traces (garbage on 12B/31B QB2, 2026-10-05).
-            share = not (self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
-            share = share and getattr(self, "mesh_config_share_page_tables", True)
-            share = share and os.environ.get("GEMMA4_SHARE_PAGE_TABLES", "0") == "1"
-            by_host_id: dict = {}
+            # GEMMA4_SHARE_PAGE_TABLES: the layers of one vLLM KV-cache group slot share one device buffer
+            # (_page_table_buffer_slots, from the layer types: never the host objects a call carries, which the
+            # warmup broadcasts to every layer), so an update costs one H2D copy per group. Lane-sharded layouts
+            # depend on the layer and keep per-layer buffers.
+            slots = self._page_table_buffer_slots(page_tables_per_layer)
+            by_slot: dict = {}
             for i, pt in enumerate(page_tables_per_layer):
                 if pt is None:
                     persistent.append(None)
@@ -2019,15 +2077,28 @@ class Gemma4Model:
                 if isinstance(pt, ttnn.Tensor):
                     persistent.append(pt)
                     continue
-                shared = by_host_id.get(id(pt)) if share else None
+                slot = slots[i] if slots is not None else None
+                shared = by_slot.get(slot) if slot is not None else None
                 if shared is None:
                     shared = self._page_table_torch_to_ttnn(pt, layer_idx=i)
-                    if share:
-                        by_host_id[id(pt)] = shared
+                    if slot is not None:
+                        by_slot[slot] = shared
                 persistent.append(shared)
             by_batch[batch_key] = persistent
         self._persistent_per_layer_page_tables = persistent
         return persistent
+
+    def _page_table_buffer_slots(self, page_tables_per_layer):
+        """The KV-cache group slot of every layer (``page_table_group_slots``) when the persistent buffers are shared
+        per slot (``share_page_tables_default``), else None: one buffer per layer."""
+        if not getattr(self, "_share_page_tables", False):
+            return None
+        if self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False):
+            return None
+        slots = getattr(self, "_page_table_slots", None)
+        if not slots or len(slots) != len(page_tables_per_layer):
+            return None
+        return slots
 
     @staticmethod
     def _pad_page_table_host_to_shape(pt_host, target_b, target_w):
@@ -2075,9 +2146,10 @@ class Gemma4Model:
         # (padded) host tensor once and fan out to every persistent buffer.
         host_cache = {}
         new_last = [None] * len(page_tables_per_layer)
-        # Device buffers shared by several layers are written once per update;
-        # a second layer with different content means the sharing no longer
-        # holds, so the batch key's buffers are rebuilt unshared.
+        # A device buffer shared by the layers of one KV-cache group slot is written once per update, from the
+        # slot's first layer; every other layer of the slot must carry that table (the same object, or equal
+        # content: the plugin pads per layer when its shapes miss the warmup's), or the grouping assumption is
+        # wrong and the call fails loudly instead of reallocating under the captured traces.
         written: dict = {}
         # The layers of one kv-cache group are handed the same host tensor: pad it,
         # compare it with the last upload and snapshot it once per distinct
@@ -2091,6 +2163,20 @@ class Gemma4Model:
             if pt is None or persistent[i] is None or isinstance(pt, ttnn.Tensor):
                 continue
             pt_host = pt if pt.dim() > 1 else pt.unsqueeze(0)
+            first = written.get(id(persistent[i]))
+            if first is not None:
+                first_i, first_host, first_pt = first
+                if pt is not first_pt and not (
+                    tuple(pt_host.shape) == tuple(first_host.shape) and torch.equal(pt_host, first_host)
+                ):
+                    raise ValueError(
+                        f"Gemma4: the per-layer page tables of layers {first_i} and {i} differ inside one KV-cache "
+                        f"group slot (page_table_group_slots); the shared persistent buffers keep one table per "
+                        f"slot ({SHARE_PAGE_TABLES_ENV}=0 keeps one buffer per layer)"
+                    )
+                new_last[i] = new_last[first_i]
+                continue
+            written[id(persistent[i])] = (i, pt_host, pt)
             try:
                 target_b = int(persistent[i].shape[0])
                 target_w = int(persistent[i].shape[-1])
@@ -2127,22 +2213,6 @@ class Gemma4Model:
                 if snapshot is None:
                     snapshot = clone_cache[key] = pt_padded.detach().clone()
                 new_last[i] = snapshot
-            prev = written.get(id(persistent[i]))
-            if prev is not None:
-                if torch.equal(prev, pt_padded):
-                    continue
-                logger.warning(
-                    "Gemma4: per-layer page tables no longer share content across layers "
-                    "sharing a device buffer (layer {}); rebuilding the buffers unshared",
-                    i,
-                )
-                by_batch = getattr(self, "_persistent_pt_by_batch", {})
-                by_batch.pop(batch_key, None)
-                last_by_batch.pop(batch_key, None)
-                self._invalidate_decode_traces_after_page_table_realloc = True
-                self.mesh_config_share_page_tables = False
-                return self.update_persistent_per_layer_page_tables(page_tables_per_layer, force=force)
-            written[id(persistent[i])] = pt_padded
             # Cache key includes target shape so B=1 and B=32 pads don't collide.
             host_pt = host_cache.get(key)
             if host_pt is None:

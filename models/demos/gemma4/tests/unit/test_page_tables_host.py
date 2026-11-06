@@ -240,7 +240,10 @@ def test_prefill_row_record_is_off_for_the_batched_form():
     assert Mixin._g4_prefill_row_record("x", 0) is None
 
 
-# ===== merged from tests/unit/test_persistent_page_table_sharing.py: Layers handed the same host page table share one persistent device buffer,
+# ===== GEMMA4_SHARE_PAGE_TABLES (item 5 of the gemma4_12b_qb2 port): the layers of one vLLM KV-cache group slot
+# share one persistent device buffer; the slots follow the layer types (page_table_group_slots), never the host
+# objects a call carries, so the warmup's broadcast table and the first request's per-group tables land on the
+# same buffers (no reallocation under the captured traces, the 2026-11-05 hang).
 class _Dev:
     _n = 0
 
@@ -250,10 +253,16 @@ class _Dev:
         self.uid = _Dev._n
 
 
-def _model_persistent_page_table_sharing(monkeypatch, copies):
-    monkeypatch.setenv("GEMMA4_SHARE_PAGE_TABLES", "1")  # sharing is opt-in
+# six layers, two types: vLLM's group size is the smaller type count (2), so the four sliding layers form two
+# groups (layers 0, 2 and 1, 4) and the two full layers one (3, 5): three slots
+_LAYER_TYPES = ["sliding_attention"] * 3 + ["full_attention", "sliding_attention", "full_attention"]
+
+
+def _model_persistent_page_table_sharing(monkeypatch, copies, share=True, layer_types=_LAYER_TYPES):
     m = Gemma4Model.__new__(Gemma4Model)
     m.mesh_config = None
+    m._share_page_tables = share
+    m._page_table_slots, m._page_table_n_slots = model_module.page_table_group_slots(layer_types)
     monkeypatch.setattr(m, "_page_table_torch_to_ttnn", lambda pt, layer_idx=None: _Dev(list(pt.shape)), raising=False)
     monkeypatch.setattr(m, "_replicate_to_mesh_mapper", lambda: None, raising=False)
     monkeypatch.setattr(model_module.ttnn, "from_torch", lambda t, **kw: t)
@@ -261,48 +270,90 @@ def _model_persistent_page_table_sharing(monkeypatch, copies):
     return m
 
 
-def _tables(seed):
-    sliding = torch.arange(4 * 8, dtype=torch.int32).reshape(4, 8) + seed
-    full = torch.arange(4 * 8, dtype=torch.int32).reshape(4, 8) + 100 + seed
-    return [sliding, sliding, sliding, full, sliding, full]
+def _group_tables(seed, slots):
+    """One distinct host table per group slot, handed to every layer of the slot (the plugin's form)."""
+    per_slot = {}
+    for slot in sorted(set(slots)):
+        per_slot[slot] = torch.arange(4 * 8, dtype=torch.int32).reshape(4, 8) + 100 * slot + seed
+    return [per_slot[s] for s in slots]
 
 
-def test_layers_with_one_host_table_share_one_device_buffer(monkeypatch):
+def test_page_table_group_slots_follow_the_layer_types():
+    slots, n = model_module.page_table_group_slots(_LAYER_TYPES)
+    assert (slots, n) == ([0, 1, 0, 2, 1, 2], 3)
+    # the 12B: 40 sliding + 8 full layers = five sliding groups (layers i, i+6, ...) and one full group
+    types = (["sliding_attention"] * 5 + ["full_attention"]) * 8
+    slots, n = model_module.page_table_group_slots(types)
+    assert n == 6 and slots[:6] == [0, 1, 2, 3, 4, 5] and slots[6:12] == [0, 1, 2, 3, 4, 5]
+    assert all(slots[i] == 5 for i, t in enumerate(types) if t == "full_attention")
+    # a KV-shared layer has no cache of its own: it takes its source's slot (the table the generator hands it)
+    slots, n = model_module.page_table_group_slots(_LAYER_TYPES + ["sliding_attention"], {6: 4})
+    assert (slots, n) == ([0, 1, 0, 2, 1, 2, 1], 3)
+
+
+def test_layers_of_one_group_slot_share_one_device_buffer(monkeypatch):
     copies = []
     m = _model_persistent_page_table_sharing(monkeypatch, copies)
-    persistent = m._page_tables_to_ttnn(_tables(0))
+    persistent = m._page_tables_to_ttnn(_group_tables(0, m._page_table_slots))
     assert len(persistent) == 6
-    assert persistent[0] is persistent[1] is persistent[2] is persistent[4]
-    assert persistent[3] is persistent[5] and persistent[3] is not persistent[0]
+    assert persistent[0] is persistent[2] and persistent[1] is persistent[4] and persistent[3] is persistent[5]
+    assert len({id(d) for d in persistent}) == 3
+    # off: one buffer per layer, whatever the host objects
+    m_off = _model_persistent_page_table_sharing(monkeypatch, copies, share=False)
+    assert len({id(d) for d in m_off._page_tables_to_ttnn([torch.zeros(4, 8, dtype=torch.int32)] * 6)}) == 6
 
 
-def test_update_writes_each_shared_buffer_once_and_skips_unchanged_tables(monkeypatch):
+def test_warmup_broadcast_then_per_group_tables_land_on_the_same_buffers(monkeypatch):
     copies = []
     m = _model_persistent_page_table_sharing(monkeypatch, copies)
-    m.update_persistent_per_layer_page_tables(_tables(0))
-    assert sorted(copies) == sorted({d.uid for d in m._persistent_per_layer_page_tables}) and len(copies) == 2
+    m._invalidate_decode_traces_after_page_table_realloc = False
+    warmup = torch.zeros(4, 8, dtype=torch.int32)
+    m.update_persistent_per_layer_page_tables([warmup] * 6)  # the warmup: one legacy table for every layer
+    buffers = list(m._persistent_per_layer_page_tables)
+    assert len(copies) == 3 and sorted(copies) == sorted({d.uid for d in buffers})
     copies.clear()
-    m.update_persistent_per_layer_page_tables(_tables(0))
+    m.update_persistent_per_layer_page_tables(_group_tables(0, m._page_table_slots))  # the first real request
+    assert m._persistent_per_layer_page_tables == buffers  # the same objects: nothing reallocated
+    assert m._invalidate_decode_traces_after_page_table_realloc is False
+    assert len(copies) == 3
+    copies.clear()
+    m.update_persistent_per_layer_page_tables(_group_tables(0, m._page_table_slots))  # unchanged content
     assert copies == []
-    m.update_persistent_per_layer_page_tables(_tables(7))
-    assert len(copies) == 2
+    # equal content in distinct objects per layer (the plugin pads per layer): still one copy per slot
+    padded = [t.clone() for t in _group_tables(7, m._page_table_slots)]
+    m.update_persistent_per_layer_page_tables(padded)
+    assert len(copies) == 3
 
 
-def test_layers_that_stop_sharing_content_get_their_own_buffers(monkeypatch):
+def test_a_layer_that_leaves_its_group_slot_raises_instead_of_reallocating(monkeypatch):
     copies = []
     m = _model_persistent_page_table_sharing(monkeypatch, copies)
-    m.update_persistent_per_layer_page_tables(_tables(0))
-    tables = _tables(3)
-    tables[1] = tables[1].clone() + 1000  # layer 1 diverges from the sliding group
-    copies.clear()
-    m.update_persistent_per_layer_page_tables(tables)
-    persistent = m._persistent_per_layer_page_tables
-    assert persistent[0] is not persistent[1]
-    assert m._invalidate_decode_traces_after_page_table_realloc is True
-    # Rebuilt unshared: every layer owns a buffer and each was written (the one
-    # copy made before the divergence was noticed lands on a replaced buffer).
-    assert len({id(d) for d in persistent}) == 6
-    assert len(copies) >= 6 and set(d.uid for d in persistent) <= set(copies)
+    m.update_persistent_per_layer_page_tables(_group_tables(0, m._page_table_slots))
+    buffers = list(m._persistent_per_layer_page_tables)
+    tables = _group_tables(3, m._page_table_slots)
+    tables[2] = tables[2].clone() + 1000  # layer 2 leaves slot 0 (layer 0's)
+    with pytest.raises(ValueError, match="layers 0 and 2 differ inside one KV-cache group slot"):
+        m.update_persistent_per_layer_page_tables(tables)
+    assert m._persistent_per_layer_page_tables == buffers
+
+
+def test_share_page_tables_default_policy(monkeypatch):
+    """Host: the env var overrides, else the measured-shape policy; never on lanes / fractured meshes, under
+    bounded sliding or with KV-shared layers."""
+    mesh = SimpleNamespace(shape=(1, 4))
+    monkeypatch.setenv(model_module.SHARE_PAGE_TABLES_ENV, "1")
+    assert model_module.share_page_tables_default(mesh) is True
+    assert model_module.share_page_tables_default(mesh, SimpleNamespace(lane_sharded=True, weight_fracture=False)) is False
+    assert model_module.share_page_tables_default(mesh, SimpleNamespace(lane_sharded=False, weight_fracture=True)) is False
+    assert model_module.share_page_tables_default(mesh, bounded_sliding=True) is False
+    assert model_module.share_page_tables_default(mesh, kv_shared=True) is False
+    monkeypatch.setenv(model_module.SHARE_PAGE_TABLES_ENV, "0")
+    assert model_module.share_page_tables_default(mesh) is False
+    monkeypatch.delenv(model_module.SHARE_PAGE_TABLES_ENV)
+    assert model_module.share_page_tables_default(mesh) is False
+    monkeypatch.setattr(model_module, "SHARE_PAGE_TABLES_DEFAULT_SHAPES", ((1, 4),))
+    assert model_module.share_page_tables_default(mesh) is True
+    assert model_module.share_page_tables_default(SimpleNamespace(shape=(1, 8))) is False
 
 
 def test_lane_parallel_prefill_table_shards_to_one_row_per_column():
