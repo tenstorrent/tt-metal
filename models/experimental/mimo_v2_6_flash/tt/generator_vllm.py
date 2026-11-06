@@ -164,6 +164,7 @@ from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped, verify_
 from .device_sampler import CANDIDATES_PER_CHIP, MAX_USERS, stream_states
 from .generator import MiMoGalaxyGenerator
 from .model import PREFILL_CHUNK_TRACE, prefill_padded_len, prefill_warmup_batches, prefill_warmup_chunks
+from . import startup_timing as st
 
 TP = 8
 BLOCK_SIZE = 64
@@ -2389,9 +2390,12 @@ class MiMoV2ForCausalLM:
         # (ttnn/cpp/ttnn/operations/core/program_cache_l1.hpp), so prefill is compiled with those buffers in place, as
         # served prefills run. The plugin warms prefill before decode and, with trace_mode decode_only, not again after.
         idle = torch.full((self.models[0].max_batch,), -1, dtype=torch.int32)  # every slot idle: no KV is written
-        handles = [(m, m.decode_enqueue(torch.zeros_like(idle), idle)) for m in self.models if m.decode_trace is None]
-        for m, handle in handles:
-            m.decode_read(handle)
+        with st.stage("prefill_warmup.first_decode_step", self.models[0].mesh_device):
+            handles = [
+                (m, m.decode_enqueue(torch.zeros_like(idle), idle)) for m in self.models if m.decode_trace is None
+            ]
+            for m, handle in handles:
+                m.decode_read(handle)
         model0 = self.models[0]
         groups = sorted(set(self.layer_groups))
         widths = {g: model0.vllm_tables[g].shape[1] for g in groups}  # a pair-split global table is half as wide
@@ -2410,9 +2414,15 @@ class MiMoV2ForCausalLM:
         programs = [m.mesh_device.num_program_cache_entries() for m in self.models]
         tokens = torch.arange(max_tokens, dtype=torch.int32) % 1000 + 1000
         for n, start in chunks:
-            handles = [(m, m.prefill_enqueue(tokens[:n], 0, start_pos=start, layers=layers)) for m in self.models]
-            for m, h in handles:
-                m.prefill_read(h)
+
+            def _chunk(n=n, start=start):
+                handles = [(m, m.prefill_enqueue(tokens[:n], 0, start_pos=start, layers=layers)) for m in self.models]
+                for m, h in handles:
+                    m.prefill_read(h)
+
+            with st.stage(f"prefill_warmup.chunk n={n} start={start}", model0.mesh_device):
+                _chunk()
+            st.rerun(f"prefill_warmup.chunk n={n} start={start}", model0.mesh_device, _chunk)
         # Batches of first chunks (prefill_forward): every user count and padded length a lane's step can hold. Slots
         # 1 .. users - 1 write the blocks after slot 0's.
         batches = prefill_warmup_batches(max_tokens, self.per_lane, model0.PREFILL_BATCH_MAX_PADDED, self.max_seq_len)
@@ -2425,10 +2435,16 @@ class MiMoV2ForCausalLM:
                 {s: {g: blocks[s * span :][: widths[g]] for g in groups} for s in range(self.per_lane)}
             )
         for users, n in batches:
-            chunks_of = [(tokens[:n], s) for s in range(users)]
-            handles = [(m, m.prefill_enqueue_batch(chunks_of, layers=layers)) for m in self.models]
-            for m, h in handles:
-                m.prefill_read(h)
+
+            def _batch(users=users, n=n):
+                chunks_of = [(tokens[:n], s) for s in range(users)]
+                handles = [(m, m.prefill_enqueue_batch(chunks_of, layers=layers)) for m in self.models]
+                for m, h in handles:
+                    m.prefill_read(h)
+
+            with st.stage(f"prefill_warmup.batch users={users} n={n}", model0.mesh_device):
+                _batch()
+            st.rerun(f"prefill_warmup.batch users={users} n={n}", model0.mesh_device, _batch)
         for model in self.models:
             empty = {g: torch.zeros(widths[g], dtype=torch.int32) for g in groups}
             model.set_vllm_page_tables({s: dict(empty) for s in range(self.per_lane)})
@@ -2439,8 +2455,15 @@ class MiMoV2ForCausalLM:
                 for users, n in batches:
                     padded = prefill_padded_len(n)
                     if (users, padded) not in model.prefill_traces:
-                        model.setup_prefill_batch_trace(users, padded)
-                        model.warm_prefill_batch_trace(users, padded)
+                        with st.stage(f"prefill_trace.setup users={users} padded={padded}", model.mesh_device):
+                            model.setup_prefill_batch_trace(users, padded)
+                        with st.stage(f"prefill_trace.warm users={users} padded={padded}", model.mesh_device):
+                            model.warm_prefill_batch_trace(users, padded)
+                        st.rerun(
+                            f"prefill_trace.warm users={users} padded={padded}",
+                            model.mesh_device,
+                            lambda: model.warm_prefill_batch_trace(users, padded),
+                        )
             for model in self.models:
                 ttnn.synchronize_device(model.mesh_device)
         # Traced later chunks: the same, for a chunk of the step's whole budget and for the longest chunk (an unaligned
@@ -2457,8 +2480,10 @@ class MiMoV2ForCausalLM:
             lengths = sorted({prefill_padded_len(n, self._chunk_align(), pair) for n in self._chunk_trace_tokens()})
             for lane, model in enumerate(self.models):
                 try:
-                    chunk_traces[lane] = model.setup_prefill_chunk_traces(lengths, CHUNK_TRACE_SDPA)
-                    model.warm_prefill_chunk_traces()
+                    with st.stage("chunk_trace.setup", model.mesh_device):
+                        chunk_traces[lane] = model.setup_prefill_chunk_traces(lengths, CHUNK_TRACE_SDPA)
+                    with st.stage(f"chunk_trace.warm {chunk_traces[lane]}", model.mesh_device):
+                        model.warm_prefill_chunk_traces()
                 except Exception as e:  # e.g. out of DRAM for their buffers: serve with eager later chunks
                     model.drop_prefill_chunk_traces(f"replica {lane}: setting up later-chunk traces failed: {e}")
                     chunk_traces[lane] = []
@@ -2488,21 +2513,26 @@ class MiMoV2ForCausalLM:
         for lane, model in enumerate(self.models):
             if enable_trace:
                 if model.decode_trace is None:
-                    model.capture_decode_trace()
+                    with st.stage("decode_trace.capture", model.mesh_device):
+                        model.capture_decode_trace()
                     logger.info(f"MiMo vLLM: replica {lane} decode trace captured")
                 pending = [key for key, t in model.prefill_traces.items() if t["id"] is None]
                 for k, (users, padded) in enumerate(pending):
                     logger.debug(f"MiMo vLLM: replica {lane} capturing prefill trace {k + 1}/{len(pending)}")
-                    model.capture_prefill_batch_trace(users, padded)
+                    with st.stage(f"prefill_trace.capture users={users} padded={padded}", model.mesh_device):
+                        model.capture_prefill_batch_trace(users, padded)
                 if pending:
                     logger.info(f"MiMo vLLM: replica {lane} prefill traces captured for (users, length) {pending}")
                 if (model.mtp is not None or model.dflash is not None) and model.verify_trace is None:
-                    model.capture_spec_traces()
+                    with st.stage("spec_traces.capture", model.mesh_device):
+                        model.capture_spec_traces()
                     logger.info(f"MiMo vLLM: replica {lane} verify and draft traces captured")
                 # Last: they are optional, so every trace the replica needs is in the region before them; one that
                 # does not fit drops them all (capture_prefill_chunk_traces warns) and later chunks run eagerly.
                 if any(t["id"] is None for t in model.chunk_traces.values()):
-                    if model.capture_prefill_chunk_traces():
+                    with st.stage("chunk_trace.capture", model.mesh_device):
+                        captured = model.capture_prefill_chunk_traces()
+                    if captured:
                         logger.info(f"MiMo vLLM: replica {lane} later-chunk prefill traces {list(model.chunk_traces)}")
                 trace = ttnn.get_memory_view(model.mesh_device, ttnn.BufferType.TRACE)
                 dram = ttnn.get_memory_view(model.mesh_device, ttnn.BufferType.DRAM)
@@ -2514,7 +2544,8 @@ class MiMoV2ForCausalLM:
                 )
             else:
                 idle = torch.full((model.max_batch,), -1, dtype=torch.int32)
-                model.decode_read(model.decode_enqueue(torch.zeros(model.max_batch, dtype=torch.int32), idle))
+                with st.stage("decode_warmup.eager_step", model.mesh_device):
+                    model.decode_read(model.decode_enqueue(torch.zeros(model.max_batch, dtype=torch.int32), idle))
 
     def release_persistent_capture(self):
         self._flush_draws()
