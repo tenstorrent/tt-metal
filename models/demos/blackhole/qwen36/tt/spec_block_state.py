@@ -693,6 +693,17 @@ class SpecGdnBlockState:
                 device=mesh,
                 mesh_mapper=rep,
             )
+        # QWEN36_SPEC_CHAIN_KERNEL with QWEN36_MAMBA_CHAIN_MOVES: windows_dev's words as uint32 RM (the kernel's window
+        # table)
+        self.windows_rm_dev = None
+        if self.windows_dev is not None and spec_chain_kernel_enabled():
+            self.windows_rm_dev = ttnn.from_torch(
+                as_u32_words(self.book.windows_cat().to(torch.int64)),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                mesh_mapper=rep,
+            )
         self._up = {}  # host copy of the last upload of pages_dev / windows_dev
         self._tables_moved = False  # the last upload held a row's chained state moves
         self.moves_counts = None  # (wait=False) -> engine-row accepted counts the staged moves follow, None until read
@@ -738,11 +749,11 @@ class SpecGdnBlockState:
             ttnn.copy_host_to_device_tensor(
                 ttnn.from_torch(host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep), dev
             )
-            if name == "pages" and self.pages_rm_dev is not None:
+            rm = {"pages": self.pages_rm_dev, "windows": self.windows_rm_dev}[name]
+            if rm is not None:
                 words = as_u32_words(host.to(torch.int64))
                 ttnn.copy_host_to_device_tensor(
-                    ttnn.from_torch(words, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep),
-                    self.pages_rm_dev,
+                    ttnn.from_torch(words, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep), rm
                 )
             self._up[name] = host
         self._tables_moved = bool(self.book.moves)

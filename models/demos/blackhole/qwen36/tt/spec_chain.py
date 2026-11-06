@@ -301,12 +301,14 @@ class ChainDevice:
         ring_pages=None,
         ring_windows=None,
         ring_pages_rm=None,
+        ring_windows_rm=None,
     ):
         """Persistent buffers; every ``*_in`` / ``*_out`` argument binds a LIVE engine tensor (shape / dtype / layout
         checked), None allocates a standalone one. ``ring_pages`` = (fp32 TILE [B, T * G * Nv] table, G);
         ``ring_windows`` = (fp32 TILE [B, T * G * T * Nv] table, [G] uint32 RM [B, T * Nv] ring_page_idx outputs), needs
         ``ring_pages``: see the class docstring. ``ring_pages_rm``: the same start pages as ``ring_pages`` in uint32 RM
-        [B, T * G * Nv], which QWEN36_SPEC_CHAIN_KERNEL reads."""
+        [B, T * G * Nv], which QWEN36_SPEC_CHAIN_KERNEL reads; ``ring_windows_rm``: likewise the window table in uint32
+        RM [B, T * G * T * Nv]."""
         import ttnn
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_words
 
@@ -319,7 +321,7 @@ class ChainDevice:
             want = ((B, (K + 1) * self.G * Nv), ttnn.float32, ttnn.TILE_LAYOUT)
             assert got == want, f"bound ring_pages: {got} != {want}"
         self.ring_windows, self.ring_idx_outs = (None, []) if ring_windows is None else ring_windows
-        self.ring_pages_rm = ring_pages_rm
+        self.ring_pages_rm, self.ring_windows_rm = ring_pages_rm, ring_windows_rm
         if self.ring_windows is not None:
             T = K + 1
             assert self.ring_pages is not None, "ring_windows needs ring_pages"
@@ -329,6 +331,8 @@ class ChainDevice:
             assert len(self.ring_idx_outs) == self.G, (len(self.ring_idx_outs), self.G)
             for g, t in enumerate(self.ring_idx_outs):
                 cls._check_bound(f"ring_idx_outs[{g}]", t, (B, T * Nv), ttnn.uint32)
+            if ring_windows_rm is not None:
+                cls._check_bound("ring_windows_rm", ring_windows_rm, (B, T * self.G * T * Nv), ttnn.uint32)
         R = self.R
         self.W_res, self.W_a = _align(max(R, B)), _align(max(B, 5))
         self.W_o, self.ctrl_words = _align(max(R, B, 5)), spec_ctrl_words(B, Nv)

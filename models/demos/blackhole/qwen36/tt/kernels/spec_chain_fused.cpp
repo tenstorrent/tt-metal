@@ -18,6 +18,11 @@
 // With G > 0, one more input:
 //   pages       uint32 [B, T*G*NV]      row u, column t*G*NV + g*NV + h = the first page of head h of group g for start
 //                                       column t (SpecBlockBook.pages_cat, as words)
+// With MOVES (QWEN36_MAMBA_CHAIN_MOVES), one more input and G more outputs:
+//   windows     uint32 [B, T*G*T*NV]    row u, column c*G*T*NV + g*T*NV + t*NV + h = the first page of head h of
+//                                       the block that takes the state after query token t, for accepted count c + 1
+//                                       (SpecBlockBook.windows_cat, as words)
+//   ring_idx g  uint32 [B, T*NV]        group g's ring_page_idx: row u = the windows row u at count column mi'
 //   aux_prev_in int32  [7, W_A]         the next fused aux (ovr rows 0..3, p0', ovr row 5, ovr row OVR_DELTA)
 // Arithmetic: the op graph computes in fp32 on integers below 2^24, where fp32 is exact, so int32 arithmetic gives the
 // same words. A negative value stored to a uint32 output becomes 0, as ttnn.typecast fp32 -> uint32 does (only reachable
@@ -40,12 +45,15 @@ constexpr uint32_t DRAFT_PAGE = get_compile_time_arg_val(7);  // bytes read per 
 constexpr uint32_t CB_L1 = get_compile_time_arg_val(8);
 constexpr uint32_t CB_BYTES = get_compile_time_arg_val(9);
 constexpr uint32_t G = get_compile_time_arg_val(10);  // GDN KV cache groups with a pages input; 0 = one ring ctrl page
-constexpr uint32_t CTA_ACCESSORS = 11;
+constexpr uint32_t MOVES = get_compile_time_arg_val(11);  // 1: write each group's ring_page_idx from the windows input
+constexpr uint32_t CTA_ACCESSORS = 12;
 
 constexpr uint32_t T = K + 1;
 constexpr uint32_t R = B * T;
 constexpr uint32_t CTRL_ROWS = G == 0 ? 1 : G;
 constexpr uint32_t W_P = T * G * NV;  // words per pages row
+constexpr uint32_t W_IDX = T * NV;     // words per ring_page_idx row
+constexpr uint32_t W_WIN = T * G * W_IDX;  // words per windows row
 
 // spec_fused.AUX_* / CONST_* and spec_chain.RES_* / OVR_* rows
 constexpr uint32_t AUX_NUM_VALID = 0, AUX_ACTIVE = 1, AUX_P0 = 4, AUX_CONSTS = 5, AUX_DELTA = 6, AUX_ROWS = 7;
@@ -58,6 +66,7 @@ static_assert(R <= W_RES && B <= W_RES, "result row width");
 static_assert(B <= W_A && 5 <= W_A && W_A <= W_O && R <= W_O, "aux / overlay widths");
 static_assert(R <= W_V && 1 + B + B * NV <= W_V, "vaux width");
 static_assert(DRAFT_PAGE >= 4 && DRAFT_PAGE <= 64, "one draft id per <= 64 B page");
+static_assert(MOVES == 0 || G > 0, "chained state moves need the start-page table");
 
 constexpr uint32_t al64(uint32_t x) { return (x + 63u) & ~63u; }
 
@@ -75,7 +84,11 @@ constexpr uint32_t OFF_VAUX = OFF_TOK + al64(R * 4);       // 2 + CTRL_ROWS rows
 constexpr uint32_t OFF_NAUX = OFF_VAUX + (2 + CTRL_ROWS) * V_ROW;  // AUX_ROWS rows
 constexpr uint32_t P_ROW = al64(W_P * 4);
 constexpr uint32_t OFF_PAGES = OFF_NAUX + AUX_ROWS * AUX_ROW;  // B rows when G > 0
-constexpr uint32_t L1_BYTES = OFF_PAGES + (G == 0 ? 0 : B * P_ROW);
+constexpr uint32_t WIN_ROW = al64(W_WIN * 4);
+constexpr uint32_t IDX_ROW = al64(W_IDX * 4);
+constexpr uint32_t OFF_WIN = OFF_PAGES + (G == 0 ? 0 : B * P_ROW);  // B rows with MOVES
+constexpr uint32_t OFF_IDX = OFF_WIN + (MOVES ? B * WIN_ROW : 0);   // G * B rows with MOVES (group g, user u at g*B+u)
+constexpr uint32_t L1_BYTES = OFF_IDX + (MOVES ? G * B * IDX_ROW : 0);
 static_assert(L1_BYTES + 64 <= CB_BYTES, "scratch CB too small");
 
 using wptr = volatile tt_l1_ptr uint32_t*;
@@ -100,6 +113,9 @@ void kernel_main() {
     constexpr auto vaux_args = TensorAccessorArgs<tok_args.next_compile_time_args_offset()>();
     constexpr auto dr_args = TensorAccessorArgs<vaux_args.next_compile_time_args_offset()>();
     constexpr auto pg_args = TensorAccessorArgs<dr_args.next_compile_time_args_offset()>();
+    constexpr auto win_args = TensorAccessorArgs<pg_args.next_compile_time_args_offset()>();
+    constexpr auto idx_args = TensorAccessorArgs<win_args.next_compile_time_args_offset()>();
+    constexpr uint32_t ARG_WIN = 5 + K + 1, ARG_IDX0 = ARG_WIN + 1;  // after the drafts and the pages address
     const auto res = TensorAccessor(res_args, res_addr);
     const auto aux = TensorAccessor(aux_args, aux_addr);
     const auto ovr = TensorAccessor(ovr_args, ovr_addr);
@@ -125,6 +141,12 @@ void kernel_main() {
         const auto pg = TensorAccessor(pg_args, get_common_arg_val<uint32_t>(ARG_DRAFT0 + K));
         for (uint32_t u = 0; u < B; ++u) {
             noc_async_read(pg.get_noc_addr(u), base + OFF_PAGES + u * P_ROW, W_P * 4);
+        }
+    }
+    if constexpr (MOVES) {
+        const auto win = TensorAccessor(win_args, get_common_arg_val<uint32_t>(ARG_WIN));
+        for (uint32_t u = 0; u < B; ++u) {
+            noc_async_read(win.get_noc_addr(u), base + OFF_WIN + u * WIN_ROW, W_WIN * 4);
         }
     }
     noc_async_read_barrier();
@@ -212,6 +234,17 @@ void kernel_main() {
                     cg[1 + B + u * NV + h] = pages[col * G * NV + g * NV + h];
                 }
             }
+            if constexpr (MOVES) {
+                // the state window of count mi' + 1, staged through an aligned row (the source column is not
+                // 64 B aligned)
+                const wptr win = reinterpret_cast<wptr>(base + OFF_WIN + u * WIN_ROW);
+                for (uint32_t g = 0; g < G; ++g) {
+                    const wptr out = reinterpret_cast<wptr>(base + OFF_IDX + (g * B + u) * IDX_ROW);
+                    for (uint32_t i = 0; i < W_IDX; ++i) {
+                        out[i] = win[(col * G + g) * W_IDX + i];
+                    }
+                }
+            }
         }
         naux[AUX_P0 * NAUX_STRIDE + u] = p0n;
     }
@@ -234,6 +267,14 @@ void kernel_main() {
     }
     for (uint32_t i = 0; i < AUX_ROWS; ++i) {
         noc_async_write(base + OFF_NAUX + i * AUX_ROW, aux.get_noc_addr(i), W_A * 4);
+    }
+    if constexpr (MOVES) {
+        for (uint32_t g = 0; g < G; ++g) {
+            const auto idx = TensorAccessor(idx_args, get_common_arg_val<uint32_t>(ARG_IDX0 + g));
+            for (uint32_t u = 0; u < B; ++u) {
+                noc_async_write(base + OFF_IDX + (g * B + u) * IDX_ROW, idx.get_noc_addr(u), W_IDX * 4);
+            }
+        }
     }
     noc_async_write_barrier();
 }

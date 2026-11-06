@@ -2234,6 +2234,8 @@ class MTPSpecEngine:
                 kw["ring_pages_rm"] = paged.pages_rm_dev
             if paged.windows_dev is not None:  # QWEN36_MAMBA_CHAIN_MOVES
                 kw["ring_windows"] = (paged.windows_dev, list(paged._idx_dev))
+                if paged.windows_rm_dev is not None:  # QWEN36_SPEC_CHAIN_KERNEL
+                    kw["ring_windows_rm"] = paged.windows_rm_dev
         Nv = int(model._vfy_Nv)
         ch_g = ch_s = None
         try:

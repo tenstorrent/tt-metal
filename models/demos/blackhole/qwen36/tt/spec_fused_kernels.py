@@ -144,8 +144,6 @@ class ChainKernel:
         if R > 32 or K < 1:
             return f"B={B} K={K}: more than 32 rows"
         G = ChainKernel.groups(cd)
-        if getattr(cd, "ring_windows", None) is not None:
-            return "QWEN36_MAMBA_CHAIN_MOVES (the window selection runs in the op graph)"
         checks = (
             ("result_in", cd.result_in, ttnn.int32, None, cd.W_res),
             ("aux_prev_in", cd.aux_prev_in, ttnn.int32, FUSED_AUX_ROWS, cd.W_a),
@@ -157,6 +155,13 @@ class ChainKernel:
             if getattr(cd, "ring_pages_rm", None) is None:
                 return "QWEN36_MAMBA_SPEC without the uint32 start-page table (ring_pages_rm)"
             checks += (("ring_pages_rm", cd.ring_pages_rm, ttnn.uint32, B, cd.T * G * Nv),)
+        if ChainKernel.moves(cd):
+            if getattr(cd, "ring_windows_rm", None) is None:
+                return "QWEN36_MAMBA_CHAIN_MOVES without the uint32 window table (ring_windows_rm)"
+            checks += (("ring_windows_rm", cd.ring_windows_rm, ttnn.uint32, B, cd.T * G * cd.T * Nv),)
+            checks += tuple(
+                (f"ring_idx_outs[{g}]", t, ttnn.uint32, B, cd.T * Nv) for g, t in enumerate(cd.ring_idx_outs)
+            )
         for name, t, dt, rows, width in checks:
             why = _rm(t, dt, rows, width)
             if why is not None:
@@ -165,7 +170,15 @@ class ChainKernel:
             return "result_in has fewer than 2 rows"
         if 1 + B + B * Nv > cd.W_v or cd.W_a > cd.W_o or R > cd.W_o:
             return "widths"
+        if ChainKernel.moves(cd) and any(_accessor(t) != _accessor(cd.ring_idx_outs[0]) for t in cd.ring_idx_outs):
+            return "ring_idx_outs: the groups' tensors differ in layout"
         return ChainKernel._draft_reason(cd.draft_ins, B)
+
+    @staticmethod
+    def moves(cd):
+        """True when the chain also writes each group's ring_page_idx from the window table
+        (QWEN36_MAMBA_CHAIN_MOVES)."""
+        return getattr(cd, "ring_windows", None) is not None
 
     @staticmethod
     def groups(cd):
@@ -214,11 +227,17 @@ class ChainKernel:
         l1 = 2 * _al64(4 * W_res) + _al64(4 * W_a) + OVR_ROWS * _al64(4 * W_o) + K * B * 64
         l1 += _al64(4 * R) + (2 + max(G, 1)) * _al64(4 * W_v) + FUSED_AUX_ROWS * _al64(4 * W_a)
         l1 += B * _al64(4 * (K + 1) * G * Nv) if G else 0
+        mv = self.moves(cd)
+        T = K + 1
+        if mv:  # B window rows, then G * B ring_page_idx rows
+            l1 += B * _al64(4 * T * G * T * Nv) + G * B * _al64(4 * T * Nv)
         cb_bytes = l1 + 64
-        cta = [B, K, Nv, W_res, W_a, W_o, W_v, page, CB_L1, cb_bytes, G]
-        # the pages accessor slot is filled with the draft ids' accessor when there is no table (never read then)
+        cta = [B, K, Nv, W_res, W_a, W_o, W_v, page, CB_L1, cb_bytes, G, int(mv)]
+        # accessor slots without a tensor are filled with the draft ids' accessor (never read then)
         pages = cd.ring_pages_rm if G else cd.draft_ins[0]
-        for t in (cd.result_in, cd.aux_prev_in, cd.ovr_in, cd.tok_out, cd.vaux_out, cd.draft_ins[0], pages):
+        win = cd.ring_windows_rm if mv else cd.draft_ins[0]
+        idx = cd.ring_idx_outs[0] if mv else cd.draft_ins[0]
+        for t in (cd.result_in, cd.aux_prev_in, cd.ovr_in, cd.tok_out, cd.vaux_out, cd.draft_ins[0], pages, win, idx):
             cta += _accessor(t)
         common = (
             [
@@ -230,6 +249,7 @@ class ChainKernel:
             ]
             + [d.buffer_address() for d in cd.draft_ins]
             + [pages.buffer_address()]
+            + ([cd.ring_windows_rm.buffer_address()] + [t.buffer_address() for t in cd.ring_idx_outs] if mv else [])
         )
         kernel = ttnn.KernelDescriptor(
             kernel_source=CHAIN_KERNEL,
@@ -247,6 +267,8 @@ class ChainKernel:
         io = [cd.result_in, *cd.draft_ins, cd.ovr_in, cd.tok_out, cd.vaux_out, cd.aux_prev_in]
         if self.groups(cd):
             io.insert(-3, cd.ring_pages_rm)
+        if self.moves(cd):
+            io[-1:-1] = [cd.ring_windows_rm, *cd.ring_idx_outs]
         return ttnn.generic_op(io, self.descriptor())
 
 
