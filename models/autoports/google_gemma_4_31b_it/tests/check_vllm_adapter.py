@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Reduced real-layer adapter check; not a full-model quality/performance result."""
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,11 @@ from ..tt.weights import HF_MODEL, HF_REVISION
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--output", type=Path, default=Path("models/autoports/google_gemma_4_31b_it/readiness_vllm/adapter_state.json")
+    )
+    args = parser.parse_args()
     torch.set_num_threads(8)
     os.environ["GEMMA4_SERVING_TEST_LAYERS"] = "0,5"
     config = AutoConfig.from_pretrained(HF_MODEL, revision=HF_REVISION)
@@ -113,9 +119,8 @@ def main():
             counters=adapter.generator.counters,
             traces=[str(adapter.generator.model_trace), str(adapter.generator.sample_trace)],
         )
-        Path("models/autoports/google_gemma_4_31b_it/readiness_vllm/adapter_state.json").write_text(
-            json.dumps(result, indent=2) + "\n"
-        )
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(result, indent=2) + "\n")
         adapter.release_persistent_capture()
     finally:
         ttnn.close_mesh_device(mesh)

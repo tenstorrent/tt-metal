@@ -1,0 +1,324 @@
+{
+  "status": "complete; independent review clean-pass",
+  "source": "vllm",
+  "headline_workload": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "batch": 1,
+    "concurrency": 1
+  },
+  "single_user": {
+    "before": {
+      "config": {
+        "prompt_len": 4096,
+        "output_len": 128,
+        "num_requests": 1,
+        "concurrency": 1,
+        "temperature": 0.0,
+        "generation_config_mode": "explicit",
+        "dataset_name": "random",
+        "ignore_eos": true
+      },
+      "completed_requests": 1,
+      "total_input_tokens": 4096.0,
+      "total_output_tokens": 128.0,
+      "ttft_ms": {
+        "p50": 754.8702870262787,
+        "p99": 754.8702870262787,
+        "mean": 754.8702870262787
+      },
+      "tpot_ms": {
+        "p50": 28.311535322811366,
+        "p99": 28.311535322811366,
+        "mean": 28.311535322811366
+      },
+      "itl_ms": {
+        "p50": 28.30946701578796,
+        "p99": 33.23337466921657,
+        "mean": 28.311535322811366
+      },
+      "output_throughput_tok_per_s": 29.419356657491925,
+      "mean_per_request_decode_tps": 35.3212917843517,
+      "evidence": "models/autoports/google_gemma_4_31b_it/readiness_vllm/b1_final/vllm_benchmark.json"
+    },
+    "after": {
+      "config": {
+        "prompt_len": 4096,
+        "output_len": 128,
+        "num_requests": 1,
+        "concurrency": 1,
+        "temperature": 0.0,
+        "generation_config_mode": "explicit",
+        "dataset_name": "random",
+        "ignore_eos": true
+      },
+      "completed_requests": 1,
+      "total_input_tokens": 4096.0,
+      "total_output_tokens": 128.0,
+      "ttft_ms": {
+        "p50": 754.4311319943517,
+        "p99": 754.4311319943517,
+        "mean": 754.4311319943517
+      },
+      "tpot_ms": {
+        "p50": 28.31266970854018,
+        "p99": 28.31266970854018,
+        "mean": 28.31266970854018
+      },
+      "itl_ms": {
+        "p50": 28.30992895178497,
+        "p99": 35.49610256217419,
+        "mean": 28.31266970854018
+      },
+      "output_throughput_tok_per_s": 29.421170232082588,
+      "mean_per_request_decode_tps": 35.31987658862003,
+      "evidence": "models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_final_b1/vllm_benchmark.json"
+    }
+  },
+  "matched_server_configuration": {
+    "mesh_device": "P300x2",
+    "max_num_seqs": 1,
+    "max_model_len": 262144,
+    "block_size": 32,
+    "tt_config": {
+      "sample_on_device_mode": "all",
+      "trace_region_size": 134217728,
+      "fabric_config": "FABRIC_1D_RING"
+    },
+    "enable_prefix_caching": true
+  },
+  "server_commands_identical": true,
+  "generation_mode": "explicit greedy, temperature0; served operator top_k32 override; canonical device split sampler",
+  "benchmark_dataset": {
+    "effective_name": "timed_trace",
+    "path": "models/autoports/google_gemma_4_31b_it/readiness_vllm/headline_4096_128.jsonl",
+    "sha256": "ac948d0d3c89e10c912eb669bb4bad08a041767e1a3f8f91d95385779a120146",
+    "note": "Runner config.dataset_name remains random, but the final CLI override is timed_trace. Both raw results contain exactly4096 input128 output tokens; all overrides match."
+  },
+  "ci_burst": {
+    "before": {
+      "config": {
+        "prompt_len": 100,
+        "output_len": 100,
+        "num_requests": 32,
+        "concurrency": null,
+        "temperature": 0.0,
+        "generation_config_mode": "explicit",
+        "dataset_name": "random",
+        "ignore_eos": true
+      },
+      "completed_requests": 32,
+      "total_input_tokens": 3200.0,
+      "total_output_tokens": 3200.0,
+      "ttft_ms": {
+        "p50": 1799.4129350408912,
+        "p99": 2655.3975933615584,
+        "mean": 2065.012946346542
+      },
+      "tpot_ms": {
+        "p50": 40.208188843363054,
+        "p99": 40.59831390053862,
+        "mean": 37.5946901450986
+      },
+      "itl_ms": {
+        "p50": 29.724726045969874,
+        "p99": 87.47110165888442,
+        "mean": 37.5946901450986
+      },
+      "output_throughput_tok_per_s": 551.2966018106092,
+      "mean_per_request_decode_tps": 26.59950105029326,
+      "evidence": "models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_serial_burst/vllm_ci_serving_benchmark.json"
+    },
+    "after": {
+      "config": {
+        "prompt_len": 100,
+        "output_len": 100,
+        "num_requests": 32,
+        "concurrency": null,
+        "temperature": 0.0,
+        "generation_config_mode": "explicit",
+        "dataset_name": "random",
+        "ignore_eos": true
+      },
+      "completed_requests": 32,
+      "total_input_tokens": 3200.0,
+      "total_output_tokens": 3200.0,
+      "ttft_ms": {
+        "p50": 694.0542185329832,
+        "p99": 1152.5778455717955,
+        "mean": 849.7586314661021
+      },
+      "tpot_ms": {
+        "p50": 36.30708592927384,
+        "p99": 36.68319188071312,
+        "mean": 34.822420712082405
+      },
+      "itl_ms": {
+        "p50": 29.724441992584616,
+        "p99": 84.29181193350814,
+        "mean": 34.822420712082405
+      },
+      "output_throughput_tok_per_s": 741.3648645863597,
+      "mean_per_request_decode_tps": 28.717130502447464,
+      "evidence": "models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_final_full/performance/vllm_ci_serving_benchmark.json"
+    },
+    "scope": "Local CI/nightly-shaped100/100/32 capacity profile on max-num-seqs32, uncapped arrival concurrency; not remoteCI or headline decode speed."
+  },
+  "cold_prefill_burst": {
+    "before": {
+      "config": {
+        "prompt_len": 128,
+        "output_len": 32,
+        "num_requests": 32,
+        "concurrency": 32,
+        "temperature": 0.0,
+        "generation_config_mode": "explicit",
+        "dataset_name": "random",
+        "ignore_eos": true
+      },
+      "completed_requests": 32,
+      "total_input_tokens": 4096.0,
+      "total_output_tokens": 1024.0,
+      "ttft_ms": {
+        "p50": 1416.578071541153,
+        "p99": 2627.053158072522,
+        "mean": 1981.6968651612115
+      },
+      "tpot_ms": {
+        "p50": 69.67088861218203,
+        "p99": 70.94504751798307,
+        "mean": 51.75623445228989
+      },
+      "itl_ms": {
+        "p50": 29.72559747286141,
+        "p99": 1161.3819853949826,
+        "mean": 51.75623445228989
+      },
+      "output_throughput_tok_per_s": 284.4407715230459,
+      "mean_per_request_decode_tps": 19.32134380683787,
+      "evidence": "models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_serial_burst/vllm_prefill_burst_benchmark.json"
+    },
+    "after": {
+      "config": {
+        "prompt_len": 128,
+        "output_len": 32,
+        "num_requests": 32,
+        "concurrency": 32,
+        "temperature": 0.0,
+        "generation_config_mode": "explicit",
+        "dataset_name": "random",
+        "ignore_eos": true
+      },
+      "completed_requests": 32,
+      "total_input_tokens": 4096.0,
+      "total_output_tokens": 1024.0,
+      "ttft_ms": {
+        "p50": 595.0101809576154,
+        "p99": 1160.5112715973519,
+        "mean": 857.8267864359077
+      },
+      "tpot_ms": {
+        "p50": 48.846226146129226,
+        "p99": 50.01660294673075,
+        "mean": 40.701859670192675
+      },
+      "itl_ms": {
+        "p50": 29.754513467196375,
+        "p99": 515.5626502551604,
+        "mean": 40.701859670192675
+      },
+      "output_throughput_tok_per_s": 479.86580643619743,
+      "mean_per_request_decode_tps": 24.568901964259222,
+      "evidence": "models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_final_full/performance/vllm_prefill_burst_benchmark.json"
+    },
+    "serial_reference": {
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_serial_burst/vllm_prefill_burst_benchmark.json",
+      "serial_config": {
+        "prompt_len": 128,
+        "output_len": 32,
+        "num_requests": 32,
+        "concurrency": 32
+      },
+      "config_matches": true,
+      "serial_ttft_ms": {
+        "p50": 1416.578071541153,
+        "p99": 2627.053158072522,
+        "mean": 1981.6968651612115
+      },
+      "ttft_ratio_p99": 0.4417540117265168,
+      "ttft_ratio_mean": 0.43287487683749415,
+      "ttft_ratio_p50": 0.4200334544994612,
+      "serial_prefix_cache": {
+        "reset": true,
+        "queries": 4096.0,
+        "hits": 0.0,
+        "hit_rate": 0.0
+      }
+    },
+    "scope": "128input32output32requestsC32; cold cache zerohits both arms"
+  },
+  "full_model_comparison": {
+    "source": "autoregressive",
+    "evidence": "doc/datatype_sweep/selected_default/performance_b1.json",
+    "workload": "4096input128generatedB1C1",
+    "ttft_ms": 656.1773680150509,
+    "decode_tps": 34.82999900522996,
+    "serving_to_full_model_decode_ratio": 1.0140648176107188,
+    "boundary": "Standalone uses buffered token history read; vLLM streams through plugin deferred token reads. Both full60 selected policy,mesh1x4,traced token-out."
+  },
+  "single_user_128_regression": "single_user_regression.json",
+  "device_measurements": {
+    "prefill_device_us": null,
+    "decode_device_us": null,
+    "prefill_flops_pct": null,
+    "decode_dram_pct": null
+  },
+  "missing_reasons": {
+    "device_measurements": "No serving profiling permitted; host-wall/HTTP latency is not substituted."
+  },
+  "limitations": [
+    "One timed headline request per arm; TTFT/TPOT percentiles coincide and are not a request-latency distribution.",
+    "ITL p99 increased from33.23ms to35.50ms in the single-request samples while meanTPOT is unchanged; report the observed samples without a distribution-level claim.",
+    "CI-shaped burst metrics are secondary capacity evidence measured locally."
+  ],
+  "capacity_profiles": {
+    "8": {
+      "workload": "128input128output8requestsC8,serverB8,context262144",
+      "completed_requests": 8,
+      "ttft_ms": {
+        "p50": 430.61306746676564,
+        "p99": 431.03679395630024,
+        "mean": 428.32786435610615
+      },
+      "tpot_ms": {
+        "p50": 26.73587374028009,
+        "p99": 26.878969923888267,
+        "mean": 26.75469038587735
+      },
+      "output_tokens_per_second": 267.57765346317785,
+      "ci_workload": "100input100output32requests,uncapped arrivals,serverB8",
+      "ci_output_tokens_per_second": 267.0056548663614,
+      "sampling": "3passed1unchangedskip smoke; full76passed75skip onB32",
+      "evidence": "models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_final_b8"
+    },
+    "16": {
+      "workload": "128input128output16requestsC16,serverB16,context262144",
+      "completed_requests": 16,
+      "ttft_ms": {
+        "p50": 630.6244785082527,
+        "p99": 631.0802989464719,
+        "mean": 628.5969151140307
+      },
+      "tpot_ms": {
+        "p50": 27.69491123585544,
+        "p99": 27.920999662312646,
+        "mean": 27.711553962987857
+      },
+      "output_tokens_per_second": 493.5669377049712,
+      "ci_workload": "100input100output32requests,uncapped arrivals,serverB16",
+      "ci_output_tokens_per_second": 440.5733857375861,
+      "sampling": "3passed1unchangedskip smoke; full76passed75skip onB32",
+      "evidence": "models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_final_b16"
+    }
+  }
+}

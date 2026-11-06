@@ -6,9 +6,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import torch
-from readiness_check import run_prefill_check, run_teacher_forcing
 
 import ttnn
+from readiness_check import run_prefill_check, run_teacher_forcing
 
 from ..tt.generator import Gemma4Generator
 from .full_generation_evidence import performance
@@ -57,6 +57,7 @@ def inventory(gen):
         "page_tables": size(gen.page_table),
         "sampler": size(vars(gen.sampler)),
         "prepared_prefill": size(vars(gen.prefill)),
+        "prepared_batched_prefill": size(gen.batched_prefill.inputs) if gen.batched_prefill else 0,
         "generator_state": size(vars(gen)),
     }
     groups["sum_owned_dram_bytes"] = sum(groups.values())

@@ -3,6 +3,7 @@
 
 import json
 import math
+import os
 import time
 from numbers import Integral, Real
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from readiness_check.contract import Generator
 from transformers import AutoTokenizer, GenerationConfig
 
 import ttnn
+from models.autoports.google_gemma_4_31b_it.tt.batched_prefill import PreparedBatchedPrefill
 from models.autoports.google_gemma_4_31b_it.tt.model import Gemma4Model
 from models.autoports.google_gemma_4_31b_it.tt.optimized_decoder import HF_MODEL, HF_REVISION
 from models.autoports.google_gemma_4_31b_it.tt.prefill import PreparedPrefill
@@ -117,6 +119,11 @@ class Gemma4Generator(Generator):
             shard=3,
         )
         self.prefill = PreparedPrefill(self.model, self.context, host_page_tables)
+        self.batched_prefill = (
+            PreparedBatchedPrefill(self.prefill, self.batch)
+            if os.environ.get("GEMMA4_BATCHED_PREFILL", "1") == "1" and self.batch > 1
+            else None
+        )
         self.prepared = False
         self.counters = dict(
             model_replays=0,
@@ -189,6 +196,8 @@ class Gemma4Generator(Generator):
                 rows = selected if self.batch == 1 else ttnn.concat([selected] * self.batch, dim=2)
                 ttnn.copy(rows, self.logits)
                 del hidden, all_logits, selected, selection_logits, rows
+        if self.batched_prefill is not None:
+            self.batched_prefill.warm(self.kv_cache)
         for start in (1, 33):
             if start + 31 <= self.context:
                 partial_hidden = self.prefill.partial_hidden(
@@ -241,6 +250,10 @@ class Gemma4Generator(Generator):
                     "layers": list(self.model.layer_indices),
                     "cache_shapes": [list(cache[0].shape) for cache in self.kv_cache],
                     "prefill_buckets": list(self.prefill.buckets),
+                    "batched_prefill_buckets": list(self.batched_prefill.inputs) if self.batched_prefill else [],
+                    "batched_prefill_bytes_per_device": (
+                        self.batched_prefill.allocation_bytes_per_device() if self.batched_prefill else 0
+                    ),
                     "traces": {
                         "decode": str(self.model_trace),
                         "sample": str(self.sample_trace),
@@ -358,7 +371,33 @@ class Gemma4Generator(Generator):
         self.prepare_decode()
         results = []
         selected_rows = []
+        batched_rows = {}
+        if self.batched_prefill is not None and not return_all_logits:
+            for size, group in self.batched_prefill.groups(prompt_lens, starts):
+                outputs = self.batched_prefill.run(
+                    tokens[group],
+                    [prompt_lens[row] for row in group],
+                    [slots[row] for row in group],
+                    size=size,
+                    kv_cache=self.kv_cache,
+                )
+                batched_rows.update(zip(group, outputs))
+                del outputs
+                print(
+                    json.dumps(
+                        {
+                            "event": "generator_batched_prefill",
+                            "rows": group,
+                            "lengths": [int(prompt_lens[row]) for row in group],
+                            "physical_size": int(size),
+                        }
+                    ),
+                    flush=True,
+                )
         for row, (slot, length, logical_start) in enumerate(zip(slots, prompt_lens, starts)):
+            if row in batched_rows:
+                selected_rows.append(batched_rows.pop(row))
+                continue
             if length == 0:
                 if return_all_logits:
                     results.append(torch.zeros(1, 0, self.model.config.vocab_size))

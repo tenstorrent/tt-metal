@@ -1,0 +1,25 @@
+{
+  "status": "review_complete_local_checkpoint_pending",
+  "active": "local checkpoint",
+  "completed": [
+    "coldburst candidate gate andCI-shaped before/after",
+    "all15full60bucketcalibrations atcontext262144",
+    "B2/B4/B8/B32 reducedrandom exactnessall11lengths,twoorders",
+    "B32finalsourcecompute-watcher",
+    "trackedB32mixedchat+unsafeallocationpositivecontrol",
+    "B2/B4/B8chat andtrackedB1adapterstate controls",
+    "Full60 B32 chat exactness10/10 cases",
+    "B1 128/128 regression passed; batched prefill default-on",
+    "Full60 B32 synchronous tracked mixed68requests pass, no program cache exclusions",
+    "Final default full sampling76pass75skip, same test outcomes as stage09",
+    "Final default qualitative andprefixcache pass",
+    "Final default cold burst andCI-shaped parity pass",
+    "Full60 async mixed68requests match tracked synchronous control",
+    "Growing160requests to32768tokens passed; lateprefixreuse99.65%",
+    "Corrected load costs98requests pass, all stress workers cleaned",
+    "Independent stage review clean-pass; no required work"
+  ],
+  "remaining": [
+    "Local stage-owned commits, log SHAs, finalize compact telemetry"
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "command": "TT_MODEL_BRINGUP_ROOT/prompts/model_bringup_multigoal/10-optimized-vllm.check.sh",
+  "exit_status": 1,
+  "classification": "advisory_only",
+  "components": {
+    "degenerate_output": "pass",
+    "context_contract": "pass262144",
+    "prefill_features_required_burst": "pass",
+    "agentic_serving": "two documented structural advisories; no missing measurements or critical errors"
+  },
+  "advisories": [
+    {
+      "item": "Tied embedding and vocabulary projection have two physical representations",
+      "basis": "BF16 row-major hidden-sharded lookup and BFP4 tiled transposed vocabulary-sharded head cannot alias; selected policy and inventory remain measured."
+    },
+    {
+      "item": "KV pool uses a fixed synthetic budget",
+      "basis": "Pinned worker asks before weights load; model maps normalized global64/sliding32 groups, and full served allocator fit plus32-conversation growing reuse validate the budget. Runtime interface unchanged."
+    }
+  ],
+  "evidence": "stage_check.log",
+  "hooks": {
+    "status": "pass",
+    "exit_status": 0,
+    "evidence": "hooks.log"
+  }
+}

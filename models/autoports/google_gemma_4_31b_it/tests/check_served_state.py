@@ -123,6 +123,9 @@ def trace_summary(baseline, workload):
         "sampling_step_counts": dict(counts),
         "scheduler_prefill_steps": scheduler_prefill,
         "actual_generator_chunks": chunks,
+        "actual_batched_prefill_groups": [
+            event for event in workload if event.get("event") == "generator_batched_prefill"
+        ],
         "actual_unaligned_prompt_positions": prompt_tokens,
         "actual_partial_pages": partial_pages,
         "decode_step_count": len(decoder_lines),
@@ -145,6 +148,11 @@ def main():
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--server-log", type=Path, required=True)
     parser.add_argument("--execution-mode", choices=("synchronous", "async"), required=True)
+    parser.add_argument(
+        "--require-batched-prefill",
+        action="store_true",
+        help="Add short-row concurrent controls and require batched events for each physical bucket",
+    )
     parser.add_argument("--model", default="google/gemma-4-31B-it")
     parser.add_argument("--revision", default="842da3794eaa0b77d5f08bae87a17459d91ff475")
     args = parser.parse_args()
@@ -280,6 +288,65 @@ def main():
                             baseline[record["input_tokens"]][:count],
                         )
                     records.append(record)
+        if args.require_batched_prefill:
+            short_shapes = [
+                (length, f"length {length} case {replica} about rainbows")
+                for length in (32, 64, 96, 127, 128)
+                for replica in range(4)
+            ]
+            short_controls = {}
+            for index, (length, topic) in enumerate(short_shapes):
+                row = request(f"short_serial_{index}", length, topic, output_tokens=32)
+                short_controls[length, topic] = row["token_ids"]
+                records.append(row)
+            if reference:
+                expected_short = {
+                    r["label"]: r["token_ids"] for r in reference["requests"] if r["label"].startswith("short_serial_")
+                }
+                actual_short = {r["label"]: r["token_ids"] for r in records if r["label"].startswith("short_serial_")}
+                check("sync_async_short_serial_control", actual_short, expected_short)
+            for wave in range(2):
+                # Reset only while idle: prior solo controls must not turn these
+                # short-prefill requests into prefix-cache hits.
+                reset = urllib.request.Request(args.url + "/reset_prefix_cache", data=b"", method="POST")
+                with urllib.request.urlopen(reset, timeout=30) as response:
+                    if response.status != 200:
+                        raise RuntimeError("Short-wave prefix cache reset failed")
+                jobs = (
+                    short_shapes
+                    if wave == 0
+                    else list(reversed([shape for index, shape in enumerate(short_shapes) if index % 4 < 2]))
+                )
+                anchor_started = threading.Event()
+                with ThreadPoolExecutor(max_workers=len(jobs) + 2) as pool:
+                    anchor = pool.submit(request, f"short_anchor{wave}", 131, "plant growth", 0.0, 384, anchor_started)
+                    if not anchor_started.wait(timeout=180):
+                        raise RuntimeError("Short-wave anchor did not begin decoding")
+                    futures = [pool.submit(request, f"short_long{wave}", 8193 + wave * 130, "how tides work", 0.0, 128)]
+                    futures.extend(
+                        pool.submit(request, f"short_wave{wave}_{index}", length, topic, 0.0, 32)
+                        for index, (length, topic) in enumerate(jobs)
+                    )
+                    rows = [future.result() for future in futures]
+                    anchor_row = anchor.result()
+                records.extend([anchor_row, *rows])
+                check(
+                    f"short_wave{wave}_arrived_during_decode",
+                    all(
+                        anchor_row["first_token_seconds"] <= row["start_seconds"] < anchor_row["end_seconds"]
+                        for row in rows
+                    ),
+                    True,
+                )
+                for row, shape in zip(rows[1:], jobs):
+                    check(row["label"] + "_solo_equal", row["token_ids"], short_controls[shape])
+                if reference:
+                    expected_wave = {
+                        r["label"]: r["token_ids"]
+                        for r in reference["requests"]
+                        if r["label"].startswith(f"short_wave{wave}_")
+                    }
+                    check(f"sync_async_short_wave{wave}", {r["label"]: r["token_ids"] for r in rows[1:]}, expected_wave)
         for repeat in range(2):
             records.append(request(f"sampled_{repeat}", 129, "rainbows", 1.0))
         check("seeded_repeat", records[-1]["token_ids"], records[-2]["token_ids"])
@@ -302,11 +369,20 @@ def main():
         checks.append(
             dict(name="decode_interleaved_between_continuations", passed=evidence["decode_between_continuation_steps"])
         )
+        if args.require_batched_prefill:
+            groups = evidence["actual_batched_prefill_groups"]
+            check("short_batched_physical_buckets", {e.get("physical_size") for e in groups}, {32, 64, 96, 128})
+            check(
+                "short_batched_groups_have_multiple_rows",
+                bool(groups) and all(len(e.get("rows", [])) >= 2 for e in groups),
+                True,
+            )
         failed = bool(errors) or any(not item["passed"] for item in checks)
         report = dict(
             status="failed" if failed else "incomplete_evidence" if evidence["missing_reasons"] else "pass",
             scope="mixed-shape HTTP control, not headline performance",
             execution_mode=args.execution_mode,
+            require_batched_prefill=args.require_batched_prefill,
             reference=str(args.reference) if args.reference else None,
             server_log=str(args.server_log),
             server_log_byte_range=[log_offset, len(log_after)],

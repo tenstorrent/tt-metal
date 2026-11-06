@@ -1,0 +1,190 @@
+{
+  "status": "candidate_pass_final_validation_pending",
+  "context": 262144,
+  "mesh": [
+    1,
+    4
+  ],
+  "server_max_num_seqs": 32,
+  "sampling_mode": "all device; benchmark logs have only device prefill/decode steps",
+  "workloads": {
+    "prefill_burst": {
+      "before": {
+        "config": {
+          "prompt_len": 128,
+          "output_len": 32,
+          "num_requests": 32,
+          "concurrency": 32,
+          "temperature": 0.0,
+          "generation_config_mode": "explicit",
+          "dataset_name": "random",
+          "ignore_eos": true
+        },
+        "completed_requests": 32,
+        "ttft_ms": {
+          "p50": 1416.578071541153,
+          "p99": 2627.053158072522,
+          "mean": 1981.6968651612115
+        },
+        "tpot_ms": {
+          "p50": 69.67088861218203,
+          "p99": 70.94504751798307,
+          "mean": 51.75623445228989
+        },
+        "itl_ms": {
+          "p50": 29.72559747286141,
+          "p99": 1161.3819853949826,
+          "mean": 51.75623445228989
+        },
+        "output_throughput_tok_per_s": 284.4407715230459,
+        "evidence": "readiness_vllm/stage10_serial_burst/vllm_prefill_burst_benchmark.json",
+        "prefix_cache": {
+          "reset": true,
+          "queries": 4096.0,
+          "hits": 0.0,
+          "hit_rate": 0.0
+        }
+      },
+      "candidate": {
+        "config": {
+          "prompt_len": 128,
+          "output_len": 32,
+          "num_requests": 32,
+          "concurrency": 32,
+          "temperature": 0.0,
+          "generation_config_mode": "explicit",
+          "dataset_name": "random",
+          "ignore_eos": true
+        },
+        "completed_requests": 32,
+        "ttft_ms": {
+          "p50": 589.3030564766377,
+          "p99": 1158.4850129811093,
+          "mean": 854.1326020349516
+        },
+        "tpot_ms": {
+          "p50": 48.747753046618236,
+          "p99": 49.92848900015346,
+          "mean": 40.587534864419965
+        },
+        "itl_ms": {
+          "p50": 29.779016505926847,
+          "p99": 516.7020830151159,
+          "mean": 40.587534864419965
+        },
+        "output_throughput_tok_per_s": 481.0708280887747,
+        "evidence": "readiness_vllm/stage10_grouped_burst_v2/vllm_prefill_burst_benchmark.json",
+        "prefix_cache": {
+          "reset": true,
+          "queries": 4096.0,
+          "hits": 0.0,
+          "hit_rate": 0.0
+        }
+      },
+      "ratios": {
+        "ttft_ratio_p99": 0.44098270696246356,
+        "ttft_ratio_mean": 0.4310107247232627,
+        "ttft_ratio_p50": 0.4160046440896201
+      }
+    },
+    "ci_serving_burst": {
+      "before": {
+        "config": {
+          "prompt_len": 100,
+          "output_len": 100,
+          "num_requests": 32,
+          "concurrency": null,
+          "temperature": 0.0,
+          "generation_config_mode": "explicit",
+          "dataset_name": "random",
+          "ignore_eos": true
+        },
+        "completed_requests": 32,
+        "ttft_ms": {
+          "p50": 1799.4129350408912,
+          "p99": 2655.3975933615584,
+          "mean": 2065.012946346542
+        },
+        "tpot_ms": {
+          "p50": 40.208188843363054,
+          "p99": 40.59831390053862,
+          "mean": 37.5946901450986
+        },
+        "itl_ms": {
+          "p50": 29.724726045969874,
+          "p99": 87.47110165888442,
+          "mean": 37.5946901450986
+        },
+        "output_throughput_tok_per_s": 551.2966018106092,
+        "evidence": "readiness_vllm/stage10_serial_burst/vllm_ci_serving_benchmark.json"
+      },
+      "candidate": {
+        "config": {
+          "prompt_len": 100,
+          "output_len": 100,
+          "num_requests": 32,
+          "concurrency": null,
+          "temperature": 0.0,
+          "generation_config_mode": "explicit",
+          "dataset_name": "random",
+          "ignore_eos": true
+        },
+        "completed_requests": 32,
+        "ttft_ms": {
+          "p50": 718.2217845111154,
+          "p99": 1188.19192233379,
+          "mean": 877.821669288096
+        },
+        "tpot_ms": {
+          "p50": 36.12583886298135,
+          "p99": 36.49871896603145,
+          "mean": 34.60366548163372
+        },
+        "itl_ms": {
+          "p50": 29.727373039349914,
+          "p99": 83.76546198152937,
+          "mean": 34.60366548163372
+        },
+        "output_throughput_tok_per_s": 740.3553749698643,
+        "evidence": "readiness_vllm/stage10_grouped_burst_v2/vllm_ci_serving_benchmark.json"
+      }
+    }
+  },
+  "primary_target_after": null,
+  "missing_reasons": {
+    "primary_target_after": "Final default4096/128/B1/C1 not yet run",
+    "device_time_and_roofline": "Serving profiling prohibited"
+  },
+  "final_default": {
+    "burst_source": "models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_final_full/performance/vllm_prefill_burst_benchmark.json",
+    "burst_mean_ttft_ms": 857.8267864359077,
+    "burst_p99_ttft_ms": 1160.5112715973519,
+    "serial_reference": {
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_serial_burst/vllm_prefill_burst_benchmark.json",
+      "serial_config": {
+        "prompt_len": 128,
+        "output_len": 32,
+        "num_requests": 32,
+        "concurrency": 32
+      },
+      "config_matches": true,
+      "serial_ttft_ms": {
+        "p50": 1416.578071541153,
+        "p99": 2627.053158072522,
+        "mean": 1981.6968651612115
+      },
+      "ttft_ratio_p99": 0.4417540117265168,
+      "ttft_ratio_mean": 0.43287487683749415,
+      "ttft_ratio_p50": 0.4200334544994612,
+      "serial_prefix_cache": {
+        "reset": true,
+        "queries": 4096.0,
+        "hits": 0.0,
+        "hit_rate": 0.0
+      }
+    },
+    "ci_source": "models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_final_full/performance/vllm_ci_serving_benchmark.json",
+    "ci_mean_ttft_ms": 849.7586314661021,
+    "ci_output_tokens_per_second": 741.3648645863597
+  }
+}

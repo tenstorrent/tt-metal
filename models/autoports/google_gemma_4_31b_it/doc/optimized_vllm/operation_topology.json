@@ -1,0 +1,31 @@
+{
+  "scope": "serving orchestration, selected decoder math unchanged",
+  "rows": [
+    {
+      "sequence": "for each admitted row: embedding ->60 layers(norm/QKV/attention/cache/out/MLP) -> terminal",
+      "repeated_work": "full dense weight pass per request",
+      "candidate": "prepared equal-padded batched dense pass with independent attention/cache rows",
+      "constraints": "Exact selected datatype-sweep runtime policy; exact batched/solo logits and valid KV; persistent allocations prepared before traces",
+      "status": "Default-on cap1024 path passes full60 exactness, tracked replay, watcher, full serving, cold-burst and single-user regression gates"
+    },
+    {
+      "sequence": "resident token/position -> model trace -> sampler trace -> deferred token read",
+      "repeated_work": "no steady unchanged page-table copies; explicit scheduler reload only",
+      "candidate": "retain existing nonblocking traced device-feedback path",
+      "constraints": "vLLM async-scheduling and selective readback contract",
+      "status": "Final full60 sync/async mixed68-request comparison and stale-input controls pass; measured B1 decode matches baseline and selected full-model speed"
+    },
+    {
+      "sequence": "wide B32x128 hidden norm uses generic reduction above1024rows",
+      "candidate": "split only four named hidden norms into <=1024rows; keep wide dense projections",
+      "constraints": "preserve solo reduction family and BF16 rounding; avoid oversized L1 normalization",
+      "status": "experimental repair restores reduced exactness; overlapping ABBA timings show no clear gain over bounded groups; no production norm change",
+      "evidence": [
+        "norm_discriminator_b32.json",
+        "probe_b32_bounded_norm.json",
+        "autofix_wide.md"
+      ]
+    }
+  ],
+  "profiling": "prohibited in serving; existing stage07/08 evidence supplies decoder context"
+}

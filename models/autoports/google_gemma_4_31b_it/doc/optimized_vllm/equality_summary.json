@@ -1,0 +1,77 @@
+{
+  "2": {
+    "status": "pass",
+    "cases": 22,
+    "passed": 22,
+    "row_comparisons": 44,
+    "all_32_token_continuations_equal": true,
+    "programs": 2894,
+    "trace_ids": [
+      "MeshTraceId(0)",
+      "MeshTraceId(1)",
+      "MeshTraceId(2)"
+    ],
+    "layers": "0,5",
+    "evidence": "equality_b2_all.json"
+  },
+  "4": {
+    "status": "pass",
+    "cases": 22,
+    "passed": 22,
+    "row_comparisons": 88,
+    "all_32_token_continuations_equal": true,
+    "programs": 2894,
+    "trace_ids": [
+      "MeshTraceId(0)",
+      "MeshTraceId(1)",
+      "MeshTraceId(2)"
+    ],
+    "layers": "0,5",
+    "evidence": "equality_b4_all.json"
+  },
+  "8": {
+    "status": "pass",
+    "cases": 22,
+    "passed": 22,
+    "row_comparisons": 176,
+    "all_32_token_continuations_equal": true,
+    "programs": 2894,
+    "trace_ids": [
+      "MeshTraceId(0)",
+      "MeshTraceId(1)",
+      "MeshTraceId(2)"
+    ],
+    "layers": "0,5",
+    "evidence": "equality_b8_all.json"
+  },
+  "32": {
+    "status": "pass",
+    "cases": 22,
+    "passed": 22,
+    "row_comparisons": 704,
+    "all_32_token_continuations_equal": true,
+    "programs": 3091,
+    "trace_ids": [
+      "MeshTraceId(0)",
+      "MeshTraceId(1)",
+      "MeshTraceId(2)"
+    ],
+    "layers": "0,5",
+    "evidence": "watcher_b32_final.json",
+    "watcher": "compute10ms; documentedETHinstrumentationcapacityexclusion"
+  },
+  "full60_chat": {
+    "source": "full60_chat_b32.json",
+    "status": "pass",
+    "cases": 10,
+    "row_comparisons": 320,
+    "lengths": [
+      5,
+      33,
+      96,
+      127,
+      128
+    ],
+    "scope": "all60 layers, both row orders; correctness fixture context2048; no performance claim"
+  }
+}

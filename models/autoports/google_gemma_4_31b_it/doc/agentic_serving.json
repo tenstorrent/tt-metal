@@ -11,8 +11,8 @@
     16,
     32
   ],
-  "stage": "09-vllm",
-  "status": "Stage09 validated: full60 B1/8/16/32, sampling, mixed-shape traces, growing multi-turn prefix reuse, headline benchmark and cleanup pass; independent clean-pass.",
+  "stage": "10-optimized-vllm",
+  "status": "complete; independent review clean-pass",
   "context_evidence": "context_contract.json",
   "prefix_state_contract": "full_model/README.md",
   "functional_measurements": [
@@ -1455,7 +1455,7 @@
       "final_context_tokens": 32768,
       "late_hit_fraction": 0.9965343876604676,
       "pool_bound": false,
-      "elapsed_seconds": 343.08076105907094,
+      "elapsed_seconds": 345.1835248179268,
       "preemptions": 0.0,
       "context_schedule": [
         4096,
@@ -1479,20 +1479,208 @@
     "prefilled_to_final_context_ratio": 1.0078125,
     "final_round_hit_fraction": 0.9971118252450881,
     "memory_endpoint_bytes_per_device": {
-      "min": 32248072704,
-      "max": 32248072704,
+      "min": 32321636864,
+      "max": 32321636864,
       "snapshots": 1040
     },
-    "evidence": "readiness_vllm/growing_traffic.json",
-    "mixed_shape_evidence": "readiness_vllm/mixed_async.json",
-    "allocation_tracking_evidence": "readiness_vllm/b32_pool36896_tracked/mixed_sync.json",
+    "evidence": "readiness_vllm/stage10_final_load/growing_traffic.json",
+    "mixed_shape_evidence": "readiness_vllm/stage10_final_full/mixed_async.json",
+    "allocation_tracking_evidence": "readiness_vllm/stage10_sync_tracked/mixed_sync.json",
     "limitation": "Synthetic raw-continuation cache stress; not a chat-quality or headline performance benchmark. Endpoint allocator readings do not measure transient high-water use.",
     "sampling_steps": {
       "prefill:host_compatibility": 476,
       "prefill:device": 44,
       "decode:device": 287
     },
-    "regime": "Final full60 B32 async server with token range audit enabled"
+    "regime": "Final full60 B32 default-on batched prefill, async scheduler, context262144, selected head_bfp4; identical runtime hashes across final servers",
+    "prefill_by_length": {
+      "measurements": [
+        {
+          "input_tokens": 4096,
+          "ttft_ms": 871.7964639654383,
+          "input_tokens_per_second": 4698.344360527692,
+          "status": "pass",
+          "prefix_cache_bypass": "reset while idle plus unique initial prefix"
+        },
+        {
+          "input_tokens": 32768,
+          "ttft_ms": 9063.113720039837,
+          "input_tokens_per_second": 3615.5344633429104,
+          "status": "pass",
+          "prefix_cache_bypass": "reset while idle plus unique initial prefix"
+        }
+      ],
+      "server_max_num_seqs": 32,
+      "request_concurrency": 1,
+      "decode_during_working_set_prefill": {
+        "input_tokens": 32768,
+        "concurrent_decode_requests": 31,
+        "window_seconds": 9.734427768969908,
+        "other_delivered_tokens": 279,
+        "other_output_tokens_per_second": 28.66116084289602,
+        "all_anchors_live_through_window": true,
+        "timing_boundary": "long request submit through first token, including scheduler wait"
+      },
+      "evidence": "readiness_vllm/stage10_final_load_v2/load_costs.json",
+      "timing": "HTTP TTFT/input rate, not device time; typical context4096 shares the4096 row."
+    },
+    "host_contention": {
+      "idle": {
+        "start_seconds": 59.68195554090198,
+        "end_seconds": 67.95354765094817,
+        "seconds": 8.271592110046186,
+        "delivered_tokens": 8131,
+        "output_tokens_per_second": 983.0030170521306,
+        "logged_decode_steps": 254,
+        "logged_prefill_steps": 0,
+        "active_rows": [
+          15,
+          32
+        ],
+        "engine_cpu_seconds": 47.61999999999989,
+        "engine_host_cpu_ms_per_decode_step": 187.4803149606295,
+        "log_byte_range": [
+          293925,
+          341120
+        ],
+        "valid_decode_only_cpu_window": true,
+        "batch": 32,
+        "input_tokens": 128,
+        "output_tokens": 256,
+        "completed_requests": 32
+      },
+      "stress_processes": 16,
+      "inherited_cpu_affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "stress_mode": "one unpinned busy process per available CPU",
+      "busy": {
+        "start_seconds": 77.90612264489755,
+        "end_seconds": 90.39540010190103,
+        "seconds": 12.489277457003482,
+        "delivered_tokens": 8123,
+        "output_tokens_per_second": 650.3979135674458,
+        "logged_decode_steps": 254,
+        "logged_prefill_steps": 0,
+        "active_rows": [
+          15,
+          32
+        ],
+        "engine_cpu_seconds": 21.1400000000001,
+        "engine_host_cpu_ms_per_decode_step": 83.22834645669332,
+        "log_byte_range": [
+          348311,
+          395326
+        ],
+        "valid_decode_only_cpu_window": true,
+        "batch": 32,
+        "input_tokens": 128,
+        "output_tokens": 256,
+        "completed_requests": 32
+      },
+      "evidence": "readiness_vllm/stage10_final_load_v2/load_costs.json",
+      "stress_workers_cleaned": true,
+      "metric_note": "Engine host CPU is summed process CPU across all threads. Lower CPU/step under contention is not improved wall latency; measured delivery throughput falls. HTTP windows include boundary stream events."
+    },
+    "validated_batches": [
+      1,
+      8,
+      16,
+      32
+    ]
   },
-  "datatype_sweep_stage_review": "datatype_sweep/stage_review.md"
+  "datatype_sweep_stage_review": "datatype_sweep/stage_review.md",
+  "optimized_vllm_ledger": {
+    "scope": "real full60 vLLM served shared cache; per-device mirrored DRAM allocator reservations",
+    "context": 262144,
+    "batch": 32,
+    "physical_pool_blocks": 36896,
+    "trace_region_bytes_per_device": 134217728,
+    "trace_region_note": "Already excluded from usable allocator DRAM; do not subtract twice",
+    "arms": {
+      "before": {
+        "allocator": {
+          "before_serving_cache": {
+            "allocated_bytes": 6419826688,
+            "usable_bytes": 34044513280,
+            "free_bytes": 27624686592,
+            "largest_contiguous_free_per_bank": 3431885696
+          },
+          "after_serving_cache": {
+            "allocated_bytes": 32174163968,
+            "usable_bytes": 34044513280,
+            "free_bytes": 1870349312,
+            "largest_contiguous_free_per_bank": 220457856
+          },
+          "after_serving_prepare": {
+            "allocated_bytes": 32248072704,
+            "usable_bytes": 34044513280,
+            "free_bytes": 1796440576,
+            "largest_contiguous_free_per_bank": 213889920
+          }
+        },
+        "new_batched_input_bytes": 0,
+        "programs_after_prepare": 2354,
+        "evidence": "readiness_vllm/stage10_serial_burst/server.log"
+      },
+      "candidate": {
+        "allocator": {
+          "before_serving_cache": {
+            "allocated_bytes": 6419826688,
+            "usable_bytes": 34044513280,
+            "free_bytes": 27624686592,
+            "largest_contiguous_free_per_bank": 3431885696
+          },
+          "after_serving_cache": {
+            "allocated_bytes": 32174163968,
+            "usable_bytes": 34044513280,
+            "free_bytes": 1870349312,
+            "largest_contiguous_free_per_bank": 220457856
+          },
+          "after_serving_prepare": {
+            "allocated_bytes": 32321636864,
+            "usable_bytes": 34044513280,
+            "free_bytes": 1722876416,
+            "largest_contiguous_free_per_bank": 211592064
+          }
+        },
+        "new_batched_input_bytes": 55181312,
+        "programs_after_prepare": 3180,
+        "evidence": "readiness_vllm/stage10_grouped_burst_v2/server.log"
+      }
+    },
+    "candidate_incremental_prepared_bytes": 73564160,
+    "retained_transient_budget_bytes": 805306368,
+    "free_after_transient_budget_bytes": 917570048,
+    "limitations": [
+      "Persistent allocator measurements and analytical transient bound, not a new full-stack peak. See transient_bound_review.",
+      "Batched input accounting excludes program-cache/runtime allocations; total prepared allocator delta includes them."
+    ],
+    "transient_bound_review": {
+      "scope": "Analytical carry-forward, not a new device/full-stack peak",
+      "basis": "doc/datatype_sweep/memory_plan.json temporary_workspace",
+      "prior_reduced_measured_peak_bytes": 560168960,
+      "retained_logits_bound_bytes": 130023424,
+      "additional_extraction_allowance_bytes": 22708224,
+      "additional_extraction_basis": "Conservatively allow two full1024x5376 BF16 buffers plus two32x5376 BF16 buffers per device for untilize/row selection; bank alignment remains far inside residual slack. Actual embedding selection is smaller.",
+      "combined_bound_bytes": 712900608,
+      "budget_slack_bytes": 92405760,
+      "shape_basis": "Group total rows<=1024; dense/norm activation volumes no larger than prepared solo1024. Attention uses at most128 keys within each short row. Terminal has<=32 logical rows, same padded height as solo. Per-row logits retained across groups are bounded by the existing31-extra-tile allowance. Persistent inputs/program state are already in allocator endpoints."
+    }
+  }
 }

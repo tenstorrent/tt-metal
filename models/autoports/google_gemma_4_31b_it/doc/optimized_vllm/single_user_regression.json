@@ -1,0 +1,74 @@
+{
+  "before": {
+    "config": {
+      "prompt_len": 128,
+      "output_len": 128,
+      "num_requests": 1,
+      "concurrency": 1,
+      "temperature": 0.0,
+      "generation_config_mode": "explicit",
+      "dataset_name": "random",
+      "ignore_eos": true
+    },
+    "completed_requests": 1,
+    "total_input_tokens": 128.0,
+    "total_output_tokens": 128.0,
+    "ttft_ms": {
+      "p50": 111.0075090546161,
+      "p99": 111.0075090546161,
+      "mean": 111.0075090546161
+    },
+    "tpot_ms": {
+      "p50": 25.695859967899604,
+      "p99": 25.695859967899604,
+      "mean": 25.695859967899604
+    },
+    "itl_ms": {
+      "p50": 25.650020921602845,
+      "p99": 31.320490732323375,
+      "mean": 25.695859967899604
+    },
+    "output_throughput_tok_per_s": 37.92745264335605,
+    "mean_per_request_decode_tps": 38.91677496877878,
+    "evidence": "models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_serial_128/vllm_benchmark.json"
+  },
+  "candidate": {
+    "config": {
+      "prompt_len": 128,
+      "output_len": 128,
+      "num_requests": 1,
+      "concurrency": 1,
+      "temperature": 0.0,
+      "generation_config_mode": "explicit",
+      "dataset_name": "random",
+      "ignore_eos": true
+    },
+    "completed_requests": 1,
+    "total_input_tokens": 128.0,
+    "total_output_tokens": 128.0,
+    "ttft_ms": {
+      "p50": 109.67122006695718,
+      "p99": 109.67122006695718,
+      "mean": 109.67122006695718
+    },
+    "tpot_ms": {
+      "p50": 25.684934047116773,
+      "p99": 25.684934047116773,
+      "mean": 25.684934047116773
+    },
+    "itl_ms": {
+      "p50": 25.64445696771145,
+      "p99": 31.22566025471314,
+      "mean": 25.684934047116773
+    },
+    "output_throughput_tok_per_s": 37.95871374100542,
+    "mean_per_request_decode_tps": 38.93332948278501,
+    "evidence": "models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_candidate_b1_128/vllm_benchmark.json"
+  },
+  "ratios": {
+    "ttft_p50": 0.9879621748200704,
+    "tpot_mean": 0.9995747983995679
+  },
+  "pass": true,
+  "scope": "B1/C1 128 input128 output regression, max_model_len262144, explicitgreedy, selectedpolicy, mesh1x4, async andprefixcaching; candidate env1 before defaultflip; no behavior change forB1"
+}

@@ -1,20 +1,11 @@
 # Gemma 4 31B text autoport
 
-Full-model TP4 token-out autoregressive generation on four local Blackhole p300c ASICs, **4096 input / 128 generated tokens**. Batch 1 is first; values are medians of three warmed requests with diagnostics disabled. Decode includes model and sampling traces, device token feedback and caller token readback.
+**vLLM serving,4096 input /128 generated /batch1 /concurrency1: TTFT754.43 ms; decode35.32 tokens/s/user.** This is full 60-layer TT plugin serving through this run's autoport, with context 262144, mesh1x4, selected head_bfp4 precision, prefix caching and async device sampling. One measured request per arm; decode is1000/meanTPOT. All required serving profiles pass; independent stage review returned `clean-pass` ([report](doc/optimized_vllm/stage_review.md)).
 
-| Batch / concurrent requests | TTFT (ms) | Decode tokens/s/user | Decode ms/token | Evidence |
-|---:|---:|---:|---:|---|
-| 1 | 659.37 | 34.22 | 29.23 | [measurement](doc/full_model/performance_b1.json) |
-| 32 (agent target) | 20677.09 | 23.18 | 43.14 | [measurement](doc/full_model/performance_b32.json) |
-| 16 | 10327.03 | 29.13 | 34.33 | [measurement](doc/full_model/performance_b16.json) |
-| 8 | 5162.31 | 32.31 | 30.95 | [measurement](doc/full_model/performance_b8.json) |
+Short batched prefill reduces cold128-input/32-output,C32 meanTTFT from 1981.70 ms to 857.83 ms while preserving the128/128,B1/C1 latency gate. Secondary local CI-shaped100/100/32 capacity throughput improves from 551.30 to 741.36outputtokens/s; it is not headline decode speed or a remoteCI result.
 
-The separate AIME24 teacher-forcing workload is 161 input / 100 output tokens: **94.56 ms TTFT and 37.38 tokens/s/user**. It includes on-device sampling and explicit reference-token feedback; it is not logits-only timing or the headline workload.
+HF/tokenizer revision:`842da3794eaa0b77d5f08bae87a17459d91ff475`. This is a new text-only implementation built from the HF reference and generic TTNN operations. Non-aligned prompts, chunked continuation, shared vLLM KV ownership and allocator-driven page growth remain supported.
 
-Prefill top-1/5/100 agreement is **94% / 100% / 100%**; decode is **93% / 100% / 100%**, over all 100 positions of one pinned AIME24 chat reference. These are token-agreement results, not a contest score.
+The operator-authorized served default is top_k=32, retaining checkpoint temperature 1/top_p0.95. Stock intermediate-containing prefill and explicitly requested host-only features use documented host compatibility; measured decode and eligible all-final prefill stay on the canonical traced device sampler. Qualitative controls retain the selected-policy prose/language and256-token output-cap limitations described in the report.
 
-The full stack preserves **262144-token context**, including non-aligned prompts. The target pool holds 32 concurrent 32768-token working sets. Full-model and allocation-tracked reduced checks cover batches 1/8/16/32, mixed prompts, inactive slots, remapped pages, deterministic logits and on-device split sampling.
-
-HF and tokenizer revision: `842da3794eaa0b77d5f08bae87a17459d91ff475`. This new text-only implementation preserves this run's optimized multichip decoder policy and layout. Stochastic top-k supports 1–32 candidates; explicit host sampling is a separate compatibility mode.
-
-[Full-model report](doc/full_model/README.md), [qualitative review](doc/full_model/qualitative_verdict.md), [independent review](doc/full_model/stage_review.md), [work log and commits](doc/full_model/work_log.md). No vLLM integration is included in this stage.
+[Optimized vLLM report](doc/optimized_vllm/README.md), [metrics](doc/optimized_vllm/perf_summary.json), [work log](doc/optimized_vllm/work_log.md), [context contract](doc/context_contract.json), [serving contract](doc/full_model/serving_contract.json), [datatype selection](doc/datatype_sweep/README.md), [historical full-model report](doc/full_model/README.md). No serving profiler collection or pushes.

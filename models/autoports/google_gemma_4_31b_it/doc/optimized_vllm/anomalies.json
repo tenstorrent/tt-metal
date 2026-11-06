@@ -1,0 +1,70 @@
+[
+  {
+    "observed": "Wide B32x128 batched logits and first-layer KV differ from solo",
+    "evidence": [
+      "probe_b32_wide.json",
+      "norm_discriminator_b32.json",
+      "probe_b32_bounded_norm.json"
+    ],
+    "affected_path": "probe-only groups above1024physicalrows",
+    "investigation": "Identical embeddings; wide generic hidden norms differ, bounded sharded norms equal. Replacing only those four norms in experiment restores all logits/KV.",
+    "resolution": "controlled: production candidate capped1024; experimental wide repair is not enabled"
+  },
+  {
+    "observed": "Watcher Ethernet-instrumented kernel exceeds firmware capacity",
+    "evidence": [
+      "watcher_b32_all.log",
+      "watcher_b32_compute.json",
+      "watcher_b32_final.json"
+    ],
+    "affected_path": "watcher instrumentation",
+    "investigation": "29264required vs26624available; documented ETH exclusion keeps compute assertions enabled;22cases passed.",
+    "resolution": "controlled: documentedETHcapacityexclusion; finalsource22casecompute-watcherpasses"
+  },
+  {
+    "observed": "Tracked positive-control cleanup retained Tilize program buffer",
+    "evidence": [
+      "tracked_b32_mixed.json",
+      "tracked_b32_control.json"
+    ],
+    "affected_path": "test-only deliberate allocation",
+    "investigation": "Use ROW_MAJOR uint32 instead of TILE upload so deliberate allocation adds no persistent tilizeprogram; unsafeallocation detected, deletion permits cleanreplay.",
+    "resolution": "fixed in test; tracked positive control passes"
+  },
+  {
+    "observed": "JSON serialization of vLLM numpy.int64 prompt lengths kills first candidate server",
+    "evidence": [
+      "../../readiness_vllm/stage10_grouped_burst/server.log",
+      "../../readiness_vllm/stage10_grouped_burst_v2/vllm_run_summary.json"
+    ],
+    "affected_path": "new batched prefill diagnostic event",
+    "investigation": "Explicit Pythonint fields; generator acceptance now supplies NumPy lengths likevLLM.",
+    "resolution": "fixed: paired full serving v2 exits0, all32 CI and burst requests complete"
+  },
+  {
+    "observed": "Chat fixture treated tokenizer dictionary length as token count",
+    "evidence": [
+      "tracked_b32_chat_final.json",
+      "tracked_b32_chat_v2.json"
+    ],
+    "affected_path": "test-only rendered chat construction; zero workload cases executed",
+    "investigation": "Explicit return_dict=False; pinned tokenizer host check returns2824 integer token IDs; hooks pass",
+    "resolution": "fixed: tracked mixedchat v2 passes12cases pluspositivecontrol"
+  },
+  {
+    "observed_anomaly": "Growing-context client ImportError before any HTTP request",
+    "evidence": "readiness_vllm/stage10_final_full/growing.log",
+    "affected_path": "Private stage orchestration invocation, not model/runtime",
+    "control_or_comparison": "Module uses a package-relative import; direct-file invocation lacks package context",
+    "investigation": "Inspected traceback and import; corrected command to python -m models.autoports.google_gemma_4_31b_it.tests.check_agentic_serving_traffic",
+    "resolution": "Fixed: corrected module invocation passed all160 growing requests; see readiness_vllm/stage10_final_load/growing_traffic.json"
+  },
+  {
+    "observed_anomaly": "HTTP load client CPU saturation and token-read backlog after server requests completed",
+    "evidence": "readiness_vllm/stage10_final_load/load_costs.json; optimized_vllm/load_client_discriminator.json",
+    "affected_path": "Load diagnostic per-token validation, not adapter/model",
+    "control_or_comparison": "Server had zero running/waiting requests while client used one CPU; no stress workers had been created. Per-token len(tokenizer) rebuilds vocabulary.",
+    "investigation": "Cache vocabulary size once, matching the established mixed-state client. Interrupted only owned HTTP client after server idle; runner cleaned server.",
+    "resolution": "Fixed: corrected client passes all98requests, clean decode CPU windows, no missing evidence, all stress workers cleaned. Prior attempt discarded."
+  }
+]

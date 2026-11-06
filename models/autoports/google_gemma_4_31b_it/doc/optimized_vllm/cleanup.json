@@ -1,0 +1,18 @@
+{
+  "status": "pass",
+  "observed_utc": "2026-11-06T02:25:06.315025+00:00",
+  "device_owner_pids": [],
+  "owned_server_or_stress_pids": [],
+  "stress_workers_cleaned": true,
+  "final_runtime_source_hashes_match_across": [
+    "stage10_sync_tracked",
+    "stage10_final_full",
+    "stage10_final_load",
+    "stage10_final_load_v2",
+    "stage10_final_b1",
+    "stage10_final_b8",
+    "stage10_final_b16"
+  ],
+  "plugin_local_commit": "90f33d2e392eb8bfda6948df9dabe712a724cb1a",
+  "plugin_runtime_base": "ca7a18246e4111629ed6cb4a7d1192002749fccf"
+}

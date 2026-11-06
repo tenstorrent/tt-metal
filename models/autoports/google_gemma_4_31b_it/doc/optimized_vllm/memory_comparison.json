@@ -1,0 +1,78 @@
+{
+  "scope": "real full60 vLLM served shared cache; per-device mirrored DRAM allocator reservations",
+  "context": 262144,
+  "batch": 32,
+  "physical_pool_blocks": 36896,
+  "trace_region_bytes_per_device": 134217728,
+  "trace_region_note": "Already excluded from usable allocator DRAM; do not subtract twice",
+  "arms": {
+    "before": {
+      "allocator": {
+        "before_serving_cache": {
+          "allocated_bytes": 6419826688,
+          "usable_bytes": 34044513280,
+          "free_bytes": 27624686592,
+          "largest_contiguous_free_per_bank": 3431885696
+        },
+        "after_serving_cache": {
+          "allocated_bytes": 32174163968,
+          "usable_bytes": 34044513280,
+          "free_bytes": 1870349312,
+          "largest_contiguous_free_per_bank": 220457856
+        },
+        "after_serving_prepare": {
+          "allocated_bytes": 32248072704,
+          "usable_bytes": 34044513280,
+          "free_bytes": 1796440576,
+          "largest_contiguous_free_per_bank": 213889920
+        }
+      },
+      "new_batched_input_bytes": 0,
+      "programs_after_prepare": 2354,
+      "evidence": "readiness_vllm/stage10_serial_burst/server.log"
+    },
+    "candidate": {
+      "allocator": {
+        "before_serving_cache": {
+          "allocated_bytes": 6419826688,
+          "usable_bytes": 34044513280,
+          "free_bytes": 27624686592,
+          "largest_contiguous_free_per_bank": 3431885696
+        },
+        "after_serving_cache": {
+          "allocated_bytes": 32174163968,
+          "usable_bytes": 34044513280,
+          "free_bytes": 1870349312,
+          "largest_contiguous_free_per_bank": 220457856
+        },
+        "after_serving_prepare": {
+          "allocated_bytes": 32321636864,
+          "usable_bytes": 34044513280,
+          "free_bytes": 1722876416,
+          "largest_contiguous_free_per_bank": 211592064
+        }
+      },
+      "new_batched_input_bytes": 55181312,
+      "programs_after_prepare": 3180,
+      "evidence": "readiness_vllm/stage10_grouped_burst_v2/server.log"
+    }
+  },
+  "candidate_incremental_prepared_bytes": 73564160,
+  "retained_transient_budget_bytes": 805306368,
+  "free_after_transient_budget_bytes": 917570048,
+  "limitations": [
+    "Persistent allocator measurements and analytical transient bound, not a new full-stack peak. See transient_bound_review.",
+    "Batched input accounting excludes program-cache/runtime allocations; total prepared allocator delta includes them."
+  ],
+  "transient_bound_review": {
+    "scope": "Analytical carry-forward, not a new device/full-stack peak",
+    "basis": "doc/datatype_sweep/memory_plan.json temporary_workspace",
+    "prior_reduced_measured_peak_bytes": 560168960,
+    "retained_logits_bound_bytes": 130023424,
+    "additional_extraction_allowance_bytes": 22708224,
+    "additional_extraction_basis": "Conservatively allow two full1024x5376 BF16 buffers plus two32x5376 BF16 buffers per device for untilize/row selection; bank alignment remains far inside residual slack. Actual embedding selection is smaller.",
+    "combined_bound_bytes": 712900608,
+    "budget_slack_bytes": 92405760,
+    "shape_basis": "Group total rows<=1024; dense/norm activation volumes no larger than prepared solo1024. Attention uses at most128 keys within each short row. Terminal has<=32 logical rows, same padded height as solo. Per-row logits retained across groups are bounded by the existing31-extra-tile allowance. Persistent inputs/program state are already in allocator endpoints."
+  }
+}

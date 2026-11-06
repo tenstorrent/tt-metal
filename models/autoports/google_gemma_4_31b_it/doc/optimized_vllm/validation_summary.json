@@ -1,0 +1,143 @@
+{
+  "status": "complete; independent review clean-pass",
+  "full60_batched_equality": {
+    "status": "pass",
+    "cases": 10,
+    "rows": 320,
+    "source": "full60_chat_b32.json"
+  },
+  "reduced_boundary_equality": {
+    "status": "pass",
+    "batches": [
+      2,
+      4,
+      8,
+      32
+    ],
+    "lengths": [
+      5,
+      31,
+      32,
+      33,
+      127,
+      128,
+      129,
+      257,
+      640,
+      1000,
+      1024
+    ],
+    "source": "equality_summary.json"
+  },
+  "compute_watcher": {
+    "status": "pass",
+    "cases": 22,
+    "source": "watcher_b32_final.json",
+    "limitation": "ETH watcher exceeds firmware capacity; documented scoped exclusion, compute assertions active."
+  },
+  "allocation_guard": {
+    "status": "pass",
+    "source": "tracked_b32_chat_v2.json",
+    "positive_control": true,
+    "program_cache_excluded": false
+  },
+  "adapter_stale_state": {
+    "status": "pass",
+    "source": "adapter_state_current.json"
+  },
+  "sampling": {
+    "status": "pass",
+    "passed": 76,
+    "skipped": 75,
+    "failed": 0,
+    "test_id_outcomes_equal_completed_stage09": true,
+    "source": "readiness_vllm/stage10_final_full/checks/sampling_tests.log",
+    "control": "readiness_vllm/final_full/sampling_tests.log",
+    "plugin_commit": "90f33d2e392eb8bfda6948df9dabe712a724cb1a",
+    "runtime_base": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+    "new_skips": [],
+    "warnings": "Two SWIG type deprecations; no correctness or device health warning."
+  },
+  "qualitative": {
+    "status": "reviewed",
+    "source": "readiness_vllm/stage10_final_full/qualitative_review.json",
+    "outputs": 12,
+    "greedy_equal_stage09": 6
+  },
+  "prefix_cache": {
+    "status": "pass",
+    "source": "readiness_vllm/stage10_final_full/checks/prefix_cache_check.json"
+  },
+  "mixed_async_sync": {
+    "status": "pass",
+    "requests": 68,
+    "source": "readiness_vllm/stage10_final_full/mixed_async.json",
+    "control": "readiness_vllm/stage10_sync_tracked/mixed_sync.json"
+  },
+  "burst": {
+    "status": "pass",
+    "mean_ratio": 0.43287487683749415,
+    "p99_ratio": 0.4417540117265168,
+    "source": "readiness_vllm/stage10_final_full/performance/vllm_prefill_burst_benchmark.json"
+  },
+  "single_user_128_regression": {
+    "status": "pass",
+    "source": "single_user_regression.json"
+  },
+  "headline_4096": {
+    "status": "pass",
+    "source": "readiness_vllm/stage10_final_b1/vllm_benchmark.json",
+    "configuration_matches_before": true
+  },
+  "growing_and_host_load": {
+    "status": "pass",
+    "growing_requests": 160,
+    "load_requests": 98,
+    "sources": [
+      "readiness_vllm/stage10_final_load/growing_traffic.json",
+      "readiness_vllm/stage10_final_load_v2/load_costs.json"
+    ],
+    "stress_workers_cleaned": true
+  },
+  "b8_b16": {
+    "status": "pass",
+    "sources": [
+      "readiness_vllm/stage10_final_b8",
+      "readiness_vllm/stage10_final_b16"
+    ]
+  },
+  "stage_checks": {
+    "command": "TT_MODEL_BRINGUP_ROOT/prompts/model_bringup_multigoal/10-optimized-vllm.check.sh",
+    "exit_status": 1,
+    "classification": "advisory_only",
+    "components": {
+      "degenerate_output": "pass",
+      "context_contract": "pass262144",
+      "prefill_features_required_burst": "pass",
+      "agentic_serving": "two documented structural advisories; no missing measurements or critical errors"
+    },
+    "advisories": [
+      {
+        "item": "Tied embedding and vocabulary projection have two physical representations",
+        "basis": "BF16 row-major hidden-sharded lookup and BFP4 tiled transposed vocabulary-sharded head cannot alias; selected policy and inventory remain measured."
+      },
+      {
+        "item": "KV pool uses a fixed synthetic budget",
+        "basis": "Pinned worker asks before weights load; model maps normalized global64/sliding32 groups, and full served allocator fit plus32-conversation growing reuse validate the budget. Runtime interface unchanged."
+      }
+    ],
+    "evidence": "stage_check.log",
+    "hooks": {
+      "status": "pass",
+      "exit_status": 0,
+      "evidence": "hooks.log"
+    }
+  },
+  "independent_review": {
+    "verdict": "clean-pass",
+    "required_work": [],
+    "source": "stage_review.md"
+  },
+  "path_basis": "Paths beginning readiness_vllm resolve from model root; other relative paths resolve from doc/optimized_vllm.",
+  "cleanup": "cleanup.json"
+}

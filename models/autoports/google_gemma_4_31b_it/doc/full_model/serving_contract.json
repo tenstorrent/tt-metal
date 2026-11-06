@@ -45,35 +45,35 @@
       "kind": "call",
       "status": "supported",
       "notes": "Reduced real layers0/5 stale tokens/current positions and page-only refresh preserve resident device state; full mixed allocator growth additionally exercised.",
-      "evidence": "readiness_vllm/adapter_state.json"
+      "evidence": "doc/optimized_vllm/adapter_state_current.json"
     },
     {
       "item": "read_decode_output",
       "kind": "call",
       "status": "supported",
       "notes": "Minimal deferred sampled-token read with explicit event synchronization.",
-      "evidence": "readiness_vllm/adapter_state.json"
+      "evidence": "doc/optimized_vllm/adapter_state_current.json"
     },
     {
       "item": "process_decode_output_host",
       "kind": "call",
       "status": "supported",
       "notes": "Formats deferred host output without feeding it back in steady device decode.",
-      "evidence": "readiness_vllm/adapter_state.json"
+      "evidence": "doc/optimized_vllm/adapter_state_current.json"
     },
     {
       "item": "warmup_model_prefill",
       "kind": "call",
       "status": "supported",
       "notes": "Generator-owned prepare warms served cache/buckets before captures; no request-specific warmup.",
-      "evidence": "readiness_vllm/b32_pool36896_tracked/mixed_sync.json"
+      "evidence": "readiness_vllm/stage10_sync_tracked/mixed_sync.json"
     },
     {
       "item": "warmup_model_decode",
       "kind": "call",
       "status": "supported",
       "notes": "Three execution signatures captured once; zero workload recapture/retirement.",
-      "evidence": "readiness_vllm/b32_pool36896_tracked/mixed_sync.json"
+      "evidence": "readiness_vllm/stage10_sync_tracked/mixed_sync.json"
     },
     {
       "item": "release_persistent_capture",
@@ -90,23 +90,29 @@
       "declaration": true,
       "evidence": "readiness/prefill_resume_check.json",
       "additional_evidence": [
-        "readiness_vllm/prefix_cache_check.json"
+        "readiness_vllm/stage10_final_full/checks/prefix_cache_check.json"
       ]
     },
     {
       "item": "batched_prefill",
       "kind": "call",
       "status": "supported",
-      "notes": "The adapter accepts multiple logical rows and delegates each to the canonical serial prefill path. Dense packed/equal-padded prefill is not implemented. Per prefill-features.md Stage split, stage9 records the serial burst reference; stage10 implements batched dense work, exact equality evidence and ratio gate.",
-      "evidence": "readiness_vllm/vllm_prefill_burst_serial_benchmark.json",
-      "dense_batched_implementation": false
+      "notes": "Short start-zero requests with equal padded lengths share dense prefill passes. Prepared physical sizes32/64/96/128 and group counts2/4/8/16/32 are bounded to1024 total rows to preserve the solo normalization reduction. Exact logits, valid KV and generated tokens match solo controls. Long rows and nonzero starts retain canonical continuation support. Enabled by default after cold-burst and batch-1 regression gates passed; final full sampling, prefix caching and mixed sync/async validation pass.",
+      "evidence": "doc/optimized_vllm/equality_summary.json",
+      "dense_batched_implementation": true,
+      "additional_evidence": [
+        "doc/optimized_vllm/single_user_regression.json",
+        "readiness_vllm/stage10_final_full/performance/vllm_prefill_burst_benchmark.json",
+        "readiness_vllm/stage10_sync_tracked/mixed_sync.json",
+        "readiness_vllm/stage10_final_full/mixed_async.json"
+      ]
     },
     {
       "item": "supports_async_decode",
       "kind": "capability",
       "status": "supported",
       "notes": "Explicit async scheduling full60/B32 matched the explicit --no-async-scheduling reference. Real allocator page growth, concurrent arrivals, row retirement/reorder, seeded repeats and unchanged-table steady decode pass; adapter_state.json separately checks deliberately stale host inputs and uint32 seed boundaries.",
-      "evidence": "readiness_vllm/mixed_async.json",
+      "evidence": "readiness_vllm/stage10_final_full/mixed_async.json",
       "declaration": true
     },
     {
@@ -114,14 +120,14 @@
       "kind": "request_feature",
       "status": "supported",
       "notes": "Explicit stock host-sampling compatibility path; canonical full-profile logprobs matrix20cases passed. Diagnostic full-logit readback is confined to requested host features, never headline device-sampled decode.",
-      "evidence": "readiness_vllm/final_full/sampling_tests.log"
+      "evidence": "readiness_vllm/stage10_final_full/checks/sampling_tests.log"
     },
     {
       "item": "penalties",
       "kind": "request_feature",
       "status": "supported",
       "notes": "supports_device_penalties=False records the device boundary. Explicit penalty requests use stock host compatibility. Authorized PC03 per-policy mixed/solo/homogeneous assertions pass in the final full profile; pinned HF also disproves the original raw-character assertion.",
-      "evidence": "readiness_vllm/final_full/sampling_tests.log",
+      "evidence": "readiness_vllm/stage10_final_full/checks/sampling_tests.log",
       "additional_evidence": [
         "readiness_vllm/raw_prompt_hf_controls.json"
       ]
@@ -131,7 +137,7 @@
       "kind": "request_feature",
       "status": "supported",
       "notes": "Base seeds normalized modulo2**31, then absolute position and advancement modulo2**32. Boundary steady/remap/reset stochastic outputs and actual device seed counters match.",
-      "evidence": "readiness_vllm/adapter_state.json"
+      "evidence": "doc/optimized_vllm/adapter_state_current.json"
     },
     {
       "item": "checkpoint_default_top_k64",
@@ -146,12 +152,12 @@
       "kind": "capability",
       "status": "supported",
       "notes": "Each server advertises its prepared bucket [max_num_seqs]. Full60 B8 and B16 smoke plus concurrent benchmark rows pass; B32 mixed/growing traffic passes. Final B1 4096/128/C1 measurement passed. Active rows below the configured bucket are padded; no unprepared bucket is advertised.",
-      "evidence": "readiness_vllm/mixed_async.json",
+      "evidence": "readiness_vllm/stage10_final_full/mixed_async.json",
       "declaration": "[max_num_seqs]",
       "additional_evidence": [
-        "readiness_vllm/b8_final/vllm_benchmark.json",
-        "readiness_vllm/b16_final/vllm_benchmark.json",
-        "readiness_vllm/b1_final/vllm_benchmark.json"
+        "readiness_vllm/stage10_final_b8/vllm_benchmark.json",
+        "readiness_vllm/stage10_final_b16/vllm_benchmark.json",
+        "readiness_vllm/stage10_final_b1/vllm_benchmark.json"
       ]
     },
     {

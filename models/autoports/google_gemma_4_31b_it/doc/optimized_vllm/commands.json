@@ -1,0 +1,31 @@
+{
+  "status": "in_progress",
+  "working_directory": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+  "environment_setup": [
+    "export TT_MODEL_BRINGUP_ROOT=/home/mvasiljevic/.codex-gemma4-v3/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.23",
+    "export TT_AUTODEBUG_ROOT=/home/mvasiljevic/.codex-gemma4-v3/plugins/cache/tenstorrent-skills/tt-autodebug/0.1.9",
+    "BRINGUP_EXPORTS=$(python_env/bin/python \"$TT_MODEL_BRINGUP_ROOT/scripts/environment.py\"); eval \"$BRINGUP_EXPORTS\"",
+    "export TT_METAL_CACHE=$PWD/bringup/artifacts/tt-metal-cache",
+    "export XDG_CACHE_HOME=$PWD/bringup/artifacts/xdg-cache"
+  ],
+  "server_wrapper": "models/autoports/google_gemma_4_31b_it/tests/run_serving.sh",
+  "server_defaults": "pinnedHF/tokenizerrevision842da3794eaa0b77d5f08bae87a17459d91ff475; context262144; P300x2 mesh1x4; block32; trace134217728; FABRIC_1D_RING; explicitasync; sample_on_device_mode=all; operatoroverride-generation-config top_k32, checkpointtemperature1/top_p0.95",
+  "safety": "All device jobs serialized, bounded; no profiler, no pushes. Benchmark runs tracking0, watcher unset. Tracker/watcher diagnostics separate.",
+  "commands": [
+    "PYTHONHASHSEED=0 GEMMA4_BATCHED_PREFILL=0 TT_METAL_TRACE_ALLOC_TRACKING=0 bash models/autoports/google_gemma_4_31b_it/tests/run_serving.sh --max-num-seqs 32 --enable-prefix-caching --stages serve,benchmark,prefill_burst --benchmark-prompt-len 128 --benchmark-output-len 128 --output-dir models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_serial_burst",
+    "PYTHONHASHSEED=0 GEMMA4_BATCHED_PREFILL=1 TT_METAL_TRACE_ALLOC_TRACKING=0 bash models/autoports/google_gemma_4_31b_it/tests/run_serving.sh --max-num-seqs 32 --enable-prefix-caching --stages serve,benchmark,prefill_burst --benchmark-prompt-len 128 --benchmark-output-len 128 --prefill-burst-serial-result models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_serial_burst/vllm_prefill_burst_benchmark.json --output-dir models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_grouped_burst_v2",
+    "TT_METAL_TRACE_ALLOC_TRACKING=0 timeout 3600 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.calibrate_batched_prefill --context 262144 --pool-tokens 1048576 --repeats 2 --output models/autoports/google_gemma_4_31b_it/doc/optimized_vllm/bucket_calibration.json",
+    "For batch in2,4,8: TT_METAL_TRACE_ALLOC_TRACKING=0 timeout 2400 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.check_batched_prefill_acceptance --batch <batch> --output models/autoports/google_gemma_4_31b_it/doc/optimized_vllm/equality_b<batch>_all.json",
+    "TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 TT_METAL_TRACE_ALLOC_TRACKING=0 timeout 3600 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.check_batched_prefill_acceptance --batch 32 --output models/autoports/google_gemma_4_31b_it/doc/optimized_vllm/watcher_b32_final.json",
+    "TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0 timeout 2400 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.check_batched_prefill_acceptance --batch 32 --lengths 32,64,96,127,128,129 --mixed --prompt-source chat --positive-control --output models/autoports/google_gemma_4_31b_it/doc/optimized_vllm/tracked_b32_chat_v2.json",
+    "For batch in2,4,8: TT_METAL_TRACE_ALLOC_TRACKING=0 timeout 1800 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.check_batched_prefill_acceptance --batch <batch> --lengths 5,33,127 --prompt-source chat --output models/autoports/google_gemma_4_31b_it/doc/optimized_vllm/chat_b<batch>.json",
+    "TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0 timeout 1800 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.check_vllm_adapter --output models/autoports/google_gemma_4_31b_it/doc/optimized_vllm/adapter_state_current.json",
+    "TT_METAL_TRACE_ALLOC_TRACKING=0 timeout 3600 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.check_batched_prefill_acceptance --batch 32 --layers all --lengths 5,33,96,127,128 --prompt-source chat --output models/autoports/google_gemma_4_31b_it/doc/optimized_vllm/full60_chat_b32.json",
+    "PYTHONHASHSEED=0 GEMMA4_BATCHED_PREFILL=1 TT_METAL_TRACE_ALLOC_TRACKING=0 bash models/autoports/google_gemma_4_31b_it/tests/run_serving.sh --stages serve,benchmark --max-num-seqs 1 --enable-prefix-caching --no-benchmark-ci-serving --benchmark-prompt-len 128 --benchmark-output-len 128 --output-dir models/autoports/google_gemma_4_31b_it/readiness_vllm/stage10_candidate_b1_128",
+    "timeout 3900 python3 models/autoports/google_gemma_4_31b_it/doc/optimized_vllm/run_sync_control.py (exact server command in readiness_vllm/stage10_sync_tracked/launch_manifest.json)",
+    "timeout 7500 python3 models/autoports/google_gemma_4_31b_it/doc/optimized_vllm/run_final_async.py; exact client commands and bounded server-log intervals in readiness_vllm/stage10_final_full/steps.json",
+    "timeout 7500 python3 models/autoports/google_gemma_4_31b_it/doc/optimized_vllm/run_final_load.py (growing passed; first load diagnostic discarded; exact module invocation in stage10_final_load/steps.json)",
+    "timeout 7500 python3 models/autoports/google_gemma_4_31b_it/doc/optimized_vllm/run_final_load_v2.py (corrected load-only diagnostic)",
+    "python3 models/autoports/google_gemma_4_31b_it/doc/optimized_vllm/run_final_profiles.py (serialized B1 exact4096/128, B8/B16 concurrent128/128 and CI profiles; exact argv/source hashes in each launch_manifest.json)"
+  ]
+}

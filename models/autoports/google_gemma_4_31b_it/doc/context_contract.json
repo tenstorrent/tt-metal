@@ -407,5 +407,21 @@
     "kv_cache_dtype": "bfloat8_b",
     "selected_precision_config": "datatype_sweep/selected_precision_config.json"
   },
-  "historical_fields_note": "functional/fused/optimized/multichip layer fields retain earlier stage evidence. full_model_plan is the current full-stack allocation and context contract."
+  "historical_fields_note": "functional/fused/optimized/multichip layer fields retain earlier stage evidence. full_model_plan is the current full-stack allocation and context contract.",
+  "optimized_vllm_preparation": {
+    "supported_context_tokens": 262144,
+    "capability_reduction": null,
+    "short_batched_logical_limit": 128,
+    "larger_or_continued_prompts": "Canonical solo/chunked prefill path remains supported; this is a dispatch boundary, not a context limit.",
+    "group_total_row_limit": 1024,
+    "prepared_allocation_delta_bytes_per_device": 73564160,
+    "persistent_input_bytes_per_device": 55181312,
+    "free_after_transient_reserve_bytes_per_device": 917570048,
+    "memory_evidence": "optimized_vllm/memory_comparison.json",
+    "nonaligned_evidence": [
+      "optimized_vllm/full60_chat_b32.json",
+      "../readiness_vllm/stage10_sync_tracked/mixed_sync.json"
+    ],
+    "maximum_context_evidence": "Unchanged full-model long-prefill/decode path retains the selected datatype-sweep maximum-context validation above."
+  }
 }
