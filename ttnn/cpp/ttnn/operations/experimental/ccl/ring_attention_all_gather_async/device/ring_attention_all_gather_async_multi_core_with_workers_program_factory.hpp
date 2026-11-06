@@ -140,8 +140,10 @@ struct RingAttentionRankSlab {
 // done (the tail of ring_attention_all_gather_writer.cpp). Units are split over the SDPA cores as base or base + 1
 // each (the first `units_extra` cores get one more).
 struct RingAttentionDenseReturn {
-    tt::tt_metal::Buffer* staging = nullptr;  // this device's partials, page = unit * partial_tiles + tile
-    tt::tt_metal::Buffer* recv = nullptr;     // the neighbours': page = (side * n_units + unit) * partial_tiles + tile
+    // Unit u's partial_tiles pages are consecutive pages of one DRAM bank: page ((u / n_banks) * partial_tiles + t) *
+    // n_banks + u % n_banks; the receive buffer holds side * n_units + u.
+    tt::tt_metal::Buffer* staging = nullptr;  // this device's partials
+    tt::tt_metal::Buffer* recv = nullptr;     // the neighbours'
     uint32_t ready_plus_addr = 0;             // per SDPA core: 4 bits per owner, set once its units are staged
     uint32_t ready_minus_addr = 0;
     uint32_t arrival_addr = 0;  // per SDPA core: 4 bits per owner, one increment per arriving neighbour
@@ -150,8 +152,10 @@ struct RingAttentionDenseReturn {
     uint32_t units_extra = 0;
     std::vector<uint32_t> core_x;  // NoC x of each SDPA grid column, NoC y of each row
     std::vector<uint32_t> core_y;
-    uint32_t n_units = 0;
+    uint32_t n_units = 0;  // a multiple of n_banks
+    uint32_t n_banks = 0;
     uint32_t partial_tiles = 0;
+    uint32_t partial_tile_bytes = 0;
     // (owner record, first unit, end unit) sent to tensor rank + 1 / - 1.
     std::vector<std::array<uint32_t, 3>> sends_plus;
     std::vector<std::array<uint32_t, 3>> sends_minus;

@@ -27,6 +27,12 @@ constexpr uint32_t partial_tiles() {
     return Sq_chunk_t * vDHt + 2 * Sq_chunk_t;
 }
 
+// Hop buffers (staging, receive): unit u's partial_tiles pages are consecutive pages of one DRAM bank (page p is in
+// bank p % n_banks), so one read and few fabric packets move a whole unit. Units are padded to a multiple of n_banks.
+inline uint32_t banked_page(uint32_t u, uint32_t t, uint32_t partial_tiles, uint32_t n_banks) {
+    return ((u / n_banks) * partial_tiles + t) * n_banks + u % n_banks;
+}
+
 // Per owner shard, kRecordWords runtime words.
 constexpr uint32_t kRecordWords = 8;
 // role: what this device does with the owner's units after its own partial (and any merges).

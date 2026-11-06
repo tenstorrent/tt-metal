@@ -1457,6 +1457,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"res_remap", res_remap ? 1u : 0u},
         {"cb_dense_in", dense_h && !dense_debug ? cbs.dense_in : cbs.q_in},
         {"dense_units", dense_units},
+        // DRAM banks: a unit's partial is one bank's consecutive pages in the hop buffers.
+        {"dense_banks", mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM)},
         {"dense_q_rows_t", dense_q_rows_t},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
@@ -1823,8 +1825,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                 v.x == dr.core_x[i % grid_size.x] && v.y == dr.core_y[i / grid_size.x],
                 "SparseRingSDPA dense return: the SDPA grid's NoC coordinates are not a product of rows and columns");
         }
-        dr.n_units = dense_units;
+        dr.n_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
+        dr.n_units = tt::round_up(dense_units, dr.n_banks);
         dr.partial_tiles = partial_tiles;
+        dr.partial_tile_bytes = tt::tile_size(out_df);
         for (uint32_t k = 0; k < owner_plans.size(); ++k) {
             const uint32_t role = dense_records[k * sparse_dense::kRecordWords + 7];
             const std::array<uint32_t, 3> send = {
@@ -1894,7 +1898,9 @@ tt::tt_metal::WorkloadDescriptor SparseRingSDPAProgramFactory::create_workload_d
         dense_owner_plans(args, tensor_args, n_units);
         const uint32_t sq_t = args.block_tiles();
         const uint32_t vdh_t = tensor_args.input_v.logical_shape()[3] / tt::constants::TILE_WIDTH;
-        const uint32_t pages = n_units * (sq_t * vdh_t + 2 * sq_t);
+        // Units padded to whole banks (sparse_dense::banked_page).
+        const uint32_t n_banks = mesh->allocator()->get_num_banks(BufferType::DRAM);
+        const uint32_t pages = tt::round_up(n_units, n_banks) * (sq_t * vdh_t + 2 * sq_t);
         const auto make_buffer = [&](uint32_t n_pages) {
             const tt::tt_metal::TensorSpec spec(
                 ttnn::Shape({1, 1, n_pages * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),

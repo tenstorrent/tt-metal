@@ -1061,17 +1061,16 @@ void kernel_main() {
                             continue;
                         }
                         for (uint32_t u = u0; u < u1; ++u) {
+                            // The unit's pages are contiguous in one bank (sparse_dense::banked_page): one read.
+                            constexpr uint32_t n_banks = get_named_compile_time_arg_val("dense_banks");
+                            constexpr uint32_t units_padded = (dense_units + n_banks - 1) / n_banks * n_banks;
                             cb_in.reserve_back(kPartialTiles);
-                            const uint32_t page0 = (side * dense_units + u) * kPartialTiles;
-                            for (uint32_t t = 0; t < kPartialTiles; ++t) {
-                                noc.async_read(
-                                    recv_reader,
-                                    CoreLocalMem<uint32_t>(cb_in.get_write_ptr() + t * partial_tile_bytes),
-                                    partial_tile_bytes,
-                                    {.page_id = page0 + t},
-                                    {});
-                            }
-                            noc.async_read_barrier();
+                            noc_async_read(
+                                recv_reader.get_noc_addr(
+                                    sparse_dense::banked_page(side * units_padded + u, 0, kPartialTiles, n_banks)),
+                                cb_in.get_write_ptr(),
+                                kPartialTiles * partial_tile_bytes);
+                            noc_async_read_barrier();
                             cb_in.push_back(kPartialTiles);
                         }
                     }

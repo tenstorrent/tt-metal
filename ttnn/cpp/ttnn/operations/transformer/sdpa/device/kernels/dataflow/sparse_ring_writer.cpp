@@ -210,12 +210,17 @@ void kernel_main() {
                     }
                     for (uint32_t t = 0; t < kPartialTiles; ++t) {
                         cb.wait_front(1);
+                        // dense_debug: unit-major for the test's host merge; else one bank per unit.
+                        const uint32_t page =
+                            dense_debug ? u * kPartialTiles + t
+                                        : sparse_dense::banked_page(
+                                              u, t, kPartialTiles, get_named_compile_time_arg_val("dense_banks"));
                         noc.async_write(
                             CoreLocalMem<uint32_t>(cb.get_read_ptr()),
                             partials_writer,
                             tile_bytes,
                             {},
-                            {.page_id = u * kPartialTiles + t});
+                            {.page_id = page});
                         noc.async_writes_flushed();
                         cb.pop_front(1);
                     }

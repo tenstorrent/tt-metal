@@ -1412,6 +1412,13 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             // the + side (receive side 1); the backward worker the other way.
             const auto& dr = *dense_return;
             const auto& sends = is_forward ? dr.sends_minus : dr.sends_plus;
+            // A whole unit lands in the (idle after the gather) packet CB, then leaves in max-payload packets.
+            TT_FATAL(
+                cb_num_pages * l1_scratch_cb_page_size_bytes >= dr.partial_tiles * dr.partial_tile_bytes,
+                "Ring attention dense return: a {}-tile partial does not fit the {} B packet CB",
+                dr.partial_tiles,
+                cb_num_pages * l1_scratch_cb_page_size_bytes);
+            const uint32_t packet_tiles = std::max(1u, max_payload_size_bytes / dr.partial_tile_bytes);
             writer_args.push_back(static_cast<uint32_t>(sends.size()));
             writer_args.push_back(dr.staging);
             writer_args.push_back(dr.recv);
@@ -1427,6 +1434,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             writer_args.push_back(num_links);
             writer_args.push_back(placement.link);
             writer_args.push_back(dr.partial_tiles);
+            writer_args.push_back(dr.partial_tile_bytes);
+            writer_args.push_back(dr.n_banks);
+            writer_args.push_back(packet_tiles);
             for (const uint32_t x : dr.core_x) {
                 writer_args.push_back(x);
             }

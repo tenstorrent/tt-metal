@@ -177,7 +177,7 @@ class Bench:
 
         return fn
 
-    def sparse(self, t_mask, k_chunk, pooled, dense_blocks=None, dense_q_buf=None):
+    def sparse(self, t_mask, k_chunk, pooled, dense_blocks=None, dense_q_buf=None, dense_partials=None):
         rt, case = self.rt, self.case
         q, k, v = self.tensors
         pk, pv = self.pooled if pooled else (None, None)
@@ -212,6 +212,7 @@ class Bench:
             block_size=BLOCK,
             dense_blocks=dense_blocks,
             persistent_output_buffer_dense_q=dense_q_buf,
+            dense_partials_debug=dense_partials,
         )
 
     def baseline(self, rows, logical_n=None):
@@ -277,9 +278,11 @@ def time_mask(
     logical_n=None,
     lofi=False,
     dense_blocks=None,
+    dense_local=False,
 ):
     """Time the sparse op on the mask `make(case)` builds and record it against the bf16 dense op and the gather of
-    the same inputs; dense_blocks (with its dense-Q buffer) go to the op."""
+    the same inputs; dense_blocks (with its dense-Q buffer) go to the op, and dense_local keeps every device's dense
+    partials local (dense_partials_debug: no return hops, no merge), to time the dense units alone."""
     dense, gather = bench.baseline(rows, logical_n)
     if lofi:
         gather = bench.lofi_gather(rows, logical_n)
@@ -289,12 +292,15 @@ def time_mask(
     t_mask = case._upload(mask, case.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
     del mask
     dense_q_buf = None if dense_blocks is None else case.dense_q_buffer(dense_blocks)
+    partials = case.dense_partials_buffer(dense_blocks) if dense_local else None
     try:
-        times = traced_ms(case.rt.mesh_device, bench.sparse(t_mask, k_chunk, pooled, dense_blocks, dense_q_buf))
+        times = traced_ms(
+            case.rt.mesh_device, bench.sparse(t_mask, k_chunk, pooled, dense_blocks, dense_q_buf, partials)
+        )
     finally:
-        ttnn.deallocate(t_mask)
-        if dense_q_buf is not None:
-            ttnn.deallocate(dense_q_buf)
+        for t in (t_mask, dense_q_buf, partials):
+            if t is not None:
+                ttnn.deallocate(t)
     mode = ("sparse" if pooled else "kept") + ("-lofi" if lofi else "")
     return record(
         results_file,
@@ -396,16 +402,18 @@ def dense_tail_range(geo, S, *, tail_tokens, position):
 
 @pytest.mark.parametrize("pooled", [True, False], ids=["sparse", "kept"])
 @pytest.mark.parametrize("tail_tokens", TAIL_TOKENS, ids=[f"T{t}" for t in TAIL_TOKENS])
-@pytest.mark.parametrize("variant", ["rows_cols", "cols", "dense_blocks"])
+@pytest.mark.parametrize("variant", ["rows_cols", "cols", "dense_blocks", "dense_blocks_local"])
 @pytest.mark.parametrize("position", ["start", "end"])
 @pytest.mark.parametrize("rows", list(TAIL_POINTS), ids=list(TAIL_POINTS.values()))
 def test_dense_tail_perf(bench, results_file, rows, position, variant, tail_tokens, pooled):
     """The sparse op at the production k_chunk on density-0.2 video blocks with a dense text / audio tail on one
     device: in the mask (dense_tail_mask: rows and columns, or columns only), or as dense_blocks (rows split across
-    the devices, columns by dense_keys) on the plain density-0.2 mask."""
+    the devices, columns by dense_keys) on the plain density-0.2 mask; dense_blocks_local times the same without the
+    partials' return to the owner (dense_partials_debug), so dense_blocks minus it is the return path's cost."""
+    via_dense_blocks = variant.startswith("dense_blocks")
 
     def make(case):
-        if variant == "dense_blocks":
+        if via_dense_blocks:
             mask = make_mask(case.geo, case.S, case.H, density=0.2, seed=rows)
             return mask * (_block_lengths(case.geo, case.S) == BLOCK).reshape(-1).to(mask.dtype)
         return dense_tail_mask(
@@ -413,10 +421,16 @@ def test_dense_tail_perf(bench, results_file, rows, position, variant, tail_toke
         )
 
     case = bench.shape(rows)
-    dense = (
-        dense_tail_range(case.geo, case.S, tail_tokens=tail_tokens, position=position)
-        if variant == "dense_blocks"
-        else None
-    )
+    dense = dense_tail_range(case.geo, case.S, tail_tokens=tail_tokens, position=position) if via_dense_blocks else None
     structure = f"dense_tail_{position}_{variant}_T{tail_tokens}"
-    time_mask(bench, results_file, rows, make, FAMILY_K_CHUNK, pooled, structure=structure, dense_blocks=dense)
+    time_mask(
+        bench,
+        results_file,
+        rows,
+        make,
+        FAMILY_K_CHUNK,
+        pooled,
+        structure=structure,
+        dense_blocks=dense,
+        dense_local=variant == "dense_blocks_local",
+    )

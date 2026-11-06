@@ -260,12 +260,13 @@ void kernel_main() {
     };
 
     // Dense return block: [n_sends, staging, receive, ready semaphore, arrival semaphore, cores, units per core,
-    // cores with one more, grid x, grid y, receive side, total units, link stride, link, tiles per partial], the NoC
-    // x of each grid column, the NoC y of each grid row, then per send (owner record k, first unit, end unit).
+    // cores with one more, grid x, grid y, receive side, units (padded to banks), link stride, link, tiles per partial,
+    // bytes per tile, DRAM banks, tiles per packet], the NoC x of each grid column, the NoC y of each grid row, then
+    // per send (owner record k, first unit, end unit).
     [[maybe_unused]] const uint32_t dense_args = arg_idx;
     if constexpr (has_dense_return) {
         const uint32_t n_sends = get_arg_val<uint32_t>(arg_idx);
-        arg_idx += 15 + get_arg_val<uint32_t>(arg_idx + 8) + get_arg_val<uint32_t>(arg_idx + 9) + 3 * n_sends;
+        arg_idx += 18 + get_arg_val<uint32_t>(arg_idx + 8) + get_arg_val<uint32_t>(arg_idx + 9) + 3 * n_sends;
     }
 
     size_t arg_for_fab = arg_idx;
@@ -668,10 +669,14 @@ void kernel_main() {
         const uint32_t stride = arg(12);
         const uint32_t link = arg(13);
         const uint32_t partial_tiles = arg(14);
-        const uint32_t xs = dense_args + 15;
+        const uint32_t tile_bytes = arg(15);
+        const uint32_t n_banks = arg(16);
+        const uint32_t packet_tiles = arg(17);
+        // Unit u's tiles are consecutive pages of bank u % n_banks (sparse_dense::banked_page).
+        const auto unit_page = [&](uint32_t u) { return (u / n_banks) * partial_tiles * n_banks + u % n_banks; };
+        const uint32_t xs = dense_args + 18;
         const uint32_t ys = xs + grid_x;
         const uint32_t sends = ys + grid_y;
-        const uint32_t tile_bytes = output_page_size;
         const uint32_t scratch = get_local_cb_interface(cb_output_id).fifo_limit -
                                  get_local_cb_interface(cb_output_id).fifo_size;  // the gather is done with it
         const auto core_noc = [&](uint32_t c, uint32_t addr) {
@@ -700,17 +705,19 @@ void kernel_main() {
                     invalidate_l1_cache();
                 } while (((*word >> (4 * k)) & 0xFu) == 0);
                 for (uint32_t u = lo; u < hi; ++u) {
-                    for (uint32_t t = 0; t < partial_tiles; ++t) {
-                        const uint32_t page = u * partial_tiles + t;
-                        noc_async_read(staging.get_noc_addr(page), scratch, tile_bytes);
-                        noc_async_read_barrier();
+                    // One DRAM read for the unit, then packets of up to packet_tiles physically contiguous tiles.
+                    noc_async_read(staging.get_noc_addr(unit_page(u)), scratch, partial_tiles * tile_bytes);
+                    noc_async_read_barrier();
+                    const uint32_t dst_page = unit_page(recv_side * n_units + u);
+                    for (uint32_t t = 0; t < partial_tiles; t += packet_tiles) {
+                        const uint32_t n = partial_tiles - t < packet_tiles ? partial_tiles - t : packet_tiles;
                         fabric_write_unidir(
-                            recv_side * n_units * partial_tiles + page,
+                            dst_page + t * n_banks,
                             recv,
                             pkt_hdr,
                             *fabric_direction_connection,
-                            scratch,
-                            tile_bytes);
+                            scratch + t * tile_bytes,
+                            n * tile_bytes);
                     }
                 }
                 pkt_hdr_arrival->to_noc_unicast_atomic_inc(
