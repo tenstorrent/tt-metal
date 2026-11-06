@@ -166,9 +166,10 @@ def main() -> int:
     report("sdpa dv", grad(v), dv)
     ctx.reset_graph()
 
-    # 10. composite SDPA, same check
+    # 10. composite SDPA, same check (all-ones mask: #62526 made the mask mandatory, full attention like check 9)
     q, k, v = tensor(q_np, True), tensor(k_np, True), tensor(v_np, True)
-    out = ttml.ops.attention.scaled_dot_product_attention_composite(q, k, v, None)
+    mask = tensor(np.ones((1, 1, S, S), dtype=np.float32), False)
+    out = ttml.ops.attention.scaled_dot_product_attention_composite(q, k, v, mask)
     ttml.ops.unary.mean(out * tensor(go_np * go_np.size, False)).backward(False)
     report("sdpa composite dq", grad(q), dq)
     report("sdpa composite dv", grad(v), dv)
