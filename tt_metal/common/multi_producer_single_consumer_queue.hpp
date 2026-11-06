@@ -13,8 +13,7 @@
 template <typename T>
 class MultiProducerSingleConsumerQueue {
 private:
-    // One cache line per slot, so a push or pop touches one line.
-    struct alignas(64) Node {
+    struct alignas(64) Node {  // One cache line per slot.
         T data{};
         Node* next = nullptr;
     };
@@ -60,7 +59,6 @@ public:
     MultiProducerSingleConsumerQueue(const MultiProducerSingleConsumerQueue& other) = delete;
     MultiProducerSingleConsumerQueue& operator=(const MultiProducerSingleConsumerQueue& other) = delete;
 
-    // Stored in place, so a push does not allocate.
     void push(T value) {
         // Stall condition: this push will update the tail (wptr)
         // to match the location of head (rptr). The current push can
