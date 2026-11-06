@@ -72,6 +72,9 @@ void bind_embedding(nb::module_& mod);
 namespace ttnn::operations::bringup::prepared_program::detail {
 void bind_prepared_program(nb::module_& mod);
 }
+namespace ttnn::operations::bringup::moe_block_main {
+void bind_moe_block(nb::module_& bringup);
+}
 
 namespace ttnn::bringup {
 
@@ -98,6 +101,8 @@ void py_module(nb::module_& mod) {
     ::ttnn::operations::bringup::embedding::bind_embedding(mod);
     // END FORKED OPS (fork_op.py)
     ::ttnn::operations::bringup::prepared_program::detail::bind_prepared_program(mod);
+    // ttnn.bringup.moe_block_main: Marko Staletovic's C++ MoE block ops (moe_block_main_ttnn/, a submodule)
+    ::ttnn::operations::bringup::moe_block_main::bind_moe_block(mod);
 }
 
 }  // namespace ttnn::bringup

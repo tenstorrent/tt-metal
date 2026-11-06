@@ -496,6 +496,15 @@ _bringup = create_module_if_not_exists("ttnn.bringup")
 for _name in dir(ttnn._ttnn.operations.bringup):
     if not _name.startswith("_") and not _name.endswith("_t") and not hasattr(_bringup, _name):
         setattr(_bringup, _name, getattr(ttnn._ttnn.operations.bringup, _name))
+# A fork bound as a nanobind submodule (ttnn.bringup.moe_block_main): its ops were registered into a module of that name
+# above; add the submodule's classes and functions beside them (the registered ops win).
+for _name in dir(ttnn._ttnn.operations.bringup):
+    _sub = getattr(ttnn._ttnn.operations.bringup, _name)
+    if isinstance(_sub, ModuleType) and not _name.startswith("_"):
+        _mod = create_module_if_not_exists(f"ttnn.bringup.{_name}")
+        for _attr in dir(_sub):
+            if not _attr.startswith("_") and not hasattr(_mod, _attr):
+                setattr(_mod, _attr, getattr(_sub, _attr))
 
 import ttnn.operations
 
