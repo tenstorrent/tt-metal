@@ -37,6 +37,9 @@ PROFILER_ENV = {
 _TRACY = bool(os.environ.get("BRINGUP_TRACY_SIGNPOSTS"))
 _P = {"mesh": None}
 BACKENDS = ("rt", "device")
+# F262: a real-time record's runtime_id is the program's device-operation id narrowed to 16 bits (tt-metal #46103;
+# cq_dispatch carries a uint16 program_host_id, 0 meaning "not profiled"), while the markers hold the full id
+RT_ID_SPAN = 1 << 16
 
 
 def backend(s=None) -> str:
@@ -141,6 +144,7 @@ def finish_rt(settle_s: float = 1.0) -> list:
 
     p = _P
     ttnn.synchronize_device(p["mesh"])
+    p["rt_end"] = ttnn._ttnn.get_device_operation_id()  # F262: every id the window launched is below this one
     time.sleep(settle_s)
     if p.get("rt_handle") is not None:
         ttnn.device.UnregisterProgramRealtimeProfilerCallback(p["rt_handle"])
@@ -150,8 +154,30 @@ def finish_rt(settle_s: float = 1.0) -> list:
             f"the real-time profiler dropped {p['rt_dropped'][0]} record(s): the receiver could not keep up, the "
             "section times would under-report"
         )
+    p["rt_records"] = unwrap_ids(p["rt_records"], p["markers"][0][0], p["rt_end"])
     charge_rt(p, p["rt_records"])
     return p["calls"]
+
+
+def unwrap_ids(recs: dict, lo: int, hi: int) -> dict:
+    """F262: the records keyed by full device-operation id. A record's runtime_id is the id modulo 2**16, so the
+    profiled window [lo, hi) (enable() to finish_rt()) unwraps as long as it spans at most 2**16 ids: each record goes
+    to the one id of the window with its low 16 bits; a record of a program launched before the window (delivered
+    late) lands at or past ``hi`` and is dropped. Without this every id past 65535 in a process missed its section: a
+    profile in a batch (F259) after other runs got no records at all, a separate process whose window crossed 65536
+    silently lost the sections after it. Programs whose id is 0 modulo 2**16 are never recorded (one in 65536: the
+    dispatcher's "not profiled" id)."""
+    if hi - lo > RT_ID_SPAN:
+        raise RuntimeError(
+            f"the profiled run launched {hi - lo} device operations, more than the real-time profiler's 16-bit "
+            f"runtime ids ({RT_ID_SPAN}) tell apart (tt-metal #46103): its records cannot be charged to sections"
+        )
+    out = {}
+    for rid, chips in recs.items():
+        full = lo + (int(rid) - lo) % RT_ID_SPAN
+        if full < hi:
+            out[full] = chips
+    return out
 
 
 def charge_rt(p: dict, recs: dict) -> None:
