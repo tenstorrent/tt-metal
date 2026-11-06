@@ -3638,6 +3638,10 @@ class MTPSpecEngine:
                 continue
             if len(inside) > GDN_SNAP_SLOTS:
                 return None, None
+            # _replay_short_trace snapshots only rows 3 <= r <= actual_len - 3 (a vLLM checkpoint at 2048 in a 2049-row
+            # prompt is r = 2048 of 2049 rows): the split ends a segment there instead.
+            if rep.kind in ("tail", "mbig") and any(not 3 <= p - rep.start <= rep.rows - 3 for p in inside):
+                return None, None
             if rep.kind == "tail":
                 if rep.rows < 3 or model._short_trace_for(rep.rows) is None or not model.snap_rows_ok(rep.bucket):
                     return None, None
