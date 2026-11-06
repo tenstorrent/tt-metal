@@ -364,13 +364,18 @@ class _DecodeTransformer:
         from models.demos.blackhole.bonsai2.tt import core_ranges
         from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
 
+        if os.environ.get("BONSAI_SDPA_DEC", "1") == "1" and _TM_ON() and len(args) == 3:
+            out = _decode_sdpa(*args, **kwargs)
+            if out is not None:
+                return _TM(out)
+
         if pc is not None and stream_decode.active():  # the stream's receivers only
             rx = stream_decode.STATE.st.rx_order
             kwargs["program_config"] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(len(rx) // 8, 8),
                 sub_core_grids=core_ranges.rects(rx),
                 q_chunk_size=pc.q_chunk_size,
-                k_chunk_size=int(os.environ.get("BONSAI_STREAM_SDPA_KCHUNK") or pc.k_chunk_size),
+                k_chunk_size=pc.k_chunk_size,
                 exp_approx_mode=pc.exp_approx_mode,
             )
         elif pc is not None and os.environ.get("BONSAI_DECODE_SDPA_GRID", "1") == "1":
@@ -382,6 +387,33 @@ class _DecodeTransformer:
             )
         out = ttnn.transformer.paged_scaled_dot_product_attention_decode(*args, **kwargs)
         return _TM(out) if _TM_ON() else out
+
+
+_SDPA = {}
+
+
+def _decode_sdpa(q, k, v, cur_pos_tensor=None, page_table_tensor=None, scale=None, **kwargs):
+    """The decode SDPA as one custom op (tt/sdpa_dec) on the stream's receivers (else the first cores of the grid):
+    bf8 caches, 4 kv heads x 6 q heads, head_dim 256; None for any other shape (the stock op then)."""
+    from models.demos.blackhole.bonsai2.tt.sdpa_dec.sdpa_dec import DecodeSDPA
+    from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
+
+    _, H, bs, D = list(k.shape)
+    Hq = list(q.shape)[-2]
+    if k.dtype != ttnn.bfloat8_b or D != 256 or Hq != 6 * H or page_table_tensor is None or cur_pos_tensor is None:
+        return None
+    device = k.device()
+    if stream_decode.active():
+        cores = stream_decode.STATE.st.rx_order
+    else:
+        g = device.compute_with_storage_grid_size()
+        cores = [ttnn.CoreCoord(i % g.x, i // g.x) for i in range(g.x * g.y)]
+    cores = cores[: (len(cores) // H) * H]
+    cap = list(page_table_tensor.shape)[-1] * bs
+    key = (tuple((c.x, c.y) for c in cores), H, cap, scale)
+    if key not in _SDPA:
+        _SDPA[key] = DecodeSDPA(device, cores, H=H, Hq=Hq, D=D, max_positions=cap, scale=scale)
+    return _SDPA[key](q, k, v, cur_pos_tensor, page_table_tensor)
 
 
 class TernaryAttentionTtnn:
