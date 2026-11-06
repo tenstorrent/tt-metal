@@ -1684,7 +1684,7 @@ struct to_json_t<T> {
 template <typename T>
     requires std::is_integral_v<T> or std::is_floating_point_v<T> or std::is_enum_v<T>
 struct from_json_t<T> {
-    T operator()(const nlohmann::json& json_object) noexcept { return json_object.get<T>(); }
+    T operator()(const nlohmann::json& json_object) { return json_object.get<T>(); }
 };
 
 template <>
@@ -1706,7 +1706,7 @@ struct to_json_t<std::string> {
 
 template <>
 struct from_json_t<std::string> {
-    std::string operator()(const nlohmann::json& json_object) noexcept { return json_object.get<std::string>(); }
+    std::string operator()(const nlohmann::json& json_object) { return json_object.get<std::string>(); }
 };
 
 template <typename T>
@@ -1723,7 +1723,7 @@ struct to_json_t<T> {
 template <typename T>
     requires std::is_pointer_v<T>
 struct from_json_t<T> {
-    T operator()(const nlohmann::json& json_object) noexcept {
+    T operator()(const nlohmann::json& json_object) {
         if (json_object.is_null()) {
             return nullptr;
         }
@@ -1749,7 +1749,7 @@ struct to_json_t<std::array<T, N>> {
 
 template <typename T, std::size_t N>
 struct from_json_t<std::array<T, N>> {
-    std::array<T, N> operator()(const nlohmann::json& json_object) noexcept {
+    std::array<T, N> operator()(const nlohmann::json& json_object) {
         std::array<T, N> array{};
         [&array, &json_object]<size_t... Ns>(std::index_sequence<Ns...>) {
             (
@@ -1823,7 +1823,7 @@ struct to_json_t<std::optional<T>> {
 
 template <typename T>
 struct from_json_t<std::optional<T>> {
-    std::optional<T> operator()(const nlohmann::json& json_object) noexcept {
+    std::optional<T> operator()(const nlohmann::json& json_object) {
         if (json_object.is_null()) {
             return std::nullopt;
         }
@@ -1844,7 +1844,7 @@ struct to_json_t<std::vector<T>> {
 
 template <typename T>
 struct from_json_t<std::vector<T>> {
-    std::vector<T> operator()(const nlohmann::json& json_object) noexcept {
+    std::vector<T> operator()(const nlohmann::json& json_object) {
         std::vector<T> vector;
         vector.reserve(json_object.size());
         for (const auto& element : json_object) {
@@ -1867,7 +1867,7 @@ struct to_json_t<std::set<T>> {
 
 template <typename T>
 struct from_json_t<std::set<T>> {
-    std::set<T> operator()(const nlohmann::json& json_object) noexcept {
+    std::set<T> operator()(const nlohmann::json& json_object) {
         std::set<T> set;
         for (const auto& element : json_object) {
             set.insert(from_json<T>(element));
@@ -1938,7 +1938,7 @@ struct to_json_t<std::tuple<Ts...>> {
 
 template <typename... Ts>
 struct from_json_t<std::tuple<Ts...>> {
-    std::tuple<Ts...> operator()(const nlohmann::json& json_object) noexcept {
+    std::tuple<Ts...> operator()(const nlohmann::json& json_object) {
         std::tuple<Ts...> tuple;
         [&tuple, &json_object]<std::size_t... Ns>(std::index_sequence<Ns...>) {
             (
@@ -1995,7 +1995,7 @@ struct to_json_t<T> {
 template <typename T>
     requires ttsl::concepts::Reflectable<T>
 struct from_json_t<T> {
-    T operator()(const nlohmann::json& json_object) noexcept {
+    T operator()(const nlohmann::json& json_object) {
         T object;
         reflect::for_each(
             [&object, &json_object](auto I) {

@@ -36,5 +36,5 @@ struct ttsl::json::to_json_t<tt::tt_metal::RelativeCoreCoord> {
 
 template <>
 struct ttsl::json::from_json_t<tt::tt_metal::RelativeCoreCoord> {
-    tt::tt_metal::RelativeCoreCoord operator()(const nlohmann::json& json) noexcept;
+    tt::tt_metal::RelativeCoreCoord operator()(const nlohmann::json& json);
 };
