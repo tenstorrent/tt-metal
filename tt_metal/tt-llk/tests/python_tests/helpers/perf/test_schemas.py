@@ -924,7 +924,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_unpack_tilize": {
-        "version": 5,
+        "version": 6,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -951,6 +951,7 @@ PERF_TEST_SCHEMAS = {
             "output_num_tiles_in_block",
             "tile_cnt",
             "unpack_to_dest",
+            "use_perf_buffers",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {"perf_unpack_tilize": "perf_unpack_tilize"},

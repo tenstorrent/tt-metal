@@ -13,7 +13,6 @@ _PERF_RUN_TYPES = [
     PerfRunType.L1_TO_L1,
     PerfRunType.UNPACK_ISOLATE,
     PerfRunType.PACK_ISOLATE,
-    PerfRunType.L1_CONGESTION,
 ]
 PERF_LOOP_FACTOR = 256
 

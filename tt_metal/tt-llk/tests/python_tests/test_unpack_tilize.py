@@ -16,7 +16,6 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import DestAccumulation, DestSync, PerfRunType
 from helpers.param_config import (
-    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     max_dest_tiles,
     parametrize,
@@ -30,9 +29,28 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
     TILE_COUNT,
+    USE_PERF_BUFFERS,
     generate_input_dim,
 )
 from helpers.utils import passed_test, result_tensor
+
+
+def _get_block_config(formats, dest_acc, tile_count):
+    configured_dest_acc = dest_acc if dest_acc is not None else DestAccumulation.No
+    configured_dest_acc = effective_dest_acc(
+        formats.input_format,
+        formats.output_format,
+        configured_dest_acc,
+    )
+    tiles_per_block = min(
+        tile_count,
+        max_dest_tiles(
+            configured_dest_acc == DestAccumulation.Yes
+            or formats.input_format.is_32_bit(),
+            DestSync.Half,
+        ),
+    )
+    return math.ceil(tile_count / tiles_per_block), tiles_per_block
 
 
 @parametrize(
@@ -113,6 +131,14 @@ def test_unpack_tilize_int8(
     )
 
 
+@pytest.mark.parametrize(
+    "formats",
+    input_output_formats([DataFormat.Float16_b], same=True),
+)
+def test_unpack_tilize_partial_block(formats):
+    unpack_tilize(formats, input_dimensions=[96, 96])
+
+
 def unpack_tilize(
     formats,
     unpack_to_dest=False,
@@ -145,25 +171,7 @@ def unpack_tilize(
             src_A, input_dimensions, formats.output_format, num_faces=num_faces
         )
 
-    if is_perf:
-        configured_dest_acc = dest_acc if dest_acc is not None else DestAccumulation.No
-        configured_dest_acc = effective_dest_acc(
-            formats.input_format,
-            formats.output_format,
-            configured_dest_acc,
-        )
-        num_tiles_in_block = min(
-            tile_cnt_A, max_dest_tiles(configured_dest_acc, DestSync.Half)
-        )
-        num_blocks = math.ceil(tile_cnt_A / num_tiles_in_block)
-    else:
-        num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-            DestSync.Half,
-            dest_acc,
-            formats,
-            input_dimensions,
-            TILE_DIMENSIONS,
-        )
+    num_blocks, num_tiles_in_block = _get_block_config(formats, dest_acc, tile_cnt_A)
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -179,6 +187,7 @@ def unpack_tilize(
             TILE_COUNT(tile_cnt_A),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            USE_PERF_BUFFERS(is_perf),
         ],
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
