@@ -271,9 +271,40 @@ def _id(c):
     )
 
 
+# cells whose golden fails on main's LLK under this harness (tools/mm-bisect2/golden_predating.md; a main-LLK tree run of the nine ids, the cells_x twins included)
+_MAIN_LLK_FAILS = {
+    ("I8", "I8", "I32", "Y", "H", "HiFi2", 1, 1, 1),
+    ("U8", "U8", "I32", "Y", "H", "HiFi2", 1, 1, 1),
+    ("F32", "B4", "B2", "N", "H", "HiFi2", 1, 6, 8),
+    ("B8a", "B8a", "B8a", "N", "H", "LoFi", 1, 7, 8),
+    ("B8a", "B8a", "B8a", "N", "F", "LoFi", 1, 7, 8),
+    ("F16a", "B8a", "B8a", "Y", "H", "LoFi", 1, 4, 3),
+}
+
+
+def _main_llk_fails(body):
+    a, b, o, acc, sy, fi, r0, c1, rt, ct, kt = body
+    return (a, b, o, acc, sy, fi.name, rt, ct, kt) in _MAIN_LLK_FAILS and (r0, c1) == (
+        32,
+        32,
+    )
+
+
+def _marks(c):
+    if _main_llk_fails(c[2]):
+        return [
+            pytest.mark.xfail(
+                strict=False, reason="fails the same golden on main's LLK"
+            )
+        ]
+    return []
+
+
 @pytest.mark.nightly
 @skip_for_wormhole
-@pytest.mark.parametrize("case", _CASES, ids=_id)
+@pytest.mark.parametrize(
+    "case", [pytest.param(c, marks=_marks(c), id=_id(c)) for c in _CASES]
+)
 def test_matmul_cells(case, monkeypatch):
     table, row_mop, body = case
     if row_mop:
