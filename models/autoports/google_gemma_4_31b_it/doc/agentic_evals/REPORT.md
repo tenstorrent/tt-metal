@@ -99,3 +99,7 @@ The Django loop investigation has verified the reconstructed full42,823-token pr
 The full42823-token conditional HF/TT comparison agrees on the top token but has KL0.135185 and differing truncated sampling support. Two native replays did not loop. The original capped response remains a failure; root cause remains open, with further probes deferred until a normal-rung recurrence supplies exact onset evidence. See `runs/django-cap-loop-diagnosis/RESULT.md`.
 
 The idle-host workload repeat passed5requests: cold TTFT0.783/8.284/48.065seconds at4096/31755/107585tokens; overlap49.259seconds with28anchor tokens delivered. The prior HF-contended measurements remain separate; neither single regime establishes a causal speedup or release-level saving. See `runs/measured-workload-idle-regime/RESULT.md`.
+
+![Valid SWE smoke timeline](figures/swe_valid_timeline.svg)
+
+Query windows include API work and client overhead; the plot does not separate device generation, prefill or queue time. The two agents overlap, so summed lane time exceeds suite wall time.
