@@ -199,6 +199,9 @@ def device_argmax(tt_output, vocab_size: int) -> int:
         tt_output = tt_output[0]
     from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
 
+    done = getattr(stream_decode.STATE, "argmax_out", None) if stream_decode.active() else None
+    if done is not None and done[1] == vocab_size:  # already taken inside the decode step (model.py)
+        return int(ttnn.to_torch(done[0]).reshape(-1)[0])
     if stream_decode.active():  # one op on the decode cores (bonsai2/tt/ternary/argmax.py)
         from models.demos.blackhole.bonsai2.tt.ternary.argmax import row0_argmax
 

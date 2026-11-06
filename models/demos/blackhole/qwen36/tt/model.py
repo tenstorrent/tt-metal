@@ -1053,6 +1053,11 @@ class Qwen36Model:
             sd = stream_decode.STATE
             logits = sd.head.rotated(sd.final_nrot, x, lead=tuple(list(x.shape)[:-1]), host_pf=sd.head_pf())
             ttnn.deallocate(x)
+            if os.environ.get("BONSAI_ARGMAX_TRACED", "1") == "1":
+                # the greedy argmax inside the step (and its trace): the caller reads one id (stream_decode.argmax)
+                from models.demos.blackhole.bonsai2.tt.ternary.argmax import row0_argmax
+
+                sd.argmax_out = (row0_argmax(logits, self.args.vocab_size), self.args.vocab_size)
             return logits
         x = self._final_norm_decode(x)
         if sharded_lm_head or self._ondev_argmax:
