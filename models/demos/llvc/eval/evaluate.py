@@ -156,11 +156,15 @@ def global_pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     y = b.flatten().float()
     n = min(x.numel(), y.numel())
     x, y = x[:n], y[:n]
+    if not torch.isfinite(x).all() or not torch.isfinite(y).all():
+        return 0.0  # NaN/Inf output must fail accuracy gates, not pass them
     xv = x - x.mean()
     yv = y - y.mean()
     denom = (xv.norm() * yv.norm()).item()
     if denom == 0.0:
-        return 1.0
+        # Zero variance: identical constants are a (degenerate) match, a
+        # constant vs non-constant signal is a mismatch.
+        return float(torch.equal(x, y))
     return max(-1.0, min(1.0, (xv * yv).sum().item() / (denom + 1e-8)))
 
 

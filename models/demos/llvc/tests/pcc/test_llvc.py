@@ -14,7 +14,7 @@ import torch
 from models.demos.llvc.eval.evaluate import reference_stream
 from models.demos.llvc.reference.llvc_reference import build_reference_model
 from models.demos.llvc.tt.config import LLVCConfig
-from models.demos.llvc.tt.model import LLVCModel
+from models.demos.llvc.tt.model import LLVCModel, reference_params_from_config
 
 # bf16 device numerics vs fp32 torch; identical weights and chunking.
 E2E_VS_REFERENCE_PCC = 0.99
@@ -25,11 +25,15 @@ BATCHED_VS_SEQUENTIAL_PCC = 0.99
 def compute_pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     x = a.flatten().float()
     y = b.flatten().float()
+    if not torch.isfinite(x).all() or not torch.isfinite(y).all():
+        return 0.0  # NaN/Inf output must fail the PCC gates, not pass them
     vx = x - x.mean()
     vy = y - y.mean()
     denom = torch.sqrt((vx * vx).sum()) * torch.sqrt((vy * vy).sum())
     if denom.item() == 0.0:
-        return 1.0
+        # Zero variance: identical constants are a (degenerate) match, a
+        # constant vs non-constant signal is a mismatch.
+        return float(torch.equal(x, y))
     corr = (vx * vy).sum().item() / (denom.item() + 1e-8)
     return max(-1.0, min(1.0, corr))
 
@@ -65,31 +69,9 @@ def _fused_sdpa_config() -> LLVCConfig:
     return cfg
 
 
-def _reference_params_from(config: LLVCConfig) -> dict:
-    return dict(
-        label_len=1,
-        L=config.L,
-        enc_dim=config.enc_dim,
-        num_enc_layers=config.num_enc_layers,
-        dec_dim=config.dec_dim,
-        num_dec_layers=config.num_dec_layers,
-        dec_buf_len=config.dec_buf_len,
-        dec_chunk_size=config.dec_chunk_size,
-        out_buf_len=config.out_buf_len,
-        nhead=config.nhead,
-        use_pos_enc=config.use_pos_enc,
-        decoder_dropout=0.0,
-        convnet_config=dict(
-            convnet_prenet=config.convnet.convnet_prenet,
-            out_channels=list(config.convnet.out_channels),
-            kernel_sizes=list(config.convnet.kernel_sizes),
-            dilations=list(config.convnet.dilations),
-            dropout=0.0,
-            combine_residuals=config.convnet.combine_residuals,
-            skip_connection=config.convnet.skip_connection,
-            use_residual_blocks=config.convnet.use_residual_blocks,
-        ),
-    )
+# Single source of truth for config -> reference kwargs lives next to
+# ``create_llvc`` so tests and production construction cannot drift.
+_reference_params_from = reference_params_from_config
 
 
 class TestLLVCReference:

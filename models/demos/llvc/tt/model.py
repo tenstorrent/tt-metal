@@ -689,6 +689,42 @@ class LLVCModel:
         return outputs, device_times, e2e_times
 
 
+def reference_params_from_config(config: LLVCConfig) -> dict:
+    """Torch reference (``Net``) constructor kwargs matching ``config``.
+
+    ``create_llvc`` and the PCC tests must build the reference from the *same*
+    mapping, so a non-default ``LLVCConfig`` (e.g. a small test config) gets a
+    matching reference instead of the 512/256-channel default.
+    """
+    return dict(
+        label_len=config.label_len,
+        L=config.L,
+        enc_dim=config.enc_dim,
+        num_enc_layers=config.num_enc_layers,
+        dec_dim=config.dec_dim,
+        num_dec_layers=config.num_dec_layers,
+        dec_buf_len=config.dec_buf_len,
+        dec_chunk_size=config.dec_chunk_size,
+        out_buf_len=config.out_buf_len,
+        nhead=config.nhead,
+        use_pos_enc=config.use_pos_enc,
+        skip_connection=config.skip_connection,
+        proj=config.proj,
+        lookahead=config.lookahead,
+        decoder_dropout=0.0,  # inference: dropout is identity
+        convnet_config=dict(
+            convnet_prenet=config.convnet.convnet_prenet,
+            out_channels=list(config.convnet.out_channels),
+            kernel_sizes=list(config.convnet.kernel_sizes),
+            dilations=list(config.convnet.dilations),
+            dropout=0.0,  # inference: dropout is identity
+            combine_residuals=config.convnet.combine_residuals,
+            skip_connection=config.convnet.skip_connection,
+            use_residual_blocks=config.convnet.use_residual_blocks,
+        ),
+    )
+
+
 def create_llvc(
     config: LLVCConfig | None = None,
     *,
@@ -706,7 +742,10 @@ def create_llvc(
     if config is None:
         config = LLVCConfig()
     if reference is None:
-        reference = build_reference_model()
+        # Derive the reference architecture from the supplied config so a
+        # non-default LLVCConfig gets a matching reference (not the 512/256
+        # default, whose weights would not fit this model).
+        reference = build_reference_model(reference_params_from_config(config))
         if checkpoint_path is not None:
             from models.demos.llvc.tt.state_io import load_llvc_checkpoint
 

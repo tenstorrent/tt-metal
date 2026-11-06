@@ -85,6 +85,11 @@ def run_demo(args: argparse.Namespace, *, device: ttnn.Device) -> None:
         config, reference = load_llvc_config_and_model(args.config, args.checkpoint)
         model = create_llvc(config, device=device, reference=reference)
     else:
+        if not args.synthetic:
+            raise ValueError(
+                "Real-audio conversion requires both --config and --checkpoint; "
+                "use --synthetic to smoke-test with random weights."
+            )
         logger.warning("No checkpoint provided: running with random weights (smoke test only).")
         config = LLVCConfig()
         model = create_llvc(config, device=device)
