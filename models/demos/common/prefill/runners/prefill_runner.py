@@ -425,6 +425,8 @@ def build_d2d_pipeline_endpoints(
             sender_rank=rank - 1,
             receiver_rank=rank,
             fabric_link_group=D2D_INBOUND_LINK_GROUP,
+            # A middle stage builds its outbound sender on this mesh next; the last stage builds none.
+            reserve_links_for_later_service=rank < num_ranks - 1,
             **_common(inbound_planes),
         )
     outbound = None
@@ -467,6 +469,7 @@ def build_d2d_index_endpoints(mesh_device, rank: int, per_chip_shape, *, inbound
             sender_rank=rank - 1,
             receiver_rank=rank,
             fabric_link_group=D2D_INBOUND_LINK_GROUP,
+            reserve_links_for_later_service=outbound,
             **_common(),
         )
     idx_out = None
