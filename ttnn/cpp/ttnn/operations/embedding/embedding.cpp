@@ -30,8 +30,8 @@ ttnn::Tensor embedding(
     Tensor mutable_weight = weight_arg;
 
     if (mutable_weight.layout() == ttnn::TILE_LAYOUT) {
-        // runtime_rows: the native multi-core prim with its own runtime rows, so an interleaved table's row
-        // count stays out of the hash (the routed untilize may pick the codegen prim, keyed on the full shape).
+        // runtime_rows: untilize the interleaved table with the native multi-core program, which takes its
+        // row count at runtime (the routed untilize may pick the shape-specific codegen program).
         mutable_weight = runtime_rows && !mutable_weight.is_sharded()
                              ? ttnn::operations::data_movement::detail::untilize_force_native(
                                    mutable_weight, std::nullopt, true, std::nullopt, runtime_rows)

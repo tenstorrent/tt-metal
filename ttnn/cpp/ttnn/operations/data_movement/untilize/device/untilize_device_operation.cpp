@@ -273,7 +273,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
 
 namespace {
 // The multi-core factory with interleaved input and output derives its per-core rows on device when
-// asked to; only that configuration hashes without the row count.
+// asked to; only that configuration takes the row count at runtime.
 bool row_free_configuration(
     const UntilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const UntilizeDeviceOperation::tensor_args_t& tensor_args) {
@@ -292,7 +292,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_hit(
         validate_on_program_cache_miss(operation_attributes, tensor_args);
         return;
     }
-    // Only the row-dependent invariants: the row count is not in the hash.
+    // Only the row-dependent invariants.
     using namespace tt::constants;
     const auto& input_tensor_a = tensor_args.input;
     uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
