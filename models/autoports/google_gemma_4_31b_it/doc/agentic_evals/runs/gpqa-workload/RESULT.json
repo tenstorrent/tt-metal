@@ -1,0 +1,151 @@
+{
+  "status": "complete_host_analysis",
+  "used_device_hours": 0,
+  "source": "bringup/artifacts/stage12-gpqa-job.log",
+  "source_sha256": "5a91aa5c54075bbcc20960a9978b98dc0e41990d8c8fe11e8e763b025b455797",
+  "selection": {
+    "final_docker_log_lines_1_based": [
+      15651,
+      29456
+    ],
+    "workload_event_lines_1_based": [
+      23866,
+      29425
+    ],
+    "rule": "Final Docker dump only; first before_serving_prefill after internal06:37:44 through final decode. GitHub outer06:40:30 timestamps are dump times, not event times."
+  },
+  "suite": "r1_gpqa_diamond",
+  "sample_ids": [
+    152,
+    189
+  ],
+  "evaluation_seconds": 163.384,
+  "evaluation_seconds_source": "coordinator-provided completed eval result; not derived from dump timestamps",
+  "registration": {
+    "class": "models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM",
+    "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59
+    ],
+    "device_ids": [
+      0,
+      1,
+      2,
+      3
+    ]
+  },
+  "serving": {
+    "planned_clients": 2,
+    "captured_batch": 8,
+    "observed_max_active_decode_rows": 2,
+    "sampling_submission_counts": {
+      "prefill:device": 2,
+      "decode:device": 5480
+    },
+    "host_sampled_steps": 0,
+    "decode_submission_rows_histogram": {
+      "2": 3151,
+      "1": 2329
+    },
+    "decode_reload_inputs_submissions": 2,
+    "decode_reload_page_table_submissions": 269,
+    "startup_prepare_events": 1,
+    "workload_prepare_events": 0,
+    "captures_at_startup": 3,
+    "captures_at_last_memory_snapshot": 3,
+    "last_memory_snapshot_scope": "after second prefill, before decode; no end-of-decode snapshot",
+    "model_replays_at_last_memory_snapshot": 0,
+    "sample_replays_at_last_memory_snapshot": 2,
+    "max_logged_kv_usage_percent": 4.3,
+    "kv_usage_basis": "Periodic rounded logger samples; not exact peak or allocator occupancy"
+  },
+  "prompt_workload": {
+    "logical_prompt_tokens": [
+      485,
+      298
+    ],
+    "physical_prefill_rows": [
+      512,
+      320
+    ],
+    "total_logical_prompt_tokens": 783,
+    "mean_prompt_tokens": 391.5,
+    "max_initial_prompt_tokens": 485,
+    "request_id_mapping": null,
+    "basis": "Two zero-start prefill chunks485 and298, one final prefill per request; no mapping to sample IDs from event alone."
+  },
+  "working_set_tokens": null,
+  "max_context_tokens": null,
+  "emitted_output_tokens": null,
+  "end_model_replay_count": null,
+  "missing_reasons": {
+    "working_set_tokens": "No per-request exact output usage or final token positions in this log. Initial prompts do not measure prompt+generated live histories.",
+    "max_context_tokens": "Same missing exact output/position data; cannot derive from async submission count.",
+    "emitted_output_tokens": "Sampling submissions can overlap outstanding work and include discarded async work; active_rows or padded checked-row counters are not response usage.",
+    "end_model_replay_count": "Memory counter snapshots end after prefills; no final completion counter export."
+  },
+  "forecast_use": "Use observedC2/B8 and163.384s aggregate smoke duration for next-rung timing with small-sample/slow-tail uncertainty. Do not substitute391.5 initial prompt mean for agent working_set. Tool suite timing/cache demand remains separate.",
+  "limitations": [
+    "Single-turn GPQA smoke has no returning conversation prefix ceiling; zero prefix hits is not evidence of broken multi-turn caching.",
+    "Zero workload prepare events supports no observed recapture, but final trace counter is unavailable.",
+    "No new score or accuracy judgment made by this workload analysis."
+  ]
+}

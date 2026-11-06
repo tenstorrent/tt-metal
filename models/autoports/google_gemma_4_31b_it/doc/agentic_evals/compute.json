@@ -414,6 +414,47 @@
           "last_observed_at": "2026-11-06T06:37:24.816519+00:00",
           "workflow_status": "in_progress",
           "workflow_conclusion": null
+        },
+        {
+          "arm": "nightly-r1_gpqa_diamond",
+          "device": "qb2-ci",
+          "owner": "coordinator",
+          "status": "queued",
+          "eval": "r1_gpqa_diamond",
+          "workflow": "evals",
+          "planned_clients": 2,
+          "batch": 8,
+          "max_num_seqs": 8,
+          "tasks": 10,
+          "task_ids": [
+            152,
+            189,
+            46,
+            87,
+            52,
+            181,
+            31,
+            185,
+            50,
+            187
+          ],
+          "tt_metal_sha": "08ee8790bcbcd9e85cb799593b2bbaf40b785134",
+          "tti_sha": "a0c8bde35bb9f5c3dd7318883c8c29c29baa2540",
+          "plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+          "predicted_hours": 2.5,
+          "predicted_eval_seconds": 816.9198796432465,
+          "prediction_basis": "5x smoke163.384s for10/C2;50percent eval tail margin plus observed~95min CIoverhead; round totalup2.5h. Tail notmeasured on n2.",
+          "run_timeout_hours": 12,
+          "ci_job_timeout_hours": 18,
+          "created_at": "2026-11-06T06:44:45.848417+00:00",
+          "previous_rung": {
+            "run_id": 42166117505,
+            "functional_at": 2,
+            "audit": "runs/smoke2-r1_gpqa_diamond/audit.json"
+          },
+          "run_id": 42176391791,
+          "submitted_at": "2026-11-06T06:44:47Z",
+          "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42176391791"
         }
       ]
     }

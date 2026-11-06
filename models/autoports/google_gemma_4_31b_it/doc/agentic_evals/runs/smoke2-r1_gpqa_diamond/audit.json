@@ -1,0 +1,95 @@
+{
+  "status": "valid_smoke_rung",
+  "functional_at": 2,
+  "run_id": 42166117505,
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "completed_samples": 2,
+  "dataset_samples": 198,
+  "scope": "subset",
+  "sample_ids": [
+    152,
+    189
+  ],
+  "scores": {
+    "correct": 2,
+    "total": 2,
+    "accuracy_fraction": 1.0,
+    "wilson95_fraction": [
+      0.34237195288961925,
+      1
+    ],
+    "reference_published_percent": 84.3,
+    "reference_gpu_percent": 83.33,
+    "interpretation": "Two samples cannot establish parity with full-suite references."
+  },
+  "samples": [
+    {
+      "doc_id": 152,
+      "target": "(C)",
+      "final_boxed_answer": "C",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 15595,
+      "finish_reason": null,
+      "observed_timeout": false
+    },
+    {
+      "doc_id": 189,
+      "target": "(A)",
+      "final_boxed_answer": "A",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 10003,
+      "finish_reason": null,
+      "observed_timeout": false
+    }
+  ],
+  "limits": {
+    "request_timeout_seconds": 14400,
+    "max_generated_tokens": 126976,
+    "temperature": 1.0,
+    "top_k": 20,
+    "top_p": 0.95,
+    "seed": 42,
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475"
+  },
+  "trajectory_validity": {
+    "mode": "local-chat-completions text-only lm-eval requests; no agent tools",
+    "quarantined_samples": [],
+    "network_or_fetched_fix": "No tool executor or tool payload in this task protocol; no URLs in the recorded responses. Dataset download and local model API transport are harness operations, not agent egress.",
+    "cutoff": "Both responses terminate in complete correct boxed answers; no timeout/error in client log. Raw finish_reason and usage are not retained in sample schema, so unknown.",
+    "sampling_note": "Native thought prefix appears in content because this pre-parser run did not separate reasoning; boxed-answer grade remains valid."
+  },
+  "timing": {
+    "evaluation_wall_seconds": 163.3839759286493,
+    "evaluation_wall_hours": 0.04538443775795814,
+    "per_call_seconds": null,
+    "agent_hours": null,
+    "nightly10_projection": {
+      "planned_clients": 2,
+      "batch": 8,
+      "waves": 5,
+      "evaluation_seconds": 816.9198796432465,
+      "evaluation_hours": 0.2269221887897907,
+      "basis": "Linear five times measured two-sample concurrent rung; small sample no measured tail distribution. Add build/startup/queue separately and margin; this is not release-readiness proof."
+    }
+  },
+  "metadata_correction": "lm-eval n-samples original/effective198 describes dataset metadata despite explicit IDs; actual JSONL records and grades prove completed2. Do not report198 completed or trust zero stderr as interval.",
+  "sources": {
+    "results": "collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/evals/google__gemma-4-31B-it_p300x2_evals/eval-attempt-0c80aea405fa4dd596ee141b6f60c959/eval_id_gemma4-31b-autoport-v3_gemma-4-31B-it_p300x2/google__gemma-4-31B-it/results_2026-11-06T06-40-19.407298.json",
+    "samples": "collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/evals/google__gemma-4-31B-it_p300x2_evals/eval-attempt-0c80aea405fa4dd596ee141b6f60c959/eval_id_gemma4-31b-autoport-v3_gemma-4-31B-it_p300x2/google__gemma-4-31B-it/samples_r1_gpqa_diamond_2026-11-06T06-40-19.407298.jsonl",
+    "lm_eval_version": "0.4.10.dev0",
+    "task_version": {
+      "r1_gpqa_diamond": 1.0
+    },
+    "tti_sha": "e070c90450defcb6859120fe4976255375040a4f",
+    "full_registration_verification": "Coordinator inspected bringup/artifacts/stage12-gpqa-job.log lines15768 and16000: full60 autoport, context262144, B8, revision pins and1x4."
+  },
+  "missing_reasons": {
+    "finish_reason": "Not stored by lm-eval samples JSONL",
+    "token_counts_and_per_call_latency": "Not stored per sample; aggregate evaluation wall available"
+  },
+  "device_work_for_audit": 0
+}

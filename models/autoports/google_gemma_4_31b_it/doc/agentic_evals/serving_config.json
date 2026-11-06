@@ -190,5 +190,15 @@
     "batch": 8,
     "working_set_is_real_agent_measurement": false,
     "source": "runs/local-long-context/RESULT.md"
+  },
+  "measured_suites": {
+    "r1_gpqa_diamond": {
+      "planned_clients": 2,
+      "observed_peak_running": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "eval_seconds": 163.3839759286493,
+      "reference": "runs/smoke2-r1_gpqa_diamond/audit.json"
+    }
   }
 }

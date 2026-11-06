@@ -67,8 +67,26 @@
     {
       "fact": "CI manual dispatch defaults vllm-git-ref to main. Terminal retry resolver explicitly observed ca7a18246e4111629ed6cb4a7d1192002749fccf; future dispatches must supply this immutable ref explicitly.",
       "evidence": "bringup/artifacts/stage12-terminal-retry-resolve.log:443-444"
+    },
+    {
+      "fact": "lm-eval n-samples effective198 persists when explicit GPQA doc_ids select2; sample JSONL is authoritative for completed count.",
+      "evidence": "runs/smoke2-r1_gpqa_diamond/collected"
     }
   ],
-  "suite_timings": [],
+  "suite_timings": [
+    {
+      "run_id": 42166117505,
+      "eval": "r1_gpqa_diamond",
+      "tasks": 2,
+      "agents": 2,
+      "batch": 8,
+      "wall_hours": 0.04538443775795814,
+      "wall_basis": "lm-eval total_evaluation_time_seconds; excludes image/server/setup",
+      "agent_hours": null,
+      "timeouts": 0,
+      "score": 1.0,
+      "evidence": "runs/smoke2-r1_gpqa_diamond/collected"
+    }
+  ],
   "generic_fixes": []
 }

@@ -33,14 +33,29 @@
     "decode_tps": 35.3042433377839,
     "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/parser-tti-benchmark/headline.json; full60/B1/C1,8serial4096/128 requests; parser configuration TTI da219dd56a241bb5314ae1da4b87104b84b0da15"
   },
-  "accuracy": [],
+  "accuracy": [
+    {
+      "name": "r1_gpqa_diamond",
+      "value": 1.0,
+      "unit": "fraction",
+      "phase": "agentic_smoke",
+      "completed_samples": 2,
+      "dataset_samples": 198,
+      "scope": "subset",
+      "confidence_interval_95": [
+        0.34237195288961925,
+        1.0
+      ],
+      "evidence": "runs/smoke2-r1_gpqa_diamond/collected; CI42166117505; doc_ids152,189"
+    }
+  ],
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
-    "stage12_accuracy": "CI smoke jobs in progress; scored trajectories not yet collected/audited."
+    "stage12_accuracy": "SWE and Terminal smoke results pending; GPQA completed2/198 only."
   },
   "notes": [
     "Current stage12 serving measurement; not frozen release.",
     "Native-tool registration repaired with2x168 exact token-ID pairs and actualharness parser checks.",
-    "No release or scored rung completion claimed."
+    "GPQA smoke2 valid; no release completion claimed."
   ]
 }

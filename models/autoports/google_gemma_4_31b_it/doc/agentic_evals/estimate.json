@@ -2,12 +2,22 @@
   "status": "awaiting_ci_smoke",
   "evals": {
     "r1_gpqa_diamond": {
-      "decision": "stop",
-      "reason": "No valid scored smoke or measured release projection yet. Decision8 authorizesCI; existing smoke source build is in progress. Stop is provisional release exclusion, not a capacity or accuracy stop.",
-      "functional_at": 0,
+      "decision": "go",
+      "reason": "Valid smoke2, both finalanswers scoredcorrect. Nightly10 projected13.615min evaluation plus measuredCI overhead and margin; fits stage/run budgets. Release list not yet frozen.",
+      "functional_at": 2,
       "projected_hours": null,
-      "score": null,
-      "confidence_interval_95": null
+      "score": 1.0,
+      "confidence_interval_95": [
+        0.34237195288961925,
+        1.0
+      ],
+      "next_rung": {
+        "tasks": 10,
+        "planned_clients": 2,
+        "batch": 8,
+        "evaluation_hours": 0.2269221887897907,
+        "projection_basis": "Linear five waves from measured smoke; tail unmeasured, add50percent evaluation margin and observed CI overhead"
+      }
     },
     "swe_bench_verified": {
       "decision": "stop",

@@ -47,14 +47,34 @@
   "release_route": {
     "ok": false,
     "harness_main_commit": "7a51c2f20f51e7508d8ea365d09092d00bbd5fcb",
-    "reason": "Operator decision8 authorizes stock QB2CI route. Three smoke source builds active; runtime/trajectory validity pending.",
+    "reason": "Authorized stockQB2CI GPQA route demonstrated full60autoport and valid2taskscore; Docker tool-suite environment validity pending. Dryrun/release not yet started.",
     "authorized": true,
     "device": "qb2-ci"
   },
   "smoke": {
     "ok": false,
-    "runs": [],
-    "trajectory_audit": null,
-    "reason": "Not launched; prerequisite failure, not failed model tasks."
+    "runs": [
+      {
+        "eval": "r1_gpqa_diamond",
+        "run_id": 42166117505,
+        "ok": true,
+        "tasks": 2,
+        "trajectory_audit": "runs/smoke2-r1_gpqa_diamond/audit.json"
+      },
+      {
+        "eval": "swe_bench_verified",
+        "run_id": 42173587147,
+        "ok": false,
+        "reason": "Running; no trajectory collected"
+      },
+      {
+        "eval": "terminal_bench_2_1",
+        "run_id": 42175367781,
+        "ok": false,
+        "reason": "Infrastructure retry after premodel topology failure; no task score yet"
+      }
+    ],
+    "trajectory_audit": "runs/smoke2-r1_gpqa_diamond/audit.json",
+    "reason": "GPQA valid; tool-suite smokes pending"
   }
 }

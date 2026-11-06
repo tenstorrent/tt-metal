@@ -829,6 +829,43 @@
         }
       ],
       "reason": "Validity remains first. Topology recovery dispatched; real trajectories unavailable. No informative extra synthetic device run until actual histories arrive."
+    },
+    {
+      "after": "gpqa-smoke2-valid-nightly-dispatched",
+      "order": [
+        {
+          "problem": "ci-fabric-topology",
+          "unblocks": [
+            "terminal_bench_2_1"
+          ],
+          "device_hours": 0.2167,
+          "saving_hours": null
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": null,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "unblocks": [],
+          "device_hours": null,
+          "saving_hours": null
+        }
+      ],
+      "reason": "GPQA valid and advances immediately; tool-suite validity remains above speed. Real multi-turn histories still unavailable, so capacity savings cannot be priced yet."
     }
   ]
 }

@@ -1,0 +1,13 @@
+{
+  "base_tti_sha": "a087be086b6e2cd6edf215dddb4c47c48463f13a",
+  "plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+  "planned_clients": 2,
+  "device_hours": 0,
+  "patches": {
+    "terminal_bench_2_1.patch": "80ca7ad0a2b61122f17697fc9a21871bd59a9158660447d929deb5f6b490eb03",
+    "swe_bench_verified.patch": "bdf1d9bfb95670570d420b888cc8eb13c9f390d5efb58ff1c840b66d720d0477",
+    "r1_gpqa_diamond.patch": "7adcf9d42f038f7dca6d282d11b67d48ac1f3513caa2736d70014d7d1dd36621"
+  },
+  "validation": "Each candidate: exact stock route check PASS; model-specific tests23passed; Ruff PASS",
+  "status": "prepared_only; not dispatched; smoke validation required"
+}
