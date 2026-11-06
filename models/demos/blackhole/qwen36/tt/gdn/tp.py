@@ -866,10 +866,10 @@ class TPGatedDeltaNet:
         if sp is not None:
             if sp.use_fold(T):
                 # Fold: ONE batch-1 call on the augmented value v' = [0 | v] (Dv' = Dk + Dv) from S'_0 = [I | 0]; its final
-                # state is the packed [A | B] and its outputs [U | O0], see sp.py. Needs the delta op's num_key_heads.
+                # state is [A | B] and its outputs [U | O0], see sp.py. Needs the delta op's num_key_heads.
                 assert _qkv_head_dims is not None, "the sp fold needs flat q/k/v"
                 v = sp.gdn_fold_v(v)
-                _init_state = sp.gdn_init_fold
+                _init_state = sp.gdn_identity_ab
                 _delta_head_dims = (Nk, Dk, Nv, Dk + Dv)
             else:
                 # Batch 2: real inputs from a zero state (O0, B) and v = 0 from an identity state (U, A), see sp.py.
