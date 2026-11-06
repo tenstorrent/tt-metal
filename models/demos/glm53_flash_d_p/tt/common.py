@@ -89,7 +89,8 @@ def local_rows(t: ttnn.Tensor, dim: int = -2) -> ttnn.Tensor:
     return b
 
 
-# row gathers on MiMo's fabric_all_gather (GLM_FABRIC_GATHER=1, default): bit-identical to ttnn.all_gather and faster
+# row gathers on ttnn.experimental.high_bw_all_gather (GLM_FABRIC_GATHER=1, default; MiMo's fabric_all_gather program,
+# stock since #61387, the bring-up fork retired 2026-11-06): bit-identical to ttnn.all_gather and faster
 # at every model shape (tests/test_all_gather_bench.py: 640 x 4096 axis 1 281 -> 208 us, 640 x 1536 132 -> 88,
 # 2560 x 4096 axis 0 340 -> 289); a fresh output per call, the op's own cached semaphores. Rows that are not a whole
 # number of tiles keep ttnn.all_gather. A module attribute so tests/test_ab_layers.py can flip it.
@@ -101,7 +102,7 @@ _TOPO2D: dict = {}
 
 
 def _ensure_2d_topology(t: ttnn.Tensor) -> None:
-    """fabric_all_gather validates a 2D declared distribution; split-layout tensors made by mesh_partition / the
+    """high_bw_all_gather validates a 2D declared distribution; split-layout tensors made by mesh_partition / the
     collectives carry a 1D one. Re-declare rows (dim 2) split over both mesh axes - what the bytes are (as MiMo's
     moe_ag.gather_full and deepseek_v3_d_p's chunked prefill do)."""
     if t.tensor_topology().distribution_shape().dims() >= 2:
@@ -123,7 +124,7 @@ def gather_axis(t: ttnn.Tensor, axis: int) -> ttnn.Tensor:
     _ensure_2d_topology(t)
     shape[-2] *= tuple(t.device().shape)[axis]
     out = ttnn.empty(shape, dtype=t.dtype, layout=ttnn.TILE_LAYOUT, device=t.device(), memory_config=MC)
-    ttnn.bringup.fabric_all_gather(t, dim=2, output_tensor=out, cluster_axis=axis, num_links=GATHER_LINKS)
+    ttnn.experimental.high_bw_all_gather(t, dim=2, output_tensor=out, cluster_axis=axis, num_links=GATHER_LINKS)
     return out
 
 
@@ -147,7 +148,7 @@ def _ring_scatter_ok(mesh) -> bool:
     """Whether the whole mesh closes into a snake ring of direct links (fabric_reduce_scatter plans it, or refuses)."""
     hit = _RING_OK.get(id(mesh))
     if hit is None or hit[0] is not mesh:
-        from ttnn.bringup.fabric_all_gather_ttnn.fabric_all_gather_py import plan
+        from ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_all_gather_py import plan
 
         try:
             links = int(__import__("os").environ.get("GLM_MOE_LINKS", "2"))

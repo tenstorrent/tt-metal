@@ -5,9 +5,9 @@
 
     stock   ttnn.all_gather; the exact TP partial sums as all_gather + SFPU ttnn.add in mesh-column order (K-30), the
             hidden-split ones (ATTN_O_SUM / EXPERTS_SUM gather_add) then ttnn.mesh_partition to the chip's columns.
-    fabric  the bring-up fabric forks: ttnn.bringup.fabric_all_gather (a drop-in for high_bw_all_gather with a
-            link-rate program; preallocated output, caller-owned L1_SMALL semaphores) and
-            ttnn.bringup.fabric_reduce_scatter(exact_fp32_add=True) (each add one IEEE fp32 rounding on the SFPU):
+    fabric  the fabric collectives: ttnn.experimental.high_bw_all_gather (stock; the link-rate program of the retired
+            fork ttnn.bringup.fabric_all_gather, #61387; preallocated output, caller-owned L1_SMALL semaphores) and
+            the bring-up fork ttnn.bringup.fabric_reduce_scatter(exact_fp32_add=True) (each add one IEEE fp32 rounding on the SFPU):
             sum_cols = ONE reduce-scatter over the TP axis by column blocks (dim 3: the chip's [S/SP, H/TP] slice
             of the sum, no full sum and no mesh_partition); tp_sum = a reduce-scatter by column blocks + a fabric
             all_gather of the columns (the sum replicated, bit-identical on every chip of the row; TP_SUM_BLOCKS=rows:
@@ -24,9 +24,10 @@
 A group of 2 (TP = 2: 2x2, 2x4 rows) adds a + b once: bit-identical to the stock gather_add. With TP = 4 (Galaxy) the
 fabric line adds in its own order (own + upstream partials), still one exact fp32 rounding per add.
 
-Not on a fork (they stay stock under fabric): the head <-> seq all_to_all (ttnn.experimental.all_to_all_async_generic;
-no bring-up fork), and any gather the fork's contract refuses (`_fits`: a ROW_MAJOR gather of the innermost dim, a
-non-DRAM-interleaved input, a TILE gather of a dim that is not tile-aligned). The optional reduce_scatter / all_reduce
+Not on the fabric ops (they stay as under stock): the head <-> seq all_to_all
+(ttnn.experimental.all_to_all_async_generic; no bring-up fork), and any gather high_bw_all_gather's contract refuses
+(`_fits`, then ttnn.all_gather: a ROW_MAJOR gather of the innermost dim, a non-DRAM-interleaved input, a TILE gather of
+a dim that is not tile-aligned). The optional reduce_scatter / all_reduce
 values of ATTN_O_SUM / EXPERTS_SUM / HC_TP_SUM (the FPU CCLs) are stock ttnn in both modes."""
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ from .settings import settings
 
 TP_AXIS = 1
 DRAM = ttnn.DRAM_MEMORY_CONFIG
-AG_LINKS = None  # fabric_all_gather: every link reported usable on the axis (2x2 BH: 4; vs 2 links 1.4-2x faster)
+AG_LINKS = None  # high_bw_all_gather: every link reported usable on the axis (2x2 BH: 4; vs 2 links 1.4-2x faster)
 
 _SEMS: dict = {}
 _RS_LINKS: dict = {}
@@ -176,7 +177,7 @@ def _to_fp32(t: ttnn.Tensor) -> ttnn.Tensor:
 
 
 def _sems(mesh):
-    """fabric_all_gather's caller-owned semaphores (zero, left zero by every call; L1_SMALL, which the spec's
+    """high_bw_all_gather's caller-owned semaphores (zero, left zero by every call; L1_SMALL, which the spec's
     device_params reserve): one pair per mesh, the whole worker grid."""
     hit = _SEMS.get(id(mesh))
     if hit is None or hit[0] is not mesh:
@@ -194,7 +195,7 @@ def rs_links(mesh, axis: int = TP_AXIS) -> int:
     hit = _RS_LINKS.get((id(mesh), axis))
     if hit is not None and hit[0] is mesh:
         return hit[1]
-    from ttnn.bringup.fabric_all_gather_ttnn.fabric_all_gather_py import _num_banks
+    from ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_all_gather_py import _num_banks
 
     rows, cols = tuple(mesh.shape)
     node = lambda r, c: mesh.get_fabric_node_id(ttnn.MeshCoordinate(r, c))  # noqa: E731
@@ -213,7 +214,7 @@ def rs_links(mesh, axis: int = TP_AXIS) -> int:
 
 
 def setup(mesh) -> None:
-    """Load time (agent rule 5): fabric_all_gather's semaphores and fabric_reduce_scatter's plan and counters on the TP
+    """Load time (agent rule 5): high_bw_all_gather's semaphores and fabric_reduce_scatter's plan and counters on the TP
     axis (the partial sums' axis), so that no forward pass creates a semaphore or synchronizes the mesh.
     Idempotent; nothing under stock."""
     if not fabric():
@@ -226,7 +227,7 @@ def setup(mesh) -> None:
 
 
 def _fits(t: ttnn.Tensor, dim: int) -> bool:
-    """fabric_all_gather's contract (high_bw_all_gather's): DRAM interleaved input; a ROW_MAJOR gather never along
+    """high_bw_all_gather's contract: DRAM interleaved input; a ROW_MAJOR gather never along
     the innermost dim; a TILE gather of the last two dims only when that dim is tile-aligned (the output is
     preallocated at G x the padded size)."""
     mc = t.memory_config()
@@ -244,8 +245,8 @@ def _fits(t: ttnn.Tensor, dim: int) -> bool:
 def all_gather(
     t: ttnn.Tensor, dim: int, cluster_axis: int, out: ttnn.Tensor | None = None, site: str | None = None
 ) -> ttnn.Tensor:
-    """ttnn.all_gather(t, dim, cluster_axis) into DRAM (a data move, exact), on fabric_all_gather when CCL_IMPL=fabric
-    and its contract fits. Does not consume ``t``. ``site`` (HOST_ALLOC=on, P.15): the site's load-time output when one
+    """ttnn.all_gather(t, dim, cluster_axis) into DRAM (a data move, exact), on ttnn.experimental.high_bw_all_gather
+    when CCL_IMPL=fabric and its contract fits. Does not consume ``t``. ``site`` (HOST_ALLOC=on, P.15): the site's load-time output when one
     was reserved for this output spec (``reserve``; the result is then that buffer, which ``dealloc`` skips)."""
     mesh = t.device()
     if not fabric() or not _fits(t, dim):
@@ -258,7 +259,7 @@ def all_gather(
     if out is None:  # (EXPERTS_XG_PINNED: the caller's persistent output)
         out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), t.dtype, t.layout, mesh, DRAM)
     s0, s1 = _sems(mesh)
-    res = ttnn.bringup.fabric_all_gather(
+    res = ttnn.experimental.high_bw_all_gather(
         t, dim, out, cluster_axis=cluster_axis, num_links=AG_LINKS, ready_semaphore=s0, data_valid_semaphore=s1
     )
     # (a load-time output: the op returns a new wrapper of its buffer (DS41-149); hand back the kept object itself)
@@ -300,7 +301,7 @@ def _rs_ok(t: ttnn.Tensor, dim: int, g: int) -> bool:
 def tp_sum(mesh, t: ttnn.Tensor, exact: bool = False, fp32: bool = True) -> ttnn.Tensor:
     """The exact fp32 sum of ``t`` ([1, 1, R, W] fp32 TILE) over the TP axis, replicated on every chip of the row,
     bit-identical across them. Does not consume ``t``. stock: _gather_add. fabric: fabric_reduce_scatter of column
-    blocks (exact SFPU add) -> fabric_all_gather of the columns (TP_SUM_BLOCKS=rows: row blocks and rows); when the
+    blocks (exact SFPU add) -> high_bw_all_gather of the columns (TP_SUM_BLOCKS=rows: row blocks and rows); when the
     split dim is not a multiple of 32 TP (the norms' [S/SP, 1] sum of squares, the [S/SP, 32] mHC row),
     _gather_add on the fabric gather (mesh-column order). Column blocks or the gather: every row adds in the same
     order wherever the chunk starts (DS41-128). fabric_bf16 (P.6): the

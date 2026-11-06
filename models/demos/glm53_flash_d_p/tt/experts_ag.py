@@ -4,17 +4,18 @@
 """GLM-5.3 routed experts on the MiMo all-gather MoE ops (GLM_EXPERTS_MODE=ag): no dispatch / combine.
 
 Port of models/demos/mimo_v2_d_p/tt/moe_ag.py (MoeAgBlock, branch mstaletovic/mimo-v2-dp) onto the ttnn.bringup ops
-(INDEX.md: moe_ag, flat_routed_expert_ttnn, fabric_all_gather_ttnn, fabric_reduce_scatter_ttnn), for a mesh with two
+(INDEX.md: moe_ag, flat_routed_expert_ttnn, fabric_reduce_scatter_ttnn) and stock ttnn.experimental.high_bw_all_gather
+(the retired fork fabric_all_gather_ttnn's program, #61387), for a mesh with two
 rows (the dispatch axis 0, SP = 2) and any number of columns (TP); more rows (a Galaxy 4x4) skip the fused send-back:
 
     x, top-k (idx, w) of mesh row r's S/2 tokens (the same on every chip of the row)
-      -> fabric_all_gather over axis 0 -> every chip holds the chunk's T = S tokens (row r's at r S/2)
+      -> high_bw_all_gather over axis 0 -> every chip holds the chunk's T = S tokens (row r's at r S/2)
          (replicated input: x already holds all S tokens, no gather)
       -> moe_ag_route_plan: this chip's local experts' (token, k) pairs as flat rows (counts / regions / token_index /
          y_slot), from the gathered top-k and the chip's local-slot map
       -> flat_routed_expert in indexed mode (flat row i reads gathered row token_index[i]; clamped_silu = silu(min(g,
          10)) * clamp(u, +-10), as GLM): y [rows, H] bf16 row major
-      -> moe_ag_local_reduce, fused send-back: phase 1 the other row's tokens' partial, fabric_all_gather axis 0, phase
+      -> moe_ag_local_reduce, fused send-back: phase 1 the other row's tokens' partial, high_bw_all_gather axis 0, phase
          2 this row's tokens' partial + the peer's -> [S/2, H] bf16 tiles: the column's sum for row r's tokens
          (R > 2 rows: moe_ag_local_reduce phase 0 over all T tokens as tiles, fabric_reduce_scatter axis 0 -> the same)
       -> reduce over the columns: split (the model's default residual layout) fabric_reduce_scatter axis 1 -> the
@@ -27,7 +28,7 @@ generated/glm53_flash_d_p/tt_cache/flat/<rows>x<cols>; a miss dequantizes the la
 Precision (tests/test_flat_stage_probe.py, test_bfp8_rounding.py): the packer rounds bf16 -> bfp8 ties away from zero
 (+0.28% per pack); with fp32 down accumulation and stochastic packer rounding the flat expert is unbiased against fp32
 math on its own bfp4 weights (coef 1.0005). Partial sums are bf16 (+0.1%); the unified path adds them in fp32.
-Knobs: GLM_AG_GATHER_OP (fabric | high_bw), GLM_AG_RS_OP (fabric | ttnn), GLM_MOE_LINKS (links of every collective),
+Knobs: GLM_AG_RS_OP (fabric | ttnn), GLM_MOE_LINKS (links of every collective),
 GLM_AG_DOWN_FP32 (default 1: fp32 DEST down projection; 0: bf16 DEST, ~3-4% output gain with bfp4 weights),
 GLM_AG_PACK_SRND (default 0; 1: stochastic rounding in the flat expert's packers, analysis only),
 GLM_AG_XBF16 / GLM_AG_HBF16 (default 0: the flat expert's x / h as bfp8 tiles; 1: bf16).
@@ -112,7 +113,7 @@ _SEMS = {}
 
 
 def _sems(mesh):
-    """Caller-owned fabric_all_gather semaphores (zero, left zero by every call): one pair per mesh."""
+    """Caller-owned high_bw_all_gather semaphores (zero, left zero by every call): one pair per mesh."""
     hit = _SEMS.get(id(mesh))
     if hit is None or hit[0] is not mesh:
         g = mesh.compute_with_storage_grid_size()
@@ -124,10 +125,8 @@ def _sems(mesh):
 
 def all_gather_rows(x, out, axis, links):
     """x [1, 1, s, W] DRAM interleaved -> out [1, 1, G s, W] (chip p's rows at p s) over mesh axis ``axis``."""
-    if os.environ.get("GLM_AG_GATHER_OP", "fabric") == "high_bw":
-        return ttnn.experimental.high_bw_all_gather(x, dim=2, output_tensor=out, cluster_axis=axis, num_links=links)
     s0, s1 = _sems(x.device())
-    return ttnn.bringup.fabric_all_gather(
+    return ttnn.experimental.high_bw_all_gather(
         x,
         dim=2,
         output_tensor=out,

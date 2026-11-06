@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CLI: measure fabric_all_gather on YOUR fabric configs / topologies / links / shard.
+"""CLI: measure the Python fabric_all_gather (fabric_all_gather_py.py) on YOUR fabric configs / topologies / links / shard.
 
-    python -m ttnn.bringup.fabric_all_gather_ttnn [--fabric 1d,2d] [--topology 4x1_line,4x1_ring]
-                                                        [--links 1,2] [--shape 2048,4096] [--dtype bf16]
-                                                        [--dim 0] [--payload 14336] [--trials 3]
+    python -m ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_all_gather_cli [--fabric 1d,2d] [--topology 4x1_line,4x1_ring]
+                                                                                [--links 1,2] [--shape 2048,4096] [--dtype bf16]
+                                                                                [--dim 0] [--payload 14336] [--trials 3]
 
 Translates the flags into env overrides and runs the device-perf test through scripts/run_safe_pytest.sh
 (device lock, in-process profiler, post-run reset). Needs 4 chips. Run from the repo root with the Python env active.
@@ -16,11 +16,11 @@ import os
 import subprocess
 import sys
 
-_TEST = "ttnn/ttnn/bringup/fabric_all_gather_ttnn/tests/unit/test_fabric_all_gather_py.py"
+_TEST = "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/unit/test_fabric_all_gather_py.py"
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="python -m ttnn.bringup.fabric_all_gather_ttnn")
+    ap = argparse.ArgumentParser(prog="python -m ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_all_gather_cli")
     ap.add_argument(
         "--fabric", default=None, help="comma list: 1d, 1d_ring, 1d_neighbor_exchange, 2d, 2d_torus_x/y/xy."
     )

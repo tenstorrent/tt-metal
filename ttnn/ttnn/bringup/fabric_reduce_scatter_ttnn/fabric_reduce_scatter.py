@@ -32,7 +32,7 @@ import math
 from collections import OrderedDict
 
 import ttnn
-from ttnn.bringup.fabric_all_gather_ttnn.fabric_all_gather_py import (
+from ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_all_gather_py import (
     _CHUNK_WALK,
     NOC0,
     NOC1,

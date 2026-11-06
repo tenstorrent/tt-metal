@@ -105,7 +105,7 @@ def test_experts_ag_perf(mesh_device):
 
         for it in range(ITERS + 1):
             idx, wts = stage("topk (dense -> idx, w)", lambda: mod.topk_from_dense(rd))
-            stage("gather x tiles (fabric_all_gather axis 0)", lambda: blk_ag(xd, blk.gx))
+            stage("gather x tiles (high_bw_all_gather axis 0)", lambda: blk_ag(xd, blk.gx))
             x_rm = stage("gathered x tile -> row major", lambda: ttnn.to_layout(blk.gx, ttnn.ROW_MAJOR_LAYOUT))
             stage("gather idx + w", lambda: (blk_ag(idx, blk.gidx_t), blk_ag(wts, blk.gw_t)))
             gi, gw = stage(

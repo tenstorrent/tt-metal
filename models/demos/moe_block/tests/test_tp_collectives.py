@@ -145,7 +145,6 @@ def test_tp_collectives(mesh_device, device_params):
                 ttnn.Shape(out_shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
             )
             cands["high_bw"] = lambda: ttnn.experimental.high_bw_all_gather(x, dim, pre, cluster_axis=1, num_links=2)
-            cands["fabric_ag"] = lambda: ttnn.bringup.fabric_all_gather(x, dim, pre, cluster_axis=1, num_links=2)
             if dim == 2:
                 from ttnn.bringup.combine_rf.fabric_all_gather_py import fabric_all_gather as fag_py
 
@@ -193,7 +192,7 @@ def test_tp_collectives(mesh_device, device_params):
                 x = xk[k][1]  # (the candidates' lambdas read x)
                 return f()
 
-            us, errs = _calls(mesh_device, run, check, free=cname not in ("high_bw", "fabric_ag"))
+            us, errs = _calls(mesh_device, run, check, free=cname != "high_bw")
             res[cname] = (us, max(errs))
         mb = rows * cols * 2 / 1e6
         logger.info(

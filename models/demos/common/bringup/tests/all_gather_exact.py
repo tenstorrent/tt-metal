@@ -1,37 +1,62 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""ttnn.bringup.fabric_all_gather against its torch semantics (reference.py), one random-input case per captured call
-(cases.py). Pure data movement: every element of every chip's output is compared exactly (bits), including, for a
-partial gather (gathered_dim_size), the bytes outside each rank's prefix, which must keep the preallocated output's
-random fill. Every chip's input differs, so a chip gathered into the wrong group or slot fails. Don't-care: nothing.
+"""Bit-exact model-case check of ttnn.experimental.high_bw_all_gather (stock), shared by the models' own tests
+(models/demos/glm53_flash_d_p/tests/test_all_gather_stock.py, models/demos/deepseek_v41_flash_d_p/tests/
+test_all_gather_stock.py). Not a test file itself.
 
-The op's own unit suite (tests/unit/) checks it against ttnn.experimental.high_bw_all_gather."""
+The cases are the retired fork ttnn.bringup.fabric_all_gather's model cases (fabric_all_gather_ttnn/tests/cases.py,
+O.1; the fork was retired 2026-11-06: upstream #61387 made the stock op the same program), unchanged, now run on the
+stock op the models call. Pure data movement: every element of every chip's output is compared exactly (bits),
+including, for a partial gather (gathered_dim_size), the bytes outside each rank's prefix, which must keep the
+preallocated output's random fill. Every chip's input differs, so a chip gathered into the wrong group or slot fails.
+Then determinism (models/demos/common/bringup/testing/determinism.py). Don't-care: nothing.
 
-import importlib.util
-from pathlib import Path
+A case: id, sig (the fork-call capture's signature, for the record), mesh, device_params (fabric_config name,
+l1_small_size, optional fabric_payload_bytes), input {shape, dtype, layout} (per chip), output {shape}, dim,
+cluster_axis (0 / 1 / None = the whole mesh), num_links, optional gathered_dim_size and semaphores (the caller-owned
+L1_SMALL pair the model passes), seed, exact."""
 
-import pytest
+from __future__ import annotations
+
 import torch
 
 import ttnn
 from models.demos.common.bringup.testing import determinism
 
-_HERE = Path(__file__).resolve().parent
+
+# ---- torch semantics (high_bw_all_gather's contract)
+def group(mesh: tuple[int, int], d: int, cluster_axis: int | None) -> list[int]:
+    """Row-major device indices of device d's group, in rank order: cluster_axis 0 -> the chips of one mesh column,
+    1 -> one mesh row, None -> every chip."""
+    rows, cols = mesh
+    r, c = divmod(d, cols)
+    if cluster_axis is None:
+        return list(range(rows * cols))
+    if cluster_axis == 0:
+        return [i * cols + c for i in range(rows)]
+    return [r * cols + j for j in range(cols)]
 
 
-def _load(name):
-    spec = importlib.util.spec_from_file_location(f"bringup_fabric_all_gather_ttnn_tests_{name}", _HERE / f"{name}.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+def reference(xs, mesh, d, *, dim, cluster_axis, fill, gathered_dim_size=None):
+    """xs: every device's input (row-major list); fill: the output's prior contents. -> device d's expected output: its
+    group's inputs concatenated along `dim` in row-major chip order. gathered_dim_size (a partial gather): rank g writes
+    the first gathered_dim_size / G entries of its input along `dim` into its fixed slot [g L, g L + gathered_dim_size /
+    G) (L = the input's length along `dim`); every other output byte keeps what the preallocated output held."""
+    members = group(mesh, d, cluster_axis)
+    if gathered_dim_size is None:
+        return torch.cat([xs[m] for m in members], dim=dim)
+    out = fill.clone()
+    L = xs[0].shape[dim]
+    active = gathered_dim_size // len(members)
+    assert gathered_dim_size % len(members) == 0 and active <= L
+    for g, m in enumerate(members):
+        out.narrow(dim, g * L, active).copy_(xs[m].narrow(dim, 0, active))
+    return out
 
 
-ref = _load("reference")
-CASES = _load("cases").CASES
-
-
-def _device_params(c):
+# ---- the device side
+def device_params(c: dict) -> dict:
     p = dict(c["device_params"])
     p["fabric_config"] = getattr(ttnn.FabricConfig, p["fabric_config"])
     if "fabric_payload_bytes" in p:  # the model's fabric packet payload (harness.device_params)
@@ -42,6 +67,16 @@ def _device_params(c):
     # handshake, and the groups depend on the mesh.
     p["require_exact_physical_num_devices"] = True
     return p
+
+
+def parametrize(cases: list[dict]) -> dict:
+    """pytest.mark.parametrize arguments for ("mesh_device, device_params, case", ...)."""
+    return dict(
+        argnames="mesh_device, device_params, case",
+        argvalues=[(tuple(c["mesh"]), device_params(c), c) for c in cases],
+        ids=[c["id"] for c in cases],
+        indirect=["mesh_device", "device_params"],
+    )
 
 
 def _put(mesh_device, host, spec, mapper):
@@ -101,21 +136,14 @@ def _call(mesh_device, c, tt_in, fill, sems=None):
     out = _put(mesh_device, fill, c["input"], ttnn.ReplicateTensorToMesh(mesh_device))
     kw = {"gathered_dim_size": c["gathered_dim_size"]} if c.get("gathered_dim_size") is not None else {}
     kw.update(sems or {})
-    res = ttnn.bringup.fabric_all_gather(
+    res = ttnn.experimental.high_bw_all_gather(
         tt_in, dim=c["dim"], output_tensor=out, cluster_axis=c["cluster_axis"], num_links=c["num_links"], **kw
     )
     return res if res is not None else out
 
 
-@pytest.mark.timeout(900)
-@pytest.mark.parametrize(
-    "mesh_device, device_params, case",
-    [(tuple(c["mesh"]), _device_params(c), c) for c in CASES],
-    ids=[c["id"] for c in CASES],
-    indirect=["mesh_device", "device_params"],
-)
-def test_fabric_all_gather_ttnn(mesh_device, device_params, case):
-    c = case
+def run_case(mesh_device, c: dict) -> None:
+    """The case's call on random inputs: every chip's output bit for bit vs ``reference``, then determinism."""
     assert c["exact"]
     rows, cols = c["mesh"]
     sems = _semaphores(mesh_device, c)
@@ -124,7 +152,7 @@ def test_fabric_all_gather_ttnn(mesh_device, device_params, case):
     outs = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(out)]
     assert len(outs) == rows * cols
     for d in range(rows * cols):
-        want = ref.all_gather(
+        want = reference(
             xs,
             (rows, cols),
             d,

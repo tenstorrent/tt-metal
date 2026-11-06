@@ -15,7 +15,7 @@ fork-call capture see it like any other op. Nothing here imports at ``import ttn
 # C++ bindings, their Python implementations importable as ttnn.bringup.mhc_pre_ttnn.mhc_pre / .mhc_post_ttnn.mhc_post.
 PYTHON_OPS = {
     # fabric reduce-scatter (Python ProgramDescriptor op, mstaletovic/mimo-v2-dp); its planning code is the Python
-    # fabric_all_gather in fabric_all_gather_ttnn/fabric_all_gather_py.py (ttnn.bringup.fabric_all_gather is the C++ op)
+    # fabric_all_gather in fabric_reduce_scatter_ttnn/fabric_all_gather_py.py (not a registered op)
     "fabric_reduce_scatter": ("fabric_reduce_scatter_ttnn", "fabric_reduce_scatter"),
     # bf16 TILE rows -> 320 B bfloat4_b / 576 B bfloat8_b row records, SFPU-rounded to nearest even (deepseek_v41_flash_d_p
     # compressed / window KV)
@@ -34,6 +34,9 @@ RETIRED_OPS = {
     # deepseek_v41_flash_d_p's sqrtsoftplus router (fp32_selection + fp32_activation): upstream #60550 made the stock op
     # select in fp32 with its own fp32-accurate sqrt(softplus) (owner decision 2026-11-06)
     "moe_grouped_topk": "ttnn.experimental.deepseek_prefill.moe_grouped_topk (upstream #60550; retired 2026-11-06)",
+    # glm53_flash_d_p / deepseek_v41_flash_d_p's fabric all-gather (mstaletovic/mimo-v2-dp): upstream #61387 rewrote the
+    # stock op on the same program; same signature and validation, outputs bit-identical (owner decision 2026-11-06)
+    "fabric_all_gather": "ttnn.experimental.high_bw_all_gather (upstream #61387; retired 2026-11-06)",
 }
 
 

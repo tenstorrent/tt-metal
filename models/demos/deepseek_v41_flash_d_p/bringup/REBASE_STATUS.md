@@ -26,6 +26,8 @@ pushing because one item matches a stop rule (a failure I cannot fix at its caus
    (#63309; DS41 does not use it); re-check the stock combine_fabric2d and stock moe_grouped_topk merges (GLM-5.3 /
    Kimi paths, not run here); knowledge staleness edits uncommitted until you read
    /scratch/dnijemcevic/rebase/staleness_report.md.
+   Also decided 2026-11-06: fork fabric_all_gather_ttnn retired (stock high_bw_all_gather is the same program,
+   #61387; 8x4 A/B bit-identical); tt/ccl.py calls the stock op.
 6. Not rebase work: the Galaxy ledger's O.1 never ran; 8x4 fork cases for its 195 calls are new test work.
 7. Running meanwhile: the full fork suite on the rebased build (/scratch/dnijemcevic/rebase/forksuite_new/), so you
    have the complete list; anything new it finds is added below.

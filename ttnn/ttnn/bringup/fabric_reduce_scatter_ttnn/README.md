@@ -4,7 +4,7 @@
 New op (no TTNN source on this tree; from `ttnn/ttnn/operations/examples/fabric_reduce_scatter` on
 `mstaletovic/mimo-v2-dp` @ `b45a923d73c`): a reduce-scatter over the fabric, DRAM to DRAM, as one `ttnn.generic_op`
 (Python ProgramDescriptor, no C++ build), planned with fabric_all_gather's `plan()`
-(`fabric_all_gather_ttnn/fabric_all_gather_py.py`).
+(`fabric_all_gather_py.py`, in this folder; see "Python all-gather prototype" below).
 - Input per chip: a partial `[1, 1, G * Sb, W]` TILE, DRAM interleaved. Output per chip: its block of the sum over the
   group, `[1, 1, Sb, W]` (as `ttnn.reduce_scatter(dim=2)`); with `dim=3` column blocks (as `ttnn.reduce_scatter(dim=3)`).
   Chip (r, c) owns the block of its row-major rank in the group, whatever order the group travels in.
@@ -19,7 +19,7 @@ New op (no TTNN source on this tree; from `ttnn/ttnn/operations/examples/fabric_
 ## Consider it instead of
 - `ttnn.reduce_scatter` / `ttnn.experimental.reduce_scatter_minimal_async` on DRAM TILE partials: faster at the
   measured model shapes (Measured), and a whole-mesh reduce in one call (`cluster_axis=None`) instead of axis 0 then 1.
-- `ttnn.all_reduce` when every chip only needs its slice; for a replicated sum follow with `ttnn.bringup.fabric_all_gather`.
+- `ttnn.all_reduce` when every chip only needs its slice; for a replicated sum follow with `ttnn.experimental.high_bw_all_gather`.
 - Precision only (rule 7: cross-chip sums in bf16): `ttnn.all_gather` + `ttnn.add` (+ `ttnn.mesh_partition`) for exact
   fp32 partial sums: `exact_fp32_add=True` with `dim=3` is bit-identical to that chain at TP 2 and one call; for
   per-step checks or a measured end-to-end gap.
@@ -83,7 +83,7 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
 - Every hop must be a direct fabric link (`plan()` ValueError "not a direct link"; e.g. no ring along a LoudBox row).
 - Without `cache_descriptors` the Python descriptor build costs ~0.65 ms host per call.
 - A persistent scratch `(G + 1) Sb x W` per (shape, dtype) stays allocated (module cache).
-- `dual_cycles` only exercised via fabric_all_gather's emulated Galaxy; no hardware number.
+- `dual_cycles` only exercised via the Python fabric_all_gather's emulated Galaxy; no hardware number.
 - Unit files other than `test_fabric_reduce_scatter.py` / `test_fabric_rs_exact_fp32.py` need a 2x4 mesh. The 2x2
   regression (`tests/unit/test_fabric_reduce_scatter.py` + `tests/test_fabric_reduce_scatter_ttnn.py`): 5 passed, with
   errors identical to the unchanged file (`models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md`, P.5).
@@ -104,7 +104,8 @@ y = ttnn.bringup.fabric_reduce_scatter(t, cluster_axis=1, num_links=links, dim=3
 (`models/demos/deepseek_v41_flash_d_p/tt/ccl.py:sum_cols`). Tests: `tests/test_fabric_reduce_scatter_ttnn.py` +
 `tests/cases.py` (model cases); `tests/unit/test_fabric_reduce_scatter.py` (vs ttnn.reduce_scatter),
 `test_fabric_reduce_scatter_topologies.py`, `test_fabric_rs_exact_fp32.py`, `test_fabric_rs_model_shapes.py`,
-`test_fabric_rs_vs_ag.py`, `test_fabric_rs_program_hash.py`, `test_fabric_rs_prepared.py`.
+`test_fabric_rs_vs_ag.py`, `test_fabric_rs_program_hash.py`, `test_fabric_rs_prepared.py`;
+`test_fabric_all_gather_py.py` (the Python all-gather prototype's sweep).
 
 ## Used by
 - glm53_flash_d_p: `tt/common.py:scatter_rows` (GLM_SCATTER_OP=fabric_ring default: one full-mesh Ring call;
@@ -112,8 +113,19 @@ y = ttnn.bringup.fabric_reduce_scatter(t, cluster_axis=1, num_links=links, dim=3
   `tt/experts_ag.py` (GLM_EXPERTS_MODE=ag, GLM_AG_RS_OP=fabric); bf16 inputs; task O.1 model cases. Whole model on the
   LoudBox via glm53_flash_d_p_lb.
 - deepseek_v41_flash_d_p: `tt/ccl.py` (CCL_IMPL=fabric, P.5: sum_cols dim 3 + exact, tp_sum dim 2 + exact +
-  fabric_all_gather, cache_descriptors, `prepare` at load; CCL_IMPL=fabric_bf16, P.6: default FPU add on bf16;
+  stock high_bw_all_gather, cache_descriptors, `prepare` at load; CCL_IMPL=fabric_bf16, P.6: default FPU add on bf16;
   `program_hash=True` under GLUE_FOLD=on, P.19; `prepared=True` under GENERIC_OP_PREPARED=on, P.1 galaxy).
+
+## Python all-gather prototype (`fabric_all_gather_py.py`)
+Not a registered op: `from ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_all_gather_py import fabric_all_gather, plan`.
+A ProgramDescriptor line / ring all-gather (DRAM interleaved input only) with explicit `topology` / `scheme` /
+`balance`; its `plan()` (groups, schedules, probe-based port placement; "Direct hops only": a hop between chips that
+are not direct fabric neighbours is a ValueError, via `ttnn.get_neighbor_eth_directions`) plans this op, and
+glm53_flash_d_p `tt/common.py:_ring_scatter_ok` and deepseek_v41_flash_d_p `tt/ccl.py:rs_links` (`_num_banks`) call it.
+It came with the C++ fork `ttnn.bringup.fabric_all_gather` (fabric_all_gather_ttnn, retired 2026-11-06: stock
+`ttnn.experimental.high_bw_all_gather` runs the same program, #61387). Design, CLI
+(`python -m ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_all_gather_cli`) and measurements:
+`fabric_all_gather_py.md`, `fabric_all_gather_py_report.md`; sweep: `tests/unit/test_fabric_all_gather_py.py`.
 
 ## History
 CHANGELOG.md

@@ -51,7 +51,7 @@ The fabric config, the topology and the number of links are swept as parameters.
 Needs 4 chips.
 
 ```bash
-python -m ttnn.bringup.fabric_all_gather_ttnn [options]
+python -m ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_all_gather_cli [options]
 ```
 
 | Flag | Type | Default | Meaning |
@@ -65,7 +65,7 @@ python -m ttnn.bringup.fabric_all_gather_ttnn [options]
 | `--payload` | int (bytes) | `14336` | router max payload |
 | `--trials` | int | `3` | measured launches per case (median) |
 
-Test environment variables (`test_fabric_all_gather.py`): `AG_FABRICS`, `AG_TOPOS`, `AG_LINKS`, `AG_VARIANTS`
+Test environment variables (`tests/unit/test_fabric_all_gather_py.py`): `AG_FABRICS`, `AG_TOPOS`, `AG_LINKS`, `AG_VARIANTS`
 (`base`, `b` balanced, `d` desync, `bd`), `AG_SHAPE` (`H,W` or a list `H,W;H,W;...`, one row per size), `AG_DTYPE` (`bf16`, `bfp8`, `fp32`, `fp8`), `AG_LAYOUT` (`tile`, `rm`), `AG_DIM`, `AG_PAYLOAD`, `AG_TRIALS`,
 `AG_PROFILER` (`device` or `rt`), `AG_STRICT` (1 = an unroutable topology fails), `AG_REUSE_CALLS`, `AG_LINK_GBPS` (one link direction's rate for the utilization column: 48.5 GB/s by default,
 27 on a 32-chip Galaxy, whose links are slower: high_bw_all_gather's 8-rank Galaxy gate implies ≥ 26.9).
@@ -78,7 +78,7 @@ unsupported instead of failing.
 
 ## Measured result
 *Illustrative — see the **First profiled on** stamp above; re-run the CLI for your box. Full matrix in
-[`report.md`](report.md).* Effective receive bandwidth per chip, 16 MiB bf16 per chip, 2 links:
+[`fabric_all_gather_py_report.md`](fabric_all_gather_py_report.md).* Effective receive bandwidth per chip, 16 MiB bf16 per chip, 2 links:
 
 | Fabric | 2-chip line (either axis) | 4-chip line (axis or snake) | 4-chip ring |
 |---|---|---|---|
@@ -188,9 +188,9 @@ Running it under tt-emule: build tt-metal with `-DTT_METAL_USE_EMULE=ON -DTT_EMU
 TT_METAL_SLOW_DISPATCH_MODE=1 EMULE_FABRIC8=1 TT_METAL_MOCK_CLUSTER_DESC_PATH=<umd>/tests/cluster_descriptor_examples/blackhole_galaxy.yaml`
 and `AG_TOPOS=4x8_axis0_ring,4x8_axis1_ring,4x8_snake_ring,4x8_dual_cycles AG_FABRICS=2d_torus_xy AG_TRIALS=0`.
 
-## Run the predefined sweep (regenerates `report.md`)
+## Run the predefined sweep (regenerates `fabric_all_gather_py_report.md`)
 ```bash
-scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/fabric_all_gather_ttnn/tests/unit/test_fabric_all_gather_py.py -s
+scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/unit/test_fabric_all_gather_py.py -s
 ```
 (One device session per fabric config × mesh shape; run a few fabric configs at a time with `--fabric`.)
 

@@ -54,6 +54,9 @@ def test_a_call_to_a_retired_fork_is_listed_apart(tmp_path, monkeypatch):
     cap.write_text(json.dumps({"calls": calls}))
     assert "ttnn.bringup.moe_grouped_topk" in fork_cases.retired_ops()
     assert "ttnn.bringup.moe_grouped_topk" not in fork_cases.op_to_fork()
+    # fabric_all_gather (retired 2026-11-06, #61387): no binding left, the planner module beside fabric_reduce_scatter
+    assert "#61387" in fork_cases.retired_ops()["ttnn.bringup.fabric_all_gather"]
+    assert "ttnn.bringup.fabric_all_gather" not in fork_cases.op_to_fork()
     monkeypatch.setattr(fork_cases, "cases", lambda fork: [{"model": "m", "sig": "aaa"}] if fork == "dispatch" else [])
     res, missing = fork_cases.check(cap, "m")
     assert res["forks"] == ["dispatch"] and not missing

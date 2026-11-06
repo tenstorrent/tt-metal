@@ -89,7 +89,7 @@ GENERIC_OP_NOTES = {
     "scatter": "scatter by index",
     "mesh_partition": "keep this chip's part of a replicated tensor",
     "all_gather": "collective: gather over a mesh axis",
-    "bringup.fabric_all_gather": "collective: gather over a mesh axis (fabric fork)",
+    "experimental.high_bw_all_gather": "collective: gather over a mesh axis (fabric, link-rate program)",
     "bringup.fabric_reduce_scatter": "collective: sum over a mesh axis, each chip keeps its slice (fabric fork)",
     "experimental.all_to_all_async_generic": "collective: all-to-all reshard over a mesh axis",
     "from_torch": "host -> device upload",
