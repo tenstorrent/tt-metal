@@ -51,6 +51,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_combine.hpp"
 #include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_hc_sfpu.hpp"
+#include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_mix_sfpu.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -90,6 +91,10 @@ constexpr uint32_t cb_hc_lanes = get_compile_time_arg_val(FB + 27);
 constexpr uint32_t cb_hc_out = get_compile_time_arg_val(FB + 28);
 constexpr uint32_t HC_LAG = get_compile_time_arg_val(FB + 30);  // after fused_ct (descriptor HC_LAG)
 static_assert(HC_LAG <= 1, "hc runs at most one iteration after its combine");
+// Fused SFPU mix (Refinement 5, mhc_post_mix_sfpu.hpp): packed coefficient tiles + multi-term SFPU
+// passes. 0 = the per-term chain below (any arch).
+constexpr bool mix_fused = get_compile_time_arg_val(FB + 31) != 0;
+constexpr uint32_t cb_coef_packed = get_compile_time_arg_val(FB + 32);
 
 static_assert(n == 4, "mhc_post: the mix chain is written for n = 4 streams");
 
@@ -97,6 +102,11 @@ constexpr uint32_t ONE_F32_BITS = 0x3f800000u;  // Addcmul value = 1.0 (exact)
 constexpr uint32_t COEF_POST_BASE = 0;
 constexpr uint32_t COEF_COMB_BASE = n;
 constexpr uint32_t COEF_PRE_BASE = n + n * n;  // collapse: P_i at n + n^2 + i
+// Packed coefficient tiles (mix_fused): A_j = {post_j, comb_0j, comb_1j, comb_2j} at j, P at n.
+constexpr uint32_t PACKED_A_BASE = 0;
+constexpr uint32_t PACKED_P = n;
+constexpr uint32_t n_packed = n + (collapse ? 1 : 0);
+static_assert(mhc_post_mix::COEFS_PER_PACKED == n, "A_j / P packing assumes n = 4 coefficients per tile");
 
 // ---------------------------------------------------------------------------
 // Chain specs
@@ -209,9 +219,143 @@ using PackLanes = ckl::PackTile<
         ckl::TileAddressing::Offset),
     Slot>;
 
+// Fused mix (mix_fused) elements.
+template <ckl::Dst Slot>
+using CoefBcastTo = ckl::UnaryBcast<ckl::BroadcastDim::Col, coef_in, Slot>;  // tile base + row
+template <ckl::Dst Slot>
+using CoefBcastAt = ckl::UnaryBcast<
+    ckl::BroadcastDim::Col,
+    ckl::input(
+        cb_coef_cols,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Enabled,
+        ckl::TileAddressing::Offset),
+    Slot>;
+using PackPacked = ckl::PackTile<
+    ckl::output(
+        cb_coef_packed,
+        ckl::ReservePolicy::None,
+        ckl::PushPolicy::None,
+        ckl::DataFormatReconfig::Enabled,
+        ckl::TileAddressing::Offset),
+    ckl::Dst::D0>;
+using CopyPackedRow = ckl::CopyTile<  // A_j: tile base + row (j)
+    ckl::input(
+        cb_coef_packed,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Col,
+        ckl::DataFormatReconfig::Enabled,
+        ckl::TileAddressing::Offset),
+    ckl::Dst::D3>;
+using CopyPackedAt = CopyAt<cb_coef_packed, ckl::Dst::D3>;
+template <ckl::Dst Slot>
+using CopyFTo = ckl::CopyTile<f_in, Slot>;
+template <ckl::Dst Slot>
+using CopyXTo = ckl::CopyTile<x_in, Slot>;
+template <ckl::Dst Slot>
+using CopyXprimeTo = ckl::CopyTile<
+    ckl::input(
+        cb_xprime_mm,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Row,
+        ckl::DataFormatReconfig::Enabled,
+        ckl::TileAddressing::Offset),
+    Slot>;
+using LoadSsD2 = ckl::CopyTile<ckl::input(cb_ss_run), ckl::Dst::D2>;
+using PackSsD2 = ckl::PackTile<ckl::output(cb_ss_run), ckl::Dst::D2>;
+
 // ---------------------------------------------------------------------------
 // Block operations
 // ---------------------------------------------------------------------------
+
+// pack_coefficients (mix_fused, once per row): the row's column-broadcast coefficients -> packed
+// tiles (mhc_post_mix_sfpu.hpp). A_j gathers post_j, comb_0j, comb_1j, comb_2j (tile bases 0, n,
+// 2n, 3n + row j of a grid(n, 1) walk); collapse adds P = {P_0..P_3}. comb_3j stays a broadcast
+// tile (read lane-aligned by MixPass3). The caller owns the packed window (reserve / push).
+ALWI void pack_coefficients(DataflowBuffer& coef, DataflowBuffer& packed) {
+    ckl::eltwise_chain(
+        ckl::IterationShape::grid(n, 1),
+        CoefBcastTo<ckl::Dst::D0>{coef, COEF_POST_BASE},
+        CoefBcastTo<ckl::Dst::D1>{coef, COEF_COMB_BASE + 0 * n},
+        CoefBcastTo<ckl::Dst::D2>{coef, COEF_COMB_BASE + 1 * n},
+        CoefBcastTo<ckl::Dst::D3>{coef, COEF_COMB_BASE + 2 * n},
+        mhc_post_mix::CoefCompact{},
+        PackPacked{packed, PACKED_A_BASE});
+    if constexpr (collapse) {
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            CoefBcastAt<ckl::Dst::D0>{coef, COEF_PRE_BASE + 0},
+            CoefBcastAt<ckl::Dst::D1>{coef, COEF_PRE_BASE + 1},
+            CoefBcastAt<ckl::Dst::D2>{coef, COEF_PRE_BASE + 2},
+            CoefBcastAt<ckl::Dst::D3>{coef, COEF_PRE_BASE + 3},
+            mhc_post_mix::CoefCompact{},
+            PackPacked{packed, PACKED_P});
+    }
+}
+
+// mix_block, fused SFPU form (mix_fused): per output tile 7 unpacks (+ ss) and 3 SFPU passes.
+// Same arithmetic order as the per-term chain (bit-identical X' / ss).
+template <bool with_ss>
+ALWI void mix_block_fused(
+    uint32_t extent,
+    DataflowBuffer& packed,
+    DataflowBuffer& coef,
+    DataflowBuffer& f,
+    DataflowBuffer& x,
+    DataflowBuffer& out,
+    DataflowBuffer& xprime,
+    DataflowBuffer& ss) {
+    if constexpr (!with_ss) {
+        ckl::eltwise_chain(
+            ckl::IterationShape::grid(n, extent),
+            CopyPackedRow{packed, PACKED_A_BASE},
+            CopyFTo<ckl::Dst::D0>{f},
+            CopyXTo<ckl::Dst::D1>{x, 0 * block_c},
+            CopyXTo<ckl::Dst::D2>{x, 1 * block_c},
+            mhc_post_mix::MixPass1{},
+            CopyXTo<ckl::Dst::D1>{x, 2 * block_c},
+            mhc_post_mix::MixPass2{},
+            CoefBcastTo<ckl::Dst::D3>{coef, COEF_COMB_BASE + 3 * n},
+            CopyXTo<ckl::Dst::D1>{x, 3 * block_c},
+            mhc_post_mix::MixPass3{},
+            PackOut{out});
+    } else {
+        ckl::eltwise_chain(
+            ckl::IterationShape::grid(n, extent),
+            CopyPackedRow{packed, PACKED_A_BASE},
+            CopyFTo<ckl::Dst::D0>{f},
+            CopyXTo<ckl::Dst::D1>{x, 0 * block_c},
+            CopyXTo<ckl::Dst::D2>{x, 1 * block_c},
+            mhc_post_mix::MixPass1{},
+            CopyXTo<ckl::Dst::D1>{x, 2 * block_c},
+            mhc_post_mix::MixPass2{},
+            CoefBcastTo<ckl::Dst::D3>{coef, COEF_COMB_BASE + 3 * n},
+            LoadSsD2{ss},
+            CopyXTo<ckl::Dst::D1>{x, 3 * block_c},
+            mhc_post_mix::MixPass3Ss{},
+            PackOut{out},
+            PackXprime{xprime},
+            PackSsD2{ss});
+    }
+}
+
+// collapse_block, fused SFPU form (mix_fused): 5 unpacks + 2 SFPU passes per y tile.
+ALWI void collapse_block_fused(uint32_t extent, DataflowBuffer& packed, DataflowBuffer& xprime, DataflowBuffer& y) {
+    ckl::eltwise_chain(
+        ckl::IterationShape::grid(1, extent),
+        CopyPackedAt{packed, PACKED_P},
+        CopyXprimeTo<ckl::Dst::D0>{xprime, 0 * extent},
+        CopyXprimeTo<ckl::Dst::D1>{xprime, 1 * extent},
+        mhc_post_mix::YPass1{},
+        CopyXprimeTo<ckl::Dst::D1>{xprime, 2 * extent},
+        CopyXprimeTo<ckl::Dst::D2>{xprime, 3 * extent},
+        mhc_post_mix::YPass2{},
+        PackY{y});
+}
 
 // collapse_block: y = P_0 X'_0 + sum_{i>0} P_i X'_i over the block's `extent` c-tiles (fp32 in DEST,
 // one bf16 rounding at the pack). Caller has waited the X' block.
@@ -398,13 +542,24 @@ void kernel_main() {
 
     if constexpr (!fused) {
         compute_kernel_hw_startup(cb_f_tiles, cb_x_tiles, cb_out_tiles);
+        DataflowBuffer packed_buf(mix_fused ? cb_coef_packed : cb_coef_cols);
         for (uint32_t r = 0; r < num_rows; ++r) {
             coef_buf.wait_front(n_coef_cols);  // load_coefficients (consumer side)
+            if constexpr (mix_fused) {
+                packed_buf.reserve_back(n_packed);
+                pack_coefficients(coef_buf, packed_buf);
+                packed_buf.push_back(n_packed);
+                packed_buf.wait_front(n_packed);
+            }
             for (uint32_t b = 0; b < num_blocks; ++b) {
                 const uint32_t extent = (num_c - b * block_c) < block_c ? (num_c - b * block_c) : block_c;
                 f_buf.wait_front(block_c);
                 x_buf.wait_front(n * block_c);
-                mix_block(extent, coef_buf, f_buf, x_buf, out_buf, out_buf, out_buf);
+                if constexpr (mix_fused) {
+                    mix_block_fused<false>(extent, packed_buf, coef_buf, f_buf, x_buf, out_buf, out_buf, out_buf);
+                } else {
+                    mix_block(extent, coef_buf, f_buf, x_buf, out_buf, out_buf, out_buf);
+                }
                 f_buf.pop_front(block_c);
                 x_buf.pop_front(n * block_c);
                 // Ragged tail: keep the output window nominal (n * block_c pages per block) so the
@@ -413,6 +568,9 @@ void kernel_main() {
                     out_buf.reserve_back(n * (block_c - extent));
                     out_buf.push_back(n * (block_c - extent));
                 }
+            }
+            if constexpr (mix_fused) {
+                packed_buf.pop_front(n_packed);
             }
             coef_buf.pop_front(n_coef_cols);  // release_coefficients
         }
@@ -451,6 +609,7 @@ void kernel_main() {
             }
         }
         DataflowBuffer y_buf(collapse ? cb_y_tiles : cb_xprime_mm);
+        DataflowBuffer packed_buf(mix_fused ? cb_coef_packed : cb_coef_cols);
         DataflowBuffer hc_lanes_buf(collapse ? cb_hc_lanes : cb_xprime_mm);
         DataflowBuffer hc_out_buf(collapse ? cb_hc_out : cb_xprime_mm);
         // hc_row runs HC_LAG iterations after the row's stats are combined. With 1 (after the next
@@ -532,6 +691,12 @@ void kernel_main() {
         for (uint32_t r = 0; r < total; ++r) {
             if (r < num_rows) {
                 coef_buf.wait_front(n_coef_cols);
+                if constexpr (mix_fused) {
+                    packed_buf.reserve_back(n_packed);
+                    pack_coefficients(coef_buf, packed_buf);
+                    packed_buf.push_back(n_packed);
+                    packed_buf.wait_front(n_packed);
+                }
                 // ss_run <- 0 (row seed)
                 ckl::eltwise_chain(
                     ckl::IterationShape::one_tile(),
@@ -542,7 +707,12 @@ void kernel_main() {
                     const uint32_t pad = block_c - extent;
                     f_buf.wait_front(block_c);
                     x_buf.wait_front(n * block_c);
-                    mix_block(extent, coef_buf, f_buf, x_buf, out_buf, xprime_buf, ss_run_buf);
+                    if constexpr (mix_fused) {
+                        mix_block_fused<true>(
+                            extent, packed_buf, coef_buf, f_buf, x_buf, out_buf, xprime_buf, ss_run_buf);
+                    } else {
+                        mix_block(extent, coef_buf, f_buf, x_buf, out_buf, xprime_buf, ss_run_buf);
+                    }
                     f_buf.pop_front(block_c);
                     x_buf.pop_front(n * block_c);
                     if (pad) {
@@ -554,7 +724,11 @@ void kernel_main() {
                     }
                     if constexpr (collapse) {
                         xprime_buf.wait_front(n * block_c);
-                        collapse_block(extent, coef_buf, xprime_buf, y_buf);
+                        if constexpr (mix_fused) {
+                            collapse_block_fused(extent, packed_buf, xprime_buf, y_buf);
+                        } else {
+                            collapse_block(extent, coef_buf, xprime_buf, y_buf);
+                        }
                         if (pad) {
                             y_buf.reserve_back(pad);
                             y_buf.push_back(pad);
@@ -602,6 +776,9 @@ void kernel_main() {
                     CopyRun<cb_ss_run, ckl::Dst::D0>{ss_run_buf},
                     SfpuRowSum<ckl::Dst::D0>{},
                     PackTo<cb_ss_row>{ss_row_buf});
+                if constexpr (mix_fused) {
+                    packed_buf.pop_front(n_packed);
+                }
                 coef_buf.pop_front(n_coef_cols);  // release_coefficients
             }
             // combine_row: leader combines row r - LAG, root combines row r - 2*LAG.

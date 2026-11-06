@@ -67,6 +67,12 @@ BLOCK_ROWS = 1  # rows per block (see op_design.md "Why block_rows = 1")
 # the segment's cb_coef_src instead of once per core. Both use the kernel_lib multicast helper.
 W_MCAST = True
 COEF_MCAST = True
+# Fused SFPU mix (Refinement 5, kernels/mhc_post_mix_sfpu.hpp): once per row the compute packs the
+# broadcast coefficient columns into DEST-layout tiles (4 coefficients per tile), and every output
+# tile is 7 unpacks + 3 multi-term SFPU passes instead of 10 unpacks + 5 SFPU ops (+ y: 5 + 2 vs
+# 8 + 4). Bit-identical arithmetic. Needs the Blackhole SFPU lane mapping (one SFPU load = 4 dest
+# rows x 8 same-parity columns), so it is gated to Blackhole; False = the per-term chain.
+MIX_FUSED = True
 
 # CB indices (semantic names; any distinct values)
 CB_COEF_SRC = 0
@@ -94,6 +100,7 @@ CB_Y_TILES = 19  # y = sum_i P_i X'_i, one block (bf16), pushed per tile
 CB_HC_LANES = 20  # root: stats row permuted into the hc lane layout (writer -> compute)
 CB_HC_OUT = 21  # root: hc program result lanes (compute -> writer)
 CB_HC_ROW = 22  # root: writer-private landing tile for the inverse permutation
+CB_COEF_PACKED = 23  # mix_fused: the row's packed coefficient tiles (compute-internal, fp32)
 HC_LANE_TILES = 2  # cb_hc_lanes / cb_hc_out capacity (mhc_post_hc_sfpu.hpp LANE_CB_PAGES)
 # collapse: iterations between a row's stats combine and its hc program on the compute side.
 # 1 decouples the compute from the writer's lane permute (which sits behind the writer's cross-core
@@ -114,6 +121,11 @@ def _n_src(mode, coef_source):
 
 def _n_coef_cols(mode, n=N_STREAMS):
     return n + n * n + (n if mode == "collapse" else 0)
+
+
+def _n_coef_packed(mode, n=N_STREAMS):
+    """mix_fused packed tiles per row: A_j = {post_j, comb_0j, comb_1j, comb_2j}, + P in collapse."""
+    return n + (1 if mode == "collapse" else 0)
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +186,7 @@ def choose_split(Rt, Ct, *, f_tile, x_tile, n_src, G, fused=False, n=N_STREAMS, 
 
 
 def plain_fixed_bytes(n_src, n_coef_cols):
-    return n_src * FP32_TILE_BYTES + n_coef_cols * COEF_DEPTH * FP32_TILE_BYTES
+    return n_src * FP32_TILE_BYTES + (n_coef_cols * COEF_DEPTH + _n_coef_packed("plain")) * FP32_TILE_BYTES
 
 
 def plain_per_c_bytes(f_tile, x_tile, n=N_STREAMS):
@@ -209,6 +221,7 @@ def fused_fixed_bytes(core_c_max, Q, n=N_STREAMS):
     tiles = (
         n_src_max  # cb_coef_src
         + _n_coef_cols("collapse") * COEF_DEPTH  # cb_coef_cols
+        + _n_coef_packed("collapse")  # cb_coef_packed
         + n * core_c_max  # cb_w_slice (resident)
         + 1  # cb_proj_block
         + 2  # cb_proj_run
@@ -432,6 +445,10 @@ def create_program_descriptor(
         _cb(CB_OUT_TILES, output_tensor.dtype, x_tile, n * block_c * OUT_DEPTH, core_ranges),
     ]
     fp32_copy_cbs = []  # Float32 CBs read only by CopyTile -> UnpackToDestFp32
+    mix_fused = MIX_FUSED and ttnn.device.is_blackhole(device)
+    if mix_fused:
+        cbs.append(_cb(CB_COEF_PACKED, ttnn.float32, FP32_TILE_BYTES, _n_coef_packed(mode), core_ranges))
+        fp32_copy_cbs.append(CB_COEF_PACKED)
     proj_passes = PROJ_EXACT_PASSES if compute_config.math_fidelity in PROJ_EXACT_FIDELITIES else 1
     if fused:
         f32 = lambda idx, pages: _cb(idx, ttnn.float32, FP32_TILE_BYTES, pages, core_ranges)  # noqa: E731
@@ -454,7 +471,7 @@ def create_program_descriptor(
             bf16_tile = ttnn.tile_size(ttnn.bfloat16)
             cbs.append(_cb(CB_PROJ_MASKS, ttnn.bfloat16, bf16_tile, proj_passes, core_ranges))
             cbs.append(_cb(CB_XPRIME_MASKED, ttnn.bfloat16, bf16_tile, n * block_c, core_ranges))
-        fp32_copy_cbs = [CB_PROJ_BLOCK, CB_PROJ_RUN, CB_SS_RUN, CB_GATHER, CB_ROOT_GATHER, CB_COMB_ACC]
+        fp32_copy_cbs += [CB_PROJ_BLOCK, CB_PROJ_RUN, CB_SS_RUN, CB_GATHER, CB_ROOT_GATHER, CB_COMB_ACC]
         if collapse:
             cbs += [
                 _cb(CB_Y_TILES, y_output.dtype, ttnn.tile_size(y_output.dtype), block_c, core_ranges),
@@ -518,7 +535,11 @@ def create_program_descriptor(
     writer_ct.extend(ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args())
     writer_ct.extend(ttnn.TensorAccessorArgs(h_tensor).get_compile_time_args())
 
-    compute_ct = [CB_COEF_COLS, CB_F_TILES, CB_X_TILES, CB_OUT_TILES, n, block_c, n_coef_cols] + fused_ct + [HC_LAG]
+    compute_ct = (
+        [CB_COEF_COLS, CB_F_TILES, CB_X_TILES, CB_OUT_TILES, n, block_c, n_coef_cols]
+        + fused_ct
+        + [HC_LAG, int(mix_fused), CB_COEF_PACKED]
+    )
 
     # --- physical coordinates of every core of the program (combine transport) ---
     def phys(k):

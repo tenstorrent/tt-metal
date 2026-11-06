@@ -11,3 +11,4 @@
 {"event":"test_run","refinement":2,"result":"pass","detail":"golden collapse 62/62; regression 26/27 (test_hc_scalars_are_runtime: reference itself violates HC_COLSUM for hc_eps=1.1e-5)","ts":"2026-11-06T18:52:14+00:00"}
 {"event":"test_run","refinement":3,"status":"pass","focus_ns_before":193518,"focus_ns_after":138113,"golden":"collapse+stats 124 pass, plain 332/332, regression 26/27 (pre-existing hc_eps gate)","ts":"2026-11-06T19:31:26+00:00"}
 {"event":"test_run","refinement":4,"status":"pass","focus_collapse_ns":[137936,129528],"golden":"collapse/stats 124/124, plain 332/332, regression 26/27 (pre-existing hc_eps gate)","ts":"2026-11-06T20:02:12+00:00"}
+{"event":"test_run","refinement":5,"status":"pass","test":"test_mhc_post.py","result":"30/30","perf_focus_ns":107650,"before_ns":129305,"ts":"2026-11-06T20:24:05+00:00"}
