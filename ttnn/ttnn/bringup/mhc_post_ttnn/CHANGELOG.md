@@ -163,3 +163,27 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_post` on
 - Measured: 8x4 Galaxy, one 5120-token chunk (mhc_post): 120 -> 110 cores a chip (tests/perf/test_core_audit.py in deepseek_v41_flash_d_p); per-op device time in that model's BREADCRUMBS FIX.15.
 - Needed by: deepseek_v41_flash_d_p FIX.15
 - Files: device/mhc_post_stats_device_operation.cpp, device/mhc_post_stats_device_operation.hpp, device/mhc_post_stats_program_factory.cpp, device/mhc_post_ttnn_device_operation.cpp, device/mhc_post_ttnn_device_operation.hpp, device/mhc_post_ttnn_device_operation_types.hpp, device/mhc_post_ttnn_program_factory.cpp, device/mhc_post_ttnn_program_factory.hpp, mhc_post_ttnn.cpp, mhc_post_ttnn.hpp, mhc_post_ttnn_nanobind.cpp
+
+### collapse_pre: the next mHC step's hc and collapsed input from the same pass (deepseek_v41_flash_d_p P.34)
+- What: opt-in `collapse_pre=P` (with `stats_weight`, bf16 F and X, n <= 4) plus the next step's scalars `hc_scale`,
+  `hc_base`, `hc_norm_width`, `hc_norm_eps`, `hc_eps`, `hc_sinkhorn_iters` (and optional `hc_output` / `y_output`
+  buffers): the stats program also writes y = sum_i P[:, i] X'_i (per column, one DEST window after the unit's mix:
+  the pre-block tile + the bf16 X' tiles it just packed for the matmul, mhc_pre_xing's ymix, the packer's bf16
+  rounding) and, on each row's root after the partials' sum, the step's hc (DeepSeek's coefficients + Sinkhorn on the
+  summed row, the SFPU code of mhc_pre_xing_compute.cpp copied into kernels/mhc_post_hc_sfpu.hpp). Returns
+  (X', stats, hc, y). Define MHC_POST_COLLAPSE (writer, compute), CBs 8 / 9 / 10 / 22 / 23; the collapse_pre / hc / y
+  addresses (writer) and the scalars (compute) are common runtime args, patched per call (no per-core host cost,
+  DS41-145; a slot appended after the writer's variable-length per-core lists cannot be found on a cache hit,
+  DS41-210); the hash adds collapse_pre's spec only. Off (default): every program, CT / RT arg, define and hash
+  unchanged.
+- Why: the next hc step (mhc_pre_xing(stats, X', deepseek=True, collapse_pre=)) re-read the 4 x H streams a call
+  (6.5 MB on the 8x4 own rows) and was one more program; its pre is known when the residual runs (DS41-3).
+- Tests: `tests/unit/test_mhc_post_collapse.py` (8x4 Galaxy, FABRIC_2D, the 11 x 10 grid cap; 8 passed): X', stats,
+  hc, y bit-identical to mhc_post(stats_weight=) + mhc_pre_xing on its outputs at [160, 5120] (8x4 own rows),
+  [640, 1280], [64, 640] (ragged blocks), the pre as the packed mixes and as its own tensor; a cache hit with other
+  scalars into given hc / y buffers; negative control (another pre, another y); refusals. Fork regression not run on
+  the 8x4 (owner OV-25: F.1 runs every suite); the off path's program is byte-for-byte the old one.
+- Needed by: deepseek_v41_flash_d_p P.34 (setting POST_COLLAPSE: tt/residual.py, tt/engram_add.py, tt/mhc.py).
+- Files: `mhc_post_ttnn.{hpp,cpp}`, `mhc_post_ttnn_nanobind.cpp`, `device/mhc_post_stats_device_operation.{hpp,cpp}`,
+  `device/mhc_post_stats_program_factory.cpp`, `kernels/mhc_post_stats_{writer,compute}.cpp`,
+  `kernels/mhc_post_hc_sfpu.hpp` (new), `tests/unit/test_mhc_post_collapse.py` (new).

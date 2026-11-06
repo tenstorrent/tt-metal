@@ -18,6 +18,11 @@
 //   token row), this kernel sums its 32 column slots in order (cb_soa_out), the writer puts the totals in column
 //   n (n + 2) of the partial and sends it to the row's root.
 // Root phase: per rooted row, its NB partials (cb_part, block order) summed in fp32 on the SFPU -> cb_fin.
+// MHC_POST_COLLAPSE (P.34, bf16 X): after a unit's columns, per column c one DEST window: DEST 0 = the unit's pre-block
+//   tile (cb_pb, UnpackToDestFp32), DEST 1..n = the bf16 X'_k[c] just packed to cb_xs (exact in the fp32 DEST), ymix
+//   -> DEST 1 -> cb_y (bf16: the packer's one rounding) = mhc_pre_xing(collapse_pre=)'s y of the bf16 X'. Root phase:
+//   after each row's sum, its coefficient-major copy (cb_hsoa, from the writer) -> coefficients + Sinkhorn (DeepSeek)
+//   -> cb_hsoa_out = mhc_pre_xing(deepseek=True)'s hc of that row (kernels/mhc_post_hc_sfpu.hpp).
 
 #include <cstdint>
 
@@ -34,6 +39,9 @@
 #ifdef TRISC_MATH
 #include "sfpi.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#endif
+#ifdef MHC_POST_COLLAPSE
+#include "mhc_post_hc_sfpu.hpp"
 #endif
 
 constexpr uint32_t n_streams = get_compile_time_arg_val(0);
@@ -56,6 +64,12 @@ constexpr uint32_t cb_part = get_compile_time_arg_val(17);
 constexpr uint32_t cb_fin = get_compile_time_arg_val(18);
 #ifdef MHC_POST_STATS_F16
 constexpr uint32_t cb_f = get_compile_time_arg_val(19);  // P.19: bf16 F tiles (UnpackToDestFp32: exact in DEST)
+#endif
+#ifdef MHC_POST_COLLAPSE
+constexpr uint32_t cb_pb = get_compile_time_arg_val(20);  // P.34 (bf16 X, so bf16 F: cb_f is at 19)
+constexpr uint32_t cb_y = get_compile_time_arg_val(21);
+constexpr uint32_t cb_hsoa = get_compile_time_arg_val(22);
+constexpr uint32_t cb_hsoa_out = get_compile_time_arg_val(23);
 #endif
 
 #ifdef TRISC_MATH
@@ -142,6 +156,10 @@ ALWI void sfpu_init() { MATH((ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType
     } while (0)
 
 ALWI void copy_from(uint32_t cb, uint32_t tile, uint32_t dst) { copy_tile(cb, tile, dst); }
+
+#if defined(MHC_POST_COLLAPSE) && defined(TRISC_MATH)
+using HcK = post_hc_sfpu::Hc<static_cast<int>(n_streams), 0>;  // the scalars: common runtime args 0..
+#endif
 
 // MHC_POST_STATS_X16 (P.20: bf16 X in cb_in, bf16 X' in cb_out / cb_xs): srcA / the packer to ``cb``'s format where
 // the CBs alternate fp32 / bf16; absent otherwise (the fp32 program does no reconfiguration).
@@ -234,6 +252,33 @@ void kernel_main() {
 #endif
         cb_pop_front(cb_cf, 2 * cf);
 
+#ifdef MHC_POST_COLLAPSE
+        // the next step's collapse of the unit's bf16 X' columns: y = sum_k pre_k X'_k (mhc_pre_xing's ymix)
+        cb_wait_front(cb_xs, n * bw);
+        cb_wait_front(cb_pb, 1);
+        cb_reserve_back(cb_y, bw);
+        pack_reconfig_data_format(cb_y);
+        for (uint32_t c = 0; c < U.valid; ++c) {
+            tile_regs_acquire();
+            reconfig_data_format_srca(cb_pb);
+            copy_init(cb_pb);
+            copy_from(cb_pb, 0, 0);
+            reconfig_data_format_srca(cb_pb, cb_xs);
+            copy_init(cb_xs);
+            for (uint32_t k = 0; k < n; ++k) {
+                copy_from(cb_xs, c * n + k, 1 + k);
+            }
+            STATS_SFPU(HcK::ymix);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile<true>(1, cb_y, c);
+            tile_regs_release();
+        }
+        cb_push_back(cb_y, bw);
+        cb_pop_front(cb_pb, 1);
+        pack_reconfig_data_format(cb_mfin);
+#endif
+
         // the unit's partial: DEST 0 = X'_unit @ W_block (FPU), DEST 1 = sum of the columns' squares (SFPU)
         cb_wait_front(cb_xs, n * bw);
         cb_wait_front(cb_ssc, bw);
@@ -299,5 +344,22 @@ void kernel_main() {
         pack_tile(0, cb_fin);
         tile_regs_release();
         cb_push_back(cb_fin, 1);
+#ifdef MHC_POST_COLLAPSE
+        // the next step's hc of this row (mhc_pre_xing(deepseek=True)'s coefficient stage on the summed row)
+        cb_wait_front(cb_hsoa, 1);
+        cb_reserve_back(cb_hsoa_out, 1);
+        tile_regs_acquire();
+        copy_init(cb_hsoa);
+        copy_from(cb_hsoa, 0, 0);
+        sfpu_init();
+        MATH((_llk_math_eltwise_unary_sfpu_params_(HcK::coefficients, 0, VectorMode::None)));
+        MATH((_llk_math_eltwise_unary_sfpu_params_(HcK::sinkhorn, 0, VectorMode::None)));
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_hsoa_out);
+        tile_regs_release();
+        cb_push_back(cb_hsoa_out, 1);
+        cb_pop_front(cb_hsoa, 1);
+#endif
     }
 }

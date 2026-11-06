@@ -7,6 +7,7 @@
 #include <optional>
 #include <tuple>
 #include <variant>
+#include <vector>
 
 #include <tt-metalium/program_descriptors.hpp>
 
@@ -55,8 +56,37 @@ std::tuple<Tensor, Tensor> mhc_post_with_stats(
     const std::optional<Tensor>& stats_scratch = std::nullopt,
     std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
 
-// The Python entry: X' without stats_weight (the op as it was), (X', stats) with it.
-std::variant<Tensor, std::tuple<Tensor, Tensor>> mhc_post_py(
+// collapse_pre (deepseek_v41_flash_d_p P.34): mhc_post_with_stats AND, from the same pass, the next mHC step's inputs
+// y = sum_i collapse_pre[:, i] X'_i (..., T, C) in X's dtype and that step's hc (..., T, n (n + 2)) fp32 from the
+// stats row (DeepSeek's coefficients + Sinkhorn) = ttnn.bringup.mhc_pre_xing(stats, X', deepseek=True,
+// collapse_pre=collapse_pre, scale=, base=, ...). Needs bf16 X (and F), n <= 4. Returns (X', stats, hc, y).
+std::tuple<Tensor, Tensor, Tensor, Tensor> mhc_post_with_collapse(
+    const Tensor& input_tensor,
+    const Tensor& residual,
+    const Tensor& post,
+    const Tensor& comb,
+    const Tensor& stats_weight,
+    const Tensor& collapse_pre,
+    const std::vector<double>& hc_scale,
+    const std::vector<double>& hc_base,
+    double hc_norm_width,
+    double hc_norm_eps,
+    double hc_eps,
+    int64_t hc_sinkhorn_iters,
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt,
+    bool comb_transposed = true,
+    int64_t post_col = 0,
+    int64_t comb_col = 0,
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    const std::optional<Tensor>& stats_output = std::nullopt,
+    const std::optional<Tensor>& stats_scratch = std::nullopt,
+    const std::optional<Tensor>& hc_output = std::nullopt,
+    const std::optional<Tensor>& y_output = std::nullopt,
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
+
+// The Python entry: X' without stats_weight (the op as it was), (X', stats) with it, (X', stats, hc, y) with
+// collapse_pre.
+std::variant<Tensor, std::tuple<Tensor, Tensor>, std::tuple<Tensor, Tensor, Tensor, Tensor>> mhc_post_py(
     const Tensor& input_tensor,
     const Tensor& residual,
     const Tensor& post,
@@ -69,6 +99,15 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>> mhc_post_py(
     const std::optional<Tensor>& output_tensor = std::nullopt,
     const std::optional<Tensor>& stats_output = std::nullopt,
     const std::optional<Tensor>& stats_scratch = std::nullopt,
-    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt,
+    const std::optional<Tensor>& collapse_pre = std::nullopt,
+    const std::optional<std::vector<double>>& hc_scale = std::nullopt,
+    const std::optional<std::vector<double>>& hc_base = std::nullopt,
+    double hc_norm_width = 0.0,
+    double hc_norm_eps = 1e-6,
+    double hc_eps = 1e-6,
+    int64_t hc_sinkhorn_iters = 20,
+    const std::optional<Tensor>& hc_output = std::nullopt,
+    const std::optional<Tensor>& y_output = std::nullopt);
 
 }  // namespace ttnn::operations::bringup::mhc_post_ttnn

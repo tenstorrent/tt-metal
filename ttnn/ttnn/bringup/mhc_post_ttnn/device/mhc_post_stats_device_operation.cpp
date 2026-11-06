@@ -62,6 +62,10 @@ void MhcPostStatsDeviceOperation::validate_on_program_cache_miss(
     for (const Tensor* x : {&t.input, &t.residual, &t.post, &t.comb, &t.weight}) {
         TT_FATAL(x->storage_type() == ttnn::StorageType::DEVICE, "mhc_post: every operand must be on a device");
     }
+    if (t.collapse_pre.has_value()) {
+        TT_FATAL(
+            t.collapse_pre->storage_type() == ttnn::StorageType::DEVICE, "mhc_post: every operand must be on a device");
+    }
 }
 
 void MhcPostStatsDeviceOperation::validate_on_program_cache_hit(
@@ -86,6 +90,12 @@ MhcPostStatsDeviceOperation::spec_return_value_t MhcPostStatsDeviceOperation::co
     const auto p = mhc_post_stats_plan(t, attrs.max_grid);
     specs.emplace_back(
         ttnn::Shape({1, 1, p.row_tiles * TILE_HW, p.blocks * TILE_HW}), layout(DataType::FLOAT32));  // scratch
+    if (attrs.collapse) {  // P.34: hc (..., T, n (n + 2)) fp32 and y (..., T, C) in X's dtype (mhc_pre_xing's specs)
+        dims.back() = p.n * (p.n + 2);
+        specs.emplace_back(ttnn::Shape(dims), layout(DataType::FLOAT32));
+        dims.back() = t.input.logical_shape()[-1];
+        specs.emplace_back(ttnn::Shape(dims), layout(x.dtype()));
+    }
     return specs;
 }
 
@@ -97,11 +107,26 @@ MhcPostStatsDeviceOperation::tensor_return_value_t MhcPostStatsDeviceOperation::
     out.push_back(given_or_new(t.output, specs[0], t.residual, ins, "output_tensor"));
     out.push_back(given_or_new(t.stats_output, specs[1], t.residual, ins, "stats_output"));
     out.push_back(given_or_new(t.stats_scratch, specs[2], t.residual, ins, "stats_scratch"));
+    if (attrs.collapse) {
+        TT_FATAL(t.collapse_pre.has_value(), "mhc_post: collapse needs collapse_pre");
+        const auto ins2 = {&t.input, &t.residual, &t.post, &t.comb, &t.weight, &*t.collapse_pre};
+        out.push_back(given_or_new(t.hc_output, specs[3], t.residual, ins2, "hc_output"));
+        out.push_back(given_or_new(t.y_output, specs[4], t.residual, ins2, "y_output"));
+    } else {
+        TT_FATAL(
+            !t.hc_output.has_value() && !t.y_output.has_value(), "mhc_post: hc_output / y_output need collapse_pre");
+    }
     return out;
 }
 
 ttsl::hash::hash_t MhcPostStatsDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (attrs.collapse) {  // P.34: the off hash, then collapse_pre's spec (the scalars are runtime args); off: below
+        auto off = attrs;
+        off.collapse = false;
+        return tt::tt_metal::operation::hash_operation<MhcPostStatsDeviceOperation>(
+            compute_program_hash(off, t), true, t.collapse_pre->tensor_spec());
+    }
     if (attrs.max_grid.has_value()) {  // FIX.15: the hash below, then the grid; the off hashes are unchanged
         auto off = attrs;
         off.max_grid.reset();
@@ -152,7 +177,8 @@ std::vector<ttnn::Tensor> mhc_post_stats(
     const std::optional<ttnn::Tensor>& output_tensor,
     const std::optional<ttnn::Tensor>& stats_output,
     const std::optional<ttnn::Tensor>& stats_scratch,
-    std::optional<tt::tt_metal::CoreCoord> max_grid) {
+    std::optional<tt::tt_metal::CoreCoord> max_grid,
+    const std::optional<ttnn::operations::bringup::mhc_post_ttnn::MhcPostCollapseArgs>& collapse) {
     using OperationType = ttnn::operations::bringup::mhc_post_ttnn::MhcPostStatsDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
         .compute_config = compute_config,
@@ -169,6 +195,18 @@ std::vector<ttnn::Tensor> mhc_post_stats(
         .output = output_tensor,
         .stats_output = stats_output,
         .stats_scratch = stats_scratch};
+    if (collapse.has_value()) {  // P.34
+        attrs.collapse = true;
+        attrs.hc_scale = collapse->scale;
+        attrs.hc_base = collapse->base;
+        attrs.hc_inv_nc = collapse->inv_nc;
+        attrs.hc_norm_eps = collapse->norm_eps;
+        attrs.hc_eps = collapse->hc_eps;
+        attrs.hc_sinkhorn_iters = collapse->sinkhorn_iters;
+        args.collapse_pre = collapse->collapse_pre;
+        args.hc_output = collapse->hc_output;
+        args.y_output = collapse->y_output;
+    }
     return ttnn::device_operation::launch<OperationType>(attrs, args);
 }
 

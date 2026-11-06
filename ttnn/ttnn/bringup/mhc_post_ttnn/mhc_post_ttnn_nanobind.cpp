@@ -11,6 +11,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "mhc_post_ttnn.hpp"
@@ -100,10 +101,17 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
                 call) and must not be an input; the results are tensors of those buffers (new Python objects).
             max_grid (ttnn.CoreCoord, optional): default None = the device's whole compute grid
                 (deepseek_v41_flash_d_p FIX.15): the op runs on the rectangle (0, 0) .. (max_grid - 1) of the grid.
+            collapse_pre (ttnn.Tensor, optional; default None = off; deepseek_v41_flash_d_p P.34): (..., T, n..32)
+                float32 TILE DRAM, the next mHC step's pre in columns 0..n-1. Needs stats_weight, a bfloat16 residual
+                and input_tensor, n <= 4, and hc_scale / hc_base (+ hc_norm_width, hc_norm_eps, hc_eps,
+                hc_sinkhorn_iters: that step's mhc_pre_xing scalars). The same pass then also writes
+                y = sum_i collapse_pre[:, i] X'_i (..., T, C) bfloat16 and, from the stats row, that step's
+                hc (..., T, n (n + 2)) float32 = ttnn.bringup.mhc_pre_xing(stats, X', deepseek=True,
+                collapse_pre=collapse_pre, ...) bit for bit. hc_output / y_output: the caller's buffers for them.
 
         Returns:
             ttnn.Tensor: X' (..., T, n*C), the residual's dtype, TILE, DRAM interleaved; with stats_weight the tuple
-            (X', stats).
+            (X', stats); with collapse_pre (X', stats, hc, y).
         )doc",
         &mhc_post_py,
         nb::arg("input_tensor"),
@@ -119,7 +127,16 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
         nb::arg("output_tensor") = nb::none(),
         nb::arg("stats_output") = nb::none(),
         nb::arg("stats_scratch") = nb::none(),
-        nb::arg("max_grid") = nb::none());
+        nb::arg("max_grid") = nb::none(),
+        nb::arg("collapse_pre") = nb::none(),
+        nb::arg("hc_scale") = nb::none(),
+        nb::arg("hc_base") = nb::none(),
+        nb::arg("hc_norm_width") = 0.0,
+        nb::arg("hc_norm_eps") = 1e-6,
+        nb::arg("hc_eps") = 1e-6,
+        nb::arg("hc_sinkhorn_iters") = 20,
+        nb::arg("hc_output") = nb::none(),
+        nb::arg("y_output") = nb::none());
 
     mod.def(
         "_mhc_post_ttnn_program_descriptor",

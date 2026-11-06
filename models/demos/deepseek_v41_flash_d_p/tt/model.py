@@ -112,7 +112,8 @@ class DevH:
     """A block boundary on the device: the 4 mHC streams and the pending pre (DS41-3). MHC_FUSED=on: ``pre`` is the
     whole [S/SP, 24] mixes of the previous ffn_hc (pre in columns 0..3; layer 0: one-hot), and ``stats`` may carry
     (layer, row): this chip's partial hc row [S/SP, 32] of the streams for that layer's attn_hc, emitted by the
-    previous residual's mhc_post pass (used only by that layer, freed with the boundary)."""
+    previous residual's mhc_post pass (used only by that layer, freed with the boundary). POST_COLLAPSE=on (P.34):
+    ``row`` is that attn_hc's finished (hc, y) instead (mhc_post collapse_pre=; load-time site buffers)."""
 
     __slots__ = ("streams", "pre", "stats")
 
@@ -120,10 +121,14 @@ class DevH:
         self.streams, self.pre, self.stats = streams, pre, stats
 
     def tensors(self):
-        return [self.streams, self.pre] + ([self.stats[1]] if self.stats is not None else [])
+        if self.stats is None:
+            return [self.streams, self.pre]
+        row = self.stats[1]
+        return [self.streams, self.pre] + (list(row) if isinstance(row, tuple) else [row])
 
     def take_stats(self, layer: int):
-        """The partial row for ``layer``'s attn_hc, or None (none emitted, or for another layer)."""
+        """The partial row for ``layer``'s attn_hc (POST_COLLAPSE=on: its (hc, y)), or None (none emitted, or for
+        another layer)."""
         if self.stats is None or self.stats[0] != layer:
             return None
         row, self.stats = self.stats[1], None
@@ -470,6 +475,8 @@ class TtDS41Block:
         self.ffn_hc = build_hc(mesh, ck, cfg, i, "ffn_hc", rows=self.own)
         self.collapse = TtHcCollapse(n=cfg.hc)
         self.fused = model.fused  # MHC_FUSED=on (P.14): hc + collapse in one program, residuals emit the next hc row
+        # POST_COLLAPSE=on (P.34): those residuals also emit that hc step's hc and collapsed y (no mhc_pre_xing there)
+        self.post_collapse = model.post_collapse
         self.fold = ccl.glue_fold()  # GLUE_FOLD=on (P.19)
         # ATTN_SP32=on (P.10): attn_norm, q_a, kv, compressor and the indexer gates on the chip's own S/(SP TP) rows
         # with whole hidden rows (one all_to_all of attn_in over TP, then local); the attention projections already
@@ -600,7 +607,9 @@ class TtDS41Block:
 
         def engram_add(ctx, x, kv):
             # MHC_FUSED=on: the add's mhc_post pass also emits this layer's attn_hc partial row (P.14)
-            s, pre, row = self.engram_add.add(x.streams, kv, x.pre, hc=self.attn_hc if self.fused else None)
+            s, pre, row = self.engram_add.add(
+                x.streams, kv, x.pre, hc=self.attn_hc if self.fused else None, collapse=self.post_collapse
+            )
             return DevH(s, pre, stats=(i, row) if row is not None else None)
 
         def attn_hc(ctx, x):
@@ -737,7 +746,11 @@ class TtDS41Block:
             # in one program (tt/mhc.py:TtHcMixes.fused); the collapse steps hand that output on. attn_hc collapses x
             # with the pending pre (the previous ffn_hc's whole mixes), ffn_hc h_mid with attn_hc's mixes (DS41-3).
             def attn_hc(ctx, x):  # noqa: F811
-                hc, y = self.attn_hc.fused(x.streams, x.pre, row=x.take_stats(i))
+                row = x.take_stats(i)
+                if isinstance(row, tuple):  # POST_COLLAPSE=on (P.34): the previous residual's pass made them
+                    hc, y = row
+                else:
+                    hc, y = self.attn_hc.fused(x.streams, x.pre, row=row)
                 ctx.extra["attn_in"] = y
                 ctx.extra["attn_mix"] = hc  # ffn_hc's collapse pre (freed by the block after ffn_collapse)
                 return hc
@@ -746,13 +759,17 @@ class TtDS41Block:
                 return ctx.extra.pop("attn_in")
 
             def attn_residual(ctx, x, mix, y):  # noqa: F811
-                out, row = self.attn_res.fused(x.streams, mix, y, self.ffn_hc)
+                out, row = self.attn_res.fused(x.streams, mix, y, self.ffn_hc, collapse=self.post_collapse)
                 if row is not None:
                     ctx.extra["ffn_row"] = row
                 return out
 
             def ffn_hc(ctx, h):  # noqa: F811
-                hc, y = self.ffn_hc.fused(h, ctx.extra["attn_mix"], row=ctx.extra.pop("ffn_row", None))
+                row = ctx.extra.pop("ffn_row", None)
+                if isinstance(row, tuple):  # POST_COLLAPSE=on (P.34): attn_residual's pass made them
+                    hc, y = row
+                else:
+                    hc, y = self.ffn_hc.fused(h, ctx.extra["attn_mix"], row=row)
                 ctx.extra["ffn_in"] = y
                 return hc
 
@@ -762,7 +779,9 @@ class TtDS41Block:
 
             def ffn_residual(ctx, h, mix, y):  # noqa: F811
                 nxt = self.model.next_hc(i)
-                out, row = self.ffn_res.fused(h, mix, y, nxt.attn_hc if nxt is not None else None)
+                out, row = self.ffn_res.fused(
+                    h, mix, y, nxt.attn_hc if nxt is not None else None, collapse=self.post_collapse
+                )
                 return DevH(out, mix, stats=(nxt.layer, row) if row is not None else None)
 
         table = dict(
@@ -911,6 +930,16 @@ class TtDS41Model:
         if bf16_activations():  # P.20: the bf16 paths exist on the fused / folded / stock-rope / fork-norm path only
             off = [k for k in ("MHC_FUSED", "GLUE_FOLD", "ROPE_IMPL", "NORM_IMPL") if settings.get(k) != "on"]
             assert not off, f"BF16_ACTIVATIONS=on needs {off} on"
+        # POST_COLLAPSE=on (P.34): the fork's collapse needs bf16 streams, whole rows on a chip (the row's sums whole:
+        # OWN_ROWS) and the SFPU Sinkhorn of mhc_pre_xing; otherwise the path before (setting text)
+        self.post_collapse = (
+            settings.get("POST_COLLAPSE") == "on"
+            and self.fused
+            and self.own
+            and bf16_activations()
+            and settings.get("HC_SINKHORN") == "sfpu_fp32"
+            and ccl.glue_fold()
+        )
         ccl.configure()  # GLUE_FOLD=on (P.19): tt/ccl.py:dealloc through the binding
         for i in self.layers:
             missing = [j for j in cfg.sources(i) if j not in self.layers]

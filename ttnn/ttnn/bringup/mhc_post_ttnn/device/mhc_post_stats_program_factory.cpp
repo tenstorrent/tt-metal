@@ -15,6 +15,7 @@
 #include "mhc_post_stats_device_operation.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <vector>
 
@@ -55,9 +56,35 @@ constexpr uint8_t CB_SSC = 18;     // per-column sum of squares tiles           
 constexpr uint8_t CB_MFIN = 19;    // the unit's partial X' @ W tile                  compute -> writer
 constexpr uint8_t CB_SFIN = 20;    // the unit's lane-wise sum-of-squares tile         compute -> writer
 constexpr uint8_t CB_FIN = 21;     // a root's summed row                              compute -> writer
+// collapse (P.34) only:
+constexpr uint8_t CB_PB = 8;         // the unit's pre-block tile (collapse_pre)        writer -> compute
+constexpr uint8_t CB_HSOA = 9;       // a root row, coefficient-major                   writer -> compute
+constexpr uint8_t CB_HSTAGE = 10;    // the row-major hc stage                         writer scratch
+constexpr uint8_t CB_Y = 22;         // the unit's y tiles                              compute -> writer
+constexpr uint8_t CB_HSOA_OUT = 23;  // the row's hc, coefficient-major               compute -> writer
 constexpr uint32_t SEM_ROOT = 0;
 
-constexpr uint32_t READER_KERNEL = 0, WRITER_KERNEL = 1;
+constexpr uint32_t READER_KERNEL = 0, WRITER_KERNEL = 1, COMPUTE_KERNEL = 2;
+
+uint32_t f32_bits(double v) { return std::bit_cast<uint32_t>(static_cast<float>(v)); }
+
+// The hc step's scalars in mhc_pre_xing's order (mhc_pre_xing_program_factory.cpp scalar_args; clamp unused: 0).
+std::vector<uint32_t> hc_scalar_args(const MhcPostStatsParams& p, uint32_t n) {
+    std::vector<uint32_t> a = {
+        f32_bits(p.hc_scale[0]),
+        f32_bits(p.hc_scale[1]),
+        f32_bits(p.hc_scale[2]),
+        f32_bits(p.hc_inv_nc),
+        f32_bits(p.hc_norm_eps),
+        f32_bits(p.hc_eps),
+        0u,
+        0u,
+        p.hc_sinkhorn_iters};
+    for (uint32_t k = 0; k < n * (n + 2); ++k) {
+        a.push_back(k < p.hc_base.size() ? f32_bits(p.hc_base[k]) : 0u);
+    }
+    return a;
+}
 
 CBDescriptor make_cb(
     uint8_t index,
@@ -130,6 +157,13 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
         TT_FATAL(t->buffer()->page_size() == page, "mhc_post stats: post / comb / W must be fp32 tiles");
     }
     TT_FATAL(coef_tiles + n + 1 <= 8, "mhc_post stats: n={} does not fit the 8 fp32 DEST tiles", n);
+    const bool collapse = params.collapse;
+    TT_FATAL(!collapse || (x16 && n <= 4), "mhc_post stats: collapse needs bf16 streams and n <= 4");
+    if (collapse) {
+        TT_FATAL(in.collapse_pre->buffer()->page_size() == page, "mhc_post stats: collapse_pre must be fp32 tiles");
+        TT_FATAL(outputs.at(3).buffer()->page_size() == page, "mhc_post stats: hc must be fp32 tiles");
+        TT_FATAL(outputs.at(4).buffer()->page_size() == x_page, "mhc_post stats: y must be in X's tiles");
+    }
 
     const CoreCoord grid = cut_grid(device->compute_with_storage_grid_size(), params.max_grid);
     auto [num_cores, all_cores, group_1, group_2, units_1, units_2] =
@@ -165,7 +199,7 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     desc.cbs.push_back(make_cb(CB_IN, x_page, 2 * (n + 1) * B, all_cores, x_dt));
     desc.cbs.push_back(make_cb(CB_W, page, 2 * n * B, all_cores));
     desc.cbs.push_back(make_cb(CB_CF, page, 2 * 2 * coef_tiles, all_cores));
-    desc.cbs.push_back(make_cb(CB_RAW, page, 2, all_cores));
+    desc.cbs.push_back(make_cb(CB_RAW, page, collapse ? 3 : 2, all_cores));  // collapse: + the collapse_pre row
     desc.cbs.push_back(make_cb(CB_SOA, page, 1, all_cores));
     desc.cbs.push_back(make_cb(CB_SOA_OUT, page, 1, all_cores));
     TT_FATAL(NB <= 64, "mhc_post stats: {} partials per row", NB);
@@ -178,6 +212,13 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     desc.cbs.push_back(make_cb(CB_FIN, page, 2, all_cores));
     if (f16) {
         desc.cbs.push_back(make_cb(CB_F, f_page, 2 * B, all_cores, DataType::BFLOAT16));
+    }
+    if (collapse) {
+        desc.cbs.push_back(make_cb(CB_PB, page, 2, all_cores));
+        desc.cbs.push_back(make_cb(CB_Y, x_page, 2 * B, all_cores, x_dt));
+        desc.cbs.push_back(make_cb(CB_HSOA, page, 1, all_cores));
+        desc.cbs.push_back(make_cb(CB_HSOA_OUT, page, 1, all_cores));
+        desc.cbs.push_back(make_cb(CB_HSTAGE, page, 1, all_cores));
     }
 
     std::vector<uint32_t> common_ct = {n, p.col_tiles, RT, B, NB, page, coef_tiles};
@@ -206,6 +247,13 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     for (const Tensor* t : {&out, &in.post, &in.comb, &scratch, &stats}) {
         append_accessor(writer_ct, *t);
     }
+    if (collapse) {  // appended only when on (MHC_POST_COLLAPSE): the off program keeps its CT args
+        writer_ct.insert(writer_ct.end(), {CB_PB, CB_Y, CB_HSOA, CB_HSOA_OUT, CB_HSTAGE});
+        for (const Tensor* t :
+             std::initializer_list<const Tensor*>{&*in.collapse_pre, &outputs.at(3), &outputs.at(4)}) {
+            append_accessor(writer_ct, *t);
+        }
+    }
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.insert(
         compute_ct.end(),
@@ -213,6 +261,10 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     if (f16) {
         compute_ct.push_back(CB_F);
     }
+    if (collapse) {  // (bf16 X needs bf16 F: CB_F is at 19, these from 20)
+        compute_ct.insert(compute_ct.end(), {CB_PB, CB_Y, CB_HSOA, CB_HSOA_OUT});
+    }
+    const auto hc_scalars = collapse ? hc_scalar_args(params, n) : std::vector<uint32_t>{};
 
     KernelDescriptor::RuntimeArgs reader_rt, writer_rt, compute_rt;
     for (size_t i = 0; i < cores.size(); ++i) {
@@ -244,6 +296,11 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     if (f16) {
         cc.unpack_to_dest_mode[CB_F] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;  // bf16 -> fp32 DEST, exact
     }
+    if (collapse) {  // (CB_XS stays Default for the matmul: its bf16 X' reaches the fp32 DEST exactly through srcA)
+        for (uint8_t cb : {CB_PB, CB_HSOA}) {
+            cc.unpack_to_dest_mode[cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
     // CB_XS / CB_W stay Default: the matmul's operands go through srcB / srcA like ttnn.matmul's fp32 inputs.
 
     desc.kernels.push_back(make_kernel(
@@ -261,6 +318,16 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
             k.defines.emplace_back("MHC_POST_STATS_X16", "1");
         }
     }
+    if (collapse) {  // absent when off: every kernel unchanged (P.34)
+        for (size_t k : {size_t{WRITER_KERNEL}, size_t{COMPUTE_KERNEL}}) {
+            desc.kernels[k].defines.emplace_back("MHC_POST_COLLAPSE", "1");
+        }
+        // the same on every core: common runtime args (no per-core host cost, DS41-145; fixed slots on a cache hit,
+        // DS41-210): the writer's collapse_pre / hc / y addresses, the compute's hc scalars
+        desc.kernels[WRITER_KERNEL].common_runtime_args = {
+            addr(*in.collapse_pre), addr(outputs.at(3)), addr(outputs.at(4))};
+        desc.kernels[COMPUTE_KERNEL].common_runtime_args = hc_scalars;
+    }
     if (params.post_col != 0 || params.comb_col != 0) {  // absent when 0 / 0: the writer unchanged
         TT_FATAL(
             params.post_col + n <= TILE_HW && params.comb_col + n * n <= TILE_HW,
@@ -275,7 +342,7 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
 
 void MhcPostStatsProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const MhcPostStatsParams& /*operation_attributes*/,
+    const MhcPostStatsParams& params,
     const MhcPostStatsInputs& in,
     std::vector<Tensor>& outputs,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
@@ -299,6 +366,18 @@ void MhcPostStatsProgramFactory::override_runtime_arguments(
                 args[3] = scratch;
                 args[4] = addr(outputs.at(1));
             }
+        }
+    }
+    if (params.collapse) {  // P.34: the common args (addresses; the hc scalars: one program for every layer)
+        auto& w = tt::tt_metal::GetCommonRuntimeArgs(program, WRITER_KERNEL);
+        w[0] = addr(*in.collapse_pre);
+        w[1] = addr(outputs.at(3));
+        w[2] = addr(outputs.at(4));
+        const auto n = static_cast<uint32_t>(in.residual.logical_shape()[-1] / in.input.logical_shape()[-1]);
+        const auto sc = hc_scalar_args(params, n);
+        auto& k = tt::tt_metal::GetCommonRuntimeArgs(program, COMPUTE_KERNEL);
+        for (size_t i = 0; i < sc.size(); ++i) {
+            k[i] = sc[i];
         }
     }
 }
