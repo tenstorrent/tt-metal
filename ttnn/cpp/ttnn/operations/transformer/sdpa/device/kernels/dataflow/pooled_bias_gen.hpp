@@ -42,35 +42,42 @@ struct Geometry {
     uint32_t nb_pad;        // pooled rows per shard (tile multiple)
 };
 
+// The reader is built at Os (kernel config buffer), but its per-element loops (the bias tiles here, the per-iteration
+// mask bits in sparse_ring_reader.cpp) pace the pooled route with LoFi compute: built at Os it ran ~10% slower. They
+// are out-of-line functions built at O2 (GCC does not inline across optimize levels). The helpers they call are
+// always_inline with no optimize attribute of their own, so they inline at either level.
+#define SPARSE_RING_HOT __attribute__((noinline, optimize("O2")))
+
 // Geometric real-token count of padded block b of shard s (kBlockTokens, a shard/logical tail, or 0 for padding).
-inline uint32_t block_len(const Geometry& geo, uint32_t s, uint32_t b) {
+FORCE_INLINE uint32_t block_len(const Geometry& geo, uint32_t s, uint32_t b) {
     return sparse_blocks::geometric_len<kBlockTokens>(geo.shard_tokens, geo.logical_n, geo.nb, s, b);
 }
 
-// bf16 bits of the bias for a block of `len` valid tokens; entry 0 is the "exact / padding" value.
-inline uint32_t table_entry(uint32_t table_base_arg, uint32_t len) {
-    const uint32_t word = get_arg_val<uint32_t>(table_base_arg + (len >> 1));
-    return (word >> (16 * (len & 1))) & 0xFFFFu;
+// Real tokens of padded block b of shard s: the reader's byte table (one entry per global block s * nb_pad + b, the
+// block_counts input capped by the geometry) when given, else the geometric count; 0 for padding past the blocks.
+template <bool has_counts>
+FORCE_INLINE uint32_t
+block_count(const Geometry& geo, const volatile tt_l1_ptr uint8_t* counts, uint32_t s, uint32_t b) {
+    if (b >= geo.nb) {
+        return 0;  // padding past the shard's blocks (the last piece can reach past them)
+    }
+    if constexpr (has_counts) {
+        return counts[s * geo.nb_pad + b];
+    } else {
+        return block_len(geo, s, b);
+    }
 }
 
-// Bias (bf16 bits) for padded block b of shard s holding len real tokens: the "exact / padding" value (computed
-// exactly: its mask bit is set and it holds a real token; or no real token), or ln(len) / scale for a pooled block.
-// mask_row holds the whole block-form row (n_blocks_pad words).
-inline uint32_t block_bias(
-    const Geometry& geo,
-    CoreLocalMem<volatile uint32_t> mask_row,
-    uint32_t table_base_arg,
-    uint32_t s,
-    uint32_t b,
-    uint32_t len) {
-    const bool exact = mask_row[s * geo.nb_pad + b] != 0;
-    return (len == 0 || exact) ? table_entry(table_base_arg, 0) : table_entry(table_base_arg, len);
+// bf16 bits of the bias for a block of `len` valid tokens; entry 0 is the "exact / padding" value.
+FORCE_INLINE uint32_t table_entry(uint32_t table_base_arg, uint32_t len) {
+    const uint32_t word = get_arg_val<uint32_t>(table_base_arg + (len >> 1));
+    return (word >> (16 * (len & 1))) & 0xFFFFu;
 }
 
 // Fill faces 0/1 of the tile at tile_addr with 16 copies of one tile row (vals: columns 0-15, then 16-31) and issue
 // the L1->L1 NoC copy of faces 0/1 onto faces 2/3. The caller waits with async_read_barrier.
 template <uint32_t tile_bytes>
-inline void fill_tile_rows(const Noc& noc, uint32_t tile_addr, const uint32_t (&vals)[2 * kFaceRowWords]) {
+SPARSE_RING_HOT void fill_tile_rows(const Noc& noc, uint32_t tile_addr, const uint32_t (&vals)[2 * kFaceRowWords]) {
     const uint8_t noc_id = noc.get_noc_id();
     volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
     for (uint32_t r = 0; r < 16; ++r) {
@@ -93,10 +100,13 @@ inline void fill_tile_rows(const Noc& noc, uint32_t tile_addr, const uint32_t (&
 }
 
 // Write `tiles` bias tiles for pooled tile rows [row0_t, row0_t + tiles) at L1 address dst (a reserved
-// cb_pooled_bias region of >= tiles * tile_bytes). count(s, b): real tokens of block b of shard s. Blocking: returns
-// after the face copies have landed.
-template <uint32_t tile_bytes, typename CountFn>
-inline void generate_tiles(
+// cb_pooled_bias region of >= tiles * tile_bytes). Column j of the row is padded block g = row0_t * 32 + j (shard
+// g / nb_pad, block g % nb_pad): the "exact / padding" value when it is computed exactly (its mask bit is set and it
+// holds a real token) or holds no real token, else ln(len) / scale (table entry len). mask_row holds the whole
+// block-form row (n_blocks_pad words, indexed by g); counts as block_count. Blocking: returns after the face copies
+// have landed.
+template <uint32_t tile_bytes, bool has_counts>
+SPARSE_RING_HOT void generate_tiles(
     const Noc& noc,
     uint32_t dst,
     uint32_t row0_t,
@@ -104,25 +114,26 @@ inline void generate_tiles(
     const Geometry& geo,
     CoreLocalMem<volatile uint32_t> mask_row,
     uint32_t table_base_arg,
-    const CountFn& count) {
+    const volatile tt_l1_ptr uint8_t* counts) {
     static_assert(tile_bytes == 4 * kFaceWords * 4, "pooled bias tiles are Float16_b 32x32");
+    const uint32_t exact_bias = table_entry(table_base_arg, 0);
     uint32_t g = row0_t * 32;  // global padded block index of column 0
     uint32_t s = g / geo.nb_pad;
     uint32_t b = g - s * geo.nb_pad;
     for (uint32_t t = 0; t < tiles; ++t) {
         uint32_t vals[2 * kFaceRowWords];
         for (uint32_t w = 0; w < 2 * kFaceRowWords; ++w) {
-            const uint32_t lo = block_bias(geo, mask_row, table_base_arg, s, b, count(s, b));
-            if (++b == geo.nb_pad) {
-                b = 0;
-                ++s;
+            uint32_t half[2];
+            for (uint32_t h = 0; h < 2; ++h) {
+                const uint32_t len = block_count<has_counts>(geo, counts, s, b);
+                half[h] = (len == 0 || mask_row[g] != 0) ? exact_bias : table_entry(table_base_arg, len);
+                ++g;
+                if (++b == geo.nb_pad) {
+                    b = 0;
+                    ++s;
+                }
             }
-            const uint32_t hi = block_bias(geo, mask_row, table_base_arg, s, b, count(s, b));
-            if (++b == geo.nb_pad) {
-                b = 0;
-                ++s;
-            }
-            vals[w] = lo | (hi << 16);
+            vals[w] = half[0] | (half[1] << 16);
         }
         fill_tile_rows<tile_bytes>(noc, dst + t * tile_bytes, vals);
     }
@@ -133,7 +144,7 @@ inline void generate_tiles(
 // real_cols columns (1..31) are real tokens and the rest padding, 0 on the real columns and the "exact / padding"
 // value (table entry 0, large negative) on the others, the same on every row. Blocking, as generate_tiles.
 template <uint32_t tile_bytes>
-inline void generate_key_bias_tile(const Noc& noc, uint32_t dst, uint32_t real_cols, uint32_t table_base_arg) {
+SPARSE_RING_HOT void generate_key_bias_tile(const Noc& noc, uint32_t dst, uint32_t real_cols, uint32_t table_base_arg) {
     static_assert(tile_bytes == 4 * kFaceWords * 4, "key bias tiles are Float16_b 32x32");
     const uint32_t neg = table_entry(table_base_arg, 0);
     uint32_t vals[2 * kFaceRowWords];  // one tile row: columns 0-15 (face 0), then 16-31 (face 1)
