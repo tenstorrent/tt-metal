@@ -1715,8 +1715,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Kernels process this many joint K chunks on every ring iteration (sharded) or just the last (replicated).
     const uint32_t num_joint_k_chunks = tt::div_up(L_local, k_chunk_size);
 
-    // dynamic_local_n: the length-derived compile-time slots are 0 and the kernels derive the live values from
-    // one common runtime word; CB sizing and the reader count use the gather capacity (the longest length served).
+    // dynamic_local_n: the length-derived compile-time slots are placeholders (0, or the joint chunk count alone for
+    // num_q_chunks) and the kernels derive the live values from one common runtime word; CB sizing and the reader
+    // count use the gather capacity (the longest length served).
     const bool dynamic_local_n = args.dynamic_local_n;
     const uint32_t capacity_local_Nt = gathered_padded_Nt / ring_size;
     const uint32_t capacity_num_q_chunks = tt::div_up(capacity_local_Nt, Sq_chunk_t) + num_joint_q_chunks;

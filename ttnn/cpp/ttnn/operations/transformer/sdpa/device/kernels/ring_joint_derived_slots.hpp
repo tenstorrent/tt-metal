@@ -43,9 +43,13 @@ constexpr uint32_t kReaderMetadataCommonArgCount = 5;
 constexpr uint32_t kWriterMetadataCommonArgCount = 1;  // kv_actual_isl addr
 constexpr uint32_t kLogicalLengthCommonArgCount = 2;   // logical_n addr, logical_l addr (pair, when either is present)
 
-// dynamic_local_n: the per-chip padded length N_local (in tiles) is one common runtime word per kernel, placed
-// after every other common arg (addresses, metadata block, logical-length pair, kv_valid_end); every count
-// below is derived from it on both sides.
+// dynamic_local_n (a named compile-time arg of the reader, writer and compute kernels). On that path the per-chip
+// padded length N_local (in tiles) is one common runtime word per kernel, placed after every other common arg
+// (addresses, metadata block, logical-length pair, kv_valid_end), and all three kernels rebuild the per-chip
+// geometry from it with derive_local_n_geometry below. The compile-time slots that carry that geometry on the
+// static path (the kernels' *_ct values) are placeholders on the dynamic path: q/kv_local_padded_Nt,
+// num_local_q/k_chunks and chunk_size_t are 0, and num_q_chunks holds only the joint chunk count. sdpa_ring_v2 in
+// compute_streaming.hpp reads a 0 template length the same way.
 constexpr uint32_t dynamic_local_n_reader_common_arg(
     bool has_joint_inputs,
     bool has_gathered_joint_k,

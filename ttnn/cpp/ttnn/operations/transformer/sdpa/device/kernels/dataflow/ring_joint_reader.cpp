@@ -237,8 +237,7 @@ void kernel_main() {
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
-    // Slots 7/8/11/13/15/23 carry the per-chip length geometry. With dynamic_local_n they are 0 and the live
-    // values come from one common runtime word (see local_n below); otherwise they are the constants.
+    // Length-geometry slots (the _ct values): placeholders with dynamic_local_n, see ring_joint_derived_slots.hpp.
     constexpr uint32_t q_local_padded_Nt_ct = get_compile_time_arg_val(7);
     constexpr uint32_t kv_local_padded_Nt_ct = get_compile_time_arg_val(8);
     constexpr uint32_t Lt = get_compile_time_arg_val(9);
@@ -1175,8 +1174,7 @@ void kernel_main() {
                     if (!ksplit_k_range.contains(source_k_chunk)) {
                         return true;
                     }
-                    // causal_end_nt is logical_nt when the causal skip is off. The static path keeps the local
-                    // geometry in the template arguments, as before dynamic_local_n.
+                    // causal_end_nt is logical_nt when the causal skip is off.
                     if constexpr (dynamic_local_n) {
                         return !chunked_kv_chunk_is_live<kv_pad_rotation_enabled, chunked_enabled>(
                             source_ring_id,
