@@ -36,14 +36,10 @@ def device_params(spec):
     """The mesh's device params: the spec's (2D fabric, l1_small), read by the harness, with the fabric packet payload
     at 10880 B (P.8): combine_rf's L1 hand-off in the routed experts' weighted combine sends each expert row (5120
     bf16 = 10240 B) with its 32 B trailer as one packet (the router default is 4352 B; Blackhole max 15232 B; Marko
-    Staletovic's V4.1 setting, FLAT_COMBINE_OVERLAP_WORKLOG.md). Also, before any mesh opens (the harness calls this
-    at collection and in open_mesh), the pinned-memory limit the routed experts' weight staging needs
-    (tt/settings.py export_pinned_limit, when unset)."""
+    Staletovic's V4.1 setting, FLAT_COMBINE_OVERLAP_WORKLOG.md). (tt-metal's pinned-memory limit is no longer set
+    here: the routed experts' upload raises it only while it runs, tt/experts.py pinned_upload.)"""
     from models.demos.common.bringup.testing import harness
-    from models.demos.deepseek_v41_flash_d_p.tt.settings import export_pinned_limit
     from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import FABRIC_PAYLOAD
-
-    export_pinned_limit()
 
     return harness.device_params(_WeightedPayloadSpec(spec, FABRIC_PAYLOAD))
 

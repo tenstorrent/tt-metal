@@ -63,7 +63,7 @@ from . import ccl
 from .ccl import dealloc
 from .common import DRAM, TP_AXIS, cast, sum_cols
 from .cores import sub_cores, sub_cores_tiled
-from .settings import settings
+from .settings import pinned_limit_bytes, settings
 
 TILE = 32
 NAMES = ("w1", "w3", "w2")
@@ -189,6 +189,17 @@ def _read_pool() -> ThreadPoolExecutor:
 
 
 _LOAD_ORDER: list[int] = []  # the layers a model loads, in order (set_load_order): which layer's cache to read ahead
+
+
+def pinned_upload(mesh, limit_bytes=None):
+    """The routed experts' pinned upload window (flat_routed_expert bank_major.pinned_upload): ``limit_bytes`` raises
+    tt-metal's pinned-memory limit for the upload (first window only, unless TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES is
+    set); None only holds the window (a model's layer loop: each layer's window then neither releases the staging the
+    next layer reuses nor restores the limit). The outermost exit unpins and frees the staging and restores the limit.
+    """
+    from ttnn.bringup.flat_routed_expert_ttnn.bank_major import pinned_upload as _window
+
+    return _window(mesh, limit_bytes)
 
 
 def set_load_order(layers) -> None:
@@ -343,9 +354,13 @@ class TtExperts:
         prefix = expert_cache_prefix(self.cache_dir, ck, self.layer, self.impl, self.mesh, self.E)
         marker = _CacheMarker(prefix)
         self._host_s = None
-        self._load_flat(lambda: self._host_weights(ck, gtab), gtab, prefix)
-        hit = self._host_s is None
-        pre = self._prefetch_next(ck, prefix)
+        # tt-metal's pinned host memory limit raised only around the upload (owner 2026-11-06): to 2 staging slots x
+        # a layer's experts at the first layer, restored (and the staging unpinned and freed) when the outermost window
+        # closes: here for one layer built alone, after the last layer in a model (TtDS41Model holds it, pinned_upload)
+        with pinned_upload(self.mesh, pinned_limit_bytes(self.impl)):
+            self._load_flat(lambda: self._host_weights(ck, gtab), gtab, prefix)
+            hit = self._host_s is None
+            pre = self._prefetch_next(ck, prefix)
         if prefix is not None:
             if hit:
                 self.bfp4_stats = marker.stats

@@ -79,7 +79,7 @@ from .cores import from_torch, init_caps, max_grid, sub_cores, sub_cores_tiled
 from .engram import TtEngramRows
 from .engram_add import build_engram_add
 from .engram_kv import build_engram_kv
-from .experts import build_experts, set_load_order
+from .experts import build_experts, pinned_upload, set_load_order
 from .indexer import TtCandidateIndexer, TtReindexer, build_indexer, topk_local
 from .kv import TtWindowKv, attn_in_weights, rope_freqs
 from .layout import (
@@ -998,8 +998,12 @@ class TtDS41Model:
         self.head_w = ck.weight("head.weight", torch.float32) if lm_head else None
         self.blocks = {}
         set_load_order(self.layers)  # (EXPERTS_PREFETCH: layer i+1's routed-expert cache read while layer i loads)
-        for i in self.layers:
-            self.blocks[i] = TtDS41Block(self, i)
+        # one pinned upload window over every layer's routed experts: the first layer's raises tt-metal's pinned-memory
+        # limit, the staging is reused across layers, and leaving this (also on an error) unpins and frees it and
+        # restores the limit (tt/experts.py pinned_upload)
+        with pinned_upload(mesh):
+            for i in self.layers:
+                self.blocks[i] = TtDS41Block(self, i)
         # DEEP_LAYERS=tail (FIX.17): the layers above the last KV / candidate source (21-39: window attention over
         # the sources' state, no state of their own another layer reads) run only in tail_pass, on the rows the
         # prompt's last token needs: (n_deep + 1) x (window - 1) + 1 positions of the last full layer's output

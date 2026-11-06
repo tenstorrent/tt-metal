@@ -8,7 +8,8 @@
     (bank_major.write_from_host), and it reads back as the source after the inverse permutation (in a subprocess with
     tt-metal's mock cluster: a host tensor needs a tt-metal context, never the real cards)
   - _CacheMarker lists the .bm.bin files, never deletes a cache file, and keeps an old marker's stats
-  - export_pinned_limit sets TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES when unset, keeps an explicit value
+  - nothing sets TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES globally any more (the routed experts' upload raises tt-metal's
+    limit only while it runs: bank_major.pinned_upload); pinned_limit_bytes is 2 x a layer's experts
   - the shared master's file filter (bringup/hooks.py weight_cache_patterns): the run impl's .bm.bin and markers only
 """
 
@@ -77,16 +78,17 @@ def test_marker_lists_bm_files_and_never_deletes(tmp_path):
     assert _CacheMarker(None).stats is None
 
 
-def test_export_pinned_limit_sets_it_when_unset_and_keeps_an_explicit_value(monkeypatch):
+def test_the_pinned_limit_is_not_set_globally_and_is_two_layers_of_experts(monkeypatch):
     from models.demos.deepseek_v41_flash_d_p.tt import settings as S
 
     monkeypatch.delenv("DS41_EXPERTS_IMPL", raising=False)
-    env = {}
-    assert S.export_pinned_limit(env) == str(16 << 30) and env[S.PINNED_LIMIT_ENV] == str(16 << 30)
-    env = {S.PINNED_LIMIT_ENV: "0"}  # e.g. a runner test's KMD 2.9 workaround: kept
-    assert S.export_pinned_limit(env) is None and env[S.PINNED_LIMIT_ENV] == "0"
+    assert S.pinned_limit_bytes() == 16 << 30 and S.pinned_limit_bytes("bfp8") == 32 << 30
     monkeypatch.setenv("DS41_EXPERTS_IMPL", "bfp8")
     assert S.pinned_limit_bytes() == 32 << 30
+    assert not hasattr(S, "export_pinned_limit")
+    root = Path(__file__).resolve().parents[1]
+    for f in ("bringup/hooks.py", "tt/runners/adapter.py"):  # (they set it before the mesh opened, until 2026-11-06)
+        assert S.PINNED_LIMIT_ENV not in (root / f).read_text() and "export_pinned_limit" not in (root / f).read_text()
 
 
 def test_the_shared_masters_files_are_the_run_impls_bm_files_and_markers(monkeypatch):
