@@ -134,6 +134,8 @@ class TernaryAttention:
     def project_o(self, a):
         if isinstance(a, _GatedOut) and _ROT_FUSE():  # sigmoid(gate) * attn rotated inside the o projection's op
             lead = tuple(list(a.attn.shape)[:-1])
+            if list(a.attn.shape)[-1] != self.o.K:  # token-major SDPA output (_TM): one token, as after the concat
+                lead = (1, 1, 1)
             y = self.o.rotated(
                 self.rot_out, a.gate, lead=lead, u=a.attn, sig=True, residual=prerot.take_residual(), out_l1=True
             )
@@ -286,6 +288,18 @@ class _KVSh:
         self.t = t
 
 
+class _TM:
+    """The decode SDPA's output, token-major [1, 1, heads, D]: the o projection's fused rotation reads it as is
+    (rotate.py ROT_U_TM), so the transpose and concatenate_heads after the SDPA pass it through."""
+
+    def __init__(self, t):
+        self.t = t
+
+
+def _TM_ON():
+    return os.environ.get("BONSAI_ATTN_TM", "1") == "1" and _ROT_FUSE()
+
+
 class _GatedOut:
     """Decode attn * sigmoid(gate), not computed yet (TernaryAttention.project_o rotates it in one op)."""
 
@@ -305,6 +319,8 @@ class _DecodeTransformer:
         return getattr(ttnn.transformer, name)
 
     def concatenate_heads(self, x, *args, **kwargs):
+        if isinstance(x, _TM):
+            return x
         if _ROT_FUSE() and not args:  # in L1: the o projection's fused rotation reads it during its weight stream
             kwargs.setdefault("memory_config", ttnn.L1_MEMORY_CONFIG)
         return ttnn.transformer.concatenate_heads(x, *args, **kwargs)
@@ -318,7 +334,8 @@ class _DecodeTransformer:
                 k_chunk_size=pc.k_chunk_size,
                 exp_approx_mode=pc.exp_approx_mode,
             )
-        return ttnn.transformer.paged_scaled_dot_product_attention_decode(*args, **kwargs)
+        out = ttnn.transformer.paged_scaled_dot_product_attention_decode(*args, **kwargs)
+        return _TM(out) if _TM_ON() else out
 
 
 class TernaryAttentionTtnn:
@@ -365,6 +382,8 @@ class TernaryAttentionTtnn:
         return ttnn.chunk(t, n, dim=dim)
 
     def transpose(self, t, *args, **kwargs):
+        if isinstance(t, _TM):
+            return t
         if isinstance(t, _NormRope):
             if t.head_major:
                 return t
@@ -392,7 +411,7 @@ class TernaryAttentionTtnn:
 
     def multiply(self, a, b, *args, **kwargs):
         if isinstance(b, SigGate) and not args and not kwargs:
-            return _GatedOut(a, b.t)
+            return _GatedOut(a.t if isinstance(a, _TM) else a, b.t)
         return ttnn.multiply(a, b, *args, **kwargs)
 
     def apply_rope(self, q, k, cos, sin, orig):

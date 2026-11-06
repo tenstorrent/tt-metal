@@ -29,6 +29,14 @@ def _xr_alloc(device, K, C):
     )
 
 
+def _u_tm(u, K, common):
+    """ROT_U_TM for a token-major u ([1, 1, heads, D], the decode SDPA's output) instead of a [.., K] row."""
+    if u is None or list(u.shape)[-1] == K:
+        return []
+    assert common and list(u.shape)[-2] * list(u.shape)[-1] == K and 1024 % u.shape[-1] == 0, (u.shape, K)
+    return [("ROT_U_TM", str(u.shape[-1]))]
+
+
 class DecodeRotation:
     def __init__(self, device, signs: np.ndarray, copies: int = 8, chunk_src=None):
         """chunk_src[c]: the input tile (32 values) that feeds rotated position chunk c (identity when None)."""
@@ -89,7 +97,7 @@ class DecodeRotation:
                     compile_time_args=rd_ct,
                     runtime_args=rd,
                     common_runtime_args=rd_c,
-                    defines=([("ROT_GLU", "1")] if u is not None else []) + dm_def,
+                    defines=([("ROT_GLU", "1")] if u is not None else []) + dm_def + _u_tm(u, K, common),
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
@@ -182,7 +190,7 @@ class DecodeRotation:
                 compile_time_args=rd_ct,
                 runtime_args=rd,
                 common_runtime_args=rd_c,
-                defines=glu + defs_rd,
+                defines=glu + defs_rd + _u_tm(u, K, common),
                 config=ttnn.ReaderConfigDescriptor(),
             ),
             ttnn.KernelDescriptor(

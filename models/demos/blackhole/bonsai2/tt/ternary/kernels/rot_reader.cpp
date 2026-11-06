@@ -81,7 +81,32 @@ void kernel_main() {
 #ifdef ROT_GLU
     constexpr uint32_t cb_u = ROT_CB_U;
     cb_reserve_back(cb_u, 1);
+#ifdef ROT_U_TM
+    // ROT_U_TM = head size D: u is token-major [1, 1, heads, D] (the decode SDPA's output, rows = heads), element
+    // h D + d at row h of tile d / 32. Block b holds heads h0 .. h0 + HPB - 1 (HPB = 1024 / D) of every tile: per tile
+    // their rows are one 32 HPB-B run in face 0 and one in face 1 (h0 a multiple of HPB), read whole into scratch,
+    // then row jh of the block (head h0 + jh / NT, tile jh % NT) copied out.
+    {
+        constexpr uint32_t NT = ROT_U_TM / 32, HPB = 1024 / ROT_U_TM, RUN = 32 * HPB;
+        static_assert(16 % HPB == 0 && NT * 2 * RUN <= 4096, "token-major u: heads per block must tile a face");
+        const uint32_t h0 = (1024 * b) / ROT_U_TM, f = h0 % 32 < 16 ? 0 : 1024, r0 = h0 % 16;
+        const uint32_t u_dst = get_write_ptr(cb_u);
+        for (uint32_t t = 0; t < NT; ++t) {
+            const uint64_t a = us.get_noc_addr(t) + f + r0 * 32;
+            noc_async_read(a, sc + t * 2 * RUN, RUN);
+            noc_async_read(a + 512, sc + t * 2 * RUN + RUN, RUN);
+        }
+        noc_async_read_barrier();
+        for (uint32_t jh = 0; jh < 32; ++jh) {
+            const uint32_t hr = jh / NT, t = jh % NT;
+            noc_async_read(get_noc_addr(sc + t * 2 * RUN + hr * 32), u_dst + jh * 64, 32);
+            noc_async_read(get_noc_addr(sc + t * 2 * RUN + RUN + hr * 32), u_dst + jh * 64 + 32, 32);
+        }
+        noc_async_read_barrier();
+    }
+#else
     gather(us, get_write_ptr(cb_u));
+#endif
     cb_push_back(cb_u, 1);
 #endif
     cb_push_back(cb_h, 2);
