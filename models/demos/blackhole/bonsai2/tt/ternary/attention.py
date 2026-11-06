@@ -74,9 +74,25 @@ class TernaryAttention:
             self.pre_o = prefill_linear(self.o, packed["o"][0])
             self.prot_in, self.prot_out = prefill_rotations[Kq], prefill_rotations[self.o.K]
 
+    def takes_norm(self):
+        """Whether decode can run the layer's norm + rotation inside the q projection's op (prerot.put_norm); k / v
+        then read x' from that op's L1 hub buffer (BONSAI_ATTN_NORM_FUSE=0: off)."""
+        return os.environ.get("BONSAI_ATTN_NORM_FUSE", "1") == "1" and _ROT_FUSE() and self.heads is not None
+
     def project_q(self, x):
         lead = tuple(list(x.shape)[:-1])
-        self._xr = prerot.take(x)  # k and v reuse it
+        nrot = prerot.take_norm(x)
+        if nrot is not None and self._hm_ok(lead):
+            q, gate = self.q.rotated(nrot, x, lead=lead, qg_heads=self.heads, out_l1=True)
+            self._xr = self.q.last_xl1  # x' in every q core's L1 (k / v's cores are a subset)
+            self._xr_local = True
+            return _QGDec(q, gate)
+        self._xr_local = False
+        if nrot is not None:  # handed the norm but not fusing it: run it here
+            xn, self._xr = nrot(x)
+            ttnn.deallocate(xn)
+        else:
+            self._xr = prerot.take(x)  # k and v reuse it
         if self._xr is None:
             self._xr = self.rot_in(x)
         if self._hm_ok(lead):  # q head-major and the gate as their own tensors (no reshape / chunk / transpose)
@@ -88,9 +104,13 @@ class TernaryAttention:
         if self._hm_ok(lead):
             hk = self.kv_split // self.head_dim
             shape = [1, hk, 1, self.head_dim]
-            k, v = self.kv(self._xr, lead=lead, split=self.kv_split, shapes=(shape, shape))
+            local = getattr(self, "_xr_local", False)
+            k, v = self.kv(self._xr, lead=lead, split=self.kv_split, shapes=(shape, shape), x_local=local)
             self._v = _HMDec(v)
             k = _HMDec(k)
+            if local:  # the shared hub buffer: not ours to free
+                self._xr, self._xr_local = None, False
+                return k
         else:
             k, self._v = self.kv(self._xr, lead=lead, split=self.kv_split)
         ttnn.deallocate(self._xr)

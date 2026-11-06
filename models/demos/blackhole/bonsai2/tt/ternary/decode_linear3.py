@@ -200,6 +200,7 @@ class TernaryDecodeLinear3:
         rot=None,
         out_l1=False,
         stage=None,
+        x_local=False,
     ):
         """stage: this linear's weights already copied into L1 by stage_kernels(stage) in an earlier op.
         split > 0: return two tensors, output columns [0, split) and [split, N) (split a multiple of 32).
@@ -220,8 +221,12 @@ class TernaryDecodeLinear3:
             extra_defines = list(extra_defines) + [("BATCH4", "1")]
         glu = getattr(self, "glu", False)
         if rot is not None:
-            assert COMMON_ARGS and not qg_heads and self.inline_scales and self.group16
+            assert COMMON_ARGS and self.inline_scales and self.group16
             dm_defines = list(dm_defines) + [("X_HUB", "1")]  # x' from the fused rotation (tdec_stream.hpp XHub)
+        elif x_local:
+            # x_rot is a fused rotation's hub buffer (last_xl1) from the previous op, which ran on (a superset of)
+            # this op's cores: each core copies x' from its own L1
+            dm_defines = list(dm_defines) + [("X_PAGED", "1"), ("X_LOCAL", "1")]
         elif x_rot is not None and list(x_rot.shape) == [K // 1024, 1024]:
             dm_defines = list(dm_defines) + [("X_PAGED", "1")]  # x' as 2-KB pages in L1 (rotate.py XPAGED)
         if residual is not None:
@@ -309,6 +314,7 @@ class TernaryDecodeLinear3:
             span = [Nt, cores, grid.x, unit]
             if rot is not None:
                 xl1 = _xl1_buffer(device, K, crs, cores)
+                self.last_xl1 = xl1  # x' stays there for the next op on these cores (x_local=)
                 rd_c = [xl1.buffer_address(), s_addr, self.w.buffer_address()] + span + [1]
             else:
                 rd_c = [x_rot.buffer_address(), s_addr, self.w.buffer_address()] + span + [x_rot.shape[0]]
@@ -466,11 +472,28 @@ class TernaryDecodeLinear3:
         ]
 
     def rotated(
-        self, rotation, x, lead=(1, 1, TILE), u=None, sig=False, residual=None, out_l1=False, split=0, stage=None
+        self,
+        rotation,
+        x,
+        lead=(1, 1, TILE),
+        u=None,
+        sig=False,
+        residual=None,
+        out_l1=False,
+        split=0,
+        stage=None,
+        qg_heads=0,
     ):
         """This linear on rotation(x) (rotation(x, u=u, sig=sig)) in one op: the rotation runs on the cores after this
         linear's and hands x' over through core 0 (no rotation op, no x' round trip; the weight stream starts at
         once). x (and u) should be in L1: the rotation's reads then do not queue behind the weight streams."""
         return self(
-            None, lead=lead, rot=(rotation, x, u, sig), residual=residual, out_l1=out_l1, split=split, stage=stage
+            None,
+            lead=lead,
+            rot=(rotation, x, u, sig),
+            residual=residual,
+            out_l1=out_l1,
+            split=split,
+            stage=stage,
+            qg_heads=qg_heads,
         )

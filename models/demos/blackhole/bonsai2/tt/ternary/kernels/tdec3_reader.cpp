@@ -57,6 +57,12 @@ void kernel_main() {
     // x' comes from the fused rotation via the hub (tdec_stream.hpp XHub), polled during the weight stream
     cb_reserve_back(cb_x, Kt);
     (void)x_copy;
+#elif defined(X_PAGED) && defined(X_LOCAL)
+    // x' already in this core's L1 at x_addr: a fused rotation's hub buffer from the previous op on these cores
+    // (decode_linear3.py x_local=)
+    cb_reserve_back(cb_x, Kt);
+    (void)x_copy;
+    noc_async_read(get_noc_addr(x_addr), get_write_ptr(cb_x), X_BYTES);
 #elif defined(X_PAGED)
     // x' as a [K / 1024, 1024] L1 tensor: its 2-KB pages from the cores' L1 (no DRAM bank queue, one copy)
     const auto xs = TensorAccessor(x_args, x_addr, 2048);

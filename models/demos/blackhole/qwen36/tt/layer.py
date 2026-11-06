@@ -349,9 +349,9 @@ class Qwen36DecoderLayer:
             # (models/demos/blackhole/bonsai2/tt/ternary/rotate.py NormRotation, prerot.py).
             from models.demos.blackhole.bonsai2.tt.ternary import prerot
 
-            _tgdn = None if self.is_full_attention else getattr(self.attention, "ternary", None)
+            _tgdn = getattr(self.attention, "ternary", None)
             if _tgdn is not None and _tgdn.takes_norm():
-                # Bonsai: the norm + rotation runs inside the GDN's qkvz op (the GDN gets x itself)
+                # Bonsai: the norm + rotation runs inside the GDN's qkvz op / the attention's q op (they get x itself)
                 attn_input = x
                 prerot.put_norm(x, self._bonsai_attn_nrot)
             else:
