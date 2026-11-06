@@ -25,6 +25,7 @@ from pathlib import Path
 
 import ml_dtypes
 import numpy as np
+import ttnn
 import ttml
 
 from ttml.common.performance import get_device_peak_tflops_bf16
@@ -159,12 +160,14 @@ def main(argv=None) -> int:
     model = H3Transformer(config)
     load_transformer(model, Path(args.weights))
     lora = inject(model, args.rank, args.alpha or args.rank)
+    trainable = lora_params(lora)
+    # fp32 master weights live in the parameters (#62083); forward/backward read their bf16 view
+    ttml.core.store_trainable_parameters_as(trainable, ttnn.DataType.FLOAT32)
     if args.resume:
         resume = resume_folder(Path(args.resume))
         log.info("resumed %d adapter tensors from %s", load_adapter(lora, config, resume), resume)
     else:
         init_lora_A_gaussian(lora, args.rank, args.seed)
-    trainable = lora_params(lora)
     time_weights = read_time_embedder(Path(args.weights))
     log.info(
         "model ready in %.0f s: rank %d, %.1f M trainable params per device",
@@ -173,8 +176,8 @@ def main(argv=None) -> int:
         sum(np.prod(t.shape()) for t in trainable.values()) / 1e6,
     )
 
-    opt_config = ttml.optimizers.AdamWFullPrecisionConfig.make(args.lr, 0.9, 0.99, 1e-8, args.weight_decay, False)
-    optimizer = ttml.optimizers.AdamWFullPrecision(trainable, opt_config)
+    opt_config = ttml.optimizers.AdamWConfig.make(args.lr, 0.9, 0.99, 1e-8, args.weight_decay)
+    optimizer = ttml.optimizers.AdamW(trainable, opt_config)
     scheduler = LambdaScheduler(optimizer, linear_warmup_lambda(args.warmup))
     ema = Ema(lora, args.ema_decay) if args.ema_decay > 0 else None
 

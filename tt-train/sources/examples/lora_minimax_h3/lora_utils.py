@@ -29,6 +29,7 @@ _LEAF_RENAMES = [
 ]
 _SLOT_RE = re.compile(r"^(?P<base>.+)\.(?P<slot>lora_A|lora_B)$")
 _NATIVE = ttml.autograd.PreferredPrecision.NATIVE
+_FULL = ttml.autograd.PreferredPrecision.FULL
 
 
 def inject(model, rank: int, alpha: int, dropout: float = 0.0, verbose: bool = False) -> LoraModel:
@@ -76,13 +77,8 @@ def gather_grad(tensor: ttml.autograd.Tensor) -> np.ndarray:
 
 
 def assign_like(param: ttml.autograd.Tensor, value: np.ndarray) -> None:
-    """Upload `value` (global 4-D) with the parameter's own mesh placement."""
-    mapper = ttml.Sharding.from_tensor(param).derive_mapper()
-    param.set_value(
-        ttml.autograd.Tensor.from_numpy(
-            np.ascontiguousarray(value, dtype=np.float32), ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper
-        ).get_value()
-    )
+    """Load `value` (global 4-D) with the parameter's own mesh placement, in the dtype it is stored in."""
+    ttml.autograd.assign_numpy(param, value, mapper=ttml.Sharding.from_tensor(param).derive_mapper())
 
 
 def device_to_hf(name: str, arr: np.ndarray, config: H3Config, tp: int | None = None) -> np.ndarray:
@@ -220,9 +216,8 @@ class Ema:
 
     def __init__(self, lora: LoraModel, max_decay: float) -> None:
         self.max_decay = max_decay
-        self.shadows = {
-            name: ttnn.typecast(tensor.get_value(), ttnn.DataType.FLOAT32) for name, tensor in named_lora(lora)
-        }
+        # clone: lerp writes the shadows in place, and FULL of an fp32 parameter is the parameter itself
+        self.shadows = {name: ttnn.clone(tensor.get_value(_FULL)) for name, tensor in named_lora(lora)}
         self._lora = lora
 
     def update(self, step: int) -> float:
@@ -230,7 +225,7 @@ class Ema:
         weight = upload(np.full((1, 1, 1, 1), 1.0 - decay), ttnn.DataType.FLOAT32).get_value()
         for name, tensor in named_lora(self._lora):
             s = self.shadows[name]
-            ttnn.lerp(s, ttnn.typecast(tensor.get_value(), ttnn.DataType.FLOAT32), weight, output_tensor=s)
+            ttnn.lerp(s, tensor.get_value(_FULL), weight, output_tensor=s)
         return decay
 
 
