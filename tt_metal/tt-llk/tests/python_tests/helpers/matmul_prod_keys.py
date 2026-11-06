@@ -1248,7 +1248,9 @@ def reinit_main_block(fidelity, half_sync, rt, ct, kb, throttle, l1_acc, nb) -> 
     )
 
 
-def half_two_tile_main_block(fidelity, half_sync, in1, in0, out, rt, ct, kb, throttle) -> bool:
+def half_two_tile_main_block(
+    fidelity, half_sync, in1, in0, out, rt, ct, kb, throttle
+) -> bool:
     """HiFi2 half sync blocks of two tiles and one K tile into Float16_b from Float16_b or Float32 operands (llk_matmul_forms.h matmul_half_two_tile_main_block)."""
     wide = (DataFormat.Float16_b, DataFormat.Float32)
     return (
@@ -1280,7 +1282,9 @@ def grid_main_cell(
     """Cells of the perf_matmul_grid sweep (every subblock) where the keyed forms read slower than main's: they keep main's form."""
     if reinit_main_block(fidelity, half_sync, rt, ct, kb, throttle, l1_acc, nb):
         return True
-    if half_two_tile_main_block(fidelity, half_sync, in1, in0, out, rt, ct, kb, throttle):
+    if half_two_tile_main_block(
+        fidelity, half_sync, in1, in0, out, rt, ct, kb, throttle
+    ):
         return True
     try:
         key = (

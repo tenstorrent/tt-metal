@@ -4182,3 +4182,4 @@ LoFi,Float32,Bfp8_b,Float32,2,1,4,0,False,True,1,reinit(census-mod),-5.34,,False
 LoFi,Float32,Bfp8_b,Float32,1,2,4,0,False,True,1,reinit(census-mod),-12.47,,False,False,,Full,keyed
 LoFi,Float32,Bfp8_b,Float32,1,2,32,0,False,True,1,reinit(census-mod),-145.27,,False,False,,Full,keyed
 LoFi,Float32,Bfp8_b,Float32,1,3,32,0,False,True,1,reinit(census-mod),-357.81,,False,False,,Half,keyed
+LoFi,Bfp8_b,Float16_b,Float32,4,2,4,0,False,False,1,perf_matmul_mix,0.89,0.0,True,False,pt,Half,
