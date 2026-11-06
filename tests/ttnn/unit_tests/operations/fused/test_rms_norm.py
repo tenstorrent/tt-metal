@@ -257,9 +257,13 @@ def test_rms_norm_default_compute_config(arch, math_approx_mode, fp32_dest_acc_e
     assert config.fp32_dest_acc_en == fp32_dest_acc_en
 
 
-def test_rms_norm_default_config_subblock_limit(device, expect_error):
-    if not ttnn.rmsnorm_default_compute_config(device.arch()).fp32_dest_acc_en:
-        pytest.skip("the default config on this arch has fp32_dest_acc_en=False")
+def bf16_accumulation_config(device):
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=True, fp32_dest_acc_en=False
+    )
+
+
+def test_rms_norm_default_config_wide_subblock(device, expect_error):
     memory_config = ttnn.create_sharded_memory_config(
         shape=(1, 1, 32, 2048), core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.WIDTH
     )
@@ -270,12 +274,40 @@ def test_rms_norm_default_config_subblock_limit(device, expect_error):
         device=device,
         memory_config=memory_config,
     )
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(8, 1), subblock_w=8, block_h=1, block_w=8, inplace=False
+    )
 
-    def program_config(subblock_w):
-        return ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(8, 1), subblock_w=subblock_w, block_h=1, block_w=8, inplace=False
+    def run(compute_kernel_config=None):
+        output = ttnn.rms_norm(
+            input_tensor,
+            epsilon=1e-6,
+            memory_config=memory_config,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
         )
+        return ttnn.to_torch(output)
 
-    ttnn.rms_norm(input_tensor, epsilon=1e-6, memory_config=memory_config, program_config=program_config(4))
+    assert torch.equal(run(), run(bf16_accumulation_config(device)))
+    fp32_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
     with expect_error(RuntimeError, "fp32_dest_acc_en"):
-        ttnn.rms_norm(input_tensor, epsilon=1e-6, memory_config=memory_config, program_config=program_config(8))
+        run(fp32_config)
+
+
+def test_rms_norm_default_config_row_major_weight(device):
+    # Too wide for fp32 accumulation with a ROW_MAJOR weight, but fits with bf16 accumulation.
+    w = 5632
+    torch.manual_seed(0)
+    input_tensor = ttnn.from_torch(
+        torch.randn((1, 1, 32, w)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    weight = ttnn.from_torch(
+        torch.randn((1, 1, w // 32, 32)) * 0.1 + 1, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    output = ttnn.rms_norm(input_tensor, epsilon=1e-6, weight=weight)
+    expected = ttnn.rms_norm(
+        input_tensor, epsilon=1e-6, weight=weight, compute_kernel_config=bf16_accumulation_config(device)
+    )
+    assert torch.equal(ttnn.to_torch(output), ttnn.to_torch(expected))
