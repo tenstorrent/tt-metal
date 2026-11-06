@@ -17,10 +17,14 @@ is the k-th tile of what was tile column b). The flat op reads its weights by bu
 (flat_with_program_device_operation.cpp AddrSrc::GateUp / Down; flat_routed_expert.cpp dtype checks), so this tensor
 is interchangeable with the width-sharded one. Each bank is ONE contiguous host range: the pinned path applies.
 
-File format (<stem>.bm.bin): a 4096 B header (magic, then JSON), then one record per
-mesh coordinate (row-major), each the chip's shard in bank-major order, at offset 4096 + k * stride (stride = shard
-bytes rounded up to 4096, so O_DIRECT / page-aligned reads work). Written on a cache miss (flat_expert._bank_sharded)
-or from existing .tensorbin files by models/demos/deepseek_v41_flash_d_p/tools/convert_expert_cache.py."""
+The weight cache's ONLY on-disk layout (owner 2026-11-06: one copy per thing, one layout). File format
+(<stem>.bm.bin): a 4096 B header (magic, then JSON: rows, banks, dtype, the width-sharded shape, tile_bytes, mesh,
+shard_bytes, stride, n_shards: everything the loader needs, so no other file is read), then one record per mesh
+coordinate (row-major), each the chip's shard in bank-major order, at offset 4096 + k * stride (stride = shard bytes
+rounded up to 4096, so O_DIRECT / page-aligned reads work). Written (tmp + rename: a file under its final name is
+complete) on a cache miss (flat_expert._bank_sharded -> write_from_host). Caches written before 2026-11-06 hold
+<stem>.tensorbin (ttnn flatbuffer, WIDTH_SHARDED) instead: never read; the migration is
+models/demos/deepseek_v41_flash_d_p/tools/convert_expert_cache.py (host only), after which the .tensorbin can go."""
 
 from __future__ import annotations
 
@@ -32,6 +36,10 @@ from pathlib import Path
 
 import torch
 
+EXT = ".bm.bin"  # the cache file suffix (flat_expert: <cache_prefix>.flat.<dtype>.lay<key>.<name>.bm.bin)
+OLD_EXT = ".tensorbin"  # the pre-2026-11-06 layout of the same stem (convert_expert_cache.py; never read)
+PINNED_LIMIT_ENV = "TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES"
+PINNED_LIMIT_DEFAULT = 4 << 30  # tt-metal's default (rtoptions.cpp) when the variable is unset
 MAGIC = b"TTBMAJ01"
 HDR = 4096
 ALIGN = 4096
@@ -39,9 +47,17 @@ CHUNK = 16 << 20  # pread request size
 
 
 def bm_path(tensorbin) -> str:
+    """The bank-major file of an old-layout <stem>.tensorbin (the converter's output name)."""
     s = str(tensorbin)
-    assert s.endswith(".tensorbin"), s
-    return s[: -len(".tensorbin")] + ".bm.bin"
+    assert s.endswith(OLD_EXT), s
+    return s[: -len(OLD_EXT)] + EXT
+
+
+def old_layout_path(bm) -> str:
+    """The old-layout <stem>.tensorbin a bank-major file replaces (named in a cache miss's line; never read)."""
+    s = str(bm)
+    assert s.endswith(EXT), s
+    return s[: -len(EXT)] + OLD_EXT
 
 
 def _round_up(n, a):
@@ -87,7 +103,7 @@ def hs_memory_config(rows: int, banks: int):
 
 
 def hs_args(info: dict):
-    """(shape, dtype, layout, memory_config) of the bank-major (height-sharded) twin of a width-sharded weight."""
+    """(shape, dtype, layout, memory_config) of the bank-major (height-sharded) form of a width-sharded weight."""
     import ttnn
 
     rows, banks = info["rows"], info["banks"]
@@ -211,6 +227,7 @@ class PinnedStager:
         self._jobs: dict = {}  # slot -> [set of paths not uploaded yet, Future]
         self._next = 0
         self._lock = threading.Lock()
+        self._warned_pin = False
 
     @staticmethod
     def _key(hdr):
@@ -227,7 +244,35 @@ class PinnedStager:
                     ttnn.allocate_tensor_on_host(shape, dt, lay, self.mesh, mc) for _ in range(self.depth)
                 ]
                 self.views[key] = [shard_views(t, self.shape) for t in self.sets[key]]
+                self._check_pin_limit()
             return self.sets[key][slot % self.depth], self.views[key][slot % self.depth]
+
+    def staged_bytes(self) -> int:
+        """Host bytes of every staging slot (what tt-metal's PinnedMemoryCache must hold to keep them all pinned)."""
+        return sum(self.depth * int(v[0][0].numel()) * len(v[0]) for v in self.views.values())
+
+    def _check_pin_limit(self) -> None:
+        """One line when tt-metal's pinned-memory cache limit (read when the process first touched tt-metal) is below
+        the staging: the upload stays correct (the chips past the limit take the issue-queue copy, still one
+        contiguous range a bank), only slower. DeepSeek-V4.1 sets it before the mesh opens (tt/settings.py
+        export_pinned_limit)."""
+        if self._warned_pin:
+            return
+        raw = os.environ.get(PINNED_LIMIT_ENV)  # diagnostic: only the log line below reads it
+        try:
+            limit = PINNED_LIMIT_DEFAULT if raw is None else int(raw, 0)
+        except ValueError:
+            return
+        need = self.staged_bytes()
+        if limit < need:
+            from loguru import logger
+
+            self._warned_pin = True
+            logger.warning(
+                f"FLAT_CACHE pinned staging {need / 2**30:.1f} GiB > {PINNED_LIMIT_ENV}="
+                f"{raw if raw is not None else f'unset ({PINNED_LIMIT_DEFAULT >> 30} GiB default)'}: some chips take "
+                f"the slower issue-queue copy (same bytes); set it to >= {-(-need // 2**30)} GiB before the mesh opens"
+            )
 
     def fill(self, path, slot: int) -> int:
         hdr = read_header(path)
@@ -278,6 +323,7 @@ class PinnedStager:
                 self._jobs.pop(slot)  # (its prefetched files, if any are left, are read again when uploaded)
             self.fill(path, slot)
         hdr = read_header(path)
+        assert tuple(hdr["mesh"]) == self.shape, f"{path}: written for mesh {hdr['mesh']}, this mesh is {self.shape}"
         host, _ = self.staging(hdr, slot)
         if device_tensor is None:
             shape, dt, lay, mc = hs_args(hdr)
@@ -298,16 +344,16 @@ def stager(mesh, depth: int | None = None) -> PinnedStager:
     return st
 
 
-def write_twin_from_host(cache_file, host_tensor) -> str:
-    """On a cache miss (flat_expert._bank_sharded): the bank-major twin of the .tensorbin just dumped from
-    ``host_tensor`` (the width-sharded, bfp-packed host tensor)."""
+def write_from_host(cache_file, host_tensor) -> str:
+    """On a cache miss (flat_expert._bank_sharded): the bank-major file ``cache_file`` (<stem>.bm.bin) of the
+    width-sharded, bfp-packed host tensor just laid out (atomic: tmp + rename)."""
+    dst = str(cache_file)
+    assert dst.endswith(EXT), dst
     info = width_info(host_tensor)
     mesh = tuple(int(x) for x in host_tensor.host_buffer().shape())
     srcs = shard_views(host_tensor, mesh)
     n = int(srcs[0].numel())
     info["tile_bytes"] = n // ((info["rows"] // 32) * info["banks"])
-    info["src"] = os.path.basename(str(cache_file))
     outs = [width_to_bank_major(s, info["banks"], info["tile_bytes"], torch.empty(n, dtype=torch.uint8)) for s in srcs]
-    dst = bm_path(cache_file)
     write_bm(dst, info, mesh, outs)
     return dst

@@ -321,8 +321,8 @@ def _bank_sharded(regions_per_dev, banks, dtype, device, cache_file=None, replic
     """Per-core weight regions (equal-size [tiles, 32, 32]) -> one width-sharded DRAM tensor: core i's region is
     contiguous in bank i % banks at byte offset (i // banks) * region bytes. One region list per device (a mesh:
     row-major device order; lockstep allocation gives every device the same address); ``replicate``: one list, the
-    same on every device of the mesh (packed once on the host). ``cache_file``: also dump the host (bfp-packed)
-    tensor there, for _load_cached."""
+    same on every device of the mesh (packed once on the host). ``cache_file``: also write the host (bfp-packed)
+    tensor there as the weight cache's bank-major file (bank_major.write_from_host; what _load_cached_set loads)."""
     hosts = []
     for regions in regions_per_dev:
         per = -(-len(regions) // banks)
@@ -348,9 +348,7 @@ def _bank_sharded(regions_per_dev, banks, dtype, device, cache_file=None, replic
     )
     if cache_file is not None:
         Path(cache_file).parent.mkdir(parents=True, exist_ok=True)
-        ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(cache_file), host)
-        if _bank_major_on():  # (its bank-major twin too: what _load_cached_set loads)
-            bank_major.write_twin_from_host(cache_file, host)
+        bank_major.write_from_host(cache_file, host)
     return host.to(device, mc)
 
 
@@ -397,72 +395,45 @@ WEIGHT_LAYOUT_KEYS = (
 )  # fmt: skip
 
 
-def _adopt_legacy(cache_prefix, wdtype, files):
-    """Caches written before the layout-only key were keyed on the whole plan (capacity, h buffers, ...), so any
-    plan change re-packed every layer (~1 h for 42 layers on the CPU). When the layout-keyed files are missing, hard
-    link the newest whole-plan-keyed set of this layer (same weights, dtype and mesh directory): the packing depends
-    on the shape and the grid only, and no packing change was made while those keys were in use. Set
-    FLAT_CACHE_NO_ADOPT=1 to repack instead."""
-    import os
-
-    if os.environ.get("FLAT_CACHE_NO_ADOPT") or all(Path(f).is_file() for f in files.values()):
-        return
-    stem = Path(cache_prefix)
-    sets = {}
-    for f in stem.parent.glob(f"{stem.name}.flat.{wdtype}.*.tensorbin"):
-        key = f.name[len(stem.name) + len(f".flat.{wdtype}.") :].split(".")[0]
-        if not key.startswith("lay"):
-            sets.setdefault(key, []).append(f)
-    names = list(files)
-    full = [k for k, fs in sets.items() if all(any(x.name.endswith(f".{n}.tensorbin") for x in fs) for n in names)]
-    if not full:
-        return
-    best = max(full, key=lambda k: max(x.stat().st_mtime for x in sets[k]))
-    for n, dst in files.items():
-        src = stem.parent / f"{stem.name}.flat.{wdtype}.{best}.{n}.tensorbin"
-        if not Path(dst).is_file():
-            os.link(src, dst)
-
-
-def _load_cached(cache_file, device):
-    """A _bank_sharded tensor from its dump (the memory config is part of the stored spec), or None."""
-    if cache_file is None or not Path(cache_file).is_file():
-        return None
-    return ttnn._ttnn.tensor.load_tensor_flatbuffer(str(cache_file), device=device)
-
-
-def _bank_major_on() -> bool:
-    """FLAT_CACHE_BANK_MAJOR (default 1): write and load the weight cache's bank-major twins (bank_major.py)."""
-    return os.environ.get("FLAT_CACHE_BANK_MAJOR", "1") != "0"
+def _old_layout_files(files) -> list[str]:
+    """The pre-2026-11-06 (.tensorbin, WIDTH_SHARDED flatbuffer) dumps of a layer's missing bank-major files, if this
+    cache still holds them: never read (the bank-major file is the cache's only layout), only named in the miss line so
+    the owner converts them (models/demos/deepseek_v41_flash_d_p/tools/convert_expert_cache.py, host only, ~11 s a
+    layer) instead of repacking from the checkpoint."""
+    return [t for t in (bank_major.old_layout_path(f) for f in files.values() if f is not None) if Path(t).is_file()]
 
 
 def _load_cached_set(files, device):
-    """Every laid-out weight tensor of a layer from the weight cache ({name: tensor or None}). When each file has its
-    bank-major twin (<stem>.bm.bin) and FLAT_CACHE_BANK_MAJOR is on, from the twins: parallel preads into the mesh's
-    persistent pinned host staging (bank_major.stager; read ahead by prefetch_cached), then one device pull per chip.
-    The result is a HEIGHT_SHARDED [1, banks x rows, 32] tensor whose every DRAM bank holds the same bytes as the
-    WIDTH_SHARDED .tensorbin tensor's (the op reads its weights by buffer address and dtype only). Else the
-    .tensorbin path (mmap + to_device: the serial pin of the file pages, then the issue-queue copy of 576 B tiles)."""
+    """Every laid-out weight tensor of a layer from the weight cache ({name: tensor or None}). A hit = every file of
+    the layer is a complete bank-major file (<stem>.bm.bin, bank_major.py: its 4 KiB header holds the shape, dtype,
+    bank count and mesh, so nothing else is read): parallel preads into the mesh's persistent pinned host staging
+    (bank_major.stager; read ahead by prefetch_cached), then one device pull per chip. The result is a HEIGHT_SHARDED
+    [1, banks x rows, 32] tensor whose every DRAM bank holds the bytes the WIDTH_SHARDED layout's would (the op reads
+    its weights by buffer address and dtype only). Anything else is a miss for the whole layer (all None): the caller
+    repacks from the checkpoint and writes the bank-major files."""
     if any(f is None for f in files.values()):
         return dict.fromkeys(files)
-    if _bank_major_on():
-        twins = {n: bank_major.bm_path(f) for n, f in files.items()}
-        if all(bank_major.is_complete(p) for p in twins.values()):
-            st = bank_major.stager(device)
-            return {n: st.upload(p) for n, p in twins.items()}
-    return {n: _load_cached(f, device) for n, f in files.items()}
+    if all(bank_major.is_complete(f) for f in files.values()):
+        st = bank_major.stager(device)
+        return {n: st.upload(f) for n, f in files.items()}
+    old = _old_layout_files(files)
+    if old:
+        logger.warning(
+            f"FLAT_CACHE miss: {Path(next(iter(files.values()))).name} has no complete bank-major file, but the old "
+            f"layout ({len(old)} .tensorbin, never read) is there: convert it instead of repacking (host only, ~11 s a layer): "
+            f"python models/demos/deepseek_v41_flash_d_p/tools/convert_expert_cache.py {' '.join(old)}"
+        )
+    return dict.fromkeys(files)
 
 
 def prefetch_cached(device, files) -> bool:
-    """Start reading another layer's bank-major twins into a free staging slot of ``device``'s stager (the next
-    FlatRoutedExpert's load then only waits for it). ``files``: that layer's .tensorbin paths. False when not all
-    twins exist (nothing started)."""
-    if not _bank_major_on() or not files:
+    """Start reading another layer's bank-major files (``files``: its cache_files paths) into a free staging slot of
+    ``device``'s stager (the next FlatRoutedExpert's load then only waits for it). False when not all are complete
+    (nothing started)."""
+    files = [f for f in files if f is not None]
+    if not files or not all(bank_major.is_complete(f) for f in files):
         return False
-    twins = [bank_major.bm_path(f) for f in files]
-    if not all(bank_major.is_complete(p) for p in twins):
-        return False
-    bank_major.stager(device).prefetch(twins)
+    bank_major.stager(device).prefetch(files)
     return True
 
 
@@ -2060,15 +2031,14 @@ class FlatRoutedExpert:
         files = dict.fromkeys(names)
         if cache_prefix is not None:
             key = hashlib.sha1(repr((_weight_packing(lay, nk=weights_nk), gids, n_dev)).encode()).hexdigest()[:12]
-            files = {n: f"{cache_prefix}.flat.{wdtype}.lay{key}.{n}.tensorbin" for n in names}
-            _adopt_legacy(cache_prefix, wdtype, files)
+            files = {n: f"{cache_prefix}.flat.{wdtype}.lay{key}.{n}{bank_major.EXT}" for n in names}
         if isinstance(weights, str):
             assert weights == "fake", weights
             shapes = flat_weight_shapes(H, I, E, lay)
             cached = {n: _fake_bank_sharded(*shapes[n], banks, fmts[n][0], device, n_dev) for n in names}
         else:
             cached = _load_cached_set(files, device)
-        self.cache_files = files  # ({name: .tensorbin path or None}: another layer's names share the suffix)
+        self.cache_files = files  # ({name: .bm.bin path or None}: another layer's names share the suffix)
         if any(t is None for t in cached.values()):
             weights = weights() if callable(weights) else weights
             assert len(weights) == n_dev and all(len(w_) == E for w_ in weights)

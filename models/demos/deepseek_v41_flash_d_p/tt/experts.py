@@ -224,10 +224,11 @@ def expert_cache_prefix(cache_dir, ck, layer: int, impl: str, mesh, n_experts: i
 
 
 class _CacheMarker:
-    """<prefix>.done.json, written after FlatRoutedExpert has dumped a layer's laid-out weights: the files (and their
-    sizes) it wrote and the layer's bfp4_stats. The fork dumps straight to the final names, so a process killed while
-    dumping leaves a truncated file: at construction every <prefix>.flat.* file the marker does not list with its size
-    is deleted (the fork then misses and repacks)."""
+    """<prefix>.done.json, written after FlatRoutedExpert has written a layer's laid-out weights: the files (and their
+    sizes) it wrote and the layer's bfp4_stats (read back on a hit, for the EXPERTS_BFP4 line). The cache files are the
+    fork's bank-major files (<prefix>.flat.*.bm.bin, the only layout: bank_major.py), each written to a temporary name
+    and renamed, and checked against its own header on load (bank_major.is_complete), so nothing here deletes or
+    vets them; a marker written before 2026-11-06 lists the old .tensorbin names instead (only its stats are used)."""
 
     def __init__(self, prefix: str | None):
         self.prefix, self.stats = prefix, None
@@ -240,20 +241,14 @@ class _CacheMarker:
                 rec = json.loads(self.path.read_text())
             except (OSError, ValueError):
                 rec = {}
-        files = rec.get("files", {})
-        for f in self._files():
-            if files.get(f.name) != f.stat().st_size:
-                logger.warning(f"EXPERTS_CACHE dropping {f} (not in the completion marker {self.path.name})")
-                f.unlink()
         self.stats = rec.get("stats")
 
     def _files(self):
-        """The fork's .tensorbin dumps of this layer (their bank-major twins, <stem>.bm.bin, are written atomically
-        and checked against their own header: not the marker's)."""
+        """The fork's bank-major files of this layer."""
         stem = Path(self.prefix)
         if not stem.parent.is_dir():
             return []
-        return sorted(f for f in stem.parent.glob(f"{stem.name}.flat.*") if f.name.endswith(".tensorbin"))
+        return sorted(stem.parent.glob(f"{stem.name}.flat.*.bm.bin"))
 
     def write(self, stats):
         rec = {"files": {f.name: f.stat().st_size for f in self._files()}, "stats": stats}
@@ -371,7 +366,7 @@ class TtExperts:
         )
 
     def _prefetch_next(self, ck, prefix):
-        """Start reading the next layer's routed-expert cache (set_load_order; its bank-major twins) into the pinned
+        """Start reading the next layer's routed-expert cache (set_load_order; its bank-major files) into the pinned
         staging, so its FlatRoutedExpert only waits for what is left of the read. The next layer's files: its own
         cache prefix (expert_cache_prefix: a hash of its stored experts) with this layer's file suffixes (the layout
         key is the plan's, the same for every layer of the model). Returns the layer started, or None."""
