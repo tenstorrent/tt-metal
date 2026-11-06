@@ -9,7 +9,10 @@ from ttnn.dot_access import DotAccessDict
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 import ttnn
-from models.demos.vision.classification.vit.blackhole.tt.ttnn_optimized_sharded_vit_bh import largest_divisor_at_most
+from models.demos.vision.classification.vit.blackhole.tt.ttnn_optimized_sharded_vit_bh import (
+    ff1_exceeds_l1_budget,
+    largest_divisor_at_most,
+)
 
 try:
     from tracy import signpost
@@ -68,13 +71,9 @@ def update_model_config(config, batch_size, sequence_size, device):
     seqL_t__y = (batch_size * seqL_t) // core_grid_BLOCK_SHARDED.y  # 4, 8, 12
     dim_t__x = dim_t // core_grid_BLOCK_SHARDED.x  # 2, 3, 4, 6
 
-    # Each sharded projection keeps its block of the hidden dim, its output and the residual in a core's L1;
-    # the widest is the MLP's 4x fc1 output. Past a quarter of a core's L1 they no longer fit, so the qkv,
-    # output and MLP projections run through DRAM instead.
-    BFLOAT8_B_TILE_BYTES = 1088
-    fc1_output_bytes_per_core = seqL_t__y * dim_t__x * 4 * BFLOAT8_B_TILE_BYTES
-    l1_bytes_per_core = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
-    projections_in_dram = fc1_output_bytes_per_core > l1_bytes_per_core // 4
+    # When ff1 does not fit, only the qkv, output and MLP projections go through DRAM; their outputs return
+    # to the block-sharded grid, and the rest of the layer stays in L1.
+    projections_in_dram = ff1_exceeds_l1_budget(device, seqL_t__y, dim_t__x)
 
     head_seqL_t__x = (batch_size * head_num * seqL_t) // (
         core_grid_HEIGHT_SHARDED.x * core_grid_HEIGHT_SHARDED.y
