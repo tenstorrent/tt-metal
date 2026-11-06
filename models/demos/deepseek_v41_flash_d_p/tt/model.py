@@ -74,7 +74,7 @@ from .common import (
     set_load_layer,
     stream_dtype,
 )
-from .compressor import CompressRope, TtCompressCaches, TtCompressor, compressor_weights
+from .compressor import CompressRope, TtCompressCaches, TtCompressor, compressor_weights, config_names, reindex_layers
 from .cores import from_torch, init_caps, max_grid, sub_cores, sub_cores_tiled
 from .engram import TtEngramRows
 from .engram_add import build_engram_add
@@ -264,10 +264,24 @@ class DS41DeviceState:
         }
         shared = compress or {}
         self.shared_compress = frozenset(shared)
+
+        def mirrors(i):  # INDEX_K_SERVED=fp8_row192 (P.39): the re-index layers serving source i's index keys
+            name = config_names(cfg.ratio(i))[1]
+            return [slabs.get(j, {}).get(name) for j in reindex_layers(cfg, model.layers, i)]
+
         self.compress = {
             i: shared[i]
             if i in shared
-            else TtCompressCaches(mesh, tables, max_seq, cfg.ratio(i), cfg.head_dim, cfg.index_dim, slabs=slabs.get(i))
+            else TtCompressCaches(
+                mesh,
+                tables,
+                max_seq,
+                cfg.ratio(i),
+                cfg.head_dim,
+                cfg.index_dim,
+                slabs=slabs.get(i),
+                mirrors=mirrors(i),
+            )
             for i in model.layers
             if cfg.is_kv_source(i)
         }
@@ -425,6 +439,8 @@ class DS41DeviceState:
         out = {"0_window_kv": ttnn.bfloat16}
         for c in self.compress.values():
             out.update({n: ttnn.bfloat16 for n in c.names})
+            if c.index_k.fp8:  # INDEX_K_SERVED=fp8_row192 (P.39): e4m3 values (+ an fp32 scale a 192-byte row)
+                out[c.names[1]] = ttnn.fp8_e4m3
         return out
 
     def free(self) -> None:

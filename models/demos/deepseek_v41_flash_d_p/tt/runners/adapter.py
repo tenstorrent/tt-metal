@@ -159,7 +159,8 @@ class DS41PrefillRuntime:
         self._d2h = service
 
     def state(self, kv, slot: int):
-        """The slot's DS41DeviceState over the engine's caches (built once per slot; no device allocation)."""
+        """The slot's DS41DeviceState over the engine's caches (built once per slot; no device allocation but the
+        index keys' bf16 compute copies under INDEX_K_SERVED=fp8_row192, P.39)."""
         key = (id(kv), int(slot))
         if key not in self._states:
             self._states[key] = self.model.new_state(

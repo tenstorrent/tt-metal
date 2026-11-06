@@ -380,6 +380,7 @@ def state_threshold():
     drift = E.load(Golden.for_rung(_spec(), GOLDEN_RUNG).dir, GOLDEN_RUNG)
 
     def limit(cfg: dict, layer: int) -> float:
+        layer = cfg.get("of", {}).get(layer, layer)  # (P.39: a re-index layer serves its key source's index keys)
         return max(PREFILL_GOLDEN_PCC, E.pcc_limit(drift, f"state_{STATE_OF_KIND[cfg['kind']]}_L{layer:02d}"))
 
     return limit

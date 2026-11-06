@@ -21,6 +21,19 @@ tables.py:37; bf16 ROW_MAJOR; one record = one ND shard [1, 1, rows, width] in o
 A compressed row j stands for tokens [j * r, j * r + r): the record of token positions [p, p + 32) holds rows
 [p / r, (p + 32) / r). RoPE dims are the last 64 of a 512 vector and of a 128 index key (inference/model.py
 apply_rotary_emb(x[..., -rd:])): the per-channel PCC splits there (kv_dump_compare.tensor_pcc, nope / pe).
+
+INDEX_K_SERVED=fp8_row192 (P.39, the default; owner 2026-11-06, Blaze decode compatibility): the index configs hold
+Blaze decode's indexer key cache rows, uint8 192 B a row (records 16 x 192 / 32 x 192 B): bytes 0..127 e4m3 of
+key / scale, 128..131 the scale (fp32, little endian), 132..191 zero; pad rows all zero. 4_index_k_r1 also covers the
+re-index layers (24 / 28 / 32 / 36), each holding layer 20's rows (``cfg["of"]``: layer -> its key source). The
+readers here decode the rows (``decode``, independent of the model code) and compare the values with the golden at
+the same limit as before (the stated fp8 tolerance: none of its own; e4m3's truncation, ~3-6 % of a value, is far
+inside the index keys' limit, calib x the reference's own fp4 drift); ``fp8_row_failures`` checks the bytes' format
+(zero padding, a positive finite scale, the row's largest |value| / scale at e4m3's 416 or 448, all-zero pad rows),
+and ``blaze_rows`` is Blaze's torch recipe (tt-blaze 8223e7f9963e tests/blaze/micro_ops/dsa/
+test_dsa_indexer_direct_k_cache_update.py:_quantize_scaled_keys). test_kv_layout.py checks the served bytes against
+the stock per_token_cast_to_fp8 exactly (the writer tt-blaze's test compares with) and against the recipe within one
+e4m3 step (the cast lands one step higher at ~1 % of values and keeps e4m3 subnormals the recipe flushes, P.39).
 """
 
 from __future__ import annotations
@@ -37,6 +50,7 @@ import torch
 from models.demos.deepseek_v41_flash_d_p.tests.bringup.contract import server_rules as R
 
 ROPE = 64
+FP8_VALUES, FP8_ROW_BYTES = 128, 192  # INDEX_K_SERVED=fp8_row192: Blaze decode's indexer key cache row
 CONFIG_ORDER = ("0_window_kv", "1_compress_kv_r2", "2_index_k_r2", "3_compress_kv_r1", "4_index_k_r1")
 PREFILL_CHUNK_KWARGS = ("slot_id", "actual_start", "actual_end", "request_id", "d2h_service", "metadata_msg")
 
@@ -62,6 +76,22 @@ def is_kv_source(layer: int) -> bool:
     return layer in model_args()["kv_source_layers"]
 
 
+def index_k_fp8() -> bool:
+    """INDEX_K_SERVED=fp8_row192 (P.39): the index configs hold Blaze's 192-byte fp8 rows (the model's setting)."""
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+    return settings.get("INDEX_K_SERVED") == "fp8_row192"
+
+
+def key_source(layer: int) -> int | None:
+    """The KV source whose index keys a re-index layer reads (an index source that is no KV source: the latest KV
+    source before it); None for any other layer."""
+    a = model_args()
+    if not ratio(layer) or layer not in a["index_source_layers"] or is_kv_source(layer):
+        return None
+    return max(j for j in a["kv_source_layers"] if j <= layer)
+
+
 def served_prefix() -> list[int]:
     """Layers the runner tests serve: the spec's layers from 0 up to the first gap (the whole model in a full run;
     0-3 in this partial run, whose later layers need golden inputs the runner cannot give). Runner layer k = model
@@ -80,14 +110,20 @@ def served_configs(layers: list[int]) -> list[dict]:
     a = model_args()
     head, idx = int(a["head_dim"]), int(a["index_head_dim"])
     out = [{"name": CONFIG_ORDER[0], "kind": "window", "ratio": 1, "rows": 32, "width": head, "layers": list(layers)}]
+    fp8 = index_k_fp8()
     for r, (cn, ik) in ((2, CONFIG_ORDER[1:3]), (1, CONFIG_ORDER[3:5])):
         src = [i for i in layers if is_kv_source(i) and ratio(i) == r]
         if src:
             out.append({"name": cn, "kind": "compress", "ratio": r, "rows": 32 // r, "width": head, "layers": src})
-            out.append({"name": ik, "kind": "index", "ratio": r, "rows": 32 // r, "width": idx, "layers": src})
+            c = {"name": ik, "kind": "index", "ratio": r, "rows": 32 // r, "width": idx, "layers": src}
+            if fp8:  # P.39: Blaze's rows, also under the re-index layers that read these keys
+                of = {j: key_source(j) for j in layers if key_source(j) in src}
+                c.update(fp8=True, layers=sorted(src + list(of)), of=of)
+            out.append(c)
     for c in out:
         c["split"] = c["width"] - ROPE
-        c["record_bytes"] = c["rows"] * c["width"] * 2
+        c["row_bytes"] = FP8_ROW_BYTES if c.get("fp8") else c["width"] * 2
+        c["record_bytes"] = c["rows"] * c["row_bytes"]
     return out
 
 
@@ -226,7 +262,8 @@ class GoldenKV:
         else:
             name = "compress_kv" if cfg["kind"] == "compress" else "index_k"
             a, b = rows_of(cfg, lo_tok, hi_tok)
-            t = self.g.state(layer)[name][a:b]
+            src = cfg.get("of", {}).get(layer, layer)  # (P.39: a re-index layer serves its key source's rows)
+            t = self.g.state(src)[name][a:b]
         return t.float().numpy()
 
     def limits(self, kvc, cfg: dict, layer: int, lo_tok: int, hi_tok: int) -> dict[str, tuple[float, float]]:
@@ -352,34 +389,95 @@ def rel_err(got: np.ndarray, want: np.ndarray) -> float:
 
 
 # ---------------------------------------------------------------- records
-def decode(raw: bytes, cfg: dict) -> np.ndarray:
+def fp8_decode(raw: np.ndarray) -> np.ndarray:
+    """192-byte rows uint8 [n, 192] -> the values they hold, float32 [n, 128]: e4m3 (bytes 0..127) x the fp32 scale
+    (bytes 128..131, little endian), exact (float64 product)."""
+    t = torch.from_numpy(np.ascontiguousarray(raw, dtype=np.uint8))
+    v = t[:, :FP8_VALUES].contiguous().view(torch.float8_e4m3fn).double()
+    sc = t[:, FP8_VALUES : FP8_VALUES + 4].contiguous().view(torch.float32).double()
+    return (v * sc).float().numpy()
+
+
+def decode(raw: bytes, cfg: dict, raw_rows: bool = False) -> np.ndarray:
     """One record -> [rows, width] float32 (bf16 ROW_MAJOR; for 32-row records this is kv_dump_compare.decode_chunk
-    with dtype bf16, storage row-major)."""
+    with dtype bf16, storage row-major; an fp8 index config: its 192-byte rows decoded, ``raw_rows``: the rows'
+    bytes, uint8 [rows, 192])."""
     if len(raw) != cfg["record_bytes"]:
-        raise ValueError(
-            f"{cfg['name']}: record of {len(raw)} B, expected {cfg['record_bytes']} B "
-            f"({cfg['rows']} rows x {cfg['width']} bf16, row-major)"
-        )
+        what = f"{cfg['rows']} rows x 192 B fp8" if cfg.get("fp8") else f"{cfg['rows']} rows x {cfg['width']} bf16"
+        raise ValueError(f"{cfg['name']}: record of {len(raw)} B, expected {cfg['record_bytes']} B ({what}, row-major)")
+    if cfg.get("fp8"):
+        rows = np.frombuffer(raw, dtype=np.uint8).reshape(cfg["rows"], FP8_ROW_BYTES)
+        return rows.copy() if raw_rows else fp8_decode(rows)
+    assert not raw_rows, "raw rows: fp8 configs only"
     return (np.frombuffer(raw, dtype="<u2").astype(np.uint32) << 16).view(np.float32).reshape(cfg["rows"], cfg["width"])
 
 
-def assemble(records: dict, cfg: dict, layer: int, lo_tok: int, hi_tok: int) -> np.ndarray:
+def assemble(records: dict, cfg: dict, layer: int, lo_tok: int, hi_tok: int, raw_rows: bool = False) -> np.ndarray:
     """Rows of the records covering token range [align32(lo), ceil32(hi)) of one layer, in position order.
-    records: {(layer, pos): bytes}."""
+    records: {(layer, pos): bytes}. ``raw_rows``: an fp8 config's row bytes (uint8 [.., 192])."""
     out = []
     for pos in range(R.align_down(lo_tok, 32), R.ceil_to(hi_tok, 32), 32):
         if (layer, pos) not in records:
             raise KeyError(f"{cfg['name']}: no record for layer {layer} position {pos}")
-        out.append(decode(records[(layer, pos)], cfg))
-    return np.concatenate(out) if out else np.zeros((0, cfg["width"]), np.float32)
+        out.append(decode(records[(layer, pos)], cfg, raw_rows))
+    if out:
+        return np.concatenate(out)
+    return np.zeros((0, FP8_ROW_BYTES), np.uint8) if raw_rows else np.zeros((0, cfg["width"]), np.float32)
 
 
-def valid_and_pad(records: dict, cfg: dict, layer: int, lo_tok: int, hi_tok: int) -> tuple[np.ndarray, np.ndarray]:
+def valid_and_pad(
+    records: dict, cfg: dict, layer: int, lo_tok: int, hi_tok: int, raw_rows: bool = False
+) -> tuple[np.ndarray, np.ndarray]:
     """(rows of the complete groups in [lo_tok, hi_tok), the pad rows after them up to the end of the last record)."""
-    rows = assemble(records, cfg, layer, lo_tok, hi_tok)
+    rows = assemble(records, cfg, layer, lo_tok, hi_tok, raw_rows)
     base = R.align_down(lo_tok, 32) // cfg["ratio"]
     a, b = rows_of(cfg, lo_tok, hi_tok)
     return rows[a - base : b - base], rows[b - base :]
+
+
+def blaze_rows(keys: torch.Tensor) -> np.ndarray:
+    """Blaze decode's 192-byte rows of keys [n, 128] (taken as bf16, as the device holds them): tt-blaze 8223e7f9963e
+    tests/blaze/micro_ops/dsa/test_dsa_indexer_direct_k_cache_update.py:_quantize_scaled_keys, verbatim: scale =
+    clamp(amax |x|, 1e-4, 3e38) x fp32(1 / 448), x times the TF32-truncated reciprocal, e4m3 mantissa truncated, below
+    2^-6 flushed to zero. An all-zero key (a pad row) is all zero here (the device's pad rows; the recipe would
+    write the clamp floor as its scale)."""
+    values = keys.to(torch.bfloat16).float().contiguous()
+    scales = values.abs().amax(dim=-1, keepdim=True).clamp(1e-4, 3e38) * (1 / 448)
+    inv = scales.reciprocal().contiguous()
+    inv = (inv.view(torch.int32) & -8192).view(torch.float32)
+    normalized = (values * inv).contiguous()
+    truncated = (normalized.view(torch.int32) & ~((1 << 20) - 1)).view(torch.float32)
+    truncated[normalized.abs() < 2**-6] = 0
+    raw = torch.zeros((*values.shape[:-1], FP8_ROW_BYTES), dtype=torch.uint8)
+    raw[..., :FP8_VALUES] = truncated.to(torch.float8_e4m3fn).view(torch.uint8)
+    raw[..., FP8_VALUES : FP8_VALUES + 4] = scales.contiguous().view(torch.uint8)
+    raw[(values == 0).all(dim=-1)] = 0
+    return raw.numpy()
+
+
+def fp8_row_failures(rows: np.ndarray, pad: np.ndarray, cfg: dict, layer: int, what: str) -> list[str]:
+    """The format of an fp8 index config's served rows (uint8 [n, 192] of complete groups, then the record's pad rows):
+    bytes 132..191 zero; a finite scale > 0; the largest |e4m3| of the row 416 or 448 (the amax maps to 448 x (1 - a
+    TF32 truncation), the mantissa truncated); every pad row all zero."""
+    if not cfg.get("fp8"):
+        return []
+    out = []
+    if rows.size:
+        t = torch.from_numpy(np.ascontiguousarray(rows))
+        if (t[:, FP8_VALUES + 4 :] != 0).any():
+            out.append(f"{what}: {cfg['name']} layer {layer}: padding bytes 132..191 not zero")
+        sc = t[:, FP8_VALUES : FP8_VALUES + 4].contiguous().view(torch.float32).flatten()
+        top = t[:, :FP8_VALUES].contiguous().view(torch.float8_e4m3fn).float().abs().amax(dim=-1)
+        bad = (~torch.isfinite(sc)) | (sc <= 0) | ~((top == 416) | (top == 448))
+        if bad.any():
+            i = int(torch.nonzero(bad)[0])
+            out.append(
+                f"{what}: {cfg['name']} layer {layer}: {int(bad.sum())} of {len(sc)} rows not a scaled e4m3 row, "
+                f"first row {i} (scale {float(sc[i])!r}, largest |e4m3| {float(top[i])})"
+            )
+    if pad.size and (pad != 0).any():
+        out.append(f"{what}: {cfg['name']} layer {layer}: pad rows not all zero bytes")
+    return out
 
 
 def pcc_failures(kvc, cfg: dict, got: np.ndarray, want: np.ndarray, layer: int, thr, what: str) -> list[str]:
@@ -534,7 +632,7 @@ def table_rules(table_path: str, layers: list[int], num_users: int, bank_limits:
         if cfg.chunk_size_bytes != w["record_bytes"]:
             fails.append(
                 f"{name}: chunk_size_bytes {cfg.chunk_size_bytes} != {w['record_bytes']} "
-                f"({w['rows']} rows x {w['width']} bf16 per 32 tokens)"
+                f"({w['rows']} rows x {w['row_bytes']} B per 32 tokens)"
             )
         if hc[idx]["layers"] != w["layers"]:
             fails.append(f"{name}: covers layers {hc[idx]['layers']}, expected exactly {w['layers']}")
@@ -641,11 +739,12 @@ def load_dump(dir_: Path, cfg: dict, slot: int) -> dict:
 def bytes_equal(a: dict, b: dict, cfg: dict, layers, lo_tok: int, hi_tok: int) -> list[str]:
     """Byte compare of the rows of complete groups in [lo_tok, hi_tok) (kv_dump_compare bytecmp, per config rows)."""
     out = []
+    raw = bool(cfg.get("fp8"))  # (an fp8 index config: the rows' own bytes)
     for l in layers:
-        ra, _ = valid_and_pad(a, cfg, l, lo_tok, hi_tok)
-        rb, _ = valid_and_pad(b, cfg, l, lo_tok, hi_tok)
+        ra, _ = valid_and_pad(a, cfg, l, lo_tok, hi_tok, raw)
+        rb, _ = valid_and_pad(b, cfg, l, lo_tok, hi_tok, raw)
         if ra.tobytes() != rb.tobytes():
-            bad = np.nonzero((ra.view(np.uint32) != rb.view(np.uint32)).any(axis=1))[0]
+            bad = np.nonzero((ra != rb).any(axis=1))[0]
             out.append(
                 f"{cfg['name']} layer {l}: {bad.size} rows of tokens [{lo_tok}, {hi_tok}) differ, first row {bad[:3]}"
             )
@@ -815,27 +914,29 @@ def payload_tensor(mesh_device, payload: np.ndarray):
 
 # ---------------------------------------------------------------- the cache tensors' memory config (layout test)
 def layout_failures(tensor, cfg: dict, num_banks: int) -> tuple[list[str], tuple[int, int] | None]:
-    """The record rule (serving_contract.md "KV cache"): bf16 ROW_MAJOR, DRAM ND-sharded with shard [1, 1, rows, width],
-    ROUND_ROBIN_1D over every DRAM bank, never DRAM interleaved. Returns (failures, (lo, hi) of each bank's
-    allocation: base address .. base + ceil(shards / banks) * shard bytes)."""
+    """The record rule (serving_contract.md "KV cache"): bf16 ROW_MAJOR (an fp8 index config: uint8 rows of 192 B),
+    DRAM ND-sharded with shard [1, 1, rows, width], ROUND_ROBIN_1D over every DRAM bank, never DRAM interleaved.
+    Returns (failures, (lo, hi) of each bank's allocation: base address .. base + ceil(shards / banks) * shard
+    bytes)."""
     import ttnn
 
     name = cfg["name"]
     fails = []
     mc = tensor.memory_config()
+    dtype, width = (ttnn.uint8, FP8_ROW_BYTES) if cfg.get("fp8") else (ttnn.bfloat16, cfg["width"])
     if mc.buffer_type != ttnn.BufferType.DRAM:
         fails.append(f"{name}: buffer type {mc.buffer_type}, not DRAM")
-    if tensor.dtype != ttnn.bfloat16:
-        fails.append(f"{name}: dtype {tensor.dtype}, the served dtype is bfloat16")
+    if tensor.dtype != dtype:
+        fails.append(f"{name}: dtype {tensor.dtype}, the served dtype is {dtype}")
     if tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
-        fails.append(f"{name}: layout {tensor.layout}, records are bf16 ROW_MAJOR rows")
+        fails.append(f"{name}: layout {tensor.layout}, records are ROW_MAJOR rows")
     nd = mc.nd_shard_spec
     if nd is None:
         fails.append(f"{name}: not ND-sharded ({mc.memory_layout}): an interleaved cache spreads a record over banks")
         return fails, None
     shape = list(nd.shard_shape)
-    if shape[-2:] != [cfg["rows"], cfg["width"]] or any(int(d) != 1 for d in shape[:-2]):
-        fails.append(f"{name}: shard shape {shape}, expected [1, 1, {cfg['rows']}, {cfg['width']}]")
+    if shape[-2:] != [cfg["rows"], width] or any(int(d) != 1 for d in shape[:-2]):
+        fails.append(f"{name}: shard shape {shape}, expected [1, 1, {cfg['rows']}, {width}]")
     if nd.shard_distribution_strategy != ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D:
         fails.append(f"{name}: shard distribution {nd.shard_distribution_strategy}, expected ROUND_ROBIN_1D")
     cores = nd.num_cores() if callable(nd.num_cores) else nd.num_cores

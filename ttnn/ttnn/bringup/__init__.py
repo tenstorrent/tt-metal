@@ -24,6 +24,9 @@ PYTHON_OPS = {
     "bfp_round": ("ckv_bfp4_ttnn", "bfp_round"),
     # [kv | gate] row pairs -> softmax-gated pair pool, fp32 (deepseek_v41_flash_d_p compressor, P.24 TINY_KERNELS)
     "pair_pool": ("pair_pool_ttnn", "pair_pool"),
+    # per_token_cast_to_fp8's e4m3 rows + fp32 scales -> Blaze decode's 192 B indexer key cache rows (deepseek_v41_flash_d_p
+    # P.39, INDEX_K_SERVED=fp8_row192)
+    "pack_fp8_rows": ("fp8_rows_ttnn", "pack_fp8_rows"),
 }
 
 # Retired forks (INDEX.md, "Retired forks"): python name -> what replaced it. The fork's folder and binding are gone; a

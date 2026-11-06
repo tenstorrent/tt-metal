@@ -52,9 +52,35 @@ Build these served caches, in this table order (a config is present when a serve
 |---|---|---|---|---|
 | 0_window_kv | every layer, 0-39 | 32 | 512 | window KV per position: kv_norm(wkv x), RoPE, fp8 q-dq (`Attention._window_kv`) |
 | 1_compress_kv_r2 | 2, 8, 14 | 16 | 512 | latent per 2-token group, RoPE at the group's first token, fp4 q-dq (`_compress_kv`) |
-| 2_index_k_r2 | 2, 8, 14 | 16 | 128 | index key per group: k_norm(wk latent), RoPE, fp4 (`Indexer`) |
+| 2_index_k_r2 | 2, 8, 14 | 16 | 192 B (fp8 row) | index key per group: k_norm(wk latent), RoPE (`Indexer`); Blaze decode's scaled e4m3 row (below) |
 | 3_compress_kv_r1 | 20 | 32 | 512 | as above, ratio 1 |
-| 4_index_k_r1 | 20 | 32 | 128 | as above, ratio 1 |
+| 4_index_k_r1 | 20, 24, 28, 32, 36 | 32 | 192 B (fp8 row) | as above, ratio 1; the re-index layers 24-36 hold layer 20's rows, byte for byte |
+
+**Index keys (P.39, owner 2026-11-06, PD migration first cut: compatibility with Blaze decode for now).** Setting
+`INDEX_K_SERVED` (tt/settings.py): `fp8_row192` (default) or `bf16` (the earlier contract: bf16 rows of 128, 256 B,
+on the KV sources 2, 8, 14 / 20 only, records 16 x 256 / 32 x 256 B). Under `fp8_row192` an index row is tt-blaze's
+indexer key cache row (blaze/ops/dsa_indexer_direct_k_cache_update, `SCALED_ROW_BYTES` 192), uint8 [.., 192]
+row-major, one row per compressed position:
+- bytes 0..127: e4m3 of key[i] / scale, in the bf16 key's order; values times the scale's reciprocal truncated to
+  TF32 (`& 0xFFFFE000`), the e4m3 mantissa truncated toward zero, below 2^-6 flushed to zero;
+- bytes 128..131: scale, fp32 little endian, scale = clamp(amax |key|, 1e-4, 3e38) x float32(1/448) (not a power of
+  two);
+- bytes 132..191: zero. A pad row (a group past actual_end) is all zero, its scale too.
+Byte-exact reference: the stock `ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x,
+round_scale_to_power_of_two=False)` packed [e4m3 | scale | zeros] (tt-blaze 8223e7f9963e
+tests/blaze/micro_ops/dsa/test_dsa_indexer_direct_k_cache_update.py:75-118 checks bytes 0..131 against it;
+`_quantize_scaled_keys` is the torch recipe). The model encodes on the device: the chunk's server-order bf16 key rows
+-> tiled -> that stock cast -> `ttnn.bringup.pack_fp8_rows` (tt/compressor.py `fp8_rows`) -> update_padded_kv_cache.
+Records: 16 x 192 = 3072 B (ratio 2), 32 x 192 = 6144 B (ratio 1), still one ND shard [1, 1, 32 / r, 192] in one bank,
+SP-sharded and TP-replicated as before. Blaze decode keeps an index cache on its REINDEX layers 24, 28, 32, 36 too:
+it quantizes the key the stage payload carries (`index_cache_row`, the producer's post-norm post-RoPE bf16 key,
+blaze/models/deepseek_v4_1_flash/stage_payload.py:29-32; csa_attention/op.py:1126-1161), and the only producer
+before them is layer 20 (the candidate-source stage, csa_candidate_pool_stage/op.py:271-281). So 4_index_k_r1 covers
+20, 24, 28, 32, 36 and each re-index layer's slab holds layer 20's rows (written with them, in the same chunk, before
+layer 20's ack). The prefill indexer scores a persistent bf16 compute copy of the keys (the old served slab, now
+private), not the fp8 rows. Memory per chip per slot, 8x4 (SP 8) at 1,048,576 tokens: served index rows 3 x 65,536 x
+192 B + 131,072 x 192 B = 60 MiB (bf16: 80 MiB), the re-index copies 4 x 24 MiB = 96 MiB, the compute copy 80 MiB:
+236 MiB (bf16 contract: 80 MiB).
 
 Reader layers (3-7, 9-13, 15-19, 21-23, ...) own only 0_window_kv. topk, candidates and the compressor's partial group
 are not served: topk / candidates are recomputed every chunk, and no partial group is pending at a chunk start
@@ -74,10 +100,11 @@ Rules:
   `ShardDistributionStrategy.ROUND_ROBIN_1D` over all DRAM banks, as DeepSeek's `init_kvpe_cache`
   (deepseek_v3_d_p/utils/kv_cache_utils.py:986-1080). Never DRAM interleaved (a page per row spreads a record over
   banks).
-- **One format: bf16, ROW_MAJOR.** The owner's rule is a bf16 KV cache. A 16-row record cannot be a 32-row tile, and
-  kv_dump_compare reads bf16 row-major records (kv_dump_compare.py:90-93). bf16 holds the reference values exactly
-  (fp8 e4m3 / fp4 e2m1 times power-of-two or e4m3 scales), so the cache adds no error. The ladder, the contract and
-  serving all run on these caches (report them in `state.formats()`).
+- **One format: bf16, ROW_MAJOR** (index keys: the fp8 rows above, P.39). The owner's rule is a bf16 KV cache. A
+  16-row record cannot be a 32-row tile, and kv_dump_compare reads bf16 row-major records (kv_dump_compare.py:90-93;
+  not the fp8 index rows: our tests decode them). bf16 holds the reference values exactly (fp8 e4m3 / fp4 e2m1 times
+  power-of-two or e4m3 scales), so the cache adds no error. The ladder, the contract and serving all run on these
+  caches (report them in `state.formats()`: the index configs as fp8_e4m3).
 - **One region per slot.** A slot's rows of a layer never alias another slot or layer.
 - **Placement.** Shard the sequence over SP rows like the input: position g on row (g / W) % SP, local row
   (g / (W * SP)) * W + g % W. A compressed row j (tokens [j r, j r + r)) sits on the row of token j r, local row =
@@ -175,7 +202,8 @@ models/demos/common/prefill/adapter.py `ADAPTER_PATHS` (spec `contract.adapter`)
 Table rules (`ttnn.experimental.disaggregation.KvChunkAddressTable`):
 - **Config fields.** The configs above, in that order, with those names: they sort in table order, because
   `KvChunkAddressTable`'s name-to-config constructor gives ids in sorted name order
-  (ttnn/cpp/ttnn-nanobind/disaggregation.cpp:117-122). chunk_n_tokens 32. chunk_size_bytes = (32 / r) x width x 2.
+  (ttnn/cpp/ttnn-nanobind/disaggregation.cpp:117-122). chunk_n_tokens 32. chunk_size_bytes = (32 / r) x width x 2
+  (index configs under fp8_row192: (32 / r) x 192).
   num_layers = the served layers. num_slots = max_slots, the same in every config (kv_chunk_table.cpp:41-72).
   max_sequence_length = PREFILL_MAX_SEQ_LEN. Compression UNROLLED or STRIDED_ROWS (tables.py:37).
 - **Coverage.** Config 0 (0_window_kv) covers exactly the served layers 0..N-1 (tables.py:67-74). Every other config

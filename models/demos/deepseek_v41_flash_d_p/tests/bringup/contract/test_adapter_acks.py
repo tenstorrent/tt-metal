@@ -24,7 +24,10 @@ through the table over UMD, as the KV Manager does. Pass:
     err_acks_wkv_*_official, never gated); another layer's window KV at the positions its ring
     snapshots hold; every served layer compared at least once, the per-layer mode printed) (server per-channel PCC >= 0.93), the pad
     rows of the last record zero; the same records re-read after the chunk returns and the mesh syncs hold the same
-    bytes (an ack before the KV is in DRAM ships stale KV: K-71)
+    bytes (an ack before the KV is in DRAM ships stale KV: K-71). INDEX_K_SERVED=fp8_row192 (P.39): the index configs'
+    192-byte rows decoded (caches.decode) and compared with the golden at the same limit; their bytes' format
+    (caches.fp8_row_failures: zero padding, a positive scale, the row's largest |e4m3| 416 or 448, all-zero pad rows);
+    a re-index layer's rows (24 / 28 / 32 / 36) byte-identical to its key source's (layer 20)
   - at the end: each slot's [0, end) vs the golden; slot 0's reused prefix [0, 960) byte-identical to what turn 1's
     acks shipped, its last block [960, 1000) PCC >= 0.99 against it (the harness's prefix / last-block rule,
     validation.py:55-61); every chip of a record's device group holds the same bytes
@@ -80,6 +83,17 @@ def test_adapter_acks(mesh_device, tmp_path):
             cur["fails"] += C.golden_failures(kvc, gk, cfg, got, layer_idx, lo, hi, thr, f"ack slot {s} [{lo}, {hi})")
             if pad.size and not (pad == 0).all():
                 cur["fails"].append(f"ack slot {s} {cfg['name']} layer {layer_idx}: pad rows after {hi} not zero")
+            if cfg.get("fp8"):  # P.39: Blaze's 192-byte rows; a re-index layer's are its key source's, byte for byte
+                rb, pb = C.valid_and_pad(recs, cfg, layer_idx, lo, hi, raw_rows=True)
+                cur["fails"] += C.fp8_row_failures(rb, pb, cfg, layer_idx, f"ack slot {s} [{lo}, {hi})")
+                src = cfg["of"].get(layer_idx)
+                if src is not None:
+                    mine = {(src, p): b for (_, p), b in recs.items()}
+                    theirs = reader.records(cfg["name"], s, [src], lo, hi)
+                    cur["fails"] += [
+                        f"ack slot {s} [{lo}, {hi}): re-index layer {layer_idx} vs its source: {x}"
+                        for x in C.bytes_equal(mine, theirs, cfg, [src], lo, hi)
+                    ]
 
     class Sink(LayerCompletionSink):
         def layers_completed(self, layer_start, layer_end, slot_id, pos_start, pos_end):
@@ -128,6 +142,9 @@ def test_adapter_acks(mesh_device, tmp_path):
             for layer in cfg["layers"]:
                 got, _ = C.valid_and_pad(recs, cfg, layer, 0, e)
                 fails += C.golden_failures(kvc, gk, cfg, got, layer, 0, e, thr, f"final slot {s} [0, {e})")
+                if cfg.get("fp8"):  # P.39: the served bytes' format over the whole request
+                    rb, pb = C.valid_and_pad(recs, cfg, layer, 0, e, raw_rows=True)
+                    fails += C.fp8_row_failures(rb, pb, cfg, layer, f"final slot {s} [0, {e})")
     t1, t2 = R.ACK_TURNS[0]
     prefix = R.follow_up_resident(t1, t2)
     for cfg in cfgs:

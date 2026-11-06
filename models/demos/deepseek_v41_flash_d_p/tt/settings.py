@@ -720,6 +720,20 @@ TABLE = {
         "reads them through the unpacker): top-512 selection error 7.6-15.7 % vs the reference's own fp4 8.0-16.6 % "
         "(CPU, native goldens), 3.6x less ring traffic. The served index-key cache stays bf16. bf16 = the path before",
     ),
+    "INDEX_K_SERVED": Setting(
+        "fp8_row192",
+        ("fp8_row192", "bf16"),
+        "P.39 (OWNER 2026-11-06, PD migration first cut, compatibility with Blaze decode for now): the served index-key "
+        "caches 2_index_k_r2 / 4_index_k_r1. fp8_row192 = Blaze decode's indexer key cache rows byte for byte: uint8 "
+        "[.., 192] ROW_MAJOR a compressed position, bytes 0..127 e4m3 of key / scale, 128..131 the fp32 scale "
+        "(clamp(amax, 1e-4, 3e38) / 448), 132..191 zero; encoded on the device by the stock "
+        "ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8 (round_scale_to_power_of_two=False) + "
+        "ttnn.bringup.pack_fp8_rows (zeroed pad rows stay all zero), and served also under the re-index layers that "
+        "read the ratio-1 source's keys (24 / 28 / 32 / 36: Blaze's REINDEX caches hold layer 20's key, "
+        "csa_attention/op.py:1126-1161); the indexer scores a persistent bf16 compute copy of the keys (tt/"
+        "compressor.TtServedRows: the slab of the old path, not served). Records 32 / r x 192 B. bf16 = the path "
+        "before (bf16 rows of 128, 256 B, served on the KV sources only)",
+    ),
     "INDEX_Q_FORMAT": Setting(
         "bfp4",
         ("bf16", "bfp4"),
