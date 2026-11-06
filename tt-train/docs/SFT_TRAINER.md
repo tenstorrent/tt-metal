@@ -136,19 +136,19 @@ Pass the config's precision block as `precision=` to get fp32 master weights or 
 [Mixed Precision](MIXED_PRECISION.md)):
 
 ```python
-ttml.core.validate_precision_config(yaml_config["training_config"])  # right after loading: a typo fails here
+training_config = TrainingConfig(yaml_config)  # checks the precision block: a typo fails here
 SFTTrainer(
     ...,
     optimizer={"type": "AdamW", "lr": 1e-4},
     # e.g. {"master_dtype": "float32", "reduce_dtype": "float32"}
-    precision=yaml_config["training_config"].get("precision"),
+    precision=training_config.precision,
 )
 ```
 
 The trainer applies it before it builds the optimizer, so the optimizer state follows the stored dtype. With LoRA,
 only the trainable adapters are converted; the frozen base model keeps its dtype. Weights loaded before the trainer
 is built went into the model's dtype: if they come from an fp32 file, apply the block right after building the
-model, before loading (`ttml.core.apply_precision_config({"precision": block}, model.parameters())`); applying it
+model, before loading (`ttml.common.utils.apply_precision(model, block)`); applying it
 again in the trainer changes nothing. A ready optimizer instance can't be combined with `precision=`: apply the block
 before creating it, as `ttml.common.utils.create_optimizer` does when it is given the whole config.
 

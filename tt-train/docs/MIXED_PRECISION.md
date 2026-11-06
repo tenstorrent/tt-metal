@@ -101,8 +101,9 @@ dtype:
   `assign()`, which keeps the dtype a tensor is stored in, so an fp32 file keeps its bits in fp32 parameters. Loaded
   before the conversion, it would be rounded to bf16, and converting afterwards only widens the rounded values.
 - **Checking.** `ttml.core.validate_precision_config()` (C++ `core::validate_precision_config()`) checks the block
-  without applying it. The runners call it right after loading their config, so a typo stops the run before the
-  model is built.
+  without applying it. The config parsers call it: Python's `ttml.common.config.TrainingConfig`, which also exposes the
+  block as `.precision`, and the C++ `nano_gpt` and 3-tier `parse_config()`, so a typo stops the run before the model
+  is built.
 
 The fp32 parameter is the master weight: fused `AdamW` updates it in place with fp32 moments, and forward and backward
 read its bf16 view, which is refreshed into its existing buffer the first time it is read after the step. Parameters
@@ -160,10 +161,10 @@ never narrows an fp32 gradient.
   sum over micro-batches (see [fp32 gradient accumulation](#fp32-gradient-accumulation)), and under HSDP (`dp` x
   `fsdp`) the `dp` sum of a sharded parameter's gradient, which starts from FSDP's fp32 shard, so it is rounded once,
   not twice. No shipped config enables HSDP, and none of the measurements below is an HSDP run.
-- **3-tier training.** The C++ 3-tier aggregator averages the workers' gradients with
-  `core::distributed::average_gradients()`: with `float32` it casts each one to fp32, sums and divides in fp32, runs
-  its all-reduce over the aggregator's devices in fp32 (a sum, as before), and writes the result in bf16 once. Workers
-  and aggregator send bf16, as before.
+- **3-tier training.** The C++ 3-tier aggregator adds the workers' gradients into its own parameters' gradients with
+  `Tensor::add_grad()`, after `core::apply_reduce_dtype_config()` set fp32 accumulation on them: with `float32` they are
+  summed and divided in fp32, its all-reduce over the aggregator's devices runs in fp32 (a sum, as before), and the
+  result is written in bf16 once. Workers and aggregator send bf16, as before.
 - **Not covered.** `aggregator()` and `aggregator_optimizer()` in the Python hierarchical example
   (`sources/examples/python/multihost/hierarchical_parallel/trainer.py`) add and all-reduce the workers' gradients in
   bf16 whatever `reduce_dtype` says. `SFTTrainer` and `GRPOTrainer` given no `precision=` store no value, so their
@@ -239,9 +240,9 @@ With `reduce_dtype: float32`, a trainable parameter's gradient is summed in fp32
 devices: over the micro-batches of a step, and over the ops that use the same weight in one backward, such as a tied
 embedding and LM head.
 
-- **Which tensors.** `core::apply_precision_config()` and `core::apply_reduce_dtype_config()` set FLOAT32 as the
-  gradient accumulation dtype of every trainable parameter (`autograd::Tensor::set_grad_accumulation_dtype()`, also
-  bound in Python), and clear it when `reduce_dtype` is unset or `bfloat16`. Activations keep their gradients in the
+- **Which tensors.** `core::apply_precision_config()` and `core::apply_reduce_dtype_config()` set fp32 gradient
+  accumulation on every trainable parameter (`autograd::Tensor::set_accumulate_grad_in_fp32()`, also bound in Python),
+  and clear it when `reduce_dtype` is unset or `bfloat16`. Activations keep their gradients in the
   dtype they arrive in, because the backward kernels they feed take bf16. The setting is per tensor rather than
   "every leaf that requires a gradient": the memory-efficient runner recomputes a block from such a leaf
   (`input_detached` in `sources/ttml/models/common/transformer_common.hpp`), and its gradient goes on into the
@@ -250,8 +251,8 @@ embedding and LM head.
   with one micro-batch, costs nothing extra. From the second add on, the stored gradient and the new one are both cast
   to fp32 and added in fp32. A gradient that is already fp32 is added the same way, with or without the setting. The
   optimizers whose `zero_grad()` installs zeros instead of clearing the gradient (`SGD`, `SGDComposite`,
-  `MuonComposite` and `NoOp`; `MuonWithAdamW` for its Muon half) count as that first add: after their `zero_grad()`,
-  the first gradient of a step is already added in fp32, so it becomes fp32 with one micro-batch too.
+  `MuonComposite` and `NoOp`; `MuonWithAdamW` for its Muon half) install them in fp32 for such a parameter, so the
+  first gradient of a step is already added in fp32 and becomes fp32 with one micro-batch too.
 - **Why both operands are cast.** ttnn adds two fp32 tensors on the SFPU, which gives the IEEE fp32 sum. With one fp32
   and one bf16 operand the add runs on the FPU, which reads the fp32 operand with 10 fraction bits: on one p150b,
   adding bf16 zeros this way moved an fp32 tensor by up to 8191 fp32 ulps. `fast_and_approximate_mode=False`, which

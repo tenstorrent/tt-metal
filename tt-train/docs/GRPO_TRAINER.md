@@ -497,8 +497,7 @@ creates the optimizer:
 
 ```python
 raw = load_config(config_path)
-ttml.core.validate_precision_config(raw["training_config"])  # a typo stops here, before the model is built
-precision = raw["training_config"].get("precision")
+precision = TrainingConfig(raw).precision  # checks the block: a typo stops here, before the model is built
 completer = LlamaGRPOCompleter(..., precision=precision)
 trainer = GRPOTrainer(..., optimizer_dict=optimizer_dict, precision=precision)
 ```
