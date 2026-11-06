@@ -38,7 +38,6 @@ class TtVADPerceptionTransformer:
         bev_h,
         bev_w,
         feat_hw,
-        lidar2img,
         img_shape,
         num_feature_levels=4,
         num_cams=6,
@@ -71,7 +70,6 @@ class TtVADPerceptionTransformer:
             bev_h=bev_h,
             bev_w=bev_w,
             feat_hw=feat_hw,
-            lidar2img=lidar2img,
             img_shape=img_shape,
             num_layers=3,
             pc_range=point_cloud_range,
@@ -149,10 +147,18 @@ class TtVADPerceptionTransformer:
         self._rotation_mask_buffer = ttnn.from_torch(
             torch.zeros(1, num_query, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
+        # The cameras' projection rows (camera_rows) of each frame's lidar2img.
+        self.projection_buffer = ttnn.from_torch(
+            self.encoder.projection_rows(torch.zeros(num_cams, 4, 4)),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
         self._frame_ready = False
 
     def refill_frame(self, img_metas, grid_length):
-        """Write this frame's BEV shift and CAN-bus signals into the device buffers.
+        """Write this frame's BEV shift, CAN-bus signals, rotation gather and camera projection rows
+        into the device buffers.
 
         Host work only plus two host-to-device copies; call it before every
         forward, outside any trace capture or replay.
@@ -172,18 +178,27 @@ class TtVADPerceptionTransformer:
         shift_torch = torch.tensor([shift_x, shift_y], dtype=torch.float32).permute(1, 0).reshape(-1, 1, 1, 2)
         can_bus_torch = torch.tensor([each["can_bus"] for each in img_metas], dtype=torch.float32)
         rotation_index, rotation_mask = rotation_gather(img_metas, self.bev_h, self.bev_w, self.rotate_center)
+        assert len(img_metas) == 1, "the camera projection is built for bs=1"
+        projection = self.encoder.projection_rows(img_metas[0]["lidar2img"])
 
         for host, buffer, dtype, layout in (
             (shift_torch, self._shift_buffer, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
             (can_bus_torch, self._can_bus_buffer, ttnn.bfloat16, ttnn.TILE_LAYOUT),
             (rotation_index.int(), self._rotation_index_buffer, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
             (rotation_mask, self._rotation_mask_buffer, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            (projection, self.projection_buffer, ttnn.float32, ttnn.TILE_LAYOUT),
         ):
             assert tuple(host.shape) == tuple(
                 buffer.shape
             ), f"frame {tuple(host.shape)} != buffer {tuple(buffer.shape)}"
             ttnn.copy_host_to_device_tensor(ttnn.from_torch(host, dtype=dtype, layout=layout), buffer)
         self._frame_ready = True
+
+    def prepare_frame(self, img_metas, grid_length):
+        """refill_frame(), then the cameras' projection and the rebatch plan's sizing on device, whose
+        only readback is each camera's visible count. Call before every forward."""
+        self.refill_frame(img_metas, grid_length)
+        self.encoder.project_cameras(self.projection_buffer)
 
     def _rotate_prev_bev(self, prev_bev):
         """(num_query, bs=1, C) previous BEV rotated by the frame's heading change, on device."""

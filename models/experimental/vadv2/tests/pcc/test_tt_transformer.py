@@ -385,7 +385,6 @@ def test_vadv2_transformer(
         bev_h=bev_h,
         bev_w=bev_w,
         feat_hw=(12, 20),
-        lidar2img=img_metas[0]["lidar2img"],
         img_shape=img_metas[0]["img_shape"][0][:2],
         rotate_prev_bev=True,
         use_shift=True,
@@ -412,7 +411,7 @@ def test_vadv2_transformer(
 
     bev_pos = ttnn.from_torch(bev_pos, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    ttnn_model.refill_frame(img_metas, grid_length)
+    ttnn_model.prepare_frame(img_metas, grid_length)
     ttnn_outputs = ttnn_model(
         mlvl_feats,
         bev_queries,

@@ -648,7 +648,6 @@ def test_vadv2(
     tt_model = tt_vad.TtVAD(
         device,
         parameter,
-        lidar2img=rig_meta["lidar2img"],
         img_shape=rig_meta["img_shape"][0][:2],
         read_raw_outputs=True,
         use_grid_mask=False,  # set to tru for training only
@@ -751,6 +750,12 @@ def test_vadv2(
     second_meta["can_bus"][:2] += np.array([1.5, 0.4])
     second_meta["can_bus"][-2] += np.deg2rad(4.0)
     second_meta["can_bus"][-1] += 4.0
+    # nuScenes compensates each camera for the ego's motion between its exposure and the lidar
+    # sweep, so lidar2img changes from frame to frame; turn the rig by half a degree.
+    yaw = np.deg2rad(0.5)
+    turn = np.eye(4)
+    turn[:2, :2] = [[np.cos(yaw), -np.sin(yaw)], [np.sin(yaw), np.cos(yaw)]]
+    second_meta["lidar2img"] = [lidar2img @ turn for lidar2img in second_meta["lidar2img"]]
     tt_second_metas = copy.deepcopy(second_metas)
     second_img = torch.randn(1, 6, 3, 384, 640)
     frame_inputs = dict(

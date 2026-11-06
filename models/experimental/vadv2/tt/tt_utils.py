@@ -51,11 +51,20 @@ def msda_operands(query, params, num_heads, samples_per_group):
     return sampling_offsets, attention_weights
 
 
-def fused_msda(value, reference_points, sampling_offsets, attention_weights, spatial_shapes_hw, reference_mode):
+def fused_msda(
+    value,
+    reference_points,
+    sampling_offsets,
+    attention_weights,
+    spatial_shapes_hw,
+    reference_mode,
+    num_valid_queries_tensor=None,
+):
     """Multi-scale deformable attention as one device op, sampling locations formed in float32.
 
     value (bs, S, C) is the projected value; reference_points (bs, Q, R, 2) in [0, 1]. Returns
-    (bs, Q, C) ROW_MAJOR with the heads concatenated.
+    (bs, Q, C) ROW_MAJOR with the heads concatenated. With num_valid_queries_tensor, a (bs,) uint32
+    device tensor, only that many rows of each batch are computed; the rest are left unwritten.
     """
     value = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     reference_points = ttnn.to_layout(reference_points, ttnn.ROW_MAJOR_LAYOUT)
@@ -69,6 +78,7 @@ def fused_msda(value, reference_points, sampling_offsets, attention_weights, spa
         [(int(h), int(w)) for h, w in spatial_shapes_hw],
         reference_mode=reference_mode,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        num_valid_queries_tensor=num_valid_queries_tensor,
     )
 
 
