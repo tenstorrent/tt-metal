@@ -85,8 +85,8 @@ inline void _llk_math_eltwise_unary_broadcast_addrmod_(const TensorShape& tensor
  *
  * @tparam BROADCAST_TYPE: Scalar, row, or column broadcast, values = <COL/ROW/SCALAR>
  * @tparam EN_32BIT_DEST: True if the Dest register is in 32-bit mode, values = <true/false>
- * @tparam unpack_to_dest: When true, record MOVD2B reads from dest followed by MOVB2D broadcast writes in the replay buffer.
- *         The reads cover exactly the rows @ref _llk_unpack_unary_broadcast_operands_to_dest_mop_config_ placed.
+ * @tparam unpack_to_dest: When true, record MOVD2B reads from dest followed by MOVB2D broadcast writes in the replay buffer,
+ *         on both DEST planes of a 32-bit DEST or on DEST_NORM of a 16-bit DEST.
  * @param tensor_shape: Tile shape for loop counts and row dimensions
  */
 template <BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest>
@@ -96,39 +96,43 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
 
     if constexpr (unpack_to_dest)
     {
-        // Every row is read and written on both DEST planes (hi16 via DEST_NORM, lo16 via DEST_32B_LOW).
-        static_assert(EN_32BIT_DEST, "Unary broadcast from DEST (unpack_to_dest) requires the 32-bit DEST mode");
-
+        // A 32-bit DEST is read and written on both planes (hi16 via DEST_NORM, lo16 via DEST_32B_LOW), a 16-bit DEST on DEST_NORM only.
+        constexpr std::uint32_t PLANES        = EN_32BIT_DEST ? 2 : 1;
         constexpr std::uint32_t MOVS_PER_FACE = FACE_R_DIM / ELTWISE_MATH_ROWS;
         // Row/scalar broadcast caches eight source rows, independently of the FPU width.
         constexpr std::uint32_t SOURCE_ROWS = 8;
-        constexpr std::uint32_t READ_MOVS   = 2 * SOURCE_ROWS / ELTWISE_MATH_ROWS;
+        constexpr std::uint32_t READ_MOVS   = PLANES * SOURCE_ROWS / ELTWISE_MATH_ROWS;
 
         if constexpr (BROADCAST_TYPE == BroadcastType::COL)
         {
-            constexpr std::uint32_t replay_buf_len = 6 * MOVS_PER_FACE;
+            constexpr std::uint32_t replay_buf_len = 3 * PLANES * MOVS_PER_FACE;
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
-            // Cache F0/F2 hi16 in SrcB[0:15] and lo16 in SrcB[16:31].
+            // Cache F0/F2 hi16 in SrcB[0:15] and, on a 32-bit DEST, lo16 in SrcB[16:31].
 #pragma GCC unroll 4
                     for (const auto row : fpu_row_offsets<FACE_R_DIM>())
                     {
                         TTI_MOVD2B(p_mov::DEST_NORM, row, ADDR_MOD_4, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
-                        TTI_MOVD2B(p_mov::DEST_32B_LOW, FACE_R_DIM + row, ADDR_MOD_4, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                        if constexpr (EN_32BIT_DEST)
+                        {
+                            TTI_MOVD2B(p_mov::DEST_32B_LOW, FACE_R_DIM + row, ADDR_MOD_4, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                        }
                     }
 
-                // Broadcast both planes to F0,F1/F2,F3 after all source rows are cached.
+                // Broadcast the cached planes to F0,F1/F2,F3 after all source rows are cached.
 #pragma GCC unroll 4
                     for (const auto row : fpu_row_offsets<FACE_R_DIM>())
                     {
-                        TTI_MOVB2D(p_mov::DEST_NORM, row, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_ON, row);
-                        TTI_MOVB2D(p_mov::DEST_NORM, row, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_ON, FACE_R_DIM + row);
-                        TTI_MOVB2D(p_mov::DEST_32B_LOW, FACE_R_DIM + row, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_ON, row);
-
                         // Advance from F0 to F2 after the final MOV.
-                        const std::uint8_t addr_mod = row + ELTWISE_MATH_ROWS == FACE_R_DIM ? ADDR_MOD_3 : ADDR_MOD_4;
-                        TTI_MOVB2D(p_mov::DEST_32B_LOW, FACE_R_DIM + row, addr_mod, FPU_MOV_ROWS, p_movb2d::BCAST_ON, FACE_R_DIM + row);
+                        const std::uint8_t last_addr_mod = row + ELTWISE_MATH_ROWS == FACE_R_DIM ? ADDR_MOD_3 : ADDR_MOD_4;
+                        TTI_MOVB2D(p_mov::DEST_NORM, row, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_ON, row);
+                        TTI_MOVB2D(p_mov::DEST_NORM, row, EN_32BIT_DEST ? ADDR_MOD_4 : last_addr_mod, FPU_MOV_ROWS, p_movb2d::BCAST_ON, FACE_R_DIM + row);
+                        if constexpr (EN_32BIT_DEST)
+                        {
+                            TTI_MOVB2D(p_mov::DEST_32B_LOW, FACE_R_DIM + row, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_ON, row);
+                            TTI_MOVB2D(p_mov::DEST_32B_LOW, FACE_R_DIM + row, last_addr_mod, FPU_MOV_ROWS, p_movb2d::BCAST_ON, FACE_R_DIM + row);
+                        }
                     }
                 });
 
@@ -138,29 +142,35 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
         }
         else if constexpr (BROADCAST_TYPE == BroadcastType::ROW)
         {
-            constexpr std::uint32_t replay_buf_len = READ_MOVS + 4 * MOVS_PER_FACE;
+            constexpr std::uint32_t replay_buf_len = READ_MOVS + 2 * PLANES * MOVS_PER_FACE;
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
-            // Read F0/F1 rows[0:7] hi16 and lo16 from DEST → SrcB[0:15].
+            // Read F0/F1 rows[0:7] hi16 and, on a 32-bit DEST, lo16 from DEST → SrcB[0:15].
 #pragma GCC unroll 4
                     for (const auto row : fpu_row_offsets<SOURCE_ROWS>())
                     {
                         TTI_MOVD2B(p_mov::DEST_NORM, row, ADDR_MOD_4, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
-                        TTI_MOVD2B(p_mov::DEST_32B_LOW, SOURCE_ROWS + row, ADDR_MOD_4, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                        if constexpr (EN_32BIT_DEST)
+                        {
+                            TTI_MOVD2B(p_mov::DEST_32B_LOW, SOURCE_ROWS + row, ADDR_MOD_4, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                        }
                     }
 
-                // Broadcast the cached hi16/lo16 source rows to F0,F2/F1,F3.
+                // Broadcast the cached source rows to F0,F2/F1,F3.
 #pragma GCC unroll 4
                     for (const auto row : fpu_row_offsets<FACE_R_DIM>())
                     {
-                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_OFF, row + 1);
-                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_OFF, 2 * FACE_R_DIM + row + 1);
-                        TTI_MOVB2D(p_mov::DEST_32B_LOW, SOURCE_ROWS, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_OFF, row + 1);
-
                         // Advance from F0 to F1 after the final MOV.
-                        const std::uint8_t addr_mod = row + ELTWISE_MATH_ROWS == FACE_R_DIM ? ADDR_MOD_3 : ADDR_MOD_4;
-                        TTI_MOVB2D(p_mov::DEST_32B_LOW, SOURCE_ROWS, addr_mod, FPU_MOV_ROWS, p_movb2d::BCAST_OFF, 2 * FACE_R_DIM + row + 1);
+                        const std::uint8_t last_addr_mod = row + ELTWISE_MATH_ROWS == FACE_R_DIM ? ADDR_MOD_3 : ADDR_MOD_4;
+                        TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_OFF, row + 1);
+                        TTI_MOVB2D(
+                            p_mov::DEST_NORM, 0, EN_32BIT_DEST ? ADDR_MOD_4 : last_addr_mod, FPU_MOV_ROWS, p_movb2d::BCAST_OFF, 2 * FACE_R_DIM + row + 1);
+                        if constexpr (EN_32BIT_DEST)
+                        {
+                            TTI_MOVB2D(p_mov::DEST_32B_LOW, SOURCE_ROWS, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_OFF, row + 1);
+                            TTI_MOVB2D(p_mov::DEST_32B_LOW, SOURCE_ROWS, last_addr_mod, FPU_MOV_ROWS, p_movb2d::BCAST_OFF, 2 * FACE_R_DIM + row + 1);
+                        }
                     }
                 });
 
@@ -170,24 +180,30 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
         }
         else // BroadcastType::SCALAR
         {
-            constexpr std::uint32_t replay_buf_len = READ_MOVS + 2;
+            constexpr std::uint32_t replay_buf_len = READ_MOVS + PLANES;
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
-            // Read F0 rows[0:7] hi16 and lo16 from DEST → SrcB[0:15].
+            // Read F0 rows[0:7] hi16 and, on a 32-bit DEST, lo16 from DEST → SrcB[0:15].
 #pragma GCC unroll 4
                     for (const auto row : fpu_row_offsets<SOURCE_ROWS>())
                     {
                         TTI_MOVD2B(p_mov::DEST_NORM, row, ADDR_MOD_4, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
-                        TTI_MOVD2B(p_mov::DEST_32B_LOW, SOURCE_ROWS + row, ADDR_MOD_4, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                        if constexpr (EN_32BIT_DEST)
+                        {
+                            TTI_MOVD2B(p_mov::DEST_32B_LOW, SOURCE_ROWS + row, ADDR_MOD_4, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
+                        }
                     }
 
-                    // The MOP replays only these two writes after caching the source once.
-                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, FPU_MOV_ROWS, p_movb2d::BCAST_ON, 0 + 1);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, SOURCE_ROWS, ADDR_MOD_3, FPU_MOV_ROWS, p_movb2d::BCAST_ON, 0 + 1);
+                    // The MOP replays only these writes after caching the source once.
+                    TTI_MOVB2D(p_mov::DEST_NORM, 0, EN_32BIT_DEST ? ADDR_MOD_4 : ADDR_MOD_3, FPU_MOV_ROWS, p_movb2d::BCAST_ON, 0 + 1);
+                    if constexpr (EN_32BIT_DEST)
+                    {
+                        TTI_MOVB2D(p_mov::DEST_32B_LOW, SOURCE_ROWS, ADDR_MOD_3, FPU_MOV_ROWS, p_movb2d::BCAST_ON, 0 + 1);
+                    }
                 });
 
-            ckernel_template temp(1 /* mop_outer_loop */, NUM_FACES * MOVS_PER_FACE /* mop_inner_loop */, TT_OP_REPLAY(READ_MOVS, 2, 0, 0, 0, 0));
+            ckernel_template temp(1 /* mop_outer_loop */, NUM_FACES * MOVS_PER_FACE /* mop_inner_loop */, TT_OP_REPLAY(READ_MOVS, PLANES, 0, 0, 0, 0));
             temp.set_start_op(TT_OP_REPLAY(0, READ_MOVS, 0, 0, 0, 0));
             temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
             temp.program_bank0_sw_cntl(instrn_buffer);
@@ -245,7 +261,7 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
  *
  * @tparam BROADCAST_TYPE: Scalar, row, or column broadcast, values = <COL/ROW/SCALAR>
  * @tparam EN_32BIT_DEST: True if the Dest register is in 32-bit mode, values = <true/false>
- * @tparam unpack_to_dest: UNP path wrote to dest; requires EN_32BIT_DEST
+ * @tparam unpack_to_dest: UNP path wrote to dest
  * @param tensor_shape: Passed to addrmod / MOP setup
  * @note On the unpack thread, pair with @ref _llk_unpack_unary_broadcast_operands_init_ (T0, SrcB) or, when
  *       unpack_to_dest, @ref _llk_unpack_unary_broadcast_operands_to_dest_init_ (T0), with matching BROADCAST_TYPE.
@@ -268,7 +284,7 @@ inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_sha
 /**
  * @brief Run one tile of unary broadcast math: set dest write addr
  *
- * @tparam unpack_to_dest: When true, the broadcast source rows were unpacked into DEST tile tile_idx
+ * @tparam unpack_to_dest: When true, the broadcast source rows get unpacked into DEST tile tile_idx
  * @param tile_idx: Destination tile index within current dest bank (SyncHalf)
  * @note Call @ref _llk_math_eltwise_unary_broadcast_init_ with matching template args before this function.
  * @note When unpack_to_dest, the unpack thread sets a dummy SrcB dvalid per tile (@ref _llk_unpack_set_srcB_dummy_valid_),

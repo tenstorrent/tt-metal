@@ -471,20 +471,17 @@ bool run_unpack_to_dest_bcast_dst_offset_quasar(
 TEST_F(LLKMeshDeviceFixture, TensixUnpackToDestRowBcastNonzeroDstOffset) {
     using unit_tests::compute::unpack_to_dest_bcast::BcastDim;
     const bool quasar = this->arch_ == tt::ARCH::QUASAR;
-    if (!quasar && this->arch_ != tt::ARCH::WORMHOLE_B0 && this->arch_ != tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "32-bit unpack-to-dest broadcast path exists on Wormhole B0, Blackhole and Quasar only";
-    }
     for (auto& device : this->devices_) {
         for (BcastDim dim : {BcastDim::ROW, BcastDim::COL, BcastDim::SCALAR, BcastDim::NONE}) {
             log_info(
                 tt::LogTest,
                 "unpack-to-dest {} into dst 0 after copy_tile into dst 1",
                 unit_tests::compute::unpack_to_dest_bcast::bcast_dim_name(dim));
-            const bool ok =
+            const bool result =
                 quasar
                     ? unit_tests::compute::unpack_to_dest_bcast::run_unpack_to_dest_bcast_dst_offset_quasar(device, dim)
                     : unit_tests::compute::unpack_to_dest_bcast::run_unpack_to_dest_bcast_dst_offset(device, dim);
-            EXPECT_TRUE(ok) << "bcast dim " << unit_tests::compute::unpack_to_dest_bcast::bcast_dim_name(dim);
+            EXPECT_TRUE(result) << "bcast dim " << unit_tests::compute::unpack_to_dest_bcast::bcast_dim_name(dim);
         }
     }
 }

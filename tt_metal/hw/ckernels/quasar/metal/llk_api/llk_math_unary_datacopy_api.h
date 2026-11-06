@@ -17,13 +17,12 @@
 /**
  * @brief Initialize eltwise unary datacopy operations
  *
- * For an unpack-to-dest operand the unpacker writes DEST directly: on the plain path math has no MOP to
- * program and the math init is skipped; on a broadcast path math broadcasts the placed rows in place
- * (MOVD2B / MOVB2D), which needs the mov-ops ALU format state instead of the default one.
+ * For an unpack-to-dest operand: unpacker writes DEST directly, math has no MOP and math init is skipped
+ * For broadcast path: math broadcasts rows in place (MOVD2B / MOVB2D) with mov-ops ALU format state.
  *
- * @tparam type sets which src register to copy from, values = <A2D, B2D>; any value with unpack_to_dest
+ * @tparam type sets which src register to copy from, values = <A2D, B2D>
  * @tparam EN_32BIT_DEST set if math destination register is set to Float32/Int32 mode
- * @tparam src_b_bcast_type Broadcast mode; non-NONE uses the unary-broadcast math init
+ * @tparam src_b_bcast_type Broadcast mode; non-NONE uses unary-broadcast math init
  * @tparam unpack_to_dest Set true to enable the UNP_DEST routing decision (unary and unary-broadcast paths)
  * @param operand Logical dataflow buffer id for the input operand
  */
@@ -60,7 +59,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
             "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
 
         if constexpr (unpack_to_dest) {
-            // DEST -> SrcB -> DEST moves need the mov-ops ALU state (Tf32 sources, Float32 dest override on 32-bit).
+            // DEST -> SrcB -> DEST requires mov-ops ALU state (Tf32 sources, Float32 dest override on 32-bit).
             _configure_mov_ops_explicit_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
         } else {
             _configure_default_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
@@ -73,12 +72,12 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
  * @brief Performs an eltwise unary datacopy for a single tile.
  *
  * For the non-broadcast path, when `unpack_to_dest` is true the unpacker writes DEST directly and
- * math is a sync-only forwarder; no MOP is run. A broadcast operand in DEST is broadcast in place.
+ * math is a sync-only forwarder; no MOP is run.
  *
- * @tparam type sets which src register to copy from, values = <A2D, B2D>; any value with unpack_to_dest
+ * @tparam type sets which src register to copy from, values = <A2D, B2D>
  * @tparam EN_32BIT_DEST set if math destination register is set to Float32/Int32 mode
- * @tparam src_b_bcast_type Broadcast mode; non-NONE runs the unary-broadcast math (from SrcB or from DEST)
- * @tparam unpack_to_dest when true, unpack-to-dest path; SrcA / SrcB path otherwise
+ * @tparam src_b_bcast_type Broadcast mode; non-NONE runs unary-broadcast math (from SrcB or from DEST)
+ * @tparam unpack_to_dest when true, unpack-to-dest path, otherwise SrcA / SrcB path
  * @param dst_index Tile index into the destination register.
  * @param operand Logical dataflow buffer id for the input operand.
  */

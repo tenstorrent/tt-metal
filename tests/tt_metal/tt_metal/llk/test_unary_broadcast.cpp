@@ -74,10 +74,7 @@ struct UnaryBroadcastConfig {
     tt::DataFormat in_t;
     tt::DataFormat out_t;
     bool fp32_dest_acc_en = false;
-    // Quasar: mark the input DFB UnpackToDest, so the broadcast runs from DEST (32-bit formats only).
     bool unpack_to_dest = false;
-    // Quasar: tiles the compute kernel broadcasts per DEST section (one tile_regs_acquire / commit), and SyncFull
-    // instead of the SyncHalf default.
     std::uint32_t tiles_per_section = 1;
     bool dst_full_sync_en = false;
 };
@@ -694,11 +691,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDf
     }
 }
 
-// 32-bit broadcast from DEST (UnpackToDestEn): the unpacker places the source rows at the dst index and math
-// broadcasts them in place. 32 tiles in 8 blocks of 4, bit-exact for Float32 and Int32, in two section shapes: one
-// tile per section at dst index 0..3, so the SyncHalf bank-1 sections meet dst 1 and dst 3 (= capacity - 1 for a
-// 32-bit DEST); and four tiles per section (a full 32-bit SyncHalf section), in SyncHalf and SyncFull, which needs
-// the section's SrcB dummy dvalids deferred past its UNPACK_MATH post (llk_unpack_set_srcb_dummy_valid).
+// Broadcast from DEST (UnpackToDestEn): 32-bit operands on a 32-bit DEST, Float16_b on a 16-bit DEST
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDfbToDest) {
     constexpr BroadcastDim k_quasar_dims[] = {BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR};
     struct SectionShape {
@@ -706,25 +699,32 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDf
         bool dst_full_sync_en;
     };
     constexpr SectionShape k_section_shapes[] = {{1, false}, {4, false}, {4, true}};
+    struct Operand {
+        tt::DataFormat fmt;
+        bool fp32_dest_acc_en;
+    };
+    constexpr Operand k_operands[] = {
+        {tt::DataFormat::Float32, true}, {tt::DataFormat::Int32, true}, {tt::DataFormat::Float16_b, false}};
     for (const SectionShape& shape : k_section_shapes) {
         for (BroadcastDim bcast_dim : k_quasar_dims) {
-            for (tt::DataFormat fmt : {tt::DataFormat::Float32, tt::DataFormat::Int32}) {
+            for (const Operand& operand : k_operands) {
                 UnaryBroadcastConfig test_config = {
                     .broadcast_dim = bcast_dim,
-                    .in_t = fmt,
-                    .out_t = fmt,
-                    .fp32_dest_acc_en = true,
+                    .in_t = operand.fmt,
+                    .out_t = operand.fmt,
+                    .fp32_dest_acc_en = operand.fp32_dest_acc_en,
                     .unpack_to_dest = true,
                     .tiles_per_section = shape.tiles_per_section,
                     .dst_full_sync_en = shape.dst_full_sync_en,
                 };
                 log_info(
                     tt::LogTest,
-                    "Testing UNARY BROADCAST from DEST bcast={} in_t={} out_t={} tiles_per_section={} "
-                    "dst_full_sync_en={}",
+                    "Testing UNARY BROADCAST from DEST bcast={} in_t={} out_t={} fp32_dest_acc_en={} "
+                    "tiles_per_section={} dst_full_sync_en={}",
                     broadcast_dim_to_type.at(test_config.broadcast_dim),
                     test_config.in_t,
                     test_config.out_t,
+                    test_config.fp32_dest_acc_en,
                     test_config.tiles_per_section,
                     test_config.dst_full_sync_en);
                 run_single_core_unary_broadcast(this->device(), test_config);

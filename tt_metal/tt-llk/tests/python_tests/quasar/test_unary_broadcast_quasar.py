@@ -3,7 +3,6 @@
 
 import pytest
 import torch
-from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -96,10 +95,22 @@ def get_valid_dest_acc_unary_broadcast(formats):
     ]
 
 
+def get_valid_unpack_to_dest_unary_broadcast(formats, dest_acc):
+    """Valid unpack-to-dest routes: a 32-bit input always unpacks to Dest; a 16-bit input
+    unpacks to Dest only into a 16-bit Dest (UNP_DEST does not widen), next to its SrcB route.
+    """
+    if formats.input_format.is_32_bit():
+        return [True]
+    if formats.input_format == DataFormat.Float16_b and dest_acc == DestAccumulation.No:
+        return [False, True]
+    return [False]
+
+
 @pytest.mark.quasar
 @parametrize(
     formats=UNARY_BROADCAST_FORMATS,
     dest_acc=lambda formats: get_valid_dest_acc_unary_broadcast(formats),
+    unpack_to_dest=get_valid_unpack_to_dest_unary_broadcast,
     broadcast_type=BROADCAST_TYPES,
     dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(INPUT_DIMENSIONS),
@@ -109,6 +120,7 @@ def get_valid_dest_acc_unary_broadcast(formats):
 def test_unary_broadcast_quasar(
     formats,
     dest_acc,
+    unpack_to_dest,
     broadcast_type,
     dest_sync_mode,
     input_dimensions,
@@ -119,8 +131,6 @@ def test_unary_broadcast_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
-
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
         [tile_rows, tile_cols]

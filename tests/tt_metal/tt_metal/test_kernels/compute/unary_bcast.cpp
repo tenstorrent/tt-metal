@@ -21,8 +21,6 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
     constexpr uint32_t per_core_block_dim = get_arg(args::per_core_block_dim);
-    // Tiles broadcast per DEST section: tile t of a section is read at input index t and lands at DEST slot
-    // tile_index + t, so a block of per_core_block_dim tiles fills slots 0..per_core_block_dim - 1.
     constexpr uint32_t tiles_per_section = get_arg(args::tiles_per_section);
     static_assert(
         per_core_block_dim % tiles_per_section == 0, "per_core_block_dim must be a multiple of tiles_per_section");
@@ -58,8 +56,6 @@ void kernel_main() {
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb16(tt::CBIndex::c_16);
 
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup
-    // full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     unary_bcast_init<BCAST_DIM>(tt::CBIndex::c_0);
 

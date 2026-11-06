@@ -58,9 +58,6 @@ constexpr BroadcastType kBcastDim = (BCAST_DIM_VAL == 0)   ? BroadcastType::ROW
 
 void kernel_main() {
 #ifdef ARCH_QUASAR
-    // Quasar twin: the same three operands as Metal 2.0 DFBs with the same formats. The route is per operand under
-    // the kernel-wide UnpackToDestEn: the Float16_b copy goes through SrcA and MOVA2D widens it into DST[1], the
-    // Float32 broadcast source is placed at DST[0] by the unpacker (UNP_DEST does not widen 16-bit operands).
     DataflowBuffer copy_cb(dfb::copy_in);
     DataflowBuffer bcast_cb(dfb::bcast_in);
     DataflowBuffer out_cb(dfb::out);

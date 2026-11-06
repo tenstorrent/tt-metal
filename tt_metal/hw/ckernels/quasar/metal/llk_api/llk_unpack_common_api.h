@@ -54,17 +54,12 @@ namespace ckernel::trisc {
 // llk_unpack_hw_configure clears it at kernel start. Defined in tt_metal/hw/firmware/src/tt-2xx/trisc.cc.
 extern thread_local std::uint32_t reduce_2x_scaler_operand_plus_one;
 
-// SrcB dummy dvalids requested in the current unpack-to-dest section (llk_unpack_set_srcb_dummy_valid) and issued by
-// llk_unpack_dest_section_done after its UNPACK_MATH post. thread_local because each Neo's unpack thread runs its own
-// sections; firmware TLS outlives a kernel, so llk_unpack_hw_configure clears it at kernel start. Defined in
-// tt_metal/hw/firmware/src/tt-2xx/trisc.cc.
+// SrcB dummy dvalids requested in the current unpack-to-dest section (llk_unpack_set_srcb_dummy_valid), issued by
+// llk_unpack_dest_section_done after its UNPACK_MATH post. Per Neo (thread_local), cleared by llk_unpack_hw_configure.
 extern thread_local std::uint32_t unpack_to_dest_deferred_srcb_dummies;
 
-// SrcA-path and SrcB-path tiles issued in the current unpack-to-dest section: operands that cannot go through
-// UNP_DEST (operand_fits_unpack_to_dest) under the kernel-wide UnpackToDestEn flag. Math consumes them only after the
-// section's UNPACK_MATH post, so they must fit the two banks of their src register (llk_unpack_count_src_path_tile).
-// Reset per section in llk_unpack_wait_for_dest_available and at kernel start in llk_unpack_hw_configure. Defined in
-// tt_metal/hw/firmware/src/tt-2xx/trisc.cc.
+// SrcA-path / SrcB-path tiles issued in the current unpack-to-dest section, budgeted by llk_unpack_count_src_path_tile.
+// Reset per section (llk_unpack_wait_for_dest_available) and at kernel start (llk_unpack_hw_configure).
 extern thread_local std::uint32_t unpack_to_dest_srca_path_tiles;
 extern thread_local std::uint32_t unpack_to_dest_srcb_path_tiles;
 }  // namespace ckernel::trisc
@@ -163,8 +158,7 @@ inline void llk_unpack_dest_section_done() {
     if constexpr (UnpackToDestEn) {
         _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_PACK);
         _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
-        // Math runs the section from here on and frees a SrcB bank per dummy it consumes, so each deferred dummy's
-        // wait for a free bank now ends.
+        // Math runs the section from here on, so the deferred dummies no longer wait on a SrcB bank it holds.
         for (std::uint32_t i = 0; i < ckernel::trisc::unpack_to_dest_deferred_srcb_dummies; i++) {
             _llk_unpack_set_srcB_dummy_valid_();
         }
@@ -268,16 +262,9 @@ inline void llk_unpack_reconfig_data_format(
 }
 
 /**
- * @brief Hands math a dummy SrcB dvalid for an op that reads DEST through SrcB (MOVD2B): transpose-dest and the
- *        broadcast from DEST. Used by the transpose_dest compute API and the unpack-to-dest broadcast arms of
- *        llk_unpack_A / llk_unpack_A_block.
+ * @brief Dummy SrcB dvalid for an op that reads DEST through SrcB (transpose-dest, broadcast from DEST).
  *
- * With UnpackToDestEn, math starts a section only after the UNPACK_MATH post of @ref llk_unpack_dest_section_done,
- * and a dummy waits for a free SrcB bank, which only math frees. Issued inside the section, a dummy that finds no free
- * bank waits on math while math waits on the post queued behind it, and the kernel deadlocks (the shape of #58115;
- * ttsim shows it, the emulator does not). So under the flag the dummy is only counted here and issued by
- * llk_unpack_dest_section_done after that post. Without UnpackToDestEn, math does not wait on the unpacker and the
- * dummy is issued at once.
+ * Under UnpackToDestEn it is deferred to llk_unpack_dest_section_done, past the UNPACK_MATH post (#58115 deadlock).
  */
 inline void llk_unpack_set_srcb_dummy_valid() {
     if constexpr (UnpackToDestEn) {
@@ -288,18 +275,12 @@ inline void llk_unpack_set_srcb_dummy_valid() {
 }
 
 /**
- * @brief Counts a SrcA-path or SrcB-path tile issued inside an unpack-to-dest section: an operand that cannot go
- *        through UNP_DEST (operand_fits_unpack_to_dest) in a kernel with UnpackToDestEn. No-op without the flag.
+ * @brief Counts a SrcA-path / SrcB-path tile issued inside an unpack-to-dest section and asserts the section budget.
  *
- * Math starts the section only after the UNPACK_MATH post of @ref llk_unpack_dest_section_done, so a src-path tile
- * issued inside the section is consumed only after that post. Each src register has two banks: a third tile would
- * stall the unpacker before it can post while math waits for the post, and the kernel deadlocks (the shape of the
- * SrcB dummy case above). The assert turns that hang into a fault. On a 32-bit DEST a src-path tile takes a bank of
- * both src registers: the A2D datacopy MOP and the SrcB broadcast ELWADD end with CLR_SRCAB_VLD, and the unpacker
- * zeroes the unused register with a dvalid per tile (nop_insn_for_unused_unpacker_engine), so there the cap is two
- * src-path tiles per section in total. A SrcB-path tile may not follow a broadcast from DEST in the same section
- * either: math consumes SrcB in program order, but the deferred dummy of that broadcast is issued after the post,
- * behind the tile, so the broadcast would consume the tile's bank and the tile the dummy.
+ * Math consumes these tiles only after the UNPACK_MATH post, so a src register's two banks cap them at two per
+ * section. A third would stall the unpacker before it can post and deadlock the kernel. A SrcB-path tile may not
+ * follow a broadcast from DEST in the same section either, as that broadcast's deferred dummy dvalid would then take
+ * the tile's bank.
  *
  * @tparam UNP_SEL: src register the tile's data goes to, values = <p_unpacr::UNP_A, p_unpacr::UNP_B>
  */

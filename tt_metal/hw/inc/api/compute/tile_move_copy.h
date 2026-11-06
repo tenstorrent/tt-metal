@@ -69,11 +69,8 @@ ALWI void copy_init(
     MATH((ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))));
 #else
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    // Quasar routes per operand under the kernel-wide UnpackToDestEn flag (operand_fits_unpack_to_dest): an operand
-    // whose datum width matches the DEST width goes through UNP_DEST and math only forwards the section; any other
-    // operand goes through SrcA, where MOVA2D widens it into the DEST, as on WH/BH. The to-dest section handshake in
-    // tile_regs_acquire / tile_regs_commit is kernel-wide and the same on both routes; src-path tiles inside such a
-    // section are consumed only after its post, so at most two per section (llk_unpack_count_src_path_tile).
+    // Per-operand route: an operand width must match DEST datum width to go through UNP_DEST, otherwise
+    // through SrcA (MOVA2D widens datum).
     if (UnpackToDestEn && operand_fits_unpack_to_dest(cbid)) {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             transpose, transpose_within_16x16_face, cbid)));

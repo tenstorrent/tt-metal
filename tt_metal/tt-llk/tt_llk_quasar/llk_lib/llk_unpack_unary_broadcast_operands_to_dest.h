@@ -68,8 +68,9 @@ inline void _llk_unpack_unary_broadcast_operands_to_dest_mop_config_(const std::
  * @tparam BROADCAST_TYPE: Broadcast type, values = <COL/ROW/SCALAR>
  * @param buf_desc_id: Buffer descriptor of the L1 operand, unpack TRISC partition [0,16) (see llk_bfd_alloc.h)
  * @note Transpose is forced off for both unpacker engines: UNP_DEST does not support it. 32x32 tiles only.
- * @note Math pair (T1): @ref _llk_math_eltwise_unary_broadcast_init_ <BROADCAST_TYPE, true, true> after
- *       @ref _configure_mov_ops_explicit_alu_data_format_state_ <true>, then @ref _llk_math_eltwise_unary_broadcast_ <true>
+ * @note UNP_DEST does not widen or narrow: the operand width must match the DEST width (32-bit on a 32-bit DEST, 16-bit on a 16-bit one).
+ * @note Math pair (T1): @ref _llk_math_eltwise_unary_broadcast_init_ <BROADCAST_TYPE, EN_32BIT_DEST, true> after
+ *       @ref _configure_mov_ops_explicit_alu_data_format_state_ <EN_32BIT_DEST>, then @ref _llk_math_eltwise_unary_broadcast_ <true>
  *       per tile, which reads the rows placed here and writes the broadcast tile back in place. Its MOVD2B stalls on
  *       SRCB_VLD, so this thread sets one @ref _llk_unpack_set_srcB_dummy_valid_ per tile.
  * @note @ref _llk_unpack_unary_broadcast_operands_to_dest_tile_ is the matching execute call on this thread.

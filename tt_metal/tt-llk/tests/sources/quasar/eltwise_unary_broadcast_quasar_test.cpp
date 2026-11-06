@@ -76,8 +76,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         if constexpr (unpack_to_dest)
         {
-            // Placer API under the dest-dvalid scheme set up above: the placers carry no synchronization, and the
-            // bank tile offset reset to 0 keeps every section at DEST tile 0 (dest-dvalid moves the client between banks).
             _llk_unpack_dest_init_();
             _llk_unpack_unary_broadcast_operands_to_dest_init_<BROADCAST_TYPE>(bfd_unpack);
         }
@@ -134,7 +132,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
                     }
-                    // The math MOVD2B of every tile stalls on SRCB_VLD; issued after the hand-off so math drains them.
                     for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                     {
                         _llk_unpack_set_srcB_dummy_valid_();
