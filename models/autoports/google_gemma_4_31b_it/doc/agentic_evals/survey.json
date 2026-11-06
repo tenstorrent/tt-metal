@@ -2,64 +2,111 @@
   "status": "incomplete",
   "checks": {
     "time_split": {
-      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "not_measured": "Tool-suite smoke and full agent-call accounting pending; GPQA smoke measured separately below.",
       "test": "Stock2-task smoke with trajectory audit and adapter metrics"
     },
     "busy_rows": {
-      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
-      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+      "measured": {
+        "eval": "r1_gpqa_diamond",
+        "peak_active_rows": 2,
+        "decode_submission_rows_histogram": {
+          "2": 3151,
+          "1": 2329
+        }
+      },
+      "evidence": "runs/gpqa-workload/RESULT.json",
+      "limitation": "Submission rows are not emitted token counts."
     },
     "live_prefill_rows": {
-      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
-      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+      "measured": {
+        "logical": [
+          485,
+          298
+        ],
+        "physical": [
+          512,
+          320
+        ]
+      },
+      "evidence": "runs/gpqa-workload/RESULT.json"
     },
     "trace_captures": {
-      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
-      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+      "measured": {
+        "startup_captures": 3,
+        "captures_after_second_prefill": 3,
+        "workload_prepare_events": 0
+      },
+      "evidence": "runs/gpqa-workload/RESULT.json",
+      "limitation": "Final completion counter missing; no observed workload recapture."
     },
     "served_step": {
-      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "not_measured": "Tool-suite smoke and full agent-call accounting pending; GPQA smoke measured separately below.",
       "test": "Stock2-task smoke with trajectory audit and adapter metrics"
     },
     "prefix_hits": {
-      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "not_measured": "Tool-suite smoke and full agent-call accounting pending; GPQA smoke measured separately below.",
       "test": "Stock2-task smoke with trajectory audit and adapter metrics"
     },
     "cache_pressure": {
-      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
-      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+      "measured": {
+        "maximum_periodic_logged_kv_usage_percent": 4.3
+      },
+      "evidence": "runs/gpqa-workload/RESULT.json",
+      "limitation": "Rounded periodic logger, not exact allocator peak."
     },
     "cache_bytes": {
-      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "not_measured": "Tool-suite smoke and full agent-call accounting pending; GPQA smoke measured separately below.",
       "test": "Stock2-task smoke with trajectory audit and adapter metrics"
     },
     "memory_headroom": {
-      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "not_measured": "Tool-suite smoke and full agent-call accounting pending; GPQA smoke measured separately below.",
       "test": "Stock2-task smoke with trajectory audit and adapter metrics"
     },
     "cutoffs": {
-      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
-      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+      "measured": {
+        "gpqa_smoke_complete_final_answers": 2,
+        "observed_timeouts": 0
+      },
+      "evidence": "runs/smoke2-r1_gpqa_diamond/audit.json",
+      "limitation": "Exact finish_reason absent from sample schema; tool trajectories pending."
     },
     "eval_validity": {
-      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
-      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+      "measured": {
+        "r1_gpqa_diamond": "valid_smoke2"
+      },
+      "evidence": "runs/smoke2-r1_gpqa_diamond/audit.json",
+      "remaining": [
+        "swe_bench_verified",
+        "terminal_bench_2_1"
+      ]
     },
     "accuracy_drift": {
-      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
-      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+      "measured": {
+        "gpqa_accuracy_fraction": 1,
+        "wilson95": [
+          0.34237195288961925,
+          1
+        ]
+      },
+      "evidence": "runs/smoke2-r1_gpqa_diamond/audit.json",
+      "limitation": "n=2 cannot distinguish full-suite reference or precision effects."
     },
     "generation_share": {
-      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "not_measured": "Tool-suite smoke and full agent-call accounting pending; GPQA smoke measured separately below.",
       "test": "Stock2-task smoke with trajectory audit and adapter metrics"
     },
     "prefill_under_load": {
-      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "not_measured": "Tool-suite smoke and full agent-call accounting pending; GPQA smoke measured separately below.",
       "test": "Stock2-task smoke with trajectory audit and adapter metrics"
     },
     "host_contention": {
-      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
-      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+      "measured": {
+        "regime": "local synthetic C32",
+        "idle_output_tokens_per_second": 985.554416731418,
+        "busy_output_tokens_per_second": 645.0344483642087
+      },
+      "evidence": "../agentic_serving.json serving.host_contention",
+      "limitation": "Real task CPU contention and generation share pending."
     }
   },
   "calculations": {
@@ -77,8 +124,11 @@
       "reason": "Smoke only; max_num_seqs8, prior synthetic pool supports greater occupancy, operator runner nominal31network ceiling; actual task resources/working sets audited fromCI."
     },
     "run_hours": {
-      "value": null,
-      "reason": "No smoke timings; cannot project release."
+      "measured": {
+        "gpqa_smoke_evaluation_hours": 0.04538443775795814,
+        "gpqa_nightly10_evaluation_projection_hours": 0.2269221887897907
+      },
+      "reason": "Next-rung estimate only: n2 does not measure slow tail. Build/queue/startup separately; no frozen release projection."
     },
     "task_lists": {
       "source": "cohorts.json",
@@ -108,21 +158,28 @@
       "basis": "block32 /2 uniform alignment estimate; real request alignment unmeasured"
     },
     "prefill_padding": {
-      "value": null,
-      "reason": "No agent run."
+      "gpqa_logical_tokens": 783,
+      "gpqa_physical_tokens": 832,
+      "extra_tokens": 49,
+      "fraction_extra": 0.06257982120051085,
+      "evidence": "runs/gpqa-workload/RESULT.json",
+      "release_hours_cost": null,
+      "reason": "No isolated timing of padded work; cannot turn rows into claimed seconds."
     }
   },
   "shortfalls": [
     {
-      "problem": "Host contention lowers synthetic decode delivery from983.0 to650.4 tokens/s",
+      "problem": "Host contention lowers local synthetic C32 decode delivery from985.5544 to645.0344tokens/s",
       "hours": null,
       "reason": "Release agent generation share unmeasured; cannot price hours yet.",
       "evidence": "../agentic_serving.json serving.host_contention"
     },
     {
       "problem": "Mixed intermediate prefill uses accepted stock host sampler",
-      "hours": null,
-      "reason": "No agent traffic sampled; prior synthetic counts not release counts."
+      "hours": 0,
+      "reason": "GPQA smoke observed no host-sampled steps; zero observed cost for this rung only. Tool-suite/release mixed-prefill frequency pending.",
+      "evidence": "runs/gpqa-workload/RESULT.json"
     }
-  ]
+  ],
+  "last_updated": "2026-11-06T07:19:19.897569+00:00"
 }

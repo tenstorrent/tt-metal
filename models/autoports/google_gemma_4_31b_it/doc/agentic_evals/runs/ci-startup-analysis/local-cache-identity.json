@@ -1,0 +1,22 @@
+{
+  "resolved_cache": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/cache-env-validation/weights/hub",
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "index_sha256": "d4aff3b976d69c123a29d1c085d7ba4de1ac3f4ca1726a7f81e1b11462a64ea2",
+  "files": [
+    {
+      "file": "model.safetensors.index.json",
+      "same_inode": true,
+      "bytes": 120246
+    },
+    {
+      "file": "model-00001-of-00002.safetensors",
+      "same_inode": true,
+      "bytes": 49784788364
+    },
+    {
+      "file": "model-00002-of-00002.safetensors",
+      "same_inode": true,
+      "bytes": 12761549884
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "status": "pass",
+  "cache_root": "/home/container_app_user/cache_root",
+  "persistent_mount": [
+    "volume_id_gemma4_31b_autoport_v3-gemma-4-31B-it:/home/container_app_user/cache_root"
+  ],
+  "candidate_cache_env": {
+    "HF_HUB_CACHE": "/home/container_app_user/cache_root/weights/hub",
+    "TT_METAL_CACHE": "/home/container_app_user/cache_root/tt-metal-jit"
+  },
+  "method": "Stock SetupConfig and generate_docker_run_command, no Docker invocation or device import"
+}

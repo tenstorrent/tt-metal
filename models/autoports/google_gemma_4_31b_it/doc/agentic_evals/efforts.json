@@ -417,6 +417,56 @@
       "problem_status": "solved",
       "confirmed": "HTTP200 and valid parsed submissionaction, no commands executed",
       "evidence": "runs/native-tool-roundtrip/result.json"
+    },
+    {
+      "problem": "ci-cache-routing",
+      "owner": "harness_registration",
+      "goal": "Route model cache lookups through existing mounted files without changing outputs",
+      "plan": "runs/ci-startup-analysis/local-confirmation.md",
+      "predicted": {
+        "saving_hours": null,
+        "device_hours": 0.08333333333333333,
+        "basis": "guess; CI saving unmeasured"
+      },
+      "confirm": {
+        "method": "Same inode for pinned shards; fullB8server with both cache aliases; two exact168-token comparisons",
+        "success": "Allsamefiles,healthyfull60,tokenIDs identical"
+      },
+      "box_hours": 0.25,
+      "status": "done",
+      "unblocks": [],
+      "used_device_hours": 0.05277675944444444,
+      "change": "kept",
+      "problem_status": "open",
+      "confirmed": "Pinned cache files identical; full60healthy;2x168tokenIDs exact. CIstartup saving still unmeasured.",
+      "evidence": "runs/ci-startup-analysis/paired-audit.json"
+    },
+    {
+      "problem": "immutable-harbor-release-source",
+      "owner": "suite_registration",
+      "goal": "Freeze exact clientharness source for dry/release without changing default runner",
+      "plan": "runs/release-dependency-pins/plan.md",
+      "predicted": {
+        "saving_hours": null,
+        "device_hours": 0,
+        "basis": "calculated host-only sourcefix"
+      },
+      "unblocks": [
+        "swe_bench_verified",
+        "terminal_bench_2_1",
+        "release"
+      ],
+      "confirm": {
+        "method": "Model-scoped fullSHA validation, verified checkoutHEAD, default behavior tests and fullhooks",
+        "success": "Exactsourcepinnable; defaultsunchanged; allhostchecks pass"
+      },
+      "box_hours": 0,
+      "status": "done",
+      "evidence": "runs/release-dependency-pins/AUTOFIX.md",
+      "used_device_hours": 0,
+      "change": "kept",
+      "problem_status": "open",
+      "confirmed": "Fullhosthooks pass; generic optionalpin locallyintegrated. Modelpin/actualCIcheckout confirmation pending."
     }
   ],
   "rankings": [
@@ -866,6 +916,127 @@
         }
       ],
       "reason": "GPQA valid and advances immediately; tool-suite validity remains above speed. Real multi-turn histories still unavailable, so capacity savings cannot be priced yet."
+    },
+    {
+      "after": "gpqa-smoke-and-cache-routing-plan",
+      "order": [
+        {
+          "problem": "ci-fabric-topology",
+          "unblocks": [
+            "terminal_bench_2_1"
+          ],
+          "device_hours": 0.2167,
+          "saving_hours": null
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": null,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-cache-routing",
+          "unblocks": [],
+          "device_hours": 0.08333333333333333,
+          "saving_hours": null
+        }
+      ],
+      "reason": "Toolvalidity CIjobs alreadyrunning; sparelocaldevice validates exact cache routing while no usefultoolhistories exist. Doesnotdelayanyrung; saving remainsunknown untilCI confirms."
+    },
+    {
+      "after": "cache-routing-exact-confirmation",
+      "order": [
+        {
+          "problem": "ci-fabric-topology",
+          "unblocks": [
+            "terminal_bench_2_1"
+          ],
+          "device_hours": 0.2167,
+          "saving_hours": null
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": null,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-cache-routing",
+          "unblocks": [],
+          "device_hours": 0.05277675944444444,
+          "saving_hours": null
+        }
+      ],
+      "reason": "Exact cache-routing change accepted; speedproblem remainsopen pendingCImeasurement. Toolrungs proceedonimmutablealreadydispatchedSHAs."
+    },
+    {
+      "after": "release-dependency-freeze-gap",
+      "order": [
+        {
+          "problem": "immutable-harbor-release-source",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1",
+            "release"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-fabric-topology",
+          "unblocks": [
+            "terminal_bench_2_1"
+          ],
+          "device_hours": 0.2167,
+          "saving_hours": null
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": null,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-cache-routing",
+          "unblocks": [],
+          "device_hours": 0.05277675944444444,
+          "saving_hours": null
+        }
+      ],
+      "reason": "Host-only frozen-source validity defect ranks ahead of speed; liveCIrungs unchanged."
     }
   ]
 }

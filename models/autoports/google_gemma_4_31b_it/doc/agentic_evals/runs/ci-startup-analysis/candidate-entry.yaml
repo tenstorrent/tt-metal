@@ -1,0 +1,42 @@
+templates:
+- weights:
+    - google/gemma-4-31B-it
+  impl: gemma4_31b_autoport_v3
+  inference_engine: VLLM
+  status: EXPERIMENTAL
+  supported_modalities: [text]
+  has_builtin_warmup: true
+  device_model_specs:
+    - device: P300X2
+      max_concurrency: 8
+      max_context: 262144
+      default_impl: false
+      env_vars:
+        HF_HUB_CACHE: "/home/container_app_user/cache_root/weights/hub"
+        TT_METAL_CACHE: "/home/container_app_user/cache_root/tt-metal-jit"
+        TT_MODEL_CLASS_OVERRIDES: "TTGemma4ForConditionalGeneration=models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM,TTGemma4ForCausalLM=models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM"
+      vllm_args:
+        block_size: "32"
+        max_num_seqs: "8"
+        # Effective chunk size observed in all four stage-11 server startup logs.
+        max_num_batched_tokens: "2048"
+        revision: "842da3794eaa0b77d5f08bae87a17459d91ff475"
+        tokenizer_revision: "842da3794eaa0b77d5f08bae87a17459d91ff475"
+        # Native HF thought channels and mini-swe-agent v2 function calls.
+        reasoning_parser: gemma4
+        tool_call_parser: gemma4
+        enable_auto_tool_choice: true
+        language_model_only: true
+        async_scheduling: true
+        enable_prefix_caching: true
+        enable_chunked_prefill: true
+        override_generation_config: '{"top_k":32}'
+        served_model_name: "google/gemma-4-31B-it"
+      override_tt_config:
+        sample_on_device_mode: all
+        trace_region_size: 134217728
+        fabric_config: FABRIC_1D_RING
+  metadata:
+    google/gemma-4-31B-it:
+      validated_decode_batches: [1, 8, 16, 32]
+      serving_configuration_source: "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/perf-b1-server.json"

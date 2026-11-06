@@ -1,0 +1,12 @@
+{
+  "pid": 24847,
+  "env": {
+    "HF_HUB_CACHE": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/cache-env-validation/weights/hub",
+    "TT_METAL_CACHE": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/cache-env-validation/tt-metal-jit"
+  },
+  "idle_metrics": [
+    "vllm:num_requests_running{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0",
+    "vllm:num_requests_waiting{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0"
+  ],
+  "at": "2026-11-06T07:01:58.196907+00:00"
+}

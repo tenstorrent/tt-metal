@@ -1,0 +1,20 @@
+{
+  "arm": "cache-env-validation",
+  "device": "local",
+  "owner": "coordinator",
+  "status": "completed",
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "predicted_seconds": 300,
+  "box_device_hours": 0.25,
+  "start": "2026-11-06T06:58:29.431033+00:00",
+  "purpose": "Cache aliases point to identical existing files; paired nativeparser output identity; no claimedCIstartupgain",
+  "measurement_end": "2026-11-06T07:01:39.427367+00:00",
+  "end": "2026-11-06T07:02:08.205610+00:00",
+  "exit_status": 0,
+  "server_exit_status": 1,
+  "used_device_hours": 0.05277675944444444,
+  "actual_seconds": 189.996334,
+  "confirmation": "Same pinnedfiles,livecacheenv aliases,2x168tokenIDs identical,healthyfull60; noCIstartupgain claimed"
+}

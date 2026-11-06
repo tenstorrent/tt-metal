@@ -374,13 +374,27 @@
       "functional_at": 2,
       "score": 1.0,
       "outcome": "valid"
+    },
+    {
+      "arm": "cache-env-validation",
+      "planned_clients": 2,
+      "batch": 8,
+      "predicted_seconds": 300,
+      "actual_seconds": 189.996334,
+      "used_device_hours": 0.05277675944444444,
+      "outcome": "exactcache-routing validation; CIgainunmeasured"
     }
   ],
   "local_idle_intervals": [
     {
       "start": "2026-11-06T06:31:00Z",
-      "end": null,
+      "end": "2026-11-06T06:59:00.629010+00:00",
       "reason": "Local benchmarks/protocol/fullcontext/contention complete; remaining useful capacity replay depends on real CI histories. Avoid redundant hardware runs; CI carries Docker-required work."
+    },
+    {
+      "start": "2026-11-06T07:02:08.205610+00:00",
+      "end": null,
+      "reason": "Cache validation complete; next useful localrealhistory replay depends on tool-suiteCI output"
     }
   ]
 }

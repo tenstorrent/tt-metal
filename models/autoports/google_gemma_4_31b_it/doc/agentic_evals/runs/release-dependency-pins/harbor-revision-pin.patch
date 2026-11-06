@@ -1,0 +1,195 @@
+From 7079fe20b4a7c0eb8dc441fd0e0bc455bafda97c Mon Sep 17 00:00:00 2001
+From: Marina Vasiljevic <197624760+mvasiljevicTT@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 07:08:11 +0000
+Subject: [PATCH] Allow immutable model-scoped Harbor source revisions
+
+---
+ tests/workflows/test_harbor_revision_pin.py | 118 ++++++++++++++++++++
+ workflows/workflow_venvs.py                 |  37 +++++-
+ 2 files changed, 154 insertions(+), 1 deletion(-)
+ create mode 100644 tests/workflows/test_harbor_revision_pin.py
+
+diff --git a/tests/workflows/test_harbor_revision_pin.py b/tests/workflows/test_harbor_revision_pin.py
+new file mode 100644
+index 0000000..0c53603
+--- /dev/null
++++ b/tests/workflows/test_harbor_revision_pin.py
+@@ -0,0 +1,118 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++
++from types import SimpleNamespace
++from unittest.mock import Mock
++import subprocess
++
++import pytest
++
++from workflows import workflow_venvs as mod
++
++PIN = "e" * 40
++
++
++@pytest.fixture
++def setup_calls(monkeypatch, tmp_path):
++    checkout = Mock(return_value=True)
++    resolve = Mock(return_value=SimpleNamespace(stdout=PIN + "\n"))
++    install = Mock(return_value=0)
++    monkeypatch.setattr(mod, "checkout_pinned_repo", checkout)
++    monkeypatch.setattr(mod.subprocess, "run", resolve)
++    monkeypatch.setattr(mod, "run_command", install)
++    monkeypatch.setattr(mod, "_write_harbor_adapters_pth", Mock(return_value=True))
++    config = SimpleNamespace(venv_path=tmp_path, venv_python=tmp_path / "bin/python")
++    return config, checkout, resolve, install
++
++
++@pytest.mark.parametrize(
++    "metadata", [{}, {"harbor_git_ref": PIN}, {"harbor_git_ref": PIN.upper()}]
++)
++def test_setup_selects_exact_ref_and_logs_resolved_commit(
++    setup_calls, metadata, monkeypatch
++):
++    config, checkout, resolve, install = setup_calls
++    log_info = Mock()
++    monkeypatch.setattr(mod.logger, "info", log_info)
++    assert mod.setup_evals_agentic(config, SimpleNamespace(metadata=metadata))
++    checkout.assert_called_once_with(
++        config.venv_path / "harbor",
++        mod.HARBOR_REPO,
++        PIN if metadata else mod.HARBOR_REF,
++    )
++    assert resolve.call_args.args[0] == [
++        "git",
++        "-C",
++        str(config.venv_path / "harbor"),
++        "rev-parse",
++        "HEAD",
++    ]
++    log_info.assert_any_call(
++        "Harbor source: requested=%s resolved=%s",
++        PIN if metadata else mod.HARBOR_REF,
++        PIN,
++    )
++    install.assert_called_once()
++
++
++@pytest.mark.parametrize(
++    "ref",
++    [
++        None,
++        "",
++        "main",
++        "tt-inference-server",
++        "a" * 39,
++        "a" * 41,
++        "g" * 40,
++        " " + PIN,
++        123,
++        [PIN],
++    ],
++)
++def test_mutable_or_invalid_ref_is_rejected_before_checkout(setup_calls, ref):
++    config, checkout, resolve, install = setup_calls
++    with pytest.raises(ValueError, match="full 40-character commit SHA"):
++        mod.setup_evals_agentic(
++            config, SimpleNamespace(metadata={"harbor_git_ref": ref})
++        )
++    checkout.assert_not_called()
++    resolve.assert_not_called()
++    install.assert_not_called()
++
++
++@pytest.mark.parametrize("actual", ["f" * 40, "", "main"])
++def test_checkout_mismatch_never_installs(setup_calls, actual):
++    config, _, resolve, install = setup_calls
++    resolve.return_value.stdout = actual
++    assert not mod.setup_evals_agentic(
++        config, SimpleNamespace(metadata={"harbor_git_ref": PIN})
++    )
++    install.assert_not_called()
++
++
++def test_checkout_failure_never_resolves_or_installs(setup_calls):
++    config, checkout, resolve, install = setup_calls
++    checkout.return_value = False
++    assert not mod.setup_evals_agentic(
++        config, SimpleNamespace(metadata={"harbor_git_ref": PIN})
++    )
++    resolve.assert_not_called()
++    install.assert_not_called()
++
++
++@pytest.mark.parametrize(
++    "error",
++    [
++        OSError("git unavailable"),
++        subprocess.TimeoutExpired("git", 30),
++        subprocess.CalledProcessError(1, "git"),
++    ],
++)
++def test_verification_failure_never_installs(setup_calls, error):
++    config, _, resolve, install = setup_calls
++    resolve.side_effect = error
++    assert not mod.setup_evals_agentic(
++        config, SimpleNamespace(metadata={"harbor_git_ref": PIN})
++    )
++    install.assert_not_called()
+diff --git a/workflows/workflow_venvs.py b/workflows/workflow_venvs.py
+index 75b996c..487cd62 100644
+--- a/workflows/workflow_venvs.py
++++ b/workflows/workflow_venvs.py
+@@ -6,6 +6,7 @@ from __future__ import annotations
+ import hashlib
+ import logging
+ import os
++import re
+ import shutil
+ import subprocess
+ import tarfile
+@@ -331,9 +332,43 @@ def setup_evals_agentic(
+     is available on disk. The adapters are not part of the Harbor wheel and live
+     outside ``src/``, so a ``.pth`` file exposes the repo root to Python imports.
+     """
++    metadata = getattr(model_spec, "metadata", None) or {}
++    harbor_ref = HARBOR_REF
++    if "harbor_git_ref" in metadata:
++        requested_ref = metadata["harbor_git_ref"]
++        if (
++            not isinstance(requested_ref, str)
++            or re.fullmatch(r"[0-9a-fA-F]{40}", requested_ref) is None
++        ):
++            raise ValueError(
++                "metadata.harbor_git_ref must be a full 40-character commit SHA"
++            )
++        harbor_ref = requested_ref.lower()
++
+     harbor_dir = venv_config.venv_path / "harbor"
+-    if not checkout_pinned_repo(harbor_dir, HARBOR_REPO, HARBOR_REF):
++    if not checkout_pinned_repo(harbor_dir, HARBOR_REPO, harbor_ref):
++        return False
++    try:
++        resolved_ref = subprocess.run(
++            ["git", "-C", str(harbor_dir), "rev-parse", "HEAD"],
++            check=True,
++            capture_output=True,
++            text=True,
++            timeout=30,
++        ).stdout.strip()
++    except (OSError, subprocess.SubprocessError) as exc:
++        logger.error("Could not verify Harbor checkout: %s", exc)
++        return False
++    if re.fullmatch(r"[0-9a-f]{40}", resolved_ref) is None or (
++        "harbor_git_ref" in metadata and resolved_ref != harbor_ref
++    ):
++        logger.error(
++            "Harbor checkout mismatch: requested=%s resolved=%s",
++            harbor_ref,
++            resolved_ref,
++        )
+         return False
++    logger.info("Harbor source: requested=%s resolved=%s", harbor_ref, resolved_ref)
+ 
+     # Install with the `kubernetes` extra so the Python k8s client comes in: the
+     # kubernetes environment needs it, and it is declared as an optional extra,
+-- 
+2.34.1
+

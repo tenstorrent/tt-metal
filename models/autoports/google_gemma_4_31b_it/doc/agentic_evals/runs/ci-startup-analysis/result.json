@@ -1,0 +1,65 @@
+{
+  "status": "host_analysis_done_confirmation_pending",
+  "used_device_hours": 0,
+  "goal": "Attribute coldCIstartup and identify stockcacheconfiguration candidate",
+  "measured": {
+    "ci_server_launch_to_health_seconds": 1174,
+    "ci_pinned_snapshot_download_seconds": 487,
+    "ci_layer0_to_layer59_seconds": 619.265935,
+    "ci_layer0_to1_seconds": 379.702506,
+    "ci_layer4_to5_seconds": 116.232456,
+    "ci_prefill_warmup_seconds": 447.82022308791056,
+    "ci_total_trace_preparation_seconds": 484.663275572937,
+    "local_b8_startup_seconds": 186.2315111400094,
+    "local_b8_trace_preparation_seconds": 11.256106532993726,
+    "local_b8_prefill_warmup_seconds": 10.542895192978904
+  },
+  "facts": [
+    "Pinned index maps layer0 to shard1; layer4 first spans shard2; large load gaps coincide with first shard use.",
+    "TTI snapshot_download pins revision and explicitly caches to mounted cache_root/weights/hub.",
+    "Autoport PinnedWeights calls hf_hub_download with revision but no cache_dir and does not consume MODEL_WEIGHTS_DIR.",
+    "TTI sets TT_CACHE_PATH; JIT root is TT_METAL_CACHE else ~/.cache/tt-metal-cache, a distinct setting.",
+    "Local run_serving.sh sets persistent TT_METAL_CACHE; new CIentry does not.",
+    "NamedDocker volume covers cache_root. Default home cache is not an explicit mount in captured docker command.",
+    "No autoport cache_file_name/dump_tensor/load_tensor path was found; do not claim tensor-cache reuse."
+  ],
+  "hypotheses": [
+    {
+      "mechanism": "HFcache mismatch causes second downloads at first shard touch",
+      "basis": "source path mismatch and two boundary-correlated large gaps",
+      "unresolved": "Actual child HF_HUB_CACHE/environment and bothcachepath/inode listings not captured; elapsed gaps also include conversion/upload."
+    },
+    {
+      "mechanism": "Cold JIT cache increases warmup preparation",
+      "basis": "CIpreparation484.66s versus local11.26s; logs label wall including compilation and synchronizedwarmup",
+      "unresolved": "No percompile breakdown or persisted JITcacheinventory; do not attribute entire delta to compilation."
+    }
+  ],
+  "candidate_stock_env": {
+    "HF_HUB_CACHE": "/home/container_app_user/cache_root/weights/hub",
+    "TT_METAL_CACHE": "/home/container_app_user/cache_root/tt-metal-jit"
+  },
+  "candidate_status": "proposed_only_no_edits_no_measured_gain",
+  "release_four_runs": {
+    "launch_count": 4,
+    "cold_server_startup_allowance_hours": 1.3044444444444445,
+    "cold_snapshot_download_allowance_hours": 0.5411111111111111,
+    "combined_allowance_hours": 1.8455555555555556,
+    "maximum_observed_cold_vs_local_gap_hours": 1.0975205431777673,
+    "interpretation": "Conservative planning charge repeats observedcold costs for benchmark+three suites; not a guaranteed ceiling or achievedsaving. Build/poolqueue/eval runtimes are additional. Sharedpool placement means do not assume cache reuse acrossjobs."
+  },
+  "fastest_discriminating_check": "Host-only inside already-built CIimage: print only resolvedHFcache and JITcachepaths, confirm mounted snapshot revision and index/shards local_files_only, compare resolvedpaths/inodes. No tensorread/deviceopen. If mismatchconfirmed, sameimage sameboard restart after alignedstockenv to measure startup and pairedtokenexactness. Do not delay rungs or assume warmrunperformance from these logs.",
+  "evidence": [
+    "bringup/artifacts/stage12-gpqa-job.log firstliveLOAD_LAYER lines1416/1455/1459/1471 and generator_trace_prepare record",
+    "doc/benchmark/run/perf-b8-server.json",
+    "doc/benchmark/run/configuration-b8.json",
+    "tt/weights.py",
+    "TTI vllm-tt-metal/src/run_vllm_api_server.py:715-729,775-790",
+    "TTI workflows/run_docker_server.py:648-657",
+    "tt_metal/jit_build/build.hpp:38-40"
+  ],
+  "patch": "cache-env.patch",
+  "host_confirmation": "host-check.json: stock SetupConfig and generated Docker mount prove candidate cache paths within persistent namedvolume",
+  "proposed_confirmation_box_device_hours": 0.25,
+  "remaining_confirmation": "Host pinnedfileidentity and local pairedtokeninvariance, then actualCIstartup timing on subsequent rung; no measured saving yet"
+}

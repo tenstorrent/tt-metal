@@ -71,6 +71,10 @@
     {
       "fact": "lm-eval n-samples effective198 persists when explicit GPQA doc_ids select2; sample JSONL is authoritative for completed count.",
       "evidence": "runs/smoke2-r1_gpqa_diamond/collected"
+    },
+    {
+      "fact": "Freshautoport HF cache lookup must align with stock mountedweights/hub; TT_CACHE_PATH is not TT_METAL_CACHE. Modelentry cachealiases verified with same pinnedfiles and exact2x168tokenpairs; CIstartup saving unknown.",
+      "evidence": "runs/ci-startup-analysis/confirmation-result.json; TTI8437f186"
     }
   ],
   "suite_timings": [
@@ -88,5 +92,14 @@
       "evidence": "runs/smoke2-r1_gpqa_diamond/collected"
     }
   ],
-  "generic_fixes": []
+  "generic_fixes": [
+    {
+      "branch": "fix/model-scoped-harbor-revision",
+      "sha": "7079fe20b4a7c0eb8dc441fd0e0bc455bafda97c",
+      "integration_sha": "eac746513e4ced539f4462d0dc5762d76e04fc56",
+      "published": false,
+      "fix": "Optional modelmetadata harbor_git_ref fullSHA verifies/logs actualcheckout; defaultbranch unchanged; permits frozen clientharness source",
+      "evidence": "runs/release-dependency-pins/AUTOFIX.md"
+    }
+  ]
 }

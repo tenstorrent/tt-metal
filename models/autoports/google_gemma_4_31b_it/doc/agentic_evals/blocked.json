@@ -29,7 +29,7 @@
     "Stage gate pass"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-06T05:09:54.490083+00:00",
+  "updated_at": "2026-11-06T07:19:19.897569+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -37,14 +37,12 @@
   ],
   "live_wait": {
     "run_ids": [
-      42166117505,
-      42166151590,
-      42166175324
+      42173587147,
+      42175367781,
+      42176391791
     ],
-    "status": "image builds in progress",
-    "monitor": "bringup/artifacts/stage12-monitor-ci.py",
-    "tool_session_id": 76721,
-    "note": "Queueing is not a failed run; do not cancel or redispatch solely for queue time."
+    "status": "SWE smoke device run active; Terminal retry and GPQA nightly image builds active",
+    "monitor": "bringup/artifacts/stage12-monitor-ci.py"
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",
@@ -83,5 +81,10 @@
     "reason": "Stock workflow lacks readiness-stop; cancellation skips complete task evidence upload",
     "source": "runs/ci-release-route/RESULT.md",
     "permission_required": "Exception to stop-after-start/no-score dry run; no generic route alteration assumed"
+  },
+  "release_dependency_freeze": {
+    "status": "local_repair_verified_awaiting_actual_ci_pin",
+    "reason": "Generic default-preserving pin support passed full hooks on defect branch7079fe2, locally integratedeac7465, not yet published. Await actual tool-run HarborSHA before model metadata pin.",
+    "evidence": "runs/release-dependency-pins/RESULT.md"
   }
 }

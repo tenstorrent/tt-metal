@@ -1,0 +1,5 @@
+{
+  "owners": [],
+  "scope": "container-visible /proc fd scan; fuser unavailable; no reset",
+  "at": "2026-11-06T06:58:29.430871+00:00"
+}

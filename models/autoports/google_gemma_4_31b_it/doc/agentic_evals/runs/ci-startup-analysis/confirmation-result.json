@@ -1,0 +1,39 @@
+{
+  "status": "done",
+  "goal": "Validate cache-path routing against identical pinned files and accept only an output-exact change",
+  "confirmation": {
+    "pinned_files": "Same inode for pinned index and all shards via alias; local-cache-identity.json",
+    "live_environment": "Both HF_HUB_CACHE and TT_METAL_CACHE aliases observed; live-cache-env.json",
+    "paired_outputs": "Two concurrent B8 replies each168tokens exactly equal with unchanged finishreason; paired-audit.json",
+    "full_model": "Coordinator full60healthy server confirmation"
+  },
+  "box_device_hours": 0.25,
+  "predicted_seconds": 300,
+  "actual_seconds": 189.996334,
+  "used_device_hours": 0.05277675944444444,
+  "change": "kept",
+  "cache_routing_problem_status": "solved",
+  "ci_startup_speed_problem_status": "open",
+  "ci_measured_saving_seconds": null,
+  "acceptance": "Same-file identity plus exact token pairs and live env confirmation accepts cache routing; local warmed caches do not measure CI savings.",
+  "source_changes": [
+    "TTI workflows/model_specs/dev/llm.yaml:HF_HUB_CACHE and TT_METAL_CACHE",
+    "TTI tests/workflows/test_gemma4_31b_autoport_v3.py:stock persistent mount assertion"
+  ],
+  "publication": "Applied to a0c8bde working tree only; no commit/push by investigator.",
+  "tests": {
+    "focused": "8 passed",
+    "hooks": "Ruff,format,pytest,copyright allpassed with TT_METAL_HOME unset",
+    "prior_attempt": "3738passed15skipped1failure from inheritedTT_METAL_HOME contradicting CLI-default test; no productsourcefix required",
+    "logs": [
+      "bringup/artifacts/stage12-cache-env-hooks.log",
+      "bringup/artifacts/stage12-cache-env-hooks-clean.log"
+    ]
+  },
+  "device_exit": {
+    "client": 0,
+    "server_wrapper": 1,
+    "reason": "Owned idle server shutdown"
+  },
+  "quality_score": null
+}
