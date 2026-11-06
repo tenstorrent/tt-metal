@@ -3386,6 +3386,11 @@ class MTPSpecEngine:
             pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)  # MTP chunk fill keeps the nb-wide pt_row
             logits_dev = model.prefill_traced_chunked(prompt, pt_rec, Tp, on_chunk=_on_chunk, **vis_kw)
         if logits_dev is None:
+            if self.fast_prefill and self.prefill_recorded and self.recorded_prefill:
+                self._note_eager_prefill(
+                    "whole prompt",
+                    f"slot {slot} [{0 if plan is None else int(plan[0])}, {Tp}): no trace serves it",
+                )
             if plan is None:
                 logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot, **vis_kw, **gkw)
             elif final:
@@ -3801,6 +3806,9 @@ class MTPSpecEngine:
                 if decline_ok:
                     return None  # no spec short trace for this length / trash-block collision: nothing staged, eager
                 assert snap is None or not snap.inside(a, n), "in-replay snapshot points in an eager replay"
+                self._note_eager_prefill(
+                    "segment", f"slot {slot} [{a}, {b}): {self._short_decline_reason(n)}, eager masked bucket"
+                )
                 pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)
                 logits, hidden = model.prefill_masked_bucket(
                     prompt[:, a:b],
@@ -3826,6 +3834,7 @@ class MTPSpecEngine:
             # The uncached long-prompt path: the chunk trace replays every full chunk and the eager masked-bucket tail
             # runs inside it (its tail slice is right for start == 0).
             assert snap is None or not snap.inside(cs, tail), "in-replay snapshot points in an eager tail"
+            self._note_eager_prefill("tail", f"slot {slot} [{cs}, {b}): {self._short_decline_reason(tail)}")
             logits = model._prefill_traced_chunked_tp(
                 prompt,
                 pt_rec,
@@ -3890,6 +3899,7 @@ class MTPSpecEngine:
             )
         if host is None:  # no short trace for the tail (< 3 tokens / uncaptured bucket) or a trash-block collision
             assert snap is None or not snap.inside(cs, tail), "in-replay snapshot points in an eager tail"
+            self._note_eager_prefill("tail", f"slot {slot} [{cs}, {b}): {self._short_decline_reason(tail)}")
             logits, hidden = model.prefill_masked_bucket(
                 prompt[:, cs:b],
                 pt_rec,
@@ -3999,6 +4009,25 @@ class MTPSpecEngine:
         if join_logits_one_copy_enabled():
             return ttnn.to_torch(ttnn.get_device_tensors(logits_dev)[0])
         return ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
+
+    def _note_eager_prefill(self, reason, detail):
+        """Count a prefill (or a part of one) that runs eagerly although QWEN36_SPEC_FAST_PREFILL is on and its traces are
+        recorded: eager and traced prefill give slightly different numerics (greedy text can differ), so every such
+        path is visible. WARNING the first time per ``reason``, then DEBUG; counts in ``self.eager_prefills``."""
+        counts = self.__dict__.setdefault("eager_prefills", {})
+        counts[reason] = counts.get(reason, 0) + 1
+        (logger.warning if counts[reason] == 1 else logger.debug)(
+            f"[spec_engine] eager prefill #{counts[reason]} ({reason}): {detail}"
+            + (" (first of its kind; later ones log at DEBUG)" if counts[reason] == 1 else "")
+        )
+
+    def _short_decline_reason(self, n):
+        """Why no spec short trace served an n-token piece (for _note_eager_prefill)."""
+        if n < 3:
+            return f"{n} tokens (a short trace needs 3 for the conv carry)"
+        if self.model._short_trace_for(n) is None:
+            return f"no short trace for {n} tokens"
+        return f"trash block {getattr(self.model, 'prefill_trash_block', None)} is one of the request's blocks"
 
     def _note_resume_fallback(self, prompt_list, start_pos, Tp, plan, final):
         """Count (and log) a prefill with start_pos > 0 that resumes from a GDN snapshot below spec_resume_cap (the
