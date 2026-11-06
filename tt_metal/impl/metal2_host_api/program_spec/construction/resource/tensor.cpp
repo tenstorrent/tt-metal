@@ -29,8 +29,8 @@ namespace tt::tt_metal::experimental {
 
 namespace {
 
-LLKMetadata LLKMetadataFromTensorSpec(const TensorSpec& spec) {
-    return LLKMetadata{.format = datatype_to_dataformat_converter(spec.data_type()), .tile = spec.tile()};
+LLKMetadata LLKMetadataFromTensorSpec(const TensorSpec& spec, uint32_t l1_alignment) {
+    return make_llk_metadata(datatype_to_dataformat_converter(spec.data_type()), spec.tile(), l1_alignment);
 }
 
 }  // namespace
@@ -55,7 +55,7 @@ namespace {
 // `extra_crta_words` slots immediately after the address slot.
 // (See also ResolveTensorBindingsForKernel below.)
 ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
-    const TensorParameter& tensor_parameter, const distributed::MeshDevice& mesh_device) {
+    const TensorParameter& tensor_parameter, const distributed::MeshDevice& mesh_device, uint32_t l1_alignment) {
     const TensorSpec& spec = tensor_parameter.spec;
     const MemoryConfig& memory_config = spec.memory_config();
     const BufferType buffer_type = memory_config.buffer_type();
@@ -121,7 +121,8 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
         aligned_page_size,
         std::numeric_limits<uint32_t>::max());
 
-    ResolvedTensorParameter result{.is_per_node = is_per_node, .llk_metadata = LLKMetadataFromTensorSpec(spec)};
+    ResolvedTensorParameter result{
+        .is_per_node = is_per_node, .llk_metadata = LLKMetadataFromTensorSpec(spec, l1_alignment)};
     std::vector<uint32_t>& cta_payload = result.cta_payload;
 
     // Common header (always emitted, sharded or not):
@@ -280,7 +281,10 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
 }
 
 std::unordered_map<TensorParamName, ResolvedTensorParameter> RegisterTensorParameters(
-    const ProgramSpec& spec, const distributed::MeshDevice& mesh_device, detail::ProgramImpl& program_impl) {
+    const ProgramSpec& spec,
+    const distributed::MeshDevice& mesh_device,
+    detail::ProgramImpl& program_impl,
+    uint32_t l1_alignment) {
     // Resolve TensorParameters against the MeshDevice into static CTA payloads.
     //
     // TensorBindings ride two existing kernel-arg channels:
@@ -295,7 +299,7 @@ std::unordered_map<TensorParamName, ResolvedTensorParameter> RegisterTensorParam
     resolved_tensor_parameters.reserve(spec.tensor_parameters.size());
     for (const auto& tensor_parameter : spec.tensor_parameters) {
         resolved_tensor_parameters.emplace(
-            tensor_parameter.unique_id, ResolveTensorParameterStaticCTAs(tensor_parameter, mesh_device));
+            tensor_parameter.unique_id, ResolveTensorParameterStaticCTAs(tensor_parameter, mesh_device, l1_alignment));
     }
 
     // Register TensorParameters with the program for ValidateProgramRunArgs to consult at enqueue.

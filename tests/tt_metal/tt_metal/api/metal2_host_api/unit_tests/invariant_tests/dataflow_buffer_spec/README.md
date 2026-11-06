@@ -4,12 +4,17 @@ Local invariants of `DataflowBufferSpec` (`dataflow_buffer_spec.hpp`).  Most oth
 on the kernels that bind the DFB, so they are structural and live in `../program_spec/`; `DFBAdvancedOptions` rules
 are in `../advanced_options/`.
 
+The MX tile rule is covered by [resource tile metadata tests](../../resource_tile_metadata.cpp).
+
 ## Listed invariants
 
 `DataflowBufferSpec` as declared in `dataflow_buffer_spec.hpp`, with every field and only its invariants.
 
 ```cpp
 struct DataflowBufferSpec {
+    // Invariant: For an MX data format, the effective tile contains a multiple of 32 elements.
+    // The effective tile is tile_format_metadata when set, or the default 32x32 tile otherwise.
+
     DFBSpecName unique_id;
 
     // Invariant: Must be greater than 0.

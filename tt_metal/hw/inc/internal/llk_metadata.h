@@ -40,10 +40,23 @@ struct LLKMetadata {
     uint8_t face_c_dim = 16;
     uint8_t num_faces_r_dim = 2;
     uint8_t num_faces_c_dim = 2;
+
+    // Zero when tile storage size metadata is unavailable.
+    uint32_t tile_size_bytes = 0;
 };
 
 // Deliberately non-constexpr: a missing format fails constant evaluation even when ASSERT is disabled.
 // Runtime callers retain the configured device assertion behavior.
 inline void data_format_metadata_not_set() { ASSERT(false); }
+
+// Checks that data format metadata is present.
+constexpr void assert_dataformat_set(const LLKMetadata& metadata) {
+    if (metadata.format == LLKMetadata::kNoFormat) {
+        data_format_metadata_not_set();
+    }
+}
+
+// Deliberately non-constexpr so unsupported tile storage formats fail constant evaluation.
+inline void tile_size_unsupported_for_format() { ASSERT(false); }
 
 }  // namespace binding_details

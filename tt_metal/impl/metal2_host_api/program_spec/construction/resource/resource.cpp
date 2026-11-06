@@ -4,6 +4,8 @@
 
 #include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
 
+#include "llrt/hal.hpp"
+
 namespace tt::tt_metal::experimental {
 
 ProgramResources RegisterResources(
@@ -14,7 +16,8 @@ ProgramResources RegisterResources(
     MetalEnvImpl& metal_env,
     detail::ProgramImpl& program_impl) {
     ProgramResources resources;
-    resources.tensor_parameters = RegisterTensorParameters(spec, mesh_device, program_impl);
+    const uint32_t l1_alignment = metal_env.get_hal().get_alignment(HalMemType::L1);
+    resources.tensor_parameters = RegisterTensorParameters(spec, mesh_device, program_impl, l1_alignment);
     resources.dfbs = RegisterDataflowBuffers(spec, collected, risc_masks, program_impl);
 
     // Reserve PrefetcherPipe slots (one per kernel accessor group) from the spec geometry, register
@@ -31,7 +34,10 @@ ProgramResources RegisterResources(
 }
 
 KernelResourceBindings ResolveKernelResourceBindings(
-    const KernelSpec& kernel_spec, const CollectedSpecData& collected, const ProgramResources& resources) {
+    const KernelSpec& kernel_spec,
+    const CollectedSpecData& collected,
+    const ProgramResources& resources,
+    uint32_t l1_alignment) {
     KernelResourceBindings bindings{
         .dfbs = MakeDataflowBufferBindingHandles(
             kernel_spec,
@@ -40,7 +46,8 @@ KernelResourceBindings ResolveKernelResourceBindings(
             resources.dfbs.relay_pipe_id,
             collected.dfb_by_name,
             resources.dfbs.id,
-            resources.dfbs.patterns),
+            resources.dfbs.patterns,
+            l1_alignment),
         .semaphores = MakeSemaphoreBindingHandles(
             kernel_spec, collected.semaphore_binders, resources.semaphores.id, resources.semaphores.scope),
         .prefetcher_pipes = {}};

@@ -33,6 +33,11 @@ void ValidateScratchpadSpec(const ScratchpadSpec& scratchpad, tt::ARCH arch) {
             scratchpad.unique_id,
             scratchpad.data_format_metadata.value(),
             arch);
+        ValidateResourceTileMetadata(
+            "ScratchpadSpec",
+            scratchpad.unique_id.get(),
+            *scratchpad.data_format_metadata,
+            scratchpad.tile_format_metadata.value_or(Tile{}));
     }
 }
 
