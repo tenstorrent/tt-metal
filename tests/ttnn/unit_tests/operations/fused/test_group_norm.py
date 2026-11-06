@@ -2609,7 +2609,7 @@ def test_group_norm_interleaved_wide_groups_fp32_dest(device, C, dtype, fp32_des
 # when SrcB truncated those groups to bf16 (#29960). Over seeds 0-9, the fixed kernels give 8.4e-4 to 9.1e-4 and the
 # truncating kernels 1.68e-3 to 1.76e-3. The values are the same on Wormhole (HiFi3) and Blackhole (HiFi4), on 4x4 and
 # 8x8 grids, and on both the mcast and sharded factories.
-FP32_INPUT_NARROW_GROUPS_MAX_ERR = 1.2e-3
+FP32_INPUT_NARROW_GROUPS_MEAN_ERR_LIMIT = 1.2e-3
 
 
 # With 16 channels per group, every group after the first in a tile goes through the accumulate that truncated it to
@@ -2634,7 +2634,8 @@ def test_group_norm_welford_fp32_input_narrow_groups_accuracy(device, path):
     )
     if path == "sharded":
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
-        shard_spec = ttnn.ShardSpec(shard_grid, (N * HW // grid.y, C // grid.x), ttnn.ShardOrientation.COL_MAJOR)
+        # COL_MAJOR splits the channels (C) across grid.y and the rows (N * HW) across grid.x.
+        shard_spec = ttnn.ShardSpec(shard_grid, (N * HW // grid.x, C // grid.y), ttnn.ShardOrientation.COL_MAJOR)
         memory_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
@@ -2655,7 +2656,7 @@ def test_group_norm_welford_fp32_input_narrow_groups_accuracy(device, path):
         tt_output = ttnn.sharded_to_interleaved(tt_output, ttnn.L1_MEMORY_CONFIG)
     out = ttnn.to_torch(tt_output).double()
     err = (out - ref).abs().mean().item()
-    assert err < FP32_INPUT_NARROW_GROUPS_MAX_ERR, f"mean abs error {err}"
+    assert err < FP32_INPUT_NARROW_GROUPS_MEAN_ERR_LIMIT, f"mean abs error {err}"
 
 
 # Helper for the user compute_kernel_config tests below: runs group_norm on x (N, 1, HW, C) on one factory, all on
