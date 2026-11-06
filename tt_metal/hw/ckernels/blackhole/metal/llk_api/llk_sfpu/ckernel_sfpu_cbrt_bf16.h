@@ -3,17 +3,10 @@
 
 #pragma once
 #include <cstdint>
-namespace ckernel::sfpu {
-struct CbrtBf16Config {
-    static constexpr uint32_t kKind = 2u;
-    static constexpr uint32_t kMagic = 0x548c2b4bu;
-    static constexpr uint32_t kC0Bits = 0x3fe04c03u;
-    static constexpr uint32_t kC1Bits = 0xbfa01f36u;
-    static constexpr uint32_t kC2Bits = 0x3f0266d9u;
-    static constexpr uint32_t kBodySlots = 23u;
-};
-}  // namespace ckernel::sfpu
-#include "ckernel_sfpu_cbrt_bf16_newton_root.h"
+
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -30,11 +23,7 @@ inline bool bf16_dest_cbrt() {
     return false;
 #endif
 }
-// The Blackhole whole-tile call as tt-polynomial-fitter's scheduler issues it (ttpoly/sfpu_schedule.py
-// in tenstorrent/tt-polynomial-fitter, not in this repository): the compiled instructions of
-// ckernel::sfpu::bf16::cbrt::calculate_newton_root<ckernel::sfpu::CbrtBf16Config, 32> in a stall-filling order, rows
-// addressed by their immediates, constants held in LRegs. It stores the same word for every BF16 input; other
-// ITERATIONS run the compiled body itself.
+// Whole-tile BF16 cbrt: Moroz seed plus one Newton step on cube_root_init's constants, scheduled to fill stalls.
 inline void calculate_cbrt_bf16_scheduled() {
     TTI_SFPLOAD(3, 0, 7, 0);
     TTI_SFPLOAD(0, 0, 7, 2);
@@ -525,12 +514,10 @@ inline void calculate_cbrt_bf16_scheduled() {
 
 template <int ITERATIONS = 32>
 inline void calculate_cbrt_bf16() {
-    if constexpr (ITERATIONS == 32) {
-        calculate_cbrt_bf16_scheduled();
-    } else {
-        ckernel::sfpu::bf16::cbrt::calculate_newton_root<ckernel::sfpu::CbrtBf16Config, ITERATIONS>();
-    }
+    static_assert(ITERATIONS == 32, "the BF16 cbrt kernel runs as one whole-tile call");
+    calculate_cbrt_bf16_scheduled();
 }
-inline void init_cbrt_bf16() { ckernel::sfpu::bf16::cbrt::init_newton_root<ckernel::sfpu::CbrtBf16Config>(); }
+// The kernel reads only the constants cube_root_init programs, so it needs no setup of its own.
+inline void init_cbrt_bf16() {}
 
 }  // namespace ckernel::sfpu

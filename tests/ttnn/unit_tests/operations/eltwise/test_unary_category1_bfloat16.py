@@ -785,11 +785,7 @@ def test_bessel_ops(device, ttnn_op, low, high):
 
 @pytest.mark.parametrize("generated_first", [True, False])
 def test_cbrt_with_log_in_sfpu_chain(device, generated_first):
-    """cbrt in one SFPU chain with stock log, both orders.
-
-    Each chain step runs the kernel its own TT-NN op runs, and the second op stores exactly what it
-    stores standalone on the first op's device result, which the chain keeps in DEST.
-    """
+    """cbrt chained with stock log, both orders: each step matches its standalone op on the first op's result."""
     generated = (ttnn.UnaryWithParam(ttnn.UnaryOpType.CBRT), lambda tensor: ttnn.cbrt(tensor))
     stock = (ttnn.UnaryWithParam(ttnn.UnaryOpType.LOG), lambda tensor: ttnn.log(tensor))
     first, second = (generated, stock) if generated_first else (stock, generated)
@@ -818,58 +814,20 @@ def test_cbrt_with_log_in_sfpu_chain(device, generated_first):
 
 
 def test_cbrt_bf16_unflushed_zero_and_subnormal_inputs(device):
-    """TT-NN's copy into DEST keeps -0 and subnormal BF16 inputs, which the LLK sweep's unpack delivers as +0.
-
-    Each such input and +0 must store torch's result: its class as the BF16 pack stores it (NaN as
-    +inf, a subnormal result as 0) and a finite result within 1 ULP of torch's float64 value.
-    The pack writes a zero result as +0, so ±0 and both signs of subnormal store the word 0x0000.
-    STOCK lists, per board, the inputs where the kernel stores its stock kernel's word instead,
-    as {word: [(first input, last input), ...]} over the input bits.
-    """
+    """TT-NN keeps -0 and subnormal BF16 inputs in DEST; cbrt of each, and of +0, stores +0."""
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     if board not in ("blackhole",):
         pytest.skip(f"ttnn.cbrt keeps its stock kernel on {board}")
-    STOCK = {"blackhole": {0x0000: [(0x0001, 0x007F), (0x8001, 0x807F)]}}
     words = torch.cat([torch.arange(0x80), torch.arange(0x8000, 0x8080)]).to(torch.int16)
     x = words.view(torch.bfloat16).repeat(4).reshape(1, 1, 32, 32)
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tiny = torch.finfo(torch.bfloat16).tiny
-
-    def stored(t):
-        t = t.to(torch.bfloat16).to(torch.float64).flatten()
-        t = torch.where(torch.isnan(t), torch.full_like(t, float("inf")), t)
-        return torch.where(t.abs() < tiny, torch.zeros_like(t), t)
-
     device_out = ttnn.to_torch(ttnn.cbrt(tt_x))
     raw = device_out.reshape(-1).view(torch.int16).to(torch.int32) & 0xFFFF
-    bits = words.repeat(4).to(torch.int32) & 0xFFFF
-    assert torch.all(raw[bits == 0x0000] == 0x0000)
-    assert torch.all(raw[bits == 0x8000] == 0x0000)
-    assert torch.all(raw[(bits > 0) & (bits < 0x80)] == 0x0000)
-    assert torch.all(raw[(bits > 0x8000) & (bits < 0x8080)] == 0x0000)
-
-    actual = stored(device_out)
-    x64 = x.flatten().to(torch.float64)
-    reference = ttnn.get_golden_function(ttnn.cbrt)(x64).to(torch.float64).flatten()
-    rounded = stored(reference)
-    spacing = 2.0 ** (torch.floor(torch.log2(reference.abs().clamp(min=tiny))) - 7)
-    close = torch.isfinite(reference) & (actual != 0) & ((actual - reference).abs() < spacing)
-    ok = (actual == rounded) | close
-    for word, ranges in STOCK.get(board, {}).items():
-        value = stored(torch.tensor([word], dtype=torch.int32).to(torch.int16).view(torch.bfloat16))
-        for first, last in ranges:
-            ok |= (bits >= first) & (bits <= last) & (actual == value)
-    assert ok.all(), (
-        f"{(~ok).sum().item()} of {ok.numel()} inputs off torch and stock; first input 0x{bits[~ok][0].item():04x} "
-        f"stored {actual[~ok][0].item()!r}, torch {reference[~ok][0].item()!r}"
-    )
+    assert torch.all(raw == 0x0000), f"{int((raw != 0).sum())} of {raw.numel()} inputs did not store +0"
 
 
 def test_cbrt_bf16_bfloat8_b(device):
-    """bfloat8_b in and out. The SFPU reads Bfp8_b data in DEST as BF16, so this runs the BF16 kernel, as the
-    BF16 cases do. The result must correlate with torch's on the input as stored to PCC 0.999, as upstream's
-    bfloat8_b unary cases require.
-    """
+    """bfloat8_b in and out runs the BF16 kernel (DEST holds Bfp8_b as BF16); PCC 0.999 against torch."""
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     if board not in ("blackhole",):
         pytest.skip(f"ttnn.cbrt keeps its stock kernel on {board}")
@@ -886,15 +844,9 @@ def test_cbrt_bf16_bfloat8_b(device):
 
 
 def test_cbrt_bf16_exhaustive_inputs(device):
-    """All 65,536 BF16 inputs through ttnn.cbrt, the call TT-NN users make.
+    """All 65,536 BF16 inputs through ttnn.cbrt: within STEPS BF16 steps of torch's float64 result, as stored.
 
-    Each must store torch's float64 result (ttnn.get_golden_function(ttnn.cbrt)(x)) as the BF16 pack stores it (NaN as an
-    infinity, a result below the smallest normal, or within 2^-12 above it, as 0), a finite word within
-    STEPS BF16 steps of it, or the word STOCK lists for that input on the board, as
-    {word: [(first input, last input), ...]} over the input bits. SKIP lists the inputs this case does
-    not judge, which the LLK sweep checks against its own golden: where torch's float64 formula misses
-    the exact result (a cancellation), where the kernel departs from torch by its spec, and NaN inputs
-    whose stock word varies with the payload.
+    SKIP lists the inputs left to the LLK sweep; STOCK lists per-board words the kernel keeps from stock.
     """
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     if board not in ("blackhole",):

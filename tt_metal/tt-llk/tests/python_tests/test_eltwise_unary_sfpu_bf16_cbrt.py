@@ -7,7 +7,7 @@ import pytest
 import test_eltwise_unary_sfpu as _unary
 from helpers.bf16_sweep import bf16_exhaustive_sweep, replaced_instance_params
 from helpers.chip_architecture import ChipArchitecture
-from helpers.llk_params import ApproximationMode, FastMode, MathOperation
+from helpers.llk_params import ApproximationMode, DestSync, FastMode, MathOperation
 from helpers.param_config import build_param_id
 
 # (operation, approximation mode of the replaced instance, max ULP); max ULP 0 is an exact fit.
@@ -43,10 +43,7 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
     )
 
 
-# The (approximation, fast mode) instances the op's BF16 kernel replaces with FP32 DEST off, read from
-# its kernel's gate. Its setup runs from an init that stock instances share; export compiles every other
-# instance's init and tile from this tree and from stock and refuses the PR unless they are identical,
-# so only these instances run here.
+# The (approximation, fast mode) instances the BF16 kernel replaces with FP32 DEST off.
 _BF16_REPLACED_INSTANCES = {
     MathOperation.Cbrt: (
         (ApproximationMode.No, FastMode.No),
@@ -68,5 +65,11 @@ def test_eltwise_unary_sfpu_bf16_replaced_instances(
 ):
     """Every instance the BF16 kernel replaces, on BF16 and FP32 data, against the sweep's golden."""
     _unary.test_eltwise_unary_sfpu(
-        formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions
+        formats,
+        approx_mode,
+        mathop,
+        fast_mode,
+        dest_acc,
+        input_dimensions,
+        DestSync.Half,
     )
