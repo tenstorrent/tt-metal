@@ -50,6 +50,7 @@ on:
           - yunet
           - xtts-v2
           - vibevoice-1.5b
+          - llvc
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
