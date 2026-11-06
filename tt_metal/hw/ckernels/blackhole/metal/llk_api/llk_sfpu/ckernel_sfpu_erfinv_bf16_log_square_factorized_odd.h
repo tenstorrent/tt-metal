@@ -9,21 +9,10 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 
-// Shared S60 runtime for the structural family
-//
-//     t = log(1 - x*x); y = x * P(abs(t)), |x| < 1.
-//
-// The including generated configuration owns every coefficient and terminal
-// class.  This file owns only the family algorithm.  It must therefore remain
-// free of activation names and coefficient values.
-
 namespace ckernel::sfpu::bf16::erfinv {
 
 constexpr float fp32_from_bits(std::uint32_t bits) { return __builtin_bit_cast(float, bits); }
 
-// This runtime implements the decoded TTNN class partition.  The assertions
-// bind that implementation to S60's complete raw-class table; a Torch config
-// (which requires a NaN BF16 terminal) cannot compile through this runtime.
 template <typename Config, std::uint32_t Index>
 sfpi_inline sfpi::vFloat log_coefficient() {
     static_assert(Index < 3u);
@@ -38,8 +27,6 @@ sfpi_inline sfpi::vFloat outer_coefficient() {
 
 template <typename Config>
 sfpi_inline sfpi::vFloat anchored_log1p(sfpi::vFloat v, sfpi::vFloat ln2_times_2_neg23) {
-    // k chooses a reduced 1+v in [0.75, 1.5).  S60 supplies the minimax
-    // correction in ascending order for r + r^2 * P2(r).
     constexpr std::uint32_t kBits0p75 = 0x3f400000u;
     constexpr std::uint32_t kBits1p0 = 0x3f800000u;
     sfpi::vFloat u = v + 1.0f;
@@ -104,17 +91,11 @@ template <typename Config>
 sfpi_inline sfpi::vFloat evaluate(
     sfpi::vFloat x, sfpi::vFloat outer_top, sfpi::vFloat outer_next, sfpi::vFloat ln2_times_2_neg23) {
     sfpi::vFloat result = 0.0f;
-    // For the statically asserted +/-1 domain, a biased exponent below the
-    // IEEE-754 bias is exactly |x| < 1.  Unlike an SFPU float comparison this
-    // partition cannot admit an unordered NaN lane.
     v_if(sfpi::exexp(x, sfpi::ExponentMode::Biased) < 127) {
         result = evaluate_open_unit_core<Config>(x, outer_top, outer_next, ln2_times_2_neg23);
     }
     v_endif;
     result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
-    // Reload the same physical row after the arithmetic is dead.  The target
-    // load retains the signed-nonfinite carrier needed by copysgn, without
-    // keeping the original coordinate live across log reduction and Horner.
     sfpi::vFloat terminal_x = sfpi::dst_reg[0];
     return install_post_round_decoded_terminals<Config>(terminal_x, result);
 }

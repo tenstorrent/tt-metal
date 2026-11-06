@@ -5,56 +5,51 @@
 
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_default_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_program_factory.hpp"
+#include "ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_mcast_1d.hpp"
 #include "ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_mcast_2d.hpp"
-#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-#include <unordered_map>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt_stl/overloaded.hpp>
 
 namespace ttnn::experimental::prim {
 
+namespace {
+
+// The all-gather is the first descriptor in the merge below, so its reader and writer are kernels 0 and 1 of every
+// per-coordinate program. A Program built from the descriptor uses the same indices as kernel handles; the cache-hit
+// override relies on that to find the semaphore slots. build_program_descriptor() checks it.
+constexpr AllGatherDescriptorArtifacts kAllGatherKernels{.reader_kernel_index = 0, .writer_kernel_index = 1};
+
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
-AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMeshWorkloadFactory::create_at(
-    const Tensor& input_tensor,
-    Tensor& all_gather_output_tensor,
-    const Tensor& weight_tensor,
-    Tensor& matmul_output_tensor,
+tt::tt_metal::ProgramDescriptor build_program_descriptor(
+    const AllGatherMatmulAsyncParams& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coord,
+    const AllGatherMatmulAsyncInputs& tensor_args,
+    AllGatherMatmulAsyncResult& tensor_return_value) {
+    const auto& ag = operation_attributes.all_gather_async_attributes;
+    const Tensor& input_tensor = tensor_args.input_tensor;
+    Tensor& all_gather_output_tensor = tensor_return_value[0];
+    const Tensor& weight_tensor = tensor_args.weight_tensor;
+    Tensor& matmul_output_tensor = tensor_return_value[1];
 
-    /* All Gather Params */
-    IDevice* /*target_device*/,
-    const MeshCoordinate& target_device_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    ttnn::ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<uint32_t> chunks_per_sync,
-    std::optional<uint32_t> num_workers_per_direction_opt,
-    std::optional<uint32_t> num_buffers_per_channel,
-    const CoreCoord core_grid_offset,
+    const uint32_t ring_index =
+        ttnn::ccl::get_linearized_index_from_physical_coord(input_tensor, mesh_coord, ag.cluster_axis);
+    const std::optional<MeshCoordinate> forward_coord =
+        ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, mesh_coord, 1, ag.topology, ag.cluster_axis);
+    const std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        input_tensor, mesh_coord, -1, ag.topology, ag.cluster_axis);
 
-    /* Matmul Params */
-    const std::optional<Tensor>& bias,
-    bool bcast_batch,
-    DeviceComputeKernelConfig compute_kernel_config,
-    const operations::matmul::MatmulProgramConfig& program_config,
-    bool untilize_out
-
-) {
-    tt::tt_metal::Program program{};
+    const bool bcast_batch = operation_attributes.matmul.bcast_batch.value();
+    const auto compute_kernel_config = operation_attributes.matmul.compute_kernel_config.value();
+    const auto& program_config = operation_attributes.matmul.program_config.value();
+    const bool untilize_out = operation_attributes.matmul.untilize_out;
 
     ////////////// Params for fused op signalers //////////////
     auto tensor_slicer =
-        ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, all_gather_output_tensor, dim, ring_index);
+        ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, all_gather_output_tensor, ag.dim, ring_index);
     bool is_clockwise_direction = true;
     const uint32_t num_transfers = 4;
     const uint32_t weight_tensor_width = weight_tensor.padded_shape()[3] / 32;
@@ -66,7 +61,7 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
         ttnn::experimental::ccl::MatmulFusedOpSignaler(ttnn::experimental::ccl::MatmulFusedOpSignalerType::ALL_GATHER);
     matmul_fused_op_signaler->init_all_gather(
         num_transfers,
-        ring_size,
+        ag.ring_size,
         ring_index,
         tensor_slicer.num_cols,
         tensor_slicer.output_page_offset,
@@ -75,41 +70,35 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
             weight_tensor_width /* weight_output_page_offset: stride across a tensor slice in the weight_tensor */
     );
 
-    decltype(AllGatherMatmulAsyncSharedVariables::matmul_shared_variables) matmul_shared_variables;
+    // Matmul (first, as before: the all-gather needs the matmul signaler's receiver cores and semaphores)
+    tt::tt_metal::ProgramDescriptor matmul_desc;
     std::visit(
         ttsl::overloaded{
             [&](const operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig& config) {
-                auto cached_program = ttnn::prim::ccl_fusion::matmul_multi_core_reuse_mcast_2d_optimized_helper(
-                    program,
+                ttnn::prim::ccl_fusion::matmul_multi_core_reuse_mcast_2d_optimized_helper(
+                    matmul_desc,
                     all_gather_output_tensor,
                     weight_tensor,
-                    bias,
+                    tensor_args.bias,
                     matmul_output_tensor,
                     bcast_batch,
                     compute_kernel_config,
                     config,
                     untilize_out,
                     matmul_fused_op_signaler);
-                program = std::move(cached_program.program);
-                matmul_shared_variables = std::move(cached_program.shared_variables);
             },
             [&](const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
-                auto cached_program = ttnn::prim::matmul_multi_core_reuse_mcast_1d_optimized_helper(
-                    program,
+                ttnn::prim::ccl_fusion::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+                    matmul_desc,
                     all_gather_output_tensor,
                     {weight_tensor},
-                    bias,
+                    tensor_args.bias,
                     {matmul_output_tensor},
                     bcast_batch,
                     compute_kernel_config,
                     config,
                     untilize_out,
-                    matmul_fused_op_signaler,
-                    std::nullopt,
-                    std::nullopt);
-
-                program = std::move(cached_program.program);
-                matmul_shared_variables = std::move(cached_program.shared_variables);
+                    matmul_fused_op_signaler);
             },
             [&](const auto& /*config*/) {
                 TT_THROW("Unsupported MatmulProgramConfig type. Needs to be 1D or 2D Multicast.");
@@ -125,35 +114,59 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
         matmul_fused_op_signaler->fused_op_signaler_mode);
 
     // All Gather
-    auto all_gather_async_shared_variables = ttnn::build_all_gather_async_minimal_default_program_artifacts(
-        program,
+    tt::tt_metal::ProgramDescriptor all_gather_desc;
+    const auto all_gather_kernels = ttnn::build_all_gather_async_minimal_default_program_descriptor(
+        all_gather_desc,
         input_tensor,
-        target_device_coord,
+        mesh_coord,
         forward_coord,
         backward_coord,
         all_gather_output_tensor,
-        dim,
-        num_links,
-        ring_size,
+        ag.dim,
+        ag.num_links,
+        ag.ring_size,
         ring_index,
-        topology,
-        semaphore,
-        barrier_semaphore,
-        using_persistent_buffers,
-        sub_device_id,
+        ag.topology,
+        ag.semaphore,
+        ag.barrier_semaphore,
+        ag.using_persistent_buffers,
+        ag.sub_device_id,
         all_gather_fused_op_signaler,
-        chunks_per_sync,
-        num_workers_per_direction_opt,
-        num_buffers_per_channel,
-        core_grid_offset,
+        ag.chunks_per_sync,
+        ag.num_workers_per_link,
+        ag.num_buffers_per_channel,
+        operation_attributes.all_gather_core_grid_offset,
         false,  // reverse_order = false by default
         std::nullopt);
+    TT_FATAL(
+        all_gather_kernels.reader_kernel_index == kAllGatherKernels.reader_kernel_index &&
+            all_gather_kernels.writer_kernel_index == kAllGatherKernels.writer_kernel_index,
+        "all_gather_matmul_async: the all-gather reader/writer must be the first two kernels (got {}, {}); the "
+        "cache-hit override depends on it",
+        all_gather_kernels.reader_kernel_index,
+        all_gather_kernels.writer_kernel_index);
 
-    return cached_program_t(
-        {std::move(program),
-         shared_variables_t{
-             .matmul_shared_variables = std::move(matmul_shared_variables),
-             .all_gather_async_shared_variables = all_gather_async_shared_variables}});
+    // The all-gather workers and the matmul cores are separate core sets (all_gather_core_grid_offset); the merge
+    // checks that, and keeps the all-gather's kernels first.
+    return tt::tt_metal::merge_program_descriptors({all_gather_desc, matmul_desc});
+}
+
+}  // namespace
+
+tt::tt_metal::WorkloadDescriptor AllGatherMatmulAsyncProgramFactory::create_workload_descriptor(
+    const AllGatherMatmulAsyncParams& operation_attributes,
+    const AllGatherMatmulAsyncInputs& tensor_args,
+    AllGatherMatmulAsyncResult& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor workload;
+    const auto coords = tensor_coords.coords();
+    workload.programs.reserve(coords.size());
+    for (const auto& coord : coords) {
+        workload.programs.push_back(
+            {ttnn::MeshCoordinateRange(coord),
+             build_program_descriptor(operation_attributes, coord, tensor_args, tensor_return_value)});
+    }
+    return workload;
 }
 
 AllGatherMatmulAsyncMeshWorkloadFactory::cached_mesh_workload_t
@@ -162,66 +175,8 @@ AllGatherMatmulAsyncMeshWorkloadFactory::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const AllGatherMatmulAsyncInputs& tensor_args,
     AllGatherMatmulAsyncResult& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-
-    for (const auto& mesh_coord : tensor_coords.coords()) {
-        const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
-        auto* mesh_device = tensor_args.input_tensor.device();
-        IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : tensor_args.input_tensor.device();
-
-        uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
-            tensor_args.input_tensor, mesh_coord, operation_attributes.all_gather_async_attributes.cluster_axis);
-
-        std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            tensor_args.input_tensor,
-            mesh_coord,
-            1,
-            operation_attributes.all_gather_async_attributes.topology,
-            operation_attributes.all_gather_async_attributes.cluster_axis);
-
-        std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            tensor_args.input_tensor,
-            mesh_coord,
-            -1,
-            operation_attributes.all_gather_async_attributes.topology,
-            operation_attributes.all_gather_async_attributes.cluster_axis);
-
-        auto cached_program = create_at(
-            tensor_args.input_tensor,
-            tensor_return_value[0],
-            tensor_args.weight_tensor,
-            tensor_return_value[1],
-
-            target_device,
-            mesh_coord,
-            forward_coord,
-            backward_coord,
-            operation_attributes.all_gather_async_attributes.dim,
-            operation_attributes.all_gather_async_attributes.num_links,
-            operation_attributes.all_gather_async_attributes.ring_size,
-            device_index,
-            operation_attributes.all_gather_async_attributes.topology,
-            operation_attributes.all_gather_async_attributes.semaphore,
-            operation_attributes.all_gather_async_attributes.barrier_semaphore,
-            operation_attributes.all_gather_async_attributes.using_persistent_buffers,
-            operation_attributes.all_gather_async_attributes.sub_device_id,
-            operation_attributes.all_gather_async_attributes.chunks_per_sync,
-            operation_attributes.all_gather_async_attributes.num_workers_per_link,
-            operation_attributes.all_gather_async_attributes.num_buffers_per_channel,
-            operation_attributes.all_gather_core_grid_offset,
-
-            tensor_args.bias,
-            operation_attributes.matmul.bcast_batch.value(),
-            operation_attributes.matmul.compute_kernel_config.value(),
-            operation_attributes.matmul.program_config.value(),
-            operation_attributes.matmul.untilize_out);
-
-        workload.add_program(single_coord_range, std::move(cached_program.program));
-        shared_variables.emplace(single_coord_range, std::move(cached_program.shared_variables));
-    }
-
-    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
+    return descriptor_adapter_t::create_mesh_workload(
+        operation_attributes, tensor_coords, tensor_args, tensor_return_value);
 }
 
 void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
@@ -229,45 +184,16 @@ void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
     const AllGatherMatmulAsyncParams& operation_attributes,
     const AllGatherMatmulAsyncInputs& tensor_args,
     AllGatherMatmulAsyncResult& tensor_return_value) {
-    // Fuse the override runtime arguments callbacks
-    const auto ccl_args = AllGatherProgramArtifacts::collect_runtime_args(
-        operation_attributes.all_gather_async_attributes.barrier_semaphore,
-        operation_attributes.all_gather_async_attributes.semaphore,
-        tensor_args.input_tensor,
-        tensor_return_value[0]);
+    // Tensor addresses (all-gather input/output, matmul in0/in1/bias/output, tensor-backed CBs).
+    descriptor_adapter_t::apply_descriptor(cached_workload, operation_attributes, tensor_args, tensor_return_value);
+
+    // The caller-owned GlobalSemaphores.
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-
-        std::visit(
-            ttsl::overloaded{
-                [&](const ttnn::prim::ccl_fusion::Mcast2DSharedVariables& mm_shared_variables) {
-                    std::vector<Tensor> matmul_output_tensors = {tensor_return_value[1]};
-                    ttnn::prim::ccl_fusion::override_mcast_2d_runtime_arguments(
-                        program,
-                        mm_shared_variables,
-                        {{tensor_return_value[0], tensor_args.weight_tensor},
-                         {tensor_args.bias},
-                         {tensor_return_value[1]}},
-                        matmul_output_tensors);
-                },
-                [&](const ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t&
-                        mm_shared_variables) {
-                    std::vector<Tensor> matmul_output_tensors = {tensor_return_value[1]};
-                    ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
-                        program,
-                        mm_shared_variables,
-                        operation_attributes.matmul,
-                        {{tensor_return_value[0], tensor_args.weight_tensor},
-                         {tensor_args.bias},
-                         {tensor_return_value[1]}},
-                        matmul_output_tensors);
-                },
-                [&](const auto& /*config*/) {
-                    TT_THROW("Unsupported MatmulProgramConfig type. Needs to be 1D or 2D Multicast.");
-                }},
-            shared_vars.matmul_shared_variables);
-
-        shared_vars.all_gather_async_shared_variables.override_runtime_arguments(ccl_args);
+        ttnn::apply_all_gather_async_minimal_default_semaphore_args(
+            program,
+            kAllGatherKernels,
+            operation_attributes.all_gather_async_attributes.barrier_semaphore,
+            operation_attributes.all_gather_async_attributes.semaphore);
     }
 }
 

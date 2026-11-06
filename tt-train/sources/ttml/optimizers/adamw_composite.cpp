@@ -24,10 +24,13 @@ const std::string kSteps = "steps";
 
 namespace ttml::optimizers {
 
-MorehAdamW::MorehAdamW(serialization::NamedParameters parameters, const AdamWCompositeConfig& config) :
-    OptimizerBase(std::move(parameters)), m_config(config) {
+MorehAdamW::MorehAdamW(
+    serialization::NamedParameters parameters,
+    const AdamWCompositeConfig& config,
+    std::vector<ParamGroup> param_groups) :
+    OptimizerBase(std::move(parameters)) {
     require_bf16_parameters(m_parameters, "MorehAdamW");
-    if (m_config.kahan_summation) {
+    if (config.kahan_summation) {
         throw std::runtime_error("MorehAdamW: Kahan summation is not supported. Use default AdamWComposite instead.");
     }
 
@@ -45,6 +48,7 @@ MorehAdamW::MorehAdamW(serialization::NamedParameters parameters, const AdamWCom
                     /* requires_grad */ false));
         }
     }
+    init_param_groups(param_group_defaults(config), std::move(param_groups));
 }
 
 void MorehAdamW::zero_grad() {
@@ -62,42 +66,55 @@ void MorehAdamW::step() {
     }
 
     m_steps++;
-    for (auto& [key, first_moment_ptr] : m_first_moment) {
-        const auto& tensor_ptr = m_parameters.at(key);
-        if (!tensor_ptr->is_grad_initialized()) {
-            continue;
+    for (const auto& group : m_param_groups) {
+        const float lr = group.options.at("lr");
+        const float beta1 = group.options.at("beta1");
+        const float beta2 = group.options.at("beta2");
+        const float epsilon = group.options.at("epsilon");
+        const float weight_decay = group.options.at("weight_decay");
+
+        for (const auto& key : group.params) {
+            const auto first_moment_it = m_first_moment.find(key);
+            if (first_moment_it == m_first_moment.end()) {
+                continue;  // not trainable
+            }
+            auto& first_moment_ptr = first_moment_it->second;
+            const auto& tensor_ptr = m_parameters.at(key);
+            if (!tensor_ptr->is_grad_initialized()) {
+                continue;
+            }
+            auto& second_moment_ptr = m_second_moment.at(key);
+            // moreh_adamw writes the parameter and the moments in place, through its output tensors.
+            auto param = tensor_ptr->get_value_for_update(autograd::PreferredPrecision::HALF);
+            auto first_moment = first_moment_ptr->get_value_for_update(autograd::PreferredPrecision::HALF);
+            auto second_moment = second_moment_ptr->get_value_for_update(autograd::PreferredPrecision::HALF);
+
+            auto gradients = tensor_ptr->get_grad();
+
+            // By value: the op below relabels its outputs (see optimizers::restore_topology).
+            const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
+
+            ttnn::moreh_adamw(
+                param.tensor(),
+                gradients,
+                first_moment.tensor(),
+                second_moment.tensor(),
+                lr,
+                beta1,
+                beta2,
+                epsilon,
+                weight_decay,
+                m_steps,
+                /* amsgrad */ false,
+                /* max_exp_avg_sq_in */ std::nullopt,
+                /* param_out */ param.tensor(),
+                /* exp_avg_out */ first_moment.tensor(),
+                /* exp_avg_sq_out */ second_moment.tensor(),
+                /* max_exp_avg_sq_out */ std::nullopt,
+                /* memory_config */ std::nullopt,
+                /* compute_kernel_config */ core::ComputeKernelConfig::precise());
+            restore_topology({tensor_ptr, first_moment_ptr, second_moment_ptr}, topology);
         }
-        auto& second_moment_ptr = m_second_moment.at(key);
-        // moreh_adamw writes the parameter and the moments in place, through its output tensors.
-        auto param = tensor_ptr->get_value_for_update(autograd::PreferredPrecision::HALF);
-        auto first_moment = first_moment_ptr->get_value_for_update(autograd::PreferredPrecision::HALF);
-        auto second_moment = second_moment_ptr->get_value_for_update(autograd::PreferredPrecision::HALF);
-
-        auto gradients = tensor_ptr->get_grad();
-
-        // By value: the op below relabels its outputs (see optimizers::restore_topology).
-        const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
-
-        ttnn::moreh_adamw(
-            param.tensor(),
-            gradients,
-            first_moment.tensor(),
-            second_moment.tensor(),
-            m_config.lr,
-            m_config.beta1,
-            m_config.beta2,
-            m_config.epsilon,
-            m_config.weight_decay,
-            m_steps,
-            /* amsgrad */ false,
-            /* max_exp_avg_sq_in */ std::nullopt,
-            /* param_out */ param.tensor(),
-            /* exp_avg_out */ first_moment.tensor(),
-            /* exp_avg_sq_out */ second_moment.tensor(),
-            /* max_exp_avg_sq_out */ std::nullopt,
-            /* memory_config */ std::nullopt,
-            /* compute_kernel_config */ core::ComputeKernelConfig::precise());
-        restore_topology({tensor_ptr, first_moment_ptr, second_moment_ptr}, topology);
     }
 }
 
@@ -106,18 +123,16 @@ void MorehAdamW::step() {
     state_dict[kFirstMoment] = m_first_moment;
     state_dict[kSecondMoment] = m_second_moment;
     state_dict[kSteps] = m_steps;
-    state_dict["lr"] = m_config.lr;
-    save_initial_lr(state_dict);
+    save_param_groups(state_dict);
 
     return state_dict;
 }
 
 void MorehAdamW::set_state_dict(const serialization::StateDict& dict) {
+    restore_param_groups(dict);
     m_first_moment = std::get<serialization::NamedParameters>(dict.at(kFirstMoment));
     m_second_moment = std::get<serialization::NamedParameters>(dict.at(kSecondMoment));
     m_steps = serialization::get_value_type<size_t>(dict, kSteps);
-    set_lr(serialization::get_value_type<float>(dict, "lr"));
-    restore_initial_lr(dict);
 }
 
 [[nodiscard]] size_t MorehAdamW::get_steps() const {
@@ -128,15 +143,11 @@ void MorehAdamW::set_steps(size_t steps) {
     m_steps = steps;
 }
 
-float MorehAdamW::get_lr() const {
-    return m_config.lr;
-}
-void MorehAdamW::set_lr(float lr) {
-    m_config.lr = lr;
-}
-
-AdamWComposite::AdamWComposite(serialization::NamedParameters parameters, const AdamWCompositeConfig& config) :
-    OptimizerBase(std::move(parameters)), m_config(config) {
+AdamWComposite::AdamWComposite(
+    serialization::NamedParameters parameters,
+    const AdamWCompositeConfig& config,
+    std::vector<ParamGroup> param_groups) :
+    OptimizerBase(std::move(parameters)), m_amsgrad(config.amsgrad), m_kahan_summation(config.kahan_summation) {
     require_bf16_parameters(m_parameters, "AdamWComposite");
     for (const auto& [key, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
@@ -150,14 +161,14 @@ AdamWComposite::AdamWComposite(serialization::NamedParameters parameters, const 
                 autograd::create_tensor(
                     core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
                     /* requires_grad */ false));
-            if (m_config.amsgrad) {
+            if (m_amsgrad) {
                 m_max_exp_avg_sq.emplace(
                     key,
                     autograd::create_tensor(
                         core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
                         /* requires_grad */ false));
             }
-            if (m_config.kahan_summation) {
+            if (m_kahan_summation) {
                 m_kahan_compensation.emplace(
                     key,
                     autograd::create_tensor(
@@ -166,6 +177,7 @@ AdamWComposite::AdamWComposite(serialization::NamedParameters parameters, const 
             }
         }
     }
+    init_param_groups(param_group_defaults(config), std::move(param_groups));
 }
 
 void AdamWComposite::zero_grad() {
@@ -183,90 +195,102 @@ void AdamWComposite::step() {
     }
 
     m_steps++;
-    for (auto& [key, first_moment_ptr] : m_first_moment) {
-        const auto& tensor_ptr = m_parameters.at(key);
-        if (!tensor_ptr->is_grad_initialized()) {
-            continue;
-        }
-        auto& second_moment_ptr = m_second_moment.at(key);
-        auto first_moment = first_moment_ptr->get_value(autograd::PreferredPrecision::HALF);
-        auto second_moment = second_moment_ptr->get_value(autograd::PreferredPrecision::HALF);
+    for (const auto& group : m_param_groups) {
+        const float lr = group.options.at("lr");
+        const float beta1 = group.options.at("beta1");
+        const float beta2 = group.options.at("beta2");
+        const float epsilon = group.options.at("epsilon");
+        const float weight_decay = group.options.at("weight_decay");
 
-        auto gradients = tensor_ptr->get_grad();
+        for (const auto& key : group.params) {
+            const auto first_moment_it = m_first_moment.find(key);
+            if (first_moment_it == m_first_moment.end()) {
+                continue;  // not trainable
+            }
+            auto& first_moment_ptr = first_moment_it->second;
+            const auto& tensor_ptr = m_parameters.at(key);
+            if (!tensor_ptr->is_grad_initialized()) {
+                continue;
+            }
+            auto& second_moment_ptr = m_second_moment.at(key);
+            auto first_moment = first_moment_ptr->get_value(autograd::PreferredPrecision::HALF);
+            auto second_moment = second_moment_ptr->get_value(autograd::PreferredPrecision::HALF);
 
-        // By value: the ops below relabel their outputs (see optimizers::restore_topology).
-        const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
+            auto gradients = tensor_ptr->get_grad();
 
-        if (m_config.weight_decay != 0.0F) {
-            auto weight_decay_update = ttnn::multiply(
-                tensor_ptr->get_value(autograd::PreferredPrecision::HALF), m_config.weight_decay * m_config.lr);
-            // weights -= weight_decay * lr * weights
-            tensor_ptr->set_value(
-                ttnn::subtract(tensor_ptr->get_value(autograd::PreferredPrecision::HALF), weight_decay_update));
-        }
+            // By value: the ops below relabel their outputs (see optimizers::restore_topology).
+            const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
 
-        // first moment = beta1 * first moment + (1 - beta1) * gradients
-        first_moment =
-            ttnn::add(ttnn::multiply(first_moment, m_config.beta1), ttnn::multiply(gradients, 1.F - m_config.beta1));
-        // second moment = beta2 * second moment + (1 - beta2) * gradients^2
-        second_moment = ttnn::add(
-            ttnn::multiply(second_moment, m_config.beta2),
-            ttnn::multiply(ttnn::square(gradients), 1.F - m_config.beta2));
-        // first_moment_hat = first_moment / (1 - beta1^steps)
-        auto first_moment_hat =
-            ttnn::multiply(first_moment, static_cast<float>(1.F / (1.F - std::pow(m_config.beta1, m_steps))));
+            if (weight_decay != 0.0F) {
+                auto weight_decay_update =
+                    ttnn::multiply(tensor_ptr->get_value(autograd::PreferredPrecision::HALF), weight_decay * lr);
+                // weights -= weight_decay * lr * weights
+                tensor_ptr->set_value(
+                    ttnn::subtract(tensor_ptr->get_value(autograd::PreferredPrecision::HALF), weight_decay_update));
+            }
 
-        first_moment_ptr->set_value(first_moment);
-        second_moment_ptr->set_value(second_moment);
+            // first moment = beta1 * first moment + (1 - beta1) * gradients
+            first_moment = ttnn::add(ttnn::multiply(first_moment, beta1), ttnn::multiply(gradients, 1.F - beta1));
+            // second moment = beta2 * second moment + (1 - beta2) * gradients^2
+            second_moment =
+                ttnn::add(ttnn::multiply(second_moment, beta2), ttnn::multiply(ttnn::square(gradients), 1.F - beta2));
+            // first_moment_hat = first_moment / (1 - beta1^steps)
+            auto first_moment_hat =
+                ttnn::multiply(first_moment, static_cast<float>(1.F / (1.F - std::pow(beta1, m_steps))));
 
-        // For amsgrad, use the maximum of all past second_moment values
-        ttnn::Tensor denom_tensor;
-        if (m_config.amsgrad) {
-            auto& max_exp_avg_sq_ptr = m_max_exp_avg_sq.at(key);
-            auto max_exp_avg_sq = max_exp_avg_sq_ptr->get_value(autograd::PreferredPrecision::HALF);
-            // max_exp_avg_sq = max(max_exp_avg_sq, second_moment)
-            max_exp_avg_sq = ttnn::maximum(max_exp_avg_sq, second_moment);
-            max_exp_avg_sq_ptr->set_value(max_exp_avg_sq);
-            // Apply bias correction after taking max
-            auto max_exp_avg_sq_hat =
-                ttnn::multiply(max_exp_avg_sq, static_cast<float>(1.0f / (1.0f - std::pow(m_config.beta2, m_steps))));
-            denom_tensor = ttnn::add(ttnn::sqrt(max_exp_avg_sq_hat), m_config.epsilon);
-        } else {
-            // second_moment_hat = second_moment / (1 - beta2^steps)
-            auto second_moment_hat =
-                ttnn::multiply(second_moment, static_cast<float>(1.0f / (1.0f - std::pow(m_config.beta2, m_steps))));
-            denom_tensor = ttnn::add(ttnn::sqrt(second_moment_hat), m_config.epsilon);
-        }
+            first_moment_ptr->set_value(first_moment);
+            second_moment_ptr->set_value(second_moment);
 
-        // weights -= lr * first_moment_hat / (sqrt(denom) + epsilon)
-        auto update_tensor = ttnn_fixed::divide(ttnn::multiply(first_moment_hat, -m_config.lr), denom_tensor);
+            // For amsgrad, use the maximum of all past second_moment values
+            ttnn::Tensor denom_tensor;
+            if (m_amsgrad) {
+                auto& max_exp_avg_sq_ptr = m_max_exp_avg_sq.at(key);
+                auto max_exp_avg_sq = max_exp_avg_sq_ptr->get_value(autograd::PreferredPrecision::HALF);
+                // max_exp_avg_sq = max(max_exp_avg_sq, second_moment)
+                max_exp_avg_sq = ttnn::maximum(max_exp_avg_sq, second_moment);
+                max_exp_avg_sq_ptr->set_value(max_exp_avg_sq);
+                // Apply bias correction after taking max
+                auto max_exp_avg_sq_hat =
+                    ttnn::multiply(max_exp_avg_sq, static_cast<float>(1.0f / (1.0f - std::pow(beta2, m_steps))));
+                denom_tensor = ttnn::add(ttnn::sqrt(max_exp_avg_sq_hat), epsilon);
+            } else {
+                // second_moment_hat = second_moment / (1 - beta2^steps)
+                auto second_moment_hat =
+                    ttnn::multiply(second_moment, static_cast<float>(1.0f / (1.0f - std::pow(beta2, m_steps))));
+                denom_tensor = ttnn::add(ttnn::sqrt(second_moment_hat), epsilon);
+            }
 
-        if (!m_config.kahan_summation) {
-            tensor_ptr->set_value(ttnn::add(tensor_ptr->get_value(autograd::PreferredPrecision::HALF), update_tensor));
-        } else {
-            auto value_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::HALF);
+            // weights -= lr * first_moment_hat / (sqrt(denom) + epsilon)
+            auto update_tensor = ttnn_fixed::divide(ttnn::multiply(first_moment_hat, -lr), denom_tensor);
 
-            const auto& kahan_compensation_ptr = m_kahan_compensation.at(key);
-            // A running compensation for lost low-order bits
-            auto compensation_tensor = kahan_compensation_ptr->get_value(autograd::PreferredPrecision::HALF);
-            // Adjust the update with the compensation
-            auto adjusted_update = ttnn::subtract(update_tensor, compensation_tensor);
-            // Update the value with the adjusted update
-            auto result = ttnn::add(value_tensor, adjusted_update);
-            // (result - value_tensor) cancels the high-order part of adjusted_update;
-            // subtracting adjusted_update recovers negative (low part of adjusted_update)
-            compensation_tensor = ttnn::subtract(ttnn::subtract(result, value_tensor), adjusted_update);
+            if (!m_kahan_summation) {
+                tensor_ptr->set_value(
+                    ttnn::add(tensor_ptr->get_value(autograd::PreferredPrecision::HALF), update_tensor));
+            } else {
+                auto value_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::HALF);
 
-            tensor_ptr->set_value(result);
-            kahan_compensation_ptr->set_value(compensation_tensor);
-        }
+                const auto& kahan_compensation_ptr = m_kahan_compensation.at(key);
+                // A running compensation for lost low-order bits
+                auto compensation_tensor = kahan_compensation_ptr->get_value(autograd::PreferredPrecision::HALF);
+                // Adjust the update with the compensation
+                auto adjusted_update = ttnn::subtract(update_tensor, compensation_tensor);
+                // Update the value with the adjusted update
+                auto result = ttnn::add(value_tensor, adjusted_update);
+                // (result - value_tensor) cancels the high-order part of adjusted_update;
+                // subtracting adjusted_update recovers negative (low part of adjusted_update)
+                compensation_tensor = ttnn::subtract(ttnn::subtract(result, value_tensor), adjusted_update);
 
-        restore_topology({tensor_ptr, first_moment_ptr, second_moment_ptr}, topology);
-        if (m_config.amsgrad) {
-            restore_topology({m_max_exp_avg_sq.at(key)}, topology);
-        }
-        if (m_config.kahan_summation) {
-            restore_topology({m_kahan_compensation.at(key)}, topology);
+                tensor_ptr->set_value(result);
+                kahan_compensation_ptr->set_value(compensation_tensor);
+            }
+
+            restore_topology({tensor_ptr, first_moment_ptr, second_moment_ptr}, topology);
+            if (m_amsgrad) {
+                restore_topology({m_max_exp_avg_sq.at(key)}, topology);
+            }
+            if (m_kahan_summation) {
+                restore_topology({m_kahan_compensation.at(key)}, topology);
+            }
         }
     }
 }
@@ -278,20 +302,18 @@ void AdamWComposite::step() {
     state_dict[kMaxExpAvgSq] = m_max_exp_avg_sq;
     state_dict[kKahanCompensation] = m_kahan_compensation;
     state_dict[kSteps] = m_steps;
-    state_dict["lr"] = m_config.lr;
-    save_initial_lr(state_dict);
+    save_param_groups(state_dict);
 
     return state_dict;
 }
 
 void AdamWComposite::set_state_dict(const serialization::StateDict& dict) {
+    restore_param_groups(dict);
     m_first_moment = std::get<serialization::NamedParameters>(dict.at(kFirstMoment));
     m_second_moment = std::get<serialization::NamedParameters>(dict.at(kSecondMoment));
     m_max_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at(kMaxExpAvgSq));
     m_kahan_compensation = std::get<serialization::NamedParameters>(dict.at(kKahanCompensation));
     m_steps = serialization::get_value_type<size_t>(dict, kSteps);
-    set_lr(serialization::get_value_type<float>(dict, "lr"));
-    restore_initial_lr(dict);
 }
 
 [[nodiscard]] size_t AdamWComposite::get_steps() const {
@@ -302,10 +324,4 @@ void AdamWComposite::set_steps(size_t steps) {
     m_steps = steps;
 }
 
-float AdamWComposite::get_lr() const {
-    return m_config.lr;
-}
-void AdamWComposite::set_lr(float lr) {
-    m_config.lr = lr;
-}
 }  // namespace ttml::optimizers

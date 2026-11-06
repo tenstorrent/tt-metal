@@ -47,7 +47,7 @@ void multicast_data(
     Noc noc,
     MulticastEndpoint mcast_ep,
     bool is_receiver_core,
-    SrcDFB src_cb,
+    SrcDFB& src_cb,
     uint32_t src_offset,
     McastDst& dst,
     uint32_t total_bytes) {
@@ -91,9 +91,9 @@ template <
 void mcast_block_chunked(
     Noc noc,
     MulticastEndpoint mcast_ep,
-    SrcDFB src_cb_obj,
+    SrcDFB& src_cb_obj,
     bool is_receiver_core,
-    DstDFB dst_cb_obj,
+    DstDFB& dst_cb_obj,
     const McastRect& rect) {
     // Build mcast dst once; only .addr is updated per burst
     // number of full bursts
