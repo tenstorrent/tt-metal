@@ -143,6 +143,10 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
     kda_factory_detail::check_fp32_dest_acc(
         attrs.compute_kernel_config, operation_name, "the hop adds the FP32 entry state and B exactly in DST");
+    TT_FATAL(
+        attrs.compute_kernel_config.math_fidelity != tt::tt_metal::MathFidelity::LoFi,
+        "{}: LoFi is unsupported because B enters the hop as I @ B, exact only from HiFi2 on",
+        operation_name);
 }
 
 RelayAffinePrefixOperation::spec_return_value_t RelayAffinePrefixOperation::compute_output_specs(
