@@ -11,7 +11,7 @@ from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import is_blackhole, torch2tt_tensor
+from models.common.utility_functions import is_blackhole
 from models.demos.vision.classification.vit.blackhole.tt import ttnn_optimized_sharded_vit_bh
 from models.demos.vision.classification.vit.common.common import load_torch_model
 from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import get_batch, get_data_loader
@@ -76,29 +76,14 @@ def test_vit(device, model_location_generator):
         batch_size, img_h, img_w, img_c = torch_pixel_values.shape  # permuted input NHWC
         patch_size = config.patch_size
         torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
-        N, H, W, C = torch_pixel_values.shape
-        shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(11, 1),
-                ),
-            }
-        )
-        n_cores = 16
-        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
-
-        output = None
-        pixel_values = torch2tt_tensor(
+        pixel_values = ttnn.from_torch(
             torch_pixel_values,
-            device,
-            ttnn.ROW_MAJOR_LAYOUT,
-            tt_memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                shard_spec,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn_optimized_sharded_vit_bh.pixel_values_memory_config(
+                config, device, torch_pixel_values.shape
             ),
-            tt_dtype=ttnn.bfloat16,
         )
 
         output = ttnn_optimized_sharded_vit_bh.vit(
