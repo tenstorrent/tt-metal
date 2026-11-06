@@ -1,0 +1,7 @@
+# Terminal server-sized native-message retention preparation
+
+Goal: prepare the next eligible normal Terminal rung with the same frozen nightly ten tasks, C2/B8 and peers disabled, while enabling stock Harbor `agent_kwargs.store_all_messages=true`. No additional CI run or device work. Device budget: zero hours.
+
+Base TTI: 4b94cf3ba86d30a6816149872e59cc34438748ae (rebased from the initial e1bc916 candidate). Isolated worktree: /home/mvasiljevic/gemma4-31b-pipeline-v3/tti-terminal-native-history, branch prep/terminal-native-history. Only the model-specific eval configuration and its corresponding test expectations may change. Run focused model and Harbor tests and repository hooks after rebasing. Preserve limits, sampling, task CPU/memory defaults, dependencies, model revision, serving settings and phase export.
+
+Confirmation: compare parsed model configuration against base, checking that changes are limited to peer selection, frozen Terminal nightly cohort/limit and metadata retention; resolve stock Harbor kwargs and verify retention true. Reuse the paired stock Chat/export check in ../native-history-retention/check_export.py proving identical requests with and without retention. Prepare a source-only local commit and patch; coordinator owns publication and dispatch. Live final metadata confirmation is pending the next normal rung, including summarization/unwind and coverage checks; final retained history is not automatically a complete request trace.

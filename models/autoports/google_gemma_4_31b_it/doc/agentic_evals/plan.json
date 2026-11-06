@@ -826,7 +826,7 @@
       "eval": "terminal_bench_2_1",
       "device": "qb2-ci",
       "owner": "coordinator",
-      "status": "building_or_queued",
+      "status": "device_job_in_progress",
       "queued_at": "2026-11-06T10:54:39.812689+00:00",
       "planned_clients": 2,
       "batch": 8,
@@ -864,10 +864,15 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42206258311",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T11:34:15.517260+00:00",
+      "last_observed_at": "2026-11-06T11:50:29.286920+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-x6kzj",
       "build_started_at": "2026-11-06T10:55:05Z",
-      "build_completed_at": null
+      "build_completed_at": "2026-11-06T11:47:58Z",
+      "runner": "qb2-120-p05t06",
+      "device_job_id": 127875630165,
+      "device_job_started_at": "2026-11-06T11:48:00Z",
+      "device_job_completed_at": null,
+      "start": "2026-11-06T11:48:00Z"
     },
     {
       "arm": "full-gpqa-observable",
@@ -906,7 +911,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42208934357",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T11:34:52.998245+00:00",
+      "last_observed_at": "2026-11-06T11:50:05.859628+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-l229t",
       "build_started_at": "2026-11-06T11:16:03Z",
       "build_completed_at": null
@@ -954,14 +959,30 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42210467509",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T11:34:12.199380+00:00",
+      "last_observed_at": "2026-11-06T11:50:26.720091+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-kd74g",
       "build_started_at": "2026-11-06T11:28:23Z",
       "build_completed_at": null
+    },
+    {
+      "arm": "measured-workload-idle-regime",
+      "owner": "coordinator",
+      "device": "local",
+      "status": "queued",
+      "queued_at": "2026-11-06T11:46:58.004182+00:00",
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "predicted_hours": 0.2,
+      "box_hours": 0.35,
+      "timeout_seconds": 1260,
+      "regime": "Serial TT mesh1x4, HF CPU reference finished; ordinary host activity recorded",
+      "owner_check": [],
+      "prediction_basis": "Prior .2758h included CPU-contended startup and failed client retry; .20h current guess, exact previous successful protocol."
     }
   ],
   "status": "valid_gpqa_nightly_terminal_smoke_swe_repair_inflight",
-  "last_updated": "2026-11-06T11:35:49.925807+00:00",
+  "last_updated": "2026-11-06T11:50:44.090784+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -1294,7 +1315,9 @@
     },
     {
       "start": "2026-11-06T11:05:29.560934+00:00",
-      "reason": "Two native replays completed without loop; stopped seed probing by plan. Await full-prefix HF comparison before choosing further device work; no faithful C4 histories available. CI carries three active task/eval jobs."
+      "reason": "Two native replays completed without loop; stopped seed probing by plan. Await full-prefix HF comparison before choosing further device work; no faithful C4 histories available. CI carries three active task/eval jobs.",
+      "end": "2026-11-06T11:47:34.390258+00:00",
+      "resolution": "HF reference completed; useful same-protocol idle-host measurement now scheduled."
     }
   ]
 }

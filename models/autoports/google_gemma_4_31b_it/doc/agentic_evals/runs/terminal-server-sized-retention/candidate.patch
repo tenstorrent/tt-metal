@@ -1,0 +1,53 @@
+diff --git a/reference_config/evals/eval_config.py b/reference_config/evals/eval_config.py
+index ab9df57..1ee40a4 100644
+--- a/reference_config/evals/eval_config.py
++++ b/reference_config/evals/eval_config.py
+@@ -11972,7 +11972,7 @@ _eval_config_list = [
+                 doc_ids=list(range(198)),
+                 limit_samples_map={
+                     EvalLimitMode.SMOKE_TEST: 2,
+-                    EvalLimitMode.CI_NIGHTLY: 198,
++                    EvalLimitMode.CI_NIGHTLY: 0,
+                 },
+             ),
+             EvalTask(
+@@ -12041,6 +12041,7 @@ _eval_config_list = [
+                     agent_timeout_sec=21600,
+                     agent_kwargs={
+                         "parser_name": "json",
++                        "store_all_messages": True,
+                         "temperature": 1.0,
+                         "model_info": {
+                             "max_input_tokens": 262144,
+@@ -12057,16 +12058,27 @@ _eval_config_list = [
+                         },
+                     },
+                     task_names_map={
+-                        mode: [
++                        EvalLimitMode.SMOKE_TEST: [
+                             "terminal-bench/llm-inference-batching-scheduler",
+                             "terminal-bench/mailman",
+-                        ]
+-                        for mode in (EvalLimitMode.SMOKE_TEST, EvalLimitMode.CI_NIGHTLY)
++                        ],
++                        EvalLimitMode.CI_NIGHTLY: [
++                            "terminal-bench/llm-inference-batching-scheduler",
++                            "terminal-bench/mailman",
++                            "terminal-bench/db-wal-recovery",
++                            "terminal-bench/winning-avg-corewars",
++                            "terminal-bench/feal-linear-cryptanalysis",
++                            "terminal-bench/fix-code-vulnerability",
++                            "terminal-bench/constraints-scheduling",
++                            "terminal-bench/sparql-university",
++                            "terminal-bench/dna-insert",
++                            "terminal-bench/video-processing",
++                        ],
+                     },
+                 ),
+                 limit_samples_map={
+                     EvalLimitMode.SMOKE_TEST: 2,
+-                    EvalLimitMode.CI_NIGHTLY: 0,
++                    EvalLimitMode.CI_NIGHTLY: 10,
+                 },
+             ),
+         ],

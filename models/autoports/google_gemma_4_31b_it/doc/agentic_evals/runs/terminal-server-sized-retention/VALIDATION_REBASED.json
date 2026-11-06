@@ -1,0 +1,39 @@
+{
+  "status": "prepared_not_published",
+  "base": "4b94cf3ba86d30a6816149872e59cc34438748ae",
+  "candidate_commit": "296fdd5f9eb066ab1404ec082002930ffce0eb18",
+  "supersedes_candidate": "8ecf84988486c4e53407cbbe5d3c9002ded8a0be",
+  "files": [
+    "reference_config/evals/eval_config.py",
+    "tests/workflows/test_gemma4_autoport_smoke_suites.py"
+  ],
+  "selection": {
+    "terminal": 10,
+    "gpqa": 0,
+    "swe": 0,
+    "planned_clients": 2,
+    "batch": 8
+  },
+  "retention": true,
+  "validation": {
+    "focused": "34 passed in 7.31s",
+    "configuration_equivalence_and_stock_paired_export": "pass",
+    "hooks": {
+      "ruff": "pass",
+      "ruff_format": "pass",
+      "pytest": "pass",
+      "copyright": "pass"
+    },
+    "hook_environment": "TT_METAL_HOME and vllm_dir unset for test process only; PRE_COMMIT_HOME=/tmp/tti-retention-precommit",
+    "initial_hook_failure": "3773 passed,15 skipped,1 failure: CLI default expected None but inherited TT_METAL_HOME; no source fix required",
+    "concurrent_agent_note": "Another agent checked same worktree; its73-test run is not counted as independent confirmation. Final diff reconciled before commit."
+  },
+  "evidence": [
+    "check_candidate_rebased.py",
+    "../native-history-retention/check_export.py",
+    "candidate-rebased.patch"
+  ],
+  "device_hours": 0,
+  "publication_writes": false,
+  "pending": "Coordinator publication and next normal rung final metadata completeness confirmation; no extra dispatch."
+}

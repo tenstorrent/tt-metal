@@ -1,0 +1,50 @@
+{
+  "status": "prepared_not_dispatched",
+  "base": "e1bc9167b26c2d34379f8e80bec541364c995739",
+  "candidate_commit": "8ecf84988486c4e53407cbbe5d3c9002ded8a0be",
+  "branch": "prep/terminal-native-history",
+  "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-terminal-native-history",
+  "source_changes": [
+    "reference_config/evals/eval_config.py"
+  ],
+  "planned_clients": 2,
+  "supported_batch": 8,
+  "terminal_tasks": 10,
+  "peer_limits": {
+    "r1_gpqa_diamond": 0,
+    "swe_bench_verified": 0
+  },
+  "store_all_messages": true,
+  "checks": {
+    "configuration_ast_equivalence_except_authorized_changes": "pass",
+    "frozen_smoke_and_nightly_cohort_match": "pass",
+    "stock_harbor_resolved_kwargs_retention_true": "pass",
+    "stock_chat_paired_requests_unchanged": "pass",
+    "git_diff_check": "pass"
+  },
+  "unchanged": [
+    "C2 admission",
+    "serving B8",
+    "model revision",
+    "dependency pins",
+    "phase export",
+    "task CPU and memory defaults",
+    "generation and timeout limits",
+    "sampling and parser",
+    "runtime source"
+  ],
+  "device_hours": 0,
+  "evidence": [
+    "check_candidate.py",
+    "../native-history-retention/check_export.py",
+    "candidate.patch"
+  ],
+  "pending": [
+    "Coordinator publication and next eligible normal rung dispatch",
+    "Final trial result metadata all_messages and completeness checks; summaries or unwinds may remove earlier prefixes"
+  ],
+  "limitations": [
+    "This is a host-only preparation, not a live metadata or capacity claim.",
+    "No extra CI run was dispatched."
+  ]
+}

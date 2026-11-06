@@ -1,0 +1,116 @@
+{
+  "status": "diagnostic_confirmation_complete_root_cause_open",
+  "goal": "Distinguish full-prefix tokenization/numerical divergence from inherent-model or native-parser explanations for original Django capped loop without raising limits.",
+  "confirmation_scope": "Pinned HF and TT full60 compare one next-token logit row after entire reconstructed42823-token prefix; two native diagnostic replays preserve release sampling/limits. No accuracy or inherent-model verdict.",
+  "device_hours": 0.540240841111111,
+  "device_hour_box": 1.0,
+  "speed_credit_hours": 0,
+  "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "prefix_tokens": 42823,
+  "case_sha256": "4474ca423162476efeb212b722e4aaa78724074b1d0760f27ea3fba7c23aabf2",
+  "original_failure": {
+    "assistant_message_index": 148,
+    "completion_tokens": 32768,
+    "command_chars": 57451,
+    "repeated_a_units": 8140,
+    "finish_reason": "tool_calls",
+    "response_envelope_seconds": 1281.434,
+    "still_failure": true,
+    "sampling_seed": null
+  },
+  "conditional_comparison": {
+    "kl_hf_tt": 0.13518481679154684,
+    "js": 0.03378935795113552,
+    "centered_max_abs_logit_error": 14.140085278761944,
+    "top1_equal": true,
+    "release_top20_top_p95_kl_hf_tt": null,
+    "release_kl_infinite_due_to_zero_support": true
+  },
+  "comparison_evidence": "bringup/artifacts/django-cap-loop/comparison/result.json",
+  "hf": {
+    "source": "bringup/artifacts/django-cap-loop/hf512-extended-single/result.json",
+    "full_layers": 60,
+    "chunk_tokens": 512,
+    "elapsed_seconds": 5007.956094684079,
+    "peak_rss_mib": 99583.125,
+    "short_cache_control": {
+      "kl_hf_tt": 0.0,
+      "js": -4.122294090007072e-17,
+      "centered_max_abs_logit_error": 0.0,
+      "top1_equal": true,
+      "release_top20_top_p95_kl_hf_tt": 0.0,
+      "release_kl_infinite_due_to_zero_support": false
+    },
+    "cpu_budget_seconds": 7100
+  },
+  "tt": {
+    "source": "bringup/artifacts/django-cap-loop/tt-b8-retry/result.json",
+    "full_layers": 60,
+    "batch": 8,
+    "elapsed_host_seconds_including_setup": 332.07758247700986,
+    "precision_config_id": "head_bfp4"
+  },
+  "native_replays": [
+    {
+      "seed": 0,
+      "planned_clients": 1,
+      "served_batch": 8,
+      "prompt_tokens": 42823,
+      "prompt_ids_exact_reconstructed_case": true,
+      "generated_tokens": 200,
+      "reasoning_tokens": 33,
+      "elapsed_seconds": 30.90571414900478,
+      "finish_reason": "tool_calls",
+      "at_output_cap": false,
+      "detected_repetition": null,
+      "request_sha256": "ca17398779e9e06d37334bec15c2a4e24cda2f2dc0ebdd56bfb9c3217a93d049",
+      "summary": "bringup/artifacts/django-cap-loop/native-replay-seed0/summary.json",
+      "raw_response": "bringup/artifacts/django-cap-loop/native-replay-seed0/response.json",
+      "raw_generated_ids": "bringup/artifacts/django-cap-loop/native-replay-seed0/generated-token-ids.json",
+      "request_evidence": "bringup/artifacts/django-cap-loop/native-replay-request.json"
+    },
+    {
+      "seed": 1,
+      "planned_clients": 1,
+      "served_batch": 8,
+      "prompt_tokens": 42823,
+      "prompt_ids_exact_reconstructed_case": true,
+      "generated_tokens": 1043,
+      "reasoning_tokens": 1000,
+      "elapsed_seconds": 69.13062448101118,
+      "finish_reason": "tool_calls",
+      "at_output_cap": false,
+      "detected_repetition": null,
+      "request_sha256": "f0739639df8b3555a2cfbf8eb3883a3d3f06c40c64cc52829fd2f6e1061d6833",
+      "summary": "bringup/artifacts/django-cap-loop/native-replay-seed1/summary.json",
+      "raw_response": "bringup/artifacts/django-cap-loop/native-replay-seed1/response.json",
+      "raw_generated_ids": "bringup/artifacts/django-cap-loop/native-replay-seed1/generated-token-ids.json",
+      "request_evidence": "bringup/artifacts/django-cap-loop/native-replay-seed1/request.json"
+    }
+  ],
+  "predictions_vs_results": [
+    {
+      "prediction": "Full-prefix conditional comparison can detect numerical disagreement, but does not independently establish loop cause.",
+      "result": "KL0.1351848168 and JS0.033789358 with equal top1; release-truncated supports differ. Precision/runtime causation remains unresolved."
+    },
+    {
+      "prediction": "Initial CPU pilot fits3500s only if measured remaining projection permits; extend to7100s after measured forecast.",
+      "result": "Pilot stopped as planned at3072tokens; single full attempt completed5007.956s, within extended budget. Earlier ~1.05h projection underestimated actual1.3911h."
+    },
+    {
+      "prediction": "Replay budget uses original1281.434s response, with final seed1 forecast0.48deviceh including390s startup; stop after two seeds.",
+      "result": "Seed0 response30.9057s/200tokens; seed1 69.1306s/1043tokens; neither reproduced loop. Total effort0.540240841111deviceh below1h. No speed improvement claimed."
+    }
+  ],
+  "changes": "Private diagnostic/payload preparation only; no precision, output-cap, timeout or model-runtime repair accepted by this effort. Tokenization preparation corrected structured-chat whitespace and request-mutation transport bug.",
+  "limitations": [
+    "Original runtime token IDs and original sampling seed were not saved. Reconstructed prefix matches original recorded count and exact current stock tokenize/server IDs, not proven original ID identity.",
+    "One selected row at the pre-generation boundary cannot test later loop-onset distributions, long decode drift or historical concurrent scheduler state.",
+    "HF control is conditional logits, not a matching full stochastic generation. Two finite TT outputs do not establish quality accuracy or inherent-model behavior.",
+    "Infinite release-support KL is represented by null plus explicit zero-support flag, not a fabricated finite value.",
+    "No tool commands executed. Native repetition scan checks short periodic patterns and the original repeated-a unit, not every possible semantic loop.",
+    "Original11 discarded FormatError responses have no saved raw token/usage evidence; cannot assign them inferred cap counts.",
+    "Two duplicate CPU launches were stopped and shared output invalidated; only uniquely named single attempt is used. See handoff-note.md."
+  ],
+  "next_action": "No more stochastic probes. Preserve original failure and prioritize capturing raw response/usage for future normal-rung malformed or capped events; only a reproduced raw onset justifies a new matched HF/TT conditional probe at that onset. Continue scheduled rungs without changing limits."
+}
