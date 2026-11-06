@@ -418,7 +418,7 @@
   arch: arch-blackhole
   tt-config: '{"fabric_config": "FABRIC_1D_RING", "trace_region_size": 1073741824, "l1_small_size": 24576, "decode_interleave_prefill_steps": 1, "long_prefill_alone_threshold": 16384, "max_concurrent_partial_prefills": 1, "prefill_chunk_cap_table": [[0, 16384], [131072, 8192]]}'
   additional-server-args: >-
-    --data_parallel_size 4 --max_num_seqs 8 --max_model_len 262144 --max_num_batched_tokens 525312 --async-scheduling --enable-chunked-prefill --long_prefill_token_threshold 16384 --enable-prefix-caching --limit-mm-per-prompt '{"image":1,"video":1}' --mm-processor-cache-gb 0 --mm-processor-kwargs '{"max_pixels":1048576}' --media-io-kwargs '{"video":{"num_frames":16}}' --speculative-config '{"method":"custom_class","model":"vllm_tt_plugin.model_owned_drafter","num_speculative_tokens":3}' --block_size 64
+    --data_parallel_size 4 --max_num_seqs 8 --max_model_len 262144 --max_num_batched_tokens 525312 --async-scheduling --enable-chunked-prefill --long_prefill_token_threshold 16384 --enable-prefix-caching --limit-mm-per-prompt.image 1 --limit-mm-per-prompt.video 1 --mm-processor-cache-gb 0 --mm-processor-kwargs.max_pixels 1048576 --media-io-kwargs.video.num_frames 16 --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 3 --block_size 64
   additional-benchmark-args: "--num-prompts 128 --max-concurrency 32 --random-input-len 2000 --random-output-len 200 --tokenizer $HF_MODEL_LOCAL"
   hf-snapshot-revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
   default-chat-template-kwargs: '{"enable_thinking": false}'
@@ -462,7 +462,7 @@
   arch: arch-blackhole
   tt-config: '{"fabric_config": "FABRIC_1D_RING", "trace_region_size": 1073741824, "l1_small_size": 24576, "decode_interleave_prefill_steps": 1, "long_prefill_alone_threshold": 16384, "max_concurrent_partial_prefills": 1, "prefill_chunk_cap_table": [[0, 16384], [131072, 8192]]}'
   additional-server-args: >-
-    --data_parallel_size 4 --max_num_seqs 8 --max_model_len 262144 --max_num_batched_tokens 525312 --async-scheduling --enable-chunked-prefill --long_prefill_token_threshold 16384 --enable-prefix-caching --limit-mm-per-prompt '{"image":1,"video":1}' --mm-processor-cache-gb 0 --mm-processor-kwargs '{"max_pixels":1048576}' --media-io-kwargs '{"video":{"num_frames":16}}' --speculative-config '{"method":"custom_class","model":"vllm_tt_plugin.model_owned_drafter","num_speculative_tokens":3}' --block_size 1024 --prefix-cache-retention-interval 1024
+    --data_parallel_size 4 --max_num_seqs 8 --max_model_len 262144 --max_num_batched_tokens 525312 --async-scheduling --enable-chunked-prefill --long_prefill_token_threshold 16384 --enable-prefix-caching --limit-mm-per-prompt.image 1 --limit-mm-per-prompt.video 1 --mm-processor-cache-gb 0 --mm-processor-kwargs.max_pixels 1048576 --media-io-kwargs.video.num_frames 16 --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 3 --block_size 1024 --prefix-cache-retention-interval 1024
   additional-benchmark-args: "--num-prompts 128 --max-concurrency 32 --random-input-len 2000 --random-output-len 200 --tokenizer $HF_MODEL_LOCAL"
   hf-snapshot-revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
   default-chat-template-kwargs: '{"enable_thinking": false}'
