@@ -746,6 +746,8 @@ def _determine_device_name(mesh_device: ttnn.MeshDevice) -> str:
             2: "P300",
             4: "P150x4",
             8: "P150x8",
+            # Only a Galaxy carved into 4x4 stages has 16 Blackhole chips in one mesh.
+            16: "BHGLX_4x4",
             32: "BHGLX",
         }
     elif "wormhole_b0" in arch_name:
@@ -789,6 +791,7 @@ def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None)
         "P150x8": (2, 2),
         "P300": (2, 2),
         "BHGLX": (2, 2),  # NOTE: Possible increase to 4 when it's enabled
+        "BHGLX_4x4": (2, 2),  # a stage keeps the Galaxy's links on both axes
         "TG": (4, 4),
         "N150x4": (1, 1),
     }
@@ -796,5 +799,32 @@ def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None)
     if cluster_axis is None:
         return min(device_links)
     if cluster_axis in (0, 1):
-        return device_links[cluster_axis]
+        # The table is what the box is cabled for; a carved stage or a degraded cable can leave
+        # an axis fewer live links, and asking a collective for one more than a hop has fails it.
+        live = _live_links_on_axis(mesh_device, cluster_axis)
+        return device_links[cluster_axis] if live is None else min(device_links[cluster_axis], live)
     return min(device_links)
+
+
+def _live_links_on_axis(mesh_device: ttnn.MeshDevice, cluster_axis: int) -> int | None:
+    """The fewest fabric links any hop along `cluster_axis` forwards on, or None where the
+    fabric is not up to ask."""
+    shape = tuple(mesh_device.shape)
+    if len(shape) != 2 or shape[cluster_axis] < 2:
+        return None
+    try:
+        fewest = None
+        for row in range(shape[0]):
+            for col in range(shape[1]):
+                src = [row, col]
+                if src[cluster_axis] + 1 == shape[cluster_axis]:
+                    continue
+                dst = list(src)
+                dst[cluster_axis] += 1
+                src_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(src))
+                dst_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(dst))
+                count = len(ttnn.get_forwarding_link_indices(mesh_device, src_node, dst_node))
+                fewest = count if fewest is None else min(fewest, count)
+        return fewest or None
+    except RuntimeError:
+        return None

@@ -321,7 +321,7 @@
     # reference case to pretrained weights when it sees that variable.
 
     k3_contracts() (
-      timeout -k 2m 10m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export LOGURU_LEVEL=INFO
         export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
@@ -336,6 +336,13 @@
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
           models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
           models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
+        python3 -m pytest -vvv --tb=short -k "torusxy-mesh-8x4" \
+          models/demos/deepseek_v3_d_p/tests/attn_res/model/test_forward_loop.py::test_split_loop_matches_reference
+        # AttnRes determinism on the full torus: each op, then a whole block of reads, many runs without a sync.
+        python3 -m pytest -vvv --tb=short \
+          tests/ttnn/unit_tests/operations/experimental/test_attn_res_determinism.py -k "torusxy-mesh-8x4"
+        python3 -m pytest -vvv --tb=short -k "torusxy-mesh-8x4" \
+          models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_contract.py::test_read_repeats_exactly_without_disturbing_its_inputs
       '
     )
 
@@ -384,9 +391,9 @@
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (10 + 12 + 12 + 12),
-      # so the time budget for this bucket is unchanged by the fold.
-      timeout: 46
+      # Exactly the sum of the per-section bounds (12 + 12 + 12 + 12),
+      # with 2 min added to [1/4] for the AttnRes determinism tests.
+      timeout: 48
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
@@ -407,6 +414,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and torus-xy-8x4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py::test_attn_res_layer_perf -k "SP8xTP4" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_op_perf.py::test_attn_res_op_perf -k "SP8xTP4" -vvv --tb=short
     '
   test_type: k3_mla_perf
   test_tags: [kimi_k3, kda, mla, k3_kda_perf]
