@@ -21,6 +21,7 @@ Needs vLLM 0.31 and vllm-tt-plugin (src/ on PYTHONPATH), and the ttnn host stub 
 """
 
 import contextlib
+import inspect
 import json
 from types import SimpleNamespace
 
@@ -53,7 +54,7 @@ from vllm.v1.request import Request  # noqa: E402
 from vllm.v1.structured_output import StructuredOutputManager  # noqa: E402
 from vllm_tt_plugin.config import store_tt_spec_plan  # noqa: E402
 from vllm_tt_plugin.mamba_state import mamba_cache_groups  # noqa: E402
-from vllm_tt_plugin.scheduler import TTScheduler  # noqa: E402
+from vllm_tt_plugin.scheduler import TTScheduler, get_tt_mamba_checkpoints  # noqa: E402
 from vllm_tt_plugin.spec_admission import MODEL_OWNED_DRAFT_METHOD, MODEL_OWNED_DRAFT_SENTINEL  # noqa: E402
 from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, DRAFTER_STATE_INTERNAL, SpecPlan  # noqa: E402
 
@@ -302,6 +303,13 @@ class _BookAsState(sbs.SpecBlockBook):
     def set_step(self, blocks, start_col, live_rows, boundary=()):
         super().set_step(blocks, start_col, live_rows, boundary)
 
+    def write_checkpoint(self, blocks):
+        """SpecGdnBlockState.write_checkpoint on the fake device: the bound scratch (``scratch``, the label the
+        harness's segment loop left there) into one block per group."""
+        for g, b in enumerate(blocks):
+            self.forget_block(b)
+            self.dev.write_block(g, b, self.scratch)
+
 
 class _Harness:
     def __init__(
@@ -316,6 +324,7 @@ class _Harness:
         retention=0,
         max_model_len=8192,
         budget=2048,
+        checkpoint=False,
     ):
         (tmp_path / "config.json").write_text(json.dumps(_QWEN2))
         model_config = ModelConfig(model=str(tmp_path), dtype="float16", seed=0, skip_tokenizer_init=True)
@@ -347,6 +356,7 @@ class _Harness:
             num_speculative_blocks=K,
             mamba_cache_mode=mode,
             mamba_block_size=mamba_bs,
+            prefill_checkpoint_alignment=block if checkpoint else None,
         )
         groups = get_kv_cache_groups(cfg, specs)
         page = next(iter(specs.values())).page_size_bytes
@@ -390,6 +400,9 @@ class _Harness:
         lay = _layout(tp, block, n_banks, layout, num_blocks)
         self.book = _BookAsState(lay, len(self.mamba), B, T, mode, block if mode == "align" else 0)
         self.dev = _FakeDevice(lay, len(self.mamba))
+        self.book.dev = self.dev
+        self.prefill_steps = {}  # request id -> prefill steps of its prompt
+        self.checkpoint_writes = []  # (request id, n) of every prefill checkpoint state written
         self.eng = _EngineStub(self.book, block)
         self.req_states = {}
         self.row_of = {}  # request id -> engine row
@@ -481,9 +494,15 @@ class _Harness:
             self.book.forget_block(b)
             self.dev.zero(b)
         self._copies([(c.src_block_id, c.dst_block_id) for c in out.kv_cache_block_copies or ()])
-        # the position of each scheduled row's first query token (synchronous scheduling: vLLM's computed tokens)
-        positions = {r: st.num_computed_tokens for r, st in self.req_states.items()}
-        self._copies(self.groups.begin_step(out, self.req_states, positions, self.plugin_counts))
+        # Synchronous scheduling: each row's first query position is the scheduler's num_computed_tokens. The plugin of
+        # vllm-tt-plugin#280 takes these positions; the older one reads the request states.
+        positions = {r: self.req_states[r].num_computed_tokens for r in out.num_scheduled_tokens}
+        new_api = "num_computed" in inspect.signature(self.groups.begin_step).parameters
+        self._copies(
+            self.groups.begin_step(out, self.req_states, positions, self.plugin_counts)
+            if new_api
+            else self.groups.begin_step(out, self.req_states, self.plugin_counts)
+        )
         req_ids = list(out.num_scheduled_tokens)
         width = self.groups.max_num_blocks(self.max_model_len)
         tables = []
@@ -494,7 +513,12 @@ class _Harness:
                 t[row, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
             tables.append(t)
         inputs = self.groups.step_inputs(
-            tables, req_ids, positions, out.num_scheduled_tokens, list(range(len(tables))), len(req_ids)
+            tables,
+            req_ids,
+            positions if new_api else self.req_states,
+            out.num_scheduled_tokens,
+            list(range(len(tables))),
+            len(req_ids),
         )
         rows_prefill, rows_verify = [], []
         for row, r in enumerate(req_ids):
@@ -509,6 +533,15 @@ class _Harness:
             self.book.set_prefill_blocks(
                 [inputs.state_block_ids_per_layer[g][[row for row, _ in rows_prefill], 0] for g in self.mamba]
             )
+            # TTModelRunner's prefill checkpoint inputs: the rows of this prefill step, in its order
+            ckpt_ids, ckpt_pos = self.groups.checkpoint_inputs(
+                get_tt_mamba_checkpoints(out),
+                [r for _, r in rows_prefill],
+                self.req_states,
+                list(range(len(self.kv.kv_cache_groups))),
+                len(rows_prefill),
+            )
+            self.book.set_prefill_checkpoints([ckpt_ids[g] for g in self.mamba], ckpt_pos)
             for i, (row, r) in enumerate(rows_prefill):
                 req = sched.requests[r]
                 nc, ns = self.req_states[r].num_computed_tokens, out.num_scheduled_tokens[r]
@@ -517,11 +550,21 @@ class _Harness:
                 final = L >= req.num_prompt_tokens
                 u = self._claim_row(r)
                 self.book.forget_row(u)
+                self.prefill_steps[r] = self.prefill_steps.get(r, 0) + 1
                 plan = self.eng._paged_plan(nc, L, None, final, i)
                 for g in range(len(self.mamba)):
                     b = self.book.prefill_block(g, i)
                     if plan is not None and plan[0] > 0:
                         assert self.dev.read_block(g, b) == (_label(tokens[:nc]),) * 2, ("restore", r, nc, g, b)
+                # _prefill_fast / _prefill_for_spec_resumable: a segment ends at each save point, and the bound scratch
+                # then holds the state after tokens[:n]
+                points = plan[2] if plan is not None else []
+                for n in points:
+                    self.book.scratch = _label(tokens[:n])
+                    points.save(n)
+                    self.checkpoint_writes.append((r, n))
+                for g in range(len(self.mamba)):
+                    b = self.book.prefill_block(g, i)
                     self.book.forget_block(b)
                     self.dev.write_block(g, b, _label(tokens[:L]))
                 if plan is not None and plan[0] > 0:
@@ -758,6 +801,68 @@ def test_a_chunk_that_ends_inside_a_block_is_recomputed(tmp_path):
     h.add("a", _prompt(12, 2600), max_tokens=8)
     h.run()
     assert all(s % 1024 == 0 for r, s, _ in h.resumes if r == "a"), h.resumes
+
+
+CKPT_LENGTHS = (900, 1500, 2048, 2049, 2050, 3000, 3100)
+
+
+def _checkpoint_run(tmp_path, retention, checkpoint):
+    """Each prompt of CKPT_LENGTHS alone (they fit one 4096-token chunk), then its follow-up (the prompt + 300
+    tokens)."""
+    tmp_path.mkdir()
+    h = _Harness(tmp_path, "align", retention=retention, budget=4096, checkpoint=checkpoint)
+    h.accept = _rotate
+    for k, n in enumerate(CKPT_LENGTHS):
+        a = _prompt(40 + k, n)
+        h.add(f"a{n}", a, max_tokens=6)
+        h.run()
+        h.add(f"b{n}", a + _prompt(60 + k, 300), max_tokens=6)
+        h.run()
+    return h
+
+
+@pytest.mark.parametrize("retention", [0, None])
+def test_prefill_checkpoints_run_each_prompt_in_one_step(tmp_path, retention):
+    """QWEN36_MAMBA_PREFILL_CKPT: vLLM no longer ends a prompt's chunk at its last full block; the prefill writes the
+    state there into vLLM's checkpoint block (a segment ends there, CheckpointPoints). Against the same requests
+    without checkpoints: every prompt in one prefill step, fewer steps overall, every follow-up hit at least as long,
+    and every resume reads exactly the state of its tokens (the harness asserts each read)."""
+    split = _checkpoint_run(tmp_path / "split", retention, False)
+    h = _checkpoint_run(tmp_path / "ckpt", retention, True)
+    firsts = [f"a{n}" for n in CKPT_LENGTHS]
+    assert all(h.prefill_steps[r] == 1 for r in firsts), h.prefill_steps
+    assert sum(h.prefill_steps.values()) < sum(split.prefill_steps.values())
+    assert not split.checkpoint_writes
+    for n in CKPT_LENGTHS:
+        assert h.hits[f"b{n}"] >= split.hits[f"b{n}"], (n, h.hits, split.hits)
+        last = (n // 1024) * 1024
+        if n > 1024 and n % 1024:
+            assert (f"a{n}", last) in h.checkpoint_writes, h.checkpoint_writes
+            assert h.hits[f"b{n}"] == last
+            assert (f"b{n}", last, n + 300) in h.resumes, h.resumes
+
+
+def test_a_prefill_that_skips_its_checkpoints_serves_a_stale_state(tmp_path, monkeypatch):
+    """Negative control: without the checkpoint writes a follow-up resumes from a block that holds no state of its
+    tokens."""
+    monkeypatch.setattr(_BookAsState, "write_checkpoint", lambda self, blocks: None)
+    with pytest.raises(AssertionError, match="restore"):  # allow-pytest.raises: --noconftest host test
+        _checkpoint_run(tmp_path / "ckpt", 0, True)
+
+
+def test_a_checkpoint_off_the_block_grid_or_outside_the_prefill_is_refused():
+    book = _BookAsState(_layout(8, 1024, 8, "two_pool"), 3, B, T, "align", 1024)
+    eng = _EngineStub(book, 1024)
+    book.set_prefill_blocks([torch.tensor([5])] * 3)
+    for n, (s, L) in [(1500, (0, 3000)), (3072, (0, 3000)), (1024, (1024, 3000))]:
+        book.set_prefill_checkpoints([torch.tensor([[7]])] * 3, torch.tensor([[n]]))
+        with pytest.raises(ValueError, match="checkpoint"):  # allow-pytest.raises: --noconftest host test
+            eng._paged_plan(s, L, None, True, 0)
+    book.set_prefill_checkpoints([torch.tensor([[7]])] * 3, torch.tensor([[2048]]))
+    s, src, points = eng._paged_plan(1024, 3000, None, True, 0)
+    assert (s, list(points)) == (1024, [2048]) and src == (book, 0)
+    book.set_prefill_checkpoints(None, torch.zeros(1, 1, dtype=torch.int32))
+    assert eng._paged_plan(0, 3000, None, True, 0) is None
 
 
 @pytest.mark.parametrize("mode", ["none", "align"])
