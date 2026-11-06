@@ -301,6 +301,9 @@ chan_id_t FabricBuilderContext::get_fabric_master_router_chan(ChipId chip_id) co
 }
 
 std::vector<size_t> FabricBuilderContext::get_fabric_router_addresses_to_clear() const {
+    if (router_config_->router_block_clear_address) {
+        return {*router_config_->router_block_clear_address};
+    }
     std::vector<size_t> addresses_to_clear = {
         router_config_->edm_local_sync_address,
         router_config_->edm_local_tensix_sync_address,
