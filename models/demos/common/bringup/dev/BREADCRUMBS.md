@@ -2702,3 +2702,54 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
   sync -> mirror read and idempotent, a changed shared file -> stale until the next sync, a mirror file edited or
   missing and a manifest mismatch detected, the -official sibling part of completeness, mirror-only files reported,
   frozen check and goldens key unchanged by sync, the orchestrator syncing only a stale mirror).
+
+## F261: the weight cache has a shared master on NFS and a node-local mirror, like the goldens (owner 2026-11-06)
+- Owner 2026-11-06: one copy per thing, one layout; things must be accessible in the shared data folder for other
+  users on other Galaxies. DeepSeek-V4.1's routed-expert cache (306 GB at bfp4_mse) lived only under art on each box;
+  /data held a hand-made 571 GiB old-layout backup.
+- Fix: `paths.tt_cache_shared` (spec.tt_cache_shared(variant): the master, the same <mesh>/<version> below it as
+  spec.tt_cache(); None when unset or the same dir) and the local cache (spec.tt_cache(), unchanged: the only copy
+  runs read and write) as its mirror. core/mirror.py: the shared + local machinery (listing, mirror.json manifest,
+  mirror_problem, rsync at nice 10 / ionice idle, compare, make_readable), now also under F260's goldens
+  (reference/golden.py keeps its API and behaviour; its selftests pass unchanged). core/weight_cache.py:
+  - pull (master -> local): files the master has that the local cache lacks or holds at another size and older;
+    refused without the room on the local disk. The orchestrator pulls at run / resume start, blocking, before any
+    task (a pull beats a rebuild from the checkpoint).
+  - push (local -> master): files the local cache has that the master lacks or holds at another size and older;
+    rsync --update (never over a newer master file), temp name + rename per file (atomic: a master reader never sees
+    a partial file under its final name), --chmod=Dgo+rx,Fgo+r and o+rx on the dirs it made (other users read it; a
+    parent without o+x is reported); one push a box (flock on <local>/.weight_cache_push.lock); a master the user
+    cannot write (another user's) is pull-only. The orchestrator starts one in the background (detached; log
+    <run dir>/weight_cache_push.log) at run start and after every passed task when the plan has files to push.
+  - Which files: hooks.weight_cache_patterns(spec) (basename globs; default all), never a temp name (dot files,
+    *.tmp*, *.part). Cache files are named by their content key, so the same name at the same size is the same file
+    (never copied again, whatever the mtime). A half-built layer is pushed file by file; a box that pulls a partial
+    layer misses on it and rebuilds it. Each side's mirror.json: the master's listing after the last push / pull.
+  - CLI: `python -m models.demos.common.bringup.core.weight_cache status|pull|push --spec S [--glob G ...]`.
+- DS41: galaxy spec paths.tt_cache_shared = /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/tt_cache (intake
+  re-approved); hooks.weight_cache_patterns = the run's EXPERTS_IMPL `L??.<impl>.*.bm.bin` and `.done.json` (never
+  the old .tensorbin layout, never another impl's A/B cache). The cache layout itself (bank-major .bm.bin only, the
+  pinned-memory limit set before the mesh opens): flat_routed_expert_ttnn/CHANGELOG.md 2026-11-06 "one layout".
+- Selftest: test_weight_cache_mirror.py (master path, push only the cache files atomically and readable with both
+  manifests, pull fills and never re-copies a same-size file, newer master / newer local never overwritten, no room,
+  one push a box, a master we cannot write, no master, status + CLI, the orchestrator pulling at start and pushing in
+  the background, a failure never stopping the run); test_golden_mirror.py unchanged and passing.
+
+## F262: real-time profiler records past device-operation id 65535 were charged nowhere (F259 device check, 2026-11-06)
+- Problem: the one-process check (/scratch/dnijemcevic/rebase/fasttests/check.sh: quick clean wall, clean wall at
+  51200, profiled run at 51200, one batch process) failed its profiled run with "the real-time profiler returned no
+  program records in any section"; the same run in a process of its own works. Cause: not the profiler being off
+  (it is a dispatch-side stream that runs whenever the device is open, IsProgramRealtimeProfilerActive was true; a
+  callback registered later gets every program dispatched after it, cached programs included), but its ids:
+  a ProgramRealtimeRecord's runtime_id is the device-operation id narrowed to 16 bits (cq_dispatch's uint16
+  program_host_id, tt-metal #46103), while F155's markers and call ranges hold the full ttnn id. In a batch the runs
+  before it pushed the id past 65535, so no record fell in any range. A process of its own stays below that in its
+  warm-up + timed runs; one whose profiled window crossed 65536 would have lost the sections after it silently.
+- Fix (testing/profiler.py): finish_rt reads the id after its sync and unwraps every record into the profiled window
+  [first marker, that id) (`unwrap_ids`: the one id of the window with those low 16 bits); a late record of a program
+  launched before enable() lands past the window and is dropped; a window of more than 65536 ids fails loudly. One
+  program in 65536 (id 0 mod 2**16, the dispatcher's "not profiled" id) has no record: noise. F114 unchanged: clean
+  walls register no callback, as in a process of their own; the batch order still puts them before the profiled run.
+- Selftest: test_realtime_profiler.py (windows at and across 65536, a stale record, the too-wide window, the fake
+  device now sends 16-bit ids), test_one_process.py (a unit of two clean walls then the profiled run, the id past
+  65535 when it starts, its sections charged).

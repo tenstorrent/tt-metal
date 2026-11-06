@@ -165,6 +165,38 @@ def test_stop_on_fail_stops_the_unit_at_its_first_failure(tmp_path):
     assert ran == [["t0"], ["t1"]]
 
 
+def test_a_profiled_run_after_other_runs_of_the_batch_still_gets_its_records(monkeypatch):
+    """F262: the runs before it in the process advance the device-operation id past 65535; the real-time profiler's
+    records carry it modulo 2**16, and the profiled run (the last of the unit, after its clean walls) still charges
+    them to its sections."""
+    from models.demos.common.bringup.selftest.test_realtime_profiler import Mesh, deliver, fake_ttnn
+    from models.demos.common.bringup.testing import profiler
+
+    st, Op = fake_ttnn(monkeypatch)
+    got = {}
+
+    def main(args, plugins):
+        if os.environ.get("BRINGUP_WALL_CLEAN") != "1":  # a clean wall: warm-up and timed runs, no profiler
+            st.next_id += 40000
+            return 0
+        st.launched.clear()
+        profiler.enable(Mesh(), rt=True)
+        try:
+            profiler.signpost("attention")
+            Op("ttnn.matmul", 3)()
+            profiler.signpost("end")
+            deliver(st, {i: (10, 20) for i in st.launched})
+            profiler.finish_rt()
+            got.update(profiler.result()["kernel_ns"])
+        finally:
+            profiler.disable()
+        return 0 if sum(got.values()) > 0 else 1
+
+    plan = B.plan_from_cmd(f"{WALL} && {WALL} && {PROF}")
+    assert TB.run_plan("MESH", (1, 1), plan, None, main=main) == []
+    assert st.next_id > 65536 and got == {"attention": 60.0}
+
+
 class Model:
     loads = 0
 

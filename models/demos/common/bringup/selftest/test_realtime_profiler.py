@@ -64,13 +64,17 @@ class Mesh:
         return [10, 11]
 
 
-def deliver(st, ns_by_id):
-    """One record per launched program per chip: ``ns_by_id[id] = (chip-10 ns, chip-11 ns)``, back to back."""
+def deliver(st, ns_by_id, stale=()):
+    """One record per launched program per chip: ``ns_by_id[id] = (chip-10 ns, chip-11 ns)``, back to back, its
+    runtime_id the id's low 16 bits as the device sends it (F262; id 0 mod 2**16 is never recorded). ``stale``: ids
+    launched before enable() whose records arrive late."""
     t = {10: 0.0, 11: 0.0}
     recs = []
-    for i in st.launched:
+    for i in list(stale) + st.launched:
+        if i % profiler.RT_ID_SPAN == 0:
+            continue
         for d, ns in zip((10, 11), ns_by_id[i]):
-            recs.append(Rec(i, d, t[d], t[d] + ns))
+            recs.append(Rec(i % profiler.RT_ID_SPAN, d, t[d], t[d] + ns))
             t[d] += ns + 5.0
     st.cb(types.SimpleNamespace(records=recs, dropped=0))
 
@@ -206,3 +210,36 @@ def test_ledger_profile_env_follows_the_switch():
     wall, run = (x.strip() for x in with_clean_wall(dev).split("&&"))
     assert "TT_METAL_" not in wall and "BRINGUP_PROFILER" not in wall and run == f"BRINGUP_WALL_CLEAN=1 {dev}"
     assert with_clean_wall(with_clean_wall(prof)) == with_clean_wall(prof)
+
+
+@pytest.mark.parametrize("first", [65530, 3 * 65536 + 7])
+def test_16_bit_runtime_ids_are_unwrapped_into_the_profiled_window(monkeypatch, first):
+    """F262: records carry the device-operation id modulo 2**16; a window past (or across) 65536 still charges every
+    section, and a late record of a program launched before enable() is not charged."""
+    st, Op = fake_ttnn(monkeypatch)
+    st.next_id = first
+    profiler.enable(Mesh(), rt=True, calls=True)
+    try:
+        profiler.set_layer(0)
+        profiler.signpost("attention")
+        Op("ttnn.matmul", 4)()
+        profiler.signpost("experts")
+        Op("ttnn.add", 4)()
+        profiler.signpost("end")
+        ns = {i: (10, 10) for i in st.launched}
+        ns[first - 1] = (1000, 1000)  # before the window: dropped
+        deliver(st, ns, stale=[first - 1])
+        profiler.finish_rt()
+        res = profiler.result()
+    finally:
+        profiler.disable()
+    lost = sum(1 for i in st.launched if i % profiler.RT_ID_SPAN == 0)
+    assert res["programs"]["attention"] + res["programs"]["experts"] == 2 * (8 - lost)
+    assert res["kernel_ns"]["attention"] > 0 and res["kernel_ns"]["experts"] > 0
+    assert max(res["kernel_ns"].values()) <= 40.0  # the stale 1000 ns program is in no section
+
+
+def test_a_window_wider_than_the_runtime_ids_fails_loudly():
+    with pytest.raises(RuntimeError, match="16-bit"):
+        profiler.unwrap_ids({1: {}}, 10, 10 + profiler.RT_ID_SPAN + 1)
+    assert profiler.unwrap_ids({5: "x", 9: "y"}, 65540, 65540 + 65536) == {65541: "x", 65545: "y"}
