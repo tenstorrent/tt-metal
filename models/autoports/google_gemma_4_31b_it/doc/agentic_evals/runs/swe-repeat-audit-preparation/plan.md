@@ -1,0 +1,3 @@
+# SWE retained repeat audit preparation
+
+Prepare a read-only helper for the coordinator to run explicitly on completed retained-repeat artifacts. Device box/forecast/saving0. Confirmation uses old nightly artifacts only to reproduce known Astropy84calls/81saved responses and xarray curl candidate, without replacing existing audit evidence or emitting raw messages, patches or secrets. Extract per-task call/response coverage, FormatError omissions, retained token IDs against usage, executable native-tool network candidates, caps, timing/status/reward and Wilson95. Candidates require human trajectory interpretation; URLs in source/license are not classified as retrieval. No hardware/network/polling/central edits.

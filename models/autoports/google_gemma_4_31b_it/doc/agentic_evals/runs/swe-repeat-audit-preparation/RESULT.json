@@ -1,0 +1,30 @@
+{
+  "status": "prepared_validated_not_run_on_repeat",
+  "device_hours": 0,
+  "tests_passed": 4,
+  "old_artifact_validation": {
+    "astropy_api_calls": 84,
+    "astropy_saved_native_responses": 81,
+    "astropy_missing_response_count": 3,
+    "astropy_format_error_indices": [
+      102,
+      139,
+      142
+    ],
+    "xarray_curl_message_index": 2,
+    "xarray_following_remote_http_indicator": true
+  },
+  "tool": "audit_retained.py",
+  "test": "test_audit_retained.py",
+  "old_evidence_unchanged": true,
+  "limitations": [
+    "Candidates are not network-retrieval or loop verdicts. Shell aliases, embedded scripts and commands inside wrappers can evade lexical detection; review complete native trajectories privately.",
+    "Missing response bodies cannot be reconstructed. Token-ID counts alone do not prove semantic output or absence of loops.",
+    "Per-task timing is host wall; agent sums overlap and are not device time."
+  ],
+  "new_run_id": 42228448171,
+  "execution": "Coordinator explicitly runs CLI only after run completed; output opens exclusively and refuses overwrite.",
+  "retention_schema_evidence": "runs/native-token-retention-confirmation/result.json",
+  "confirmed_retention_schema": "messages[i].extra.response.choices[0].provider_specific_fields.token_ids",
+  "confirmed_retention_count": 104
+}

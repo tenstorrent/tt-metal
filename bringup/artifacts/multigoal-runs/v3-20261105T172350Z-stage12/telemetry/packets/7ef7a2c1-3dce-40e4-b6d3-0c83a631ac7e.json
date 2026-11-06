@@ -79,7 +79,7 @@
   ],
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
-    "stage12_accuracy": "BankedGPQA10/198,SWE2/500,Terminal2/89. FullGPQA198 stopped after10reportedcompletions: empiricalprojection24.55\u201329.46h exceeds12h; no finalsamples/score. SWEnightly5 incompletevalidity, same5repeat42228448171 running; Terminal10 stopped at2reportedcompletions:12.1486h workflow projection; no partial score. No dry/release. GPQA C4 attempt42232104462 used wrong workflow and failed before scoring; AutoFix correcting dispatch; synthetic capacity is not scored accuracy."
+    "stage12_accuracy": "BankedGPQA10/198,SWE2/500,Terminal2/89. FullGPQA198 stopped after10reportedcompletions: empiricalprojection24.55\u201329.46h exceeds12h; no finalsamples/score. SWEnightly5 incompletevalidity, same5repeat42228448171 running; Terminal10 stopped at2reportedcompletions:12.1486h workflow projection; no partial score. No dry/release. GPQA C4 attempt42232104462 used wrong workflow and failed before scoring; AutoFix corrected dispatch; C4ten42234229161 and C2twenty42234274300 active; synthetic capacity is not scored accuracy."
   },
   "notes": [
     "Current stage12 serving measurement; not frozen release.",

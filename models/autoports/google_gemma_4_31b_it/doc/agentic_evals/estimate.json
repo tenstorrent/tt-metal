@@ -17,8 +17,8 @@
         "batch": 8,
         "status": "queued",
         "projected_workflow_hours": 7.72125727234195,
-        "source": "runs/larger-gpqa20-c2/manifest.json",
-        "run_id": 42233126698
+        "source": "runs/larger-gpqa20-c2-evals/manifest.json",
+        "run_id": 42234274300
       },
       "full_suite_decision": "stop",
       "full_suite_stop_evidence": "runs/full-gpqa-observable/stop.json"

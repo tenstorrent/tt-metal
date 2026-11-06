@@ -29,7 +29,7 @@
     "Stage gate pass"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-06T14:18:58.613726+00:00",
+  "updated_at": "2026-11-06T14:29:53.016156+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -37,9 +37,11 @@
   ],
   "live_wait": {
     "run_ids": [
-      42228448171
+      42228448171,
+      42234229161,
+      42234274300
     ],
-    "status": "SWE repeat5 active; two GPQA dispatches used wrong workflow before scoring, AutoFix correcting to evals with identical SHAs/cohorts"
+    "status": "SWE repeat5, corrected GPQA C4 same10 and C2 nested20 active"
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",
