@@ -3057,6 +3057,7 @@ class MTPSpecEngine:
                 (u, 0) for u in torch.nonzero(act & ((sp + 1) % paged.mamba_block_size == 0)).reshape(-1).tolist()
             ]
         copies = moves[2] if moves is not None and len(moves) > 2 else None
+        paged.chain_copies = []  # only this step's copies may run before its verify
         if copies is not None and self._paged_unknown:  # looked up in the pending verify's windows, before set_step
             cps = [torch.as_tensor(x).to(torch.int64) for x in self._to_rows(*copies)]
             if any(tuple(x.shape) != (self.B, self.T, 2) for x in cps):
