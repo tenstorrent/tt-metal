@@ -6,6 +6,7 @@
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/program_preparation.hpp>
 #include <tt_stl/fmt.hpp>
+#include <tt_stl/small_vector.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
 #include <cstdint>
@@ -151,6 +152,34 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     // programs are already compiled and laid out, so compile_program is a flag check per program;
     // handing those to the thread pool costs a worker wake-up and a join for no work. Only the
     // first compile of a multi-program workload does enough to be worth parallelizing.
+    // A finalized workload whose programs are all compiled and laid out for this device needs only the lockstep L1
+    // frontier check, and every program's check reads the same mesh allocator: do it once, against the highest
+    // frontier. The workload's sub-device set is the union of its programs', so its lowest occupied address is no
+    // higher than any program's own, and passing here means each program's check passes. Otherwise, or on a
+    // failure, the per-program path below runs and reports the collision in detail.
+    if (this->is_finalized() && programs_.size() > 1) {
+        uint64_t frontier = 0;
+        bool all_cached = true;
+        for (auto& [device_range, program] : programs_) {
+            const auto program_frontier = program.impl().cached_l1_frontier(mesh_device);
+            if (!program_frontier.has_value()) {
+                all_cached = false;
+                break;
+            }
+            frontier = std::max(frontier, *program_frontier);
+        }
+        if (all_cached) {
+            if (frontier == 0) {
+                return;
+            }
+            const auto& sub_device_set = this->determine_sub_device_ids(mesh_device);
+            const ttsl::SmallVector<SubDeviceId, 4> sub_device_ids(sub_device_set.begin(), sub_device_set.end());
+            const auto lowest_address = mesh_device->lowest_occupied_compute_l1_address(sub_device_ids);
+            if (!lowest_address.has_value() || *lowest_address >= frontier) {
+                return;
+            }
+        }
+    }
     if (programs_.size() == 1 || this->is_finalized()) {
         // Compile from main thread for homogeneous workloads
         for (auto& [device_range, _] : programs_) {
