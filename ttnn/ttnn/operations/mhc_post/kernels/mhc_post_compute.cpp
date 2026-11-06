@@ -15,6 +15,11 @@
 // consumer is a Col broadcast; post_j sits at tile j, comb[i][j] at n + i*n + j (comb is applied
 // transposed). F / X / coefficients are caller-managed (None/None).
 //
+// mix_fused (Refinement 5; Blackhole, bf16 X streams — host gate): pack_coefficients compacts the
+//   row's broadcast coefficients into packed DEST-layout tiles once per row, and mix_block_fused /
+//   collapse_block_fused run the same arithmetic as 3 (mix) / 2 (y) multi-term SFPU passes per output
+//   tile (mhc_post_mix_sfpu.hpp). Bit-identical to the per-term chains above, which remain the
+//   mix_fused = 0 path.
 // project_block (fused): matmul_block of the bf16 X' block (K = n*extent tiles, order [j][c])
 //   against the resident W slice (block-major, same order) -> cb_proj_block (fp32), then an
 //   exact SFPU add into the running row partial (cb_proj_run; the row's last block packs

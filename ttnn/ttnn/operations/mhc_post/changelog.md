@@ -310,3 +310,84 @@
   - Shapes where the band layout does not fit (e.g. T640 C1792 fused, R = 20 > gy) keep per-core W reads.
 - Tests added: none (the existing unit / golden / perf files cover the changed path; `test_fused_modes`
   T160 exercises the band layout with both W and coefficient channels).
+
+## Refinement 5 — Speed up the perf-flagged profile: SFPU-bound mix
+- Date: 2026-11-06
+- What was done:
+  - **Confirmed compute-bound first** (ablations, flagged config T160 C5120 bf16 collapse packed HiFi2, 129.3 µs):
+    - mix chain stubbed to copy + packs: 101.2 µs; mix + y stubbed: 93.7 µs;
+    - mix with no SFPU ops (unpacks only): 109.9 µs; mix with no coefficient / X unpacks: 104.9 µs.
+    - Unpacks and SFPU ops serialize: together they cost ~28 µs, more than the sum of each alone.
+  - **Fused SFPU mix** (new `kernels/mhc_post_mix_sfpu.hpp`, `MIX_FUSED` knob + `MIX_FUSED_STREAM_DTYPES`
+    gate):
+    - Once per row, `pack_coefficients` compacts the column-broadcast coefficient tiles into packed DEST-layout
+      tiles (`cb_coef_packed`): A_j = {post_j, comb_0j, comb_1j, comb_2j}, and P = {P_0..P_3} in collapse.
+    - Each coefficient is per-token (per-row), so the 4 SFPU vectors k0 + {0, 1, 8, 9} (2 parities × 2 face
+      columns, the same 4 rows) need one coefficient vector. Coefficient s lives in quadrant {0,1,8,9}[s].
+      Compaction is 24 in-place SFPU moves from 4 broadcast tiles, then one pack.
+    - Per output tile (half-sync fp32 DEST, 4 slots): A_j, F, X_0, X_1 → `MixPass1`
+      (post·F + c0·X_0 + c1·X_1); X_2 → `MixPass2`; bcast comb_3j (+ ss_run) and X_3 → `MixPass3` (+ ss).
+      That is 7 unpacks (+ss) and 3 SFPU passes, instead of 10 unpacks + 5 SFPU ops + the ss op.
+    - y: P, X'_0, X'_1 → `YPass1`; X'_2, X'_3 → `YPass2`. That is 5 unpacks + 2 passes, instead of 8 + 4.
+    - Every pass walks the 8 row groups with a moving dst base: operands sit at constant immediate offsets,
+      inner loop unrolled. Pairs of quadrants are interleaved so the MUL → MAD chains overlap.
+    - Arithmetic order and rounding are identical to the per-term chain (fp32 mul, then SFPMAD, with
+      Addcmul's 1.0 scale exact), so X', stats and y bits are unchanged.
+  - **Path gate**: the fused mix is used on Blackhole (it relies on the probed SFPU lane mapping) with bf16 X
+    streams only.
+    - With fp32 streams, the per-term chain already paces a full-grid call at the aggregate DRAM limit
+      (~360 GB/s). There, the faster mix exposes a NoC hotspot instead: the bottom-right cores
+      (x 12–15, y 8–10) straggle.
+    - Zone-measured at T4096 C1792 fp32: the mix block runs 22.4k vs 39.8k cycles and the median core
+      finishes at 708k vs 966k cycles, but the slowest core takes 1141k.
+    - fp32 results (per-term → fused): T4096 C1792 736 → 823 µs, T640 C7168 454 → 475, T320 C7168 236 → 260.
+      Small fp32 calls win: T160 C5120 105 → 98.5, T640 C1792 148 → 131, T640 C3584 259 → 233,
+      T1 C7168 40.7 → 36.3.
+    - fp32 stays on the per-term chain until the hotspot is fixed.
+  - Tried and kept as a non-regressing form:
+    - Fully unrolled passes with a free coefficient layout (8s + g) measured the same as the loop form, so code
+      size was not the T4096 cause.
+    - Interleaving was flat at the focus. Inner-loop unroll took the focus from 109.1 to 106.5 µs (2 runs each).
+  - Reused: the eltwise_chain, every CB, the coefficient expansion, the y / mix call sites, and the chain-element
+    pattern of `HcProgram`. Added: one header (6 SFPU programs as chain elements), one compute-internal CB, 2 CT
+    args, and the host knob + gate.
+- Perf (device kernel ns, Blackhole 11×10; `test_mhc_post_perf.py`; before = Refinement 4 / knob-off on this
+  build → after):
+
+  | Config | before | after |
+  |---|---|---|
+  | **bf16 packed collapse HiFi2 T160 (flagged)** | **129.3** | **106.5–107.1** |
+  | bf16 plain / stats HiFi2 T160 | 73.6 / 96.0 | 56.9 / 78.1 |
+  | bf16 stats / collapse HiFi4 T160 | 195.1 / 228.5 | 177.2 / 206.8 |
+  | bf16 plain / stats / collapse HiFi2 T640 | 231.3 (R3) / 284.7 / 354.0 | 172.1 / 213.7 / 266.8 |
+  | bf16 stats / collapse HiFi4 T640 | 657.3 / 726.9 (R3) | 575.1 / 630.1 |
+  | bf16 plain / collapse HiFi2 T4096 C1792 (new probe) | 493.7 / 835.0 | 356.7 / 643.4 |
+  | bf16 plain / collapse HiFi2 T640 C7168 (new probe) | 309.9 / 476.1 | 225.1 / 348.8 |
+  | plain fp32 (gated off; same path) | T160 110.3 (median of 3, R4 code) | 107.3 (median of 3); others within ±0.3 % |
+
+- Accuracy achieved: bits unchanged by construction (same operation order). Golden gates as before: X'
+  rounding / bias gates, stats SUMSQ ≤ 1e-6, hc ≤ 1e-5, y PCC ≥ 0.99995, on every cell run below.
+- Golden test progress (targeted slices):
+  - `test_golden.py -k "BFLOAT16-fp32_dest_acc_en"` (every bf16-X cell, i.e. every cell on the new path:
+    plain / stats / collapse, separate / packed, mixed sublayer): 292 passed / 116 skipped (INVALID).
+  - `test_regression.py`: 26 / 27. The one failure is the pre-existing `test_hc_scalars_are_runtime` `hc_eps`
+    gate defect (Refinement 2).
+  - Unit dir: `test_mhc_post.py` 30 / 30; debug + precision baseline + knob sweep 9 / 9.
+- Issues encountered:
+  - The SFPU `dst_reg +=` immediate is a signed 4-bit row count, so the 8-vector face skip is 4 × `+= 2`.
+  - A `dst_reg` → `dst_reg` copy must go through a `vFloat`.
+  - The fused-mode `fp32_copy_cbs` list was assigned, not extended; it now appends, so `cb_coef_packed` keeps
+    its UnpackToDestFp32 tag.
+- Findings / what is left:
+  - At the focus, the SFPU passes stubbed give 104.2 µs, and the pre-change mix + y stubbed floor is 93.7 µs. The
+    mix now costs ~10 µs of unpack / element overhead on the wall. The rest of the op (~94 µs) is the non-mix
+    floor: DM, the projection, and the per-row combine / hc tail (the R3 fit gives ~20 µs fixed per row).
+  - A per-c window (load F / X once for all 4 j) needs 5 inputs + 5 packed coefficient tiles + ss = 11 fp32
+    DEST tiles, more than even full-sync's 8, so input re-unpacks per j are inherent in this form.
+  - Next levers:
+    - fix the fp32 NoC hotspot (`noc_placement` / `bank_stagger`), then widen `MIX_FUSED_STREAM_DTYPES`;
+    - pack comb_3j into per-j packed tiles (CopyTile instead of a broadcast unpack);
+    - the per-row fixed cost of the fused modes.
+- Tests added: `test_mhc_post_perf.py`: plain fp32 T640 C3584 and T320 C7168, and
+  `test_perf_bf16_packed_large` (T4096 C1792 / T640 C7168, plain / collapse). They are perf probes for the
+  DRAM-saturated regime.

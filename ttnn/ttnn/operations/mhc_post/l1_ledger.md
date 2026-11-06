@@ -166,3 +166,15 @@ Totals: DRAM ≈ 22.8 MB (minimum ≈ 19.1 MB with W and the mixes once); NoC �
   - DRAM total ≈ 19.3 MB (was ≈ 29.7 MB).
 - Plain row-major layout: coefficients are read once per row group (Q-core RowMajor group; up to 3
   rectangles), e.g. plain fp32 T1/C7168 Q=75: 75 → 1 read of the post + comb pages.
+
+### Refinement 5 deltas (fused SFPU mix)
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_coef_packed` (new; only when `mix_fused`: Blackhole and bf16 X streams) | `n` (plain / stats) or `n + 1` (collapse) | same (one row) | {row: streams, c: streams (read by every output tile of the row), j: spans → n (A_j), i: spans → n−1 (comb_0j..comb_2j packed in A_j; comb_3j stays in `cb_coef_cols`), coef: spans → 4 per page; others: streams} | Float32 (UnpackToDestFp32: CopyTile into DEST must be exact) | compute (`pack_coefficients`, once per row) | compute (mix / y chains) | one row | Packed DEST-layout coefficient tiles: A_j = {post_j, comb_0j, comb_1j, comb_2j}, P = {P_0..P_3}, coefficient s in SFPU quadrant {0,1,8,9}[s] of every row group (`mhc_post_mix_sfpu.hpp`). Cannot alias `cb_coef_cols`: it is built FROM `cb_coef_cols` (broadcast unpacks) and `comb_3j` is still read from there all row. Cannot be built by the reader instead: a packed coefficient fills 256 words per tile (vs 32 for a column), ~6 k single-word L1 stores per row on a RISC; the SFPU compacts it from four broadcast tiles in DEST for one pack per 4 coefficients. |
+
+- `fused_fixed_bytes` and `plain_fixed_bytes` charge `cb_coef_packed` (+5 / +4 tiles = 20 / 16 KiB)
+  whether or not the fused mix is selected, so `(R, Q, block_c)` — and the stats bits — do not depend on
+  the arch / dtype gate. At the focus and on every guard shape the charge changes no split or block.
+- Data movement: unchanged (the change is compute-only). Per output tile the compute now unpacks 7
+  tiles (A_j, F, X_0..X_3, broadcast comb_3j) + ss instead of 10 + ss; per y tile 5 instead of 8.

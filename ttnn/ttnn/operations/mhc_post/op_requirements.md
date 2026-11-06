@@ -241,7 +241,7 @@ collapse the same `(R, Q, block_c)`, or `test_fused_modes_agree` breaks.
   member injects 1/R of the slice) would also balance the injector's extra read. It is not tried because
   the receivers already sit at the W-free ceiling.
 
-### [ ] Refinement 5 — Speed up the perf-flagged profile: SFPU-bound mix
+### [x] Refinement 5 — Speed up the perf-flagged profile: SFPU-bound mix
 
 **Type**: perf
 
@@ -266,3 +266,24 @@ collapse the same `(R, Q, block_c)`, or `test_fused_modes_agree` breaks.
 - Measured device-ns improves on the flagged shape, and the golden suite (including the bias and depth-chain
   gates) is green.
 - No regression across the guard set.
+
+**Outcome**:
+- Confirmed compute-bound first: at the focus, stubbing the mix + y chains gives 129.3 → 93.7 µs.
+- Flagged config (T160 C5120 bf16 collapse packed HiFi2): **129.3 → 106.5–107.1 µs** device kernel (−17 %).
+  - plain bf16 73.6 → 56.9; stats 96.0 → 78.1;
+  - HiFi4 stats / collapse 195.1 / 228.5 → 177.2 / 206.8;
+  - T640 HiFi2 stats / collapse 284.7 / 354.0 → 213.7 / 266.8;
+  - T4096 C1792 bf16 plain / collapse 494 / 835 → 357 / 643.
+- Lever: a fused SFPU mix (`MIX_FUSED`).
+  - Once per row, the broadcast coefficient columns are compacted into packed DEST-layout tiles, with 4
+    coefficients per tile, one per SFPU quadrant of each row group.
+  - Each output tile is then 7 unpacks + 3 multi-term SFPU passes, instead of 10 + 6. y is 5 + 2 instead of 8 + 4.
+  - The operation order is the same, so the bits are unchanged.
+- Path-gated to bf16 X streams (`MIX_FUSED_STREAM_DTYPES`).
+  - With fp32 streams, full-grid calls already sit at the aggregate DRAM limit, and the faster mix exposes a
+    bottom-right NoC hotspot: T4096 C1792 fp32 736 → 823 µs.
+  - Small fp32 calls would win 6–11 %. Plain fp32 stays on the per-term chain, unchanged.
+- Bottleneck now: the non-mix floor (~94 µs: DM, projection, per-row combine / hc tail). The mix itself costs
+  ~10 µs of unpack overhead; its SFPU passes cost ~3 µs.
+- Next to try: fix the fp32 NoC hotspot (placement / bank stagger), then enable fp32. Not done here because it
+  is a dataflow-placement lever, outside this SFPU-mix scope.

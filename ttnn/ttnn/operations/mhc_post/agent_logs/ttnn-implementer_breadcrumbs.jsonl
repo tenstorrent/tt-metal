@@ -12,3 +12,4 @@
 {"event":"test_run","refinement":3,"status":"pass","focus_ns_before":193518,"focus_ns_after":138113,"golden":"collapse+stats 124 pass, plain 332/332, regression 26/27 (pre-existing hc_eps gate)","ts":"2026-11-06T19:31:26+00:00"}
 {"event":"test_run","refinement":4,"status":"pass","focus_collapse_ns":[137936,129528],"golden":"collapse/stats 124/124, plain 332/332, regression 26/27 (pre-existing hc_eps gate)","ts":"2026-11-06T20:02:12+00:00"}
 {"event":"test_run","refinement":5,"status":"pass","test":"test_mhc_post.py","result":"30/30","perf_focus_ns":107650,"before_ns":129305,"ts":"2026-11-06T20:24:05+00:00"}
+{"event":"test_run","refinement":5,"status":"pass","tests":["test_mhc_post.py 30/30","golden bf16 292 passed/116 skipped","test_regression 26/27 (pre-existing hc_eps defect)"],"perf_focus_ns_before":129305,"perf_focus_ns_after":106500,"gate":"bf16 X streams only (fp32 NoC hotspot regression)","ts":"2026-11-06T20:48:48+00:00"}
