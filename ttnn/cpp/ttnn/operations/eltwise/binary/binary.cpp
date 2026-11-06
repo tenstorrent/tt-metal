@@ -1389,9 +1389,7 @@ Tensor divide_(
 }
 namespace {
 
-// A fused SFPU op computes multiply(gate, up) as one binary_ng program when the gate operand carries exactly the
-// unary activation of its row and up carries none. Each row is one op's kernel on one board; the ops are generated
-// by tt-polynomial-fitter (activations/products/<op>.json).
+// multiply(gate, up) runs as one fused binary_ng program when gate carries exactly its row's activation on that board.
 struct FusedActivationRoute {
     operations::unary::UnaryOpType gate_activation;
     operations::binary::BinaryOpType op;
@@ -1408,9 +1406,6 @@ struct FusedActivationOperands {
     bool lhs_is_gate;
 };
 
-// The fused op that computes multiply(lhs, rhs), and which operand is its gate: BF16 operands and output, no output
-// tensor, post-activation or fast mode, and one operand carrying exactly one parameterless activation that a row
-// names for this board while the other carries none.
 std::optional<FusedActivationOperands> fused_activation_operands(
     const Tensor& lhs,
     const Tensor& rhs,
