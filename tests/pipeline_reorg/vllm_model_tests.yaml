@@ -453,6 +453,30 @@
   team: models
   budget_type: vllm
 
+# Device unit tests of the GDN-state-in-vLLM stack on one Blackhole chip of a CI Galaxy (no server).
+- name: "Qwen3.8-27B GDN state device unit tests (BH Galaxy)"
+  model: Qwen/Qwen3.8-27B
+  ab-driver: true
+  device-tests-only: true
+  device-tests: >-
+    tests/ttnn/unit_tests/base_functionality/test_alias_view.py
+    tests/ttnn/unit_tests/operations/experimental/kda/test_gdn_spec_step.py
+    models/demos/blackhole/qwen36/tests/test_gdn_decode_step_paged.py
+    models/demos/blackhole/qwen36/tests/test_spec_block_state_device.py
+    models/demos/blackhole/qwen36/tests/test_spec_fused_kernels.py
+  multimodal: false
+  server-timeout: 10
+  benchmark-timeout: 10
+  mesh-device: BH-Galaxy
+  arch: arch-blackhole
+  skus:
+    bh_galaxy:
+      timeout: 150
+      tier: 2
+  owner_id: U09LTAPEU2U # Viktor Pus
+  team: models
+  budget_type: vllm
+
 # ── GPT-OSS ────────────────────────────────────────────────────────
 
 - name: "GPT-OSS-120B (low-latency)"
