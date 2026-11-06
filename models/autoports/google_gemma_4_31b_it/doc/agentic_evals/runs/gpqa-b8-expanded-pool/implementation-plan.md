@@ -1,0 +1,11 @@
+# Optional B8 pool implementation
+
+Coordinator goal: prove eight independent 131072-token histories at B8, then improve the frozen GPQA20 completion time without losing validity. Host preparation does not accept the candidate or authorize a device launch. The coordinator owns the queue; client preparation is in plan.md.
+
+Add model-owned GEMMA4_B8_KV_POOL_IDS=20480. Preserve the existing default budget and supported B1/B16/B32 behavior. Reject other override values; require advertised context262144 for expanded B8. The pinned worker adds256 output-reserve tokens and65536 sliding-reserve tokens to the synthetic589568-token budget, yielding exactly20480 normalized32-token IDs. No plugin, sampler, API, precision, context or output-limit change.
+
+The proposed pool consumes14260633600 bytes/device,7124746240 more than default. From the accepted B8 prepared allocator ledger, projected prepared allocation is20817281024 of34044513280 usable bytes/device, leaving13227232256. The analytical805306368 transient reserve leaves12421925888, but is not a measured full-model long-prefill peak. The in-flight-aware eight-history requirement is18451 IDs, leaving2029. Live capacity confirmation must measure allocator reserve and preemption; these projections alone cannot establish fit.
+
+Use a pure host helper and regression tests for unchanged defaults, exact pinned-worker allocation arithmetic, scoped override, malformed values and context guard. Validate syntax/diff hygiene. Do not commit or publish; hand source to coordinator. The helper, adapter import and test file must travel together in any source publication; changed model source requires a new immutable image.
+
+Confirmation remains: exact three native baseline bodies at C2/B8; eight growing independent histories with release output126976 and timeout14400 preserved and safe cancellation of owned requests; then frozen20 C8 scored comparison against repaired20 C4. Historical baseline reuse is coordinator-authorized, not an isolated causal speed experiment. No lower diagnostic output cap for capacity. Total provisional device box2.5h, forecast1.11h, release80 saving3.02h are estimates requiring measured updates. Normal40 must not wait.

@@ -11,6 +11,7 @@ import ttnn
 
 from .benchmark_phases import PhaseRecorder
 from .generator import Gemma4Generator
+from .kv_pool_budget import PRIOR_TURN_TOKENS_PER_USER, TARGET_TOKENS_PER_USER, get_pool_token_budget
 from .model import Gemma4Model
 
 
@@ -91,13 +92,10 @@ class Gemma4ForCausalLM:
         # conversations can retain prefixes while allocating their next turn.
         # Keep the single-request floor conservative; this is a cache budget,
         # not the advertised context or a scheduler token limit.
-        target_tokens_per_user = 32768
-        prior_turn_tokens_per_user = 24576
-        worker_block_size, global_block_size = 32, 64
-        global_blocks = max_num_seqs * math.ceil(
-            (target_tokens_per_user + prior_turn_tokens_per_user) / global_block_size
-        )
-        budget = max(max_model_len, worker_block_size * global_blocks)
+        target_tokens_per_user = TARGET_TOKENS_PER_USER
+        prior_turn_tokens_per_user = PRIOR_TURN_TOKENS_PER_USER
+        b8_pool_ids = os.environ.get("GEMMA4_B8_KV_POOL_IDS")
+        budget = get_pool_token_budget(max_model_len=max_model_len, max_num_seqs=max_num_seqs, b8_pool_ids=b8_pool_ids)
         print(
             json.dumps(
                 {
@@ -105,7 +103,8 @@ class Gemma4ForCausalLM:
                     "synthetic_token_budget": budget,
                     "target_tokens_per_user": target_tokens_per_user,
                     "prior_turn_reserve_tokens_per_user": prior_turn_tokens_per_user,
-                    "global_block_size": global_block_size,
+                    "global_block_size": 64,
+                    "b8_pool_ids_override": 20480 if b8_pool_ids is not None and max_num_seqs == 8 else None,
                     "max_model_len": max_model_len,
                     "max_num_seqs": max_num_seqs,
                     "basis": "normalized hybrid blocks plus prior-turn APC reserve; worker adds live sliding/output reserves",
