@@ -2686,6 +2686,14 @@ TRAY_POWER_PHASE_S = 120
 # that tray. Every tray's bus doing so (no read ok) means no route: stop.
 TRAY_POWER_NO_ROUTE_TIMEOUTS = 2
 TRAY_POWER_MAX_READS = 4
+# stderr phrases of a real sudo refusal (no route); a sudo warning line is not one.
+SUDO_REFUSALS = (
+    "a password is required",
+    "a terminal is required",
+    "is not in the sudoers",
+    "is not allowed to execute",
+    "sudo: ipmitool: command not found",
+)
 
 
 def tray_bdf_range(tray: int) -> str:
@@ -2853,7 +2861,12 @@ class TrayPowerReader:
         self.bus_ok: dict[int, int] = {}
         self.bus_timeouts: dict[int, int] = {}
         self.errors: list[str] = []
+        self.bus_err: dict[int, str] = {}  # last error per bus: the 'not read' reason of its tray
         self.stopped = ""
+
+    def _err(self, bus: int, msg: str) -> None:
+        self.errors.append(msg)
+        self.bus_err[bus] = msg
 
     def _run(self, argv: list[str]) -> subprocess.CompletedProcess:
         left = self.deadline - self.clock()
@@ -2875,29 +2888,35 @@ class TrayPowerReader:
         except subprocess.TimeoutExpired as e:
             self.timeouts += 1
             self.bus_timeouts[bus] = self.bus_timeouts.get(bus, 0) + 1
-            self.errors.append(f"ipmitool: no reply in {e.timeout:g} s")
+            self._err(bus, f"ipmitool: no reply in {e.timeout:g} s")
             hung = [b for b in TRAY_POWER_BUS.values() if self.bus_timeouts.get(b, 0) >= TRAY_POWER_NO_ROUTE_TIMEOUTS]
             if self.reads_ok == 0 and len(hung) == len(TRAY_POWER_BUS):
                 self.stopped = "no route: ipmitool timed out"
             return None
         except FileNotFoundError as e:
-            self.errors.append(repr(e))
+            self._err(bus, repr(e))
             self.stopped = "no route: ipmitool not found"
             return None
         except (OSError, subprocess.SubprocessError) as e:
-            self.errors.append(repr(e))
+            self._err(bus, repr(e))
             return None
         if cp.returncode != 0:
-            err = ((cp.stderr or cp.stdout or "").strip().splitlines() or [f"rc {cp.returncode}"])[0]
-            self.errors.append(err)
-            if "sudo" in err.lower() or "password is required" in err.lower():
-                self.stopped = f"no route: {err}"
+            lines = [ln.strip() for ln in (cp.stderr or cp.stdout or "").splitlines() if ln.strip()]
+            refusal = next((ln for ln in lines if any(m in ln.lower() for m in SUDO_REFUSALS)), None)
+            if refusal:
+                self._err(bus, refusal)
+                self.stopped = f"no route: {refusal}"
+                return None
+            # sudo may warn first ('sudo: unable to resolve host ...') and still run
+            # ipmitool: keep ipmitool's own error, and read the other trays.
+            err = next((ln for ln in lines if not ln.lower().startswith("sudo:")), None)
+            self._err(bus, err or (lines[0] if lines else f"rc {cp.returncode}"))
             return None
         if nbytes == 0:
             return []
         got = _parse_raw_bytes(cp.stdout or "", nbytes)
         if got is None:
-            self.errors.append(f"unparsed reply {cp.stdout!r}")
+            self._err(bus, f"unparsed reply {cp.stdout!r}")
         else:
             self.reads_ok += 1
             self.bus_ok[bus] = self.bus_ok.get(bus, 0) + 1
@@ -3027,7 +3046,8 @@ def run_tray_power(tier: str, phase: Phase, dry_run: bool, runner=None, clock=ti
         hscs = {addr: reader.hsc(bus, addr) for addr in TRAY_POWER_HSC_ADDRS}
         # No early exit on a tray with no reply: a dead tray NACKs fast and
         # must not hide the next ones; hangs are bounded by the reader.
-        reads[tray] = (hscs, reader.cpld(bus), reader.stopped)
+        cpld = reader.cpld(bus)
+        reads[tray] = (hscs, cpld, reader.stopped or reader.bus_err.get(bus, ""))
     # The peak rule compares each feed with all the others, so it runs once every tray is read.
     warns = hsc_record_warnings({t: r[0] for t, r in reads.items()})
     checks = [tray_power_check(t, hscs, cpld, why=why, warns=warns[t]) for t, (hscs, cpld, why) in reads.items()]

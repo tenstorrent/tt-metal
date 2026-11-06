@@ -67,12 +67,13 @@ def txn_of(argv: list[str]) -> tuple[int, int, int, tuple[int, ...]]:
 class FakeBmc:
     """Answers the phase's reads from per-tray HSC and CPLD values; records every call."""
 
-    def __init__(self, hsc=None, cpld=None, fail=()):
+    def __init__(self, hsc=None, cpld=None, fail=(), stderr_prefix=""):
         # hsc: {(tray, addr): {"word", "input", "iout"[, "rec": {code: word}]}},
         # cpld: {tray: {"reg1e", "dbg5f", "dbg58"}}
         self.hsc = hsc or {}
         self.cpld = cpld or {}
         self.fail = set(fail)  # (tray, addr) whose reads all error out
+        self.stderr_prefix = stderr_prefix  # e.g. a sudo warning line before ipmitool's error
         self.calls: list[list[str]] = []
         self.index: dict[int, int] = {}
         self.tray_of_bus = {bus: tray for tray, bus in TRAY_POWER_BUS.items()}
@@ -82,7 +83,8 @@ class FakeBmc:
         bus, addr, nbytes, payload = txn_of(argv)
         tray = self.tray_of_bus[bus]
         if (tray, addr) in self.fail:
-            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="Unable to send RAW command\n")
+            err = self.stderr_prefix + "Unable to send RAW command\n"
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr=err)
         if addr == 0x80:
             cp = self.cpld.get(tray, CLEAN_CPLD)
             if nbytes == 0:
@@ -308,6 +310,38 @@ class TestTrayPowerPhase(unittest.TestCase):
         self.assertEqual([c.status for c in phase.checks], [SKIP])
         self.assertEqual(len(calls), 1)
 
+    def test_sudo_refusal_anywhere_in_stderr_is_one_skip(self):
+        for err in (
+            "sudo: unable to resolve host h: Name or service not known\nsudo: a password is required\n",
+            "sudo: a terminal is required to read the password\n",
+            "smarton is not in the sudoers file.  This incident will be reported.\n",
+            "Sorry, user smarton is not allowed to execute '/usr/bin/ipmitool raw' as root on h.\n",
+            "sudo: ipmitool: command not found\n",
+        ):
+            calls = []
+
+            def runner(argv, err=err):
+                calls.append(argv)
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr=err)
+
+            phase = run_phase(runner)
+            self.assertEqual([c.status for c in phase.checks], [SKIP], err)
+            self.assertEqual(len(calls), 1, err)
+
+    def test_sudo_warning_line_does_not_hide_other_trays(self):
+        # sudo warns on the first line and still runs ipmitool; tray 1's bus NACKs.
+        fail = {(1, a) for a in (0x40, 0x42, 0x80)}
+        for warn in (
+            "sudo: unable to resolve host h: Name or service not known\n",
+            "sudo: setrlimit(RLIMIT_CORE): Operation not permitted\n",
+        ):
+            bmc = FakeBmc(hsc={(3, 0x40): dict(CLEAN_HSC, word=0x2000, input=0x20)}, fail=fail, stderr_prefix=warn)
+            checks = by_tray(run_phase(bmc))
+            self.assertEqual([checks[t].status for t in (1, 2, 3, 4)], [WARN, PASS, FAIL, PASS], warn)
+            self.assertIn("Unable to send RAW command", checks[1].details, warn)
+            self.assertNotIn("resolve host", checks[1].details, warn)
+            self.assertNotIn("setrlimit", checks[1].details, warn)
+
     def test_hung_tray_1_does_not_hide_tray_3_fault(self):
         clock = FakeClock()
         bmc = FakeBmc(hsc={(3, 0x40): dict(CLEAN_HSC, word=0x2000, input=0x20)})
@@ -321,6 +355,7 @@ class TestTrayPowerPhase(unittest.TestCase):
         checks = by_tray(run_phase(runner, clock=clock))
         self.assertEqual([checks[t].status for t in (1, 2, 3, 4)], [WARN, PASS, FAIL, PASS])
         self.assertIn("not read", checks[1].details)
+        self.assertIn(f"no reply in {TRAY_POWER_CALL_S:g} s", checks[1].details)
 
     def test_other_tiers_and_dry_run_send_nothing(self):
         for tier in ("light", "medium", "deploy"):
