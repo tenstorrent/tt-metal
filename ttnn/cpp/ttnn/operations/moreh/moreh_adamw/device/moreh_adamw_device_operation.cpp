@@ -14,7 +14,7 @@
 namespace ttnn::operations::moreh::moreh_adamw {
 
 void MorehAdamWDeviceOperation::validate_inputs(
-    const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     check_tensor(tensor_args.param_in, "moreh_adamw", "param_in", {DataType::BFLOAT16, DataType::BFLOAT8_B});
     check_tensor(tensor_args.grad, "moreh_adamw", "grad", {DataType::BFLOAT16, DataType::BFLOAT8_B});
     check_tensor(tensor_args.exp_avg_in, "moreh_adamw", "exp_avg_in", {DataType::BFLOAT16, DataType::BFLOAT8_B});
@@ -49,6 +49,16 @@ void MorehAdamWDeviceOperation::validate_inputs(
             "moreh_adamw",
             "max_exp_avg_sq_out",
             {DataType::BFLOAT16, DataType::BFLOAT8_B});
+    }
+
+    // The reader fills the scalar/intermediate CBs (which take param_in's format unless fp32_dest_acc_en)
+    // with raw 16/32-bit tiles, which a block-float page can neither hold nor represent.
+    if (tensor_args.param_in.dtype() == DataType::BFLOAT8_B) {
+        const auto fp32_dest_acc_en = std::get<2>(
+            get_compute_kernel_config_args(tensor_args.param_in.device()->arch(), attributes.compute_kernel_config));
+        TT_FATAL(
+            fp32_dest_acc_en,
+            "moreh_adamw: param_in of dtype BFLOAT8_B requires compute_kernel_config.fp32_dest_acc_en = true");
     }
 }
 
