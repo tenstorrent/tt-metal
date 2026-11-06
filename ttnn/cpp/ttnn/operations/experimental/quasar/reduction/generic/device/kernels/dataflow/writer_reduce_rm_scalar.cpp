@@ -8,7 +8,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "llk_defs.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/kernels/dataflow/reduce_rm_dataflow_common.hpp"
 
 //

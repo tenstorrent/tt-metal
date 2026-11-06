@@ -13,8 +13,8 @@
 #include "ckernel_sfpu_sqrt_custom.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_log1p.h"
-#include "sfpu/ckernel_sfpu_log.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_log.h"
+#include "ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -625,12 +625,14 @@ inline void acos_init() {
     asin_acos_init<is_fp32_dest_acc_en>();
 }
 
-bool bf16_dest_acos();
-template <int ITERATIONS>
-void calculate_acos_bf16();
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_acos_bf16.h"
+
+namespace ckernel::sfpu {
+
 // Whether BF16 DEST runs the generated acos kernel as one call over the whole tile.
 inline constexpr bool acos_bf16_whole_tile = true;
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_acos() {
     if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
@@ -704,13 +706,13 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     return y;
 }
 
-// t = exp(a); cosh(a) = 0.5 * (t + 1/t)
+// t = exp(|x|); cosh(x) = 0.5 * (t + 1/t)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat a = sfpi::setsgn(x, 0);
-        sfpi::vFloat q = _sfpu_quarter_exp_abs_<is_fp32_dest_acc_en>(a);
+        // _sfpu_quarter_exp_abs_ takes |x| itself; no setsgn needed here.
+        sfpi::vFloat q = _sfpu_quarter_exp_abs_<is_fp32_dest_acc_en>(x);
         sfpi::vFloat r = _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(q);
         sfpi::vFloat y = q + q;
         r *= 0.125f;
@@ -1218,5 +1220,3 @@ void init_atanh() {
 }
 
 }  // namespace ckernel::sfpu
-
-#include "ckernel_sfpu_acos_bf16.h"
