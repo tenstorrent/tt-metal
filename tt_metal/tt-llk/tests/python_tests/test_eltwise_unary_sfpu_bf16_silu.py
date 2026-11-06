@@ -49,5 +49,11 @@ def test_eltwise_unary_sfpu_bf16_replaced_instances(
 ):
     """Every instance the BF16 kernel replaces, on BF16 and FP32 data, against the sweep's golden."""
     _unary.test_eltwise_unary_sfpu(
-        formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions, DestSync.Half
+        formats,
+        approx_mode,
+        mathop,
+        fast_mode,
+        dest_acc,
+        input_dimensions,
+        DestSync.Half,
     )
