@@ -162,7 +162,6 @@ void kernel_main() {
     constexpr uint32_t cb_recv_max = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_RECV_MAX);
     constexpr uint32_t cb_recv_sum = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_RECV_SUM);
     constexpr uint32_t cb_merge_ctrl = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_MERGE_CTRL);
-    constexpr uint32_t cb_mmax = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_MMAX);
     constexpr uint32_t cb_corr2 = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_CORR2);
 
     constexpr uint32_t qsb =
@@ -561,22 +560,23 @@ void kernel_main() {
                 uint32_t fin_sum = sum_cur.get_cb_id(), fin_out = out_cur.get_cb_id();
                 if (partial == sparse_sdpa::SPLIT_PARTIAL_VALID) {
                     CircularBuffer recv_out(cb_recv_out), recv_max(cb_recv_max), recv_sum(cb_recv_sum);
-                    CircularBuffer mmax(cb_mmax), corr2(cb_corr2);
+                    CircularBuffer corr2(cb_corr2);
+                    // max_prev / out_prev / sum_prev are empty here (consumed by this chunk, or never filled).
                     recv_max.wait_front(Sqt);
                     max_cur.wait_front(Sqt);
                     reconfig_data_format_srca(cb_recv_max);
-                    pack_reconfig_data_format(cb_mmax);
+                    pack_reconfig_data_format(max_prev.get_cb_id());
                     pack_reconfig_l1_acc(0);
-                    configure_single_tile_pack(cb_mmax);
-                    max_block_sfpi(max_cur.get_cb_id(), cb_recv_max, cb_mmax, Sqt);
+                    configure_single_tile_pack(max_prev.get_cb_id());
+                    max_block_sfpi(max_cur.get_cb_id(), cb_recv_max, max_prev.get_cb_id(), Sqt);
                     exp_packthread_tile_init<EXP_APPROX_MODE>();
                     corr_cb.reserve_back(Sqt);
-                    sub_exp_first_col_blocks<false, scale_fp32>(max_cur.get_cb_id(), cb_mmax, cb_corr, 0, Sqt);
+                    sub_exp_first_col_blocks<false, scale_fp32>(
+                        max_cur.get_cb_id(), max_prev.get_cb_id(), cb_corr, 0, Sqt);
                     corr_cb.push_back(Sqt);
                     corr2.reserve_back(Sqt);
-                    sub_exp_first_col_blocks<false, scale_fp32>(cb_recv_max, cb_mmax, cb_corr2, 0, Sqt);
+                    sub_exp_first_col_blocks<false, scale_fp32>(cb_recv_max, max_prev.get_cb_id(), cb_corr2, 0, Sqt);
                     corr2.push_back(Sqt);
-                    // out_prev / sum_prev are empty here (consumed by this chunk's SALAD, or never filled).
                     out_prev.reserve_back(Sqt * vDHt);
                     sum_prev.reserve_back(Sqt);
                     reconfig_data_format(out_cur.get_cb_id(), cb_corr);
@@ -607,7 +607,7 @@ void kernel_main() {
                     recv_sum.pop_front(Sqt);
                     corr_cb.pop_front(Sqt);
                     corr2.pop_front(Sqt);
-                    mmax.pop_front(Sqt);
+                    max_prev.pop_front(Sqt);
                     pack_to_unpack_sync();  // merged packs must be visible to normalize's unpack
                     fin_sum = sum_prev.get_cb_id();
                     fin_out = out_prev.get_cb_id();

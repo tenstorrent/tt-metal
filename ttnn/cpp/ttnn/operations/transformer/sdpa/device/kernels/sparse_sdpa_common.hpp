@@ -200,7 +200,6 @@ enum : uint32_t {
     CB_RECV_MAX,
     CB_RECV_SUM,
     CB_MERGE_CTRL,
-    CB_MMAX,
     CB_CORR2,
     END,
 };

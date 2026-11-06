@@ -59,7 +59,6 @@ enum SparseCB : uint32_t {
     cb_recv_max,
     cb_recv_sum,
     cb_merge_ctrl,  // writer -> compute: the neighbour's semaphore value (SPLIT_PARTIAL_*)
-    cb_mmax,        // merged max
     cb_corr2,       // exp(recv_max - merged_max)
     cb_count
 };
@@ -229,7 +228,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         for (uint32_t id : {cb_send_out, cb_recv_out}) {
             cb(id, tile_bytes, Sqt * vDHt, bf);
         }
-        for (uint32_t id : {cb_send_max, cb_send_sum, cb_recv_max, cb_recv_sum, cb_mmax, cb_corr2}) {
+        for (uint32_t id : {cb_send_max, cb_send_sum, cb_recv_max, cb_recv_sum, cb_corr2}) {
             cb(id, tile_bytes, Sqt, bf);
         }
         cb(cb_merge_ctrl, ::sparse_sdpa::control_message::PAGE_BYTES, 1, bf);
@@ -401,7 +400,6 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
          cb_recv_max,
          cb_recv_sum,
          cb_merge_ctrl,
-         cb_mmax,
          cb_corr2});
     TT_FATAL(
         compute_ct.size() == ::sparse_sdpa::compute_ct_arg::END,
