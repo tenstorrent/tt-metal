@@ -30,6 +30,8 @@ Stock response logging is accepted after fresh AutoDebug found the built-in resp
 
 The optional expanded batch-8 cache passed local capacity confirmation: eight independent 131,072-token histories were resident together, with no preemptions and 99.73% late-prefix reuse. Three native baseline responses and 583 retained decode IDs matched exactly. This used 0.24167 device hours against a 0.42-hour forecast. The new-source batch-1 regression also passed: eight exact 4096/128 requests, 753.41 ms TTFT and 35.31 tokens/s/user, with all eight outputs matching the prior benchmark. Its device cost was 0.08853 hours against 0.07605 predicted. These candidate values remain unselected pending the scored C8 comparison; no release speedup is credited. Measured eight-agent cadence rises from31.15ms/token at4K to63.85ms at131K. The matching four-agent cadence run completed in0.14202device hours against0.20forecast:34.32tokens/s/user at4K and18.70at131K. Short-window aggregate C8/C4 ratios are1.87–1.68, not causal scored speedups. The optional effort box is3.5device hours. Larger normal rungs remain independent. Same20 C8comparison42293808766 was dispatched21:05UTC to overlap its new-image build with the repaired baseline tail; paired validity and acceptance remain pending. See `runs/gpqa-b8-expanded-pool/local-confirmation.json` and `benchmark-confirmation.json`.
 
+GPQA40 startup confirms the frozen40 list, full60 autoport, C4/B8/maxseq8, context262144 and unchanged sampling/output/request limits. The stockCI INFO filter removed native request/reply records. The model-only hex formatter passed three exact native pairs/583 decode IDs and a lossless roundtrip through that filter; its two local runs used0.12060device hours versus0.18predicted. ActualCI confirmation42302118669 is building on published eef534/483509; no clean dry claim. A separate timestamp observer repair passed9 host tests and parsed the actual seven-digit CI timestamp without changing evidence.
+
 ## Effort predictions and results
 
 Device costs include the device job, not build/queue. Release savings are forecasts on the then-planned lists; guesses are marked. Later measured stops can retire those savings. Complete confirmations and their original scope remain in each result linked by efforts.json.
@@ -129,6 +131,12 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | larger-gpqa-concurrency-reprice | 1.50000 (guess) / 0.00000 | 2.00000 | none/open: result: B16/C8 conservative allocation scenario exceeds pool by3 IDs; B32/C16 fits modeled envelope but speed uncertain. Prefer model-owned enlarged B8 pool20480; physical long-context fit unmeasured.; conte… |
 | gpqa-b8-expanded-pool | 1.10900 (guess) / unknown | 3.02400 | running/pending: Pending |
 | gpqa80-c8-preparation | 0.00000 / 0.00000 | 0.00000 | kept/solved: candidate sha: dd4ba5b83837db77f4b26ca43005ae2074cd03b6; registered80 exact: True; tests: 36; hooks: passed |
+| gpqa80-current-best-publication | 0.00000 / 0.00000 | 0.00000 | kept/solved: candidate sha: 9a874b6574c157e77e5f4445e3134885589af96d; production identical to: 1eca89c0dcf65550a79196aecca13ef687c9cf06; tests: 36; hooks: passed |
+| ci-timestamp-observer-fix | 0.00000 / 0.00000 | 0.00000 | kept/solved: tests passed: 9; actual snapshot parses: True; original timestamps preserved: True; dry pass: False |
+| gpqa160-198-publication | 0.00000 / 0.00000 | 0.00000 | kept/solved: variants: 4; tests per variant: 36; hooks: passed; source and cohort guards: passed |
+| ci-response-log-propagation | 0.09000 (guess) / 0.12060 | 0.00000 | kept/open: local exactness: True; expected decode ids exact: 583; full native json equal: True; filter roundtrip: True |
+| ci-response-log-publication | 0.00000 / 0.00000 | 0.00000 | kept/solved: tt sha: eef534e5cd6bcaf37957647de4d8d4eff4f0e047; tti sha: 483509781a0898395208fe0fdc14f54eb3ff8857; published: source-only FF separate checkouts, dedicated branches; host tests: 37 |
+| ci-native-log-confirmation | 0.18296 / unknown | 0.00000 | running/pending: Pending |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 

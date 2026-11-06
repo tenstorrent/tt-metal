@@ -202,6 +202,15 @@
     {
       "fact": "A configured unsorted GPQA doc_ids list can be logged as labels while pinned lm_eval iterates semantic documents ascending. Bind saved official prompt/document hashes and unique pinned-template lengths to complete remap-aware retained chains; never assign physical row order as request identity. Repaired20 matched20chains withzeroambiguousedges.",
       "evidence": "runs/larger-gpqa20-c4-retention-retry/audit.json"
+    },
+    {
+      "fact": "CI emits seven fractional timestamp digits; host Python3.10 fromisoformat rejects these. Normalize fractional precision only for arithmetic and preserve original timestamps.",
+      "evidence": "runs/ci-timestamp-observer-fix/RESULT.json",
+      "scope": "Private read-only observer; no harness or serving changes"
+    },
+    {
+      "fact": "Stock shield Docker live-log forwarding removes every line matching INFO case-insensitively, including request records and response text. Removing severity label alone is insufficient. Model-only lossless hex formatter selected through supported logging config passed local exact3/583ID and exactfilter checks; actual CI confirmation pending42302118669.",
+      "evidence": "runs/ci-response-log-propagation/RESULT.json"
     }
   ],
   "suite_timings": [

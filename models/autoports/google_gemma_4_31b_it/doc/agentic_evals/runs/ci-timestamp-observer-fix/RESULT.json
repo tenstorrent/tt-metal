@@ -1,0 +1,22 @@
+{
+  "snapshot_bytes": 4212534,
+  "snapshot_sha256": "e3a0fc4002f68420de9fb209a9756f54d945ef418413c5a628a117f4a7626f2f",
+  "fetch_started_at": "2026-11-06T21:43:26.530430+00:00",
+  "fetch_finished_at": "2026-11-06T21:43:27.323589+00:00",
+  "latest_log_event": {
+    "timestamp": "2026-11-06T21:43:20.5438920Z",
+    "basis": "CI timestamp UTC",
+    "line": 17924
+  },
+  "last_event_lag_seconds": 6.779697,
+  "initial_c_identified": false,
+  "all_initial_server_replies_observed": false,
+  "no_score_currently": "unknown",
+  "scope": "Server response construction only; no client acknowledgement, dry pass, cancellation or score decision. Initial IDs require isolated evaluator traffic after the operator-selected boundary.",
+  "tests_passed": 9,
+  "device_hours": 0,
+  "original_latest_timestamp_preserved": true,
+  "arithmetic_precision": "microseconds; fractional remainder truncated only during arithmetic, below1us per timestamp",
+  "observer_sha256": "97ff0a94095f334f6dda3fc3e3d688282942b24c342a979b3121b1675dd299de",
+  "prior_error_state_modified": false
+}

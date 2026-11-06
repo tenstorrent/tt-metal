@@ -80,7 +80,7 @@
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
     "stage12_accuracy": "Banked GPQA20/198, SWE2/500, Terminal2/89. SWE5 invalid external retrieval; measured stop5/functional2. Terminal10 measured nonfit/functional2. GPQA40 running; no dry/release.",
-    "release": "No frozen dry/release yet. Stock response logging locally confirmed for initial-request IDs including empty-visible replies; actual CI no-score dry remains."
+    "release": "No frozen dry/release yet. CI INFO log filter diagnosed; model-only lossless logging repair passed local3/583ID exactness. ActualCI originalsmoke2 confirmation42302118669 pending; no-score dry remains unproven."
   },
   "notes": [
     "Repaired runtime ab2730c measured; no frozen release yet. No vLLM profiling.",

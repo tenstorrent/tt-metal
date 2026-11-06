@@ -332,6 +332,25 @@
       "planned_clients": 4,
       "max_num_seqs": 8,
       "batch_reason": "Smallest validated batch>=4; current acceptedC4/B8"
+    },
+    "ci-response-log-propagation-stock-local": {
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest supported batch>=2; exact native pair and CI B8 logging configuration"
+    },
+    "ci-response-log-propagation-hex-local": {
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest supported batch>=2; native-pair/CI logging confirmation"
+    },
+    "ci-native-log-confirmation": {
+      "planned_clients": 2,
+      "configured_concurrency_ceiling": 4,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "batch_reason": "Two original smoke tasks; smallest validated batch>=2, current C4 ceiling unchanged"
     }
   },
   "release_limits": {

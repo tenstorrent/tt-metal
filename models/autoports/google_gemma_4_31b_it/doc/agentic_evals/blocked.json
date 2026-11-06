@@ -193,15 +193,20 @@
     }
   },
   "initial_agent_reply_observability": {
-    "status": "local_config_fix_confirmed_ci_dry_pending",
-    "observed_at": "2026-11-06T19:49:25.885007+00:00",
-    "problem": "Aggregate completions do not prove all initial C requests received replies; stock output log excludes reasoning-only replies, model adapter has no request-final identity.",
+    "status": "local_exact_formatter_repair_confirmed_actual_ci_pending",
+    "observed_at": "2026-11-06T21:49:49.076105+00:00",
+    "problem": "StockCI grep-v-i INFO strips native records and responsecontent; workflow remains unchanged",
     "evidence": [
-      "runs/first-agent-reply-observability/confirmation.json"
+      "runs/ci-response-log-propagation/RESULT.json",
+      "runs/ci-response-log-publication/publication-confirmation.json"
     ],
     "action": "Fresh AutoDebug/AutoFix source investigation; no runtime or route change authorized implicitly. Normal rungs continue independently.",
     "otlp": "Stock host request-finish spans exist, but collector/read route unavailable; no device profiler used or proposed.",
-    "solution": "Stock response-body debugmiddleware plusrequeststartIDs; no sharedsource/runtimechange",
-    "remaining": "Actual initialC response IDs and clientprogress/no errors before score on frozenCIroute; no pass inferred fromlocalcheck"
+    "solution": "Model-only explicit native hex logging preserves exact stock records through filter; private observer decodes",
+    "remaining": "Actual CI initial request and full reply visibility; then frozen no-score dry",
+    "ci_run_id": 42296943044,
+    "ci_observation": "Correct autoport/full60/list/limits and enabled request flags, but no request-ID or response-body records in available CI log; no dry claim",
+    "diagnosis_effort": "runs/ci-response-log-propagation/plan.md",
+    "confirmation_run_id": 42302118669
   }
 }
