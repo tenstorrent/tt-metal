@@ -218,8 +218,13 @@ void enqueue_mesh_workload(
                 [&](const Tensor& t) { spec_copies.emplace_back(t.tensor_spec()); }, tensor_args);
         }
 
-        auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(
-            ttnn::core::current_mesh_command_queue(*mesh_device, cq_id));
+        // A NO_DISPATCH graph capture enqueues nothing, so there is no trace to report. Skipping the lookup also
+        // keeps such a capture working when the selected queue does not exist on this device.
+        std::optional<tt::tt_metal::distributed::MeshTraceId> trace_id;
+        if (!graph_capture_blocks_dispatch()) {
+            trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(
+                ttnn::core::current_mesh_command_queue(*mesh_device, cq_id));
+        }
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
             workload, runtime_id, operation_name, std::move(spec_copies), trace_id);
     }
