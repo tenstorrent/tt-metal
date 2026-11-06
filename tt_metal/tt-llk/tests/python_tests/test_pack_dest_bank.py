@@ -42,66 +42,140 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test, result_tensor
 
-_CPP_SOURCE = "sources/pack_dest_bank_test.cpp"
+
+def get_valid_tilize_datacopy(formats):
+    """
+    Get valid tilize options for _llk_math_eltwise_unary_datacopy_
+
+    - Blackhole and Wormhole have differing APIs:
+        - Blackhole: Has tilize argument (SW workaround for HW bug)
+        - Wormhole: No tilize argument (No SW workaround needed)
+    - Tilize cannot be enabled if input format is Bfp8_b (HW limitation)
+
+    Therefore we only test tilization on Blackhole
+    """
+
+    chip_arch = get_chip_architecture()
+
+    if chip_arch == ChipArchitecture.WORMHOLE:
+        return [Tilize.No]
+
+    if formats.input_format == DataFormat.Bfp8_b:
+        return [Tilize.No]
+
+    return [Tilize.No, Tilize.Yes]
 
 
-def create_pack_dest_bank_config(
+# Shared with perf_pack_dest_bank.py so the two sweeps stay aligned.
+PACK_DEST_BANK_SWEEP = dict(
+    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
+    num_faces=4,
+    tilize=get_valid_tilize_datacopy,
+    dest_index=0,
+    input_dimensions=[[32, 32], [32, 64], [128, 32], [128, 64], [128, 256]],
+)
+
+
+def _run_pack_dest_bank_test(
     formats,
     dest_acc,
     l1_acc,
     num_faces,
     tilize,
     dest_index,
-    tile_count,
-    num_blocks,
-    num_tiles_in_block,
-    variant_stimuli,
-    *,
     input_dimensions,
-    loop_factor=1,
+    *,
+    blocks=None,
     is_perf=False,
+    perf_report=None,
     run_types=None,
+    loop_factor=1,
 ):
-    """Build the shared functional/performance destination-bank configuration."""
+    """Shared body for the functional and perf destination-bank tests.
+
+    ``blocks`` overrides the (num_blocks, num_tiles_in_block) split that Dest
+    capacity would otherwise choose.
+    """
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
     if run_types is None:
         run_types = [PerfRunType.L1_TO_L1]
-    if not is_perf and run_types != [PerfRunType.L1_TO_L1]:
-        raise ValueError("Functional pack destination-bank runs only support L1_TO_L1")
-    if is_perf and tilize == Tilize.Yes:
-        raise ValueError("Pack destination-bank perf runs do not support tilize")
-    if is_perf and dest_index != 0:
-        raise ValueError("Pack destination-bank perf runs require dest_index=0")
 
-    runtimes = [
-        generate_input_dim(input_dimensions, input_dimensions),
-        DEST_INDEX(dest_index),
-        TILE_COUNT(tile_count),
-        NUM_BLOCKS(num_blocks),
-        NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        NUM_FACES(num_faces),
-        L1_ACC(l1_acc),
-    ]
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
 
-    return create_test_or_perf_config(
+    if tilize == Tilize.No:
+        golden_tensor = src_A.to(format_dict[formats.output_format])
+    else:
+        generate_golden = get_golden_generator(TilizeGolden)
+        golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
+
+    if blocks is None:
+        blocks = get_num_blocks_and_num_tiles_in_block(
+            DestSync.Half,
+            dest_acc,
+            formats,
+            input_dimensions,
+            TILE_DIMENSIONS,
+            (
+                BlocksCalculationAlgorithm.Standard
+                if tilize == Tilize.No
+                else BlocksCalculationAlgorithm.Tilize
+            ),
+        )
+    num_blocks, num_tiles_in_block = blocks
+
+    configuration = create_test_or_perf_config(
         is_perf=is_perf,
         run_types=run_types,
         test_config_kwargs={
-            "test_name": _CPP_SOURCE,
+            "test_name": "sources/pack_dest_bank_test.cpp",
             "formats": formats,
             "templates": [
                 TILIZE(tilize),
                 LOOP_FACTOR(loop_factor),
             ],
-            "runtimes": runtimes,
-            "variant_stimuli": variant_stimuli,
+            "runtimes": [
+                generate_input_dim(input_dimensions, input_dimensions),
+                DEST_INDEX(dest_index),
+                TILE_COUNT(tile_cnt_A),
+                NUM_BLOCKS(num_blocks),
+                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+                NUM_FACES(num_faces),
+                L1_ACC(l1_acc),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt_A,
+                num_faces=num_faces,
+            ),
             "dest_acc": dest_acc,
             "l1_acc": l1_acc,
             "unpack_to_dest": unpacks_to_dest(formats.input_format, dest_acc, tilize),
         },
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
+
+    _run_functional_pack_dest_bank(
+        configuration, formats, tile_cnt_A, num_faces, golden_tensor
+    )
 
 
-def run_functional_pack_dest_bank(
+def _run_functional_pack_dest_bank(
     configuration, formats, tile_count, num_faces, golden_tensor
 ):
     """Run after zero-filling every result tile so L1 accumulation starts from a known state."""
@@ -139,108 +213,12 @@ def run_functional_pack_dest_bank(
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
 
 
-def get_valid_tilize_datacopy(formats):
-    """
-    Get valid tilize options for _llk_math_eltwise_unary_datacopy_
-
-    - Blackhole and Wormhole have differing APIs:
-        - Blackhole: Has tilize argument (SW workaround for HW bug)
-        - Wormhole: No tilize argument (No SW workaround needed)
-    - Tilize cannot be enabled if input format is Bfp8_b (HW limitation)
-
-    Therefore we only test tilization on Blackhole
-    """
-
-    chip_arch = get_chip_architecture()
-
-    if chip_arch == ChipArchitecture.WORMHOLE:
-        return [Tilize.No]
-
-    if formats.input_format == DataFormat.Bfp8_b:
-        return [Tilize.No]
-
-    return [Tilize.No, Tilize.Yes]
-
-
-def get_valid_num_faces_datacopy(tilize):
-    """
-    Get valid num_faces options for _llk_math_eltwise_unary_datacopy_
-
-    - Number of faces must be 4 when tilization is enabled (SW limitation)
-    - Otherwise num_faces can be 1, 2, or 4
-    """
-
-    if tilize == Tilize.Yes:
-        return [4]
-
-    return [1, 2, 4]
-
-
-@parametrize(
-    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
-    num_faces=4,
-    tilize=get_valid_tilize_datacopy,
-    dest_index=0,
-    input_dimensions=[[32, 32], [32, 64], [128, 32], [128, 64], [128, 256]],
-)
+@parametrize(**PACK_DEST_BANK_SWEEP)
 def test_pack_dest_bank(
     formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
 ):
-
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-    )
-
-    if tilize == Tilize.No:
-        golden_tensor = src_A.to(format_dict[formats.output_format])
-    else:
-        generate_golden = get_golden_generator(TilizeGolden)
-        golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
-
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        (
-            BlocksCalculationAlgorithm.Standard
-            if tilize == Tilize.No
-            else BlocksCalculationAlgorithm.Tilize
-        ),
-    )
-
-    configuration = create_pack_dest_bank_config(
-        formats,
-        dest_acc,
-        l1_acc,
-        num_faces,
-        tilize,
-        dest_index,
-        tile_cnt_A,
-        num_blocks,
-        num_tiles_in_block,
-        StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-        ),
-        input_dimensions=input_dimensions,
-    )
-
-    run_functional_pack_dest_bank(
-        configuration, formats, tile_cnt_A, num_faces, golden_tensor
+    _run_pack_dest_bank_test(
+        formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
     )
 
 
@@ -258,41 +236,13 @@ def test_pack_dest_bank_two_blocked_packs_of_4(
     if get_chip_architecture() != ChipArchitecture.WORMHOLE:
         pytest.skip("Wormhole-specific blocked pack regression")
 
-    input_dimensions = [128, 64]
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-    )
-
-    torch_format = format_dict[formats.output_format]
-    golden_tensor = src_A.to(torch_format)
-
-    configuration = create_pack_dest_bank_config(
+    _run_pack_dest_bank_test(
         formats,
         dest_acc,
         l1_acc,
         num_faces,
         tilize,
         dest_index,
-        tile_cnt_A,
-        2,
-        4,
-        StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-        ),
-        input_dimensions=input_dimensions,
-    )
-
-    run_functional_pack_dest_bank(
-        configuration, formats, tile_cnt_A, num_faces, golden_tensor
+        [128, 64],
+        blocks=(2, 4),
     )
