@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Post-splice embeddings on one chip: TtParallelEmbedding over an expanded prompt with image rows spliced chunk by
+"""Post-splice embeddings on one chip and on a galaxy: TtParallelEmbedding over an expanded prompt with image rows spliced chunk by
 chunk through TtPrefillRuntime._splice_media, against a torch merge and against Hugging Face minimax_m3_vl's merge.
 
 Run: pytest models/demos/minimax_m3/tests/unit/test_media_splice_vs_ref.py
@@ -96,7 +96,12 @@ def splice_chunks(mesh_device, table, tokens, images, store, first_chunk_start, 
         shard_vocab_on_sp=False,
     )
     runtime = runtime_with(
-        store, sp=1, chunk_size=CHUNK, mesh_shape=mesh_shape, mesh_device=mesh_device, emb_tp_sharded=emb_tp_sharded
+        store,
+        sp=mesh_shape[0],
+        chunk_size=CHUNK,
+        mesh_shape=mesh_shape,
+        mesh_device=mesh_device,
+        emb_tp_sharded=emb_tp_sharded,
     )
     out = []
     for start in range(first_chunk_start, len(tokens), CHUNK):
@@ -110,7 +115,7 @@ def splice_chunks(mesh_device, table, tokens, images, store, first_chunk_start, 
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(0, None)),
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, None)),
             )
         )
         if len(x.shape) == 3:
@@ -118,7 +123,11 @@ def splice_chunks(mesh_device, table, tokens, images, store, first_chunk_start, 
         refs = [MediaRef(0, s, s + n, key) for s, n, key in images if s < end and s + n > start]
         if refs:
             x = TtPrefillRuntime._splice_media(runtime, x, [PrefillChunk(0, start, end)], refs)
-        out.append(ttnn.to_torch(ttnn.get_device_tensors(x)[0]).reshape(CHUNK, -1)[: end - start])
+        # Inverts activation_mapper. A replicated residual repeats hidden once per TP rank, so keep the first.
+        rows = ttnn.to_torch(
+            x, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(2, 3))
+        ).reshape(CHUNK, -1)[:, :HIDDEN]
+        out.append(rows[: end - start])
         ttnn.deallocate(x)
     return torch.cat(out)
 
@@ -137,7 +146,7 @@ def check(got, want, images, first_chunk_start, seq_len):
     assert torch.equal(got[is_image], want[is_image]), "an image row is not its embedding"
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (8, 4)])
 @pytest.mark.parametrize("sharded_residual", ["1", "0"], ids=["tp_sharded", "replicated"])
 @pytest.mark.parametrize(
     "seq_len,layout,first_chunk_start",
@@ -243,7 +252,7 @@ def hf_prompt(layout, model):
     return torch.tensor(ids), images, features
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (8, 4)])
 @pytest.mark.parametrize(
     "layout,first_chunk_start",
     [

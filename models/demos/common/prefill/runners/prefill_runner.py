@@ -894,7 +894,8 @@ def _compute_and_send(
     where = f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     logger.info(
         f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} {where} "
-        f"provided={meta.get('provided_levels')}{_chunks_str(meta)}"
+        f"provided={meta.get('provided_levels')} media_refs={len(meta.get('media_refs') or ())}"
+        f"{_chunks_str(meta)}"
     )
 
     ack_md = _ack_metadata(runtime, sockets, meta, d2h_service)
