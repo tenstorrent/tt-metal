@@ -22,7 +22,6 @@ Needs vLLM 0.31 and vllm-tt-plugin (src/ on PYTHONPATH), and the ttnn host stub 
         models/demos/blackhole/qwen36/tests/test_mamba_align_host.py
 """
 
-import inspect
 import json
 from types import SimpleNamespace
 
@@ -81,47 +80,23 @@ def _label(tokens):
 
 def plugin_windows(groups, tables, req_ids, num_computed, num_scheduled, num_rows):
     """vllm-tt-plugin's MambaCacheGroups.step_inputs of one step: (each MambaSpec group's windows [num_rows, 1 + K] in
-    group_indices order, the start-state counts [num_rows] or None). A plugin whose step_inputs takes layer_to_group_idx
-    returns lists over layers; with the KV cache group indices as the layers, entry g is group g's tensor."""
-    if "layer_to_group_idx" not in inspect.signature(groups.step_inputs).parameters:
-        return groups.step_inputs(tables, req_ids, num_computed, num_scheduled, num_rows)
-    inputs = groups.step_inputs(tables, req_ids, num_computed, num_scheduled, list(range(len(tables))), num_rows)
-    per_group = inputs.state_block_windows_per_layer or inputs.state_block_ids_per_layer
-    return [per_group[g] for g in groups.group_indices], inputs.state_accepted_counts
+    group_indices order, the start-state counts [num_rows] or None)."""
+    return groups.step_inputs(tables, req_ids, num_computed, num_scheduled, num_rows)
 
 
 def plugin_checkpoints(groups, checkpoints, req_ids, requests, num_rows):
     """vllm-tt-plugin's MambaCacheGroups.checkpoint_inputs: (each MambaSpec group's checkpoint blocks [num_rows, W] in
-    group_indices order, the positions [num_rows, W]), as plugin_windows for a plugin that takes layer_to_group_idx."""
-    if "layer_to_group_idx" not in inspect.signature(groups.checkpoint_inputs).parameters:
-        return groups.checkpoint_inputs(checkpoints, req_ids, requests, num_rows)
-    layers = list(range(max(groups.group_indices) + 1))
-    per_group, positions = groups.checkpoint_inputs(checkpoints, req_ids, requests, layers, num_rows)
-    return [per_group[g] for g in groups.group_indices], positions
+    group_indices order, the positions [num_rows, W])."""
+    return groups.checkpoint_inputs(checkpoints, req_ids, requests, num_rows)
 
 
-def mamba_state(groups, kv_cache_groups, windows, rows, counts=None, checkpoints=None):
+def mamba_state(groups, windows, rows, counts=None, checkpoints=None):
     """The model's mamba_state keyword for ``rows`` of a step, from plugin_windows (``windows``, ``counts``) and, for a
-    prefill, plugin_checkpoints of those rows: MambaCacheGroups.step_state where the plugin has it, else the same fields
-    with vLLM's layer names of each MambaSpec group."""
+    prefill, plugin_checkpoints of those rows: vllm-tt-plugin's MambaCacheGroups.step_state."""
     windows = [w[rows] for w in windows]
     counts = None if counts is None else counts[rows]
     blocks, positions = (None, None) if checkpoints is None else checkpoints
-    if hasattr(groups, "step_state"):
-        return groups.step_state(windows, counts, blocks, positions)
-    return SimpleNamespace(
-        groups=tuple(
-            SimpleNamespace(
-                layer_names=tuple(kv_cache_groups[g].layer_names),
-                windows=w,
-                checkpoint_blocks=None if blocks is None else blocks[k],
-                chain=None,
-            )
-            for k, (g, w) in enumerate(zip(groups.group_indices, windows))
-        ),
-        accepted_counts=counts,
-        checkpoint_positions=positions,
-    )
+    return groups.step_state(windows, counts, blocks, positions)
 
 
 class _Ledger:
@@ -264,7 +239,7 @@ class _Harness:
                 t[row, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
             tables.append(t)
         windows, _ = plugin_windows(self.groups, tables, req_ids, positions, out.num_scheduled_tokens, MAX_NUM_SEQS)
-        state = mamba_state(self.groups, self.kv.kv_cache_groups, windows, list(range(len(req_ids))))
+        state = mamba_state(self.groups, windows, list(range(len(req_ids))))
         state_blocks, _ = _gdn_step_blocks(state, self.gdn_layers)
         sampled = []
         for row, r in enumerate(req_ids):

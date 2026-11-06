@@ -558,9 +558,7 @@ class _Harness:
                 self.req_states,
                 len(rows_prefill),
             )
-            state = mamba_state(
-                self.groups, self.kv.kv_cache_groups, windows, [row for row, _ in rows_prefill], checkpoints=ckpts
-            )
+            state = mamba_state(self.groups, windows, [row for row, _ in rows_prefill], checkpoints=ckpts)
             ids, ckpt = _spec_prefill_blocks(state, self.book)
             self.book.set_prefill_blocks(ids)
             self.book.set_prefill_checkpoints(ckpt, state.checkpoint_positions)
@@ -601,9 +599,7 @@ class _Harness:
                     sampled[r] = []
         # ---- the verify (decode_forward): every live row not in this step is held
         if rows_verify:
-            state = mamba_state(
-                self.groups, self.kv.kv_cache_groups, windows, [row for row, _ in rows_verify], counts=counts
-            )
+            state = mamba_state(self.groups, windows, [row for row, _ in rows_verify], counts=counts)
             gdn_windows = Qwen36MTPContractForCausalLM._gdn_windows(state, self.book, B)
             start0 = torch.zeros(B, dtype=torch.int64)
             active = torch.zeros(B, dtype=torch.bool)
@@ -871,7 +867,8 @@ def test_a_prefill_that_skips_its_checkpoints_serves_a_stale_state(tmp_path, mon
 
 def test_in_replay_checkpoints_come_from_the_snapshot_and_replay_ends_from_the_scratch():
     """QWEN36_PREFILL_INTRACE_SNAP with vLLM's checkpoints (one prefill call, one segment): a checkpoint strictly inside
-    a replay is written from that replay's snapshot slot, one at a replay end from the bound state, in position order."""
+    a replay is written from that replay's snapshot slot, one at a replay end from the bound state, in position order.
+    """
     calls = []
     points = sbs.CheckpointPoints(
         [(1024, [5]), (2048, [6]), (3072, [7]), (3584, [8])],
