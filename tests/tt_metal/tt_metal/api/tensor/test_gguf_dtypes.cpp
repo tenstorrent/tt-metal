@@ -78,6 +78,11 @@ TEST(GgufDtypesTest, TraitsMatchDecoderPageLayout) {
         EXPECT_EQ(f.page_tiles, layout.page_tiles);
         EXPECT_EQ(f.code_bytes, layout.code_bytes);
         EXPECT_EQ(f.scale_rows, layout.scale_rows);
+        EXPECT_EQ(f.fp16_rows, layout.fp16_rows);
+        EXPECT_EQ(f.code_offset, layout.code_offset);
+        EXPECT_EQ(f.l1_scale_offset(), layout.scale_offset);
+        EXPECT_EQ(f.l1_scale_bytes(), layout.scale_bytes);
+        EXPECT_EQ(f.l1_page_bytes(), layout.rows * 64);
     }
     EXPECT_FALSE(is_gguf(DataType::MXINT2));
     EXPECT_FALSE(is_gguf(DataType::INVALID));
