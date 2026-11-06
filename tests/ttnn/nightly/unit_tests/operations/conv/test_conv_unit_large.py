@@ -156,7 +156,7 @@ def test_conv_dram_large(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout, num_slices, slice_type",
-    ((1, 512, 512, 64, 64, 3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth),),
+    ((1, 512, 512, 64, 64, 3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 0, SliceWidth),),
 )
 @pytest.mark.parametrize("weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(

@@ -106,9 +106,11 @@ def test_simple_conv_t2d(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout, num_slices, slice_type",
     (
         # fmt: off
+        # num_slices=0 lets the op choose. At these sizes it picks one slice (the L1 path), so the last row forces 4.
+        (1,  128, 512,  64, 64,  3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 0, SliceWidth ),
+        (1,   32,  32,  64, 64,  8, 8, 4, 4, 2, 2, 2, 2, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 0, SliceWidth ),
+        (16,  16,  16, 256, 128, 2, 2, 2, 2, 0, 0, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED,  0, SliceWidth ),
         (1,  128, 512,  64, 64,  3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
-        (1,   32,  32,  64, 64,  8, 8, 4, 4, 2, 2, 2, 2, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 2 , SliceWidth ),
-        (16,  16,  16, 256, 128, 2, 2, 2, 2, 0, 0, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED,  2, SliceWidth ),
         # fmt: on
     ),
 )
@@ -156,6 +158,7 @@ def test_convt2d_dram(
         pytest.skip("Needs 8x8 Grid for Wormhole_b0")
     dram_slice_config = ttnn.Conv2dSliceConfig(
         slice_type=slice_type,
+        num_slices=num_slices,
     )
     if is_blackhole() and config is not None:
         # Blackhole requires different act_block_h to be divisble
