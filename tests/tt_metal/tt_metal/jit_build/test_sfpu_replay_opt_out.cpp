@@ -6,7 +6,8 @@
 // kernel define that compiles a compute kernel's TRISC binaries with -mno-tt-tensix-optimize-replay
 // (tenstorrent/tt-metal#58433).
 //
-//  - Define absent: no TRISC compile recipe carries the flag (default builds are unchanged).
+//  - Define absent: a TRISC compile recipe carries the flag only when instruction gathering is on (the
+//    Blackhole default, which needs the flag in every compile), and not otherwise.
 //  - Define present: all three TRISC recipes (unpack, math, pack) carry it, nothing else in their cflags
 //    changes, and the kernel's JIT cache key changes. The kernel still compiles.
 //  - ProgramDescriptor: the define in KernelDescriptor::defines reaches the kernel.
@@ -27,6 +28,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
+#include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "mock_blackhole_fixture.hpp"
@@ -80,10 +82,12 @@ protected:
     }
 };
 
-TEST_F(SfpuReplayOptOutMockBlackholeFixture, DefineAbsentRecipesOmitTheFlag) {
+TEST_F(SfpuReplayOptOutMockBlackholeFixture, DefineAbsentRecipesCarryTheFlagOnlyWithGathering) {
+    // With gathering on, every Blackhole compile gets the flag from the build environment.
+    const bool gathering = MetalContext::instance().rtoptions().get_gathering_enabled();
     auto kernel = compile_blank(/*disable_sfpu_replay_optimization=*/false);
     for (int processor_id = 0; processor_id < 3; processor_id++) {
-        EXPECT_EQ(recipe_cflags(kernel, processor_id).find(kNoReplayFlag), std::string::npos)
+        EXPECT_EQ(recipe_cflags(kernel, processor_id).find(kNoReplayFlag) != std::string::npos, gathering)
             << "trisc" << processor_id;
     }
 }
