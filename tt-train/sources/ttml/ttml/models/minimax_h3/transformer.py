@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import ttnn
 import ttml
+from ttml.common.autograd_ops import Concat, Split
 from ttml.models.qwen3 import Qwen3RMSNorm
 from ttml.modules import (
     AbstractModuleBase,
@@ -123,43 +124,6 @@ def upload(arr: np.ndarray, dtype=ttnn.DataType.BFLOAT16, requires_grad: bool = 
 
 def const(value: ttnn.Tensor) -> ttml.autograd.Tensor:
     return ttml.autograd.create_tensor(value, False)
-
-
-def _slices(value: ttnn.Tensor, sizes, dim: int) -> tuple[ttnn.Tensor, ...]:
-    """Contiguous chunks along `dim` with ttnn.slice; ttnn.split only runs on a few cores."""
-    out, start = [], 0
-    for size in sizes:
-        begin, end = [0, 0, 0, 0], list(value.shape)
-        begin[dim], end[dim] = start, start + size
-        out.append(ttnn.slice(value, begin, end))
-        start += size
-    return tuple(out)
-
-
-class Split(ttml.autograd.Function):
-    """Contiguous chunks along a dim; backward is one concat."""
-
-    @staticmethod
-    def forward(ctx, input, sizes, dim):
-        ctx.dim = dim
-        return _slices(input.get_value(), sizes, dim)
-
-    @staticmethod
-    def backward(ctx, *grad_outputs):
-        return ttnn.concat(list(grad_outputs), ctx.dim)
-
-
-class Concat(ttml.autograd.Function):
-    """Concatenation along a dim; backward slices the gradient back."""
-
-    @staticmethod
-    def forward(ctx, dim, *inputs):
-        ctx.dim, ctx.sizes = dim, [t.shape()[dim] for t in inputs]
-        return ttnn.concat([t.get_value() for t in inputs], dim)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        return _slices(grad_output, ctx.sizes, ctx.dim)
 
 
 class GatedResidual(ttml.autograd.Function):

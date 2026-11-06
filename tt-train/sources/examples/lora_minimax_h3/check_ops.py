@@ -16,7 +16,8 @@ import numpy as np
 import ttnn
 import ttml
 
-from ttml.models.minimax_h3.transformer import Split, const
+from ttml.common.autograd_ops import Split
+from ttml.models.minimax_h3.transformer import const
 from ttml.models.qwen3 import Qwen3RMSNorm
 
 from compare import Checks
