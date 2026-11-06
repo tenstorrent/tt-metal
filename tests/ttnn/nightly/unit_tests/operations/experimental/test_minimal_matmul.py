@@ -218,7 +218,7 @@ def test_linear_flat_cache_across_rows(device, K, N):
 
     variants = [(tile_rows * 32, N) for tile_rows in H3_PROJ_OUT_TILE_ROWS] + [(H3_PROJ_OUT_TILE_ROWS[0] * 32, N + 32)]
     entries = assert_program_cache_flat(device, run, variants, warm_index=0, miss_indices=(len(variants) - 1,))
-    logger.info(f"program cache entries after the sweep: {entries}; PCC per (rows, N): {pcc_by_rows}")
+    logger.debug(f"program cache entries after the sweep: {entries}; PCC per (rows, N): {pcc_by_rows}")
 
 
 # Correctness guard for the granular output-writer path (write_block_sync_granular): each row's
