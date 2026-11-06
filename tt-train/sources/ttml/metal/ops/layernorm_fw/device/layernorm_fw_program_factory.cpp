@@ -148,7 +148,7 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
     const auto& beta_shape = beta.logical_shape();
     TT_FATAL(beta_shape.rank() == 4, "Beta tensor must be 4D [1, 1, 1, C], got shape {}", beta_shape);
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*input.device());
     tt::tt_metal::IDevice* device = input.device();
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);

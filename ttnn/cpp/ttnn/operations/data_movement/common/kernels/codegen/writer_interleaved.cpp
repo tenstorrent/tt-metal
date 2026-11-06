@@ -18,8 +18,8 @@ void kernel_main() {
 
     constexpr uint32_t cb_out = get_compile_time_arg_val(0);
     constexpr uint32_t REQUESTED_WRITE_SIZE = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
-    constexpr uint32_t BATCH = get_compile_time_arg_val(dst_args.next_compile_time_args_offset());
+    constexpr uint32_t BATCH = get_compile_time_arg_val(2);
+    constexpr auto dst_args = TensorAccessorArgs<3>();
 
     // TensorAccessorArgs owns the destination's physical address pitch. The
     // caller's historical CT[1] is only the requested bytes copied per page;

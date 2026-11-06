@@ -391,3 +391,37 @@ def test_moreh_sgd_callback(
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+
+
+def test_moreh_sgd_lr_schedule_reuses_program(device):
+    """lr is not part of the program-cache key, and every cache hit still uses the current lr (#58406 item 4)."""
+    shape = [1, 1, 32, 32]
+    # ones - lr * ones = 1 - lr, which is exact in bfloat16 for these lr values.
+    lrs = [0.5, 0.25, 0.125]
+    dev_param = ttnn.from_torch(torch.ones(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    dev_grad = ttnn.from_torch(torch.ones(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    device.clear_program_cache()
+    num_program_cache_entries_list = []
+    for lr in lrs:
+        dev_param_out, _ = ttnn.operations.moreh.sgd(
+            dev_param,
+            dev_grad,
+            None,
+            None,
+            None,
+            lr,
+            0.0,
+            0.0,
+            0.0,
+            False,
+            momentum_initialized=False,
+            compute_kernel_config=get_compute_kernel_options(False),
+        )
+        result = ttnn.to_torch(dev_param_out).to(torch.bfloat16)
+        expected = torch.full(shape, 1.0 - lr, dtype=torch.bfloat16)
+        assert torch.equal(result, expected), f"lr={lr}: {result}"
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list == [num_program_cache_entries_list[0]] * len(lrs)

@@ -14,19 +14,25 @@ time is in:
 ``test_fused_msda_module_perf``
     The whole ``TTMSDeformableAttention`` forward: value/attn/offset Linears,
     softmax, the fused op, ``output_proj`` and the residual. This is what the
-    encoder actually pays.
+    encoder actually pays. Run once per forced ``value_memory`` placement so
+    the L1 and DRAM measurements remain directly comparable.
 
 ``test_fused_msda_kernel_perf``
     Only ``ttnn.experimental.fused_msda_from_offsets``. The projections and the
     softmax run once, before the signpost, so the measured region is the op and
-    nothing else. Three variants:
+    nothing else. Four variants:
 
-    * ``packed_multi`` -- packed value/offsets/attn, one call covering all
-      levels. This is the production contract.
-    * ``canonical_multi`` -- the rank-4 / rank-6 / rank-5 operand forms the op
-      also accepts. The delta against ``packed_multi`` is the cost of one page
-      per sample instead of a byte offset into a packed stick.
-    * ``packed_per_level`` -- L single-level calls accumulated on device.
+    * ``packed_multi_dram`` -- packed value/offsets/attn, one call covering all
+      levels, with ``value`` and output in DRAM.
+    * ``packed_multi_l1`` -- the same, with ``value`` moved to L1 interleaved
+      before the measured region (the op's output follows it into L1). This is
+      the placement ``auto`` picks when L1 fits.
+    * ``canonical_multi_dram`` -- the rank-4 / rank-6 / rank-5 operand forms the
+      op also accepts, with ``value`` and output in DRAM. The delta against
+      ``packed_multi_dram`` is the cost of one page per sample instead of a byte
+      offset into a packed stick.
+    * ``packed_per_level_dram`` -- L single-level DRAM calls accumulated in
+      DRAM on device.
       Operands are pre-sliced on the host outside the measured region, so this
       is a lower bound on the per-level cost: it counts L launches plus L-1
       adds, but not the slicing a per-level path would also pay.
@@ -46,11 +52,11 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.experimental.bevformer.config import DeformableAttentionConfig
-from models.experimental.bevformer.config.encoder_config import get_preset_config
+from models.experimental.bevformer.model_config import DeformableAttentionConfig
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
-from models.experimental.bevformer.tests.test_utils import check_with_pcc
+from models.experimental.bevformer.tests.common import PRESETS, assert_pcc
 from models.experimental.bevformer.tt.model_preprocessing import create_ms_deformable_attention_parameters
+from models.experimental.bevformer.tt import tt_ms_deformable_attention
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import (
     TTMSDeformableAttention,
     _spatial_shapes_list,
@@ -64,7 +70,7 @@ WORKLOADS = [
     ("nuscenes_base", 1, 2500),
 ]
 
-KERNEL_VARIANTS = ["packed_multi", "canonical_multi", "packed_per_level"]
+KERNEL_VARIANTS = ["packed_multi_dram", "packed_multi_l1", "canonical_multi_dram", "packed_per_level_dram"]
 
 
 def _head_sha():
@@ -80,12 +86,9 @@ def _build(device, config_name, batch_size, num_queries):
     Deliberately the same construction as the PCC file: a perf number measured
     on a different shape than the correctness gate is not comparable to it.
     """
-    preset_config = get_preset_config(config_name)
-    assert preset_config is not None, f"Configuration '{config_name}' not found"
-
-    model_config = preset_config.model_config
+    model_config = PRESETS[config_name]
     num_levels = model_config.num_levels
-    spatial_shapes = torch.tensor(preset_config.dataset_config.spatial_shapes[:num_levels], dtype=torch.long)
+    spatial_shapes = torch.tensor(model_config.spatial_shapes, dtype=torch.long)
     num_keys = int(spatial_shapes.prod(dim=1).sum().item())
 
     config = DeformableAttentionConfig(
@@ -102,9 +105,7 @@ def _build(device, config_name, batch_size, num_queries):
     ref_model = MSDeformableAttention(config)
     ref_model.eval()
 
-    tt_parameters = create_ms_deformable_attention_parameters(
-        torch_model=ref_model, device=device, config=config, dtype=ttnn.float32
-    )
+    tt_parameters = create_ms_deformable_attention_parameters(ref_model, device=device, dtype=ttnn.float32)
 
     logger.info(
         f"{config_name}: Q={num_queries} heads={config.num_heads} D={config.embed_dims // config.num_heads} "
@@ -185,15 +186,10 @@ def _canonical_operands(value, offsets, attn, model):
 def _per_level_operands(device, value, offsets, attn, model, spatial_shapes):
     """Host-side per-level slices of the packed operands, one set per level.
 
-    Sliced through torch rather than ``ttnn.slice`` on purpose: this runs
-    outside the measured region, and a host round trip has no device cost to
-    attribute, whereas a device slice would land inside the measured region and
-    be counted as launch overhead.
-
     ``reference_points`` is not sliced. In ``reference_mode="pillar"`` the
     reference index is ``p % R``, independent of the level, so each single-level
     call needs the full (B, Q, R, 2) tensor -- which is also why the per-level
-    sum is numerically the same as one multi-level call.
+    sum computes the same thing as one multi-level call.
     """
     value_t = ttnn.to_torch(value)
     offsets_t = ttnn.to_torch(offsets)
@@ -212,18 +208,21 @@ def _per_level_operands(device, value, offsets, attn, model, spatial_shapes):
                     device=device,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 ),
                 ttnn.from_torch(
                     offsets_t[..., level * p * 2 : (level + 1) * p * 2].contiguous(),
                     device=device,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 ),
                 ttnn.from_torch(
                     attn_t[..., level * p : (level + 1) * p].contiguous(),
                     device=device,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 ),
             )
         )
@@ -253,8 +252,9 @@ def _call_per_level(refs, per_level):
             attn_l,
             [(height, width)],
             reference_mode="pillar",
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        acc = out if acc is None else ttnn.add(acc, out)
+        acc = out if acc is None else ttnn.add(acc, out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     return acc
 
 
@@ -276,6 +276,7 @@ def _signposted(device, op_fn, iters=DEVICE_PERF_ITERS):
 @torch.no_grad()
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("config_name, batch_size, num_queries", WORKLOADS)
+@pytest.mark.parametrize("value_memory", ["l1", "dram"])
 @pytest.mark.parametrize("expected_pcc", [0.999])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
 def test_fused_msda_module_perf(
@@ -283,16 +284,27 @@ def test_fused_msda_module_perf(
     config_name,
     batch_size,
     num_queries,
+    value_memory,
     expected_pcc,
+    monkeypatch,
     reset_seeds,
     ensure_gc,
 ):
     """Whole-module device time: what the encoder pays per MSDA call."""
-    logger.info(f"device-perf run of commit {_head_sha()} -- module {config_name} q={num_queries}")
+    logger.info(
+        f"device-perf run of commit {_head_sha()} -- module {config_name} q={num_queries} value_memory={value_memory}"
+    )
 
     config, ref_model, tt_parameters, torch_inputs = _build(device, config_name, batch_size, num_queries)
     query, value, reference_points, spatial_shapes = torch_inputs
     tt_query, tt_value, tt_refs = _to_device(device, torch_inputs)
+    # Pins the placement the module otherwise decides from live L1 state. Patched
+    # on the module because ``forward`` resolves the name there at call time.
+    monkeypatch.setattr(
+        tt_ms_deformable_attention,
+        "multi_scale_deformable_attn_fused",
+        partial(tt_ms_deformable_attention.multi_scale_deformable_attn_fused, value_memory=value_memory),
+    )
     model = _tt_model(device, config, tt_parameters, spatial_shapes)
 
     def op_fn():
@@ -302,8 +314,13 @@ def test_fused_msda_module_perf(
 
     # Doubles as the warmup: this call compiles the kernels and fills the program
     # cache, so the signposted iterations already run at steady state.
-    tt_output = op_fn()
-    passed, message = check_with_pcc(expected, ttnn.to_torch(tt_output, dtype=torch.float32), expected_pcc)
+    try:
+        tt_output = op_fn()
+    except RuntimeError as error:
+        if value_memory == "l1" and "value_memory='l1' is unsafe" in str(error):
+            pytest.skip(f"forced L1 placement is unavailable: {error}")
+        raise
+    passed, message = assert_pcc(expected, ttnn.to_torch(tt_output, dtype=torch.float32), expected_pcc)
     assert passed, f"PCC check failed: {message}"
     logger.info(f"PCC gate: {message}")
     ttnn.deallocate(tt_output)
@@ -331,7 +348,7 @@ def test_fused_msda_kernel_perf(
     config, _, tt_parameters, torch_inputs = _build(device, config_name, batch_size, num_queries)
     spatial_shapes = torch_inputs[3]
 
-    if variant == "packed_per_level" and config.num_levels == 1:
+    if variant == "packed_per_level_dram" and config.num_levels == 1:
         pytest.skip("per-level is the same single call as multi-level when num_levels == 1")
 
     tt_query, tt_value, tt_refs = _to_device(device, torch_inputs)
@@ -339,19 +356,24 @@ def test_fused_msda_kernel_perf(
 
     value_p, refs, offsets_p, attn_p = _packed_operands(model, tt_query, tt_value, tt_refs)
 
-    if variant == "packed_multi":
+    if variant == "packed_multi_dram":
+        assert value_p.memory_config() == ttnn.DRAM_MEMORY_CONFIG
         op_fn = partial(_call_one, value_p, refs, offsets_p, attn_p, spatial_shapes)
-    elif variant == "canonical_multi":
+    elif variant == "packed_multi_l1":
+        value_l1 = ttnn.to_memory_config(value_p, ttnn.L1_MEMORY_CONFIG)
+        op_fn = partial(_call_one, value_l1, refs, offsets_p, attn_p, spatial_shapes)
+    elif variant == "canonical_multi_dram":
         value_c, offsets_c, attn_c = _canonical_operands(value_p, offsets_p, attn_p, model)
+        assert value_c.memory_config() == ttnn.DRAM_MEMORY_CONFIG
         op_fn = partial(_call_one, value_c, refs, offsets_c, attn_c, spatial_shapes)
-    elif variant == "packed_per_level":
+    elif variant == "packed_per_level_dram":
         per_level = _per_level_operands(device, value_p, offsets_p, attn_p, model, spatial_shapes)
         op_fn = partial(_call_per_level, refs, per_level)
     else:
         pytest.fail(f"unknown variant {variant}")
 
     # Gate every variant against the production contract rather than against the
-    # torch reference: all three are meant to compute the same thing, and a
+    # torch reference: every variant is meant to compute the same thing, and a
     # variant that quietly samples different points would otherwise show up as a
     # speedup. Doubles as the warmup.
     golden = _call_one(value_p, refs, offsets_p, attn_p, spatial_shapes)
@@ -360,13 +382,13 @@ def test_fused_msda_kernel_perf(
     assert (
         list(warmup.shape) == expected_shape
     ), f"variant {variant} produced {list(warmup.shape)}, want {expected_shape}"
-    passed, message = check_with_pcc(
+    passed, message = assert_pcc(
         ttnn.to_torch(golden, dtype=torch.float32),
         ttnn.to_torch(warmup, dtype=torch.float32),
         pcc=0.999,
     )
-    assert passed, f"variant {variant} diverged from packed_multi: {message}"
-    logger.info(f"variant gate vs packed_multi: {message}")
+    assert passed, f"variant {variant} diverged from packed_multi_dram: {message}"
+    logger.info(f"variant gate vs packed_multi_dram: {message}")
     ttnn.deallocate(golden)
     ttnn.deallocate(warmup)
 

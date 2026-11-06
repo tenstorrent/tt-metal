@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import torch
 from helpers.accuracy_metrics import compute_pointwise_metrics
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     UnarySFPUGolden,
@@ -22,38 +23,18 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     FastMode,
-    FusedSort,
     MathOperation,
     PerfRunType,
-    StableSort,
-    Transpose,
     format_dict,
 )
-from helpers.perf.core import PerfConfig
 from helpers.sfpu_domains import for_op
-from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     DistributionKind,
     StimuliSpec,
-    calculate_tile_and_face_counts,
     generate_stimuli,
 )
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import (
-    APPROX_MODE,
-    CLAMP_NEGATIVE,
-    FAST_MODE,
-    FUSED_SORT,
-    ITERATIONS,
-    LOOP_FACTOR,
-    MATH_OP,
-    NUM_FACES,
-    PERF_RUN_TYPE,
-    STABLE_SORT,
-    TILE_COUNT,
-    UNPACK_TRANS_FACES,
-    UNPACK_TRANS_WITHIN_FACE,
-)
+from test_eltwise_unary_sfpu import eltwise_unary_sfpu
 
 _THIS_DIR = Path(__file__).resolve().parent
 
@@ -195,9 +176,8 @@ def build_sweep_spec(
     otherwise the curve's tail is the approximation's known overshoot rather than a
     finding.
     """
-    spec = for_op(
-        op, in_fmt, distribution_a=distribution, approx_mode=approx_mode
-    ).spec_A
+    spec = for_op(op, in_fmt, approx_mode=approx_mode).spec_A
+    spec.distribution = distribution
     if seed is not None:
         spec.seed = seed
     return spec
@@ -373,8 +353,9 @@ def run_case(
 ) -> Optional[Path]:
     """Run one (op, format, config) variant in the requested *run_mode*.
 
-    All three modes run the same merged kernel (eltwise_unary_sfpu_perf.cpp).
-    RunMode.ACCURACY (default) runs it through a plain TestConfig — no profiler
+    All three modes run the same merged kernel (`eltwise_unary_sfpu_test.cpp`)
+    through `eltwise_unary_sfpu` in test_eltwise_unary_sfpu.py.
+    RunMode.ACCURACY (default) runs it as a functional TestConfig — no profiler
     build, no perf_report — checks the result against the torch golden, and writes
     a shard CSV.
     RunMode.PERF runs it through PerfConfig for timings only.
@@ -411,95 +392,39 @@ def run_case(
         input_dimensions_B=input_dimensions,
     )
 
-    variant_stimuli = StimuliConfig(
-        src_A,
-        formats.input_format,
-        src_B,
-        formats.input_format,
-        formats.output_format,
-        tile_count_A=tile_cnt_A,
-        tile_count_B=tile_cnt_B,
-        tile_count_res=tile_cnt_A,
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
+
+    is_perf = run_mode != RunMode.ACCURACY
+    collect_result = run_mode == RunMode.BOTH
+    helper_loop_factor = 1 if run_mode == RunMode.ACCURACY else loop_factor
+    helper_run_types = (
+        _ACCURACY_CAPABLE_RUN_TYPES
+        if run_mode == RunMode.BOTH
+        else (_PERF_ONLY_RUN_TYPES if run_mode == RunMode.PERF else None)
     )
-
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+    res_from_L1 = eltwise_unary_sfpu(
+        formats=formats,
+        dest_acc=dest_acc,
+        approx_mode=approx_mode,
+        mathop=op,
+        fast_mode=fast_mode,
+        input_dimensions=input_dimensions,
+        clamp_negative=True,
+        iterations=iterations,
+        loop_factor=helper_loop_factor,
+        src_A=src_A,
+        src_B=src_B,
+        tile_cnt_A=tile_cnt_A,
+        tile_cnt_B=tile_cnt_B,
+        unpack_to_dest=unpack_to_dest,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=helper_run_types,
+        collect_result=collect_result,
+        check_golden=False,
     )
-
-    _, _, faces_to_generate = calculate_tile_and_face_counts(
-        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
-    )
-
-    if run_mode == RunMode.ACCURACY:
-        configuration = TestConfig(
-            "sources/eltwise_unary_sfpu_perf.cpp",
-            formats,
-            templates=[
-                PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
-                MATH_OP(mathop=op),
-                APPROX_MODE(approx_mode),
-                ITERATIONS(iterations),
-                FAST_MODE(fast_mode),
-                STABLE_SORT(StableSort.No),
-                FUSED_SORT(FusedSort.No),
-                CLAMP_NEGATIVE(True),
-            ],
-            runtimes=[
-                TILE_COUNT(tile_cnt_A),
-                LOOP_FACTOR(1),
-                NUM_FACES(num_faces=faces_to_generate),
-                UNPACK_TRANS_FACES(Transpose.No),
-                UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-            ],
-            variant_stimuli=variant_stimuli,
-            dest_acc=dest_acc,
-            unpack_to_dest=unpack_to_dest,
-        )
-        res_from_L1 = configuration.run().result
-    else:
-        run_types = (
-            _ACCURACY_CAPABLE_RUN_TYPES
-            if run_mode == RunMode.BOTH
-            else _PERF_ONLY_RUN_TYPES
-        )
-        configuration = PerfConfig(
-            "sources/eltwise_unary_sfpu_perf.cpp",
-            formats,
-            run_types=run_types,
-            templates=[
-                MATH_OP(mathop=op),
-                APPROX_MODE(approx_mode),
-                ITERATIONS(iterations),
-                FAST_MODE(fast_mode),
-                STABLE_SORT(StableSort.No),
-                FUSED_SORT(FusedSort.No),
-                CLAMP_NEGATIVE(True),
-            ],
-            runtimes=[
-                TILE_COUNT(tile_cnt_A),
-                LOOP_FACTOR(loop_factor),
-                NUM_FACES(num_faces=faces_to_generate),
-                UNPACK_TRANS_FACES(Transpose.No),
-                UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-            ],
-            variant_stimuli=variant_stimuli,
-            unpack_to_dest=unpack_to_dest,
-            dest_acc=dest_acc,
-        )
-
-        if run_mode == RunMode.PERF:
-            # Timings only — PerfConfig.run() writes runtime params and collects
-            # timings; it needs no real stimuli written and no result read back.
-            configuration.run(perf_report)
-            return None
-
-        # BOTH: PerfConfig.run() does not write stimuli or read the result, so
-        # write the real input to L1 first and read it back after.
-        configuration.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
-        configuration.run(perf_report)
-        res_from_L1 = configuration.variant_stimuli.collect_results(
-            TestConfig.TENSIX_LOCATION
-        )
+    if run_mode == RunMode.PERF:
+        return None
 
     # ── Golden + accuracy CSV ──────────────────────────────────────────────────
     generate_golden = get_golden_generator(UnarySFPUGolden)

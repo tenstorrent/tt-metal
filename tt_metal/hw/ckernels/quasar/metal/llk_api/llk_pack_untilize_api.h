@@ -102,7 +102,7 @@ inline void llk_pack_untilize(
     const std::uint32_t l1_index_per_entry =  // l1_index steps per entry
         entry_size_16B / (face_row_16B * tensor_shape.num_faces_c_dim);
     const std::uint32_t base_l1 =
-        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx * l1_index_per_entry;
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx * l1_index_per_entry;
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         const std::uint32_t dest_idx = block_rt * block_ct_dim + tile_dst_rt_offset;

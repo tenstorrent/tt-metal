@@ -21,7 +21,6 @@ struct LogsigmoidBf16Config {
     static constexpr uint32_t kBoundBits = 0x42b00000u;
     static constexpr bool kResidualFold = true;
 
-    // Typed domain actions.
     struct TtDomainActionRecord {
         float bound;
         uint8_t direction;
@@ -65,7 +64,7 @@ struct LogsigmoidBf16Config {
 namespace ckernel::sfpu {
 
 template <int ITERATIONS = 32>
-inline void calculate_logsigmoid_bf16() {
+__attribute__((noinline)) inline void calculate_logsigmoid_bf16() {
     ckernel::sfpu::bf16::logsigmoid::calculate_abs_exp_correction<ckernel::sfpu::LogsigmoidBf16Config, ITERATIONS>();
 }
 inline void init_logsigmoid_bf16() {

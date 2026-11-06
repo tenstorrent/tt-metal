@@ -418,6 +418,38 @@ def _is_device_discovery_failure(exc):
     return any(marker in msg for marker in _DEVICE_DISCOVERY_FAILURE_MARKERS)
 
 
+GEMMA4_TEST_L1_SMALL_SIZE = 32768
+
+
+def mesh_tp_and_axis(mesh_device):
+    """``(tp, tp_axis)`` of the dense TP group the unit tests build for ``mesh_device``.
+
+    (8,4) is the Galaxy one-instance orientation (TP on the size-8 axis 0, see ``test_experts``); every other mesh
+    takes ``GEMMA4_TP_AXIS`` (default: the rows on a column mesh, else the columns), so
+    ``GEMMA4_TEST_MESH_SHAPES=4x1`` runs the 4-chip line as a column mesh with TP over the rows (the token-dispatch
+    prefill orientation) without further env.
+    """
+    from models.demos.gemma4.tt.ccl import mesh_tp_axis
+
+    if not hasattr(mesh_device, "shape"):
+        return 1, 1
+    shape = tuple(int(d) for d in mesh_device.shape)
+    if shape == (8, 4):
+        return 8, 0
+    axis = mesh_tp_axis(shape)
+    return shape[axis], axis
+
+
+def lanes_fabric_config():
+    """Fabric for the lane-engine tests (the decode MoE kernel's 8-row dispatch, the lane generator): FABRIC_1D_RING,
+    the Galaxy's torus descriptor, by default; GEMMA4_TEST_FABRIC_1D=1 opens the mesh as a FABRIC_1D line for the (2,4)
+    block emulation, whose p150_x8 MESH descriptor has no wraparound (a ring fabric fails at mesh open there, and the
+    decode MoE wrapper then dispatches with the Linear topology). Touches ttnn only when called."""
+    if os.environ.get("GEMMA4_TEST_FABRIC_1D", "0") == "1":
+        return ttnn.FabricConfig.FABRIC_1D
+    return ttnn.FabricConfig.FABRIC_1D_RING
+
+
 def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
     """Universal mesh parametrization with FABRIC_1D.
 
@@ -469,7 +501,13 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
 
         return decorator
 
-    if mesh_shapes is None:
+    env_shapes = os.getenv("GEMMA4_TEST_MESH_SHAPES", "").strip()
+    if env_shapes:
+        # Harness override: run the selected tests on these shapes instead of the decorator's list, e.g.
+        # ``GEMMA4_TEST_MESH_SHAPES=4x1`` (with ``GEMMA4_TP_AXIS=0``) to run the 4-chip line as a column mesh.
+        mesh_shapes = [tuple(int(d) for d in tok.lower().split("x")) for tok in env_shapes.split(",") if tok]
+        mesh_shapes = [s for s in mesh_shapes if s[0] * s[1] <= num_devices]
+    elif mesh_shapes is None:
         all_shapes = [(1, 1), (1, 2), (1, 4), (1, 8), (1, 32)]
         mesh_shapes = [s for s in all_shapes if s[0] * s[1] <= num_devices]
     else:
@@ -483,6 +521,10 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
         mesh_shapes = [max(mesh_shapes, key=lambda s: s[0] * s[1])]
 
     extra = dict(device_params_extra or {})
+    # Collective semaphores live in L1_SMALL when the device has that region; without it a collective
+    # first compiled after a trace capture puts them in worker L1, where the replay's intermediates land
+    # (see models/demos/gemma4/tt/ccl.py::ccl_semaphores_in_l1_small and test_ccl_semaphores.py).
+    extra.setdefault("l1_small_size", GEMMA4_TEST_L1_SMALL_SIZE)
     if not mesh_shapes:
         params = [
             pytest.param(
@@ -506,3 +548,23 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
         return pytest.mark.parametrize("mesh_device, device_params", params, indirect=True)(func)
 
     return decorator
+
+
+def skip_unless_siglip_vision():
+    """Module-level mark for the SigLIP vision-tower unit tests: skip on checkpoints
+    whose vision path is the unified (encoder-free) embedder (12B) or that have no
+    vision config at all, so the per-model unit jobs can run the whole directory."""
+    import pytest
+
+    model_path = os.environ.get("HF_MODEL", "google/gemma-4-31B-it")
+    try:
+        from transformers import AutoConfig
+
+        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        vision_type = getattr(getattr(cfg, "vision_config", None), "model_type", None)
+    except Exception as e:  # unreadable config: let the test itself report it
+        return pytest.mark.skipif(False, reason=str(e))
+    return pytest.mark.skipif(
+        vision_type != "gemma4_vision",
+        reason=f"{model_path}: vision_config.model_type={vision_type!r} is not the SigLIP tower (gemma4_vision)",
+    )

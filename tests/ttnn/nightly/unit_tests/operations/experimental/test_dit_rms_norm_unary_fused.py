@@ -8,6 +8,11 @@ import ttnn
 
 from tt_py_test_utils_common.utility_functions import comp_pcc
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 
 def measure_quality(torch_output, tt_output, pcc_threshold=0.9995, rel_rmse_threshold=0.02):
     pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)

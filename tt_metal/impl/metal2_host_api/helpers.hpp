@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <string_view>
 #include <type_traits>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <unordered_set>
 #include <variant>
 #include <vector>

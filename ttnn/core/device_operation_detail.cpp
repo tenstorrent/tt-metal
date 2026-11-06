@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
@@ -27,8 +28,8 @@ using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using MeshCoordinateRange = tt::tt_metal::distributed::MeshCoordinateRange;
 using MeshCoordinateRangeSet = tt::tt_metal::distributed::MeshCoordinateRangeSet;
 
-static bool is_fully_replicated(const ttnn::Tensor& tensor) {
-    for (const auto& placement : tensor.tensor_topology().placements()) {
+static bool is_fully_replicated(const tt::tt_metal::TensorTopology& topology) {
+    for (const auto& placement : topology.placements()) {
         if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement)) {
             return false;
         }
@@ -43,32 +44,46 @@ std::pair<
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
     tt::tt_metal::distributed::MeshShape>
 compute_output_placements_and_shape(const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors) {
-    using Tensor = ttnn::Tensor;
+    TT_FATAL(!tensors.empty(), "Cannot compute output placements and shape with no tensors");
+
+    std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>> topologies;
+    topologies.reserve(tensors.size());
+    for (const auto& tensor_ref : tensors) {
+        topologies.emplace_back(tensor_ref.get().tensor_topology());
+    }
+    return compute_output_placements_and_shape(topologies);
+}
+
+std::pair<
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
+    tt::tt_metal::distributed::MeshShape>
+compute_output_placements_and_shape(
+    const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& topologies) {
+    using TensorTopology = tt::tt_metal::TensorTopology;
     using Placement = tt::tt_metal::distributed::MeshMapperConfig::Placement;
     using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
     using Replicate = tt::tt_metal::distributed::MeshMapperConfig::Replicate;
 
-    TT_FATAL(!tensors.empty(), "Cannot compute output placements and shape with no tensors");
+    TT_FATAL(!topologies.empty(), "Cannot compute output placements and shape with no tensor topologies");
 
-    std::vector<std::reference_wrapper<const Tensor>> sharded_tensors;
-    sharded_tensors.reserve(tensors.size());
-    for (const auto& tensor_ref : tensors) {
-        if (!is_fully_replicated(tensor_ref.get())) {
-            sharded_tensors.push_back(tensor_ref);
+    std::vector<std::reference_wrapper<const TensorTopology>> sharded_topologies;
+    sharded_topologies.reserve(topologies.size());
+    for (const auto& topology_ref : topologies) {
+        if (!is_fully_replicated(topology_ref.get())) {
+            sharded_topologies.push_back(topology_ref);
         }
     }
 
     // Compute max distribution rank: use only sharded tensors if they exist, otherwise use all tensors (fully
     // replicated)
     size_t max_distribution_rank = 0;
-    if (!sharded_tensors.empty()) {
-        for (const auto& tensor_ref : sharded_tensors) {
-            max_distribution_rank =
-                std::max(max_distribution_rank, tensor_ref.get().tensor_topology().distribution_shape().dims());
+    if (!sharded_topologies.empty()) {
+        for (const auto& topology_ref : sharded_topologies) {
+            max_distribution_rank = std::max(max_distribution_rank, topology_ref.get().distribution_shape().dims());
         }
     } else {
-        const auto &first_tensor = tensors.front().get();
-        max_distribution_rank = first_tensor.tensor_topology().distribution_shape().dims();
+        const auto& first_topology = topologies.front().get();
+        max_distribution_rank = first_topology.distribution_shape().dims();
     }
 
     auto result_strides = ttsl::SmallVector<uint32_t>(max_distribution_rank, 1);
@@ -78,17 +93,17 @@ compute_output_placements_and_shape(const std::vector<std::reference_wrapper<con
 
     // TODO: #25340 - Add back logging / validation. Currently, this results in a lot of log spam.
     constexpr bool kEnableLogging = false;
-    for (const auto& tensor_ref : tensors) {
-        const Tensor& tensor = tensor_ref.get();
+    for (const auto& topology_ref : topologies) {
+        const TensorTopology& topology = topology_ref.get();
         // Augment output tensor distribution shape with the max strides of all input tensors with the max
         // distribution rank
-        const auto& tensor_distribution_shape = tensor.tensor_topology().distribution_shape();
+        const auto& tensor_distribution_shape = topology.distribution_shape();
         if (tensor_distribution_shape.dims() == max_distribution_rank) {
             for (size_t i = 0; i < std::min(result_strides.size(), tensor_distribution_shape.dims()); i++) {
                 result_strides[i] = std::max(result_strides[i], tensor_distribution_shape[i]);
             }
 
-            const auto& tensor_placements = tensor.tensor_topology().placements();
+            const auto& tensor_placements = topology.placements();
             for (size_t i = 0; i < tensor_placements.size(); i++) {
                 Placement output_placement = result_placements[i];
                 if (std::holds_alternative<Shard>(tensor_placements[i])) {
@@ -128,7 +143,7 @@ compute_output_placements_and_shape(const std::vector<std::reference_wrapper<con
                 }
                 result_placements[i] = output_placement;
             }
-        } else if (!is_fully_replicated(tensor)) {
+        } else if (!is_fully_replicated(topology)) {
             dim_mismatch = true;
         }
     }

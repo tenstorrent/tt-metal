@@ -385,7 +385,9 @@ def render_report(
         if len(groups) > _TOP_N:
             table += ["", f"_… and {len(groups) - _TOP_N} more — see `{companion}`._"]
         summary = table[0].removeprefix("## ")
-        lines += ["<details>", f"<summary>{summary}</summary>", ""]
+        # Regressions are what a reader comes for, so their table starts open.
+        details = "<details open>" if what == "regression" else "<details>"
+        lines += [details, f"<summary>{summary}</summary>", ""]
         lines += table[2:] + ["", "</details>", ""]
     if result["new_points"]:
         lines.append(

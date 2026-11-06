@@ -68,7 +68,7 @@ void kernel_main() {
             in_cb.push_back(onetile);
             in_cb.wait_front(onetile);
 
-            reconfig_data_format(in_cb_id, trans_mat_cb_id);
+            reconfig_data_format<SrcOrder::Reverse>(in_cb_id, trans_mat_cb_id);
             pack_reconfig_data_format(rotated_in_interm_cb_id);
             matmul_init(in_cb_id, trans_mat_cb_id);
             tile_regs_acquire();
