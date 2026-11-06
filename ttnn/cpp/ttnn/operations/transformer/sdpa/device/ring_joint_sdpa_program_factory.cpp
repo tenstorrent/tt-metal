@@ -3806,11 +3806,66 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 // a WorkloadDescriptor (rather than a per-coord ProgramDescriptor) keeps the framework on
 // its no-rebuild cache-hit fast path; the dynamic scalar runtime args (indexed kv-cache /
 // kv-pad rotation) are still re-applied every dispatch by override_runtime_arguments below.
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+using FullMeshRoute = RingJointSDPAMeshWorkloadFactory::FullMeshRoute;
+
+void apply_full_mesh_route(RingJointSDPAParams& args, const FullMeshRoute& route) {
+    auto& ag = args.all_gather_operation_attributes;
+    ag.topology = route.topology;
+    ag.snake_orientation = route.orientation;
+    ag.route_plan_hash = route.route_plan_hash;
+}
+
+// A full-mesh gather's route (snake orientation, Ring vs Linear closure) is proved here, on a program-cache miss,
+// instead of in invoke on every call: proving it walks the fabric control plane. The key need not hold it: the
+// program cache is per mesh device, and the device's fabric cannot change while it is open.
+std::optional<FullMeshRoute> prove_full_mesh_route(const RingJointSDPAParams& args, const Tensor& q) {
+    const auto& ag = args.all_gather_operation_attributes;
+    if (!ag.full_mesh) {
+        return std::nullopt;
+    }
+    // Only create_mesh_workload's resolved copy carries a route; invoke never sets one.
+    if (ag.route_plan_hash.has_value()) {
+        return FullMeshRoute{ag.topology, ag.snake_orientation, *ag.route_plan_hash};
+    }
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const std::array<tt::tt_fabric::Topology, 2> axis_topology{
+        ttnn::ccl::get_axis_topology(q, fabric_config, 0), ttnn::ccl::get_axis_topology(q, fabric_config, 1)};
+    const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
+        q, std::nullopt, ag.num_links, axis_topology, true, "ring_mla", /*allow_open_path=*/true);
+    TT_FATAL(route.has_value(), "ring_mla could not resolve a direct-neighbor full-mesh route");
+    TT_FATAL(
+        route->plan.mesh_rows == ag.mesh_rows && route->plan.mesh_cols == ag.mesh_cols &&
+            route->plan.ring_size == ag.ring_size,
+        "ring_mla full-mesh route {}x{} does not match the {}x{} mesh of {} ranks it was requested for",
+        route->plan.mesh_rows,
+        route->plan.mesh_cols,
+        ag.mesh_rows,
+        ag.mesh_cols,
+        ag.ring_size);
+    TT_FATAL(route->plan.route_plan_hash.has_value(), "ring_mla full-mesh route carries no route hash");
+    return FullMeshRoute{route->topology, route->plan.orientation, *route->plan.route_plan_hash};
+}
+
+RingJointSDPAParams with_full_mesh_route(const RingJointSDPAParams& args, const Tensor& q) {
+    auto resolved = args;
+    if (const auto route = prove_full_mesh_route(args, q)) {
+        apply_full_mesh_route(resolved, *route);
+    }
+    return resolved;
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 tt::tt_metal::WorkloadDescriptor RingJointSDPAProgramFactory::create_workload_descriptor(
-    const RingJointSDPAParams& args,
+    const RingJointSDPAParams& unresolved_args,
     const RingJointSDPAInputs& tensor_args,
     RingJointSDPAResult& output_tensors,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    const auto args = CMAKE_UNIQUE_NAMESPACE::with_full_mesh_route(unresolved_args, tensor_args.input_q);
     tt::tt_metal::WorkloadDescriptor wd;
     const auto coords = tensor_coords.coords();
     wd.programs.reserve(coords.size());
@@ -3822,10 +3877,16 @@ tt::tt_metal::WorkloadDescriptor RingJointSDPAProgramFactory::create_workload_de
 }
 
 RingJointSDPAMeshWorkloadFactory::cached_mesh_workload_t RingJointSDPAMeshWorkloadFactory::create_mesh_workload(
-    const RingJointSDPAParams& args,
+    const RingJointSDPAParams& unresolved_args,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const RingJointSDPAInputs& tensor_args,
     RingJointSDPAResult& output_tensors) {
+    // Program-cache miss: prove the full-mesh route once and keep it for the hits.
+    const auto route = CMAKE_UNIQUE_NAMESPACE::prove_full_mesh_route(unresolved_args, tensor_args.input_q);
+    auto args = unresolved_args;
+    if (route.has_value()) {
+        CMAKE_UNIQUE_NAMESPACE::apply_full_mesh_route(args, *route);
+    }
     auto descriptor_cached =
         descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output_tensors);
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
@@ -3833,6 +3894,7 @@ RingJointSDPAMeshWorkloadFactory::cached_mesh_workload_t RingJointSDPAMeshWorklo
         auto& shared = shared_variables[range];
         shared.descriptor = std::move(descriptor_cached.shared_variables.at(range));
         shared.semaphore_patch = record_ring_joint_semaphore_arg_patch(program, args, tensor_args, range.start_coord());
+        shared.full_mesh_route = route;
     }
     return {std::move(descriptor_cached.workload), std::move(shared_variables)};
 }
@@ -3845,6 +3907,14 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     if (cached_workload.shared_variables.empty()) {
         return;
     }
+    // A hit's attributes carry no full-mesh route (invoke does not prove it); reapply the one proved on the miss.
+    const auto& cached_route = cached_workload.shared_variables.begin()->second.full_mesh_route;
+    std::optional<RingJointSDPAParams> routed_args;
+    if (cached_route.has_value() && !args.all_gather_operation_attributes.route_plan_hash.has_value()) {
+        routed_args.emplace(args);
+        CMAKE_UNIQUE_NAMESPACE::apply_full_mesh_route(*routed_args, *cached_route);
+    }
+    const RingJointSDPAParams& hit_args = routed_args.has_value() ? *routed_args : args;
     // Every coordinate's descriptor copy holds the same workload resources, so collect once.
     const auto collected = descriptor_adapter_t::collect_tensor_buffers(
         tensor_args, output_tensors, cached_workload.shared_variables.begin()->second.descriptor.workload_descriptor);
@@ -3860,8 +3930,8 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
             coord,
             coordinate_range.end_coord());
         ag_dyn::apply_semaphore_arg_patch(
-            shared.semaphore_patch, program, args.all_gather_operation_attributes.semaphore);
-        apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord);
+            shared.semaphore_patch, program, hit_args.all_gather_operation_attributes.semaphore);
+        apply_ring_joint_scalar_runtime_args(program, hit_args, tensor_args, coord);
     }
 }
 
