@@ -201,6 +201,9 @@ def test_moe_padding_config_one_program_across_chunks(mesh_device, metadata):
     start_t = _meta1(mesh_device, 0)
     end_t = _meta1(mesh_device, 0)
 
+    # Start from an empty program cache: with DS_PREFILL_REUSE_MODEL=1 the device (and its cache) is shared
+    # with earlier tests, which may already hold this op's program and would skew the entry count below.
+    mesh_device.disable_and_clear_program_cache()
     mesh_device.enable_program_cache()
     entries_before = mesh_device.num_program_cache_entries()
 
