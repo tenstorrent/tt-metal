@@ -8,7 +8,7 @@
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/rpc_server_controller.hpp"
 #include <tt-metalium/mesh_trace_id.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <atomic>
 #include <cstddef>
 #include <optional>

@@ -12,15 +12,13 @@ namespace ckernel::sfpu::ttpoly::asinh
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
 
-// Compile-time load indices are required by DST's immediate-row SFPLOAD.
-// A pointer/Config accessor and a parked-DST provider use the same rungs.
 template <typename Coefficients>
 struct polynomial_indexed_coefficients
 {
     const Coefficients& values;
 
     template <std::uint32_t INDEX>
-    inline vFloat load() const
+    __attribute__((always_inline)) inline vFloat load() const
     {
         return values[INDEX];
     }
@@ -65,13 +63,11 @@ __attribute__((always_inline)) inline void eval_polynomial_transport(const Coeff
 }
 
 template <std::uint32_t DEGREE, typename Coefficients>
-inline void eval_polynomial_dual(const Coefficients& coeffs, vFloat x1, vFloat x2, vFloat& result1, vFloat& result2)
+__attribute__((always_inline)) inline void eval_polynomial_dual(const Coefficients& coeffs, vFloat x1, vFloat x2, vFloat& result1, vFloat& result2)
 {
     static_assert(DEGREE <= 16, "unsupported canonical paired polynomial degree");
     if constexpr (DEGREE == 1)
     {
-        // Retain the canonical immediate path's expression and load order.
-        // The DST path above deliberately keeps accumulator*x+coefficient.
         vFloat c1 = coeffs[1];
         vFloat c0 = coeffs[0];
         result1   = c0 + c1 * x1;

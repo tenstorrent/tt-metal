@@ -21,6 +21,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_transaction_id_tracker.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_link_transport.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_tmp_utils.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp"
@@ -46,6 +47,10 @@
 #include <cstdint>
 #include <type_traits>
 
+#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+#include "tt_metal/impl/streaming_profiler/kernels/link_sync.hpp"
+#endif
+
 using namespace tt::tt_fabric;
 
 // Type alias for the 1D low-latency hop fields.
@@ -53,31 +58,33 @@ using LowLatencyFields = tt::tt_fabric::RoutingFieldsConstants::LowLatency;
 
 /*
 
-The fabric Erisc Data Mover (EDM) is a component that can be used to build *very* simple linear topology fabrics.
-One of these EDMs can be instantiated on each ethernet link. It is built from 3 "channels" (though the definition
-of channel here is a little loose since two of the 3 will merge traffic, so this setup could be interpreted as a
-two channel setup.). This EDM implements packet based packets only - concepts like sockets are not supported.
+The fabric_erisc_router is a component that can be used to implement various fabric topologies - namely graphs of k-ary n-cubes.
+One of these EDMs can be instantiated on each ethernet link. It is built from 2 or more "channels", though the definition
+of channel here is a little loose since multiple sender channels can merge traffic into shared receiver channels.
+This router implements packet based messages only - concepts like sockets are not supported.
 
-## EDM Structure
+## Router Structure
 
-There are two sender channels and one receiver channel. "Sender" and "receiver" are relative to the Ethernet link,
+There are one or more sender channels and one or more receiver channel. "Sender" and "receiver" are relative to the Ethernet link,
 not the chip. Sender sends over the link and receiver receives from the link.
 
-Each sender channel serves a different purpose:
-- Sender channel 0 : Accepts packets from a workers on the local chip
-- Sender channel 1: accepts packets from an upstream EDM (i.e. an upstream
-  EDM receiver channel on the same chip but different core)
+Each sender channel are grouped by VC. Each VC holds one or more sender channels. Receiver channels are one per VC. Each sender
+channel serves a different purpose:
+- VC0: forwards traffic originated from within this DeviceMesh
+  - Sender channel 0 : Accepts packets from a workers on the local chip
+  - Sender channel 1-N: Accepts packets from an upstream routers (i.e. an upstream
+    router receiver channel on the same chip but different core)
 
 The receiver channel accepts packets from the Ethernet link and can do one (or both) of:
-- Write the packet to local chip if it is the intended destination (unicast or mcast)
-- Forward the packet to the next chip in the line if:
+- Write the packet to local chip if it is the intended destination (unicast)
+- Forward the packet to a downstream router if:
   - Unicast and not the target chip
   - Multicast and this chip is in the multicast target range
 
-Sender channels will merge traffic into the remote EDM's receiver channel.
+Sender channels will merge traffic into the remote router's receiver channel.
 
-Below is a diagram that shows how EDMs can be connected over an ethernet link. In this case, the two
-EDM kernels are run on separate, but connected ethernet link cores.
+Below is an example diagram that shows how routers can be connected over an ethernet link. In this case,
+a simple line topology is instantiated, and the kernels run on separate, but connected ethernet link cores.
 
  ┌───────────────────────┐           ┌───────────────────────┐
  │    Sender Channel 0   │           │    Receiver Channel   │
@@ -102,9 +109,9 @@ EDM kernels are run on separate, but connected ethernet link cores.
 
 ## Building a "Fabric"
 
-At present, only linear topologies are supported, and one per ethernet link along that given line.
-Below shows the intended connectivity of EDMs across chips in a hypothetical 3-chip fabric. For longer
-lines, the pattern would be extended.
+Below shows the intended connectivity of routers across chips in a hypothetical 3-chip line fabric. For longer
+lines, the pattern would be extended. For higher dimensional topologies, more channels are instantiated. For
+more levels of routing (i.e. multi-mesh), more VCs are instantiated.
 
            CHIP 0                              CHIP 1                             CHIP 2
      ┌─────────────────┐                ┌─────────────────┐                ┌─────────────────┐
@@ -134,36 +141,6 @@ by the worker (the EDM is a subordinate in this protocol).
 *NOTE*: If multiple workers try to connect to the same EDM sender channel at the same time, the behavior is undefined.
 *NOTE*: Additionally, if a worker pushes packets to a channel it isn't connected to, behaviour is undefined.
 *NOTE*: Undefined == likely hang
-
-The `EdmToEdmSender` from `edm_fabric_worker_adapters.hpp`
-provides an implementation of the connection protocol. `EdmToEdmSender` also acts as a wrapper around that
-protocol so workers can simply call `open()` to execute the connection protocol without having to manually reimplement
-for each kernel.
-
-### Protocol
-Worker:
-- Read from EDM sender channel buffer_index address
-  - Required so that the worker knows where to write its first packet (since the channel may already contain packets
-from a previous connection)
-- Write worker core X/Y (NOC 0 based)
-- Write worker flow control semaphore L1 address
-
-EDM Sender Channel:
-- Check local connection valid semaphore for new established connection
-  - When the connection semaphore indicates an active connection, the channel assumes all other relevant fields were
-    correctly populated by the worker:
-    - Worker core_x (on NOC 0)
-    - Worker core_y (on NOC 0)
-    - Worker flow control semaphore L1 address
-
-
-## Tearing Down Connections
-
-Every worker is required to explicitly teardown its connection with the EDM before terminating. To do this, the worker
-must simply write a `0` to the EDM sender channel's connection semaphore address. As long as the worker has sent all
-of its packets to the EDM before this, then the EDM will guarantee to forward the messages correctly.
-
-At this point, it is safe for another kernel to establish a connection.
 
 ## Packet Structure
 
@@ -196,39 +173,24 @@ size. Packets 0, 2, and 3 are smaller than the full buffer size, while packet 1 
   buf 0           buf 1           buf 2           buf 3
 
 
-
-
 ## Sending Packets
 Sending a packet is done as follows:
 
-1) Worker waits for flow control semaphore increment from EDM sender channel
-  - Indicates there is space at the next buffer index for a packet
-2) Worker performs a noc write of its packet to the EDM sender channel at the buffer index
+1) Worker checks (and conditionally waits for) credits to send to the router's sender channel
+  - credits are used to notify of space in the sender channel
+2) Worker performs a noc write of its packet to the router's sender channel 0 at the buffer index
 
 *NOTE*: !!!ALL PACKETS MUST CONTAIN DESTINATION NOC X/Y AS NOC 0 COORDINATES, REGARDLESS OF THE `noc_index` OF THE
 SENDER!!!
 
-
-## EDM <-> EDM Channel Flow Control
+## router <-> router Channel Flow Control
 The flow control protocol between EDM channels is built on a rd/wr ptr based protocol where pointers are
 to buffer slots within the channel (as opposed so something else like byte or word offset). Ptrs are
 free to advance independently from each other as long as there is no overflow or underflow.
 
 The flow control is implemented through the use of several stream registers: one per conceptual pointer being tracked.
-In total there are 5 such counters:
-1) to receiver channel packets sent
-  - Incremented by sender (via eth_reg_write) by the number of buffer slots written. In practice, this means it is
-    incremented once per packet
-2) to sender 0 packets acked
-  - Incremented by receiver for every new packet from channel 0 that it sees
-3) to sender 1 packets acked
-  - Incremented by receiver for every new packet from channel 1 that it sees
-4) to sender 0 packets completed
-  - Incremented by receiver for every packet from channel 0 that it completes processing for
-5) to sender 1 packets completed
-  - Incremented by receiver for every packet from channel 1 that it completes processing for
-
-See calls to `increment_local_update_ptr_val`, `remote_update_ptr_val`, `init_ptr_val` for more on implementation.
+See calls to `increment_local_update_ptr_val`, `remote_update_ptr_val`, `init_ptr_val` for more on implementation of
+stream register manipulation.
 
 ### Sender Channel Flow Control
 Both sender channels share the same flow control view into the receiver channel. This is because both channels
@@ -238,7 +200,7 @@ write to the same receiver channel.
   * leads other pointers
   * writer updates for every new packet
   * `has_data_to_send(): local_wrptr != remote_sender_wrptr`
-* ackptr
+* ackptr (ring/torus only)
   * trails `wrptr`
   * advances as the channel receives acknowledgements from the receiver
     * as this advances, the sender channel can notify the upstream worker of additional space in sender channel buffer
@@ -269,23 +231,6 @@ write to the same receiver channel.
 ////////////////////////////////////////////////
 // Data structures, types, enums, and constants
 ////////////////////////////////////////////////
-
-// read and write stream scratch register store values as uint32_t
-enum class CoordinatedEriscContextSwitchState : uint32_t {
-    // Initially set by the master (erisc0) in entrance of kernel_main() and is the default state. erisc1 polls for this
-    // state at the end of the handshake
-    NORMAL_EXECUTION = 0,
-    // Set by master to signal intent on beginning handshake. Checked by erisc1 before it begins handshake
-    RETRAIN_INTENT = 1,
-    // Set by erisc1 to indicate it's cooperation. Polled by master before it runs the retrain to ensure that it has
-    // erisc1's cooperation
-    INTENT_ACK = 2,
-    // Set by erisc0 to indicate completion of retrain. Polled by erisc1
-    RETRAIN_COMPLETE = 3,
-    // Set by erisc1 to indicate it has seen the completion of retrain. Polled by erisc0 before it sets register back to
-    // NORMAL_EXECUTION
-    COMPLETE_ACK = 4,
-};
 
 // In case underlying type for the enum class is changed later
 using CoordinatedEriscCtxType = std::underlying_type_t<CoordinatedEriscContextSwitchState> ;
@@ -514,10 +459,10 @@ FORCE_INLINE void send_next_data(
     }
 
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        while (internal_::eth_txq_is_busy(sender_txq_id)) {
+        while (SenderLinkTransport::is_busy()) {
         };
     }
-    internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
+    SenderLinkTransport::send_packet(src_addr, dest_addr, payload_size_bytes);
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)
@@ -531,9 +476,9 @@ FORCE_INLINE void send_next_data(
 
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
-    while (internal_::eth_txq_is_busy(sender_txq_id)) {
+    while (SenderLinkTransport::is_busy()) {
     };
-    remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
+    SenderLinkTransport::remote_update_ptr_val<to_receiver_pkts_sent_id>(1U);
 }
 
 /////////////////////////////////////////////
@@ -777,7 +722,9 @@ FORCE_INLINE void forward_to_local_destination(
 
 // Packed-slot bitset of eth outputs this ELF actually has. Bit i is fwd_dirs<MY_DIR>()[i].
 // Intramesh E/W also drop N/S (packed bits 1 and 2): Y-before-X forbids those turns, and
-// decode_action for E/W never reads the Y byte. INTERMESH E/W landings keep them.
+// decode_action for E/W never reads the Y byte. On an X-express mesh an intramesh Z router is an X
+// resource for the same reasons: it decodes the X byte only, which never carries N/S, so it drops
+// N/S (packed bits 2 and 3) as dead arms. INTERMESH landings keep them.
 template <size_t DOWNSTREAM_EDM_SIZE>
 constexpr uint8_t live_eth_mask_2d() {
     constexpr auto my_dir = static_cast<eth_chan_directions>(my_direction);
@@ -799,6 +746,11 @@ constexpr uint8_t live_eth_mask_2d() {
         (my_dir == eth_chan_directions::EAST || my_dir == eth_chan_directions::WEST) && !is_intermesh_router;
     if constexpr (trim_ns_for_intramesh_ew) {
         live = static_cast<uint8_t>(live & ~0b0110);
+    }
+    constexpr bool trim_ns_for_intramesh_z_on_x_express =
+        my_dir == eth_chan_directions::Z && Fabric2DRoutingConfig::express_on(Fabric2DAxis::X) && !is_intermesh_router;
+    if constexpr (trim_ns_for_intramesh_z_on_x_express) {
+        live = static_cast<uint8_t>(live & ~0b1100);
     }
     return live;
 }
@@ -884,6 +836,15 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) uint8_t forward_2d_disp
     constexpr auto dirs = Routing2DCodec::fwd_dirs<static_cast<eth_chan_directions>(my_direction)>();
     constexpr bool stateful_api = use_2d_single_live_stateful_noc<DOWNSTREAM_EDM_SIZE>();
     const uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+    // The arms below skip a direction this router was built without, so a packet asking for one is
+    // dropped and its receiver hangs. Routes never ask for one (for example E/W after a
+    // VC0 landing with the intermesh VC disabled); with the watcher on, a wrong route stops here instead.
+    constexpr uint8_t DEAD_ARMS = static_cast<uint8_t>(
+        (((LIVE >> 0) & 1) ? 0 : Routing2DCodec::action_bit(dirs[0])) |
+        (((LIVE >> 1) & 1) ? 0 : Routing2DCodec::action_bit(dirs[1])) |
+        (((LIVE >> 2) & 1) ? 0 : Routing2DCodec::action_bit(dirs[2])) |
+        (((LIVE >> 3) & 1) ? 0 : Routing2DCodec::action_bit(dirs[3])));
+    ASSERT((action & DEAD_ARMS) == 0);
     uint8_t forwarded_slot_mask = 0;
     if constexpr ((LIVE >> 0) & 1) {
         if (action & Routing2DCodec::action_bit(dirs[0])) {
@@ -1240,7 +1201,7 @@ FORCE_INLINE
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
 
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
+        can_send = can_send && !SenderLinkTransport::is_busy();
     }
     if (can_send) {
         did_something = true;
@@ -1383,7 +1344,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         bool pkts_received = pkts_received_since_last_check > 0;
         bool can_send_ack = pkts_received;
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            can_send_ack = can_send_ack && !internal_::eth_txq_is_busy(receiver_txq_id);
+            can_send_ack = can_send_ack && !ReceiverLinkTransport::is_busy();
         }
         if (can_send_ack) {
             // currently only support processing one packet at a time, so we only decrement by 1
@@ -1457,7 +1418,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                     action = Routing2DCodec::decode_action_y_first(
                         packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
                 } else {
-                    action = Routing2DCodec::decode_action<static_cast<eth_chan_directions>(my_direction)>(
+                    // A Z-facing router decodes the axis its chord runs along; see Fabric2DRoutingConfig.
+                    action = Fabric2DRoutingConfig::decode_action<static_cast<eth_chan_directions>(my_direction)>(
                         packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
                 }
                 // This chip is the exit when the maps say deliver here but the final mesh is
@@ -1575,7 +1537,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         auto& completion_counter = receiver_channel_pointers.completion_counter;
         bool unsent_completions = !completion_counter.is_caught_up_to(completion_counter, wr_flush_counter);
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            unsent_completions = unsent_completions && !internal_::eth_txq_is_busy(receiver_txq_id);
+            unsent_completions = unsent_completions && !ReceiverLinkTransport::is_busy();
         }
         if (unsent_completions) {
             // completion ptr incremented in callee
@@ -1595,7 +1557,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         bool can_send_completion = unflushed_writes && next_trid_flushed;
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
+            can_send_completion = can_send_completion && !ReceiverLinkTransport::is_busy();
         }
         if (can_send_completion) {
             uint8_t src_ch_id;
@@ -1894,11 +1856,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
     uint16_t fabric_heartbeat_counter = 0;
 #if defined(ARCH_BLACKHOLE)
-    constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x7CC70;
+    constexpr uint32_t fabric_kernel_heartbeat_addr = FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE;
 #else
-    constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x1F80;
+    constexpr uint32_t fabric_kernel_heartbeat_addr = FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE;
 #endif
-    volatile uint32_t* fabric_heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(FABRIC_KERNEL_HEARTBEAT_ADDR);
+    volatile uint32_t* fabric_heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(fabric_kernel_heartbeat_addr);
 
     auto execute_main_loop = [&]() __attribute__((always_inline)) {
         ActualSpeedySenderState<super_speedy_mode> local_speedy_sender_state;
@@ -2247,8 +2209,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     fabric_telemetry);
             }
 
-            if ((++fabric_heartbeat_counter & 0x3F) == 0) {
-                *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
+            if ((++fabric_heartbeat_counter & (FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS - 1)) == 0) {
+                *fabric_heartbeat_ptr = FABRIC_KERNEL_HEARTBEAT_MAGIC | fabric_heartbeat_counter;
             }
 
             if constexpr (enable_context_switch) {
@@ -2282,6 +2244,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     }
                 }
             }
+#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+            link_sync::RouterHook::step(fabric_heartbeat_counter);
+#endif
         }
 
         speedy_state_copy_out<super_speedy_mode, 0>(
@@ -2676,11 +2641,13 @@ void kernel_main() {
         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,
         "For multi-txq mode, the only currently supported configuration is sender_txq_id=0 and receiver_txq_id=1");
     if constexpr (receiver_txq_id != sender_txq_id) {
-        constexpr bool is_erisc_that_sets_up_second_txq = any_receiver_channel_serviced;
-        if constexpr (is_erisc_that_sets_up_second_txq) {
+        // Role selection is structural (2-erisc split), not workload-driven: use the untrimmed role
+        // flags, not the trimming-aware per-channel serviced bits (whose channel 0 can now be
+        // legitimately trimmed while a sibling channel of the same role stays active).
+        if constexpr (risc_services_receiver_channels) {
             initialize_state_for_txq1_active_mode();
         }
-        if constexpr (any_sender_channel_serviced) {
+        if constexpr (risc_services_sender_channels) {
             initialize_state_for_txq1_active_mode_sender_side();
         }
     }
@@ -2874,6 +2841,7 @@ void kernel_main() {
                  // must be initialized here. This is the only time the router touches it.
                  auto* const producer_cursor =
                      reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_buffer_index_ids[I]);
+#pragma GCC unroll 1
                  for (size_t w = 0; w < sizeof(tt::tt_fabric::SenderChannelProducerCursor) / sizeof(uint32_t); ++w) {
                      producer_cursor[w] = 0;
                  }
@@ -3177,10 +3145,10 @@ void kernel_main() {
     // initialize the local sender channel buffers
     local_sender_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
 
-    // The initializer populates every sender interface. Channel trimming can leave a router with
-    // only a nonzero static sender (for example, transit traffic on channel 1), so channel 0 cannot
-    // be used as a proxy for whether initialization is needed.
-    if constexpr (any_sender_channel_serviced) {
+    // Interface construction is a structural sender-RISC obligation. Trimming can disable
+    // sender channel 0 while leaving static forwarding sender channels active, so channel 0
+    // cannot be used as a proxy for whether these interfaces must be initialized.
+    if constexpr (risc_services_sender_channels) {
         init_local_sender_channel_worker_interfaces(
             local_sender_connection_live_semaphore_addresses,
             local_sender_connection_info_addresses,
@@ -3321,30 +3289,33 @@ void kernel_main() {
 
     if constexpr (is_2d_fabric) {
         // Helper function to open downstream EDM connections, works for both VC0 and VC1
-        auto open_downstream_edm_connections =
-            [](auto& downstream_edm_noc_interfaces, uint32_t has_downstream_edm, int receiver_channel_idx) {
-                uint32_t edm_index = 0;
-                if (is_receiver_channel_serviced[receiver_channel_idx]) {
-                    while (has_downstream_edm) {
-                        if (has_downstream_edm & 0x1) {
-                            // open connections with available downstream edms
-                            downstream_edm_noc_interfaces[edm_index]
-                                .template open<
-                                    false,
-                                    use_posted_writes_for_connection_open,
-                                    tt::tt_fabric::worker_handshake_noc>();
-                        }
-                        edm_index++;
-                        has_downstream_edm >>= 1;
-                    }
+        auto open_downstream_edm_connections = [](auto& downstream_edm_noc_interfaces, uint32_t has_downstream_edm) {
+            uint32_t edm_index = 0;
+            while (has_downstream_edm) {
+                if (has_downstream_edm & 0x1) {
+                    // open connections with available downstream edms
+                    downstream_edm_noc_interfaces[edm_index]
+                        .template open<
+                            false,
+                            use_posted_writes_for_connection_open,
+                            tt::tt_fabric::worker_handshake_noc>();
                 }
-            };
+                edm_index++;
+                has_downstream_edm >>= 1;
+            }
+        };
 
-        open_downstream_edm_connections(
-            downstream_edm_noc_interfaces_vc0, has_downstream_edm_vc0_buffer_connection & 0xF, 0);
+        // Open gates are builder-resolved (trimming- and VC1-mode-aware): VC1 downstreams are
+        // consumed by receiver 0's crossover step on crossover routers, not by receiver 1.
+        if constexpr (open_downstream_vc0_connections) {
+            open_downstream_edm_connections(
+                downstream_edm_noc_interfaces_vc0, has_downstream_edm_vc0_buffer_connection & 0xF);
+        }
 #if defined(FABRIC_2D_VC1_ACTIVE)
-        open_downstream_edm_connections(
-            downstream_edm_noc_interfaces_vc1, has_downstream_edm_vc1_buffer_connection & 0xF, 1);
+        if constexpr (open_downstream_vc1_connections) {
+            open_downstream_edm_connections(
+                downstream_edm_noc_interfaces_vc1, has_downstream_edm_vc1_buffer_connection & 0xF);
+        }
 #endif
         if constexpr (udm_mode) {
             if (has_local_tensix_relay_connection) {
@@ -3372,7 +3343,7 @@ void kernel_main() {
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::VCS_OPENED);
 #endif
-    if constexpr (is_receiver_channel_serviced[0] and NUM_ACTIVE_ERISCS > 1) {
+    if constexpr (open_downstream_vc0_connections and NUM_ACTIVE_ERISCS > 1) {
         // Two erisc mode requires us to reorder the cmd buf programming/state setting
         // because we need to reshuffle some of our cmd_buf/noc assignments around for
         // just the fabric bringup phase. These calls are also located earlier for the
@@ -3393,7 +3364,7 @@ void kernel_main() {
         }
     }
 #if defined(FABRIC_2D_VC1_ACTIVE)
-    if constexpr (is_receiver_channel_serviced[1] and NUM_ACTIVE_ERISCS > 1) {
+    if constexpr (open_downstream_vc1_connections and NUM_ACTIVE_ERISCS > 1) {
         // Two erisc mode requires us to reorder the cmd buf programming/state setting
         // because we need to reshuffle some of our cmd_buf/noc assignments around for
         // just the fabric bringup phase. These calls are also located earlier for the

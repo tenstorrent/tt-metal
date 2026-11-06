@@ -20,7 +20,7 @@ constexpr std::uint32_t SFPU_REPLAY_BANK_DEPTH = 32;
 // The read ID only flips after an executed REPLAY, so entering bank 1 replays an SFPNOP kept here.
 constexpr std::uint32_t SFPU_REPLAY_BANK_SWITCH_SLOT = SFPU_REPLAY_BANK_DEPTH - 1;
 
-// On quasar_4row, 16-bit transpose_dest's recording ends in the switch slot; re-init it after
+// On Trinity (4-row FPU), 16-bit transpose_dest's recording ends in the switch slot; re-init it after
 // bank-1 SFPU tiles there. On the 8-row FPU every bank-0 recording stops by slot 23.
 constexpr bool SFPU_REPLAY_BANK_SWITCH_SLOT_FREE = (ELTWISE_MATH_ROWS == 8);
 
