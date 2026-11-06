@@ -6,6 +6,9 @@
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#ifdef SE_SKIP
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/rt_rows.hpp"
+#endif
 #ifdef W_RA0
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
@@ -23,7 +26,14 @@ using namespace tt::tt_fabric;
 // final) x ncnt; cores (x, y) x nc; per rank: nreq, (counter address, the entry's index, the stream's entries a chunk)
 MB_LOOP_BODY {
     size_t a = 0;
-    const uint32_t nch = get_arg_val<uint32_t>(a++), sem = get_semaphore(get_arg_val<uint32_t>(a++));
+    const uint32_t nch0 = get_arg_val<uint32_t>(a++), sem = get_semaphore(get_arg_val<uint32_t>(a++));
+#ifdef SE_SKIP
+    // (a padded forward: the row chunks up to the last with a real row - the counters count those)
+    const uint32_t nch = rt_live_chunks(
+        [](uint32_t i) { return get_common_arg_val<uint32_t>(i); }, 0, (get_common_arg_val<uint32_t>(10) + 63) & ~63u);
+#else
+    const uint32_t nch = nch0;
+#endif
     const uint32_t nk = get_arg_val<uint32_t>(a++), nc = get_arg_val<uint32_t>(a++), ncnt = get_arg_val<uint32_t>(a++);
     const uint32_t cnt0 = a, c0 = cnt0 + 2 * ncnt, r0 = c0 + 2 * nc;
     for (uint32_t m = 0; m < nch; ++m) {
@@ -43,7 +53,8 @@ MB_LOOP_BODY {
     }
     for (uint32_t i = 0; i < ncnt; ++i) {  // (re-arm)
         noc_semaphore_inc(
-            get_noc_addr(get_arg_val<uint32_t>(cnt0 + 2 * i)), 0u - get_arg_val<uint32_t>(cnt0 + 2 * i + 1));
+            get_noc_addr(get_arg_val<uint32_t>(cnt0 + 2 * i)),
+            0u - get_arg_val<uint32_t>(cnt0 + 2 * i + 1) / nch0 * nch);
     }
     noc_async_atomic_barrier();
 #ifdef W_RA0

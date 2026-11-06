@@ -73,6 +73,7 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
                 }
                 const uint32_t dst0 = zb + (zo + po) * 2048;
                 const uint64_t ctr = get_noc_addr(x, y, actr);
+                const bool live = xg_block_real(m, (cw >> 20) & 0x7F, b);  // (padding rows only: no payload)
                 for (uint32_t t0 = 0; t0 < cnt; t0 += RP) {
                     lpoll();  // (the logits / routing go between my packets: ahead of my next one)
                     while (!cb_pages_available_at_front(0, RP * (u + 1))) {
@@ -81,17 +82,25 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
                     cb_wait_front(0, RP * (u + 1));
                     const uint32_t src = get_read_ptr(0) + u * RP * 2048;
                     const uint32_t n = cnt - t0 < RP ? cnt - t0 : RP;
-                    const uint64_t dst = get_noc_addr(x, y, dst0 + t0 * 2048);
-                    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
-                    h = h + 1 == GROUP ? 0 : h + 1;
-                    if (last && t0 + RP >= cnt) {
-                        hdr->to_noc_fused_unicast_write_atomic_inc(
-                            NocUnicastAtomicIncFusedCommandHeader{dst, ctr, 1, true}, n * 2048);
-                    } else {
-                        hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, n * 2048);
+                    const bool inc = last && t0 + RP >= cnt;
+                    if (live) {
+                        const uint64_t dst = get_noc_addr(x, y, dst0 + t0 * 2048);
+                        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
+                        h = h + 1 == GROUP ? 0 : h + 1;
+                        if (inc) {
+                            hdr->to_noc_fused_unicast_write_atomic_inc(
+                                NocUnicastAtomicIncFusedCommandHeader{dst, ctr, 1, true}, n * 2048);
+                        } else {
+                            hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, n * 2048);
+                        }
+                        conn.wait_for_empty_write_slot();
+                        conn.send_current_slot_non_blocking(src, n * 2048, reinterpret_cast<uint32_t>(hdr));
+                    } else if (inc) {  // (only the arrival count)
+                        hdrs[GROUP]->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{ctr, 1, true});
+                        conn.wait_for_empty_write_slot();
+                        conn.send_payload_flush_blocking_from_address(
+                            reinterpret_cast<uint32_t>(hdrs[GROUP]), sizeof(PACKET_HEADER_TYPE));
                     }
-                    conn.wait_for_empty_write_slot();
-                    conn.send_current_slot_non_blocking(src, n * 2048, reinterpret_cast<uint32_t>(hdr));
                     if (++u == lim) {
                         pop_batch();
                     }

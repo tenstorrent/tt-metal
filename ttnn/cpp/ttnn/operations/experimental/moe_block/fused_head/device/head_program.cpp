@@ -279,7 +279,19 @@ public:
     // head_words' order
     static uint32_t word_index(const std::string& n) {
         static const std::vector<std::string> names = {
-            "mbox", "arr", "xg", "rt", "slot_words", "sfree", "ra_c", "ra_p", "ra_s", "yhello", "ewords", "rit"};
+            "mbox",
+            "arr",
+            "xg",
+            "rt",
+            "slot_words",
+            "sfree",
+            "ra_c",
+            "ra_p",
+            "ra_s",
+            "yhello",
+            "ewords",
+            "valid",
+            "rit"};
         const auto it = std::find(names.begin(), names.end(), n);
         TT_FATAL(it != names.end(), "fused_head: no persistent words '{}'", n);
         return u32(it - names.begin());
@@ -973,6 +985,9 @@ std::vector<HeadWordsSpec> head_words(const HeadModel& h) {
         {"yhello", cells({h.watcher}), 16},
     };
     out.push_back({"ewords", h.engine_cores(), 64});
+    // a padded forward's metadata, read by the kernels that skip its row chunks past the last real one (SE_SKIP:
+    // rt_rows.hpp rt_live_chunks): 128 B, 64 B aligned, a core
+    out.push_back({"valid", head_arena_cores(h), 48});
     // router iterations: [0] router core 0's count of the chip's router cores / ports done with an iteration, [16] a
     // port's count of the chip's router cores done
     if (h.NIT > 1) {
@@ -1318,10 +1333,40 @@ private:
         }
     }
     void planner_defines(KernelDescriptor& k, uint32_t ct0) const;
+    // SE_SKIP (a padded forward; no latent, x resident, row chunks): the engine, the gather's ports and the watcher run
+    // the row chunks up to the last with a real row only (rt_rows.hpp rt_live_chunks) - the matmul cores' BRISC tells
+    // its NCRISC and compute (ewords + SE_NE_ID)
+    bool skip() const { return bufs[SRC_START] != nullptr && !e.LT && !h.cfg.lay.xdram && e.NCH > 1; }
+    void skip_defines(KernelDescriptor& k, uint32_t va) const {
+        define(k, "SE_SKIP");
+        define(k, "SE_VA", iv(va));
+        define(k, "SE_NE_ID", iv(240));
+        define(k, "RT_FWD", iv(h.cfg.shape.fwd_chunks));
+        if (bufs.meta) {
+            define(k, "RT_META");
+        }
+    }
+    Args live_args() const {
+        const uint32_t sub = h.S * h.C, g0 = bufs.split * bufs.loops;
+        const bool own = e.NCH > 1 && e.shards > 1;
+        return Args{
+            S(SRC_START),
+            bufs[SRC_END] ? S(SRC_END) : Arg(0u),
+            Arg(coord.first),
+            Arg(h.R),
+            Arg(h.cfg.shape.row_tokens ? h.cfg.shape.row_tokens : sub * bufs.loops * h.splits),
+            Arg((g0 + bufs.loop) * sub),
+            Arg(e.NCH),
+            Arg(e.CR),
+            Arg(own ? e.CR / e.shards : 0u),
+            Arg(own ? e.rows / 32 / e.shards : 0u),
+            word("valid")};
+    }
     // a padded forward (router_addr.hpp RT_VALID): its chunks a forward (RT_FWD) and whether it comes as the
     // forward's metadata words (RT_META) rather than one chunk's actual_start / actual_end
     void valid_defines(KernelDescriptor& k) const {
         define(k, "RT_VALID");
+
         define(k, "RT_FWD", iv(h.cfg.shape.fwd_chunks));
         if (bufs.meta) {
             define(k, "RT_META");
@@ -1838,7 +1883,14 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
     for (const auto& [c, a] : b_rt) {
         set_rt(brisc, c, a);
     }
-    set_common(brisc, b_crt);
+    if (skip()) {  // (the live row chunks: BRISC reads them, after its own common args)
+        Args bc = b_crt;
+        skip_defines(brisc, u32(bc.size()));
+        add(bc, live_args());
+        set_common(brisc, bc);
+    } else {
+        set_common(brisc, b_crt);
+    }
     auto ncrisc = kernel("dataflow/se_ncrisc.cpp", allc, dm(DataMovementProcessor::RISCV_1, NOC::NOC_1));
     ncrisc.compile_time_args = nct;
     auto& nca = ncrisc.compile_time_args;
@@ -1847,7 +1899,7 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
     append_accessor(nca, bufs[SRC_XBUF]);
     append_accessor(nca, bufs[SRC_X]);
     append_accessor(nca, bufs[SRC_RW]);
-    ncrisc.defines = brisc.defines;
+    ncrisc.defines = brisc.defines;  // (SE_SKIP: NCRISC reads the live chunks from ewords)
     for (const auto& [c, a] : n_rt) {
         set_rt(ncrisc, c, a);
     }
@@ -1894,10 +1946,18 @@ std::vector<KernelDescriptor> ChipProgram::engine(std::vector<CBDescriptor>& cbs
             define(compute, k, float_literal(v));
         }
         compute.defines.insert(compute.defines.end(), nd.begin(), nd.end());
+
         for (const auto& [c, a] : c_rt) {
             set_rt(compute, c, a);
         }
-        set_common(compute, c_crt);
+        if (skip()) {  // (the live chunks from ewords: its address after the group's common args)
+            Args cc = c_crt;
+            skip_defines(compute, u32(cc.size()));
+            add(cc, Args{word("ewords")});
+            set_common(compute, cc);
+        } else {
+            set_common(compute, c_crt);
+        }
         push(ks, compute);
     }
     return ks;
@@ -2254,7 +2314,17 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
         add(wl, tail);
     }
     set_rt(watcher, h.watcher, wl);
+    if (skip()) {
+        skip_defines(watcher, 0);
+        set_common(watcher, live_args());
+    }
     routing_accessors(watcher);
+    if (skip()) {  // (the gather's ports: each reads the live chunks itself)
+        for (auto* k : {&reader, &sender}) {
+            skip_defines(*k, 0);
+            set_common(*k, live_args());
+        }
+    }
     std::vector<KernelDescriptor> ks;
     push(ks, reader);
     push(ks, sender);
@@ -2719,6 +2789,9 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
             define(ck, "INP_FLOAT32", "1");
         }
         define(ck, "RT_ROUTE");
+        if (padded) {  // (its row tiles of padding only: no sums, top-K, rows or route words - router_compute.cpp)
+            valid_defines(ck);
+        }
         define(ck, "RW_R", iv(h.R));
         define(ck, "RW_C", iv(h.C));
         define(ck, "RW_ME", iv(me));

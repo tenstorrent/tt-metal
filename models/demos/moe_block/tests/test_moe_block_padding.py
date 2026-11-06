@@ -454,7 +454,8 @@ def test_padded_traced(setup):
             )
             _check_padded(s, ref, o, span)
             e = _forward(s, _padded(s, real_mask(*span)), span)
-            assert _same(o["y_own"], e["y_own"]) and _same(o["out"], e["out"]), f"{span}: traced vs eager"
+            m = real_mask(*span)  # (the padding rows' block output is not computed: not compared)
+            assert _same(o["y_own"], e["y_own"]) and _same(o["out"][m], e["out"][m]), f"{span}: traced vs eager"
         logger.info(f"MOE_PAD (d) traced: one capture replayed with (start, end) {spans} = eager, ok")
     finally:
         ttnn.release_trace(mesh, tid)

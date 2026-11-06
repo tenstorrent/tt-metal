@@ -220,6 +220,17 @@ MB_LOOP_BODY {
             }
         }
     }
+#ifdef SE_SKIP
+    uint32_t NE;  // (a padded forward: the row chunks up to the last with a real row - my BRISC's, in ewords)
+    {
+        volatile tt_l1_ptr uint32_t* ne = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_EW + SE_NE_ID);
+        while ((NE = *ne) == 0) {
+            invalidate_l1_cache();
+        }
+    }
+#else
+    constexpr uint32_t NE = NCH;
+#endif
     // the weights' DRAM reads go in stream order a window ahead of the sends (WPF of my blocks in flight): spread
     // over gate / up at the rate the stream uses them - a burst of all 35 MB at the start starved the gather
     constexpr uint8_t WNOC = noc_index;  // (the W DRAM reads: the NCRISC's own NoC)
@@ -234,7 +245,7 @@ MB_LOOP_BODY {
     uint32_t nsent = 0;
 #endif
 #ifdef SE_WRING
-    constexpr uint32_t WPN = NCH * NB;  // (rounds the prefetch walks: every chunk reads its blocks again)
+    const uint32_t WPN = NE * NB;  // (rounds the prefetch walks: every chunk reads its blocks again)
 #else
     constexpr uint32_t WPN = NB;  // (the first chunk's: resident after it)
 #endif
@@ -271,7 +282,7 @@ MB_LOOP_BODY {
             ++pending;
         }
     };
-    const uint32_t NR = NCH * NB;                 // (W rounds a call)
+    const uint32_t NR = NE * NB;                  // (W rounds a call)
     uint32_t ws = 0, woff = 0, wr = 0, wc = NWS;  // (send, my offset, pushed, credited)
     uint32_t nf[NWS] = {};
     while (ws < NR && blk(ws) % GY != cy) {
@@ -293,9 +304,11 @@ MB_LOOP_BODY {
 // f0 + 6: the fin's y0 of chunks 1 .., the ports facing my fwd / bwd upstream (NoC x | y << 16), their zone-free
 // word, my FINB-free word, the ports reading my FINB)
 #ifdef SE_FIN_ROWS  // (a core's MT rows straddle owner blocks: each (chunk, row)'s own y base, at f0 + 6 + NCH + 4)
-    constexpr uint32_t CHX = NCH + 4 + NCH * MT, NFF = NCH - 1;
+    constexpr uint32_t CHX = NCH + 4 + NCH * MT;
+    const uint32_t NFF = NE - 1;
 #else
-    constexpr uint32_t CHX = NCH > 1 ? NCH + 4 : 0, NFF = NCH > 1 ? NCH - 1 : 0;
+    constexpr uint32_t CHX = NCH > 1 ? NCH + 4 : 0;
+    const uint32_t NFF = NCH > 1 ? NE - 1 : 0;
 #endif
     uint32_t nfmax = 0, nbmax = 0, zuf = 0, zub = 0;  // (the thresholds' max; the zone pages my slots take)
     for (uint32_t i = 0; i < naf; ++i) {
@@ -319,7 +332,7 @@ MB_LOOP_BODY {
     // prep may untilize them)
     const uint32_t L0 = f0 + 6 + CHX, lnr = se_ra(L0), lnsrc = se_ra(L0 + 1);
     volatile tt_l1_ptr uint32_t* lctr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(se_ra(L0 + 2));
-    const uint32_t NLI = lnr == 0 || lnsrc == 0 ? 0 : NCH;
+    const uint32_t NLI = lnr == 0 || lnsrc == 0 ? 0 : NE;
     uint32_t li = 0;
 #else
     constexpr uint32_t NLI = 0, li = 0;
@@ -329,12 +342,12 @@ MB_LOOP_BODY {
 #else
     const uint32_t P0 = f0 + 6 + CHX;
 #endif
-    const uint32_t pnu = se_ra(P0);
+    const uint32_t pnu = se_ra(P0) / NCH * NE;  // (prep units: chunk-major, as many a chunk)
     const auto pg = TensorAccessor(p_args, se_ra(P0 + 1), SE_PREP_ROW);
     uint32_t fsrc = 0, frow = 0,
              fco = 0;  // (the last prep unit: the fence's source / rows - mine: nothing else writes them)
     uint32_t pu = 0;
-    while (ws < NR || wr < NR || wc < NR || af < NCH * naf || ab < NCH * nab || fo < NCH * fcount || ff < NFF ||
+    while (ws < NR || wr < NR || wc < NR || af < NE * naf || ab < NE * nab || fo < NE * fcount || ff < NFF ||
            li < NLI || pu < pnu) {
         invalidate_l1_cache();
 #ifdef SE_LAT
@@ -359,7 +372,7 @@ MB_LOOP_BODY {
             cb_pop_front(SE_PO, SE_PREP_FULL);
             ++pu;
         }
-        if (af < NCH * naf) {
+        if (af < NE * naf) {
             const uint32_t sl = af % naf, mc = af / naf;
             if (NCH > 1 && sl == 0 && mc > zsf) {  // (chunk mc's first slot: chunk mc - 1's zone all read (popped) -
                 // +1 on the zone-free word of the port facing my fwd upstream: it credits the upstream's sends)
@@ -387,7 +400,7 @@ MB_LOOP_BODY {
                 }
             }
         }
-        if (ab < NCH * nab) {
+        if (ab < NE * nab) {
             const uint32_t sl = ab % nab, mc = ab / nab;
             if (NCH > 1 && sl == 0 && mc > zsb) {
                 if (cb_pages_reservable_at_back(SE_ARRB, SE_ZB)) {
@@ -411,7 +424,7 @@ MB_LOOP_BODY {
                 }
             }
         }
-        if (fo < NCH * fcount && cb_pages_available_at_front(SE_OUTF, 1)) {
+        if (fo < NE * fcount && cb_pages_available_at_front(SE_OUTF, 1)) {
             const uint32_t mc = fo / fcount, i = fo % fcount;
 #ifdef SE_FIN_ROWS
             const uint32_t ya = se_ra(f0 + 6 + NCH + 4 + mc * MT + i / fw) + i % fw;
@@ -500,10 +513,10 @@ MB_LOOP_BODY {
     noc_async_write_barrier();
     {  // re-arm my arrival counters (every increment of the call landed: each was waited to its final count)
         if (nfmax) {
-            noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(arrf)), 0u - NCH * nfmax);
+            noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(arrf)), 0u - NE * nfmax);
         }
         if (nbmax) {
-            noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(arrb)), 0u - NCH * nbmax);
+            noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(arrb)), 0u - NE * nbmax);
         }
         if (NFF && fnr) {
             noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(ffw)), 0u - NFF * fnr);
@@ -511,7 +524,7 @@ MB_LOOP_BODY {
     }
 #ifdef SE_LAT
     if (lnr && lnsrc) {
-        noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(lctr)), 0u - NCH * lnsrc);  // (re-arm)
+        noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(lctr)), 0u - NE * lnsrc);  // (re-arm)
     }
 #endif
     noc_async_atomic_barrier();

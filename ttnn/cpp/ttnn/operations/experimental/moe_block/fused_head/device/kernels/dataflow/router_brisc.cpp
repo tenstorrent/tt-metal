@@ -49,6 +49,29 @@ MB_LOOP_BODY {
 #else
     constexpr uint32_t NIT = 1;
 #endif
+#ifdef RT_VALID
+    // a padded forward: my SP row's real rows now, and which of my iterations' row tiles hold a real token (bit it, bit
+    // 31 valid) - an all-padding tile's top-K and joint rows are not computed (its route words are zero). Published at
+    // words + 144 once the NCRISC zeroed the words (the arena is call scratch: its BIAS push comes after), for it and,
+    // through each iteration's RDY page, the compute's three threads alike
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    rr = rt_rows(vl1);
+    uint32_t live = 0x80000000u;
+    for (uint32_t it = 0; it < NIT; ++it) {
+#ifdef RT_NIT
+        const uint32_t tk = get_arg_val<uint32_t>(t0 + 8) + it * 32 * RT_RBI;
+#else
+        const uint32_t tk = get_arg_val<uint32_t>(t0 + 8);
+#endif
+        if (rr.count(get_common_arg_val<uint32_t>(7) + tk, 32)) {
+            live |= 1u << it;
+        }
+    }
+    auto live_it = [&](uint32_t it) -> bool { return (live >> it) & 1; };
+#else
+    auto live_it = [](uint32_t) -> bool { return true; };
+#endif
     auto route_out = [&](uint32_t it) {  // dispatch prep: my owned tokens' route words (the compute's, word 96)
 #ifdef RT_ROUTE
         volatile tt_l1_ptr uint32_t* rd = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 96);
@@ -82,6 +105,9 @@ MB_LOOP_BODY {
 #endif
     };
     cb_wait_front(BIAS, ET);
+#ifdef RT_VALID
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 144) = live;
+#endif
     for (uint32_t it = 0; it < NIT; ++it) {
         volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words);
         while (*done == 0) {
@@ -91,10 +117,12 @@ MB_LOOP_BODY {
         {
             {
                 DeviceZoneScopedN("SE-RROWS");
-                set_l1_data_cache<true>();  // (write-through; the packed tiles read after an invalidate)
-                invalidate_l1_cache();
-                rows_::make<K, ET>(bv, get_arg_val<uint32_t>(t0 + 9), o_l1, get_arg_val<uint32_t>(t0 + 2), 0, 8);
-                set_l1_data_cache<false>();
+                if (live_it(it)) {              // (an all-padding tile: no rows)
+                    set_l1_data_cache<true>();  // (write-through; the packed tiles read after an invalidate)
+                    invalidate_l1_cache();
+                    rows_::make<K, ET>(bv, get_arg_val<uint32_t>(t0 + 9), o_l1, get_arg_val<uint32_t>(t0 + 2), 0, 8);
+                    set_l1_data_cache<false>();
+                }
             }
             for (uint32_t i = 1; i < 4; ++i) {
                 volatile tt_l1_ptr uint32_t* wd = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 16 * i);
@@ -104,13 +132,6 @@ MB_LOOP_BODY {
                 *wd = 0;  // (re-arm)
             }
 #ifdef RT_ROUTE
-#ifdef RT_VALID
-            if (it == 0) {
-                noc_async_read_barrier();
-                invalidate_l1_cache();
-                rr = rt_rows(vl1);  // (my SP row's real rows: the route words of the rest are zeroed below)
-            }
-#endif
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 80) = 1;  // (every share of the rows written)
 #endif
         }

@@ -64,7 +64,7 @@ FORCE_INLINE void la_gather(uint32_t a0, uint32_t& pos, uint32_t m, uint32_t* se
             flush();
         }
     }
-    if (m + 1 < NCH) {
+    if (m + 1 < xg_ne) {
         return;
     }
     for (uint32_t i = 0; i < nc; ++i) {

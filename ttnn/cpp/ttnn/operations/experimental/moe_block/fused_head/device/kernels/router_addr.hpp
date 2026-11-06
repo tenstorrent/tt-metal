@@ -38,10 +38,7 @@
 // (rt_row_real): the planner counts, stages and plans only those, and the route words of the rest are zero - a
 // padding token is not routed, dispatched, computed or combined.
 #if defined(RT_VALID) && !defined(COMPILE_FOR_TRISC)
-#ifndef RT_FWD
-#define RT_FWD 1
-#endif
-static_assert(RT_FWD >= 1 && RT_FWD <= 8, "a forward of 1 .. 8 chunks (the metadata's 104 B in a 128 B slot)");
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/rt_rows.hpp"
 // the metadata's slot in a scratch from a: its first 64 B aligned address and 64 B on (the DRAM source is 64 B
 // aligned; into a 16 B aligned, not 64 B aligned slot the read came back zero) - give it 192 B
 FORCE_INLINE uint32_t rt_valid_slot(uint32_t a) { return (a + 63) & ~63u; }
@@ -56,54 +53,8 @@ FORCE_INLINE void rt_valid_issue(uint32_t l1) {
     noc_async_read(TensorAccessor(ra_acc::end, get_common_arg_val<uint32_t>(3), 64).get_noc_addr(0), l1 + 64, 16);
 #endif
 }
-// positions in [base, base + len) below end
-FORCE_INLINE uint32_t rt_prefix_count(uint32_t end, uint32_t base, uint32_t len) {
-    return end <= base ? 0 : (end - base < len ? end - base : len);
-}
-// SP row my's real rows of a chunk [start, end) of tpc rows an SP row (moe_padding_config's closed form)
-FORCE_INLINE uint32_t rt_chunk_rows(uint32_t start, uint32_t end, uint32_t my, uint32_t sp, uint32_t tpc) {
-    const uint32_t chunk = sp * tpc, slab = start / chunk, bchip = (start / tpc) % sp, boff = start % tpc;
-    if (my != bchip) {  // (one run: rows before the boundary row a slab on)
-        return rt_prefix_count(end, ((my < bchip ? slab + 1 : slab) * chunk) + my * tpc, tpc);
-    }
-    // (the boundary row starts mid-slab and wraps into the next: two runs)
-    return rt_prefix_count(end, slab * chunk + my * tpc + boff, tpc - boff) +
-           rt_prefix_count(end, (slab + 1) * chunk + my * tpc, boff);
-}
-// my SP row's real rows of each chunk of the forward (its block's real prefix), from the words at l1
-struct RtRows {
-    uint32_t B;          // an SP row's rows a chunk
-    uint32_t v[RT_FWD];  // chunk k's real rows: rows k B .. k B + v[k] of the SP row
-    // is row `row` of my SP row real (rows past every chunk's - the block's padding rows - are not)
-    FORCE_INLINE bool real(uint32_t row) const {
-        const uint32_t k = row / B;
-        return k < RT_FWD && row - k * B < v[k];
-    }
-    // the real rows in [f, f + n)
-    FORCE_INLINE uint32_t count(uint32_t f, uint32_t n) const {
-        uint32_t c = 0;
-        for (uint32_t k = 0; k < RT_FWD; ++k) {
-            const uint32_t a = k * B, b = a + v[k];
-            const uint32_t lo = a > f ? a : f, hi = b < f + n ? b : f + n;
-            c += hi > lo ? hi - lo : 0;
-        }
-        return c;
-    }
-};
 FORCE_INLINE RtRows rt_rows(uint32_t l1) {
-    RtRows r;
-    const uint32_t my = get_common_arg_val<uint32_t>(4), sp = get_common_arg_val<uint32_t>(5);
-    r.B = get_common_arg_val<uint32_t>(6) / RT_FWD;
-    volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
-#ifdef RT_META
-    const uint32_t n = RT_FWD == 1 ? 1u : w[0];  // (the chunks in use: the rest are empty)
-    for (uint32_t k = 0; k < RT_FWD; ++k) {
-        const uint32_t o = RT_FWD == 1 ? 1u : 3u + 3u * k;
-        r.v[k] = k < n ? rt_chunk_rows(w[o], w[o + 1], my, sp, r.B) : 0;
-    }
-#else
-    r.v[0] = rt_chunk_rows(w[0], w[16], my, sp, r.B);
-#endif
-    return r;
+    return rt_rows_of(
+        l1, get_common_arg_val<uint32_t>(4), get_common_arg_val<uint32_t>(5), get_common_arg_val<uint32_t>(6));
 }
 #endif

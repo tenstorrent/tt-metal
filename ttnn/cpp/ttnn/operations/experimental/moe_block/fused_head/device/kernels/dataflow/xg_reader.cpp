@@ -14,6 +14,9 @@ constexpr auto x_args = TensorAccessorArgs<14>();
 
 MB_LOOP_BODY {
     size_t a = 0;
+#ifdef SE_SKIP
+    xg_live_chunks();  // (a padded forward: the row chunks up to the last with a real row)
+#endif
     const uint32_t x_addr = get_arg_val<uint32_t>(a++), xown = get_arg_val<uint32_t>(a++),
                    v = get_arg_val<uint32_t>(a++);
     const uint32_t arrival = get_arg_val<uint32_t>(a++), n = get_arg_val<uint32_t>(a++),
@@ -27,12 +30,13 @@ MB_LOOP_BODY {
     const auto x = TensorAccessor(x_args, x_addr, 2048);
     volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival);
     uint32_t batch = 0, wptr = 0;
-    for (uint32_t m = 0; m < NCH; ++m) {
+    for (uint32_t m = 0; m < xg_ne; ++m) {
         for (uint32_t k = 0; k < n; ++k) {
             const uint32_t q = get_arg_val<uint32_t>(ent + 4 * k), part = get_arg_val<uint32_t>(ent + 4 * k + 1);
             const uint32_t up_base = get_arg_val<uint32_t>(ent + 4 * k + 2),
                            npk = get_arg_val<uint32_t>(ent + 4 * k + 3);
             uint32_t done = 0;
+            const auto mk = xg_mask(m);  // (chunk m's real row tiles)
             walk(m, q, part, v, [&](uint32_t R, uint32_t j, uint32_t kj, uint32_t kk0, uint32_t np, uint32_t idx) {
                 if (batch == 0) {
                     cb_reserve_back(0, RP * GROUP);
@@ -45,12 +49,16 @@ MB_LOOP_BODY {
                         noc_semaphore_wait_min(xloaded, xl_need);
                         xl = true;
                     }
-                    const Dst d = dst_of(T, xown, m, R, j, kk0);
-                    noc_async_read(get_noc_addr(d.x, d.y, d.addr), dst, np * 2048);
+                    if ((mk >> (R - m * CR)) & 1) {  // (a padding row tile: nothing to read)
+                        const Dst d = dst_of(T, xown, m, R, j, kk0);
+                        noc_async_read(get_noc_addr(d.x, d.y, d.addr), dst, np * 2048);
+                    }
                 } else {  // relay: upstream's packet idx of (chunk m, its entry k - 1) landed here
                     noc_semaphore_wait_min(arrived, m * up_ipc + up_base + idx / INC + 1);
-                    const Dst d = dst_of(T, xown, m, R, j, kk0);
-                    noc_async_read(get_noc_addr(d.x, d.y, d.addr), dst, np * 2048);
+                    if ((mk >> (R - m * CR)) & 1) {
+                        const Dst d = dst_of(T, xown, m, R, j, kk0);
+                        noc_async_read(get_noc_addr(d.x, d.y, d.addr), dst, np * 2048);
+                    }
                 }
                 ++batch;
                 ++done;
@@ -68,7 +76,7 @@ MB_LOOP_BODY {
     const uint32_t rsa = xl0 + 2, rnu = get_arg_val<uint32_t>(rsa), rnc = get_arg_val<uint32_t>(rsa + 1 + 2 * rnu);
     uint32_t pos = 0;  // (the gather left the CB batch-aligned; the phases after it share one chunk count)
     uint32_t seen[128], lseen[128];
-    for (uint32_t m = 0; m < NCH; ++m) {
+    for (uint32_t m = 0; m < xg_ne; ++m) {
         la_gather(rsa + 2 + 2 * rnu + 2 * rnc + G + RSX, pos, m, lseen);
         rs_gather(rsa, pos, m, seen);
     }

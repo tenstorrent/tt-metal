@@ -11,6 +11,9 @@
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "api/debug/kernel_profiler.hpp"
+#ifdef SE_SKIP
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/rt_rows.hpp"
+#endif
 using namespace dataflow_kernel_lib;
 constexpr uint32_t GX = get_compile_time_arg_val(0), MT = get_compile_time_arg_val(1), KB = get_compile_time_arg_val(2);
 constexpr uint32_t NSG = get_compile_time_arg_val(3), NPG = get_compile_time_arg_val(4),
@@ -167,6 +170,18 @@ MB_LOOP_BODY {
         noc_async_atomic_barrier();
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(se_ra(np0 + 2 + 2 * nports))) = 1;
     }
+#ifdef SE_SKIP
+    // a padded forward: the row chunks up to the last with a real row only (the rest are padding: no x, no shared
+    // expert, no reduce-scatter) - for my NCRISC and compute too (ewords + SE_NE_ID, zeroed at my end). After my x load
+    // and its count on the gather's ports (they go first), before the router's x (my NCRISC's weights wait on it)
+    const uint32_t NE = rt_live_chunks(
+        [](uint32_t i) { return get_common_arg_val<uint32_t>(SE_VA + i); },
+        0,
+        (get_common_arg_val<uint32_t>(SE_VA + 10) + 63) & ~63u);
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_EW + SE_NE_ID) = NE;
+#else
+    constexpr uint32_t NE = NCH;
+#endif
     rtrx();  // (the router's x after my own x)
     constexpr auto mx0 =
         McastArgs<get_named_compile_time_arg_val("x0_ct_offset"), get_named_compile_time_arg_val("x0_rt_offset")>();
@@ -182,7 +197,7 @@ MB_LOOP_BODY {
     auto s1 = mx1.optional_sender(noc);
     auto r1 = mx1.optional_receiver(noc);
     volatile tt_l1_ptr uint32_t* xready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(XREADY));
-    for (uint32_t m = 0; m < NCH; ++m) {
+    for (uint32_t m = 0; m < NE; ++m) {
         if (SE_XRING < NCH && m >= SE_XRING && x_ct) {  // (the ring: chunk m's x own, issued at chunk m - 1's end)
             DeviceZoneScopedN("SE-XRELOAD");
             noc_async_read_barrier();
@@ -264,7 +279,7 @@ MB_LOOP_BODY {
                 cb_pop_front(SE_FINC, nh);  // (the next chunk's hand-offs from the front again)
             }
         }
-        if (SE_XRING < NCH && m + SE_XRING < NCH && x_ct) {
+        if (SE_XRING < NCH && m + SE_XRING < NE && x_ct) {
             // (the ring: chunk m + SE_XRING into chunk m's slot - its rounds sent, its prep done (my hand-offs above
             // waited for the chunk's fins, after its prep op): the load lands under the chunks between)
 #ifdef SE_XFREE
@@ -279,12 +294,15 @@ MB_LOOP_BODY {
     }
 #ifdef SE_XFREE
     {  // (the last chunks' credits, unused: popped - a call ends with the CB empty, the next one's credits its own)
-        constexpr uint32_t left = SE_XRING < NCH ? SE_XRING : NCH;
+        const uint32_t left = SE_XRING < NE ? SE_XRING : NE;
         cb_wait_front(SE_XFREE, left);
         cb_pop_front(SE_XFREE, left);
     }
 #endif
     noc_async_atomic_barrier();
+#ifdef SE_SKIP
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_EW + SE_NE_ID) = 0;  // (re-arm: my NCRISC and compute read it)
+#endif
 }
 
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop_main.hpp"

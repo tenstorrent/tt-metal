@@ -69,6 +69,14 @@ MB_LOOP_BODY {
 #endif
     for (uint32_t it = 0; it < NIT; ++it) {
         cb_wait_front(12, 1);  // (the engine's partial logits are in my HOLD: RDY - UNPACK; PACK on word 112)
+#ifdef RT_VALID
+        // (a padded forward: is my row tile of this iteration live - the BRISC's bits, in the RDY page: every thread
+        // the same; an all-padding tile: every CB and word as ever, no sums, scores, top-K, rows or route words - its
+        // route words are zero)
+        const bool live = (read_tile_value(12, 0, 0) >> it) & 1;
+#else
+        constexpr bool live = true;
+#endif
         if constexpr (NIT > 1) {
             cb_pop_front(12, 1);
         }
@@ -104,6 +112,9 @@ MB_LOOP_BODY {
                 if (a + 1 == na) {
                     last = sl;
                     break;
+                }
+                if (!live) {
+                    continue;
                 }
                 for (uint32_t i0 = 0; i0 < ET; i0 += 2) {
                     const uint32_t n = ET - i0 < 2 ? ET - i0 : 2;
@@ -142,7 +153,7 @@ MB_LOOP_BODY {
             // ~1e-3 and the picks of close experts with them) (a score tile a pass: DEST 0 its score, 1 its key, 2 / 3
             // the operands - the score is kept: packed back over its logits in HOLD, where the joint rows read the
             // picks' weights exactly; the key's low bits are the id)
-            for (uint32_t i = 0; i < ET; ++i) {
+            for (uint32_t i = 0; i < ET && live; ++i) {
                 tile_regs_acquire();
                 reconfig_data_format_srca(HOLD);
                 copy_init(HOLD);
@@ -196,57 +207,62 @@ MB_LOOP_BODY {
         constexpr uint32_t KS = K <= 4 ? 4 : K <= 8 ? 8 : K <= 16 ? 16 : 32;
         constexpr uint32_t LK = KS == 8 ? 3 : KS == 16 ? 4 : KS == 32 ? 5 : 2, NM = 6 - LK;
         constexpr auto TIE = ckernel::TopkTieOrder::Unset;
-        tile_regs_acquire();
-        if constexpr (ET == 1) {  // (one tile of candidates: no running top K is parked in DEST tile 2 - the
-                                  // column's other half is -inf keys, below every score; K <= 32 never reaches them)
-            fill_tile_init();
-            fill_tile_int<DataFormat::Int32>(0, 0xFF800000u);
-        }
-        reconfig_data_format_srca(SC);
-        copy_init(SC);
-        ckernel::topk_tile_init<true, false>();
-        for (uint32_t t = 0; t < ET; t += 2) {
-            const bool odd = t + 1 == ET;     // (a last tile alone: against the running top K, a full round)
-            const bool fold = t > 0 && !odd;  // (a pair after the first: its run folded into the running top K)
-            if (odd) {
-                if constexpr (ET > 1) {
-                    copy_dest_values<DataFormat::Int32>(2, 0);  // (the running top K, parked at t - 2)
+        if (live) {
+            tile_regs_acquire();
+            if constexpr (ET == 1) {  // (one tile of candidates: no running top K is parked in DEST tile 2 - the
+                                      // column's other half is -inf keys, below every score; K <= 32 never reaches
+                                      // them)
+                fill_tile_init();
+                fill_tile_int<DataFormat::Int32>(0, 0xFF800000u);
+            }
+            reconfig_data_format_srca(SC);
+            copy_init(SC);
+            ckernel::topk_tile_init<true, false>();
+            for (uint32_t t = 0; t < ET; t += 2) {
+                const bool odd = t + 1 == ET;     // (a last tile alone: against the running top K, a full round)
+                const bool fold = t > 0 && !odd;  // (a pair after the first: its run folded into the running top K)
+                if (odd) {
+                    if constexpr (ET > 1) {
+                        copy_dest_values<DataFormat::Int32>(2, 0);  // (the running top K, parked at t - 2)
+                    }
+                    copy_tile(SC, t, 1);
+                } else {
+                    copy_tile(SC, t, 0);
+                    copy_tile(SC, t + 1, 1);
                 }
-                copy_tile(SC, t, 1);
-            } else {
-                copy_tile(SC, t, 0);
-                copy_tile(SC, t + 1, 1);
+                ckernel::topk_local_sort<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, LK - 1);
+                for (uint32_t m = 0; m + 1 < NM; ++m) {
+                    ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, m, KS);
+                    ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, m, KS, LK, false);
+                }
+                if (!fold) {  // the top K of the 64 a column on top: tile 0's run, descending
+                    ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, KS);
+                    ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, KS, LK, true);
+                } else {  // the pair's top K into tile 1's run, ascending; the running top K (descending) into tile 0
+                          // -> one bitonic merge (max on top) + rebuild of K
+                    ckernel::topk_merge<true, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, KS);
+                    ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, KS, LK, false);
+                    copy_dest_values<DataFormat::Int32>(2, 0);
+                    ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, KS);
+                    ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, KS, LK, true);
+                }
+                if (t + 2 < ET) {
+                    copy_dest_values<DataFormat::Int32>(
+                        0, 2);  // (parked in DEST tile 2: fused keys leave the id tiles unused)
+                }
             }
-            ckernel::topk_local_sort<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, LK - 1);
-            for (uint32_t m = 0; m + 1 < NM; ++m) {
-                ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, m, KS);
-                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, m, KS, LK, false);
-            }
-            if (!fold) {  // the top K of the 64 a column on top: tile 0's run, descending
-                ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, KS);
-                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, KS, LK, true);
-            } else {  // the pair's top K into tile 1's run, ascending; the running top K (descending) into tile 0 ->
-                      // one bitonic merge (max on top) + rebuild of K
-                ckernel::topk_merge<true, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, KS);
-                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, KS, LK, false);
-                copy_dest_values<DataFormat::Int32>(2, 0);
-                ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, KS);
-                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, KS, LK, true);
-            }
-            if (t + 2 < ET) {
-                copy_dest_values<DataFormat::Int32>(
-                    0, 2);  // (parked in DEST tile 2: fused keys leave the id tiles unused)
-            }
-        }
-        tile_regs_commit();
+            tile_regs_commit();
+        }  // (live)
         if constexpr (NIT > 1) {
             cb_pop_front(SC, ET);  // (copied into DEST: the next iteration's scores reuse the pages)
         }
         cb_reserve_back(BEST, 1);
-        tile_regs_wait();
-        pack_reconfig_data_format(BEST);
-        pack_tile(0, BEST);
-        tile_regs_release();
+        if (live) {
+            tile_regs_wait();
+            pack_reconfig_data_format(BEST);
+            pack_tile(0, BEST);
+            tile_regs_release();
+        }
         cb_push_back(BEST, 1);
         const uint32_t t1 = et0 + G, words = get_arg_val<uint32_t>(t1);
         PACK(({  // (the last best pair packed: the joint rows can go - BRISC and NCRISC told)
@@ -259,7 +275,9 @@ MB_LOOP_BODY {
             const uint32_t scl = get_arg_val<uint32_t>(t1 + 3), sv = get_arg_val<uint32_t>(t1 + 4);
             PACK(({
                 *reinterpret_cast<volatile uint32_t*>(RT_MSYNC) = 1;
-                rows_::make<K, ET>(bvc, sv, olc, scl, 24, 32);
+                if (live) {
+                    rows_::make<K, ET>(bvc, sv, olc, scl, 24, 32);
+                }
                 *reinterpret_cast<volatile uint32_t*>(words + 48) = 1;
             }));
             MATH(({
@@ -269,7 +287,9 @@ MB_LOOP_BODY {
                 if constexpr (NIT > 1) {
                     *ms = 0;  // (re-arm: PACK sets it again only after the next iteration's top-K)
                 }
-                rows_::make<K, ET>(bvc, sv, olc, scl, 16, 24);
+                if (live) {
+                    rows_::make<K, ET>(bvc, sv, olc, scl, 16, 24);
+                }
                 *reinterpret_cast<volatile uint32_t*>(words + 32) = 1;
             }));
         }
@@ -289,7 +309,7 @@ MB_LOOP_BODY {
             }
             *rd = 0;
             volatile uint32_t* o = reinterpret_cast<volatile uint32_t*>(rl1);
-            for (uint32_t c = 0; c < 32; ++c) {
+            for (uint32_t c = 0; c < 32 && live; ++c) {
                 rw_::word(o, c, reinterpret_cast<volatile const uint16_t*>(ol1 + c * 4 * K), tok0 + c);
             }
             *reinterpret_cast<volatile uint32_t*>(words + 96) = 1;

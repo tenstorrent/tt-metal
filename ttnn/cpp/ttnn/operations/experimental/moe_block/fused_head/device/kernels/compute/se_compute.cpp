@@ -16,6 +16,9 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/pack_untilize.h"
 #include "api/debug/kernel_profiler.hpp"
+#ifdef SE_SKIP
+#include "internal/tt-1xx/cache.h"
+#endif
 #if defined(SE_GLU) && defined(TRISC_PACK)
 #include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
@@ -127,9 +130,21 @@ MB_LOOP_BODY {
     PACK((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::MUL))));
 #endif
 #endif
+#ifdef SE_SKIP
+    uint32_t NE;  // (a padded forward: the row chunks up to the last with a real row - the BRISC's, in ewords)
+    {
+        volatile tt_l1_ptr uint32_t* ne =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_common_arg_val<uint32_t>(SE_VA) + SE_NE_ID);
+        while ((NE = *ne) == 0) {
+            invalidate_l1_cache();
+        }
+    }
+#else
+    constexpr uint32_t NE = NCH;
+#endif
     uint32_t opos = 0;  // (OUTF tiles pushed: its blocks end at multiples of 8 - the NCRISC reads it page by page,
                         // pack_tile does not wrap; the chunks' fins continue where the last one left it)
-    for (uint32_t m = 0; m < NCH; ++m) {
+    for (uint32_t m = 0; m < NE; ++m) {
         // gate / up: per pass all of K in DEST, the GLU, h packed once
         {
             DeviceZoneScopedN("SE-GU");
@@ -344,7 +359,7 @@ MB_LOOP_BODY {
                     DeviceZoneScopedN("SE-PREP");
 #ifdef SE_PREP_LAST
                     // (with chunks: every chunk's units in the last chunk's op - no prep writes under the W re-reads)
-                    const uint32_t nu = m + 1 == NCH ? se_arg(idx) : 0, u0 = 0, u1 = NCH * nu;
+                    const uint32_t nu = m + 1 == NE ? se_arg(idx) : 0, u0 = 0, u1 = NE * nu;
 #else
                     const uint32_t nu = se_arg(idx), u0 = m * nu, u1 = (m + 1) * nu;
 #endif

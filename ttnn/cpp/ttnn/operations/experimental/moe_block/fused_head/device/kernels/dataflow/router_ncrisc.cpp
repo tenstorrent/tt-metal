@@ -32,7 +32,7 @@ MB_LOOP_BODY {
        // split word 128 too, the partner's best K landed - the arena is call scratch: stale, it let the merge take a
        // stale page, the picks a call behind)
         const uint32_t w0 = get_arg_val<uint32_t>(ab0 + nab + 2);
-        for (uint32_t i = 0; i < 9; ++i) {
+        for (uint32_t i = 0; i < 10; ++i) {  // (and 144: the BRISC's live row tiles, written after my BIAS)
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w0 + 16 * i) = 0;
         }
     }
@@ -63,6 +63,17 @@ MB_LOOP_BODY {
             noc_semaphore_inc(get_noc_addr(RT_ENG), 0u - ET);  // (re-arm)
             noc_async_atomic_barrier();
             cb_reserve_back(RDY, 1);
+#ifdef RT_VALID
+            {  // (the BRISC's live row tiles into the RDY page: the compute's three threads read the same word)
+                volatile tt_l1_ptr uint32_t* lw =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(ab0 + nab + 2) + 144);
+                uint32_t lv;
+                while (!((lv = *lw) >> 31)) {
+                    invalidate_l1_cache();
+                }
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(RDY)) = lv;
+            }
+#endif
             cb_push_back(RDY, 1);
             // (and word 112 for the compute's PACK thread: the RDY wait holds only UNPACK, and PACK's hand-off pushes
             // (FINC) would hand HOLD to the ports before the engine's partials landed - stale HOLD: the last call's
@@ -100,16 +111,22 @@ MB_LOOP_BODY {
         }
         *done = 0;
         DeviceZoneScopedN("SE-RROWS");
-        set_l1_data_cache<true>();
-        invalidate_l1_cache();
-        rows_::make<K, ET>(
-            get_arg_val<uint32_t>(t2 + 1),
-            get_arg_val<uint32_t>(t2 + 4),
-            get_arg_val<uint32_t>(t2 + 2),
-            get_arg_val<uint32_t>(t2 + 3),
-            8,
-            16);
-        set_l1_data_cache<false>();
+#ifdef RT_VALID
+        // (my iterations' live row tiles: the BRISC's, words + 144 - an all-padding tile has no rows)
+        if ((*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 144) >> it) & 1)
+#endif
+        {
+            set_l1_data_cache<true>();
+            invalidate_l1_cache();
+            rows_::make<K, ET>(
+                get_arg_val<uint32_t>(t2 + 1),
+                get_arg_val<uint32_t>(t2 + 4),
+                get_arg_val<uint32_t>(t2 + 2),
+                get_arg_val<uint32_t>(t2 + 3),
+                8,
+                16);
+            set_l1_data_cache<false>();
+        }
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 16) = 1;
     }
     }  // (router iterations)

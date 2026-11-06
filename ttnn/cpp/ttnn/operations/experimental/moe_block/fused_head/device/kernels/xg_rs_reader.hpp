@@ -68,6 +68,7 @@ FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos, uint32_t m, uint32_t* se
                 noc_semaphore_wait_min(mb, target);
                 rdc[i] = 1;
                 const uint64_t src = get_noc_addr(cw & 0xFF, (cw >> 8) & 0xFF, finb + fo * 2048);
+                const bool live = xg_block_real(m, (cw >> 20) & 0x7F, b);  // (padding rows only: not read)
                 for (uint32_t t0 = 0; t0 < cnt; t0 += RP) {
                     if (c == 0) {
                         need = GROUP - pos % GROUP;
@@ -75,7 +76,9 @@ FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos, uint32_t m, uint32_t* se
                         wptr = get_write_ptr(0);
                     }
                     const uint32_t n = cnt - t0 < RP ? cnt - t0 : RP;
-                    noc_async_read(src + t0 * 2048, wptr + c * RP * 2048, n * 2048);
+                    if (live) {
+                        noc_async_read(src + t0 * 2048, wptr + c * RP * 2048, n * 2048);
+                    }
                     if (++c == need) {
                         flush();
                     }
@@ -86,7 +89,7 @@ FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos, uint32_t m, uint32_t* se
             flush();
         }
     }
-    if (m + 1 < NCH) {  // (every read of the chunk landed - each unit ends in a flush: FINB free)
+    if (m + 1 < xg_ne) {  // (every read of the chunk landed - each unit ends in a flush: FINB free)
         const uint32_t ffa = get_arg_val<uint32_t>(en0 + G + 5);
         for (uint32_t i = 0; i < nc; ++i) {
             if (rdc[i]) {

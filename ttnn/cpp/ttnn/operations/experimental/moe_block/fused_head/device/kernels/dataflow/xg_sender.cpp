@@ -22,6 +22,9 @@ using namespace tt::tt_fabric;
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_head/device/kernels/ra_send.hpp"
 
 MB_LOOP_BODY {
+#ifdef SE_SKIP
+    xg_live_chunks();  // (a padded forward: the row chunks up to the last with a real row)
+#endif
     size_t a = 0;
     const uint32_t xown = get_arg_val<uint32_t>(a++), v = get_arg_val<uint32_t>(a++);
     const uint32_t arrival = get_arg_val<uint32_t>(a++), expect_in = get_arg_val<uint32_t>(a++);  // (my counter)
@@ -40,9 +43,10 @@ MB_LOOP_BODY {
     // signals a chunk; forwarded to the peer's port facing me (its zone-credit word): NCH - 1 a call)
     const uint32_t rse = rs0 + 2 + 2 * rnu + 2 * rnc + G;
     volatile tt_l1_ptr uint32_t* zfree = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(rse + 7));
-    const uint32_t zneed = get_arg_val<uint32_t>(rse + 8), zexp = get_arg_val<uint32_t>(rse + 9);
+    const uint32_t zneed = get_arg_val<uint32_t>(rse + 8), zexp0 = get_arg_val<uint32_t>(rse + 9);
+    const uint32_t zexp = zexp0 ? zexp0 - (NCH - xg_ne) : 0;  // (the credits a call expects: one a live chunk on)
     const uint32_t zcred = get_arg_val<uint32_t>(rse + 6);
-    const uint32_t NZF = zneed && NCH > 1 ? NCH - 1 : 0;
+    const uint32_t NZF = zneed && NCH > 1 ? xg_ne - 1 : 0;
     // (the router's buffers over this chip's arrival zones / LATZ: every matmul core counts its router phase over on
     // my "router done" word (rneed of them) - only then the peer's chunk 0 credit and the latent's "started" go)
     volatile tt_l1_ptr uint32_t* rdone =
@@ -226,11 +230,12 @@ MB_LOOP_BODY {
             ra.poll(conn, rahdr, false, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);
             rf.poll(conn, rahdr, false, RA_N_, RA_M_, RA_HBP_, RA_MAXP_);
         };
-        for (uint32_t m = 0; m < NCH && n > 0; ++m) {
+        for (uint32_t m = 0; m < xg_ne && n > 0; ++m) {
             for (uint32_t k = 0; k < n; ++k) {
                 const uint32_t q = get_arg_val<uint32_t>(ent + 3 * k), part = get_arg_val<uint32_t>(ent + 3 * k + 1);
                 const uint32_t npk = get_arg_val<uint32_t>(ent + 3 * k + 2);
                 uint32_t sent = 0;
+                const auto mk = xg_mask(m);  // (chunk m's real row tiles)
                 walk(m, q, part, v, [&](uint32_t R, uint32_t j, uint32_t, uint32_t kk0, uint32_t np, uint32_t) {
                     if (NCH > 1 && !rtold) {  // (chunks: the upstream's chunk 0 reduce-scatter comes before
                         // my gather of the last chunk's x ends; one chunk: after it - no blocking header between
@@ -244,18 +249,26 @@ MB_LOOP_BODY {
 #endif
                     cb_wait_front(0, RP * (unflushed + 1));
                     const uint32_t src = get_read_ptr(0) + unflushed * RP * 2048;
-                    const Dst d = dst_of(T, xown, m, R, j, kk0);
-                    const uint64_t dst = get_noc_addr(d.x, d.y, d.addr);
-                    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
-                    h = h + 1 == GROUP ? 0 : h + 1;
-                    if ((++sent % INC) == 0 || sent == npk) {
-                        hdr->to_noc_fused_unicast_write_atomic_inc(
-                            NocUnicastAtomicIncFusedCommandHeader{dst, arr_noc, 1, true}, np * 2048);
-                    } else {
-                        hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, np * 2048);
+                    const bool inc = (++sent % INC) == 0 || sent == npk;
+                    if ((mk >> (R - m * CR)) & 1) {
+                        const Dst d = dst_of(T, xown, m, R, j, kk0);
+                        const uint64_t dst = get_noc_addr(d.x, d.y, d.addr);
+                        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
+                        h = h + 1 == GROUP ? 0 : h + 1;
+                        if (inc) {
+                            hdr->to_noc_fused_unicast_write_atomic_inc(
+                                NocUnicastAtomicIncFusedCommandHeader{dst, arr_noc, 1, true}, np * 2048);
+                        } else {
+                            hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, np * 2048);
+                        }
+                        conn.wait_for_empty_write_slot();
+                        conn.send_current_slot_non_blocking(src, np * 2048, reinterpret_cast<uint32_t>(hdr));
+                    } else if (inc) {  // (a padding row tile: no x - only the count its packets carry)
+                        hdrs[GROUP]->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{arr_noc, 1, true});
+                        conn.wait_for_empty_write_slot();
+                        conn.send_payload_flush_blocking_from_address(
+                            reinterpret_cast<uint32_t>(hdrs[GROUP]), sizeof(PACKET_HEADER_TYPE));
                     }
-                    conn.wait_for_empty_write_slot();
-                    conn.send_current_slot_non_blocking(src, np * 2048, reinterpret_cast<uint32_t>(hdr));
                     if (++unflushed == GROUP || sent == npk) {
                         noc_async_writes_flushed();
                         cb_pop_front(0, RP * GROUP);
@@ -272,7 +285,7 @@ MB_LOOP_BODY {
         }
         lpoll();
         uint32_t rpos = 0;  // (as the reader's pos)
-        for (uint32_t m = 0; m < NCH; ++m) {
+        for (uint32_t m = 0; m < xg_ne; ++m) {
             la_send(la0, conn, hdrs, lpoll, rpos, m);
             rs_send(rs0, conn, hdrs, lpoll, rpos, m);
         }
@@ -331,8 +344,9 @@ MB_LOOP_BODY {
     }
     if (expect_in > 0) {  // everything from upstream landed; re-arm for the next call
         volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival);
-        noc_semaphore_wait_min(arrived, expect_in);
-        noc_semaphore_inc(get_noc_addr(arrival), 0u - expect_in);
+        const uint32_t ein = expect_in / NCH * xg_ne;  // (as many a chunk: the live ones)
+        noc_semaphore_wait_min(arrived, ein);
+        noc_semaphore_inc(get_noc_addr(arrival), 0u - ein);
         noc_async_atomic_barrier();
     }
 }
