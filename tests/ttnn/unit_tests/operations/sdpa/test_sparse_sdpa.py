@@ -67,6 +67,27 @@ def make_scaled_kv_cache(device, batch, T, seed, round_scale):
     return tt_packed, reconstructed
 
 
+def split_k_ran(device, tt_q, tt_kv, tt_idx, kv_format, kc):
+    """True if the program has the split-K merge CBs: more CBs than the whole-token split at S = cores.
+    NO_DISPATCH builds the program without compiling, running, or caching it."""
+    grid = device.compute_with_storage_grid_size()
+    H, topk = tt_q.shape[1], tt_idx.shape[3]
+    whole_q = to_dev(torch.zeros(1, H, grid.x * grid.y, K_DIM, dtype=torch.bfloat16), device, ttnn.bfloat16)
+    whole_idx = to_dev(torch.zeros(1, 1, grid.x * grid.y, topk, dtype=torch.int32), device, ttnn.uint32)
+
+    def num_cbs(q, idx):
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+        try:
+            ttnn.transformer.sparse_sdpa(
+                q, tt_kv, idx, V_DIM, kv_format=kv_format, scale=K_DIM**-0.5, k_chunk_size=kc
+            )
+        finally:
+            graph = ttnn.graph.end_graph_capture()
+        return sum(node["node_type"] == "circular_buffer_allocate" for node in graph)
+
+    return num_cbs(tt_q, tt_idx) > num_cbs(whole_q, whole_idx)
+
+
 # ---- op runs, output shape/layout correct ----
 @run_for_blackhole()
 def test_sparse_sdpa_runs(device):
@@ -743,19 +764,19 @@ def test_sparse_sdpa_deepseek_attention_sink(device, scale):
 # ---- split-K work distribution (S > cores, S % cores != 0): tokens straddling two cores are merged ----
 @run_for_blackhole()
 @pytest.mark.parametrize(
-    "H,S,T,TOPK,kc,nv_id",
+    "H,S,T,TOPK,kc,nv_id,split",
     [
-        (64, 160, 4096, 2048, 128, "all"),  # GLM per-chip shape (16 chunks/token)
-        (64, 160, 1024, 512, 128, "mixed"),  # sentinel tails: empty HEAD segments, masks in either segment
-        (32, 250, 1024, 512, 128, "causal"),  # 2+ tokens/core, prefill-like valid counts
-        (64, None, 1024, 256, 64, "mixed"),  # 1 token + a sliver per core: S = cores + 10
-        (128, 160, 1024, 512, 128, "mixed"),  # Sqt=4: the merge fills DST
-        (96, 160, 1024, 512, 128, "mixed"),  # Sqt=3
-        (128, 160, 4096, 1536, 384, "mixed"),  # split-K CBs over the L1 budget: whole-token split
+        (64, 160, 4096, 2048, 128, "all", True),  # GLM per-chip shape (16 chunks/token)
+        (64, 160, 1024, 512, 128, "mixed", True),  # sentinel tails: empty HEAD segments, masks in either segment
+        (32, 250, 1024, 512, 128, "causal", True),  # 2+ tokens/core, prefill-like valid counts
+        (64, None, 1024, 256, 64, "mixed", True),  # 1 token + a sliver per core: S = cores + 10
+        (128, 160, 1024, 512, 128, "mixed", True),  # Sqt=4: the merge fills DST
+        (96, 160, 1024, 512, 128, "mixed", True),  # Sqt=3
+        (128, 160, 4096, 1344, 448, "mixed", False),  # split-K CBs over the L1 budget: whole-token split
     ],
 )
-def test_sparse_sdpa_scaled_fp8_split_k(device, H, S, T, TOPK, kc, nv_id):
-    """Split-K must match the torch golden (PCC), incl. sentinel tails."""
+def test_sparse_sdpa_scaled_fp8_split_k(device, H, S, T, TOPK, kc, nv_id, split):
+    """Split-K must run (or fall back) as expected and match the torch golden (PCC), incl. sentinel tails."""
     grid = device.compute_with_storage_grid_size()
     cores = grid.x * grid.y
     S = cores + 10 if S is None else S
@@ -768,10 +789,13 @@ def test_sparse_sdpa_scaled_fp8_split_k(device, H, S, T, TOPK, kc, nv_id):
     }[nv_id]
     q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, nv_fn, seed=71)
     tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=72, round_scale=True)
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    assert split_k_ran(device, tt_q, tt_packed, tt_idx, SCALED_FP8_KV, kc) == split, f"expected split-K {split}"
     out = ttnn.transformer.sparse_sdpa(
-        to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+        tt_q,
         tt_packed,
-        to_dev(indices.to(torch.int32), device, ttnn.uint32),
+        tt_idx,
         V_DIM,
         kv_format=SCALED_FP8_KV,
         scale=K_DIM**-0.5,
@@ -787,17 +811,18 @@ def test_sparse_sdpa_scaled_fp8_split_k(device, H, S, T, TOPK, kc, nv_id):
 # ---- split-K for S < cores (small chunks, e.g. GLM chunk 1024/2048 -> 32/64 rows per chip): <= 2 cores per token ----
 @run_for_blackhole()
 @pytest.mark.parametrize(
-    "H,S,T,TOPK,kc,nv_id",
+    "H,S,T,TOPK,kc,nv_id,split",
     [
-        (64, 32, 4096, 2048, 128, "all"),  # GLM chunk 1024 per chip: 64 cores, half a token each
-        (64, 64, 4096, 2048, 128, "all"),  # GLM chunk 2048: 96 cores, 2/3 token each (HEAD+TAIL cores)
-        (64, 32, 1024, 512, 128, "mixed"),  # sentinel tails: empty HEAD segments
-        (64, 64, 1024, 512, 128, "causal"),  # prefill-like valid counts
-        (32, 40, 1024, 256, 64, "mixed"),  # 4 chunks/token, odd S
+        (64, 32, 4096, 2048, 128, "all", True),  # GLM chunk 1024 per chip: 64 cores, half a token each
+        (64, 64, 4096, 2048, 128, "all", True),  # GLM chunk 2048: 96 cores, 2/3 token each (HEAD+TAIL cores)
+        (64, 32, 1024, 512, 128, "mixed", True),  # sentinel tails: empty HEAD segments
+        (64, 64, 1024, 512, 128, "causal", True),  # prefill-like valid counts
+        (32, 40, 1024, 256, 64, "mixed", True),  # 4 chunks/token, odd S
+        (128, 32, 4096, 1344, 448, "mixed", False),  # split-K CBs over the L1 budget: whole-token split
     ],
 )
-def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, H, S, T, TOPK, kc, nv_id):
-    """Small-S split-K must match the torch golden (PCC), incl. sentinel tails."""
+def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, H, S, T, TOPK, kc, nv_id, split):
+    """Small-S split-K must run (or fall back) as expected and match the torch golden (PCC), incl. sentinel tails."""
     grid = device.compute_with_storage_grid_size()
     if S >= grid.x * grid.y:
         pytest.skip("needs S < cores")
@@ -808,10 +833,13 @@ def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, H, S, T, TOPK, kc, nv_id
     }[nv_id]
     q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, nv_fn, seed=73)
     tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=74, round_scale=True)
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    assert split_k_ran(device, tt_q, tt_packed, tt_idx, SCALED_FP8_KV, kc) == split, f"expected split-K {split}"
     out = ttnn.transformer.sparse_sdpa(
-        to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+        tt_q,
         tt_packed,
-        to_dev(indices.to(torch.int32), device, ttnn.uint32),
+        tt_idx,
         V_DIM,
         kv_format=SCALED_FP8_KV,
         scale=K_DIM**-0.5,
