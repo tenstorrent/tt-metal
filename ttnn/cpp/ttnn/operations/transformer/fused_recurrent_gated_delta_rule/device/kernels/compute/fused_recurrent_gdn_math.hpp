@@ -302,14 +302,16 @@ void vector_pass(uint32_t cb_r16, uint32_t cb_v16, uint32_t cb_ebc16, uint32_t c
 // qk16 x S_cur[., j] into slot 0 (r_j, exactly what the read pass packs) and then the vector pass's SFPU chain on it,
 // so r16 is never packed or copied. The round trip it removes is exact (fp32 pack of an fp32 DEST, UnpackToDestFp32
 // copy), so the bits are identical to read_pass + vector_pass. Waits on the state's utd id and unpacks it through its
-// mm view. Waits qk16 (Kt), S_cur (Kt*Vt), v16 (Vt), ebc16 (1); pushes u16 (Vt) and out16 (Vt).
+// mm view, column by column: (j + 1) * Kt tiles before column j, since the reader pushes the t = 0 state in column
+// groups of Kt as the columns land (its tiles sit at slot i*Vt + j throughout; the count is the number of landed
+// columns times Kt) and every other producer has pushed the whole state before the pass starts. Waits qk16 (Kt), S_cur
+// (as above), v16 (Vt), ebc16 (1); pushes u16 (Vt) and out16 (Vt).
 template <uint32_t Kt, uint32_t Vt>
 void read_vector_pass(
     uint32_t cb_qk16, StateCb s_cur, uint32_t cb_v16, uint32_t cb_ebc16, uint32_t cb_u16, uint32_t cb_out16) {
     const uint32_t cb_s_cur = s_cur.mm;
     CircularBuffer qk(cb_qk16), s(s_cur.utd), v(cb_v16), ebc(cb_ebc16), u(cb_u16), out(cb_out16);
     qk.wait_front(Kt);
-    s.wait_front(Kt * Vt);
     check_state_views(s_cur);
     v.wait_front(Vt);
     ebc.wait_front(1);
@@ -317,6 +319,7 @@ void read_vector_pass(
     out.reserve_back(Vt);
     reconfig_full_operand<SrcOrder::Reverse>(cb_qk16, cb_s_cur);
     for (uint32_t j = 0; j < Vt; j++) {
+        s.wait_front((j + 1) * Kt);  // column j of the state has landed
         tile_regs_acquire();
         matmul_init(cb_qk16, cb_s_cur, 0);
         for (uint32_t ki = 0; ki < Kt; ki++) {

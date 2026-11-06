@@ -99,6 +99,13 @@ void bind_fused_recurrent_gated_delta_rule(nb::module_& mod) {
             state after token t's own write; state None, [B, HV, K, V] (final), [B, T, HV, K, V] (per token), the
             initial_state tensor (in place), or the ring tensor itself (ring mode).
 
+        What this build serves: the gated-DeltaNet decode (T = 1) and speculative verify (T = K + 1) of the
+        Qwen3.5 / 3.6 / 3.8 layers on one chip or a tensor-parallel slice, straight from the layer's own tensors:
+        the GQA key-head mapping, the norm, the scale, the bf16 widening and rounding, the zero state and the state
+        and output layouts (in place, per token, the ring) are the kernels' work, so one call is one program with
+        common runtime arguments and nothing else is launched. The per-head state pool and the in-kernel gates
+        are later keyword additions.
+
         Limits of this build: B*HV must fit the compute grid (one core per head); T is at most 32 per call;
         the inputs are TILE. Every combination rule is checked in a fixed order, so a wrong call fails on its own
         message: HV a multiple of H; K and V multiples of 32; q, k and v of one dtype; initial_state [Bs >= B, HV, K,

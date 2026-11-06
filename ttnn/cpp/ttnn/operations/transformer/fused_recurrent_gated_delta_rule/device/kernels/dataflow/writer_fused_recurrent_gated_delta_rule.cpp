@@ -19,6 +19,8 @@
 // mode (the Qwen3.6 verify path) it goes token-major into the ring: slab t*BH + h, so the [T*BH, K, V] ring reads as
 // [T, B, HV, K, V] and the host commits by choosing the next call's block index. The final state goes to slab h of
 // [B, HV, K, V], which is also rows [0:B] of the caller's state when the output aliases it (inplace_final_state).
+//
+// Every runtime argument is common to the cores; the head index is the core's coordinates: h = x * grid_y + y.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -57,11 +59,12 @@ void kernel_main() {
     constexpr auto o_a = TensorAccessorArgs<6>();
     constexpr auto st_a = TensorAccessorArgs<o_a.next_compile_time_args_offset()>();
 
-    const uint32_t h = get_arg_val<uint32_t>(0);
-    const uint32_t T = get_arg_val<uint32_t>(1);
-    const uint32_t o_addr = get_arg_val<uint32_t>(2);
-    const uint32_t st_addr = get_arg_val<uint32_t>(3);
-    const uint32_t BH = get_arg_val<uint32_t>(4);  // the ring's token-major stride
+    const uint32_t T = get_common_arg_val<uint32_t>(0);
+    const uint32_t o_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t st_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t BH = get_common_arg_val<uint32_t>(3);  // the ring's token-major stride
+    const uint32_t grid_y = get_common_arg_val<uint32_t>(4);
+    const uint32_t h = get_absolute_logical_x() * grid_y + get_absolute_logical_y();
 
     // o: 32x32 tiles of the output dtype in DRAM, fp32 16x32 tiles in the CB; the state: 32x32 fp32 tiles.
     constexpr uint32_t e_o = o_bf16 ? 2u : 4u;

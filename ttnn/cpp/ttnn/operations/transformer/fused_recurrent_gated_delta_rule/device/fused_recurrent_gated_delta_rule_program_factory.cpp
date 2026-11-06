@@ -10,7 +10,7 @@
 // The circular-buffer plan (ids, tile dims, which CBs unpack straight into fp32 DEST) is the shared
 // header kernels/fused_recurrent_gdn_cb.hpp; the reader builds the tiny 16x32 / 32x16 token tiles
 // from the layer's own tensors (face-row gathers, GQA, bf16 widened), the writer writes the 2 KB o tiles into 4 KB
-// output pages.
+// output pages. Every runtime argument is common to the cores; a kernel takes its head index from its coordinates.
 
 #include "fused_recurrent_gated_delta_rule_program_factory.hpp"
 
@@ -63,11 +63,11 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     const uint32_t grid_y = grid.y;
     TT_FATAL(BH <= grid.x * grid_y, "num_heads {} exceeds compute cores {}", BH, grid.x * grid_y);
 
-    std::vector<CoreCoord> head_cores(BH);
     std::set<CoreRange> core_set;
     for (uint32_t h = 0; h < BH; h++) {
-        head_cores[h] = CoreCoord{h / grid_y, h % grid_y};
-        core_set.insert(CoreRange{head_cores[h], head_cores[h]});
+        // Head h on core (h / grid_y, h % grid_y): the kernels recover h = x * grid_y + y from their coordinates.
+        const CoreCoord core{h / grid_y, h % grid_y};
+        core_set.insert(CoreRange{core, core});
     }
     CoreRangeSet cores{core_set};
 
@@ -189,7 +189,6 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     reader.core_ranges = cores;
     reader.compile_time_args = reader_ct;
     reader.config = ReaderConfigDescriptor{};
-    reader.runtime_args.reserve(BH);
 
     KernelDescriptor writer;
     writer.kernel_source = kdir + "dataflow/writer_fused_recurrent_gated_delta_rule.cpp";
@@ -197,7 +196,6 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     writer.core_ranges = cores;
     writer.compile_time_args = writer_ct;
     writer.config = WriterConfigDescriptor{};
-    writer.runtime_args.reserve(BH);
 
     KernelDescriptor compute;
     compute.kernel_source = kdir + "compute/fused_recurrent_gated_delta_rule.cpp";
@@ -225,7 +223,6 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
         .dst_full_sync_en = dst_full_sync_en,
         .unpack_to_dest_mode = std::move(utd),
         .math_approx_mode = false};
-    compute.runtime_args.reserve(BH);
 
     auto* q_buf = in.q.buffer();
     auto* k_buf = in.k.buffer();
@@ -236,14 +233,12 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     auto* o_buf = outputs[0].buffer();
     auto* st_buf = outputs[1].buffer();
 
-    for (uint32_t h = 0; h < BH; h++) {
-        const auto& core = head_cores[h];
-        reader.emplace_runtime_args(
-            core, {h, T, q_buf, k_buf, v_buf, g_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes, BH});
-        // BH is the ring's token-major stride (ring mode only).
-        writer.emplace_runtime_args(core, {h, T, o_buf, st_buf, BH});
-        compute.emplace_runtime_args(core, {T, scale_bits});
-    }
+    // Common runtime arguments only (one write per kernel at launch, no per-core lists): the buffer addresses, T, the
+    // ring's token-major stride BH (ring mode only) and the grid stride the kernels turn their coordinates into h with.
+    reader.emplace_common_runtime_args(
+        {T, q_buf, k_buf, v_buf, g_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes, BH, grid_y});
+    writer.emplace_common_runtime_args({T, o_buf, st_buf, BH, grid_y});
+    compute.emplace_common_runtime_args({T, scale_bits});
 
     desc.kernels.push_back(std::move(reader));
     desc.kernels.push_back(std::move(writer));

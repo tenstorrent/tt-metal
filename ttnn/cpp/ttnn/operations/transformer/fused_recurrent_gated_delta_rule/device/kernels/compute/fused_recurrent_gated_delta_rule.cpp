@@ -35,9 +35,9 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t per_token = get_compile_time_arg_val(2);
-    constexpr bool norm = get_compile_time_arg_val(3) != 0;  // the in-kernel L2 norm of q and k
-    const uint32_t T = get_arg_val<uint32_t>(0);
-    const uint32_t scale_bits = get_arg_val<uint32_t>(1);  // the query scale, fp32 bits
+    constexpr bool norm = get_compile_time_arg_val(3) != 0;       // the in-kernel L2 norm of q and k
+    const uint32_t T = get_common_arg_val<uint32_t>(0);           // every runtime argument is common to the cores
+    const uint32_t scale_bits = get_common_arg_val<uint32_t>(1);  // the query scale, fp32 bits
 
     // Every CB is fp32 (see the program factory). Matmul operand order: in0 (qk16) -> SrcB, in1 (S) -> SrcA; the
     // passes re-initialise the unpacker / packer per CB tile shape as they go.
