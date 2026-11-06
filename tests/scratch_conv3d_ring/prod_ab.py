@@ -131,13 +131,13 @@ def run_entry(device, grid, e):
 
     ttnn.synchronize_device(device)
     out = None
-    t0 = time.time()
+    t0 = time.perf_counter()
     for _ in range(WARMUP + N_TIMED):
         if out is not None:
             out.deallocate()
         out = call()
     ttnn.synchronize_device(device)
-    wall = time.time() - t0
+    wall = time.perf_counter() - t0
     chk = float(ttnn.to_torch(out).float().abs().sum())
     for t in (x, w, b, out):
         t.deallocate()
@@ -191,7 +191,7 @@ ran = []
 for i, e in enumerate(entries()):
     try:
         wall, chk = run_entry(device, grid, e)
-        e.update(status="ok", wall_s=round(wall, 2), checksum=chk)
+        e.update(status="ok", wall_s=round(wall, 6), checksum=chk)
     except Exception as ex:  # noqa: BLE001
         e.update(status=f"fail: {type(ex).__name__}: {str(ex).splitlines()[0][:200]}")
         traceback.print_exc(limit=1, file=sys.stderr)

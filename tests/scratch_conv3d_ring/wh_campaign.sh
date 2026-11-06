@@ -12,12 +12,18 @@ $PY -c "import ttnn, sys; print('ttnn', ttnn.__file__, sys.version.split()[0]); 
 echo "=== $(date -u +%T) CENSUS ==="
 TT_CONV3D_PROBE_ONLY=1 CENSUS_ANY_ARCH=1 timeout 1500 $PY $S/census.py $D/wh.jsonl wh 2>&1 | grep -v "^\s*$" | tail -4
 echo "=== RING_CENSUS_BEGIN ==="; cat $D/wh.jsonl; echo "=== RING_CENSUS_END ==="
+# Compile pass per arm (one call per entry, results discarded) so the kernel cache is warm before timing.
+for arm in gate d0; do
+  envs=(); [ $arm = d0 ] && envs+=(TT_CONV3D_FORCE_GATHER_TRIDS=0)
+  echo "=== $(date -u +%T) compile pass arm $arm ==="
+  env "${envs[@]}" timeout 2400 $PY $S/prod_ab.py $D/wh.jsonl $D/r0_prod_${arm} 1 1 2>&1 | grep -E "fail|Error|THROW|overflow|done" | tail -40
+done
 for r in 1 2; do
   for arm in gate d0; do
     envs=()
     [ $arm = d0 ] && envs+=(TT_CONV3D_FORCE_GATHER_TRIDS=0)
     echo "=== $(date -u +%T) round $r arm $arm ==="
-    env "${envs[@]}" timeout 2400 $PY $S/prod_ab.py $D/wh.jsonl $D/r${r}_prod_${arm} 2 20 2>&1 | grep -E "^\[|fail|Error|THROW|info:|overflow|done" | tail -400
+    env "${envs[@]}" timeout 2400 $PY $S/prod_ab.py $D/wh.jsonl $D/r${r}_prod_${arm} 4 40 2>&1 | grep -E "^\[|fail|Error|THROW|info:|overflow|done" | tail -400
     echo "=== RING_RESULTS_BEGIN round$r arm $arm ==="
     $PY $S/wh_summarize.py $D r${r}_prod_${arm} 2>&1 || true
     echo "=== RING_RESULTS_END ==="
