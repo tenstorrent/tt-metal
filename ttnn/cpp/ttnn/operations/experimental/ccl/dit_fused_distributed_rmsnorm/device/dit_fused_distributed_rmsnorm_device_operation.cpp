@@ -25,7 +25,10 @@ namespace {
 uint32_t affine_tile_rows(const Tensor& t) { return (t.physical_volume() / t.padded_shape()[-1]) / TILE_HEIGHT; }
 
 // Stats scratch checks shared by the miss and hit validators: the page geometry must match the
-// op's spec exactly and the buffer must hold at least `min_pages` pages.
+// op's spec exactly and the buffer must hold at least `min_pages` pages. The all-gather path (TP>1,
+// whole-row norm) needs this caller-supplied persistent buffer because the fabric mcast requires a
+// mesh-coherent MeshBuffer (same DRAM address on every chip); the caller creates one per cluster and
+// reuses it across launches.
 void validate_stats_buffer(
     const DitFusedDistributedRmsnormInputs& tensor_args,
     const DitFusedDistributedRmsnormSizing& sizing,
@@ -386,14 +389,8 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             *args.row_capacity,
             TILE_HEIGHT);
     }
-    // The all-gather path (TP>1, whole-row norm) requires a caller-supplied
-    // persistent buffer for the gathered-stats DRAM scratch. The buffer must
-    // be allocated as a mesh-coherent MeshBuffer (same DRAM address on every
-    // chip in the cluster) — required for the fabric mcast. Allocating it
-    // outside the op lets the caller pre-create one MeshBuffer per cluster
-    // and reuse it across launches; we reject mismatched shape/dtype/layout
-    // up front so a wrong tensor doesn't silently corrupt the AG. A miss brings the buffer sized for
-    // the whole capacity (total_pages); a hit only needs the pages its live rows touch.
+    // A miss checks the stats scratch for the whole capacity (total_pages); a hit only for the pages its live
+    // rows touch.
     const auto sizing = compute_sizing(args, input);
     validate_rows(args, tensor_args, sizing, sizing.total_pages);
 }

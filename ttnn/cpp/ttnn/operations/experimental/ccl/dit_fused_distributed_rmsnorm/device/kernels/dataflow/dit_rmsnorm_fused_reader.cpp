@@ -11,10 +11,12 @@
  * the first chunk while the reader continues filling.
  *
  * Differences from the existing post-allgather reader:
- *   - We do NOT read stats from DRAM; stats come from the compute kernel's
- *     own pre phase via stats_local_cb, are forwarded by the AG kernel, and
- *     are delivered to compute via stats_gathered_cb.
- *   - We generate TWO reduce scalars: SUM (for pre phase) and AVG (for post).
+ *   - We do NOT read stats from DRAM: compute writes the local stats to stats_local_cb, the AG
+ *     kernel forwards them, and compute reads the gathered stats from stats_gathered_cb.
+ *   - We generate TWO reduce scalars: SUM for PRE and AVG for POST.
+ *
+ * PRE and POST are the compute kernel's two passes over a row: PRE produces the local stats,
+ * POST normalizes and applies weight, bias and RoPE.
  *   - Optional weight / RoPE / trans_mat loading is preserved verbatim.
  */
 
@@ -121,8 +123,6 @@ void kernel_main() {
     const uint32_t rows_per_worker = ttnn::runtime_length::div_up(total_tile_rows, num_workers);
     const uint32_t tile_row_start = ttnn::runtime_length::core_start(worker_index, rows_per_worker, total_tile_rows);
     const uint32_t tile_row_end = ttnn::runtime_length::core_end(worker_index, rows_per_worker, total_tile_rows);
-    // Per-batch tile rows: the cos/sin seq length (validate pins it to the input's N) and the
-    // per-batch affine selector. batch is compile-time so the batch==1 case folds away.
     const uint32_t rows_per_batch_tiles = total_tile_rows / batch;
     const uint32_t rope_seqlen_tiles = rows_per_batch_tiles;
     constexpr uint32_t rope_num_heads_dim = (per_head_rope != 0) ? (num_tile_cols / head_dim_tiles) : 1u;
@@ -199,11 +199,9 @@ void kernel_main() {
     const uint32_t bias_face_row_bytes = tt::constants::FACE_WIDTH * bias_datum_bytes;
     const uint32_t bias_face_bytes = tt::constants::FACE_HW * bias_datum_bytes;
 
-    // Weight + bias are consumed in the POST phase (sub-phases 2 / 2.5) which
-    // only start after chunk 0's AG completes. So both reads can be deferred
-    // until chunk 0's input rows are all pushed — the latency then hides
-    // behind chunk 0's pre compute + fabric mcast + fabric wait. Issued in
-    // `block_size`-sized pushes so the compute kernel can consume cumulatively.
+    // Weight and bias are first consumed by POST, which starts only after chunk 0's AG completes, so
+    // both reads are deferred until chunk 0's input rows are pushed; their latency then hides behind
+    // PRE and the fabric exchange. Issued in block_size pushes so compute can consume cumulatively.
     bool weight_pushed = (has_weight == 0);
     bool bias_pushed = (has_bias == 0);
 
@@ -239,10 +237,8 @@ void kernel_main() {
         // rows, an integer multiple of num_tile_cols, so a row's reservation never
         // wraps the ring (wr_ptr stays contiguous). Compute consumes cumulatively,
         // so the coarser push granularity is transparent to it.
-        // Order: issue + push the INPUT row FIRST, barriered alone, so compute's PRE
-        // sum-of-squares starts as soon as input lands; cos/sin are issued AFTER (see
-        // below) so their DRAM read latency overlaps PRE — they aren't consumed until
-        // the POST RoPE phase.
+        // The input row is issued and pushed first, barriered alone, so PRE starts as soon as it lands;
+        // cos/sin are issued after it (below) because only POST consumes them.
         const uint32_t input_tile_idx = tile_row * num_tile_cols;
         // Input read placement is schedule-driven (see input_schedule above):
         //   INPUT_FIRST: read everything HERE so PRE starts ASAP — streaming = both
@@ -261,9 +257,6 @@ void kernel_main() {
             DeviceZoneScopedN("R_INPUT");
             read_input_pass(input_tile_idx);  // PRE pass only; POST pass deferred below
         }
-
-        // (cos/sin moved BELOW the weight/bias reads — compute consumes weight
-        // (POST sub-phase 2) before rope (sub-phase 3), so weight is read first.)
 
         // Per-token weight / bias: push this row's slice now, in block_size
         // tiles. Full-tile reads since per-token data isn't face-row sparse.
@@ -443,42 +436,24 @@ void kernel_main() {
             }
         }
 
-        // cos/sin for the WHOLE chunk, read AFTER the chunk's input rows AND the
-        // weight/bias reads (compute's POST consumes weight in sub-phase 2 and
-        // rope in sub-phase 3, so weight is read first; matches the compute loop
-        // order). Keeping these reads out from between the input rows lets the
-        // input flow uninterrupted on the NoC. cos/sin aren't consumed until the
-        // post-AG RoPE phase, so reading them here leaves them ready in time and
-        // overlaps the AG wait + POST. Still pushed per row so POST can start as
-        // each row lands.
+        // cos/sin for the whole chunk are read after the chunk's input rows and after weight/bias (POST
+        // applies weight before RoPE), so the input flows uninterrupted and the tiles are ready for POST.
         if constexpr (fuse_rope) {
             const uint32_t pos_in_chunk = (tile_row - tile_row_start) % chunk_size_rows;
             const bool chunk_input_done = (pos_in_chunk + 1 == chunk_size_rows) || (tile_row + 1 == tile_row_end);
             if (chunk_input_done) {
                 const uint32_t chunk_first = tile_row - pos_in_chunk;
                 for (uint32_t r = chunk_first; r <= tile_row; r++) {
-                    // Batched RoPE: fold the global row r into (batch b, within-batch seq row
-                    // r_seq) so each input batch reuses cos/sin at seq row r_seq. b selects the
-                    // per-batch cos/sin block via rope_batch_stride_tiles (0 => broadcast, all
-                    // batches share block 0). At batch=1: r_seq==r, rope_batch_off==0 (unchanged).
+                    // Global row r -> (batch b, within-batch row r_seq); rope_batch_stride_tiles is 0 when
+                    // every batch shares cos/sin block 0.
                     const uint32_t r_seq = (batch > 1) ? (r % rope_seqlen_tiles) : r;
                     const uint32_t rope_batch_off =
                         (batch > 1) ? ((r / rope_seqlen_tiles) * rope_batch_stride_tiles) : 0u;
-                    // Per-head RoPE: cos/sin shape [B, num_heads, N, head_dim] — all
-                    // heads' head_dim_tiles tiles for row r_seq, idx (+ per-batch offset)
-                    // h*rope_seqlen_tiles*head_dim_tiles + r_seq*head_dim_tiles + c.
-                    // Broadcast (per_head_rope=0): [B,1,N,head_dim], idx r_seq*head_dim_tiles+c.
-                    // This row's cos/sin tiles, laid out contiguously in the CB as
-                    // [head0: head_dim_tiles, head1: ...] for per-head RoPE (total
-                    // num_tile_cols), or head_dim_tiles for broadcast. Read them in
-                    // block_size-tile groups — the SAME granularity P_ROPE consumes
-                    // them at — barriering + pushing each group, instead of issuing
-                    // the whole row (2*num_tile_cols reads) under a single barrier.
-                    // This caps outstanding rope reads at 2*block_size (cos+sin) so the
-                    // deep reader can't oversubscribe the NoC read-response queue under
-                    // many chunks (the selfattn_qk_s2 traced hang: ~2300 reads issued
-                    // but unreturned). Compute's cumulative wait_front absorbs the
-                    // block-wise pushes (same pattern as the input read above).
+                    // cos/sin tile index for this row: per-head RoPE ([B, num_heads, N, head_dim]) is
+                    // h * rope_seqlen_tiles * head_dim_tiles + r_seq * head_dim_tiles + c, broadcast
+                    // ([B, 1, N, head_dim]) is r_seq * head_dim_tiles + c. The row's tiles are read in
+                    // block_size groups, each barriered and pushed, so at most 2 * block_size RoPE reads
+                    // are in flight (one barrier over a whole row oversubscribed the NoC read-response queue).
                     const uint32_t rope_tiles_this_row = (per_head_rope != 0) ? num_tile_cols : head_dim_tiles;
                     for (uint32_t t0 = 0; t0 < rope_tiles_this_row; t0 += block_size) {
                         const uint32_t grp =
