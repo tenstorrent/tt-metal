@@ -55,11 +55,14 @@ assert AG8_QPAGES + CAND_PAGES <= AG8_PPC and AG8_PPC % 2 == 0 and RS2_PPC % 2 =
 assert RS_CHUNKS * RS_PPC == 36  # rev 59: the RS round-1 message = 16 fp32 O tiles + 2 stats tiles = 36 pages exactly
 
 
-def merge_msgs() -> int:
-    """dsa_shard.hpp MERGE_MSGS = 1 + ROUNDS + 2 (start, the radix rounds, 2 tie-quota slots), checked on the text"""
+def merge_msgs(nchips: int = 8) -> int:
+    """dsa_shard.hpp MERGE_MSGS = 1 + ROUNDS + QUOTA_SLOTS (start, the radix rounds, the tie-quota slots: one 16-B slot
+    per 4 merge helpers -- 2 at NCHIPS = 8, 8 at 32), checked on the text"""
     with open(os.path.join(KDIR, "mla", "dsa_shard.hpp")) as f:
-        assert "constexpr uint32_t MERGE_MSGS = 1 + mladsa::ROUNDS + 2;" in f.read()
-    return 1 + 8 + 2
+        src = f.read()
+    assert "constexpr uint32_t QUOTA_SLOTS = NCHIPS * 4 / mladsa::MSG_BYTES;" in src
+    assert "constexpr uint32_t MERGE_MSGS = 1 + mladsa::ROUNDS + QUOTA_SLOTS;" in src
+    return 1 + 8 + nchips * 4 // 16
 
 
 def merge_scr_bytes() -> int:

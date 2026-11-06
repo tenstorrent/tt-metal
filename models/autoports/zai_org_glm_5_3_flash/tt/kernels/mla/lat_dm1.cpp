@@ -300,12 +300,14 @@ void kernel_main() {
 #if defined(MLA_DSA_SHARD) && defined(MLA_DSA_SHARD_LINE)
             // TP8 (kernels/mla/dsa_shard.hpp AG8): this chip's 8 head rows of q_lat tile (t, d) = face 0 rows 0..7 +
             // face 1 rows 0..7 (two 256-B runs) -> the compact q piece of token t's x_ag chunk (page d / 4, offset
-            // (d % 4) 512); the pad rows 8..31 of q_lat never leave the chip
+            // (d % 4) 512); the pad rows 8..31 of q_lat never leave the chip. TP32 (AG32): the 2 head rows = two 64-B
+            // runs at page 0, offset d 128 (dsa_shard.hpp PIECE_RUN / PIECES_PER_PAGE)
             static_assert(KX == mlashard::PPC, "q_lat tiles per token = the latent tiles (512 / 32)");
             const uint32_t tt_ = (i0 + i) / mlashard::PPC, d = (i0 + i) % mlashard::PPC;
             const uint64_t dst = ql_dst.get_noc_addr(mlashard::agx_q_page(t_rows, 0, tt_, d), mlashard::agx_q_off(d));
-            noc_async_write(scr + i * TB, dst, 256);
-            noc_async_write(scr + i * TB + 512, dst + 256, 256);
+            // (8x4: PIECE_ROWS = 2 -> two 64-B runs into the AG32 page; the TP8 build keeps its 256-B runs)
+            noc_async_write(scr + i * TB, dst, mlashard::PIECE_RUN);
+            noc_async_write(scr + i * TB + TB / 4, dst + mlashard::PIECE_RUN, mlashard::PIECE_RUN);
 #else
             noc_async_write_page(i0 + i, ql_dst, scr + i * TB);
 #endif

@@ -73,7 +73,9 @@ constexpr uint32_t GQUOTA_OFF = GMSG_OFF + mladsa::T_MAX * mladsa::MSG_BYTES;
 // rev 59: the global merge's messages to the merge helpers (owner chunk cores c < NCHIPS of group 0; helper q holds
 // chip q's candidate list): per token MERGE_MSGS 16-B slots -- 0 start, 1 + r round r's (prefix, k_rem, done), then the
 // tie quotas of the NCHIPS helpers (2 slots: 8 words)
-constexpr uint32_t MERGE_MSGS = 1 + mladsa::ROUNDS + 2;
+constexpr uint32_t QUOTA_SLOTS = NCHIPS * 4 / mladsa::MSG_BYTES;  // 16-B slots of the per-helper tie quotas (2 / 8)
+static_assert(QUOTA_SLOTS * mladsa::MSG_BYTES == NCHIPS * 4, "one quota word per merge helper, whole slots");
+constexpr uint32_t MERGE_MSGS = 1 + mladsa::ROUNDS + QUOTA_SLOTS;
 constexpr uint32_t MERGE_OFF = GQUOTA_OFF + mladsa::T_MAX * mladsa::MAX_CHUNKS * 4;
 constexpr uint32_t MBOX_SHARD_BYTES = MERGE_OFF + mladsa::T_MAX * MERGE_MSGS * mladsa::MSG_BYTES;
 inline uint32_t merge_msg(uint32_t t, uint32_t i) { return MERGE_OFF + (t * MERGE_MSGS + i) * mladsa::MSG_BYTES; }
@@ -110,19 +112,33 @@ inline uint32_t rs_base(uint32_t T, uint32_t blk, uint32_t t) { return (blk * T 
 constexpr uint32_t RS_PAGES = RS_CHUNKS * RS_PPC;  // 36 pages = 72 KiB = 16 x 4 KiB (O) + 2 x 4 KiB (m, l) exactly
 
 // ---- TP8 (the 2x4 mesh): MLA_DSA_SHARD_LINE = the chips of a mesh row (the axis-1 line); the pair: 1
+// ---- TP32 (the 8x4 mesh, doc/perf/shard_8x4_design.md): MLA_DSA_SHARD_PAIR = the chips of a mesh column (the axis-0
+// line, 8); unset = 2 (the pair / the 2x4 column pair: every build before the port is unchanged)
 #if defined(MLA_DSA_SHARD_LINE)
 constexpr uint32_t LINE = MLA_DSA_SHARD_LINE;
 #else
 constexpr uint32_t LINE = 1;
 #endif
-static_assert(LINE == 1 || LINE == 4, "shard: the pair (1) or the 2x4 mesh rows (4)");
-constexpr uint32_t NCHIPS = 2 * LINE;                            // the axis-0 pair x the row line
-constexpr uint32_t PIECE_ROWS = 32 / LINE;                       // q / o rows (heads) of one chip in a 32-row head tile
-inline uint32_t pair_pos(uint32_t rank) { return rank / LINE; }  // the mesh row (2x4) / the pair position (TP2)
-inline uint32_t line_pos(uint32_t rank) { return rank % LINE; }  // the mesh column (2x4) / 0 (TP2)
-// y_ag block of chip `rank`: the two chips of a column are adjacent (the round-2 bundle of column c = blocks 2 c,
-// 2 c + 1); the pair: block = rank
-inline uint32_t ag_blk(uint32_t rank) { return line_pos(rank) * 2 + pair_pos(rank); }
+#if defined(MLA_DSA_SHARD_PAIR)
+constexpr uint32_t PAIR = MLA_DSA_SHARD_PAIR;
+#else
+constexpr uint32_t PAIR = 2;
+#endif
+static_assert(LINE == 1 || LINE == 4, "shard: the pair (1) or the mesh rows of 4 chips (4)");
+static_assert(PAIR == 2 || (PAIR == 8 && LINE == 4), "shard: the pair / the 2x4 column pair (2) or the 8x4 column (8)");
+constexpr uint32_t NCHIPS = PAIR * LINE;                         // the axis-0 line x the axis-1 line
+constexpr uint32_t HPC = 64 / NCHIPS;                            // heads per chip (32 / 8 / 2)
+constexpr uint32_t PIECE_ROWS = NCHIPS > 2 ? 64 / NCHIPS : 32;   // q / o rows (heads) of one chip in a 32-row head tile
+constexpr uint32_t PIECES = NCHIPS > 2 ? NCHIPS / 2 : 1;         // chips whose pieces form one head tile (4 / 16)
+constexpr uint32_t RS1_ROWS = PAIR > 2 ? 64 / PAIR : 32;         // 8x4 round 1: the column slice rows per chip (8)
+constexpr uint32_t RS2_ROWS = RS1_ROWS / LINE;                   // round 2: the row slice rows (2x4: 8; 8x4: 2)
+inline uint32_t pair_pos(uint32_t rank) { return rank / LINE; }  // the mesh row (2x4 / 8x4) / the pair position (TP2)
+inline uint32_t line_pos(uint32_t rank) { return rank % LINE; }  // the mesh column (2x4 / 8x4) / 0 (TP2)
+inline uint32_t tile_of(uint32_t rank) { return pair_pos(rank) / (PAIR / 2); }     // the chip's 32-head tile (0 / 1)
+inline uint32_t piece_of(uint32_t rank) { return rank - tile_of(rank) * PIECES; }  // its piece (rows PIECE_ROWS j ..)
+// y_ag block of chip `rank`: the PAIR chips of a column are adjacent (the round-2 bundle of column c = blocks PAIR c
+// .. PAIR c + PAIR - 1); the pair: block = rank
+inline uint32_t ag_blk(uint32_t rank) { return line_pos(rank) * PAIR + pair_pos(rank); }
 // the TP8 AG block: per token ONE chunk of AG8_PPC pages ([T x 32, 320] bf16 tensors): pages [0, AG8_QPAGES) = the
 // chip's q piece (q_lat rows 0..7 of tile d = 2 face-row runs of 256 B at page d / 4, offset (d % 4) 512 (+ 256)),
 // then the candidate records (header + CAND_MAX records = 5 pages), then a pad page (page pairs)
@@ -130,25 +146,49 @@ constexpr uint32_t AG8_PPC = 10;
 constexpr uint32_t AG8_QPAGES = 4;
 constexpr uint32_t CAND_PAGES = (REC_HDR + CAND_MAX * REC_BYTES + TB - 1) / TB;
 static_assert(AG8_QPAGES + CAND_PAGES <= AG8_PPC && AG8_PPC % 2 == 0, "TP8 AG chunk");
-constexpr uint32_t AG_PPC = LINE > 1 ? AG8_PPC : PPC;  // pages per AG chunk (the AG tensors' width / 32)
+// the TP32 AG block (8x4): the 2-row q piece of every tile = 2 runs of 64 B = 128 B x 16 tiles = ONE page, then the
+// candidate records (5 pages): 6 pages per token
+constexpr uint32_t AG32_PPC = 6;
+constexpr uint32_t AG32_QPAGES = 1;
+static_assert(AG32_QPAGES + CAND_PAGES <= AG32_PPC && AG32_PPC % 2 == 0, "TP32 AG chunk");
+constexpr uint32_t AG_PPC = PAIR > 2 ? AG32_PPC : (LINE > 1 ? AG8_PPC : PPC);  // pages per AG chunk (width / 32)
+constexpr uint32_t AG_QPAGES = PAIR > 2 ? AG32_QPAGES : AG8_QPAGES;
 constexpr uint32_t AG_CHUNKS_PER_TOKEN = LINE > 1 ? 1 : 2;
+// a q piece of one bf16 tile in the compact AG formats: 2 runs of PIECE_ROWS face rows (PIECE_ROWS x 32 B each)
+constexpr uint32_t PIECE_RUN = PIECE_ROWS * 32;         // bytes of one run (256 at TP8, 64 at TP32)
+constexpr uint32_t PIECE_BYTES = 2 * PIECE_RUN;         // bytes of a tile's piece (512 / 128)
+constexpr uint32_t PIECES_PER_PAGE = TB / PIECE_BYTES;  // 4 at TP8, 16 at TP32
 // (the pair forms of ag_q_page / ag_cand_page above; these pick the format of this build)
 inline uint32_t agx_q_page(uint32_t T, uint32_t blk, uint32_t t, uint32_t d) {
-    return LINE > 1 ? (blk * T + t) * AG8_PPC + d / 4 : ag_q_page(T, blk, t, d);
+    return LINE > 1 ? (blk * T + t) * AG_PPC + d / PIECES_PER_PAGE : ag_q_page(T, blk, t, d);
 }
-inline uint32_t agx_q_off(uint32_t d) { return LINE > 1 ? (d % 4) * 512 : 0; }
+inline uint32_t agx_q_off(uint32_t d) { return LINE > 1 ? (d % PIECES_PER_PAGE) * PIECE_BYTES : 0; }
 inline uint32_t agx_cand_page(uint32_t T, uint32_t blk, uint32_t t, uint32_t byte) {
-    return LINE > 1 ? (blk * T + t) * AG8_PPC + AG8_QPAGES + byte / TB : ag_cand_page(T, blk, t, byte);
+    return LINE > 1 ? (blk * T + t) * AG_PPC + AG_QPAGES + byte / TB : ag_cand_page(T, blk, t, byte);
 }
-// rows 8 j .. 8 j + 7 of a 32x32 tile of tb bytes (4 faces of tb / 4; a face row = tb / 64 bytes): two runs of tb / 8
-// bytes, run A at slice_off(j, tb) (face 0 / 2), run B = run A + tb / 4 (face 1 / 3)
-inline uint32_t slice_off(uint32_t j, uint32_t tb) { return (j / 2) * (tb / 2) + (j % 2) * (tb / 8); }
+// rows `rows` j .. of a 32x32 tile of tb bytes (4 faces of tb / 4; a face row = tb / 64 bytes): two runs of rows x
+// tb / 64 bytes, run A at slice_off_rows(rows, j, tb) (face 0 / 2), run B = run A + tb / 4 (face 1 / 3). rows = 8
+// (the TP8 pieces / the 8x4 round-1 slices): run A at (j / 2) (tb / 2) + (j % 2) (tb / 8), tb / 8 bytes
+inline uint32_t slice_off_rows(uint32_t rows, uint32_t j, uint32_t tb) {
+    const uint32_t r0 = rows * j;
+    return (r0 / 16) * (tb / 2) + (r0 % 16) * (tb / 64);
+}
+inline uint32_t slice_run(uint32_t rows, uint32_t tb) { return rows * (tb / 64); }
+inline uint32_t slice_off(uint32_t j, uint32_t tb) { return slice_off_rows(PIECE_ROWS, j, tb); }  // the q / o pieces
 // RS round 2 (x_rs2 / y_rs2 [LINE x T x 32, 320] bf16): block q x token t = one chunk of RS2_PPC pages; x_rs2 block q
 // = the slice for destination column q (the own column too: the root lands it from there), y_rs2 block s = the slice
 // from source column s. A slice = rows 8 q .. of the column-combined partial: O tile d at byte d (otb / 4), the stats
 // tile i at DT (otb / 4) + i (ptb / 4) (9 pages with fp32 O, 5 with bf16 O)
 constexpr uint32_t RS2_PPC = 10;
 inline uint32_t rs2_page(uint32_t T, uint32_t blk, uint32_t t) { return (blk * T + t) * RS2_PPC; }
+// 8x4 (doc/perf/shard_8x4_design.md): round 1 = the column reduce-scatter of 8-row slices in the RS2 format above
+// (x_rs1 / y_rs1 [PAIR x T x 32, 320] bf16, block q = destination / source column position); round 2 = the row scatter
+// of 2-row slices (x_rs2 / y_rs2 [LINE x T x 32, 128] bf16: O tile d at d (otb / 16), stats tile i at DT (otb / 16) +
+// i (ptb / 16): 16 x 256 + 2 x 256 = 4.5 KB -> 3 pages + pad)
+constexpr uint32_t RS1_PPC = RS2_PPC;
+constexpr uint32_t RS2B_PPC = 4;
+inline uint32_t rs1_page(uint32_t T, uint32_t blk, uint32_t t) { return (blk * T + t) * RS1_PPC; }
+inline uint32_t rs2b_page(uint32_t T, uint32_t blk, uint32_t t) { return (blk * T + t) * RS2B_PPC; }
 // rev 59, TP8: q_asm [2 x T x 32, 512] bf16 -- head tile g of token t assembled ONCE per chip (the index core's NCRISC,
 // behind the global merge) from the 4 pieces in y_ag; the owners read 16 whole pages per push
 inline uint32_t qasm_page(uint32_t T, uint32_t tile, uint32_t t, uint32_t d) { return (tile * T + t) * PPC + d; }

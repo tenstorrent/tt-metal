@@ -120,7 +120,14 @@ SHARD_TL_MAX = 8
 # slice chunk, pages per 32-row chunk of their [., 320] bf16 tensors
 SHARD_AG8_PPC, SHARD_AG8_QPAGES, SHARD_RS2_PPC = 10, 4, 10
 SHARD_RS_PPC = 12  # rev 59: x_rs / y_rs pages per chunk ([., 384] bf16): 3 chunks = 36 pages = the fp32 RS-1 message
-SHARD_MERGE_MSGS = 11  # rev 59: dsa_shard.hpp MERGE_MSGS (start + 8 rounds + 2 tie-quota slots per token)
+SHARD_MERGE_MSGS = 11  # rev 59: dsa_shard.hpp MERGE_MSGS at NCHIPS = 8 (start + 8 rounds + 2 tie-quota slots per token)
+
+
+def shard_merge_msgs(nchips: int = 8) -> int:
+    """dsa_shard.hpp MERGE_MSGS of a build with NCHIPS merge helpers (the 8x4: 32 -> 1 + 8 + 8)"""
+    return 1 + 8 + nchips * 4 // 16
+
+
 SHARD_MERGE_SCR = 5 * 2048 + 2 * 512 * 4 + 64 * 4  # dsa_shard.hpp MERGE_SCR_BYTES (the helpers' CB_AKEY scratch)
 SHARD_PROBE_LANE0 = (
     236  # rev 59: probe rows of the shard stream lanes (fs_send.cpp): 236 + i, i < 4 (inside PROBE_ROWS)
@@ -139,6 +146,7 @@ def _shard_header_check():
     bad = {k: (v, h.get(k)) for k, v in got.items() if h.get(k) != v}
     assert not bad, f"mk_mla.py SHARD_* vs kernels/mla/dsa_shard.hpp: {bad}"
     assert SP.merge_msgs() == SHARD_MERGE_MSGS and SP.merge_scr_bytes() == SHARD_MERGE_SCR, "dsa_shard.hpp merge layout"
+    assert SP.merge_msgs(32) == shard_merge_msgs(32) == 17, "dsa_shard.hpp merge layout at NCHIPS = 32"
     # every probe row a shard kernel flushes stays inside the probe tensor and its stack-layer block (kernels/mk/probe.hpp
     # MK_PROBE_LROWS): an out-of-bounds probe row hung card0 (u72)
     lrows = SP.header_constants_define("mk/probe.hpp", "MK_PROBE_LROWS")
@@ -149,6 +157,9 @@ def _shard_line_defs(shard) -> list:
     """the MLA_DSA_SHARD_LINE define of the 2x4 build (kernels/mla/dsa_shard.hpp LINE: the chips of a mesh row; the
     pair builds without it, LINE = 1)"""
     line = int((shard or {}).get("line", 1))
+    pair = int((shard or {}).get("pair", 2))  # 8x4 (doc/perf/shard_8x4_design.md): the column of 8
+    if pair > 2:
+        return [("MLA_DSA_SHARD_LINE", str(line)), ("MLA_DSA_SHARD_PAIR", str(pair))]
     assert line in (1, 4), line
     return [("MLA_DSA_SHARD_LINE", str(line))] if line > 1 else []
 
@@ -228,13 +239,13 @@ def dsa_slot_addrs(st: dict, t: int) -> tuple:
     return tuple(out)
 
 
-def dsa_mbox_bytes(t: int, shard: bool = False) -> int:
+def dsa_mbox_bytes(t: int, shard: bool = False, nchips: int = 8) -> int:
     """the owners' mailbox (kernels/mla/dsa_common.hpp MBOX_BYTES; with the shard variant dsa_shard.hpp MBOX_SHARD_BYTES:
     (quota, offset) pairs in the tie message, the global message and the global quotas per token)"""
     tm = shard_tl(t) if shard else dsa_tmax(t)  # rev 60: the shard mailbox holds the lane-local tokens
     if shard:  # (rev 59: + the merge helpers' messages, dsa_shard.hpp MERGE_OFF / MERGE_MSGS)
         return (tm * DSA_MSGS * 16 + tm * DSA_MAX_CHUNKS * 4 * 2 + tm * 16 + tm * DSA_MAX_CHUNKS * 4
-                + tm * SHARD_MERGE_MSGS * 16)  # fmt: skip
+                + tm * shard_merge_msgs(nchips) * 16)  # fmt: skip
     return tm * DSA_MSGS * 16 + tm * DSA_MAX_CHUNKS * 4
 
 
@@ -1317,7 +1328,7 @@ class MkMla(_MlaBase):
         if self.dsa_shard != (shard is not None):
             raise ValueError("MkMla(dsa_shard=True) takes shard= (tt/tp_dsa_shard.py) and only then")
         if shard is not None:
-            self.shard_lanes_check(t, int(shard.get("line", 1)))
+            self.shard_lanes_check(t, int(shard.get("line", 1)), int(shard["C"]))
         if shard is not None and dsa_state is not None and dsa_state.get("window") is not None:
             # the dense window (the caller's replicated store): the split-K phase's all-dense pass + the latent write
             win = dsa_state["window"]
@@ -1398,7 +1409,8 @@ class MkMla(_MlaBase):
             )  # L1: I3's 32-B face-row scatter (validated to L1)
             wsc = mk((1, 1, TILE, TILE), FP32, DRAM)
             kc = mhc.kcores
-            mbox = _sharded_u32(self.device, kc, len(self.place["k"]), dsa_mbox_bytes(t, shard is not None) // 4)
+            mbox = _sharded_u32(self.device, kc, len(self.place["k"]),
+                                dsa_mbox_bytes(t, shard is not None, int(shard["C"]) if shard is not None else 8) // 4)  # fmt: skip
             ixc = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self._ix_cores(t)])
             nl = self.att_lanes(t)
             if shard is not None:  # the coordinators' merge scratch (ix_dm0.cpp MLA_DSA_SHARD; rev 60: one per lane)
@@ -1516,6 +1528,7 @@ class MkMla(_MlaBase):
         if shard is not None:
             io += [shard["x_ag"], shard["y_ag"], shard["x_rs"], shard["y_rs"]]
             io += [shard["x_rs2"], shard["y_rs2"], shard["q_asm"]] if int(shard.get("line", 1)) > 1 else []
+            io += [shard["x_rs2b"], shard["y_rs2b"]] if int(shard.get("pair", 2)) > 2 else []
             io += [shard["window"]] if shard.get("window") is not None else []
         if self.qfold:
             io += [self.qb_fold.weight] + ([self.ix_qb_fold.weight] if self.dsa is not None else [])
@@ -1583,7 +1596,7 @@ class MkMla(_MlaBase):
             p *= 2
         return p
 
-    def shard_lanes_check(self, t: int, line: int = 1) -> None:
+    def shard_lanes_check(self, t: int, line: int = 1, nchips: int | None = None) -> None:
         """rev 60 (W, shard_tp8_design.md section 7): the sharded split-K phase at t rows -- t <= SHARD_T_MAX, one head
         group, and with token lanes (t > 4: att_lanes(t) = L, the lane cores tt/tp_dsa_shard.py reserves) at most
         shard_tl(t) tokens per lane, one index core per lane (the shard coordinator: GLM53_MLA_DSA_IX_LANES=1), and the
@@ -1600,8 +1613,9 @@ class MkMla(_MlaBase):
             )
         if nl > 1 and self.ix_lanes(t) != nl:
             why.append("one index core per token lane (GLM53_MLA_DSA_IX_LANES=1)")
-        if self.chunks // nl < 2 * line:
-            why.append(f"{2 * line} merge helpers among the lane's {self.chunks // nl} chunk cores")
+        helpers = nchips if nchips is not None else 2 * line  # the merge helpers = NCHIPS (8x4: 32)
+        if self.chunks // nl < helpers:
+            why.append(f"{helpers} merge helpers among the lane's {self.chunks // nl} chunk cores")
         if why:
             raise ValueError(f"MkMla(dsa_shard=True) at t={t}: {'; '.join(why)}")
 
@@ -2161,6 +2175,8 @@ def attention_args(
     if shard:  # (rev 59: + y_ag for the merge helpers)
         dm1_ct += acc(shard["x_ag"]) + acc(shard["x_rs"]) + acc(shard["y_rs"]) + acc(shard["y_ag"])
         dm1_ct += (acc(shard["x_rs2"]) + acc(shard["y_rs2"])) if tp8 else []
+        if int(shard.get("pair", 2)) > 2:  # 8x4: x_rs2 / y_rs2 = round 1's 8-row slices; round 2's 2-row slices
+            dm1_ct += acc(shard["x_rs2b"]) + acc(shard["y_rs2b"])
     c_ct = [acb[k] for k in ("AQ", "AK", "AMASK", "AINFO", "AS", "AM", "AP", "AE", "APA", "APB", "ARX", "ACOEF", "ASEND",
                              "AOUT")]  # fmt: skip
     c_ct += [C, LV, f32_bits(attn.scale), f32_bits(-1.0e30)]
@@ -2206,6 +2222,8 @@ def attention_args(
             if tp8:  # x_rs2, y_rs2, the RS round-2 (scatter) lane + its wait semaphore
                 dm1_rt[xy] += [shard["x_rs2"].buffer_address(), shard["y_rs2"].buffer_address(), *shard["rs2_lane"],
                                SEM_FSW]  # fmt: skip
+                if int(shard.get("pair", 2)) > 2:  # 8x4: the 2-row round-2 tensors (sh + 18, sh + 19)
+                    dm1_rt[xy] += [shard["x_rs2b"].buffer_address(), shard["y_rs2b"].buffer_address()]
         c_rt[xy] = [c, t] + lane_arg(lane)
     out = dict(reader=(dm0_ct, dm0_rt), writer=(dm1_ct, dm1_rt), compute=(c_ct, c_rt))
     if shard:

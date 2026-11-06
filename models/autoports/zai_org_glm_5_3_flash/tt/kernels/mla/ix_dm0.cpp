@@ -342,8 +342,14 @@ void kernel_main() {
                     msg[q] = n < rem ? n : rem;
                     rem -= msg[q];
                 }
-                static_assert(mlashard::NCHIPS * 4 <= 2 * mladsa::MSG_BYTES && MSG_OFF + 32 <= QUOTA_L1, "tie quotas");
-                hsend(scr + MSG_OFF, mlashard::merge_msg(j, 1 + mladsa::ROUNDS), 2 * mladsa::MSG_BYTES);
+                static_assert(
+                    mlashard::NCHIPS * 4 <= mlashard::QUOTA_SLOTS * mladsa::MSG_BYTES &&
+                        MSG_OFF + mlashard::QUOTA_SLOTS * mladsa::MSG_BYTES <= QUOTA_L1,
+                    "tie quotas");
+                hsend(
+                    scr + MSG_OFF,
+                    mlashard::merge_msg(j, 1 + mladsa::ROUNDS),
+                    mlashard::QUOTA_SLOTS * mladsa::MSG_BYTES);
                 T_g = prefix;
                 mk::wait_handoff(H_SEM, 1);  // helper `rank`: this chip's per-core quotas, words [0, C) of the slots
                 invalidate_l1_cache();

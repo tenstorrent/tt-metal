@@ -62,8 +62,8 @@ class TPMlaShard(TPM.TPMla):
         serves t > 4 from the 32-row phase); the stack's native widths are added when 32 is in ts"""
         assert mk_kwargs.get("dsa") is not None, "TPMlaShard: dsa=DsaIndexer"
         super().__init__(mesh, mhc_args, attn, ts=ts, dsa_shard=True, **mk_kwargs)
-        self.geo = SP.Geometry(self.R, self.C)  # raises unless 1x2 / 2x1 / 2x4
-        self.n, self.L = self.geo.n, self.geo.L
+        self.geo = SP.Geometry(self.R, self.C)  # raises unless 1x2 / 2x1 / 2x4 / 8x4
+        self.n, self.L, self.P = self.geo.n, self.geo.L, self.geo.P
         wts = set(ts) | set(int(v) for v in (stream_ts or ()))
         if 32 in ts:  # StackBackend's native widths (t = w calls on this object, the 32-row FabricPhase)
             nspec = os.environ.get("GLM53_STACK_NATIVE_WIDTHS", "none")
@@ -105,9 +105,9 @@ class TPMlaShard(TPM.TPMla):
         lanes_t4 = os.environ.get("GLM53_DSA_SHARD_LANES_T4", "1") == "1" and max(self.stream_ts) > 1
         if max(self.stream_ts) > MK.DSA_T_MAX or lanes_t4:
             rest = [v for v in free if tuple(v) not in {tuple(e) for e in ex}]
-            self.ix_lane_cores = self.mk.reserve_lane_cores(rest, 2 * self.L)
+            self.ix_lane_cores = self.mk.reserve_lane_cores(rest, self.n)  # NCHIPS merge helpers per lane
         for t in self.stream_ts:
-            self.mk.shard_lanes_check(t, self.L)
+            self.mk.shard_lanes_check(t, self.L, self.n)
         self.link_audit, self.target_audit, self.header_audit, self.census, self.censuses = {}, {}, {}, {}, {}
         # GLM53_DSA_SHARD_SHARE_SYNC=1 (stream_share = the first sparse_dsa layer's TPMlaShard): every layer's stream of a
         # row count t uses that layer's sync tensor -- the counters are monotonic across launches (fs_common.hpp: launch g
@@ -174,6 +174,34 @@ class TPMlaShard(TPM.TPMla):
             return dict(C=self.n, line=1, x_ag=x_ag, y_ag=ag.y, x_rs=x_rs, y_rs=rs.y, ag=ag, rs=rs,
                         ag_lane=ag.lane_noc()[0], rs_lane=rs.lane_noc()[0], t=t, lanes=nl, ag_wait=ag_wait[1],
                         objs=dict(ag1=ag, rs1=rs), x=dict(ag1=x_ag, rs1=x_rs))  # fmt: skip
+        if self.P > 2:  # 8x4 (doc/perf/shard_8x4_design.md): AG1 (the column of 8) -> AG2 (the row, 8-block bundles)
+            # -> merge; RS1 = the column SCATTER of 8-row slices (the 2x4 round-2 format, x_rs1 block q = destination
+            # position q) -> combine -> RS2 = the row scatter of 2-row slices (x_rs2b). The kernel's x_rs2 / y_rs2
+            # accessors carry round 1 here; x_rs / y_rs (the pair message) are unused: a small x_rs stands in for both.
+            W32 = 32 * SP.AG32_PPC
+            W2B = 32 * SP.RS2B_PPC
+            x_ag = z(t * 32, W32)
+            x_rs = z(2 * rs_rows, W_RS)
+            x_rs1 = z(self.P * t * 32, W8)
+            x_rs2b = z(self.L * t * 32, W2B)
+            q_asm = z(2 * t * 32, HIDDEN)
+            ag2_noc = self._noc(self.lane_core["ag2"])
+            ag1 = FS.FabricStreamAG(mesh, t * 32, W32, axis=geo.pair_axis, lanes=lane("ag1"), **sy("ag1"), local_copy=True,
+                                    wait=ag_wait, cons=(MK.SEM_FSW, [ag2_noc]), link_base=0, after=MK.SEM_FSA)  # fmt: skip
+            ag2 = FS.FabricStreamAG(mesh, self.P * t * 32, W32, axis=geo.line_axis, lanes=lane("ag2"), **sy("ag2"), bundle=True,
+                                    y=ag1.y, wait=(MK.SEM_FSW, 1), cons=(MK.SEM_AGC, ix), link_base=0, after=MK.SEM_FSA)  # fmt: skip
+            rs1 = FS.FabricStreamScatter(mesh, t * 32, W8, axis=geo.pair_axis, lanes=lane("rs1"), **sy("rs1"), wait=rs_wait,
+                                         cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA)  # fmt: skip
+            rs2 = FS.FabricStreamScatter(mesh, t * 32, W2B, axis=geo.line_axis, lanes=lane("rs2"), **sy("rs2"), wait=rs_wait,
+                                         cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA)  # fmt: skip
+            assert int(ag1.y.shape[-2]) == geo.n * t * 32 and int(rs1.y.shape[-2]) == self.P * t * 32
+            assert int(rs2.y.shape[-2]) == self.L * t * 32
+            return dict(C=self.n, line=self.L, pair=self.P, x_ag=x_ag, y_ag=ag1.y, x_rs=x_rs, y_rs=x_rs,
+                        x_rs2=x_rs1, y_rs2=rs1.y, x_rs2b=x_rs2b, y_rs2b=rs2.y, q_asm=q_asm,
+                        ag=ag1, rs=rs1, ag2=ag2, rs2=rs2, ag_lane=ag1.lane_noc()[0], rs_lane=rs1.lane_noc()[0],
+                        ag2_lane=ag2_noc, rs2_lane=rs2.lane_noc()[0], t=t, lanes=nl, ag_wait=ag_wait[1],
+                        objs=dict(ag1=ag1, ag2=ag2, rs1=rs1, rs2=rs2),
+                        x=dict(ag1=x_ag, ag2=ag1.y, rs1=x_rs1, rs2=x_rs2b))  # fmt: skip
         # TP8: AG1 (axis 0) -> AG2 (axis 1, the bundles) -> merge; RS1 (axis 0) -> combine -> RS2 (axis 1 scatter)
         x_ag = z(t * 32, W8)
         x_rs = z(2 * rs_rows, W_RS)
@@ -233,7 +261,8 @@ class TPMlaShard(TPM.TPMla):
         extra = [(f"{n}.cons", tuple(xy)) for n, o in objs.items() for xy in (o.cons[1] if o.cons else [])]
         extra += [(f"{n}.lane", tuple(xy)) for n, o in objs.items() for xy in o.lane_noc()]
         extra += [(f"ar_lane{h}.release", tuple(xy)) for h in late for xy in late[h][1]]
-        self.target_audit[f"{r},{c}"] = SP.audit_targets(entries, rank, 1 - geo.pair_pos(rank), self.valid_noc, extra)
+        self.target_audit[f"{r},{c}"] = SP.audit_targets(entries, rank, (1 - geo.pair_pos(rank)) if self.P == 2 else 0,
+                                                          self.valid_noc, extra)  # fmt: skip
         # fabric packet headers per (core, RISC): fs_send NHDR per direction, lane_send 2 + 1 flag per direction
         budget = {(n, "brisc"): o.headers(r, c) for n, o in objs.items()}
         budget.update({(f"ar_lane{h}", "brisc"): SP.FAR_NHDR * len(ar_dirs) for h in (0, 1)})
@@ -361,7 +390,8 @@ class TPMlaShard(TPM.TPMla):
         for r in range(self.R):
             for c in range(self.C):
                 p = self._pos(r, c)
-                peer = 1 - self.geo.pair_pos(p)  # the pair peer's position: x_rs block of pass 0 / its y_ag block (TP2)
+                # the pair peer's position: x_rs block of pass 0 / its y_ag block (TP2); the 8x4 has no pair peer (0)
+                peer = (1 - self.geo.pair_pos(p)) if self.P == 2 else 0
                 kernels, seen, audit = [], {"ra": 0, "own": 0}, []
                 n_cores, patched = {}, {}  # per slot source: the kernels' cores / the cores patched (review 4)
                 for kd in desc.kernels:  # copies: patched per chip
@@ -467,7 +497,7 @@ class TPMlaShard(TPM.TPMla):
         for st in self.streams.values():
             for o in st["objs"].values():
                 o.release()  # (AG2 lands in AG1's y: only AG1 frees it)
-            for k in ("x_ag", "x_rs", "x_rs2", "q_asm"):
+            for k in ("x_ag", "x_rs", "x_rs2", "x_rs2b", "q_asm"):
                 if st.get(k) is not None:
                     ttnn.deallocate(st[k])
         self.streams = {}

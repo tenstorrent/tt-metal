@@ -96,7 +96,8 @@ void kernel_main() {
     constexpr uint32_t TPB = BLOCK / 32;  // row tiles per cache page
     static_assert(HPT == 1, "split-K: one head group per chip (TP2: 32 heads; TP8: 8 heads + the q assembly)");
     // (at function scope: a static_assert inside `if constexpr` of a non-template lambda is evaluated in every build)
-    static_assert(mlashard::LINE == 1 || (mlashard::LINE == 4 && DT == 16), "the 2x4 q assembly: 4 pieces of 8 rows");
+    static_assert(
+        mlashard::LINE == 1 || (mlashard::LINE == 4 && DT == 16), "the q assembly: PIECES pieces of PIECE_ROWS rows");
     const auto qlat = TensorAccessor(q_args, get_arg_val<uint32_t>(ph_rt0 + 0));
     const auto cache = TensorAccessor(k_args, get_arg_val<uint32_t>(ph_rt0 + 1));
     const auto pt = TensorAccessor(p_args, get_arg_val<uint32_t>(ph_rt0 + 2));
@@ -160,8 +161,8 @@ void kernel_main() {
             // TP8 (rev 59): head tile `tile` (pass 0 the other mesh row's, pass 1 this row's), assembled once per chip
             // by the index core's NCRISC into q_asm (kernels/mla/ix_dm1.cpp; the 10th message implies it landed): 16
             // pages
-            const uint32_t row = mlashard::pair_pos(rank);
-            const uint32_t tile = pass == 0 ? 1 - row : row;
+            const uint32_t own = mlashard::tile_of(rank);  // 2x4: the mesh row; 8x4: rows 0-3 / 4-7
+            const uint32_t tile = pass == 0 ? 1 - own : own;
             for (uint32_t d = 0; d < DT; ++d) {
                 noc_async_read_page(mlashard::qasm_page(t_rows, tile, t, d), yag, q1 + d * tb);
             }

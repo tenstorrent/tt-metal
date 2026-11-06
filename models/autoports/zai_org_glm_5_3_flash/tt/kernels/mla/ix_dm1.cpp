@@ -332,6 +332,7 @@ void kernel_main() {
 #if defined(MLA_DSA_SHARD) && defined(MLA_DSA_SHARD_LINE)
     {  // the TP8 q assembly (rev 59): both head tiles of every token, once per chip, behind the global merge
         static_assert(mlashard::LINE == 4 && POOL_TILES == 4 && mlashard::PPC % 4 == 0, "4 assembled tiles per trip");
+        static_assert(mlashard::PIECES * mlashard::PIECE_ROWS == 32, "the pieces of a tile cover its 32 rows");
         const auto yag = TensorAccessor(yag_args, get_arg_val<uint32_t>(SH1 + 2));
         const auto qasm = TensorAccessor(qasm_args, get_arg_val<uint32_t>(SH1 + 3));
         const uint32_t agc_sem = get_arg_val<uint32_t>(SH1 + 4), qasm_sem = get_arg_val<uint32_t>(SH1 + 5);
@@ -342,13 +343,13 @@ void kernel_main() {
                 for (uint32_t d0 = 0; d0 < mlashard::PPC; d0 += POOL_TILES) {
                     for (uint32_t i = 0; i < POOL_TILES; ++i) {
                         const uint32_t d = d0 + i;
-                        for (uint32_t j = 0; j < mlashard::LINE; ++j) {
-                            const uint32_t blk = mlashard::ag_blk(tile * mlashard::LINE + j);
+                        for (uint32_t j = 0; j < mlashard::PIECES; ++j) {  // piece j = rank tile PIECES + j
+                            const uint32_t blk = mlashard::ag_blk(tile * mlashard::PIECES + j);
                             const uint64_t src =
                                 yag.get_noc_addr(mlashard::agx_q_page(t_rows, blk, t, d), mlashard::agx_q_off(d));
                             const uint32_t dst = scr + i * TB + mlashard::slice_off(j, TB);
-                            noc_async_read(src, dst, 256);                 // rows 8 j .. of face 0 / 2
-                            noc_async_read(src + 256, dst + TB / 4, 256);  // face 1 / 3
+                            noc_async_read(src, dst, mlashard::PIECE_RUN);  // rows PIECE_ROWS j .. of face 0 / 2
+                            noc_async_read(src + mlashard::PIECE_RUN, dst + TB / 4, mlashard::PIECE_RUN);  // face 1 / 3
                         }
                     }
                     noc_async_read_barrier();

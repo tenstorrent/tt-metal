@@ -628,7 +628,10 @@ void kernel_main() {
 #endif
     // ---- the two passes: per token the pass header (., ., 0x5D) then its batches (the DSA batched form)
     for (uint32_t pass = all_dense ? 1 : 0; pass < 2; ++pass) {
-        const bool ship = !sends && pass == 0;  // the root of pass 0: its final partial goes to the send CBs
+        // the root of pass 0: its final partial goes to the send CBs (the NCRISC ships it). 8x4 (PAIR > 2,
+        // doc/perf/shard_8x4_design.md): pass 1's too -- both passes' 8-row slices go to the column; the combines
+        // happen on the landed slices below (round 1), not with a pair message
+        const bool ship = !sends && (pass == 0 || (mlashard::PAIR > 2 && !all_dense));
         const bool to_send = sends || ship;
         for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {
             cb_wait_front(CB_AINFO, 1);
@@ -661,7 +664,9 @@ void kernel_main() {
                 finalize(cur);  // the window pass: the tree's combine is the whole attention of this chip's heads
                 continue;
             }
-            if constexpr (mlashard::LINE > 1) {
+            if constexpr (mlashard::PAIR > 2) {
+                // (unreachable: the 8x4 root shipped pass 1 above)
+            } else if constexpr (mlashard::LINE > 1) {
                 combine(cur, send);  // TP8 RS round 1 -> P1 in the send CBs (the NCRISC ships its slices: round 2)
             } else {
                 combine(
@@ -670,7 +675,35 @@ void kernel_main() {
             }
         }
     }
-    if constexpr (mlashard::LINE > 1) {
+    if constexpr (mlashard::PAIR > 2) {
+        // 8x4 on the root (per token, after both passes shipped): round 1 = the own 8-row column slice (take), then
+        // the PAIR - 1 column peers' slices (combine each; the last into the SEND CBs: the NCRISC ships its 2-row
+        // sub-slices along the row); round 2 = the own 2-row slice (take), then the LINE - 1 row peers' (combine),
+        // finalize
+        if (!sends && !all_dense) {
+            for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {
+                take(pa);
+                Part cur = pa, nxt = pb;
+                for (uint32_t k = 1; k < mlashard::PAIR; ++k) {
+                    const Part to = (k + 1 == mlashard::PAIR) ? send : nxt;
+                    combine(cur, to);
+                    nxt = cur;
+                    cur = to;
+                }
+            }
+            for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {
+                take(pa);
+                Part cur = pa, nxt = pb;
+                for (uint32_t k = 1; k < mlashard::LINE; ++k) {
+                    combine(cur, nxt);
+                    const Part tmp = cur;
+                    cur = nxt;
+                    nxt = tmp;
+                }
+                finalize(cur);
+            }
+        }
+    } else if constexpr (mlashard::LINE > 1) {
         if (!sends &&
             !all_dense) {  // TP8 RS round 2 on the root: own slice, then the row peers' slices in column order
             for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {

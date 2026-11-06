@@ -87,6 +87,11 @@ void kernel_main() {
 #if defined(MLA_DSA_SHARD_LINE)
     constexpr auto xrs2_args = TensorAccessorArgs<yag_args.next_compile_time_args_offset()>();
     constexpr auto yrs2_args = TensorAccessorArgs<xrs2_args.next_compile_time_args_offset()>();
+#if defined(MLA_DSA_SHARD_PAIR) && MLA_DSA_SHARD_PAIR > 2
+    // 8x4: xrs2 / yrs2 carry round 1 (the column's 8-row slices); the row's 2-row slices are these
+    constexpr auto xrs2b_args = TensorAccessorArgs<yrs2_args.next_compile_time_args_offset()>();
+    constexpr auto yrs2b_args = TensorAccessorArgs<xrs2b_args.next_compile_time_args_offset()>();
+#endif
 #endif
     constexpr uint32_t ST = mlaatt::STAT_TILES, DT = mlaatt::DT;
     static_assert(C <= mladsa::MAX_CHUNKS, "chunks");
@@ -135,6 +140,10 @@ void kernel_main() {
     const auto yrs2 = TensorAccessor(yrs2_args, get_arg_val<uint32_t>(sh + 14));
     const uint32_t rs2_x = get_arg_val<uint32_t>(sh + 15), rs2_y = get_arg_val<uint32_t>(sh + 16);
     const uint32_t rs2_sem = get_arg_val<uint32_t>(sh + 17);
+#if defined(MLA_DSA_SHARD_PAIR) && MLA_DSA_SHARD_PAIR > 2
+    const auto xrs2b = TensorAccessor(xrs2b_args, get_arg_val<uint32_t>(sh + 18));  // 8x4 round 2 (2-row slices)
+    const auto yrs2b = TensorAccessor(yrs2b_args, get_arg_val<uint32_t>(sh + 19));
+#endif
     const uint32_t lpos = mlashard::line_pos(rank);  // this chip's column = its slice index in the row's head tile
 #endif
     const uint32_t arx_base = get_local_cb_interface(CB_ARX).fifo_limit - get_local_cb_interface(CB_ARX).fifo_size;
@@ -506,7 +515,9 @@ void kernel_main() {
         if (pass == 1) {
             MK_MARK();  // probe 3: pass 0 done (the root: its partial shipped into x_rs)
             if (c == 0 && !all_dense) {
-                if constexpr (mlashard::LINE > 1) {
+                if constexpr (mlashard::PAIR > 2) {
+                    // 8x4: round 1 lands after pass 1 (both passes' slices ship first): no wait here
+                } else if constexpr (mlashard::LINE > 1) {
                     noc_semaphore_wait_min(rsc, 1);  // RS round 1 landed (round 2's signal comes later: >= waits only)
                 } else {
                     mk::wait_handoff(
@@ -552,6 +563,61 @@ void kernel_main() {
             }
             if (c != 0) {
                 continue;
+            }
+            if constexpr (mlashard::PAIR > 2) {
+                if (!all_dense) {  // (the dense window's pass finalises on the compute: no slices to ship)
+                    // 8x4 (doc/perf/shard_8x4_design.md): the root ships this pass's partial (the send CBs) as 8-row
+                    // slices to every column position q whose heads lie in this pass's tile: x_rs1 block q, rows
+                    // RS1_ROWS (q % 4) of the tile (the own position's slice too: it lands from x_rs1); the RS1 scatter
+                    // lane is signalled once per token after pass 1
+                    const uint32_t own_tile = mlashard::tile_of(rank);
+                    const uint32_t pass_tile = pass == 0 ? 1 - own_tile : own_tile;
+                    const uint32_t ob = 2 * mlashard::slice_run(mlashard::RS1_ROWS, otb);
+                    const uint32_t pb = 2 * mlashard::slice_run(mlashard::RS1_ROWS, ptb);
+                    ASSERT(DT * ob + ST * pb <= mlashard::RS1_PPC * mlashard::TB);
+                    cb_wait_front(CB_ASEND, ST);
+                    for (uint32_t q = 0; q < mlashard::PAIR; ++q) {
+                        if (q / (mlashard::PAIR / 2) != pass_tile) {
+                            continue;
+                        }
+                        const uint32_t jq = q % (mlashard::PAIR / 2);  // the destination's slice index in the tile
+                        const uint32_t pg0 = mlashard::rs1_page(t_rows, q, t);
+                        for (uint32_t i = 0; i < ST; ++i) {
+                            const uint32_t b = DT * ob + i * pb;
+                            const uint64_t dst = xrs2.get_noc_addr(pg0 + b / PG, b % PG);
+                            const uint32_t src = get_read_ptr(CB_ASEND) + i * ptb +
+                                                 mlashard::slice_off_rows(mlashard::RS1_ROWS, jq, ptb);
+                            noc_async_write(src, dst, pb / 2);
+                            noc_async_write(src + ptb / 4, dst + pb / 2, pb / 2);
+                        }
+                    }
+                    for (uint32_t d0_ = 0; d0_ < DT; d0_ += OG) {
+                        cb_wait_front(CB_ASENDO, d0_ + OG);
+                        for (uint32_t q = 0; q < mlashard::PAIR; ++q) {
+                            if (q / (mlashard::PAIR / 2) != pass_tile) {
+                                continue;
+                            }
+                            const uint32_t jq = q % (mlashard::PAIR / 2);
+                            const uint32_t pg0 = mlashard::rs1_page(t_rows, q, t);
+                            for (uint32_t d = d0_; d < d0_ + OG; ++d) {
+                                const uint32_t b = d * ob;
+                                const uint64_t dst = xrs2.get_noc_addr(pg0 + b / PG, b % PG);
+                                const uint32_t src = get_read_ptr(CB_ASENDO) + d * otb +
+                                                     mlashard::slice_off_rows(mlashard::RS1_ROWS, jq, otb);
+                                noc_async_write(src, dst, ob / 2);
+                                noc_async_write(src + otb / 4, dst + ob / 2, ob / 2);
+                            }
+                        }
+                    }
+                    noc_async_write_barrier();
+                    cb_pop_front(CB_ASEND, ST);
+                    cb_pop_front(CB_ASENDO, DT);
+                    if (pass == 1) {  // both passes' slices are in x_rs1: the RS1 scatter lane may send
+                        noc_semaphore_inc(get_noc_addr(rs_x, rs_y, get_semaphore(rs_sem)), 1);
+                        noc_async_atomic_barrier();
+                    }
+                    continue;
+                }
             }
             // the O / stats tiles of a partial as x_rs / y_rs pages: tile k of otb bytes = otb / PG pages from page p0
             const uint32_t rsb = mlashard::rs_base(t_rows, pass == 0 ? peer_blk : 0, t);
@@ -662,7 +728,131 @@ void kernel_main() {
     if (all_dense) {
         sweep_b();  // the merge messages of an all-dense launch (CB_ASEL pages for the reader's final pop)
     }
-#if defined(MLA_DSA_SHARD_LINE)
+#if defined(MLA_DSA_SHARD_LINE) && defined(MLA_DSA_SHARD_PAIR) && MLA_DSA_SHARD_PAIR > 2
+    // ---- E (8x4, doc/perf/shard_8x4_design.md): on the root, per token: round 1 = the own 8-row column slice
+    // (x_rs1 block ppos) then the column peers' (y_rs1 block s, s ascending) into rows RS1_ROWS (ppos % 4) of the
+    // receive CBs (the compute: take + PAIR - 1 combines -> the column-combined slice in the SEND CBs); the root ships
+    // its 2-row sub-slices (rows RS1_ROWS (ppos % 4) + RS2_ROWS q) to every row position q (x_rs2 block q, the own
+    // too); round 2 = the own 2-row slice (x_rs2 block lpos) then the row peers' (y_rs2 block s) into rows
+    // RS1_ROWS (ppos % 4) + RS2_ROWS lpos (the compute: take + LINE - 1 combines, finalize); the chip's HPC heads =
+    // those rows of the o tiles -> o_lat rows 0 .. HPC - 1. (x_rs1 / y_rs1 are the TP8 x_rs2 / y_rs2 accessors
+    // xrs2 / yrs2: the same 8-row slice format; the 2-row round-2 tensors are the extra accessors xrs2b / yrs2b.)
+    if (c == 0 && !all_dense) {
+        const uint32_t ppos = mlashard::pair_pos(rank), lpos2 = mlashard::line_pos(rank);
+        const uint32_t j1 = ppos % (mlashard::PAIR / 2);        // the 8-row slice index in the tile
+        const uint32_t j2 = (mlashard::PAIR / 2) * j1 + lpos2;  // the 2-row slice index (rows 2 j2 ..)
+        static_assert(
+            mlashard::RS1_ROWS * (mlashard::PAIR / 2) == 32 &&
+                mlashard::RS2_ROWS * mlashard::LINE == mlashard::RS1_ROWS,
+            "8x4 slices");
+        const uint32_t tb = get_tile_size(CB_AOUT);
+        // one slice of `rows` rows (chunk pg0 of src_t, the TP8 rs2 / the 2-row layout) -> rows `rows` j of the receive
+        // CBs (a message for the compute)
+        auto land_rows = [&](const auto& src_t, uint32_t pg0, uint32_t rows, uint32_t j) {
+            const uint32_t ob = 2 * mlashard::slice_run(rows, otb), pb = 2 * mlashard::slice_run(rows, ptb);
+            cb_reserve_back(CB_ARX, ST);
+            cb_reserve_back(CB_ARXO, DT);
+            const uint32_t rx = get_write_ptr(CB_ARX), rxo = get_write_ptr(CB_ARXO);
+            for (uint32_t i = 0; i < ST; ++i) {
+                const uint32_t b = DT * ob + i * pb;
+                const uint64_t src = src_t.get_noc_addr(pg0 + b / PG, b % PG);
+                const uint32_t dst = rx + i * ptb + mlashard::slice_off_rows(rows, j, ptb);
+                noc_async_read(src, dst, pb / 2);
+                noc_async_read(src + pb / 2, dst + ptb / 4, pb / 2);
+            }
+            for (uint32_t d = 0; d < DT; ++d) {
+                const uint32_t b = d * ob;
+                const uint64_t src = src_t.get_noc_addr(pg0 + b / PG, b % PG);
+                const uint32_t dst = rxo + d * otb + mlashard::slice_off_rows(rows, j, otb);
+                noc_async_read(src, dst, ob / 2);
+                noc_async_read(src + ob / 2, dst + otb / 4, ob / 2);
+            }
+            noc_async_read_barrier();
+            cb_push_back(CB_ARX, ST);
+            cb_push_back(CB_ARXO, DT);
+        };
+        noc_semaphore_wait_min(rsc, 1);  // the column scatter's waiter: every column peer's slices landed in y_rs1
+        MK_MARK();                       // probe 6: RS round 1 landed (8x4 root)
+        for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {
+            land_rows(xrs2, mlashard::rs1_page(t_rows, ppos, t), mlashard::RS1_ROWS, j1);  // the own slice first
+            for (uint32_t s_ = 0; s_ < mlashard::PAIR; ++s_) {  // then the column peers in position order
+                if (s_ != ppos) {
+                    land_rows(yrs2, mlashard::rs1_page(t_rows, s_, t), mlashard::RS1_ROWS, j1);
+                }
+            }
+            // the column-combined slice (the compute's last combine: the send CBs) -> 2-row sub-slices to the row
+            {
+                const uint32_t ob = 2 * mlashard::slice_run(mlashard::RS2_ROWS, otb);
+                const uint32_t pb = 2 * mlashard::slice_run(mlashard::RS2_ROWS, ptb);
+                ASSERT(DT * ob + ST * pb <= mlashard::RS2B_PPC * mlashard::TB);
+                cb_wait_front(CB_ASEND, ST);
+                for (uint32_t q = 0; q < mlashard::LINE; ++q) {
+                    const uint32_t jq = (mlashard::PAIR / 2) * j1 + q;
+                    const uint32_t pg0 = mlashard::rs2b_page(t_rows, q, t);
+                    for (uint32_t i = 0; i < ST; ++i) {
+                        const uint32_t b = DT * ob + i * pb;
+                        const uint64_t dst = xrs2b.get_noc_addr(pg0 + b / PG, b % PG);
+                        const uint32_t src =
+                            get_read_ptr(CB_ASEND) + i * ptb + mlashard::slice_off_rows(mlashard::RS2_ROWS, jq, ptb);
+                        noc_async_write(src, dst, pb / 2);
+                        noc_async_write(src + ptb / 4, dst + pb / 2, pb / 2);
+                    }
+                }
+                for (uint32_t d0_ = 0; d0_ < DT; d0_ += OG) {
+                    cb_wait_front(CB_ASENDO, d0_ + OG);
+                    for (uint32_t q = 0; q < mlashard::LINE; ++q) {
+                        const uint32_t jq = (mlashard::PAIR / 2) * j1 + q;
+                        const uint32_t pg0 = mlashard::rs2b_page(t_rows, q, t);
+                        for (uint32_t d = d0_; d < d0_ + OG; ++d) {
+                            const uint32_t b = d * ob;
+                            const uint64_t dst = xrs2b.get_noc_addr(pg0 + b / PG, b % PG);
+                            const uint32_t src = get_read_ptr(CB_ASENDO) + d * otb +
+                                                 mlashard::slice_off_rows(mlashard::RS2_ROWS, jq, otb);
+                            noc_async_write(src, dst, ob / 2);
+                            noc_async_write(src + otb / 4, dst + ob / 2, ob / 2);
+                        }
+                    }
+                }
+                noc_async_write_barrier();
+                cb_pop_front(CB_ASEND, ST);
+                cb_pop_front(CB_ASENDO, DT);
+                noc_semaphore_inc(get_noc_addr(rs2_x, rs2_y, get_semaphore(rs2_sem)), 1);
+                noc_async_atomic_barrier();
+            }
+        }
+        MK_MARK();                       // probe: the row scatter shipped
+        noc_semaphore_wait_min(rsc, 2);  // the row scatter's waiter: every row peer's 2-row slices landed in y_rs2b
+        MK_MARK();                       // probe: RS round 2 landed (8x4 root)
+        for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {
+            land_rows(xrs2b, mlashard::rs2b_page(t_rows, lpos2, t), mlashard::RS2_ROWS, j2);  // the own slice first
+            for (uint32_t s_ = 0; s_ < mlashard::LINE; ++s_) {
+                if (s_ != lpos2) {
+                    land_rows(yrs2b, mlashard::rs2b_page(t_rows, s_, t), mlashard::RS2_ROWS, j2);
+                }
+            }
+            // this chip's HPC heads: rows RS2_ROWS j2 .. of each finalised bf16 o tile -> o_lat tile (t, d) rows 0..
+            const uint32_t orun = mlashard::slice_run(mlashard::RS2_ROWS, tb);
+            for (uint32_t d = 0; d < mlaatt::DT; ++d) {
+                cb_wait_front(CB_AOUT, d + 1);
+                const uint32_t src =
+                    get_read_ptr(CB_AOUT) + d * tb + mlashard::slice_off_rows(mlashard::RS2_ROWS, j2, tb);
+                const uint64_t dst = olat.get_noc_addr((t * HPT + g) * mlaatt::DT + d, 0);
+                noc_async_write(src, dst, orun);
+                noc_async_write(src + tb / 4, dst + tb / 4, orun);
+#if defined(MLA_ATT_OT)
+                write_ot(get_read_ptr(CB_AOUT) + d * tb, t, d, mlashard::RS2_ROWS * j2);  // rows 2 j2 ..
+#endif
+            }
+            noc_async_write_barrier();
+            cb_pop_front(CB_AOUT, mlaatt::DT);
+        }
+        noc_semaphore_set(rsc, 0);
+    } else {
+        MK_MARK();  // (the same mark count on every core)
+        MK_MARK();
+        MK_MARK();
+    }
+#elif defined(MLA_DSA_SHARD_LINE)
     // ---- E: TP8 round 2 on the root -- per token its own slice of P1 (x_rs2 block lpos) then the row peers' slices of
     // its heads (y_rs2 block s = the source column, ascending) into rows 8 lpos .. of the receive CBs; the compute
     // takes the first, combines the others, finalises; rows 8 lpos .. 8 lpos + 7 of the o tiles -> o_lat rows 0..7
