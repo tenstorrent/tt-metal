@@ -233,19 +233,27 @@ class TtVADHead:
         self.bev_pos = ttnn.to_memory_config(bev_pos, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(bev_mask)
 
-        # Constant device tensors (zeros/ones/arange) that recur on every warm
-        # call with fixed shapes. Materialising them fresh each call does a
-        # host->device fill / iota that blocks Metal-Trace capture; cache by
-        # shape and hand back a device-side clone (zeros/ones) or the cached
-        # read-only tensor (arange base).
+        # Constant device tensors (zeros/ones/arange) the forward uses with fixed
+        # shapes. Creating one is a host->device fill, so every shape is built
+        # here; the forward only clones them and fails on a shape it lacks.
         self._const_zeros_cache = {}
         self._const_ones_cache = {}
         self._base_idx_cache = {}
+        self._consts_frozen = False
+        num_agents = self.query_embedding.weight.shape[0]
+        self._const_zeros((1, num_agents * self.fut_mode, 2), layout=ttnn.TILE_LAYOUT)
+        self._const_zeros((1, 1, 2), layout=ttnn.TILE_LAYOUT)
+        self._const_zeros((1, 1, self.embed_dims), dtype=ttnn.bfloat16)
+        self._const_zeros((1, 1, 2), dtype=ttnn.bfloat16)
+        self._const_ones((1, 1), dtype=ttnn.bfloat16)
+        self._arange_base(self.map_num_vec, self.map_num_pts_per_vec)
+        self._consts_frozen = True
 
     def _const_tensor(self, create_fn, cache, shape, dtype=None, layout=None):
         key = (tuple(shape), dtype, layout)
         t = cache.get(key)
         if t is None:
+            assert not self._consts_frozen, f"constant {key} was not built in __init__"
             kw = {}
             if dtype is not None:
                 kw["dtype"] = dtype
@@ -265,6 +273,7 @@ class TtVADHead:
         key = (count, num_pts)
         t = self._base_idx_cache.get(key)
         if t is None:
+            assert not self._consts_frozen, f"index base {key} was not built in __init__"
             t = ttnn.arange(0, count, dtype=ttnn.uint32, device=self.device) * num_pts
             self._base_idx_cache[key] = t
         return t
