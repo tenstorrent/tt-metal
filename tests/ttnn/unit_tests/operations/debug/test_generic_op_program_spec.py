@@ -761,6 +761,9 @@ def test_a_compilation_failure_leaves_the_program_cache_unchanged(device, expect
     spec.kernels = kernels
     entries = device.num_program_cache_entries()
     with expect_error(RuntimeError, "build failed"):
+        E.prepare_generic_op([a, b, out], spec, run_args)
+    assert device.num_program_cache_entries() == entries
+    with expect_error(RuntimeError, "build failed"):
         E.generic_op([a, b, out], spec, run_args)
     assert device.num_program_cache_entries() == entries
 
