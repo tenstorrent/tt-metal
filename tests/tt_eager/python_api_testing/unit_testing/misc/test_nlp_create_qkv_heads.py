@@ -826,3 +826,22 @@ def test_sharded_nlp_create_qkv_heads_kv_tied_with_program_cache(device):
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
     assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.parametrize("read_from_input_tensor_kv", (False, True))
+@pytest.mark.parametrize("head_dim", (80, 112))
+def test_nlp_create_qkv_heads_unaligned_head_dim_rejected(device, expect_error, head_dim, read_from_input_tensor_kv):
+    with expect_error(RuntimeError, "must be a multiple of the tile width"):
+        run_nlp_create_qkv_heads_test(
+            1,
+            32,
+            head_dim,
+            8,
+            2,
+            False,
+            read_from_input_tensor_kv,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            device,
+        )
