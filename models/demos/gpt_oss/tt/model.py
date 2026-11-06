@@ -94,6 +94,13 @@ class Model:
     - Compatible with tt_transformers generator interface
     """
 
+    # Generator: re-capture a decode trace, over its existing inputs, when programs were compiled since its capture
+    # (checked at the end of every prefill call and before every decode replay; Generator._recapture_stale_decode_traces).
+    # The prefill's stock CCL ops (ttnn.all_reduce) create global semaphores held by their program-cache entries; the
+    # first prefill of a new length after the capture could place them in the decode trace's scratch region, where
+    # every decode replay overwrites them (the next prefill of that length then hangs or decodes garbage).
+    _tt_recapture_decode_trace_on_new_programs = True
+
     def __init__(
         self,
         mesh_device,
@@ -176,9 +183,11 @@ class Model:
         self.cos_matrix = self.rope_setup.cos_matrix
         self.sin_matrix = self.rope_setup.sin_matrix
         self.transformation_mats = self.rope_setup.get_both_trans_mats()
-        # Prefill rope slices, keyed by sequence length. See prepare_inputs_prefill: the slice is a device
-        # op, so recomputing it per call allocates -- and on a traced prefill it allocates with the trace
-        # live, then throws the result away (the replay uses the matrices bound at capture time).
+        # Prefill rope slices, keyed by sequence length. None may be created lazily: a device tensor allocated after
+        # a trace was captured can sit in that trace's scratch region and is overwritten by every replay of it (a
+        # slice cached by the first prefill of a new length after the decode trace capture corrupted every later
+        # prefill of that length). The traced prefill's slice (max_seq_len, bound at capture) is made with the model
+        # (create_transformer_compatible); an eager prefill slices per call, a temporary that does not outlive it.
         self._prefill_rope_slices = {}
 
         if state_dict:
@@ -382,6 +391,8 @@ class Model:
         instance.vocab_size = args.vocab_size
         instance.n_layers = args.n_layers
         instance.dtype = dtype
+        # The traced prefill's rope slice, made before any trace exists (see __init__).
+        instance._prefill_rope_slices[args.max_seq_len] = instance._prefill_rope_slice(args.max_seq_len)
 
         return instance
 
@@ -402,6 +413,7 @@ class Model:
         batch_size=1,
         skip_lm_head=False,
         page_tables_per_layer=None,
+        literal_last_token_bounds=False,
     ):
         """
         Shared forward pass through decoder layers and final projection.
@@ -420,6 +432,10 @@ class Model:
                 sliding-window layers can index a smaller paged pool than
                 full-attention layers (KV cache groups). When None, behavior is
                 byte-equivalent to the pre-hybrid path.
+            literal_last_token_bounds: Slice the ``get_last_token`` tile of a single user with literal bounds (one
+                program per offset) instead of tensor-arg bounds written from the host (_slice_last_token_tile). For
+                callers that capture this forward into a trace, where host writes are not allowed. Users of a batch
+                (batch_size > 1) are always sliced with literal bounds.
 
         Returns:
             logits: Output logits
@@ -465,9 +481,12 @@ class Model:
                 for t in tiles:
                     t.deallocate(True)
             else:
-                logits_sliced = ttnn.slice(
-                    logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1])
-                )
+                if literal_last_token_bounds:
+                    logits_sliced = ttnn.slice(
+                        logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1])
+                    )
+                else:
+                    logits_sliced = self._slice_last_token_tile(logits, get_last_token)
                 logits.deallocate(True)
                 logits = logits_sliced
             hidden_states = logits
@@ -665,6 +684,7 @@ class Model:
         batch_size=1,
         skip_lm_head=False,
         page_tables_per_layer=None,
+        literal_last_token_bounds=False,
     ):
         if page_tables_per_layer is None:
             # See ttnn_decode_forward: the bridge stashes per-layer page tables
@@ -697,9 +717,46 @@ class Model:
             batch_size=batch_size,
             skip_lm_head=skip_lm_head,
             page_tables_per_layer=page_tables_per_layer,
+            literal_last_token_bounds=literal_last_token_bounds,
         )
 
         return logits
+
+    def _slice_last_token_tile(self, x, get_last_token):
+        """Rows [get_last_token, get_last_token + 32) of x [1, 1, seq_len, width]; get_last_token is a multiple of 32.
+
+        The offset is passed at runtime rather than as a compile-time attribute. With literal bounds every distinct
+        prompt offset compiles its own slice program, and an eager prefill or a traced prefill's tail runs after the
+        traces are captured: each new program is stranded across trace replays and makes the generator re-capture its
+        decode traces (_tt_recapture_decode_trace_on_new_programs). Warmup cannot cover the offsets either: it only
+        sees bucket-length mock prompts, and real prompts are shorter. The bounds are written from the host, so this
+        must not run inside a trace capture.
+
+        The tensor-args path needs a tile-aligned slice, which this already is - 32 rows starting at a multiple of 32 -
+        so num_devices = seq_len // 32 selects exactly that window and the program keys on the prefill bucket instead
+        of the offset.
+        """
+        seq_len = int(x.shape[-2])
+        if seq_len % 32 != 0:
+            return ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+        for device_tensor, values in (
+            (self._tail_slice_start, [0, 0, get_last_token, 0]),
+            (self._tail_slice_end, [1, 1, get_last_token + 32, int(x.shape[-1])]),
+        ):
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    torch.tensor(values, dtype=torch.int32),
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                ),
+                device_tensor,
+            )
+        return ttnn.slice(
+            input_tensor=x,
+            starts=self._tail_slice_start,
+            ends=self._tail_slice_end,
+            slice_dim=2,
+            num_devices=seq_len // 32,
+        )
 
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         """
@@ -708,42 +765,7 @@ class Model:
         Unlike tt_transformers `Transformer`, GPT-OSS `ttnn_prefill_forward` already
         applies final norm + lm_head, so this method only slices logits.
         """
-        get_last_token = (last_token_idx // 32) * 32
-        seq_len = int(logits.shape[-2])
-        # Pass the offset at runtime rather than as a compile-time attribute. With literal bounds
-        # every distinct prompt offset compiles its own slice program, and this runs after the
-        # prefill traces are captured, so each one is stranded across trace replays. Warmup cannot
-        # cover it either: it only sees bucket-length mock prompts, and real prompts are shorter.
-        #
-        # The tensor-args path needs a tile-aligned slice, which this already is - 32 rows starting
-        # at a multiple of 32 - so num_devices = seq_len // 32 selects exactly that window and the
-        # program keys on the prefill bucket instead of the offset.
-        if seq_len % 32 == 0:
-            for device_tensor, values in (
-                (self._tail_slice_start, [0, 0, get_last_token, 0]),
-                (self._tail_slice_end, [1, 1, get_last_token + 32, int(logits.shape[-1])]),
-            ):
-                ttnn.copy_host_to_device_tensor(
-                    ttnn.from_torch(
-                        torch.tensor(values, dtype=torch.int32),
-                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    ),
-                    device_tensor,
-                )
-            return ttnn.slice(
-                input_tensor=logits,
-                starts=self._tail_slice_start,
-                ends=self._tail_slice_end,
-                slice_dim=2,
-                num_devices=seq_len // 32,
-            )
-
-        logits = ttnn.slice(
-            logits,
-            (0, 0, get_last_token, 0),
-            (1, 1, get_last_token + 32, logits.shape[-1]),
-        )
-        return logits
+        return self._slice_last_token_tile(logits, (last_token_idx // 32) * 32)
 
     def prepare_row_sharded_prefill_iter(
         self, tokens, page_table, prompt_lens, iter_idx, max_padded_len, max_num_blocks, users_per_row_per_iter=1
@@ -791,6 +813,7 @@ class Model:
             kv_cache=kv_cache,
             batch_size=batch_size,
             skip_lm_head=skip_lm_head,
+            literal_last_token_bounds=True,  # the programs of the traced row-sharded path (see fixed_glt there)
         )
 
     def extract_prefill_logits_to_host(
@@ -951,6 +974,13 @@ class Model:
         if (max(all_last_idxs) // 32) * 32 != fixed_glt:
             fixed_glt = -1
         skip_lm = sampling_params is not None
+        # The forwards below slice the fixed_glt tile with literal bounds (the traced ones are captured, where the
+        # tensor-arg bounds of _slice_last_token_tile cannot be written), so each offset compiles its own slice
+        # programs, and one compiled after the decode trace capture makes the generator re-capture it. With the LM
+        # head skipped nothing reads the forward's output (the first token is fixed, see the end of this method), so
+        # keep the first tile: the programs then key on the padded length only.
+        if skip_lm:
+            fixed_glt = 0
 
         vocab_size = model_args.vocab_size if model_args else self.vocab_size
         output_tensor = torch.zeros(batch_size, 1, vocab_size)
@@ -986,6 +1016,7 @@ class Model:
                     kv_cache=kv_cache,
                     batch_size=upr,
                     skip_lm_head=skip_lm,
+                    literal_last_token_bounds=True,
                 )
                 if not skip_lm:
                     self.extract_prefill_logits_to_host(
@@ -1009,6 +1040,7 @@ class Model:
                     kv_cache=kv_cache,
                     batch_size=upr,
                     skip_lm_head=skip_lm,
+                    literal_last_token_bounds=True,
                 )
                 ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
                 ttnn.synchronize_device(mesh_device)
@@ -1204,6 +1236,12 @@ class Model:
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
         return tokens_embd, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
+    def _prefill_rope_slice(self, seq_len):
+        return [
+            self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
+            self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
+        ]
+
     def prepare_inputs_prefill(
         self,
         tokens,
@@ -1254,18 +1292,15 @@ class Model:
             if len(tokens_embd.shape) == 3:
                 tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
-        # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159).
-        # Cached per sequence length: the slice runs on device, so recomputing it allocates. On a traced
-        # prefill that allocation happens with the trace live -- and is then discarded, since the replay
-        # uses the matrices that were bound when the trace was captured.
-        seq_len = self.args.max_seq_len if trace_enabled else tokens_embd.shape[-2]
-        rot_mats_global = self._prefill_rope_slices.get(seq_len)
-        if rot_mats_global is None:
-            rot_mats_global = [
-                self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
-                self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
-            ]
-            self._prefill_rope_slices[seq_len] = rot_mats_global
+        # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159). A traced
+        # prefill uses the max_seq_len slice made with the model by create_transformer_compatible, which also sets
+        # self.args (bound at capture, reused by every replay, so a replay's host call allocates nothing); an eager
+        # prefill slices per call. Caching the eager slice would create a long-lived tensor while a decode trace may
+        # already be live (see __init__).
+        if trace_enabled:
+            rot_mats_global = self._prefill_rope_slices[self.args.max_seq_len]
+        else:
+            rot_mats_global = self._prefill_rope_slice(tokens_embd.shape[-2])
         rot_mats_local = None
 
         # Prepare page tables if provided
