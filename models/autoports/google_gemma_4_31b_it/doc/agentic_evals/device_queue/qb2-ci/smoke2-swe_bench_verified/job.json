@@ -33,5 +33,6 @@
   "score_valid": false,
   "workflow_status": "completed",
   "workflow_conclusion": "cancelled",
-  "build_completed_at": "2026-11-06T06:07:16Z"
+  "build_completed_at": "2026-11-06T06:07:16Z",
+  "workflow_wall_hours": 1.0563888888888888
 }

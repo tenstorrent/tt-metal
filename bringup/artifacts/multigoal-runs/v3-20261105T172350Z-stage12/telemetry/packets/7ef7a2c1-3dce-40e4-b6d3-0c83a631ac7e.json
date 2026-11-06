@@ -51,7 +51,7 @@
   ],
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
-    "stage12_accuracy": "SWE and Terminal smoke results pending; GPQA completed2/198 only."
+    "stage12_accuracy": "SWE smoke active; Terminal and GPQA nightly wrong-implementation dispatches excluded and replaced with explicitautoport. Only valid GPQA smoke2/198 scored so far."
   },
   "notes": [
     "Current stage12 serving measurement; not frozen release.",

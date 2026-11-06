@@ -518,6 +518,96 @@
       "problem_status": "open",
       "confirmed": "GPQA each single-turn; reconstructed counts differ from API, so no meaningful multi-turn replay. Tool history extraction requirements prepared; capacity remains open",
       "evidence": "runs/real-history-capacity/RESULT.json"
+    },
+    {
+      "problem": "stage12-zero-cost-checker",
+      "owner": "suite_registration",
+      "goal": "Correct checker rejection of genuine zero-device host validity ranking without relaxing missing-estimate guards",
+      "plan": "runs/stage12-checker-zero-cost/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "stage_check"
+      ],
+      "confirm": {
+        "method": "Focused regression tests against original and patched isolated checker",
+        "success": "Zero-hour validity accepted; negative/malformed/missing measurements and invalid ordering remain rejected"
+      },
+      "box_hours": 0,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "open",
+      "confirmed": "7 tests pass on candidate, original defect reproduced; installed skills unchanged pending operator decision",
+      "evidence": "runs/stage12-checker-zero-cost/RESULT.md",
+      "proposal_branch": "fix/zero-device-validity-ranking",
+      "proposal_sha": "2fb2ffcebb50f5ac2ad2e30f1573701461b60255"
+    },
+    {
+      "problem": "explicit-autoport-dispatch",
+      "owner": "harness_registration",
+      "goal": "Restore exact fresh-autoport selection through stock workflow",
+      "plan": "runs/ci-implementation-selection/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "r1_gpqa_diamond",
+        "terminal_bench_2_1"
+      ],
+      "confirm": {
+        "method": "Exact-commit stock resolver plus actual dispatched server class in logs",
+        "success": "Explicit implementation resolves and imports this autoport; unchanged task cohorts and sourceSHAs"
+      },
+      "box_hours": 0.25,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "kept",
+      "problem_status": "open",
+      "confirmed": "Host resolves explicit implementation correctly; replacement CI jobs dispatched. Existing SWE logs prove same explicit route loadsautoport. Replacement completion pending.",
+      "evidence": "runs/ci-implementation-selection/result.json"
+    },
+    {
+      "problem": "harbor-model-pin-confirmation",
+      "owner": "suite_registration",
+      "goal": "Register exact Harbor source observed in actualCI using generic pin API",
+      "plan": "runs/harbor-model-pin/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "release"
+      ],
+      "confirm": {
+        "method": "ActualCI abbreviatedcheckout + official fullSHA + resolvedmodelmetadata + focusedtests/fullhooks",
+        "success": "Current source retained exactly, no taskrunner behavior change"
+      },
+      "box_hours": 0,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "kept",
+      "problem_status": "open",
+      "confirmed": "58focusedtests andfullhooks passed; source-only dedicatedbranch publication8a3c949. Livepin verification remains fornextnormalrung.",
+      "evidence": "runs/harbor-model-pin/RESULT.md"
     }
   ],
   "rankings": [
@@ -1142,6 +1232,210 @@
         }
       ],
       "reason": "Validity remains ahead of speed. Completed host pin repair still needs live pin confirmation; running smoke/nightly jobs proceed without waiting. Real capacity and contention savings cannot yet be priced from two single-turn GPQA samples."
+    },
+    {
+      "after": "zero-cost-checker-repair-prepared",
+      "order": [
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "device_hours": 0,
+          "saving_hours": 0
+        },
+        {
+          "problem": "immutable-harbor-release-source",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1",
+            "release"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-fabric-topology",
+          "unblocks": [
+            "terminal_bench_2_1"
+          ],
+          "device_hours": 0.2167,
+          "saving_hours": null
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": null,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-cache-routing",
+          "unblocks": [],
+          "device_hours": 0.05277675944444444,
+          "saving_hours": null
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "unblocks": [],
+          "saving_hours": null,
+          "device_hours": null,
+          "basis": "unknown until actual tool histories and generation share"
+        }
+      ],
+      "reason": "Host-only stage-check validity correction has zero device cost; installed package remains read-only. Active rungs are not interrupted."
+    },
+    {
+      "after": "explicit-autoport-dispatch-repair",
+      "order": [
+        {
+          "problem": "explicit-autoport-dispatch",
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "device_hours": 0,
+          "saving_hours": 0
+        },
+        {
+          "problem": "immutable-harbor-release-source",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1",
+            "release"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-fabric-topology",
+          "unblocks": [
+            "terminal_bench_2_1"
+          ],
+          "device_hours": 0.2167,
+          "saving_hours": null
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": null,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-cache-routing",
+          "unblocks": [],
+          "device_hours": 0.05277675944444444,
+          "saving_hours": null
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "unblocks": [],
+          "saving_hours": null,
+          "device_hours": null,
+          "basis": "unknown until actual tool histories and generation share"
+        }
+      ],
+      "reason": "Wrong-adapter execution invalidates score; zero-device dispatch correction precedes speed work. Correct cohorts redispatched immediately."
+    },
+    {
+      "after": "harbor-model-pin-published",
+      "order": [
+        {
+          "problem": "explicit-autoport-dispatch",
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "terminal_bench_2_1"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "device_hours": 0,
+          "saving_hours": 0
+        },
+        {
+          "problem": "immutable-harbor-release-source",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1",
+            "release"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-fabric-topology",
+          "unblocks": [
+            "terminal_bench_2_1"
+          ],
+          "device_hours": 0.2167,
+          "saving_hours": null
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": null,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-cache-routing",
+          "unblocks": [],
+          "device_hours": 0.05277675944444444,
+          "saving_hours": null
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "unblocks": [],
+          "saving_hours": null,
+          "device_hours": null,
+          "basis": "unknown until actual tool histories and generation share"
+        }
+      ],
+      "reason": "Validity still first; live pinconfirmation rides next normalrung, noextraevaljob or rungdelay. All measuredspeed claims unchanged."
     }
   ]
 }

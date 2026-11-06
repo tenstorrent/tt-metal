@@ -32,11 +32,12 @@
   "runner": "qb2-120-p05t02",
   "device_job_started_at": "2026-11-06T06:06:08Z",
   "device_job_id": 127742759927,
-  "actual_hours_basis": "Device CI job including setup, server and clients; evaluation time recorded separately",
+  "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
   "functional_at": 2,
   "score": 1.0,
   "audit": "runs/smoke2-r1_gpqa_diamond/audit.json",
   "workflow_status": "completed",
   "workflow_conclusion": "success",
-  "device_job_completed_at": "2026-11-06T06:40:46Z"
+  "device_job_completed_at": "2026-11-06T06:40:46Z",
+  "workflow_wall_hours": 1.62
 }

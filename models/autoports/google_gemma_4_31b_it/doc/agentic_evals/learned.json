@@ -75,6 +75,10 @@
     {
       "fact": "Freshautoport HF cache lookup must align with stock mountedweights/hub; TT_CACHE_PATH is not TT_METAL_CACHE. Modelentry cachealiases verified with same pinnedfiles and exact2x168tokenpairs; CIstartup saving unknown.",
       "evidence": "runs/ci-startup-analysis/confirmation-result.json; TTI8437f186"
+    },
+    {
+      "fact": "Manual dispatch impl-of-model defaults to default, resolving stock tt-transformers. Always pass explicit gemma4-31b-autoport-v3 and verify emitted runtime model ID/class; pinned source SHAs alone do not select implementation.",
+      "evidence": "runs/ci-implementation-selection/result.json; Terminal42175367781 failed stock import beforetasks; saved GPQAnightly command also omittedimpl"
     }
   ],
   "suite_timings": [
@@ -97,9 +101,12 @@
       "branch": "fix/model-scoped-harbor-revision",
       "sha": "7079fe20b4a7c0eb8dc441fd0e0bc455bafda97c",
       "integration_sha": "eac746513e4ced539f4462d0dc5762d76e04fc56",
-      "published": false,
+      "published": true,
       "fix": "Optional modelmetadata harbor_git_ref fullSHA verifies/logs actualcheckout; defaultbranch unchanged; permits frozen clientharness source",
-      "evidence": "runs/release-dependency-pins/AUTOFIX.md"
+      "evidence": "runs/release-dependency-pins/AUTOFIX.md",
+      "publication_sha": "8a3c949317fdf43ba11086ad90d11a6555046d54",
+      "model_pin": "e76c762fca5267dfb36e1f900f0a7724ed72e735",
+      "pin_evidence": "runs/harbor-model-pin/RESULT.md; SWE liveCI checkout07:33:57; official ls-remote fullSHA"
     }
   ]
 }

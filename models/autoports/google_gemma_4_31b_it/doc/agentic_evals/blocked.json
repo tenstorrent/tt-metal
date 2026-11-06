@@ -38,10 +38,10 @@
   "live_wait": {
     "run_ids": [
       42173587147,
-      42175367781,
-      42176391791
+      42182632490,
+      42182664252
     ],
-    "status": "SWE smoke device run active; Terminal retry and GPQA nightly image builds active",
+    "status": "SWE correct-autoport devicejobactive; corrected explicit-autoport Terminalsmoke and GPQAnightly dispatched; oldGPQA arm disqualified",
     "monitor": "bringup/artifacts/stage12-monitor-ci.py"
   },
   "release_route_decision_request": {
@@ -83,8 +83,19 @@
     "permission_required": "Exception to stop-after-start/no-score dry run; no generic route alteration assumed"
   },
   "release_dependency_freeze": {
-    "status": "local_repair_verified_awaiting_actual_ci_pin",
-    "reason": "Generic default-preserving pin support passed full hooks on defect branch7079fe2, locally integratedeac7465, not yet published. Await actual tool-run HarborSHA before model metadata pin.",
+    "status": "source_pin_published_live_confirmation_pending",
+    "reason": "Default-preserving generic pin support and exact observedHarborSHA modelmetadata published8a3c949; hosthooks pass. Future normalrung verifies resolved checkout. No transitivepackagefreeze claimed.",
     "evidence": "runs/release-dependency-pins/RESULT.md"
+  },
+  "checker_zero_cost_decision_request": {
+    "status": "pending",
+    "at": "2026-11-06T07:29:12.330796+00:00",
+    "defect": "check_rankings rejects legitimate zero-device-hour host validity repairs",
+    "patch": "runs/stage12-checker-zero-cost/checker-zero-cost.patch",
+    "confirmation": "7 focused regressions passed; installed package unchanged",
+    "choices": [
+      "Keep skills read-only; accept specific checker defect",
+      "Authorize tested zero-cost checker patch"
+    ]
   }
 }

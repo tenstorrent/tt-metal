@@ -1,0 +1,76 @@
+--- a/scripts/check_agentic_serving.py
++++ b/scripts/check_agentic_serving.py
+@@ -184,7 +184,8 @@
+         order = ranking.get("order") if isinstance(ranking, dict) else None
+         if not (isinstance(order, list) and order and all(
+                 isinstance(row, dict) and number(row.get("saving_hours")) and number(row.get("device_hours"))
+-                and row["device_hours"] > 0 for row in order)):
++                and (row["device_hours"] > 0 or
++                     (row["device_hours"] == 0 and row.get("unblocks"))) for row in order)):
+             problems.append((2, f"ranking {index} needs order rows with saving_hours and device_hours"))
+             continue
+         if ranking.get("reason"):
+--- /dev/null
++++ b/tests/test_zero_device_validity.py
+@@ -0,0 +1,61 @@
++import importlib.util
++from pathlib import Path
++import unittest
++
++path = Path(__file__).resolve().parents[1] / "scripts/check_agentic_serving.py"
++spec = importlib.util.spec_from_file_location("checker", path)
++checker = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(checker)
++
++
++def row(hours, unblocks=None, saving=0):
++    return dict(problem="repair", device_hours=hours, saving_hours=saving, unblocks=unblocks)
++
++
++def check(order, **kwargs):
++    problems = []
++    checker.check_rankings([dict(order=order, **kwargs)], problems)
++    return problems
++
++
++class ZeroDeviceValidity(unittest.TestCase):
++    def test_host_validity_before_speed(self):
++        self.assertEqual(check([row(0, "swe_bench_verified"), row(1, saving=2)]), [])
++
++    def test_negative_hours_invalid_even_with_reason(self):
++        for validity in (None, "swe_bench_verified"):
++            self.assertTrue(check([row(-1, validity)], reason="not a waiver"))
++
++    def test_zero_speed_still_invalid(self):
++        self.assertTrue(check([row(0, saving=1)]))
++
++    def test_malformed_rankings_rejected(self):
++        for rankings in (None, {}, [], [None], [{"order": []}], [{"order": [None]}]):
++            problems = []
++            checker.check_rankings(rankings, problems)
++            self.assertTrue(problems)
++        for value in (None, "0", False):
++            self.assertTrue(check([row(value, "swe_bench_verified")]))
++        self.assertTrue(check([dict(problem="missing numeric fields", unblocks="swe")]))
++
++    def test_speed_before_validity_needs_reason(self):
++        order = [row(1, saving=1), row(0, "swe_bench_verified")]
++        self.assertTrue(check(order))
++        self.assertEqual(check(order, reason="documented exception"), [])
++
++    def test_speed_ratio_order_remains_enforced(self):
++        self.assertTrue(check([row(0, "swe"), row(1, saving=1), row(1, saving=2)]))
++
++    def test_missing_estimates_cannot_claim_measured(self):
++        for predicted in (
++            {"saving_hours": {"swe": None}, "device_hours": 0, "basis": "measured"},
++            {"saving_hours": {"swe": 0}, "device_hours": None, "basis": "measured"},
++            {"saving_hours": {"swe": 0}, "device_hours": 0, "basis": "measured from host reasoning"},
++        ):
++            problems = []
++            checker.check_prediction({"predicted": predicted, "confirm": {"method": "host check", "success": "passes"}}, "repair", problems)
++            self.assertTrue(problems)
++
++
++if __name__ == "__main__":
++    unittest.main()

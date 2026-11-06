@@ -38,5 +38,6 @@
   "workflow_status": "completed",
   "workflow_conclusion": "failure",
   "device_job_completed_at": "2026-11-06T06:24:22Z",
-  "actual_hours_basis": "Device CI job including setup, server and clients; evaluation time recorded separately"
+  "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+  "workflow_wall_hours": 1.3375
 }

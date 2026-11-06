@@ -75,6 +75,18 @@
       "reason": "Smallest validated batch at or above planned clients",
       "pool_basis": "Full-contextC2 synthetic admission verified; GPQA smokeobserved2requests",
       "host_limit_basis": "Two clients within stockhostlimit; no taskresource overrides"
+    },
+    "smoke2-terminal-explicit-autoport": {
+      "batch": 8,
+      "planned_clients": 2,
+      "max_num_seqs": 8,
+      "implementation": "gemma4-31b-autoport-v3"
+    },
+    "nightly-gpqa-explicit-autoport": {
+      "batch": 8,
+      "planned_clients": 2,
+      "max_num_seqs": 8,
+      "implementation": "gemma4-31b-autoport-v3"
     }
   },
   "release_limits": {
@@ -229,5 +241,12 @@
     },
     "confirmation": "runs/ci-startup-analysis/confirmation-result.json",
     "ci_startup_saving_seconds": null
+  },
+  "harness_source_pin": {
+    "harbor_git_ref": "e76c762fca5267dfb36e1f900f0a7724ed72e735",
+    "tti_sha": "8a3c949317fdf43ba11086ad90d11a6555046d54",
+    "source_evidence": "SWE CI checkout e76c762f, matched official fullSHA",
+    "live_pin_hook_confirmed": false,
+    "note": "Does not change running immutable jobs; next normalrung confirms pin hook"
   }
 }

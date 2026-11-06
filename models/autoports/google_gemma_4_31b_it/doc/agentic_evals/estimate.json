@@ -16,7 +16,8 @@
         "planned_clients": 2,
         "batch": 8,
         "evaluation_hours": 0.2269221887897907,
-        "projection_basis": "Linear five waves from measured smoke; tail unmeasured, add50percent evaluation margin and observed CI overhead"
+        "projection_basis": "Linear five waves from measured smoke; tail unmeasured, add50percent evaluation margin and observed CI overhead",
+        "run_id": 42182664252
       }
     },
     "swe_bench_verified": {
@@ -29,7 +30,7 @@
     },
     "terminal_bench_2_1": {
       "decision": "stop",
-      "reason": "No scored smoke: first CI attempt failed before model initialization on fabric topology. Infrastructure retry42175367781 dispatched; provisional release exclusion, not measured capacity stop.",
+      "reason": "No valid smoke yet. Original fabric failure then wrong-implementation retry are excluded. Explicit-autoport retry42182632490 preserves frozen2tasks; no measured capacity stop.",
       "functional_at": 0,
       "projected_hours": null,
       "score": null,

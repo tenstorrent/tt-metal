@@ -1,0 +1,36 @@
+{
+  "status": "host_repair_confirmed_pending_retry",
+  "problem": "Missing explicit impl-of-model selected stock default",
+  "unblocks": [
+    "terminal_bench_2_1",
+    "gpqa_diamond"
+  ],
+  "failed_run": 42175367781,
+  "score": null,
+  "valid_trajectories": 0,
+  "repair": "-f impl-of-model=gemma4-31b-autoport-v3",
+  "source_change": "none",
+  "host_confirmation": "host-check.json",
+  "live_route_confirmation": "Coordinator existingSWE live log66/1222/1348 explicitimpl andautoport",
+  "other_runs": {
+    "swe_native_parser": "confirmedcorrect bycoordinator",
+    "gpqa_nightly": {
+      "run_id": 42176391791,
+      "status": "disqualified_before_score",
+      "reason": "Coordinator verified original dispatch command pins TTI a0c8bde and plugin but omits impl-of-model; default selector cannot validate this autoport.",
+      "evidence": "bringup/artifacts/multigoal-runs/v3-20261105T172350Z-stage12/12-12-agentic-evals.resume-1.jsonl",
+      "device_action": "none; hardware ownership unknown; coordinator replaces with explicit implementation"
+    }
+  },
+  "used_device_hours": 0,
+  "problem_status": "retry_pending",
+  "evidence": [
+    "AUTODEBUG.md",
+    "AUTOFIX.md",
+    "bringup/artifacts/stage12-terminal-retry-job.log"
+  ],
+  "notes": [
+    "Wrong adapter failed before tasks; not autoport accuracy failure.",
+    "No old implementation source inspected."
+  ]
+}
