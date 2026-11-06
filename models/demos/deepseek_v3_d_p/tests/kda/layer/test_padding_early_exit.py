@@ -75,7 +75,8 @@ def test_padding_changing_interval_single_capture(mesh_device, sp_axis, tp_axis,
         sp_axis,
         tp_axis,
         0,
-        config.num_heads // tuple(mesh_device.shape)[tp_axis] * config.head_k_dim,
+        config,
+        layer.convolution_page_channels,
     ).float()
     reference_initial = KDAReferenceState(
         recurrent=reconstruct_state_at_sp_rank(initial.recurrent, mesh_device, sp_axis, tp_axis, 0).float(),
@@ -182,6 +183,7 @@ def test_padding_changing_interval_single_capture(mesh_device, sp_axis, tp_axis,
                     sp_axis=sp_axis,
                     tp_axis=tp_axis,
                     config=config,
+                    page_channels=layer.convolution_page_channels,
                     label=f"padding SP{p} start={start} length={length}",
                     # Short SP1 and full-length offset baselines can exceed
                     # the inherited peak-error gate without padding. These

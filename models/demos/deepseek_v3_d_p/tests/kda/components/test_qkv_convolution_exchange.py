@@ -29,9 +29,12 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 )
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
 from models.demos.deepseek_v3_d_p.tt.kda.kda import _HistoryExchange
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
+    decode_tail,
+    encode_tail,
     make_actual_start,
 )
 
@@ -201,7 +204,11 @@ class _Exchange:
         )
         replicate = ttnn.ReplicateTensorToMesh(mesh_device)
         self.history_tt = ttnn.from_torch(
-            self.history, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, mesh_mapper=replicate
+            encode_tail(self.history, KDA_CONVOLUTION_PAGE_CHANNELS),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=replicate,
         )
         self.taps_tt = tuple(
             ttnn.from_torch(
@@ -224,13 +231,17 @@ class _Exchange:
             actual_end=actual_end,
             sequence_parallel_axis=self.sp_axis,
             memory_config=self.output_memory_config,
+            page_channels=KDA_CONVOLUTION_PAGE_CHANNELS,
         )
 
     def to_host(self, outputs: tuple[ttnn.Tensor, ...]) -> list[list[torch.Tensor]]:
-        """Per device, in mesh order: the concatenated Q, K and V, and the carry."""
+        """Per device, in mesh order: the concatenated Q, K and V, and the carry as ``[1, K-1, W]`` rows."""
         q, k, v, carry = (ttnn.get_device_tensors(output) for output in outputs)
         return [
-            [torch.cat([ttnn.to_torch(part) for part in parts], dim=-1)[0], ttnn.to_torch(final)]
+            [
+                torch.cat([ttnn.to_torch(part) for part in parts], dim=-1)[0],
+                decode_tail(ttnn.to_torch(final), KDA_CONVOLUTION_PAGE_CHANNELS),
+            ]
             for *parts, final in zip(q, k, v, carry, strict=True)
         ]
 

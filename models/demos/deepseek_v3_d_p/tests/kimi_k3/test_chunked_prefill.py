@@ -49,14 +49,15 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import deallocate_state
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_natural, unrotate_cache_layer
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import decode_tail
 
 # A placement's production chunk is 640 tokens per chip: 5120 on 8x4 (SP=8), 2560 on 4x4 (SP=4).
 CHUNK_TOKENS_PER_CHIP = 640
@@ -151,9 +152,6 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, sp_axis, 
         eps=KimiK3Config.RMS_NORM_EPS,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        # Same pools the KDA layers cycle, as in the depth ladder: AttnRes's private fallback set is only safe
-        # while nothing else has a collective in flight on this axis.
-        tt_ccl=get_tt_ccl(mesh_device),
         weights=load_attn_res_weights(
             mesh_device,
             load_attn_res_state_dict(checkpoint, num_layers, root),
@@ -286,11 +284,12 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, sp_axis, 
             columns = tuple(mesh_device.shape)[1]
             tp_size = tuple(mesh_device.shape)[tp_axis]
             history = KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE - 1
+            page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
             per_chip = KimiK3Config.KDA_NUM_HEADS * KimiK3Config.KDA_HEAD_DIM // tp_size
             tp_shards = []
             for t in range(tp_size):
                 row, column = (0, t) if sp_axis == 0 else (t, 0)
-                tp_shards.append(shards[row * columns + column].reshape(history, -1))
+                tp_shards.append(decode_tail(shards[row * columns + column], page_channels).reshape(history, -1))
             got_conv = torch.cat(
                 [
                     torch.cat([sh[:, stream * per_chip : (stream + 1) * per_chip] for sh in tp_shards], dim=-1)

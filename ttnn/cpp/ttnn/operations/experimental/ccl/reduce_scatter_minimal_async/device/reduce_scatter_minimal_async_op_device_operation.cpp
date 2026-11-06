@@ -34,16 +34,24 @@ bool uses_contiguous_staging(
         ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config));
 }
 
+template <typename ProgramFactory>
+using DescriptorAdapter = ttnn::device_operation::MeshDeviceOperationAdapter<
+    ReduceScatterMinimalAsyncDeviceOperation>::DescriptorMeshWorkloadAdapter<ProgramFactory>;
+
+// The cache-hit re-application of the caller-owned semaphores depends on the adapter reaching these hooks.
+static_assert(DescriptorAdapter<RingReduceScatterProgramFactory>::has_override_runtime_arguments());
+static_assert(DescriptorAdapter<LineReduceScatterProgramFactory>::has_override_runtime_arguments());
+
 }  // unnamed namespace
 
 ReduceScatterMinimalAsyncDeviceOperation::program_factory_t
 ReduceScatterMinimalAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-        return RingReduceScatterMeshWorkloadFactory{};
+        return RingReduceScatterProgramFactory{};
     }
     TT_FATAL(operation_attributes.topology == ttnn::ccl::Topology::Linear, "Topology must be Ring or Linear");
-    return LineReduceScatterMeshWorkloadFactory{};
+    return LineReduceScatterProgramFactory{};
 }
 
 void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_hit(

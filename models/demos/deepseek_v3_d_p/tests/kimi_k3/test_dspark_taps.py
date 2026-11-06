@@ -38,7 +38,6 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 
 # The same taps test_dflash_golden_pcc feeds the drafter.
@@ -74,7 +73,6 @@ def test_dspark_taps_match_golden(mesh_device, device_params, sp_axis, tp_axis, 
         eps=KimiK3Config.RMS_NORM_EPS,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        tt_ccl=get_tt_ccl(mesh_device),
         weights=load_attn_res_weights(
             mesh_device,
             load_attn_res_state_dict(checkpoint, num_layers, root),

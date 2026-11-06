@@ -439,8 +439,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             ag.mesh_rows,
             ag.mesh_cols,
             ag.ring_size);
-        TT_FATAL(
-            ag.route_plan_hash.has_value(), "Full-mesh RingJointSDPA requires a resolved direct-neighbor route hash");
         const auto live_shape = input_tensor_q.device()->shape();
         TT_FATAL(
             live_shape.dims() == 2 && live_shape[0] == ag.mesh_rows && live_shape[1] == ag.mesh_cols,
@@ -1405,11 +1403,12 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const auto& mesh_shape = mesh_device.shape();
     std::size_t num_devices =
         full_mesh ? mesh_shape.mesh_size() : (*cluster_axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols());
+    // A full-mesh route (snake_orientation, closure, route_plan_hash) is filled in by the program factory on a
+    // program-cache miss; here they stay at their defaults.
     ttnn::ccl::snake_ring::Orientation snake_orientation = ttnn::ccl::snake_ring::Orientation::Row;
     uint32_t mesh_rows = 0;
     uint32_t mesh_cols = 0;
     std::optional<uint64_t> route_plan_hash;
-    // The caller asks for a full-mesh gather; the proved route decides whether it closes.
     ttnn::ccl::Topology resolved_topology = topology;
     uint32_t resolved_kv_stripe_split = 1;
     // Split KV numbers its KV stripes SP-major: row-major over the mesh with Q's sequence on axis 0,
@@ -1470,23 +1469,17 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
             tt::tt_fabric::is_2d_fabric_config(fabric_config),
             "ring_mla cluster_axis=None requires a 2D fabric config (FABRIC_2D or FABRIC_2D_TORUS_X/Y/XY), got {}",
             fabric_config);
-        std::array<tt::tt_fabric::Topology, 2> axis_topology{
-            ttnn::ccl::get_axis_topology(input_tensor_q, fabric_config, 0),
-            ttnn::ccl::get_axis_topology(input_tensor_q, fabric_config, 1)};
-        const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
-            input_tensor_q, std::nullopt, num_links, axis_topology, true, "ring_mla", /*allow_open_path=*/true);
-        TT_FATAL(route.has_value(), "ring_mla could not resolve a direct-neighbor full-mesh route");
         TT_FATAL(
-            route->plan.ring_size <= std::numeric_limits<uint32_t>::digits,
-            "ring_mla supports at most {} full-mesh ranks, got {}",
+            mesh_shape.dims() == 2 && mesh_shape.mesh_size() <= std::numeric_limits<uint32_t>::digits,
+            "ring_mla supports a 2D mesh of at most {} full-mesh ranks, got {}",
             std::numeric_limits<uint32_t>::digits,
-            route->plan.ring_size);
-        snake_orientation = route->plan.orientation;
-        mesh_rows = route->plan.mesh_rows;
-        mesh_cols = route->plan.mesh_cols;
-        route_plan_hash = route->plan.route_plan_hash;
-        num_devices = route->plan.ring_size;
-        resolved_topology = route->topology;
+            mesh_shape);
+        // The route is proved on a program-cache miss (prove_full_mesh_route in the program factory), not here,
+        // where it would walk the fabric control plane on every call. It decides closure (Ring or Linear); the
+        // caller's topology only asked for a full-mesh gather, so it is not kept and Ring and Linear share a program.
+        resolved_topology = ttnn::ccl::Topology::Ring;
+        mesh_rows = mesh_shape[0];
+        mesh_cols = mesh_shape[1];
     } else {
         TT_FATAL(
             *cluster_axis < mesh_shape.dims(),
