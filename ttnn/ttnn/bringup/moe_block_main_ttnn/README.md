@@ -60,7 +60,13 @@ each default off (= the source's program):
 
 ## Measured
 
-not measured here yet (DeepSeek-V4.1 galaxy_8x4: deepseek_v41_flash_d_p, DS41_MOE_BLOCK_SRC=main).
+DeepSeek-V4.1-Flash, Galaxy 8x4 (FABRIC_2D_TORUS_XY), chunk 5120 at start 51200, P.34 defaults, cap 11 x 10,
+weights_nk, bfp4_mse experts (2026-11-06, /scratch/dnijemcevic/rebase/moe_main/check vs fasttests/check, the carried
+block): chunk wall 196.1 ms vs 180.6; device 177.3 vs 165.4 ms (experts section 106.3 vs 94.9: routed_experts_combine
+63.4, sparse_dispatch_2d 25.0, fused_head 21.9 ms a chunk, slowest chip); host: the MoE layer's call 49.7 vs 68.0 ms
+a chunk (cProfile), 8 launches a layer (fused_head ~350 us, routed_experts_combine ~490 us, sparse_dispatch_2d ~110 us
+each, profiled run); every quick-ladder metric inside the P.34 gate's limits (mean err_layer 0.164 vs 0.166). Serving
+runner smoke (tt-d-gen engine): pass.
 
 ## Limits
 
