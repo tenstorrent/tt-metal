@@ -231,7 +231,7 @@ class TTNNMaxPool:
                 x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x = ttnn.reshape(x, [batch_size, height, width, channels])
             if x.layout == ttnn.TILE_LAYOUT:
-                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                x = ttnn.untilize(x, use_multicore=True)
 
             pool = self._get_pool(batch_size, height, width, channels)
             x = pool(x)
@@ -278,7 +278,10 @@ def to_nhwc(
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         # Convert TILE to ROW_MAJOR - required for to_torch() on tensors with small last dim
         if x.layout == ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            if x.device().arch() == Arch.WORMHOLE_B0:
+                x = ttnn.untilize(x, use_multicore=True)
+            else:
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     return x
 
 
