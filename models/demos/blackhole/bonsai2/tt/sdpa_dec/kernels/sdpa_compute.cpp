@@ -41,7 +41,6 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_s);
     cb_wait_front(cb_info, 1);
     const uint32_t nr = read_tile_value(cb_info, 0, 0);
-    cb_wait_front(cb_one, 3);
     if (nr != 0) {
         cb_wait_front(cb_q, Dt);
         cb_wait_front(cb_k, nr * Dt);
@@ -54,6 +53,7 @@ void kernel_main() {
             }
         }
         put(cb_s, nr);
+        cb_wait_front(cb_one, 3);  // (the writer's constant tiles, made while S ran)
         cb_wait_front(cb_tok, 1);  // masked
         cb_wait_front(cb_s, nr);
         tile_regs_acquire();
@@ -99,6 +99,7 @@ void kernel_main() {
         put(cb_o, 1);
     }
     if (c < NC) {
+        cb_wait_front(cb_one, 3);
         cb_wait_front(cb_stk, 2 * NST);
         tile_regs_acquire();
         reconfig_data_format<SrcOrder::Reverse>(cb_one, cb_stk);

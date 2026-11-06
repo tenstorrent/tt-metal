@@ -47,30 +47,6 @@ void kernel_main() {
     const uint32_t stk = get_write_ptr(cb_stk);
     const uint32_t zero = get_write_ptr(cb_zero);
     {
-        volatile tt_l1_ptr uint32_t* z = (volatile tt_l1_ptr uint32_t*)zero;
-        for (uint32_t i = 0; i < 2048 / 4; ++i) {
-            z[i] = 0;
-        }
-    }
-    if (comb) {
-        // zero the stack rows no partial lands on (the row-selection matmul reads them)
-        const uint32_t nst = (NG + 4) / 5;
-        for (uint32_t t = 0; t < 2 * nst; ++t) {
-            for (uint32_t R = 0; R < 32; ++R) {
-                const uint32_t i = (t % nst) * 5 + R / 6;
-                if (R < 30 && i < NG) {
-                    continue;
-                }
-                const uint32_t off = R < 16 ? R * 32 : 1024 + (R - 16) * 32;
-                volatile tt_l1_ptr uint32_t* p = (volatile tt_l1_ptr uint32_t*)(stk + t * TB + off);
-                for (uint32_t w = 0; w < 8; ++w) {
-                    p[w] = 0;
-                    p[128 + w] = 0;
-                }
-            }
-        }
-    }
-    {
         // the constant bf16 tiles: ones, the reduce scaler (row 0 of each face), the row selection Sel[r, 6k + r]
         constexpr uint32_t cb_one = 3;
         cb_reserve_back(cb_one, 3);
@@ -162,6 +138,31 @@ void kernel_main() {
     }
     cb_push_back(cb_M, 1);
 
+    // (while the compute takes P V) the zero rows for empty partials and padding, and the unused stack rows
+    {
+        volatile tt_l1_ptr uint32_t* z = (volatile tt_l1_ptr uint32_t*)zero;
+        for (uint32_t i = 0; i < 2048 / 4; ++i) {
+            z[i] = 0;
+        }
+    }
+    if (comb) {
+        // zero the stack rows no partial lands on (the row-selection matmul reads them)
+        const uint32_t nst = (NG + 4) / 5;
+        for (uint32_t t = 0; t < 2 * nst; ++t) {
+            for (uint32_t R = 0; R < 32; ++R) {
+                const uint32_t i = (t % nst) * 5 + R / 6;
+                if (R < 30 && i < NG) {
+                    continue;
+                }
+                const uint32_t off = R < 16 ? R * 32 : 1024 + (R - 16) * 32;
+                volatile tt_l1_ptr uint32_t* p = (volatile tt_l1_ptr uint32_t*)(stk + t * TB + off);
+                for (uint32_t w = 0; w < 8; ++w) {
+                    p[w] = 0;
+                    p[128 + w] = 0;
+                }
+            }
+        }
+    }
     // 3. partials to the combiners
     uint32_t po = zero, pl = zero;
     if (nr != 0) {
