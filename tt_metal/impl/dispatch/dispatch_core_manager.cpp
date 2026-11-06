@@ -22,7 +22,7 @@
 #include <internal/service/service_core_manager.hpp>
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {

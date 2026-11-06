@@ -69,7 +69,7 @@ struct SourceInjectCandidate {
 struct SourceInjectProgram {
     ChipId physical_id;
     std::shared_ptr<tt_metal::distributed::MeshDevice> device;
-    tt_metal::Program program;
+    tt_metal::Program program = tt_metal::CreateProgram(*device);
     bool is_target;
 };
 
@@ -144,16 +144,23 @@ bool candidate_exercises_z_fanout(const SourceInjectCandidate& candidate) {
     return candidate_contains_z(candidate) && candidate.root_outputs.size() > 1;
 }
 
-bool outputs_match_branch(const std::vector<RoutingDirection>& root_outputs, RoutingDirection primary_output) {
+// A branch's root outputs are its own cardinal and, when that cardinal lies on the mesh's express
+// axis, possibly the chord Z. `express_axis` is 0 when the chords run along N/S, 1 when they run
+// along E/W, and nullopt on a non-express mesh, where Z is never a legal root output.
+bool outputs_match_branch(
+    const std::vector<RoutingDirection>& root_outputs,
+    RoutingDirection primary_output,
+    std::optional<int> express_axis) {
     if (root_outputs.empty()) {
         return false;
     }
+    const bool primary_on_y = primary_output == RoutingDirection::N || primary_output == RoutingDirection::S;
+    const bool primary_on_express_axis = express_axis.has_value() && ((*express_axis == 0) == primary_on_y);
     return std::all_of(root_outputs.begin(), root_outputs.end(), [&](RoutingDirection output) {
         if (output == primary_output) {
             return true;
         }
-        return output == RoutingDirection::Z &&
-               (primary_output == RoutingDirection::N || primary_output == RoutingDirection::S);
+        return output == RoutingDirection::Z && primary_on_express_axis;
     });
 }
 
@@ -168,7 +175,10 @@ const char* branch_name(RoutingDirection primary_output) {
 }
 
 bool direction_is_connectable(
-    const ControlPlane& control_plane, const FabricNodeId& source, RoutingDirection direction) {
+    const tt_metal::distributed::MeshDevice& mesh_device,
+    const ControlPlane& control_plane,
+    const FabricNodeId& source,
+    RoutingDirection direction) {
     const auto neighbors = control_plane.get_intra_chip_neighbors(source, direction);
     if (neighbors.empty()) {
         return false;
@@ -177,7 +187,7 @@ bool direction_is_connectable(
     const FabricNodeId first_hop(source.mesh_id, neighbors.front());
     const auto forwarding_direction = control_plane.get_forwarding_direction(source, first_hop);
     return forwarding_direction.has_value() && forwarding_direction.value() == direction &&
-           !get_forwarding_link_indices(source, first_hop).empty();
+           !get_forwarding_link_indices(mesh_device, source, first_hop).empty();
 }
 
 std::optional<std::set<ChipId>> target_devices(
@@ -296,6 +306,13 @@ std::optional<SourceInjectCandidate> select_candidate(BaseFabricFixture* fixture
         TT_FATAL(y_topology != nullptr && x_topology != nullptr, "Missing 2D axis topology for mesh {}", mesh_id);
 
         const bool express = control_plane.express_routing_enabled(mesh_id);
+        // Which axis the chords run along decides which cardinal branches may also launch Z.
+        std::optional<int> express_axis;
+        if (express) {
+            const auto* express_rings = control_plane.ring_for_direction(mesh_id, RoutingDirection::Z);
+            TT_FATAL(express_rings != nullptr, "Mesh {} reports express routing but has no express rings", mesh_id);
+            express_axis = express_rings->axis_dim;
+        }
         if (!express && best.has_value() && candidate_contains_z(best.value())) {
             return best;
         }
@@ -336,15 +353,17 @@ std::optional<SourceInjectCandidate> select_candidate(BaseFabricFixture* fixture
                             mesh_id,
                             source_chip_id,
                             failure);
-                        // A legal branch may leave on its cardinal output and, for N/S under express
-                        // routing, Z. Reject wrapped/combined candidates that change the logical branch.
-                        if (!outputs_match_branch(root_outputs, branch.primary_output)) {
+                        // A legal branch may leave on its cardinal output and, when that cardinal lies on
+                        // the express axis (N/S on a Y-express mesh, E/W on an X-express mesh), Z. Reject
+                        // wrapped/combined candidates that change the logical branch.
+                        if (!outputs_match_branch(root_outputs, branch.primary_output, express_axis)) {
                             return false;
                         }
 
                         const bool all_outputs_connectable =
                             std::all_of(root_outputs.begin(), root_outputs.end(), [&](RoutingDirection output) {
-                                return direction_is_connectable(control_plane, source, output);
+                                return direction_is_connectable(
+                                    *fixture->get_devices().front(), control_plane, source, output);
                             });
                         if (!all_outputs_connectable) {
                             return false;
@@ -393,7 +412,8 @@ std::optional<SourceInjectCandidate> select_candidate(BaseFabricFixture* fixture
     return best;
 }
 
-std::vector<eth_chan_directions> attempted_directions(const SourceInjectCandidate& candidate) {
+std::vector<eth_chan_directions> attempted_directions(
+    const tt_metal::distributed::MeshDevice& mesh_device, const SourceInjectCandidate& candidate) {
     auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
     const uint32_t max_connections =
         candidate.express && tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE ? 5 : 4;
@@ -415,7 +435,7 @@ std::vector<eth_chan_directions> attempted_directions(const SourceInjectCandidat
             break;
         }
         if ((!candidate.express && direction == RoutingDirection::Z) ||
-            !direction_is_connectable(control_plane, candidate.source, direction)) {
+            !direction_is_connectable(mesh_device, control_plane, candidate.source, direction)) {
             continue;
         }
         append_if_absent(direction);
@@ -497,7 +517,7 @@ void run_source_inject_test(BaseFabricFixture* fixture, SourceInjectCoverage cov
         *source_device, sender_logical_core, worker_mem_map.test_results_address, zero_results, CoreType::WORKER);
     tt_metal::MetalContext::instance().get_cluster().l1_barrier(candidate->source_physical_id);
 
-    const auto connection_directions = attempted_directions(candidate.value());
+    const auto connection_directions = attempted_directions(*source_device, candidate.value());
     ASSERT_GE(connection_directions.size(), candidate->root_outputs.size());
     for (const RoutingDirection output : candidate->root_outputs) {
         const auto eth_direction = control_plane.routing_direction_to_eth_direction(output);
@@ -532,7 +552,7 @@ void run_source_inject_test(BaseFabricFixture* fixture, SourceInjectCoverage cov
             QUIESCENCE_TIME_US;
         ASSERT_LE(quiescence_cycles, std::numeric_limits<uint32_t>::max());
 
-        auto program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateProgram(*source_device);
         const auto receiver_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/"

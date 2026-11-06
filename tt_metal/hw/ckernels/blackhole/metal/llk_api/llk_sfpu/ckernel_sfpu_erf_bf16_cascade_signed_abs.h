@@ -9,14 +9,6 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 
-// Shared S60 runtime for the structural family
-//
-//     y = copysign(min(P(abs(x)), clamp_max), x).
-//
-// The generated Config owns the polynomial degree, every fitted coefficient,
-// the clamp, and the complete typed class contract.  This runtime owns only
-// the family algorithm.  It intentionally has no operation-name dispatch.
-
 namespace ckernel::sfpu::bf16::erf {
 
 constexpr float signed_abs_fp32_from_bits(std::uint32_t bits) { return __builtin_bit_cast(float, bits); }
@@ -96,16 +88,6 @@ sfpi_inline void signed_abs_horner_pair(
 template <typename Config, std::uint32_t Index, bool Negated = false>
 sfpi_inline void signed_abs_horner_pair(sfpi::vFloat& r0, sfpi::vFloat& r1, sfpi::vFloat a0, sfpi::vFloat a1) {
     signed_abs_horner_pair<Config, Index, Negated, false>(r0, r1, a0, a1, sfpi::vFloat(0.0f));
-}
-
-// The NaN form returns the saturating result for every non-NaN. A NaN input
-// becomes the SFPU's +NaN: narrowing can turn a low-payload NaN into Inf, and
-// the trailing multiply-add regenerates +NaN from that. The payload is not torch's 0xffff.
-template <typename Config>
-inline void init_signed_abs_nan() {
-    // Horner runs on -P. BH SFPMAD returns +NaN for a NaN operand, which survives
-    // the max that bounds -P below; the min that bounds P would drop it.
-    sfpi::vConstFloatPrgm0 = signed_abs_negated(Config::kCoefficientBits[Config::kDegree]);
 }
 
 template <typename Config>
