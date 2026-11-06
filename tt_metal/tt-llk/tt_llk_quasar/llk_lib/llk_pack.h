@@ -13,6 +13,13 @@
 
 using namespace ckernel;
 
+// Per-launch MOP outer loop count override: outer[5:0] goes in bits [14:9] of zmask_lo8_or_loop_count (above the
+// 9-bit inner count), outer[9:6] in loop_count.
+constexpr std::uint32_t PACK_MOP_MAX_OUTER_LOOP      = 1023;
+constexpr std::uint32_t PACK_MOP_OUTER_LOOP_LO_BITS  = 6;
+constexpr std::uint32_t PACK_MOP_OUTER_LOOP_LO_MASK  = 0x3F;
+constexpr std::uint32_t PACK_MOP_OUTER_LOOP_LO_SHIFT = 9;
+
 /**
  * @brief Builds the MOP for packing contiguous tiles from the math destination register via Packer 0.
  *
@@ -68,10 +75,13 @@ inline void _llk_pack_init_(const std::uint8_t buf_desc_id, const TensorShape& t
  * @param start_math_dest_tile_idx: The tile index into the math destination register that the packer starts packing from.
  * @param start_l1_tile_idx: The tile index into the L1 output buffer that the packer starts packing into.
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ * @param num_tiles: Per-launch tile count override (1..1023), or 0 to use the count programmed by init.
  * @note Call @ref _llk_pack_init_ with matching template args before this function.
  */
-inline void _llk_pack_(const std::uint32_t start_math_dest_tile_idx, const std::uint32_t start_l1_tile_idx, const TensorShape& tensor_shape)
+inline void _llk_pack_(
+    const std::uint32_t start_math_dest_tile_idx, const std::uint32_t start_l1_tile_idx, const TensorShape& tensor_shape, const std::uint32_t num_tiles = 0)
 {
+    LLK_ASSERT(num_tiles <= PACK_MOP_MAX_OUTER_LOOP, "Pack tile count must fit the 10-bit MOP outer loop count");
     //(TODO) RT: for the best performance, setting counters should be placed in a REPLAY buffer
     // in the mop_config, but for back compatibility with APIs, the counter functions must
     // be programmable with users offset idx
@@ -93,6 +103,12 @@ inline void _llk_pack_(const std::uint32_t start_math_dest_tile_idx, const std::
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, math_dest_tile_idx);
     TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, l1_tile_idx);
 
-    // Runs MOP
-    ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+    if (num_tiles == 0)
+    {
+        ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+    }
+    else
+    {
+        TT_MOP(1 /*mop_type*/, 0 /*done*/, num_tiles >> PACK_MOP_OUTER_LOOP_LO_BITS, (num_tiles & PACK_MOP_OUTER_LOOP_LO_MASK) << PACK_MOP_OUTER_LOOP_LO_SHIFT);
+    }
 }
