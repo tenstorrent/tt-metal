@@ -959,15 +959,56 @@ def test_only_the_spec_class_declares_prefill_checkpoints_and_only_in_mode_align
 
 
 def test_the_block_state_allocates_both_trace_sets_in_warmup(monkeypatch):
-    """_prepare_block_traces allocates the write trace's and the copy traces' control tensors once (the eager warmup
-    calls it before any trace exists)."""
+    """_prepare_block_traces allocates the write traces' (the scratch's and one per in-replay snapshot slot) and the
+    copy traces' control tensors once (the eager warmup calls it before any trace exists)."""
+    from models.demos.blackhole.qwen36.tt.tp_common import GDN_SNAP_SLOTS
+
     made = []
-    monkeypatch.setattr(sbs, "_WriteTrace", lambda st: made.append("write") or "W")
+    monkeypatch.setattr(sbs, "_WriteTrace", lambda st, snap=None: made.append(("write", snap)) or ("W", snap))
     monkeypatch.setattr(sbs, "_CopyTraces", lambda st: made.append("copy") or "C")
     st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
+    st.layers = [(0, SimpleNamespace(_snap_rec=object()), 0), (4, SimpleNamespace(_snap_rec=object()), 1)]
     st._prepare_block_traces()
     st._prepare_block_traces()
-    assert made == ["write", "copy"] and (st._wt_pending, st._ct_pending) == ("W", "C")
+    snaps = list(range(GDN_SNAP_SLOTS))
+    assert made == [("write", None)] + [("write", k) for k in snaps] + ["copy"]
+    assert (st._wt_pending, st._ct_pending) == (("W", None), "C")
+    assert st._swt_pending == {k: ("W", k) for k in snaps}
+
+
+def test_no_snapshot_write_traces_without_snapshot_buffers(monkeypatch):
+    # Without QWEN36_PREFILL_INTRACE_SNAP's buffers no checkpoint comes from a snapshot, so no trace is allocated.
+    monkeypatch.setattr(sbs, "_WriteTrace", lambda st, snap=None: ("W", snap))
+    monkeypatch.setattr(sbs, "_CopyTraces", lambda st: "C")
+    st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
+    st.layers = [(0, SimpleNamespace(_snap_rec=None), 0)]
+    st._prepare_block_traces()
+    assert getattr(st, "_swt_pending", None) is None
+
+
+def test_a_checkpoint_from_a_snapshot_replays_that_slots_write_trace(monkeypatch):
+    """write_checkpoint_snapshot replays the captured trace of snapshot slot k (no eager op runs) and forgets the
+    target blocks, as the eager write does; without a trace for k it runs the eager write."""
+    replayed, forgotten, eager = [], [], []
+
+    class Trace:
+        def __init__(self, ok):
+            self.ok = ok
+
+        def replay(self, blocks):
+            replayed.append(list(blocks))
+            return self.ok
+
+    st = sbs.SpecGdnBlockState.__new__(sbs.SpecGdnBlockState)
+    st.layers = []
+    st.book = SimpleNamespace(forget_block=forgotten.append)
+    st._snap_write_traces = {2: Trace(True), 3: Trace(False)}
+    monkeypatch.setattr(sbs, "_PageTables", lambda s: eager.append("eager") or contextlib.nullcontext())
+    st.write_checkpoint_snapshot([5, 6, 7], 2)
+    assert (replayed, forgotten, eager) == ([[5, 6, 7]], [5, 6, 7], [])
+    st.write_checkpoint_snapshot([8, 9, 10], 3)  # the trace does not apply: the eager write runs
+    st.write_checkpoint_snapshot([8, 9, 10], 1)  # no trace for slot 1
+    assert eager == ["eager", "eager"]
 
 
 @pytest.mark.parametrize("mode", ["none", "align"])

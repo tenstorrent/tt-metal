@@ -998,6 +998,8 @@ class SpecGdnBlockState:
         would leave in the scratch (TPGatedDeltaNet.copy_snapshot_to takes the same slices for the prefix cache)."""
         import ttnn
 
+        if self._replay_write(blocks, "checkpoint snapshot writes", k):
+            return
         dram = ttnn.DRAM_MEMORY_CONFIG
         with self._timed("checkpoint snapshot writes", len(self.layers)), _PageTables(self) as pts:
             for _, dn, g in self.layers:
@@ -1025,11 +1027,14 @@ class SpecGdnBlockState:
                 self._write_carry(dn, b, rm, pts)
                 ttnn.deallocate(rm)
 
-    def _replay_write(self, blocks, kind):
-        """Write the bound prefill scratch into ``blocks`` ([G] ids) by the captured write trace (_WriteTrace); False
-        when there is none (before capture_write_trace, or its capture failed) or it does not apply (the caller writes
-        eagerly)."""
-        wt = getattr(self, "_write_trace", None)
+    def _replay_write(self, blocks, kind, snap=None):
+        """Write the bound prefill scratch (``snap`` None) or in-replay snapshot ``snap`` into ``blocks`` ([G] ids) by
+        its captured write trace (_WriteTrace); False when there is none (before capture_write_trace, or its capture
+        failed) or it does not apply (the caller writes eagerly)."""
+        traces = (
+            getattr(self, "_snap_write_traces", {}) if snap is not None else {None: getattr(self, "_write_trace", None)}
+        )
+        wt = traces.get(snap)
         if wt is None:
             return False
         with self._timed(f"{kind} (trace)", len(self.layers)):
@@ -1046,9 +1051,16 @@ class SpecGdnBlockState:
         captured last (capture_write_trace, capture_copy_traces)."""
         from loguru import logger
 
+        from models.demos.blackhole.qwen36.tt.tp_common import GDN_SNAP_SLOTS
+
         try:
             if getattr(self, "_wt_pending", None) is None:
                 self._wt_pending = _WriteTrace(self)
+            # one per in-replay snapshot slot: a prefill checkpoint inside a replay is written from its slot
+            if getattr(self, "_swt_pending", None) is None and all(
+                getattr(dn, "_snap_rec", None) is not None for _, dn, _ in self.layers
+            ):
+                self._swt_pending = {k: _WriteTrace(self, snap=k) for k in range(GDN_SNAP_SLOTS)}
             if getattr(self, "_ct_pending", None) is None:
                 self._ct_pending = _CopyTraces(self)
         except Exception as e:  # noqa: BLE001
@@ -1073,6 +1085,16 @@ class SpecGdnBlockState:
             logger.error(f"[mamba_spec] prefill block write trace capture failed ({e!r}): eager writes")
         finally:
             model._unbind_gdn_prefill_scratch(prev)
+        done = {}
+        try:
+            for k, swt in (getattr(self, "_swt_pending", None) or {}).items():
+                swt.capture()
+                done[k] = swt
+            if done:
+                logger.info(f"[mamba_spec] checkpoint snapshot write traces captured ({len(done)} snapshot slots)")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"[mamba_spec] checkpoint snapshot write trace capture failed ({e!r}): eager writes")
+        self._snap_write_traces = done
 
     def capture_copy_traces(self):
         """Capture the block copy, page copy, conv write and restore traces (_CopyTraces, its controls allocated in
@@ -1362,15 +1384,16 @@ class SpecGdnBlockState:
 
 
 class _WriteTrace:
-    """The captured write of the bound prefill scratch into one block per GDN group (SpecGdnBlockState.write_prefill),
-    through persistent page tables: per group one int32 table per recurrent pool and one for the conv history,
-    restaged per write. Valid while the scratch keeps the addresses the capture baked and the target blocks keep their
-    conv history in the captured views."""
+    """The captured write of the bound prefill scratch (``snap`` None, SpecGdnBlockState.write_prefill) or of in-replay
+    snapshot slot ``snap`` (write_checkpoint_snapshot) into one block per GDN group, through persistent page tables:
+    per group one int32 table per recurrent pool and one for the conv history, restaged per write. Valid while the
+    source keeps the addresses the capture baked and the target blocks keep their conv history in the captured
+    views."""
 
-    def __init__(self, state):
+    def __init__(self, state, snap=None):
         import ttnn
 
-        self.state, self.tid = state, None
+        self.state, self.tid, self.snap = state, None, snap
         rep = ttnn.ReplicateTensorToMesh(state.mesh)
         self.tables = [self._host(g, 0) for g in range(state.G)]
         self.dev = [
@@ -1404,16 +1427,27 @@ class _WriteTrace:
         return self.state.layout.conv_page(b) < self.state.layout.conv_pages_total
 
     def fingerprint(self):
+        if self.snap is not None:
+            return [
+                (dn._snap_rec.buffer_address(), dn._snap_conv_rm.buffer_address()) for _, dn, _ in self.state.layers
+            ]
         return [(dn.rec_state.buffer_address(), dn.conv_carry.buffer_address()) for _, dn, _ in self.state.layers]
 
     def body(self):
         """The write of every GDN layer through the device tables (the capture and the warm run)."""
         import ttnn
 
-        st, mc = self.state, ttnn.DRAM_MEMORY_CONFIG
+        st, mc, k = self.state, ttnn.DRAM_MEMORY_CONFIG, self.snap
         for _, dn, g in st.layers:
-            st._write_rec(dn, None, dn.rec_state, None, tables=self.dev[g])
-            rm = ttnn.to_layout(dn.conv_carry, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
+            if k is None:
+                st._write_rec(dn, None, dn.rec_state, None, tables=self.dev[g])
+                rm = ttnn.to_layout(dn.conv_carry, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
+            else:
+                rec = ttnn.slice(dn._snap_rec, [k, 0, 0, 0], [k + 1, dn.Nv, dn.Dk, dn.Dv], memory_config=mc)
+                st._write_rec(dn, None, rec, None, tables=self.dev[g])
+                ttnn.deallocate(rec)
+                n = dn.K - 1
+                rm = ttnn.slice(dn._snap_conv_rm, [0, n * k, 0], [1, n * k + n, dn.qkv_dim_tp], memory_config=mc)
             st._write_carry(dn, 0, rm, None, self.dev[g]["conv"])
             ttnn.deallocate(rm)
 
