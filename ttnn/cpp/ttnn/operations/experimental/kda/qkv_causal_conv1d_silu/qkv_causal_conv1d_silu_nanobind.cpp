@@ -38,10 +38,14 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 channels from ``input_column_offset`` are the convolution input,
                 read in place (such as a fused projection). A ROW_MAJOR input is
                 tilized first.
-            history (ttnn.Tensor): Interleaved ROW_MAJOR BFLOAT16 history.
-                Shape ``[1,3,Q+K+V]``. SP calls supply the predecessor's three-row
-                history separately. The kernel derives when each history is needed
-                from actual_start and its mesh coordinate.
+            history (ttnn.Tensor): Interleaved ROW_MAJOR BFLOAT16 three-row history
+                in the layout ``page_channels`` declares: token-paged
+                ``[1, 3, Q+K+V]`` (page ``r`` is row ``r``) or channel-paged
+                ``[1, (Q+K+V)/P, 3*P]`` (page ``c`` holds the three rows of channels
+                ``[Pc, Pc+P)``, row ``r`` at element ``Pr``). SP calls supply the
+                predecessor's three-row history separately. The kernel derives
+                when each history is needed from actual_start and its mesh
+                coordinate.
             tap0, tap1, tap2, tap3 (ttnn.Tensor): Per-channel convolution taps.
                 Each must have logical volume ``Q+K+V`` and be an interleaved
                 TILE-layout BFLOAT16 device tensor.
@@ -58,7 +62,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
                 sequence. Native mesh coordinates supply each device's rank.
             predecessor_carry (ttnn.Tensor): Three-row history from the
-                preceding rank, matching history. For local execution, alias history.
+                preceding rank, in history's layout and shape. For local execution, alias history.
             program_config (QkvCausalConv1dSiluProgramConfig): Required program tuning;
                 ``channel_chunk_size`` is expressed in logical channels.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
@@ -67,6 +71,9 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 Compute-kernel configuration.
             input_column_offset (int, optional): First convolution channel of
                 ``input``; tile aligned. Defaults to 0.
+            page_channels (int, optional): ``history``'s layout. None (default)
+                is token-paged; ``P`` is channel-paged with ``P`` channels per
+                page, a positive multiple of 32 dividing ``Q+K+V``.
             segment_length (int, optional): if > 0, every token t with t % segment_length == 0 (t > 0) starts a new sequence with zero history (rows of independent sequences folded into time); a multiple of 32 dividing T
 
         Returns:
@@ -97,6 +104,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("input_column_offset") = 0,
+        nb::arg("page_channels") = nb::none(),
         nb::arg("segment_length") = 0);
 
     mod.def(
@@ -126,8 +134,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: ``q``, ``k``,
-                ``v`` as ``qkv_causal_conv1d_silu``, and the ROW_MAJOR BFLOAT16
-                ``[1, 3, Q+K+V]`` replacement carry, replicated across SP.
+                ``v`` as ``qkv_causal_conv1d_silu``, and the replacement carry in
+                ``history``'s layout and shape, replicated across SP.
         )doc",
         &ttnn::experimental::kda::qkv_causal_conv1d_silu_with_carry,
         nb::arg("input").noconvert(),
@@ -149,6 +157,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("input_column_offset") = 0,
+        nb::arg("page_channels") = nb::none(),
         nb::arg("segment_length") = 0);
 }
 }  // namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail

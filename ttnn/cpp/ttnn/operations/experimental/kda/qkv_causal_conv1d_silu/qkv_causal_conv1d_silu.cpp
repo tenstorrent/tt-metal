@@ -22,6 +22,7 @@ prim::QkvCausalConv1dSiluParams make_params(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     uint32_t sequence_parallel_axis,
     uint32_t input_column_offset,
+    std::optional<uint32_t> page_channels,
     uint32_t segment_length) {
     TT_FATAL(
         input.storage_type() == StorageType::DEVICE && input.is_allocated() && input.logical_shape().rank() == 3,
@@ -34,6 +35,7 @@ prim::QkvCausalConv1dSiluParams make_params(
         .channel_chunk_size = program_config.channel_chunk_size,
         .sequence_parallel_axis = sequence_parallel_axis,
         .input_column_offset = input_column_offset,
+        .page_channels = page_channels,
         .segment_length = segment_length,
         .output_mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
         .compute_kernel_config = init_device_compute_kernel_config(
@@ -69,6 +71,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     uint32_t sequence_parallel_axis,
     uint32_t input_column_offset,
+    std::optional<uint32_t> page_channels,
     uint32_t segment_length) {
     auto params = make_params(
         input,
@@ -80,6 +83,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
         compute_kernel_config,
         sequence_parallel_axis,
         input_column_offset,
+        page_channels,
         segment_length);
     auto outputs = ttnn::device_operation::launch<prim::QkvCausalConv1dSiluOperation>(
         params,
@@ -114,6 +118,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_co
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     uint32_t sequence_parallel_axis,
     uint32_t input_column_offset,
+    std::optional<uint32_t> page_channels,
     uint32_t segment_length) {
     auto params = make_params(
         input,
@@ -125,6 +130,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_co
         compute_kernel_config,
         sequence_parallel_axis,
         input_column_offset,
+        page_channels,
         segment_length);
     TT_FATAL(
         exchange_semaphores.size() == params.exchange_semaphore_addresses.size(),

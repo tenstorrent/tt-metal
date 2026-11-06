@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stream packing, mesh rows, device<->host transfers and PCC grading shared by the V4 tests."""
+"""Stream packing, mesh rows, device<->host transfers, PCC grading and the multi-user prefill schedule
+shared by the V4 tests."""
 
 import pytest
 from loguru import logger
@@ -11,11 +12,26 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
 
 # How far below its model's floor a CSA layer is graded: with production top-k, bf16 can swap
 # near-tied candidates at the selection boundary, which no other attention kind is exposed to, and
 # the swaps compound with the error the layer inherits.
 CSA_LAYER_MARGIN = 0.01
+
+# The multi-user prefill schedule, keyed by user-slot count.
+# (slot, chunks, replays) per request: ``replays`` names an earlier request whose opening tokens this one
+# repeats, or None for fresh tokens. The third request reuses slot 0 and is shorter than the one before
+# it there, so the rows that request left past the new one's end are still in slot 0's index key cache
+# and have to go unread.
+USER_REQUESTS = {1: [(0, 2, None)], 2: [(0, 2, None), (1, 2, None), (0, 1, 0)]}
+# (request, chunk) in the order the chunks reach the device.
+USER_SCHEDULE = {1: [(0, 0), (0, 1)], 2: [(0, 0), (1, 0), (0, 1), (2, 0), (1, 1)]}
+# (request, slot) run again once the schedule is done, every slot reset first. The slot is another request's:
+# its index key rows still hold that request's keys, which a reset does not clear, so a chunk that scored
+# rows it had not written itself would no longer reproduce its interleaved run. A replay on the same slot
+# cannot show that, since it rewrites the rows it would otherwise read with identical keys.
+USER_ISOLATED = {1: [], 2: [(1, 0)]}
 
 
 def pack_streams(x, tp_factor):
@@ -97,3 +113,13 @@ def assert_layers_and_output(config, per_layer, ref_layers, out, ref_out, floor,
     if pcc < floor:
         failures.append(f"output {pcc:.6f} < {floor}")
     assert not failures, f"[{label}] {', '.join(failures)}"
+
+
+def assert_same_on_device(label, first, again):
+    """Two device runs of the same chunks, each ``(per_layer, outs)``, are bit-identical: same weights, tokens
+    and programs over the same state leave no tolerance to spend."""
+    (first_layers, first_outs), (again_layers, again_outs) = first, again
+    for c in range(len(again_outs)):
+        taps = [(f"layer {i}", first_layers[i][c], again_layers[i][c]) for i in range(len(again_layers))]
+        for name, a, b in [*taps, ("output", first_outs[c], again_outs[c])]:
+            assert_bit_identical(a, b, name=f"[{label}] chunk {c} {name}")
