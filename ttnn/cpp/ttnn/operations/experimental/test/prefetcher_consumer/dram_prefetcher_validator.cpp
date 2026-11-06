@@ -210,17 +210,48 @@ uint32_t lead_block_for(const std::vector<uint32_t>& rotation, uint32_t ring_pos
 }
 }  // namespace
 
+DramPrefetcherValidatorDeviceOperation::program_factory_t
+DramPrefetcherValidatorDeviceOperation::select_program_factory(
+    const operation_attributes_t& attrs, const tensor_args_t& /*tensor_args*/) {
+    if (!attrs.prefetcher_pipes.empty()) {
+        return PrefetcherPipeSpecFactory{};
+    }
+    return ProgramFactory{};
+}
+
 void DramPrefetcherValidatorDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     TT_FATAL(attrs.num_layers > 0, "num_layers must be > 0");
     const auto* tensor_buffer = tensor_args.source_tensor.buffer();
     TT_FATAL(tensor_buffer != nullptr, "source_tensor must be on device");
     TT_FATAL(tensor_buffer->is_dram(), "source_tensor must be a DRAM buffer");
-    TT_FATAL(attrs.global_cb.has_value(), "global_cb required");
-    TT_FATAL(attrs.global_cb->receiver_cores().num_cores() > 0, "GCB has no receiver cores");
+    TT_FATAL(
+        attrs.global_cb.has_value() != !attrs.prefetcher_pipes.empty(),
+        "Supply exactly one delivery target: global_cb={} prefetcher_pipes={} pipes",
+        attrs.global_cb.has_value(),
+        attrs.prefetcher_pipes.size());
+    if (attrs.global_cb.has_value()) {
+        TT_FATAL(attrs.global_cb->receiver_cores().num_cores() > 0, "GCB has no receiver cores");
+        TT_FATAL(!attrs.global_cb->sender_receiver_core_mapping().empty(), "GCB has no senders");
+        return;
+    }
 
-    const auto& sr_mapping = attrs.global_cb->sender_receiver_core_mapping();
-    TT_FATAL(!sr_mapping.empty(), "GCB has no senders");
+    const CoreRangeSet receiver_cores =
+        metal_exp::GetPrefetcherPipeReceiverCores(ttnn::prefetcher_pipe_refs(attrs.prefetcher_pipes));
+    TT_FATAL(receiver_cores.num_cores() > 0, "The PrefetcherPipes have no receiver cores");
+    // Slab order comes from the plan the pipes were created from, so the pipes may be passed in
+    // any order.
+    CoreRangeSet planned_receivers;
+    for (const auto& [_bank_id, receivers] : attrs.bank_to_receivers) {
+        planned_receivers = planned_receivers.merge(receivers);
+    }
+    TT_FATAL(
+        planned_receivers.num_cores() == receiver_cores.num_cores() &&
+            planned_receivers.intersection(receiver_cores).num_cores() == receiver_cores.num_cores(),
+        "bank_to_receivers covers receivers {}, but the PrefetcherPipes' receivers are {}; pass the bank_to_receivers "
+        "the pipes were created from",
+        planned_receivers.str(),
+        receiver_cores.str());
 }
 
 void DramPrefetcherValidatorDeviceOperation::validate_on_program_cache_hit(
@@ -238,14 +269,19 @@ DramPrefetcherValidatorDeviceOperation::create_output_tensors(const operation_at
 
 ttsl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // Everything create_at reads has to be keyed, because override_runtime_arguments is a no-op here.
-    // The whole GlobalCircularBuffer goes in rather than just its config address: the sender/receiver
-    // core mapping becomes the kernels' core ranges and their compile- and runtime args, and the size
-    // and buffer type set the CB geometry, none of which a recycled config address distinguishes.
-    // On the tensor side, create_at derives k_tiles, total_n_tiles, n_per_recv_tiles, is_recv_contig,
-    // tile_bytes and the CB page sizes from the real shape, tile and memory config, and emits
-    // TensorAccessorArgs as compile-time args, so the address alone is not a sufficient identity.
+    // Everything a factory reads has to be keyed. The GlobalCircularBuffer factory refreshes nothing on
+    // a hit. The whole GlobalCircularBuffer goes in rather than just its config address: the
+    // sender/receiver core mapping becomes the kernels' core ranges and their compile- and runtime
+    // args, and the size and buffer type set the CB geometry, none of which a recycled config address
+    // distinguishes. The PrefetcherPipe factory's program binds the pipes and the source tensor as
+    // parameters, which a hit rebinds, so it is keyed by what it bakes in from them: the pipes'
+    // geometry and addresses, the plan, and the tensor's spec but not its address.
+    // On the tensor side, both derive k_tiles, total_n_tiles, n_per_recv_tiles, is_recv_contig,
+    // tile_bytes and the page sizes from the real shape, tile and memory config, and emit the
+    // tensor's accessor args at compile time, so the address alone is not a sufficient identity.
     const auto* tensor_buffer = tensor_args.source_tensor.buffer();
+    const uint64_t gcb_tensor_address =
+        attrs.global_cb.has_value() && tensor_buffer != nullptr ? tensor_buffer->address() : 0;
     const tt::DataFormat dataformat = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.source_tensor.dtype());
     return ttsl::hash::hash_objects_with_default_seed(
         ttsl::hash::type_hash<DramPrefetcherValidatorDeviceOperation>,
@@ -261,11 +297,14 @@ ttsl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
         // two same-shaped GCBs at different allocations must not share a program.
         static_cast<uint64_t>(attrs.global_cb.has_value() ? attrs.global_cb->buffer_address() : 0),
         static_cast<uint64_t>(attrs.global_cb.has_value() ? attrs.global_cb->config_address() : 0),
-        static_cast<uint64_t>(tensor_buffer != nullptr ? tensor_buffer->address() : 0),
+        gcb_tensor_address,
         static_cast<uint32_t>(dataformat),
         tensor_args.source_tensor.tensor_spec().page_config(),
+        tensor_args.source_tensor.logical_shape(),
         tensor_args.source_tensor.padded_shape(),
-        tensor_args.source_tensor.memory_config());
+        tensor_args.source_tensor.memory_config(),
+        attrs.prefetcher_pipes,
+        attrs.bank_to_receivers);
 }
 
 ttnn::device_operation::CachedProgram<DramPrefetcherValidatorDeviceOperation::ProgramFactory::shared_variables_t>
@@ -363,43 +402,21 @@ void test_dram_prefetcher_validator(
     ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
 
-tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_workload(
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
-    const ttnn::Tensor& source_tensor,
-    uint32_t num_layers,
-    uint32_t print_stride,
-    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
-    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
-    bool streaming,
-    const std::vector<uint32_t>& rotation) {
+ttnn::device_operation::ProgramArtifacts
+DramPrefetcherValidatorDeviceOperation::PrefetcherPipeSpecFactory::create_program_artifacts(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*tensor_return_value*/) {
     using namespace tt::tt_metal;
 
-    TT_FATAL(!prefetcher_pipes.empty(), "prefetcher_pipes must hold at least one pipe");
-    TT_FATAL(num_layers > 0, "num_layers must be > 0");
-    Buffer* tensor_buffer = source_tensor.buffer();
-    TT_FATAL(tensor_buffer != nullptr, "source_tensor must be on device");
-    TT_FATAL(tensor_buffer->is_dram(), "source_tensor must be a DRAM buffer");
-
+    const auto& source_tensor = tensor_args.source_tensor;
+    const auto& prefetcher_pipes = operation_attributes.prefetcher_pipes;
     const CoreRangeSet receiver_cores =
         metal_exp::GetPrefetcherPipeReceiverCores(ttnn::prefetcher_pipe_refs(prefetcher_pipes));
-    TT_FATAL(receiver_cores.num_cores() > 0, "The PrefetcherPipes have no receiver cores");
-
-    // Slab order comes from the plan the pipes were created from, so the pipes may be passed in
-    // any order.
-    CoreRangeSet planned_receivers;
-    for (const auto& [_bank_id, receivers] : bank_to_receivers) {
-        planned_receivers = planned_receivers.merge(receivers);
-    }
-    TT_FATAL(
-        planned_receivers.num_cores() == receiver_cores.num_cores() &&
-            planned_receivers.intersection(receiver_cores).num_cores() == receiver_cores.num_cores(),
-        "bank_to_receivers covers receivers {}, but the PrefetcherPipes' receivers are {}; pass the bank_to_receivers "
-        "the pipes were created from",
-        planned_receivers.str(),
-        receiver_cores.str());
     const ValidatorGeometry geom = compute_validator_geometry(
         source_tensor,
-        bank_plan_from_bank_to_receivers(bank_to_receivers, static_cast<uint32_t>(prefetcher_pipes.size())));
+        bank_plan_from_bank_to_receivers(
+            operation_attributes.bank_to_receivers, static_cast<uint32_t>(prefetcher_pipes.size())));
 
     std::vector<metal_exp::PrefetcherPipeParamName> names;
     std::vector<metal_exp::PrefetcherPipeParameter> parameters;
@@ -424,10 +441,10 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
     receiver.scratchpad_bindings = {{.scratchpad_spec_name = scratch_name, .accessor_name = "expected"}};
     receiver.advanced_options.prefetcher_pipe_bindings = {{.pipe_parameter_names = names, .accessor_name = "in"}};
     receiver.compile_time_args = {
-        {"num_layers", num_layers},
+        {"num_layers", operation_attributes.num_layers},
         {"num_blocks", geom.num_blocks},
-        {"print_stride", print_stride},
-        {"streaming", streaming ? 1u : 0u}};
+        {"print_stride", operation_attributes.print_stride},
+        {"streaming", operation_attributes.streaming ? 1u : 0u}};
     receiver.runtime_arg_schema.runtime_arg_names = {
         "bank_id",
         "recv_idx_in_bank",
@@ -449,7 +466,6 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
               .kernels = {metal_exp::KernelSpecName{"receiver"}},
               .target_nodes = receiver_cores}},
         .advanced_options = {.prefetcher_pipe_parameters = std::move(parameters)}};
-    Program program = metal_exp::MakeProgramFromSpec(*mesh_device, spec);
 
     metal_exp::ProgramRunArgs::KernelRunArgs kernel_args{.kernel = metal_exp::KernelSpecName{"receiver"}};
     for (const auto& plan : geom.receivers) {
@@ -462,11 +478,51 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
              {"total_n_tiles", geom.total_n_tiles},
              {"n_per_recv_tiles", geom.n_per_recv_tiles},
              {"n_col_start", plan.ring_pos * geom.n_per_recv_tiles},
-             {"lead_block", lead_block_for(rotation, plan.ring_pos)}});
+             {"lead_block", lead_block_for(operation_attributes.rotation, plan.ring_pos)}});
     }
     run_args.kernel_run_args.push_back(std::move(kernel_args));
     run_args.tensor_args.emplace(source_name, metal_exp::TensorArgument{source_tensor.mesh_tensor()});
-    metal_exp::SetProgramRunArgs(program, run_args);
+    return {.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+namespace {
+DramPrefetcherValidatorDeviceOperation::operation_attributes_t pipe_validator_attributes(
+    uint32_t num_layers,
+    uint32_t print_stride,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    bool streaming,
+    const std::vector<uint32_t>& rotation) {
+    return {
+        .num_layers = num_layers,
+        .print_stride = print_stride,
+        .prefetcher_pipes = prefetcher_pipes,
+        .bank_to_receivers = bank_to_receivers,
+        .streaming = streaming,
+        .rotation = rotation,
+    };
+}
+}  // namespace
+
+tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_workload(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const ttnn::Tensor& source_tensor,
+    uint32_t num_layers,
+    uint32_t print_stride,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    bool streaming,
+    const std::vector<uint32_t>& rotation) {
+    using OperationType = DramPrefetcherValidatorDeviceOperation;
+    const OperationType::operation_attributes_t attrs =
+        pipe_validator_attributes(num_layers, print_stride, prefetcher_pipes, bank_to_receivers, streaming, rotation);
+    const OperationType::tensor_args_t tensor_args{.source_tensor = source_tensor};
+    OperationType::validate_on_program_cache_miss(attrs, tensor_args);
+    OperationType::tensor_return_value_t no_outputs;
+    const ttnn::device_operation::ProgramArtifacts artifacts =
+        OperationType::PrefetcherPipeSpecFactory::create_program_artifacts(attrs, tensor_args, no_outputs);
+    tt::tt_metal::Program program = metal_exp::MakeProgramFromSpec(*mesh_device, artifacts.spec);
+    metal_exp::SetProgramRunArgs(program, artifacts.run_params);
 
     tt::tt_metal::distributed::MeshWorkload workload;
     workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
@@ -482,9 +538,12 @@ void test_tensor_prefetcher_pipe_validator(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool streaming,
     const std::vector<uint32_t>& rotation) {
-    tt::tt_metal::distributed::MeshWorkload workload = make_tensor_prefetcher_pipe_validator_workload(
-        mesh_device, source_tensor, num_layers, print_stride, prefetcher_pipes, bank_to_receivers, streaming, rotation);
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
+    using OperationType = DramPrefetcherValidatorDeviceOperation;
+    const OperationType::operation_attributes_t attrs =
+        pipe_validator_attributes(num_layers, print_stride, prefetcher_pipes, bank_to_receivers, streaming, rotation);
+    const OperationType::tensor_args_t tensor_args{.source_tensor = source_tensor};
+    ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
+    // A mismatch hangs the validator kernel, so waiting here makes this call the one that times out.
     tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
 }
 
