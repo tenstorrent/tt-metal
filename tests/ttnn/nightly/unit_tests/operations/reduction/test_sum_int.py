@@ -95,7 +95,16 @@ def test_sum_int32_all_zeros_regression(device):
 
 
 @pytest.mark.parametrize("scale", [2.0, 0.5, -3.0])
-@pytest.mark.parametrize("input_shape, dim", [((1, 2, 64, 64), -1), ((1, 1, 96, 64), -2), ((1, 1, 64, 64), (-1, -2))])
+@pytest.mark.parametrize(
+    "input_shape, dim",
+    [
+        ((1, 2, 64, 64), -1),
+        ((1, 1, 96, 64), -2),
+        ((1, 1, 64, 64), (-1, -2)),
+        ((2, 3, 64, 60), (0, -1)),
+        ((2, 3, 64, 60), None),
+    ],
+)
 def test_sum_int32_with_scaling(device, input_shape, dim, scale):
     """scalar= is a post-reduce fp32 multiply: result == trunc(scale * int_sum)."""
     torch.manual_seed(0)
@@ -127,10 +136,29 @@ def test_sum_uint32(device, input_shape, dim):
     assert_equal(ttnn_output.to(torch.int64).reshape(torch_output.shape), torch_output)
 
 
-def test_sum_uint32_rejects_scaling(device, expect_error):
-    """scalar != 1 is rejected for uint32. The int32 path would apply it as an inexact float32 multiply."""
+@pytest.mark.parametrize("scale", [2.0, 0.5, 0.1, -3.0])
+@pytest.mark.parametrize(
+    "input_shape, dim",
+    [
+        ((1, 2, 64, 64), -1),
+        ((1, 1, 96, 64), -2),
+        ((1, 1, 64, 64), (-1, -2)),
+        ((2, 3, 64, 60), (0, -1)),
+        ((2, 3, 64, 60), None),
+    ],
+)
+def test_sum_uint32_with_scaling(device, input_shape, dim, scale):
+    torch.manual_seed(0)
+    torch_input = torch.randint(0, 2**32, input_shape, dtype=torch.int64)
+    torch_input.view(-1)[:4] = torch.tensor([0, 2**31 - 1, 2**31, 2**32 - 1])
+    torch_sum = torch.sum(torch_input, dim=dim) % 2**32
+    torch_product = torch_sum.to(torch.float32) * torch.tensor(scale, dtype=torch.float32)
+    torch_expected = torch_product.to(torch.float64).trunc().clamp(0, 2**32 - 1).to(torch.int64)
+
     ttnn_input = ttnn.from_torch(
-        torch.ones((1, 1, 32, 32), dtype=torch.uint32), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.uint32
+        torch_input.to(torch.uint32), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.uint32
     )
-    with expect_error(RuntimeError, "UINT32 sum/max/min do not support scalar"):
-        ttnn.sum(ttnn_input, dim=-1, scalar=2.0)
+    ttnn_output = ttnn.to_torch(ttnn.sum(ttnn_input, dim=dim, scalar=scale))
+
+    assert ttnn_output.dtype == torch.uint32
+    assert_equal(ttnn_output.to(torch.int64).reshape(torch_expected.shape), torch_expected)

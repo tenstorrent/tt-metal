@@ -62,8 +62,14 @@ inline uint32_t dense_rm_padding_identity_bits(tt::DataFormat df, tt::tt_metal::
     return static_cast<uint32_t>(bf16);
 }
 
+// True for the 32-bit integer dtypes. Both reduce natively on the SFPU with the same steps.
+// They differ only in signed vs unsigned compare and in their pad sentinels.
+inline bool is_int_reduce_dtype(tt::tt_metal::DataType dtype) {
+    return dtype == tt::tt_metal::DataType::INT32 || dtype == tt::tt_metal::DataType::UINT32;
+}
+
 // True when the reduce uses the SFPU path instead of the FPU GMPOOL/matmul path.
-// Int32 always uses SFPU (FPU has no Int32 support). BFLOAT16 MIN always does too (FPU has no
+// INT32/UINT32 always use SFPU (FPU has no integer support). BFLOAT16 MIN always does too (FPU has no
 // bf16 min pool); it takes no `use_sfpu_reduce` opt-in. Float32 opts in only when the host
 // requests the accurate path (`use_sfpu_reduce`): the FPU truncates fp32 to tf32, so the SFPU
 // preserves full fp32. mean arrives as SUM (the host lowers it to SUM + a 1/N post-mul). Remaining
@@ -72,7 +78,7 @@ inline uint32_t dense_rm_padding_identity_bits(tt::DataFormat df, tt::tt_metal::
 inline bool use_sfpu_reduce_path(
     tt::tt_metal::DataType dtype, tt::tt_metal::ReduceOpMath math_op, bool use_sfpu_reduce = false) {
     using tt::tt_metal::ReduceOpMath;
-    if (dtype == tt::tt_metal::DataType::INT32) {
+    if (is_int_reduce_dtype(dtype)) {
         return math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MIN;
     }
     if (dtype == tt::tt_metal::DataType::BFLOAT16) {
@@ -117,7 +123,7 @@ inline ScalerMode derive_scaler_mode(
     if (math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN) {
         return ScalerMode::PostMul;
     }
-    if (math_op == ReduceOpMath::SUM && dtype == tt::tt_metal::DataType::INT32) {
+    if (math_op == ReduceOpMath::SUM && is_int_reduce_dtype(dtype)) {
         return ScalerMode::PostMul;
     }
     const bool sfpu_fp32_scalar = use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 &&

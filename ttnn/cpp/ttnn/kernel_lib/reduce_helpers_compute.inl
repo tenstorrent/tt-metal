@@ -26,10 +26,15 @@ namespace compute_kernel_lib {
 namespace detail {
 
 // SFPU MAX fold
+// UInt32 folds do not exist on Quasar
 template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_init() {
     if constexpr (format == DataFormat::Int32) {
         binary_max_int32_tile_init();
+    } else if constexpr (format == DataFormat::UInt32) {
+#ifndef ARCH_QUASAR
+        binary_max_uint32_tile_init();
+#endif
     } else {
         binary_max_tile_init();
     }
@@ -39,6 +44,10 @@ template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     if constexpr (format == DataFormat::Int32) {
         binary_max_int32_tile(a, b, out);
+    } else if constexpr (format == DataFormat::UInt32) {
+#ifndef ARCH_QUASAR
+        binary_max_uint32_tile(a, b, out);
+#endif
     } else {
         binary_max_tile(a, b, out);
     }
@@ -49,6 +58,10 @@ template <DataFormat format>
 ALWI void sfpu_reduce_min_fold_init() {
     if constexpr (format == DataFormat::Int32) {
         binary_min_int32_tile_init();
+    } else if constexpr (format == DataFormat::UInt32) {
+#ifndef ARCH_QUASAR
+        binary_min_uint32_tile_init();
+#endif
     } else {
         binary_min_tile_init();
     }
@@ -58,42 +71,46 @@ template <DataFormat format>
 ALWI void sfpu_reduce_min_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     if constexpr (format == DataFormat::Int32) {
         binary_min_int32_tile(a, b, out);
+    } else if constexpr (format == DataFormat::UInt32) {
+#ifndef ARCH_QUASAR
+        binary_min_uint32_tile(a, b, out);
+#endif
     } else {
         binary_min_tile(a, b, out);
     }
 }
 
-// SFPU cross-tile add. Int32 uses add_int_tile; Float32 uses add_binary_tile for
+// SFPU cross-tile add. Int32 and UInt32 use add_int_tile; Float32 uses add_binary_tile for
 // accurate fp32 accumulation. add_binary_tile is unavailable on Quasar, so guard
 // it with ARCH_QUASAR to avoid template lookup failures.
 template <DataFormat format>
 ALWI void sfpu_reduce_sum_fold_init() {
-    if constexpr (format == DataFormat::Int32) {
+    if constexpr (is_int_reduce_format(format)) {
         add_int_tile_init();
     } else {
 #ifndef ARCH_QUASAR
         add_binary_tile_init();
 #else
-        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU reduce is not supported on Quasar");
+        static_assert(is_int_reduce_format(format), "Accurate fp32 SFPU reduce is not supported on Quasar");
 #endif
     }
 }
 
 template <DataFormat format>
 ALWI void sfpu_reduce_sum_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
-    if constexpr (format == DataFormat::Int32) {
+    if constexpr (is_int_reduce_format(format)) {
         add_int_tile<format>(a, b, out);
     } else {
 #ifndef ARCH_QUASAR
         add_binary_tile(a, b, out);
 #else
-        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU reduce is not supported on Quasar");
+        static_assert(is_int_reduce_format(format), "Accurate fp32 SFPU reduce is not supported on Quasar");
 #endif
     }
 }
 
 // Pool-type dispatched cross-tile fold init (MAX -> binary_max, MIN -> binary_min, SUM -> add).
-// Used by compute_kernel_lib::reduce() for the Int32 SFPU path and for accurate fp32 reduces.
+// Used by compute_kernel_lib::reduce() for the integer SFPU path and for accurate fp32 reduces.
 template <PoolType pool_type, DataFormat format>
 ALWI void sfpu_reduce_fold_init() {
     if constexpr (pool_type == PoolType::SUM) {
@@ -133,17 +150,18 @@ ALWI bool sfpu_is_first_tile(uint32_t axis_index, const AccumulateT& accumulate)
     return axis_index == 0;
 }
 
-// Post-reduce scalar multiply. mul_unary_tile is fp32-only, so Int32 is bracketed with typecasts
-// (truncates toward zero on the way back); all other formats use plain mul_unary_tile.
+// Post-reduce scalar multiply. mul_unary_tile is fp32-only, so Int32/UInt32 are bracketed with typecasts
+// (truncates toward zero on the way back). For UInt32 a negative product becomes 0. All other formats use
+// plain mul_unary_tile.
 template <DataFormat reduce_format>
 ALWI void reduce_post_mul_tile(uint32_t dst, uint32_t scaler_bits) {
-    if constexpr (reduce_format == DataFormat::Int32) {
-        typecast_tile_init<(uint32_t)DataFormat::Int32, (uint32_t)DataFormat::Float32>();
-        typecast_tile<(uint32_t)DataFormat::Int32, (uint32_t)DataFormat::Float32>(dst);
+    if constexpr (is_int_reduce_format(reduce_format)) {
+        typecast_tile_init<(uint32_t)reduce_format, (uint32_t)DataFormat::Float32>();
+        typecast_tile<(uint32_t)reduce_format, (uint32_t)DataFormat::Float32>(dst);
         binop_with_scalar_tile_init();
         mul_unary_tile(dst, scaler_bits);
-        typecast_tile_init<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>();
-        typecast_tile<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>(dst);
+        typecast_tile_init<(uint32_t)DataFormat::Float32, (uint32_t)reduce_format>();
+        typecast_tile<(uint32_t)DataFormat::Float32, (uint32_t)reduce_format>(dst);
     } else {
         binop_with_scalar_tile_init();
         mul_unary_tile(dst, scaler_bits);
@@ -303,21 +321,21 @@ ALWI void reduce(
     ReduceInputMemoryLayout input_memory_layout,
     AccumulateT accumulate,
     PostReduceOp post_reduce_op) {
-    // Int32 and Accurate fp32 route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
+    // Int32, UInt32 and Accurate fp32 route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
     // =============================================================================
     // Static Assertions (compile-time validation)
     // =============================================================================
     static_assert(
         (reduce_type != PoolType::MAX && reduce_type != PoolType::SUM) ||
-            reduce_dim != ReduceDim::REDUCE_SCALAR || reduce_format != DataFormat::Int32,
-        "Int32 MAX/SUM REDUCE_SCALAR is not supported (host decomposes Int32 HW reduce into W-then-H)");
+            reduce_dim != ReduceDim::REDUCE_SCALAR || !is_int_reduce_format(reduce_format),
+        "Int32/UInt32 MAX/SUM REDUCE_SCALAR is not supported (host decomposes an integer HW reduce into W-then-H)");
     static_assert(
-        reduce_type != PoolType::AVG || reduce_format != DataFormat::Int32,
-        "Int32 AVG (mean) is not supported");
+        reduce_type != PoolType::AVG || !is_int_reduce_format(reduce_format),
+        "Int32/UInt32 AVG (mean) is not supported");
     static_assert(
         reduce_type != PoolType::MIN || is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>(),
-        "MIN requires an SFPU path: Int32, bf16, or Accurate fp32, bf16 only on Quasar, on REDUCE_ROW/COL. "
+        "MIN requires an SFPU path: Int32, UInt32, bf16, or Accurate fp32, bf16 only on Quasar, on REDUCE_ROW/COL. "
         "The FPU has no min pool at all, so every other MIN is lowered to -MAX(-x) and arrives as PoolType::MAX");
     static_assert(
         is_accumulation_type_v<AccumulateT>,

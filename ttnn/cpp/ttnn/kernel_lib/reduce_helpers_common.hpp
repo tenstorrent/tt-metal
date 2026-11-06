@@ -12,18 +12,21 @@
  * @brief Float32 reduce precision mode.
  *
  * Fast keeps fp32 on the FPU/GMPOOL path (inputs truncated to tf32 — faster, lossy); Accurate
- * routes fp32 through the SFPU at full fp32. Only affects Float32; Int32 and bf16 MIN use the SFPU
+ * routes fp32 through the SFPU at full fp32. Only affects Float32; Int32, UInt32 and bf16 MIN use the SFPU
  * regardless of this mode.
  */
+constexpr bool is_int_reduce_format(DataFormat data_format) {
+    return data_format == DataFormat::Int32 || data_format == DataFormat::UInt32;
+}
 enum class ReduceFp32Mode : uint8_t { Fast, Accurate };
 
 /**
  * @brief Determines whether a reduce operation should use the SFPU path.
  *
- * Int32 MAX, MIN and SUM on REDUCE_ROW/COL use SFPU (GMPOOL/matmul have no Int32 support).
- * Int32 REDUCE_SCALAR is unsupported (no SFPU scalar primitive); the host decomposes an
- * Int32 HW reduce into a W-then-H two-step (see reduce_op.cpp use_two_step_hw_sfpu_reduce).
- * Int32 MIN drives the LLK MIN reduce directly, instead of the -MAX(-x) reduce_{h,w}_neg path that FPU MIN uses.
+ * Int32 and UInt32 MAX, MIN and SUM on REDUCE_ROW/COL use SFPU (GMPOOL/matmul have no integer support).
+ * Integer REDUCE_SCALAR is unsupported (no SFPU scalar primitive); the host decomposes an
+ * integer HW reduce into a W-then-H two-step (see reduce_op.cpp use_two_step_hw_sfpu_reduce).
+ * Integer MIN drives the LLK MIN reduce directly, instead of the -MAX(-x) reduce_{h,w}_neg path that FPU MIN uses.
  *
  * Float16_b MIN does the same, with no fp32_mode opt-in: bf16 is not truncated into SrcA. bf16
  * SUM/MAX stay on the FPU.
@@ -39,11 +42,11 @@ template <
     ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast>
 constexpr bool is_sfpu_reduce_path() {
 #ifdef ARCH_QUASAR
-    // On Quasar only bf16 MIN takes the SFPU path. The Int32 and accurate Float32 reduces that need the
+    // On Quasar only bf16 MIN takes the SFPU path. The integer and accurate Float32 reduces that need the
     // SFPU on WH/BH are rejected at compile time rather than silently run on the FPU.
     constexpr bool requires_sfpu =
         (reduce_dim == ckernel::ReduceDim::REDUCE_ROW || reduce_dim == ckernel::ReduceDim::REDUCE_COL) &&
-        ((data_format == DataFormat::Int32 &&
+        ((is_int_reduce_format(data_format) &&
           (pool_type == ckernel::PoolType::MAX || pool_type == ckernel::PoolType::SUM)) ||
          (data_format == DataFormat::Float32 && fp32_mode == ReduceFp32Mode::Accurate &&
           (pool_type == ckernel::PoolType::SUM || pool_type == ckernel::PoolType::MAX)));
@@ -56,14 +59,14 @@ constexpr bool is_sfpu_reduce_path() {
         pool_type != ckernel::PoolType::MIN) {
         return false;
     }
-    if constexpr (data_format != DataFormat::Int32) {
+    if constexpr (!is_int_reduce_format(data_format)) {
         // pool_type is already narrowed to MAX/SUM/MIN above and all three have an SFPU fold.
         if constexpr (data_format == DataFormat::Float16_b) {
             if constexpr (pool_type != ckernel::PoolType::MIN) {
                 return false;
             }
         } else if constexpr (fp32_mode != ReduceFp32Mode::Accurate || data_format != DataFormat::Float32) {
-            // Float32 opts in via Accurate mode. Everything else non-Int32 stays on the FPU.
+            // Float32 opts in via Accurate mode. Everything else non-integer stays on the FPU.
             return false;
         }
     }
@@ -79,7 +82,7 @@ constexpr bool is_sfpu_reduce_path() {
  *
  * REDUCE_ROW SUM/AVG uses matmul with scaler in SrcA and data in SrcB (the opposite of the
  * default data→SrcA, scaler→SrcB ordering). This does not apply to MAX (which uses GMPOOL)
- * or to the SFPU path (Int32, bf16 MIN, and Accurate fp32), which bypasses matmul entirely.
+ * or to the SFPU path (Int32, UInt32, bf16 MIN, and Accurate fp32), which bypasses matmul entirely.
  */
 template <ckernel::PoolType pool_type, ckernel::ReduceDim reduce_dim, bool is_sfpu>
 constexpr bool reduce_swaps_operands() {
