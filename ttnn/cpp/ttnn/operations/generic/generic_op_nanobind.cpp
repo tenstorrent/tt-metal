@@ -261,13 +261,15 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
                 call, or of each range's program.
 
         Returns:
-            ttnn.Tensor: The output tensor, the last entry of io_tensors.
+            ttnn.Tensor: The output tensor, the last entry of io_tensors. When the tensors are not all on the
+                same devices, only its parts on the devices the program ran on.
 
         Raises:
             RuntimeError: If the run args do not match the spec, naming the kernel, argument or tensor parameter at
                 fault; if a tensor is on another MeshDevice or misses a device the program runs on; if mesh ranges
-                overlap or the run args' ranges differ from the spec's; if a tensor is allocated per core; or, on a
-                first call, if a kernel does not compile.
+                overlap or the run args' ranges differ from the spec's; if io_tensors is empty or holds a tensor that
+                is not allocated on a device, or one allocated per core; or, on a first call, if a kernel does not
+                compile or the program does not fit the kernel-configuration buffer.
 
         Example:
             Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py for usage examples
