@@ -29,9 +29,9 @@
     "decode_device_us": null,
     "prefill_flops_pct": null,
     "decode_dram_pct": null,
-    "ttft_ms": 753.31630265282,
-    "decode_tps": 35.31811185868559,
-    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/retained-runtime-benchmark/RESULT.json; publication11a387692d2b434198e79dd92fbb8ed308c3ca47; full60/B1/C1 eight exact4096/128 serial requests"
+    "ttft_ms": 753.7608764978359,
+    "decode_tps": 35.32100514361217,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/phase-archive-runtime-benchmark/RESULT.json; publicationab2730c27e557b09b2eafe3494e47790adc210aa; full60/B1/C1 eight exact4096/128 serial requests"
   },
   "accuracy": [
     {
@@ -82,7 +82,7 @@
     "stage12_accuracy": "Banked GPQA10/198, SWE2/500, Terminal2/89. GPQA20 raw16/20 unbanked: tar discarded retained artifact. Local archive repair passed; same20 retry42273660905 building ab2730c2. SWE5 active. No dry/release."
   },
   "notes": [
-    "Measured runtime11a387; repaired ab2730c2 benchmark in progress. Neither is frozen release. No vLLM profiling.",
+    "Repaired runtime ab2730c measured; no frozen release yet. No vLLM profiling.",
     "C4 same-ten scored pair9/10 each; C4 642.445722s versus C2 938.039050s. Repeated tasks are not additional independent accuracy samples.",
     "SWE repeat5 raw1/5 in4041.919023s excluded from banked accuracy pending cap classification.",
     "Default-off model-owned token retention accepted by exact native paired outputs and583matched decode IDs; no client-emission identity claim.",

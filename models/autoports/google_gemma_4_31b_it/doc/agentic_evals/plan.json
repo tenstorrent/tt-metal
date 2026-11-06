@@ -1666,7 +1666,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42247098210",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T18:30:17.805933+00:00",
+      "last_observed_at": "2026-11-06T18:49:34.687304+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-wvng9",
       "build_started_at": "2026-11-06T15:54:10Z",
       "build_completed_at": "2026-11-06T16:47:21Z",
@@ -2053,7 +2053,7 @@
       "arm": "phase-archive-runtime-benchmark",
       "owner": "coordinator",
       "device": "local",
-      "status": "running",
+      "status": "completed_valid",
       "started_at": "2026-11-06T18:45:36.976918+00:00",
       "queued_at": "2026-11-06T18:45:36.976918+00:00",
       "planned_clients": 1,
@@ -2084,7 +2084,11 @@
         ]
       },
       "owner_check": [],
-      "source_snapshot": "bringup/artifacts/stage12-phase-archive-runtime-benchmark/source-launch.json"
+      "source_snapshot": "bringup/artifacts/stage12-phase-archive-runtime-benchmark/source-launch.json",
+      "ended_at": "2026-11-06T18:50:10.778118+00:00",
+      "exit_status": 0,
+      "actual_device_hours": 0.07605465913249645,
+      "evidence": "runs/phase-archive-runtime-benchmark/RESULT.json"
     },
     {
       "eval": "r1_gpqa_diamond",
@@ -2129,7 +2133,7 @@
       "capacity_evidence": "runs/retention-c4-lifecycle/RESULT.json",
       "retention_enabled": true,
       "arm": "larger-gpqa20-c4-retention-retry",
-      "status": "submitted",
+      "status": "building_or_queued",
       "queued_at": "2026-11-06T18:46:01.548044+00:00",
       "tt_metal_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
       "predicted_hours": 3.049166666666667,
@@ -2144,7 +2148,13 @@
       "previous_run_id": 42256121890,
       "run_id": 42273660905,
       "submitted_at": "2026-11-06T18:46:03Z",
-      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42273660905"
+      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42273660905",
+      "workflow_status": "in_progress",
+      "workflow_conclusion": null,
+      "last_observed_at": "2026-11-06T18:49:36.248275+00:00",
+      "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-frkdx",
+      "build_started_at": "2026-11-06T18:46:22Z",
+      "build_completed_at": null
     },
     {
       "arm": "phase-archive-idle-race",
@@ -2168,7 +2178,7 @@
     }
   ],
   "status": "same20_archive_repair_retry_and_SWE5_running",
-  "last_updated": "2026-11-06T18:35:33.107785+00:00",
+  "last_updated": "2026-11-06T18:51:58.460734+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -2831,6 +2841,16 @@
       "raw_score": 0.8,
       "valid": false,
       "audit": "runs/larger-gpqa20-c4-retained/audit.json"
+    },
+    {
+      "arm": "phase-archive-runtime-benchmark",
+      "planned_clients": 1,
+      "batch": 1,
+      "device_job_hours": 0.07605465913249645,
+      "predicted_device_hours": 0.0966789076586,
+      "matrix_client_seconds": 27.09793480101507,
+      "headline_client_seconds": 34.79740667401347,
+      "evidence": "runs/phase-archive-runtime-benchmark/RESULT.json"
     }
   ],
   "local_idle_intervals": [
@@ -3260,9 +3280,13 @@
     }
   ],
   "next_local_job": {
-    "status": "running",
-    "arm": "phase-archive-runtime-benchmark",
-    "goal": "Bind accepted repaired source to headline and release matrix measurements"
+    "status": "waiting_for_actual_CI_trajectory",
+    "goal": "Diagnose an actual retained failure if normal current rung requires it",
+    "reason": "Selected repaired runtime benchmark complete. All capacity/source prerequisites measured; host assessment found no justified additional interference trial. Avoid duplicate diagnostics without a new mechanism.",
+    "active_secondary_runs": [
+      42247098210,
+      42273660905
+    ]
   },
   "next_rung_admission_policy": {
     "updated_at": "2026-11-06T17:48:16.171357+00:00",

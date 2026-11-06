@@ -473,6 +473,17 @@
         "device_time_and_rooflines": "No profiling of vLLM; host TTFT/phase boundaries cannot substitute for device time.",
         "causal_retention_overhead": "Single sequential run, no randomized repeated control; no causal optimization/speed claim."
       }
+    },
+    {
+      "runtime": "ab2730c27e557b09b2eafe3494e47790adc210aa",
+      "source": "runs/phase-archive-runtime-benchmark/RESULT.json",
+      "matrix_seconds": 27.09793480101507,
+      "headline_ttft_ms": 753.7608764978359,
+      "headline_decode_tps": 35.32100514361217,
+      "device_hours": 0.07605465913249645,
+      "limitations": {
+        "device_times_and_rooflines": "No vLLM profiling; host TTFT/phase boundary timings cannot substitute for device time."
+      }
     }
   ],
   "diagnostic_confirmations": [

@@ -1,0 +1,57 @@
+{
+  "status": "host_assessment_complete_no_device_allocation",
+  "effort": "long-prefill-decode-interference",
+  "change": "none",
+  "problem_status": "open; release impact and profitable serving counterfactual unmeasured",
+  "device_hours": 0,
+  "credited_release_saving_hours": 0,
+  "estimated_release_saving_hours": null,
+  "hours_saved_per_device_hour": null,
+  "decision": "Do not allocate the prior0.25device-hour trial now",
+  "confirmation": "Existing evidence supplies no defensible positive release makespan improvement",
+  "configuration_review": {
+    "current_stock": {
+      "decode_interleave_enabled": true,
+      "decode_interleave_prefill_steps": 2,
+      "decode_interleave_decode_steps": 1
+    },
+    "possible_candidate": {
+      "decode_interleave_decode_steps": 4
+    },
+    "candidate_status": "not selected or accepted; trades current decode progress against next-agent first-token time"
+  },
+  "measured_basis": {
+    "valid_swe2_prefill_label_host_seconds": 27.577056846999998,
+    "valid_swe2_phase_window_seconds": 338.479998605,
+    "current_swe5_repeat_eval_seconds": 4041.919023,
+    "gpqa_C4_ten_prefill_steps": 8,
+    "gpqa_C4_ten_decode_steps": 19863,
+    "synthetic107585_overlap_host_seconds": 49.25943780597299,
+    "synthetic_anchor_tokens_during_overlap": 28
+  },
+  "why_no_action": [
+    "Synthetic overlap proves stalls exist but has no real-task critical-path counterfactual; repeating it alone duplicates completed diagnostics.",
+    "Returning-prefix reuse means long histories do not imply repeated cold whole-context prefills.",
+    "Old smoke prefill/decode host labels include gaps and cannot be treated as removable device time or extrapolated to current capped-task composition.",
+    "GPQA observed capped decode loops are not long-prefill interference; latest20C4 lacked complete archived phases.",
+    "Changing interleave can delay other agents and alter sampled trajectories; lower anchor gaps alone do not establish suite makespan improvement."
+  ],
+  "revisit_condition": "Complete repaired normal-run artifacts tie repeated long uncached prefills to overlapping release-critical decode and quantify an aggregate nonoverlapping critical-path saving that exceeds added waiting and confirmation cost.",
+  "conditional_confirmation": "Coordinator may then price matched current2:1 versus candidate2:4 exact native-history replay with same request arrivals/seeds/caps, complete-agent makespan, phase/native usage, preemption and retention checks. Accept only paired exactness plus confirmation, or a scored pair on the same current-best frozen cohort if outputs change. Keep all context/release limits and stock plugin runtime.",
+  "future_box_note": "Prior0.25h trial is not allocated; any future forecast/box must be repriced from chosen real trace. No claimed positive savings.",
+  "evidence": [
+    "PROPOSAL.md",
+    "../prefill-under-load/RESULT.md",
+    "../measured-workload-idle-regime/RESULT.md",
+    "../serving-shortfall-pricing/RESULT.json",
+    "../swe-valid-runtime-analysis/RESULT.md",
+    "../swe-phase-accounting-confirmation/result.json",
+    "../nightly-swe-retained-repeat/audit.json",
+    "../gpqa-c4-scored10-evals/audit.json",
+    "../gpqa-current10-c2/audit.json",
+    "../terminal-smoke-runtime-analysis/result.json",
+    "../nightly-terminal-observable/stop.json",
+    "/home/mvasiljevic/gemma4-31b-pipeline-v3/vllm-tt-plugin-stage09/src/vllm_tt_plugin/config.py"
+  ],
+  "central_docs_modified": false
+}

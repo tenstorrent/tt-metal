@@ -2,7 +2,7 @@
   "arm": "phase-archive-runtime-benchmark",
   "owner": "coordinator",
   "device": "local",
-  "status": "running",
+  "status": "completed_valid",
   "started_at": "2026-11-06T18:45:36.976918+00:00",
   "queued_at": "2026-11-06T18:45:36.976918+00:00",
   "planned_clients": 1,
@@ -33,5 +33,9 @@
     ]
   },
   "owner_check": [],
-  "source_snapshot": "bringup/artifacts/stage12-phase-archive-runtime-benchmark/source-launch.json"
+  "source_snapshot": "bringup/artifacts/stage12-phase-archive-runtime-benchmark/source-launch.json",
+  "ended_at": "2026-11-06T18:50:10.778118+00:00",
+  "exit_status": 0,
+  "actual_device_hours": 0.07605465913249645,
+  "evidence": "runs/phase-archive-runtime-benchmark/RESULT.json"
 }
