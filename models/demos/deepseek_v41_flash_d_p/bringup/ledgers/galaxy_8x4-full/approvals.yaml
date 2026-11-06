@@ -33,3 +33,9 @@ shared:
     paths:
     - ttnn/ttnn/bringup
     note: 'owner 2026-11-06: bf16 compressed KV and bf16 window KV (compute, not only serve) for now; back to 4-bit later'
+  P.39:
+    by: dnijemcevic
+    at: '2026-11-06T20:45:00'
+    paths:
+    - ttnn/ttnn/bringup
+    note: 'owner 2026-11-06: served index keys in Blaze decode format (scaled fp8, 192 B rows) for PD compatibility; contract change authorized; run after P.38 without waiting for the owner'
