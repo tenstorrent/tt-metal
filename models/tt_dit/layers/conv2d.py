@@ -39,6 +39,10 @@ class Conv2d(Module):
     # with every cached program, so a model that runs many input sizes fills L1_SMALL without it.
     config_tensors_in_dram: bool = False
 
+    # Rows of activation blocks per core, and double-buffered activations and weights.
+    act_block_h_override: int = 32
+    double_buffer: bool = False
+
     # Mesh shape -> (input height, input width, in channels, out channels) -> number of DRAM width
     # slices; 1 runs the conv on the whole input in L1. A shape missing here gets no slice config,
     # so ttnn picks the slicing from the L1 free at call time. Models can extend the table for their
@@ -544,9 +548,11 @@ class Conv2d(Module):
         in_channels = self.in_channels // self.in_mesh_axis_size
         out_channels = self.weight.data.shape[0]
         conv_config = ttnn.Conv2dConfig(
-            act_block_h_override=32,
+            act_block_h_override=self.act_block_h_override,
             weights_dtype=self.weight.dtype,
             config_tensors_in_dram=self.config_tensors_in_dram,
+            enable_act_double_buffer=self.double_buffer,
+            enable_weights_double_buffer=self.double_buffer,
         )
 
         # The prepared layout depends on the input size and the slice config. The input memory config,
