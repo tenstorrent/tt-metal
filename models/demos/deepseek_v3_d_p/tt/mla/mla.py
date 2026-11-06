@@ -699,6 +699,13 @@ class ttMLA:
                 self.g_proj_weight = weights["g_proj"]
             if self._q_distnorm:
                 self._q_a_norm_weight_tp = weights["q_a_layernorm_tp"]
+                self.tt_ccl.preallocate_fused_rmsnorm_resources(
+                    [1, 1, self.active_seq_len_local, self.q_lora_rank // self.tp_factor],
+                    ttnn.bfloat16,
+                    self._q_a_norm_weight_tp,
+                    self.tp_axis,
+                    self.ccl_num_links,
+                )
         logger.info(f"Loaded {len(weights)} weights in MLA layer {layer_idx} (kv_only={kv_only})")
         if self._merge_qkv_a:
             self.qkv_a_proj_weight = self._concat_qkv_a_weight()

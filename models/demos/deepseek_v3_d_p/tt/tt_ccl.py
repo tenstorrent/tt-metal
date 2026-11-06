@@ -198,6 +198,20 @@ class TT_CCL:
         self.mla_high_bw_gather_semaphores = None
 
     def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links):
+        resources = self._fused_rmsnorm_entry(x, weight, cluster_axis, num_links)
+        index = resources["next"]
+        resources["next"] = 1 - index
+        return resources["pairs"][index]
+
+    def preallocate_fused_rmsnorm_resources(self, shape, dtype, weight, cluster_axis, num_links):
+        """Create get_fused_rmsnorm_resources' entry for a TILE input of this shape, at model construction."""
+        x = ttnn.empty(
+            shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        self._fused_rmsnorm_entry(x, weight, cluster_axis, num_links)
+        ttnn.deallocate(x)
+
+    def _fused_rmsnorm_entry(self, x, weight, cluster_axis, num_links):
         key = (
             tuple(x.shape),
             tuple(x.padded_shape),
@@ -217,13 +231,10 @@ class TT_CCL:
                 )
                 pairs.append((semaphores, stats))
             # All chips must initialize their semaphores before any peer sends.
-            # This allocation happens during the first warmup, once per geometry.
             ttnn.synchronize_device(self.mesh_device)
             resources = {"pairs": pairs, "next": 0}
             self.fused_rmsnorm_resources[key] = resources
-        index = resources["next"]
-        resources["next"] = 1 - index
-        return resources["pairs"][index]
+        return resources
 
     def get_combine_overlap_semaphores(self):
         """fwd_arrived, final_arrived and expert_go, then combine's channel counters, for
