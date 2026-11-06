@@ -336,11 +336,15 @@ inline __attribute__((always_inline)) void configure_gathering() {
 #if defined(ARCH_BLACKHOLE) && !defined(ENABLE_GATHERING)
     // Workaround for tt-metal#16439, making sure gathering multiple instructions issued to Tensix is disabled
     // Brisc does not issue Tensix instructions but to be consistent for all riscs around Tensix we disable it
-    // Disable gathering: set bit 18
+    // Disable gathering: set bit 18. Same sequence as ckernel_gathering_off() in the Blackhole ckernel.h:
+    // branch prediction off, 20 nops so any prediction made before it resolves, then gathering off.
     asm(R"ASM(
         .option push
         li   t1, 0x2
         csrrs zero, 0x7c0, t1
+        .rept 20
+        nop
+        .endr
         li   t1, 0x1
         slli t1, t1, 18
         fence
