@@ -1,7 +1,10 @@
 # Source files for ttnn_op_experimental_tensor_prefetcher.
 # Module owners should update this file when adding/removing/renaming source files.
 
-set(TTNN_OP_EXPERIMENTAL_TENSOR_PREFETCHER_SRCS tensor_prefetcher.cpp)
+set(TTNN_OP_EXPERIMENTAL_TENSOR_PREFETCHER_SRCS
+    tensor_prefetcher.cpp
+    device/signal_tensor_prefetcher_device_operation.cpp
+)
 
 # Registered on the shared `ttnn` Python module target from
 # ttnn/cpp/ttnn/operations/experimental/tensor_prefetcher/CMakeLists.txt (see the `if(TARGET ttnn)` block there).

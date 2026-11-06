@@ -1104,19 +1104,22 @@ class Attention(LightweightModule):
             return dense_out_sharded
 
         else:
-            attn_output = tt_all_gather(
-                attn_output_cat,
-                self.mesh_device,
-                self.tt_ccl,
-                dim=2,
-                cluster_axis=1,
-                memory_config=self.args.get_attn_gather_users_mem_config(
-                    Mode.DECODE, list(self.mesh_device.shape)[1], self.prefetcher
-                ),
-                sharded=True,
-                subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
-                # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
-            )
+            # Users are partitioned across columns only on a 2D mesh.
+            attn_output = attn_output_cat
+            if 1 not in self.mesh_device.shape:
+                attn_output = tt_all_gather(
+                    attn_output_cat,
+                    self.mesh_device,
+                    self.tt_ccl,
+                    dim=2,
+                    cluster_axis=1,
+                    memory_config=self.args.get_attn_gather_users_mem_config(
+                        Mode.DECODE, list(self.mesh_device.shape)[1], self.prefetcher
+                    ),
+                    sharded=True,
+                    subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
+                    # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
+                )
             if self.TG:
                 attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
                 # user_selection_matrix = [1, 1, 32, 128]

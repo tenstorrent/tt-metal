@@ -147,7 +147,6 @@ python -m models.demos.deepseek_v3_d_p.scripts.plot_pipeline_trace \
   /data/philei/health/pp_2rank.log -o /data/philei/health/pp_2rank.png
 ```
 `parse_iteration_times.py <log>` prints per-iteration numbers. Ignore chunk 0 (first iteration recompiles).
-`PREFILL_SYNC_PER_CHUNK=1` on Process 1 gives exact per-chunk compute but disables overlap (timing only).
 
 ### 1 vs 2 vs 4
 
@@ -242,6 +241,5 @@ source PCC 60/60 layers, dst==src byte-identical over all 345600 chunks, migrate
 - `M3_WEIGHTS_FROM_CACHE=1` — force the tilized-cache load (skip the bf16 source).
 - `PREFILL_TRACE_DIR=<dir>` — override the golden trace.
 - `PREFILL_PP_LAYER_COUNTS="a,b,..."` — override the even layer split (must sum to 60, one per rank).
-- `PREFILL_SYNC_PER_CHUNK=1` — exact per-chunk compute (disables overlap).
 - `LOGURU_LEVEL=INFO` — silence the model's DEBUG logs. Already in the request bindings' `global_env` for
   the runner ranks; set it on the producer command too (shown above).
