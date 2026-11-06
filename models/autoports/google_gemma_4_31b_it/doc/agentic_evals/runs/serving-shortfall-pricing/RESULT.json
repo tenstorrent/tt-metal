@@ -1,0 +1,153 @@
+{
+  "status": "host_only_pricing_complete_causal_savings_unidentified",
+  "created_at": "2026-11-06T12:35:35.303571+00:00",
+  "device_hours": 0,
+  "scope": "Existing evidence only; provisional release lists are not frozen release or measured full-suite results.",
+  "provisional_schedule": {
+    "lists": {
+      "r1_gpqa_diamond": 198,
+      "swe_bench_verified": 5,
+      "terminal_bench_2_1": 10
+    },
+    "linear_eval_hours": {
+      "r1_gpqa_diamond": 5.2085724876293975,
+      "swe_bench_verified": 0.26040839930555554,
+      "terminal_bench_2_1": 3.187784116666667
+    },
+    "sum_linear_eval_hours": 8.65676500360162,
+    "excludes": "setup, queue, dry-run and release benchmark matrix",
+    "source": "efforts.json agent-capacity-and-contention.re_estimate",
+    "c4_guess_hours_saved": {
+      "r1_gpqa_diamond": 1.3021431219073494,
+      "swe_bench_verified": 0.06510209982638888,
+      "terminal_bench_2_1": 0.7969460291666668
+    },
+    "c4_guess_total_hours_saved": 2.164191250900405,
+    "c4_guess_device_hours": 0.15,
+    "interpretation": "25% is a coordinator hypothesis, not an observed causal factor or bound. SWE C4 candidate does not authorize GPQA/Terminal C4."
+  },
+  "valid_swe_measured_basis": {
+    "tasks": 2,
+    "suite_seconds": 374.9880950450897,
+    "agent_union_seconds": 342.9376528263092,
+    "query_agent_lane_seconds": 643.4552664756775,
+    "query_fraction_of_agent_lane_time": 0.9890372908345415,
+    "query_window_interpretation": "Upper envelopes including host preparation/parsing; overlapping agents mean sum exceeds suite wall. Not generation/device seconds.",
+    "phase_host_seconds": {
+      "prefill": 27.577056846999998,
+      "decode": 310.9029417580009
+    },
+    "phase_window_seconds": 338.479998605,
+    "prefill_host_boundary_fraction": 0.08147322429879209,
+    "calls": 91,
+    "max_prompt_tokens": 35925,
+    "max_prompt_plus_completion": 35998,
+    "observed_limit_hits": false,
+    "source": [
+      "runs/swe-valid-runtime-analysis/result.json",
+      "runs/swe-phase-accounting-confirmation/result.json"
+    ]
+  },
+  "linear_swe5_accounting_not_savings": {
+    "factor": 2.5,
+    "suite_hours": 0.2604083993368679,
+    "prefill_label_host_hours": 0.019150733921527777,
+    "decode_label_host_hours": 0.2159048206652784,
+    "agent_union_hours": 0.23815114779604807,
+    "query_agent_lane_hours": 0.4468439350525538,
+    "interpretation": "Bookkeeping scaled from two tasks, not a prediction for actual five task composition or causal removable time. Prefill/decode labels include gaps and plugin work; shifting a boundary can shift attribution. Do not add query-lane time to phase/suite time."
+  },
+  "shortfalls": [
+    {
+      "problem": "fixed KV pool",
+      "release_added_hours": null,
+      "release_savings_hours": null,
+      "measured": "C2 replay zero preemptions and returning-prefix ratio0.9995835069; final-pair proxy0.9995148970. Synthetic full-window C2 also passed.",
+      "source": [
+        "runs/real-history-capacity/REPLAY_RESULT.json",
+        "runs/local-long-context/RESULT.md"
+      ],
+      "interpretation": "Observed zero preemption events is not zero pool-induced release cost. Fixed pool could limit future concurrency or cause unobserved eviction; current C2 tests do not identify alternative-pool counterfactual. Central zero is conservative planning credit only.",
+      "needed": [
+        "Four distinct valid representative histories with actual simultaneous residency and allocator/preemption/reuse counters",
+        "Safe physical pool accounting and matched alternate capacity measurement",
+        "Same-cohort scored scheduling pair and admitted host resources for higher concurrency"
+      ]
+    },
+    {
+      "problem": "long prefill and decode interference",
+      "release_added_hours": null,
+      "release_savings_hours": null,
+      "idle_cold_seconds": {
+        "4096": 0.7828310740878806,
+        "31755": 8.284344288986176,
+        "107585": 48.065079889958724
+      },
+      "idle_overlap_seconds": 49.25943780597299,
+      "anchor_tokens_in_window": 28,
+      "idle_overlap_anchor_tokens_per_second": 0.5684189923216062,
+      "source": [
+        "runs/measured-workload-idle-regime/RESULT.md",
+        "runs/swe-valid-runtime-analysis/result.json"
+      ],
+      "interpretation": "107585 derives from earlier quarantined stress histories; valid SWE smoke max35998 total, so charging107585 cold cost on each valid call is unsupported. Cached returning histories do not incur whole-context cold prefill every turn. Overlap window is host wall and includes scheduling; overlap-minus-cold is not causal interference overhead.",
+      "needed": [
+        "Release-representative prompt distributions, exact uncached prefixes and request overlap counts",
+        "Comparable C2 isolated versus overlapping windows with preserved outputs",
+        "Task critical-path mapping; generation share alone cannot price overlapping request delays"
+      ]
+    },
+    {
+      "problem": "host contention",
+      "release_added_hours": null,
+      "release_savings_hours": null,
+      "synthetic_c32_idle_tps": 985.554416731418,
+      "synthetic_c32_busy_tps": 645.0344483642087,
+      "synthetic_busy_to_idle_time_factor_equal_tokens": 1.5279097406824695,
+      "c2_cold_idle_to_prior_time_ratios": {
+        "4096": 0.3513152845076627,
+        "31755": 0.4886998216035328,
+        "107585": 0.661293342079496
+      },
+      "source": [
+        "runs/local-host-contention/RESULT.md",
+        "runs/measured-workload-idle-regime/RESULT.md",
+        "runs/measured-workload-prefill/result-retry.json"
+      ],
+      "interpretation": "C32 one-busy-process-per-CPU stress differs from C2 tool tasks; idle comparison still included coordinator/hooks. Ratios describe observed regimes, not a release factor. Earlier queue cost includes readiness/socket failures, so queue ratio is not serving speed.",
+      "needed": [
+        "Actual CI concurrent CPU load and per-task resource residency correlated with query windows",
+        "Matched same-request concurrency/load comparison on representative host",
+        "Critical-path serving fraction and reproducibility before translating rates to release hours"
+      ]
+    },
+    {
+      "problem": "mixed intermediate prefill host sampling",
+      "release_added_hours": null,
+      "release_savings_hours": null,
+      "valid_swe_host_compatibility_steps": 9,
+      "valid_swe_prefill_steps": 98,
+      "host_fraction_of_prefill_steps": 0.09183673469387756,
+      "device_decode_steps": 9582,
+      "source": "runs/swe-phase-accounting-confirmation/result.json",
+      "interpretation": "9/98 is frequency, not duration share. Host sampler executes outside adapter; its time may fall into next decode/prefill boundary interval. Cannot multiply prefill27.577s by9/98 or call it sampler cost. Accepted stock-plugin mode remains operator-authorized; no shared runtime modification proposed.",
+      "needed": [
+        "Matched host-compatible versus canonical sampling step shapes and host-boundary attribution that separates surrounding work",
+        "Frequency on selected release lists and output-preserving counterfactual",
+        "Operator authorization before any prohibited stock-plugin runtime change"
+      ]
+    }
+  ],
+  "bounds": {
+    "measured_swe_smoke_trivial_nonnegative_saving_upper_hours": 0.10416335973474715,
+    "basis": "A nonnegative speed saving cannot exceed all measured374.988095s of this fixed two-task suite. This tautological upper bound gives no positive attainable savings and does not extrapolate to other cohorts.",
+    "provisional_linear_upper_hours": 8.65676500360162,
+    "provisional_interpretation": "Only an upper bound within assumed linear schedule, not empirical release bound. Different shortfalls overlap the same timeline and must not be added."
+  },
+  "generic_implications": [
+    "Current query share does not resolve isolated generation share:643.455 summed seconds overlap inside374.988 suite seconds.",
+    "Use valid smoke accounting for forecasts; retain quarantined long histories as stress evidence only.",
+    "Replace linear list forecasts after actual nightly/full timings; reprice C4 and release-list selection.",
+    "Central survey has stale pending fields; this artifact cites newer valid SWE evidence without editing central files."
+  ]
+}

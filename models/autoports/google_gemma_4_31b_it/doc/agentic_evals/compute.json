@@ -550,6 +550,61 @@
           "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
           "command": "timeout1260 tests/run_serving.sh --stages serve --max-num-seqs8 --enable-prefix-caching; client-command.json",
           "evidence": "runs/measured-workload-idle-regime/RESULT.md"
+        },
+        {
+          "arm": "current-runtime-benchmark",
+          "owner": "coordinator",
+          "device": "local",
+          "status": "completed",
+          "planned_clients": 1,
+          "batch": 1,
+          "max_num_seqs": 1,
+          "predicted_hours": 0.169,
+          "box_device_hours": 0.2,
+          "runtime_publication_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
+          "tti_sha": "4b94cf3ba86d30a6816149872e59cc34438748ae",
+          "plugin_runtime_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+          "prediction_basis": "Conservative prior queue .0952942889h + current observed startup226s/3600 + headline35s and one warmup5s/3600 = .1691831778h. Prior queue already included startup; additive estimate intentionally overcounts rather than claiming isolated client cost. Current B1 startup remains unmeasured.",
+          "phases": [
+            {
+              "name": "tti-release-matrix",
+              "input_tokens": 128,
+              "output_tokens": 128,
+              "num_prompts": 8,
+              "planned_clients": 1,
+              "predicted_seconds": 27.120889400946908
+            },
+            {
+              "name": "headline-warmup",
+              "input_tokens": 4096,
+              "output_tokens": 128,
+              "num_prompts": 1,
+              "planned_clients": 1,
+              "predicted_seconds": 5
+            },
+            {
+              "name": "headline",
+              "input_tokens": 4096,
+              "output_tokens": 128,
+              "num_prompts": 8,
+              "planned_clients": 1,
+              "predicted_seconds": 34.80392373201903
+            }
+          ],
+          "commands": "commands.json",
+          "release": false,
+          "queued_at": "2026-11-06T12:38:26.091009+00:00",
+          "start": "2026-11-06T12:38:26.091009+00:00",
+          "timeout_seconds": 720,
+          "execution_sha": "8c49bb3fe33ad8530ab70559f8d99274355bf12c",
+          "owner_check": [],
+          "regime": "serial TT mesh1x4; no HF CPU workload; ordinary coordinator activity",
+          "end": "2026-11-06T12:43:40.562401+00:00",
+          "exit_status": 0,
+          "wrapper_exit_status": 1,
+          "exit_reason": "Clients0; intentional idle API SIGINT; no device owners",
+          "owner_check_after": [],
+          "actual_hours": 0.08735316444444444
         }
       ]
     },
@@ -1119,7 +1174,7 @@
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42206258311",
           "workflow_status": "in_progress",
           "workflow_conclusion": null,
-          "last_observed_at": "2026-11-06T12:33:03.417076+00:00",
+          "last_observed_at": "2026-11-06T12:43:11.710422+00:00",
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-x6kzj",
           "build_started_at": "2026-11-06T10:55:05Z",
           "build_completed_at": "2026-11-06T11:47:58Z",
@@ -1166,7 +1221,7 @@
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42208934357",
           "workflow_status": "in_progress",
           "workflow_conclusion": null,
-          "last_observed_at": "2026-11-06T12:32:39.632815+00:00",
+          "last_observed_at": "2026-11-06T12:43:48.661245+00:00",
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-l229t",
           "build_started_at": "2026-11-06T11:16:03Z",
           "build_completed_at": "2026-11-06T12:06:53Z",
@@ -1219,7 +1274,7 @@
           "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42210467509",
           "workflow_status": "in_progress",
           "workflow_conclusion": null,
-          "last_observed_at": "2026-11-06T12:33:00.401858+00:00",
+          "last_observed_at": "2026-11-06T12:43:08.607300+00:00",
           "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-kd74g",
           "build_started_at": "2026-11-06T11:28:23Z",
           "build_completed_at": "2026-11-06T12:19:28Z",

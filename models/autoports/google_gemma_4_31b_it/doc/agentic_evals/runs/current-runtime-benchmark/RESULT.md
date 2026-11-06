@@ -1,0 +1,13 @@
+# Current runtime benchmark confirmation
+
+The stock TTI existing-server route completed the unchanged release matrix: eight128-input/128-output requests at concurrency1 on B1 in27.087502s. Every detailed client input/output length and all8 completions match the matrix. The stock chat template produces actual server prefills141–143tokens;128 is the harness dataset length, not a device-executed token claim. No route or template was changed.
+
+The separate exact4096/128/B1/C1 headline completed8/8 with all lengths verified, after one independent warmup. Measured request duration34.814444s, meanTTFT756.097911ms, meanTPOT28.310063ms, reciprocal-mean-TPOT decode rate35.323129tokens/s/user. The headline CLI's42.393834s includes client startup and is not benchmark request duration. All three clients exited0.
+
+Runtime registration confirms the execution autoport, all60layers, mesh1x4, context262144, max_num_seqs1, native parsers, APC/chunked prefill/async and top_k32. Model/tokenizer use revision842da3794eaa0b77d5f08bae87a17459d91ff475. All14 compared runtime/launcher files match published TT439c22b0e991e5af626efafa7224edf28f84795b; stock plugin runtimeca7a18246e4111629ed6cb4a7d1192002749fccf; TTI4b94cf3ba86d30a6816149872e59cc34438748ae. The old emitted runtime spec supplies only the existing-server client's model/matrix, not the live B1 server configuration.
+
+Bounded phase export retained144snapshots,4370events and2185matched submit/completion pairs; no export errors, truncation or final pending steps. All2159decode steps and17final-prefill steps used device sampling;9intermediate-prefill steps used the accepted stock host compatibility path. These are lightweight host adapter timestamps, not device measurements; no device latency or roofline is inferred.
+
+Predicted device hold0.169h versus measured0.087353164h, within0.20h box. The conservative forecast intentionally added a startup allowance to an older total already containing startup. Matrix duration changed from27.120889s to27.087502s; headline from34.803924s to34.814444s and TTFT752.843677ms to756.097911ms. Single sequential observations with changing random matrix seed/cache salt and ordinary host activity do not establish an isolated causal change or release-hours saving.
+
+After clients completed, running/waiting were zero and the coordinator issued idle API SIGINT. Wrapper exit1 is deliberate shutdown, clients exit0, and final device owners are empty. Queue closed at12:43:40.562401UTC. No model/configuration change was made. This resolves current-runtime benchmark confirmation; it is not a frozen dry run or release result.

@@ -1,0 +1,91 @@
+{
+  "published_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
+  "publication_checkout": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tt-metal-stage12-publish",
+  "files": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/batched_prefill.py",
+      "published_sha256": "ab99ab9c8c54f206d16a56df1dc02bc3c4da14db003ea52d6e45d7f679af8df8",
+      "execution_sha256": "ab99ab9c8c54f206d16a56df1dc02bc3c4da14db003ea52d6e45d7f679af8df8",
+      "equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/benchmark_phases.py",
+      "published_sha256": "d39865a75a96676f07b269592fbc14b009fc57d47adef1bdcc23fb78aba4a81e",
+      "execution_sha256": "d39865a75a96676f07b269592fbc14b009fc57d47adef1bdcc23fb78aba4a81e",
+      "equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/functional_decoder.py",
+      "published_sha256": "a9d4f4d8ba3c710fb7508e0f0804e499a1312a847484f4d4e6668bd6b4334731",
+      "execution_sha256": "a9d4f4d8ba3c710fb7508e0f0804e499a1312a847484f4d4e6668bd6b4334731",
+      "equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/fused_decoder.py",
+      "published_sha256": "cc1b358f90a2fadab24cbb3dd9826ffe32015fab46ccefac25c0c6c11c658149",
+      "execution_sha256": "cc1b358f90a2fadab24cbb3dd9826ffe32015fab46ccefac25c0c6c11c658149",
+      "equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/generator.py",
+      "published_sha256": "3276fd7427898077ab25e139f89a7b03d2a968cd9bafb79e9aa08bb975016f22",
+      "execution_sha256": "3276fd7427898077ab25e139f89a7b03d2a968cd9bafb79e9aa08bb975016f22",
+      "equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/generator_contract.py",
+      "published_sha256": "b5af096ae1b99d19a48786c089a790778faf1c228a45b4a8933a447dfba95f24",
+      "execution_sha256": "b5af096ae1b99d19a48786c089a790778faf1c228a45b4a8933a447dfba95f24",
+      "equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py",
+      "published_sha256": "4cc22731bf210fdb24040d4ad855c663823132aaf441c50bdefa2c0710dd1ff6",
+      "execution_sha256": "4cc22731bf210fdb24040d4ad855c663823132aaf441c50bdefa2c0710dd1ff6",
+      "equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/model.py",
+      "published_sha256": "10224839f923f08887ac64ab71121980affa50d7bb542784b234ff19b466e70b",
+      "execution_sha256": "10224839f923f08887ac64ab71121980affa50d7bb542784b234ff19b466e70b",
+      "equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py",
+      "published_sha256": "4580814729e23f84b4b8fc1b952ae6dc3eeb55a7de6b8f13753c940f98fb03b7",
+      "execution_sha256": "4580814729e23f84b4b8fc1b952ae6dc3eeb55a7de6b8f13753c940f98fb03b7",
+      "equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py",
+      "published_sha256": "3129039e1aafc3b12f2c535306a80e40f41fc2d98747ed93768d0bab1323e1c7",
+      "execution_sha256": "3129039e1aafc3b12f2c535306a80e40f41fc2d98747ed93768d0bab1323e1c7",
+      "equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/precision.py",
+      "published_sha256": "4d2c9708ec2757d888610e9ab5025e6e9b1cbe7cf1e929475e1167131052eef1",
+      "execution_sha256": "4d2c9708ec2757d888610e9ab5025e6e9b1cbe7cf1e929475e1167131052eef1",
+      "equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/prefill.py",
+      "published_sha256": "4208b8362e997db1845fd98043df9b183e8e17ed789ff5b5ea839739cd0b1f91",
+      "execution_sha256": "4208b8362e997db1845fd98043df9b183e8e17ed789ff5b5ea839739cd0b1f91",
+      "equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/selected_precision_config.json",
+      "published_sha256": "af0969d87723dccb3a1199c01632ae720324f68c0287e8e327566a754be2d410",
+      "execution_sha256": "af0969d87723dccb3a1199c01632ae720324f68c0287e8e327566a754be2d410",
+      "equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/weights.py",
+      "published_sha256": "bca69b111c9c9cbf9bc620c3dc6bee873abdecdd75f08d5b8b93638e881868cd",
+      "execution_sha256": "bca69b111c9c9cbf9bc620c3dc6bee873abdecdd75f08d5b8b93638e881868cd",
+      "equal": true
+    }
+  ],
+  "all_runtime_files_equal": true
+}

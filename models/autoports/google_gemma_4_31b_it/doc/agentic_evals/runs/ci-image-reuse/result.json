@@ -1,0 +1,62 @@
+{
+  "status": "source_proven_supported_reuse",
+  "device_hours": 0,
+  "dispatch_input": {
+    "docker-image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:61962ce48cd4561ed02080d50b7403eea5cb1b2122a160e212ee4ced875c9005",
+    "impl-of-model": "gemma4-31b-autoport-v3",
+    "inference-server-git-ref": "<new immutable TTI task-list commit>",
+    "tt-metal-git-ref": "439c22b0e991e5af626efafa7224edf28f84795b",
+    "vllm-git-ref": "ca7a18246e4111629ed6cb4a7d1192002749fccf"
+  },
+  "digest_evidence": "bringup/artifacts/stage12-swe-activation-live.log:1010 and1279: successful pulls for tag0.26.1-439c22b0e991e5af626efafa7224edf28f84795b-ca7a182-127834471058",
+  "provenance": {
+    "normal_run": 42200513517,
+    "tti_sha_used": "2d738ec3910f7f13d1614e6196d9ff5f646b6fe1",
+    "build_job": 127834471058,
+    "tt_metal": "439c22b0e991e5af626efafa7224edf28f84795b",
+    "plugin": "ca7a18246e4111629ed6cb4a7d1192002749fccf"
+  },
+  "source_chain": [
+    {
+      "source": "doc/agentic_evals/setup/dispatch-workflow.yml:96",
+      "fact": "Wrapper forwards docker-image unchanged."
+    },
+    {
+      "source": "doc/agentic_evals/setup/shield-on-dispatch.yml:286-355",
+      "fact": "Nonempty docker-image skips resolve-shas and all image builds; run-tests always condition permits skipped builds, takes explicit image and separately requested TTI ref."
+    },
+    {
+      "source": "doc/agentic_evals/setup/shield-run-tests.yml:99-106,136-157,336-361",
+      "fact": "Checks out requested TTI ref; supports image pull/cache and forwards string as override-docker-image; dev-mode and explicit impl retained. Digest string has colon but is not latest, and is passed unchanged to Docker."
+    },
+    {
+      "source": "TTI run.py:1280-1283; workflows/run_docker_server.py:760-804",
+      "fact": "Job checkout resolves/writes runtime model spec, binds it readonly and sets RUNTIME_MODEL_SPEC_JSON_PATH. Dev mounts job reference_config,utils,tests,vllm-tt-metal/src."
+    },
+    {
+      "source": "TTI vllm-tt-metal/src/run_vllm_api_server.py:442-473",
+      "fact": "Runtime JSON is preferred and returned before image catalog fallback."
+    },
+    {
+      "source": "TTI workflow_module/command_factory.py:189,222-225",
+      "fact": "Task/eval selection resolves from job checkout target pack; tests and reference_config are also dev-mounted."
+    },
+    {
+      "source": "TTI vllm-tt-metal/vllm.tt-metal.src.dev.Dockerfile:102-125,237-258,302",
+      "fact": "Image builds requested TT Metal commit and installs plugin commit own pinned vLLM, then copies TT source/venv/plugin to runtime. TT model implementation, native binaries and installed dependencies remain image-owned; no host TT tree mount on this route."
+    },
+    {
+      "source": "bringup/artifacts/stage12-swe-activation-live.log:51-66,1221,1296-1305",
+      "fact": "Completed actual run records requested source refs, explicit autoport, dev-mode and exact runtime JSON/application mounts; no runtime TT/plugin override."
+    }
+  ],
+  "validation": "Read-only source inspection; current source files run.py,run_docker_server.py,run_vllm_api_server.py,Dockerfile have no diff from completed-run TTI2d738ec. Observed digest was pulled in completed normal run. No new pull or dispatch performed.",
+  "reuse_scope": "Safe for TTI task-list-only commits preserving these mounted server/config semantics and installed dependency requirements. Use digest, not mutable tag. Explicit implementation selection remains mandatory.",
+  "limits": [
+    "With docker-image set, TT/plugin ref inputs no longer build or validate image contents: digest provenance is the binding evidence.",
+    "Changing TT/model source, plugin, compiled runtime, image-installed dependencies or unmounted image files requires a different proven image.",
+    "Pull, startup, queue and eval remain; avoided build duration is forecast approximately50min from coordinator historical observation, not measured saving of a reuse dispatch.",
+    "Next normal rung supplies live digest-dispatch confirmation; no optional validation should delay it."
+  ],
+  "measured_reuse_speedup_seconds": null
+}

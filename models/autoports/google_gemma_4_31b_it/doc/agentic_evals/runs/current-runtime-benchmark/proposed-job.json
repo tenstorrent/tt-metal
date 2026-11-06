@@ -1,0 +1,43 @@
+{
+  "arm": "current-runtime-benchmark",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "prepared_not_queued",
+  "planned_clients": 1,
+  "batch": 1,
+  "max_num_seqs": 1,
+  "predicted_hours": 0.169,
+  "box_device_hours": 0.2,
+  "runtime_publication_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
+  "tti_sha": "4b94cf3ba86d30a6816149872e59cc34438748ae",
+  "plugin_runtime_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+  "prediction_basis": "Conservative prior queue .0952942889h + current observed startup226s/3600 + headline35s and one warmup5s/3600 = .1691831778h. Prior queue already included startup; additive estimate intentionally overcounts rather than claiming isolated client cost. Current B1 startup remains unmeasured.",
+  "phases": [
+    {
+      "name": "tti-release-matrix",
+      "input_tokens": 128,
+      "output_tokens": 128,
+      "num_prompts": 8,
+      "planned_clients": 1,
+      "predicted_seconds": 27.120889400946908
+    },
+    {
+      "name": "headline-warmup",
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "num_prompts": 1,
+      "planned_clients": 1,
+      "predicted_seconds": 5
+    },
+    {
+      "name": "headline",
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "num_prompts": 8,
+      "planned_clients": 1,
+      "predicted_seconds": 34.80392373201903
+    }
+  ],
+  "commands": "commands.json",
+  "release": false
+}

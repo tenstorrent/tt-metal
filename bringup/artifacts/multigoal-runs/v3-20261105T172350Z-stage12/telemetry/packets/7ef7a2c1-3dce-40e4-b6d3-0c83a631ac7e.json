@@ -29,9 +29,9 @@
     "decode_device_us": null,
     "prefill_flops_pct": null,
     "decode_dram_pct": null,
-    "ttft_ms": 752.8436765132938,
-    "decode_tps": 35.3042433377839,
-    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/parser-tti-benchmark/headline.json; full60/B1/C1,8serial4096/128 requests; parser configuration TTI da219dd56a241bb5314ae1da4b87104b84b0da15"
+    "ttft_ms": 756.0979105037404,
+    "decode_tps": 35.32312857218267,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/current-runtime-benchmark/headline.json; full60/B1/C1,8serial4096/128 requests; runtime439c22b0e991e5af626efafa7224edf28f84795b; TTI4b94cf3ba86d30a6816149872e59cc34438748ae; no device profiling"
   },
   "accuracy": [
     {
@@ -85,6 +85,7 @@
     "Current stage12 serving measurement; not frozen release.",
     "Native-tool registration repaired with2x168 exact token-ID pairs and actualharness parser checks.",
     "GPQA server-sized 10 repeats prior nightly visible answers; not 20 independent samples. Full 198 rung dispatched, not release.",
-    "Synthetic prefill-interference diagnostic is not headline workload or scored accuracy; excluded from performance fields. Local evidence commit6c9d8cdf."
+    "Synthetic prefill-interference diagnostic is not headline workload or scored accuracy; excluded from performance fields. Local evidence commit6c9d8cdf.",
+    "Current-runtime benchmark confirmation passed; no frozen dry run or release yet."
   ]
 }

@@ -116,6 +116,18 @@
     {
       "fact": "At observed107585-token stress length, B8 idle-host coldTTFT48.065s and overlap49.259s; concurrent anchor delivered28tokens. Prior16-threadHF regime took72.683/78.910s. Single protocol repeats with fresh UUID prefixes; host regime matters, no causal speedup or release saving inferred.",
       "evidence": "runs/measured-workload-idle-regime/RESULT.md"
+    },
+    {
+      "fact": "Stock docker-image override accepts immutable digest, skips server image rebuild, and still checks out dispatched TTI SHA for dev-mode config. Input TT/plugin refs alone do not validate an overridden image; retain digest-to-source build provenance. Applicable only to unchanged image-owned runtime/dependencies.",
+      "evidence": "runs/ci-image-reuse/result.json"
+    },
+    {
+      "fact": "GitHub job logs may initially404 while a job is running, but later API snapshots can succeed and expose progress. Treat last log timestamp as snapshot boundary and completed-task counts as unaudited; no score before artifact audit.",
+      "evidence": [
+        "bringup/artifacts/stage12-terminal-live-1244.log",
+        "bringup/artifacts/stage12-gpqa-live-1244.log",
+        "bringup/artifacts/stage12-swe-nightly-live-1244.log"
+      ]
     }
   ],
   "suite_timings": [

@@ -1737,8 +1737,16 @@
         "success": "Auditable release-pricing inputs or precise evidence gaps"
       },
       "box_hours": 0,
-      "status": "running",
-      "started_at": "2026-11-06T12:34:15.678297+00:00"
+      "status": "done",
+      "started_at": "2026-11-06T12:34:15.678297+00:00",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "open",
+      "confirmed": {
+        "result": "Existing host accounting gives descriptive costs but does not identify causal per-release savings; explicit gaps retained",
+        "evidence": "runs/serving-shortfall-pricing/RESULT.json"
+      },
+      "evidence": "runs/serving-shortfall-pricing/RESULT.json"
     },
     {
       "problem": "ci-image-reuse",
@@ -1760,8 +1768,54 @@
         "success": "Safe supported dispatch argument or explicit unsupported finding"
       },
       "box_hours": 0,
-      "status": "running",
-      "started_at": "2026-11-06T12:34:47.105929+00:00"
+      "status": "done",
+      "started_at": "2026-11-06T12:34:47.105929+00:00",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "open",
+      "confirmed": {
+        "source_parity": "Proven immutable digest TT439c/plugin ca7; separate dispatched TTI checkout supplies task config",
+        "live_confirmation": "Pending next eligible normal task-list-only rung; no extra device job",
+        "saving": "50min per build hypothesis; measure actual workflow on reuse"
+      },
+      "evidence": "runs/ci-image-reuse/result.json"
+    },
+    {
+      "problem": "current-runtime-benchmark-confirmation",
+      "owner": "current_benchmark",
+      "goal": "Confirm exact stock TTI benchmark matrix route on current full60 runtime after phase-export change",
+      "plan": "runs/current-runtime-benchmark/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0,
+          "swe_bench_verified": 0,
+          "terminal_bench_2_1": 0
+        },
+        "device_hours": 0.169,
+        "basis": "guess",
+        "reason": "Conservative prior queue .0952942889h + current observed startup226s/3600 + headline35s and one warmup5s/3600 = .1691831778h. Prior queue already included startup; additive estimate intentionally overcounts rather than claiming isolated client cost. Current B1 startup remains unmeasured."
+      },
+      "unblocks": [
+        "current runtime benchmark route projection"
+      ],
+      "confirm": {
+        "method": "Current autoport/runtime and exact matrix completed counts/lengths through stock TTI; bounded local queue",
+        "success": "Current runtime matrix measured without profiler; comparison scope preserved"
+      },
+      "box_hours": 0.2,
+      "status": "done",
+      "started_at": "2026-11-06T12:35:50.727342+00:00",
+      "used_device_hours": 0.08735316444444444,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": {
+        "matrix_completed": 8,
+        "headline_completed": 8,
+        "runtime_matches_publication": true,
+        "phase_export_errors": 0,
+        "within_box": true
+      },
+      "evidence": "runs/current-runtime-benchmark/result.json"
     }
   ],
   "rankings": [
@@ -3965,6 +4019,247 @@
         }
       ],
       "reason": "Validity issues first; idle-host measurements complete. Capacity preparation costs no device now and cannot delay normalC2 rungs. No C4 admission until actual4histories and confirmation; numerical speed credit remains0."
+    },
+    {
+      "after": "existing-evidence-serving-shortfall-pricing",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 2.164191250900405,
+          "device_hours": 0.15,
+          "basis": "guess",
+          "reason": "Current planning198/5/10;25% wall reduction guess; no measured benefit or frozen release claim."
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Pricing analysis earns no speed credit; causal counterfactuals remain unavailable. Validity stays first, normal rungs continue. Host-only image reuse investigation may remove build overhead without serving changes; benchmark confirmation establishes current runtime route."
+    },
+    {
+      "after": "immutable-ci-image-reuse-source-proof",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 2.164191250900405,
+          "device_hours": 0.15,
+          "basis": "guess",
+          "reason": "Current planning198/5/10;25% wall reduction guess; no measured benefit or frozen release claim."
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Source proof permits existing image for next normal TTI-only cohort change. No live time saving yet; normal rung confirms reuse, no extra experiment or delay. Validity priorities unchanged."
+    },
+    {
+      "after": "current-runtime-benchmark-start-and-image-reuse-next-rung",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "current-runtime-benchmark-confirmation",
+          "unblocks": [
+            "current_runtime_release_projection"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.169,
+          "basis": "guess"
+        },
+        {
+          "problem": "serving-shortfall-pricing",
+          "unblocks": [
+            "representative_release_projection"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0,
+          "reason": "Host-only analysis complete; causal gaps explicit, updated normal rung evidence needed"
+        },
+        {
+          "problem": "ci-image-reuse",
+          "saving_hours": 2.5,
+          "device_hours": 0,
+          "basis": "guess",
+          "reason": "Three release eval builds at50min each; no added device job, confirm on next normal rung. No evaluated serving speedup."
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 2.164191250900405,
+          "device_hours": 0.15,
+          "basis": "guess",
+          "reason": "Current planning198/5/10;25% wall reduction guess; no measured benefit or frozen release claim."
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Validity first. Current runtime benchmark uses local device while Docker-required rungs run onCI. Source-proven image reuse costs no device experiment and estimates2.5h build avoidance across three release eval arms; verify on next eligible rung without delaying it. C4 awaits four genuine histories and follows positive-cost speed ranking."
+    },
+    {
+      "after": "current-runtime-benchmark-confirmed",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "serving-shortfall-pricing",
+          "unblocks": [
+            "representative_release_projection"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0,
+          "reason": "Host-only analysis complete; causal gaps explicit, updated normal rung evidence needed"
+        },
+        {
+          "problem": "ci-image-reuse",
+          "saving_hours": 2.5,
+          "device_hours": 0,
+          "basis": "guess",
+          "reason": "Three release eval builds at50min each; no added device job, confirm on next normal rung. No evaluated serving speedup."
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 2.164191250900405,
+          "device_hours": 0.15,
+          "basis": "guess",
+          "reason": "Current planning198/5/10;25% wall reduction guess; no measured benefit or frozen release claim."
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Current B1 route/phase-export validated within box, no runtime change or causal speed claim. CI image reuse confirms on next eligible normal rung. Validity constraints still precede speed work."
     }
   ],
   "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

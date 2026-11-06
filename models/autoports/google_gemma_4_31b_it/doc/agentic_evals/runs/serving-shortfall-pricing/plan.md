@@ -1,0 +1,3 @@
+# Serving shortfall pricing from existing evidence
+
+Coordinator goal: price remaining pool, long-prefill, host-contention and mixed-host-sampling shortfalls against provisional release lists, separating measured costs and arithmetic bounds from unidentifiable causal savings. Host-only/device box0. Read current survey/efforts and valid SWE runtime/phase accounting plus idle-regime evidence. Trace each number to its artifact, workload and timing denominator. No new hardware/CI dispatch and no edits to central/previous evidence. Write one result; normal rungs continue independently. Unknown savings remain null with exact missing evidence, not fabricated zero. Host adapter boundaries never become device times.

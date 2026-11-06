@@ -864,7 +864,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42206258311",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T12:33:03.417076+00:00",
+      "last_observed_at": "2026-11-06T12:43:11.710422+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-x6kzj",
       "build_started_at": "2026-11-06T10:55:05Z",
       "build_completed_at": "2026-11-06T11:47:58Z",
@@ -911,7 +911,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42208934357",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T12:32:39.632815+00:00",
+      "last_observed_at": "2026-11-06T12:43:48.661245+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-l229t",
       "build_started_at": "2026-11-06T11:16:03Z",
       "build_completed_at": "2026-11-06T12:06:53Z",
@@ -964,7 +964,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42210467509",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T12:33:00.401858+00:00",
+      "last_observed_at": "2026-11-06T12:43:08.607300+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-kd74g",
       "build_started_at": "2026-11-06T11:28:23Z",
       "build_completed_at": "2026-11-06T12:19:28Z",
@@ -999,7 +999,7 @@
     }
   ],
   "status": "all_smokes_valid_three_larger_runs_executing",
-  "last_updated": "2026-11-06T12:34:15.678297+00:00",
+  "last_updated": "2026-11-06T12:43:49.433275+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -1333,6 +1333,61 @@
       "wrapper_exit_reason": "Intentional idle API SIGINT; device owners empty",
       "actual_hours": 0.10904988249999999,
       "owner_check_after": []
+    },
+    {
+      "arm": "current-runtime-benchmark",
+      "owner": "coordinator",
+      "device": "local",
+      "status": "completed",
+      "planned_clients": 1,
+      "batch": 1,
+      "max_num_seqs": 1,
+      "predicted_hours": 0.169,
+      "box_device_hours": 0.2,
+      "runtime_publication_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
+      "tti_sha": "4b94cf3ba86d30a6816149872e59cc34438748ae",
+      "plugin_runtime_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+      "prediction_basis": "Conservative prior queue .0952942889h + current observed startup226s/3600 + headline35s and one warmup5s/3600 = .1691831778h. Prior queue already included startup; additive estimate intentionally overcounts rather than claiming isolated client cost. Current B1 startup remains unmeasured.",
+      "phases": [
+        {
+          "name": "tti-release-matrix",
+          "input_tokens": 128,
+          "output_tokens": 128,
+          "num_prompts": 8,
+          "planned_clients": 1,
+          "predicted_seconds": 27.120889400946908
+        },
+        {
+          "name": "headline-warmup",
+          "input_tokens": 4096,
+          "output_tokens": 128,
+          "num_prompts": 1,
+          "planned_clients": 1,
+          "predicted_seconds": 5
+        },
+        {
+          "name": "headline",
+          "input_tokens": 4096,
+          "output_tokens": 128,
+          "num_prompts": 8,
+          "planned_clients": 1,
+          "predicted_seconds": 34.80392373201903
+        }
+      ],
+      "commands": "commands.json",
+      "release": false,
+      "queued_at": "2026-11-06T12:38:26.091009+00:00",
+      "start": "2026-11-06T12:38:26.091009+00:00",
+      "timeout_seconds": 720,
+      "execution_sha": "8c49bb3fe33ad8530ab70559f8d99274355bf12c",
+      "owner_check": [],
+      "regime": "serial TT mesh1x4; no HF CPU workload; ordinary coordinator activity",
+      "end": "2026-11-06T12:43:40.562401+00:00",
+      "exit_status": 0,
+      "wrapper_exit_status": 1,
+      "exit_reason": "Clients0; intentional idle API SIGINT; no device owners",
+      "owner_check_after": [],
+      "actual_hours": 0.08735316444444444
     }
   ],
   "local_idle_intervals": [
@@ -1361,8 +1416,14 @@
     },
     {
       "start": "2026-11-06T11:54:06.969835+00:00",
+      "end": "2026-11-06T12:38:26.091009+00:00",
+      "reason": "No4distinct native histories yet; capacity work awaits normal nightly artifacts. Existing requested local measurements complete.",
+      "resolution": "Current full60 runtime B1 benchmark route confirmation after phase export"
+    },
+    {
+      "start": "2026-11-06T12:43:40.562401+00:00",
       "end": null,
-      "reason": "No4distinct native histories yet; capacity work awaits normal nightly artifacts. Existing requested local measurements complete."
+      "reason": "Current runtime B1 benchmark confirmation complete; awaiting genuine nightly histories for C4 capacity, threeCI evaljobs active"
     }
   ],
   "schedule_history": [
@@ -1418,5 +1479,111 @@
     "second_cycle_reserved": true,
     "release_queue_margin_hours": 2.8,
     "exact_early_stop_route": "If operator provides supported exact dry route, recalculate its measured shorter duration and release reserve; do not assume it exists."
+  },
+  "next_ci_dispatch_image": {
+    "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:61962ce48cd4561ed02080d50b7403eea5cb1b2122a160e212ee4ced875c9005",
+    "condition": "TT439c/plugin ca7 unchanged; only model TTI cohort/concurrency/retention config changes with unchanged dependencies; still dispatch explicit implementation and refs",
+    "evidence": "runs/ci-image-reuse/result.json",
+    "live_confirmation": "pending normal next rung",
+    "forecast": "Do not claim measured speedup until run completes; recalculate build component with explicit estimated removal"
+  },
+  "active_runs": [
+    {
+      "arm": "current-runtime-benchmark",
+      "owner": "coordinator",
+      "device": "local",
+      "status": "completed",
+      "planned_clients": 1,
+      "batch": 1,
+      "max_num_seqs": 1,
+      "predicted_hours": 0.169,
+      "box_device_hours": 0.2,
+      "runtime_publication_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
+      "tti_sha": "4b94cf3ba86d30a6816149872e59cc34438748ae",
+      "plugin_runtime_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+      "prediction_basis": "Conservative prior queue .0952942889h + current observed startup226s/3600 + headline35s and one warmup5s/3600 = .1691831778h. Prior queue already included startup; additive estimate intentionally overcounts rather than claiming isolated client cost. Current B1 startup remains unmeasured.",
+      "phases": [
+        {
+          "name": "tti-release-matrix",
+          "input_tokens": 128,
+          "output_tokens": 128,
+          "num_prompts": 8,
+          "planned_clients": 1,
+          "predicted_seconds": 27.120889400946908
+        },
+        {
+          "name": "headline-warmup",
+          "input_tokens": 4096,
+          "output_tokens": 128,
+          "num_prompts": 1,
+          "planned_clients": 1,
+          "predicted_seconds": 5
+        },
+        {
+          "name": "headline",
+          "input_tokens": 4096,
+          "output_tokens": 128,
+          "num_prompts": 8,
+          "planned_clients": 1,
+          "predicted_seconds": 34.80392373201903
+        }
+      ],
+      "commands": "commands.json",
+      "release": false,
+      "queued_at": "2026-11-06T12:38:26.091009+00:00",
+      "start": "2026-11-06T12:38:26.091009+00:00",
+      "timeout_seconds": 720,
+      "execution_sha": "8c49bb3fe33ad8530ab70559f8d99274355bf12c",
+      "owner_check": [],
+      "regime": "serial TT mesh1x4; no HF CPU workload; ordinary coordinator activity",
+      "end": "2026-11-06T12:43:40.562401+00:00",
+      "exit_status": 0,
+      "wrapper_exit_status": 1,
+      "exit_reason": "Clients0; intentional idle API SIGINT; no device owners",
+      "owner_check_after": [],
+      "actual_hours": 0.08735316444444444
+    }
+  ],
+  "latest_live_progress": [
+    {
+      "arm": "nightly-terminal-observable",
+      "run_id": 42206258311,
+      "observed_at": "2026-11-06T12:45:06.558100+00:00",
+      "source": "bringup/artifacts/stage12-terminal-live-1244.log",
+      "snapshot_through": "2026-11-06T12:42:42.1991798",
+      "server_ready_at": "2026-11-06T12:03:39.1593036",
+      "progress_line": "2026-11-06T12:41:44.4755390Z 2026-11-06 12:41:44,475 [INFO] llm_module.agentic.harbor: [agentic progress] terminal_bench_2_1_20261106T120344: 2/10 (20%) done, 2 running | elapsed 0:38:00 | per-task budget 6:20:00 | max allowed 1 day, 7:50:00 | projected remaining <= 1 day, 1:20:00 (4 waves) | stall kill in 6:16:59",
+      "score": null,
+      "scope": "Partial live log can lag; completion counts unaudited, not scores"
+    },
+    {
+      "arm": "full-gpqa-observable",
+      "run_id": 42208934357,
+      "observed_at": "2026-11-06T12:45:06.558100+00:00",
+      "source": "bringup/artifacts/stage12-gpqa-live-1244.log",
+      "snapshot_through": "2026-11-06T12:42:47.2132385",
+      "server_ready_at": "2026-11-06T12:30:20.7690436",
+      "progress_line": "2026-11-06T12:41:08.5588352Z 2026-11-06 12:41:08,558 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   3%|\u258e         | 6/198 [06:48<2:59:17, 56.03s/it]",
+      "score": null,
+      "scope": "Partial live log can lag; completion counts unaudited, not scores"
+    },
+    {
+      "arm": "nightly-swe-observable",
+      "run_id": 42210467509,
+      "observed_at": "2026-11-06T12:45:06.558100+00:00",
+      "source": "bringup/artifacts/stage12-swe-nightly-live-1244.log",
+      "snapshot_through": "2026-11-06T12:39:25.4799307",
+      "server_ready_at": null,
+      "progress_line": null,
+      "score": null,
+      "scope": "Partial live log can lag; completion counts unaudited, not scores"
+    }
+  ],
+  "current_runtime_benchmark": {
+    "evidence": "runs/current-runtime-benchmark/result.json",
+    "matrix_seconds": 27.087501666974276,
+    "headline_seconds": 34.81444410898257,
+    "device_hours": 0.08735316444444444,
+    "release": false
   }
 }

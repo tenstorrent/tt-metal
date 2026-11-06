@@ -274,5 +274,7 @@
     "anchor_tokens": 28,
     "release_cost_hours": null,
     "missing_reason": "ActualCIrequestoverlap and puregeneration shares pending; diagnosticwalltime not releasecost."
-  }
+  },
+  "latest_shortfall_pricing": "runs/serving-shortfall-pricing/RESULT.json",
+  "pricing_scope": "Observed host phase accounting and linear cohort forecasts are not causal speed savings; unknown release costs retained. No duplicate/additive cost across overlapping shortfalls."
 }

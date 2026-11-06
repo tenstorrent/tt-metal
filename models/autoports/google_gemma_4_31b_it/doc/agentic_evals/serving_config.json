@@ -137,6 +137,12 @@
       "planned_clients": 2,
       "max_num_seqs": 8,
       "batch_reason": "Smallest validated batch>=2; original task resources unchanged"
+    },
+    "current-runtime-benchmark": {
+      "batch": 1,
+      "planned_clients": 1,
+      "max_num_seqs": 1,
+      "reason": "Smallest validated batch>=1; exact stage11 matrix/standard headline confirmation"
     }
   },
   "release_limits": {
@@ -347,5 +353,32 @@
   "agent_timeout_s": 21600,
   "request_timeout_s": 3600,
   "output_cap_tokens": 32768,
-  "flat_limits_scope": "Common minimum across applicable suite settings for checker interoperability, not a uniform dispatch setting. Exact per-suite release_limits and agent_time_limit/request_time_limit/output_cap maps remain authoritative; GPQA request14400/output126976, no agent timeout."
+  "flat_limits_scope": "Common minimum across applicable suite settings for checker interoperability, not a uniform dispatch setting. Exact per-suite release_limits and agent_time_limit/request_time_limit/output_cap maps remain authoritative; GPQA request14400/output126976, no agent timeout.",
+  "current_runtime_benchmark": {
+    "runtime": "439c22b0e991e5af626efafa7224edf28f84795b",
+    "evidence": "runs/current-runtime-benchmark/result.json",
+    "headline": {
+      "source": "vllm",
+      "completed": 8,
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "duration_seconds": 34.81444410898257,
+      "ttft_ms": 756.0979105037404,
+      "mean_tpot_ms": 28.310063134880707,
+      "decode_tps": 35.32312857218267,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/current-runtime-benchmark/headline.json"
+    },
+    "matrix": {
+      "source": "tti",
+      "completed": 8,
+      "input_tokens": 128,
+      "output_tokens": 128,
+      "duration_seconds": 27.087501666974276,
+      "mean_ttft_ms": 115.1914483634755,
+      "mean_tpot_ms": 25.750937507035005,
+      "evidence": "bringup/artifacts/stage12-current-runtime-benchmark/__home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_benchmarks/llm/benchmark___home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_2026-11-06_12-41-30-706777_isl-128_osl-128_maxcon-1_n-8.json",
+      "input_length_scope": "Stock client random dataset lengths; actual chat-template prefill lengths141\u2013143, unchanged route."
+    },
+    "release": false
+  }
 }

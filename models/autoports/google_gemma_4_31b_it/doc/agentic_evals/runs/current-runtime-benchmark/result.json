@@ -1,0 +1,84 @@
+{
+  "confirmed": true,
+  "change": "none",
+  "problem_status": "solved",
+  "release": false,
+  "planned_clients": 1,
+  "batch": 1,
+  "max_num_seqs": 1,
+  "full_layers": 60,
+  "mesh": [
+    1,
+    4
+  ],
+  "runtime_publication_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
+  "execution_sha": "8c49bb3fe33ad8530ab70559f8d99274355bf12c",
+  "tti_sha": "4b94cf3ba86d30a6816149872e59cc34438748ae",
+  "plugin_runtime_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+  "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "tti_matrix": {
+    "source": "tti",
+    "completed": 8,
+    "input_tokens": 128,
+    "output_tokens": 128,
+    "duration_seconds": 27.087501666974276,
+    "mean_ttft_ms": 115.1914483634755,
+    "mean_tpot_ms": 25.750937507035005,
+    "evidence": "bringup/artifacts/stage12-current-runtime-benchmark/__home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_benchmarks/llm/benchmark___home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_2026-11-06_12-41-30-706777_isl-128_osl-128_maxcon-1_n-8.json",
+    "input_length_scope": "Stock client random dataset lengths; actual chat-template prefill lengths141\u2013143, unchanged route."
+  },
+  "headline": {
+    "source": "vllm",
+    "completed": 8,
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "duration_seconds": 34.81444410898257,
+    "ttft_ms": 756.0979105037404,
+    "mean_tpot_ms": 28.310063134880707,
+    "decode_tps": 35.32312857218267,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/current-runtime-benchmark/headline.json"
+  },
+  "phase_export": {
+    "snapshots": 144,
+    "events": 4370,
+    "matched_steps": 2185,
+    "prefill_device_steps": 17,
+    "prefill_host_compatibility_steps": 9,
+    "decode_device_steps": 2159,
+    "errors": 0,
+    "truncated": false,
+    "pending_steps_final": 0,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/current-runtime-benchmark/phase-events.json",
+    "time_basis": "host adapter boundaries, not device time"
+  },
+  "prediction": {
+    "device_hours": 0.169,
+    "box_hours": 0.2,
+    "actual_device_hours": 0.08735316444444444,
+    "actual_over_predicted": 0.5168826298487836,
+    "matrix_seconds": 27.120889400946908,
+    "headline_seconds": 34.80392373201903
+  },
+  "comparison": {
+    "matrix_duration_delta_seconds": -0.033387733972631395,
+    "headline_duration_delta_seconds": 0.010520376963540912,
+    "headline_ttft_delta_ms": 3.2542339904466644,
+    "causal_speed_claim": false
+  },
+  "device_time_measured": false,
+  "missing_reasons": [
+    "No live vLLM profiling; device latencies and device rooflines unavailable."
+  ],
+  "evidence": [
+    "source-comparison.json",
+    "server/server.log",
+    "commands.json",
+    "client-exits.json",
+    "manifest.json",
+    "idle-shutdown.json"
+  ],
+  "limits": [
+    "Route confirmation only, not frozen dry run or release.",
+    "Single sequential measurement with ordinary host activity and changed matrix random seed/cache salt; no isolated causal comparison."
+  ]
+}

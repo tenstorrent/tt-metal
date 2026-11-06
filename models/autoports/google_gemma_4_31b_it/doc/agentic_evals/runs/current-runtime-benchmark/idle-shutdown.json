@@ -1,0 +1,10 @@
+{
+  "at": "2026-11-06T12:43:19.853675+00:00",
+  "idle_metrics": [
+    "vllm:num_requests_running{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0",
+    "vllm:num_requests_waiting{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0"
+  ],
+  "api_pid": 122648,
+  "signal": "SIGINT",
+  "reason": "All clients complete; no requests running or waiting"
+}

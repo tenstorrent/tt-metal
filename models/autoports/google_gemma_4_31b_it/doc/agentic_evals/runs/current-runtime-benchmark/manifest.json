@@ -1,0 +1,55 @@
+{
+  "arm": "current-runtime-benchmark",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "completed",
+  "planned_clients": 1,
+  "batch": 1,
+  "max_num_seqs": 1,
+  "predicted_hours": 0.169,
+  "box_device_hours": 0.2,
+  "runtime_publication_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
+  "tti_sha": "4b94cf3ba86d30a6816149872e59cc34438748ae",
+  "plugin_runtime_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+  "prediction_basis": "Conservative prior queue .0952942889h + current observed startup226s/3600 + headline35s and one warmup5s/3600 = .1691831778h. Prior queue already included startup; additive estimate intentionally overcounts rather than claiming isolated client cost. Current B1 startup remains unmeasured.",
+  "phases": [
+    {
+      "name": "tti-release-matrix",
+      "input_tokens": 128,
+      "output_tokens": 128,
+      "num_prompts": 8,
+      "planned_clients": 1,
+      "predicted_seconds": 27.120889400946908
+    },
+    {
+      "name": "headline-warmup",
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "num_prompts": 1,
+      "planned_clients": 1,
+      "predicted_seconds": 5
+    },
+    {
+      "name": "headline",
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "num_prompts": 8,
+      "planned_clients": 1,
+      "predicted_seconds": 34.80392373201903
+    }
+  ],
+  "commands": "commands.json",
+  "release": false,
+  "queued_at": "2026-11-06T12:38:26.091009+00:00",
+  "start": "2026-11-06T12:38:26.091009+00:00",
+  "timeout_seconds": 720,
+  "execution_sha": "8c49bb3fe33ad8530ab70559f8d99274355bf12c",
+  "owner_check": [],
+  "regime": "serial TT mesh1x4; no HF CPU workload; ordinary coordinator activity",
+  "end": "2026-11-06T12:43:40.562401+00:00",
+  "exit_status": 0,
+  "wrapper_exit_status": 1,
+  "exit_reason": "Clients0; intentional idle API SIGINT; no device owners",
+  "owner_check_after": [],
+  "actual_hours": 0.08735316444444444
+}
