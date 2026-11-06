@@ -76,7 +76,6 @@ class TtDetectionTransformerDecoder:
                 reference_points=reference_points_input,
             )
             output = ttnn.permute(output, (1, 0, 2))
-            ttnn.ReadDeviceProfiler(self.device)
 
             if reg_branches is not None:
                 # Select reg_branch layers for current lid
