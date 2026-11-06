@@ -20,3 +20,10 @@ shared:
     - ttnn/ttnn/bringup
     note: 'owner 2026-11-06: write P.34-P.36 into tasks.yaml, let''s run them (P.36
       held)'
+  P.37:
+    by: dnijemcevic
+    at: '2026-11-06T17:35:22'
+    paths:
+    - ttnn/ttnn/bringup
+    - models/demos/moe_block_main
+    note: 'owner 2026-11-06: one task for SE_PACK_PRECISE, NORM_INTO_MOE, replay128 on the main MoE block; run right away; P.35 / P.36 later'
