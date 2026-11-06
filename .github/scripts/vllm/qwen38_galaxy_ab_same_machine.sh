@@ -58,12 +58,15 @@ run_arm() {
   fi
   echo "$tag startup_s $(( SECONDS - t0 ))" >> "$OUT/ab_startup.txt"
   for c in 32 8; do
+    # The spec-decode counters around each benchmark give its draft acceptance.
+    curl -sf http://localhost:8000/metrics > "$OUT/ab_${tag}_metrics_pre_c${c}.txt" || true
     vllm bench serve --backend vllm --model "$AB_MODEL" --tokenizer "$HF_MODEL_LOCAL" \
       --dataset-name random --random-input-len 2000 --random-output-len 200 \
       --num-prompts $(( c * 4 )) --max-concurrency "$c" --ignore-eos \
       --percentile-metrics ttft,tpot,itl,e2el --save-result \
       --result-filename "$OUT/ab_${tag}_bench_c${c}.json" > "$OUT/ab_${tag}_bench_c${c}.log" 2>&1 \
       || { echo "=== $tag: benchmark c$c failed"; tail -20 "$OUT/ab_${tag}_bench_c${c}.log"; FAILED=1; }
+    curl -sf http://localhost:8000/metrics > "$OUT/ab_${tag}_metrics_post_c${c}.txt" || true
   done
   python3 .github/scripts/vllm/qwen38_galaxy_ab_client.py --model "$AB_MODEL" \
     --out "$OUT/ab_${tag}_greedy.json" || { echo "=== $tag: greedy client reported failures"; FAILED=1; }

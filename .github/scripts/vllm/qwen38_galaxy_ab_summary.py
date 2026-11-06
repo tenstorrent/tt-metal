@@ -36,6 +36,22 @@ def same(a, b, key):
     return f"{sum(x['text'] == y['text'] for x, y in zip(xs, ys))}/{len(xs)}"
 
 
+def counter(path, name):
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return None
+    return sum(float(line.rsplit(" ", 1)[1]) for line in lines if line.startswith(name))
+
+
+def acceptance(out, tag, c):
+    pre, post = out / f"ab_{tag}_metrics_pre_c{c}.txt", out / f"ab_{tag}_metrics_post_c{c}.txt"
+    vals = [counter(p, n) for p in (pre, post) for n in ("vllm:spec_decode_num_accepted_tokens_total", "vllm:spec_decode_num_draft_tokens_total")]
+    if None in vals or vals[3] == vals[1]:
+        return None
+    return (vals[2] - vals[0]) / (vals[3] - vals[1])
+
+
 def hit_rate(c):
     return c["hits"] / c["queried"] if c and c.get("queried") else None
 
@@ -57,6 +73,7 @@ def main():
             (f"Bench c{c}: TPOT p50, ms", lambda t, b=b: fmt(b[t] and b[t].get("median_tpot_ms"), nd=2)),
             (f"Bench c{c}: TTFT p50, ms", lambda t, b=b: fmt(b[t] and b[t].get("median_ttft_ms"), nd=0)),
             (f"Bench c{c}: TTFT p99, ms", lambda t, b=b: fmt(b[t] and b[t].get("p99_ttft_ms"), nd=0)),
+            (f"Bench c{c}: draft acceptance", lambda t, c=c: fmt(acceptance(out, t, c), nd=3)),
         ]
 
     def gfield(fn):
