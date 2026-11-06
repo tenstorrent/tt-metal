@@ -1,16 +1,5 @@
 # Known issues detail: deepseek_v41_flash_d_p
 
-## (RESOLVED by the overseer) The canonical prompt was shorter than the scaled rung
-
-Resolved 2026-10-15 by the supervisor: `scaled.ladder` is now 55296 tokens in 2048-token chunks, within the existing
-prompt (56320 tokens); no prompt rebuild.
-
-The alternatives that were open before the resolution (both outside SG.1's paths): set spec `text.length: 65536` and
-rebuild the prompt (`prompt.build(force=True)`; ids stay prefix-identical, new sha), or make `prompt.default_length`
-count `scaled.ladder` as well as the real ladder rungs.
-
-(Moved here from the bullet in C.swa.kv test attempt 2: the RESOLVED note pushed the bullet past 600 characters.)
-
 ## Scaled router vs golden sits at the device noise floor; judge it by the noise-floor limit
 FIX.2 (2026-10-16): the fixed PCC 0.99 is gone (F76, every limit 2 x the noise floor of the reference's dtypes). At the reference kernel's attention dtypes (bf16 q / P / output, fp32 scores / max / sum) S.swa.11 records router vs golden 0.9862 (limit 0.254), router vs CPU 0.99987, pcc_swap_out 0.99982 (limit 0.9923). The history below is kept for the numbers.
 
@@ -183,47 +172,8 @@ are). Every check passes: `swap_indexer_out` 0.022992 <= 0.052679 (2 x the nudge
 0.030351 <= 0.063240, every step check ok, `run_swap_test` True. That one-line change in
 `models/demos/common/bringup/testing/component.py` (read-only for model steps), or the owner waiver, closes the step.
 
-## The 'small' second input of a compressed-layer attention misses the fixed 0.03 floor at the reference's precision
-
-C.enc_source.attention attempt 1 (tt/sparse_attention.py, layer 2, 2x2, chunk 2048). Every check passes except the
-auto second input `small` (every float input scaled by a power of 2 to RMS ~1e-3): rel 0.0352 vs the CPU step,
-limit 0.03 = the fixed second-input floor (component_second_rel); its calibrated limit is 0.0057 (2 x the input nudge,
-0.0029). Golden 0.0350 <= 0.1616, vs CPU 0.0316 <= 0.0668, chunk0 0.0292 <= 0.0545, layer14 0.0287 <= 0.0529, mixed
-0.0298 <= 0.0505, big 0.0230 <= 0.0491.
-
-Probe `tests/ttnn/unit_tests/operations/ds41_sparse_attn/probes/probe_004.py` (device o captured before the inverse
-RoPE, float64 statistics):
-
-| case | device o vs CPU o | kernel dtypes (bf16 q, P, o) vs CPU o | CPU tail on bf16(CPU o) | CPU tail on device o | device step |
-|---|---|---|---|---|---|
-| small | rel 0.00227, norm ratio 0.99911, bias -8.9e-4 | rel 0.0018, bias -2.2e-4 | 0.0329 | 0.0352 | 0.0352 |
-| golden | rel 0.00203, norm ratio 0.99992, bias -8.2e-5 | rel 0.0018, bias -7e-6 | 0.0311 | 0.0316 | 0.0316 |
-
-- The official kernel (inference/kernel.py sparse_attn) returns o in q's dtype, bf16. Rounding the CPU's own o to bf16
-  flips 3.1 % of the fp8 values after the inverse RoPE and gives rel 0.0329 on `small`, above the 0.03 floor. The
-  input nudge (q_resid bf16; kv / compressed / top-k fixed) moves nothing there: the scores are ~0 (row max 0.000-0.002),
-  the softmax is flat, so q's rounding does not reach the output.
-- What the device adds beyond the kernel's dtypes is a coherent shrink of o (norm ratio 0.99911, per head 0.99813 to
-  1.00006) only in the flat-softmax regime (golden -8e-5). The sink is not the cause (|sink| < 0.6, its term is 0.2 % of
-  the denominator, the fit per head is inconsistent). It fits DS41-16: every in-tile partial dot of P@V is truncated to
-  about TF32, and averaging many keys of mixed sign (uniform P) amplifies it. No setting removes it (no split matmul).
-- Raising the output to fp32 (WINDOW_SDPA_OUT=fp32) would be above the reference (FIX.2), so not done. The check needs
-  an owner waiver (spec tests.waivers: `enc_source.attention`) or a framework floor for second inputs that includes
-  the official arithmetic's excess (as the golden's official_floor does: 0.0808).
-
-## NUMERICS=native fails the official per-step swap checks upstream of the experts
-P.8 (attempts 1 and 2), change on (EXPERTS_COMBINE=weighted NUMERICS=native FFN_NORM_DTYPE=bf16), frozen tests in gate
-order: the 8 test_c_*_experts pass (vs CPU rel 0.0298 L0 .. 0.0410 L24, limits 0.085 .. 0.120; deterministic);
-test_swap_swa_12_experts fails swap_q_a (rel 0.011596 <= 0.01040) and swap_ffn_hc (0.000197 <= 0.00015, covered by the
-owner's hc_fn waiver, DS41-43). Attempt 1 also ran swa_engram_15 (q_a 0.013907 <= 0.01191) and enc_source_14 (q_a
-0.012939 <= 0.01114, compressor 0.101759 <= 0.07459, indexer unexplained flips 170).
-
-Probe (attempt 2, golden q_a input, chunk of the component rung, 2x2): CPU native q_a = rms_norm(mm(bf16(x), wq_a),
-q_norm) vs the official CPU (fp8 q-dq of x first): rel 0.011637 (L0), 0.013901 (L1). Device NUMERICS=native vs CPU
-native 0.000143 / 0.000160; device official vs CPU official 0.000101 / 0.000105. Bias device native - CPU native
--6.7e-7 / +5.9e-7 of the rms. So the swap failure is exactly the official fp8 rounding the device skips (rule 17), no
-device error: the per-step limits are 2 x the official arithmetic's noise floor and the reference hook stays official
-(owner, P.8 brief). The compressor's fp4 q-dq (rel ~0.1) is the same kind.
+Done as framework F92 (7ca27ba1741): `_check_tail` feeds int nudged outputs to the tail as they are
+(component.py:605-612).
 
 ## The swap tests' indexer checks failed on order and on bf16 score ties, not on logic
 
@@ -255,7 +205,9 @@ CPU only, layer 2, golden inputs (script /tmp/fix10diag/idx_ties.py; framework's
   what bf16 scores alone give, so no indexer change since 2026-10-17 is needed to explain them.
 - enc_source_engram_17 also hits pytest-timeout (300 s) in the same run.
 
-## Real-time profiler off on chips 7 and 10 (8x4 Galaxy, FIX.3, DS41-120)
+## Chips 7 / 10 lost the real-time profiler: two cards came back in an identity IOMMU domain after reset
+
+(8x4 Galaxy, FIX.3, DS41-120.)
 
 - Host: kernel cmdline `iommu=pt` (Weka's NIC needs passthrough); `/etc/systemd/system/tt-iommu-domains.service`
   (`/usr/local/sbin/tt-iommu-domains.sh apply`, oneshot at boot, 2026-10-22 10:16) unbinds each TT card, writes
@@ -304,6 +256,10 @@ positions carry the largest relative error. That is the accumulated hidden-state
 layout error is visible: layers 0-3 and 14 and every compressed / index cache pass. No CPU diagnosis at device
 formats was possible 20 layers deep. The limit was not changed (OV-15: no rule, threshold or check). The owner's options:
 a waiver, or a per-position drift for the contract's window-KV limit (golden generation).
+Owner decision B (2026-10-27): the last 128 positions of each range (caches.GoldenKV(window="last")). Since FIX.19
+(DS41-193, owner 2026-11-01) the acks / runner-contract tests use GoldenKV(window="drift"): every position against
+the official reference's drift on the same rows (section "The contract's window-KV limit must come from the official
+drift on the checked rows, not the ring").
 
 ## The galaxy goldens have no official_floor.json, so component limits are one bf16 rounding of the output
 
@@ -404,6 +360,8 @@ ATTN_SP32_PROJ=off.
 
 Verdict: honest rounding (DS41-125's limit-vs-position gap), no bug. No code change; the waiver stays for the owner
 (options as before: keep the waiver, or a per-position drift for the contract's window-KV limit).
+Later (FIX.19, DS41-193): the contract's window-KV limit became per position (caches.GoldenKV(window="drift")); this
+check passes and the L20 waiver was removed (1eaa7164991).
 
 ## P.23 OWN_ROWS tips the acks / runner-contract window-KV checks by rounding, not a bug
 (DS41-192, FIX.18 overseer fix, galaxy 8x4, code 3a1a390acd8 = P.23..FIX.17.) K.1R's test_adapter_acks and
@@ -436,6 +394,8 @@ Verdict: a genuine one-rounding difference (the fp32 summation order of the mHC 
 lower-precision choice behind it. It is amplified chaotically over depth, as P.9 was (DS41-141). No code changed. The
 owner's options are as before: a waiver for these checks, or a per-position drift for the contract's window-KV limit
 (DS41-125). The 0.99 last-block rule is tt-d-gen's own, and its limit is not tied to the noise floor.
+Later: the L20 check passes FIX.19's per-position limit (DS41-193); the last-block 0.99 checks stay under the owner's
+waiver (spec.yaml unit_waivers, widened to any layer 2026-11-05).
 
 ## The contract's window-KV limit must come from the official drift on the checked rows, not the ring
 (DS41-193, FIX.19 overseer fix, owner 2026-11-01; closes the DS41-125 / DS41-141 / DS41-192 gap for the dumped layers.)
@@ -1209,6 +1169,10 @@ off, truncated under exact).
 On the fixed code (measure, ring on): p51200 rc 0 (wall 209.3 ms), p512000 rc 0 (wall 231.6 ms), test_window_ring rc 0
 (refusal ring: 2048 refused, 5056 accepted; none: 4992 refused). last, test_dram and profile were measured on the code
 before this host-only change (rc 0, above); the orchestrator's A/B re-runs them.
+
+## Window KV rows away from the rung's end: the golden keeps only rings; recompute them from the dumped inputs
+
+DS41-209: see "Golden rows before the cut (DS41-209)" in the next section (P.33 DECODER_CUT_TEST).
 
 ## P.33 DECODER_CUT_TEST: prefill stopped at an even cut 128 tokens short of the end (BREADCRUMBS section)
 - What: test only, no model change. `tests/bringup/test_decoder_cut.py`: rung s10240 tokens, all 40 layers,
