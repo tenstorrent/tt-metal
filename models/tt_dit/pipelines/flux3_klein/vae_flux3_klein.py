@@ -72,14 +72,17 @@ def _vae_kwargs(mesh_device, parallel_config, ccl_manager) -> dict:
     )
 
 
-def _configure(module) -> None:
+def _configure(module, *, decoder: bool) -> None:
     if isinstance(module, Conv2d):
         # keeps the sliding-window config tensors out of L1_SMALL at 2K and 4K
         module.config_tensors_in_dram = True
+        module.act_block_h_override = 64
+        module.double_buffer = True
+        module.full_inner_dim = decoder
     if isinstance(module, VaeAttention):
         module.local_queries = True
     for _, child in module.named_children():
-        _configure(child)
+        _configure(child, decoder=decoder)
 
 
 class Flux3KleinVae:
@@ -100,7 +103,7 @@ class Flux3KleinVae:
         self._dit_ccl = dit_ccl_manager
         self._dit_sp_axis = dit_sp_axis
         self._tp_axis = tp_axis
-        self._h_axis = h_axis
+        self.h_axis = h_axis
         self._model_name = f"flux3_klein_vae_{checkpoint_id(self._snapshot / SUBFOLDER / VAE_WEIGHTS)}"
         # a conv prepares its weights for the first input shape it sees, so every shape gets its own instance
         self._decoders: dict[int, Flux2VaeDecoder] = {}
@@ -109,7 +112,7 @@ class Flux3KleinVae:
     def _load(self, module, parallel_config, subfolder: str):
         from diffusers.models.autoencoders.autoencoder_kl_flux2 import AutoencoderKLFlux2
 
-        _configure(module)
+        _configure(module, decoder=isinstance(module, Flux2VaeDecoder))
         cache.load_model(
             module,
             model_name=self._model_name,
@@ -126,7 +129,7 @@ class Flux3KleinVae:
     def decoder(self, size: int) -> Flux2VaeDecoder:
         if size not in self._decoders:
             parallel_config = Flux2VaeParallelConfig.from_axes(
-                self._device, tp_axis=self._tp_axis, h_axis=self._h_axis, w_axis=None
+                self._device, tp_axis=self._tp_axis, h_axis=self.h_axis, w_axis=None
             )
             decoder = Flux2VaeDecoder(**_vae_kwargs(self._device, parallel_config, self._ccl))
             self._decoders[size] = self._load(decoder, parallel_config, SUBFOLDER)
@@ -142,10 +145,11 @@ class Flux3KleinVae:
         return self._encoders[size]
 
     def decode(self, state: ttnn.Tensor, *, size: int) -> ttnn.Tensor:
-        """Decode the SP-sharded fp32 latent state of a size x size image to a replicated [1, size, size, 3] image."""
+        """Decode the SP-sharded fp32 latent state of a size x size image to a [1, size, size, 3] image H-sharded over
+        `h_axis`."""
         h, w = latent_shape(size, size)
         decoder = self.decoder(size)
-        register_conv_slices(tuple(self._device.shape), size, size, h_factor=self._device.shape[self._h_axis])
+        register_conv_slices(tuple(self._device.shape), size, size, h_factor=self._device.shape[self.h_axis])
 
         z = ttnn.typecast(state, ttnn.bfloat16)
         gathered = self._dit_ccl.all_gather(z, dim=1, mesh_axis=self._dit_sp_axis, use_hyperparams=True)
@@ -156,11 +160,11 @@ class Flux3KleinVae:
             sliced = ttnn.slice(rows, [0, 0, 0], [1, h * w, LATENT_CHANNELS])
             ttnn.deallocate(rows)
             rows = sliced
-        parted = ttnn.mesh_partition(rows, dim=1, cluster_axis=self._h_axis, memory_config=rows.memory_config())
+        parted = ttnn.mesh_partition(rows, dim=1, cluster_axis=self.h_axis, memory_config=rows.memory_config())
         ttnn.deallocate(rows)
         z = decoder.preprocess_and_unpatchify(parted, height=size // SCALE, width=size // SCALE)
         ttnn.deallocate(parted)
-        out = decoder.forward(z, traced=False)
+        out = decoder.forward(z, traced=False, gather_hw=False)
         ttnn.deallocate(z)
         return out
 
