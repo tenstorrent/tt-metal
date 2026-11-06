@@ -1,0 +1,123 @@
+---
+# Throwaway diagnostic for tenstorrent/torrentci#2517: run
+# `tt-smi -r --eth_train_skip` (the card-check's reset args) inside an
+# ordinary n150 card job, long after the VM booted, and snapshot the card
+# before and after. Every step runs under `set +e` and exits 0 so the whole
+# sequence always runs. No trigger; run it by name. Modelled on
+# 40-card-smi-n150.yaml (same runs-on and image).
+jobs:
+  - id: diag-tt-smi-reset
+    checkout: false
+    description: "diag torrentci#2517: tt-smi -r inside an n150 card VM, with before/after snapshots (manual)"
+    timeout: 30m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: tt-metal-ci-build}
+        accelerator: {type: n150, count: 1}
+        resources:
+          requests: {cpu: '4', memory: 8Gi, ephemeral-storage: 20Gi}
+          limits: {cpu: '4', memory: 8Gi, ephemeral-storage: 20Gi}
+    env:
+      - {name: HOME, value: /tmp/home}
+      - {name: TT_SMI_VERSION, value: 6.7.0}
+      - {name: TT_SMI_SHA256, value: 13ba3d41c77254c733b8dd70a53323fcc6da20f7869b2326b04be180f23f7942}
+    steps:
+      - id: snapshot-before
+        kind: shell
+        shell:
+          run:
+            - |
+              set +e
+              exec 2>&1
+              mkdir -p "$HOME"
+              cat > /tmp/snap.sh <<'EOF'
+              #!/bin/sh
+              set +e
+              echo "=== snapshot $1 at $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              uname -a
+              echo "--- /dev/tenstorrent"; ls -l /dev/tenstorrent/; echo "ls rc=$?"
+              echo "--- tenstorrent pci devices"
+              for d in /sys/bus/pci/devices/*; do
+                v=$(cat "$d/vendor" 2>/dev/null)
+                [ "$v" = "0x1e52" ] || continue
+                echo "dev $d vendor_file=$v device_file=$(cat "$d/device" 2>/dev/null) class_file=$(cat "$d/class" 2>/dev/null) driver=$(basename "$(readlink "$d/driver" 2>/dev/null)" 2>/dev/null) reset_method=$(cat "$d/reset_method" 2>/dev/null)"
+                echo "  config[0..15] bytes: $(od -An -tx1 -N16 "$d/config" 2>&1 | tr -s ' ')"
+                echo "  config vendor=$(od -An -tx2 -j0 -N2 "$d/config" 2>&1 | tr -d ' ') device=$(od -An -tx2 -j2 -N2 "$d/config" 2>&1 | tr -d ' ') class=$(od -An -tx1 -j9 -N3 "$d/config" 2>&1 | tr -d ' ') (prog-if,subclass,class)"
+                echo "  command/status: $(od -An -tx2 -j4 -N4 "$d/config" 2>&1 | tr -s ' ')"
+              done
+              echo "--- lspci"; lspci -d 1e52: -nnvv 2>&1 | head -60
+              echo "--- /dev/shm"; ls -la /dev/shm; echo "ls rc=$?"
+              echo "--- tenstorrent module version: $(cat /sys/module/tenstorrent/version 2>&1)"
+              echo "=== end snapshot $1"
+              EOF
+              chmod +x /tmp/snap.sh
+              /tmp/snap.sh before
+              exit 0
+      - id: fetch-tt-smi
+        kind: shell
+        shell:
+          run:
+            - |
+              set +e
+              exec 2>&1
+              echo "=== fetch at $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              curl -fsSL --proto =https -o /tmp/tt-smi "https://github.com/tenstorrent/tt-smi/releases/download/v${TT_SMI_VERSION}/tt-smi-${TT_SMI_VERSION}-ubuntu-24.04"
+              echo "curl rc=$?"
+              echo "${TT_SMI_SHA256}  /tmp/tt-smi" | sha256sum -c -
+              echo "sha256 rc=$?"
+              chmod +x /tmp/tt-smi
+              /tmp/tt-smi --version
+              echo "version rc=$?"
+              exit 0
+      - id: smi-snapshot-before
+        kind: shell
+        shell:
+          run:
+            - |
+              set +e
+              exec 2>&1
+              echo "=== tt-smi -s (before) start $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              timeout 300 /tmp/tt-smi -s
+              echo "=== tt-smi -s (before) rc=$? end $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              exit 0
+      - id: smi-reset
+        kind: shell
+        shell:
+          run:
+            - |
+              set +e
+              exec 2>&1
+              t0=$(date +%s.%N)
+              echo "=== tt-smi -r --eth_train_skip start $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              timeout 600 /tmp/tt-smi -r --eth_train_skip
+              rc=$?
+              t1=$(date +%s.%N)
+              echo "=== tt-smi -r rc=$rc end $(date -u +%Y-%m-%dT%H:%M:%S.%NZ) duration_s=$(awk "BEGIN{print $t1-$t0}")"
+              /tmp/snap.sh after-reset-immediate
+              sleep 10
+              /tmp/snap.sh after-reset-plus-10s
+              exit 0
+      - id: smi-snapshot-after
+        kind: shell
+        shell:
+          run:
+            - |
+              set +e
+              exec 2>&1
+              echo "=== tt-smi -s (after) start $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              timeout 300 /tmp/tt-smi -s
+              echo "=== tt-smi -s (after) rc=$? end $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              exit 0
+      - id: guest-dmesg
+        kind: shell
+        shell:
+          run:
+            - |
+              set +e
+              exec 2>&1
+              echo "=== dmesg at $(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+              dmesg | tail -100
+              echo "dmesg rc=$?"
+              exit 0
