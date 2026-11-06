@@ -16,7 +16,7 @@
     "astropy__astropy-14598"
   ],
   "tt_metal_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
-  "tti_candidate_sha": "4b94cf3ba86d30a6816149872e59cc34438748ae",
+  "tti_candidate_sha": "f12b2682cb03e84555ba122dd647262ae399815f",
   "plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
   "implementation": "gemma4-31b-autoport-v3",
   "predicted_hours": null,
@@ -25,5 +25,6 @@
   "not_dispatched": true,
   "batch_reason": "Smallest supported measured batch>=2",
   "publication_pending": false,
-  "scope": "Conditional next normal rung; no dispatch before valid nightly, measured projection and source publication verification"
+  "scope": "Conditional next normal rung; no dispatch before valid nightly, measured projection and source publication verification",
+  "accepted_metadata_change": "runs/native-token-retention-confirmation/result.json"
 }

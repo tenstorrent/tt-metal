@@ -143,6 +143,13 @@
       "planned_clients": 1,
       "max_num_seqs": 1,
       "reason": "Smallest validated batch>=1; exact stage11 matrix/standard headline confirmation"
+    },
+    "native-token-retention-confirmation": {
+      "batch": 8,
+      "planned_clients": 1,
+      "max_num_seqs": 8,
+      "batch_reason": "Confirm metadata on actual SWE B8 route; no performance selection claim.",
+      "evidence": "runs/native-token-retention-confirmation/result.json"
     }
   },
   "release_limits": {

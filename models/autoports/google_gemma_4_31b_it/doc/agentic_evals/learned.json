@@ -128,6 +128,10 @@
         "bringup/artifacts/stage12-gpqa-live-1244.log",
         "bringup/artifacts/stage12-swe-nightly-live-1244.log"
       ]
+    },
+    {
+      "fact": "Stock return_token_ids request flag preserves full generated IDs through LiteLLM1.108.1 provider_specific_fields and mini2.2.8 saved response; FormatError paths still discard response.",
+      "evidence": "runs/native-token-retention-confirmation/result.json"
     }
   ],
   "suite_timings": [

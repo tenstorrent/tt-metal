@@ -59,3 +59,7 @@ Stock capacity command, conditional on all four histories and admission/projecti
 ## Pre-artifact replay-selection clarification
 
 This metadata-only preparation change allows deterministic missing-retention fallback as stated above; it never changes the scored five-task cohort or delays C2. Output-changing concurrency acceptance uses a same-cohort scored C2/C4 pair after capacity and host admission, as the skill permits. Exact stochastic trajectory equality is not required for that output-changing category; exactness remains required for changes claimed exact. Host tests and capacity replay alone do not accept C4. Earlier strict-first-four wording is superseded by this pre-artifact rule.
+
+## Accepted metadata-base refresh
+
+C4 candidate6454fd22fce8d73030d59f7b72176bf49de76368 rebased onto accepted TTI f12b2682cb03e84555ba122dd647262ae399815f. Accepted SWE extra_body.return_token_ids=true retained. Entire eval_config source differs only in SWE n_concurrent_trials2→4;34 focused tests and all hooks pass. Preparation evidence candidate-validation-token-retention.json; prior candidate evidence retained. No C4 capacity/output acceptance, publication or dispatch; waiting for four complete real histories.

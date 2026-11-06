@@ -2,7 +2,7 @@
   "owner": "coordinator",
   "effort": "native-token-retention-confirmation",
   "start": "2026-11-06T13:29:47.471385+00:00",
-  "status": "running",
+  "status": "completed",
   "planned_clients": 1,
   "batch": 8,
   "max_num_seqs": 8,
@@ -10,5 +10,17 @@
   "predicted_hours": 0.12,
   "box_hours": 0.2,
   "command": "bash bringup/artifacts/native-token-retention/launch-local.sh",
-  "owners_before": []
+  "owners_before": [],
+  "end": "2026-11-06T13:33:31.825214+00:00",
+  "actual_hours": 0.06232050805555555,
+  "client_exit_status": 0,
+  "server_exit_status": 1,
+  "server_exit_reason": "Intentional SIGINT of idle API after successful clients; readiness wrapper reports1",
+  "owners_after": [],
+  "arm": "native-token-retention-confirmation",
+  "device": "local",
+  "runtime_publication_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
+  "plugin_runtime_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+  "exit_status": 0,
+  "regime": "serial mesh1x4; no task containers; host serialization after clients"
 }

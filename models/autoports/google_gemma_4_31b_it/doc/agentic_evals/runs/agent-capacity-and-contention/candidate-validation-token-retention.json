@@ -1,0 +1,26 @@
+{
+  "status": "prepared_not_accepted",
+  "base": "f12b2682cb03e84555ba122dd647262ae399815f",
+  "candidate": "6454fd22fce8d73030d59f7b72176bf49de76368",
+  "supersedes_candidate": "3d5d41d149ac8d12465842232c97d11d413baf9b",
+  "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-swe-c4-capacity",
+  "validation": {
+    "exact_full_eval_config_source_comparison": "only SWE n_concurrent_trials2to4 differs from accepted base",
+    "focused": "34 passed in3.35s",
+    "hooks": {
+      "ruff": "pass",
+      "format": "pass",
+      "full_pytest": "pass",
+      "copyright": "pass"
+    },
+    "clean_worktree": true
+  },
+  "preserved": "Accepted extra_body.return_token_ids=true and all other cohort, sampling, output, resource, revision and runtime settings",
+  "output_and_capacity_acceptance": false,
+  "device_hours": 0,
+  "publication_or_dispatch": false,
+  "evidence": [
+    "c4-candidate-token-retention.patch",
+    "plan.md"
+  ]
+}

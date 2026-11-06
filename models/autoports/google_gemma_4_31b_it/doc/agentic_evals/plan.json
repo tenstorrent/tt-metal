@@ -864,7 +864,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42206258311",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T12:43:11.710422+00:00",
+      "last_observed_at": "2026-11-06T13:34:57.243256+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-x6kzj",
       "build_started_at": "2026-11-06T10:55:05Z",
       "build_completed_at": "2026-11-06T11:47:58Z",
@@ -911,7 +911,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42208934357",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T12:43:48.661245+00:00",
+      "last_observed_at": "2026-11-06T13:35:31.443019+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-l229t",
       "build_started_at": "2026-11-06T11:16:03Z",
       "build_completed_at": "2026-11-06T12:06:53Z",
@@ -964,7 +964,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42210467509",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T12:43:08.607300+00:00",
+      "last_observed_at": "2026-11-06T13:34:53.073584+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-kd74g",
       "build_started_at": "2026-11-06T11:28:23Z",
       "build_completed_at": "2026-11-06T12:19:28Z",
@@ -999,7 +999,7 @@
     }
   ],
   "status": "all_smokes_valid_three_larger_runs_executing",
-  "last_updated": "2026-11-06T12:43:49.433275+00:00",
+  "last_updated": "2026-11-06T13:35:52.898195+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -1388,6 +1388,15 @@
       "exit_reason": "Clients0; intentional idle API SIGINT; no device owners",
       "owner_check_after": [],
       "actual_hours": 0.08735316444444444
+    },
+    {
+      "arm": "native-token-retention-confirmation",
+      "planned_clients": 1,
+      "batch": 8,
+      "predicted_hours": 0.12,
+      "device_job_hours": 0.06232050805555555,
+      "client_seconds": 6.016756773926318,
+      "scope": "Paired exactness/metadata retention, no score or speed claim"
     }
   ],
   "local_idle_intervals": [
@@ -1422,8 +1431,14 @@
     },
     {
       "start": "2026-11-06T12:43:40.562401+00:00",
+      "end": "2026-11-06T13:29:47.471385+00:00",
+      "reason": "Current runtime B1 benchmark confirmation complete; awaiting genuine nightly histories for C4 capacity, threeCI evaljobs active",
+      "resolution": "Bounded native token-retention exactness confirmation; real LiteLLM/mini preservation proven on host."
+    },
+    {
+      "start": "2026-11-06T13:33:31.825214+00:00",
       "end": null,
-      "reason": "Current runtime B1 benchmark confirmation complete; awaiting genuine nightly histories for C4 capacity, threeCI evaljobs active"
+      "reason": "Bounded retention check complete; awaiting real nightly histories for C4. Three CI evals remain active."
     }
   ],
   "schedule_history": [
@@ -1548,35 +1563,39 @@
     {
       "arm": "nightly-terminal-observable",
       "run_id": 42206258311,
-      "observed_at": "2026-11-06T12:45:06.558100+00:00",
-      "source": "bringup/artifacts/stage12-terminal-live-1244.log",
-      "snapshot_through": "2026-11-06T12:42:42.1991798",
+      "observed_at": "2026-11-06T12:54:39.387678+00:00",
+      "source": "bringup/artifacts/stage12-terminal-live-1253.log",
+      "snapshot_through": "2026-11-06T12:48:27.9254791",
       "server_ready_at": "2026-11-06T12:03:39.1593036",
-      "progress_line": "2026-11-06T12:41:44.4755390Z 2026-11-06 12:41:44,475 [INFO] llm_module.agentic.harbor: [agentic progress] terminal_bench_2_1_20261106T120344: 2/10 (20%) done, 2 running | elapsed 0:38:00 | per-task budget 6:20:00 | max allowed 1 day, 7:50:00 | projected remaining <= 1 day, 1:20:00 (4 waves) | stall kill in 6:16:59",
+      "progress_line": "2026-11-06T12:47:44.4773877Z 2026-11-06 12:47:44,477 [INFO] llm_module.agentic.harbor: [agentic progress] terminal_bench_2_1_20261106T120344: 2/10 (20%) done, 2 running | elapsed 0:44:00 | per-task budget 6:20:00 | max allowed 1 day, 7:50:00 | projected remaining <= 1 day, 1:20:00 (4 waves) | stall kill in 6:10:59",
       "score": null,
       "scope": "Partial live log can lag; completion counts unaudited, not scores"
     },
     {
       "arm": "full-gpqa-observable",
       "run_id": 42208934357,
-      "observed_at": "2026-11-06T12:45:06.558100+00:00",
-      "source": "bringup/artifacts/stage12-gpqa-live-1244.log",
-      "snapshot_through": "2026-11-06T12:42:47.2132385",
+      "observed_at": "2026-11-06T12:54:39.416677+00:00",
+      "source": "bringup/artifacts/stage12-gpqa-live-1253.log",
+      "snapshot_through": "2026-11-06T12:52:21.1534676",
       "server_ready_at": "2026-11-06T12:30:20.7690436",
-      "progress_line": "2026-11-06T12:41:08.5588352Z 2026-11-06 12:41:08,558 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   3%|\u258e         | 6/198 [06:48<2:59:17, 56.03s/it]",
+      "progress_line": "2026-11-06T12:51:49.4402679Z 2026-11-06 12:51:49,439 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   5%|\u258c         | 10/198 [19:13<7:27:42, 142.88s/it]",
       "score": null,
       "scope": "Partial live log can lag; completion counts unaudited, not scores"
     },
     {
       "arm": "nightly-swe-observable",
       "run_id": 42210467509,
-      "observed_at": "2026-11-06T12:45:06.558100+00:00",
-      "source": "bringup/artifacts/stage12-swe-nightly-live-1244.log",
-      "snapshot_through": "2026-11-06T12:39:25.4799307",
-      "server_ready_at": null,
-      "progress_line": null,
+      "observed_at": "2026-11-06T12:47:38.905304+00:00",
+      "source": "bringup/artifacts/stage12-swe-nightly-live-1246.log",
+      "snapshot_through": "2026-11-06T12:46:06.7446876Z",
+      "server_ready_at": "2026-11-06T12:42:08.3542188Z",
+      "progress_line": "Stock Harbor at12:45:13:0/5done,2running; elapsed3minutes",
       "score": null,
-      "scope": "Partial live log can lag; completion counts unaudited, not scores"
+      "scope": "Partial live log can lag; completion counts unaudited, not scores",
+      "evaluation_started_at": "2026-11-06T12:42:13.8544264Z",
+      "completed_tasks_observed": 0,
+      "planned_clients": 2,
+      "running_agents_observed": 2
     }
   ],
   "current_runtime_benchmark": {
@@ -1585,5 +1604,98 @@
     "headline_seconds": 34.81444410898257,
     "device_hours": 0.08735316444444444,
     "release": false
+  },
+  "partial_projection_observation": {
+    "at": "2026-11-06T12:54:39.416699+00:00",
+    "scope": "Early completed-count trend only, not valid scores or release admission",
+    "gpqa": "10/198 reported at19m13s inside client progress; linear6.34h eval vs5.21h initial forecast, still within11.08h workflow slot; tail/overhead unresolved",
+    "terminal": "2/10 at44min; naive3.67h eval below4.78h task-margin forecast; active slow tasks unresolved",
+    "swe": "1/5at8min; too early to extrapolate with confidence; configured6h tail allowance remains; no limit changes"
+  },
+  "gpqa_live_tail_watch": {
+    "at": "2026-11-06T13:10:43.994280+00:00",
+    "source": "bringup/artifacts/stage12-gpqa-live-1310.log",
+    "snapshot_through": "2026-11-06T13:08:22.7538207Z",
+    "completed_reported": 10,
+    "dataset_tasks": 198,
+    "active_decode_rows": 2,
+    "last_new_prefill_at": "2026-11-06T12:51:49.5335445Z",
+    "interpretation": "Continuous decode is observed, not stalled tool execution. Two in-flight slow requests not yet classified as long valid reasoning or loops. Early completed-count extrapolation is unstable and now near/past12h, while original additive4h request-tail reserve remains largely unconsumed. No release-fit claim. Re-estimate immediately after these requests resolve or tail reserve is consumed; stop a demonstrated non-fitting full rung and retain prior functional10.",
+    "limits_unchanged": true
+  },
+  "prepared_next_rungs": [
+    {
+      "arm": "server-sized-swe-c2",
+      "owner": "coordinator",
+      "device": "qb2-ci",
+      "status": "prepared_awaiting_valid_prerequisite",
+      "prepared_at": "2026-11-06T13:17:20.041677+00:00",
+      "prerequisite_run_id": 42210467509,
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "tasks": [
+        "pylint-dev__pylint-7080",
+        "django__django-11265",
+        "psf__requests-1766",
+        "pydata__xarray-4966",
+        "astropy__astropy-14598"
+      ],
+      "tt_metal_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
+      "tti_candidate_sha": "4b94cf3ba86d30a6816149872e59cc34438748ae",
+      "plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+      "implementation": "gemma4-31b-autoport-v3",
+      "predicted_hours": null,
+      "projection_pending": "Use completed audited nightly timing plus measured setup/queue and explicit image-reuse estimate before dispatch",
+      "run_timeout_hours": 12,
+      "not_dispatched": true,
+      "batch_reason": "Smallest supported measured batch>=2",
+      "publication_pending": false,
+      "scope": "Conditional next normal rung; no dispatch before valid nightly, measured projection and source publication verification"
+    },
+    {
+      "arm": "server-sized-terminal-native-c2",
+      "owner": "coordinator",
+      "device": "qb2-ci",
+      "status": "prepared_awaiting_valid_prerequisite",
+      "prepared_at": "2026-11-06T13:17:20.041677+00:00",
+      "prerequisite_run_id": 42206258311,
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "tasks": [
+        "terminal-bench/llm-inference-batching-scheduler",
+        "terminal-bench/mailman",
+        "terminal-bench/db-wal-recovery",
+        "terminal-bench/winning-avg-corewars",
+        "terminal-bench/feal-linear-cryptanalysis",
+        "terminal-bench/fix-code-vulnerability",
+        "terminal-bench/constraints-scheduling",
+        "terminal-bench/sparql-university",
+        "terminal-bench/dna-insert",
+        "terminal-bench/video-processing"
+      ],
+      "tt_metal_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
+      "tti_candidate_sha": "296fdd5f9eb066ab1404ec082002930ffce0eb18",
+      "plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+      "implementation": "gemma4-31b-autoport-v3",
+      "predicted_hours": null,
+      "projection_pending": "Use completed audited nightly timing plus measured setup/queue and explicit image-reuse estimate before dispatch",
+      "run_timeout_hours": 12,
+      "not_dispatched": true,
+      "batch_reason": "Smallest supported measured batch>=2",
+      "publication_pending": true,
+      "scope": "Conditional next normal rung; no dispatch before valid nightly, measured projection and source publication verification"
+    }
+  ],
+  "current_accepted_tti_sha": "f12b2682cb03e84555ba122dd647262ae399815f",
+  "swe_live_tail_watch": {
+    "run_id": 42210467509,
+    "source": "bringup/artifacts/stage12-swe-nightly-live-1336.log",
+    "long_call_prefill_at": "2026-11-06T13:07:05.7801550Z",
+    "next_prefill_at": "2026-11-06T13:28:36.1187304Z",
+    "decode_step_lines": 32767,
+    "interpretation": "Subsequent model calls observed, so task continues. Step count is not final API usage/finish evidence; cap/loop classification awaits collected native response.",
+    "limits_unchanged": true
   }
 }

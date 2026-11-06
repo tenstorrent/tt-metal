@@ -1,0 +1,77 @@
+{
+  "status": "confirmation_passed",
+  "goal": "Retain whole native generated-token IDs through existing stock response and mini serialization without generation changes.",
+  "commit": "f12b2682cb03e84555ba122dd647262ae399815f",
+  "branch": "fix/native-token-retention",
+  "base": "4b94cf3ba86d30a6816149872e59cc34438748ae",
+  "changed_paths": [
+    "reference_config/evals/eval_config.py",
+    "tests/workflows/test_gemma4_autoport_smoke_suites.py"
+  ],
+  "change": "Only fresh autoport SWE extra_body.return_token_ids=true and focused assertion; no runtime/plugin changes.",
+  "predicted_device_hours": 0.12,
+  "device_hour_box": 0.2,
+  "actual_device_hours": 0.06232050805555555,
+  "queue_evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/device_queue/local/native-token-retention-confirmation/job.json",
+  "planned_clients": 1,
+  "served_batch": 8,
+  "max_num_seqs": 8,
+  "batch_reason": "Exact existing SWE B8 route confirmation, not measured fastest configuration.",
+  "pair": {
+    "exact_native_fields_finish_usage": true,
+    "tool_call_random_ids_excluded": true,
+    "off_raw_token_ids_available": false,
+    "on_generated_ids_count": 104,
+    "on_count_matches_completion_usage": true,
+    "scope": "no tool commands executed; off IDs unavailable, no off/on raw-ID equality claim"
+  },
+  "serialization": {
+    "litellm": "1.108.1",
+    "mini_swe_agent": "2.2.8",
+    "source_response": "bringup/artifacts/native-token-retention/live/on-response.json",
+    "generated_ids": 104,
+    "exact_whole_sequence_retained": true,
+    "actual_mini_native_actions_parsed": 1,
+    "saved_path": "messages[i].extra.response.choices[0].provider_specific_fields.token_ids",
+    "network_or_tool_execution": false,
+    "coverage": "Actual LiteLLM conversion and actual mini.query/model_dump with only _query transport replaced by captured response."
+  },
+  "sampling_params_equal": true,
+  "sampling_params_evidence": "bringup/artifacts/native-token-retention/sampling-params.json",
+  "latencies_seconds": {
+    "off": 3.038182866992429,
+    "on": 2.978573906933889
+  },
+  "prediction_vs_result": "Metadata-only opt-in predicted unchanged native output and complete serialization; matched native fields/finish/usage, source SamplingParams equality and all104 IDs retained confirm that scoped prediction. Actual0.06232h below0.12h forecast; response timing is one pair and makes no speed claim.",
+  "validation": {
+    "focused_tests": "18passed",
+    "full_hooks": "Ruff,format,fullpytest,copyright passed before local commit",
+    "hook_log": "bringup/artifacts/native-token-retention-hooks.log",
+    "dependency_versions": {
+      "litellm": "1.108.1",
+      "mini-swe-agent": "2.2.8"
+    },
+    "dependency_scope": "Bounded180s private venv setup completed; shared environment unchanged. Actual conversion and mini.query/model_dump exercised with captured response replacing only transport."
+  },
+  "raw_evidence": [
+    "bringup/artifacts/native-token-retention/live/off-request.json",
+    "bringup/artifacts/native-token-retention/live/on-request.json",
+    "bringup/artifacts/native-token-retention/live/off-response.json",
+    "bringup/artifacts/native-token-retention/live/on-response.json",
+    "bringup/artifacts/native-token-retention/live/pair-audit.json",
+    "bringup/artifacts/native-token-retention/live/serialization.json"
+  ],
+  "problem_status": {
+    "successfully_parsed_native_token_retention": "confirmed",
+    "parser_FormatError_response_loss": "still_open; raw response discarded before mini saves it"
+  },
+  "limitations": [
+    "Off-side raw IDs intentionally unavailable; no off/on token-ID equality claim.",
+    "Exact native comparison excludes randomly generated toolcall ID identifiers; reasoning/content/function names/arguments, finish and usage match.",
+    "Serialization retains entire engine-generated sequence including reasoning/control/tool tokens; no tool command executed.",
+    "Original capped-loop cause remains unresolved; this is observability acceptance, not task accuracy or quality pass.",
+    "Future normal-rung artifact retention not yet observed with this model-specific config.",
+    "Server wrapper exit1 is intentional idle API SIGINT after successful clients; owners empty before/after."
+  ],
+  "publication": "Local isolated commit only; no push, dispatch or active-publication edits."
+}
