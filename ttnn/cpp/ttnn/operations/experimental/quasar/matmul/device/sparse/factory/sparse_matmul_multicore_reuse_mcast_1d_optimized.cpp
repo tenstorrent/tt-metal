@@ -316,10 +316,10 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)batchA,   // batchA
         (std::uint32_t)false,    // reuse_in0_in_CB
         // sparsity args
-        (std::uint32_t)batchB,                                  // batchB
-        (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
-        (std::uint32_t)!is_input_a_sparse,                      // bcast_A
-        (std::uint32_t)!nnz.has_value(),                        // get_batch_from_reader
+        (std::uint32_t)batchB,                                      // batchB
+        (std::uint32_t)sparsity.mesh_buffer().aligned_page_size(),  // sparsity_pagesize
+        (std::uint32_t)!is_input_a_sparse,                          // bcast_A
+        (std::uint32_t)!nnz.has_value(),                            // get_batch_from_reader
         // fuse op args
         (std::uint32_t)false,  // fuse_op
     };
@@ -355,8 +355,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)batchA,   // batchA
         (std::uint32_t)true,     // bcast_B
         // sparsity args
-        (std::uint32_t)batchB,                                  // batchB
-        (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
+        (std::uint32_t)batchB,                                      // batchB
+        (std::uint32_t)sparsity.mesh_buffer().aligned_page_size(),  // sparsity_pagesize
 
         // WRITER
         // out tensor args
@@ -576,7 +576,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     uint32_t sparsity_cb_index0 = tt::CBIndex::c_6;
     uint32_t sparsity_cb_index1 = tt::CBIndex::c_7;
 
-    uint32_t sparsity_cb_size = sparsity.buffer()->aligned_page_size();
+    uint32_t sparsity_cb_size = sparsity.mesh_buffer().aligned_page_size();
     tt_metal::CircularBufferConfig sparsity_cb_config0 =
         tt_metal::CircularBufferConfig(
             sparsity_cb_size, {{sparsity_cb_index0, tt::tt_metal::datatype_to_dataformat_converter(sparsity.dtype())}})

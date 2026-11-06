@@ -166,7 +166,7 @@ ChunkedParams compute_chunked_params(
         TT_FATAL(p.page_table_stick_size % 32 == 0, "page table stick size must be a multiple of 32");
     } else {
         p.max_blocks_per_seq = page_table_tensor.padded_shape()[1];
-        p.page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
+        p.page_table_stick_size = page_table_tensor.mesh_buffer().aligned_page_size();
         TT_FATAL(
             p.page_table_stick_size % 32 == 0,
             "page table page size in bytes must be a multiple of 32 due to address alignment");
@@ -521,7 +521,7 @@ uint32_t allocate_mask_block_map_cb(const SDPAInputs& tensors, sdpa_cb::CBIds& c
     if (!tensors.attn_mask_block_map.has_value()) {
         return 0;
     }
-    const uint32_t stick_size = tensors.attn_mask_block_map->buffer()->aligned_page_size();
+    const uint32_t stick_size = tensors.attn_mask_block_map->mesh_buffer().aligned_page_size();
     cb_ids.mask_block_map = allocate_cb(stick_size, 1, tt::DataFormat::Int32);
     return stick_size;
 }

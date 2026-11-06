@@ -910,7 +910,7 @@ uint32_t per_shard_page_size_bytes(const ttnn::Tensor& t, uint32_t row_bytes) {
         return spec.shape[1] * t.element_size();
     }
     if (mc.is_sharded()) {
-        return static_cast<uint32_t>(t.buffer()->aligned_page_size());
+        return static_cast<uint32_t>(t.mesh_buffer().aligned_page_size());
     }
     return row_bytes;
 }

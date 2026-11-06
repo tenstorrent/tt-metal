@@ -45,8 +45,8 @@ ttnn::device_operation::ProgramArtifacts FullShardedProgramFactory::create_progr
     std::vector<CoreCoord> runtime_cores = get_optimal_worker_cores_for_sharded_tensor(output);
     const auto& compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(runtime_cores));
 
-    const auto& aligned_page_size = output.buffer()->aligned_page_size();
-    const auto& page_size = output.buffer()->page_size();
+    const auto& aligned_page_size = output.mesh_buffer().aligned_page_size();
+    const auto& page_size = output.mesh_buffer().page_size();
 
     const m2::DFBSpecName FILL_VALUE{"fill_value"};
     const m2::TensorParamName OUTPUT{"output"};

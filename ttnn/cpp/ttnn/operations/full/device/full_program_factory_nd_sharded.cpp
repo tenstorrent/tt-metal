@@ -38,14 +38,15 @@ ttnn::device_operation::ProgramArtifacts FullNDShardedProgramFactory::create_pro
     DataType dtype{operation_attributes.dtype};
 
     auto data_format = datatype_to_dataformat_converter(dtype);
-    const auto& distribution_spec = output.buffer()->buffer_distribution_spec().value();
+    const auto& distribution_spec =
+        output.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec().value();
     uint32_t num_shards = distribution_spec.num_shards();
     uint32_t num_compute_cores = distribution_spec.cores_with_data().size();
 
     std::vector<CoreCoord> ordered_cores_with_data = get_optimal_worker_cores_for_sharded_tensor(output);
     const auto& compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
-    const auto& aligned_page_size = output.buffer()->aligned_page_size();
-    const auto& page_size = output.buffer()->page_size();
+    const auto& aligned_page_size = output.mesh_buffer().aligned_page_size();
+    const auto& page_size = output.mesh_buffer().page_size();
 
     const m2::DFBSpecName FILL_VALUE{"fill_value"};
     const m2::TensorParamName OUTPUT{"output"};

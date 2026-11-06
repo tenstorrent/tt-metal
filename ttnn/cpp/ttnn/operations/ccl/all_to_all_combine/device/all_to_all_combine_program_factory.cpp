@@ -296,7 +296,7 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
         // a BufferBinding for the cache-hit fast path.  All other positions remain
         // plain uint32_t (semaphores stable across cache hits).
         std::vector<uint32_t> writer_runtime_args = {
-            output_tensor.buffer()->address(),  // placeholder; replaced via Buffer* below
+            output_tensor.mesh_buffer().address(),  // placeholder; replaced via Buffer* below
             (uint32_t)cross_device_semaphore.address(),
             (uint32_t)init_semaphore.address(),
             token_range_start,

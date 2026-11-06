@@ -111,7 +111,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         if (keep_l1_aligned) {
             padded_offset_bytes = tt::align(input_unit_size, hal::get_l1_alignment());
         } else {
-            padded_offset_bytes = tt::align(input_unit_size, input.buffer()->alignment());
+            padded_offset_bytes = tt::align(input_unit_size, input.mesh_buffer().alignment());
         }
     }
 

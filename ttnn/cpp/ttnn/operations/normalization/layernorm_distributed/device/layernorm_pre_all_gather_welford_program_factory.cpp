@@ -171,7 +171,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
         "Welford algorithm requires recip_tensor. Use ttnn.create_layer_norm_reciprocals() to create it.");
     const auto& recip_tensor = tensor_args.recip_tensor.value();
     const auto& recip_mesh = recip_tensor.mesh_tensor();
-    const uint32_t reciprocal_CB_size_bytes = recip_tensor.buffer()->aligned_size_per_bank();
+    const uint32_t reciprocal_CB_size_bytes = recip_tensor.mesh_buffer().aligned_size_per_bank();
     constexpr tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
 
     // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for

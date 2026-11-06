@@ -21,7 +21,7 @@ void AllToAllAsyncDeviceOperation::validate_on_program_cache_miss(
     validate_on_program_cache_hit(operation_attributes, tensor_args);
 
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& page_size = input_tensor.buffer()->page_size();
+    const auto& page_size = input_tensor.mesh_buffer().page_size();
     const auto& input_shape = input_tensor.logical_shape();
     auto rank = input_shape.rank();
 
@@ -36,7 +36,7 @@ void AllToAllAsyncDeviceOperation::validate_on_program_cache_miss(
         rank,
         operation_attributes.out_dim);
 
-    TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "AllToAllAsync currently requires aligned pages");
+    TT_FATAL(page_size % input_tensor.mesh_buffer().alignment() == 0, "AllToAllAsync currently requires aligned pages");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_to_all_async must be on device");
     TT_FATAL(input_tensor.is_allocated(), "Operands to all_to_all_async must be allocated in buffers on device");

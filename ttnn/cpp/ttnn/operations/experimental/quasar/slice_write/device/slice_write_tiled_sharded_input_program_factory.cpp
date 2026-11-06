@@ -320,7 +320,7 @@ ttnn::device_operation::ProgramArtifacts SliceWriteTiledShardedInputProgramFacto
     // ---- Per-core runtime args ----
     auto per_core = get_slice_write_runtime_args_tiled_sharded_input(
         input, output, output_tensor_start, output_tensor_end, iter_cores);
-    const uint32_t out_addr = output.buffer()->address();
+    const uint32_t out_addr = output.mesh_buffer().address();
 
     ProgramRunArgs run_args;
     KernelRunArgs reader_run{.kernel = SWT_READER};

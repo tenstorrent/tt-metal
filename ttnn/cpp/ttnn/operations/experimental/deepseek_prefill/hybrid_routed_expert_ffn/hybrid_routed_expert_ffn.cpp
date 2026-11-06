@@ -238,8 +238,9 @@ ttnn::Tensor hybrid_routed_expert_moe(
             .final_arrived_addr = semaphore_addr(final_arrived_semaphore),
             .expert_go_addr = semaphore_addr(expert_go_semaphore),
             .channel_semaphore_addrs = semaphore_addrs(channel_semaphores),
-            .l1_arena_addr =
-                overlap_combine && l1_arena.has_value() ? static_cast<uint32_t>(l1_arena->buffer()->address()) : 0u},
+            .l1_arena_addr = overlap_combine && l1_arena.has_value()
+                                 ? static_cast<uint32_t>(l1_arena->mesh_buffer().address())
+                                 : 0u},
         OperationType::tensor_args_t{
             .x = dispatched_buffer,
             .gate_projs = gate_projs,

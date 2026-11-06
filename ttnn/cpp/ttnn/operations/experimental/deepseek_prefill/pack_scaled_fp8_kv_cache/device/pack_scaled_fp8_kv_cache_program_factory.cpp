@@ -79,10 +79,10 @@ void PackScaledFp8KvCacheProgramFactory::override_runtime_arguments(
     Tensor& output) {
     for (const auto& core : cached.shared_variables.cores) {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(cached.program, cached.shared_variables.kernel_id, core);
-        runtime_args[0] = args.latent.buffer()->address();
-        runtime_args[1] = args.scales.buffer()->address();
-        runtime_args[2] = args.rope.buffer()->address();
-        runtime_args[3] = output.buffer()->address();
+        runtime_args[0] = args.latent.mesh_buffer().address();
+        runtime_args[1] = args.scales.mesh_buffer().address();
+        runtime_args[2] = args.rope.mesh_buffer().address();
+        runtime_args[3] = output.mesh_buffer().address();
     }
 }
 
