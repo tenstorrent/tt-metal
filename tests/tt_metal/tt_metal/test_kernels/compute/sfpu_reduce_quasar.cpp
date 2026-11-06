@@ -12,6 +12,8 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
+// SFPU reduce kernel for llk/test_sfpu_reduce.cpp. The column and row tests run on Quasar only; the
+// scalar PROD test (REDUCE_AXIS_SCALAR) runs on every arch, so Wormhole and Blackhole build it too.
 void kernel_main() {
     constexpr std::uint32_t block_ct_dim = get_arg(args::block_ct_dim);
     constexpr std::uint32_t block_rt_dim = get_arg(args::block_rt_dim);
@@ -39,6 +41,10 @@ void kernel_main() {
 
 #ifdef REDUCE_AXIS_ROW
         sfpu_reduce<REDUCE_POOL_TYPE, REDUCE_FORMAT, ReduceDim::REDUCE_ROW>(/* idst */ 0, block_ct_dim, block_rt_dim);
+#elif defined(REDUCE_AXIS_SCALAR)
+        for (std::uint32_t tile = 0; tile < tiles_per_block; ++tile) {
+            sfpu_reduce<REDUCE_POOL_TYPE, REDUCE_FORMAT, ReduceDim::REDUCE_SCALAR>(tile);
+        }
 #else
         for (std::uint32_t tile = 0; tile < tiles_per_block; ++tile) {
             sfpu_reduce<REDUCE_POOL_TYPE, REDUCE_FORMAT, ReduceDim::REDUCE_COL>(tile);

@@ -23,6 +23,12 @@ from helpers.llk_params import (
 from helpers.logger import logger
 from helpers.param_config import parametrize, runtime
 from helpers.perf.core import create_test_or_perf_config
+from helpers.reduce_prod import (
+    PROD_DIMENSIONS,
+    PROD_STIMULI,
+    check_prod_result,
+    generate_prod_stimuli,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
@@ -214,6 +220,23 @@ def get_reduce_tolerance(
     return max(0.05, atol), None
 
 
+def _unpack_to_dest_acc(input_format: DataFormat) -> DestAccumulation:
+    """The single legal Dest width for unpacking *input_format* straight to Dest.
+
+    Not an axis: the unpack-to-dest engine cannot widen, so a 32-bit format needs a 32-bit Dest
+    and a 16-bit format a 16-bit one. Nothing is lost by a narrow Dest: the SFPU still folds in
+    fp32 lanes and stores once per output element, so it only rounds what the packer would have
+    rounded anyway.
+    """
+    dest_acc = dest_acc_for(input_format)
+    # Checked against the harness's own rule, so a format whose legal width does not follow from
+    # is_32_bit() fails here rather than on device.
+    assert is_valid_quasar_unpack_to_dest(
+        input_format, input_format, dest_acc
+    ), f"{input_format.name} at dest_acc={dest_acc.name} is not a legal unpack-to-dest pairing"
+    return dest_acc
+
+
 def _reduce_test_config_kwargs(
     formats,
     mathop,
@@ -225,7 +248,7 @@ def _reduce_test_config_kwargs(
     dest_acc,
     loop_factor=1,
 ):
-    """Kernel configuration shared by the sweep and the Int32 range-end guard."""
+    """TestConfig kwargs for one sfpu_reduce_quasar_test.cpp variant."""
     return {
         "test_name": "sources/quasar/sfpu_reduce_quasar_test.cpp",
         "formats": formats,
@@ -294,16 +317,7 @@ def test_sfpu_reduce_quasar(
     The kernel writes only the axis it collapses and leaves the rest of the tile holding leftovers,
     so the assert compares just that axis - which is what a reduce's consumers read.
     """
-    # Not an axis: the unpack-to-dest engine cannot widen, so a 32-bit format needs a 32-bit Dest
-    # and a 16-bit format a 16-bit one - one legal value per format. Nothing is lost by a narrow
-    # Dest: the SFPU still folds in fp32 lanes and stores once per output element, so it only
-    # rounds what the packer would have rounded anyway.
-    dest_acc = dest_acc_for(formats.input_format)
-    # Checked against the harness's own rule, so a format whose legal width does not follow from
-    # is_32_bit() fails here rather than on device.
-    assert is_valid_quasar_unpack_to_dest(
-        formats.input_format, formats.input_format, dest_acc
-    ), f"{formats.input_format.name} at dest_acc={dest_acc.name} is not a legal unpack-to-dest pairing"
+    dest_acc = _unpack_to_dest_acc(formats.input_format)
 
     min_value, max_value = input_bounds
     input_dimensions = dimension_combinations
@@ -540,3 +554,45 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
         f"{num_mismatch} mismatched reduction lanes for {reduce_pool} {mathop} "
         f"injected={int(injected_value)} over base_range={base_range} (see log)"
     )
+
+
+# Scalar PROD (REDUCE_SCALAR) multiplies each tile's 1024 values onto its element [0][0]. Floats only.
+PROD_FORMATS = [
+    InputOutputFormat(fmt, fmt)
+    for fmt in (DataFormat.Float32, DataFormat.Float16_b, DataFormat.Float16)
+]
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=PROD_FORMATS,
+    stimulus=runtime(PROD_STIMULI),
+    dimension_combinations=PROD_DIMENSIONS,
+)
+def test_sfpu_reduce_prod_quasar(formats, stimulus, dimension_combinations):
+    """Scalar PROD on Quasar: each tile's product lands in its element [0][0] (see prod_result_bounds)."""
+    dest_acc = _unpack_to_dest_acc(formats.input_format)
+    input_dimensions = dimension_combinations
+    tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
+
+    src_A = generate_prod_stimuli(stimulus, tile_cnt).to(
+        format_dict[formats.input_format]
+    )
+    src_B = torch.zeros_like(src_A)
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs=_reduce_test_config_kwargs(
+            formats,
+            MathOperation.ReduceScalar,
+            ReducePool.Prod,
+            input_dimensions,
+            tile_cnt,
+            src_A,
+            src_B,
+            dest_acc,
+        ),
+    )
+    res_from_L1 = configuration.run().result
+    check_prod_result(res_from_L1, src_A, tile_cnt, stimulus, formats, dest_acc)

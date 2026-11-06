@@ -444,6 +444,7 @@ class ReducePool(Enum):
     Min = "MIN"
     Sum = "SUM"
     Average = "AVG"
+    Prod = "PROD"
 
     @property
     def cpp_enum_value(self):
