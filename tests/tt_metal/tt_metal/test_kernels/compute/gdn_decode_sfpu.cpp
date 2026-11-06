@@ -19,9 +19,10 @@
 //                         (5 copy_tiles per j in modes 0..2: r16, v16, ecol32, bcol16, then ccol32 once beta is dead)
 //                         MODE 3: 4-row helpers with ONE constants tile in c_3 (ebc16: column 0 rows 0..3 = e, 4..7 =
 //                         beta, 8..11 = c) read through mul_col_bcast_band0: 3 copy_tiles and one copy_init per j
-//   5  exact exp:         c_0 = gcol32, c_1 = a 32x32 data tile; out[0] = exp(gcol32), out[1] = data (.) col(out[0])
-//                         MODE 0: exp over the whole tile (VectorMode::RC), MODE 1: faces 0 and 2 only (VectorMode::C),
-//                         MODE 2: column 0 only (exp_col0_exact)
+//   5  exact exp:         c_0 = gcol32, c_1 = a 32x32 data tile; out[0] = exp(gcol32), out[1] = data (.) col(out[0]);
+//                         the API's exp_tile<false> (fp32-accurate) after exp_tile_init<false>
+//                         MODE 0: over the whole tile (VectorMode::RC), MODE 1: faces 0 and 2 only (VectorMode::C,
+//                         the form the constants pass uses)
 //   6  build ebc16:       c_0 = ecol32, c_1 = bcol16, c_2 = ccol32 copied into slots 0, 1, 2; out[0] = build_ebc16 into
 //                         the free slot 3, out[1] = build_ebc16 in place in slot 0 (two 16x32 tiles per repetition)
 //   7  scalar x tile:     c_0 = a 32x32 scalar tile (e at [0, 0]), c_1 = four random 32x32 tiles -> four tiles = data *
@@ -38,6 +39,7 @@
 
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
@@ -253,13 +255,8 @@ void kernel_main() {
             copy_init(cb_in0);
             copy_tile(cb_in0, 0, 0);
             copy_tile(cb_in1, 0, 1);
-            if constexpr (MODE == 2) {
-                gdn_decode_sfpu::exp_col0_exact(0);
-            } else if constexpr (MODE == 1) {
-                gdn_decode_sfpu::exp_tile_exact<ckernel::VectorMode::C>(0);
-            } else {
-                gdn_decode_sfpu::exp_tile_exact<ckernel::VectorMode::RC>(0);
-            }
+            ckernel::exp_tile_init<false>();
+            ckernel::exp_tile<false>(0, MODE == 1 ? ckernel::VectorMode::C : ckernel::VectorMode::RC);
             gdn_decode_sfpu::mul_col_bcast<32>(1, 0);
             tile_regs_commit();
             tile_regs_wait();

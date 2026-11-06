@@ -774,8 +774,8 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuExpExact) {
         g[r * 32 + 0] = gcol[r];
     }
     const auto data = random_tile(kT32, gen, 1.0f);
-    std::vector<float> col0_ref;  // column 0 of the whole-tile form, for the bit-equality of the other forms
-    for (uint32_t mode : {0u, 1u, 2u}) {
+    std::vector<float> col0_ref;  // column 0 of the whole-tile form, for the bit-equality of the faces-0-and-2 form
+    for (uint32_t mode : {0u, 1u}) {
         auto res =
             run(this->devices_.at(0),
                 {.variant = 5,
@@ -793,16 +793,10 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuExpExact) {
             col0[r] = e[r * 32 + 0];
             max_ulp = std::max(max_ulp, ulp_diff(e[r * 32 + 0], std::exp(gcol[r])));
             for (uint32_t c = 1; c < 32; c++) {
-                // mode 0 computes every column (exp(0) = 1), mode 1 faces 0 / 2 only (c < 16); mode 2 runs the
-                // eight column-0 vectors, which also carry the other even columns of faces 0 / 2 (exp(0) = 1 there),
-                // and leaves the odd columns and faces 1 / 3 as they were (g's zeros)
-                if (mode == 2) {
-                    elsewhere++;
-                    ones_elsewhere += e[r * 32 + c] == ((c < 16 && c % 2 == 0) ? 1.0f : 0.0f);
-                } else if (mode == 0 || c < 16) {
-                    elsewhere++;
-                    ones_elsewhere += e[r * 32 + c] == 1.0f;
-                }
+                // mode 0 computes every column (exp(0) = 1), mode 1 faces 0 / 2 only (c < 16) and leaves faces 1 / 3
+                // as they were (g's zeros)
+                elsewhere++;
+                ones_elsewhere += e[r * 32 + c] == ((mode == 0 || c < 16) ? 1.0f : 0.0f);
             }
         }
         if (mode == 0) {
@@ -820,7 +814,7 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuExpExact) {
             }
         }
         EXPECT_LE(max_ulp, 2) << "exact exp differs from std::exp by more than 2 ulp";
-        EXPECT_EQ(ones_elsewhere, elsewhere) << "the other columns are not what the form should leave there";
+        EXPECT_EQ(ones_elsewhere, elsewhere) << "the other columns are not what the vector mode should leave there";
         EXPECT_LE(max_ulp_mul, 1) << "mul_col_bcast did not apply column 0 of the exp tile";
         EXPECT_TRUE(col0_same) << "column 0 differs bitwise between the exp forms";
         EXPECT_TRUE(bits_equal(res.first, res.tiles));
@@ -830,12 +824,10 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuExpExact) {
             "whole-tile form {}; other columns as expected ({}) on {} / {}; data (.) col(exp) equals fp32(data * e_r) "
             "bitwise on {} / 1024 (max {} ulp); repeatable {}; cycles per rep (2 copies + exp + col bcast + 2 packs) "
             "{:.0f}",
-            mode == 0   ? "whole tile (VectorMode::RC)"
-            : mode == 1 ? "faces 0 and 2 (VectorMode::C)"
-                        : "column 0 only (exp_col0_exact)",
+            mode == 0 ? "whole tile (VectorMode::RC)" : "faces 0 and 2 (VectorMode::C)",
             max_ulp,
             col0_same,
-            mode == 2 ? "exp(0) == 1 on the even columns of faces 0 / 2, untouched zeros elsewhere" : "exp(0) == 1",
+            mode == 0 ? "exp(0) == 1" : "exp(0) == 1 on faces 0 / 2, untouched zeros on faces 1 / 3",
             ones_elsewhere,
             elsewhere,
             exact,
