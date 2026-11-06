@@ -13,6 +13,8 @@
       "evidence": "setup/prepare.log"
     }
   ],
-  "latency_collection": "continuing within original7200s deadline",
-  "accuracy_verdict": null
+  "latency_collection": "completed all four profiles; owned servers stopped",
+  "accuracy_verdict": null,
+  "runtime_observer_decision": "pending explicit operator reply",
+  "completion_audit": "requirements_audit.json"
 }
