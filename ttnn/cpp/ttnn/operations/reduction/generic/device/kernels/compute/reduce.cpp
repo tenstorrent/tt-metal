@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Thin wrapper around compute_kernel_lib::reduce<>. The input data format is deduced from the input
-// buffer inside the helper, so Int32 MAX, MIN and SUM, and bf16 MIN, are routed to the SFPU path
+// buffer inside the helper, so Int32/UInt32 MAX, MIN and SUM, and bf16 MIN, are routed to the SFPU path
 // automatically; otherwise FPU/GMPOOL. Accurate fp32 also uses the SFPU. Every other MIN (bfloat8_b,
 // fast-mode fp32) never reaches here: the host rewrites it as -MAX(-x) and dispatches
 // reduce_{h,w}_neg instead.
@@ -47,7 +47,7 @@ void kernel_main() {
 #ifdef REDUCE_POST_MUL
         // GMPOOL only respects the scaler's exponent for MAX/MIN and SFPU reduce ignores the
         // scaler buffer entirely, so both paths apply the user scalar here per output tile.
-        // reduce_post_mul_tile handles Int32 (typecast-bracketed) and float formats uniformly.
+        // reduce_post_mul_tile handles Int32 and UInt32 (typecast-bracketed) and float formats uniformly.
         [](uint32_t dst_idx) {
             const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
             if (post_mul_scaler_bits == k_identity_scaler_bits) {
