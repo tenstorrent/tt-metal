@@ -171,7 +171,11 @@ def wait_providers(paths):
         kind: {vld: set() for _, vld in PAIRS} for kind in ("full", "vld_only")
     }
     for path in paths:
-        src = open(path, errors="ignore").read()
+        try:
+            with open(path, errors="ignore") as f:
+                src = f.read()
+        except OSError:
+            continue
         if "STALLWAIT" not in src or "_VLD" not in src:
             continue
         lines = _blank_noncode(src).split("\n")
@@ -204,7 +208,11 @@ def scan(path, providers):
     `kind` is "none" (no wait on the bank at all) or "vld_only" (a wait on the valid bit that
     does not drain math).
     """
-    src = open(path, errors="ignore").read()
+    try:
+        with open(path, errors="ignore") as f:
+            src = f.read()
+    except OSError:
+        return
     if "MOVD2" not in src:
         return
     code = _blank_noncode(src)
@@ -282,8 +290,11 @@ def tree_headers():
 
 
 def _has_move(path):
-    with open(path, errors="ignore") as f:
-        return "MOVD2" in f.read()
+    try:
+        with open(path, errors="ignore") as f:
+            return "MOVD2" in f.read()
+    except OSError:
+        return False
 
 
 def main():

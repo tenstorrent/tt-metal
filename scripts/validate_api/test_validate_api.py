@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+import io
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -17,6 +18,7 @@ from validate_api import (
     BANNED_HEADERS,
     SKIP_FILES,
     load_exceptions,
+    main,
     skip_unrelated_commit,
     source_lines,
     validate,
@@ -461,30 +463,33 @@ class ApiValidationTests(unittest.TestCase):
         self.populate_prefixes()
         self.assertEqual(validate(self.root, set())[0], [])
 
+    def _run_cli(self, exceptions):
+        # PRE_COMMIT makes main() skip a commit that does not touch the API. This fixture is a
+        # temporary directory, so drop those variables for the call instead of spawning a process
+        # with the parent environment.
+        argv = ["validate_api.py", str(self.root), "--exceptions", str(exceptions)]
+        output = io.StringIO()
+        cleaned = {key: value for key, value in os.environ.items() if not key.startswith("PRE_COMMIT")}
+        with patch.dict(os.environ, cleaned, clear=True), patch.object(sys, "argv", argv):
+            with contextlib.redirect_stdout(output):
+                code = main()
+        return code, output.getvalue()
+
     def test_existing_cli_runs_both_include_and_header_checks(self):
         self.populate_prefixes()
         exceptions = self.root / "exceptions.json"
         exceptions.write_text("[]")
-        command = [
-            sys.executable,
-            str(Path(__file__).with_name("validate_api.py")),
-            str(self.root),
-            "--exceptions",
-            str(exceptions),
-        ]
-        # Under pre-commit the child would inherit PRE_COMMIT and skip an unrelated commit.
-        env = {key: value for key, value in os.environ.items() if not key.startswith("PRE_COMMIT")}
-        result = subprocess.run(command, capture_output=True, text=True, env=env)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        code, output = self._run_cli(exceptions)
+        self.assertEqual(code, 0, output)
         self.header("tt-metalium/a.hpp", '#include "internal/private.hpp"\n')
-        result = subprocess.run(command, capture_output=True, text=True, env=env)
-        self.assertEqual(result.returncode, 1)
+        code, output = self._run_cli(exceptions)
+        self.assertEqual(code, 1)
         for diagnostic in (
             "unconditional #pragma once",
             "Quoted includes are not allowed",
             "must not include internal",
         ):
-            self.assertIn(diagnostic, result.stdout)
+            self.assertIn(diagnostic, output)
 
 
 class PrecommitSkipTests(unittest.TestCase):

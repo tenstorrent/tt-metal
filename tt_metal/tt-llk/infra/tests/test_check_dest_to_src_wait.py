@@ -480,6 +480,28 @@ def test_tree_headers_drops_index_entries_missing_on_disk(monkeypatch):
     assert mod.tree_headers() == [os.path.normpath(present)]
 
 
+def test_missing_argument_file_is_ignored(tmp_path):
+    """A deleted or non-existent file passed on the command line must not raise FileNotFoundError."""
+    missing = tmp_path / "deleted.h"
+    res = run(missing)
+    assert res.returncode == 0
+    assert res.stdout == ""
+
+    bad = hdr(
+        tmp_path,
+        "bad.h",
+        """
+        inline void _llk_math_thing_()
+        {
+            TTI_MOVD2B(0, 0, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, 0);
+        }
+        """,
+    )
+    res = run(missing, bad)
+    assert res.returncode == 0
+    assert "MOVD2B with no SRCB_VLD wait" in res.stdout
+
+
 def test_shipped_tree_never_fails():
     """Whole-tree run (no files) exits 0 whether or not findings remain."""
     g = runpy.run_path(SCRIPT)
