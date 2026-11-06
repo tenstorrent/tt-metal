@@ -145,7 +145,7 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     }
     // Get worker cores
     // 2 senders (reader + writer) per direction (forward, reverse_order) per link
-    // The packed size of the spec, the quantity the program hash derives the default worker count from.
+    // The packed size of the spec, which fixes the default worker count.
     uint32_t output_data_size_bytes = output_tensor.tensor_spec().compute_packed_buffer_size_bytes();
     uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(default_workers(
         *mesh_device,
@@ -388,8 +388,8 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     const auto [normalized_dim, batch_head_size, input_tensor_C, output_tensor_C] =
         (input_tensor_shape.rank() == 2) ? map_2d_to_4d() : map_nd_to_4d();
 
-    // A page is one tile, so every tile count comes from the tensor's own tile shape (tiny tiles included):
-    // the workers split input_Ht * input_Wt pages and the per-chip offsets use the same counts.
+    // A page is one tile: every tile count comes from the tensor's own tile shape (tiny tiles included).
+    // The workers split input_Ht * input_Wt pages and the per-chip offsets use the same counts.
     const auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     const uint32_t tile_height = tile_shape[0];
     const uint32_t tile_width = tile_shape[1];
@@ -821,7 +821,7 @@ void DefaultMeshWorkloadFactory::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
     ttnn::apply_all_gather_async_minimal_default_semaphore_args(
         program, kDefaultKernels, operation_attributes.barrier_semaphore, operation_attributes.semaphore);
-    // The row count is not in the program hash: a hit may serve a new length.
+    // A hit may serve a new length: rewrite the common row count.
     const uint32_t input_Ht = all_gather_input_Ht(tensor_args.input_tensor);
     for (const size_t kernel_index : {kDefaultKernels.reader_kernel_index, kDefaultKernels.writer_kernel_index}) {
         tt::tt_metal::GetCommonRuntimeArgs(program, kernel_index)[ttnn::ccl::AllGatherCommonArgs::input_Ht] = input_Ht;

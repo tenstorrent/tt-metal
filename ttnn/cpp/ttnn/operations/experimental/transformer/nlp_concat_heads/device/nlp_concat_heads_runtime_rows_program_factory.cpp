@@ -38,9 +38,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsRuntimeRowsProgramFactory
 
     CoreCoord compute_with_storage_grid_size = a.device()->compute_with_storage_grid_size();
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      TM Parameters Setup
-    ////////////////////////////////////////////////////////////////////////////
+    // Tile counts
     uint32_t per_tensor_tiles = ashape[1] * ashape[3] / TILE_WIDTH;
     uint32_t in0_h_tiles = ashape[2] / TILE_HEIGHT;
     uint32_t in0_w_tiles = ashape[3] / TILE_WIDTH;    // head_dim
@@ -131,7 +129,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsRuntimeRowsProgramFactory
         AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, cores[i], {{"core_idx", i}});
     }
 
-    // The hash drops the row count, so the parameters accept any height.
+    // The tensor parameters accept any height.
     const TensorSpecRelaxations rows_vary{.dynamic_tensor_shape = true};
     ProgramSpec spec{
         .name = "nlp_concat_heads",
@@ -163,8 +161,6 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsRuntimeRowsProgramFactory
     };
 }
 
-// A hit re-binds the two tensors and rewrites the common row count the kernels derive their block
-// ranges from (the hash leaves the row count out).
 tt::tt_metal::experimental::ProgramRunArgs NLPConcatHeadsRuntimeRowsProgramFactory::override_runtime_arguments(
     const NlpConcatHeadsParams& /*operation_attributes*/,
     const Tensor& input,
