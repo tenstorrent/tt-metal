@@ -7,9 +7,13 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent.parent / "llk-fetch-test-durations.sh"
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import llk_sum_test_durations as summing  # noqa: E402
 
 FAKE_GH = """#!/usr/bin/env bash
 if [[ "$2" == list ]]; then cat "$FIXTURE/runs"; exit 0; fi
@@ -62,3 +66,29 @@ def test_newest_run_with_durations_wins_and_parts_are_summed(tmp_path):
         "blackhole": {"a.py::t[1]": 1.5, "a.py::t[2]": 2.0},
         "wormhole": {"b.py::t": 3.0},
     }
+
+
+def test_the_summing_runs_on_its_own(tmp_path):
+    """The legs are summed by a module, so it can be called without the shell."""
+    for name, durations in {
+        "test-durations-blackhole-1": {"a.py::t": 1.0},
+        "test-durations-blackhole-1-compile": {"a.py::t": 0.5},
+        "test-durations-quasar-1": {"q.py::t": 4.0},
+    }.items():
+        leg = tmp_path / "download" / name
+        leg.mkdir(parents=True)
+        (leg / ".test_durations").write_text(json.dumps(durations))
+    assert summing.sum_durations(tmp_path / "download", "blackhole") == {"a.py::t": 1.5}
+    assert summing.sum_durations(tmp_path / "download", "wormhole") == {}
+
+
+def test_the_summing_writes_one_table_per_architecture(tmp_path, monkeypatch):
+    leg = tmp_path / "download" / "test-durations-wormhole-3"
+    leg.mkdir(parents=True)
+    (leg / ".test_durations").write_text(json.dumps({"b.py::t": 2.0}))
+    output = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    assert summing.main([str(tmp_path / "download"), str(tmp_path / "out")]) == 0
+    assert json.loads((tmp_path / "out" / "wormhole.json").read_text()) == {"b.py::t": 2.0}
+    assert not (tmp_path / "out" / "blackhole.json").exists()
+    assert output.read_text().strip() == "found=true"

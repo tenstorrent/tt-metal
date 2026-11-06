@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Sum the per-leg test durations of one run into one table per architecture.
+
+A leg writes the seconds of its own tests, and the compile pass writes a file
+of its own, so a test appears once per leg that ran it and its seconds add up.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+ARCHES = ("wormhole", "blackhole")
+
+
+def sum_durations(download: Path, arch: str) -> dict:
+    summed: dict = {}
+    for leg in sorted(download.glob(f"test-durations-{arch}-*/.test_durations")):
+        for test, seconds in json.loads(leg.read_text()).items():
+            summed[test] = summed.get(test, 0.0) + seconds
+    return summed
+
+
+def main(argv=None) -> int:
+    download, out = (Path(p) for p in (argv or sys.argv[1:])[:2])
+    out.mkdir(parents=True, exist_ok=True)
+    found = False
+    for arch in ARCHES:
+        summed = sum_durations(download, arch)
+        print(f"{arch}: durations for {len(summed)} tests")
+        if summed:
+            (out / f"{arch}.json").write_text(json.dumps(summed))
+            found = True
+    github_output = os.environ.get("GITHUB_OUTPUT")
+    if github_output:
+        with open(github_output, "a", encoding="utf-8") as handle:
+            handle.write(f"found={str(found).lower()}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
