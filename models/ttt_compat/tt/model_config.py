@@ -586,6 +586,9 @@ class ModelArgs:
         "GATE_MM_OUTPUT",
     )
 
+    # Instance attribute set from DISTRIBUTED_PREFILL_NORM in __init__; see is_distributed_norm.
+    distributed_prefill_norm = False
+
     # GQA models padded to the tensor-parallel width when their KV heads do not divide it.
     PAD_HEADS_FOR_TP_MODELS = ("Qwen2.5-VL-3B", "Qwen2.5-VL-7B", "olmOCR-2-7B")
 
@@ -714,6 +717,10 @@ class ModelArgs:
         # Mathematically a no-op for softmax; keeps QK^T small enough for the bf16 score
         # intermediates of the decode SDPA kernel. See Attention._create_k_bias_shift.
         self.subtract_k_bias_post_rope = False
+        # Opt-in (DISTRIBUTED_PREFILL_NORM=1): distribute the prefill norm for dim <= 4096 too. Each device then
+        # normalizes its own shard instead of the gathered full width, which needs far less L1 for circular
+        # buffers (e.g. when the model shares its devices with another model). See is_distributed_norm.
+        self.distributed_prefill_norm = os.getenv("DISTRIBUTED_PREFILL_NORM") == "1"
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -2784,7 +2791,11 @@ class ModelArgs:
             local_params = None
         return local_params
 
-    def is_distributed_norm(self, mode: Mode):
+    def is_distributed_norm(self, mode: Mode | str):
+        # RMSNorm.forward accepts "prefill"/"decode" strings too; compare them as Mode so DistributedNorm
+        # (which picks gather-or-not) and RMSNorm (which picks the gamma) always agree.
+        if isinstance(mode, str):
+            mode = Mode(mode)
         if not self.is_multichip:
             return False
         if all([dim > 1 for dim in list(self.mesh_device.shape)]):  # 2D grid
@@ -2792,6 +2803,8 @@ class ModelArgs:
         elif (
             self.dim > 4096 and mode == Mode.PREFILL
         ):  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
+            return True
+        elif mode == Mode.PREFILL and self.distributed_prefill_norm:
             return True
         return False
 
