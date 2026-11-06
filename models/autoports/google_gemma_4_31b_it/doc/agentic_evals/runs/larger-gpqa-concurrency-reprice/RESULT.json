@@ -1,0 +1,84 @@
+{
+  "status": "host_preparation_complete_no_device_admitted",
+  "device_hours": 0,
+  "old_decision_preserved": "gpqa-c8-capacity/RESULT.json applies current B8 pool10248 and old schedule",
+  "preferred_candidate": {
+    "compute_batch": 8,
+    "planned_clients": 8,
+    "model_owned_pool_ids": 20480,
+    "synthetic_budget_tokens": 589568,
+    "source_change_required": true,
+    "stock_plugin_change": false,
+    "new_image_build_required": true,
+    "kv_bytes_per_device": 14260633600,
+    "projected_prepared_bytes_per_device": 20817281024,
+    "usable_bytes_per_device": 34044513280,
+    "projected_free_bytes_per_device": 13227232256,
+    "analytical_transient_reserve_bytes": 805306368,
+    "remaining_after_analytical_reserve": 12421925888,
+    "full60_long_prefill_peak_measured": false,
+    "target131072_context_async_scenario_ids": 18451,
+    "headroom_ids": 2029
+  },
+  "physical_batch_alternatives": [
+    {
+      "batch": 16,
+      "clients": 8,
+      "pool_ids": 18448,
+      "scenario_ids": 18451,
+      "margin": -3,
+      "decision": "cannot certify full asynchronous boundary with unchanged pool"
+    },
+    {
+      "batch": 32,
+      "clients": 16,
+      "pool_ids": 36896,
+      "scenario_ids": 36203,
+      "margin": 693,
+      "decision": "capacity candidate but throughput/tail cost unproved; lower priority than B8 larger pool"
+    }
+  ],
+  "projection_basis": {
+    "measured20_C4_eval_hours": 1.511982668724894,
+    "measured_setup_hours": 0.1371839979417726,
+    "guessed_queue_hours": 0.5,
+    "full_request_tail_allowance_hours": 4,
+    "candidate_speedup_is_guess": [
+      1.5,
+      2
+    ]
+  },
+  "B8_C8_scenario_hours": {
+    "80": {
+      "gain2": 7.661149335391561,
+      "gain1_5": 8.669137781208157
+    },
+    "160": {
+      "gain2": 10.68511467284135,
+      "gain1_5": 12.701091564474542
+    },
+    "198": {
+      "gain2": 12.121498208129998,
+      "gain1_5": 14.616269611525073
+    }
+  },
+  "cost": {
+    "initial_forecast_device_hours": 1.5,
+    "saving_guess_hours_per_release80": 2,
+    "credited_saving_hours": 0,
+    "B8_capacity_point_hours": 0.216,
+    "suggested_capacity_box_not_admitted": 0.35,
+    "contemporary_same20_pair_plus_capacity_point_hours": 2.758,
+    "new_image_build_guess_hours": 0.9,
+    "historical_baseline_reuse_point_hours": 1.109,
+    "qualification": "1.5h cannot cover contemporary same20 pair; no shortened caps or missing capped20 tasks to force fit"
+  },
+  "next": "Coordinator ranks optional B8 model-budget preparation; no implementation/dispatch/capacity/scored run authorized by this host result; normal20 then40 never waits.",
+  "details": "RESULT.md",
+  "limitations": [
+    "Stage11 rates measured full concurrency8/16/32 at4096/128 on earlier runtime, not half-filled batches or131K histories.",
+    "Allocator arithmetic scenarios are not observed peaks or an admission pass.",
+    "Native capped current20 work unavailable at analysis; earlier C2 active-work counts are not C4 emitted-token parity.",
+    "Full4h request tail retained in release scenarios; no causal speed or capacity result claimed."
+  ]
+}

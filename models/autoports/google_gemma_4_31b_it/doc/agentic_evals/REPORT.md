@@ -122,6 +122,8 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | gpqa80-preparation | 0.00000 / 0.00000 | 0.00000 | kept/solved: Nested80 prepared on6ca5a1b;34 focused tests/hooks passed. Held until valid40 and measured time admission. |
 | first-agent-reply-observability | 0.06000 (guess) / 0.06629 | 0.00000 | kept/solved: native body id matches: 7; baseline exact pairs: 3; empty visible probes logged: 4; matched seconds before: 14.044918984 |
 | response-logging-runtime-benchmark | 0.07605 / 0.08307 | 0.00000 | dropped/solved: headline completed: 8; matrix completed: 8; headline buffered ttft ms: 4386.854759; headline buffered tpot ms: 0.037546873 |
+| larger-gpqa-concurrency-reprice | 1.50000 (guess) / 0.00000 | 2.00000 | none/open: result: B16/C8 conservative allocation scenario exceeds pool by3 IDs; B32/C16 fits modeled envelope but speed uncertain. Prefer model-owned enlarged B8 pool20480; physical long-context fit unmeasured.; conte… |
+| gpqa-b8-expanded-pool | 1.10900 (guess) / unknown | 3.02400 | running/pending: Pending |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 

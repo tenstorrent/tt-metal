@@ -3298,6 +3298,65 @@
 "runs/response-logging-runtime-benchmark/RESULT.json",
 "runs/response-logging-runtime-benchmark/AUTOFIX.md"
 ]
+},
+{
+"problem": "larger-gpqa-concurrency-reprice",
+"owner": "current_benchmark",
+"goal": "Price B16/C8 andB32/C16 for larger GPQA release lists undernew10h-longer predrywindow; normalrungs neverwait",
+"plan": "runs/larger-gpqa-concurrency-reprice/plan.md",
+"predicted": {
+"saving_hours": {
+"r1_gpqa_diamond": 2
+},
+"device_hours": 1.5,
+"basis": "guess",
+"reason": "Provisional80release saving and combined nativecapacity/scoredpaircost; hostfeasibility mustreplacebeforedeviceadmission; no credit yet"
+},
+"unblocks": [],
+"confirm": {
+"method": "Exactallocator reserve arithmetic andmeasuredbatchrates, explicitcensored-tail extrapolation; propose smallestnative independent longhistoryreplay and scoredpair againstcurrentC4best",
+"success": "Concreteprofitable/admissibleplan ormeasured/sourcebasedstop. No capacity orspeedclaimwithoutdeviceconfirmation"
+},
+"box_hours": 1.8,
+"host_box_hours": 0.2,
+"status": "done",
+"admission": "Hostonlyinitialphase; no deviceorCIrunadmitted untilcoordinatorreviewsplan",
+"reason_for_revisit": "PriorB16no-run heldunderfirstdry22 schedule. GPQA-only firstdry32 allows10additionalhours; examineB32/C16 aswell, preservingoldB8C8no-fit.",
+"used_device_hours": 0,
+"change": "none",
+"problem_status": "open",
+"confirmed": {
+"result": "B16/C8 conservative allocation scenario exceeds pool by3 IDs; B32/C16 fits modeled envelope but speed uncertain. Prefer model-owned enlarged B8 pool20480; physical long-context fit unmeasured.",
+"contemporary_pair_cost_guess_hours": 2.758,
+"baseline_reuse_cost_guess_hours": 1.109
+},
+"evidence": [
+"runs/larger-gpqa-concurrency-reprice/RESULT.json",
+"runs/larger-gpqa-concurrency-reprice/RESULT.md"
+]
+},
+{
+"problem": "gpqa-b8-expanded-pool",
+"owner": "current_benchmark",
+"goal": "Serve eight independent131072-token histories at B8 and reduce frozen20 completion time without validity loss",
+"plan": "runs/gpqa-b8-expanded-pool/plan.md",
+"predicted": {
+"saving_hours": {
+"r1_gpqa_diamond": 3.024
+},
+"device_hours": 1.109,
+"basis": "guess",
+"reason": "80-list ideal2x C4-to-C8 scaling; baseline reuse, capacity andcandidate20 estimate. No measured speedup yet."
+},
+"unblocks": [],
+"confirm": {
+"method": "Model-only optional pool, hosttests, native3 exact pairs atC2/B8, independentC8 growing-history residency/allocator check, stock frozen20 scored candidate versus repaired20 currentbest",
+"success": "No lost validity, no preemptions or missing longcontext residency; actual faster completion. Report score intervals and generated-work differences; no controlled causal speed claim from reused baseline."
+},
+"box_hours": 2.5,
+"status": "running",
+"admission": "Host implementation/client preparation admitted; root must queue each device run. Capacity subbox0.65h. Normal40 neverwaits.",
+"baseline_reuse": "Explicitly accepted repaired20 C4 baseline onab273; logging exactness-proven separately. If source/config incompatibility affects outputs, repeat appropriate baseline and reprice."
 }
 ],
 "rankings": [
@@ -20140,6 +20199,65 @@
 }
 ],
 "reason": "Required headline alreadymeasured on selectedunbufferedB1; streaminglogger experimentdropped. NormalCIrungcontinues; no speculative speed effort delays progression."
+},
+{
+"after": "Selectedlogging/performanceconfiguration complete; largerconcurrency hostreprice",
+"at": "2026-11-06T20:10:31.932687+00:00",
+"order": [
+{
+"problem": "GPQA20 archive-validity retry",
+"unblocks": [
+"next rung"
+],
+"saving_hours": 0,
+"device_hours": null
+},
+{
+"problem": "frozen CI initial-agent no-score dry",
+"unblocks": [
+"release"
+],
+"saving_hours": 0,
+"device_hours": null
+},
+{
+"problem": "larger-gpqa-concurrency-reprice",
+"unblocks": [],
+"saving_hours": 2,
+"device_hours": 1.5,
+"basis": "guess"
+}
+],
+"reason": "Validityrunscontinue independently. Host-onlyrepricing usesnew10h reserve; no speculative deviceadmission, andnormal40rung neverwaits."
+},
+{
+"after": "larger-gpqa-concurrency-reprice host conclusion",
+"at": "2026-11-06T20:20:12.502148+00:00",
+"order": [
+{
+"problem": "GPQA20 archive-validity retry",
+"unblocks": [
+"valid20 and40rung"
+],
+"saving_hours": 0,
+"device_hours": null
+},
+{
+"problem": "frozen CI initial-agent no-score dry",
+"unblocks": [
+"release"
+],
+"saving_hours": 0,
+"device_hours": null
+},
+{
+"problem": "gpqa-b8-expanded-pool",
+"unblocks": [],
+"saving_hours": 3.024,
+"device_hours": 1.109
+}
+],
+"reason": "Validity first; optional speed work uses idle local device and never delays CI rungs. Savings/cost remain guesses; widened2.5h box includes uncertainty."
 }
 ],
 "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

@@ -1,0 +1,51 @@
+{
+  "status": "held_preparation_complete",
+  "candidate_sha": "1eca89c0dcf65550a79196aecca13ef687c9cf06",
+  "base_sha": "af1ef17abfecb059da13d0a1287c00eace0f210e",
+  "cherry_picked_sha": "6ca5a1b89824bfcf1a197a1fcdc86f3e1d44fd8b",
+  "branch": "prep/gpqa80-logging",
+  "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa80-logging",
+  "validation": {
+    "focused_tests_passed": 35,
+    "focused_seconds": 3.57,
+    "full_hooks": "ruff, ruff-format, pytest, copyright passed",
+    "exact_production_delta": [
+      "GPQA doc_ids40to80",
+      "GPQA nightly_count40to80"
+    ],
+    "prior40_exact_prefix": true,
+    "deterministic_rule80_unique": true,
+    "logging_model_yaml_byte_identical": true,
+    "all_other_settings_preserved": true,
+    "clean_worktree": true,
+    "diff_check": "passed"
+  },
+  "planned_clients": 4,
+  "supported_batch": 8,
+  "scope": "Accepted logging configuration applies to nonstreaming GPQA; no extension of its live acceptance scope.",
+  "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:0696f29a1d233f318ce3003ca80bdef304e03b91111f110b8eba694af62c767d",
+  "image_source": "../larger-gpqa20-c4-retention-retry/image-provenance.json",
+  "tt_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
+  "plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+  "device_hours": 0,
+  "score": null,
+  "projection_hours": null,
+  "held_until": [
+    "valid preceding40",
+    "measured projection and schedule admission"
+  ],
+  "actions_not_taken": [
+    "push",
+    "dispatch",
+    "device use",
+    "central documentation edits"
+  ],
+  "evidence": [
+    "cohort.json",
+    "logging-candidate-audit.json",
+    "logging-candidate-tests.log",
+    "logging-candidate-hooks.log",
+    "logging-candidate.patch"
+  ],
+  "note": "Separate follow-on preparation evidence; original RESULT unchanged. Current image provenance reused, not newly measured."
+}
