@@ -318,7 +318,7 @@ class Flux3KleinPipeline:
 
         t0 = time.time()
         u8 = image_to_uint8(decoded)
-        rows = ttnn.to_torch(ttnn.get_device_tensors(u8)[0])[0]
+        rows = tensor.to_torch(u8, mesh_axes=[None, self._vae.h_axis, None])[0]
         image = Image.fromarray(rows.reshape(size, size, 3).numpy())
         ttnn.deallocate(u8)
         ttnn.deallocate(decoded)

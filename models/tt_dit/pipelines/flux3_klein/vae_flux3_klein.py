@@ -110,6 +110,16 @@ def _bounded_group_norm_blocks(module) -> None:
         _bounded_group_norm_blocks(child)
 
 
+def _decoder_conv_blocking(module) -> None:
+    """64 activation rows per core, double-buffered activations and weights, the full inner dimension."""
+    if isinstance(module, Conv2d):
+        module.act_block_h_override = 64
+        module.double_buffer = True
+        module.full_inner_dim = True
+    for _, child in module.named_children():
+        _decoder_conv_blocking(child)
+
+
 def _local_query_attention(module) -> None:
     if isinstance(module, VaeAttention):
         module.local_queries = True
@@ -135,7 +145,7 @@ class Flux3KleinVae:
         self._ccl = ccl_manager
         self._dit_ccl = dit_ccl_manager
         self._dit_sp_axis = dit_sp_axis
-        self._h_axis = h_axis
+        self.h_axis = h_axis
         model_name = f"flux3_klein_vae_{checkpoint_id(self._snapshot / SUBFOLDER / VAE_WEIGHTS)}"
         mesh_shape = tuple(device.shape)
         common = {
@@ -172,6 +182,7 @@ class Flux3KleinVae:
         configure_conv2d(
             self._decoder, slice_params={mesh_shape: decoder_slice_params(sizes, int(device.shape[h_axis]))}
         )
+        _decoder_conv_blocking(self._decoder)
         _local_query_attention(self._decoder)
         load(self._decoder, decoder_parallel, SUBFOLDER)
 
@@ -186,7 +197,8 @@ class Flux3KleinVae:
         self._bn_std = torch.sqrt(state["bn.running_var"].float() + torch_vae.config.batch_norm_eps)
 
     def decode(self, state: ttnn.Tensor, *, size: int) -> ttnn.Tensor:
-        """Decode the SP-sharded fp32 latent state of a size x size image to a replicated [1, size, size, 3] image."""
+        """Decode the SP-sharded fp32 latent state of a size x size image to a [1, size, size, 3] image H-sharded over
+        `h_axis`."""
         h, w = latent_shape(size, size)
         decoder = self._decoder
 
@@ -199,11 +211,11 @@ class Flux3KleinVae:
             sliced = ttnn.slice(rows, [0, 0, 0], [1, h * w, LATENT_CHANNELS])
             ttnn.deallocate(rows)
             rows = sliced
-        parted = ttnn.mesh_partition(rows, dim=1, cluster_axis=self._h_axis, memory_config=rows.memory_config())
+        parted = ttnn.mesh_partition(rows, dim=1, cluster_axis=self.h_axis, memory_config=rows.memory_config())
         ttnn.deallocate(rows)
         z = decoder.preprocess_and_unpatchify(parted, height=size // SCALE, width=size // SCALE)
         ttnn.deallocate(parted)
-        out = decoder.forward(z, traced=False)
+        out = decoder.forward(z, traced=False, gather_hw=False)
         ttnn.deallocate(z)
         return out
 
