@@ -429,8 +429,7 @@ public:
 
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
-    // Changes whenever a MeshDevice closes, so that caches of its devices can be checked without a reference to it.
-    static uint64_t close_generation();
+    static uint64_t close_generation();  // Bumped on every MeshDevice close.
     void enable_program_cache() override;
     void clear_program_cache() override;
     void disable_and_clear_program_cache() override;
