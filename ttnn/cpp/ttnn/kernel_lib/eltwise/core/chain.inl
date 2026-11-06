@@ -379,13 +379,15 @@ struct DestReuseBinaryConfig {
     using ReuseField = ConfigField<DestReuseType, OpField::end, DestReuseType::DEST_TO_SRCB>;
     using InputField = ConfigField<uint16_t, ReuseField::end, static_cast<uint16_t>(InputSpecConfig::storage_mask)>;
     using DstField = ConfigField<Dst, InputField::end, Dst::D15>;
+    using DestFormatField = ConfigField<DestOperandFormat, DstField::end, DestOperandFormat::FromInput>;
 
     uint32_t bits;
 
-    constexpr DestReuseBinaryConfig(BinaryFpuOp op, DestReuseType reuse, InputSpec input_spec, Dst dst) noexcept :
+    constexpr DestReuseBinaryConfig(
+        BinaryFpuOp op, DestReuseType reuse, InputSpec input_spec, Dst dst, DestOperandFormat dest_format) noexcept :
         bits(
             OpField::encode(op) | ReuseField::encode(reuse) | InputField::encode(InputSpecConfig::encode(input_spec)) |
-            DstField::encode(dst)) {}
+            DstField::encode(dst) | DestFormatField::encode(dest_format)) {}
     constexpr explicit DestReuseBinaryConfig(uint32_t encoded) noexcept : bits(encoded) {}
 
     constexpr BinaryFpuOp op() const noexcept { return OpField::decode(bits); }
@@ -394,6 +396,7 @@ struct DestReuseBinaryConfig {
         return InputSpecConfig::decode(InputField::decode(bits), cb_id);
     }
     constexpr Dst dst() const noexcept { return DstField::decode(bits); }
+    constexpr DestOperandFormat dest_format() const noexcept { return DestFormatField::decode(bits); }
 };
 
 constexpr uint32_t copy_tile_config_bits(Dst dst, InputSpec input_spec) noexcept {
@@ -410,8 +413,8 @@ constexpr uint32_t binary_fpu_config_bits(
 }
 
 constexpr uint32_t dest_reuse_binary_config_bits(
-    BinaryFpuOp op, DestReuseType reuse, InputSpec input_spec, Dst dst) noexcept {
-    return DestReuseBinaryConfig{op, reuse, input_spec, dst}.bits;
+    BinaryFpuOp op, DestReuseType reuse, InputSpec input_spec, Dst dst, DestOperandFormat dest_format) noexcept {
+    return DestReuseBinaryConfig{op, reuse, input_spec, dst, dest_format}.bits;
 }
 
 }  // namespace detail
@@ -1487,6 +1490,7 @@ struct detail::DestReuseBinaryImpl : InputStream<DataflowBufferType>, DestReuseB
     static constexpr DestReuseType ReuseType = Config.reuse();
     static constexpr InputSpec InputConfig = Config.input_spec(Cb);
     static constexpr Dst DstSlot = Config.dst();
+    static constexpr DestOperandFormat DestFormat = Config.dest_format();
     static constexpr WaitPolicy Wait = InputConfig.wait;
     static constexpr PopPolicy Pop = InputConfig.pop;
     static constexpr InputTileMapping Mapping = InputConfig.mapping;
@@ -1536,15 +1540,26 @@ struct detail::DestReuseBinaryImpl : InputStream<DataflowBufferType>, DestReuseB
             TileAddressing::Direct};
     }
 
+    static_assert(
+        DestFormat == DestOperandFormat::Inherit || InputConfig.reconfig == DataFormatReconfig::Enabled,
+        "DestReuseBinary: DestOperandFormat::FromInput reprograms a source format, so the input must have "
+        "DataFormatReconfig::Enabled");
+
     // Prev-CB fold: DestReuseBinary loads CB into srca (when DEST → srcb) or srcb
     // (when DEST → srca). Reconfig only fires when opted in.
     //
+    // With DestOperandFormat::FromInput the DEST-fed side is also programmed with the CB's format, so
+    // the DEST → src move converts to it instead of whatever format that side was left in. This is
+    // safe for the unpack: the DEST-fed side's unpacker is idle (the CB goes through the other one),
+    // and the fold records the new format so the next element on that side reconfigures from it.
+    static constexpr bool reconfig_input_side = InputConfig.reconfig == DataFormatReconfig::Enabled;
+    static constexpr bool reconfig_dest_side = DestFormat == DestOperandFormat::FromInput;
     static constexpr uint32_t reconfig_srca_dfb =
-        (InputConfig.reconfig == DataFormatReconfig::Enabled && ReuseType == DestReuseType::DEST_TO_SRCB) ? Cb
-                                                                                                          : NO_PREV_DFB;
+        (ReuseType == DestReuseType::DEST_TO_SRCB) ? (reconfig_input_side ? Cb : NO_PREV_DFB)
+                                                   : (reconfig_dest_side ? Cb : NO_PREV_DFB);
     static constexpr uint32_t reconfig_srcb_dfb =
-        (InputConfig.reconfig == DataFormatReconfig::Enabled && ReuseType == DestReuseType::DEST_TO_SRCA) ? Cb
-                                                                                                          : NO_PREV_DFB;
+        (ReuseType == DestReuseType::DEST_TO_SRCA) ? (reconfig_input_side ? Cb : NO_PREV_DFB)
+                                                   : (reconfig_dest_side ? Cb : NO_PREV_DFB);
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB.
 
     // The DataflowBuffer(s) this element binds, in spec order.

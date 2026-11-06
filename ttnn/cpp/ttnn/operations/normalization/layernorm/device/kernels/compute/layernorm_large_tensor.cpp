@@ -435,10 +435,15 @@ void kernel_main() {
                 ckl::Optional<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
                     ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, inb_input, ckl::DestReuseType::DEST_TO_SRCB>>{dfb_inb},
+                // FromInput: SrcA would otherwise keep dfb_in's (or dfb_inb's) format and truncate the
+                // fp32 x - E[x] in DEST to it. ex2pe is an intermediate (Float32 under fp32_dest_acc_en,
+                // i.e. Tf32 in SrcA), so this keeps DEST's precision on the operand HiFi2 fully covers.
                 ckl::DestReuseBinary<
                     ckl::BinaryFpuOp::Mul,
                     ckl::input(dfb_ex2pe_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
-                    ckl::DestReuseType::DEST_TO_SRCA>{dfb_ex2pe},
+                    ckl::DestReuseType::DEST_TO_SRCA,
+                    ckl::Dst::D0,
+                    ckl::DestOperandFormat::FromInput>{dfb_ex2pe},
                 ckl::Optional<activate_after_normalize, FusedActivation>{},
                 ckl::PackTile<ckl::output(
                     dfb_im_or_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{dfb_im_or_out});
