@@ -12,12 +12,12 @@ from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 
 from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
-    assert_exact,
+    check_readable,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
-    torch_input,
 )
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 
 TILE_HEIGHT = 32
 
@@ -686,9 +686,10 @@ def test_gather_rank1_nd_sharded_input(device):
 )
 def test_gather_docstring_supported_inputs(dtype, layout, buffer_type, device):
     """Runs every input dtype, layout and interleaved buffer type the ttnn.gather docstring lists."""
+    check_readable(dtype, layout, buffer_type)
     memory_config = interleaved_memory_config(buffer_type)
     input_tensor = ttnn.from_torch(
-        torch_input((64, 128), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
+        full_range_input((64, 128), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
     )
     index = torch.randint(0, 128, (32, 96), dtype=torch.int64)
     index_tensor = ttnn.from_torch(
@@ -708,7 +709,8 @@ def test_gather_docstring_supported_inputs(dtype, layout, buffer_type, device):
 )
 def test_gather_docstring_supported_index_inputs(index_dtype, layout, device):
     """Runs every index dtype and layout the ttnn.gather docstring lists."""
-    input_tensor = ttnn.from_torch(torch_input((64, 128), ttnn.bfloat16), layout=layout, device=device)
+    check_readable(index_dtype, layout)
+    input_tensor = ttnn.from_torch(full_range_input((64, 128), ttnn.bfloat16), layout=layout, device=device)
     index = torch.randint(0, 128, (32, 96), dtype=torch.int64)
     index_tensor = ttnn.from_torch(index.to(torch.int32), dtype=index_dtype, layout=layout, device=device)
     output = ttnn.gather(input_tensor, -1, index=index_tensor)

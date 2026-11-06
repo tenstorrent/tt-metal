@@ -2,10 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Read the inputs that a ttnn op's docstring says it supports, so a test can run the op on exactly those.
+"""Read a ttnn op's supported dtypes, layouts and interleaved buffer types from its docstring, so a test can run the
+op on exactly those.
 
-A test parametrized with these helpers follows the docstring: a dtype, layout or buffer type added to the
-docstring must work, and one the op stops supporting fails until the docstring drops it.
+The helpers read the dtype/layout table and the interleaved Memory Support item. Sharded placement is not read.
+A test parametrized with them follows the docstring: a dtype, layout or buffer type added to the docstring must work,
+and one the op stops supporting fails until the docstring drops it.
 
 The helpers run while pytest collects. If a docstring can't be read, they return a single case that fails with the
 reason, so the rest of the test module still collects and runs.
@@ -14,7 +16,6 @@ reason, so the rest of the test module still collects and runs.
 import re
 
 import pytest
-import torch
 import ttnn
 
 _LAYOUTS = {"TILE": ttnn.TILE_LAYOUT, "ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT}
@@ -142,28 +143,3 @@ def docstring_interleaved_buffer_type_params(op, label=None):
 def interleaved_memory_config(buffer_type):
     check_readable(buffer_type)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
-
-
-def torch_input(shape, dtype, seed=0):
-    """Random values that ``dtype`` can hold. Block floats get float32 values, which they quantize."""
-    check_readable(dtype)
-    torch.manual_seed(seed)
-    if dtype == ttnn.bfloat16:
-        return torch.rand(shape, dtype=torch.bfloat16)
-    if dtype in (ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b):
-        return torch.rand(shape, dtype=torch.float32)
-    if dtype == ttnn.int32:
-        return torch.randint(-1000, 1000, shape, dtype=torch.int32)
-    if dtype == ttnn.uint32:
-        return torch.randint(0, 2**31 - 1, shape, dtype=torch.int32)
-    if dtype == ttnn.uint16:
-        return torch.randint(0, 2**15, shape, dtype=torch.int16)
-    if dtype == ttnn.uint8:
-        return torch.randint(0, 2**8, shape, dtype=torch.uint8)
-    raise ValueError(f"no torch input for {dtype}")
-
-
-def assert_exact(expected, actual):
-    """Same shape and the same values, compared as float64 so every dtype above compares exactly."""
-    assert list(expected.shape) == list(actual.shape), f"shape {list(actual.shape)} != {list(expected.shape)}"
-    assert torch.equal(expected.to(torch.float64), actual.to(torch.float64)), "values differ"

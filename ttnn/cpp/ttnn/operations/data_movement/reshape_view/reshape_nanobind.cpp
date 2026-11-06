@@ -56,7 +56,7 @@ void bind_reshape_view_operation(nb::module_& mod) {
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output tensor. Defaults to `None`, which matches the input tensor's memory configuration. If ``memory_config`` specifies a sharded layout without ``shard_spec``, the input tensor's ``shard_spec`` is used as the seed grid (layout should match the input).
                 pad_value (float or int, optional): Value to fill the output tensor's tile padding with when the reshape moves data. Defaults to `None`, which leaves the padding unspecified, except for ``BFLOAT8_B`` and ``BFLOAT4_B`` outputs, whose padding is filled with 0. For ``FLOAT32`` tensors, ``pad_value`` must be a float, such as ``1.0`` rather than ``1``.
-                reshape_tile_mode (ttnn.TileReshapeMapMode, optional): ``CACHE`` and ``RECREATE`` give the same result. Defaults to `CACHE`.
+                reshape_tile_mode (ttnn.TileReshapeMapMode, optional): ``CACHE`` and ``RECREATE`` give the same result. Defaults to `CACHE`. The tuple/list shape overload previously named this keyword ``recreate_mapping_tensor``.
                 sub_core_grids (ttnn.CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control, for interleaved input and output. ``BFLOAT8_B`` and ``BFLOAT4_B`` tensors must leave it as `None`. Defaults to `None`, which uses all the cores in the device.
                 skip_padding_fill (bool, optional): If `True`, tile padding is left as-is. Defaults to `False`, which applies ``pad_value`` when one is given. ``BFLOAT8_B`` and ``BFLOAT4_B`` outputs always have their padding filled.
 

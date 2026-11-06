@@ -16,12 +16,12 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
 from tests.ttnn.utils_for_testing import assert_equal as assert_tensors_equal
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
-    assert_exact,
+    check_readable,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
-    torch_input,
 )
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 import ttnn
 
 torch.manual_seed(0)
@@ -2263,9 +2263,10 @@ def test_pad_one_row_block_shards_squeezed_rank1(device):
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.pad))
 def test_pad_docstring_supported_inputs(dtype, layout, buffer_type, device):
     """Runs every dtype, layout and interleaved buffer type the ttnn.pad docstring lists."""
+    check_readable(dtype, layout, buffer_type)
     memory_config = interleaved_memory_config(buffer_type)
     input_tensor = ttnn.from_torch(
-        torch_input((1, 1, 32, 32), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
+        full_range_input((1, 1, 32, 32), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
     )
     output = ttnn.pad(input_tensor, [(0, 0), (0, 0), (0, 32), (0, 32)], 0.0, memory_config=memory_config)
 
