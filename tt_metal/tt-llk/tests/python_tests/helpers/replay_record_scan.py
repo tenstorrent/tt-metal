@@ -85,9 +85,6 @@ RISCV_OPCODE_OP_IMM = 0x13
 RISCV_OPCODE_STORE = 0x23
 RISCV_OPCODE_JAL = 0x6F
 FUNCT3_SW = 0b010
-REPLAY_OPCODE_LUI_IMM = (
-    TT_OPCODE_REPLAY << 12
-)  # lui immediate placing 0x04 in bits 31:24
 RUNTIME_RECORD_COMPOSE_WORDS = 12
 RUNTIME_RECORD_DISABLE_WINDOW_WORDS = 64
 
@@ -107,7 +104,9 @@ def _runtime_replay_records(words):
     """
     records = []
     for i, word in enumerate(words):
-        if word & 0x7F != RISCV_OPCODE_LUI or word >> 12 != REPLAY_OPCODE_LUI_IMM:
+        # The lui carries the REPLAY opcode byte in bits 31:24 and the start (and any high length bits)
+        # below it, so match the opcode byte alone: a record at a non-zero start is still a record.
+        if word & 0x7F != RISCV_OPCODE_LUI or word >> 24 != TT_OPCODE_REPLAY:
             continue
         rd = (word >> 7) & 0x1F
         end = min(i + RUNTIME_RECORD_COMPOSE_WORDS, len(words))

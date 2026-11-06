@@ -207,6 +207,9 @@ def test_runtime_record_is_the_store_of_the_composed_value():
     assert _runtime_replay_records(words) == [(3, None)]
     # The value never stored from t0 (moved first): the first sw still stands in for the record.
     assert _runtime_replay_records([lui, addi, _sw(t1, a0)]) == [(2, None)]
+    # A record at a non-zero start (math's replay_buf_offset, 16): start << 14 lands in the lui bits.
+    lui_start16 = ((0x04000 | (16 << 2)) << 12) | (t0 << 7) | 0x37
+    assert _runtime_replay_records([lui_start16, addi, _sw(t0, a0)]) == [(2, None)]
 
 
 # _calculate_where_'s plain-SFPLOAD path (DISABLE_SFPLOADMACRO) records 6 instructions: three
