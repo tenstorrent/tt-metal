@@ -1,0 +1,28 @@
+{
+  "arm": "b1-singleton-history-capacity",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "completed_valid",
+  "started_at": "2026-11-06T16:15:32.493618+00:00",
+  "queued_at": "2026-11-06T16:15:32.493618+00:00",
+  "planned_clients": 1,
+  "batch": 1,
+  "max_num_seqs": 1,
+  "batch_reason": "Smallest supported batch for one native history client",
+  "predicted_hours": 0.1,
+  "box_hours": 0.18,
+  "command": {
+    "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+    "env": {},
+    "argv": [
+      "bash",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/b1-singleton-history-capacity/launch.sh"
+    ]
+  },
+  "owner_check": [],
+  "source_snapshot": "bringup/artifacts/b1-singleton-history-capacity/source-launch.json",
+  "ended_at": "2026-11-06T16:20:06.411835+00:00",
+  "exit_status": 0,
+  "actual_device_hours": 0.07608734412500376,
+  "evidence": "runs/b1-singleton-history-capacity/RESULT.json"
+}

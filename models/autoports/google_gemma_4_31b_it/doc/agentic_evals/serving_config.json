@@ -226,6 +226,24 @@
       "planned_clients": 2,
       "max_num_seqs": 8,
       "batch_reason": "Smallest validated batch at orabove2"
+    },
+    "retention-c4-lifecycle": {
+      "batch": 8,
+      "planned_clients": 4,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest validated batch at or above four resident clients"
+    },
+    "b1-singleton-history-capacity": {
+      "batch": 1,
+      "planned_clients": 1,
+      "max_num_seqs": 1,
+      "batch_reason": "Smallest supported batch for one native history client"
+    },
+    "singleton-batch-comparison": {
+      "batch": 8,
+      "planned_clients": 1,
+      "max_num_seqs": 8,
+      "batch_reason": "Controlled measured alternative B8 to default B1 for identical one-client native history calls; diagnostic comparison only"
     }
   },
   "release_limits": {
@@ -497,5 +515,20 @@
     "terminal_bench_2_1": 2
   },
   "admission_limit_reason": "GPQA C4 admitted by full131072-context four-resident capacity test and valid scored10; tool suites remain C2. No four-full262144-context or four-task-sandbox claim.",
-  "current_runtime_publication_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47"
+  "current_runtime_publication_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+  "singleton_candidate_capacity": {
+    "batch": 1,
+    "clients": 1,
+    "max_actual_context": 107602,
+    "return_reuse_min": 0.999403042,
+    "evidence": "runs/b1-singleton-history-capacity/RESULT.json",
+    "accepted_scored_configuration": false,
+    "batch_comparison": {
+      "b1_client_seconds": 63.106163,
+      "b8_client_seconds": 67.288444,
+      "native_exact_calls": "2/3",
+      "source": "runs/singleton-batch-comparison/RESULT.json",
+      "scored_acceptance": false
+    }
+  }
 }

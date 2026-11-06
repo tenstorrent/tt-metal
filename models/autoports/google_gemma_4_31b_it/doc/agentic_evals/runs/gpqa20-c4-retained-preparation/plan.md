@@ -1,0 +1,3 @@
+# Retained GPQA20 C4 candidate
+
+Prepare only; no device, push or dispatch. Device forecast/box0. Goal ready exact previously frozen20 at acceptedC4 if coordinator decides currentC2 has measured nonfit/stop; do not interrupt activeC2. Base dedicated TTI publicationbb16e00; retain current diagnostic env1 and TT runtime11a387 unchanged. Enable GPQA nightly20/C4, disable SWE/Terminal nightly; preserve126976output,14400request timeout and all pins/sampling/metadata. Cohort source is runs/larger-gpqa20-c2-evals/manifest.json, unchanged order. Exact production diff and focused/full hooks confirm preparation. New11a387 image reuse only after coordinator confirms source provenance/build availability (SWE42247098210 building). This is not a run or validity claim.

@@ -68,7 +68,14 @@
     "started_at": null,
     "benchmark_source": [
       "Qwen/Qwen3-32B"
-    ]
+    ],
+    "benchmark_current_runtime_measurement": {
+      "source": "runs/retained-runtime-benchmark/RESULT.json",
+      "client_seconds": 27.08457288099453,
+      "device_job_hours": 0.09667890765859435,
+      "runtime": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+      "note": "Target matrix unchanged; this latest normal validation includes separate headline and startup, not a frozen release."
+    }
   },
   "runs": [
     {
@@ -1330,7 +1337,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42234274300",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T15:55:20.434434+00:00",
+      "last_observed_at": "2026-11-06T16:12:34.169078+00:00",
       "runner": "120-qb2-p05t01",
       "device_job_id": 127947875918,
       "device_job_started_at": "2026-11-06T14:29:07Z",
@@ -1620,14 +1627,116 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42247098210",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T15:54:59.964133+00:00",
+      "last_observed_at": "2026-11-06T16:12:14.965393+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-wvng9",
       "build_started_at": "2026-11-06T15:54:10Z",
       "build_completed_at": null
+    },
+    {
+      "arm": "retention-c4-lifecycle",
+      "owner": "coordinator",
+      "device": "local",
+      "status": "completed_valid",
+      "started_at": "2026-11-06T16:01:47.712213+00:00",
+      "queued_at": "2026-11-06T16:01:47.712213+00:00",
+      "planned_clients": 4,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest validated batch at or above four resident clients",
+      "predicted_hours": 0.15,
+      "box_hours": 0.3,
+      "command": {
+        "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+        "env": {
+          "GEMMA4_BENCHMARK_PHASE_LOG": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-retention-c4-lifecycle/phases.jsonl",
+          "GEMMA4_PHASE_AUTOEXPORT_SECONDS": "1",
+          "GEMMA4_RETAIN_DECODE_TOKENS": "1"
+        },
+        "argv": [
+          "timeout",
+          "1080",
+          "bash",
+          "models/autoports/google_gemma_4_31b_it/tests/run_serving.sh",
+          "--stages",
+          "serve",
+          "--max-num-seqs",
+          "8",
+          "--enable-prefix-caching",
+          "--output-dir",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-retention-c4-lifecycle/server"
+        ]
+      },
+      "owner_check": [],
+      "source_snapshot": "bringup/artifacts/stage12-retention-c4-lifecycle/source-launch.json",
+      "ended_at": "2026-11-06T16:10:41.889380+00:00",
+      "exit_status": 0,
+      "actual_device_hours": 0.14838147295053608,
+      "evidence": "runs/retention-c4-lifecycle/RESULT.json"
+    },
+    {
+      "arm": "b1-singleton-history-capacity",
+      "owner": "coordinator",
+      "device": "local",
+      "status": "completed_valid",
+      "started_at": "2026-11-06T16:15:32.493618+00:00",
+      "queued_at": "2026-11-06T16:15:32.493618+00:00",
+      "planned_clients": 1,
+      "batch": 1,
+      "max_num_seqs": 1,
+      "batch_reason": "Smallest supported batch for one native history client",
+      "predicted_hours": 0.1,
+      "box_hours": 0.18,
+      "command": {
+        "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+        "env": {},
+        "argv": [
+          "bash",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/b1-singleton-history-capacity/launch.sh"
+        ]
+      },
+      "owner_check": [],
+      "source_snapshot": "bringup/artifacts/b1-singleton-history-capacity/source-launch.json",
+      "ended_at": "2026-11-06T16:20:06.411835+00:00",
+      "exit_status": 0,
+      "actual_device_hours": 0.07608734412500376,
+      "evidence": "runs/b1-singleton-history-capacity/RESULT.json"
+    },
+    {
+      "arm": "singleton-batch-comparison",
+      "owner": "coordinator",
+      "device": "local",
+      "status": "completed_exactness_shortfall",
+      "started_at": "2026-11-06T16:24:10.975907+00:00",
+      "queued_at": "2026-11-06T16:24:10.975907+00:00",
+      "planned_clients": 1,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "batch_reason": "Controlled measured alternative B8 to default B1 for identical one-client native history calls; diagnostic comparison only",
+      "predicted_hours": 0.1,
+      "box_hours": 0.18,
+      "command": {
+        "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+        "argv": [
+          "bash",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/singleton-batch-comparison/launch.sh"
+        ]
+      },
+      "owner_check": [],
+      "source_snapshot": "bringup/artifacts/singleton-batch-comparison/source-launch.json",
+      "ended_at": "2026-11-06T16:28:57.027412+00:00",
+      "exit_status": 0,
+      "actual_device_hours": 0.07945769809804107,
+      "evidence": "runs/singleton-batch-comparison/RESULT.json",
+      "prelaunch_failure": {
+        "reason": "Optional env missing in coordinator helper; no subprocess/device open",
+        "device_hours": 0,
+        "repair": "cfg.get env default empty; focused absent/present host checks pass",
+        "evidence": "runs/singleton-batch-comparison/AUTOFIX.md"
+      }
     }
   ],
   "status": "all_smokes_valid_three_larger_runs_executing",
-  "last_updated": "2026-11-06T15:55:58.830336+00:00",
+  "last_updated": "2026-11-06T16:34:21.772313+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -2195,6 +2304,32 @@
       "matrix_client_seconds": 27.08457288099453,
       "headline_client_seconds": 34.79627473093569,
       "evidence": "runs/retained-runtime-benchmark/RESULT.json"
+    },
+    {
+      "arm": "retention-c4-lifecycle",
+      "planned_clients": 4,
+      "batch": 8,
+      "device_job_hours": 0.14838147295053608,
+      "predicted_device_hours": 0.15,
+      "client_seconds": 21.833349,
+      "evidence": "runs/retention-c4-lifecycle/RESULT.json"
+    },
+    {
+      "arm": "b1-singleton-history-capacity",
+      "planned_clients": 1,
+      "batch": 1,
+      "device_job_hours": 0.07608734412500376,
+      "predicted_device_hours": 0.1,
+      "evidence": "runs/b1-singleton-history-capacity/RESULT.json"
+    },
+    {
+      "arm": "singleton-batch-comparison",
+      "planned_clients": 1,
+      "batch": 8,
+      "device_job_hours": 0.07945769809804107,
+      "predicted_device_hours": 0.1,
+      "client_seconds": 67.288444,
+      "evidence": "runs/singleton-batch-comparison/RESULT.json"
     }
   ],
   "local_idle_intervals": [
@@ -2566,5 +2701,41 @@
       "bringup/artifacts/stage12-terminal-stop-jobs.json",
       "../terminal-nightly-tail-diagnosis/RESULT.json"
     ]
+  },
+  "schedule_basis_update": {
+    "at": "2026-11-06T16:03:48.051685+00:00",
+    "elapsed_hours": 11.582956404722223,
+    "running": [
+      "larger-gpqa20-c2-evals",
+      "nightly-swe-decode-retention",
+      "retention-c4-lifecycle"
+    ],
+    "next": "Settle measured larger GPQA and retained SWE validity, then freeze go set; reserve firstdry/fix/seconddry unchanged conservatively while task-route question pending",
+    "first_dry_latest_start_hour": 22,
+    "release_dispatch_latest_target_hour": 45.2
+  },
+  "progress_observations": [
+    {
+      "arm": "larger-gpqa20-c2-evals",
+      "observed_at": "2026-11-06T16:19:46.205263+00:00",
+      "live_log_through": "2026-11-06T16:16:47.5938063Z",
+      "reported_completed": 7,
+      "total": 20,
+      "progress_elapsed_seconds": 6056,
+      "elapsed_basis": "tqdm1:40:56 at7/20, console timestamp16:16:21; buffered progress timestamps differ from actual completion boundaries",
+      "completed_throughput_projection_eval_hours": 4.806349206349206,
+      "request_tail_hours": 4,
+      "observed_initial_device_setup_hours": 0.07805555555555556,
+      "queue_margin_guess_hours": 0.5,
+      "projected_workflow_hours": 9.384404761904763,
+      "decision": "continue",
+      "reason": "Projection including full request tail currently fits12h; initial two long requests dominated unstable early rate, later completions improve aggregate estimate. No cap cause/score claim.",
+      "evidence": "bringup/artifacts/stage12-gpqa20-evals-current.log"
+    }
+  ],
+  "next_local_job": {
+    "status": "waiting_for_actual_failure_evidence",
+    "goal": "Causal native replay of first retained failing GPQA/SWE request if completed normal rung requires it",
+    "reason": "All current local capacity/source/batch prerequisites measured; do not spend long device runs on invented original seeds or blind repetition. CI normal runs continue under operator Docker/dataset exception."
   }
 }

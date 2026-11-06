@@ -1,0 +1,80 @@
+{
+  "status": "pass_capacity_diagnostic_only",
+  "planned_clients": 1,
+  "batch": 1,
+  "max_num_seqs": 1,
+  "context": 262144,
+  "layers": 60,
+  "source_publication_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+  "source_file_hashes_exact_to_publication": true,
+  "history_source": "bringup/artifacts/stage12-real-histories/swe-peak3-http/django__django-11265__ohWF75G.jsonl",
+  "history_source_sha256": "4937e2477ba1b16b8bec563c297c90be6eece8d36dd735ec05c747e2cb069fea",
+  "calls": [
+    {
+      "index": 0,
+      "prompt_tokens": 103509,
+      "completion_tokens": 128,
+      "total_tokens": 103637,
+      "seconds": 49.69797566800844,
+      "prefilled_tokens": 103509,
+      "skipped_prefix_tokens": 0,
+      "previous_prompt_tokens": null,
+      "returning_prefix_reuse": null,
+      "matched_decode_ids": 127,
+      "excluded_prefill_token_count": 1
+    },
+    {
+      "index": 1,
+      "prompt_tokens": 105535,
+      "completion_tokens": 128,
+      "total_tokens": 105663,
+      "seconds": 6.9567487789317966,
+      "prefilled_tokens": 2047,
+      "skipped_prefix_tokens": 103488,
+      "previous_prompt_tokens": 103509,
+      "returning_prefix_reuse": 0.9997971190910935,
+      "matched_decode_ids": 127,
+      "excluded_prefill_token_count": 1
+    },
+    {
+      "index": 2,
+      "prompt_tokens": 107474,
+      "completion_tokens": 128,
+      "total_tokens": 107602,
+      "seconds": 6.451438888907433,
+      "prefilled_tokens": 2002,
+      "skipped_prefix_tokens": 105472,
+      "previous_prompt_tokens": 105535,
+      "returning_prefix_reuse": 0.9994030416449519,
+      "matched_decode_ids": 127,
+      "excluded_prefill_token_count": 1
+    }
+  ],
+  "matched_decode_ids": 381,
+  "excluded_prefill_tokens": 3,
+  "extra_decode_samples": 0,
+  "preemptions_delta": 0.0,
+  "diagnostic_loss": false,
+  "pending_steps": 0,
+  "errors": [],
+  "predicted_device_hours": 0.1,
+  "box_device_hours": 0.18,
+  "actual_device_hours": 0.07608734412500376,
+  "client_call_seconds": 63.10616333584767,
+  "phase_window_seconds": 63.135886283,
+  "device_closed": true,
+  "evidence": [
+    "bringup/artifacts/b1-singleton-history-capacity/client-summary.json",
+    "bringup/artifacts/b1-singleton-history-capacity/phases.jsonl",
+    "bringup/artifacts/b1-singleton-history-capacity/source-launch.json",
+    "doc/agentic_evals/device_queue/local/b1-singleton-history-capacity/job.json"
+  ],
+  "limitations": [
+    "Capacity diagnostic only: no score or singleton partition release-route acceptance; no rehabilitation of quarantined scores.",
+    "Three original recorded request prefixes; new diagnostic128-token responses are not appended into subsequent recorded histories. No tool execution or original trajectory reproduction.",
+    "Cache reuse derived from sequential prefill starts over previous prompt lengths; native API cached-token counters unavailable.",
+    "Three prefill-generated first tokens are excluded from decode retention;381 remaining native IDs matched exactly by disjoint positions and request windows, not inferred request IDs.",
+    "Observed107602-token request envelope does not establish full262144 context or full32768 output capacity.",
+    "Coordinator shutdown guard initially named summary.json rather than client-summary.json; no signal sent until corrected and fresh0/0 idle check passed."
+  ]
+}

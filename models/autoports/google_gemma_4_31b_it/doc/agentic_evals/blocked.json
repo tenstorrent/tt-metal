@@ -80,7 +80,23 @@
     "source": "runs/ci-release-route/RESULT.md",
     "permission_required": "Exception to stop-after-start/no-score dry run; no generic route alteration assumed",
     "conditional_resolution": "If all tool suites have measured stop, HTTP-only GPQA scope can use exact early-stop dry run with preserved live progress; see runs/gpqa-only-dry-route/RESULT.md. No exception assumed for tool suites.",
-    "partial_run_hypothesis": "Refuted by stock source/live console evidence; runs/partial-tool-dry-route/RESULT.md"
+    "partial_run_hypothesis": "Refuted by stock source/live console evidence; runs/partial-tool-dry-route/RESULT.md",
+    "task_boundary_candidate": {
+      "evidence": "runs/task-boundary-dry-route/RESULT.md",
+      "authorization": "Operator decision8 permits partitioning; no new permission assumed or requested",
+      "status": "Possible singleton exact route, not yet demonstrated",
+      "remaining": [
+        "native B1 history capacity and same-cohort scored acceptance",
+        "aggregate one-device suite12h fit",
+        "fresh observable second request and pre-grade stop"
+      ],
+      "live_observation": {
+        "evidence": "runs/ci-live-log-observability/RESULT.md",
+        "status": "No bounded-latency authorized channel established",
+        "rest_age_seconds": 159.806,
+        "shortest_prior_task_seconds": 151.801647
+      }
+    }
   },
   "release_dependency_freeze": {
     "status": "Harbor_pin_live_confirmed",

@@ -1,0 +1,170 @@
+{
+  "status": "passed_observed_window",
+  "goal": "C4/B8 long-context retention through returning requests and row churn",
+  "runtime_publication_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+  "runtime_files_hash_matched": 13,
+  "source_unchanged_after_run": true,
+  "planned_clients": 4,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "full_layers": 60,
+  "model_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "measured_requests": 8,
+  "warmup_requests": 4,
+  "native_output_tokens": 640,
+  "matched_decode_tokens": 632,
+  "excluded_first_tokens": 8,
+  "active_unassigned_samples": 0,
+  "inactive_physical_row_samples": 656,
+  "phase_submit_complete_pairs": 171,
+  "decode_steps": 161,
+  "prefill_steps": 10,
+  "sampling_modes": {
+    "device": 167,
+    "host_compatibility": 4
+  },
+  "captures_observed": [
+    3
+  ],
+  "audit": {
+    "request_checks": [
+      {
+        "name": "agent0-turn0",
+        "prompt_tokens": 130048,
+        "native_output_tokens": 32,
+        "expected_decode_tokens": 31,
+        "missing": 0,
+        "mismatch": 0,
+        "duplicate": 0
+      },
+      {
+        "name": "agent0-turn1",
+        "prompt_tokens": 132096,
+        "native_output_tokens": 128,
+        "expected_decode_tokens": 127,
+        "missing": 0,
+        "mismatch": 0,
+        "duplicate": 0
+      },
+      {
+        "name": "agent1-turn0",
+        "prompt_tokens": 130304,
+        "native_output_tokens": 64,
+        "expected_decode_tokens": 63,
+        "missing": 0,
+        "mismatch": 0,
+        "duplicate": 0
+      },
+      {
+        "name": "agent1-turn1",
+        "prompt_tokens": 132352,
+        "native_output_tokens": 96,
+        "expected_decode_tokens": 95,
+        "missing": 0,
+        "mismatch": 0,
+        "duplicate": 0
+      },
+      {
+        "name": "agent2-turn0",
+        "prompt_tokens": 130560,
+        "native_output_tokens": 96,
+        "expected_decode_tokens": 95,
+        "missing": 0,
+        "mismatch": 0,
+        "duplicate": 0
+      },
+      {
+        "name": "agent2-turn1",
+        "prompt_tokens": 132608,
+        "native_output_tokens": 64,
+        "expected_decode_tokens": 63,
+        "missing": 0,
+        "mismatch": 0,
+        "duplicate": 0
+      },
+      {
+        "name": "agent3-turn0",
+        "prompt_tokens": 130816,
+        "native_output_tokens": 128,
+        "expected_decode_tokens": 127,
+        "missing": 0,
+        "mismatch": 0,
+        "duplicate": 0
+      },
+      {
+        "name": "agent3-turn1",
+        "prompt_tokens": 132864,
+        "native_output_tokens": 32,
+        "expected_decode_tokens": 31,
+        "missing": 0,
+        "mismatch": 0,
+        "duplicate": 0
+      }
+    ],
+    "intervals_disjoint": true,
+    "association": "Disjoint native prompt/output position bands, not inferred request IDs",
+    "four_active_decode_steps": 149,
+    "nonidentity_remaps": 7,
+    "submit_complete_ids_match": true,
+    "preemptions_delta": 0.0,
+    "unassigned_active_samples": 0,
+    "final_retention": {
+      "scope": "decode_device_only_physical_rows",
+      "row_index": "index_in_sampled_decode_token_ids",
+      "positions": "processed_input_position; sample_predicts_position_plus_one",
+      "inactive_rows": "positions_less_than_zero_are_not_request_tokens",
+      "prefill_tokens_retained": false,
+      "host_sampled_tokens_retained": false,
+      "request_ids_available": false,
+      "client_emission_verified": false,
+      "diagnostic_disabled": false,
+      "diagnostic_failures": 0,
+      "diagnostic_reason": null,
+      "position_identity_uncertain": false,
+      "loss": false,
+      "export_failed": false,
+      "file_exhausted": false,
+      "pending_incomplete": false
+    },
+    "final_pending": 0,
+    "errors": [],
+    "scope": "Exclude native output index0 (prefill/host); unassigned samples may include async extras, never asserted emitted. Returning calls and disjoint position bands prove new request lifecycle; remap count separately measures physical row movement.",
+    "pass": true
+  },
+  "measured_window_seconds": 21.833349377964623,
+  "cold_warmup_wall_seconds": 262.106957144,
+  "cost": {
+    "forecast_device_hours": 0.15,
+    "actual_device_hours": 0.14838147295053608,
+    "actual_seconds": 534.1733026219299,
+    "forecast_ratio": 0.9892098196702406,
+    "box_device_hours": 0.3,
+    "queue_status": "server_closed"
+  },
+  "shutdown": {
+    "at": "2026-11-06T16:10:38.341517+00:00",
+    "idle_metrics": [
+      "vllm:num_requests_running{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0",
+      "vllm:num_requests_waiting{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0"
+    ],
+    "owned_readiness_pid": 182377,
+    "signal": "SIGTERM to readiness hold handler only",
+    "device_closed_at": "2026-11-06T16:10:38.843708+00:00",
+    "remaining_owners": []
+  },
+  "evidence": [
+    "bringup/artifacts/stage12-retention-c4-lifecycle/source-launch.json",
+    "bringup/artifacts/stage12-retention-c4-lifecycle/audit.json",
+    "bringup/artifacts/stage12-retention-c4-lifecycle/summary.json",
+    "bringup/artifacts/stage12-retention-c4-lifecycle/phases.jsonl",
+    "bringup/artifacts/stage12-retention-c4-lifecycle/server/vllm_run_summary.json",
+    "bringup/artifacts/stage12-retention-c4-lifecycle/idle-shutdown.json"
+  ],
+  "limitations": [
+    "No-loss confirmation covers632 expected emitted decode IDs in this measured window only; excludes8 first tokens generated during prefill/host sampling.",
+    "656 inactive physical-row samples are not request tokens. No unassigned active samples were observed; no extra emitted tokens or async overshoot are asserted.",
+    "Disjoint measured native position bands associate rows, not request IDs; generic recorder client_emission_verified remains false, while this offline audit checks native response IDs.",
+    "Synthetic contexts and finite32\u2013128 diagnostic outputs do not test release-length generation, suite score, original failing trajectory, or four full advertised contexts.",
+    "No source/configuration change accepted, speedup claim, device timing/roofline, or release savings."
+  ]
+}

@@ -18,78 +18,86 @@ Extended mode has48hours from2026-11-06T04:28:49UTC to2026-11-08T04:28:49UTC for
 
 ## Effort predictions and results
 
-Costs are device-job hours, excluding build/queue unless stated. Savings are per projected release list; guesses remain marked in efforts.json. Each linked result owns its evidence.
+Device costs include the device job, not build/queue. Release savings are forecasts on the then-planned lists; guesses are marked. Later measured stops can retire those savings. Complete confirmations and their original scope remain in each result linked by efforts.json.
 
-| Effort | Predicted / used device hours | Change / problem | Confirmation evidence |
-|---|---:|---|---|
-| local-sandbox-runtime | 0.00000 / 0.00000 | none / solved | runs/local-runtime-repair/result.json; setup/AUTOFIX.md |
-| gpqa-local-credential | 0.00000 / unknown | not_run / solved | runs/smoke2-r1_gpqa_diamond/audit.json |
-| agent-capacity-and-contention | 0.25000 / 0.07763 | none / open | runs/agent-capacity-and-contention/REPLAY_RESULT.json |
-| source-only-packaging | 0.00000 / 0.00000 | kept / solved | runs/source-packaging/AUTOFIX.md |
-| harness-registration | 0.00000 / 0.00000 | kept / solved | runs/harness-registration/result.json |
-| suite-registration | 0.00000 / 0.00000 | kept / solved | runs/suite-registration/RESULT.md |
-| ci-release-route | 0.00000 / 0.00000 | none / open | runs/ci-release-route/RESULT.md |
-| local-serving-check | 0.20000 / 0.09213 | none / solved | runs/local-serving-check/RESULT.md |
-| local-host-contention | 0.10000 / 0.09849 | none / solved | runs/local-host-contention/RESULT.md |
-| nightly-registration-preparation | 0.00000 / 0.00000 | none / solved | runs/nightly-preparation/RESULT.md |
-| local-long-context | 0.15000 / 0.25401 | none / solved | runs/local-long-context/RESULT.md |
-| parser-protocol | 0.10000 / 0.10580 | kept / solved | runs/parser-protocol/RESULT.md; runs/parser-protocol/AUTOFIX.md |
-| ci-fabric-topology | 0.21670 / 0.00000 | none / solved | runs/ci-topology/result.json |
-| native-tool-roundtrip | 0.00278 / 0.00052 | none / solved | runs/native-tool-roundtrip/result.json |
-| ci-cache-routing | 0.08333 / 0.05278 | kept / open | runs/ci-startup-analysis/paired-audit.json |
-| immutable-harbor-release-source | 0.00000 / 0.00000 | kept / solved | runs/release-dependency-pins/AUTOFIX.md |
-| nightly-current-base-preparation | 0.00000 / 0.00000 | none / solved | runs/nightly-refreshed-preparation/result.json |
-| real-history-capacity-preparation | 0.00000 / 0.00000 | none / open | runs/real-history-capacity/RESULT.json |
-| stage12-zero-cost-checker | 0.00000 / 0.00000 | none / open | runs/stage12-checker-zero-cost/RESULT.md |
-| explicit-autoport-dispatch | 0.00000 / 0.00000 | kept / solved | runs/ci-implementation-selection/result.json |
-| harbor-model-pin-confirmation | 0.00000 / 0.00000 | kept / solved | runs/harbor-model-pin/RESULT.md |
-| gpqa-server-sized-preparation | 0.00000 / 0.00000 | none / solved | runs/gpqa-server-sized-preparation/RESULT.md |
-| nightly-resource-preparation | 0.00000 / 0.00000 | none / solved | runs/nightly-resource-preparation/result.json |
-| prefill-under-load | 0.15000 / 0.15284 | none / solved | runs/prefill-under-load/RESULT.md |
-| long-prefill-decode-interference | 0.25000 / unknown | not_run / pending | runs/prefill-under-load/RESULT.md |
-| docker-startup-timeout-leaks-own-container | 0.00000 / 0.00000 | kept / solved | runs/ci-container-startup/AUTOFIX.md |
-| terminal-current-base-preparation | 0.00000 / 0.00000 | none / solved | runs/terminal-current-base-preparation/RESULT.md |
-| gpqa-terminal-state-capacity | 0.10000 / 0.00000 | none / open | runs/gpqa-terminal-state-capacity/RESULT.json |
-| gpqa-current-base-confirmation | 0.00000 / 0.00000 | none / solved | runs/gpqa-server-sized-current-base/RESULT.md |
-| nightly-current-base-reconfirmation | 0.00000 / 0.00000 | none / solved | runs/nightly-current-base-preparation/RESULT.md |
-| gpqa-server-sized-c2-preparation | 0.00000 / 0.00000 | none / solved | runs/gpqa-server-sized-c2-preparation/RESULT.md |
-| gpqa-nightly-runtime-analysis | 0.00000 / 0.00000 | none / open | runs/gpqa-nightly-runtime-analysis/RESULT.json |
-| ci-phase-autoexport | 0.15000 / 0.10390 | kept / solved | runs/ci-phase-autoexport/result.json; runs/ci-phase-autoexport/path-followup-result.json |
-| swe-network-validity | 0.00000 / 0.00000 | kept / solved | runs/swe-network-validity/AUTOFIX.md |
-| django-cap-loop-diagnosis | 0.25000 / 0.54024 | none / open | runs/django-cap-loop-diagnosis/result.json |
-| real-history-capacity-replay | 0.05000 / 0.01613 | none / solved | runs/real-history-capacity/REPLAY_RESULT.json |
-| measured-workload-prefill | 0.15000 / 0.27580 | kept / solved | runs/measured-workload-prefill/RESULT.md |
-| terminal-smoke-runtime-analysis | 0.00000 / 0.00000 | none / solved | runs/terminal-smoke-runtime-analysis/result.json |
-| next-rung-after-terminal-preparation | 0.00000 / 0.00000 | none / solved | runs/next-rung-after-terminal/RESULT.md |
-| native-history-retention | 0.00000 / 0.00000 | none / solved | runs/native-history-retention/RESULT.md |
-| terminal-server-sized-retention-preparation | 0.00000 / 0.00000 | none / solved | runs/terminal-server-sized-retention/VALIDATION_REBASED.json |
-| swe-phase-accounting-confirmation | 0.00000 / 0.00000 | none / solved | runs/swe-phase-accounting-confirmation/result.json |
-| larger-cohort-preparation | 0.00000 / 0.00000 | none / solved | runs/larger-cohort-preparation/RESULT.md |
-| swe-valid-runtime-analysis | 0.00000 / 0.00000 | none / solved | runs/swe-valid-runtime-analysis/result.json |
-| ci-disk-admission-basis | 0.00000 / 0.00000 | none / open | runs/ci-disk-admission-basis/RESULT.md |
-| measured-workload-idle-regime | 0.20000 / 0.10905 | none / solved | runs/measured-workload-idle-regime/RESULT.md |
-| serving-shortfall-pricing | 0.00000 / 0.00000 | none / open | runs/serving-shortfall-pricing/RESULT.json |
-| ci-image-reuse | 0.00000 / 0.00000 | none / open | runs/ci-image-reuse/result.json |
-| current-runtime-benchmark-confirmation | 0.16900 / 0.08735 | none / solved | runs/current-runtime-benchmark/result.json |
-| native-token-retention | 0.00000 / 0.00000 | none / open | runs/native-token-retention/result.json |
-| native-token-retention-confirmation | 0.12000 / 0.06232 | kept / solved | runs/native-token-retention-confirmation/result.json |
-| malformed-response-retention | 0.00000 / 0.00000 | none / open | runs/malformed-response-retention/result.json, runs/malformed-response-retention/AUTOFIX.md |
-| nightly-swe-network-reach | 0.00000 / 0.00000 | none / open | runs/nightly-swe-network-reach/result.json, runs/nightly-swe-network-reach/AUTOFIX.md |
-| gpqa-c4-capacity | 0.18000 / 0.14046 | none / open | runs/gpqa-c4-capacity/RESULT.json |
-| gpqa-c4-scored10 | 0.50889 / 0.76167 | kept / open | runs/gpqa-c4-scored10/RESULT.json, runs/gpqa-c4-scored10/RESULT.md |
-| terminal-nightly-tail-diagnosis | 0.00000 / 0.00000 | none / open | runs/terminal-nightly-tail-diagnosis/RESULT.json, runs/nightly-terminal-observable/stop.json |
-| gpqa-larger20-preparation | 0.00000 / 0.00000 | kept / solved | runs/gpqa-larger20-preparation/RESULT.json |
-| gpqa-only-dry-route | 0.00000 / 0.00000 | none / solved | runs/gpqa-only-dry-route/RESULT.md |
-| gpqa-dispatch-route-repair | 0.00000 / 0.00000 | kept / solved | runs/gpqa-dispatch-route-repair/AUTODEBUG.md, runs/gpqa-dispatch-route-repair/AUTOFIX.md |
-| swe-repeat-audit-preparation | 0.00000 / 0.00000 | kept / solved | runs/swe-repeat-audit-preparation/RESULT.json |
-| astropy-capped-prefix-preparation | 0.00000 / 0.00000 | none / solved | runs/astropy-capped-prefix-preparation/RESULT.json |
-| gpqa-current-ten-baseline-preparation | 0.00000 / 0.00000 | none / solved | runs/gpqa-current-ten-baseline-preparation/RESULT.json |
-| astropy-prefix-discriminator | 0.12000 / 0.05006 | none / open | runs/astropy-prefix-discriminator/RESULT.json, runs/astropy-prefix-discriminator/RESULT.md |
-| model-token-retention | 0.12000 / 0.13158 | kept / open | runs/model-token-retention/RESULT.json, runs/model-token-retention/RESULT.md, runs/model-token-retention/AUTOFIX.md |
-| partial-tool-dry-route | 0.00000 / 0.00000 | none / open | runs/partial-tool-dry-route/RESULT.md |
-| retained-runtime-benchmark | 0.09000 / 0.09668 | none / solved | runs/retained-runtime-benchmark/RESULT.json |
-| retained-token-capacity | 0.00000 / unknown | running / pending | runs/retained-token-capacity/plan.md |
-| gpqa20-c4-retained-preparation | 0.00000 / unknown | running / pending | runs/gpqa20-c4-retained-preparation/plan.md |
+| Effort | Predicted / used device h | Predicted release saving h | Result |
+|---|---:|---:|---|
+| local-sandbox-runtime | 0.00000 / 0.00000 | 0.00000 | none/solved: success: False; result: Backend unavailable; host-side provisioning required.; resolution: Operator decision8 removes local Docker requirement by authorizingCI; environment remains unchanged, no runtime repa… |
+| gpqa-local-credential | 0.00000 (guess) / unknown | 0.00000 | not_run/solved: Operator keeps local credential unavailable; valid GPQA smoke on authorized CI resolves dataset access for this stage. No local credential effort needed. |
+| agent-capacity-and-contention | 0.25000 (guess) / 0.07763 | 0.00000 | none/open: Both12/12 successful, exactAPIpromptparity, no preemptions; returningreuse.998871. Both31.9s, no speedup. C4sampledmaxrunning2/waiting3, so4residentrequests notproven; C2 retained. |
+| source-only-packaging | 0.00000 / 0.00000 | 0.00000 | kept/solved: policy: byte-identical selected policy; generator: complete class AST unchanged; host checks: 4 packaging checks,7 precision tests,existing host contract passed; boundary: Device-dependent imports stubbed; n… |
+| harness-registration | 0.00000 / 0.00000 | 0.00000 | kept/solved: host tests passed: 110; live validation: False |
+| suite-registration | 0.00000 / 0.00000 | 0.00000 | kept/solved: host tests passed: 7; live validation: False |
+| ci-release-route | 0.00000 / 0.00000 | 0.00000 | none/open: benchmarks: Stock local existing-server path resolves exact stage11 matrix; no Docker required; eval route: Stock per-suite CI workflows omit spec tests; remaining: CI exact early-stop dry-run control/artifa… |
+| local-serving-check | 0.20000 (guess) / 0.09213 | 0.00000 | none/solved: success: True; registration: full60 autoport;14 published hashes match; synthetic growing clients: 2; final context tokens: 32768 |
+| local-host-contention | 0.10000 (guess) / 0.09849 | 0.00000 | none/solved: success: True; requests per wave: 32; idle tokens per second: 985.554416731418; busy tokens per second: 645.0344483642087 |
+| nightly-registration-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: source patches prepared: 3; tests per candidate: 23; ruff: pass; published: False |
+| local-long-context | 0.15000 (guess) / 0.25401 | 0.00000 | none/solved: success: True; max prompt tokens: 262136; generated tokens: 8; concurrency: 2 |
+| parser-protocol | 0.10000 (guess) / 0.10580 | 0.00000 | kept/solved: swe baseline http: 400; candidate http: 200; actual mini parser: pass; actual terminal parser: pass |
+| ci-fabric-topology | 0.21670 / 0.00000 | 0.00000 | none/solved: original result: Host diagnosis excludes mesh alias error; physical channel deficit observed; recovery pending retry42175367781 |
+| native-tool-roundtrip | 0.00278 (guess) / 0.00052 | 0.00000 | none/solved: HTTP200 and valid parsed submissionaction, no commands executed |
+| ci-cache-routing | 0.08333 (guess) / 0.05278 | 0.00000 | kept/open: Pinned cache files identical; full60healthy;2x168tokenIDs exact. CIstartup saving still unmeasured. |
+| immutable-harbor-release-source | 0.00000 / 0.00000 | 0.00000 | kept/solved: original result: Fullhosthooks pass; generic optionalpin locallyintegrated. Modelpin/actualCIcheckout confirmation pending. |
+| nightly-current-base-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: Each independent candidate passed10 host tests on eac7465; no publication edits or dispatch |
+| real-history-capacity-preparation | 0.00000 / 0.00000 | 0.00000 | none/open: GPQA each single-turn; reconstructed counts differ from API, so no meaningful multi-turn replay. Tool history extraction requirements prepared; capacity remains open |
+| stage12-zero-cost-checker | 0.00000 / 0.00000 | 0.00000 | none/open: 7 tests pass on candidate, original defect reproduced; installed skills unchanged pending operator decision |
+| explicit-autoport-dispatch | 0.00000 / 0.00000 | 0.00000 | kept/solved: original result: Host resolves explicit implementation correctly; replacement CI jobs dispatched. Existing SWE logs prove same explicit route loadsautoport. Replacement completion pending. |
+| harbor-model-pin-confirmation | 0.00000 / 0.00000 | 0.00000 | kept/solved: result: Live Terminal smoke42190891568 completed both valid tasks with pinned Harbor and no startup leaks; score0/2 not gated.; evidence: runs/smoke2-terminal-lifecycle-repair/audit.json |
+| gpqa-server-sized-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: host tests: 32; full hooks: pass; prepared only: True; live admission: pending actual nightly and measured capacity |
+| nightly-resource-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: definition hashes checked: 15; swe storage gib: 50; terminal storage gib: 100; runner admission: Unknown until assigned runner reports free space; no extra admission hook |
+| prefill-under-load | 0.15000 (guess) / 0.15284 | 0.00000 | none/solved: completed requests: 6; client seconds: 278.58576828590594; longest prompt tokens: 86016; longest prefill host seconds: 35.41071608196944 |
+| long-prefill-decode-interference | 0.25000 (guess) / unknown | 0.00000 | not_run/pending: Observed diagnostic stalls only; real overlap, return lengths and release projection pending. No scheduler change justified yet. |
+| docker-startup-timeout-leaks-own-container | 0.00000 / 0.00000 | 0.00000 | kept/solved: result: Live Terminal smoke42190891568 completed both valid tasks with pinned Harbor and no startup leaks; score0/2 not gated.; evidence: runs/smoke2-terminal-lifecycle-repair/audit.json |
+| terminal-current-base-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: focused tests: 32; full hooks: pass; stock resolved: exact smoke2/C2/B8,peer0; published: False |
+| gpqa-terminal-state-capacity | 0.10000 (guess) / 0.00000 | 0.00000 | none/open: C8 admitted: False; reason: Saved final content omits separated reasoning; cannot reconstruct complete real generated states or simultaneous C8 residency. Retain observed C2. |
+| gpqa-current-base-confirmation | 0.00000 / 0.00000 | 0.00000 | none/solved: focused tests: 32; full hooks: pass; stock resolved: exactGPQA10/C8/B8,peers0; publication: not applied |
+| nightly-current-base-reconfirmation | 0.00000 / 0.00000 | 0.00000 | none/solved: Both patches32 focused tests/fullhooks, current2c4 base |
+| gpqa-server-sized-c2-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: Exact frozen10,C2/B8,peers0;32focused/fullhooks |
+| gpqa-nightly-runtime-analysis | 0.00000 / 0.00000 | 0.00000 | none/open: Ten prefills,max2active rows;29488device decode submissions; full-state/per-request tail unavailable |
+| ci-phase-autoexport | 0.15000 (guess) / 0.10390 | 0.00000 | kept/solved: host tests: 13; exact pairs: 2; tokens per pair: 168; complete phase steps: 170 |
+| swe-network-validity | 0.00000 / 0.00000 | 0.00000 | kept/solved: host tests: 7focused;3771passed15skipped fullsuite andhooks; generic commit: 91e38023e0561504443361df8c8a21ed88c58b16; published commit: e368f08a23516f5594a7ed853b9e3d776a3a42fe |
+| django-cap-loop-diagnosis | 0.25000 (guess) / 0.54024 | 0.00000 | none/open: prefix tokens: 42823; full layers: 60; kl hf tt: 0.13518481679154684; top1 equal: True |
+| real-history-capacity-replay | 0.05000 (guess) / 0.01613 | 0.00000 | none/solved: calls: 6; errors: 0; preemptions: 0; client seconds: 58 |
+| measured-workload-prefill | 0.15000 (guess) / 0.27580 | 0.00000 | kept/solved: requests passed: 5; overlap seconds: 78.910179; overlap anchor tokens: 28; host regime: concurrent16threadHFCPU; no idlecomparison |
+| terminal-smoke-runtime-analysis | 0.00000 / 0.00000 | 0.00000 | none/solved: calls: 47; call coverage: 1; aggregate api seconds: 2305.829807281494; aggregate non api seconds: 313.6840307185059 |
+| next-rung-after-terminal-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: tree files compared: 1821; identical to previously tested candidates: True; resolved configs equal: True; previous validation: 61focused/fullhooks per candidate; unchanged tests not repeated |
+| native-history-retention | 0.00000 / 0.00000 | 0.00000 | none/solved: setting: agent_kwargs.store_all_messages=true; paired export check: identical LLM call kwargs/native content; only result metadata added; limits: Final message list may omit earlier calls after summarization… |
+| terminal-server-sized-retention-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: candidate: 296fdd5f9eb066ab1404ec082002930ffce0eb18; base: 4b94cf3ba86d30a6816149872e59cc34438748ae; focused tests: 34; hooks: pass |
+| swe-phase-accounting-confirmation | 0.00000 / 0.00000 | 0.00000 | none/solved: steps: 9680; prefill steps: 98; decode steps: 9582; prefill input tokens: 65628 |
+| larger-cohort-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: nightly prefixes exact: True; swe catalog: 500; terminal catalog: 89; nested unique: True |
+| swe-valid-runtime-analysis | 0.00000 / 0.00000 | 0.00000 | none/solved: calls: 91; query window seconds: 643.4552664756775; tool window seconds: 5.513179779052734; suite seconds: 374.9880950450897 |
+| ci-disk-admission-basis | 0.00000 / 0.00000 | 0.00000 | none/open: docker filesystem free: None; task admission reserve: None; result: Stock evidence does not prove inequality; operator clarification requested, no added admission checks. |
+| measured-workload-idle-regime | 0.20000 (guess) / 0.10905 | 0.00000 | none/solved: requests: 5; client seconds: 166.855; configuration match: True; causal speedup claim: False |
+| serving-shortfall-pricing | 0.00000 / 0.00000 | 0.00000 | none/open: result: Existing host accounting gives descriptive costs but does not identify causal per-release savings; explicit gaps retained; evidence: runs/serving-shortfall-pricing/RESULT.json |
+| ci-image-reuse | 0.00000 (guess) / 0.00000 | 2.50000 | none/open: source parity: Proven immutable digest TT439c/plugin ca7; separate dispatched TTI checkout supplies task config; live confirmation: Pending next eligible normal task-list-only rung; no extra device job; savi… |
+| current-runtime-benchmark-confirmation | 0.16900 (guess) / 0.08735 | 0.00000 | none/solved: matrix completed: 8; headline completed: 8; runtime matches publication: True; phase export errors: 0 |
+| native-token-retention | 0.00000 / 0.00000 | 0.00000 | none/open: supported: return_token_ids true retained for parsed native calls; complete engine response sequence; limitation: FormatError responses remain discarded; next: Separate paired exactness/config confirmation e… |
+| native-token-retention-confirmation | 0.12000 (guess) / 0.06232 | 0.00000 | kept/solved: Identical native content/tool arguments/finish/usage, equal stock SamplingParams, all104on-sideIDs retained by actualLiteLLM1.108.1/mini2.2.8. Off rawIDs unavailable; no off/on ID claim. |
+| malformed-response-retention | 0.00000 / 0.00000 | 0.00000 | none/open: AutoDebug verifies upstreammini2.2.8 response loss; AutoFix cannot deploy supported TTI-only repair. Published repairedmini or authorizedgenericHarbor sourcecapability required; no wrapperintroduced. |
+| nightly-swe-network-reach | 0.00000 / 0.00000 | 0.00000 | none/open: AutoDebug/AutoFix: firstmodelaction intentionallyprobesissueURL, beforeenvironmentfailure; localreproductionworks. No genericharnessdefect oradmissiblerepair. Quarantine persists. Independentlydispatchedsame… |
+| gpqa-c4-capacity | 0.18000 (guess) / 0.14046 | 0.06576 | none/open: Four simultaneous full131072 input contexts confirmed;8/8 requests completed, no preemption/recapture, late reuse0.99854135. Capacity prerequisite passed; C4 serving change remains unaccepted until scored co… |
+| gpqa-c4-scored10 | 0.50889 (guess) / 0.76167 | 0.06576 | kept/open: selected concurrency: 4; paired eval hours saved: 0.08210925775541306; score each: 0.9; visible hashes equal: True |
+| terminal-nightly-tail-diagnosis | 0.00000 / 0.00000 | 0.00000 | none/open: Live model work, no device stall; observed throughput lacked12h margin. Coordinator newersnapshot crossed12h and stopped; loop/output cause remains unknown. |
+| gpqa-larger20-preparation | 0.00000 / 0.00000 | 0.00000 | kept/solved: Hash order reproduces original10 exactly, extends20; immutable C2 candidate with unchanged caps/pins/retention,24 focused tests and all hooks pass |
+| gpqa-only-dry-route | 0.00000 / 0.00000 | 0.00000 | none/solved: Conditional HTTP-only route: saved configuration/IDs/concurrency and successful partial lm-eval progress before scoring permit early cancellation; no task sandbox builds. Not yet an executed clean dry run, n… |
+| gpqa-dispatch-route-repair | 0.00000 / 0.00000 | 0.00000 | kept/solved: Fresh AutoDebug/source routing checks and198 host tests pass; coordinator corrected to evals on same SHAs/cohorts. Live result confirmation pending. |
+| swe-repeat-audit-preparation | 0.00000 / 0.00000 | 0.00000 | kept/solved: Four host tests pass; prior84/81 missing-response coverage and external curl candidate reproduced. New audit requires completed artifacts and coordinator manual review; no live outcome claimed. |
+| astropy-capped-prefix-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: Reconstructed stock native input31001tokens matches original chronological server prefill endpoint; discarded response and seed remain unknown. Distinct full-prefix discriminator warranted. |
+| gpqa-current-ten-baseline-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: Conditional candidate877e1624 C2 frozen10 on current runtime metadata;24 focused tests and hooks pass. No dispatch or serving acceptance yet. |
+| astropy-prefix-discriminator | 0.12000 (guess) / 0.05006 | 0.00000 | none/open: full prefix tokens: 31001; full layers: 60; top1 equal: True; kl hf tt: 0.31702078905672354 |
+| model-token-retention | 0.12000 (guess) / 0.13158 | 0.00000 | kept/open: native pairs exact: 3; expected decode ids matched: 583; extra active row samples not emitted: 2; overlap steps: 200 |
+| partial-tool-dry-route | 0.00000 / 0.00000 | 0.00000 | none/open: success: False; result: Stock console has no task-identified successful setup/reply evidence; aggregate statuses include setup failures, and earlier trials already graded before later admission. No exact no-… |
+| retained-runtime-benchmark | 0.09000 / 0.09668 | 0.00000 | none/solved: matrix completed: 8; headline completed: 8; ttft ms: 753.31630265282; decode tps: 35.31811185868559 |
+| retained-token-capacity | 0.00000 / 0.00000 | 0.00000 | none/solved: default4GiB fits calibrated 12h: True; limitation: Prefix preserved; later evidence lost after bound exhaustion, not a tail ring |
+| gpqa20-c4-retained-preparation | 0.00000 / 0.00000 | 0.00000 | none/solved: candidate sha: 37ee508969c730320c01259fafe340e6c2c14d4e; focused tests: 34; hooks: pass; published: False |
+| retention-c4-lifecycle | 0.15000 (guess) / 0.14838 | 0.00000 | none/solved: expected decode ids: 632; matched: 632; four active steps: 149; nonidentity remaps: 7 |
+| task-boundary-dry-route | 0.00000 / 0.00000 | 0.00000 | none/open: singleton partition authorized: True; live proof: False; requirements: B1 real-history capacity and scored pair, aggregate suite fit, observed second request and timely pre-grade stop |
+| ci-live-log-observability | 0.00000 / 0.00000 | 0.00000 | none/open: rest snapshot age seconds: 159.806; shortest prior task seconds: 151.801647; bounded latency channel proven: False; browser session available: False |
+| b1-singleton-history-capacity | 0.10000 (guess) / 0.07609 | 0.00000 | none/solved: max context: 107602; decode ids matched: 381; loss: False; preemptions: 0 |
+| swe5-b1-singleton-config | 0.00000 / 0.00000 | 0.00000 | none/solved: candidate sha: 35baa4fb1078675ec99341d082c222cc61877e7e; focused tests: 34; hooks: pass; published: False |
+| singleton-batch-comparison | 0.10000 (guess) / 0.07946 | 0.00000 | none/open: b1 client seconds: 63.106163; b8 client seconds: 67.288444; b1 shorter seconds: 4.182281; native exact calls: 2 |
+
+Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 
 ## Configuration and remaining limits
 
@@ -107,6 +115,6 @@ Astropy's reconstructed31001-token full60 initial-distribution comparison matche
 
 The stock CI route remains unchanged. GPQA uses workflow=evals; tool suites use agentic; release benchmarks use benchmarks, without spec tests. Two earlier GPQA dispatches to agentic produced no score; AutoDebug/AutoFix corrected dispatch only. Image reuse is allowed only for unchanged TT/plugin runtime and audited TTI configuration. The new retention runtime requires the new image now building for SWE.
 
-Tool-suite exact early-stop dry evidence and disk admission remain unresolved operator questions in blocked.json. Stock logs do not prove that every tool environment has built before grades occur; partial-run source analysis rejected that shortcut. A GPQA-only early-stop dry procedure is conditional on the eventual go set. A tested checker defect rejects legitimate zero-device-hour efforts; the installed skill package remains unchanged pending the recorded operator decision. No dry/release is claimed.
+Tool-suite exact early-stop dry evidence and disk admission remain unresolved in blocked.json. Operator decision8 already authorizes task-boundary partitions: a singleton design is conditionally viable, but normal REST logs were159.8seconds stale, longer than the shortest observed151.8-second task, and no authenticated bounded-latency channel was established. No new partition permission is being requested. B1 actual-history capacity passed107602tokens with381matched native decode IDs and at least99.94% returning reuse; a same-five scored comparison and actual dry proof still remain. Stock logs do not prove that every tool environment has built before grades occur; partial-run source analysis rejected that shortcut. A GPQA-only early-stop dry procedure is conditional on the eventual go set. A tested checker defect rejects legitimate zero-device-hour efforts; the installed skill package remains unchanged pending the recorded operator decision. No dry/release is claimed. The C4 retained-lifecycle check matched632expected decode IDs across149four-active steps and7row remaps, without loss or preemptions; cost0.14838h versus0.15h forecast. This is a short-output diagnostic window, not a full-cap guarantee.
 
 Execution changes are committed locally, with SHAs in the stage commit manifest. This execution checkout has no remotes and is never pushed. Separate authorized checkouts publish source-only commits. The local telemetry packet7ef7a2c1-3dce-40e4-b6d3-0c83a631ac7e contains measured headline values, banked subset scores and missing reasons; raw tokens/logs are excluded.

@@ -426,5 +426,17 @@
         "causal_retention_overhead": "Single sequential run, no randomized repeated control; no causal optimization/speed claim."
       }
     }
+  ],
+  "diagnostic_confirmations": [
+    {
+      "effort": "retention-c4-lifecycle",
+      "evidence": "runs/retention-c4-lifecycle/RESULT.json",
+      "summary": "632 expected IDs match,149four-active steps,7remaps,no loss/preemptions; short-output window only"
+    },
+    {
+      "effort": "singleton-batch-comparison",
+      "evidence": "runs/singleton-batch-comparison/RESULT.json",
+      "summary": "Same greedy native requests/prompts, one generated response differs B1/B8; do not infer exact substitution from same precision. Scored comparison remains required."
+    }
   ]
 }

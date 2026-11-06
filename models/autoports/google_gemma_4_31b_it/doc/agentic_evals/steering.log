@@ -24,3 +24,4 @@
 2026-11-06T15:05:42.405528+00:00 model-token-retention boundary: inputs unchanged extended48h/run12h/QB2max6; no steering.md; stock plugin and local serialization retained.
 2026-11-06T15:53:54.711588+00:00 retained-token-capacity boundary: inputs reread; extended48h/run12h, same frozen lists and authorized qb2-ci. No steering.md present.
 2026-11-06T15:58:44.888059+00:00 retention-c4-lifecycle boundary: unchanged extended48h/run12h inputs; no steering.md; local coordinator owns launch.
+2026-11-06T16:09:41.877122+00:00 task-boundary/live-observability effort boundaries: inputs reread, mode=extended, budget=48h, run=12h; steering present=False. Operator task-boundary authorization applied; no route/workflow change.
