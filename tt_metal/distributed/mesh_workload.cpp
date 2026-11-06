@@ -134,6 +134,48 @@ void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, 
     program.impl().compile_and_allocate(mesh_device, false);
 }
 
+// Every program's cached compile_and_allocate check reads the same mesh allocator, so when all of them would reduce to
+// the lockstep frontier check, one lookup against the highest frontier answers for all. Its sub-device set must cover
+// each program's: a program's empty set means every active sub-device, and then all of them are checked. A workload
+// spread over several sub-devices is left to the per-program checks, which are tighter there. Returning false only
+// means the per-program path runs, which reports any collision in detail.
+bool MeshWorkloadImpl::l1_frontier_check_passes(MeshDevice* mesh_device) {
+    uint64_t frontier = 0;
+    for (auto& [device_range, program] : programs_) {
+        const auto program_frontier = program.impl().cached_l1_frontier(mesh_device);
+        if (!program_frontier.has_value()) {
+            return false;
+        }
+        frontier = std::max(frontier, *program_frontier);
+    }
+    if (frontier == 0) {
+        return true;
+    }
+    const auto& sub_device_set = this->determine_sub_device_ids(mesh_device);
+    if (sub_device_set.size() > 1) {
+        return false;
+    }
+    auto& spans_all_by_manager = program_spans_all_sub_devices_by_mesh_and_manager_[mesh_device->id()];
+    auto [spans_all, inserted] =
+        spans_all_by_manager.try_emplace(*mesh_device->get_active_sub_device_manager_id(), false);
+    if (inserted) {
+        for (auto& [device_range, program] : programs_) {
+            if (program.impl().determine_sub_device_ids(mesh_device).empty()) {
+                spans_all->second = true;
+                break;
+            }
+        }
+    }
+    std::optional<DeviceAddr> lowest_address;
+    if (spans_all->second) {
+        lowest_address = mesh_device->lowest_occupied_compute_l1_address(ttsl::Span<const SubDeviceId>{});
+    } else {
+        const ttsl::SmallVector<SubDeviceId, 4> sub_device_ids(sub_device_set.begin(), sub_device_set.end());
+        lowest_address = mesh_device->lowest_occupied_compute_l1_address(sub_device_ids);
+    }
+    return !lowest_address.has_value() || *lowest_address >= frontier;
+}
+
 void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     if (is_finalized()) {
         const int finalized_mesh_device_id = get_finalized_metadata().mesh_device_id;
@@ -144,6 +186,11 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
             finalized_mesh_device_id,
             mesh_device->id());
     }
+    // Once finalized, a workload whose programs would each reduce to the lockstep L1 frontier check passes with one
+    // check for all of them (see l1_frontier_check_passes).
+    if (this->is_finalized() && programs_.size() > 1 && this->l1_frontier_check_passes(mesh_device)) {
+        return;
+    }
     // Multi-Step Compile:
     // 1. Compile Kernel Binaries
     // 2. Allocate and Validate CBs
@@ -152,34 +199,6 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     // programs are already compiled and laid out, so compile_program is a flag check per program;
     // handing those to the thread pool costs a worker wake-up and a join for no work. Only the
     // first compile of a multi-program workload does enough to be worth parallelizing.
-    // A finalized workload whose programs are all compiled and laid out for this device needs only the lockstep L1
-    // frontier check, and every program's check reads the same mesh allocator: do it once, against the highest
-    // frontier. The workload's sub-device set is the union of its programs', so its lowest occupied address is no
-    // higher than any program's own, and passing here means each program's check passes. Otherwise, or on a
-    // failure, the per-program path below runs and reports the collision in detail.
-    if (this->is_finalized() && programs_.size() > 1) {
-        uint64_t frontier = 0;
-        bool all_cached = true;
-        for (auto& [device_range, program] : programs_) {
-            const auto program_frontier = program.impl().cached_l1_frontier(mesh_device);
-            if (!program_frontier.has_value()) {
-                all_cached = false;
-                break;
-            }
-            frontier = std::max(frontier, *program_frontier);
-        }
-        if (all_cached) {
-            if (frontier == 0) {
-                return;
-            }
-            const auto& sub_device_set = this->determine_sub_device_ids(mesh_device);
-            const ttsl::SmallVector<SubDeviceId, 4> sub_device_ids(sub_device_set.begin(), sub_device_set.end());
-            const auto lowest_address = mesh_device->lowest_occupied_compute_l1_address(sub_device_ids);
-            if (!lowest_address.has_value() || *lowest_address >= frontier) {
-                return;
-            }
-        }
-    }
     if (programs_.size() == 1 || this->is_finalized()) {
         // Compile from main thread for homogeneous workloads
         for (auto& [device_range, _] : programs_) {
