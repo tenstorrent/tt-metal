@@ -180,9 +180,25 @@ def _float(value):
         return None
 
 
+def _report_column(fieldnames, name):
+    """The CSV header tt-perf-report writes for its table column `name`. Since 1.5.0 the library's own map adds the
+    unit (Device Time [μs]); earlier versions wrote the table name."""
+    try:
+        label = _perf_report().report_csv_column_labels.get(name, name)
+    except (ImportError, AttributeError):
+        label = name
+    for column in dict.fromkeys((label, name)):
+        if column in (fieldnames or ()):
+            return column
+    raise ValueError(f"tt-perf-report CSV has no {label!r} column; its headers are {fieldnames}")
+
+
 def summarize_cell_csv(path, top_n=None):
     with open(path, newline="") as f:
-        rows = [r for r in csv.DictReader(f) if _float(r.get("Device Time")) is not None]
+        reader = csv.DictReader(f)
+        device_time = _report_column(reader.fieldnames, "Device Time")
+        op_to_op_gap = _report_column(reader.fieldnames, "Op-to-Op Gap")
+        rows = [r for r in reader if _float(r.get(device_time)) is not None]
     # Rows are not in execution order; the lowest call count ran first and its gap precedes the replay.
     call_counts = [_float(r.get("Global Call Count")) for r in rows]
     if rows and None not in call_counts:
@@ -192,10 +208,10 @@ def summarize_cell_csv(path, top_n=None):
     kernel_us = gap_us = 0.0
     by_op = defaultdict(lambda: [0.0, 0])
     for i, row in enumerate(rows):
-        device_us = _float(row["Device Time"])
+        device_us = _float(row[device_time])
         kernel_us += device_us
         if i != leading:
-            gap_us += _float(row.get("Op-to-Op Gap")) or 0.0
+            gap_us += _float(row.get(op_to_op_gap)) or 0.0
         op = row.get("OP Code", "").strip().lstrip("'")
         by_op[op][0] += device_us
         by_op[op][1] += 1
