@@ -3342,8 +3342,11 @@ void kernel_main() {
                 // This master sends notification to self for multi risc in single eth core case,
                 // This still send to self even though with single risc core case, but no side effects
                 constexpr uint32_t exclude_eth_chan = std::numeric_limits<uint32_t>::max();
+                // The router's own view, not the plain offset: on a Keraunos CCE the store to self must be uncached,
+                // as its line also holds the termination word, and the NOC routes take the other routers' slots
+                // from the SRAM offset of either view.
                 notify_subordinate_routers(
-                    edm_channels_mask, exclude_eth_chan, router_l1_offset(edm_local_sync_ptr_addr), num_local_edms);
+                    edm_channels_mask, exclude_eth_chan, edm_local_sync_ptr_addr, num_local_edms);
             } else {
                 notify_master_router(local_handshake_master_eth_chan, router_l1_offset(edm_local_sync_ptr_addr));
                 wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
