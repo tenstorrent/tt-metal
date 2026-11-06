@@ -9,7 +9,9 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -409,6 +411,30 @@ ttsl::hash::hash_t hash_data_formats_set(const m2::ProgramSpec& spec) {
     return hash;
 }
 
+// ttsl hashes a compile-time array with Metal's std::hash<ArrayArgValue>, which mixes the values so weakly that
+// [4, 32] and [9, 14] hash alike. The values are compiled into the kernel, so the spec hash also hashes every value
+// through ttsl, taking each kernel's arrays in name order, since a Table's order is unspecified.
+ttsl::hash::hash_t hash_compile_time_array_values(const m2::ProgramSpec& spec) {
+    ttsl::hash::hash_t hash = 0;
+    for (const auto& kernel : spec.kernels) {
+        std::vector<const std::pair<const std::string, m2::ArrayArgValue>*> arrays;
+        arrays.reserve(kernel.compile_time_array_args.size());
+        for (const auto& array : kernel.compile_time_array_args) {
+            arrays.push_back(&array);
+        }
+        std::ranges::sort(arrays, {}, [](const auto* array) { return std::string_view(array->first); });
+        hash = ttsl::hash::hash_objects(hash, arrays.size());
+        for (const auto* array : arrays) {
+            const auto& [name, values] = *array;
+            hash = ttsl::hash::hash_objects(hash, name, values.size());
+            for (std::size_t i = 0; i < values.size(); ++i) {
+                hash = ttsl::hash::hash_objects(hash, values[i].to_uint32());
+            }
+        }
+    }
+    return hash;
+}
+
 }  // namespace
 
 ttsl::hash::hash_t compute_program_spec_hash(const m2::ProgramSpec& spec) {
@@ -442,7 +468,7 @@ ttsl::hash::hash_t compute_program_spec_hash(const m2::ProgramSpec& spec) {
     for (const auto& work_unit : spec.work_units) {
         hash = ttsl::hash::hash_objects(hash, work_unit.kernels, work_unit.target_nodes);
     }
-    return ttsl::hash::hash_objects(hash, hash_data_formats_set(spec));
+    return ttsl::hash::hash_objects(hash, hash_data_formats_set(spec), hash_compile_time_array_values(spec));
 }
 
 GenericProgramSpecDeviceOperation::spec_return_value_t GenericProgramSpecDeviceOperation::compute_output_specs(
