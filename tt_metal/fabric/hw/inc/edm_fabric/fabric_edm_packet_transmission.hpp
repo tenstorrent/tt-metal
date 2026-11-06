@@ -143,7 +143,9 @@ FORCE_INLINE
         uint32_t transaction_id,
         uint8_t rx_channel_id) {
     const auto& header = *packet_start;
-    uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
+    // The NOC source: a plain offset, though packet_start may be in the uncached alias.
+    const uint32_t payload_start_address =
+        router_l1_offset(reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE));
 
     constexpr bool update_counter = false;
 

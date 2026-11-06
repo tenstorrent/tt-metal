@@ -885,6 +885,10 @@ void ComputeMeshRouterBuilder::compile_ancillary_kernels(tt::tt_metal::Program& 
 void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) {
     // Build defines
     std::map<std::string, std::string> defines = {};
+    // Without base Ethernet firmware the heartbeat word is in the core's own memory map.
+    if (!fabric_context_.get_hal().has_eth_base_firmware()) {
+        defines["FABRIC_HEARTBEAT_FROM_MEM_MAP"] = "";
+    }
     if (ctx.is_2D_routing) {
         defines["FABRIC_2D"] = "";
 

@@ -301,6 +301,11 @@ std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines(cons
     // Add routing mode define
     defines["ROUTING_MODE"] = std::to_string(routing_mode_);
 
+    // Every fabric kernel agrees with its router on the credit transport (fabric_connection_interface.hpp).
+    if (!hal_.has_stream_registers()) {
+        defines["FABRIC_STREAM_REGISTERS_AVAILABLE"] = "0";
+    }
+
     // Add UDM mode define - only define it when enabled (not "0"), since header checks with #ifdef
     bool udm_enabled = control_plane.get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
     if (udm_enabled) {
