@@ -26,23 +26,26 @@ _BLOCK_DEFAULT = ("GLM53Config", "KimiK3Config")  # model config classes whose M
 
 # The model's own L1_SMALL use a bank next to the block (its other ops' semaphores and words, allocated before the
 # block's slab), where the model's l1_small_size is not that figure:
-# - Kimi-K3: 1168 B (measured on the K3 L24 test, b08u02, torus XY). KimiK3Config.L1_SMALL_SIZE (4096) is inherited,
-#   not measured, and still floors the mesh open. L1_SMALL is carved from the top of L1 and MLA's chunked attention
-#   (ring_mla) puts its static CBs up to a fixed L1 ceiling, so less is better (5408 clashed by 256 B on the SC4 DSpark
-#   runner, 5888 by 448 B).
-# - GLM-5.3: 1536 B, its runner adapter's l1_small_size (verified on the traced TtMoe path, whose routing's 512 B the
-#   block does not use).
+# - Kimi-K3: 3008 B (measured on the K3 L24 test, b09u02, torus XY, Nov 6): KDA / MLA / all-gather semaphores 704 B,
+#   and matmul_reduce_scatter_prefill's (KDA's fused output projection, #64213 / #64415) four semaphores and its
+#   mailbox, which go to L1_SMALL whenever it holds them (2304 B). Was 1168 B before that op. KimiK3Config.L1_SMALL_SIZE
+#   (4096) is inherited, not measured, and still floors the mesh open. L1_SMALL is carved from the top of L1 and MLA's
+#   chunked attention (ring_mla) puts its static CBs up to a fixed L1 ceiling, so less is better.
+# - GLM-5.3: 3328 B (the GLM chunked-accuracy CI job, Nov 6: the 576 B its 3904 B mesh left the block), with
+#   matmul_reduce_scatter_prefill's semaphores and mailbox. Was 1536 B, its runner adapter's l1_small_size.
 # Every other model: its l1_small_size.
 _MODEL_L1_SMALL = {
-    "KimiK3Config": 1168,
-    "GLM53Config": 1536,
+    "KimiK3Config": 3008,
+    "GLM53Config": 3328,
 }
 _L1_SMALL_ALIGN = 64  # (the allocator's alignment of the slab and of the model's last buffer)
 
 # The persistent words' slab a core, where the model's word sets need less than MoEBlockConfig.words_slab_bytes:
 # - Kimi-K3: 1920 B (1904 B used at 8x4 chunk 5120, the tail's words now per-call CBs). The default 2304 put the
 #   mesh's L1_SMALL at 3584 B, which pushed the K3 L24 model's top L1 buffer (5376 B) into ring_mla's static CBs
-#   (their region ends at 1564224: L1_SMALL <= 3264 B clears it); 1920 gives 3152 B.
+#   (their region ends at 1564224: L1_SMALL <= 3264 B cleared it then); 1920 gave 3152 B. Nov 6: with
+#   matmul_reduce_scatter_prefill's semaphores and mailbox the mesh opens with 4992 B and the K3 L24 depth test passes
+#   (no CB clash) on b09u02.
 _MODEL_WORDS_SLAB = {
     "KimiK3Config": 1920,
 }
