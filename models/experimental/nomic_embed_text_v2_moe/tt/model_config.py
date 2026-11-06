@@ -316,6 +316,13 @@ class TtModelConfig:
     # one matmul of 0/1 keep-mask rows against all the chunk's tokens on 24 cores, and the L2 normalize on one packed
     # row block. Off, or on a chunk off the tile grid: mean_pool's batched matmul on the DRAM output.
     packed_pooling: bool = True
+    # The additive attention mask of a right-padded batch built only if a call falls back to stock SDPA (tt.common
+    # LazyAttentionMask): nomic_sdpa takes the real lengths and never reads it. Off: built every padded pass.
+    lazy_attention_mask: bool = True
+    # embed() refills a chunk's right padding with each row's own tokens, repeated (tt.model._fill_padding): the
+    # padded slots' results are never used, and one shared pad id read one embedding row and routed every padded slot
+    # to the same experts. Off: the pad id.
+    fill_padding_ids: bool = True
     max_chunk_tokens: int = MAX_CHUNK_TOKENS  # the largest chunk a forward runs at once, tt/chunking.py
     min_chunk_tokens: int = MIN_CHUNK_TOKENS  # a smaller last chunk is merged with the one before and split
     layout: ttnn.Layout = LAYOUT

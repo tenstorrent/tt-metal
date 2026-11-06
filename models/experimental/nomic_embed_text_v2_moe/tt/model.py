@@ -65,6 +65,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     FUSED_ATTENTION_MIN_TILES,
     FusedRotaryTables,
     LayerNormParameters,
+    LazyAttentionMask,
     RotaryTables,
     activation_memory_config,
     additive_attention_mask,
@@ -185,13 +186,22 @@ class TtNomicBertModel(LightweightModule):
         mask = None
         key_lengths = None
         if attention_mask is not None and not bool(attention_mask.all()):
-            mask = additive_attention_mask(
-                attention_mask,
-                self.device,
-                dtype=self.tt_config.activation_dtype,
-                mask_dtype=self.tt_config.attention_mask_dtype,
-            )
             key_lengths = right_padded_lengths(attention_mask)
+
+            def build_mask():
+                return additive_attention_mask(
+                    attention_mask,
+                    self.device,
+                    dtype=self.tt_config.activation_dtype,
+                    mask_dtype=self.tt_config.attention_mask_dtype,
+                )
+
+            if self.tt_config.lazy_attention_mask and key_lengths is not None:
+                mask = LazyAttentionMask(
+                    build_mask, self.tt_config.attention_mask_dtype or self.tt_config.activation_dtype
+                )
+            else:
+                mask = build_mask()
         rot_mats = self.rotary_tables(seqlen)
         fused_tables = None
         rows = input_ids.shape[0] * -(-seqlen // ttnn.TILE_SIZE)
@@ -220,7 +230,9 @@ class TtNomicBertModel(LightweightModule):
             output_memory_config=output_memory_config,
         )
         self.rotary_tables.release(rot_mats)
-        if mask is not None:
+        if isinstance(mask, LazyAttentionMask):
+            mask.deallocate()
+        elif mask is not None:
             ttnn.deallocate(mask)
         return out
 
@@ -316,6 +328,8 @@ def embed(
             extra = width - chunk_ids.shape[-1]
             chunk_ids = torch.nn.functional.pad(chunk_ids, (0, extra), value=model.config.pad_token_id)
             chunk_mask = torch.nn.functional.pad(chunk_mask, (0, extra), value=0)
+        if model.tt_config.fill_padding_ids:
+            chunk_ids = _fill_padding(chunk_ids, chunk_mask)
         # Pooling needs a mask even where the backbone did not: padded positions must not enter the
         # mean, because the <pad> embedding is trained and non-zero, so counting it would make one
         # text's embedding depend on how long its batch-mates are.
@@ -342,6 +356,22 @@ def embed(
         out[order[chunk.start : chunk.start + chunk.count]] = rows_out
         ttnn.deallocate(piece)
     return out
+
+
+def _fill_padding(ids: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Right padding refilled with the row's own tokens, repeated: a padded slot takes no part in any real token's
+    result (attention gives it zero weight, pooling skips it, every other op is per token), so its id is free.
+    The pad id in every padded slot read one embedding row from one DRAM bank for all of them and routed them all
+    to the same two experts (nomic-opt, 8x512 real text: embedding 24 -> 54 us, expert w2 +19 us). Rows that are
+    not right-padded, or keep nothing, are left as they are."""
+    lengths = mask.sum(dim=-1)
+    width = ids.shape[-1]
+    positions = torch.arange(width)
+    if not torch.equal(mask.bool(), positions < lengths[:, None]) or bool((lengths == width).all()):
+        return ids
+    source = positions[None, :] % lengths.clamp(min=1)[:, None]
+    filled = torch.where(mask.bool(), ids, torch.gather(ids, 1, source))
+    return torch.where(lengths[:, None] > 0, filled, ids)
 
 
 # packed_pooling_weights per mask, so a repeated batch shape does not upload its weights again (up to 256 KB at

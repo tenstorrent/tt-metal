@@ -187,6 +187,28 @@ def additive_attention_mask(
     return cast
 
 
+class LazyAttentionMask:
+    """An additive attention mask built only if a call needs it. Where every attention call takes the real lengths
+    (nomic_sdpa with key_lengths) the mask is never read, and building it cost a host upload, a tilize and a
+    typecast a pass (35 us at 8x512). Attention plans with .dtype as it would with the tensor, and the stock SDPA
+    fallback calls get(); the backbone frees it with deallocate()."""
+
+    def __init__(self, build, dtype: ttnn.DataType):
+        self._build = build
+        self.dtype = dtype
+        self.tensor: ttnn.Tensor | None = None
+
+    def get(self) -> ttnn.Tensor:
+        if self.tensor is None:
+            self.tensor = self._build()
+        return self.tensor
+
+    def deallocate(self) -> None:
+        if self.tensor is not None:
+            ttnn.deallocate(self.tensor)
+            self.tensor = None
+
+
 def rotary_pair_permutation(head_dim: int) -> torch.Tensor:
     """The head-dim order rotary_embedding_llama rotates in: new 2i holds old i, new 2i + 1 old i + D/2.
 

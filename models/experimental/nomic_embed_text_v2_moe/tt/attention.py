@@ -27,6 +27,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     FUSED_ATTENTION_MAX_TILES,
     FUSED_ATTENTION_MIN_TILES,
+    LazyAttentionMask,
     m_tiles,
     nd_norm_layout,
     rotary_pair_permutation,
@@ -620,7 +621,8 @@ class TtNomicBertAttention(LightweightModule):
         Returns:
             ttnn.Tensor: (B, 1, S, H).
         """
-        live = (*rot_mats,) if attn_mask is None else (*rot_mats, attn_mask)
+        # A LazyAttentionMask (tt.common) is not a tensor yet and lives in DRAM when built: not an L1 resident.
+        live = (*rot_mats,) if not isinstance(attn_mask, ttnn.Tensor) else (*rot_mats, attn_mask)
         compute_kernel_config = self.tt_config.compute_kernel_config(OpGroup.SDPA)
         batch, seqlen = x.shape[0], x.shape[-2]
         heads = None
@@ -734,7 +736,7 @@ class TtNomicBertAttention(LightweightModule):
             rotated_query,
             rotated_key,
             value,
-            attn_mask=attn_mask,
+            attn_mask=attn_mask.get() if isinstance(attn_mask, LazyAttentionMask) else attn_mask,
             is_causal=False,
             scale=1.0,
             program_config=program_config,
