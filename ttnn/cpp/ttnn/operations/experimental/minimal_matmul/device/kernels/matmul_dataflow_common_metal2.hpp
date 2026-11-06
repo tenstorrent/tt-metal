@@ -45,6 +45,10 @@ struct TensorShape2D {
  * Read a block of in0 from a potentially padded tensor.
  * Since this is for matmul, no need to read when M >= logical_M
  * Otherwise, if K >= logical_K, fill with zeros.
+ *
+ * `write_offset_bytes` places the rows at that offset into the reserved slot (a row chunk of the block, see
+ * move_block_cut_through). With `barrier == false` the reads are left in flight; the caller barriers before it
+ * pushes or forwards them.
  */
 template <
     uint32_t M_block_tiles,
@@ -74,13 +78,15 @@ void read_in0_block_sync(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
+    uint32_t d1_end,
+    bool barrier = true,
+    uint32_t write_offset_bytes = 0) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
     Noc noc;
     const uint32_t dfb_base_write_ptr = dfb_in0.get_write_ptr();
-    uint32_t write_ptr = dfb_base_write_ptr;
+    uint32_t write_ptr = dfb_base_write_ptr + write_offset_bytes;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;
@@ -117,14 +123,17 @@ void read_in0_block_sync(
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
         write_ptr += (K_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
-    noc.async_read_barrier();
-    noc.write_zeros_l1_barrier();
+    if (barrier) {
+        noc.async_read_barrier();
+        noc.write_zeros_l1_barrier();
+    }
 }
 
 /**
  * Read a block of in1 from a potentially padded tensor.
  * Since this is for matmul, no need to read when N >= logical_N
  * Otherwise, if K >= logical_K, fill with zeros.
+ * `barrier` and `write_offset_bytes` as for read_in0_block_sync.
  */
 template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType, typename DFB>
 void read_in1_block_sync(
@@ -135,12 +144,14 @@ void read_in1_block_sync(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
+    uint32_t d1_end,
+    bool barrier = true,
+    uint32_t write_offset_bytes = 0) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
     Noc noc;
     const uint32_t dfb_base_write_ptr = dfb_in1.get_write_ptr();
-    uint32_t write_ptr = dfb_base_write_ptr;
+    uint32_t write_ptr = dfb_base_write_ptr + write_offset_bytes;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
@@ -159,8 +170,10 @@ void read_in1_block_sync(
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
         write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
-    noc.async_read_barrier();
-    noc.write_zeros_l1_barrier();
+    if (barrier) {
+        noc.async_read_barrier();
+        noc.write_zeros_l1_barrier();
+    }
 }
 
 /**
@@ -462,7 +475,8 @@ template <
     uint32_t N_block_tiles,
     uint32_t N_chunks,
     uint32_t N_tiles_per_chunk,
-    typename... Accessors, typename DFB>
+    typename... Accessors,
+    typename DFB>
 void write_block_sync_granular_split(
     const std::tuple<Accessors...>& accessors,
     const TensorShape2D& chunk_shape,
