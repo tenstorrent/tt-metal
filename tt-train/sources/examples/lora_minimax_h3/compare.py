@@ -32,9 +32,7 @@ class Checks:
         self._compare = _comp_allclose_and_pcc()
         self.failed: list[str] = []
 
-    def __call__(
-        self, name: str, got, ref, *, pcc: float = 0.99, rtol: float = 0.05, atol_frac: float = 0.02
-    ) -> str:
+    def __call__(self, name: str, got, ref, *, pcc: float = 0.99, rtol: float = 0.05, atol_frac: float = 0.02) -> str:
         import torch
 
         got, ref = np.ascontiguousarray(got, np.float64), np.ascontiguousarray(ref, np.float64)
