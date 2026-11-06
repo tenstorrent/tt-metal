@@ -226,3 +226,8 @@ Branch commits on the new base: 70075e3e7a1 906d3fbe4b7 3b9ed4635b1 020b0fb7556 
   sdpa row_bfp4 H=32 4: SFPI 7.9x internal compiler error triggered by the new base's compute headers, not the fork's
   changes; -O levels don't avoid it). 70 source tests "missing" vs stale baselines (upstream renames): re-record.
   Patches / repro: /scratch/dnijemcevic/rebase/fsclass/.
+- combine hang = our harness: test_hybrid_routed_expert_combine.py's first case PASSES on the old build with
+  --no-precompile (254 s); with the safe runner's precompile plugin (up_front_collect: a collect pass, then the real
+  run) it hangs on both builds. Pre-existing, a framework bug to fix (F-entry pending).
+- landed on the rebased branch: moe_grouped_topk + fabric_all_gather retirements, upstream combine file, H=32 waiver,
+  rotary test fix, F257; rebuild OK (unity regrouping exposed a missing include in prepared_program.hpp: fixed).
