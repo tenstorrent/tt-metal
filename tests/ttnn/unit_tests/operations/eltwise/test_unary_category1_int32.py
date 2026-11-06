@@ -5,6 +5,7 @@
 import torch
 import pytest
 import ttnn
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_equal
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_int32_values,
@@ -57,11 +58,15 @@ Accuracy criteria
 | abs, neg, square,      | all           | exact        | integer result; abs and neg of INT32_MIN  |
 | bitwise_not, identity, |               |              | and every overflowing square wrap mod     |
 | relu, relu6            |               |              | 2^32, as in torch                         |
-| signbit, gtz, lez,     | all           | exact        | 0 / 1 result                              |
-| logical_not            |               |              |                                           |
-| eqz, nez, ltz, gez     | x ≠ INT32_MIN | exact        | 0 / 1 result                              |
-|                        | INT32_MIN     | strict xfail | INT32_MIN is read as zero: eqz and gez    |
+| signbit, logical_not   | all           | exact        | 0 / 1 result                              |
+| eqz, nez, ltz, gez     | all           | exact        | 0 / 1 result (Blackhole)                  |
+|   on Wormhole          | x ≠ INT32_MIN | exact        | 0 / 1 result                              |
+|   on Wormhole          | INT32_MIN     | strict xfail | INT32_MIN is read as zero: eqz and gez    |
 |                        |               |              | return 1, nez and ltz return 0            |
+| gtz, lez               | all           | exact        | 0 / 1 result (Wormhole)                   |
+|   on Blackhole         | x ≠ INT32_MIN | exact        | 0 / 1 result                              |
+|   on Blackhole         | INT32_MIN     | strict xfail | INT32_MIN is read as positive: gtz        |
+|                        |               |              | returns 1, lez returns 0                  |
 """
 
 
@@ -97,7 +102,12 @@ def test_int32_value_ops(device, ttnn_op):
 # signbit, comparison to zero, logical_not — exact 0 / 1
 # ─────────────────────────────────────────────────────────────────────────────
 
-INT_MIN_READ_AS_ZERO = [ttnn.eqz, ttnn.nez, ttnn.ltz, ttnn.gez]
+INT_MIN_WRONG = [ttnn.gtz, ttnn.lez] if is_blackhole() else [ttnn.eqz, ttnn.nez, ttnn.ltz, ttnn.gez]
+INT_MIN_WRONG_REASON = (
+    "int32 gtz and lez read INT32_MIN (0x80000000) as positive"
+    if is_blackhole()
+    else "int32 eqz, nez, ltz and gez read INT32_MIN (0x80000000) as zero"
+)
 
 
 @pytest.mark.parametrize(
@@ -111,10 +121,11 @@ def test_int32_predicate_ops(device, ttnn_op):
     |-----------------|-------|----------------------------------------------|
     | all             | exact | 0 / 1 result; torch returns bool, compared   |
     |                 |       | as int32                                     |
-    | INT32_MIN       | n/a   | left out for eqz, nez, ltz and gez; covered  |
-    |                 |       | by test_int32_predicate_int_min              |
+    | INT32_MIN       | n/a   | left out for eqz, nez, ltz and gez on WH and |
+    |                 |       | for gtz and lez on BH; covered by            |
+    |                 |       | test_int32_predicate_int_min                 |
     """
-    input_tensor = generate_int32_values(include_int_min=ttnn_op not in INT_MIN_READ_AS_ZERO)
+    input_tensor = generate_int32_values(include_int_min=ttnn_op not in INT_MIN_WRONG)
 
     tt_in = to_int32_tt_tensor(input_tensor, device)
     golden_function = ttnn.get_golden_function(ttnn_op)
@@ -125,21 +136,20 @@ def test_int32_predicate_ops(device, ttnn_op):
     assert_equal(golden, result)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="int32 eqz, nez, ltz and gez read INT32_MIN (0x80000000) as zero",
-)
-@pytest.mark.parametrize("ttnn_op", INT_MIN_READ_AS_ZERO)
+@pytest.mark.xfail(strict=True, reason=INT_MIN_WRONG_REASON)
+@pytest.mark.parametrize("ttnn_op", INT_MIN_WRONG)
 def test_int32_predicate_int_min(device, ttnn_op):
-    """eqz, nez, ltz and gez at INT32_MIN.
+    """The comparisons to zero that are wrong at INT32_MIN.
 
     | Input     | Check | Reason                                             |
     |-----------|-------|----------------------------------------------------|
-    | INT32_MIN | exact | INT32_MIN is negative and non-zero; the device     |
-    |           |       | returns eqz = 1, nez = 0, ltz = 0 and gez = 1      |
+    | INT32_MIN | exact | INT32_MIN is negative and non-zero; on WH the      |
+    |           |       | device returns eqz = 1, nez = 0, ltz = 0 and       |
+    |           |       | gez = 1, on BH gtz = 1 and lez = 0                 |
     | 0, ±1     | exact | control                                            |
 
-    gtz, lez, signbit and logical_not are correct at INT32_MIN.
+    signbit and logical_not are correct at INT32_MIN on both; gtz and lez are
+    correct on WH, eqz, nez, ltz and gez on BH.
     """
     input_tensor = torch.zeros(32, 32, dtype=torch.int32)
     input_tensor[:16] = INT32_MIN
