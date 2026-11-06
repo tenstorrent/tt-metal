@@ -309,21 +309,3 @@ def test_refusals(expect_error):
     propose(ad, 1, [7])
     with expect_error(ValueError, "spec_mode"):
         verify(ad, 7, [1], 21, "fused_sample")
-
-
-def test_dflash_checkpoint_dir(monkeypatch, tmp_path):
-    import huggingface_hub
-
-    from models.demos.muse_glimmer_30b.tt import model_config as mc
-
-    monkeypatch.setenv("MUSE_DFLASH_MODEL", str(tmp_path))
-    assert mc.dflash_checkpoint_dir() == str(tmp_path)
-    calls = []
-    monkeypatch.setattr(huggingface_hub, "snapshot_download", lambda repo_id: calls.append(repo_id) or "/snap")
-    mc._hf_snapshot.cache_clear()
-    monkeypatch.setenv("MUSE_DFLASH_MODEL", mc.DFLASH_REPO_ID)
-    try:
-        assert mc.dflash_checkpoint_dir() == "/snap"
-        assert calls == [mc.DFLASH_REPO_ID]
-    finally:
-        mc._hf_snapshot.cache_clear()

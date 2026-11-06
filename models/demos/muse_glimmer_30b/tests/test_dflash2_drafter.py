@@ -9,10 +9,16 @@ import os
 import pytest
 import torch
 from loguru import logger
+from safetensors import safe_open
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.muse_glimmer_30b.reference.dflash2 import load_dflash2, rope_cos_sin, rotate_half
+from models.demos.muse_glimmer_30b.reference.dflash2 import (
+    GroupedDynamicCausalConv,
+    load_dflash2,
+    rope_cos_sin,
+    rotate_half,
+)
 from models.demos.muse_glimmer_30b.tt.ccl import MuseCCL
 from models.demos.muse_glimmer_30b.tt.common import RopeTables, as_tt, shard_mapper
 from models.demos.muse_glimmer_30b.tt.mesh_utils import mesh_test_params, skip_and_submesh
@@ -27,6 +33,10 @@ pytestmark = pytest.mark.skipif(
 )
 
 PCC = 0.99
+CONV_PCC = 0.999
+H = 6656
+ROWS = 16
+_CONV_CKPT = os.path.join(dflash_checkpoint_dir(), "model.safetensors")
 _mesh_params = mesh_test_params()
 
 
@@ -263,3 +273,46 @@ def test_draft_head(mesh_device, tp):
     logger.info(f"e2e: top1 agreement {e2e_top1}/15, selector path equal {eq_path}/15")
 
     assert overlap >= 0.75 and top1 >= 13 and hp_ok, (overlap, top1, hp_msg)
+
+
+def _to_torch(t, mesh_device):
+    out = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    return out[0:1].float()  # replicated: take rank 0 -> [1, 1, S, H]
+
+
+@_mesh_params
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize("prefix", ["layers.0.attention_conv", "layers.4.mlp_conv"])
+def test_dynamic_causal_conv(mesh_device, tp, prefix):
+    sub = skip_and_submesh(mesh_device, tp)
+    from models.demos.muse_glimmer_30b.tt.dflash.conv import TtDynamicCausalConv
+
+    with safe_open(_CONV_CKPT, framework="pt") as f:
+        base = f.get_tensor(f"{prefix}.base_kernel").float()
+        proj = f.get_tensor(f"{prefix}.kernel_projection.weight").float()
+
+    ref = GroupedDynamicCausalConv(H, 2, 16).float()
+    ref.load_state_dict({"base_kernel": base, "kernel_projection.weight": proj})
+    ref.eval()
+
+    torch.manual_seed(0)
+    h = torch.randn(1, 32, H)
+    x = torch.randn(1, 32, H)
+    with torch.no_grad():
+        ref_out, ref_dyn = ref.prepare(h[:, :ROWS])
+        ref_fin = ref.finish(x[:, :ROWS], ref_dyn)
+
+    conv = TtDynamicCausalConv(sub, base, proj, group_size=16, block_rows=ROWS)
+    h_tt = _to_tt(h.bfloat16().view(1, 1, 32, H), sub)
+    x_tt = _to_tt(x.bfloat16().view(1, 1, 32, H), sub)
+    out, dyn = conv.prepare(h_tt)
+    fin = conv.finish(x_tt, dyn)
+
+    out_t = _to_torch(out, sub)[0, 0, :ROWS]
+    fin_t = _to_torch(fin, sub)[0, 0, :ROWS]
+    ok1, msg1 = comp_pcc(ref_out[0], out_t, CONV_PCC)
+    ok2, msg2 = comp_pcc(ref_fin[0], fin_t, CONV_PCC)
+    logger.info(f"{prefix} prepare: {msg1}")
+    logger.info(f"{prefix} finish: {msg2}")
+    assert ok1, f"prepare: {msg1}"
+    assert ok2, f"finish: {msg2}"

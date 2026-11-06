@@ -2,13 +2,27 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU-only tests for the DFlash2 host sampler, rejection sampling and sampling selector."""
+"""CPU-only tests for the DFlash2 host side: sampler, rejection sampling, candidate selector and checkpoint lookup."""
 
+import os
+
+import pytest
 import torch
+from safetensors import safe_open
 
+from models.demos.muse_glimmer_30b.reference.dflash2 import CandidateSelector, DFlash2Config
 from models.demos.muse_glimmer_30b.tt.dflash.sampling import rejection_sample
-from models.demos.muse_glimmer_30b.tt.dflash.selector import HostCandidateSelector
+from models.demos.muse_glimmer_30b.tt.dflash.selector import HostCandidateSelector, merge_device_topk
+from models.demos.muse_glimmer_30b.tt.model_config import dflash_checkpoint_dir
 from models.demos.muse_glimmer_30b.tt.sampling import filtered_probs, normalize_sampling
+
+
+@pytest.fixture(scope="module")
+def ckpt():
+    path = os.path.join(dflash_checkpoint_dir(), "model.safetensors")
+    if not os.path.exists(path):
+        pytest.skip("DFlash2 checkpoint not found")
+    return path
 
 
 def _ids(rows, cols):
@@ -135,3 +149,72 @@ def test_rejection_sample_greedy_limit():
     q_probs = torch.tensor([[0.7, 0.3], [0.6, 0.4]])
     acc, bonus = rejection_sample([5, 6], q_probs, q_ids, t_probs, t_ids, torch.Generator().manual_seed(0))
     assert acc == 2 and bonus == 7
+
+
+VOCAB = 202_048
+VOCAB_LOCAL = 50_688
+
+
+def test_merge_device_topk():
+    torch.manual_seed(0)
+    full = torch.randn(32, 4 * VOCAB_LOCAL) * 5
+    # Only a few padding columns are hot: if all 704 were, shard 3's top-32 would hold no valid ids at all.
+    full[:, VOCAB : VOCAB + 8] = 100.0
+    vals, ids = zip(*(torch.topk(full[:, d * VOCAB_LOCAL : (d + 1) * VOCAB_LOCAL], 32) for d in range(4)))
+    scores, cands = merge_device_topk(
+        torch.stack(vals), torch.stack(ids), vocab_local=VOCAB_LOCAL, vocab_size=VOCAB, k=16
+    )
+    exp_scores, exp_cands = torch.topk(full[:, :VOCAB], 16)
+    assert scores.dtype == torch.float32 and cands.dtype == torch.int64
+    for r in range(32):
+        assert set(cands[r].tolist()) == set(exp_cands[r].tolist())
+    assert torch.allclose(scores, exp_scores)
+
+
+@pytest.fixture(scope="module")
+def tensors(ckpt):
+    with safe_open(ckpt, framework="pt") as f:
+        return {
+            "pred": f.get_tensor("candidate_selector.predecessor_codebook"),
+            "succ": f.get_tensor("candidate_selector.successor_codebook"),
+            "hp": f.get_tensor("candidate_selector.hidden_projection.weight"),
+        }
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_selector_matches_reference(tensors, seed):
+    ref = CandidateSelector(DFlash2Config())
+    ref.predecessor_codebook.weight.data = tensors["pred"].clone()
+    ref.successor_codebook.weight.data = tensors["succ"].clone()
+    ref.hidden_projection.weight.data = tensors["hp"].clone()
+    ref = ref.float().eval()
+
+    torch.manual_seed(seed)
+    hidden = torch.randn(1, 15, 6656)
+    logits = torch.randn(1, 15, VOCAB) * 5
+    anchor = 1234
+    with torch.no_grad():
+        ref_path = ref.select(hidden, logits, torch.tensor([anchor]))[0][0].tolist()
+
+    hp = hidden[0] @ tensors["hp"].float().T
+    scores, cands = torch.topk(logits[0], 16)
+    path = HostCandidateSelector(tensors["pred"], tensors["succ"]).select(scores, cands, hp, anchor)
+    assert path == ref_path
+
+
+def test_dflash_checkpoint_dir(monkeypatch, tmp_path):
+    import huggingface_hub
+
+    from models.demos.muse_glimmer_30b.tt import model_config as mc
+
+    monkeypatch.setenv("MUSE_DFLASH_MODEL", str(tmp_path))
+    assert mc.dflash_checkpoint_dir() == str(tmp_path)
+    calls = []
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", lambda repo_id: calls.append(repo_id) or "/snap")
+    mc._hf_snapshot.cache_clear()
+    monkeypatch.setenv("MUSE_DFLASH_MODEL", mc.DFLASH_REPO_ID)
+    try:
+        assert mc.dflash_checkpoint_dir() == "/snap"
+        assert calls == [mc.DFLASH_REPO_ID]
+    finally:
+        mc._hf_snapshot.cache_clear()
