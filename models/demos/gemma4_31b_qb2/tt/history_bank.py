@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Fixed BF16 backing for request-owned prefill histories (experimental)."""
+import gemma_history_reservation as _history_reservation
 import torch
 import ttnn
 
@@ -131,6 +132,9 @@ class HistoryBank:
             self.leases[key] = self.free.pop()
             self.next_generation += 1
             self.generations[key] = self.next_generation
+        reservation = _history_reservation.context()
+        if reservation is not None and reservation.scheduler is not None:
+            reservation.observe_bank_acquire(self)
         return self.leases[key]
 
     def release(self, key):

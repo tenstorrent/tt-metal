@@ -2,16 +2,50 @@
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Translate vLLM scheduler updates into the Gemma4 TP4 generator's inputs."""
 
-import os
 import json
+import os
 import time
 
+import gemma_history_reservation as _history_reservation
 import torch
 
 import ttnn
-from models.demos.gemma4_31b_qb2.tt.kv_precision import selected_kv_dtypes, tile_bytes
 from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
 from models.demos.gemma4_31b_qb2.tt.generator import CacheState, build_generator
+from models.demos.gemma4_31b_qb2.tt.kv_precision import selected_kv_dtypes, tile_bytes
+
+# Experimental tight full-attention packing. vLLM gives the single full
+# attention group 256-token scheduler blocks (two native 128-token pages) while
+# sliding groups keep 128-token blocks; every group page is one wide backing
+# row. A full block b owns the whole wide row b = native full rows 2b and 2b+1,
+# so the second half of each wide row is no longer idle. Ownership remains one
+# global scheduler ID per wide row, exactly as in the unpacked alias.
+PACKED_POOL_PROFILES = {
+    "c32a32_p2_f412672": 5336,
+    "c32a32_p2_f443392": 5576,
+    "c32a32_p2_f458752": 5696,
+    "c32a32_p2_f626688": 7008,
+}
+
+
+def spec_ngram_enabled():
+    """Opt-in speculative decoding with the host n-gram drafter (GEMMA_SPEC_NGRAM=1); default off."""
+    value = os.environ.get("GEMMA_SPEC_NGRAM", "0")
+    if value not in ("0", "1"):
+        raise RuntimeError("GEMMA_SPEC_NGRAM must be 0 or 1")
+    return value == "1"
+
+
+def full_pack_enabled():
+    value = os.environ.get("GEMMA_EXPERIMENT_FULL_PACK2", "0")
+    if value not in ("0", "1"):
+        raise RuntimeError("GEMMA_EXPERIMENT_FULL_PACK2 must be 0 or 1")
+    profile = os.environ.get("GEMMA_SERIAL_PREPARED_POOL_PROFILE")
+    if (value == "1") != (profile in PACKED_POOL_PROFILES):
+        raise RuntimeError("Full packing and packed pool profiles must be selected together")
+    if value == "1" and os.environ.get("GEMMA_EXPERIMENT_NATIVE_ALIAS") != "1":
+        raise RuntimeError("Full packing requires the shared native backing alias")
+    return value == "1"
 
 
 class Gemma4ForCausalLM:
@@ -29,6 +63,19 @@ class Gemma4ForCausalLM:
             "router_config": _router,
         },
     }
+    if spec_ngram_enabled():
+        # Verification returns, for every candidate row, a token sampled with that request's own sampling
+        # parameters and per-position seed (not an argmax). With deterministic n-gram drafts, the runner's
+        # id-equality walk is then exact speculative sampling, so sampled requests may speculate.
+        model_capabilities = dict(
+            model_capabilities,
+            supports_spec_decode=True,
+            spec_requirements=["device_propose"],
+            supports_async_spec_decode=True,
+            spec_sampled_verify=True,
+            spec_token_history=True,
+            spec_stateless_verify=True,
+        )
     supports_explicit_admission_limit = True
     supports_prefill_history_finality = True
     decode_input_update_contract = 1
@@ -47,6 +94,10 @@ class Gemma4ForCausalLM:
         self.cache = None
         self.prefill_slot_keys = {}
         self.next_prefill_key = 0
+        self._spec_dirty = False
+        self.spec_stats = dict(
+            propose_s=0.0, proposals=0, drafted=0, verify_s=0.0, verifies=0, verify_rows=0, verify_passes=0
+        )
         self._pool_memory_interval = int(os.environ.get("GEMMA_POOL_MEMORY_SAMPLE_INTERVAL", "1"))
         if not 1 <= self._pool_memory_interval <= 65536:
             raise ValueError("GEMMA_POOL_MEMORY_SAMPLE_INTERVAL must be in 1..65536")
@@ -96,11 +147,21 @@ class Gemma4ForCausalLM:
         # hybrid groups. Different native geometries still use separate pools.
         # The runner divides these global head counts by the TP degree.
         page_bytes = 2 * block * config.num_key_value_heads * config.head_dim * 2
+        # Packed full pages hold 2*block tokens in the same accounting page:
+        # 2*256*4*512*2 bytes equals the sliding 2*128*16*256*2 bytes, so vLLM
+        # needs no padding and hybrid groups resolve to scheduler block 256.
+        full_block = 2 * block if full_pack_enabled() else block
         result = {}
         for i, kind in enumerate(config.layer_types):
             sliding = kind == "sliding_attention"
+            if (
+                not sliding
+                and full_block != block
+                and (2 * full_block * config.num_global_key_value_heads * config.global_head_dim * 2 != page_bytes)
+            ):
+                raise ValueError("Packed full page must equal the sliding accounting page")
             common = dict(
-                block_size=block,
+                block_size=block if sliding else full_block,
                 num_kv_heads=config.num_key_value_heads if sliding else config.num_global_key_value_heads,
                 head_size=config.head_dim if sliding else config.global_head_dim,
                 dtype=torch.bfloat16,
@@ -131,15 +192,47 @@ class Gemma4ForCausalLM:
         return pool_tokens + 5 * (tails + 2 * cls.MAX_PREFILL_TOKENS)
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
+        history_capacity = _history_reservation.serving_history_capacity(
+            batch=self.max_batch_size, admitted=self.admitted_request_limit, capacity=self.max_seq_len
+        )
+        if os.environ.get("GEMMA_SERIAL_PREPARED_POOL_PROFILE") == "c32a24_f458752":
+            if len(per_layer_specs) != 60 or any(
+                type(shape[0]) is not int or shape[0] != 5336 for shape, dtype, pool_id in per_layer_specs
+            ):
+                raise RuntimeError("A24/F458752 requires exactly60 allocator specs with n5336 before TT access")
+        packed = full_pack_enabled()
+        if packed:
+            expected_n = PACKED_POOL_PROFILES[os.environ["GEMMA_SERIAL_PREPARED_POOL_PROFILE"]]
+            if len(per_layer_specs) != 60 or any(
+                type(shape[0]) is not int or shape[0] != expected_n for shape, dtype, pool_id in per_layer_specs
+            ):
+                raise RuntimeError(
+                    f"Packed profile requires exactly60 allocator specs with n{expected_n} before TT access"
+                )
+            if self.admitted_request_limit != self.max_batch_size:
+                raise RuntimeError("Packed profile uses native physical admission")
+        self._kv_full_pack = packed
         before = ttnn.get_memory_view(self.generator.mesh, ttnn.BufferType.DRAM)
-        print("KV_POOL_MEMORY " + json.dumps({"phase":"before","banks":before.num_banks,"allocated_per_bank":before.total_bytes_allocated_per_bank,"free_per_bank":before.total_bytes_free_per_bank}), flush=True)
+        print(
+            "KV_POOL_MEMORY "
+            + json.dumps(
+                {
+                    "phase": "before",
+                    "banks": before.num_banks,
+                    "allocated_per_bank": before.total_bytes_allocated_per_bank,
+                    "free_per_bank": before.total_bytes_free_per_bank,
+                }
+            ),
+            flush=True,
+        )
         if os.environ.get("GEMMA_EXPERIMENT_NATIVE_ALIAS") != "1":
             raise RuntimeError("Experimental backing reinterpretation requires explicit opt-in")
         if len(per_layer_specs) != len(self.generator.model.layers):
             raise ValueError("The allocator must supply exactly one spec per layer")
         grouped = {}
         for i, (layer, (shape, dtype, pool_id)) in enumerate(zip(self.generator.model.layers, per_layer_specs)):
-            if tuple(shape[1:]) != (layer.kv_heads, 128, layer.head_dim) or dtype != torch.bfloat16:
+            tokens = 256 if packed and not layer.sliding else 128
+            if tuple(shape[1:]) != (layer.kv_heads, tokens, layer.head_dim) or dtype != torch.bfloat16:
                 raise ValueError(f"Unexpected allocator geometry or accounting dtype: {shape}, {dtype}")
             grouped.setdefault(pool_id, []).append((i, layer, int(shape[0])))
         pools, full_views, native_factors, scheduler_bounds = {}, {}, {}, {}
@@ -163,7 +256,41 @@ class Gemma4ForCausalLM:
                 scheduler_bounds[i] = n
         # Explicit roots outlive every native view and every trace using cache.
         self._kv_alias_pool_members = {pool: [i for i, _, _ in members] for pool, members in grouped.items()}
-        print("KV_ALIAS_ROOTS " + json.dumps({"pools":len(pools), "roots":[{"pool":str(pool),"root_id":root.buffer_unique_id(),"view_id":full_views[pool][index].buffer_unique_id(),"address":root.buffer_address(),"wide_rows":int(root.shape[0]),"dtype":str(root.dtype),"tile_bytes":tile_bytes(root.dtype),"logical_backing_bytes":int(root.shape[0])*128*tile_bytes(root.dtype)} for pool,pair in pools.items() for index,root in enumerate(pair)]}), flush=True)
+        print(
+            "KV_FULL_PACK "
+            + json.dumps(
+                {
+                    "enabled": packed,
+                    "full_scheduler_block_tokens": 256 if packed else 128,
+                    "native_full_rows_per_scheduler_id": 2 if packed else 1,
+                    "scheduler_ids": sorted({n for _, _, n in sum(grouped.values(), [])}),
+                }
+            ),
+            flush=True,
+        )
+        print(
+            "KV_ALIAS_ROOTS "
+            + json.dumps(
+                {
+                    "pools": len(pools),
+                    "roots": [
+                        {
+                            "pool": str(pool),
+                            "root_id": root.buffer_unique_id(),
+                            "view_id": full_views[pool][index].buffer_unique_id(),
+                            "address": root.buffer_address(),
+                            "wide_rows": int(root.shape[0]),
+                            "dtype": str(root.dtype),
+                            "tile_bytes": tile_bytes(root.dtype),
+                            "logical_backing_bytes": int(root.shape[0]) * 128 * tile_bytes(root.dtype),
+                        }
+                        for pool, pair in pools.items()
+                        for index, root in enumerate(pair)
+                    ],
+                }
+            ),
+            flush=True,
+        )
         self._kv_alias_roots = pools
         self._kv_alias_factors = native_factors
         self._kv_alias_bounds = scheduler_bounds
@@ -180,8 +307,36 @@ class Gemma4ForCausalLM:
         )
         self.cache.serving_admission_limit = self.admitted_request_limit
         after = ttnn.get_memory_view(self.generator.mesh, ttnn.BufferType.DRAM)
-        print("KV_POOL_MEMORY " + json.dumps({"phase":"after","banks":after.num_banks,"allocated_per_bank":after.total_bytes_allocated_per_bank,"free_per_bank":after.total_bytes_free_per_bank,"unique_pools":len(pools),"pool_full_tokens":int(os.environ.get("GEMMA_EXPERIMENT_KV_POOL_TOKENS", "262144"))}), flush=True)
-        self.generator.setup_history_bank(self.cache, capacity=self.admitted_request_limit)
+        print(
+            "KV_POOL_MEMORY "
+            + json.dumps(
+                {
+                    "phase": "after",
+                    "banks": after.num_banks,
+                    "allocated_per_bank": after.total_bytes_allocated_per_bank,
+                    "free_per_bank": after.total_bytes_free_per_bank,
+                    "unique_pools": len(pools),
+                    "pool_full_tokens": int(os.environ.get("GEMMA_EXPERIMENT_KV_POOL_TOKENS", "262144")),
+                }
+            ),
+            flush=True,
+        )
+        self.generator.setup_history_bank(self.cache, capacity=history_capacity)
+        if self.cache.history_bank is not None:
+            if len(self.cache.history_bank.roots) != history_capacity:
+                raise RuntimeError("Allocated history count differs from selected capacity")
+            print(
+                "GEMMA_HISTORY_RESERVATION_CAPACITY "
+                + json.dumps(
+                    dict(
+                        batch=self.max_batch_size,
+                        admitted=self.admitted_request_limit,
+                        selected=history_capacity,
+                        roots=len(self.cache.history_bank.roots),
+                    )
+                ),
+                flush=True,
+            )
         self.generator.prepare_serving_prefill(self.cache)
         return self.cache
 
@@ -191,16 +346,22 @@ class Gemma4ForCausalLM:
         # tensor values under ordinary reshape semantics. Full scheduler IDs
         # must be doubled, and global group ownership must remain exclusive.
         shape = tuple(int(x) for x in root.shape)
-        if (len(shape) != 4 or shape[1:] != (4, 128, 256)
-                or root.dtype not in selected_kv_dtypes() or root.layout != ttnn.TILE_LAYOUT
-                or root.memory_config() != ttnn.DRAM_MEMORY_CONFIG
-                or root.buffer_aligned_page_size() != tile_bytes(root.dtype)):
+        if (
+            len(shape) != 4
+            or shape[1:] != (4, 128, 256)
+            or root.dtype not in selected_kv_dtypes()
+            or root.layout != ttnn.TILE_LAYOUT
+            or root.memory_config() != ttnn.DRAM_MEMORY_CONFIG
+            or root.buffer_aligned_page_size() != tile_bytes(root.dtype)
+        ):
             raise ValueError("Unsupported root backing geometry")
         view = ttnn.experimental.view(root, [2 * shape[0], 1, 128, 512])
-        if (view.buffer_unique_id() != root.buffer_unique_id()
-                or view.buffer_address() != root.buffer_address()
-                or view.buffer_aligned_page_size() != root.buffer_aligned_page_size()
-                or tuple(view.padded_shape) != (2 * shape[0], 1, 128, 512)):
+        if (
+            view.buffer_unique_id() != root.buffer_unique_id()
+            or view.buffer_address() != root.buffer_address()
+            or view.buffer_aligned_page_size() != root.buffer_aligned_page_size()
+            or tuple(view.padded_shape) != (2 * shape[0], 1, 128, 512)
+        ):
             raise RuntimeError("Pinned runtime did not produce the required zero-copy tile alias")
         return view
 
@@ -214,17 +375,23 @@ class Gemma4ForCausalLM:
         maximum_full = maximum_sliding = 0
         for members in self._kv_alias_pool_members.values():
             full_ids, sliding_ids = set(), set()
+            seen = set()
             for i in members:
                 full = self._kv_alias_factors[i] == 2
                 target = full_ids if full else sliding_ids
                 source = sources[i]
+                # Layers of one KV group share the scheduler's table object: identical ids, read once.
+                if (id(source), full) in seen:
+                    continue
+                seen.add((id(source), full))
                 for row, limits in enumerate(ranges):
                     if limits is None:
                         continue
                     sliding_begin, end = limits
+                    granule = 256 if full and self._kv_full_pack else 128
                     begin_page = 0 if full else sliding_begin // 128
-                    end_page = (end + 127) // 128
-                    target.update(int(v) for v in source[row, begin_page:end_page].tolist() if int(v) > 0)
+                    end_page = (end + granule - 1) // granule
+                    target.update(v for v in source[row, begin_page:end_page].tolist() if v > 0)
             overlap = full_ids & sliding_ids
             if overlap:
                 raise RuntimeError(f"Full/sliding live consumer block collision: {sorted(overlap)[:16]}")
@@ -233,9 +400,19 @@ class Gemma4ForCausalLM:
         self._alias_audit_count = getattr(self, "_alias_audit_count", 0) + 1
         self._alias_audit_seconds = getattr(self, "_alias_audit_seconds", 0.0) + time.perf_counter() - began
         if self._alias_audit_count <= 3 or self._alias_audit_count % 64 == 0:
-            print("KV_ALIAS_CONSUMER_AUDIT " + json.dumps({"calls":self._alias_audit_count,
-                "full_live_ids":maximum_full,"sliding_live_ids":maximum_sliding,
-                "cross_geometry_overlap":0,"host_seconds":self._alias_audit_seconds}), flush=True)
+            print(
+                "KV_ALIAS_CONSUMER_AUDIT "
+                + json.dumps(
+                    {
+                        "calls": self._alias_audit_count,
+                        "full_live_ids": maximum_full,
+                        "sliding_live_ids": maximum_sliding,
+                        "cross_geometry_overlap": 0,
+                        "host_seconds": self._alias_audit_seconds,
+                    }
+                ),
+                flush=True,
+            )
 
     def _allocation_probe_begin(self):
         limit = int(os.environ.get("GEMMA_ALLOCATION_EVENT_PROBES", "0"))
@@ -246,9 +423,13 @@ class Gemma4ForCausalLM:
         if len(histories) < required:
             return
         view = ttnn.get_memory_view(self.generator.mesh, ttnn.BufferType.DRAM)
-        self._allocation_probe_active = {"before_bytes":view.total_bytes_allocated_per_bank * view.num_banks,
-            "banks":view.num_banks,"before_block_table":view.block_table,
-            "history_count":len(histories),"started":time.perf_counter()}
+        self._allocation_probe_active = {
+            "before_bytes": view.total_bytes_allocated_per_bank * view.num_banks,
+            "banks": view.num_banks,
+            "before_block_table": view.block_table,
+            "history_count": len(histories),
+            "started": time.perf_counter(),
+        }
         ttnn._ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
 
     def _allocation_probe_end(self):
@@ -274,23 +455,43 @@ class Gemma4ForCausalLM:
             peak[device] = max(peak.get(device, 0), delta[device])
         self._allocation_probe_count = getattr(self, "_allocation_probe_count", 0) + 1
         probe = self._allocation_probe_count
-        result = {"probe":probe,"before_bytes":state["before_bytes"],"after_bytes":after,
-            "history_count":state["history_count"],"delta_by_virtual_device":delta,
-            "peak_extra_by_virtual_device":peak,"event_count":len(events),
-            "boundary_reconciles":bool(delta) and all(v == after-state["before_bytes"] for v in delta.values()),
-            "scope":"one adapter prefill including sampling; common mesh allocator, not independent physical-chip samples",
-            "instrumented_host_seconds":time.perf_counter()-state["started"]}
+        result = {
+            "probe": probe,
+            "before_bytes": state["before_bytes"],
+            "after_bytes": after,
+            "history_count": state["history_count"],
+            "delta_by_virtual_device": delta,
+            "peak_extra_by_virtual_device": peak,
+            "event_count": len(events),
+            "boundary_reconciles": bool(delta) and all(v == after - state["before_bytes"] for v in delta.values()),
+            "scope": "one adapter prefill including sampling; common mesh allocator, not independent physical-chip samples",
+            "instrumented_host_seconds": time.perf_counter() - state["started"],
+        }
         # Preserve raw allocation events and the allocator endpoints for an
         # independent reconstruction. Chunked lines avoid log line truncation.
-        import base64, hashlib, zlib
-        raw = json.dumps({"summary":result,"before_block_table":state["before_block_table"],
-            "after_block_table":view.block_table,"events":events},separators=(",",":")).encode()
+        import base64
+        import hashlib
+        import zlib
+
+        raw = json.dumps(
+            {
+                "summary": result,
+                "before_block_table": state["before_block_table"],
+                "after_block_table": view.block_table,
+                "events": events,
+            },
+            separators=(",", ":"),
+        ).encode()
         encoded = base64.b64encode(zlib.compress(raw)).decode()
-        chunks = [encoded[i:i+12000] for i in range(0,len(encoded),12000)]
-        result.update(raw_sha256=hashlib.sha256(raw).hexdigest(),raw_bytes=len(raw),chunks=len(chunks))
-        print("KV_ALLOCATION_EVENT_PEAK " + json.dumps(result),flush=True)
+        chunks = [encoded[i : i + 12000] for i in range(0, len(encoded), 12000)]
+        result.update(raw_sha256=hashlib.sha256(raw).hexdigest(), raw_bytes=len(raw), chunks=len(chunks))
+        print("KV_ALLOCATION_EVENT_PEAK " + json.dumps(result), flush=True)
         for index, chunk in enumerate(chunks):
-            print("KV_ALLOCATION_EVENT_DATA " + json.dumps({"probe":probe,"index":index,"count":len(chunks),"base64_zlib":chunk}),flush=True)
+            print(
+                "KV_ALLOCATION_EVENT_DATA "
+                + json.dumps({"probe": probe, "index": index, "count": len(chunks), "base64_zlib": chunk}),
+                flush=True,
+            )
 
     def _sample_pool_memory(self, phase):
         # Sampled host allocator boundaries: never a device/lifetime peak.
@@ -312,16 +513,28 @@ class Gemma4ForCausalLM:
         self._pool_memory_host_s = getattr(self, "_pool_memory_host_s", 0.0) + time.perf_counter() - started
         if allocated > previous_high or self._pool_memory_samples % 64 == 0:
             trace_view = ttnn.get_memory_view(self.generator.mesh, ttnn.BufferType.TRACE)
-            print("KV_POOL_MEMORY_BOUNDARY " + json.dumps({"phase": phase, "banks": view.num_banks,
-                "allocated_per_bank": allocated, "free_per_bank": view.total_bytes_free_per_bank,
-                "trace_allocated_per_bank": trace_view.total_bytes_allocated_per_bank, "trace_banks": trace_view.num_banks,
-                "trace_free_per_bank": trace_view.total_bytes_free_per_bank,
-                "largest_contiguous_free_per_bank": view.largest_contiguous_bytes_free_per_bank,
-                "observed_high_per_bank": high, "samples": self._pool_memory_samples,
-                "query_host_s_total": self._pool_memory_host_s,
-                "boundary_attempts": self._pool_memory_attempts,
-                "sample_interval_per_phase": self._pool_memory_interval,
-                "scope": "sampled host boundaries, not device or lifetime peak"}), flush=True)
+            print(
+                "KV_POOL_MEMORY_BOUNDARY "
+                + json.dumps(
+                    {
+                        "phase": phase,
+                        "banks": view.num_banks,
+                        "allocated_per_bank": allocated,
+                        "free_per_bank": view.total_bytes_free_per_bank,
+                        "trace_allocated_per_bank": trace_view.total_bytes_allocated_per_bank,
+                        "trace_banks": trace_view.num_banks,
+                        "trace_free_per_bank": trace_view.total_bytes_free_per_bank,
+                        "largest_contiguous_free_per_bank": view.largest_contiguous_bytes_free_per_bank,
+                        "observed_high_per_bank": high,
+                        "samples": self._pool_memory_samples,
+                        "query_host_s_total": self._pool_memory_host_s,
+                        "boundary_attempts": self._pool_memory_attempts,
+                        "sample_interval_per_phase": self._pool_memory_interval,
+                        "scope": "sampled host boundaries, not device or lifetime peak",
+                    }
+                ),
+                flush=True,
+            )
 
     def _tables(self, cache, page_tables_per_layer, *, slots=None, audit_ranges=None):
         if cache is not self.cache:
@@ -350,7 +563,22 @@ class Gemma4ForCausalLM:
                 live = source[: len(indices)].to(torch.int32).clamp_min(0)
                 if live.numel() and int(live.max()) >= bound:
                     raise ValueError("Scheduler ID enters private warmup storage")
-                dest[indices, :cols] = live if factor == 1 else live * 2
+                if factor == 1:
+                    dest[indices, :cols] = live
+                elif not self._kv_full_pack:
+                    dest[indices, :cols] = live * 2
+                else:
+                    # Scheduler block b (256 tokens) -> native pages 2b, 2b+1
+                    # (128 tokens each) of the [2P,1,128,512] full view.
+                    width = min(cols, (dest.shape[1] + 1) // 2)
+                    if cols > width and live.numel() and bool((live[:, width:] > 0).any()):
+                        raise ValueError("Packed full table has live blocks beyond the context")
+                    packed_ids = live[:, :width]
+                    expanded = torch.stack((packed_ids * 2, packed_ids * 2 + 1), dim=2).reshape(len(indices), 2 * width)
+                    # The null block (0) stays native null page 0 in both halves.
+                    expanded[expanded == 1] = 0
+                    span = min(2 * width, dest.shape[1])
+                    dest[indices, :span] = expanded[:, :span]
                 translated[key] = dest
             result[i] = translated[key]
         return result
@@ -395,10 +623,16 @@ class Gemma4ForCausalLM:
         retain_prefill_history=None,
         **kwargs,
     ):
+        self._prefill_since_decode = True
         starts = [0] * len(prompt_lens) if start_pos is None else [int(x) for x in start_pos]
         lengths = [int(x) for x in prompt_lens]
         slots = list(range(len(lengths))) if empty_slots is None else list(empty_slots)
-        tables = self._tables(kv_cache, page_tables_per_layer, slots=slots, audit_ranges=[(max(0, (start // 128) * 128 - 1024), end) for start, end in zip(starts, lengths)])
+        tables = self._tables(
+            kv_cache,
+            page_tables_per_layer,
+            slots=slots,
+            audit_ranges=[(max(0, (start // 128) * 128 - 1024), end) for start, end in zip(starts, lengths)],
+        )
         self.entry = None
         # Prefix pages can be shared by several live requests. History belongs
         # to a request's stable state slot, never to a shared physical page.
@@ -408,6 +642,9 @@ class Gemma4ForCausalLM:
                 self.prefill_slot_keys[slot] = self.next_prefill_key
                 self.next_prefill_key += 1
             keys.append(self.prefill_slot_keys[slot])
+        reservation = _history_reservation.context()
+        if reservation is not None and reservation.scheduler is not None:
+            reservation.prepare_adapter(self, keys, slots, starts, lengths, retain_prefill_history)
         self._allocation_probe_begin()
         try:
             self._sample_pool_memory("before_prefill")
@@ -430,6 +667,322 @@ class Gemma4ForCausalLM:
         finally:
             self._allocation_probe_end()
 
+    def set_kv_layer_groups(self, layer_to_group):
+        """vLLM KV-cache group of every layer (plugin, before allocation). Layers of one group share a block table,
+        so the verify trace keeps one row table per group."""
+        groups = {}
+        for layer, group in enumerate(layer_to_group):
+            groups.setdefault(int(group), []).append(layer)
+        self._spec_groups = [groups[g] for g in sorted(groups)]
+
+    def _check_spec_groups(self):
+        groups = getattr(self, "_spec_groups", None)
+        if not groups or sorted(i for g in groups for i in g) != list(range(len(self.generator.model.layers))):
+            raise RuntimeError("Speculative verify needs the KV-cache layer groups from the plugin")
+        for g in groups:
+            kinds = {self.generator.model.layers[i].kind for i in g}
+            factors = {self._kv_alias_factors[i] for i in g}
+            bounds = {self._kv_alias_bounds[i] for i in g}
+            if len(kinds) != 1 or len(factors) != 1 or len(bounds) != 1:
+                raise RuntimeError("A KV-cache group mixes layer kinds or table translations")
+        return groups
+
+    @classmethod
+    def spec_plan(cls, vllm_config, max_num_seqs, k):
+        from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, DRAFTER_STATE_INTERNAL, SpecPlan, SpecReject
+
+        from models.demos.gemma4_31b_qb2.tt.generator import Gemma4Generator
+
+        if not spec_ngram_enabled():
+            return SpecReject("GEMMA_SPEC_NGRAM=1 is required for speculative decoding")
+        if max_num_seqs > 32:
+            return SpecReject("the verify step holds 32 token rows")
+        limit = Gemma4Generator.SPEC_MAX_CANDIDATES - 1
+        return SpecPlan(
+            effective_k=max(1, min(int(k), limit)),
+            lanes_per_request=1,
+            extra_bytes_per_seq=0,
+            extra_bytes_per_token=0,
+            accept_modes=(ACCEPT_MODE_ARGMAX_IDS,),
+            drafter_state=DRAFTER_STATE_INTERNAL,
+            supports_narrow_decode=True,
+        )
+
+    def propose_draft_tokens(self, num_drafts, committed, positions, accepted_counts, hidden=None, token_history=None):
+        """Host n-gram drafts from each request's full token history, cost-aware lengths (spec_ngram.py)."""
+        from vllm_tt_plugin.spec_decode import DraftOutput
+
+        from models.demos.gemma4_31b_qb2.tt import spec_ngram
+
+        rows = int(committed.shape[0])
+        histories = [None] * rows
+        if token_history is not None:
+            for row in range(rows):
+                if int(positions[row, 0]) < 0 or int(accepted_counts[row]) < 1:
+                    continue
+                histories[row] = token_history[row]
+                self.spec_stats["committed"] = self.spec_stats.get("committed", 0) + int(accepted_counts[row])
+                self.spec_stats["request_steps"] = self.spec_stats.get("request_steps", 0) + 1
+        t = time.perf_counter()
+        n_live = sum(h is not None for h in histories)
+        if n_live >= spec_ngram.ROW_BUDGET or (n_live and not spec_ngram.GATE.peek(n_live)):
+            # No room for a draft row (or the gate holds drafting off at this batch): skip the history scans so a
+            # full-batch plain step pays no drafting host time.
+            self._spec_prev = {}
+            step = getattr(self, "_gate_step", None)
+            if step is not None and step[3] is None:
+                # The step that just finished ran under the previous plan's mode.
+                step[0] = spec_ngram.batch_bucket(n_live) if step[0] is None else step[0]
+                step[1] = getattr(self, "_gate_mode", True)
+                step[3] = sum(int(accepted_counts[row]) for row, h in enumerate(histories) if h is not None)
+            self._gate_mode = False
+            if n_live < spec_ngram.ROW_BUDGET:
+                spec_ngram.GATE.mode(spec_ngram.batch_bucket(n_live), n_live)  # advance the block counter
+            self.spec_stats["propose_s"] += time.perf_counter() - t
+            self.spec_stats["proposals"] += 1
+            self.spec_stats["skipped"] = self.spec_stats.get("skipped", 0) + 1
+            return DraftOutput(
+                draft_token_ids=torch.zeros((rows, int(num_drafts)), dtype=torch.int32),
+                num_valid=torch.zeros(rows, dtype=torch.int32),
+            )
+        # Score each row's previous proposal against what that request committed since (acceptance of a
+        # deterministic draft == sampled token equals it, verified or not), then propose with the updated model.
+        prev = getattr(self, "_spec_prev", {})
+        for row, h in enumerate(histories):
+            old = prev.get(row)
+            if h is None or old is None:
+                continue
+            length, matched, full, tail = old
+            if len(h) > length and len(tail) and list(h[length - len(tail) : length]) == tail:
+                spec_ngram.MODEL.observe(matched, full, [int(x) for x in h[length : length + len(full)]])
+        live_rows = [row for row, h in enumerate(histories) if h is not None]
+        bucket = spec_ngram.batch_bucket(max(1, len(live_rows)))
+        step = getattr(self, "_gate_step", None)
+        if step is not None and step[3] is None:
+            # Tokens this step committed, credited to the mode its plan was made under.
+            step[0] = bucket if step[0] is None else step[0]
+            step[1] = getattr(self, "_gate_mode", True)
+            step[3] = sum(int(accepted_counts[row]) for row in live_rows)
+        mode = spec_ngram.GATE.mode(bucket, len(live_rows)) if live_rows else True
+        self._gate_mode = mode
+        drafts, valid, matched, full = spec_ngram.propose(
+            histories, int(num_drafts), wide=self.generator.spec_wide, allow=mode
+        )
+        self._spec_prev = {
+            row: (len(h), matched[row], full[row], [int(x) for x in h[-8:]])
+            for row, h in enumerate(histories)
+            if h is not None and full[row]
+        }
+        self.spec_stats["propose_s"] += time.perf_counter() - t
+        self.spec_stats["proposals"] += 1
+        self.spec_stats["drafted"] += int(sum(valid))
+        return DraftOutput(
+            draft_token_ids=torch.tensor(drafts, dtype=torch.int32).reshape(rows, int(num_drafts)),
+            num_valid=torch.tensor(valid, dtype=torch.int32),
+        )
+
+    def _verify(
+        self, tokens, start_pos, kv_cache, page_tables_per_layer, num_valid_drafts, sampling_params, slot_remap
+    ):
+        """One verify step: the [B, 1+K] candidate block becomes 32 token rows (see generator.spec_decode)."""
+        from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, PLACEHOLDER_TOKEN_ID, VerifyOutput
+
+        t = time.perf_counter()
+        batch, width = tokens.shape
+        first = start_pos[:, 0]
+        tables = self._tables(
+            kv_cache,
+            page_tables_per_layer,
+            audit_ranges=[(max(0, int(pos) - 1023), int(pos) + width) if int(pos) >= 0 else None for pos in first],
+        )
+        for row, position in enumerate(first):
+            if int(position) >= 0:
+                self.release_request(row if slot_remap is None else int(slot_remap[row]))
+        if sampling_params is None:
+            raise ValueError("Speculative verify samples on device; host sampling is not supported here")
+        # Per-request seeds follow the plain path: seed + position of the input token (_sampling).
+        params = self._sampling(sampling_params, self.max_batch_size, first.tolist(), reset_seed=True)
+        groups = self._check_spec_groups()
+        # Every live request needs its committed-token row and every draft the plugin counted (the accept walk reads
+        # columns 0..num_valid), so drafts are never dropped: a block wider than 32 rows (requests that joined
+        # decode after the proposal) runs as several 32-row passes, each request's candidates kept together.
+        need = [(b, 1 + int(num_valid_drafts[b])) for b in range(batch) if int(first[b]) >= 0]
+        if self.generator.spec_wide and sum(n for _, n in need) > 32 and all(n <= 2 for _, n in need) and batch <= 32:
+            return self._verify_wide(tokens, start_pos, kv_cache, tables, num_valid_drafts, params, need, t)
+        passes, current, used = [], [], 0
+        for b, n in need:
+            if used + n > 32:
+                passes.append(current)
+                current, used = [], 0
+            current.append((b, n))
+            used += n
+        if current:
+            passes.append(current)
+        ids = torch.full((batch, width), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+        rows_used = 0
+        for members in passes:
+            row_tokens = torch.zeros(32, dtype=torch.int64)
+            row_pos = torch.full((32,), -1, dtype=torch.int32)
+            row_slot = torch.zeros(32, dtype=torch.int32)
+            row_cand = torch.zeros(32, dtype=torch.int32)
+            row_params = {name: [params[name][0]] * 32 for name in ("top_k", "top_p", "temperature")}
+            row_params["seed"] = [0] * 32
+            where = {}
+            r = 0
+            for b, n in members:
+                for j in range(n):
+                    row_tokens[r] = int(tokens[b, j])
+                    row_pos[r] = int(start_pos[b, j])
+                    row_slot[r] = b
+                    row_cand[r] = j
+                    for name in ("top_k", "top_p", "temperature"):
+                        row_params[name][r] = params[name][b]
+                    row_params["seed"][r] = (int(params["seed"][b]) + j) % (2**31)
+                    where[(b, j)] = r
+                    r += 1
+            sampled = self.generator.spec_decode(
+                kv_cache,
+                tokens=row_tokens,
+                positions=row_pos,
+                slots=row_slot,
+                candidates=row_cand,
+                host_tables=tables,
+                groups=groups,
+                sampling_params=row_params,
+            )
+            for (b, j), row in where.items():
+                ids[b, j] = int(sampled[row])
+            rows_used += r
+        self.spec_stats["verify_passes"] += len(passes)
+        # The plain trace's resident inputs and sampler state are stale after a verify.
+        self._spec_dirty = True
+        self.spec_stats["verify_s"] += time.perf_counter() - t
+        self.spec_stats["verifies"] += 1
+        self.spec_stats["verify_rows"] += rows_used
+        self.spec_stats["verify_drafts"] = self.spec_stats.get("verify_drafts", 0) + int(
+            sum(n - 1 for members in passes for _, n in members)
+        )
+        self._verify_exit(len(need))
+        self._period_last = (
+            "verify",
+            t,
+            len(need),
+            rows_used,
+            max((n for _, n in need), default=1) > 4,
+            float(sum(int(first[b]) for b, _ in need)) / max(1, len(need)),
+        )
+        if self.spec_stats["verifies"] % 256 == 1:
+            self._log_spec_stats()
+        return VerifyOutput(spec_mode=ACCEPT_MODE_ARGMAX_IDS, argmax_ids=ids)
+
+    def _verify_wide(self, tokens, start_pos, kv_cache, tables, num_valid_drafts, params, need, t):
+        """64-row verify (decoder.decode_forward_wide): rows 0-31 = slots' committed tokens, rows 32-63 = their one
+        draft each. Rows map 1:1 to slots, so the slot page tables are used as in a plain decode."""
+        from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, PLACEHOLDER_TOKEN_ID, VerifyOutput
+
+        batch, width = tokens.shape
+        tok = torch.zeros(32, dtype=torch.int64)
+        dr = torch.zeros(32, dtype=torch.int64)
+        pos = torch.full((32,), -1, dtype=torch.int32)
+        valid = torch.zeros(32, dtype=torch.bool)
+        for b, n in need:
+            tok[b] = int(tokens[b, 0])
+            pos[b] = int(start_pos[b, 0])
+            if n == 2:
+                dr[b] = int(tokens[b, 1])
+                valid[b] = True
+        row_params = {name: list(params[name][:32]) for name in ("top_k", "top_p", "temperature", "seed")}
+        a, d = self.generator.spec_decode_wide(
+            kv_cache,
+            tokens=tok,
+            drafts=dr,
+            positions=pos,
+            draft_valid=valid,
+            host_tables=tables,
+            sampling_params=row_params,
+        )
+        ids = torch.full((batch, width), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+        for b, n in need:
+            ids[b, 0] = int(a[b])
+            if n == 2:
+                ids[b, 1] = int(d[b])
+        self._spec_dirty = True
+        self.spec_stats["verify_s"] += time.perf_counter() - t
+        self.spec_stats["verifies"] += 1
+        self.spec_stats["wide_verifies"] = self.spec_stats.get("wide_verifies", 0) + 1
+        self._verify_exit(len(need))
+        self.spec_stats["verify_rows"] += sum(n for _, n in need)
+        self.spec_stats["verify_drafts"] = self.spec_stats.get("verify_drafts", 0) + int(valid.sum())
+        if self.spec_stats["verifies"] % 256 == 1:
+            self._log_spec_stats()
+        return VerifyOutput(spec_mode=ACCEPT_MODE_ARGMAX_IDS, argmax_ids=ids)
+
+    @staticmethod
+    def _batch_bucket(b):
+        for hi in (1, 4, 8, 16, 24):
+            if b <= hi:
+                return hi
+        return 32
+
+    def _verify_exit(self, live):
+        # Host time between the end of one verify and the start of the next decode call (scheduler, accept walk,
+        # output processing, drafting): serial on verify steps, which give up the plain path's async overlap.
+        self._t_verify_exit = (time.perf_counter(), self._batch_bucket(live))
+
+    def _period_stamp(self, plain, start_pos):
+        """Feed spec_ngram.COST with plain-step and verify-step periods (entry to next entry), skipping any period
+        that contained a prefill."""
+        from models.demos.gemma4_31b_qb2.tt import spec_ngram
+
+        now = time.perf_counter()
+        last = getattr(self, "_period_last", None)
+        clean = not getattr(self, "_prefill_since_decode", False)
+        self._prefill_since_decode = False
+        step = getattr(self, "_gate_step", None)
+        if step is not None and clean and step[3] is not None:
+            # (bucket, mode, entry time, committed tokens of that step): that step's period ends here.
+            spec_ngram.GATE.record(step[0], step[1], step[3], now - step[2])
+        self._gate_step = [None, None, now, None]
+        if last is not None and clean:
+            period_ms = (now - last[1]) * 1000.0
+            if last[0] == "plain" and plain:
+                spec_ngram.COST.observe_plain(last[2], period_ms)
+            elif last[0] == "verify":
+                spec_ngram.COST.observe_verify(last[2], last[3], last[4], period_ms, last[5])
+        self._period_last = None
+        if plain:
+            sp = torch.as_tensor(start_pos)
+            first = sp if sp.dim() == 1 else sp[:, 0]
+            live = int((first >= 0).sum())
+            if live:
+                self._period_last = ("plain", now, live)
+
+    def _gap_stamp(self):
+        last = getattr(self, "_t_verify_exit", None)
+        if last is None:
+            return
+        self._t_verify_exit = None
+        gap = time.perf_counter() - last[0]
+        key = f"gap_b{last[1]}"
+        g = self.spec_stats.setdefault("host_gap", {})
+        n, s = g.get(key, (0, 0.0))
+        g[key] = (n + 1, s + gap)
+
+    def _log_spec_stats(self):
+        from models.demos.gemma4_31b_qb2.tt import spec_ngram
+
+        stats = dict(
+            self.spec_stats,
+            wall_s=time.time(),
+            acceptance=spec_ngram.MODEL.summary(),
+            cost=spec_ngram.COST.summary(),
+            gate=spec_ngram.GATE.summary(),
+        )
+        stats.update(
+            {"timing_" + k: round(v, 4) if isinstance(v, float) else v for k, v in self.generator.spec_timing.items()}
+        )
+        print("GEMMA_SPEC_STATS " + json.dumps(stats), flush=True)
+
     def decode_forward(
         self,
         tokens,
@@ -448,6 +1001,29 @@ class Gemma4ForCausalLM:
         slot_remap=None,
         **kwargs,
     ):
+        spec_mode = kwargs.pop("spec_mode", None)
+        num_valid_drafts = kwargs.pop("num_valid_drafts", None)
+        if spec_ngram_enabled():
+            self._gap_stamp()
+            self._period_stamp(spec_mode is None, start_pos)
+        kwargs.pop("accepted_counts", None)
+        if spec_mode is not None:
+            if kv_cache is not self.cache:
+                raise ValueError("Serving must use the cache allocated by vLLM")
+            return self._verify(
+                tokens, start_pos, kv_cache, page_tables_per_layer, num_valid_drafts, sampling_params, slot_remap
+            )
+        if self._spec_dirty:
+            # A verify replaced the sampler's per-row parameters/seeds and advanced every request past the plain
+            # trace's resident tokens and positions: reload all of them.
+            reload_inputs = True
+            reset_sampling_state = True
+            reload_sampling_params = True
+            self._spec_dirty = False
+        if spec_ngram_enabled():
+            self.spec_stats["plain_steps"] = self.spec_stats.get("plain_steps", 0) + 1
+            if self.spec_stats["plain_steps"] % 4096 == 1:
+                self._log_spec_stats()
         if "reset_batch" in kwargs:
             raise TypeError("decode_input_update_contract=1 requires explicit reload flags")
         if not enable_trace:
@@ -458,7 +1034,11 @@ class Gemma4ForCausalLM:
             raise ValueError("Serving must use the cache allocated by vLLM")
         sample = sampling_params is not None
         if reload_inputs:
-            tables = self._tables(kv_cache, page_tables_per_layer, audit_ranges=[(max(0, int(pos) - 1023), int(pos) + 1) if int(pos) >= 0 else None for pos in start_pos])
+            tables = self._tables(
+                kv_cache,
+                page_tables_per_layer,
+                audit_ranges=[(max(0, int(pos) - 1023), int(pos) + 1) if int(pos) >= 0 else None for pos in start_pos],
+            )
             # A row entering decode no longer needs its private prefill tail.
             # The plugin notifies slot moves after submission succeeds, so
             # histories still use source slots when a decode row is gathered.
@@ -471,7 +1051,11 @@ class Gemma4ForCausalLM:
         elif self.entry is None or self.generator.traces.get(id(kv_cache)) is not self.entry:
             raise ValueError("A retired decode trace requires current scheduler inputs")
         elif reload_page_table:
-            tables = self._tables(kv_cache, page_tables_per_layer, audit_ranges=[(max(0, int(pos) - 1023), int(pos) + 1) if int(pos) >= 0 else None for pos in start_pos])
+            tables = self._tables(
+                kv_cache,
+                page_tables_per_layer,
+                audit_ranges=[(max(0, int(pos) - 1023), int(pos) + 1) if int(pos) >= 0 else None for pos in start_pos],
+            )
             self.generator._tables(kv_cache, tables)
         if sample and (reload_sampling_params or reset_sampling_state):
             params = self._sampling(sampling_params, self.max_batch_size, start_pos, reset_seed=reset_sampling_state)
@@ -502,6 +1086,9 @@ class Gemma4ForCausalLM:
         pass
 
     def warmup_model_decode(self, kv_cache, enable_trace, **kwargs):
+        if spec_ngram_enabled():
+            # The generator captures the verify trace together with every plain decode trace capture.
+            self.generator.spec_groups = self._check_spec_groups()
         self.generator._tables(kv_cache, kv_cache.page_tables)
         self.generator.configure_sampling(batch=self.max_batch_size, temperature=0)
         self.entry = self.generator._entry(kv_cache)

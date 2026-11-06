@@ -18,8 +18,8 @@ arbitrary rollback into evicted tokens. Page-ID changes require live KV migratio
 import os
 
 import ttnn
-from models.demos.gemma4_31b_qb2.tt.kv_precision import selected_kv_dtypes
 from models.demos.gemma4_31b_qb2.tt.history_bank import HistoryTail
+from models.demos.gemma4_31b_qb2.tt.kv_precision import selected_kv_dtypes
 from models.demos.gemma4_31b_qb2.tt.sdpa_l1 import BLACKHOLE_L1_BYTES, full_sdpa_fp32_l1_end
 from models.demos.gpt_oss.tt.ccl import CCLManager
 
@@ -35,17 +35,38 @@ class MeshCCL(CCLManager):
         self.ccl_sub_device_id = ttnn.SubDeviceId(0)
 
 
-# Input cores, readers per DRAM bank, and K tiles per decode matmul block.
+# Input cores, readers per DRAM bank, and K tiles per decode matmul block. The K block fixes the accumulation
+# order; input cores (a K block may span several input shards) and readers per bank only move data, so they are
+# tuned per matmul for speed without changing results (measured bit-identical on QB2).
 DECODE_GEOMETRY = {
-    "qkv": (8, 2, 21),
+    "qkv": (56, 2, 21),
     "gate_up": (56, 2, 3),
-    "o": (8, 2, 8),
-    "down": (8, 2, 21),
-    # Shared gate/up (GEMMA_EXPERIMENT_SHARE_BF8_GATE_UP=1): one reader per bank keeps
-    # the packed matmul's per-worker work (21 N tiles, K blocks of 3) unchanged.
-    "gate": (56, 1, 3),
-    "up": (56, 1, 3),
+    "o": (8, 1, 8),
+    "down": (56, 2, 21),
+    # Shared gate/up (GEMMA_EXPERIMENT_SHARE_BF8_GATE_UP=1): three readers per bank keep the
+    # shared weight's 21-tile bank shards (7 N tiles per reader) and K blocks of 3.
+    "gate": (56, int(os.environ.get("GEMMA_GATE_UP_READERS", "3")), 3),
+    "up": (56, int(os.environ.get("GEMMA_GATE_UP_READERS", "3")), 3),
 }
+# Full-attention overrides (same K block and readers as the shared entry, so the weight layout is unchanged).
+DECODE_GEOMETRY_FULL = {"o": (32, 1, 8)}
+# Output storage cores per decode matmul (sets per_core_N). Independent of the input cores above, so the input
+# multicast geometry can change without changing the output shards consumed by the following ops.
+DECODE_OUTPUT_CORES = {"qkv": 8, "gate_up": 56, "o": 8, "down": 8, "gate": 56, "up": 56}
+
+
+def spec_wide_enabled():
+    """64-row speculative verify path (needs DRAM-sharded matmuls with per_core_M=2); opt-in GEMMA_SPEC_WIDE=1."""
+    value = os.environ.get("GEMMA_SPEC_WIDE", "0")
+    if value not in ("0", "1"):
+        raise ValueError("Invalid GEMMA_SPEC_WIDE")
+    return value == "1"
+
+
+# Wide (64-row) decode matmul geometry overrides: (input cores, readers per bank, K block). Gate/up keep the shared
+# BF8 shard layout (21 tiles per bank = 3 readers x 7 tiles); full-attention o needs its K block to be a whole in0
+# shard (16 tiles) for per_core_M > 1.
+WIDE_GEOMETRY = {"gate": (56, 3, 3), "up": (56, 3, 3)}
 
 
 def share_gate_up_enabled():
@@ -202,13 +223,21 @@ class Decoder:
         policy = os.environ.get("GEMMA_REPETITION_PRECISION_POLICY", "bf4")
         if policy not in ("bf4", "bf8", "late12", "mlp", "attention"):
             raise ValueError(f"Unknown repetition precision policy: {policy}")
+
         def projection_dtype(name):
-            use_bf8 = policy == "bf8" or (policy == "late12" and layer_idx >= 48) or (policy == "mlp" and name.startswith("mlp.")) or (policy == "attention" and name.startswith("self_attn."))
+            use_bf8 = (
+                policy == "bf8"
+                or (policy == "late12" and layer_idx >= 48)
+                or (policy == "mlp" and name.startswith("mlp."))
+                or (policy == "attention" and name.startswith("self_attn."))
+            )
             return ttnn.bfloat8_b if use_bf8 else ttnn.bfloat4_b
 
         def linear(name):
             return tensor(
-                sd[name + ".weight"].T, projection_dtype(name), dim=0 if name in ("self_attn.o_proj", "mlp.down_proj") else 1
+                sd[name + ".weight"].T,
+                projection_dtype(name),
+                dim=0 if name in ("self_attn.o_proj", "mlp.down_proj") else 1,
             )
 
         q, k = (sd["self_attn.q_proj.weight"], sd["self_attn.k_proj.weight"])
@@ -234,8 +263,12 @@ class Decoder:
             # projection, built directly in its final layout (no interleaved
             # temporary). Per device the columns equal the packed gate_up halves.
             self.gate, self.up = (
-                tensor(sd["mlp." + name + "_proj.weight"].T, projection_dtype("mlp." + name + "_proj"), dim=1,
-                       decode_only=name)
+                tensor(
+                    sd["mlp." + name + "_proj.weight"].T,
+                    projection_dtype("mlp." + name + "_proj"),
+                    dim=1,
+                    decode_only=name,
+                )
                 for name in ("gate", "up")
             )
             self.down = linear("mlp.down_proj")
@@ -314,6 +347,7 @@ class Decoder:
         pool = pools[signature]
         assert pool["mesh"] is mesh_device and pool["signature"] == signature
         self.decode_ar_slots = pool["slots"]
+        # The 64-row verify reduces its two 32-row halves with these same slots (no extra L1 scratch).
         self.decode_weights = {}
         dg = mesh_device.dram_grid_size()
         banks = dg.x * dg.y
@@ -350,7 +384,9 @@ class Decoder:
             owner = self.decode_weights["down"]
             assert self.down.dtype == owner.dtype == ttnn.bfloat8_b
             assert tuple(self.down.shape) == tuple(owner.shape) == (5376, 5376)
-            assert banks == 8 and tuple(owner.memory_config().shard_spec.shape) == (5376, 704)
+            down_readers = DECODE_GEOMETRY["down"][1]
+            down_width = (5376 + banks * down_readers * 32 - 1) // (banks * down_readers * 32) * down_readers * 32
+            assert banks == 8 and tuple(owner.memory_config().shard_spec.shape) == (5376, down_width)
             assert owner.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
             assert owner.memory_config().buffer_type == ttnn.BufferType.DRAM
             self.down = owner
@@ -409,6 +445,14 @@ class Decoder:
             assert self.runtime_positions.maximum_sequence == self.PREFILL_CHUNK
         self.decode_sdpa_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(*[8, 4]),
+            q_chunk_size=0,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+        # Sliding decode at 32 rows: the full grid gives each user more cores for its heads; measured bit-identical
+        # to the 8x4 grid at batch 32 (not at smaller batches, where the K range is split across cores).
+        self.decode_sdpa_sliding32 = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
             q_chunk_size=0,
             k_chunk_size=128,
             exp_approx_mode=False,
@@ -533,8 +577,17 @@ class Decoder:
         ):
             raise ValueError("Precise BF8 rows require actual 56-core L1 width shards [32,96]")
 
-    def _decode_reduce(self, x, name):
-        memory = self._mem(self.hidden_size, 28)
+    def _decode_reduce(self, x, name, rows=32):
+        if rows > 32:
+            # Wide verify: reduce each 32-row half with the plain decode's scratch slot (row-wise identical result).
+            flat = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            halves = []
+            for h in range(rows // 32):
+                part = ttnn.slice(flat, [0, 0, 32 * h, 0], [1, 1, 32 * h + 32, flat.shape[3]])
+                out = self._decode_reduce(part, name, rows=32)
+                halves.append(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))
+            return ttnn.to_memory_config(ttnn.concat(halves, dim=2), self._mem(self.hidden_size, 28, rows=rows))
+        memory = self._mem(self.hidden_size, 28, rows=rows)
         if not x.is_sharded():
             x = ttnn.to_memory_config(x, memory)
         slot = self.decode_ar_slots[name]
@@ -677,17 +730,36 @@ class Decoder:
 
         return ttnn.reshape(result, [1, 1, packed_rows, result.shape[-1]]) if native_batch else result
 
-    def _dlinear(self, x, name):
+    def _dlinear(self, x, name, rows=32):
+        if rows > 32 and name == "o" and not self.sliding:
+            # Full-attention o with 2 M tiles needs a whole-shard K block (16 vs the plain 8), which changes the
+            # accumulation order; run it per 32-row half to keep the plain decode's exact numerics.
+            flat = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            parts = [
+                ttnn.to_memory_config(
+                    self._dlinear(ttnn.slice(flat, [0, 0, 32 * h, 0], [1, 1, 32 * h + 32, flat.shape[3]]), name),
+                    ttnn.DRAM_MEMORY_CONFIG,
+                )
+                for h in range(rows // 32)
+            ]
+            return ttnn.concat(parts, dim=2)
         weight = self.decode_weights[name]
         kdim, ndim = weight.shape[-2], weight.shape[-1]
-        cores, readers, k_block = DECODE_GEOMETRY[name]
+        geometry = DECODE_GEOMETRY[name] if self.sliding else DECODE_GEOMETRY_FULL.get(name, DECODE_GEOMETRY[name])
+        cores, readers, k_block = geometry
+        assert readers == DECODE_GEOMETRY[name][1], "Decode weight layout follows DECODE_GEOMETRY readers"
+        out_cores = DECODE_OUTPUT_CORES[name]
+        if rows > 32:
+            # Multi-shard in0 blocks need per_core_M == 1: the wide verify keeps one in0 shard per K block.
+            key = "o_full" if (name == "o" and not self.sliding) else name
+            cores, readers, k_block = WIDE_GEOMETRY.get(key, (out_cores, readers, k_block))
         row = name in ("o", "down")
         staged = row and self.sliding
-        x = ttnn.to_memory_config(x, self._mem(kdim, cores))
+        x = ttnn.to_memory_config(x, self._mem(kdim, cores, rows=rows))
         config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=k_block,
-            per_core_M=1,
-            per_core_N=3 if staged else (ndim + cores * 32 - 1) // (cores * 32),
+            per_core_M=rows // 32,
+            per_core_N=3 if staged else (ndim + out_cores * 32 - 1) // (out_cores * 32),
             num_workers_per_dram_bank=readers,
         )
         y = ttnn.linear(
@@ -701,17 +773,19 @@ class Decoder:
         if staged:
             # Keep the BF16 projection in its 56-core owner until the native
             # precise BF8 pack. Direct BF8 matmul output has different rounding.
-            self._validate_precise_bf8_row(y, ttnn.bfloat16)
+            if rows == 32:
+                self._validate_precise_bf8_row(y, ttnn.bfloat16)
             shape, memory = tuple(y.shape), y.memory_config()
             y = ttnn.typecast(y, ttnn.bfloat8_b, memory_config=memory)
-            self._validate_precise_bf8_row(y, ttnn.bfloat8_b)
+            if rows == 32:
+                self._validate_precise_bf8_row(y, ttnn.bfloat8_b)
             if tuple(y.shape) != shape or y.memory_config() != memory:
                 raise ValueError("BF8 packing changed the projection's shape or shard ownership")
         return y
 
-    def _resnorm(self, x, name, decode):
+    def _resnorm(self, x, name, decode, rows=32):
         if decode:
-            return self._dnorm(x, name)
+            return self._dnorm(x, name, rows=rows)
         if x.shape[-1] == self.hidden_size:
             rows = x.padded_shape[-2]
             if rows > 128:
@@ -760,7 +834,7 @@ class Decoder:
             compute_kernel_config=self.compute,
         )
 
-    def _input_norm(self, x, name, decode):
+    def _input_norm(self, x, name, decode, rows=32):
         if not decode and name == "pre_feedforward_layernorm" and x.shape[-1] != self.hidden_size:
             # Place the larger gather output before its temporary local norm
             # output. The latter can then retire into the free tail needed by
@@ -772,7 +846,7 @@ class Decoder:
             )
             n = self._resnorm(x, name, False)
             return self._gather(n, output=output)
-        n = self._resnorm(x, name, decode)
+        n = self._resnorm(x, name, decode, rows=rows)
         return self._gather(n) if x.shape[-1] != self.hidden_size else n
 
     def _prefill_mlp(self, x, *, sequence_hint=None, batch=1):
@@ -795,20 +869,30 @@ class Decoder:
             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer_scalar)],
         )
 
-    def _decode_finish(self, residual, attention):
-        post = self._resnorm(self._decode_reduce(self._dlinear(attention, "o"), "o"), "post_attention_layernorm", True)
-        mem = self._mem(self.hidden_size, 28)
+    def _decode_finish(self, residual, attention, rows=32):
+        post = self._resnorm(
+            self._decode_reduce(self._dlinear(attention, "o", rows=rows), "o", rows=rows),
+            "post_attention_layernorm",
+            True,
+            rows=rows,
+        )
+        mem = self._mem(self.hidden_size, 28, rows=rows)
         residual = ttnn.to_memory_config(residual, mem)
         x = ttnn.add(residual, post, memory_config=mem, dtype=self.residual_dtype)
-        n = self._input_norm(x, "pre_feedforward_layernorm", True)
+        n = self._input_norm(x, "pre_feedforward_layernorm", True, rows=rows)
         if self.share_gate_up:
-            gate, up = self._dlinear(n, "gate"), self._dlinear(n, "up")
+            gate, up = self._dlinear(n, "gate", rows=rows), self._dlinear(n, "up", rows=rows)
         else:
+            if rows != 32:
+                raise ValueError("The wide verify path requires shared gate/up weights")
             packed = self._dlinear(n, "gate_up")
             gate, up = packed[..., :5376], packed[..., 5376:]
         product = ttnn.multiply(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.GELU_TANH])
         post = self._resnorm(
-            self._decode_reduce(self._dlinear(product, "down"), "down"), "post_feedforward_layernorm", True
+            self._decode_reduce(self._dlinear(product, "down", rows=rows), "down", rows=rows),
+            "post_feedforward_layernorm",
+            True,
+            rows=rows,
         )
         return ttnn.add(
             x,
@@ -834,8 +918,7 @@ class Decoder:
         tile_bytes = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048, ttnn.float32: 4096}
         grid = [11, 10]
         flexible_start = self.runtime_positions is not None
-        page_bytes = (page_table.padded_shape[1] * 4 if flexible_start
-                      else page_table.buffer_aligned_page_size())
+        page_bytes = page_table.padded_shape[1] * 4 if flexible_start else page_table.buffer_aligned_page_size()
         for chunk in eligible:
             end = full_sdpa_fp32_l1_end(
                 rows=q.shape[2],
@@ -868,12 +951,37 @@ class Decoder:
     def _concat_heads(self, attn):
         return ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    def _decode_rope(self, x, cos, sin):
-        # The native single-user RoPE path exposes its 32 padded head rows.
-        # SDPA derives the GQA ratio from logical Q heads: restore local head
-        # ownership before attention (8 Q heads, not 32 padding rows).
-        result = self._apply_decode_rope(x, cos, sin)
-        return ttnn.reshape(result, ttnn.Shape(list(x.shape)), ttnn.Shape(list(x.padded_shape)))
+    def decode_rope_tables(self, rope_positions, batch):
+        """Per-step cos/sin rows for decode RoPE, shared by every layer of this kind.
+
+        Returns (cos, sin, memory): [1,B,1,D] tables height-sharded one user per core (rows padded to a tile)
+        and the matching height-sharded memory for [1,B,heads,D] inputs. External fixed-slot schedulers may
+        use -1 positions to suppress cache/SDPA rows; their separate nonnegative RoPE indices avoid an
+        out-of-bounds lookup.
+        """
+        idx = ttnn.reshape(ttnn.typecast(rope_positions, ttnn.uint32), (1, batch))
+        grid = self.device.compute_with_storage_grid_size()
+        memory = ttnn.create_sharded_memory_config(
+            (32, self.head_dim),
+            ttnn.num_cores_to_corerangeset(batch, grid, True),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        tables = []
+        for table in (self.decode_cos, self.decode_sin):
+            rows = ttnn.embedding(idx, table, layout=ttnn.ROW_MAJOR_LAYOUT)
+            rows = ttnn.reshape(rows, (1, batch, 1, self.head_dim))
+            tables.append(ttnn.to_layout(rows, ttnn.TILE_LAYOUT, memory_config=memory))
+        return tables[0], tables[1], memory
+
+    def _decode_rope(self, x, rope, memory_config=None):
+        # HF rotate-half RoPE in decode mode: one user per core, cos/sin rows broadcast over the user's heads.
+        # Same per-element arithmetic as the transposed rotary_embedding path (rotate, *sin, *cos, add).
+        cos, sin, memory = rope
+        return ttnn.experimental.rotary_embedding_hf(
+            ttnn.to_memory_config(x, memory), cos, sin, is_decode_mode=True, memory_config=memory_config or memory
+        )
 
     def _prefill_qkv(self, x, start, *, batch=1, sequence_hint=None):
         tied = not self.sliding
@@ -1093,8 +1201,13 @@ class Decoder:
                     )
                 else:
                     attn = self.runtime_positions.full_sdpa(
-                        self, qq, kv_cache[0], kv_cache[1], pt,
-                        position=coordinate, program_config=cfg,
+                        self,
+                        qq,
+                        kv_cache[0],
+                        kv_cache[1],
+                        pt,
+                        position=coordinate,
+                        program_config=cfg,
                     )
             del qq, pt
             if self.sliding:
@@ -1212,8 +1325,17 @@ class Decoder:
         return (result, tails) if return_history else result
 
     def prefill_forward(
-        self, x, *, page_table, kv_cache, consume_input=False, start_pos=0, history=None,
-        return_history=False, tail_descriptor=False, fill_tables=None
+        self,
+        x,
+        *,
+        page_table,
+        kv_cache,
+        consume_input=False,
+        start_pos=0,
+        history=None,
+        return_history=False,
+        tail_descriptor=False,
+        fill_tables=None,
     ):
         """Prefill a page-aligned span, optionally retaining sliding history for a continuation."""
         if start_pos < 0 or start_pos % self.PAGE_SIZE:
@@ -1272,8 +1394,11 @@ class Decoder:
                     q = ttnn.typecast(q, ttnn.bfloat8_b)
                 sdpa_config = self._prefill_sdpa_config(q, kv_cache[0], pt, start=absolute_start)
                 length = inp.shape[2]
-                fill_pt = (fill_tables[start] if fill_tables is not None else
-                           pt[:, absolute_start // self.PAGE_SIZE : (absolute_start + length) // self.PAGE_SIZE])
+                fill_pt = (
+                    fill_tables[start]
+                    if fill_tables is not None
+                    else pt[:, absolute_start // self.PAGE_SIZE : (absolute_start + length) // self.PAGE_SIZE]
+                )
                 if fill_tables is not None:
                     assert batch == 1 and tuple(fill_pt.shape) == (1, length // self.PAGE_SIZE)
                 ttnn.experimental.paged_fill_cache(
@@ -1328,8 +1453,13 @@ class Decoder:
                         )
                     else:
                         attn = self.runtime_positions.full_sdpa(
-                            self, q, kv_cache[0], kv_cache[1], pt,
-                            position=absolute_start, program_config=sdpa_config,
+                            self,
+                            q,
+                            kv_cache[0],
+                            kv_cache[1],
+                            pt,
+                            position=absolute_start,
+                            program_config=sdpa_config,
                         )
                 if self.sliding:
                     if return_history and end == seq:
@@ -1346,7 +1476,9 @@ class Decoder:
                             tails = []
                             for index, value in enumerate((k, v)):
                                 live = value[:, :, : end - start, :]
-                                joined = ttnn.concat([previous_kv[index], live], dim=2) if previous_kv is not None else live
+                                joined = (
+                                    ttnn.concat([previous_kv[index], live], dim=2) if previous_kv is not None else live
+                                )
                                 tail_start = max(0, joined.shape[2] - (self.window + self.PAGE_SIZE))
                                 tails.append(joined[:, :, tail_start:, :])
                             next_history = tuple(tails)
@@ -1428,45 +1560,115 @@ class Decoder:
         result = ttnn.concat(users, dim=0) if batch > 1 else users[0]
         return (result, next_history) if return_history else result
 
-    def decode_forward(self, x, *, positions, page_table, kv_cache, rope_positions=None, cyclic_cache=True):
-        """One token per user; all runtime data inputs and outputs are device tensors."""
+    def decode_forward(
+        self,
+        x,
+        *,
+        positions,
+        page_table,
+        kv_cache,
+        rope_positions=None,
+        cyclic_cache=True,
+        update_positions=None,
+        rope=None,
+    ):
+        """One token per row; all runtime data inputs and outputs are device tensors.
+
+        Speculative verify (update_positions given): several rows may belong to one request (its committed token
+        and draft candidates at consecutive positions, each row with a copy of the request's page-table row).
+        Rows of one request write K/V into the same cache tile, so the cache update runs once per candidate index
+        j with update_positions[j] holding only the rows of candidate j (-1 elsewhere): within one update call
+        every written tile has a single writer. All writes precede attention, so candidate j attends to the
+        candidates before it. SDPA itself is unchanged: each row reads its request's history up to its own
+        position (the K/V of a request is read once per candidate row).
+        """
         batch = x.shape[2]
         assert x.shape[0] == x.shape[1] == 1 and x.shape[3] == self.residual_width
         assert 1 <= batch <= 32 and page_table.shape[0] == batch and (positions.shape[0] == batch)
         normalized = self._input_norm(x, "input_layernorm", True)
         fused = self._dlinear(normalized, "qkv")
+        ttnn.deallocate(normalized)
+        joined = self._decode_attention(
+            fused,
+            batch,
+            positions=positions,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            rope_positions=rope_positions,
+            cyclic_cache=cyclic_cache,
+            update_positions=update_positions,
+            rope=rope,
+        )
+        return self._decode_finish(x, joined)
+
+    def decode_forward_wide(self, x, *, halves, page_table, kv_cache, cyclic_cache=True):
+        """64-row speculative verify: rows 0-31 are the 32 slots' committed tokens, rows 32-63 their (single) draft
+        tokens, so row r and row 32+r share slot r's page-table row. Matmuls, norms, all-reduces and residual ops run
+        on all 64 rows (DRAM-sharded matmuls at per_core_M=2 read each weight once); attention runs per 32-row half
+        with the plain decode ops. halves: two (positions, rope_positions, update_positions) tuples. The first half
+        writes K/V before the second half attends, so a draft row sees its slot's committed-token K/V."""
+        assert tuple(x.shape) == (1, 1, 64, self.residual_width)
+        normalized = self._input_norm(x, "input_layernorm", True, rows=64)
+        fused = self._dlinear(normalized, "qkv", rows=64)
+        ttnn.deallocate(normalized)
+        spec = fused.memory_config().shard_spec
+        half_mem = ttnn.MemoryConfig(
+            fused.memory_config().memory_layout,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(spec.grid, (32, spec.shape[1]), spec.orientation),
+        )
+        flat = ttnn.to_memory_config(fused, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(fused)
+        joined = []
+        for h, (positions, rope_positions, update_positions) in enumerate(halves):
+            part = ttnn.slice(flat, [0, 0, 32 * h, 0], [1, 1, 32 * h + 32, flat.shape[3]])
+            part = ttnn.to_memory_config(part, half_mem)
+            out = self._decode_attention(
+                part,
+                32,
+                positions=positions,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                rope_positions=rope_positions,
+                cyclic_cache=cyclic_cache,
+                update_positions=update_positions,
+            )
+            joined.append(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))
+        attention = ttnn.concat(joined, dim=2)
+        return self._decode_finish(x, attention, rows=64)
+
+    def _decode_attention(
+        self,
+        fused,
+        batch,
+        *,
+        positions,
+        page_table,
+        kv_cache,
+        rope_positions=None,
+        cyclic_cache=True,
+        update_positions=None,
+        rope=None,
+    ):
+        """Decode attention for up to 32 rows from the fused QKV projection; returns the concatenated heads."""
         spec = fused.memory_config().shard_spec
         assert spec.shape[1] * spec.grid.num_cores() == fused.shape[-1], "QKV head reader requires exact output shards"
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             fused, num_heads=8, num_kv_heads=self.kv_heads, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         )
         ttnn.deallocate(fused)
-        ttnn.deallocate(normalized)
         cache_mem = k.memory_config()
         head_mem = ttnn.L1_MEMORY_CONFIG
         if batch != 1:
             q, k, v = (ttnn.to_memory_config(t, head_mem) for t in (q, k, v))
-        # External fixed-slot schedulers may use -1 to suppress cache/SDPA rows.
-        # Their separate nonnegative RoPE indices avoid an out-of-bounds lookup.
-        idx = ttnn.reshape(
-            ttnn.typecast(positions if rope_positions is None else rope_positions, ttnn.uint32), (1, batch)
-        )
-        # A full32-index row selects the embedding kernel with native TILE
-        # output, avoiding separate small tilize operations.
-        idx = ttnn.pad(idx, [(0, 0), (0, 32 - batch)], value=0)
-        cos = ttnn.embedding(idx, self.decode_cos, layout=ttnn.TILE_LAYOUT)
-        sin = ttnn.embedding(idx, self.decode_sin, layout=ttnn.TILE_LAYOUT)
-        # Explicit padded shapes crop logical rows without a device copy.
-        logical = ttnn.Shape([1, 1, batch, self.head_dim])
-        padded = ttnn.Shape([1, 1, 32, self.head_dim])
-        cos = ttnn.reshape(cos, logical, padded)
-        sin = ttnn.reshape(sin, logical, padded)
-        q = self._decode_rope(self._norm(q, "self_attn.q_norm"), cos, sin)
+        if rope is None:
+            rope = self.decode_rope_tables(positions if rope_positions is None else rope_positions, batch)
+        q = self._decode_rope(self._norm(q, "self_attn.q_norm"), rope)
         if not self.sliding:
             v = self._norm(v)
-            k = self._decode_rope(ttnn.multiply(v, self.norms["self_attn.k_norm"]), cos, sin)
+            k = self._decode_rope(ttnn.multiply(v, self.norms["self_attn.k_norm"]), rope, cache_mem)
         else:
-            k = self._decode_rope(self._norm(k, "self_attn.k_norm"), cos, sin)
+            k = self._decode_rope(self._norm(k, "self_attn.k_norm"), rope, cache_mem)
             v = self._norm(v)
         k = ttnn.to_memory_config(k, cache_mem)
         # Fused cache update requires disjoint K/V cores. K occupies rows0-3
@@ -1484,25 +1686,26 @@ class Decoder:
         v = ttnn.to_memory_config(v, vmem)
         bounded = cyclic_cache and self.sliding and page_table.padded_shape[1] > kv_cache[0].shape[0]
         modulo = {"cache_position_modulo": self.SLIDING_WINDOW_PAGES * self.PAGE_SIZE} if bounded else {}
-        if bounded or kv_cache[0].dtype != kv_cache[1].dtype:
-            # Mixed precision cannot share the fused factory data format.
-            # Fused update still enforces logical pages <= physical pages.
-            # Native separate updates support a bounded pool explicitly. The
-            # documented cyclic table repeats its first nine private pages.
-            ttnn.experimental.paged_update_cache(
-                kv_cache[0], k, update_idxs_tensor=positions, page_table=page_table, **modulo
-            )
-            ttnn.experimental.paged_update_cache(
-                kv_cache[1], v, update_idxs_tensor=positions, page_table=page_table, **modulo
-            )
-        else:
-            ttnn.experimental.paged_fused_update_cache(
-                kv_cache[0], k, kv_cache[1], v, update_idxs_tensor=positions, page_table=page_table
-            )
+        for update_idxs in [positions] if update_positions is None else update_positions:
+            if bounded or kv_cache[0].dtype != kv_cache[1].dtype:
+                # Mixed precision cannot share the fused factory data format.
+                # Fused update still enforces logical pages <= physical pages.
+                # Native separate updates support a bounded pool explicitly. The
+                # documented cyclic table repeats its first nine private pages.
+                ttnn.experimental.paged_update_cache(
+                    kv_cache[0], k, update_idxs_tensor=update_idxs, page_table=page_table, **modulo
+                )
+                ttnn.experimental.paged_update_cache(
+                    kv_cache[1], v, update_idxs_tensor=update_idxs, page_table=page_table, **modulo
+                )
+            else:
+                ttnn.experimental.paged_fused_update_cache(
+                    kv_cache[0], k, kv_cache[1], v, update_idxs_tensor=update_idxs, page_table=page_table
+                )
         ttnn.deallocate(k)
         ttnn.deallocate(v)
         q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
-        sdpa_config = self.decode_sdpa_config
+        sdpa_config = self.decode_sdpa_sliding32 if self.sliding and batch == 32 else self.decode_sdpa_config
         if not self.sliding:
             horizon = page_table.shape[1] * self.PAGE_SIZE
             # The maximum-capacity sweep slightly favors K128; preserve K64
@@ -1550,25 +1753,25 @@ class Decoder:
         joined = ttnn.reshape(
             joined, ttnn.Shape([1, 1, batch, joined.shape[3]]), ttnn.Shape([1, 1, 32, joined.shape[3]])
         )
-        return self._decode_finish(x, joined)
+        return joined
 
-    def _mem(self, width, cores):
+    def _mem(self, width, cores, rows=32):
         grid = self.device.compute_with_storage_grid_size()
         # Rectangular grids keep RMSNorm's multicast contract explicit.
         widths = [i for i in range(1, grid.x + 1) if cores % i == 0 and cores // i <= grid.y]
         gx = max(widths) if widths else grid.x
         core_grid = ttnn.CoreGrid(x=gx, y=cores // gx) if widths else ttnn.num_cores_to_corerangeset(cores, grid, True)
         return ttnn.create_sharded_memory_config(
-            (32, ((width + cores * 32 - 1) // (cores * 32)) * 32),
+            (rows, ((width + cores * 32 - 1) // (cores * 32)) * 32),
             core_grid,
             ttnn.ShardStrategy.WIDTH,
             ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
 
-    def _dnorm(self, x, name):
+    def _dnorm(self, x, name, rows=32):
         cores = 28
-        mem = self._mem(self.hidden_size, cores)
+        mem = self._mem(self.hidden_size, cores, rows=rows)
         x = ttnn.to_memory_config(x, mem)
         block = self.hidden_size // cores // 32
         sub = max(i for i in range(1, 5) if block % i == 0)
@@ -1576,7 +1779,7 @@ class Decoder:
         cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[grid.x + 1, grid.y + 1],
             subblock_w=sub,
-            block_h=1,
+            block_h=rows // 32,
             block_w=block,
             inplace=False,
         )
@@ -1639,28 +1842,3 @@ class Decoder:
             compute_kernel_config=self.compute,
             memory_config=ttnn.L1_MEMORY_CONFIG if small_l1 else ttnn.DRAM_MEMORY_CONFIG,
         )
-
-    def _apply_decode_rope(self, x, cos, sin):
-        batch = x.shape[1]
-        cos = ttnn.reshape(cos, (1, 1, batch, self.head_dim))
-        sin = ttnn.reshape(sin, (1, 1, batch, self.head_dim))
-        if batch == 1:
-            return ttnn.experimental.rotary_embedding(
-                x,
-                cos,
-                sin,
-                token_index=0,
-                memory_config=(ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG if x.shape[2] != 32 else (ttnn.DRAM_MEMORY_CONFIG)),
-            )
-        # Interleaved decode Q must reside in DRAM for SDPA. Write the
-        # required transpose there directly; K can remain in L1 until update.
-        result = ttnn.transpose(
-            ttnn.experimental.rotary_embedding(ttnn.transpose(x, 1, 2), cos, sin),
-            1,
-            2,
-            memory_config=(ttnn.DRAM_MEMORY_CONFIG if (x.shape[2] == 32) else x.memory_config()),
-        )
-        result = ttnn.reshape(
-            result, ttnn.Shape([1, batch, x.shape[2], self.head_dim]), ttnn.Shape([1, batch, 32, self.head_dim])
-        )
-        return result

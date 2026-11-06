@@ -6,6 +6,7 @@ The optimized loop replays two traces. Only the sampling trace writes the next
 token; position advances in the model trace. Host sampling is opt-in compatibility.
 """
 
+import gemma_history_reservation as _history_reservation
 import json
 import math
 import os
@@ -63,6 +64,18 @@ class Gemma4Generator:
         self.initial_capacity = max_seq_len
         self.states = {}
         self.traces = {}
+        # Speculative verify traces, keyed by id(CacheState); see spec_decode().
+        self.spec_traces = {}
+        self.spec_inputs = {}
+        self.spec_timing = {}
+        # Table groups for the verify trace; set by the serving adapter when speculation is enabled.
+        self.spec_groups = None
+        # 64-row verify (decoder.decode_forward_wide), opt-in GEMMA_SPEC_WIDE=1 with the per_core_M=2 matmul runtime.
+        from models.demos.gemma4_31b_qb2.tt.decoder import spec_wide_enabled
+
+        self.spec_wide = spec_wide_enabled()
+        self.wide_inputs = {}
+        self.wide_traces = {}
         # Keep explicit decode/sampler IO across conservative trace retirement.
         # The next capture gets a new entry object, so old handles stay invalid.
         self._entry_storage = None
@@ -328,6 +341,9 @@ class Gemma4Generator:
         """
         if not 1 <= batch <= 32:
             raise ValueError("Expected batch1..32")
+        # Any reconfiguration (plain or verify) invalidates what a verify last uploaded to the shared sampler.
+        for shared in list(getattr(self, "spec_inputs", {}).values()) + list(getattr(self, "wide_inputs", {}).values()):
+            shared["last"].pop("params", None)
 
         def rows(value):
             values = list(value) if isinstance(value, (list, tuple)) else [value] * batch
@@ -426,12 +442,18 @@ class Gemma4Generator:
         if os.environ.get("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE", "0") != "0":
             raise RuntimeError("Program-cache allocations must remain tracked")
         pool_profile = os.environ.get("GEMMA_SERIAL_PREPARED_POOL_PROFILE", "f606208")
-        c32_profiles = {"c32a24_f262144": (24, "262144"), "c32a20_f327680": (20, "327680")}
+        c32_profiles = {"c32a24_f262144": (24, "262144"), "c32a20_f327680": (20, "327680"), "c32a24_f458752": (24, "458752"), "c32a32_p2_f412672": (32, "412672"), "c32a32_p2_f443392": (32, "443392"), "c32a32_p2_f458752": (32, "458752"), "c32a32_p2_f626688": (32, "626688")}
         c32_profile = pool_profile in c32_profiles
         expected_batch = 32 if c32_profile else 16
-        expected_history = c32_profiles[pool_profile][0] if c32_profile else 16
+        expected_admission = c32_profiles[pool_profile][0] if c32_profile else 16
+        expected_history = _history_reservation.serving_history_capacity(
+            batch=state.batch, admitted=expected_admission,
+            capacity=state.capacity)
+        if _history_reservation.bank_mode() is not None and (
+                not getattr(state, "vllm_owned", False) or not hasattr(state, "serving_admission_limit")):
+            raise RuntimeError("Reduced prepared history requires explicit serving state")
         if c32_profile and (
-                getattr(state, "serving_admission_limit", None) != expected_history
+                getattr(state, "serving_admission_limit", None) != expected_admission
                 or os.environ.get("GEMMA_EXPERIMENT_KV_POOL_TOKENS") != c32_profiles[pool_profile][1]
                 or os.environ.get("GEMMA_EXPERIMENT_SHARE_BF8_SLIDING_QKV") != "1"
                 or os.environ.get("GEMMA_EXPERIMENT_SHARE_BF8_DOWN") != "1"
@@ -446,7 +468,7 @@ class Gemma4Generator:
                 or self._serving_prefill_prepared_state is not None):
             raise RuntimeError("Experimental preparation requires fresh full60 declared-width serial state")
         pool_profile = os.environ.get("GEMMA_SERIAL_PREPARED_POOL_PROFILE", "f606208")
-        pool_rows = {"f606208": 6128, "f262144": 3440, "f311296": 3824, "f393216": 4464, "c32a24_f262144": 3832, "c32a20_f327680": 4164}
+        pool_rows = {"f606208": 6128, "f262144": 3440, "f311296": 3824, "f393216": 4464, "c32a24_f262144": 3832, "c32a20_f327680": 4164, "c32a24_f458752": 5368, "c32a32_p2_f412672": 5368, "c32a32_p2_f443392": 5608, "c32a32_p2_f458752": 5728, "c32a32_p2_f626688": 7040}
         if pool_profile not in pool_rows:
             raise RuntimeError("Unsupported serial prepared alias pool profile")
         if pool_profile == "f311296" and (
@@ -558,8 +580,12 @@ class Gemma4Generator:
         keys = kwargs.get("history_keys")
         if bank is not None and keys is not None and (len(keys) != len(kwargs.get("prompt_lens", ())) or len(set(keys)) != len(keys)):
             raise ValueError("Expected distinct stable history keys, one per prefill row")
-        if bank is not None and keys is not None and len(set(bank.leases) | set(keys)) > len(bank.roots):
-            raise RuntimeError("Live plus incoming history owners exceed configured capacity")
+        if bank is not None and keys is not None:
+            reservation = _history_reservation.context()
+            if reservation is not None and reservation.scheduler is not None:
+                _history_reservation.sequential_model_preflight(state, keys, kwargs.get("start_positions"), kwargs.get("prompt_lens"), kwargs.get("retain_prefill_history"))
+            elif len(set(bank.leases) | set(keys)) > len(bank.roots):
+                raise RuntimeError("Live plus incoming history owners exceed configured capacity")
         try:
             maximum = int(os.environ.get("GEMMA_BATCH_PREFILL_MAX_BATCH", "1"))
             if maximum > 1 and len(kwargs.get("prompt_lens", ())) > 1 and not kwargs.get("return_all_logits", False):
@@ -1032,6 +1058,10 @@ class Gemma4Generator:
             return self.traces[key]
         trace_entry_start = time.perf_counter()
         self._retire_traces()
+        if self.spec_groups is not None:
+            self._spec_alloc_inputs(state, self.spec_groups)
+            if self.spec_wide:
+                self._wide_alloc_inputs(state)
         cache_ids = tuple(id(t) for pair in state.kv for t in pair)
         table_ids = {k: id(v) for k, v in state.device_tables.items()}
         cache_buffer_ids = tuple(t.buffer_unique_id() for pair in state.kv for t in pair)
@@ -1119,6 +1149,11 @@ class Gemma4Generator:
         if programs_before != programs_after:
             raise RuntimeError("Native program cache grew during trace capture")
         self.traces[key] = entry
+        if self.spec_groups is not None:
+            # The verify trace lives and retires with the plain decode trace.
+            self._spec_entry(state, self.spec_groups)
+            if self.spec_wide:
+                self._wide_entry(state)
         if (self._serving_prefill_prepared_state is state and self._serving_prefill_has_real_work
                 and self._prepared_prefill_state is None):
             self.enable_prepared_prefill_trace_retention(state)
@@ -1321,13 +1356,306 @@ class Gemma4Generator:
     def _retire_traces(self):
         if self._prepared_prefill_state is not None:
             raise RuntimeError("Prepared trace retention forbids implicit retirement; close explicitly")
-        if self.traces:
+        if self.traces or self.spec_traces or self.wide_traces:
             ttnn.synchronize_device(self.mesh)
             self.counters["synchronizations"] += 1
-        for entry in self.traces.values():
+        for entry in list(self.traces.values()) + list(self.spec_traces.values()) + list(self.wide_traces.values()):
             for name in ("model_trace", "sampling_trace"):
                 ttnn.release_trace(self.mesh, entry[name])
         self.traces.clear()
+        self.spec_traces.clear()
+        self.wide_traces.clear()
+
+    # ------------------------------------------------------------------ speculative verify
+    # A verify step decodes 32 token rows like a plain step, but several rows can belong to one request: its last
+    # committed token (candidate 0) and up to SPEC_MAX_CANDIDATES-1 draft tokens at the following positions. Each
+    # row carries a copy of its request's page-table row and its own position, so attention, RoPE and sampling are
+    # the plain per-row operations. Only the K/V write is split by candidate index (decoder.decode_forward).
+    # Every row is sampled with its request's own top-k/top-p/temperature and a seed of request-seed + position, the
+    # same per-position seed a plain decode uses. With deterministic drafts, accepting while the sampled token
+    # equals the draft is exactly speculative sampling (acceptance probability p(draft)), so verification is
+    # lossless for sampled requests, not only for greedy ones.
+    SPEC_MAX_CANDIDATES = int(os.environ.get("GEMMA_SPEC_MAX_CANDIDATES", "8"))
+    # Verify traces are captured for these candidate widths (each splits the K/V write into P update calls per
+    # layer, ~+0.9 ms at P=4 and ~+3 ms at P=8 per step); a step uses the narrowest width that holds its drafts.
+    SPEC_WIDTHS = tuple(sorted({min(4, SPEC_MAX_CANDIDATES), SPEC_MAX_CANDIDATES}))
+
+    def _spec_alloc_inputs(self, state, groups):
+        """Persistent verify inputs, shared by all widths of this state (one set of host uploads per step).
+
+        Must exist before any decode trace is captured: a trace's intermediate buffers are free memory to the
+        allocator after capture, so a persistent tensor allocated later can sit inside them and be overwritten
+        whenever that trace replays (seen as a device hang when a verify read clobbered page tables).
+        """
+        shared = self.spec_inputs.get(id(state))
+        if shared is not None and shared["groups"] == groups:
+            return shared
+        if self.traces or self.spec_traces:
+            raise RuntimeError("Verify inputs must be allocated before any decode trace is captured")
+        width = state.capacity // 128
+        shared = {
+            "groups": groups,
+            "tokens": self._upload(torch.zeros(1, 1, 1, 32, dtype=torch.int32), ttnn.uint32),
+            # rows: 0 positions, 1 RoPE positions, 2.. update positions of candidate 0..P_max-1
+            "packed": self._upload(torch.full((2 + self.SPEC_MAX_CANDIDATES, 32), -1, dtype=torch.int32)),
+            "group_tables": [self._upload(torch.zeros(32, width, dtype=torch.int32)) for _ in groups],
+            "logits": self.model.tensor(torch.zeros(1, 1, 32, self.model.config.vocab_size), dim=3,
+                                        dtype=ttnn.bfloat16),
+            "last": {},
+        }
+        self.spec_inputs[id(state)] = shared
+        return shared
+
+    def _spec_entry(self, state, groups, P=None):
+        """Capture (once per cache state and width P) the 32-row verify model trace and its sampling trace.
+
+        groups: list of lists of page-table keys (layer index or layer kind) that share one table; the verify
+        trace reads one [32, W] row table per group. Per-step scalar inputs (positions, RoPE positions and the
+        per-candidate update positions) arrive in one packed int32 upload and are sliced on device in the trace.
+        """
+        if P is None:
+            for width in self.SPEC_WIDTHS:
+                self._spec_entry(state, groups, width)
+            return self.spec_traces[(id(state), self.SPEC_WIDTHS[-1])]
+        key = (id(state), P)
+        entry = self.spec_traces.get(key)
+        cache_ids = tuple(id(t) for pair in state.kv for t in pair)
+        if entry is not None:
+            if entry["cache_ids"] != cache_ids or entry["groups"] != groups:
+                raise ValueError("Speculative trace was captured for different cache tensors or table groups")
+            return entry
+        start = time.perf_counter()
+        shared = self._spec_alloc_inputs(state, groups)
+        entry = dict(shared, state=state, cache_ids=cache_ids, P=P)
+        tables = {k: shared["group_tables"][g] for g, keys in enumerate(groups) for k in keys}
+        packed = shared["packed"]
+
+        def row(i):
+            return ttnn.reshape(ttnn.slice(packed, [i, 0], [i + 1, 32]), (32,))
+
+        def model_step():
+            positions = row(0)
+            rope = row(1)
+            updates = [row(2 + j) for j in range(P)]
+            out = self.model.decode_device(
+                shared["tokens"], positions, page_tables=tables, kv_cache=state.kv, batch=32,
+                rope_positions=rope, update_positions=updates)
+            ttnn.copy(out, shared["logits"])
+
+        def sample_step():
+            self.sampler(shared["logits"], tt_out_tok=shared["tokens"])
+
+        # Warm with every row inactive (position -1: no cache write, no attention row), then capture. The packed
+        # inputs are shared by all widths and may still hold the last verify's positions: reset them first, or
+        # the eager warm-up would rewrite committed K/V.
+        self._refresh(torch.full((2 + self.SPEC_MAX_CANDIDATES, 32), -1, dtype=torch.int32), packed,
+                      "position_refreshes")
+        logger.info(f"Warming speculative verify trace P={P}")
+        model_step()
+        saved_seeds = ttnn.clone(self.sampler.seeds_tt_tensor)
+        sample_step()
+        ttnn.copy(saved_seeds, self.sampler.seeds_tt_tensor)
+        ttnn.synchronize_device(self.mesh)
+        ttnn.deallocate(saved_seeds)
+        programs_before = self.mesh.num_program_cache_entries()
+        self.mesh.set_program_cache_misses_allowed(False)
+        try:
+            entry["model_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            model_step()
+            ttnn.end_trace_capture(self.mesh, entry["model_trace"], cq_id=0)
+            entry["sampling_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            sample_step()
+            ttnn.end_trace_capture(self.mesh, entry["sampling_trace"], cq_id=0)
+        finally:
+            # Prepared prefill retention keeps program-cache misses forbidden for the rest of the server's life.
+            self.mesh.set_program_cache_misses_allowed(self._prepared_prefill_state is None)
+        if self.mesh.num_program_cache_entries() != programs_before:
+            raise RuntimeError("Native program cache grew during speculative trace capture")
+        self.spec_traces[key] = entry
+        logger.info("SPEC_TRACE_ENTRY_COST " + json.dumps({"seconds": time.perf_counter() - start, "P": P,
+                                                             "groups": len(groups)}))
+        return entry
+
+    def _wide_alloc_inputs(self, state):
+        shared = self.wide_inputs.get(id(state))
+        if shared is not None:
+            return shared
+        if self.traces or self.spec_traces or self.wide_traces:
+            raise RuntimeError("Wide verify inputs must be allocated before any decode trace is captured")
+        vocab = self.model.config.vocab_size
+        shared = {
+            "tokens": [self._upload(torch.zeros(1, 1, 1, 32, dtype=torch.int32), ttnn.uint32) for _ in range(2)],
+            # rows: 0 committed positions, 1 committed RoPE positions, 2 draft positions, 3 draft RoPE positions
+            "packed": self._upload(torch.full((4, 32), -1, dtype=torch.int32)),
+            "logits": [self.model.tensor(torch.zeros(1, 1, 32, vocab), dim=3, dtype=ttnn.bfloat16) for _ in range(2)],
+            "last": {},
+        }
+        self.wide_inputs[id(state)] = shared
+        return shared
+
+    def _wide_entry(self, state):
+        key = id(state)
+        entry = self.wide_traces.get(key)
+        if entry is not None:
+            return entry
+        start = time.perf_counter()
+        shared = self._wide_alloc_inputs(state)
+        packed = shared["packed"]
+
+        def row(i):
+            return ttnn.reshape(ttnn.slice(packed, [i, 0], [i + 1, 32]), (32,))
+
+        def model_step():
+            halves = [(row(0), row(1), None), (row(2), row(3), None)]
+            outs = self.model.decode_device_wide(shared["tokens"][0], shared["tokens"][1], halves=halves,
+                                                 page_tables=state.device_tables, kv_cache=state.kv)
+            for out, dest in zip(outs, shared["logits"]):
+                ttnn.copy(out, dest)
+
+        def sample_step():
+            # Draft rows sit one position after their slot's committed row: seed + 1.
+            self.sampler(shared["logits"][0], tt_out_tok=shared["tokens"][0])
+            ttnn.plus_one(self.sampler.seeds_tt_tensor)
+            self.sampler(shared["logits"][1], tt_out_tok=shared["tokens"][1])
+
+        self._refresh(torch.full((4, 32), -1, dtype=torch.int32), packed, "position_refreshes")
+        logger.info("Warming wide verify trace")
+        model_step()
+        saved_seeds = ttnn.clone(self.sampler.seeds_tt_tensor)
+        sample_step()
+        ttnn.copy(saved_seeds, self.sampler.seeds_tt_tensor)
+        ttnn.synchronize_device(self.mesh)
+        ttnn.deallocate(saved_seeds)
+        programs_before = self.mesh.num_program_cache_entries()
+        self.mesh.set_program_cache_misses_allowed(False)
+        entry = dict(shared, state=state)
+        try:
+            entry["model_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            model_step()
+            ttnn.end_trace_capture(self.mesh, entry["model_trace"], cq_id=0)
+            entry["sampling_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            sample_step()
+            ttnn.end_trace_capture(self.mesh, entry["sampling_trace"], cq_id=0)
+        finally:
+            self.mesh.set_program_cache_misses_allowed(self._prepared_prefill_state is None)
+        if self.mesh.num_program_cache_entries() != programs_before:
+            raise RuntimeError("Native program cache grew during wide verify trace capture")
+        self.wide_traces[key] = entry
+        logger.info("WIDE_TRACE_ENTRY_COST " + json.dumps({"seconds": time.perf_counter() - start}))
+        return entry
+
+    def spec_decode_wide(self, state, *, tokens, drafts, positions, draft_valid, host_tables, sampling_params):
+        """64-row verify: slot r feeds tokens[r] at positions[r] (-1 inactive) and, if draft_valid[r], drafts[r] at
+        positions[r]+1. Returns (sampled for committed rows [32], sampled for draft rows [32]) as host int64.
+        host_tables: the slot page tables (uploaded like a plain decode). sampling_params: per-slot lists; seed is
+        the committed row's seed (draft rows use seed + 1)."""
+        timing = self.spec_timing
+        t0 = time.perf_counter()
+        entry = self._wide_entry(state)
+        self._tables(state, host_tables)
+        positions = positions.to(torch.int32)
+        live = positions >= 0
+        dvalid = live & draft_valid.to(torch.bool)
+        self._validate_tokens(tokens[live])
+        self._validate_tokens(drafts[dvalid])
+        for half, values in enumerate((tokens, drafts)):
+            ids = torch.zeros(1, 1, 1, 32, dtype=torch.int32)
+            ids.reshape(-1)[:] = torch.where(live if half == 0 else dvalid, values.to(torch.int32),
+                                             torch.zeros_like(positions))
+            self._refresh(ids, entry["tokens"][half], "token_refreshes")
+        dpos = torch.where(dvalid, positions + 1, torch.full_like(positions, -1))
+        packed = torch.stack([positions, positions.clamp_min(0), dpos, dpos.clamp_min(0)]).to(torch.int32)
+        self._refresh(packed, entry["packed"], "position_refreshes")
+        last = entry["last"]
+        params = tuple(tuple(sampling_params[name]) for name in ("top_k", "top_p", "temperature"))
+        if last.get("params") != params:
+            self.configure_sampling(batch=32, **sampling_params)
+            last["params"] = params
+        else:
+            self._refresh(torch.tensor(sampling_params["seed"], dtype=torch.int32), self.sampler.seeds_tt_tensor,
+                          "seed_refreshes")
+        t1 = time.perf_counter()
+        ttnn.execute_trace(self.mesh, entry["model_trace"], cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, entry["sampling_trace"], cq_id=0, blocking=False)
+        self.counters["model_replays"] += 1
+        self.counters["sampling_replays"] += 1
+        a = self._read_tokens(entry["tokens"][0], 32).reshape(-1).to(torch.int64)
+        b = self._read_tokens(entry["tokens"][1], 32).reshape(-1).to(torch.int64)
+        t2 = time.perf_counter()
+        timing["wide_host"] = timing.get("wide_host", 0.0) + (t1 - t0)
+        timing["wide_wait_read"] = timing.get("wide_wait_read", 0.0) + (t2 - t1)
+        timing["wide_steps"] = timing.get("wide_steps", 0) + 1
+        return a, b
+
+    def spec_decode(self, state, *, tokens, positions, slots, candidates, host_tables, groups, sampling_params,
+                    sample=True):
+        """One synchronous verify step over 32 rows; returns the sampled token of every row (host int64 [32]).
+
+        tokens/positions/slots/candidates: int tensors of length 32. Row r feeds tokens[r] at positions[r]
+        (-1 = inactive row) with the page-table row of state slot slots[r]; candidates[r] is its candidate index
+        (0 = the request's last committed token, j = its j-th draft). host_tables maps every key of `groups` to the
+        current host page table [batch, W] (the same tables a plain decode would upload). sampling_params: per-row
+        lists for configure_sampling (top_k/top_p/temperature/seed, length 32); top_k/top_p/temperature are
+        re-uploaded only when they change. sample=False returns host logits rows [32, V] instead.
+        """
+        timing = self.spec_timing
+        t0 = time.perf_counter()
+        positions = positions.to(torch.int32)
+        candidates = candidates.to(torch.int32)
+        live = positions >= 0
+        if tuple(tokens.shape) != (32,) or tuple(positions.shape) != (32,):
+            raise ValueError("Speculative verify takes exactly 32 rows")
+        need = int(candidates[live].max()) + 1 if bool(live.any()) else 1
+        P = next((w for w in self.SPEC_WIDTHS if w >= need), None)
+        if P is None or bool((candidates[live] < 0).any()):
+            raise ValueError(f"Candidate index outside 0..{self.SPEC_MAX_CANDIDATES - 1}")
+        entry = self._spec_entry(state, groups, P)
+        if bool((positions >= state.capacity).any()):
+            raise ValueError("Verify position beyond the cache capacity")
+        self._validate_tokens(tokens[live])
+        rows = slots.to(torch.int64).clamp(0, state.batch - 1)
+        ids = torch.zeros(1, 1, 1, 32, dtype=torch.int32)
+        ids.reshape(-1)[:] = torch.where(live, tokens.to(torch.int32), torch.zeros_like(positions))
+        self._refresh(ids, entry["tokens"], "token_refreshes")
+        packed = torch.full((2 + self.SPEC_MAX_CANDIDATES, 32), -1, dtype=torch.int32)
+        packed[0] = positions
+        packed[1] = positions.clamp_min(0)
+        for j in range(P):
+            packed[2 + j] = torch.where(live & (candidates == j), positions, packed[2 + j])
+        self._refresh(packed, entry["packed"], "position_refreshes")
+        t1 = time.perf_counter()
+        last = entry["last"]
+        for g, keys in enumerate(groups):
+            table = host_tables[keys[0]].to(torch.int32)[rows].contiguous()
+            previous = last.get(("table", g))
+            if previous is None or not torch.equal(previous, table):
+                self._refresh(table, entry["group_tables"][g], "page_table_refreshes")
+                last[("table", g)] = table
+        t2 = time.perf_counter()
+        if sample:
+            params = tuple(tuple(sampling_params[name]) for name in ("top_k", "top_p", "temperature"))
+            if last.get("params") != params:
+                self.configure_sampling(batch=32, **sampling_params)
+                last["params"] = params
+            else:
+                self._refresh(torch.tensor(sampling_params["seed"], dtype=torch.int32), self.sampler.seeds_tt_tensor,
+                              "seed_refreshes")
+        t3 = time.perf_counter()
+        ttnn.execute_trace(self.mesh, entry["model_trace"], cq_id=0, blocking=False)
+        self.counters["model_replays"] += 1
+        if not sample:
+            return self._host_logits(entry["logits"])[0, 0, :32]
+        ttnn.execute_trace(self.mesh, entry["sampling_trace"], cq_id=0, blocking=False)
+        self.counters["sampling_replays"] += 1
+        t4 = time.perf_counter()
+        result = self._read_tokens(entry["tokens"], 32).reshape(-1).to(torch.int64)
+        t5 = time.perf_counter()
+        for name, dt in (("inputs", t1 - t0), ("tables", t2 - t1), ("sampling", t3 - t2), ("enqueue", t4 - t3),
+                         ("wait_read", t5 - t4)):
+            timing[name] = timing.get(name, 0.0) + dt
+        timing["steps"] = timing.get("steps", 0) + 1
+        timing[f"P{P}"] = timing.get(f"P{P}", 0) + 1
+        return result
 
     def close(self):
         self._serving_prefill_prepared_state = None
