@@ -533,6 +533,7 @@ int main() {
             ((go_message_signal = (go_message = current_go_message(mailboxes))->signal) != RUN_MSG_GO) &&
             !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload & DISPATCH_ENABLE_FLAG_PRELOAD)) {
             invalidate_l1_cache();
+            __builtin_riscv_pause();  // waiting; see trisc.cc
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {

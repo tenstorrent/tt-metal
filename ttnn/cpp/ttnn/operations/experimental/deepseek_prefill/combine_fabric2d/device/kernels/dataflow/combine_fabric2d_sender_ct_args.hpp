@@ -157,30 +157,14 @@ public:
     uint32_t vc_freed_addr(uint32_t v) const { return kernel_compile_time_args[vc_base + v * VC_WORDS + 1]; }
     uint32_t vc_outbox_addr(uint32_t v) const { return kernel_compile_time_args[vc_base + v * VC_WORDS + 2]; }
 
-    // What a ring-counter slot names depends on where the counters live. Overlapped, they are program
-    // semaphores the framework re-initialises every launch; alone, they are hand-placed L1 this kernel
-    // owns, so it must hand the next launch a zeroed pair. Zeroing is safe only at the very end: the
-    // reader's last act was publishing the CMD_END slot the sender has just drained.
-#ifdef CMBF2D_OVERLAPPED
+    // The ring counters never leave this core, so they are program semaphores, named by id: the framework
+    // re-initialises those every launch, so nothing here zeroes them.
     volatile tt_l1_ptr uint32_t* filled_ptr() const {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(filled_slot));
     }
     volatile tt_l1_ptr uint32_t* freed_ptr() const {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(freed_slot));
     }
-    void reset_ring_counters() const {}
-#else
-    volatile tt_l1_ptr uint32_t* filled_ptr() const {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(filled_slot);
-    }
-    volatile tt_l1_ptr uint32_t* freed_ptr() const {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freed_slot);
-    }
-    void reset_ring_counters() const {
-        noc_semaphore_set(filled_ptr(), 0);
-        noc_semaphore_set(freed_ptr(), 0);
-    }
-#endif
 #endif
 
     constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }
