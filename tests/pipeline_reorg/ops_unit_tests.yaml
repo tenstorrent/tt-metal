@@ -125,7 +125,7 @@
   skus:
     bh_p150b_civ2:
       timeout: 3
-  owner_id: U09LK84G4TF # Nikola Milicevic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   budget_type: unit
   category: experimental

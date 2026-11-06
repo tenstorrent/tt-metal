@@ -622,6 +622,12 @@ experimental.rgb_to_yuv = rgb_to_yuv
 experimental.yuv_bt601_coefficients = yuv_bt601_coefficients
 experimental.yuv_bt709_coefficients = yuv_bt709_coefficients
 
+# Sparse KV push: which of a requester's needed rows a push sends, and the cores it needs per link
+from ttnn._ttnn.operations.experimental import SparseKvPushPart, SPARSE_KV_PUSH_CORES_PER_LINK
+
+experimental.SparseKvPushPart = SparseKvPushPart
+experimental.SPARSE_KV_PUSH_CORES_PER_LINK = SPARSE_KV_PUSH_CORES_PER_LINK
+
 # PrefetcherPipe (Metal 2.0 durable cross-program remote DFB). Experimental-only surface.
 from ttnn._ttnn import prefetcher_pipe as _prefetcher_pipe
 
