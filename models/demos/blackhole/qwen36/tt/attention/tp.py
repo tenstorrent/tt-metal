@@ -256,7 +256,8 @@ class TPAttention:
                 x,
                 tw["wqkv_fused"],
                 self.tt_ccl,
-                self.compute_cfg,
+                # QWEN36_ATTN_QKV_LOFI=1: LoFi for the prefill qkv AGMM (as QWEN36_GDN_IN_LOFI for the GDN in-proj)
+                tpc.COMPUTE_LOFI if os.environ.get("QWEN36_ATTN_QKV_LOFI", "0") == "1" else self.compute_cfg,
                 self.args.ccl_topology(),
                 persistent_output_buffer=tpc.agmm_gather_buffer(self.tt_ccl, x, act_bf8=_bf8),
                 act_bf8=_bf8,

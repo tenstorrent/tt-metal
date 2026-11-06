@@ -2218,6 +2218,34 @@ class TPGatedDeltaNet:
         tw, Nv, Dv = self.tw, self.Nv, self.Dv
         # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
         _L1 = tpc.prefill_act_mem(M, ttnn.L1_MEMORY_CONFIG)  # DRAM above S=2048, as forward_prefill
+        if (
+            return_gated
+            and o_head_major
+            and B == 1
+            and os.environ.get("QWEN36_GDN_SGNORM", "0") == "1"
+            and "norm_w_1d" in tw
+            and z.dtype == ttnn.bfloat16
+        ):
+            # QWEN36_GDN_SGNORM=1 (token-parallel out-proj tail): ONE kda op does the per-head RMSNorm, the
+            # head->token relayout and norm * w * sigmoid(z); one multiply by z completes norm * w * silu(z)
+            # (replaces rms_norm + nlp_concat_heads + silu + multiply).
+            _gdt = ttnn.bfloat8_b if os.environ.get("QWEN36_TOKPAR_A2A_BF8", "0") == "1" else ttnn.bfloat16
+            z3 = ttnn.reshape(z, (1, M, self.value_dim_tp))
+            o3 = ttnn.reshape(o, (Nv, M, Dv)) if len(o.shape) != 3 else o
+            normed = ttnn.experimental.kda.sigmoid_gated_rms_norm(
+                o3,
+                z3,
+                tw["norm_w_1d"],
+                Nv,
+                epsilon=1e-6,
+                output_dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(o)
+            gated = ttnn.multiply(normed, z3, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=_gdt)
+            ttnn.deallocate(normed)
+            ttnn.deallocate(z)
+            return gated
         if o_head_major:
             # Fuse adapter relayout with per-head rms_norm + head-flatten.
             # TILE-native head->token relayout (transpose + fold), dropping the
