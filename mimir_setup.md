@@ -60,6 +60,8 @@ sudo apt install -y g++-13
 Need to add additional defines to build. After building the first time, can just run usual `./build_metal.sh` commands unless the CMAKE files are removed (e.g. with a `--clean` or `git clean`).
 
 ```
+export CHIPPY_DIR=/proj_sw/user_dev/$USER/chippy
+
 ./build_metal.sh --build-tests --build-umd-tests --configure-only
 
 cmake -DTT_UMD_BUILD_GRENDEL_JTAG=ON \
@@ -84,18 +86,26 @@ git checkout kstevens/metal_bringup
 export GRENDELEMU_DIR=/proj_sw/user_dev/$USER/grendelemulation
 ```
 
-`tests/test_metal_server.py` is on the `kstevens/metal_bringup` branch, not on `main`.
+Each model launches a different server test:
+
+| Model directory | Emulates | Server test |
+|---|---|---|
+| `models/mimir` | 1 Mimir chiplet (1 emulation module) | `tests/test_sival_server.py` |
+| `models/mmk` | 2 Mimir chiplets + 1 Keraunos (4 emulation modules) | `tests/test_metal_server.py` |
+
+`models/mmk/tests/test_metal_server.py` is on the `kstevens/metal_bringup` branch, not on `main`. The `mimir` model has no `test_metal_server.py`; launching it there collects no tests and the job exits.
 
 1. Log into one of the soc machines (e.g. `soc-l-#`)
-2. Setup your environment. Choose either the `mimir` directory (single mimir chiplet - 1 emulation module) or `mmk` (2 mimir chiplets + 1 keraunos - 4 emulation modules) directory depending on your needs.
+2. Setup your environment. Choose either the `mimir` or the `mmk` model directory depending on your needs.
 ```
 source /tools_soc/tt/bin/bashrc
-cd $GRENDELEMU_DIR/models/mimir
+cd $GRENDELEMU_DIR/models/mimir    # or models/mmk
 source bin/setup_env.sh
 ```
-3. Launch the emulation server
+3. Launch the emulation server with the server test for that model
 ```
-emu run -t 3600 -- -sv tests/test_metal_server.py --disable-dpi
+emu run -t 3600 -- -sv tests/test_sival_server.py --disable-dpi    # mimir
+emu run -t 3600 -- -sv tests/test_metal_server.py --disable-dpi    # mmk
 ```
 
 **_NOTE:_** Sometimes just re-launching the server doesn't work properly (it exits immediately thinking there is no design) and the setup commands must be re-run before re-launching the server.
