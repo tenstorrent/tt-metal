@@ -10,6 +10,8 @@ import ttnn
 from models.experimental.vadv2.tt.tt_temporal_self_attention import TtTemporalSelfAttention
 from models.experimental.vadv2.tt.tt_spatial_cross_attention import TtSpatialCrossAttention
 from models.experimental.vadv2.tt.tt_ffn import TtFFN
+from models.experimental.vadv2.tt.tt_point_sampling import camera_rows, point_sampling_3d_to_2d_ttnn, world_points_ttnn
+from models.experimental.vadv2.tt.tt_sca_rebatch_plan import SCARebatchPlanner
 
 
 class TtBEVFormerEncoder:
@@ -20,7 +22,6 @@ class TtBEVFormerEncoder:
         bev_h,
         bev_w,
         feat_hw,
-        lidar2img,
         img_shape,
         num_layers=3,
         pc_range=None,
@@ -76,12 +77,11 @@ class TtBEVFormerEncoder:
         for i in range(self.num_layers):
             self.layers.append(TtBEVFormerLayer(self.device, params.layers[f"layer{i}"], **transformer_layers))
 
-        # The reference points and their camera projection depend only on the BEV
-        # grid and the camera rig, which are fixed for the lifetime of the model.
         self.bev_h = bev_h
         self.bev_w = bev_w
+        self.img_shape = tuple(img_shape)
         # Built on the host in float32, as the reference computes them: in bfloat16 the BEV cell
-        # centres round by up to 0.4 cells and the projection moves points by pixels.
+        # centres round by up to 0.4 cells.
         ref_3d = self.reference_points_3d(bev_h, bev_w, pc_range[5] - pc_range[2], num_points_in_pillar)
         self.ref_2d = ttnn.from_torch(
             self.reference_points_2d(bev_h, bev_w),
@@ -90,9 +90,11 @@ class TtBEVFormerEncoder:
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        reference_points_cam, bev_mask = self.point_sampling(ref_3d, pc_range, lidar2img, img_shape)
-        for layer in self.layers:
-            layer.attentions[1].prepare(reference_points_cam, bev_mask)
+        # As BEVFormer: the pillar grid in world coordinates, which every frame projects to its
+        # cameras on device, and one rebatch planner, whose capacity is the rig's high-water mark.
+        self.world_points = world_points_ttnn(ref_3d.permute(0, 2, 1, 3), pc_range, device)
+        self.rebatch_planner = SCARebatchPlanner(device)
+        self._cameras = None
 
     @staticmethod
     def reference_points_3d(H, W, Z, num_points_in_pillar):
@@ -110,45 +112,30 @@ class TtBEVFormerEncoder:
         ref_2d = torch.stack((ref_x.reshape(-1)[None] / W, ref_y.reshape(-1)[None] / H), -1)
         return ref_2d.unsqueeze(2)
 
-    @staticmethod
-    def point_sampling(reference_points, pc_range, lidar2img, img_shape):
-        """Project the pillar points into every camera, in float32 on the host.
-
-        lidar2img: (num_cams, 4, 4) lidar-to-image matrices; img_shape: (H, W) of the network
-        input. Returns reference_points_cam (num_cams, 1, num_query, D, 2) and bev_mask
-        (num_cams, 1, num_query, D) bool.
-        """
+    def projection_rows(self, lidar2img):
+        """Host projection rows (camera_rows) of the cameras' (num_cams, 4, 4) lidar2img
+        over the pillar grid, (1, num_cams, 9, width) float32."""
         lidar2img = torch.as_tensor(np.asarray(lidar2img), dtype=torch.float32).reshape(1, -1, 4, 4)
-        reference_points = reference_points.clone()
-        reference_points[..., 0:1] = reference_points[..., 0:1] * (pc_range[3] - pc_range[0]) + pc_range[0]
-        reference_points[..., 1:2] = reference_points[..., 1:2] * (pc_range[4] - pc_range[1]) + pc_range[1]
-        reference_points[..., 2:3] = reference_points[..., 2:3] * (pc_range[5] - pc_range[2]) + pc_range[2]
-        reference_points = torch.cat((reference_points, torch.ones_like(reference_points[..., :1])), -1)
+        grid = self.world_points
+        return camera_rows(lidar2img, self.img_shape, grid.num_queries, grid.num_points)
 
-        reference_points = reference_points.permute(1, 0, 2, 3)
-        D, B, num_query = reference_points.size()[:3]
-        num_cam = lidar2img.size(1)
-        reference_points = reference_points.view(D, B, 1, num_query, 4).repeat(1, 1, num_cam, 1, 1).unsqueeze(-1)
-        lidar2img = lidar2img.view(1, B, num_cam, 1, 4, 4).repeat(D, 1, 1, num_query, 1, 1)
-        reference_points_cam = torch.matmul(lidar2img, reference_points).squeeze(-1)
-
-        eps = 1e-5
-        bev_mask = reference_points_cam[..., 2:3] > eps
-        reference_points_cam = reference_points_cam[..., 0:2] / torch.maximum(
-            reference_points_cam[..., 2:3], torch.ones_like(reference_points_cam[..., 2:3]) * eps
+    def project_cameras(self, projection):
+        """Project the pillar grid through the frame's projection rows on device, then size the
+        rebatch plan: the only readback is each camera's visible count, and only a frame needing
+        more rows than the planner holds grows it. Call before the forward, outside any trace."""
+        reference_points_cam, bev_mask = point_sampling_3d_to_2d_ttnn(
+            reference_points=None,
+            pc_range=None,
+            lidar2img=None,
+            device=self.device,
+            world_points=self.world_points,
+            projection=projection,
+            # Projected in float32; bfloat16 is the only dtype the rebatch plan's gather takes.
+            output_dtype=ttnn.bfloat16,
         )
-        reference_points_cam[..., 0] /= img_shape[1]
-        reference_points_cam[..., 1] /= img_shape[0]
-        bev_mask = (
-            bev_mask
-            & (reference_points_cam[..., 1:2] > 0.0)
-            & (reference_points_cam[..., 1:2] < 1.0)
-            & (reference_points_cam[..., 0:1] < 1.0)
-            & (reference_points_cam[..., 0:1] > 0.0)
-        )
-        reference_points_cam = reference_points_cam.permute(2, 1, 3, 0, 4)
-        bev_mask = bev_mask.permute(2, 1, 3, 0, 4).squeeze(-1)
-        return reference_points_cam, bev_mask
+        visibility = self.rebatch_planner.visibility(bev_mask)
+        self.rebatch_planner.size(visibility)
+        self._cameras = (reference_points_cam, visibility)
 
     def __call__(
         self,
@@ -170,7 +157,12 @@ class TtBEVFormerEncoder:
 
         assert (bev_h, bev_w) == (self.bev_h, self.bev_w)
         assert bev_query.shape[1] == 1, "reference points are built for bs=1"
+        assert self._cameras is not None, "project_cameras() with this frame's projection before the forward"
         ref_2d = self.ref_2d
+        # Device work only: the planner was sized in project_cameras().
+        reference_points_cam, visibility = self._cameras
+        rebatch_plan = self.rebatch_planner.build(reference_points_cam, visibility)
+        self._cameras = None
 
         bev_query = ttnn.permute(bev_query, (1, 0, 2))
         bev_pos = ttnn.permute(bev_pos, (1, 0, 2))
@@ -197,6 +189,7 @@ class TtBEVFormerEncoder:
                 bev_h=bev_h,
                 bev_w=bev_w,
                 prev_bev=prev_bev,
+                rebatch_plan=rebatch_plan,
                 **kwargs,
             )
             bev_query = output

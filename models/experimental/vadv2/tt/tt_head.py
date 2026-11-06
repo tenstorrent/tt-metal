@@ -67,7 +67,6 @@ class TtVADHead:
         params,
         device,
         feat_hw,
-        lidar2img,
         img_shape,
         with_box_refine=False,
         as_two_stage=False,
@@ -141,7 +140,6 @@ class TtVADHead:
             bev_h=bev_h,
             bev_w=bev_w,
             feat_hw=feat_hw,
-            lidar2img=lidar2img,
             img_shape=img_shape,
             rotate_prev_bev=True,
             use_shift=True,
@@ -253,7 +251,7 @@ class TtVADHead:
 
     def prepare_frame(self, img_metas):
         """Host-side per-frame inputs; call before every forward."""
-        self.transformer.refill_frame(img_metas, grid_length=(self.real_h / self.bev_h, self.real_w / self.bev_w))
+        self.transformer.prepare_frame(img_metas, grid_length=(self.real_h / self.bev_h, self.real_w / self.bev_w))
 
     def _const_tensor(self, create_fn, cache, shape, dtype=None, layout=None):
         key = (tuple(shape), dtype, layout)

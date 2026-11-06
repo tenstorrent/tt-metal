@@ -10,6 +10,7 @@ from models.experimental.vadv2.reference import spatial_cross_attention
 from models.experimental.vadv2.tt import tt_spatial_cross_attention
 from models.experimental.vadv2.reference.spatial_cross_attention import SpatialCrossAttention
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.experimental.vadv2.tt.tt_sca_rebatch_plan import SCARebatchPlanner
 from ttnn.model_preprocessing import (
     infer_ttnn_module_args,
     preprocess_model_parameters,
@@ -106,7 +107,7 @@ def test_vadv2_sca(
     reference_points = torch.randn(1, 4, 10000, 3)
     spatial_shapes = torch.tensor([[12, 20]])
     reference_points_cam = torch.randn(6, 1, 10000, 4, 2)
-    bev_mask = torch.randn(6, 1, 10000, 4)
+    bev_mask = (torch.rand(6, 1, 10000, 4) > 0.5).float()
     level_start_index = torch.tensor([0])
 
     torch_output = torch_model(
@@ -137,13 +138,19 @@ def test_vadv2_sca(
     query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16)
     key = ttnn.from_torch(key, device=device, dtype=ttnn.bfloat16)
     value = ttnn.from_torch(value, device=device, dtype=ttnn.bfloat16)
-    tt_model.prepare(reference_points_cam, bev_mask)
+    planner = SCARebatchPlanner(device)
+    reference_points_cam = ttnn.from_torch(
+        reference_points_cam, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    bev_mask = ttnn.from_torch(bev_mask, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    rebatch_plan = planner(reference_points_cam, planner.visibility(bev_mask))
 
     tt_output = tt_model(
         query,
         key,
         value,
         reference_points=reference_points,
+        rebatch_plan=rebatch_plan,
     )
 
     ttnn_output = ttnn.to_torch(tt_output)

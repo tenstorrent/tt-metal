@@ -41,8 +41,8 @@ class TtVAD:
         device,
         params,
         *,
-        lidar2img,
         img_shape,
+        num_cams=6,
         use_grid_mask=False,
         pts_voxel_layer=None,
         pts_voxel_encoder=None,
@@ -64,14 +64,13 @@ class TtVAD:
         read_raw_outputs=False,
     ):
         """
-        lidar2img: (num_cams, 4, 4) lidar-to-image matrices of the camera rig.
         img_shape: (H, W) of the network input.
+        num_cams: cameras per frame.
         read_raw_outputs: also read the head's raw outputs back, as _last_outs, for the PCC tests;
             the forward otherwise reads back only the decoded detections and map elements.
 
-        The rig is fixed for the lifetime of the model: the camera projection of
-        the BEV grid and the per-camera query plan are built here, and the
-        lidar2img / img_shape carried by img_metas at inference are not read.
+        Each frame's lidar2img comes from its img_metas through prepare_frame(); only the input
+        size is fixed.
         """
         super(TtVAD, self).__init__()
         img_h, img_w = img_shape[:2]
@@ -103,7 +102,6 @@ class TtVAD:
             params=params,
             device=device,
             feat_hw=self.feat_hw,
-            lidar2img=lidar2img,
             img_shape=(img_h, img_w),
             with_box_refine=True,
             as_two_stage=False,
@@ -160,7 +158,7 @@ class TtVAD:
             valid_fut_ts=6,
         )
         self.valid_fut_ts = self.pts_bbox_head.valid_fut_ts
-        self._prepare_conv_weights(num_cams=len(lidar2img), img_h=img_h, img_w=img_w)
+        self._prepare_conv_weights(num_cams=num_cams, img_h=img_h, img_w=img_w)
 
     def _prepare_conv_weights(self, num_cams, img_h, img_w):
         # conv2d lays its weights out for the input it sees and prepares them on
