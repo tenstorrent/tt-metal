@@ -287,7 +287,11 @@ def paged_kv_step(
     nsplit = int(
         os.environ.get("DSV41_KVSTEP_SPLIT", "1")
     )  # cores per query row (tt/paged_kernels/paged_kv_step_split.cpp); 1 = the single-core kernel
-    if nsplit not in (2, 4, 8) or rows * nsplit > 120 or topk_out % (16 * nsplit):
+    # the cores are laid out 8 wide: the grid has 10 rows, so at most 80 cores (the old limit 120 put core rows 10..14 outside the worker grid: TT_FATAL at B=16 k=5, rows = 24, nsplit 4);
+    # a split that does not fit falls back to the next smaller one (4 -> 2 -> 1)
+    while nsplit in (4, 8) and rows * nsplit > 80:
+        nsplit //= 2
+    if nsplit not in (2, 4, 8) or rows * nsplit > 80 or topk_out % (16 * nsplit):
         nsplit = 1
     cores = [ttnn.CoreCoord(i % 8, i // 8) for i in range(rows * nsplit)]
     core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
