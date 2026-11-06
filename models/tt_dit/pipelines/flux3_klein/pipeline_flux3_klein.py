@@ -192,6 +192,8 @@ class Flux3KleinPipeline:
             mesh_device=mesh_device,
             parallel_config=encoder_parallel,
             ccl_manager=CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology),
+            # the TP shard is ~1.8 GB per chip: keep it resident instead of all-gathering every weight per prompt
+            is_fsdp=False,
         )
         self._text_encoder = encoder
         self._prompt_encoder = Flux3KleinPromptEncoder(encoder, shared, mesh_device, text_config=text_config)
