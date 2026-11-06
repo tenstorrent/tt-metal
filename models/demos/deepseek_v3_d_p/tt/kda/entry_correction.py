@@ -65,11 +65,11 @@ class EntryCorrection:
         self.memory_config = ttnn.L1_MEMORY_CONFIG
         self.output_memory_config = ttnn.DRAM_MEMORY_CONFIG if streamed else ttnn.L1_MEMORY_CONFIG
 
-    def __call__(self, terms, final_a, final_b, entry, tail_entry, actual_start, actual_end):
+    def __call__(self, terms, final_e, final_b, entry, tail_entry, actual_start, actual_end):
         """Return (output [BH, NC, 32, V] BF16, final state [BH, K, V] FP32)."""
         return ttnn.experimental.kda.entry_correction(
             terms,
-            final_a,
+            final_e,
             final_b,
             entry,
             tail_entry,

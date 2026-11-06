@@ -12,7 +12,7 @@
 #include "experimental/kernel_args.h"
 
 // Entry correction reader: the chronology (this core's valid chunks and the reset chunk), the head's seeds, and the
-// rows of A and B this core forms the final state of.
+// rows of E = A - I and B this core forms the final state of.
 // final_stride: a head's cores each form every final_stride-th tile row of the final state.
 // streamed: interleaved terms, read a chunk row of F(0) and F(I) at a time; otherwise they are in place in the shard.
 // seed_receivers: the head's other cores, which the head's first core writes the seeds to (varargs: NoC x | y << 16).
@@ -34,8 +34,11 @@ TT_KERNEL void reader(
     DataflowBuffer seed(dfb::seed);
     DataflowBuffer tail(dfb::tail);
     DataflowBuffer terms(dfb::terms);
-    DataflowBuffer a(dfb::a);
+    DataflowBuffer e(dfb::e);
     DataflowBuffer b(dfb::b);
+    // The seeds' exact views: the same storage, pushed with the seeds.
+    DataflowBuffer seed_exact(dfb::seed_exact);
+    DataflowBuffer tail_exact(dfb::tail_exact);
     DataflowBuffer ctl(dfb::ctl);
     DataflowBuffer ctl_writer(dfb::ctl_writer);
     Noc noc;
@@ -136,6 +139,15 @@ TT_KERNEL void reader(
             tail.push_back(state_tiles);
         }
     }
+    // The seeds have landed (read here, or written by the head's first core): their exact views are ready too.
+    if (need_group) {
+        seed_exact.reserve_back(state_tiles);
+        seed_exact.push_back(state_tiles);
+    }
+    if (need_tail) {
+        tail_exact.reserve_back(state_tiles);
+        tail_exact.push_back(state_tiles);
+    }
     if constexpr (streamed) {
         // Head h's F(0) rows are tile rows h * 2 * num_chunks + chunk of the terms, its F(I) rows num_chunks further.
         // Each chunk's F(0) row then its F(I) row go to the terms buffer together.
@@ -163,20 +175,20 @@ TT_KERNEL void reader(
         terms.push_back(2 * core_chunks * kt);
     }
     if (final) {
-        // Tile rows of A and of B: each row of the final state is A[row] @ seed + B[row].
-        const auto a_states = TensorAccessor(tensor::final_a);
+        // Tile rows of E and of B: each row of the final state is seed[row] + (E[row] @ seed + B[row]).
+        const auto e_states = TensorAccessor(tensor::final_e);
         const auto b_states = TensorAccessor(tensor::final_b);
         const uint32_t tile = b.get_entry_size();
         for (uint32_t row = final_row; row < kt; row += final_stride) {
-            a.reserve_back(kt);
+            e.reserve_back(kt);
             b.reserve_back(kt);
             for (uint32_t c = 0; c < kt; ++c) {
                 const uint32_t page = head * state_tiles + row * kt + c;
-                noc.async_read(a_states, a, tile, {.page_id = page}, {.offset_bytes = c * tile});
+                noc.async_read(e_states, e, tile, {.page_id = page}, {.offset_bytes = c * tile});
                 noc.async_read(b_states, b, tile, {.page_id = page}, {.offset_bytes = c * tile});
             }
             noc.async_read_barrier();
-            a.push_back(kt);
+            e.push_back(kt);
             b.push_back(kt);
         }
     }

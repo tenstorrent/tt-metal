@@ -26,7 +26,7 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     namespace m2 = tt::tt_metal::experimental;
     const auto& terms = in.terms.mesh_tensor();
-    const auto& final_a = in.final_a.mesh_tensor();
+    const auto& final_e = in.final_e.mesh_tensor();
     const auto& final_b = in.final_b.mesh_tensor();
     const auto& entry = in.entry.mesh_tensor();
     const auto& tail_entry = in.tail_entry.mesh_tensor();
@@ -53,13 +53,15 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
     const m2::DFBSpecName terms_dfb{"terms"};
     const m2::DFBSpecName diff_dfb{"diff"};
     const m2::DFBSpecName out_dfb{"out"};
-    const m2::DFBSpecName a_dfb{"a"};
+    const m2::DFBSpecName e_dfb{"e"};
     const m2::DFBSpecName b_dfb{"b"};
+    const m2::DFBSpecName seed_exact_dfb{"seed_exact"};
+    const m2::DFBSpecName tail_exact_dfb{"tail_exact"};
     const m2::DFBSpecName final_dfb{"final_rows"};
     const m2::DFBSpecName ctl_dfb{"ctl"};
     const m2::DFBSpecName ctl_writer_dfb{"ctl_writer"};
     const m2::TensorParamName terms_name{"terms"};
-    const m2::TensorParamName final_a_name{"final_a"};
+    const m2::TensorParamName final_e_name{"final_e"};
     const m2::TensorParamName final_b_name{"final_b"};
     const m2::TensorParamName entry_name{"entry"};
     const m2::TensorParamName tail_entry_name{"tail_entry"};
@@ -86,13 +88,22 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
         return m2::DataflowBufferSpec{
             .unique_id = name, .entry_size = 64, .num_entries = 1, .data_format_metadata = tt::DataFormat::UInt32};
     };
+    // Each seed again as a second DFB on the same storage, which compute unpacks straight to DST (FP32, exact) for
+    // the final state's seed + (E @ seed + B).
+    const auto aliased = [&](const m2::DFBSpecName& name, const m2::DFBSpecName& other) {
+        auto dfb = make_dfb(name, state_tiles, fp32);
+        dfb.advanced_options.alias_with = {other};
+        return dfb;
+    };
     m2::Group<m2::DataflowBufferSpec> dfbs = {
-        make_dfb(seed_dfb, state_tiles, fp32),
-        make_dfb(tail_dfb, state_tiles, fp32),
+        aliased(seed_dfb, seed_exact_dfb),
+        aliased(seed_exact_dfb, seed_dfb),
+        aliased(tail_dfb, tail_exact_dfb),
+        aliased(tail_exact_dfb, tail_dfb),
         std::move(terms_buffer),
         make_dfb(diff_dfb, (streamed ? 2 : per_core) * kt, fp32),
         make_dfb(out_dfb, 2 * kt, tt::DataFormat::Float16_b),
-        make_dfb(a_dfb, kt, fp32),
+        make_dfb(e_dfb, kt, fp32),
         make_dfb(b_dfb, kt, fp32),
         make_dfb(final_dfb, 2 * kt, fp32),
         control(ctl_dfb),
@@ -109,15 +120,17 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
                 m2::ProducerOf(seed_dfb, "seed"),
                 m2::ProducerOf(tail_dfb, "tail"),
                 m2::ProducerOf(terms_dfb, "terms"),
-                m2::ProducerOf(a_dfb, "a"),
+                m2::ProducerOf(e_dfb, "e"),
                 m2::ProducerOf(b_dfb, "b"),
+                m2::ProducerOf(seed_exact_dfb, "seed_exact"),
+                m2::ProducerOf(tail_exact_dfb, "tail_exact"),
                 m2::ProducerOf(ctl_dfb, "ctl"),
                 m2::ProducerOf(ctl_writer_dfb, "ctl_writer"),
             },
         .semaphore_bindings = {m2::SemaphoreBinding{seed_landed, "seed_landed"}},
         .tensor_bindings =
             {
-                m2::TensorBinding{final_a_name, "final_a"},
+                m2::TensorBinding{final_e_name, "final_e"},
                 m2::TensorBinding{final_b_name, "final_b"},
                 m2::TensorBinding{entry_name, "entry"},
                 m2::TensorBinding{tail_entry_name, "tail_entry"},
@@ -155,8 +168,12 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
     auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
-    for (const auto& name : {seed_dfb, tail_dfb, terms_dfb, diff_dfb, a_dfb, b_dfb}) {
+    for (const auto& name : {seed_dfb, tail_dfb, terms_dfb, diff_dfb, e_dfb}) {
         compute_hw.unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
+    }
+    // The final state's B and seed are only copied into DST, exactly: only E @ seed passes through a source register.
+    for (const auto& name : {b_dfb, seed_exact_dfb, tail_exact_dfb}) {
+        compute_hw.unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToDest;
     }
     m2::KernelSpec compute{
         .unique_id = compute_kernel,
@@ -172,8 +189,10 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
                 m2::ProducerOf(diff_dfb, "diff"),
                 m2::ConsumerOf(diff_dfb, "diff"),
                 m2::ProducerOf(out_dfb, "out"),
-                m2::ConsumerOf(a_dfb, "a"),
+                m2::ConsumerOf(e_dfb, "e"),
                 m2::ConsumerOf(b_dfb, "b"),
+                m2::ConsumerOf(seed_exact_dfb, "seed_exact"),
+                m2::ConsumerOf(tail_exact_dfb, "tail_exact"),
                 m2::ProducerOf(final_dfb, "final_rows"),
                 m2::ConsumerOf(ctl_dfb, "ctl"),
             },
@@ -218,7 +237,7 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
         .tensor_parameters =
             {
                 m2::TensorParameter{.unique_id = terms_name, .spec = terms.tensor_spec()},
-                m2::TensorParameter{.unique_id = final_a_name, .spec = final_a.tensor_spec()},
+                m2::TensorParameter{.unique_id = final_e_name, .spec = final_e.tensor_spec()},
                 m2::TensorParameter{.unique_id = final_b_name, .spec = final_b.tensor_spec()},
                 m2::TensorParameter{.unique_id = entry_name, .spec = entry.tensor_spec()},
                 m2::TensorParameter{.unique_id = tail_entry_name, .spec = tail_entry.tensor_spec()},
@@ -241,7 +260,7 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
     run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run)};
     run_args.tensor_args = {
         {terms_name, terms},
-        {final_a_name, final_a},
+        {final_e_name, final_e},
         {final_b_name, final_b},
         {entry_name, entry},
         {tail_entry_name, tail_entry},

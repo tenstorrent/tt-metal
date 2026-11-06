@@ -25,7 +25,7 @@ void EntryCorrectionOperation::validate_on_program_cache_hit(const operation_att
     constexpr std::string_view operation_name = "entry_correction";
     const std::initializer_list<std::pair<const Tensor*, std::string_view>> tensors = {
         {&in.terms, "terms"},
-        {&in.final_a, "final_a"},
+        {&in.final_e, "final_e"},
         {&in.final_b, "final_b"},
         {&in.entry, "entry"},
         {&in.tail_entry, "tail_entry"},
@@ -38,6 +38,8 @@ void EntryCorrectionOperation::validate_on_program_cache_hit(const operation_att
 void EntryCorrectionOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     constexpr std::string_view operation_name = "entry_correction";
+    kda_factory_detail::check_fp32_dest_acc(
+        attrs.compute_kernel_config, operation_name, "the final state adds its seed and B exactly in DST");
     TT_FATAL(
         attrs.local_rows > 0 && attrs.local_rows % tt::constants::TILE_HEIGHT == 0,
         "{}: local_rows must be positive and 32-aligned",
@@ -47,7 +49,7 @@ void EntryCorrectionOperation::validate_on_program_cache_miss(
         kda_factory_detail::check_actual_start(in.actual_start, *in.actual_end, operation_name);
     }
     for (const auto& [tensor, name] :
-         {std::pair{&in.final_a, "final_a"},
+         {std::pair{&in.final_e, "final_e"},
           std::pair{&in.final_b, "final_b"},
           std::pair{&in.entry, "entry"},
           std::pair{&in.tail_entry, "tail_entry"}}) {
@@ -64,7 +66,7 @@ void EntryCorrectionOperation::validate_on_program_cache_miss(
     }
     kda_factory_detail::check_distinct_buffers(
         {{&in.terms, "terms"},
-         {&in.final_a, "final_a"},
+         {&in.final_e, "final_e"},
          {&in.final_b, "final_b"},
          {&in.entry, "entry"},
          {&in.tail_entry, "tail_entry"},
@@ -203,13 +205,13 @@ EntryCorrectionOperation::create_op_performance_model(
         .fpu_matrix_flops = heads * 2.0 * (rows + key_dim) * key_dim * key_dim,
         .fpu_add_ops = heads * rows * key_dim,
     };
-    const std::array<const Tensor*, 5> inputs = {&in.terms, &in.final_a, &in.final_b, &in.entry, &in.tail_entry};
+    const std::array<const Tensor*, 5> inputs = {&in.terms, &in.final_e, &in.final_b, &in.entry, &in.tail_entry};
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
 std::tuple<Tensor, Tensor> entry_correction(
     const Tensor& terms,
-    const Tensor& final_a,
+    const Tensor& final_e,
     const Tensor& final_b,
     const Tensor& entry,
     const Tensor& tail_entry,
@@ -229,7 +231,7 @@ std::tuple<Tensor, Tensor> entry_correction(
             .compute_kernel_config = compute_kernel_config},
         EntryCorrectionInputs{
             .terms = terms,
-            .final_a = final_a,
+            .final_e = final_e,
             .final_b = final_b,
             .entry = entry,
             .tail_entry = tail_entry,

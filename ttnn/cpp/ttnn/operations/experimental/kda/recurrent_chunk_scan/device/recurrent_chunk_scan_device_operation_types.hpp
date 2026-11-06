@@ -30,8 +30,9 @@ struct RecurrentChunkScanParams {
     bool tail = false;
     bool init = true;
     // SUMMARY with one group per head only: also write each chunk's zero-seeded output F(0) and identity-seeded output
-    // F(I) as one terms tensor, and the final segment's transform (A, B: [BH, K, V] each), all FLOAT32. Once the entry
-    // state is known, a chunk's output is F(0) + (F(I) - F(0)) @ entry and the rank's final state is A @ entry + B.
+    // F(I) as one terms tensor, and the final segment's transform in complement form (E = A - I, B: [BH, K, V] each),
+    // all FLOAT32. Once the entry state is known, a chunk's output is F(0) + (F(I) - F(0)) @ entry and the rank's final
+    // state is entry + (E @ entry + B).
     // The terms are [BH * blocks, 2, block_chunks * 32, V]: each block of a head's chunks holds its F(0) rows, then
     // its F(I) rows, so a height shard of one block holds both (emit_block_chunks).
     bool emit_outputs = false;

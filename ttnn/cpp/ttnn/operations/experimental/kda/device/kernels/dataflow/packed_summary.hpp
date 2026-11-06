@@ -46,14 +46,15 @@ FORCE_INLINE void read_summary_transform(Noc& noc, const Accessor& summaries, DF
     }
 }
 
-// Write FP32 1.0 on the diagonal of a zeroed FP32 32x32 tile. A tile's diagonal lies in its top-left and bottom-right
-// faces.
+// Write 1.0 on the diagonal of a zeroed 32x32 tile: FP32 through 32-bit words, BF16 through 16-bit ones. A tile's
+// diagonal lies in its top-left and bottom-right faces.
 template <typename VolatileWords>
 FORCE_INLINE void write_identity_diagonal(VolatileWords tile) {
     constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
+    constexpr auto one = sizeof(tile[0]) == sizeof(uint16_t) ? one_fp32 >> 16 : one_fp32;
     for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; ++row) {
-        tile[row * tt::constants::FACE_WIDTH + row] = one_fp32;
-        tile[3 * tt::constants::FACE_HW + row * tt::constants::FACE_WIDTH + row] = one_fp32;
+        tile[row * tt::constants::FACE_WIDTH + row] = one;
+        tile[3 * tt::constants::FACE_HW + row * tt::constants::FACE_WIDTH + row] = one;
     }
 }
 
