@@ -37,11 +37,11 @@
   ],
   "live_wait": {
     "run_ids": [
-      42196060694,
+      42208934357,
       42200513517,
       42206258311
     ],
-    "status": "GPQA server-sized and SWE smoke repair in flight; Terminal valid smoke banked, nightly10 dispatched"
+    "status": "Full GPQA198 rung, SWE validity smoke retry and Terminal nightly10 in flight"
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",

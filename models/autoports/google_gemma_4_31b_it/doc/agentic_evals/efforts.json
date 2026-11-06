@@ -3063,6 +3063,64 @@
         }
       ],
       "reason": "Validity tier unchanged; candidate preparation costs0deviceh and credits no speed benefit. Immediate next rung needs active-run validity and measured projection."
+    },
+    {
+      "after": "gpqa-server-sized-valid-full198-dispatched",
+      "order": [
+        {
+          "problem": "swe-network-validity",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "measured-workload-prefill",
+          "saving_hours": 0,
+          "device_hours": 0.15
+        },
+        {
+          "problem": "terminal-smoke-runtime-analysis",
+          "saving_hours": 0,
+          "device_hours": 0
+        }
+      ],
+      "reason": "Validity first unchanged; measured GPQA repetition confirms947s timing but no new independent accuracy sample. Full198 advances without waiting for efforts; no speed credit assigned."
     }
   ],
   "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

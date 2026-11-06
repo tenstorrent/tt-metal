@@ -167,6 +167,24 @@
         0.6576197724933469
       ],
       "evidence": "runs/smoke2-terminal-lifecycle-repair/audit.json"
+    },
+    {
+      "run": "server-sized-gpqa-c2",
+      "run_id": 42196060694,
+      "eval": "r1_gpqa_diamond",
+      "tasks": 10,
+      "agents": 2,
+      "batch": 8,
+      "wall_hours": 0.26305921654693926,
+      "agent_hours": null,
+      "timeouts": 0,
+      "score": 0.9,
+      "confidence_interval_95": [
+        0.5958499732047615,
+        0.9821237869049271
+      ],
+      "evidence": "runs/server-sized-gpqa-c2/audit.json",
+      "limitation": "Visible answers byte-identical to priornightly; do not pool as20independent samples. Individual request slowtail unrecorded."
     }
   ],
   "generic_fixes": [

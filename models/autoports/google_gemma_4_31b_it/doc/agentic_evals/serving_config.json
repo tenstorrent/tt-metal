@@ -120,7 +120,16 @@
       "batch": 8,
       "planned_clients": 2,
       "max_num_seqs": 8,
-      "batch_reason": "Smallest validated batch >=2 planned clients; actual smoke C2 and local real-history replay validated."
+      "batch_reason": "Smallest validated batch >=2 planned clients; actual smoke C2 and local real-history replay validated.",
+      "run_id": 42206258311
+    },
+    "full-gpqa-observable": {
+      "eval": "r1_gpqa_diamond",
+      "batch": 8,
+      "planned_clients": 2,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest validated batch at or above2; larger real concurrency not admitted",
+      "run_id": 42208934357
     }
   },
   "release_limits": {

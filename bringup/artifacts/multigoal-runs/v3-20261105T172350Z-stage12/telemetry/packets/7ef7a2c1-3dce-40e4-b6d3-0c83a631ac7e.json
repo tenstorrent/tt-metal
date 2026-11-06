@@ -38,7 +38,7 @@
       "name": "r1_gpqa_diamond",
       "value": 0.9,
       "unit": "fraction",
-      "phase": "agentic-evals-nightly",
+      "phase": "agentic-evals-server-sized",
       "completed_samples": 10,
       "dataset_samples": 198,
       "scope": "subset",
@@ -46,7 +46,7 @@
         0.5958499732047615,
         0.9821237869049271
       ],
-      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/nightly-gpqa-explicit-autoport/audit.json"
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/server-sized-gpqa-c2/audit.json"
     },
     {
       "name": "terminal_bench_2_1",
@@ -65,12 +65,12 @@
   ],
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
-    "stage12_accuracy": "GPQA nightly10/198 and Terminal smoke2/89 valid. SWE smoke quarantined for network downloads; same2 activation repair42200513517 pending. Terminal nightly42206258311 and GPQA server-sized active; no release results."
+    "stage12_accuracy": "GPQA server-sized 10/198 and Terminal smoke 2/89 valid. SWE smoke quarantined; activation retry 42200513517 pending. Full GPQA 198 (42208934357) and Terminal nightly 10 (42206258311) in flight; no release results."
   },
   "notes": [
     "Current stage12 serving measurement; not frozen release.",
     "Native-tool registration repaired with2x168 exact token-ID pairs and actualharness parser checks.",
-    "GPQA nightly10 valid; server-sized10 C2 active. No release completion claimed.",
+    "GPQA server-sized 10 repeats prior nightly visible answers; not 20 independent samples. Full 198 rung dispatched, not release.",
     "Synthetic prefill-interference diagnostic is not headline workload or scored accuracy; excluded from performance fields. Local evidence commit6c9d8cdf."
   ]
 }

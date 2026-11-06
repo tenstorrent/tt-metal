@@ -1,0 +1,220 @@
+{
+  "status": "valid_server_sized_rung",
+  "functional_at": 10,
+  "run_id": 42196060694,
+  "next_larger_rung_eligible": true,
+  "eligibility_note": "Valid completed server-sized10 at C2/B8; coordinator supplies larger-rung projection/admission. Scores not gated.",
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "completed_samples": 10,
+  "dataset_samples": 198,
+  "scope": "subset",
+  "sample_ids": [
+    152,
+    189,
+    46,
+    87,
+    52,
+    181,
+    31,
+    185,
+    50,
+    187
+  ],
+  "samples": [
+    {
+      "doc_id": 152,
+      "target": "(B)",
+      "final_answer": "B",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 1620,
+      "response_sha256": "668eb9ab123d934e314c4ffc6a9dfbf3daf84ce3b4cfc38d1a769cc0712c820f",
+      "finish_reason": null,
+      "completion_tokens": null
+    },
+    {
+      "doc_id": 189,
+      "target": "(A)",
+      "final_answer": "A",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 2422,
+      "response_sha256": "3317fbb7e050297338613a66a3401daadcba6c60cb0d6d3be0651e6d5133633a",
+      "finish_reason": null,
+      "completion_tokens": null
+    },
+    {
+      "doc_id": 46,
+      "target": "(A)",
+      "final_answer": "A",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 1936,
+      "response_sha256": "c57c522d1fe59f4cc0324f135e3e249396ab3ee6d44103ea4144d3d96edf2348",
+      "finish_reason": null,
+      "completion_tokens": null
+    },
+    {
+      "doc_id": 87,
+      "target": "(B)",
+      "final_answer": "B",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 2219,
+      "response_sha256": "e11130283f61fae1818e832d03a6bb3f452e5090e353b947642d823c987ca121",
+      "finish_reason": null,
+      "completion_tokens": null
+    },
+    {
+      "doc_id": 52,
+      "target": "(B)",
+      "final_answer": "B",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 2296,
+      "response_sha256": "11b00f97f1366f711a0520fd8660925e75c7260e5e09465c398a399c14c6f2bc",
+      "finish_reason": null,
+      "completion_tokens": null
+    },
+    {
+      "doc_id": 181,
+      "target": "(C)",
+      "final_answer": "C",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 2576,
+      "response_sha256": "0815f6df665187bbafe67c140c891595af20ed07da0549bb4b286a6632e02c60",
+      "finish_reason": null,
+      "completion_tokens": null
+    },
+    {
+      "doc_id": 31,
+      "target": "(D)",
+      "final_answer": "D",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 2556,
+      "response_sha256": "08d6fa9e1bfc96ba91d3beab2f3f5628b6095e4a2914d1cbab3d36c42dff40d4",
+      "finish_reason": null,
+      "completion_tokens": null
+    },
+    {
+      "doc_id": 185,
+      "target": "(C)",
+      "final_answer": "D",
+      "exact_match": 0,
+      "complete_final_answer": true,
+      "response_characters": 1810,
+      "response_sha256": "b344464dbb4ea3c7cf6025abc77293555ab5569bc29970ac8caeb0fec27395e2",
+      "finish_reason": null,
+      "completion_tokens": null
+    },
+    {
+      "doc_id": 50,
+      "target": "(A)",
+      "final_answer": "A",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 1614,
+      "response_sha256": "6accef28bc6f2164c6539dafc630928eedd5e63d2e457a7508d04350a1aed542",
+      "finish_reason": null,
+      "completion_tokens": null
+    },
+    {
+      "doc_id": 187,
+      "target": "(A)",
+      "final_answer": "A",
+      "exact_match": 1,
+      "complete_final_answer": true,
+      "response_characters": 2411,
+      "response_sha256": "bcadd8d4131792743e9782c394666222496bf4edbfc63ae4dd946bb3ceecd9a7",
+      "finish_reason": null,
+      "completion_tokens": null
+    }
+  ],
+  "scores": {
+    "correct": 9,
+    "total": 10,
+    "accuracy_fraction": 0.9,
+    "wilson95_fraction": [
+      0.5958499732047615,
+      0.9821237869049271
+    ],
+    "reference_published_percent": 84.3,
+    "reference_gpu_percent": 83.33,
+    "reference_caveat": "Subset interval does not establish full-suite parity."
+  },
+  "limits": {
+    "stream": false,
+    "max_gen_toks": 126976,
+    "until": [],
+    "do_sample": true,
+    "temperature": 1.0,
+    "top_k": 20,
+    "top_p": 0.95,
+    "seed": 42
+  },
+  "request_timeout_seconds": 14400,
+  "client_max_length": 262080,
+  "client_reported_max_length": 262079,
+  "server_context": 262144,
+  "pins": {
+    "tt_metal": "08ee8790bcbcd9e85cb799593b2bbaf40b785134",
+    "tt_inference_server": "e7643650635b2ab4e5f9662de26b1ae04433f031",
+    "plugin": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+    "plugin_basis": "Full dispatch manifest; report/build/runtime corroborate shortca7a182.",
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "harbor_config_pin": "e76c762fca5267dfb36e1f900f0a7724ed72e735",
+    "harbor_runtime": null,
+    "harbor_note": "Common lm-eval route does not execute Harbor.",
+    "lm_eval_version": "0.4.10.dev0",
+    "lm_eval_upper_git_hash": "05f38340c2185a56f961e8ea61e50499fe7aa2c6"
+  },
+  "autoport": {
+    "adapter": "models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM",
+    "layers": 60,
+    "layer_indices_verified": "0..59",
+    "mesh": "MeshShape([1, 4])",
+    "device_ids": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "context": 262144,
+    "evidence": "bringup/artifacts/stage12-gpqa-server-sized-complete.log autoport_registration"
+  },
+  "trajectory_validity": {
+    "complete_final_answers": 10,
+    "quarantined_samples": [],
+    "tool_executor": false,
+    "external_retrieval_observed": false,
+    "cutoff": "All answers end conclusively; no reported timeout/error. Raw finish reasons/output usage absent, so no fabricated token counts or categorical inference about hidden reasoning length.",
+    "visible_responses_identical_to_prior_nightly": true,
+    "network_note": "Dataset acquisition and API inference are harness operations; GPQA has no agent tools.",
+    "capacity_note": "Reasoning parser omits full hidden working-state text from scored samples; no additional concurrency admission follows."
+  },
+  "timing": {
+    "evaluation_wall_seconds": 947.0131795689813,
+    "evaluation_wall_hours": 0.26305921654693926,
+    "predicted_evaluation_seconds": 946.9505893969908,
+    "actual_to_prediction_ratio": 1.0000660965552917,
+    "device_job_hours": 0.5088888888888888,
+    "workflow_wall_hours": 1.6394444444444445,
+    "per_call_latency": null,
+    "request_slowtail": null,
+    "slowtail_missing_reason": "Samples omit request latency/usage/finish_reason. Complete device log includes all10 cumulative progress records; completion gaps under C2 are not per-request durations.",
+    "projection_owner": "coordinator; no full198forecast added by this audit"
+  },
+  "sources": {
+    "results": "collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/evals/google__gemma-4-31B-it_p300x2_evals/eval-attempt-49614e0f87f04537b8e192d83c2c2285/eval_id_gemma4-31b-autoport-v3_gemma-4-31B-it_p300x2/google__gemma-4-31B-it/results_2026-11-06T11-12-18.864063.json",
+    "samples": "collected/workflow_logs_evals_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/evals/google__gemma-4-31B-it_p300x2_evals/eval-attempt-49614e0f87f04537b8e192d83c2c2285/eval_id_gemma4-31b-autoport-v3_gemma-4-31B-it_p300x2/google__gemma-4-31B-it/samples_r1_gpqa_diamond_2026-11-06T11-12-18.864063.jsonl",
+    "runtime_log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-gpqa-server-sized-complete.log",
+    "report": "collected/report_evals_gemma-4-31B-it_bh-qb-ge_127848167191/report_127848167191.json"
+  },
+  "metadata_correction": "n-samples effective198 describes dataset size, not actual completed subset; JSONL confirms10.",
+  "device_hours_for_audit": 0
+}

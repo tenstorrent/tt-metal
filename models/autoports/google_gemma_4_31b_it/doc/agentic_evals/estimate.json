@@ -3,7 +3,7 @@
   "evals": {
     "r1_gpqa_diamond": {
       "decision": "go",
-      "reason": "Valid nightly10 at C2/B8,946.951s. Proceed to server-sized rung after real-state capacity admission; full198 linear C2 estimate5.208h before overhead/tail, not yet frozen.",
+      "reason": "Valid server-sized10/C2/B8 measured947.013179569s,9/10 complete answers. Full198 rung42208934357 dispatched with11.084957716h conservative workflow forecast including4h configured request-tail allowance; release not frozen.",
       "functional_at": 10,
       "projected_hours": null,
       "score": 0.9,
@@ -12,12 +12,12 @@
         0.9821237869049271
       ],
       "next_rung": {
-        "tasks": 10,
+        "tasks": 198,
         "planned_clients": 2,
         "batch": 8,
-        "evaluation_hours_at_c2": 0.263041830388053,
-        "projection_basis": "C2 selected and active on original nightly10; measured real C2 serving proof, no C8 admission.",
-        "run_id": 42196060694
+        "run_id": 42208934357,
+        "projected_eval_hours": 5.2085724876293975,
+        "projected_workflow_hours": 11.084957715526901
       }
     },
     "swe_bench_verified": {
