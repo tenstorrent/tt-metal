@@ -20,6 +20,8 @@ class KimiK31Config(KimiK3Config):
     INDEX_HEAD_DIM = 128
     INDEX_N_HEADS = 32
     INDEX_ROPE_DIM = 0  # NoPE indexer
+    # Indexer keys stay in the model's basis: K3.1's decode applies no Hadamard, and the migrated cache must match.
+    INDEX_HADAMARD = False
     # Documentation only (not emitted): freq 1, so every DSA layer runs its own indexer.
     INDEX_TOPK_FREQ = 1
     INDEX_SKIP_TOPK_OFFSET = 1
@@ -39,6 +41,7 @@ def kimi_k3_1_hf_config(max_seq: int = 8192):
     cfg.index_topk = KimiK31Config.INDEX_TOPK
     cfg.index_rope_dim = KimiK31Config.INDEX_ROPE_DIM
     cfg.index_rope_interleave = True
+    cfg.index_hadamard = KimiK31Config.INDEX_HADAMARD
     # Overlap the indexer TopK with the sparse-KV gather, as GLM-5.3 (serial on SP=1).
     cfg.sparse_mla_overlap_profile = "auto"
     return cfg

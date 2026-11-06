@@ -70,6 +70,13 @@ def get_fused_ring_host_timing() -> tuple[int, float]:
     return _fused_ring_host_timing["calls"], _fused_ring_host_timing["seconds"]
 
 
+def index_hadamard_basis(config) -> bool:
+    """Whether the indexer stores and scores its keys in the orthonormal Hadamard basis (GLM / DeepSeek decode
+    do; Kimi-K3.1's decode does not, ``config.index_hadamard = False``). Scores are the same either way; the
+    basis only has to match the decode side that the index cache migrates to."""
+    return bool(getattr(config, "index_hadamard", True))
+
+
 def normalized_hadamard_matrix(dim: int) -> torch.Tensor:
     """Return the Sylvester-order orthonormal Hadamard matrix used by the decode indexer."""
     assert dim > 0 and dim & (dim - 1) == 0, f"Hadamard dimension must be a power of two, got {dim}"
@@ -443,9 +450,11 @@ class TtIndexerBase:
                 dtype=ttnn.bfloat16,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-        # Blaze stores and scores indexer keys in the orthonormal Hadamard basis. Apply the same
+        # Blaze stores and scores GLM's indexer keys in the orthonormal Hadamard basis. Apply the same
         # transform to both Q and K so standalone prefill scores are unchanged while the persistent
-        # index cache remains byte-compatible with decode after migration.
+        # index cache remains byte-compatible with decode after migration. Kimi-K3.1's decode keeps its
+        # keys in the model's own basis (``index_hadamard = False``), so there neither side is rotated.
+        self._index_hadamard_basis = index_hadamard_basis(self.config)
         hadamard = normalized_hadamard_matrix(self.index_args.index_head_dim).reshape(
             1, 1, self.index_args.index_head_dim, self.index_args.index_head_dim
         )
@@ -458,7 +467,7 @@ class TtIndexerBase:
         )
         # NoPE: the query path is wq_b -> per-head split -> Hadamard with nothing nonlinear between, so fold the
         # Hadamard into wq_b once here and skip the per-call matmul in score().
-        self._q_hadamard_folded = self._index_rope_dim == 0
+        self._q_hadamard_folded = self._index_hadamard_basis and self._index_rope_dim == 0
         if self._q_hadamard_folded:
             self._idx_wq_b = self._fold_q_hadamard(self._idx_wq_b)
 
@@ -736,15 +745,18 @@ class TtIndexerBase:
         # compacted stride (_index_cache_layers) so it matches the cache_batch_idx computed in forward().
         cache_layer_idx = self._cache_slot(cache_layer_idx)
         k = self._bc_rope_pe(k, rope_tensors, start_pos, metadata=metadata)  # [1, 1, S/sp, D_idx] bf16
-        k_hadamard_cfg = self._resolve_mm_cfg("indexer.k_hadamard", seq_len)
-        k_h = ttnn.matmul(
-            k,
-            self._index_hadamard,
-            dtype=index_kbuf.dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.default_compute_kernel_config,
-            **({"program_config": k_hadamard_cfg["program_config"]} if k_hadamard_cfg is not None else {}),
-        )
+        if self._index_hadamard_basis:
+            k_hadamard_cfg = self._resolve_mm_cfg("indexer.k_hadamard", seq_len)
+            k_h = ttnn.matmul(
+                k,
+                self._index_hadamard,
+                dtype=index_kbuf.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.default_compute_kernel_config,
+                **({"program_config": k_hadamard_cfg["program_config"]} if k_hadamard_cfg is not None else {}),
+            )
+        else:
+            k_h = ttnn.typecast(k, index_kbuf.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(k)
         k = k_h
         if metadata is not None:
@@ -873,7 +885,11 @@ class TtIndexerBase:
         q_dev = self._bc_rope_pe(
             q, rope_tensors, start_pos, metadata=metadata, seq_subshard_axis=self.tp_axis if tpsp else None
         )
-        if not getattr(self, "_q_hadamard_folded", False):
+        if not self._index_hadamard_basis:
+            q_h = ttnn.typecast(q_dev, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(q_dev)
+            q_dev = q_h
+        elif not getattr(self, "_q_hadamard_folded", False):
             q_hadamard_cfg = self._resolve_mm_cfg("indexer.q_hadamard", sq_local)
             q_h = ttnn.matmul(
                 q_dev,
