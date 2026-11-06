@@ -380,7 +380,8 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
 
 void Device::init_command_queue_host() {
     // SystemMemoryManager now has internal stubs for mock/emulated devices
-    sysmem_manager_ = std::make_unique<SystemMemoryManager>(context_->get_context_id(), this->id_, this->num_hw_cqs());
+    sysmem_manager_ =
+        std::make_unique<SystemMemoryManager>(MetalEnvAccessor(*env_).impl(), *context_, this->id_, this->num_hw_cqs());
 
     // For mock/emulated devices, skip HWCommandQueue creation (they don't need real command queues)
     if (MetalEnvAccessor(*env_).impl().get_cluster().is_mock_or_emulated()) {
@@ -476,9 +477,8 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
             dev_msgs::launch_msg_t msg = kernel->launch_msg;  // copy
             dev_msgs::go_msg_t::ConstView go_msg = kernel->go_msg.view();
             CoreCoord virtual_core = this->virtual_core_from_logical_core(logical_dispatch_core, core_type);
-            tt::llrt::write_launch_msg_to_core(
-                MetalEnvAccessor(*env_).impl(),
-                this->id(),
+            slow_dispatch::WriteLaunchMsgToCore(
+                *this,
                 virtual_core,
                 msg.view(),
                 go_msg,
@@ -863,7 +863,8 @@ SystemMemoryManager& Device::sysmem_manager() {
     // SystemMemoryManager handles mock devices internally with stubs
     // For mock devices, ensure lazy initialization if not already done
     if (!sysmem_manager_) {
-        sysmem_manager_ = std::make_unique<SystemMemoryManager>(context_->get_context_id(), this->id_, 1);
+        sysmem_manager_ =
+            std::make_unique<SystemMemoryManager>(MetalEnvAccessor(*env_).impl(), *context_, this->id_, 1);
     }
     return *sysmem_manager_;
 }

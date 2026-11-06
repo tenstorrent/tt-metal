@@ -3866,3 +3866,214 @@ def test_serving_body_stages_at_batch(mesh_device, device_params, reset_seeds, s
                 gap < 0.5
             ), f"drafter row {r} at B={B}: top-1 {int(torch.argmax(lb[r]))} vs batch-1 {int(top2.indices[0])}"
     spec.serving_release()
+
+
+@_needs_assistant
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400_000_000}, id="1x4")],
+    indirect=True,
+)
+@pytest.mark.parametrize("sharded", [True, False], ids=["sharded", "gathered"])
+def test_serving_record_draws_match_the_device_sampler(mesh_device, device_params, reset_seeds, monkeypatch, sharded):
+    """GEMMA4_SPEC_SAMPLED_VERIFY on the (5, 5) record over the verify logits, published as the TP shards
+    (``sharded``: GEMMA4_SPEC_SHARDED_VERIFY_ARGMAX=1, the record's per-chip top-k + TP gather) or as the gathered
+    vocabulary (the record's split top-k over 64K chunks and the concat): a replay with a sampling
+    plan (two seeded rows at different temperatures / top-k / top-p, one greedy row, one unseeded row) hands back,
+    on every sampled packed row, the SAME id the target's own device sampler draws from the record's published
+    logits with the plan's parameters and seeds (the oracle: ``tt_sampling.forward`` on the shared verify-logits
+    buffer after the replay), and the record's argmax id on the greedy row; a second replay of the same plan
+    repeats the seeded rows' draws; then the greedy serving loop under the plan stays coherent (every committed
+    token comes from the sampler, so the plain-greedy reference does not apply: the loop converges, the accepted
+    counts are logged)."""
+    from types import SimpleNamespace
+
+    from models.demos.gemma4.tt.spec_sampling import serving_sampling_rows
+
+    monkeypatch.setenv("GEMMA4_SPEC_SAMPLED_VERIFY", "1")
+    monkeypatch.setenv("GEMMA4_SPEC_SHARDED_VERIFY_ARGMAX", "1" if sharded else "0")
+    shape, max_seq_len, widths = (5, 5), 4096, [2048]
+    B, K = shape
+    P = K + 1
+    n_new = int(os.environ.get("GEMMA4_SPEC_TEST_TOKENS", 16))
+    generator, tt_kv_cache, tokenizer, spec, page_table = _serving_build(mesh_device, max_seq_len, K)
+    assert spec._srv_sampled_verify and spec._srv_sharded_verify_argmax == sharded
+    spec.serving_prepare([shape], {shape: widths}, max_rows=_SERVING_MAX_ROWS)
+    assert spec._srv_sampler is not None and spec._srv_shape_bufs[shape]["sampler"]["chunks"] == 1
+    spec.serving_capture()
+    live = 4
+    users = list(range(live))
+    page_tables = torch.zeros(B, page_table.shape[1], dtype=torch.int32)
+    page_tables[:live] = page_table[:live]
+    anchors, positions = _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len)
+    # row ids are the users; the step's sampling params are indexed by them
+    sampling = SimpleNamespace(
+        temperature=[1.0, 0.0, 0.8, 1.0] + [0.0] * 28,
+        top_k=[32, 1, 20, 0] + [1] * 28,
+        top_p=[1.0, 1.0, 0.9, 1.0] + [1.0] * 28,
+        seed=[42, None, 7, None] + [None] * 28,
+    )
+    plan = serving_sampling_rows(shape, users, positions, sampling)
+    assert plan.sampled[:P] == [True] * P and plan.sampled[P : 2 * P] == [False] * P
+    assert plan.sampled[2 * P : 4 * P] == [True] * (2 * P) and not any(plan.sampled[4 * P :])
+    spec.serving_reseed(shape, users, anchors, positions, page_tables)
+    res = spec.serving_step(shape, users, anchors, positions, page_tables, [None] * live, plan)
+    lh = res.logits_to_host()  # [live, P, V] of this replay, read before the oracle consumes the buffer
+    ids = res.argmax_ids.clone()
+    # the greedy row holds the record's argmax ids (ties excepted)
+    host_arg = lh[1].float().argmax(-1)
+    for j in range(P):
+        a, b = int(host_arg[j]), int(ids[1, j])
+        assert a == b or lh[1, j, a] == lh[1, j, b], f"greedy row col {j}: device {b} vs host argmax {a}, not a tie"
+    # the oracle: the target's device sampler over the same published logits, the plan's parameters and seeds
+    tt_sampling = spec.target.sampling.tt_sampling
+    seed_manager = spec.target.sampling.seed_manager
+    if sharded:
+        oracle_logits = spec._srv_logits  # the shared buffer holds each chip's vocab slice
+    else:
+        # the shared buffer holds the gathered vocabulary on every chip; the plain sampler draws over per-chip
+        # slices, so the same logits go back up sharded over the TP axis (rows past the live ones are zeros)
+        full = torch.zeros(1, 1, 32, lh.shape[-1], dtype=torch.bfloat16)
+        full[0, 0, : live * P] = lh.reshape(live * P, -1).to(torch.bfloat16)
+        oracle_logits = ttnn.from_torch(
+            full,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=tuple(mesh_device.shape)),
+        )
+    k, p, temp, seeds = plan.chunk(0)
+    tt_sampling.reset_params(k, p, temp)
+    seed_manager.write_device_seed_values(seeds)
+    tok, _ = tt_sampling.forward(oracle_logits)
+    oracle = ttnn.to_torch(ttnn.get_device_tensors(tok)[0]).to(torch.int64).reshape(-1)[: B * P]
+    for b in (0, 2, 3):
+        for j in range(P):
+            r = b * P + j
+            assert int(ids[b, j]) == int(oracle[r]), (
+                f"row {b} col {j}: the record drew {int(ids[b, j])}, the device sampler {int(oracle[r])} "
+                f"(seed {seeds[r]}, k {k[r]}, p {p[r]}, 1/temp {temp[r]})"
+            )
+            top = torch.topk(lh[b, j].float(), 32).indices.tolist()
+            assert int(ids[b, j]) in top, f"row {b} col {j}: draw {int(ids[b, j])} outside the column's top-32"
+    logger.info(f"[sampled record] draws per row: {ids[:live].tolist()} (oracle {oracle[: live * P].tolist()})")
+    # the same plan again (same seeds): the seeded rows repeat their draws, the greedy row its argmax
+    spec.serving_reseed(shape, users, anchors, positions, page_tables)
+    res2 = spec.serving_step(shape, users, anchors, positions, page_tables, [None] * live, plan)
+    assert res2.argmax_ids[0].tolist() == ids[0].tolist() and res2.argmax_ids[2].tolist() == ids[2].tolist()
+    assert res2.argmax_ids[1].tolist() == ids[1].tolist()
+    # A replay re-seeds only the cores of its sampled packed rows; every other packed row carries the device SKIP
+    # seed, so those cores' PRNG advances through the replay's draw instead of being reset to one fixed seed.
+    # Observable on the plain sampler: over a flat distribution (1/T = 0.01, k 32, p 1) the unseeded draw that
+    # follows each of three replays keeps changing on the untouched users; a reset would repeat it every time.
+    from models.common.sampling.generator import MAX_UINT32
+
+    tt_sampling.reset_params([32] * 32, [1.0] * 32, [0.01] * 32)
+
+    def plain_draw(seed_values):
+        seed_manager.write_device_seed_values(seed_values)
+        t, _ = tt_sampling.forward(oracle_logits)
+        return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).to(torch.int64).reshape(-1)[:32].tolist()
+
+    plain_draw([1000 + u for u in range(32)])  # a known state on every core
+    draws_after_replays = []
+    for _ in range(3):
+        spec.serving_reseed(shape, users, anchors, positions, page_tables)
+        spec.serving_step(shape, users, anchors, positions, page_tables, [None] * live, plan)
+        draws_after_replays.append(plain_draw([MAX_UINT32] * 32))
+    untouched = [r for r in range(32) if not plan.sampled[r]]  # the greedy row's packed rows and the padding rows
+    constant = [u for u in untouched if len({d[u] for d in draws_after_replays}) == 1]
+    assert len(constant) <= 2, (
+        f"a replay resets the PRNG of users {constant} outside its sampled rows: the unseeded draw after each of "
+        f"three replays repeated ({draws_after_replays})"
+    )
+    anchors, positions = _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len)
+    spec.serving_reseed(shape, users, anchors, positions, page_tables)
+    outs = [[] for _ in users]
+    accepts = [[] for _ in users]
+    seed_cols = [None] * live
+    anchors, positions = list(anchors), list(positions)
+    it = 0
+    while min(len(o) for o in outs) < n_new:
+        plan = serving_sampling_rows(shape, users, positions, sampling)
+        res = spec.serving_step(shape, users, anchors, positions, page_tables, seed_cols, plan)
+        for r in range(live):
+            drafts = res.drafts[r].tolist()
+            g = res.argmax_ids[r].tolist()
+            m = next((i for i in range(K) if drafts[i] != g[i]), K)
+            committed = drafts[:m] + [g[m]]
+            outs[r].extend(committed)
+            accepts[r].append(m)
+            positions[r] += m + 1
+            anchors[r] = committed[-1]
+            seed_cols[r] = min(m, K)
+        it += 1
+        assert it <= 4 * n_new, "the sampled serving loop did not converge"
+    for r in range(live):
+        text = tokenizer.decode(outs[r][:n_new])
+        logger.info(f"[sampled record] row {r} T={sampling.temperature[r]} accepted {accepts[r]}: {text!r}")
+        assert len(outs[r]) >= n_new and all(0 <= t < spec.target.vocab_size for t in outs[r])
+    greedy_mean = sum(accepts[1]) / len(accepts[1])
+    assert greedy_mean >= float(os.environ.get("GEMMA4_SPEC_MIN_ACCEPT", 0.5)), "the greedy row's acceptance floor"
+    spec.serving_release()
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [pytest.param((1, 1), {"trace_region_size": 200_000_000}, id="1x1")],
+    indirect=True,
+)
+def test_sampled_verify_top1_tiebreak_matches_the_plain_sampler(mesh_device, device_params, reset_seeds):
+    """GEMMA4_SPEC_SAMPLED_VERIFY: the record's top-1 tie-break is the plain sampler's (``TTSampling``'s
+    ``_adjust_values_for_tiebreak``), op for op, on the same candidates: on the packed rows whose k == 1 the
+    single lowest-global-index candidate among the tied maxima is boosted past the tie (so ``ttnn.sampling``'s
+    argmax picks it whatever order the top-k network gave the ties), every other row's values are untouched,
+    and the two share their constants."""
+    import models.common.sampling.tt_sampling as plain_sampling
+    from models.common.sampling.tt_sampling import TTSampling
+    from models.demos.gemma4.tt import spec_sampling
+    from models.demos.gemma4.tt.spec_sampling import SpecVerifySampler, _top1_mask
+
+    for name in ("TIEBREAK_DELTA_SCALE", "TIEBREAK_DELTA_FLOOR", "TIEBREAK_INDEX_SENTINEL"):
+        assert getattr(spec_sampling, name) == getattr(plain_sampling, name)
+    torch.manual_seed(0)
+    R, W = 32, 64
+    values = (torch.rand(1, 1, R, W) * 2.0 - 1.0).to(torch.bfloat16)  # in [-1, 1): 3.0 below is the strict maximum
+    values[0, 0, :16, 5] = 3.0  # rows 0-15: the maximum at three candidate columns
+    values[0, 0, :16, 20] = 3.0
+    values[0, 0, :16, 41] = 3.0
+    # distinct global ids per row; among the tied columns of rows 0-15 the lowest id sits at column 41
+    gidx = torch.stack([torch.randperm(4 * W)[:W] for _ in range(R)]).reshape(1, 1, R, W)
+    gidx[0, 0, :16, 41] = 0
+    k = [1] * 24 + [32] * 8  # rows 24-31 sample with k > 1: untouched
+    gcol = _top1_mask(k)
+
+    def dev(t, dtype, layout):
+        return ttnn.from_torch(
+            t, device=mesh_device, dtype=dtype, layout=layout, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+        )
+
+    def host(t):
+        return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+
+    v, g, m = (
+        dev(values, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        dev(gidx.to(torch.int32), ttnn.uint32, ttnn.TILE_LAYOUT),
+        dev(gcol, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    )
+    record = SpecVerifySampler.__new__(SpecVerifySampler)
+    record.sub_core_grids, record.ops = None, 0
+    ours = host(record._tiebreak_top1(v, g, m))
+    plain = TTSampling.__new__(TTSampling)
+    plain.sub_core_grids, plain._greedy_col = None, m
+    theirs = host(plain._adjust_values_for_tiebreak(v, g))
+    assert torch.equal(ours, theirs), "the record's tie-break differs from the plain sampler's"
+    boosted = ours != values.float()
+    for r in range(R):
+        cols = boosted[0, 0, r].nonzero().reshape(-1).tolist()
+        if r < 16:
+            assert cols == [41], f"row {r}: boosted columns {cols}, expected the lowest-id tied maximum (41)"
+        elif r < 24:
+            assert cols == [int(values[0, 0, r].float().argmax())], f"row {r}: a lone maximum is the winner"
+        else:
+            assert cols == [], f"row {r}: a k > 1 row is untouched, got {cols}"
