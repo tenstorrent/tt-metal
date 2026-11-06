@@ -32,7 +32,17 @@ from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from ...utils.dbcache import DBCacheConfig
 from .dbcache_flux3_klein import Flux3KleinDBCache
-from .packing import DOWNSAMPLING_RATIO, MAX_TEXT_LENGTH, image_ids, latent_shape, pad_rows, reference_ids
+from .packing import (
+    DOWNSAMPLING_RATIO,
+    MAX_TEXT_LENGTH,
+    TEXT_BUCKETS,
+    TEXT_BUCKETS_BY_LAYOUT,
+    image_ids,
+    latent_shape,
+    pad_rows,
+    reference_ids,
+    text_bucket,
+)
 from .prompt_encoder import Flux3KleinPromptEncoder
 from .scheduler import GUIDANCE, STEPS, Flux3KleinScheduler
 from .upsampler_flux3_klein import Flux3KleinSharedUpsampler, reserve_upsampler_ranges
@@ -157,6 +167,7 @@ class Flux3KleinPipeline:
         *,
         snapshots: dict[str, Path],
         text_length: int = MAX_TEXT_LENGTH,
+        text_buckets: tuple[int, ...] | None = TEXT_BUCKETS,
         sp_axis: int = 1,
         tp_axis: int = 0,
         topology: ttnn.Topology = ttnn.Topology.Ring,
@@ -168,6 +179,7 @@ class Flux3KleinPipeline:
         self._upsampler_ranges = reserve_upsampler_ranges(mesh_device) if upsample else None
         self._device = mesh_device
         self._text_length = text_length
+        self._text_buckets = text_buckets
         self._sp_axis = sp_axis
         mesh_shape = tuple(mesh_device.shape)
         shared = next(iter(snapshots.values()))
@@ -222,18 +234,26 @@ class Flux3KleinPipeline:
 
     def warmup(self, sizes: tuple[int, ...] = SIZES) -> None:
         """Compile every program of the served shapes: each size without a reference and with one per reference token
-        bucket (a square reference that fills the bucket). A reference of another shape reuses its bucket's DiT
-        programs; only the VAE encoder compiles for a new reference shape."""
-        for model in self._transformers:
-            for size in sizes:
-                for bucket in (None, *REFERENCE_TOKEN_BUCKETS):
-                    images = ()
-                    if bucket is not None:
-                        side = math.isqrt(bucket) * DOWNSAMPLING_RATIO
-                        images = (Image.new("RGB", (side, side)),)
-                    self.generate(
-                        Flux3KleinRequest(WARMUP_PROMPT, model=model, width=size, height=size, seed=0, images=images)
-                    )
+        bucket (a square reference that fills the bucket), at every text bucket (a long prompt reaches the larger ones).
+        A reference of another shape reuses its bucket's DiT programs; only the VAE encoder compiles for a new shape."""
+        saved = self._text_buckets
+        try:
+            for text in self._text_buckets or (None,):
+                self._text_buckets = (text,) if text else None
+                for model in self._transformers:
+                    for size in sizes:
+                        for bucket in (None, *REFERENCE_TOKEN_BUCKETS):
+                            images = ()
+                            if bucket is not None:
+                                side = math.isqrt(bucket) * DOWNSAMPLING_RATIO
+                                images = (Image.new("RGB", (side, side)),)
+                            self.generate(
+                                Flux3KleinRequest(
+                                    WARMUP_PROMPT, model=model, width=size, height=size, seed=0, images=images
+                                )
+                            )
+        finally:
+            self._text_buckets = saved
 
     def generate(self, request: Flux3KleinRequest) -> Flux3KleinResult:
         if request.model not in self._transformers:
@@ -253,6 +273,12 @@ class Flux3KleinPipeline:
             reference = request.images[0]
             if not isinstance(reference, Image.Image):
                 reference = Image.open(reference)
+        canvas = None if reference is None else prepare_reference(reference)
+        ref_bucket = (
+            0
+            if canvas is None
+            else reference_bucket((canvas.width // DOWNSAMPLING_RATIO) * (canvas.height // DOWNSAMPLING_RATIO))
+        )
         timings = {}
 
         t0 = time.time()
@@ -261,13 +287,18 @@ class Flux3KleinPipeline:
         seed = caption_seed(prompt) if request.seed is None else request.seed
 
         t0 = time.time()
-        text = self._prompt_encoder.encode(prompt, self._text_length)
+        text_rows = self._text_length
+        if self._text_buckets:
+            buckets = self._text_buckets
+            if buckets is TEXT_BUCKETS:
+                buckets = TEXT_BUCKETS_BY_LAYOUT.get((size, ref_bucket), buckets)
+            text_rows = text_bucket(self._prompt_encoder.tokenize(prompt, self._text_length)[2], buckets)
+        text = self._prompt_encoder.encode(prompt, text_rows)
         timings["encode"] = time.time() - t0
 
         t0 = time.time()
         image_cond = None
-        if reference is not None:
-            canvas = prepare_reference(reference)
+        if canvas is not None:
             h, w = latent_shape(canvas.height, canvas.width)
             image_cond = (self._vae.encode(canvas), reference_ids(h, w, 0))
         timings["encode_reference"] = time.time() - t0

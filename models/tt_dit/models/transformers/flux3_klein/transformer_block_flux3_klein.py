@@ -30,6 +30,10 @@ RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
     2560: (160, 512),
     # 2048x2048 + 1 reference: 6 x 16 = 96 units, one round (q 128: 144 units, two rounds); -11.7 % denoise
     3072: (192, 512),
+    # 2048x2048 + 1 reference with a 1024-row text bucket: 6 x 17 = 102 units, one round
+    2688: (160, 512),
+    # 4096x4096 with a 1024-row text bucket: k 640 divides the shard (13 chunks)
+    8320: (128, 640),
     # 2048x2048 + 1 reference with a 2048-row text bucket: 6 x 18 = 108 units, one round; -16.4 % denoise vs today
     2816: (160, 512),
     # 4096x4096 + 1 reference with a 2048-row text bucket: k 640 divides the shard (14 chunks); -1.7 % denoise
