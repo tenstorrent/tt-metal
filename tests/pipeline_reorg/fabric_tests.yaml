@@ -226,7 +226,7 @@
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH ccl nightly tests
-  cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
+  cmd: TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_DRAM_MB=0 TT_METAL_STREAMING_PROFILER_FIFO_MB=16 pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
   skus:
     bh_loudbox:
       timeout: 30
