@@ -784,12 +784,9 @@ def test_bessel_ops(device, ttnn_op, low, high):
 
 
 def test_log10_bf16_unflushed_zero_and_subnormal_inputs(device):
-    """TT-NN's copy into DEST keeps -0 and subnormal BF16 inputs, which the LLK sweep's unpack delivers as +0.
+    """-0 and subnormal BF16 inputs, kept in DEST by TT-NN, and +0: torch's result as stored, or STOCK's word.
 
-    Each such input and +0 must store torch's result: its class as the BF16 pack stores it (NaN as
-    +inf, -0 as +0, a subnormal result as 0) and a finite result within 1 ULP of torch's float64
-    value. STOCK lists, per board, the inputs where the kernel stores its stock kernel's word
-    instead, as {word: [(first input, last input), ...]} over the input bits.
+    STOCK maps a stored word to the input-bit ranges where the kernel stores it instead of torch's result.
     """
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     if board not in ("blackhole", "wormhole_b0"):
@@ -823,4 +820,27 @@ def test_log10_bf16_unflushed_zero_and_subnormal_inputs(device):
     assert ok.all(), (
         f"{(~ok).sum().item()} of {ok.numel()} inputs off torch and stock; first input 0x{bits[~ok][0].item():04x} "
         f"stored {actual[~ok][0].item()!r}, torch {reference[~ok][0].item()!r}"
+    )
+
+
+def test_log10_bf16_special_and_normal_inputs(device):
+    """log10 of +-inf, +-NaN and a few normals against torch; a NaN result may store as NaN or +inf."""
+    words = [0x7F80, 0xFF80, 0x7FC0, 0xFFC0]
+    normals = [1.0e-3, 0.5, 1.0, 2.0, 3.0, 10.0, 1000.0, 3.0e38]
+    specials = torch.tensor(words, dtype=torch.int32).to(torch.int16).view(torch.bfloat16)
+    values = torch.cat([specials, torch.tensor(normals, dtype=torch.bfloat16)])
+    x = values.repeat(1024 // values.numel()).reshape(1, 1, 32, 32)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.log10(tt_x)).to(torch.float64).flatten()
+    reference = torch.log10(x.to(torch.float64)).flatten()
+    nan = torch.isnan(reference)
+    assert torch.all(torch.isnan(actual[nan]) | torch.isposinf(actual[nan])), actual[nan].unique()
+    inf = torch.isinf(reference)
+    assert torch.equal(actual[inf], reference[inf]), actual[inf].unique()
+    finite = ~nan & ~inf
+    spacing = 2.0 ** (torch.floor(torch.log2(reference[finite].abs().clamp(min=2.0**-126))) - 7)
+    error = (actual[finite] - reference[finite]).abs()
+    # 1.0 maps to an exact 0, which has no spacing of its own.
+    assert torch.all((error <= spacing) | ((reference[finite] == 0) & (actual[finite] == 0))), (
+        f"max error {(error / spacing).max().item():.3f} BF16 ULP"
     )

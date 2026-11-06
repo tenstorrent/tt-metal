@@ -26,11 +26,11 @@ inline bool bf16_dest_log10() {
 }
 template <int ITERATIONS = 8>
 inline void calculate_log10_bf16() {
-    ckernel::sfpu::bf16::calculate_log_fused<ckernel::sfpu::Log10Bf16Config, ITERATIONS>();
+    ckernel::sfpu::bf16::log10::calculate_log_fused<ckernel::sfpu::Log10Bf16Config, ITERATIONS>();
 }
 inline void init_log10_bf16() {
     if (bf16_dest_log10()) {
-        ckernel::sfpu::bf16::init_log_fused<ckernel::sfpu::Log10Bf16Config>();
+        ckernel::sfpu::bf16::log10::init_log_fused<ckernel::sfpu::Log10Bf16Config>();
     }
 }
 
