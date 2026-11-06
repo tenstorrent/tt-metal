@@ -46,6 +46,10 @@
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "l1_small_size": 4096}'
   server-default-top-k: 32
   additional-server-args: "--async-scheduling"
+  # Device grammar needs no flag: Gemma3ForConditionalGeneration declares
+  # supports_device_grammar and the plugin enables it once sample_on_device_mode is set.
+  structured-output: true
+  additional-structured-output-args: "--backend openai-chat --endpoint /v1/chat/completions --dataset json"
   tt-llama-text-ver: tt_transformers
   multimodal: true
   skus:
