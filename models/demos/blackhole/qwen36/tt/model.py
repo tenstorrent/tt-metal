@@ -761,12 +761,7 @@ class Qwen36Model:
         # the hidden fracture, so the round-trip gather->place->reshard preserves the per-device
         # columns. ConcatMeshToTensor(dim=1) over the 2D [rows, dim/TP] is the inverse of the
         # dims=(None,-1) hidden shard used on re-upload.
-        if tp:
-            vis_host = ttnn.to_torch(vision_tokens, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1)).to(
-                torch.bfloat16
-            )
-        else:
-            vis_host = ttnn.to_torch(vision_tokens).to(torch.bfloat16)  # [num_image_tokens, Hg]
+        vis_host = self.vision_rows_host(vision_tokens)  # [num_image_tokens, Hg]
         seg = vis_host[vis_row_offset : vis_row_offset + n]
         if tp:
             shard = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.args.cluster_shape)
@@ -794,6 +789,19 @@ class Qwen36Model:
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._vis_mask_buf
         )
+
+    def vision_rows_host(self, vision_tokens):
+        """The packed vision rows as one host bf16 tensor [num_image_tokens, dim] (what _set_vision_merge splices); a
+        host tensor passes through. A traced prefill reads the rows once, before its first replay: the vision tower
+        allocates the device rows per request, after the traces were captured, so a replay can overwrite them before
+        a later chunk splices them."""
+        if vision_tokens is None or isinstance(vision_tokens, torch.Tensor):
+            return vision_tokens
+        if self.num_devices > 1:
+            return ttnn.to_torch(vision_tokens, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1)).to(
+                torch.bfloat16
+            )
+        return ttnn.to_torch(vision_tokens).to(torch.bfloat16)
 
     def _vis_row_offset_for(self, token_ids, chunk_start):
         """Packed-vision-row offset for the prefill segment starting at absolute position
@@ -7372,6 +7380,7 @@ class Qwen36Model:
         persistent output), and must enqueue its reads before returning (the next replay overwrites it).
         When on_chunk is given the short-trace shortcut is skipped (it has no per-chunk hidden to hand out)."""
         chunk_size = self._chunked_chunk_size or 2048
+        vision_tokens = self.vision_rows_host(vision_tokens)  # before the first replay (see vision_rows_host)
         if (
             on_chunk is None
             and actual_len < chunk_size

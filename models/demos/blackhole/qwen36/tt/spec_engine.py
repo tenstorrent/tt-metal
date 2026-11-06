@@ -3077,6 +3077,9 @@ class MTPSpecEngine:
         self.__dict__.setdefault("_finishing", set()).discard(slot)  # a prefill gives the slot a new request
         self._fresh_dirty.discard(slot)
         model = self.model
+        if vision_tokens is not None and hasattr(model, "vision_rows_host"):  # absent on test fakes
+            # one host copy before any replay: every route splices from it (see Qwen36Model.vision_rows_host)
+            vision_tokens = model.vision_rows_host(vision_tokens)
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
         assert self._last_hidden, "prefill before prepare"
         prompt_row = None
