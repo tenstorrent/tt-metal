@@ -506,10 +506,10 @@ void apply_reduce_scatter_common_args(
     const std::optional<Tensor>& penult) {
     using Args = ttnn::ccl::ReduceScatterCommonArgs;
     std::array<uint32_t, Args::count> values{};
-    values[Args::input] = input.buffer()->address();
-    values[Args::intermediate] = intermediate.buffer()->address();
-    values[Args::output] = output.buffer()->address();
-    values[Args::penult] = penult.has_value() ? penult->buffer()->address() : 0u;
+    values[Args::input] = input.mesh_buffer().address();
+    values[Args::intermediate] = intermediate.mesh_buffer().address();
+    values[Args::output] = output.mesh_buffer().address();
+    values[Args::penult] = penult.has_value() ? penult->mesh_buffer().address() : 0u;
     const auto semaphore_args = reduce_scatter_semaphore_args(is_ring, barrier, semaphores);
     std::copy(semaphore_args.begin(), semaphore_args.end(), values.begin() + Args::barrier);
     for (const size_t kernel_index : {artifacts.reader_kernel_index, artifacts.writer_kernel_index}) {

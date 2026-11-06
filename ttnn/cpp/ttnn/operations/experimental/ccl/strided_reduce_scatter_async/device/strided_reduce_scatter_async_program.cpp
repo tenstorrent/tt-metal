@@ -1013,19 +1013,19 @@ void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
 
     auto& reader_args = GetCommonRuntimeArgs(program, artifacts.reader_kernel_id);
     reader_args[ReaderCrta::slice_Ht] = slice_Ht;
-    reader_args[ReaderCrta::input] = input.buffer()->address();
-    reader_args[ReaderCrta::intermediate] = intermed.buffer()->address();
+    reader_args[ReaderCrta::input] = input.mesh_buffer().address();
+    reader_args[ReaderCrta::intermediate] = intermed.mesh_buffer().address();
     reader_args[ReaderCrta::semaphore_0] = semaphore.at(0).address();
     reader_args[ReaderCrta::semaphore_1] = semaphore.at(1).address();
     if (addcmul_a.has_value() && addcmul_b.has_value()) {
-        reader_args[ReaderCrta::addcmul_a] = addcmul_a->buffer()->address();
-        reader_args[ReaderCrta::addcmul_b] = addcmul_b->buffer()->address();
+        reader_args[ReaderCrta::addcmul_a] = addcmul_a->mesh_buffer().address();
+        reader_args[ReaderCrta::addcmul_b] = addcmul_b->mesh_buffer().address();
     }
 
     auto& writer_args = GetCommonRuntimeArgs(program, artifacts.writer_kernel_id);
     writer_args[WriterCrta::slice_Ht] = slice_Ht;
-    writer_args[WriterCrta::intermediate] = intermed.buffer()->address();
-    writer_args[WriterCrta::output] = output.buffer()->address();
+    writer_args[WriterCrta::intermediate] = intermed.mesh_buffer().address();
+    writer_args[WriterCrta::output] = output.mesh_buffer().address();
     writer_args[WriterCrta::semaphore_0] = semaphore.at(0).address();
     writer_args[WriterCrta::semaphore_1] = semaphore.at(1).address();
     writer_args[WriterCrta::batch_ready] = semaphore.at(2).address();

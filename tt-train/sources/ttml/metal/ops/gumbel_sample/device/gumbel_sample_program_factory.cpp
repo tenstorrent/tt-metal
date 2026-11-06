@@ -486,9 +486,9 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
 
     const uint32_t logits_address = logits.mesh_buffer().address();
     const uint32_t mask_address =
-        tensor_args.logits_mask.has_value() ? tensor_args.logits_mask->buffer()->address() : 0U;
+        tensor_args.logits_mask.has_value() ? tensor_args.logits_mask->mesh_buffer().address() : 0U;
     // Zero when absent: the slot exists in both modes so the patch is unconditional.
-    const uint32_t positions_address = position_aware ? tensor_args.positions->buffer()->address() : 0U;
+    const uint32_t positions_address = position_aware ? tensor_args.positions->mesh_buffer().address() : 0U;
     const uint32_t output_address = tensor_return_value.mesh_buffer().address();
 
     // seed, the temperature value, the mask batch stride and (in position mode) the token dim are
