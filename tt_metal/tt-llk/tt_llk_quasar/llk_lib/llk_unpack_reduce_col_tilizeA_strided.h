@@ -139,7 +139,7 @@ inline void _llk_unpack_reduce_col_tilizeA_strided_init_(
     cfg[THCON_UNPACKER0_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
     cfg[THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
 
-    if (tensor_shape.face_r_dim == FACE_R_DIM)
+    if (tensor_shape.face_r_dim == FACE_R_DIM || tensor_shape.total_num_faces() == NUM_FACES)
     {
         cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_NO_WRITE_RMW, 0);
         _llk_unpack_reduce_col_tilizeA_strided_mop_config_(buf_desc_id_0, buf_desc_id_1, full_ct_dim, tensor_shape);
@@ -176,7 +176,8 @@ inline void _llk_unpack_reduce_col_tilizeA_strided_(
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, start_l1_tile_idx_0 * tensor_shape.num_faces_c_dim);
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
 
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, start_l1_tile_idx_1);
+    const std::uint32_t hw_tiles_per_sw_tile = (tensor_shape.total_num_faces() == NUM_FACES) ? 1 : tensor_shape.total_num_faces();
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, start_l1_tile_idx_1 * hw_tiles_per_sw_tile);
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, 0);
 
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
