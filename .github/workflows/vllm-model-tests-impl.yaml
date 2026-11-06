@@ -297,6 +297,8 @@ jobs:
           AB_ARGS_A: ${{ matrix.test-group.ab-args-a }}
           AB_ENV_B: ${{ matrix.test-group.ab-env-b }}
           AB_ARGS_B: ${{ matrix.test-group.ab-args-b }}
+          AB_ARMS: ${{ matrix.test-group.ab-arms }}
+          AB_BENCH: ${{ matrix.test-group.ab-bench }}
           AB_TT_CONFIG: ${{ matrix.test-group.tt-config }}
           AB_CHAT_KWARGS: ${{ matrix.test-group.default-chat-template-kwargs }}
           AB_SERVER_TIMEOUT: ${{ matrix.test-group.server-timeout }}

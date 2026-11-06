@@ -402,16 +402,17 @@
   budget_type: vllm
 
 # ── Qwen 3.8 MTP on BH Galaxy, GDN state owner A/B on one machine ──
-# tt-inference-server qwen36_blackhole_mtp settings (TP=8 x DP=4). One job serves A, B, A, B on the
-# same Galaxy so the A/B difference can be read against each setting's own repeat.
+# tt-inference-server qwen36_blackhole_mtp settings (TP=8 x DP=4). One job serves every arm of ab-arms on
+# the same Galaxy so a difference can be read against each setting's own repeat. R: retention 0 (no
+# boundary copies, no mamba_boundary refusal of a prefill over a pending verify); N and AN: prefix caching off.
 # A: GDN prefix snapshots owned by the model, block 64. B: GDN state in vLLM MambaSpec blocks, block 1024.
 # The model writes its weight cache under /work because the shared cache mount is read-only.
-- name: "Qwen3.8-27B MTP DP=4 GDN state A-B, same machine (BH Galaxy)"
+- name: "Qwen3.8-27B MTP DP=4 GDN state runs, same machine (BH Galaxy)"
   model: Qwen/Qwen3.8-27B
   ab-driver: true
   hf-snapshot-revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
   multimodal: false
-  server-timeout: 60
+  server-timeout: 40
   benchmark-timeout: 30
   mesh-device: BH-Galaxy
   arch: arch-blackhole
@@ -422,6 +423,8 @@
   ab-args-b: "--block_size 1024 --prefix-cache-retention-interval 1024"
   ab-env-a: "QWEN36_PREFIX_CACHE_SLOTS=256 QWEN36_PREFIX_END_AT_CAP=1 QWEN36_PREFIX_CACHE_FAST_ALLOC=1 QWEN36_PREFILL_INTRACE_SNAP=1"
   ab-env-b: "QWEN36_MAMBA_SPEC=1"
+  ab-arms: "A1|QWEN36_PREFIX_CACHE_SLOTS=256 QWEN36_PREFIX_END_AT_CAP=1 QWEN36_PREFIX_CACHE_FAST_ALLOC=1 QWEN36_PREFILL_INTRACE_SNAP=1|--block_size 64|1;B1|QWEN36_MAMBA_SPEC=1|--block_size 1024 --prefix-cache-retention-interval 1024|1;R1|QWEN36_MAMBA_SPEC=1|--block_size 1024 --prefix-cache-retention-interval 0|1;N1|QWEN36_MAMBA_SPEC=1|--block_size 1024 --no-enable-prefix-caching|0;AN1||--block_size 64 --no-enable-prefix-caching|0;A2|QWEN36_PREFIX_CACHE_SLOTS=256 QWEN36_PREFIX_END_AT_CAP=1 QWEN36_PREFIX_CACHE_FAST_ALLOC=1 QWEN36_PREFILL_INTRACE_SNAP=1|--block_size 64|0;B2|QWEN36_MAMBA_SPEC=1|--block_size 1024 --prefix-cache-retention-interval 1024|0;R2|QWEN36_MAMBA_SPEC=1|--block_size 1024 --prefix-cache-retention-interval 0|0"
+  ab-bench: "32:256 8:128"
   default-chat-template-kwargs: '{"enable_thinking": false}'
   extra-env: >-
     TT_QWEN35_TEXT_VER=qwen36_blackhole
@@ -429,6 +432,7 @@
     QWEN36_SPEC_K=3 QWEN36_SPEC_FAST_PREFILL=1 OMP_NUM_THREADS=8 HF_MODEL=Qwen/Qwen3.8-27B MESH_DEVICE=BH-Galaxy
     QWEN36_MAX_TOKENS_ALL_USERS=525312 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 VLLM_IMAGE_FETCH_TIMEOUT=30
     QWEN_SDPA_BF8=1 QWEN36_SPEC_FUSED=1 VLLM_TT_SPEC_FUSED=1 QWEN36_SPEC_CHAIN=1 VLLM_TT_SPEC_CHAIN=1
+    QWEN36_SPEC_STEP_TIMING=1
     QWEN36_SPEC_CHAIN_SAMPLED=1 VLLM_TT_SPEC_CHAIN_SAMPLED=1 QWEN36_SPEC_FUSED_AUDIT_EVERY=8
     QWEN36_SPEC_CHAIN_AUDIT_EVERY=8 QWEN36_SPEC_CHUNKED_PREFILL=1 QWEN36_PREFILL_BIG_CHUNK=8192
     QWEN36_PREFILL_RS_LINKS=2 QWEN36_PREFILL_RS_WORKERS=8 QWEN36_PREFILL_AGMM_TUNED=1 QWEN36_PREFILL_MASKED_BIG=1
