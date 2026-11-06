@@ -241,9 +241,17 @@ def sync_gradients(parameters):
 def average_gradients(parameters, axis_names: tuple[str, ...]):
     """Average parameter gradients across one or more mesh axes.
 
+    For each parameter with an initialized gradient, the grad is all-reduced
+    (summed) across every axis in ``axis_names`` and then divided by the
+    product of those axis sizes, leaving each device with the mean grad.
+
     Axes listed in ``axis_names`` but not present on the active mesh, or of
     size 1, are silently skipped. If none are left (or ``axis_names`` is
-    empty, or no mesh is open), the function is a no-op.
+    empty, or no mesh is open), the function is a no-op. TP is not averaged:
+    sharded parameters already hold per-shard-correct grads, and a replicated
+    parameter whose grad is partial across TP is either summed by its layer
+    (e.g. ``lora_A`` in ``LoraColumnParallelLinear``) or marked with
+    ``ttml.parallel.mark_partial`` for ``sum_partial_gradients``.
 
     FSDP interaction: parameters sharded by ``ttml.fsdp.fully_shard`` on a
     mesh axis listed in ``axis_names`` are skipped for that axis — the FSDP

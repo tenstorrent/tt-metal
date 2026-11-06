@@ -370,14 +370,15 @@ def test_tied_backward_matches_untied_reference(legs):
 
 
 def test_partial_gradients_are_marked_across_tp(tp_mesh):
-    """Each device normalizes only its own heads, and a column-parallel LoRA's lora_A feeds only that device's rows
-    of lora_B, so these gradients are partial across tp and ttml.sync_gradients sums them. Nothing else is marked."""
+    """Each device normalizes only its own heads, so the per-head norms' gradients are partial across tp and
+    ttml.sync_gradients sums them. Nothing else is marked: a column-parallel LoRA's lora_A sums its own gradient in
+    backward, and marking it too would sum it twice."""
     with empty_init():
         model = DistributedQwen3ForCausalLM(_qwen3_config(), tie_word_embeddings=False, shard_dim=1)
     inject_adapter_in_model(model, {"targets": ["q_proj", "o_proj"], "rank": 8})
 
     params = model.parameters()
-    partial = ("self_attn/q_norm/weight", "self_attn/k_norm/weight", "self_attn/q_proj/lora_A")
+    partial = ("self_attn/q_norm/weight", "self_attn/k_norm/weight")
     expected = {name for name in params if name.endswith(partial)}
     assert len(expected) == len(partial), sorted(params)
     marked = {name: ttml.parallel.partial_axes(p) for name, p in params.items() if ttml.parallel.partial_axes(p)}

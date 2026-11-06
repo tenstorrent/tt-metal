@@ -38,7 +38,7 @@ DP+TP support:
   After backward, call:
     ttml.sync_gradients(model.parameters())
   to average gradients across DP groups and sum the partial ones across TP
-  (the per-head norms and LoRA's lora_A, marked with ttml.parallel.mark_partial).
+  (the per-head norms, marked with ttml.parallel.mark_partial).
 
 Usage (TP only):
     ttml.open_device_mesh(ttml.Mesh((1, tp_size), ("dp", "tp")))

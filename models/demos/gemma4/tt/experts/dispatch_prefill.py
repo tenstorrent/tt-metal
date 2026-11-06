@@ -10,8 +10,11 @@ chosen experts, the fused GeGLU routed-expert kernel runs only the selected expe
 outputs back to the token's row, and the reduce sums the top-k and reduce-scatters over the columns. Two
 all-gathers restore the replicated [tokens, hidden] layout the lane wrapper expects.
 
-Enabled with GEMMA4_MOE_DISPATCH_PREFILL=1 (see experts/__init__.py). The direct ``dispatch`` / ``combine`` ops only
-run along mesh axis 0 ("cluster_axis must be 0 ... not tested"); a single-row mesh (the 4-chip / 8-chip entries)
+Enabled with GEMMA4_MOE_DISPATCH_PREFILL=1 (see experts/__init__.py). The direct dispatch / combine are the
+model-local programs ``custom_ops/moe_dispatch_prefill`` (the DeepSeek prefill dispatch / combine kernels and their
+factories kept in this folder, so an upstream fabric-header or shared-op change cannot break the 26B; the routing
+setup keeps the shared ``masked_bincount`` / ``offset_cumsum`` ops). They only run along mesh axis 0 (the shared
+op's tested value); a single-row mesh (the 4-chip / 8-chip entries)
 dispatches along its columns, which needs GEMMA4_MOE_DISPATCH_RING=1: the hop-forwarding ``dispatch_fabric2d`` /
 ``combine_fabric2d`` pair on a wrap-wired axis (open the mesh with FABRIC_1D_RING; the model's own collectives can
 stay Linear). The 4-chip line can instead open as the column mesh MeshShape(4, 1) with GEMMA4_TP_AXIS=0 (TP over
@@ -28,12 +31,12 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, compute_constants
-from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombine2dModule, TtCombineModule
-from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombine2dModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import MoERoutingOutputs, TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.gemma4.custom_ops.expert_gather_small import ExpertGatherSmall
 from models.demos.gemma4.custom_ops.geglu_routed_expert import GegluRoutedExpert
+from models.demos.gemma4.custom_ops.moe_dispatch_prefill import MoeCombinePrefill, MoeDispatchPrefill
 from models.demos.gemma4.tt.ccl import sync_all_reduce
 from models.demos.minimax_m3.tt.moe.tt_reduce import TtMiniMaxReduce
 
@@ -104,6 +107,8 @@ RING_FWD_EXTRA_BYTES = 64
 FABRIC_DEFAULT_PAYLOAD_BYTES = 4352
 FABRIC_PAYLOAD_UNIT_BYTES = 1088  # one bfp8 tile: the defaults are multiples of it (4 tiles) and so is the BH max (14)
 FABRIC_MAX_PAYLOAD_BYTES_BLACKHOLE = 14 * FABRIC_PAYLOAD_UNIT_BYTES
+# Pages one of dispatch_fabric2d's forwarding channels holds.
+RING_DISPATCH_FWD_VC_PAGES = 64
 
 
 def ring_token_bytes(hidden: int, elem_bytes: int = 2) -> int:
@@ -146,23 +151,26 @@ def ring_fabric_router_config(hidden: int, elem_bytes: int = 2):
     return cfg
 
 
-def combine_fwd_reduction() -> int:
-    """GEMMA4_MOE_COMBINE_FWD_REDUCTION (default 1 = no reduction): the divisor on combine_fabric2d's forwarding
-    region (tt-metal #61858, "no value can deadlock the ring"; it trades DRAM against throughput)."""
-    return max(1, int(os.environ.get("GEMMA4_MOE_COMBINE_FWD_REDUCTION", "1")))
+def combine_fwd_vc_pages(
+    ring_extent: int, seq_len_per_chip: int, num_experts_per_tok: int, experts_per_chip: int, num_links: int
+) -> int:
+    """combine_fabric2d's pages per forwarding channel, from GEMMA4_MOE_COMBINE_FWD_REDUCTION (default 1).
 
-
-def combine2d_extra_kwargs(module_cls) -> dict:
-    """The keyword arguments the shared ``TtCombine2dModule`` constructor takes beyond the common ones: main's
-    ``fwd_reduction`` (required since #61858) when the signature has it, nothing on a tree without it -- one call
-    site that works on both bases."""
-    import inspect
-
-    try:
-        params = inspect.signature(module_cls.__init__).parameters
-    except (TypeError, ValueError):
-        return {}
-    return {"fwd_reduction": combine_fwd_reduction()} if "fwd_reduction" in params else {}
+    The variable is the divisor the op once took (#61858), so it is converted here, where it is read, the way the op
+    converted it: the pages one stream's forwarding buffer needed to hold its worst case before the op had channels
+    and credits, divided by the reduction and by the stream's channel count, rounded up. The arguments are the ones
+    the combine call passes; ring_extent is the mesh's size along the dispatch axis."""
+    reduction = max(1, int(os.environ.get("GEMMA4_MOE_COMBINE_FWD_REDUCTION", "1")))
+    per_destination = seq_len_per_chip * num_experts_per_tok
+    half_extent = ring_extent // 2
+    relay_chunks = half_extent * (half_extent - 1) // 2
+    channels_per_stream = relay_chunks  # one per movement class
+    worst_case = (
+        (half_extent - 2) * (per_destination // num_links)
+        + per_destination // (2 * num_links)
+        + relay_chunks * experts_per_chip
+    )
+    return -(-worst_case // (reduction * channels_per_stream))
 
 
 def small_rows_admit(rows: int, lo: int, hi: int) -> bool:
@@ -268,11 +276,16 @@ class _DispatchChunkPlan:
                 cluster_axis=owner.dispatch_axis,
                 num_links=owner.num_links,
                 topology=ttnn.Topology.Ring,
-                **combine2d_extra_kwargs(TtCombine2dModule),
+                fwd_vc_pages=combine_fwd_vc_pages(
+                    dgs, self.seq_per_chip, owner.top_k, experts_per_chip, owner.num_links
+                ),
             )
         else:
-            self.dispatch = TtDispatchModule(
-                mesh_device=owner.mesh_device,
+            # the model-local dispatch / combine programs (custom_ops/moe_dispatch_prefill: the DeepSeek prefill
+            # dispatch / combine kernels built from this folder, so an upstream fabric-header change cannot break
+            # the 26B's prefill); one instance per chunk size, their handshake semaphores created here
+            self.dispatch = MoeDispatchPrefill(
+                owner.mesh_device,
                 dispatch_group_size=dgs,
                 experts_per_chip=experts_per_chip,
                 num_routed_experts=owner.num_experts,
@@ -284,15 +297,14 @@ class _DispatchChunkPlan:
                 cluster_axis=owner.dispatch_axis,
                 num_links=owner.num_links,
                 topology=owner.topology,
-                subdevice_id=None,
             )
-            self.combine = TtCombineModule(
-                mesh_device=owner.mesh_device,
+            self.combine = MoeCombinePrefill(
+                owner.mesh_device,
                 dispatch_group_size=dgs,
-                num_dispatch_groups=owner.ndg,
                 experts_per_chip=experts_per_chip,
                 num_experts_per_tok=owner.top_k,
                 seq_len_per_chip=self.seq_per_chip,
+                emb_dim=owner.hidden,
                 cluster_axis=owner.dispatch_axis,
                 num_links=owner.num_links,
                 topology=owner.topology,
@@ -410,7 +422,7 @@ class Gemma4DispatchExperts:
         self.routing_setup = _RoutingSetupOnAxis(
             mesh_device, table, self.dispatch_axis, num_links=num_links, experts_per_chip=experts_per_chip
         )
-        self.tt_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(
+        self.tt_dispatch_table = MoeDispatchPrefill.shard_expert_dispatch_table(
             mesh_device, table, dispatch_axis=self.dispatch_axis
         )
         # global expert index table [groups, chips-in-group, ...]: dim 1 over the dispatch axis, dim 0 over the other
@@ -650,12 +662,13 @@ class Gemma4DispatchExperts:
                 seq_len_per_chip=S,
                 cluster_axis=self.dispatch_axis,
                 num_links=self.num_links,
+                fwd_vc_pages=RING_DISPATCH_FWD_VC_PAGES,
                 topology=ttnn.Topology.Ring,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            buffer, metadata = plan.dispatch(
-                x_rm, weights_rm, indices_rm, offsets, self.tt_dispatch_table, padding_config=padding_config
+            buffer, metadata = plan.dispatch.op(
+                x_rm, indices_rm, offsets, self.tt_dispatch_table, padding_config=padding_config
             )
         ttnn.deallocate(x_rm)
         ttnn.deallocate(offsets)
@@ -665,7 +678,7 @@ class Gemma4DispatchExperts:
         if self.ring:
             combined = plan.combine(expert_out, metadata, counts, region_offsets, all_offsets)  # [1,1,S,K,H]
         else:
-            combined = plan.combine(expert_out, metadata, counts, region_offsets)  # [1,1,S,K,H] row-major
+            combined = plan.combine.op(expert_out, metadata, counts, region_offsets)  # [1,1,S,K,H] row-major
         ttnn.deallocate(all_offsets)
         ttnn.deallocate(expert_out)
         ttnn.deallocate(metadata)

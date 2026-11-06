@@ -278,6 +278,7 @@ class TtPrefillBlock(LightweightModule):
         layer_num: Optional[int] = None,
         max_seq_len: Optional[int] = None,
         kv_only: bool = False,
+        next_kv_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
         tp_shard_kv: Optional[bool] = None,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
@@ -378,6 +379,7 @@ class TtPrefillBlock(LightweightModule):
             slot_num=slot_num,
             layer_num=layer_num,
             kv_only=kv_only,
+            next_kv_only=next_kv_only,
             sparse_kv_cache_format=sparse_kv_cache_format,
             first_layer_idx=first_layer_idx,
             llama4_scale_cache=llama4_scale_cache,
@@ -522,8 +524,8 @@ class TtPrefillBlock(LightweightModule):
             overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(model_cfg),
             # Likewise only configs that opt in (Kimi K2.7, GLM 5.3) run dispatch_fabric2d / combine_fabric2d.
             moe_transport=moe_transport_arg(model_cfg),
-            combine_fwd_reduction=getattr(model_cfg, "COMBINE_FWD_REDUCTION", None),
-            dispatch_fwd_vc_pages=getattr(model_cfg, "DISPATCH_FWD_VC_PAGES", None),
+            dispatch_fwd_vc_pages=model_cfg.MOE_FWD_VC_PAGES,
+            combine_fwd_vc_pages=model_cfg.MOE_FWD_VC_PAGES,
             num_links=num_links,
             topology=topology,
             routed_expert_weights=state_dict.get("routed_expert_weights"),  # None if cache exists

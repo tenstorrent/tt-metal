@@ -651,3 +651,23 @@ def test_gather_rank_mismatch(input_shape, index_shape, device, expect_error):
     )
     with expect_error(RuntimeError, "same number of dimensions"):
         ttnn.gather(ttnn_input, -1, index=ttnn_index)
+
+
+def test_gather_rank1_nd_sharded_input(device):
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))])
+    nd_shard_spec = ttnn.NdShardSpec(
+        ttnn.Shape([64]), grid, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    )
+    memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
+    torch_input = torch.arange(256, dtype=torch.float32).to(torch.bfloat16)
+    torch_index = torch.arange(255, -1, -1, dtype=torch.int32)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+    tt_index = ttnn.from_torch(
+        torch_index, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+
+    output = ttnn.gather(tt_input, 0, index=tt_index, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert_equal(torch.gather(torch_input, 0, torch_index.long()), ttnn.to_torch(output))

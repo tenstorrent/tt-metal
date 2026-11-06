@@ -100,11 +100,15 @@ void bind_fused_msda(nb::module_& mod) {
             * :attr:`value`: (B, S, H, D) ROW_MAJOR bfloat16, S = sum_l H_l * W_l,
               or packed (B, S, H*D). The packed form is what a Linear over
               embed_dims emits and costs one DRAM page per (b, s) instead of one
-              per (b, s, h) — prefer it.
+              per (b, s, h) — prefer it. With H > 1 it needs D*2 to be a multiple
+              of the buffer's alignment (on Blackhole, D % 32 == 16 in DRAM is
+              rejected, e.g. D = 16 or 48; use (B, S, H, D) or L1 there).
             * :attr:`sampling_locations`: (B, Q, H, L, P, 2) ROW_MAJOR bfloat16, or the
               packed form (B, Q, H, L*P*2). The packed form costs one DRAM page per
               (b, q, h) instead of one per sample point and avoids 8x page padding —
-              prefer it where the producer can emit it.
+              prefer it where the producer can emit it. (B, Q, H*L*P*2), the heads of a
+              query in one page as a Linear emits them, is also accepted when each head's
+              L*P*2 values fill whole alignment units of their buffer.
             * :attr:`attention_weights`: (B, Q, H, L, P) ROW_MAJOR bfloat16, or packed (B, Q, H, L*P)
             * :attr:`spatial_shapes`: host-side list of (H_l, W_l) per level, in level order.
               Not a device tensor: it is a static property of the feature pyramid and is
@@ -154,16 +158,18 @@ void bind_fused_msda(nb::module_& mod) {
             * :attr:`reference_points`: (B, Q, R, 2) ROW_MAJOR bfloat16 or float32, normalized
               (x, y) in [0, 1]. float32 keeps the sampling position sub-pixel on wide maps.
               The 4-D box form is rejected, not reinterpreted.
-            * :attr:`sampling_offsets`: (B, Q, H, L, P, 2) or packed (B, Q, H, L*P*2)
-              ROW_MAJOR bfloat16. Raw, in feature-map pixel units — the op accounts
+            * :attr:`sampling_offsets`: (B, Q, H, L, P, 2), packed (B, Q, H, L*P*2) or
+              heads-packed (B, Q, H*L*P*2) as for sampling_locations, ROW_MAJOR bfloat16. Raw, in feature-map pixel units — the op accounts
               for scale_l (1/[W_l, H_l], or 1/[W_l-1, H_l-1] when align_corners is
               set).
             * :attr:`attention_weights`: as in fused_msda
             * :attr:`spatial_shapes`: as in fused_msda
             * :attr:`reference_mode`:
-                - "level"  (default): R == L, r(l, p) = l. DINO-family decoders.
+                - "level"  (default): R == L, r(l, p) = l. DINO-family decoders, and
+                  BEVFormer temporal attention with an ego shift (its maps are levels).
                 - "pillar": P % R == 0, r(l, p) = p % R, with the point axis laid out
-                  as (P // R, R). BEVFormer spatial/temporal attention.
+                  as (P // R, R). BEVFormer spatial attention, and temporal attention
+                  without a shift (R == 1).
             * :attr:`align_corners`: pixel mapping
             * :attr:`memory_config`: output memory config
             * :attr:`num_valid_queries`: optional list of B counts, each in [0, Q] and at
