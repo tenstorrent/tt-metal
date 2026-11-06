@@ -16,5 +16,5 @@ if [ -z "$RR_CHIPS" ]; then
     RR_CHIPS=$(basename "$(readlink -f "/sys/class/tenstorrent/tenstorrent!$n/device")")
     echo "chip /dev/tenstorrent/$n = $RR_CHIPS"
 fi
-n_chips=$(tr ',' '\n' <<< "$RR_CHIPS" | grep -c .)
-exec python3 rerank_server.py --host 0.0.0.0 --port "$RR_PORT" --chips "$RR_CHIPS" --dp "$n_chips" "$@"
+# one worker per PCI address in RR_CHIPS
+exec python3 rerank_server.py --host 0.0.0.0 --port "$RR_PORT" --chips "$RR_CHIPS" "$@"
