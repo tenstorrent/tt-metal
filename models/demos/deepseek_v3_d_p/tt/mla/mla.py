@@ -1344,6 +1344,10 @@ class ttMLA:
 
     def _q_a_latent_tp_rows(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """q_a projection + TP reduce-scatter over rows: this TP rank's query rows, un-normalized."""
+        rows = self.active_seq_len_local // self.tp_factor
+        assert (
+            self.active_seq_len_local % self.tp_factor == 0 and rows % ttnn.TILE_SIZE == 0
+        ), f"q_a row reduce-scatter needs tile-aligned TP rows: {self.active_seq_len_local} local rows over TP={self.tp_factor}"
         return ttnn.experimental.matmul_reduce_scatter_prefill(
             hidden_states,
             self.q_a_proj_weight,
@@ -1973,8 +1977,8 @@ class ttMLA:
         # q-norm output uses the tuned activation memory_config in every mode (dense and sparse);
         # the next op (q_b_proj) is the same matmul regardless of attention path.
         q_norm_mem_config = self._get_act_mem_config("q_b_proj", seq_len_local)
-        # Compute the q_a latent once and share it: the DSA indexer reads it for its queries, then
-        # _q_stem consumes it for q_b_proj — so the sparse path does not recompute the q_a stem.
+        # Compute the q_a latent once and share it: the DSA indexer reads it (or, on the row path, its TP rank's
+        # rows) for its queries, then _q_stem consumes it for q_b_proj — so the sparse path does not recompute it.
         qr_rows = qr_local = None
         if self._merge_qkv_a:
             qr, kv_a = self._qkv_a_latent(hidden_states, seq_len_local, q_norm_mem_config)

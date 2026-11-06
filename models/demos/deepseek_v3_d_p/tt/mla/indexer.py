@@ -83,14 +83,15 @@ def normalized_hadamard_matrix(dim: int) -> torch.Tensor:
 
 
 class TtIndexerBase:
-    # score()/forward() accept qr already reduced to this TP rank's query rows (qr_tp_local=True).
-    accepts_tp_local_qr = True
     """Shared implementation foundation for DSA and compressed indexer variants.
 
     The current DSA path remains here so its tracing, TP cache deduplication, and
     tuned data flow stay unchanged. Variants override weight conversion,
     initialization, key construction, and scoring where their geometry differs.
     """
+
+    # score()/forward() accept qr already reduced to this TP rank's query rows (qr_tp_local=True).
+    accepts_tp_local_qr = True
 
     # --- DSA ownership: weight names, config-field detection, host/cache API. ttMLA routes all
     # indexer weight-name / config-field / cache-file / placeholder decisions through these so the
@@ -549,14 +550,14 @@ class TtIndexerBase:
 
     def _fold_q_hadamard(self, wq_b: ttnn.Tensor) -> ttnn.Tensor:
         """wq_b [q_lora, H*D] with each head's D columns right-multiplied by the Hadamard, in wq_b's dtype."""
-        k, hd = wq_b.shape[-2], wq_b.shape[-1]
+        k = wq_b.shape[-2]
         h, d = self.index_args.index_n_heads, self.index_args.index_head_dim
         w = ttnn.reshape(ttnn.typecast(wq_b, ttnn.bfloat16), (1, k, h, d))
         folded = ttnn.matmul(
             w, self._index_hadamard, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
         )
         ttnn.deallocate(w)
-        result = ttnn.typecast(ttnn.reshape(folded, (1, 1, k, hd)), wq_b.dtype)
+        result = ttnn.typecast(ttnn.reshape(folded, tuple(wq_b.shape)), wq_b.dtype)
         ttnn.deallocate(folded)
         ttnn.deallocate(wq_b)
         return result
@@ -807,7 +808,7 @@ class TtIndexerBase:
         one full-seq chunk at offset 0, so there is no natural path that skips the cache.
 
         ``qr`` is the shared q_a latent (q_a_proj + TP all-reduce + q_a_layernorm) — ttMLA computes it once
-        and passes it in; the indexer applies wq_b to it (no q_a stem of its own). ``qr`` is NOT deallocated
+        and passes it in, or with ``qr_tp_local`` only this TP rank's normalized query rows; the indexer applies wq_b to it (no q_a stem of its own). ``qr`` is NOT deallocated
         here — ttMLA's _q_stem consumes it afterwards. ``hidden_states`` is still needed for the K stem
         (write_k) and the per-head weights (weights_proj). (write_k is called internally here; ttMLA.forward
         only ever calls self._indexer.forward — it never calls write_k directly.)
