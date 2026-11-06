@@ -37,6 +37,20 @@ FORCE_INLINE float bf16_to_f32(uint16_t bf16) {
     return result;
 }
 
+// Convert one floored BF16 random digit to an 8-bit integer in {0, ..., 255}.
+// The compute kernel draws in [0, nextafterf(256.0f, 0.0f)] and floors on the SFPU; clamping
+// guards against any out-of-range value spilling into adjacent bytes during bit-packing.
+FORCE_INLINE uint32_t clamp_rand_digit(uint16_t packed_bf16) {
+    const float val = bf16_to_f32(packed_bf16);
+    if (val <= 0.0f) {
+        return 0U;
+    }
+    if (val >= 255.0f) {
+        return 255U;
+    }
+    return static_cast<uint32_t>(val);
+}
+
 void kernel_main() {
     constexpr auto final_indices_stick_size = get_arg(args::final_indices_stick_size);
     // The host also supplies out_stick_size; this kernel does not read it.
@@ -110,23 +124,23 @@ void kernel_main() {
     // get random number
     dfb_rand.wait_front(1);
     const CoreLocalMem<volatile uint16_t> rand_values(dfb_rand.get_read_ptr());
-    // Two elements of the random tile are independent integer digits in [0, 256] (floored on the
-    // SFPU; exact in BF16). A draw of exactly 256 (the inclusive upper endpoint, probability ~0)
-    // is clamped to 255 so both digits are 8-bit. The threshold is the lattice point
-    // (hi * 256 + lo) / 65536 in [0, 1 - 2^-16], uniform over 65536 equiprobable values.
-    // Elements 0 and 1 are the first two draws of the tile's first row: element 0 is lane 0 of
-    // rand_tile's first SFPU store, element 1 is lane 0 of its second store, which lands because
-    // rand() programs its dest address mode on every call. A dead low digit would collapse the
-    // threshold to hi / 256 and bring the 1/256 tail cutoff back
-    // (test_sampling_low_digit_reaches_the_tail).
-    constexpr uint32_t RAND_HI_ELEMENT = 0;
-    constexpr uint32_t RAND_LO_ELEMENT = 1;
-    constexpr float RAND_DIGIT_MAX = 255.0f;
-    constexpr float RAND_LATTICE_SCALE = 1.0f / 65536.0f;
-    float rand_hi = bf16_to_f32(rand_values[RAND_HI_ELEMENT]);
-    float rand_lo = bf16_to_f32(rand_values[RAND_LO_ELEMENT]);
-    rand_hi = rand_hi > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : rand_hi;
-    rand_lo = rand_lo > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : rand_lo;
+    // Three independent elements of the random tile are integer digits in {0, ..., 255} (floored
+    // on the SFPU and exact in BF16). Combining three 8-bit digits yields a 24-bit integer
+    // k = (d0 << 16) | (d1 << 8) | d2 in {0, ..., 2^24 - 1}, and scaling by 2^-24 produces an
+    // exact FP32 threshold on the k / 2^24 lattice in [0, 1 - 2^-24], matching the 24-bit FP32
+    // significand grid on [0.5, 1.0).
+    // Elements 0, 1, and 2 are three independent draws from the tile's first row: element 0 is
+    // lane 0 of rand_tile's first SFPU store, element 1 is lane 0 of its second store (which lands
+    // because rand() programs its dest address mode on every call), and element 2 is lane 1 of the
+    // first store (test_sampling_low_digit_reaches_the_tail).
+    constexpr uint32_t RAND_DIGIT_0_ELEMENT = 0;
+    constexpr uint32_t RAND_DIGIT_1_ELEMENT = 1;
+    constexpr uint32_t RAND_DIGIT_2_ELEMENT = 2;
+    constexpr float RAND_LATTICE_SCALE_24 = 1.0f / 16777216.0f;  // 2^-24
+    const uint32_t rand_d0 = clamp_rand_digit(rand_values[RAND_DIGIT_0_ELEMENT]);
+    const uint32_t rand_d1 = clamp_rand_digit(rand_values[RAND_DIGIT_1_ELEMENT]);
+    const uint32_t rand_d2 = clamp_rand_digit(rand_values[RAND_DIGIT_2_ELEMENT]);
+    const uint32_t rand_q24 = (rand_d0 << 16) | (rand_d1 << 8) | rand_d2;
     // wait for compute kernel
     dfb_final_indices.wait_front(num_users);
     dfb_local_values.wait_front(1);
@@ -198,10 +212,19 @@ void kernel_main() {
         end_id_local_phase_1 = start_id_local_phase_1 + (kept_tokens - FACE_WIDTH);
     }
 
-    // Stochastic sampling in float32
-    const float rand_f = (rand_hi * 256.0f + rand_lo) * RAND_LATTICE_SCALE;
+    // Stochastic sampling in float32 using the 24-bit uniform threshold k / 2^24.
+    // Default sampled_index to the last kept token in the top-k/top-p nucleus rather than the
+    // first (top-1) token: if FP32 rounding of sum(local_values[i] / cum_prob_f) lands 1-3 ULPs
+    // below 1.0f, thresholds in [cum_sum_f_last, 1.0) belong to the final kept tail token and must
+    // not wrap around to top-1.
+    const float rand_f = static_cast<float>(rand_q24) * RAND_LATTICE_SCALE_24;
     float cum_sum_f = 0.0f;
-    uint32_t sampled_index = final_indices[local_indices[start_id_local_phase_0]];
+    const uint32_t last_kept_id = (end_id_local_phase_1 > start_id_local_phase_1)
+                                      ? (end_id_local_phase_1 - 1)
+                                      : ((end_id_local_phase_0 > start_id_local_phase_0)
+                                             ? (end_id_local_phase_0 - 1)
+                                             : start_id_local_phase_0);
+    uint32_t sampled_index = final_indices[local_indices[last_kept_id]];
     bool index_found = false;
 
     for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
