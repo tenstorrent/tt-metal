@@ -42,7 +42,7 @@ void RotateDeviceOperation::validate_inputs(
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
 
     // Buffer allocated
-    TT_FATAL(input.buffer() != nullptr, "Input tensor must be allocated in buffers on device");
+    TT_FATAL(input.is_allocated(), "Input tensor must be allocated in buffers on device");
 
     // Expand parameter
     TT_FATAL(

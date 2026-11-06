@@ -56,18 +56,28 @@ void kernel_main() {
     uint32_t start_indices[num_dims];
     uint32_t end_indices[num_dims];
 
+    // Read each index tensor under a scoped_lock. On Quasar DM the scratchpad is reached through the DM
+    // caches, and the NoC writes below land in L1 behind them: without the lock's invalidate on entry the
+    // loads can return lines cached by an earlier read (e.g. the previous call's start indices). No-op on WH/BH.
+
     // Read start tensor data using separate circular buffer
     noc.async_read(start_tensor_accessor, cb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    for (uint32_t i = 0; i < num_dims; i++) {
-        start_indices[i] = cb_tensor[i];
+    {
+        const auto cb_tensor_lock = cb_tensor.scoped_lock(0, num_dims);
+        for (uint32_t i = 0; i < num_dims; i++) {
+            start_indices[i] = cb_tensor[i];
+        }
     }
 
     // Read end tensor data using separate circular buffer
     noc.async_read(end_tensor_accessor, cb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    for (uint32_t i = 0; i < num_dims; i++) {
-        end_indices[i] = cb_tensor[i];
+    {
+        const auto cb_tensor_lock = cb_tensor.scoped_lock(0, num_dims);
+        for (uint32_t i = 0; i < num_dims; i++) {
+            end_indices[i] = cb_tensor[i];
+        }
     }
 
     uint32_t start_offset = 0;

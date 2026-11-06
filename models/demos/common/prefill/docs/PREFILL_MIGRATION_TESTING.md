@@ -202,6 +202,12 @@ export PREFILL_MODEL=my_model PREFILL_NUM_LAYERS=<L> \
 Left unset, the producer falls back to the adapter defaults (61 layers), which will not match a deeper
 runner. The ack count is `num_layers × chunks`, so the drain hangs.
 
+With `PREFILL_FORWARD_TOKENS_BUDGET` above the chunk size (packed forwards, `ADDING_A_PREFILL_MODEL.md`
+section 2.1) both modules pack each forward with one run of consecutive chunks per slot, round-robin (or
+shuffled for `interleave: random`) until it holds `budget / chunk_size` chunks or no slot has more, and fill the
+rest with empty chunks. `p_burst` must be 0 there, and the warm-up chunks go out a full forward at a time.
+Layer completions still count per chunk.
+
 For an arbitrary mapping instead of a uniform offset, replace `dst_slot_offset` with `pairs` (CLI
 equivalent: `--migrations "0:3,1:2"`). Source and destination sets must be disjoint in loopback, and
 duplicate destinations are rejected.
@@ -225,6 +231,11 @@ Two consequences follow automatically. Depth stops being synthetic — a slot pu
 `ceil(real_len / CHUNK_SIZE)` chunks with `actual_isl = real_len`, so the random chunk draw and
 `mid_end_prob` are bypassed. And a prompt longer than the per-user cache is clamped to
 `MAX_SEQ_LEN / CHUNK_SIZE` chunks with a warning, so distinct full-length traces still fit the KV budget.
+
+`PREFILL_PRODUCER_SLOT_LENGTHS="n0,n1,..."` keeps the one shared prompt but gives slot *i* a prompt of its
+first n_i tokens, so a test can mix lengths (a long prompt, a lone chunk, a partial last chunk) with a golden for
+every slot. Slots past the list keep random lengths. Each length must fit in whole chunks within
+`MAX_SEQ_LEN`, and it can't be combined with `PREFILL_PRODUCER_SLOT_TRACES`, whose traces set each slot's length.
 
 This is the discriminating multi-prompt check: with one shared prompt every slot's KV is identical, so
 crossed slot→prompt wiring or a slot-index bug in the address table still passes. Note that
@@ -250,9 +261,9 @@ knob existed, so existing legs are unaffected.
 
 Coverage: the multi-turn scheduling described here has no dedicated automated test yet — a device-free
 host-logic test for turn continuation (align-down/replay and absolute-length bookkeeping) is a TODO. The
-closest existing coverage is the on-device producer/runner PCC gate
-`tests/test_producer_runner_e2e.py::test_producer_runner_pcc`, which drives the producer end to end and
-fails if any resident slot's KV PCC is below threshold, though it is not multi-turn-specific.
+closest existing coverage is the on-device producer/runner PCC gate `runners/ci/run_multirank_pcc.sh`,
+which drives the producer end to end and fails if any resident slot's KV PCC is below threshold, though
+it is not multi-turn-specific.
 
 ---
 
@@ -471,7 +482,7 @@ Launch order is A → B (wait for `WORKER_READY`) → C. Between runs, clear sta
 
 ```bash
 pkill -f migration_endpoint ; pkill prte
-rm -f /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_acks_* /tmp/migration_done.sentinel*
+rm -f /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_completions_* /tmp/migration_done.sentinel*
 ```
 
 ```bash
@@ -541,7 +552,7 @@ gates you intend to run require.
 | 1 | `build_kv_chunk_table` | serialises the block-cyclic layout; issues no comms |
 | 2 | `kv_migration_stages` | one `KvCacheStage` per migratable cache, for the cross-stage table merge |
 | 1, 2 | `cache_kind` (adapter) | what each table config holds (`kvpe` / `index` / other); the producer's index check and the driver's cache plan key on it instead of the config count. Kimi-K3 declares its KDA state configs here (`tt/kda/KDA_STATE_MIGRATION.md`) |
-| 2 | `layer_position_range` (adapter) | positions one /migrate of a layer covers; default `[0, real_len)`. Kimi-K3 returns the KDA version window `[v * 36864, (v + 1) * 36864)`, `v = (real_len - 1) % 8`, for its KDA layers, so MLA and KDA layers go in separate calls and the byte verify walks that window |
+| 2 | `layer_position_range` (adapter) | positions one /migrate of a layer covers; default `[0, real_len)`. Kimi-K3 returns the KDA window `[0, 36864)` for its KDA layers. Consecutive layers with equal ranges share one call (at `real_len` 36864 that is every layer), and the byte verify walks each layer's own range |
 | 2 `dst-bytes` | **none** | nothing is decoded — the byte compare is model-agnostic |
 | 2 `dst-golden` | none beyond Gate 1 | reuses the producer's own read-back, not a runtime hook |
 
@@ -557,6 +568,7 @@ gets a branch there, and both gates work.
 | H2D socket | `PREFILL_H2D_SERVICE_ID` | `transport.h2d_service_id` | — |
 | layer depth | `PREFILL_NUM_LAYERS` | same var, exported | — |
 | chunk size | `PREFILL_CHUNK_SIZE` | same var, exported | — |
+| tokens per forward | `PREFILL_FORWARD_TOKENS_BUDGET` (default the chunk size) | `model.forward_tokens_budget` or the same var, exported | — |
 | mesh | `PREFILL_SP` / `PREFILL_TP` | `transport.sp` / `.tp` | — |
 | KV table | `PREFILL_MIGRATION_TABLE_PATH` | `migration.table_path` | — |
 | device map | `PREFILL_MIGRATION_DEVICE_MAP_PATH` | `migration.device_map_path` | — |
