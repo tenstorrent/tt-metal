@@ -806,6 +806,7 @@ _TRUE_MAIN_KEEP = (
     "MATMUL_PACK_BLOCK",
     "_D",
     "MATMUL_NB",
+    "MATMUL_OPERAND_SIZES",
 )
 
 
