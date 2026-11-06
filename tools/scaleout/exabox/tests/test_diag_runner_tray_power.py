@@ -49,7 +49,7 @@ from diag_runner import (  # noqa: E402
 )
 
 CLEAN_HSC = {"word": 0x0000, "input": 0x00, "iout": 0x00}
-# SYS-5505 record words of a healthy feed, as hand-read on SJC3 galaxies: no
+# SYS-5505 record words of a healthy feed, as hand-read on Blackhole Galaxy trays: no
 # FAULT_RECORD, FAULT_RECORD_LAST 0x0012, 12.22 V, IOUT peak 184.0 A, 43 C,
 # IOUT OC fault/warn limits 228 A / 219 A.
 CLEAN_REC = {0xFA: 0x0000, 0xFB: 0x0012, 0x8B: 0x0187, 0xA6: 2944, 0xAF: 43, 0x46: 3648, 0x4A: 3504}
@@ -433,18 +433,18 @@ class TestTrayPowerPhase(unittest.TestCase):
         self.assertEqual(bmc.calls, [])
 
 
-# The SJC3 c02u21 hand reads (owner msg #6581): tray 2 HSC 0x40 latched OFF and
+# Hand reads of one galaxy (SYS-5505): tray 2 HSC 0x40 latched OFF and
 # IOUT_OC with FAULT_RECORD 0x0022 and an IOUT peak of 235.5 A; the other seven
 # feeds peaked at 180.5-185.5 A. Raw IOUT peaks in 62.5 mA steps.
-C02U21_PEAKS = {
+OC_TRAY_PEAKS = {
     (1, 0x40): 2920, (1, 0x42): 2968, (2, 0x40): 3768, (2, 0x42): 2944,
     (3, 0x40): 2912, (3, 0x42): 2888, (4, 0x40): 2896, (4, 0x42): 2904,
 }  # fmt: skip
 
 
-def c02u21_hsc(tray2_status=True):
+def oc_tray_hsc(tray2_status=True):
     hsc = {}
-    for (t, a), peak in C02U21_PEAKS.items():
+    for (t, a), peak in OC_TRAY_PEAKS.items():
         hsc[(t, a)] = dict(CLEAN_HSC, rec={0xA6: peak, 0x46: 3712, 0x4A: 3552} if a == 0x42 else {0xA6: peak})
     if tray2_status:
         hsc[(2, 0x40)].update(word=0x6852, input=0x20, iout=0x80)
@@ -467,8 +467,8 @@ class TestHscRecord(unittest.TestCase):
                              "iout_oc_fault_limit_a": 228.0, "iout_oc_warn_limit_a": 219.0})  # fmt: skip
         self.assertEqual(set(decode_hsc_record({}).values()), {None})
 
-    def test_c02u21_tray_2_warns_and_fails_on_its_latches(self):
-        bmc = FakeBmc(hsc=c02u21_hsc())
+    def test_oc_tray_2_warns_and_fails_on_its_latches(self):
+        bmc = FakeBmc(hsc=oc_tray_hsc())
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             checks = by_tray(run_phase(bmc))
@@ -496,7 +496,7 @@ class TestHscRecord(unittest.TestCase):
         self.assert_read_only(bmc)
 
     def test_peak_alone_turns_a_pass_into_a_warn_never_a_fail(self):
-        checks = by_tray(run_phase(FakeBmc(hsc=c02u21_hsc(tray2_status=False))))
+        checks = by_tray(run_phase(FakeBmc(hsc=oc_tray_hsc(tray2_status=False))))
         self.assertEqual(checks[2].status, WARN)
         self.assertIn("no 12 V latch set", checks[2].details)
         self.assertIn("29% above the median", checks[2].details)
