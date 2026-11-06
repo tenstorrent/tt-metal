@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geo
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import mark_layer_cached
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
@@ -122,10 +123,15 @@ class TtKimiK3Transformer(LightweightModule):
         # Kimi-K3's MLA cache is dense: `zero_padded_kv_cache` asserts TILE layout, which a sparse
         # kvpe cache (bf16/fp8 ROW_MAJOR, read natively by sparse_sdpa) does not satisfy. Accepting a
         # sparse format silently would produce a cache the pad-zero path cannot touch, so refuse it.
-        if sparse_kv_cache_format is not None:
+        # Kimi-K3.1 (K3 plus a DSA indexer on its MLA layers) is sparse: its MLA layers read a sparse
+        # KV cache, and the indexer writes its own key cache beside it (`index_kv_cache`).
+        self.has_indexer = resolve_has_indexer(config)
+        if sparse_kv_cache_format is not None and not self.has_indexer:
             raise ValueError(
                 f"Kimi-K3 uses a dense MLA KV cache; got sparse_kv_cache_format={sparse_kv_cache_format!r}"
             )
+        if self.has_indexer and sparse_kv_cache_format is None:
+            raise ValueError("Kimi-K3.1's sparse MLA needs its KV cache format (sparse_kv_cache_format)")
         self.padding_side = padding_side
         self.mesh_device = mesh_device
         # Resolve once, here, rather than letting `None` reach a collective. The MoE's
@@ -250,6 +256,7 @@ class TtKimiK3Transformer(LightweightModule):
                 is_balanced=is_balanced,
                 first_layer_idx=first_layer_idx,
                 tp_shard_kv=tp_shard_kv,
+                sparse_kv_cache_format=sparse_kv_cache_format,
             )
             self.layers.append(
                 TtKimiK3Block(
@@ -431,8 +438,12 @@ class TtKimiK3Transformer(LightweightModule):
             def attn_input_tap(local_idx, hidden):
                 on_layer_hidden(first + local_idx - 1, hidden)
 
-        if index_kv_cache is not None:
-            raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
+        if (index_kv_cache is not None) != self.has_indexer:
+            raise ValueError(
+                "Kimi-K3.1's indexer needs index_kv_cache"
+                if self.has_indexer
+                else "Kimi-K3 has no DSA indexer; index_kv_cache must be None"
+            )
         if return_intermediates:
             raise NotImplementedError("Kimi-K3 does not implement return_intermediates")
         if (
@@ -476,6 +487,7 @@ class TtKimiK3Transformer(LightweightModule):
                 ctx = K3AttnContext(
                     rope_tensors=rope_tensors,
                     kvpe_cache=kvpe_cache,
+                    index_kv_cache=index_kv_cache,
                     cache_layer_idx=self.schedule.kv_slot(local_idx),
                     cache_user_id=cache_user_id,
                     actual_start=actual_start,

@@ -64,6 +64,16 @@ MLA_KEYS = {
     "g_proj.weight": "self_attn.g_proj.weight",
 }
 
+# Kimi-K3.1 only: the DSA indexer on each MLA layer, in TtIndexer.WEIGHT_NAMES' naming (its LayerNorm bias
+# rides as `indexer.k_norm_bias.weight`).
+INDEXER_KEYS = {
+    "indexer.wq_b.weight": "self_attn.indexer.wq_b.weight",
+    "indexer.wk.weight": "self_attn.indexer.wk.weight",
+    "indexer.k_norm.weight": "self_attn.indexer.k_norm.weight",
+    "indexer.k_norm_bias.weight": "self_attn.indexer.k_norm.bias",
+    "indexer.weights_proj.weight": "self_attn.indexer.weights_proj.weight",
+}
+
 GATE_KEYS = {
     "weight": "block_sparse_moe.gate.weight",
     "e_score_correction_bias": "block_sparse_moe.gate.e_score_correction_bias",
@@ -137,6 +147,8 @@ def load_layer_state_dict(
     wanted = {alias: prefix + key for alias, key in LAYER_NORM_KEYS.items()}
     if is_mla:
         wanted.update({f"mla::{alias}": prefix + key for alias, key in MLA_KEYS.items()})
+        if hasattr(model_cfg, "INDEX_HEAD_DIM"):  # Kimi-K3.1
+            wanted.update({f"mla::{alias}": prefix + key for alias, key in INDEXER_KEYS.items()})
     if is_moe:
         wanted.update({f"gate::{alias}": prefix + key for alias, key in GATE_KEYS.items()})
         wanted.update({f"shared::{alias}": prefix + key for alias, key in SHARED_EXPERT_KEYS.items()})

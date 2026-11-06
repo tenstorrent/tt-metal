@@ -93,6 +93,8 @@ class K3AttnContext:
 
     rope_tensors: Optional[dict] = None
     kvpe_cache: object = None
+    # Kimi-K3.1 only: the DSA indexer's key cache, slotted like `kvpe_cache` (one slot per MLA layer).
+    index_kv_cache: object = None
     # RANK-LOCAL MLA slot, from `KimiK3LayerSchedule.kv_slot`. `None` on a KDA layer, which has no
     # slot at all; see layer_schedule.py for why this is not the global one.
     cache_layer_idx: Optional[int] = None
@@ -168,6 +170,7 @@ class TtK3MlaAttention(LightweightModule):
 
         `resolve_has_indexer` reports False for K3's config (no `has_indexer`, no `index_*` fields),
         which is also what lets the trace guard in `TtPrefillTransformer.set_trace_controller` pass.
+        K3.1's config has the indexer fields, and its layers write the index cache in `ctx`.
         """
         return self._mla.forward(
             normed,
@@ -180,6 +183,7 @@ class TtK3MlaAttention(LightweightModule):
             actual_end=ctx.actual_end,
             cache_user_id=ctx.cache_user_id,
             metadata=ctx.metadata,
+            index_kv_cache=ctx.index_kv_cache,
         )
 
 
@@ -272,6 +276,7 @@ def build_attention(
     is_balanced: bool = False,
     first_layer_idx: int = 0,
     tp_shard_kv: Optional[bool] = None,
+    sparse_kv_cache_format=None,
 ) -> K3Attention:
     """The one place the hybrid schedule turns into a module.
 
@@ -310,6 +315,8 @@ def build_attention(
                 kv_only=kv_only,
                 first_layer_idx=first_layer_idx,
                 tp_shard_kv=tp_shard_kv,
+                # K3.1 only (the transformer refuses it for K3): the sparse MLA's KV cache format.
+                **({"sparse_kv_cache_format": sparse_kv_cache_format} if sparse_kv_cache_format is not None else {}),
             )
         )
 
