@@ -37,55 +37,9 @@ class TtSpatialCrossAttention:
         self.embed_dims = embed_dims
         self.num_cams = num_cams
         self.batch_first = batch_first
-        self._plan = None
-
-    def prepare(self, reference_points_cam, bev_mask):
-        """Build the per-camera query gather/scatter plan for a fixed camera rig.
-
-        reference_points_cam: torch float32 (num_cams, 1, num_query, D, 2), bev_mask: torch bool
-        (num_cams, 1, num_query, D), both from the encoder's host projection. The plan depends
-        only on the calibration, so it is built here once and the forward stays on device.
-        """
-        num_cams, _, num_query, D, _ = reference_points_cam.shape
-        assert num_cams == self.num_cams
-        indexes = [mask[0].sum(-1).nonzero().squeeze(-1) for mask in bev_mask]
-        max_len = max(len(index) for index in indexes)
-
-        # Cameras are padded to max_len. Padded rows scatter into a sink row at index num_query,
-        # sliced off after the scatter, and gather from row 0, which is harmless as their
-        # results land in the sink.
-        scatter_index = torch.full((num_cams, max_len), num_query, dtype=torch.int32)
-        gather_index = torch.zeros((num_cams, max_len), dtype=torch.int32)
-        reference_points_rebatch = torch.zeros((num_cams, max_len, D, 2), dtype=torch.float32)
-        for cam, index in enumerate(indexes):
-            scatter_index[cam, : len(index)] = index
-            gather_index[cam, : len(index)] = index
-            reference_points_rebatch[cam, : len(index)] = reference_points_cam[cam, 0, index]
-
-        count = (bev_mask.sum(-1) > 0).permute(1, 2, 0).sum(-1).clamp(min=1.0).unsqueeze(-1).float()
-
-        def upload(tensor, dtype, layout):
-            return ttnn.from_torch(
-                tensor, dtype=dtype, layout=layout, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-
-        all_idx_expanded = upload(scatter_index.reshape(-1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-        all_idx_expanded = ttnn.expand(ttnn.unsqueeze(all_idx_expanded, 1), [-1, self.embed_dims])
-        self._plan = dict(
-            num_query=num_query,
-            max_len=max_len,
-            all_idx_expanded=ttnn.to_memory_config(all_idx_expanded, ttnn.DRAM_MEMORY_CONFIG),
-            all_idx_for_gather_q=upload(gather_index.reshape(-1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
-            # float32: the fused op forms the sampling locations from them in float32.
-            reference_points_rebatch=upload(reference_points_rebatch, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-            count=upload(count, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-            # Cloned per call: zero fills are host writes, and the forward must not issue them.
-            slots_template=ttnn.zeros(
-                (1, num_query, self.embed_dims), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-            ),
-            sentinel_row_template=ttnn.zeros(
-                (1, self.embed_dims), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-            ),
+        # Each camera's last plan row is padding, the zero source for unfilled contribution slots.
+        self.zero_rows = ttnn.from_torch(
+            torch.zeros(1, num_cams, 1, embed_dims), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
 
     def __call__(
@@ -97,68 +51,72 @@ class TtSpatialCrossAttention:
         query_pos=None,
         key_padding_mask=None,
         reference_points=None,
+        rebatch_plan=None,
         flag="encoder",
         **kwargs,
     ):
-        assert self._plan is not None, "call prepare() with the rig's reference_points_cam / bev_mask first"
-        plan = self._plan
-        max_len = plan["max_len"]
-
-        if key is None:
-            key = query
+        """rebatch_plan: the frame's SCARebatchPlan, the cameras' visible queries compacted into
+        row blocks; every encoder layer shares it."""
+        assert rebatch_plan is not None, "the encoder builds the frame's rebatch plan"
         if value is None:
-            value = key
-
-        if residual is None:
-            inp_residual = query
-            slots = ttnn.clone(plan["slots_template"])
+            value = key if key is not None else query
+        inp_residual = query if residual is None else residual
         if query_pos is not None:
             query = query + query_pos
-
         bs, num_query, _ = query.shape
-        assert bs == 1, "the device-side gather/scatter assumes bs=1"
-        assert num_query == plan["num_query"]
+        assert bs == 1, "the rebatch plan is built for bs=1"
 
-        query_2d = ttnn.squeeze(query, 0)
-        queries_gathered = ttnn.embedding(plan["all_idx_for_gather_q"], query_2d, layout=ttnn.TILE_LAYOUT)
-        queries_rebatch = ttnn.reshape(queries_gathered, (bs * self.num_cams, max_len, self.embed_dims))
-        num_cams, l, bs, embed_dims = key.shape
+        if rebatch_plan.is_empty:
+            # No camera sees any query: the attention contributes nothing but the projection's bias.
+            return ttnn.add(inp_residual, self.params.output_proj.bias)
 
-        key = ttnn.permute(key, (2, 0, 1, 3))
-        key = ttnn.reshape(key, (bs * self.num_cams, l, self.embed_dims))
+        rebatch_len = rebatch_plan.rebatch_len
+        query_rows = ttnn.reshape(
+            ttnn.to_layout(query, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            (1, 1, bs * num_query, self.embed_dims),
+        )
+        queries_rebatch = ttnn.reshape(
+            ttnn.embedding(rebatch_plan.query_index, query_rows, layout=ttnn.TILE_LAYOUT),
+            (bs * self.num_cams, rebatch_len, self.embed_dims),
+        )
 
+        num_cams, l, bs, embed_dims = value.shape
         value = ttnn.permute(value, (2, 0, 1, 3))
         value = ttnn.reshape(value, (bs * self.num_cams, l, self.embed_dims))
         queries = self.deformable_attention(
             query=queries_rebatch,
-            key=key,
             value=value,
-            reference_points=plan["reference_points_rebatch"],
+            reference_points=rebatch_plan.reference_points_batched,
+            num_valid_queries_tensor=rebatch_plan.num_valid_queries,
         )
         ttnn.deallocate(queries_rebatch)
-
-        # Padded rows go to the sink row at index num_query through the sentinel
-        # in all_idx_expanded and are sliced off, so no mask multiply is needed.
-        queries_flat = ttnn.reshape(queries, (self.num_cams * max_len, self.embed_dims))
-        slots_2d = ttnn.squeeze(slots, 0)
-        slots_2d = ttnn.to_layout(slots_2d, ttnn.TILE_LAYOUT)
-        sentinel_row = ttnn.clone(plan["sentinel_row_template"])
-        slots_extended = ttnn.concat([slots_2d, sentinel_row], dim=0)
-        slots_extended = ttnn.scatter_add(slots_extended, 0, plan["all_idx_expanded"], queries_flat)
-        slots = ttnn.slice(slots_extended, [0, 0], [num_query, self.embed_dims])
-        slots = ttnn.unsqueeze(slots, 0)
-
-        slots = ttnn.to_layout(slots, layout=ttnn.TILE_LAYOUT)
-        slots = ttnn.div(slots, plan["count"])
-        slots = linear_flatten_batch(slots, self.params.output_proj.weight, bias=self.params.output_proj.bias)
-        ttnn.deallocate(key)
         ttnn.deallocate(value)
 
-        output = slots + inp_residual
-        ttnn.deallocate(slots)
-        ttnn.deallocate(inp_residual)
-
-        return output
+        # The rows past each camera's valid count are left unwritten; its last one, which every
+        # unfilled contribution slot reads, is zeroed.
+        camera_rows = ttnn.reshape(queries, (1, bs * self.num_cams, rebatch_len, self.embed_dims))
+        ttnn.experimental.slice_write(
+            self.zero_rows,
+            camera_rows,
+            [0, 0, rebatch_len - 1, 0],
+            [1, self.num_cams, rebatch_len, self.embed_dims],
+            [1, 1, 1, 1],
+        )
+        contribution_rows = ttnn.reshape(camera_rows, (1, 1, bs * self.num_cams * rebatch_len, self.embed_dims))
+        gather_layout = ttnn.TILE_LAYOUT if (bs * num_query) % ttnn.TILE_SIZE == 0 else ttnn.ROW_MAJOR_LAYOUT
+        slots = None
+        for index in rebatch_plan.inverse_index:
+            gathered = ttnn.to_layout(
+                ttnn.reshape(
+                    ttnn.embedding(index, contribution_rows, layout=gather_layout), (bs, num_query, self.embed_dims)
+                ),
+                ttnn.TILE_LAYOUT,
+            )
+            slots = gathered if slots is None else ttnn.add(slots, gathered, dtype=ttnn.float32)
+        ttnn.deallocate(queries)
+        slots = ttnn.divide(slots, rebatch_plan.count, dtype=ttnn.bfloat16)
+        slots = linear_flatten_batch(slots, self.params.output_proj.weight, bias=self.params.output_proj.bias)
+        return ttnn.add(slots, inp_residual)
 
 
 class TtMSDeformableAttention3D:
@@ -221,6 +179,7 @@ class TtMSDeformableAttention3D:
         query_pos=None,
         key_padding_mask=None,
         reference_points=None,
+        num_valid_queries_tensor=None,
         **kwargs,
     ):
         params = self.params
@@ -258,9 +217,14 @@ class TtMSDeformableAttention3D:
         # (num_points // D, D) split of the points.
         assert self.num_points % reference_points.shape[2] == 0
         output = fused_msda(
-            value, reference_points, sampling_offsets, attention_weights, self.spatial_shapes_hw, "pillar"
+            value,
+            reference_points,
+            sampling_offsets,
+            attention_weights,
+            self.spatial_shapes_hw,
+            "pillar",
+            num_valid_queries_tensor=num_valid_queries_tensor,
         )
-        output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))
 

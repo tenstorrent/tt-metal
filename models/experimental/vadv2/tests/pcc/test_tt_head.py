@@ -531,7 +531,6 @@ def test_vadv2_head(
         params=parameter,
         device=device,
         feat_hw=(12, 20),
-        lidar2img=img_metas[0]["lidar2img"],
         img_shape=img_metas[0]["img_shape"][0][:2],
         with_box_refine=True,
         as_two_stage=False,
