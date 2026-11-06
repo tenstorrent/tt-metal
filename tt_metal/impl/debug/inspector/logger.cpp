@@ -5,7 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/types.hpp"
-#include "impl/context/metal_context.hpp"
+#include <llrt/rtoptions.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_device_view_impl.hpp"
 #include <enchantum/enchantum.hpp>
@@ -15,7 +15,9 @@
 
 namespace tt::tt_metal::inspector {
 
-Logger::Logger(const std::filesystem::path& logging_path, std::optional<int> rank) : logging_path(logging_path) {
+Logger::Logger(
+    const std::filesystem::path& logging_path, std::optional<int> rank, const llrt::RunTimeOptions& rtoptions) :
+    rtoptions(rtoptions), logging_path(logging_path) {
     constexpr std::string_view additional_text =
         "\nYou can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment "
         "variables. Note that this will not throw an exception, but will log a warning instead. Running without "
@@ -34,6 +36,7 @@ Logger::Logger(const std::filesystem::path& logging_path, std::optional<int> ran
     }
     catch (const std::exception& e) {
         TT_INSPECTOR_THROW(
+            rtoptions,
             "Failed to create logging directory: {}. Error: {}\n{}",
             this->logging_path.string(),
             e.what(),
@@ -47,6 +50,7 @@ Logger::Logger(const std::filesystem::path& logging_path, std::optional<int> ran
 
             if (!inspector_startup_ostream.is_open()) {
                 TT_INSPECTOR_THROW(
+                    rtoptions,
                     "Failed to create inspector file: {}\n{}",
                     (this->logging_path / "startup.yaml").string(),
                     additional_text);
@@ -68,13 +72,15 @@ Logger::Logger(const std::filesystem::path& logging_path, std::optional<int> ran
                 inspector_startup_ostream << "  high_resolution_clock_ns: " << now_highres_ns << "\n";
             }
         } catch (const std::exception& e) {
-            TT_INSPECTOR_THROW("Failed to create inspector startup log. Error: {}\n{}", e.what(), additional_text);
+            TT_INSPECTOR_THROW(
+                rtoptions, "Failed to create inspector startup log. Error: {}\n{}", e.what(), additional_text);
         }
     }
 
     programs_ostream.open(this->logging_path / "programs_log.yaml", std::ios::trunc);
     if (!programs_ostream.is_open()) {
         TT_INSPECTOR_THROW(
+            rtoptions,
             "Failed to create inspector file: {}\n{}",
             (this->logging_path / "programs_log.yaml").string(),
             additional_text);
@@ -82,11 +88,15 @@ Logger::Logger(const std::filesystem::path& logging_path, std::optional<int> ran
     kernels_ostream.open(this->logging_path / "kernels.yaml", std::ios::trunc);
     if (!kernels_ostream.is_open()) {
         TT_INSPECTOR_THROW(
-            "Failed to create inspector file: {}\n{}", (this->logging_path / "kernels.yaml").string(), additional_text);
+            rtoptions,
+            "Failed to create inspector file: {}\n{}",
+            (this->logging_path / "kernels.yaml").string(),
+            additional_text);
     }
     mesh_devices_ostream.open(this->logging_path / "mesh_devices_log.yaml", std::ios::trunc);
     if (!mesh_devices_ostream.is_open()) {
         TT_INSPECTOR_THROW(
+            rtoptions,
             "Failed to create inspector file: {}\n{}",
             (this->logging_path / "mesh_devices_log.yaml").string(),
             additional_text);
@@ -94,25 +104,28 @@ Logger::Logger(const std::filesystem::path& logging_path, std::optional<int> ran
     mesh_workloads_ostream.open(this->logging_path / "mesh_workloads_log.yaml", std::ios::trunc);
     if (!mesh_workloads_ostream.is_open()) {
         TT_INSPECTOR_THROW(
+            rtoptions,
             "Failed to create inspector file: {}\n{}",
             (this->logging_path / "mesh_workloads_log.yaml").string(),
             additional_text);
     }
 
-    if (MetalContext::instance().rtoptions().get_inspector_log_mesh_buffers()) {
+    if (rtoptions.get_inspector_log_mesh_buffers()) {
         mesh_buffers_ostream.open(this->logging_path / "mesh_buffers_log.yaml", std::ios::trunc);
         if (!mesh_buffers_ostream.is_open()) {
             TT_INSPECTOR_THROW(
+                rtoptions,
                 "Failed to create inspector file: {}\n{}",
                 (this->logging_path / "mesh_buffers_log.yaml").string(),
                 additional_text);
         }
     }
 
-    if (MetalContext::instance().rtoptions().get_inspector_log_mesh_sockets()) {
+    if (rtoptions.get_inspector_log_mesh_sockets()) {
         mesh_sockets_ostream.open(this->logging_path / "mesh_sockets_log.yaml", std::ios::trunc);
         if (!mesh_sockets_ostream.is_open()) {
             TT_INSPECTOR_THROW(
+                rtoptions,
                 "Failed to create inspector file: {}\n{}",
                 (this->logging_path / "mesh_sockets_log.yaml").string(),
                 additional_text);
@@ -140,7 +153,7 @@ void Logger::log_mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffe
                              << "\n";
         mesh_buffers_ostream.flush();
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh buffer allocated: {}", e.what());
+        TT_INSPECTOR_LOG(rtoptions, "Failed to log mesh buffer allocated: {}", e.what());
     }
 }
 
@@ -158,7 +171,7 @@ void Logger::log_mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buf
                              << "\n";
         mesh_buffers_ostream.flush();
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh buffer deallocated: {}", e.what());
+        TT_INSPECTOR_LOG(rtoptions, "Failed to log mesh buffer deallocated: {}", e.what());
     }
 }
 
@@ -192,7 +205,7 @@ void Logger::log_mesh_socket_created(
                              << "\n";
         mesh_sockets_ostream.flush();
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh socket created: {}", e.what());
+        TT_INSPECTOR_LOG(rtoptions, "Failed to log mesh socket created: {}", e.what());
     }
 }
 
@@ -209,7 +222,7 @@ void Logger::log_mesh_socket_destroyed(
                              << "\n";
         mesh_sockets_ostream.flush();
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh socket destroyed: {}", e.what());
+        TT_INSPECTOR_LOG(rtoptions, "Failed to log mesh socket destroyed: {}", e.what());
     }
 }
 
@@ -223,7 +236,7 @@ void Logger::log_program_created(const ProgramData& program_data) noexcept {
         programs_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now()) << "\n";
         programs_ostream.flush();
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log program created: {}", e.what());
+        TT_INSPECTOR_LOG(rtoptions, "Failed to log program created: {}", e.what());
     }
 }
 
@@ -237,7 +250,7 @@ void Logger::log_program_destroyed(const ProgramData& program_data) noexcept {
         programs_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now()) << "\n";
         programs_ostream.flush();
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log program destroyed: {}", e.what());
+        TT_INSPECTOR_LOG(rtoptions, "Failed to log program destroyed: {}", e.what());
     }
 }
 
@@ -251,7 +264,7 @@ void Logger::log_program_compile_started(const ProgramData& program_data) noexce
         programs_ostream << "    timestamp_ns: " << convert_timestamp(program_data.compile_started_timestamp) << "\n";
         programs_ostream.flush();
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log program compile started: {}", e.what());
+        TT_INSPECTOR_LOG(rtoptions, "Failed to log program compile started: {}", e.what());
     }
 }
 
@@ -282,7 +295,7 @@ void Logger::log_program_kernel_compile_finished(const ProgramData& program_data
         kernels_ostream << "    program_id: " << program_data.program_id << "\n";
         kernels_ostream.flush();
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log program kernel compile finished: {}", e.what());
+        TT_INSPECTOR_LOG(rtoptions, "Failed to log program kernel compile finished: {}", e.what());
     }
 }
 
@@ -297,34 +310,7 @@ void Logger::log_program_compile_finished(const ProgramData& program_data) noexc
         programs_ostream << "    duration_ns: " << std::chrono::duration_cast<std::chrono::nanoseconds>(program_data.compile_finished_timestamp - program_data.compile_started_timestamp).count() << "\n";
         programs_ostream.flush();
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log program compile finished: {}", e.what());
-    }
-}
-
-void Logger::log_program_binary_status_change(const ProgramData& program_data, std::size_t device_id, ProgramBinaryStatus status) noexcept {
-    if (!initialized) {
-        return;
-    }
-    try {
-        programs_ostream << "- program_binary_status_change:\n";
-        programs_ostream << "    id: " << program_data.program_id << "\n";
-        programs_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now()) << "\n";
-        programs_ostream << "    device_id: " << device_id << "\n";
-        programs_ostream << "    status: ";
-        switch (status) {
-            case ProgramBinaryStatus::NotSent:
-                programs_ostream << "NotSent" << "\n";
-                break;
-            case ProgramBinaryStatus::InFlight:
-                programs_ostream << "InFlight" << "\n";
-                break;
-            case ProgramBinaryStatus::Committed:
-                programs_ostream << "Committed" << "\n";
-                break;
-        }
-        programs_ostream.flush();
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log program enqueued: {}", e.what());
+        TT_INSPECTOR_LOG(rtoptions, "Failed to log program compile finished: {}", e.what());
     }
 }
 
@@ -365,7 +351,7 @@ void Logger::log_mesh_device_created(const MeshDeviceData& mesh_device_data) noe
         }
         mesh_devices_ostream.flush();
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh device created: {}", e.what());
+        TT_INSPECTOR_LOG(rtoptions, "Failed to log mesh device created: {}", e.what());
     }
 }
 
@@ -379,7 +365,7 @@ void Logger::log_mesh_device_destroyed(const MeshDeviceData& mesh_device_data) n
         mesh_devices_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now()) << "\n";
         mesh_devices_ostream.flush();
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh device destroyed: {}", e.what());
+        TT_INSPECTOR_LOG(rtoptions, "Failed to log mesh device destroyed: {}", e.what());
     }
 }
 
@@ -393,7 +379,7 @@ void Logger::log_mesh_device_initialized(const MeshDeviceData& mesh_device_data)
         mesh_devices_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now()) << "\n";
         mesh_devices_ostream.flush();
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh device initialized: {}", e.what());
+        TT_INSPECTOR_LOG(rtoptions, "Failed to log mesh device initialized: {}", e.what());
     }
 }
 
@@ -414,7 +400,7 @@ void Logger::log_runtime_entry(const MeshWorkloadRuntimeEntry& entry) noexcept {
                                << "\n";
         mesh_workloads_ostream.flush();
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log runtime entry: {}", e.what());
+        TT_INSPECTOR_LOG(rtoptions, "Failed to log runtime entry: {}", e.what());
     }
 }
 

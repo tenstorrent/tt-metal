@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "impl/context/context_types.hpp"
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/rpc_server_controller.hpp"
 #include <tt-metalium/mesh_trace_id.hpp>
@@ -12,19 +11,26 @@
 #include <atomic>
 #include <cstddef>
 #include <optional>
-#include <unordered_set>
+#include <unordered_map>
 #include <vector>
+
+namespace tt::tt_metal {
+class MetalContext;
+class MetalEnvImpl;
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::inspector {
 
+// An inspector session: the inspector state of one MetalContext (and the MetalEnv it uses), owned by that context.
 class Data {
 public:
     ~Data();
 
 private:
-    Data(
-        std::optional<int> rank,
-        ContextId context_id);  // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
+    // `context` must outlive this object.
+    Data(MetalContext& context, std::optional<int> rank, uint64_t fw_hash);
+
+    const llrt::RunTimeOptions& rtoptions() const;
 
     void serialize_rpc();
     RpcServer& get_rpc_server();
@@ -57,7 +63,12 @@ private:
         const std::unordered_map<tt_cxy_pair, CoreInfo>& core_info,
         const std::unordered_map<ChipId, std::vector<uint32_t>>& cq_to_event_by_device);
 
-    ContextId context_id;  // Owning MetalContext's id
+    // The owning MetalContext, for runtime state (device manager, build envs).
+    MetalContext& context_;
+    // The MetalEnv used by the owning context, for low level queries (HAL, cluster, rtoptions, control plane,
+    // system mesh). Do not cache the control plane or system mesh: the env rebuilds them when fabric is
+    // reconfigured. Inspector settings are read through the env's rtoptions on demand.
+    MetalEnvImpl& env_;
 
     inspector::Logger logger;
     RpcServerController rpc_server_controller;
@@ -73,7 +84,8 @@ private:
     std::mutex prefetcher_core_info_mutex;
     std::unordered_map<uint64_t, inspector::ProgramData> programs_data;
     std::unordered_map<int, uint64_t> kernel_id_to_program_id;
-    std::unordered_set<const distributed::MeshBuffer*> mesh_buffers_data;
+    // The id of the mesh device each buffer was allocated on.
+    std::unordered_map<const distributed::MeshBuffer*, int> mesh_buffers_data;
     bool mesh_buffer_logging_enabled{false};
     bool mesh_socket_logging_enabled{false};
     std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data;
@@ -97,8 +109,7 @@ private:
     std::mutex kernel_path_mutex;
     std::unordered_map<int, std::vector<std::string>> kernel_id_to_processor_elf_paths;
 
-    // fw_compile_hash needs to be atomic because it is set in MetalContext::initialize()
-    std::atomic<uint64_t> fw_compile_hash;
+    const uint64_t fw_compile_hash;
     friend class tt::tt_metal::Inspector;
 };
 

@@ -405,7 +405,7 @@ void DPrintServer::Impl::print_buffer_data(
             risc_data.last_loaded_kernel_id = kernel_id;
 
             // Find the elf path for this risc from the inspector.
-            auto elf_path = Inspector::get_kernel_elf_path(header->info_id, header->risc_id);
+            auto elf_path = Inspector::get_kernel_elf_path(*context_, header->info_id, header->risc_id);
 
             if (elf_path.empty() || !std::filesystem::exists(elf_path)) {
                 log_warning(
@@ -964,7 +964,7 @@ DPrintServer::Impl::Impl(
     env_(MetalEnvAccessor(env).impl()),
     num_hw_cqs_(num_hw_cqs),
     dispatch_core_config_(dispatch_core_config) {
-    Inspector::enable_kernel_path_collection();
+    Inspector::enable_kernel_path_collection(*context);
 
     // Read risc mask + log file from rtoptions
     string file_name = env_.get_rtoptions().get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);

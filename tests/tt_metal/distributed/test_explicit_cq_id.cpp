@@ -100,9 +100,9 @@ TEST_F(ExplicitCqIdTest, GlobalCircularBufferConfigWriteOnSecondQueue) {
 TEST_F(ExplicitCqIdTest, InspectorTraceIdLooksUpRequestedQueue) {
     auto mesh_device = get_mesh_device();
 
-    EXPECT_FALSE(experimental::inspector::GetCurrentMeshTraceId(mesh_device.get(), /*cq_id=*/0).has_value());
-    EXPECT_FALSE(experimental::inspector::GetCurrentMeshTraceId(mesh_device.get(), /*cq_id=*/1).has_value());
-    EXPECT_ANY_THROW(experimental::inspector::GetCurrentMeshTraceId(mesh_device.get(), kOutOfRangeCqId));
+    EXPECT_FALSE(experimental::inspector::GetCurrentMeshTraceId(*mesh_device, /*cq_id=*/0).has_value());
+    EXPECT_FALSE(experimental::inspector::GetCurrentMeshTraceId(*mesh_device, /*cq_id=*/1).has_value());
+    EXPECT_ANY_THROW(experimental::inspector::GetCurrentMeshTraceId(*mesh_device, kOutOfRangeCqId));
 }
 
 }  // namespace
