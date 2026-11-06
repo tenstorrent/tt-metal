@@ -2694,6 +2694,28 @@ def _run_group_norm_user_kernel_config(device, x, G, path, dtype, compute_kernel
 USER_KERNEL_CONFIG_PATHS = [("mcast", 1, 1024), ("no_mcast", 4, 128), ("sharded", 1, 1024)]
 
 
+# The two helpers below mirror group_norm's default compute_kernel_config, set in groupnorm.cpp (math_fidelity,
+# approx_mode and fp32_acc). Tests that compare a user config against the op's default build it with these helpers, so
+# if the default changes, those tests fail and point here. Update both helpers to match the new default.
+#
+# The default uses HiFi4 on every architecture, including Wormhole. On Wormhole, HiFi4 with fp32_dest_acc_en can give
+# rare wrong outputs from a hardware bug (#38306), so other ops (matmul, softmax, batch norm, reductions) drop to HiFi3
+# there. group_norm's default does not yet, so the user config here also uses HiFi4 on Wormhole: otherwise it would not
+# match the default and the comparison would fail for a reason unrelated to the setting under test.
+def group_norm_default_kernel_config(device, fp32_dest_acc_en):
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+    )
+
+
+# The default's fp32_dest_acc_en: on for welford (which requires it) and for FLOAT32 input, off otherwise.
+def group_norm_default_fp32_dest_acc_en(dtype, use_welford):
+    return use_welford or dtype == ttnn.float32
+
+
 # A user compute_kernel_config replaces the op's default config wholesale, so its fp32_dest_acc_en must reach the
 # kernels unchanged. Float32 input defaults to fp32 DEST, so an explicit fp32_dest_acc_en=False is only rejected if
 # the user's value is actually the one in effect.
@@ -2730,13 +2752,8 @@ def test_group_norm_user_fp32_dest_acc_en_honored_for_bf16_input(device, use_wel
     def run(fp32_dest_acc_en):
         compute_kernel_config = None
         if fp32_dest_acc_en is not None:
-            # Same fidelity and approx mode as the op's default config, so only fp32_dest_acc_en differs.
-            compute_kernel_config = ttnn.init_device_compute_kernel_config(
-                device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=True,
-                fp32_dest_acc_en=fp32_dest_acc_en,
-            )
+            # The op's default config with only fp32_dest_acc_en changed (HiFi4 on Wormhole too; see the helper).
+            compute_kernel_config = group_norm_default_kernel_config(device, fp32_dest_acc_en)
         return _run_group_norm_user_kernel_config(device, x, G, path, ttnn.bfloat16, compute_kernel_config, use_welford)
 
     out_default = run(None)
@@ -2744,7 +2761,12 @@ def test_group_norm_user_fp32_dest_acc_en_honored_for_bf16_input(device, use_wel
     out_on = run(True)
 
     assert not torch.equal(out_on, out_off), "fp32_dest_acc_en in the user compute_kernel_config had no effect"
-    assert torch.equal(out_default, out_on if use_welford else out_off), "user config differs from matching default"
+    default_fp32_dest = group_norm_default_fp32_dest_acc_en(ttnn.bfloat16, use_welford)
+    assert torch.equal(out_default, out_on if default_fp32_dest else out_off), (
+        "a user compute_kernel_config that matches the op's default gave a different output. If group_norm's default "
+        "compute config in groupnorm.cpp changed, update group_norm_default_kernel_config and "
+        "group_norm_default_fp32_dest_acc_en to match."
+    )
 
     if use_welford:
         err_on = (out_on - ref).abs().mean().item()
