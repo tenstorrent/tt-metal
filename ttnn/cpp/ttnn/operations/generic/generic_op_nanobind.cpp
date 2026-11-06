@@ -262,7 +262,8 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
 
         Returns:
             ttnn.Tensor: The output tensor, the last entry of io_tensors. When the tensors are not all on the
-                same devices, only its parts on the devices the program ran on.
+                same devices, only its parts on the devices of the tensor in io_tensors that is on the fewest
+                devices.
 
         Raises:
             RuntimeError: If the run args do not match the spec, naming the kernel, argument or tensor parameter at
