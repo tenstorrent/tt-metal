@@ -1619,13 +1619,15 @@ ReadBufferDescriptor generate_sharded_buffer_read_descriptor(
     // Increment the src_page_index after the Read Buffer Descriptor has been populated
     // for the current core/txn
     dispatch_params.src_page_index += dispatch_params.pages_per_txn;
+    // Not owning: the caller makes the last descriptor of a read own the mapping.
     return ReadBufferDescriptor(
         buffer.page_size(),
         dispatch_params.padded_page_size,
         dst,
         dispatch_params.unpadded_dst_offset,
         dispatch_params.pages_per_txn,
-        dispatch_params.buffer_page_mapping,
+        std::shared_ptr<const BufferPageMapping>(
+            std::shared_ptr<const void>(), dispatch_params.buffer_page_mapping.get()),
         dispatch_params.core_page_mapping);
 }
 

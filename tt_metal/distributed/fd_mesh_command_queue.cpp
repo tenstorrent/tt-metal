@@ -939,6 +939,9 @@ void FDMeshCommandQueue::read_shard_from_device(
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
             *shard_view, id_, expected_num_workers_completed_);
         const auto& cores = dispatch_params.buffer_page_mapping->all_cores;
+        auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
+        // Pushed one behind, so that the last descriptor of the read can own the mapping.
+        std::optional<ReadBufferDescriptor> pending;
         for (uint32_t core_id = 0; core_id < shard_view->num_cores(); ++core_id) {
             for (const auto& core_page_mapping : dispatch_params.buffer_page_mapping->core_page_mappings[core_id]) {
                 buffer_dispatch::copy_sharded_buffer_from_core_to_completion_queue(
@@ -951,11 +954,17 @@ void FDMeshCommandQueue::read_shard_from_device(
                     this->dispatch_core_type());
                 if (dispatch_params.pages_per_txn > 0) {
                     num_txns_per_device[device]++;
-                    auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
-                    read_descriptor_queue.push(
-                        buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, *shard_view));
+                    if (pending) {
+                        read_descriptor_queue.push(std::move(*pending));
+                    }
+                    pending =
+                        buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, *shard_view);
                 }
             }
+        }
+        if (pending) {
+            pending->buffer_page_mapping = dispatch_params.buffer_page_mapping;
+            read_descriptor_queue.push(std::move(*pending));
         }
     } else {
         buffer_dispatch::BufferReadDispatchParams dispatch_params =
