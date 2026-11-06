@@ -13,14 +13,14 @@ time is in:
 
 ``test_fused_msda_module_perf``
     The whole ``TTMSDeformableAttention`` forward: value/attn/offset Linears,
-    softmax, the fused op, ``output_proj`` and the residual. This is what the
+    softmax, the head-major value producer, the fused op, ``output_proj`` and the residual. This is what the
     encoder actually pays. Run once per forced ``value_memory`` placement so
     the L1 and DRAM measurements remain directly comparable.
 
 ``test_fused_msda_kernel_perf``
     Only ``ttnn.experimental.fused_msda_from_offsets``. The projections and the
     softmax run once, before the signpost, so the measured region is the op and
-    nothing else. Four variants:
+    nothing else. Six variants:
 
     * ``packed_multi_dram`` -- packed value/offsets/attn, one call covering all
       levels, with ``value`` and output in DRAM. The offsets are the module's:
@@ -32,6 +32,10 @@ time is in:
       op also accepts, with ``value`` and output in DRAM. The delta against
       ``packed_multi_dram`` is the cost of one page per sample instead of a byte
       offset into a packed stick.
+    * ``head_major_dram`` / ``head_major_l1`` -- value as (B, H, ceil(S/32), 32*D),
+      32 keys of one head per page, so a horizontal corner pair is one read,
+      built by ``fused_msda_head_major_value`` outside the measured region.
+      ``head_major_l1`` is the production path.
     * ``packed_per_level_dram`` -- L single-level DRAM calls accumulated in
       DRAM on device.
       Operands are pre-sliced on the host outside the measured region, so this
@@ -71,7 +75,14 @@ WORKLOADS = [
     ("nuscenes_base", 1, 2500),
 ]
 
-KERNEL_VARIANTS = ["packed_multi_dram", "packed_multi_l1", "canonical_multi_dram", "packed_per_level_dram"]
+KERNEL_VARIANTS = [
+    "packed_multi_dram",
+    "packed_multi_l1",
+    "canonical_multi_dram",
+    "head_major_dram",
+    "head_major_l1",
+    "packed_per_level_dram",
+]
 
 
 def _head_sha():
@@ -220,7 +231,7 @@ def _per_level_operands(device, value, offsets, attn, model, spatial_shapes):
     return per_level
 
 
-def _call_one(value, refs, offsets, attn, spatial_shapes):
+def _call_one(value, refs, offsets, attn, spatial_shapes, value_layout="auto"):
     return ttnn.experimental.fused_msda_from_offsets(
         value,
         refs,
@@ -228,6 +239,7 @@ def _call_one(value, refs, offsets, attn, spatial_shapes):
         attn,
         _spatial_shapes_list(spatial_shapes),
         reference_mode="pillar",
+        value_layout=value_layout,
     )
 
 
@@ -356,6 +368,12 @@ def test_fused_msda_kernel_perf(
         value_c, offsets_c, attn_c = _canonical_operands(value_p, offsets_p, attn_p, model)
         assert value_c.memory_config() == ttnn.DRAM_MEMORY_CONFIG
         op_fn = partial(_call_one, value_c, refs, offsets_c, attn_c, spatial_shapes)
+    elif variant in ("head_major_dram", "head_major_l1"):
+        memory_config = ttnn.L1_MEMORY_CONFIG if variant == "head_major_l1" else ttnn.DRAM_MEMORY_CONFIG
+        value_hm = ttnn.experimental.fused_msda_head_major_value(
+            ttnn.to_layout(value_p, ttnn.TILE_LAYOUT), model.num_heads, memory_config=memory_config
+        )
+        op_fn = partial(_call_one, value_hm, refs, offsets_p, attn_p, spatial_shapes, value_layout="head_major")
     elif variant == "packed_per_level_dram":
         per_level = _per_level_operands(device, value_p, offsets_p, attn_p, model, spatial_shapes)
         op_fn = partial(_call_per_level, refs, per_level)

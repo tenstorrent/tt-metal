@@ -56,7 +56,7 @@ inline uint32_t tile_col0_offset(uint32_t r) {
 
 // Byte offset for col 16 of tile row r: col 0 of the face to the right, which
 // the SFPU sees in the same lane as col 0.
-inline uint32_t tile_col16_offset(uint32_t r) { return tile_col0_offset(r) + FACE_NBYTES; }
+inline uint32_t tile_col16_offset(uint32_t r) { return tile_row_offsets(r).hi; }
 
 // float32 32x32 tile, same four-face order. Each element is 4 bytes, so a face
 // is 1024 B and a face-row is 64 B. geom_x/geom_y use this when the reference

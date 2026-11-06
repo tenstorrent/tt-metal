@@ -23,6 +23,7 @@ from .tt_common import grid_linear_kwargs, l1_if_fits, signpost
 from .tt_ms_deformable_attention import (
     grouped_softmax,
     heads_packed_offsets,
+    msda_value_layout,
     multi_scale_deformable_attn_fused,
 )
 
@@ -105,6 +106,7 @@ class TTTemporalSelfAttention:
             raise ValueError(f"num_bev_queue must be 2 (the previous BEV and the queries), got {num_bev_queue}")
 
         dim_per_head = embed_dims // num_heads
+        self.value_layout = msda_value_layout(dim_per_head)
         self.embed_dims = embed_dims
         self.num_heads = num_heads
         self.num_levels = num_levels
@@ -193,11 +195,12 @@ class TTTemporalSelfAttention:
                 x, linear_params.weight, bias=linear_params.bias, memory_config=memory_config, **self.linear_kwargs
             )
 
-        # Every map's values, map-major along the keys, (B, queue * nk, embed_dims), row-major and
-        # in L1 when it fits, as the fused op reads them. Staged first: L1 is allocated top-down and the fused op's
-        # output and circular buffers must fit below the lowest live buffer, so the value takes the
-        # top and the intermediates staged after it, all but the op's own offsets and weights, are
-        # freed before the op runs.
+        # Every map's values, map-major along the keys: projected tiled as (B, queue * nk, embed_dims),
+        # then laid out as the fused op reads them (head-major (B, H, ceil(queue * nk / 32), 32 * D),
+        # or row-major when D is not a multiple of 32), in L1 when it fits. Staged first: L1 is
+        # allocated top-down and the fused op's output and circular buffers must fit below the lowest
+        # live buffer, so the value takes the top and the intermediates staged after it, all but the
+        # op's own offsets and weights, are freed before the op runs.
         if value is None:
             projected = ttnn.linear(query, params.value_proj.weight, bias=params.value_proj.bias)
             maps = ttnn.concat([projected] * queue, dim=1)
@@ -208,7 +211,10 @@ class TTTemporalSelfAttention:
                 ttnn.linear(value, params.value_proj.weight, bias=params.value_proj.bias),
                 (bs, queue * num_queries, embed_dims),
             )
-        staged_value = ttnn.to_layout(maps, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory)
+        if self.value_layout == "head_major":
+            staged_value = ttnn.experimental.fused_msda_head_major_value(maps, self.num_heads, memory_config=memory)
+        else:
+            staged_value = ttnn.to_layout(maps, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory)
         ttnn.deallocate(maps)
 
         # The offsets and attention weights read the previous BEV and the queries concatenated,
@@ -269,6 +275,7 @@ class TTTemporalSelfAttention:
             attention_weights=attention_weights,
             spatial_shapes=self.map_spatial_shapes,
             reference_mode=reference_mode,
+            value_layout=self.value_layout,
         )
         for tensor in (staged_value, sampling_offsets, attention_weights):
             ttnn.deallocate(tensor)
