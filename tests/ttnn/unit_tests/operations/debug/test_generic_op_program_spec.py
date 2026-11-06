@@ -381,10 +381,11 @@ def exp_inputs(device, num_tiles):
     return torch_input, input_tensor, ttnn.allocate_tensor_on_device(input_tensor.spec, device)
 
 
-def test_exp_in_place(device, expect_error):
-    # The guide example runs the program out of place; see test_the_guide_example.
+def test_exp_from_the_design_example(device, expect_error):
     torch_input, input_tensor, output_tensor = exp_inputs(device, 8)
     spec, run_args = exp_program(input_tensor, output_tensor)
+    result = E.generic_op([input_tensor, output_tensor], spec, run_args)
+    assert_with_pcc(torch.exp(torch_input), ttnn.to_torch(result), 0.999)
 
     # A tensor bound to two parameters must be listed twice, so io_tensors holding only the output is rejected.
     in_place_run_args = E.ProgramRunArgs(
