@@ -736,7 +736,7 @@ ProgramDescriptor build_program_descriptor(
     // welford_zero_cb (LayerNorm warm-row accumulator reset): 2 resident fp32 tiles, always present
     // for LN. Counted in the resident budget so wide LN shards correctly choose block-major.
     const uint32_t welford_zero_bytes = is_layernorm ? 2u * fp32_tile_size : 0u;
-    const uint32_t tile_row_map_bytes = use_tile_row_map ? tile_row_map->buffer()->aligned_page_size() : 0u;
+    const uint32_t tile_row_map_bytes = use_tile_row_map ? tile_row_map->mesh_buffer().aligned_page_size() : 0u;
 
     // Streaming low-L1 fallback: when the resident input_cb + row-sized
     // intermediate/rotated/output CBs would overflow L1, stream input_cb in
