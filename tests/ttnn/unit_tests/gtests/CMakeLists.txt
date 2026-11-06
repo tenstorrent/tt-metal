@@ -100,6 +100,13 @@ add_library(unit_tests_ttnn_basic OBJECT)
 add_library(TTNN::Test::Basic ALIAS unit_tests_ttnn_basic)
 TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_basic)
 target_sources(unit_tests_ttnn_basic PRIVATE ${UNIT_TESTS_TTNN_BASIC_SOURCES})
+# Declares ttnn::experimental, which changes unqualified `experimental::` lookup in files sharing its unity unit.
+set_source_files_properties(
+    test_command_list.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
+)
 target_include_directories(unit_tests_ttnn_basic PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
     unit_tests_ttnn_basic

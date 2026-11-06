@@ -71,8 +71,10 @@ the slot as a device tensor and resolve batch `slot * L + layer_position` on dev
 load or store follows the slot in the traced metadata. The slabs are the KDA carries' only store:
 every K3 KDA layer loads its slot's carry from them and stores the replacement back inside the
 captured region, so the state a reader sees is the one after the last committed chunk, and it lands
-before any later MLA layer acks that chunk, and before the KDA layer's own ack. `zero_slot(slot)`
-zeroes the slot's regions.
+before any later MLA layer acks that chunk, and before the KDA layer's own ack. Nothing clears a
+slot: a request's head chunk (`actual_start == 0`, evaluated on device) loads zeros instead of the
+slot's carry, so from the head until a layer's first store its regions still hold the previous
+request's state, and the slabs start uninitialized.
 
 ## Reading it back
 

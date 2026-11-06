@@ -101,10 +101,9 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     // ---- Token data. The last dim is the embedding and the rest is the flat slot index. BFLOAT16 in either
     // layout, or BFLOAT8_B TILE, which the untilizer cores unpack to BFLOAT16 rows. Tokens move as BFLOAT16
     // from there on, so the output is BFLOAT16 whatever the input.
-    // The id table is what the overlapped fork needs and the standalone op never passes, and unlike the
-    // routed-expert fields it is already set by the time validation runs -- those are filled in later,
-    // by the program factory.
-    const bool overlapped = tensor_args.global_expert_idx_table.has_value();
+    // The id table is optional: without one the ring's experts are contiguous. Unlike the routed-expert fields
+    // it is already set by the time validation runs -- those are filled in later, by the program factory.
+    const bool has_expert_table = tensor_args.global_expert_idx_table.has_value();
     const auto& buf = tensor_args.dispatched_buffer;
     validate_dram_interleaved(buf, "dispatched_buffer");
     TT_FATAL(
@@ -224,7 +223,7 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     validate_control_tensor(tensor_args.expert_token_counts, 1, num_routed_experts, "expert_token_counts");
     validate_control_tensor(tensor_args.expert_region_offsets, 1, num_routed_experts, "expert_region_offsets");
     validate_control_tensor(tensor_args.expert_offsets, extent, num_routed_experts, "expert_offsets");
-    if (!overlapped) {
+    if (!has_expert_table) {
         return;
     }
     const auto& table = *tensor_args.global_expert_idx_table;
