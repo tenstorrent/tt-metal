@@ -359,6 +359,12 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     }
     if (attributes.is_causal_mask) {
         base_defines["CAUSAL_MASK"] = "1";
+    } else if (
+        has_mask && mask_Ht == 1 && tensor_args.mask.value().logical_shape()[-2] > 1 &&
+        tensor_args.mask.value().logical_shape()[-2] == shape_unpadded[-2]) {
+        // A non-causal mask is one tile row per batch, reused for every head. When it has one logical row per
+        // query row it is added per row. A single-row mask, or a taller input, keeps the row-0 broadcast.
+        base_defines["MASK_FULL_ROWS"] = "1";
     }
     if (attributes.numeric_stable) {
         base_defines["NUMERIC_STABLE"] = "1";
