@@ -6,15 +6,17 @@
     "source": "Conservative observed stress target107585/typical31755 retained from prior quarantined real SWE workload; valid smoke per-suite measurements recorded separately below. No unsupported capacity claim.",
     "measured_by_eval": {
       "r1_gpqa_diamond": {
-        "target_concurrency": 2,
-        "observed_peak_running": 2,
+        "target_concurrency": 4,
+        "observed_peak_running": 4,
         "initial_prompt_tokens": [
           485,
           298
         ],
         "working_set_tokens": null,
-        "source": "stage12 real CI smoke42166117505; doc/agentic_evals/runs/gpqa-workload/RESULT.json",
-        "missing_reason": "Raw completion usage/finalcontext not retained; asynchronous decode submissions are not emittedtoken counts. Toolsuite histories pending."
+        "source": "doc/agentic_evals/runs/gpqa-c4-scored10/RESULT.json; doc/agentic_evals/runs/gpqa-c4-capacity/RESULT.json",
+        "missing_reason": "Raw completion usage/finalcontext not retained; asynchronous decode submissions are not emittedtoken counts. Toolsuite histories pending.",
+        "capacity_stress_tokens_per_client": 131072,
+        "scope": "GPQA only; top-level multi-turn tool workload remains C2; no hidden completion usage fabricated"
       },
       "swe_bench_verified": {
         "target_concurrency": 2,

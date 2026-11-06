@@ -1,6 +1,6 @@
 {
   "status": "not_release_ready",
-  "max_concurrency": 2,
+  "max_concurrency": 4,
   "max_num_seqs": 8,
   "prefix_caching": true,
   "validated_batches": [
@@ -349,11 +349,13 @@
   "measured_suites": {
     "r1_gpqa_diamond": {
       "functional_at": 10,
-      "observed_max_active_rows": 2,
+      "observed_max_active_rows": 4,
       "batch": 8,
-      "evidence": "runs/nightly-gpqa-explicit-autoport/audit.json; runs/gpqa-nightly-runtime-analysis/RESULT.json",
+      "evidence": "runs/gpqa-c4-capacity/RESULT.json; runs/gpqa-c4-scored10/RESULT.json",
       "max_capacity": null,
-      "reason": "Measured C2; C8 reconstruction unavailable"
+      "reason": "Paired current-runtime same10, samehost, equal executed work; C4 finishes31.5118%sooner. Larger-cohort tail remains separately measured.",
+      "planned_clients": 4,
+      "chosen_concurrency": 4
     },
     "swe_bench_verified": {
       "functional_at": 2,
@@ -437,5 +439,12 @@
       "input_length_scope": "Stock client random dataset lengths; actual chat-template prefill lengths141\u2013143, unchanged route."
     },
     "release": false
-  }
+  },
+  "max_concurrency_scope": "Maximum accepted per-suite: GPQA4; tool suites2. Four131072-input contexts tested, not four full262144 contexts.",
+  "concurrency_by_eval": {
+    "r1_gpqa_diamond": 4,
+    "swe_bench_verified": 2,
+    "terminal_bench_2_1": 2
+  },
+  "admission_limit_reason": "GPQA C4 admitted by full131072-context four-resident capacity test and valid scored10; tool suites remain C2. No four-full262144-context or four-task-sandbox claim."
 }

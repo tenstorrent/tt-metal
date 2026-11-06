@@ -1,5 +1,5 @@
 {
-  "status": "GPQA intermediate fitting-list search and SWE repeat active; Terminal measured stop",
+  "status": "GPQA intermediate rung/current C2 comparison active; SWE cap-evidence repair active; Terminal measured stop",
   "evals": {
     "r1_gpqa_diamond": {
       "decision": "go",
@@ -15,7 +15,7 @@
         "tasks": 20,
         "planned_clients": 2,
         "batch": 8,
-        "status": "queued",
+        "status": "running",
         "projected_workflow_hours": 7.72125727234195,
         "source": "runs/larger-gpqa20-c2-evals/manifest.json",
         "run_id": 42234274300
@@ -25,7 +25,7 @@
     },
     "swe_bench_verified": {
       "decision": "stop",
-      "reason": "Nightly5 incompletevalidity:1networkquarantine and1unresolvedcapped/malformedepisode. Threefullyauditedtasks0/3; priorcompletevalidsmoke2 retained. Same5repeat pending, notrelease stopfinal.",
+      "reason": "Repeated frozen5 completed; four tasks valid but one missing Astropy response aligns with32767 decode steps. Loop-versus-progress remains unknown, so full5 not banked. Model-owned retention hypothesis is being tested; no identical blind retry.",
       "functional_at": 2,
       "projected_hours": null,
       "score": 0,
@@ -37,8 +37,11 @@
         "tasks": 5,
         "planned_clients": 2,
         "batch": 8,
-        "run_id": 42210467509,
-        "projected_workflow_hours": 7.821522817361111
+        "run_id": 42228448171,
+        "projected_workflow_hours": 7.7925,
+        "status": "nightly_not_banked_cap_classification_missing",
+        "source": "runs/nightly-swe-retained-repeat/manifest.json",
+        "evidence": "runs/nightly-swe-retained-repeat/audit.json"
       }
     },
     "terminal_bench_2_1": {

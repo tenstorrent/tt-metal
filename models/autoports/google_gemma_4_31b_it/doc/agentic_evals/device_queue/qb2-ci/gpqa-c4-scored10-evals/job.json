@@ -41,7 +41,7 @@
   "scope": "Scored C4 candidate, same banked10; not release, not full198 retry",
   "arm": "gpqa-c4-scored10-evals",
   "workflow": "evals",
-  "status": "valid_scored_candidate",
+  "status": "completed_valid",
   "queued_at": "2026-11-06T14:27:47.822874+00:00",
   "previous_wrong_workflow_run": 42232104462,
   "repair": "Only dispatch workflow agentic\u2192evals; identical source, cohort, limits and sampling",

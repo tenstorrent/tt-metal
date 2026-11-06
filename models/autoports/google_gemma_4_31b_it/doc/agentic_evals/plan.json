@@ -1017,7 +1017,7 @@
       "eval": "swe_bench_verified",
       "device": "qb2-ci",
       "owner": "coordinator",
-      "status": "device_job_in_progress",
+      "status": "completed_valid",
       "queued_at": "2026-11-06T13:48:13.783611+00:00",
       "planned_clients": 2,
       "batch": 8,
@@ -1054,14 +1054,21 @@
       "run_id": 42228448171,
       "submitted_at": "2026-11-06T13:48:15Z",
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42228448171",
-      "workflow_status": "in_progress",
-      "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T14:55:37.482974+00:00",
+      "workflow_status": "completed",
+      "workflow_conclusion": "success",
+      "last_observed_at": "2026-11-06T15:01:43.066918+00:00",
       "runner": "qb2-120-p05t02",
       "device_job_id": 127927949769,
       "device_job_started_at": "2026-11-06T13:48:32Z",
-      "device_job_completed_at": null,
-      "start": "2026-11-06T13:48:32Z"
+      "device_job_completed_at": "2026-11-06T15:01:11Z",
+      "start": "2026-11-06T13:48:32Z",
+      "end": "2026-11-06T15:01:11Z",
+      "exit_status": 0,
+      "actual_hours": 1.2108333333333334,
+      "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+      "workflow_wall_hours": 1.2158333333333333,
+      "functional_at": 2,
+      "audit": "runs/nightly-swe-retained-repeat/audit.json"
     },
     {
       "arm": "gpqa-c4-scored10",
@@ -1238,7 +1245,7 @@
       "scope": "Scored C4 candidate, same banked10; not release, not full198 retry",
       "arm": "gpqa-c4-scored10-evals",
       "workflow": "evals",
-      "status": "valid_scored_candidate",
+      "status": "completed_valid",
       "queued_at": "2026-11-06T14:27:47.822874+00:00",
       "previous_wrong_workflow_run": 42232104462,
       "repair": "Only dispatch workflow agentic\u2192evals; identical source, cohort, limits and sampling",
@@ -1259,8 +1266,7 @@
       "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
       "workflow_wall_hours": 0.3011111111111111,
       "functional_at": 10,
-      "audit": "runs/gpqa-c4-scored10-evals/audit.json",
-      "eval_hours": 0.17845714498634657
+      "audit": "runs/gpqa-c4-scored10-evals/audit.json"
     },
     {
       "eval": "r1_gpqa_diamond",
@@ -1324,7 +1330,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42234274300",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T14:55:30.178373+00:00",
+      "last_observed_at": "2026-11-06T15:10:44.587397+00:00",
       "runner": "120-qb2-p05t01",
       "device_job_id": 127947875918,
       "device_job_started_at": "2026-11-06T14:29:07Z",
@@ -1370,7 +1376,7 @@
       "workflow": "evals",
       "tti_sha": "877e1624dc82fa667f1b16ffe205ce9223127021",
       "planned_clients": 2,
-      "status": "device_job_in_progress",
+      "status": "valid_scored_baseline",
       "queued_at": "2026-11-06T14:49:37.916525+00:00",
       "batch_reason": "Smallest supported batch>=2; current accepted C2 baseline with matching439c phase export",
       "scope": "Contemporary baseline for scored C4 comparison, same10/runtime/limits; not release",
@@ -1380,18 +1386,26 @@
       "run_id": 42237390829,
       "submitted_at": "2026-11-06T14:49:40Z",
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42237390829",
-      "workflow_status": "in_progress",
-      "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T14:55:26.464516+00:00",
+      "workflow_status": "completed",
+      "workflow_conclusion": "success",
+      "last_observed_at": "2026-11-06T15:10:40.407984+00:00",
       "runner": "120-qb2-p04t07",
       "device_job_id": 127958608729,
       "device_job_started_at": "2026-11-06T14:49:58Z",
-      "device_job_completed_at": null,
-      "start": "2026-11-06T14:49:58Z"
+      "device_job_completed_at": "2026-11-06T15:10:36Z",
+      "start": "2026-11-06T14:49:58Z",
+      "end": "2026-11-06T15:10:36Z",
+      "exit_status": 0,
+      "actual_hours": 0.3438888888888889,
+      "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+      "workflow_wall_hours": 0.3491666666666667,
+      "functional_at": 10,
+      "audit": "runs/gpqa-current10-c2/audit.json",
+      "eval_hours": 0.26056640274175963
     }
   ],
   "status": "all_smokes_valid_three_larger_runs_executing",
-  "last_updated": "2026-11-06T14:56:41.549897+00:00",
+  "last_updated": "2026-11-06T15:14:31.037130+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -1887,6 +1901,40 @@
       "workflow_wall_hours": 0.3011111111111111,
       "predicted_workflow_hours": 5.0088888888888885,
       "acceptance": "Audited valid9/10; contemporary C2 comparison pending, C2 remains selected."
+    },
+    {
+      "arm": "nightly-swe-retained-repeat",
+      "run_id": 42228448171,
+      "planned_clients": 2,
+      "batch": 8,
+      "device_job_hours": 1.2108333333333334,
+      "workflow_wall_hours": 1.2158333333333333,
+      "predicted_workflow_hours": 7.7925,
+      "workflow_conclusion": "success",
+      "status": "nightly_not_banked_cap_classification_missing",
+      "functional_at": 2,
+      "eval_hours": 1.1227552841666666,
+      "audit": "runs/nightly-swe-retained-repeat/audit.json"
+    },
+    {
+      "arm": "gpqa-current10-c2",
+      "run_id": 42237390829,
+      "planned_clients": 2,
+      "batch": 8,
+      "device_job_hours": 0.3438888888888889,
+      "workflow_wall_hours": 0.3491666666666667,
+      "predicted_workflow_hours": 5.0088888888888885,
+      "workflow_conclusion": "success"
+    },
+    {
+      "arm": "gpqa-current10-c2",
+      "run_id": 42237390829,
+      "eval_hours": 0.26056640274175963,
+      "device_job_hours": 0.3438888888888889,
+      "workflow_wall_hours": 0.3491666666666667,
+      "planned_clients": 2,
+      "batch": 8,
+      "evidence": "runs/gpqa-current10-c2/audit.json"
     }
   ],
   "local_idle_intervals": [
@@ -2218,8 +2266,11 @@
     "r1_gpqa_diamond": {
       "tasks": 10,
       "source": "cohorts.json r1_gpqa_diamond.rungs.server-sized-gpqa-c2",
-      "reason": "Full198 C2measuredprogressstop; C4capacityeffortcannotestablishfullfit",
-      "frozen": false
+      "reason": "C4 accepted by current-runtime paired10, while nested20C2 rung continues. Full198 remains non-fitting.",
+      "frozen": false,
+      "planned_clients": 4,
+      "batch": 8,
+      "configuration_evidence": "runs/gpqa-c4-scored10/RESULT.json"
     },
     "terminal_bench_2_1": {
       "decision": "stop",

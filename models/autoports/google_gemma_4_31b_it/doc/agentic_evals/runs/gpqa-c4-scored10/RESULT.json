@@ -1,0 +1,153 @@
+{
+  "status": "effort_complete_change_accepted_larger_tail_problem_open",
+  "decision": {
+    "authority": "coordinator acceptance of same-current-runtime scoredpair",
+    "change": "GPQA selected concurrency2to4, supportedB8 unchanged",
+    "accepted_scope": "Currently banked frozen10 GPQA cohort only",
+    "problem_status": "larger-cohort tail remains open",
+    "scores_gated": false
+  },
+  "runs": {
+    "C2": 42237390829,
+    "C4": 42234229161
+  },
+  "functional_at": {
+    "suite": "r1_gpqa_diamond",
+    "tasks": 10,
+    "sample_ids": [
+      152,
+      189,
+      46,
+      87,
+      52,
+      181,
+      31,
+      185,
+      50,
+      187
+    ]
+  },
+  "workload": {
+    "planned_clients": [
+      2,
+      4
+    ],
+    "served_batch": 8,
+    "max_num_seqs": 8,
+    "source": "stockCI commonlm-eval HTTPchatcompletion route; no Harbor tasks"
+  },
+  "identity": {
+    "runner": "120-qb2-p04t07",
+    "runtime": "439c22b0e991e5af626efafa7224edf28f84795b",
+    "plugin": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+    "C2_TTI": "877e1624dc82fa667f1b16ffe205ce9223127021",
+    "C4_TTI": "82da396ef63bbe95cedbe254bb5433d905cd0491",
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "config_difference": "git diff C4TTI\u2192C2TTI shows only modelGPQAmax_concurrent4to2 and matchingtest; route/caps/cohort/sampling identical",
+    "layers": 60,
+    "mesh": "1x4"
+  },
+  "limits": {
+    "stream": false,
+    "max_gen_toks": 126976,
+    "until": [],
+    "do_sample": true,
+    "temperature": 1.0,
+    "top_k": 20,
+    "top_p": 0.95,
+    "seed": 42
+  },
+  "request_timeout_seconds": 14400,
+  "accuracy": {
+    "C2": {
+      "correct": 9,
+      "total": 10,
+      "accuracy_fraction": 0.9,
+      "wilson95_fraction": [
+        0.5958499732047615,
+        0.9821237869049271
+      ],
+      "reference_published_percent": 84.3,
+      "reference_gpu_percent": 83.33,
+      "reference_caveat": "Subset interval does not establish full-suite parity."
+    },
+    "C4": {
+      "correct": 9,
+      "total": 10,
+      "accuracy_fraction": 0.9,
+      "wilson95_fraction": [
+        0.5958499732047615,
+        0.9821237869049271
+      ],
+      "reference_published_percent": 84.3,
+      "reference_gpu_percent": 83.33,
+      "reference_caveat": "Subset interval does not establish full-suite parity."
+    },
+    "completed_samples_each": 10,
+    "dataset_samples": 198,
+    "scope": "subset",
+    "visible_response_hashes_equal_all10": true,
+    "paired_score_changes": 0,
+    "hidden_full_token_sequence_equality": null
+  },
+  "measured_runtime": {
+    "C2_eval_seconds": 938.0390498703346,
+    "C4_eval_seconds": 642.4457219508477,
+    "C2_eval_hours": 0.26056640274175963,
+    "C4_eval_hours": 0.17845714498634657,
+    "seconds_saved": 295.5933279194869,
+    "hours_saved_banked_release10": 0.08210925775541303,
+    "fraction_saved": 0.3151183609683913,
+    "ratio_C4_to_C2": 0.6848816390316087,
+    "C2_device_hours": 0.3438888888888889,
+    "C4_device_hours": 0.29555555555555557,
+    "basis": "Evaluation end-to-end hostwall, not devicephase time or perrequestlatency"
+  },
+  "work_parity": {
+    "prefilled_tokens_each": 2390,
+    "decode_active_row_steps_each": 56042,
+    "C2_decode_steps": 29488,
+    "C4_decode_steps": 19863,
+    "matched_phase_coverage": true,
+    "phase_errors_or_truncation": false,
+    "host_compatibility_sampling_steps_each": 0,
+    "interpretation": "Equal executed prefill and decode-row work plus visible response hashes support matchedworkscope; counts are not rawAPIoutputtokenusage and do not prove hiddenreasoningtokenidentity."
+  },
+  "prediction_vs_result": {
+    "predicted_device_hours": 0.508888889,
+    "predicted_saving_hours": 0.065764804125,
+    "predicted_conservative_elapsed_hours": 5.008888889,
+    "device_box_hours": 5.5,
+    "actual_device_hours": 0.7616666666666667,
+    "cost_components": {
+      "contemporary_C2": 0.3438888888888889,
+      "C4": 0.29555555555555557,
+      "wrong_route_attempt": 0.12222222222222222
+    },
+    "actual_over_predicted_device_hours": 1.4967248905028987,
+    "saving_over_prediction": 1.2485288878736247,
+    "reconciliation": "Actual includes requiredcontemporaryC2 arm and wrong-route failedattempt beyond initialone-arm deviceestimate; allcost retained within5.5hbox. No separate localcapacitycharge doublecounted here."
+  },
+  "release_pricing": {
+    "accepted_current10_hours_saved": 0.08210925775541303,
+    "hypothetical20_hours_saved": 0.16421851551082606,
+    "hypothetical20_basis": "Guess assuming exactly2x samework and behavior, not measured; independentC2twenty rung does not establishC4twenty gain.",
+    "full198_hours_saved": null,
+    "full198_fit": false,
+    "full198_note": "Stopped nonfit C2full198 remains separate; this ten-questionpair neither reversesstop nor establishesC4fullfit."
+  },
+  "validity_limits": [
+    "Allten answers complete, no harnesserror/quarantine,9correct each; scores reported not thresholded.",
+    "Saved samples omit rawfinishreason, completionusage and hiddenreasoningtokens: do not infer categorical no-cap/no-loop acrosshiddencontinuations.",
+    "One sequential samehostpair, not randomized/repeated; setup/cache/hostvariance remains.",
+    "Originalhistorical08ee879 C2 is descriptive only; acceptance uses contemporary439c arm.",
+    "Accepted performance benefit is restricted to this matchedworkload, not crosssuite orlargerlist."
+  ],
+  "evidence": [
+    "../gpqa-current10-c2/audit.json",
+    "../gpqa-c4-scored10-evals/audit.json",
+    "../gpqa-c4-capacity/RESULT.json",
+    "git diff 82da396ef63bbe95cedbe254bb5433d905cd0491 877e1624dc82fa667f1b16ffe205ce9223127021 -- reference_config/evals/eval_config.py"
+  ],
+  "hardware_or_dispatch_by_result_author": false
+}

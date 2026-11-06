@@ -1,0 +1,297 @@
+{
+  "status": "nightly_not_banked_cap_classification_missing",
+  "run_id": 42228448171,
+  "complete_nightly_banked": false,
+  "functional_at": 2,
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "completed_trials": 5,
+  "valid_scored_trials": 4,
+  "raw_score": {
+    "correct": 1,
+    "total": 5,
+    "fraction": 0.2,
+    "wilson95": [
+      0.03622410863243014,
+      0.6244653702374747
+    ],
+    "eligible_for_stage_score": false
+  },
+  "audited_partial_score": {
+    "correct": 1,
+    "total": 4,
+    "fraction": 0.25,
+    "wilson95": [
+      0.04558726080970055,
+      0.6993581574175981
+    ],
+    "scope": "Four audited tasks only; not accepted frozen5 rung and not a selected replacement cohort"
+  },
+  "tasks": [
+    {
+      "task": "astropy__astropy-14598",
+      "status": "held_cap_classification_missing",
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "exception": null,
+      "agent_seconds": 2779.872801,
+      "api_calls": 48,
+      "saved_native_responses": 46,
+      "missing_response_count": 2,
+      "format_error_indices": [
+        2,
+        75
+      ],
+      "saved_token_ids_coverage": 46,
+      "saved_token_id_usage_mismatches": [],
+      "max_saved_output_tokens": 29463,
+      "reviewed_native_actions": 46,
+      "task_resources": {
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G",
+        "build_timeout_sec": 1800.0
+      },
+      "task_definition": "datasets/swebench-verified/astropy__astropy-14598/task.toml",
+      "task_definition_sha256": "89760344f93862da427f7f5e9a443cb4cdbc04c75522a8f40e49acff3f0bc1b1",
+      "task_dataset_commit": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "trajectory_sha256": "a031259c39c092cdcf61a0712cc693da135b0df2cf73eae4f7b80827695ea30f",
+      "source": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T135320/astropy__astropy-14598__aihwFkm/agent/mini-swe-agent.trajectory.json"
+    },
+    {
+      "task": "django__django-11265",
+      "status": "valid",
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "exception": null,
+      "agent_seconds": 1021.586774,
+      "api_calls": 95,
+      "saved_native_responses": 93,
+      "missing_response_count": 2,
+      "format_error_indices": [
+        2,
+        67
+      ],
+      "saved_token_ids_coverage": 93,
+      "saved_token_id_usage_mismatches": [],
+      "max_saved_output_tokens": 3064,
+      "reviewed_native_actions": 93,
+      "task_resources": {
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G",
+        "build_timeout_sec": 1800.0
+      },
+      "task_definition": "datasets/swebench-verified/django__django-11265/task.toml",
+      "task_definition_sha256": "89760344f93862da427f7f5e9a443cb4cdbc04c75522a8f40e49acff3f0bc1b1",
+      "task_dataset_commit": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "trajectory_sha256": "f5061da77d0d64b95e50931957ba3b049071a5bf03d1adf2cceb0828bb16cec1",
+      "source": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T135320/django__django-11265__r3PAZZY/agent/mini-swe-agent.trajectory.json"
+    },
+    {
+      "task": "psf__requests-1766",
+      "status": "valid",
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "exception": null,
+      "agent_seconds": 151.801647,
+      "api_calls": 9,
+      "saved_native_responses": 9,
+      "missing_response_count": 0,
+      "format_error_indices": [],
+      "saved_token_ids_coverage": 9,
+      "saved_token_id_usage_mismatches": [],
+      "max_saved_output_tokens": 1171,
+      "reviewed_native_actions": 9,
+      "task_resources": {
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G",
+        "build_timeout_sec": 1800.0
+      },
+      "task_definition": "datasets/swebench-verified/psf__requests-1766/task.toml",
+      "task_definition_sha256": "e9a5d7dd94ed43a89396fc12e7b7b32578c9114806bf017620aa694525dd9cba",
+      "task_dataset_commit": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "trajectory_sha256": "df102132ca650c6efe182350de026b488fb8cc4d36f0d1bdb8b4c7a11786fad8",
+      "source": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T135320/psf__requests-1766__w9syndk/agent/mini-swe-agent.trajectory.json"
+    },
+    {
+      "task": "pydata__xarray-4966",
+      "status": "valid",
+      "reward": 1.0,
+      "exit_status": "Submitted",
+      "exception": null,
+      "agent_seconds": 456.031946,
+      "api_calls": 26,
+      "saved_native_responses": 26,
+      "missing_response_count": 0,
+      "format_error_indices": [],
+      "saved_token_ids_coverage": 26,
+      "saved_token_id_usage_mismatches": [],
+      "max_saved_output_tokens": 1893,
+      "reviewed_native_actions": 26,
+      "task_resources": {
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G",
+        "build_timeout_sec": 1800.0
+      },
+      "task_definition": "datasets/swebench-verified/pydata__xarray-4966/task.toml",
+      "task_definition_sha256": "89760344f93862da427f7f5e9a443cb4cdbc04c75522a8f40e49acff3f0bc1b1",
+      "task_dataset_commit": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "trajectory_sha256": "6dfe30d6bc53e31ee8b1fc182aecc49f43cb27b296180e20f6774d8819259628",
+      "source": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T135320/pydata__xarray-4966__k96pg3k/agent/mini-swe-agent.trajectory.json"
+    },
+    {
+      "task": "pylint-dev__pylint-7080",
+      "status": "valid",
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "exception": null,
+      "agent_seconds": 708.58418,
+      "api_calls": 46,
+      "saved_native_responses": 46,
+      "missing_response_count": 0,
+      "format_error_indices": [],
+      "saved_token_ids_coverage": 46,
+      "saved_token_id_usage_mismatches": [],
+      "max_saved_output_tokens": 2961,
+      "reviewed_native_actions": 46,
+      "task_resources": {
+        "cpus": 1,
+        "memory": "4G",
+        "storage": "10G",
+        "build_timeout_sec": 1800.0
+      },
+      "task_definition": "datasets/swebench-verified/pylint-dev__pylint-7080/task.toml",
+      "task_definition_sha256": "89760344f93862da427f7f5e9a443cb4cdbc04c75522a8f40e49acff3f0bc1b1",
+      "task_dataset_commit": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+      "trajectory_sha256": "b36b43d3cd3024ec74b34bcbb244d7e97b6bf389061f4cc9e1ae781fd0b6b5b8",
+      "source": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T135320/pylint-dev__pylint-7080__DpLipWU/agent/mini-swe-agent.trajectory.json"
+    }
+  ],
+  "limits": {
+    "agent_seconds": 21600,
+    "request_seconds": 3600,
+    "output_tokens": 32768,
+    "source": "Collected actual Harbor config and task result timestamps",
+    "resources": "All5 use definition1CPU/4Gmemory/10Gstorage; environment config has no blanket CPU/memory/storage overrides."
+  },
+  "pins": {
+    "tt_metal": "439c22b0e991e5af626efafa7224edf28f84795b",
+    "tti": "f12b2682cb03e84555ba122dd647262ae399815f",
+    "plugin": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "mini_swe_agent": "2.2.8"
+  },
+  "autoport": {
+    "registered": true,
+    "layers": 60,
+    "mesh": [
+      1,
+      4
+    ],
+    "device_ids": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "context": 262144,
+    "max_num_seqs": 8,
+    "identity_evidence": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/tt_triage/gemma4-phase-147-1793973144191978084.jsonl"
+  },
+  "native_trajectory_review": {
+    "external_retrieval_observed": false,
+    "fetched_fix_observed": false,
+    "network_candidates_from_helper": 0,
+    "interpretation": "Reviewed all saved native action sequences and embedded-script network indicators. Xarray reproduces with locally generated netCDF data; Requests creates localhost HTTP listener but only constructs digest headers without sending external requests; Pylint remote URLs are license/source comments, not commands. No package download or remote git/curl/wget action observed. Missing malformed outputs generated no parsed actions. No packet-level guarantee.",
+    "model_quality_note": "Astropy saved long response emits unrelated graph-solver code before returning to FITS debugging. This is observed task drift, not proof that the later missing response looped."
+  },
+  "missing_response_assessment": {
+    "format_error_alone_invalidates_score": false,
+    "short_episodes": "Astropy feedback2 and Django feedback2/67 are ordinary recovered parse failures; their short time brackets and phase token budget rule out hitting32768 in those episodes. Django submitted a scorable failure.",
+    "windows": [
+      {
+        "task": "astropy__astropy-14598",
+        "feedback_message_index": 2,
+        "bracket_seconds_including_one_second_created_rounding": 16.454468965530396,
+        "basis": "Prior tool completion or agent start to following successful response creation; includes client/tool gaps, not exact request latency."
+      },
+      {
+        "task": "astropy__astropy-14598",
+        "feedback_message_index": 75,
+        "bracket_seconds_including_one_second_created_rounding": 1292.4982695579529,
+        "basis": "Prior tool completion or agent start to following successful response creation; includes client/tool gaps, not exact request latency."
+      },
+      {
+        "task": "django__django-11265",
+        "feedback_message_index": 2,
+        "bracket_seconds_including_one_second_created_rounding": 10.02006196975708,
+        "basis": "Prior tool completion or agent start to following successful response creation; includes client/tool gaps, not exact request latency."
+      },
+      {
+        "task": "django__django-11265",
+        "feedback_message_index": 67,
+        "bracket_seconds_including_one_second_created_rounding": 25.03627848625183,
+        "basis": "Prior tool completion or agent start to following successful response creation; includes client/tool gaps, not exact request latency."
+      }
+    ],
+    "astropy_feedback75": {
+      "status": "unresolved_limit_cost",
+      "preceding_saved_response_message": 73,
+      "preceding_saved_completion_tokens": 29463,
+      "following_saved_response_message": 76,
+      "following_saved_completion_tokens": 2068,
+      "phase_slot": 0,
+      "decode_position_start": 43971,
+      "decode_position_end": 76737,
+      "consecutive_decode_steps": 32767,
+      "phase_start_ns": 2917458445671331,
+      "phase_end_ns": 2918743010942502,
+      "phase_duration_seconds": 1284.565271171,
+      "interpretation": "Contiguous decode run between the exact known23028\u219252490 and19359\u219221426 response-position runs aligns to missing response75 and is strongly consistent with32768 output cap (prefill first token plus32767decode). Raw finish_reason/body/IDs are absent; a coincidental natural stop cannot be excluded and loop-versus-progress cannot be determined. Cannot assert limit did not cost score or relabel it a confirmed loop.",
+      "loop_confirmed": null,
+      "finish_reason": null,
+      "completion_tokens": null
+    },
+    "conservative_phase_token_budget": {
+      "decode_active_row_steps": 137952,
+      "all_prefill_active_row_chunks": 271,
+      "saved_completion_tokens": 103830,
+      "missing_completion_upper_bound": 34393,
+      "other_missing_after32767_step_episode_upper_bound": 1626,
+      "assumptions": "At most one generated token per active decode row and per prefill row/chunk, including intermediate chunks as an overestimate; retained phase covers all calls. Counts may include EOS/control/unused intermediate samples, so bounds are not exact usage."
+    },
+    "agent_time_limit": "All5 Submitted with no exceptions, agent durations far below21600; no agent timeout observed. Long missing episode below3600 request limit.",
+    "decision": "Hold only Astropy for unresolved output-limit classification; preserve raw failure. Full frozen5 not banked; do not drop task or cherry-pick4 as a replacement cohort. Further evidence/retention or valid repeat needed."
+  },
+  "phase_export": {
+    "snapshots": 4093,
+    "events": 218170,
+    "matched_steps": 109085,
+    "host_compatibility_steps": 47,
+    "errors": 0,
+    "truncated": false,
+    "pending_steps_final": 0,
+    "time_basis": "Host adapter boundaries only; no device time or roofline claim."
+  },
+  "timing": {
+    "evaluation_seconds": 4041.919023,
+    "evaluation_hours": 1.1227552841666666,
+    "agent_seconds_sum": 5117.877348,
+    "device_job_hours": 1.2108333333333334,
+    "workflow_hours": 1.2158333333333333,
+    "predicted_workflow_hours": 7.7925
+  },
+  "evidence": {
+    "retention_audit": "retention-audit.json",
+    "phase_export": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/tt_triage/gemma4-phase-147-1793973144191978084.jsonl",
+    "console": "bringup/artifacts/stage12-swe-repeat-complete.log",
+    "manifest": "manifest.json",
+    "prior_context": "../nightly-swe-observable/audit.json"
+  },
+  "device_hours_for_audit": 0
+}
