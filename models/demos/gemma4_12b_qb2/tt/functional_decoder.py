@@ -270,10 +270,7 @@ class FunctionalDecoder(LightweightModule):
         """Chunked-SDPA program config for one prefill chunk.
 
         The op requires the chunk start to be a multiple of both tile sizes; Q tiles also divide the
-        chunk length. Full attention keeps the running softmax @ V output and sum in exact FP32
-        (``fp32_output_accumulation``): with BF16/TF32 accumulators the error grows with every K tile
-        of an unbounded prefix (PCC 0.97 at 262144 tokens). Sliding layers visit at most
-        ~1024 / 64 + 1 K tiles of the window and keep the default accumulators.
+        chunk length.
         """
         full = self.sliding_window is None
         # K tiles never exceed one cache block (see the decode config).
@@ -290,7 +287,6 @@ class FunctionalDecoder(LightweightModule):
             q_chunk_size=largest(q_cap, chunk_start, padded_len),
             k_chunk_size=largest(k_cap, chunk_start),
             exp_approx_mode=False,
-            fp32_output_accumulation=full,
         )
 
     def _prefill_chunk(self, x, *, page_table, user_id, chunk_start, padded_len):

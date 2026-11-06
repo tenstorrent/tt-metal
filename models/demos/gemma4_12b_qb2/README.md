@@ -22,9 +22,9 @@ tenstorrent/tt-agentic-bringup-qb2#93.
 
 ## Requirements
 
-- tenstorrent/tt-metal#61986 (stacked below): the 8 full-attention layers pass its opt-in SDPA flag
-  `fp32_output_accumulation` on every chunked-prefill call. On one chip with this model's settings it raises the
-  attention PCC at a 262K prefix from 0.9991 to 0.9997, for about 4% more time in that attention.
+- tt-metal `main`; no op changes. Long-prefix full attention runs the stock chunked SDPA (attention PCC 0.9991 at a
+  262K prefix on one chip); the SDPA precision recipes (#59522, #60197) are the planned follow-up (`ACCURATE`, 0.9997
+  with an FP32 accumulator).
 - vllm-tt-plugin `main`, unmodified, with vLLM 0.30.
 
 ## Serving

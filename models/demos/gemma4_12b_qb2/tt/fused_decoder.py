@@ -312,9 +312,8 @@ class FusedDecoder(LightweightModule):
     def _sdpa_prefill_cfg(self, chunk_start, padded_len):
         """Chunked-SDPA program config for one prefill chunk (same policy as FunctionalDecoder).
 
-        The chunk start must be a multiple of both tile sizes, and Q tiles divide the chunk length. Full
-        attention keeps exact FP32 running accumulators (``fp32_output_accumulation``) for its unbounded
-        prefix. K tiles never exceed one cache block.
+        The chunk start must be a multiple of both tile sizes, and Q tiles divide the chunk length. K tiles
+        never exceed one cache block.
         """
         full = self.sliding_window is None
         q_cap, k_cap = (128, min(64, self.block_size)) if full else (SLIDING_Q_TILE, self.block_size)
@@ -330,7 +329,6 @@ class FusedDecoder(LightweightModule):
             q_chunk_size=largest(q_cap, chunk_start, padded_len),
             k_chunk_size=largest(k_cap, chunk_start),
             exp_approx_mode=False,
-            fp32_output_accumulation=full,
         )
 
     def _window_shift(self, chunk_start):

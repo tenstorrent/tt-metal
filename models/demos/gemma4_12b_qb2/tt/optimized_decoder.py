@@ -585,7 +585,7 @@ class OptimizedDecoder(FusedDecoder):
         align = math.lcm(SLIDING_Q_TILE, self.sdpa_prefill_k_cap, self.block_size)
         return -(-(self.sliding_window + align + max(rows, self.sliding_attn_block)) // self.block_size)
 
-    def _sdpa_prefill_cfg(self, chunk_start, padded_len, fp32_acc=None):
+    def _sdpa_prefill_cfg(self, chunk_start, padded_len):
         """Chunked-SDPA program config: chunk start a multiple of both chunk sizes, Q chunks divide the rows."""
 
         def largest(cap, *values):
@@ -603,7 +603,6 @@ class OptimizedDecoder(FusedDecoder):
             q_chunk_size=q_chunk,
             k_chunk_size=largest(self.sdpa_prefill_k_cap, chunk_start),
             exp_approx_mode=self.sdpa_prefill_exp_approx,
-            fp32_output_accumulation=(self.sliding_window is None) if fp32_acc is None else fp32_acc,
         )
 
     def _sdpa(self, q, *, page_table, user_id, q_start):
@@ -614,12 +613,12 @@ class OptimizedDecoder(FusedDecoder):
         if self.sliding_window is not None:
             last = min(last, first + self._window_table_blocks(q.shape[-2]))
         table = ttnn.slice(page_table, [user_id, first], [user_id + 1, last])
-        # Full layers keep exact FP32 running accumulators for long prefixes; requests whose keys all lie within
+        # Full layers run the FP32-dest SDPA kernel; requests whose keys all lie within
         # ``sdpa_prefill_full_streaming_max_kv`` take the faster streaming kernel instead (BF16 dest).
         short = (
             self.sliding_window is None and q_start + q.shape[-2] <= self.policy["sdpa_prefill_full_streaming_max_kv"]
         )
-        cfg = self._sdpa_prefill_cfg(q_start - shift, q.shape[-2], fp32_acc=False if short else None)
+        cfg = self._sdpa_prefill_cfg(q_start - shift, q.shape[-2])
         table = self._table_for_k_chunk(table, cfg.k_chunk_size)
         return ttnn.transformer.chunked_scaled_dot_product_attention(
             q,
