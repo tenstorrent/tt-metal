@@ -1,0 +1,3 @@
+# Terminal C4 revisit feasibility
+
+Coordinator goal: determine whether newer accepted runtime/image reuse and four-resident pool evidence justify a normal Terminal nightly10 revisit, without changing the current functional2/measured-stop decision. Host-only forecast0/device box0. Inspect exact limits/task CPU-memory admission, original scored smoke2 versus partial unscored nightly10, measured setup and C4 lifecycle evidence. Separate normal-rung projection from conservative full6h release tails. Provide concrete admissible confirmation or exact missing gate; no assumed speedup, permission, score baseline or acceptance. No runtime/source changes, dispatch, push, devices or central documentation. Write final RESULT.json/MD once after analysis.

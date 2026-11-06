@@ -1,0 +1,171 @@
+{
+  "status": "analysis_complete_conditional_revisit_only",
+  "device_hours": 0,
+  "forecast_device_hours": 0,
+  "box_device_hours": 0,
+  "change": "none",
+  "functional_at": 2,
+  "decision_preserved": "stop",
+  "unblocks": "Terminal nightly validity only if a subsequent normal rung completes validly",
+  "limits": {
+    "agent_timeout_seconds": 21600,
+    "request_timeout_seconds": 3600,
+    "max_output_tokens": 32768,
+    "context": 262144,
+    "batch": 8,
+    "proposed_planned_clients": 4,
+    "harbor_sha": "e76c762fca5267dfb36e1f900f0a7724ed72e735"
+  },
+  "task_definition_revision": "12b7565679ce5006230b820666353673a133db93",
+  "tasks": [
+    {
+      "task": "terminal-bench/llm-inference-batching-scheduler",
+      "cpus": 1,
+      "memory_mb": 2048,
+      "storage_mb": 10240,
+      "definition_sha256": "52aaac942f917e6a91ff658e0272195bd1cd842d41d71e302414c52603cc588b"
+    },
+    {
+      "task": "terminal-bench/mailman",
+      "cpus": 1,
+      "memory_mb": 2048,
+      "storage_mb": 10240,
+      "definition_sha256": "a04f4d0e9be25056d2cd79d6a018bc875b6e6fb51d429a9241f282272cc660d1"
+    },
+    {
+      "task": "terminal-bench/db-wal-recovery",
+      "cpus": 1,
+      "memory_mb": 2048,
+      "storage_mb": 10240,
+      "definition_sha256": "1cdc2c615e259bc10265efbe71b518332070c1c002e226566399e9788f18d0aa"
+    },
+    {
+      "task": "terminal-bench/winning-avg-corewars",
+      "cpus": 1,
+      "memory_mb": 2048,
+      "storage_mb": 10240,
+      "definition_sha256": "a9b48765d03a66d966f6a162be203bc31e1d9d6e4abe616a2f4b42bac5dc246f"
+    },
+    {
+      "task": "terminal-bench/feal-linear-cryptanalysis",
+      "cpus": 1,
+      "memory_mb": 2048,
+      "storage_mb": 10240,
+      "definition_sha256": "a39ec2c427af534c96c719dc87f70eb536956b487ce909d04b6365160e7c9fc4"
+    },
+    {
+      "task": "terminal-bench/fix-code-vulnerability",
+      "cpus": 1,
+      "memory_mb": 2048,
+      "storage_mb": 10240,
+      "definition_sha256": "9aa2bd14ce9408289d199d0608bc3fa65b8b5e23374c9641020de62197dbf1e2"
+    },
+    {
+      "task": "terminal-bench/constraints-scheduling",
+      "cpus": 1,
+      "memory_mb": 2048,
+      "storage_mb": 10240,
+      "definition_sha256": "7b9842de16d74e8faf8c7c0aa03b0b81145941cb12dd322d81ae23fc48607250"
+    },
+    {
+      "task": "terminal-bench/sparql-university",
+      "cpus": 1,
+      "memory_mb": 2048,
+      "storage_mb": 10240,
+      "definition_sha256": "47a6f6dd9ce0fc7631ef607e900fcd039b2d064ea90545645b49c678cddc9585"
+    },
+    {
+      "task": "terminal-bench/dna-insert",
+      "cpus": 1,
+      "memory_mb": 4096,
+      "storage_mb": 10240,
+      "definition_sha256": "1a9efd5c826d64d31c4874b395f1f9c488b2f26581b0c752fc4619ff177f25eb"
+    },
+    {
+      "task": "terminal-bench/video-processing",
+      "cpus": 1,
+      "memory_mb": 2048,
+      "storage_mb": 10240,
+      "definition_sha256": "be4fb42fccc5faa4862789cedd2c560eaa5758a2971989649a6dafeaeccc17aa"
+    }
+  ],
+  "host_admission": {
+    "worst_four_cpu_quota": 4,
+    "worst_four_memory_mb": 10240,
+    "four_storage_mb": 40960,
+    "networks": 4,
+    "documented_network_pool_approx": 31,
+    "historical_host_cpus": 16,
+    "historical_host_memory_gb": 249.31,
+    "current_available_resources": null,
+    "admission": "Conditionally plausible, not demonstrated. Preserve task definitions; normal workflow owns runner. Future runner available RAM/CPU/disk/network occupancy and real four-sandbox contention remain unmeasured; local/GPQA capacity cannot prove these."
+  },
+  "projections": {
+    "old_stop_eval_hours": 11,
+    "old_stop_setup_queue_hours": 1.148611111111111,
+    "old_stop_workflow_hours": 12.14861111111111,
+    "no_speed_credit_current_image": {
+      "eval_hours": 11,
+      "borrowed_measured_device_setup_hours": 0.0880780491666668,
+      "additional_queue_margin_guess_hours": 0.5,
+      "workflow_hours": 11.588078049166667,
+      "margin_hours": 0.411921950833333,
+      "qualification": "Conditional image reuse, setup borrowed from recent SWE same route; queue0.5 is guess. Eleven-hour eval estimate uses two completions and censored tails, not a fit guarantee."
+    },
+    "ideal_c4_guess": {
+      "eval_hours": 5.5,
+      "workflow_hours": 6.088078049166667,
+      "release_saving_guess_hours": 5.5,
+      "qualification": "Unmeasured ideal twofold throughput; do not use for acceptance or admission."
+    },
+    "conservative_release": {
+      "full_agent_tail_hours": 6,
+      "no_speed_workflow_hours": 17.58807804916667,
+      "ideal_c4_plus_tail_hours": 12.088078049166667,
+      "admitted": false,
+      "reason": "Even optimistic C4 arithmetic plus full6h tail exceeds12h; no release measured projection exists. Three waves each potentially6h already reach18h before setup/verifiers."
+    }
+  },
+  "evidence_basis": {
+    "scored_smoke2_hours": 0.6375568233333334,
+    "scored_smoke2_score": 0,
+    "scored_smoke2_ci95": [
+      0,
+      0.6576197724933469
+    ],
+    "smoke_calls": 47,
+    "smoke_output_tokens": 70620,
+    "smoke_max_observed_context": 54247,
+    "partial_nightly_score": null,
+    "capacity_runtime": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+    "capacity_four_active_decode_steps": 149,
+    "capacity_native_decode_ids_matched": 632,
+    "capacity_limit": "Synthetic130048-132864 prompts and32-128 outputs; not Terminal sandbox, full-output, or full-context proof.",
+    "image": "Required11a387 image is still building in nightly-swe-decode-retention manifest last observed16:34:33; no immutable completed image digest proven here."
+  },
+  "next_experiment": {
+    "immediate_dispatch_admissible": false,
+    "reason": "Image availability/source-binding and coordinator budget/confirmation not established. No permission inferred.",
+    "proposal": "Once image binding and normal host admission are satisfied, coordinator may authorize a fresh same-frozen-smoke2 scored C2/B8 versus C4/B8 pair on current runtime, retaining all limits/metadata. Use exact runtime pair only if native outputs are proven exact; otherwise scored pair required. Historical smoke2 is banked but stale and partial nightly10 is not a baseline. Two tasks cannot exercise four active agents, so this confirms regression only. Then frozen nightly10 C4 remains the next rung, with explicitly uncertain no-speed-credit11.588h projection and bounded progress checks; no intermediate cherry-picked4 or duplicated tasks.",
+    "pair_point_forecast_device_hours": 1.4512697450000005,
+    "pair_forecast_qualification": "1.45127h is borrowed two-smoke plus setup estimate, not safe effort box;6h task limits stay unchanged and coordinator must allocate tail-aware box separately.",
+    "confirmation": "Valid complete current-best scored pair with95% intervals; then complete frozen nightly10 with actualfour sandbox admission, no diagnostic loss, full cap classification/no retrieval, measured elapsed<=12h. Scores reported not gated. Only completed rung can replace stop."
+  },
+  "rank": {
+    "priority": "Validity investigation ahead of speed only if it can unblock valid nightly; otherwise speculative speed below active evidence repairs",
+    "release_hours_saved": null,
+    "hours_saved_per_device_hour": null,
+    "guessed_ideal_saving_hours": 5.5,
+    "reason": "No Terminal C4 throughput observation. Do not rank ideal speed as measured benefit."
+  },
+  "evidence": [
+    "runs/nightly-terminal-observable/stop.json",
+    "runs/terminal-nightly-tail-diagnosis/RESULT.json",
+    "runs/terminal-smoke-runtime-analysis/result.json",
+    "runs/retention-c4-lifecycle/RESULT.json",
+    "runs/current-observability-candidates/terminal10-resolved.json",
+    "runs/nightly-swe-decode-retention/manifest.json",
+    "runs/agent-capacity-and-contention/host-admission-preparation.json",
+    "/home/mvasiljevic/gemma4-31b-pipeline-v3/device-instructions.md"
+  ]
+}

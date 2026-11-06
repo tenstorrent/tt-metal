@@ -23,7 +23,7 @@
   "batch_reason": "Smallest validated batch at orabove2",
   "arm": "nightly-swe-decode-retention",
   "workflow": "agentic",
-  "status": "building_or_queued",
+  "status": "device_job_in_progress",
   "queued_at": "2026-11-06T15:51:59.874014+00:00",
   "tt_metal_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
   "tti_sha": "bb16e00efd8bbc649d68d21b501acec1d53e42a9",
@@ -44,8 +44,13 @@
   "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42247098210",
   "workflow_status": "in_progress",
   "workflow_conclusion": null,
-  "last_observed_at": "2026-11-06T16:12:14.965393+00:00",
+  "last_observed_at": "2026-11-06T16:51:47.845171+00:00",
   "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-wvng9",
   "build_started_at": "2026-11-06T15:54:10Z",
-  "build_completed_at": null
+  "build_completed_at": "2026-11-06T16:47:21Z",
+  "runner": "120-qb2-p04t05",
+  "device_job_id": 128021896449,
+  "device_job_started_at": "2026-11-06T16:47:23Z",
+  "device_job_completed_at": null,
+  "start": "2026-11-06T16:47:23Z"
 }

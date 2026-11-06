@@ -79,7 +79,7 @@
   ],
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
-    "stage12_accuracy": "Banked GPQA10/198, SWE2/500, Terminal2/89. FullGPQA198 and Terminalnightly10 measured stops. SWE repeat5 raw1/5 unbanked because one cap-correlated body was lost; repaired retention normal same5 queued. Nested GPQA20 C2 active. No dry/release."
+    "stage12_accuracy": "Banked GPQA10/198, SWE2/500, Terminal2/89. FullGPQA198 and Terminalnightly10 measured stops. SWE repeat5 raw1/5 unbanked due lost capped body. GPQA20 raw16/20 unbanked: two capped emptyanswers lack hidden tokens. Retained-runtime same5 and same20 now active. No dry/release."
   },
   "notes": [
     "Current accepted-runtime serving measurement, not frozen release. No vLLM profiling.",

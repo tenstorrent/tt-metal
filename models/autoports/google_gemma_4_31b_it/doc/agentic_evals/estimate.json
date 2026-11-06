@@ -1,9 +1,9 @@
 {
-  "status": "GPQA intermediate rung/current C2 comparison active; SWE cap-evidence repair active; Terminal measured stop",
+  "status": "GPQA20 and SWE5 retained-runtime repairs active; Terminal measured stop",
   "evals": {
     "r1_gpqa_diamond": {
       "decision": "go",
-      "reason": "Full198 stopped for measured nonfit; valid10 retained. Next nested20 at accepted C2 tests intermediate fit without waiting for C4 speed effort.",
+      "reason": "Valid10 retained. Completed20 raw16/20 unbanked due two empty capped outputs lacking hidden-token evidence. Same20 retained-runtime C4 repair active; full198 measured stop retained.",
       "functional_at": 10,
       "projected_hours": null,
       "score": 0.9,
@@ -13,12 +13,12 @@
       ],
       "next_rung": {
         "tasks": 20,
-        "planned_clients": 2,
+        "planned_clients": 4,
         "batch": 8,
-        "status": "running",
-        "projected_workflow_hours": 7.72125727234195,
-        "source": "runs/larger-gpqa20-c2-evals/manifest.json",
-        "run_id": 42234274300
+        "status": "running_retention_repair",
+        "run_id": 42256121890,
+        "projected_workflow_hours": 6.75,
+        "source": "runs/larger-gpqa20-c4-retained/manifest.json"
       },
       "full_suite_decision": "stop",
       "full_suite_stop_evidence": "runs/full-gpqa-observable/stop.json"
@@ -37,11 +37,10 @@
         "tasks": 5,
         "planned_clients": 2,
         "batch": 8,
-        "run_id": 42228448171,
-        "projected_workflow_hours": 7.7925,
-        "status": "nightly_not_banked_cap_classification_missing",
-        "source": "runs/nightly-swe-retained-repeat/manifest.json",
-        "evidence": "runs/nightly-swe-retained-repeat/audit.json"
+        "run_id": 42247098210,
+        "status": "running_retention_repair",
+        "projected_workflow_hours": 8.544166666666667,
+        "source": "runs/nightly-swe-decode-retention/manifest.json"
       }
     },
     "terminal_bench_2_1": {

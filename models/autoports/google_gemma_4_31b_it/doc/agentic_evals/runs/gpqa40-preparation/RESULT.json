@@ -1,0 +1,258 @@
+{
+  "status": "prepared_local_only_held_for20audit",
+  "candidate_sha": "6efe6739e6513d0edbf49a8ef39527b80a23784d",
+  "base_sha": "37ee508969c730320c01259fafe340e6c2c14d4e",
+  "runtime_sha": "11a387692d2b434198e79dd92fbb8ed308c3ca47",
+  "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-gpqa40-retained",
+  "branch": "prep/gpqa40-retained",
+  "cohort": {
+    "source": "default_rule",
+    "seed": "gemma4-goal12-v3-842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "rule": "SHA256(seed+NUL+str(index)) sorted first40 of indices0..197",
+    "doc_ids": [
+      152,
+      189,
+      46,
+      87,
+      52,
+      181,
+      31,
+      185,
+      50,
+      187,
+      153,
+      135,
+      81,
+      93,
+      7,
+      42,
+      24,
+      168,
+      20,
+      28,
+      13,
+      94,
+      61,
+      15,
+      123,
+      160,
+      27,
+      29,
+      90,
+      127,
+      121,
+      188,
+      136,
+      174,
+      184,
+      9,
+      80,
+      102,
+      182,
+      173
+    ],
+    "first20_exact": true,
+    "unique": true,
+    "harness_pin": "af401ef3dd3d2d90e55680990ed1f0c9f7892448",
+    "catalog_source": "Existing198 pinned harness document indices, inherited registered cohort; no gated dataset contents read",
+    "score_independent": true,
+    "semantic_mapping": "Pinned task.doc_iterator filters by membership in ascending dataset order; logged evaluator doc_id uses supplied hash-order indices by ordinal and is therefore permuted. Actual index=sorted(doc_ids)[ordinal]; validate doc_hash/prompt_hash across rungs. Preserve configured hash order; no harness edits.",
+    "logged_to_actual_mapping": [
+      {
+        "logged_doc_id": 152,
+        "actual_dataset_index": 7
+      },
+      {
+        "logged_doc_id": 189,
+        "actual_dataset_index": 9
+      },
+      {
+        "logged_doc_id": 46,
+        "actual_dataset_index": 13
+      },
+      {
+        "logged_doc_id": 87,
+        "actual_dataset_index": 15
+      },
+      {
+        "logged_doc_id": 52,
+        "actual_dataset_index": 20
+      },
+      {
+        "logged_doc_id": 181,
+        "actual_dataset_index": 24
+      },
+      {
+        "logged_doc_id": 31,
+        "actual_dataset_index": 27
+      },
+      {
+        "logged_doc_id": 185,
+        "actual_dataset_index": 28
+      },
+      {
+        "logged_doc_id": 50,
+        "actual_dataset_index": 29
+      },
+      {
+        "logged_doc_id": 187,
+        "actual_dataset_index": 31
+      },
+      {
+        "logged_doc_id": 153,
+        "actual_dataset_index": 42
+      },
+      {
+        "logged_doc_id": 135,
+        "actual_dataset_index": 46
+      },
+      {
+        "logged_doc_id": 81,
+        "actual_dataset_index": 50
+      },
+      {
+        "logged_doc_id": 93,
+        "actual_dataset_index": 52
+      },
+      {
+        "logged_doc_id": 7,
+        "actual_dataset_index": 61
+      },
+      {
+        "logged_doc_id": 42,
+        "actual_dataset_index": 80
+      },
+      {
+        "logged_doc_id": 24,
+        "actual_dataset_index": 81
+      },
+      {
+        "logged_doc_id": 168,
+        "actual_dataset_index": 87
+      },
+      {
+        "logged_doc_id": 20,
+        "actual_dataset_index": 90
+      },
+      {
+        "logged_doc_id": 28,
+        "actual_dataset_index": 93
+      },
+      {
+        "logged_doc_id": 13,
+        "actual_dataset_index": 94
+      },
+      {
+        "logged_doc_id": 94,
+        "actual_dataset_index": 102
+      },
+      {
+        "logged_doc_id": 61,
+        "actual_dataset_index": 121
+      },
+      {
+        "logged_doc_id": 15,
+        "actual_dataset_index": 123
+      },
+      {
+        "logged_doc_id": 123,
+        "actual_dataset_index": 127
+      },
+      {
+        "logged_doc_id": 160,
+        "actual_dataset_index": 135
+      },
+      {
+        "logged_doc_id": 27,
+        "actual_dataset_index": 136
+      },
+      {
+        "logged_doc_id": 29,
+        "actual_dataset_index": 152
+      },
+      {
+        "logged_doc_id": 90,
+        "actual_dataset_index": 153
+      },
+      {
+        "logged_doc_id": 127,
+        "actual_dataset_index": 160
+      },
+      {
+        "logged_doc_id": 121,
+        "actual_dataset_index": 168
+      },
+      {
+        "logged_doc_id": 188,
+        "actual_dataset_index": 173
+      },
+      {
+        "logged_doc_id": 136,
+        "actual_dataset_index": 174
+      },
+      {
+        "logged_doc_id": 174,
+        "actual_dataset_index": 181
+      },
+      {
+        "logged_doc_id": 184,
+        "actual_dataset_index": 182
+      },
+      {
+        "logged_doc_id": 9,
+        "actual_dataset_index": 184
+      },
+      {
+        "logged_doc_id": 80,
+        "actual_dataset_index": 185
+      },
+      {
+        "logged_doc_id": 102,
+        "actual_dataset_index": 187
+      },
+      {
+        "logged_doc_id": 182,
+        "actual_dataset_index": 188
+      },
+      {
+        "logged_doc_id": 173,
+        "actual_dataset_index": 189
+      }
+    ]
+  },
+  "planned_clients": 4,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "context": 262144,
+  "max_output_tokens": 126976,
+  "request_timeout_seconds": 14400,
+  "nightly_sizes": [
+    40,
+    0,
+    0
+  ],
+  "retention_enabled": true,
+  "device_hours": 0,
+  "forecast_device_hours": 0,
+  "box_device_hours": 0,
+  "tests": {
+    "focused": "34 passed",
+    "full_hooks": "ruff, ruff-format, pytest, copyright all passed",
+    "production_ast": "Identical to base except one doc_ids list20to40 and nightly limit20to40",
+    "diff_check": "pass"
+  },
+  "projection_hours": null,
+  "projection_status": "Pending admissible final20 audit; raw20 completed but empty capped responses remain unclassified,20 not banked. Do not extrapolate incomplete validity into release admission.",
+  "publication_or_dispatch": false,
+  "evidence": [
+    "cohort.json",
+    "source-audit.json",
+    "candidate.patch",
+    "hooks-formatted.log"
+  ],
+  "notes": [
+    "Semantic cohort set nested; logged IDs permuted by stock harness. Map row ordinal to sorted selected dataset index and validate doc_hash/prompt_hash.",
+    "No dataset contents accessed or score-based task selection.",
+    "Current20 audit must bank before next rung; coordinator registers centrally before dispatch."
+  ]
+}

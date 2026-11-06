@@ -244,6 +244,19 @@
       "planned_clients": 1,
       "max_num_seqs": 8,
       "batch_reason": "Controlled measured alternative B8 to default B1 for identical one-client native history calls; diagnostic comparison only"
+    },
+    "larger-gpqa20-c4-retained": {
+      "eval": "r1_gpqa_diamond",
+      "batch": 8,
+      "planned_clients": 4,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest validated batch>=4; C4 accepted on paired frozen10 and retention lifecycle validated on current runtime."
+    },
+    "gpqa-empty-response-replay": {
+      "batch": 8,
+      "planned_clients": 2,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest supported batch at or above two recorded concurrent GPQA requests; diagnostic only"
     }
   },
   "release_limits": {

@@ -151,6 +151,10 @@
     {
       "fact": "Direct diagnostic launch must set validated writable TT_METAL_CACHE before runtime init; XDG_CACHE_HOME alone does not redirect JIT. Host mkdir failure with clean UMD close recovered via environment correction and bounded mesh health, no reset.",
       "evidence": "runs/astropy-prefix-discriminator/cache-launch-AUTOFIX.md"
+    },
+    {
+      "fact": "Pinned lm-eval membership selection iterates selected dataset positions in dataset order, but logged doc_id labels use original unsorted indices order. Semantic cohort set and nesting remain correct; audit by prompt/doc hashes and mapped actual index.",
+      "evidence": "runs/larger-gpqa20-c2-evals/audit.json"
     }
   ],
   "suite_timings": [
@@ -371,6 +375,31 @@
         "reference_caveat": "Subset interval does not establish full-suite parity."
       },
       "evidence": "runs/gpqa-current10-c2/audit.json"
+    },
+    {
+      "eval": "r1_gpqa_diamond",
+      "tasks": 20,
+      "agents": 2,
+      "batch": 8,
+      "wall_hours": 2.0430460981114043,
+      "device_job_hours": 2.13,
+      "workflow_wall_hours": 2.1352777777777776,
+      "agent_hours": null,
+      "timeouts": null,
+      "score": {
+        "name": "r1_gpqa_diamond exact_match",
+        "value": 0.8,
+        "correct": 16,
+        "completed_samples": 20,
+        "dataset_samples": 198,
+        "scope": "subset",
+        "wilson95": [
+          0.5839825677481064,
+          0.919342337420202
+        ],
+        "accepted": false
+      },
+      "evidence": "runs/larger-gpqa20-c2-evals/audit.json"
     }
   ],
   "generic_fixes": [

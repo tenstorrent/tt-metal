@@ -22,14 +22,14 @@
     "account_fallback": null
   },
   "remaining_work": [
-    "Collect and audit smoke trajectories before accepting scores",
-    "Nightly/server-sized/larger rungs",
-    "Measured workload, limits and capacity; ranked efforts",
-    "Clean dry run and immutable release",
-    "Stage gate pass"
+    "Classify capped GPQA/SWE responses and bank valid rungs",
+    "Larger fitting rungs with measured projections",
+    "Resolve exact dry-route and admission evidence",
+    "Frozen clean dry run and immutable release",
+    "Closure review and stage gate"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-06T15:55:58.830336+00:00",
+  "updated_at": "2026-11-06T16:52:32.848759+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -37,10 +37,10 @@
   ],
   "live_wait": {
     "run_ids": [
-      42234274300,
-      42247098210
+      42247098210,
+      42256121890
     ],
-    "status": "Nested GPQA20 C2 active; SWE same5 retention-repaired rung queued for new image. C4 accepted and local current-runtime benchmark complete."
+    "status": "SWE retained-runtime same5 and GPQA retained-runtime same20 active on new11a387 image. Prior20 completed raw16/20 unbanked: two capped emptyresponses lack hidden-token cause evidence. Local replay preparing exact saved inputs."
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",

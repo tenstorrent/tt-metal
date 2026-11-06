@@ -1,0 +1,24 @@
+{
+  "arm": "gpqa-empty-response-replay",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "running",
+  "started_at": "2026-11-06T16:53:18.405299+00:00",
+  "queued_at": "2026-11-06T16:53:18.405299+00:00",
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "batch_reason": "Smallest supported batch at or above two recorded concurrent GPQA requests; diagnostic only",
+  "predicted_hours": 1.6,
+  "box_hours": 4.3,
+  "command": {
+    "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+    "env": {},
+    "argv": [
+      "bash",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/gpqa-empty-response-replay/launch.sh"
+    ]
+  },
+  "owner_check": [],
+  "source_snapshot": "bringup/artifacts/gpqa-empty-response-replay/source-launch.json"
+}
