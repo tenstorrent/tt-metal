@@ -10,6 +10,9 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#if !defined(ARCH_QUASAR)
+#include "ckernel.h"
+#endif
 #include "experimental/kernel_args.h"
 #if !defined(ARCH_QUASAR)
 // ckernel::load_blocking (the store drain below) is WH/BH only: Quasar's ckernel.h has no load_blocking,
@@ -41,6 +44,13 @@ inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
 #endif
 
     uint32_t pad_val_addr = dfb.get_write_ptr();
+    // The loop-back reads below source the words just stored, so the stores must reach L1 first.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    flush_l2_cache_range(
+        static_cast<uintptr_t>(pad_val_addr), static_cast<size_t>(num_bytes_risc / 2 * sizeof(uint32_t)));
+#else
+    (void)ckernel::load_blocking(ptr + (num_bytes_risc / 2) - 1);
+#endif
     uint32_t l1_write_addr = pad_val_addr;
 
     for (uint32_t i = 0; i < num_noc_transfer; ++i) {
