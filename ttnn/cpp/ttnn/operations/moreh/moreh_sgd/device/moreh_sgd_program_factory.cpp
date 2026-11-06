@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
 #include <bit>
 #include <vector>
 
 #include "moreh_sgd_device_operation.hpp"
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -22,7 +24,13 @@ static constexpr const char* WRITER_KERNEL_PATH =
 static constexpr const char* COMPUTE_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/moreh_sgd.cpp";
 
-ProgramDescriptor MorehSgdOperation::create_descriptor(
+// create_descriptor pushes the reader first and the writer second. lr is reader runtime arg 5.
+// override_runtime_arguments() patches these slots on a program-cache hit.
+static constexpr uint32_t READER_KERNEL_IDX = 0;
+static constexpr uint32_t WRITER_KERNEL_IDX = 1;
+static constexpr uint32_t READER_LR_ARG_IDX = 5;
+
+ProgramDescriptor MorehSgdOperation::MorehSgdProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
@@ -245,10 +253,9 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
     const uint32_t u_weight_decay = std::bit_cast<uint32_t>(weight_decay);
     const uint32_t u_one = std::bit_cast<uint32_t>(1.0f);
 
-    // Pass optional tensor buffers as Buffer* (not raw ->address()) so the framework registers them
-    // as buffer bindings and re-patches their addresses on program-cache hits. momentum_buffer_in is
-    // an input tensor and momentum_buffer_out is an output tensor of this op, so binding them is
-    // allowed. nullptr is fine when the optional is absent (the kernel is compiled without it).
+    // Pass the optional tensor buffers as Buffer*. nullptr is fine when an optional is absent
+    // (the kernel is compiled without it). On a program-cache hit the framework does not re-patch
+    // these addresses. override_runtime_arguments() rewrites every buffer address and lr instead.
     auto* const momentum_in_buf = momentum_buffer_in.has_value() ? momentum_buffer_in.value().buffer() : nullptr;
     auto* const momentum_out_buf = momentum_buffer_out.has_value() ? momentum_buffer_out.value().buffer() : nullptr;
 
@@ -270,7 +277,7 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
              momentum_in_buf,
              num_tiles_per_core,
              tile_offset,
-             u_lr,
+             u_lr,  // READER_LR_ARG_IDX
              u_momentum,
              u_dampening,
              u_weight_decay,
@@ -281,7 +288,9 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
         tile_offset += num_tiles_per_core;
     }
 
+    TT_FATAL(desc.kernels.size() == READER_KERNEL_IDX, "override_runtime_arguments() expects the reader here");
     desc.kernels.push_back(std::move(reader_desc));
+    TT_FATAL(desc.kernels.size() == WRITER_KERNEL_IDX, "override_runtime_arguments() expects the writer here");
     desc.kernels.push_back(std::move(writer_desc));
     desc.kernels.push_back(std::move(compute_desc_1));
     if (has_core_group_2) {
@@ -289,6 +298,48 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
     }
 
     return desc;
+}
+
+void MorehSgdOperation::MorehSgdProgramFactory::override_runtime_arguments(
+    Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Since lr is not part of the program hash, a cache hit can come from a call with a different lr.
+    // This hook rewrites every buffer address and the current lr on every core.
+    const auto& momentum_buffer_in = tensor_args.momentum_buffer_in;
+    const auto& momentum_buffer_out = output_tensor.at(1);
+    const std::array<uint32_t, 3> reader_addrs{
+        tensor_args.param_in.buffer()->address(),
+        tensor_args.grad.buffer()->address(),
+        momentum_buffer_in.has_value() ? momentum_buffer_in->buffer()->address() : 0u};
+    const std::array<uint32_t, 2> writer_addrs{
+        output_tensor.at(0)->buffer()->address(),
+        momentum_buffer_out.has_value() ? momentum_buffer_out->buffer()->address() : 0u};
+    const uint32_t u_lr = std::bit_cast<uint32_t>(operation_attributes.lr);
+
+    for (auto& column : GetRuntimeArgs(program, READER_KERNEL_IDX)) {
+        for (auto& args : column) {
+            if (args.size() <= READER_LR_ARG_IDX) {
+                continue;
+            }
+            for (uint32_t i = 0; i < reader_addrs.size(); ++i) {
+                args[i] = reader_addrs[i];
+            }
+            args[READER_LR_ARG_IDX] = u_lr;
+        }
+    }
+    for (auto& column : GetRuntimeArgs(program, WRITER_KERNEL_IDX)) {
+        for (auto& args : column) {
+            if (args.size() < writer_addrs.size()) {
+                continue;
+            }
+            for (uint32_t i = 0; i < writer_addrs.size(); ++i) {
+                args[i] = writer_addrs[i];
+            }
+        }
+    }
 }
 
 }  // namespace ttnn::operations::moreh::moreh_sgd

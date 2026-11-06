@@ -177,7 +177,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
 
     auto* device = grad_output.device();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
     auto input_data_format = datatype_to_dataformat_converter(grad_output.dtype());
     const uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);

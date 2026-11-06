@@ -6,7 +6,7 @@
 
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include "erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
@@ -52,6 +52,9 @@ struct IntermeshVCConfig {
     bool requires_vc1_full_mesh = false;            // True if VC1 needed throughout mesh (not just edges)
     bool requires_vc1_mesh_pass_through = false;    // True if VC1 must support inter-mesh pass-through
     bool requires_vc2 = false;                      // True if VC2 needed (Blackhole + 2D + no UDM/mux)
+    // TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1: inter-mesh traffic lands on VC0 and goes only N or S from the
+    // landing chip. Deadlock-free only for traffic that cannot form a buffer cycle across meshes.
+    bool intermesh_vc_disabled = false;
 
     IntermeshVCConfig() = default;
 
@@ -82,6 +85,20 @@ struct IntermeshVCConfig {
         config.requires_vc1_mesh_pass_through = true;
         return config;
     }
+
+    // Per-router VC1 mode predicates. These are pure functions of this (system-global) config and
+    // the router's own inter/intra-mesh placement — evaluate per router, do not cache.
+    //
+    // VC1 is actively serviced (VC1 sender+receiver steps run) when:
+    //  - intra-mesh router with full-mesh VC1, or
+    //  - inter-mesh router with pass-through VC1
+    bool vc1_serviced_for(bool is_inter_mesh) const {
+        return (!is_inter_mesh && requires_vc1_full_mesh) || (is_inter_mesh && requires_vc1_mesh_pass_through);
+    }
+
+    // Inter-mesh full-mesh routers cross incoming VC0 link traffic over to the VC1 downstream
+    // interface array (their own VC1 steps are compiled out — see vc1_serviced_for).
+    bool vc0_crossover_to_vc1_for(bool is_inter_mesh) const { return is_inter_mesh && requires_vc1_full_mesh; }
 };
 
 /**

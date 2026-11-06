@@ -125,7 +125,7 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
     const auto& input_tensors = tensor_args.input_tensor;
     TT_FATAL(
         !input_tensors.empty(), "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
-    TT_FATAL(input_tensors[0].buffer() != nullptr, "Input tensor 0 must be allocated in buffers on device");
+    TT_FATAL(input_tensors[0].is_allocated(), "Input tensor 0 must be allocated in buffers on device");
 
     const auto dtype = input_tensors[0].dtype();
     const auto page_size = input_tensors[0].buffer()->page_size();
@@ -134,7 +134,7 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
 
         TT_FATAL(input_tensor.layout() == Layout::TILE, "Input tensor {} must be tiled", i);
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor {} must be on device", i);
-        TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor {} must be allocated in buffers on device", i);
+        TT_FATAL(input_tensor.is_allocated(), "Input tensor {} must be allocated in buffers on device", i);
         TT_FATAL(
             input_tensor.dtype() == dtype,
             "All input tensors must have the same dtype. Input tensor {} has dtype {} but expected {}",
@@ -168,7 +168,7 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
 
             TT_FATAL(output_tensor.layout() == Layout::TILE, "Output tensor {} must be tiled", i);
             TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor {} must be on device", i);
-            TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor {} must be allocated in buffers on device", i);
+            TT_FATAL(output_tensor.is_allocated(), "Output tensor {} must be allocated in buffers on device", i);
             TT_FATAL(
                 output_tensor.dtype() == dtype,
                 "Output tensor {} dtype should match input tensors but has {}",
@@ -236,7 +236,7 @@ void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args, uint32_t 
 
     const auto validate_metadata_tensor = [&tensor_args](const Tensor& tensor, const char* name) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} must be on device", name);
-        TT_FATAL(tensor.buffer() != nullptr, "{} must be allocated on device", name);
+        TT_FATAL(tensor.is_allocated(), "{} must be allocated on device", name);
         TT_FATAL(tensor.device() == tensor_args.input_q.device(), "{} must be on the same device as Q", name);
         TT_FATAL(tensor.dtype() == DataType::UINT32, "{} must have UINT32 dtype", name);
         TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "{} must use ROW_MAJOR layout", name);
@@ -397,6 +397,10 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
     }
 }
 
+std::optional<tt::tt_metal::TensorSpec> optional_spec(const std::optional<Tensor>& tensor) {
+    return tensor.has_value() ? std::optional<tt::tt_metal::TensorSpec>{tensor->tensor_spec()} : std::nullopt;
+}
+
 }  // namespace
 
 void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
@@ -495,7 +499,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             name,
             t.dtype());
         TT_FATAL(t.storage_type() == StorageType::DEVICE, "{} tensor must be on device", name);
-        TT_FATAL(t.buffer() != nullptr, "{} tensor must be allocated on device", name);
+        TT_FATAL(t.is_allocated(), "{} tensor must be allocated on device", name);
         TT_FATAL(
             t.logical_volume() == 1,
             "{} tensor must hold exactly one value (the kernels read page 0, element 0). Got volume {}",
@@ -537,7 +541,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(!has_joint_tensors, "RingJointSDPA attention_sink does not support joint attention tensors");
         TT_FATAL(!has_latent_v, "RingJointSDPA attention_sink does not support latent-V / Ring-MLA attention");
         TT_FATAL(attention_sink.storage_type() == StorageType::DEVICE, "Attention sink tensor must be on device");
-        TT_FATAL(attention_sink.buffer() != nullptr, "Attention sink tensor must be allocated on device");
+        TT_FATAL(attention_sink.is_allocated(), "Attention sink tensor must be allocated on device");
         TT_FATAL(
             input_tensor_q.device() == attention_sink.device(),
             "Attention sink must be on the same mesh device as Q/K/V");
@@ -629,7 +633,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate storage types and buffers
     for (const auto& tensor : sdpa_input_tensors) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
-        TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
+        TT_FATAL(tensor.is_allocated(), "Operands to Joint SDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
         TT_FATAL(
             tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B ||
@@ -1214,16 +1218,14 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.kv_cache_batch_idx.has_value(),
         kv_pad_rotation_enabled,
         tensor_args.has_metadata(),
-        // The metadata accessors are baked into compile-time args; the validator pins one form, so this key is
-        // defense in depth should that pin ever relax. Only the config is keyed, never the value.
-        tensor_args.slot_id.has_value() ? tensor_args.slot_id->memory_config() : tt::tt_metal::MemoryConfig{},
-        tensor_args.kv_actual_isl.has_value() ? tensor_args.kv_actual_isl->memory_config()
-                                              : tt::tt_metal::MemoryConfig{},
-        // Presence changes how the kernels compile; the numeric attrs above hash as stable placeholders.
-        tensor_args.has_logical_n_tensor(),
-        tensor_args.has_logical_l_tensor(),
-        tensor_args.has_kv_valid_end(),
-        tensor_args.has_kv_valid_end() ? tensor_args.kv_valid_end->memory_config() : tt::tt_metal::MemoryConfig{},
+        // The metadata, logical_n / logical_l and kv_valid_end tensors' accessors are baked into compile-time args,
+        // and presence changes how the kernels compile, so each is keyed by its optional spec. Only the spec is keyed,
+        // never the value; the numeric attrs above hash as stable placeholders.
+        optional_spec(tensor_args.slot_id),
+        optional_spec(tensor_args.kv_actual_isl),
+        optional_spec(tensor_args.logical_n_tensor),
+        optional_spec(tensor_args.logical_l_tensor),
+        optional_spec(tensor_args.kv_valid_end),
         // The layer fold is baked into kernel runtime args only on the metadata path; the host path re-patches
         // the folded index per dispatch, so keying the factors there would only multiply programs per layer.
         tensor_args.has_metadata() ? args.kv_cache_num_layers : 0u,

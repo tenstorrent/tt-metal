@@ -41,13 +41,13 @@ run_t3000_llama3_perplexity_tests_single_card() {
   for MESH_DEVICE in N150 N300; do
     for hf_model in "$llama1b" "$llama3b" "$llama8b"; do
       tt_cache=$TT_CACHE_HOME/$hf_model
-      MESH_DEVICE=$MESH_DEVICE HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=4600 ; fail+=$?
+      MESH_DEVICE=$MESH_DEVICE HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/ttt_compat/demo/simple_text_demo.py -k ci-token-matching --timeout=4600 ; fail+=$?
     done
   done
 
   # 11B test does not run on N150
   tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
-  MESH_DEVICE=N300 HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=4600 ; fail+=$?
+  MESH_DEVICE=N300 HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/ttt_compat/demo/simple_text_demo.py -k ci-token-matching --timeout=4600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -80,13 +80,13 @@ run_t3000_llama3_perplexity_tests_t3000() {
   for MESH_DEVICE in T3K; do
     for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
       tt_cache=$TT_CACHE_HOME/$hf_model
-      MESH_DEVICE=$MESH_DEVICE HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=3600 ; fail+=$?
+      MESH_DEVICE=$MESH_DEVICE HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/ttt_compat/demo/simple_text_demo.py -k ci-token-matching --timeout=3600 ; fail+=$?
     done
 
     # 70B and 90B tests has the same configuration between `-k "attention-accuracy"` and `-k "attention-performance"` so we only run one of them
     for hf_model in "$llama70b" "$llama90b"; do
       tt_cache=$TT_CACHE_HOME/$hf_model
-      MESH_DEVICE=$MESH_DEVICE HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout=3600 ; fail+=$?
+      MESH_DEVICE=$MESH_DEVICE HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/ttt_compat/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout=3600 ; fail+=$?
     done
   done
 
@@ -110,7 +110,7 @@ run_t3000_qwen25_perplexity_tests() {
   qwen72b=Qwen/Qwen2.5-72B-Instruct
   tt_cache_72b=$TT_CACHE_HOME/$qwen72b
 
-  HF_MODEL=$qwen72b TT_CACHE_PATH=$tt_cache_72b pytest models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout 3600; fail+=$?
+  HF_MODEL=$qwen72b TT_CACHE_PATH=$tt_cache_72b pytest models/ttt_compat/demo/simple_text_demo.py -k ci-token-matching --timeout 3600; fail+=$?
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
@@ -133,7 +133,7 @@ run_t3000_qwen3_perplexity_tests() {
   tt_cache_qwen32b=$TT_CACHE_HOME/$qwen32b
 
 # Run Qwen3.32B with max_seq_len 32k
-  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b pytest models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --max_seq_len 32768 --timeout 3600; fail+=$?
+  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b pytest models/ttt_compat/demo/simple_text_demo.py -k ci-token-matching --max_seq_len 32768 --timeout 3600; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

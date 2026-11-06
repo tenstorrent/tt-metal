@@ -16,12 +16,19 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
+// Replay buffer: 9 block_increment reuse blocks and 1 inner_increment reuse block, 3 instructions each.
+// The MOP template windows and the odd-kt_dim tail both index the buffer in reuse blocks.
+constexpr std::uint32_t SDPA_CUSTOM_MM_REUSE_BLOCK_LEN                = 3;
+constexpr std::uint32_t SDPA_CUSTOM_MM_REUSE_NUM_BLOCK_INCREMENT_BLKS = 9;
+constexpr std::uint32_t SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN           = (SDPA_CUSTOM_MM_REUSE_NUM_BLOCK_INCREMENT_BLKS + 1) * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN;
+
 // SDPA_CUSTOM_MM_REUSE_DEST_SRCB
 // Custom matmul that reuses SrcB from dest and only unpacks SrcA.
 // Output height and width should be single tile with tile shape [1, 32].
 //
-// Both nt_dim and kt_dim loops are collapsed into a single MOP call using
-// CFGSHIFTMASK with two scratch registers:
+// The nt_dim and kt_dim loops run as one MOP over k-row pairs, plus a direct
+// replay of the last k-row when kt_dim is odd, using CFGSHIFTMASK with two
+// scratch registers:
 //   SCRATCH_SEC0 = block_increment (advance to next tile within a k-row)
 //   SCRATCH_SEC1 = inner_increment (jump from end of one k-row to start of next)
 //
@@ -29,12 +36,14 @@ using namespace ckernel::unpacker;
 // reuse blocks followed by 1 inner_increment reuse block (3 insns each).
 // The MOP template selects sliding windows into this buffer to cover any
 // nt_dim from 1 to 16. Each MOP iteration covers 2 k-rows (via B-mode or
-// halo-mode), and kt_dim/2 MOP iterations cover the full inner dimension.
+// halo-mode), so kt_dim/2 MOP iterations cover the k-row pairs; an odd kt_dim
+// then replays its last k-row directly from the same buffer windows, and
+// kt_dim == 1 issues no MOP at all.
 //
 // Constraints:
 // - ct_dim = 1, rt_dim = 1 (single output tile)
 // - nt_dim: 1 to 16
-// - kt_dim: even number from 2 to 256 (inclusive)
+// - kt_dim: any integer from 1 to 256 (inclusive)
 // - kernel_broadcast_a = 0, kernel_broadcast_b = 0
 inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std::uint32_t nt_dim)
 {
@@ -49,13 +58,12 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
     // This supports first_half up to 9 tiles and second_half up to 9 tiles = 18 max.
     // Practical limit is 16 due to dst size.
 
-    constexpr std::uint32_t REPLAY_BUF_LEN = 30;
     load_replay_buf(
         0,
-        REPLAY_BUF_LEN,
+        SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN,
         []
         {
-            for (std::uint32_t i = 0; i < 9; i++)
+            for (std::uint32_t i = 0; i < SDPA_CUSTOM_MM_REUSE_NUM_BLOCK_INCREMENT_BLKS; i++)
             {
                 TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);
                 TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
@@ -84,13 +92,15 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
     const std::uint32_t first_half_iters  = (nt_dim + 1) >> 1;
     const std::uint32_t second_half_iters = nt_dim >> 1;
 
-    const std::uint32_t first_half  = lltt::replay_insn(0, first_half_iters * 3);
-    const std::uint32_t second_half = lltt::replay_insn(REPLAY_BUF_LEN - second_half_iters * 3, second_half_iters * 3);
+    const std::uint32_t first_half_len  = first_half_iters * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN;
+    const std::uint32_t second_half_len = second_half_iters * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN;
+    const std::uint32_t first_half      = lltt::replay_insn(0, first_half_len);
+    const std::uint32_t second_half     = lltt::replay_insn(SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN - second_half_len, second_half_len);
 
     // For nt_dim == 1: only inner_increment block is needed, use B-mode
     // block_increment == inner_increment when nt_dim == 1 so either block works,
     // but we use the inner_increment block (last 3 insns) for correctness
-    const std::uint32_t single_tile = lltt::replay_insn(REPLAY_BUF_LEN - 3, 3);
+    const std::uint32_t single_tile = lltt::replay_insn(SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN - SDPA_CUSTOM_MM_REUSE_BLOCK_LEN, SDPA_CUSTOM_MM_REUSE_BLOCK_LEN);
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
         nt_dim == 1,                            // B-mode when single tile per k-row
@@ -122,7 +132,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_sdpa_custom_mm_reuse_d
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
-// Both nt_dim and kt_dim loops collapsed into a single MOP call.
+// MOP over k-row pairs, plus a replay tail for the last k-row when kt_dim is odd.
 // CFGSHIFTMASK auto-increments the SrcA L1 address:
 //   SCRATCH_SEC0 = block_increment (tile_size_a, advances within a k-row)
 //   SCRATCH_SEC1 = inner_increment (jumps from end of one k-row to start of next)
@@ -158,7 +168,25 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
 
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
-    TT_MOP(0, (kt_dim / 2) - 1, 0);
+    const std::uint32_t kt_pairs = kt_dim / 2;
+    if (kt_pairs > 0)
+    {
+        TT_MOP(0, kt_pairs - 1, 0);
+    }
+    if (kt_dim % 2 != 0)
+    {
+        // One k-row, as the MOP's first template slot plus its second: first_half from the buffer start
+        // (block_increment reuses), then second_half from the buffer end (ending on the inner_increment reuse).
+        // With nt_dim == 1 the k-row is the inner_increment reuse alone, like the MOP's B-mode slot.
+        const std::uint32_t first_half_tiles  = nt_dim == 1 ? 0 : (nt_dim + 1) / 2;
+        const std::uint32_t second_half_tiles = nt_dim == 1 ? 1 : nt_dim / 2;
+        if (first_half_tiles > 0)
+        {
+            lltt::replay(0, first_half_tiles * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN);
+        }
+        const std::uint32_t second_half_instruction_count = second_half_tiles * SDPA_CUSTOM_MM_REUSE_BLOCK_LEN;
+        lltt::replay(SDPA_CUSTOM_MM_REUSE_REPLAY_BUF_LEN - second_half_instruction_count, second_half_instruction_count);
+    }
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
