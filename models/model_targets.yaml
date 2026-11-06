@@ -1057,11 +1057,14 @@ targets:
           # Specific entry so it wins over the catch-all for this config without disturbing
           # the b4/b1 runs above. Reseeded after removing dummy host-logprob copies:
           # run 36987762999, job 110780206653 measured 71.1432 t/s/u and 2276.5818 t/s.
+          # TTFT re-centred 2026-11-05 from 28 to 24.4 ms: six scheduled runs 10-31..11-05 on three
+          # QB2 hosts (qb2-120-p06t02, qb2-120-p02t06, qb2-120-p02t09) measured 23.77-24.70 ms, so the
+          # old 23.8 ms floor sat inside the normal spread (11-05 failed "much better than expected").
           - batch_size: 32
             seq_len: 712
             status: active
             perf:
-              prefill_time_to_first_token: 28
+              prefill_time_to_first_token: 24.4
               decode_t/s/u: 71.1
               decode_t/s: 2275.2
             accuracy: {}
