@@ -43,7 +43,7 @@
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
-using Crta = ttnn::experimental::ccl::strided_reduce_scatter_common_args::Reader;
+namespace Crta = ttnn::experimental::ccl::strided_reduce_scatter_common_args;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -89,10 +89,10 @@ void kernel_main() {
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
     // The row count, buffer addresses and semaphores are common runtime args (one word per launch).
-    const uint32_t slice_Ht = get_common_arg_val<uint32_t>(Crta::slice_Ht);
-    const address_t input_tensor_address = get_common_arg_val<address_t>(Crta::input);
-    const address_t intermediate_tensor_address = get_common_arg_val<address_t>(Crta::intermediate);
-    const size_t out_ready_sem = get_common_arg_val<uint32_t>(Crta::semaphore_0 + direction);
+    const uint32_t slice_Ht = get_common_arg_val<uint32_t>(Crta::Reader::slice_Ht);
+    const address_t input_tensor_address = get_common_arg_val<address_t>(Crta::Reader::input);
+    const address_t intermediate_tensor_address = get_common_arg_val<address_t>(Crta::Reader::intermediate);
+    const size_t out_ready_sem = get_common_arg_val<uint32_t>(Crta::Reader::semaphore_0 + direction);
     // Same split as the matmul's in0 kernels: equal rows per MM core, whole M blocks per core.
     const uint32_t slice_Ht_per_core = ttnn::runtime_length::div_up(slice_Ht, mm_cores_y);
     const uint32_t mm_M_unit_blocks_per_core = ttnn::runtime_length::div_up(slice_Ht_per_core, mm_block_ht);
@@ -168,8 +168,8 @@ void kernel_main() {
 #endif
 
 #ifdef FUSE_RS_ADDCMUL
-    const address_t addcmul_a_address = get_common_arg_val<address_t>(Crta::addcmul_a);
-    const address_t addcmul_b_address = get_common_arg_val<address_t>(Crta::addcmul_b);
+    const address_t addcmul_a_address = get_common_arg_val<address_t>(Crta::Reader::addcmul_a);
+    const address_t addcmul_b_address = get_common_arg_val<address_t>(Crta::Reader::addcmul_b);
 
     // Derive CT indices for addcmul a/b CBs and tensor accessor args.
     // Factory appends: addcmul_a_cb_index, addcmul_b_cb_index, TensorAccessorArgs(a), TensorAccessorArgs(b)
