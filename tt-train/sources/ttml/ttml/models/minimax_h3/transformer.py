@@ -17,12 +17,12 @@ from pathlib import Path
 import numpy as np
 import ttnn
 import ttml
+from ttml.models.qwen3 import Qwen3RMSNorm
 from ttml.modules import (
     AbstractModuleBase,
     ColumnParallelLinear,
     LinearLayer,
     ModuleList,
-    Parameter,
     RowParallelLinear,
     RunMode,
 )
@@ -175,16 +175,6 @@ class GatedResidual(ttml.autograd.Function):
         return grad_output, ttnn.multiply(grad_output, ctx.gate)
 
 
-class RMSNorm(AbstractModuleBase):
-    def __init__(self, dim: int, eps: float) -> None:
-        super().__init__()
-        self.eps = eps
-        self.weight = Parameter(ttml.init.ones()((1, 1, 1, dim)))
-
-    def forward(self, x):
-        return ttml.ops.rmsnorm.rmsnorm(x, self.weight.tensor, self.eps)
-
-
 class H3Attention(AbstractModuleBase):
     """Full bidirectional self-attention, per-head QK RMSNorm, optional rotary on q/k.
 
@@ -216,8 +206,8 @@ class H3Attention(AbstractModuleBase):
             self.to_k = LinearLayer(dim, inner, False, weight_init=col_init)
             self.to_v = LinearLayer(dim, inner, False, weight_init=col_init)
             self.to_out = LinearLayer(inner, dim, False, weight_init=row_init)
-        self.norm_q = RMSNorm(config.attention_head_dim, config.qk_norm_eps)
-        self.norm_k = RMSNorm(config.attention_head_dim, config.qk_norm_eps)
+        self.norm_q = Qwen3RMSNorm(config.attention_head_dim, config.qk_norm_eps)
+        self.norm_k = Qwen3RMSNorm(config.attention_head_dim, config.qk_norm_eps)
         if config.sdpa not in ("fused", "composite"):
             raise ValueError(f"sdpa must be 'fused' or 'composite', got {config.sdpa!r}")
         self.sdpa = (
@@ -309,9 +299,9 @@ class H3FeedForward(AbstractModuleBase):
 class H3RefinerBlock(AbstractModuleBase):
     def __init__(self, config: H3Config) -> None:
         super().__init__()
-        self.norm1 = RMSNorm(config.hidden_size, config.norm_eps)
+        self.norm1 = Qwen3RMSNorm(config.hidden_size, config.norm_eps)
         self.attn = H3Attention(config)
-        self.norm2 = RMSNorm(config.hidden_size, config.norm_eps)
+        self.norm2 = Qwen3RMSNorm(config.hidden_size, config.norm_eps)
         self.ff = H3FeedForward(config)
 
     def forward(self, x, mask):
@@ -325,9 +315,9 @@ class H3Block(AbstractModuleBase):
     def __init__(self, config: H3Config) -> None:
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.norm1 = RMSNorm(config.hidden_size, config.norm_eps)
+        self.norm1 = Qwen3RMSNorm(config.hidden_size, config.norm_eps)
         self.attn = H3Attention(config)
-        self.norm2 = RMSNorm(config.hidden_size, config.norm_eps)
+        self.norm2 = Qwen3RMSNorm(config.hidden_size, config.norm_eps)
         self.ff = H3FeedForward(config)
         out = 6 * MODALITY_NUM * config.hidden_size
         w_init, b_init = _empty_init(config, 2), _empty_init(config, 3)
@@ -478,9 +468,9 @@ class H3Transformer(AbstractModuleBase):
         self.audio_proj_in = LinearLayer(config.audio_in_channels, D, True)
         self.context_embedder = LinearLayer(config.text_dim, D, True)
         self.refiner_blocks = ModuleList([H3RefinerBlock(config) for _ in range(config.num_refiner_layers)])
-        self.refiner_norm = RMSNorm(D, config.final_norm_eps)
+        self.refiner_norm = Qwen3RMSNorm(D, config.final_norm_eps)
         self.blocks = ModuleList([H3Block(config) for _ in range(config.num_layers)])
-        self.norm_out = RMSNorm(D, config.final_norm_eps)
+        self.norm_out = Qwen3RMSNorm(D, config.final_norm_eps)
         w_init, b_init = _empty_init(config, 2), _empty_init(config, 3)
         if _tp_size(config) > 1:
             self.norm_out_linear = ColumnParallelLinear(

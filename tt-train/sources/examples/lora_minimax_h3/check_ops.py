@@ -16,7 +16,8 @@ import numpy as np
 import ttnn
 import ttml
 
-from ttml.models.minimax_h3.transformer import RMSNorm, Split, const
+from ttml.models.minimax_h3.transformer import Split, const
+from ttml.models.qwen3 import Qwen3RMSNorm
 
 S, D, C = 64, 128, 96  # rows, hidden, out channels
 EPS = 1e-5
@@ -109,7 +110,7 @@ def main() -> int:
     ctx.reset_graph()
 
     # 6. rmsnorm backward wrt x (weight is a parameter, frozen)
-    norm = RMSNorm(D, EPS)
+    norm = Qwen3RMSNorm(D, EPS)
     norm.weight.tensor.set_value(tensor(w_np, False).get_value())
     norm.weight.tensor.set_requires_grad(False)
     x = tensor(x_np, True)

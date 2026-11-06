@@ -19,7 +19,7 @@ import ttnn
 import ttml
 
 from ttml.models.minimax_h3.packing import attention_mask, rope_tables, rope_trans_mat, selection_matrix
-from ttml.models.minimax_h3.transformer import H3Attention, H3Block, H3Config, H3FeedForward, RMSNorm, upload
+from ttml.models.minimax_h3.transformer import H3Attention, H3Block, H3Config, H3FeedForward, upload
 
 S, D, H, HD, F, TE = 32, 128, 2, 64, 128, 64
 VALID = 24
