@@ -12,6 +12,10 @@ DOWNSAMPLING_RATIO = 16
 IMAGE_ROPE_SCALE = 0.5
 TEXT_PAD_MULTIPLE = 80
 MAX_TEXT_LENGTH = 4096
+# Text rows a prompt is padded to: the smallest bucket holding its attended rows (rows past them are masked keys).
+# Per (size, references): at 4096 + 1 reference only the 2048 bucket splits into whole k = 640 chunks.
+TEXT_BUCKETS = (1024, 2048, MAX_TEXT_LENGTH)
+TEXT_BUCKETS_BY_LAYOUT = {(4096, 1): (2048, MAX_TEXT_LENGTH)}
 
 
 def latent_shape(height: int, width: int) -> tuple[int, int]:
@@ -39,6 +43,10 @@ def text_ids(length: int) -> torch.Tensor:
 
 def padded_text_length(real_length: int) -> int:
     return min(-(-real_length // TEXT_PAD_MULTIPLE) * TEXT_PAD_MULTIPLE, MAX_TEXT_LENGTH)
+
+
+def text_bucket(attended: int, buckets: tuple[int, ...] = TEXT_BUCKETS) -> int:
+    return next((b for b in buckets if b >= attended), buckets[-1])
 
 
 def pad_rows(rows: torch.Tensor, length: int) -> torch.Tensor:
