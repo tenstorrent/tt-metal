@@ -154,7 +154,7 @@ auto setter_accepts_none() { return nb::for_setter(nb::arg("value").none()); }
 // or note why Python leaves it out, then update the count. DFBAdvancedOptions has none: Python binds only
 // alias_with, which Blaze uses, and the other advanced options stay C++ only until a caller needs them. Python
 // binds no varargs: Metal 2.0 keeps them only to ease migration, and array arguments replace them.
-static_assert(reflect::size<m2::TensorSpecRelaxations>() == 4);
+static_assert(reflect::size<m2::TensorSpecRelaxations>() == 5);
 static_assert(reflect::size<m2::TensorParameter>() == 3);
 static_assert(reflect::size<m2::DataflowBufferSpec>() == 7);
 static_assert(reflect::size<m2::SemaphoreSpec>() == 3, "advanced_options is C++ only");
@@ -250,21 +250,25 @@ void bind_tensor_parameter(nb::module_& mod) {
                bool match_padded_shape_only,
                bool dynamic_tensor_shape,
                bool relax_logical_rank,
+               bool relax_tensor_layout_alignment,
                bool match_page_size) {
                 new (self) m2::TensorSpecRelaxations{
                     .match_padded_shape_only = match_padded_shape_only,
                     .dynamic_tensor_shape = dynamic_tensor_shape,
                     .relax_logical_rank = relax_logical_rank,
+                    .relax_tensor_layout_alignment = relax_tensor_layout_alignment,
                     .match_page_size = match_page_size};
             },
             nb::kw_only(),
             nb::arg("match_padded_shape_only") = relaxation_defaults.match_padded_shape_only,
             nb::arg("dynamic_tensor_shape") = relaxation_defaults.dynamic_tensor_shape,
             nb::arg("relax_logical_rank") = relaxation_defaults.relax_logical_rank,
+            nb::arg("relax_tensor_layout_alignment") = relaxation_defaults.relax_tensor_layout_alignment,
             nb::arg("match_page_size") = relaxation_defaults.match_page_size)
         .def_rw("match_padded_shape_only", &m2::TensorSpecRelaxations::match_padded_shape_only)
         .def_rw("dynamic_tensor_shape", &m2::TensorSpecRelaxations::dynamic_tensor_shape)
         .def_rw("relax_logical_rank", &m2::TensorSpecRelaxations::relax_logical_rank)
+        .def_rw("relax_tensor_layout_alignment", &m2::TensorSpecRelaxations::relax_tensor_layout_alignment)
         .def_rw("match_page_size", &m2::TensorSpecRelaxations::match_page_size);
 
     nb::class_<m2::TensorParameter>(

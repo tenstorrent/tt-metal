@@ -28,6 +28,7 @@ FIELDS = {
         "match_padded_shape_only",
         "dynamic_tensor_shape",
         "relax_logical_rank",
+        "relax_tensor_layout_alignment",
         "match_page_size",
     },
     E.TensorParameter: {"unique_id", "spec", "relaxations"},
