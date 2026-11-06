@@ -10,7 +10,7 @@ from loguru import logger
 
 import ttnn
 
-from models.common.utility_functions import run_for_blackhole, is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, is_wormhole_b0
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
@@ -87,6 +87,14 @@ BLOCK_SHARDED_V2_8X8_SHAPES = [
     # (1, 640, 1, 8192, 32),
 ]
 
+BLOCK_SHARDED_V2_8X8_SANITY_SHAPES = [
+    (2, 320, 64, 64, 32),
+    (1, 640, 1, 2048, 32),
+    (1, 1280, 1, 512, 32),
+    (1, 1920, 1, 512, 32),
+    (1, 2560, 1, 512, 32),
+]
+
 BLOCK_SHARDED_V2_8X8_TILE_LAYOUT_SHAPES = [
     (1, 1280, 1, 512, 32),
     (1, 1280, 1, 2048, 32),
@@ -109,6 +117,11 @@ SDXL_BASE_GROUP_NORM_BH_SHAPES = [
     (1, 512, 128, 128),
 ]
 
+# Sanity runs one small UNet shape of the list above; the rest run nightly only (#62486).
+SDXL_BASE_GROUP_NORM_BH_SANITY_SHAPES = [
+    (1, 640, 32, 32),
+]
+
 COMPUTE_CONFIG_SHAPES = [
     (1, 1920, 64, 64, 32),
 ]
@@ -124,6 +137,10 @@ GROUP_NORM_OFT_PARAMS = [
 
 NO_INPUT_MASK_SHAPES = [
     (1, 256, 64, 64, 32),
+]
+
+NO_INPUT_MASK_SANITY_SHAPES = [
+    (1, 256, 64, 32, 32),
 ]
 
 DRAM_GRID_SIZE_SHAPES = [
@@ -176,6 +193,45 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
     # Reshape back to original dimensions
     input_tensor = input_tensor.view(N, C, H, W)
     return input_tensor
+
+
+@pytest.mark.requires_grid_size((8, 5))
+@pytest.mark.parametrize(
+    "use_welford",
+    [pytest.param(True, marks=pytest.mark.merge_gate), pytest.param(False)],
+    ids=statistics_backend_ids,
+)
+@pytest.mark.parametrize("n,w", [(10, 128), (20, 64)], ids=["four_cores", "sender_only_mid"])
+def test_group_norm_height_sharded_batch_ends_mid_column(device, use_welford, n, w):
+    torch.manual_seed(0)
+    c, h, groups = 64, 1, 2
+    grid = ttnn.CoreGrid(x=8, y=5)
+    x = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    ref = torch.nn.functional.group_norm(x, groups).permute(0, 2, 3, 1).reshape(n, 1, h * w, c)
+    xt = ttnn.from_torch(
+        x.permute(0, 2, 3, 1).reshape(n, 1, h * w, c),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4))})
+    spec = ttnn.ShardSpec(shard_grid, (32, c), ttnn.ShardOrientation.COL_MAJOR)
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec)
+    xt = ttnn.to_memory_config(xt, mem)
+    # Two or four cores per batch straddle columns of five in COL_MAJOR order.
+    out = ttnn.group_norm(
+        xt, num_groups=groups, memory_config=mem, core_grid=grid, inplace=False, use_welford=use_welford
+    )
+    out = ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)))
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=0.999,
+        rtol=0.01,
+        atol=0.06 if use_welford else 0.09,
+        frobenius_threshold=0.015 if use_welford else 0.035,
+    )
 
 
 @pytest.mark.parametrize("N, C, H, W, num_groups", HEIGHT_SHARDED_SHAPES)
@@ -758,7 +814,7 @@ def test_group_norm_with_offset_shard_grid(device, shape, core_grid, grid_offset
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.parametrize("N, C, H, W, num_groups", BLOCK_SHARDED_V2_8X8_SHAPES)
+@pytest.mark.parametrize("N, C, H, W, num_groups", BLOCK_SHARDED_V2_8X8_SANITY_SHAPES)
 @pytest.mark.parametrize("use_welford", statistics_backend_values, ids=statistics_backend_ids)
 @pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups, use_welford, specify_grid):
@@ -1014,6 +1070,12 @@ def generate_sdxl_test_inputs():
     return inputs
 
 
+SDXL_SANITY_INPUTS = [
+    (1, 320, 32, 32),
+    (1, 512, 32, 32),
+]
+
+
 def run_sdxl_base_group_norm_test(
     device, N, C, H, W, use_welford, layout, inplace, specify_grid=True, perf_test_mode=False
 ):
@@ -1090,7 +1152,7 @@ def run_sdxl_base_group_norm_test(
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
+@pytest.mark.parametrize("input_shape", SDXL_SANITY_INPUTS)
 @pytest.mark.parametrize("use_welford", statistics_backend_values, ids=statistics_backend_ids)
 # Paramemeters need to stay consistent with usage in
 # models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_block_sharded_group_norm_sdxl_performance
@@ -1104,7 +1166,7 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, specify_grid=Tru
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
+@pytest.mark.parametrize("input_shape", SDXL_SANITY_INPUTS)
 @pytest.mark.parametrize("use_welford", statistics_backend_values, ids=statistics_backend_ids)
 @pytest.mark.parametrize("specify_grid", [True])
 # Oppositive of previous test in terms of inplace, for full coverage purposes.
@@ -1117,7 +1179,7 @@ def test_sdxl_group_norm_reverse_inplace(device, input_shape, use_welford, speci
     run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, specify_grid, perf_test_mode)
 
 
-@pytest.mark.parametrize("input_shape", SDXL_BASE_GROUP_NORM_BH_SHAPES)
+@pytest.mark.parametrize("input_shape", SDXL_BASE_GROUP_NORM_BH_SANITY_SHAPES)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("specify_grid", [True])
 @run_for_blackhole("blackhole specific tests")
@@ -1196,8 +1258,13 @@ def generate_sdxl_test_inputs_neg_mask():
     return inputs
 
 
+SDXL_NEG_MASK_SANITY_INPUTS = [
+    (1, 640, 32, 32),
+]
+
+
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
-@pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs_neg_mask())
+@pytest.mark.parametrize("input_shape", SDXL_NEG_MASK_SANITY_INPUTS)
 def test_sdxl_base_group_norm_negative_mask(device, input_shape, specify_grid=True, perf_test_mode=False):
     num_groups = 32  #  always 32 for SDXL Base 1024x1024
     N, C, H, W = input_shape
@@ -1492,7 +1559,7 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.parametrize("N, C, H, W, num_groups", NO_INPUT_MASK_SHAPES)
+@pytest.mark.parametrize("N, C, H, W, num_groups", NO_INPUT_MASK_SANITY_SHAPES)
 @pytest.mark.parametrize("specify_grid", [True])
 @pytest.mark.parametrize("use_welford", statistics_backend_values, ids=statistics_backend_ids)
 def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, specify_grid):
@@ -2516,3 +2583,49 @@ def test_group_norm_sharded_dirty_padding_tile_aligned_groups(
         f"(whole-tile groups={whole_tile_groups}); the composed row mask must still apply"
     )
     assert pcc > 0.999, f"pcc {pcc} at C={C} G={G} with tile padding = {padding_value}"
+
+
+# The interleaved factories used to pick channel subblocks of up to 8 tiles. The statistics loops fill a whole
+# subblock in one DEST acquire, and an fp32 DEST in half-sync mode only holds 4 tiles, so groups of 5 or more
+# channel tiles got wrong statistics. The sharded factory already caps the subblock at 4 in that case.
+@pytest.mark.parametrize("C", [512, 640, 768, 1024], ids=["4_tiles", "5_tiles", "6_tiles", "8_tiles"])
+@pytest.mark.parametrize(
+    "dtype, fp32_dest_acc_en",
+    [(ttnn.float32, True), (ttnn.bfloat16, True), (ttnn.bfloat16, False)],
+    ids=["fp32", "bf16_fp32_dest", "bf16"],
+)
+@pytest.mark.parametrize("dst_full_sync_en", [False, True], ids=["half_sync", "full_sync"])
+# One sample on an 8x8 grid takes the mcast factory. Eight samples on an 8x4 grid (one group per core column)
+# fill all virtual rows, which selects the no-mcast factory.
+@pytest.mark.parametrize("N, HW, core_grid", [(1, 1024, (8, 8)), (8, 128, (8, 4))], ids=["mcast", "no_mcast"])
+def test_group_norm_interleaved_wide_groups_fp32_dest(
+    device, C, dtype, fp32_dest_acc_en, dst_full_sync_en, N, HW, core_grid
+):
+    torch.manual_seed(0)
+    G = 4
+    x = torch.randn(N, 1, HW, C)
+    if dtype == ttnn.bfloat16:
+        x = x.bfloat16().float()
+    ref = torch.nn.functional.group_norm(x.double().permute(0, 3, 1, 2), G, eps=1e-5).permute(0, 2, 3, 1)
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        # HiFi4 with fp32_dest_acc_en is avoided on Wormhole (#38306).
+        math_fidelity=ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        dst_full_sync_en=dst_full_sync_en,
+    )
+    tt_input = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.group_norm(
+        tt_input,
+        num_groups=G,
+        epsilon=1e-5,
+        core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
+        inplace=False,
+        compute_kernel_config=compute_kernel_config,
+    )
+    out = ttnn.to_torch(tt_output).double()
+
+    max_abs_err = (out - ref).abs().max().item()
+    tolerance = 0.03 if dtype == ttnn.float32 else 0.08
+    assert max_abs_err < tolerance, f"max abs error {max_abs_err} at C={C} ({C // G // 32} channel tiles per group)"

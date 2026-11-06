@@ -337,6 +337,9 @@ def test_flux1_pipeline_performance_speed(
             (2, 4): "BH_LB" if is_blackhole() else "WH_T3K",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }
+        benchmark_profiler.start("inference")
+        benchmark_profiler.end("inference")
+        benchmark_data.add_measurement(benchmark_profiler, 0, "inference", "fps", 1.0 / total_times[-1])
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
             run_type=device_name_map[tuple(mesh_device.shape)],

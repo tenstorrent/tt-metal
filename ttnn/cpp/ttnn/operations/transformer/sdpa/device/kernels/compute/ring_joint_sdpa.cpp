@@ -14,7 +14,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
@@ -220,6 +220,8 @@ void kernel_main() {
     // read it from there rather than tracking a per-kernel index into the block above.
     constexpr uint32_t rotated_max_slots = get_ct_arg<kernel_compile_time_args.size() - 1>();
     constexpr bool rotated_q_split_enabled = rotated_max_slots > 0;
+    // Set when the factory can schedule padded multicast slots on this program (see static_mcast_q_count there).
+    constexpr bool padded_q_slots_enabled = get_named_compile_time_arg_val("padded_q_slots") == 1;
     constexpr uint32_t rotated_iter_stride = kRotatedComputeIterWords;
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool dense_causal_skip = get_named_compile_time_arg_val("dense_causal_skip") == 1;
@@ -376,8 +378,10 @@ void kernel_main() {
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
     auto arrival_preview = fused_op_indexer.seq;
-    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::packed_kv_schedule(
-        GROUPED_KV_SOURCE_COUNT,
+    // Chosen at compile time, and the guard below folds packed_sources to false in the classic ring's
+    // binary so it carries none of the packed-source path.
+    constexpr bool packed_kv_enabled = GROUPED_KV_SOURCE_COUNT > 1;
+    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::make_packed_kv_schedule<GROUPED_KV_SOURCE_COUNT>(
         ring_size,
         kv_local_padded_Nt,
         logical_nt,
@@ -390,7 +394,7 @@ void kernel_main() {
                 arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
         });
     const uint32_t source_group_size = packed_schedule.source_group_size;
-    const bool packed_sources = packed_schedule.packed();
+    const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
@@ -422,6 +426,7 @@ void kernel_main() {
                 q_per_core + get_arg_val<uint32_t>(rotated_iter_base + 1) * (use_zigzag_balancing ? 2 : 1);
             padded_q_slots = group_q_count - rotated_my_count;
         }
+        ASSERT(padded_q_slots_enabled || padded_q_slots == 0);
         uint32_t packed_source_ids[GROUPED_KV_SOURCE_COUNT];
         if (packed_sources) {
             for (uint32_t source = 0; source < source_group_size; ++source) {
@@ -714,7 +719,9 @@ void kernel_main() {
                 }
             }
         } else {
-            assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
+            // kernel_main is not a template, so both branches of the if constexpr are instantiated; fold the
+            // branch condition in so the guard fires only on the path it protects.
+            assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled && !use_streaming_compute>();
             sdpa_ring<
                 cb_qk_im,
                 cb_identity_scale_in,
@@ -728,7 +735,8 @@ void kernel_main() {
                 needs_lightweight_mask,
                 chunked_enabled,
                 q_local_padded_Nt,
-                chunk_size_t>(
+                chunk_size_t,
+                padded_q_slots_enabled>(
                 qk_in0_block_w,
                 qk_subblock_w,
                 qk_subblock_h,

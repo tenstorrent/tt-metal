@@ -22,7 +22,7 @@
 #include <functional>
 
 // UMD: re-exports CoreType (used in SemaphoreDescriptor::core_type member).
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #include <filesystem>
 #include <optional>

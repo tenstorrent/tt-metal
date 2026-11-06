@@ -15,6 +15,7 @@
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn-nanobind/export_enum.hpp"
@@ -112,7 +113,14 @@ void bind_fabric_mux(nb::module_& experimental_module) {
             )doc")
         .def(
             "kernel_runtime_args",
-            &tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>,
+            nb::overload_cast<
+                const tt::tt_fabric::FabricNodeId&,
+                const tt::tt_fabric::FabricNodeId&,
+                uint32_t,
+                tt::tt_metal::ProgramDescriptor&,
+                const tt::tt_metal::CoreCoord&>(
+                &tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>,
+                nb::const_),
             nb::kw_only(),
             nb::arg("source_node_id"),
             nb::arg("destination_node_id"),
@@ -240,8 +248,12 @@ void bind_fabric_mux(nb::module_& experimental_module) {
     fabric_mux_module.def(
         "channel_buffer_size_bytes",
         &tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes,
+        nb::arg("mesh_device"),
         R"doc(
         Return the maximum buffer size for one full-size mux channel.
+
+        Args:
+            mesh_device: The mesh device whose fabric is queried.
 
         Returns:
             int: Maximum buffer size in bytes.

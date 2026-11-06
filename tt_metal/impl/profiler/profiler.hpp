@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 #include <atomic>
 #include <cstddef>
 #include <filesystem>
@@ -19,7 +19,6 @@
 
 #include "buffer.hpp"
 #include "common/TracyTTDeviceData.hpp"
-#include "context/context_types.hpp"
 #include "core_coord.hpp"
 #include "mesh_device.hpp"
 #include "profiler_optional_metadata.hpp"
@@ -132,12 +131,32 @@ private:
     // Runtime ids associated with each trace
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>> runtime_ids_per_trace;
 
+    struct ProgramSubDeviceMetaData {
+        uint8_t sub_device_id;
+        uint64_t sub_device_manager_id;
+    };
+
+    // Sub-device metadata per encoded run host id, looked up once from the data collector. Entries are never
+    // refreshed, so a run host id reused within one profiling session keeps its first entry. Like the marker sets,
+    // only one thread at a time processes this device's markers, so no lock is needed.
+    std::unordered_map<uint32_t, std::optional<ProgramSubDeviceMetaData>> program_sub_device_meta_data_cache;
+
+    std::optional<ProgramSubDeviceMetaData> getProgramSubDeviceMetaData(uint32_t run_host_id);
+
     // Number of bytes reserved in each DRAM bank for storing device profiling data
     uint32_t profile_buffer_bank_size_bytes{};
 
     // Map which DRAM buffer is currently being written to by the RISC cores. Used for debug dump mode with double
     // buffering.
     std::map<CoreCoord, std::map<tracy::RiscType, uint8_t>> active_dram_buffer_per_core_risc_map;
+
+    // Debug dump mode: per (core, risc), the word index into the risc's active DRAM buffer up to which the host has
+    // already parsed. The device only appends to that buffer and publishes HOST_BUFFER_END_INDEX after each chunk, so a
+    // poll parses [cursor, HOST_BUFFER_END_INDEX) and moves the cursor up. The host must not rewrite those device-owned
+    // indices while kernels may be running (a chunk published between the host's read and its write would be lost), so
+    // a full buffer is only recycled through the stall handshake, where the risc waits for the host, and the cursor
+    // restarts at 0 in the buffer handed over.
+    std::map<CoreCoord, std::map<tracy::RiscType, uint32_t>> dram_read_cursor_per_core_risc_map;
 
     // Map to store buffer end indices for inactive buffers (before they're reset)
     // Key: (core, risc_type, buffer_index) -> buffer_end_index
@@ -202,13 +221,15 @@ private:
     void issueSlowDispatchReadFromL1DataBuffer(
         IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer);
 
-    // Helper function for reading risc profile results
+    // Helper function for reading risc profile results. dram_parse_start optionally gives, per risc, the word index in
+    // its DRAM buffer to start parsing at (riscs not listed start at 0).
     void readRiscProfilerResults(
         IDevice* device,
         const CoreCoord& worker_core,
         ProfilerDataBufferSource data_source,
         const std::optional<ProfilerOptionalMetadata>& metadata,
-        const std::optional<std::map<CoreCoord, std::set<tracy::RiscType>>>& riscs_to_include = {});
+        const std::optional<std::map<CoreCoord, std::set<tracy::RiscType>>>& riscs_to_include = {},
+        const std::map<tracy::RiscType, uint32_t>* dram_parse_start = nullptr);
 
     // Read marker data to be displayed
     void readDeviceMarkerData(
@@ -373,8 +394,10 @@ public:
     void resetActiveDramBufferIndices();
 
     // Read control buffer for each core, check if the host buffer for any risc is full. If it's full,
-    // swap the active DRAM buffer to unblock the risc and then read out the buffer
-    void pollDebugDumpResults(IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool is_final_poll);
+    // swap the active DRAM buffer to unblock the risc and then read out the buffer. A final poll also parses whatever
+    // the riscs have published since the last poll. Never rewrites the device's end indices, so it is safe while
+    // kernels are running. Returns true if it serviced a stall or parsed new data.
+    bool pollDebugDumpResults(IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool is_final_poll);
 };
 
 bool useFastDispatch(MetalContext& ctx, distributed::MeshDevice* mesh_device, IDevice* device);

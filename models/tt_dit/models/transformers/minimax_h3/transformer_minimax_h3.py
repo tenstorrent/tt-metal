@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 
 import ttnn
@@ -42,6 +44,18 @@ class MiniMaxH3TimestepEmbedding(Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         return self.linear_2(ttnn.silu(self.linear_1(x)))
+
+
+@dataclass
+class MiniMaxH3TwoTime:
+    """Interval `(t, r)` conditioning: `temb = emb_t + gate * (emb_r - emb_t)`.
+
+    Not a child module on purpose: a registered child would join the cached weight set and invalidate
+    every existing cache.
+    """
+
+    embedder: MiniMaxH3TimestepEmbedding
+    gate: float
 
 
 class MiniMaxH3AdaLayerNormOut(Module):
@@ -205,7 +219,13 @@ class MiniMaxH3Transformer3DModel(Module):
         self._temb_state = StateTensor()
         self._timestep_idx_state: dict[int, StateTensor] = {}
         self._eye_states: dict[int, StateTensor] = {}
-        self._static_source_state = StateTensor()
+        # The source table `forward` gathers rows from, `[text | cond video | cond audio | audio | video]`
+        # at the arena caps, is one persistent ROW_MAJOR buffer written in place (`slice_write`), not rebuilt
+        # by concat every step: a fragmented heap cannot supply a table-sized block each step. Allocated on
+        # the first request, never freed (eviction skips non-weights). Static prefix written once per request.
+        self._source_table: ttnn.Tensor | None = None
+        self._static_prefix_rows = 0
+        self._pending_prefix: list[ttnn.Tensor] | None = None
         self._prompt_windows_state = StateTensor()
         self.parallel_config = parallel_config
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
@@ -251,6 +271,7 @@ class MiniMaxH3Transformer3DModel(Module):
             out_dim=time_embed_dim,
             mesh_device=mesh_device,
         )
+        self.two_time: MiniMaxH3TwoTime | None = None
 
         # 3. Text stream refiner. It runs before the packed sequence is fractured, so its text stream
         # is replicated on SP and attention is local.
@@ -354,8 +375,32 @@ class MiniMaxH3Transformer3DModel(Module):
             segments.append(self.proj_in(condition_video_1BKC))
         if condition_audio_1BKC is not None:
             segments.append(self.audio_proj_in(condition_audio_1BKC))
-        prefix = segments[0] if len(segments) == 1 else ttnn.concat(segments, dim=2)
-        self._static_source_state.update(prefix, traced=traced)
+        # ROW_MAJOR is what `ttnn.embedding` reads (a TILE table would be untilized every step).
+        # The segments are written into the persistent source table by the first `forward` of the
+        # request, which is where the audio/video capacities -- and so the table size -- are known.
+        if self._pending_prefix:
+            for segment in self._pending_prefix:
+                ttnn.deallocate(segment)
+        self._pending_prefix = [ttnn.to_layout(segment, ttnn.ROW_MAJOR_LAYOUT) for segment in segments]
+        self._static_prefix_rows = sum(segment.shape[2] for segment in self._pending_prefix)
+
+    def _write_source_rows(self, segment_1BRC: ttnn.Tensor, row: int) -> int:
+        """Write a ``[1, 1, rows, C]`` ROW_MAJOR segment into the source table at ``row``; return the next row."""
+        rows, width = segment_1BRC.shape[2], segment_1BRC.shape[3]
+        ttnn.experimental.slice_write(
+            segment_1BRC, self._source_table, [0, 0, row, 0], [1, 1, row + rows, width], [1, 1, 1, 1]
+        )
+        return row + rows
+
+    def _ensure_source_table(self, total_rows: int, width: int, dtype: ttnn.DataType) -> None:
+        table = self._source_table
+        if table is not None and (table.shape[2] < total_rows or table.shape[3] != width or table.dtype != dtype):
+            ttnn.deallocate(table)
+            table = None
+        if table is None:
+            self._source_table = ttnn.zeros(
+                (1, 1, total_rows, width), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device
+            )
 
     def forward(
         self,
@@ -372,6 +417,7 @@ class MiniMaxH3Transformer3DModel(Module):
         rope_sin: ttnn.Tensor,
         logical_n: ttnn.Tensor,
         pad_to: int,
+        endpoint_timestep: ttnn.Tensor | None = None,
         traced: bool = False,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
@@ -385,6 +431,7 @@ class MiniMaxH3Transformer3DModel(Module):
         video_out_indices / audio_out_indices: [1, 1, 1, V_cap] / [1, 1, 1, A_cap] integers, the
             packed row of each target row.
         timestep: [1, 1, num_slots, 1] float32, replicated. Unscaled, in [0, 1].
+        endpoint_timestep: like `timestep`, each slot's step endpoint `r`. Required when `two_time` is set.
         adaln_indices: [1, 1, 1, S_padded_local] integers, `timestep_indices * 3 + token_tags`, built
             for the padded global sequence and sharded on SP
         timestep_indices: [1, 1, 1, S_padded_local] integers, same order
@@ -417,23 +464,42 @@ class MiniMaxH3Transformer3DModel(Module):
         for name, stream in (("audio_1BAC", audio_1BAC), ("video_1BVC", video_1BVC)):
             if stream.shape[2] % tile:
                 raise ValueError(f"{name} capacity {stream.shape[2]} must be a multiple of TILE ({tile})")
-        static_prefix = self._static_source_state.value
-        if static_prefix is None:
+        if self._static_prefix_rows == 0:
             raise RuntimeError("prepare_static_sources must run before forward: the source-table prefix is unbound")
 
         def as_indices(t: ttnn.Tensor) -> ttnn.Tensor:
             t = ttnn.reshape(t, (1, t.shape[-1]))
             return t if t.dtype == ttnn.uint32 else ttnn.typecast(t, ttnn.uint32)
 
-        source = ttnn.concat([static_prefix, self.audio_proj_in(audio_1BAC), self.proj_in(video_1BVC)], dim=2)
-        source = ttnn.reshape(source, (source.shape[2], source.shape[3]))
+        audio_rows = ttnn.to_layout(self.audio_proj_in(audio_1BAC), ttnn.ROW_MAJOR_LAYOUT)
+        video_rows = ttnn.to_layout(self.proj_in(video_1BVC), ttnn.ROW_MAJOR_LAYOUT)
+        total_rows = self._static_prefix_rows + audio_rows.shape[2] + video_rows.shape[2]
+        self._ensure_source_table(total_rows, audio_rows.shape[3], audio_rows.dtype)
+        if self._pending_prefix is not None:
+            row = 0
+            for segment in self._pending_prefix:
+                row = self._write_source_rows(segment, row)
+                ttnn.deallocate(segment)
+            self._pending_prefix = None
+        row = self._write_source_rows(audio_rows, self._static_prefix_rows)
+        self._write_source_rows(video_rows, row)
+        ttnn.deallocate(audio_rows)
+        ttnn.deallocate(video_rows)
 
-        hidden = ttnn.embedding(as_indices(assembly_indices), source, layout=ttnn.TILE_LAYOUT)
+        # `ttnn.embedding` takes the `[1, 1, rows, C]` table as is; indices never reach past
+        # `total_rows`, so rows beyond it (a smaller table layout than an earlier request) are inert.
+        hidden = ttnn.embedding(as_indices(assembly_indices), self._source_table, layout=ttnn.TILE_LAYOUT)
         hidden = ttnn.unsqueeze(hidden, 0)
         if not indices_already_sharded:
             hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
-        self._temb_state.update(self.time_embedder(self.time_proj(timestep)), traced=traced)
+        temb = self.time_embedder(self.time_proj(timestep))
+        if self.two_time is not None:
+            if endpoint_timestep is None:
+                raise ValueError("two-time conditioning is set, so every forward needs endpoint_timestep")
+            endpoint = self.two_time.embedder(self.time_proj(endpoint_timestep))
+            temb = ttnn.add(temb, ttnn.multiply(ttnn.subtract(endpoint, temb), self.two_time.gate))
+        self._temb_state.update(temb, traced=traced)
         temb = self._temb_state.value
 
         adaln_idx = as_indices(adaln_indices)

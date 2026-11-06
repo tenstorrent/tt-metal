@@ -13,6 +13,7 @@ from tests.ttnn.utils_for_testing import (
     generate_all_bfloat16_bitpatterns,
 )
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    assert_ftz_band,
     generate_float32_bits,
     generate_float32_bits_in_range,
     to_float32_tt_tensor,
@@ -83,18 +84,6 @@ Thresholds are tighter in absolute terms than the bfloat16 file but, being
 float32 ULPs (2^16 times finer), expose kernel error the bfloat16 output
 rounding hides.
 """
-
-
-def assert_ftz_band(result, band_mask, band_desc):
-    """Assert a known flush-to-zero band is non-empty and device-flushed to 0.
-
-    The band is a deterministic slice of the exhaustive sweep, so the
-    non-emptiness assertion guards against a future golden/kernel change that
-    shifts a boundary and silently empties the band (which would otherwise let
-    the test pass without ever checking the documented FTZ behavior).
-    """
-    assert band_mask.any(), f"expected {band_desc} to be non-empty for this exhaustive sweep"
-    assert_equal(torch.zeros_like(result[band_mask]), result[band_mask])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import comp_pcc, comp_allclose, is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import comp_pcc, comp_allclose, is_wormhole_b0
 
 PCC_THRESHOLD = 0.999
 

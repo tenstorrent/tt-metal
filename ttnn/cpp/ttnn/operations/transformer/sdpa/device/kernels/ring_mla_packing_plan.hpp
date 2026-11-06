@@ -352,6 +352,10 @@ struct PackedKVSchedule {
     }
 };
 
+// Passes over a ring of sources: one per source, or one synthetic pass that folds every source
+// under a sliding window.
+constexpr uint32_t ring_pass_count(uint32_t ring_size, bool sliding_window) { return sliding_window ? 1u : ring_size; }
+
 // A sliding window folds every source into one synthetic pass.
 template <typename NextArrival>
 PackedKVSchedule packed_kv_schedule(
@@ -372,12 +376,49 @@ PackedKVSchedule packed_kv_schedule(
         schedule.source_group_size,
         chunk_tiles,
         region_tiles};
-    schedule.ring_iterations = sliding_window ? 1 : ring_size / schedule.source_group_size;
+    schedule.ring_iterations = ring_pass_count(ring_size / schedule.source_group_size, sliding_window);
     if (schedule.packed()) {
         packed_kv_pass_rows(
             ring_size, schedule.source_group_size, [&](uint32_t) { return next_arrival(); }, schedule.pass_rows);
     }
     return schedule;
+}
+
+// The classic ring's schedule: each pass streams one whole source, so the base plan is that source's
+// region with nothing deferred, and no pass appends newest rows.
+constexpr PackedKVSchedule classic_kv_schedule(
+    uint32_t ring_size, uint32_t region_tiles, uint32_t chunk_tiles, bool sliding_window) {
+    return PackedKVSchedule{
+        1, {region_tiles, 1, chunk_tiles, region_tiles}, ring_pass_count(ring_size, sliding_window), {}};
+}
+
+// The schedule a kernel main runs: the packed-source one when the host grouped KV sources, else the
+// classic ring's. The choice is made at compile time so the classic ring's binary carries none of the
+// packed path.
+template <uint32_t GroupedSources, typename NextArrival>
+PackedKVSchedule make_packed_kv_schedule(
+    uint32_t ring_size,
+    uint32_t source_capacity_tiles,
+    uint32_t logical_tiles,
+    uint32_t active_mask,
+    uint32_t region_tiles,
+    uint32_t chunk_tiles,
+    bool sliding_window,
+    const NextArrival& next_arrival) {
+    if constexpr (GroupedSources > 1) {
+        return packed_kv_schedule(
+            GroupedSources,
+            ring_size,
+            source_capacity_tiles,
+            logical_tiles,
+            active_mask,
+            region_tiles,
+            chunk_tiles,
+            sliding_window,
+            next_arrival);
+    } else {
+        return classic_kv_schedule(ring_size, region_tiles, chunk_tiles, sliding_window);
+    }
 }
 
 }  // namespace ttnn::operations::transformer::sdpa::ring_joint

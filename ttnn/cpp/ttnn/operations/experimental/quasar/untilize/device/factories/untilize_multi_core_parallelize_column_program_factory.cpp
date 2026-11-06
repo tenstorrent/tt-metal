@@ -132,9 +132,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
 
     // ---- Compute (Metal 2.0 fork of untilize; full + cliff) ----
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
     auto make_compute_hw = [&]() -> ComputeHardwareConfig {
         ttnn::ComputeKernelConfig hw{
             .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};

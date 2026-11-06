@@ -10,13 +10,10 @@
 #include <sub_device_types.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
-#include <array>
 #include <cstdint>
-#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
-#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -165,6 +162,14 @@ SubDeviceManager* SubDeviceManagerTracker::get_default_sub_device_manager() cons
 SubDeviceManager* SubDeviceManagerTracker::find_sub_device_manager(SubDeviceManagerId sub_device_manager_id) const {
     auto sub_device_manager = sub_device_managers_.find(sub_device_manager_id);
     return sub_device_manager == sub_device_managers_.end() ? nullptr : sub_device_manager->second.get();
+}
+
+std::size_t SubDeviceManagerTracker::num_traces() const {
+    std::size_t count = 0;
+    for (const auto& entry : sub_device_managers_) {
+        count += entry.second->num_traces();
+    }
+    return count;
 }
 
 DeviceAddr SubDeviceManagerTracker::get_max_trace_high_water_mark() const {
