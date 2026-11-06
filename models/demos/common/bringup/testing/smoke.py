@@ -16,6 +16,7 @@ import time
 import torch
 
 from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.testing import batch
 from models.demos.common.bringup.testing.harness import begin_chunk
 
 
@@ -49,7 +50,7 @@ def run_smoke(s, mesh, max_new: int | None = None) -> dict:
     assert len(ids) + max_new <= chunk, f"smoke prompt of {len(ids)} tokens does not fit one {chunk}-token chunk"
     layers = s.layers()
     assert layers[-1] == s.num_layers - 1 and layers[0] == 0, "the smoke needs the whole model (embedding to LM head)"
-    model = s.hooks().device_model(mesh, s, layers, lm_head=True)
+    model = batch.device_model(s, mesh, layers, lm_head=True)
     eos = {t for t in (tok.eos_token_id,) if t is not None}
     out = []
     for step in range(max_new):

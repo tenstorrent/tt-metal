@@ -33,7 +33,7 @@ import torch
 from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.reference.generate_golden import run_starts
 from models.demos.common.bringup.reference.golden import Golden
-from models.demos.common.bringup.testing import cpu_bridge
+from models.demos.common.bringup.testing import batch, cpu_bridge
 from models.demos.common.bringup.testing import e2e_limits as E
 from models.demos.common.bringup.testing.harness import begin_chunk
 from models.demos.common.bringup.testing.host_transfers import HostTransfers
@@ -59,7 +59,7 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
     chunk, n_chunks = rung["chunk"], rung["seq"] // rung["chunk"]
     last = n_chunks - 1
 
-    model = s.hooks().device_model(mesh, s, layers, lm_head=ends_at_last)
+    model = batch.device_model(s, mesh, layers, lm_head=ends_at_last)
     metrics.record("model_load_s", round(getattr(model, "load_seconds", 0.0), 1))
     metrics.record("device_model_hybrid", int("Hybrid" in type(model).__name__))  # dashboard: which model a row ran on
     metrics.record("rung_seq", rung["seq"])

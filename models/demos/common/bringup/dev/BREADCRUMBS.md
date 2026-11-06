@@ -2642,3 +2642,32 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
   as "not run" (7 phantom failures, 14 wasted whole-box runs on the 2026-11-06 Galaxy fork suite).
 - Fix: a node id is a path ending in .py, then "::".
 - Selftest: none added (one-line filter); the next fork suite shows no phantom "not run".
+
+## F259: an A/B side's model runs in one process, the model loaded once (owner 2026-11-06)
+- Problem: every run_safe_pytest process on the Galaxy 8x4 (DeepSeek-V4.1, 40 layers) pays ~6.5 min of fixed cost
+  (2.5-4.5 min weight upload, 1.5-2.5 min first chunk, mesh open / close) for a measurement of seconds (a warm chunk
+  is 0.17 s). A quick A/B with two positions ran 5 processes a side (10 loads, ~75 min), P.32's full A/B 17 a side;
+  F114's clean wall doubled every profile. Owner: "this is taking insanely too much time".
+- Fix (spec / defaults `tests.one_process`, false until the device check in
+  /scratch/dnijemcevic/rebase/fasttests/DESIGN.md passes): core/batch.py plans, testing/batch.py + tests/test_batch.py
+  run several runs in ONE pytest process. Each run is the old process's pytest invocation in-process (pytest.main) with
+  its own env (restored after), log (fds 1 and 2), results dir and rc; test modules imported again per run; the
+  mesh_device fixture is the batch's mesh (SharedMesh: pytest_fixture_setup); the framework's tests take the model from
+  testing/batch.device_model (ladder, profile, positions, smoke), loaded once with the LM head and the furthest
+  position any run needs, the previous run's state (model.state) freed between runs; the program cache stays warm.
+  Joins a batch: one `run_safe_pytest.sh --no-precompile` call over those four tests, no TT_METAL_* /
+  BRINGUP_PROFILER=device; one process per model key (every variable but the per-run ones, ITEM_VARS: off and on
+  never share). Order: ladders first (their first chunk and model_load_s stay cold), clean walls before any
+  real-time-profiled run (F114), profiled runs last. A/B (ab_measure / ab_batches): kept items reused as before; the
+  rest run one process per key, each item with its own dir, log, stamp (the command as before) and result; a hang
+  keeps the finished items and stops (InfraStop), a crash reruns the unfinished runs once (F207). Gate (run_units): a
+  unit of two or more batchable runs (the clean wall + profiled pair) runs as BRINGUP_BATCH_CMD, stamp and
+  bookkeeping unchanged. Not batched: the contract tests (they build the model through the engine adapter, part of
+  what they check, and a second model on one mesh is not safe for DeepSeek-V4.1's pinned buffers) and a model's own
+  tests (their own load).
+- Estimate (DESIGN.md): quick A/B with 2 positions 10 -> 2 processes (~75 -> ~25-30 min a pick); P.32-like full A/B
+  17 -> 5 a side. The resident engram table (74 s, overlapped with the upload) is built once per process; golden
+  reads stay per run.
+- Selftest: test_one_process.py (planner, per-run env / log / result isolation and restore, stop-on-fail, the shared
+  model loaded once and the reload warning, the shared mesh fixture through a real in-process pytest, the A/B side in
+  one process with per-item results, per-switch processes, a hang keeping the finished items, off by default).

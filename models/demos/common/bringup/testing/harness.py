@@ -236,15 +236,18 @@ def close_mesh(mesh, fab) -> None:
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-def mesh_parametrize(fn):
+def mesh_parametrize(fn=None, *, timeout_s: int | None = None):
     """Parametrize a pytest test with the spec's mesh shape and device params (the repo's mesh_device fixture).
-    Under BRINGUP_IMPL=reference, stub or mutate:<kind> no device is opened: mesh_device is None."""
+    Under BRINGUP_IMPL=reference, stub or mutate:<kind> no device is opened: mesh_device is None.
+    ``timeout_s``: instead of the spec's box.test_timeout_s (F259: a batch of runs, 0 = none of its own)."""
     import pytest
 
+    if fn is None:
+        return lambda f: mesh_parametrize(f, timeout_s=timeout_s)
     s = spec()
     # F170 (audit item 7): every device test takes the spec's box.test_timeout_s, frozen component and swap tests
     # included (their templates had no mark, so pytest.ini's 300 s killed swap tests that take ~290 s unloaded)
-    fn = pytest.mark.timeout(int(s.get("box.test_timeout_s")))(fn)
+    fn = pytest.mark.timeout(int(s.get("box.test_timeout_s") if timeout_s is None else timeout_s))(fn)
     if impl_mode() != "device":
         return pytest.mark.parametrize("mesh_device", [None], ids=["nodevice"])(fn)
     fn = pytest.mark.parametrize("device_params", [device_params(s)], indirect=True, ids=["box"])(fn)
