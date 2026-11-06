@@ -26,8 +26,10 @@ namespace tt::tt_metal {
 namespace m2 = experimental;
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TriscL1CacheRuntimeArgNotStale) {
-    constexpr uint32_t num_trisc_threads = 3;
+    // One Tensix engine runs four compute processors: unpack, math, pack, and isolate-SFPU.
+    constexpr uint32_t num_trisc_threads = 4;
     // Launch count; override with TRISC_L1_CACHE_NUM_LAUNCHES. Keep it small enough for the emulator session budget.
+    // A stale hit depends on timing, so a pass over this many launches is evidence, not proof the cache is off.
     uint32_t num_launches = 100;
     if (const char* env = std::getenv("TRISC_L1_CACHE_NUM_LAUNCHES")) {
         num_launches = static_cast<uint32_t>(std::strtoul(env, nullptr, 0));
@@ -51,7 +53,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TriscL1CacheRuntimeArgNotStale) {
         distributed::MeshCoordinateRange(zero_coord, zero_coord), m2::MakeProgramFromSpec(this->device(), spec));
     Program& program = workload.get_programs().begin()->second;
 
-    const uint32_t result_l1_addr = static_cast<uint32_t>(this->device().l1_size_per_core()) - 64;
+    // Mailboxes and the firmware mem map sit at the low end of L1. This test allocates no L1 buffers, so the
+    // top of worker L1 stays unused. Four echo words fit in this gap.
+    constexpr uint32_t result_region_bytes = 64;
+    const uint32_t result_l1_addr = static_cast<uint32_t>(this->device().l1_size_per_core()) - result_region_bytes;
 
     uint32_t num_stale = 0;
     for (uint32_t launch = 0; launch < num_launches; ++launch) {

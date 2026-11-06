@@ -20,8 +20,10 @@ void kernel_main() {
     constexpr uint32_t result_slot = 1;
 #elif defined(TRISC_PACK)
     constexpr uint32_t result_slot = 2;
+#elif defined(TRISC_ISOLATE_SFPU)
+    constexpr uint32_t result_slot = 3;
 #endif
-#if defined(TRISC_UNPACK) || defined(TRISC_MATH) || defined(TRISC_PACK)
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH) || defined(TRISC_PACK) || defined(TRISC_ISOLATE_SFPU)
     volatile tt_l1_ptr uint32_t* const out =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(result_l1_addr + MEM_L1_UNCACHED_BASE);
     out[result_slot] = value;
