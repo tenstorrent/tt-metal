@@ -97,9 +97,13 @@ TT_KERNEL void reader(
     // address on each. Every core reading its own copy instead makes the K3 layer 17 us slower on Galaxy.
     Semaphore landed(sem::seed_landed);
     const uint32_t seeds = need_group + need_tail;
+    // Where the seeds sit in this core's L1: the final rows copy their seed row from there.
+    uint32_t group_l1 = 0;
+    uint32_t tail_l1 = 0;
     if (seed_sender) {
-        const auto send = [&](auto& buffer, const auto& states) {
+        const auto send = [&](auto& buffer, const auto& states, uint32_t& l1) {
             buffer.reserve_back(state_tiles);
+            l1 = buffer.get_write_ptr();
             const uint32_t tile = buffer.get_entry_size();
             for (uint32_t i = 0; i < state_tiles; ++i) {
                 noc.async_read(states, buffer, tile, {.page_id = head * state_tiles + i}, {.offset_bytes = i * tile});
@@ -113,10 +117,10 @@ TT_KERNEL void reader(
             buffer.push_back(state_tiles);
         };
         if (need_group) {
-            send(seed, TensorAccessor(tensor::entry));
+            send(seed, TensorAccessor(tensor::entry), group_l1);
         }
         if (need_tail) {
-            send(tail, TensorAccessor(tensor::tail_entry));
+            send(tail, TensorAccessor(tensor::tail_entry), tail_l1);
         }
         if (seeds != 0) {
             noc_async_write_barrier();
@@ -130,10 +134,12 @@ TT_KERNEL void reader(
         landed.wait_min(seeds);
         if (need_group) {
             seed.reserve_back(state_tiles);
+            group_l1 = seed.get_write_ptr();
             seed.push_back(state_tiles);
         }
         if (need_tail) {
             tail.reserve_back(state_tiles);
+            tail_l1 = tail.get_write_ptr();
             tail.push_back(state_tiles);
         }
     }
@@ -167,8 +173,9 @@ TT_KERNEL void reader(
         // Tile rows of E, of B and of the seed: each row of the final state is seed[row] + (E[row] @ seed + B[row]).
         const auto e_states = TensorAccessor(tensor::final_e);
         const auto b_states = TensorAccessor(tensor::final_b);
-        const auto seed_states = TensorAccessor(tensor::entry);
-        const auto tail_states = TensorAccessor(tensor::tail_entry);
+        // The seed row comes from the seed already in this core's L1 (a final rank's seed implies need_group, a final
+        // tail's need_tail): re-reading it from DRAM on every final-row core costs the op ~4 us on Galaxy.
+        const uint32_t seed_l1 = final_tail ? tail_l1 : group_l1;
         const uint32_t tile = b.get_entry_size();
         for (uint32_t row = final_row; row < kt; row += final_stride) {
             e.reserve_back(kt);
@@ -178,13 +185,10 @@ TT_KERNEL void reader(
                 const uint32_t page = head * state_tiles + row * kt + c;
                 noc.async_read(e_states, e, tile, {.page_id = page}, {.offset_bytes = c * tile});
                 noc.async_read(b_states, b, tile, {.page_id = page}, {.offset_bytes = c * tile});
-                if (final_tail) {
-                    noc.async_read(tail_states, seed_row, tile, {.page_id = page}, {.offset_bytes = c * tile});
-                } else {
-                    noc.async_read(seed_states, seed_row, tile, {.page_id = page}, {.offset_bytes = c * tile});
-                }
             }
+            noc_async_read(get_noc_addr(seed_l1 + row * kt * tile), seed_row.get_write_ptr(), kt * tile);
             noc.async_read_barrier();
+            noc_async_read_barrier();
             e.push_back(kt);
             b.push_back(kt);
             seed_row.push_back(kt);
