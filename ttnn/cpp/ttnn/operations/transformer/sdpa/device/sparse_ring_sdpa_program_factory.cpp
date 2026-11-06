@@ -965,6 +965,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     if (math_fidelity == MathFidelity::LoFi) {
         defines["SDPA_COMPUTE_LOFI"] = "1";
     }
+    // Dense units: one copy of the per-iteration bodies (sparse_dense_units.hpp); the kernel config buffer holds all
+    // kernel text.
+    if (dense_h) {
+        defines["SPARSE_DENSE_UNITS"] = "1";
+    }
 
     // NOTE: KernelDescriptors are built after chain construction.
 

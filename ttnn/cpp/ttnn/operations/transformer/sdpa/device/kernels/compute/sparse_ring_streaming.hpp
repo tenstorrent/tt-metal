@@ -1556,8 +1556,13 @@ static __attribute__((noinline, noclone)) void res_merge_slot(const uint32_t i) 
     cb_push_back_hold_wr_ptr(cb_max_scratch, kStatsCap);
     CircularBuffer(cb_max_scratch).wait_front(kStatsCap);
 
-    // exp((max - M) * scale) of one side into cb_exp_max_diff pages page0 ..
-    const auto alpha = [&](uint32_t max_cb, uint32_t max_idx0, uint32_t page0) {
+    // Side 0: the slot, rescaled in place (as the step's S4). Side 1: the arriving partial, scaled and L1-accumulated
+    // onto the slot (its out at page 0, its sums at out_tiles). alpha = exp((side max - M) * scale), at the side's
+    // out row base in cb_exp_max_diff.
+    for (uint32_t side = 0; side < 2; ++side) {
+        const uint32_t max_cb = side == 0 ? cb_max_in : cb_dense_in;
+        const uint32_t max_idx0 = side == 0 ? row0 : in_max;
+        const uint32_t page0 = side == 0 ? row0 : 0;
         CircularBuffer(cb_exp_max_diff).reserve_back(kStatsCap);
         exp_packthread_tile_init<EXP_APPROX_MODE>();
         tile_regs_acquire();
@@ -1578,29 +1583,28 @@ static __attribute__((noinline, noclone)) void res_merge_slot(const uint32_t i) 
         tile_regs_release();
         cb_push_back_hold_wr_ptr(cb_exp_max_diff, kStatsCap);
         CircularBuffer(cb_exp_max_diff).wait_front(kStatsCap);
-    };
 
-    // The slot, rescaled in place (as the step's S4).
-    alpha(cb_max_in, row0, row0);
-    sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_prev_out, cb_qkt_im, cb_exp_max_diff>();
-    sdpa_maybe_pack_reconfig_data_format<cb_qkt_im, cb_prev_out>();
-    salad_correct_fused<Sq_chunk_t, vDHt, kDst>(
-        cb_prev_out, cb_sum_in, cb_exp_max_diff, cb_prev_out, cb_sum_in, i, i, i);
-    sdpa_maybe_reconfig_data_format<cb_prev_out, cb_qkt_im, cb_exp_max_diff, cb_qkt_im>();
-    sdpa_maybe_pack_reconfig_data_format<cb_prev_out, cb_qkt_im>();
-    CircularBuffer(cb_exp_max_diff).pop_front(kStatsCap);
-
-    // The arriving partial, scaled and L1-accumulated onto the slot (out at its page 0, sums at out_tiles).
-    alpha(cb_dense_in, in_max, 0);
-    sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_dense_in, cb_qkt_im, cb_exp_max_diff>();
-    sdpa_maybe_pack_reconfig_data_format<cb_qkt_im, cb_prev_out>();
-    PACK((llk_pack_reconfig_l1_acc(1)));
-    salad_correct_fused<Sq_chunk_t, vDHt, kDst>(
-        cb_dense_in, cb_dense_in, cb_exp_max_diff, cb_prev_out, cb_sum_in, 0, vDHt, i);
-    PACK((llk_pack_reconfig_l1_acc(0)));
-    sdpa_maybe_reconfig_data_format<cb_dense_in, cb_qkt_im, cb_exp_max_diff, cb_qkt_im>();
-    sdpa_maybe_pack_reconfig_data_format<cb_prev_out, cb_qkt_im>();
-    CircularBuffer(cb_exp_max_diff).pop_front(kStatsCap);
+        if (side == 0) {
+            sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_prev_out, cb_qkt_im, cb_exp_max_diff>();
+        }
+        sdpa_maybe_pack_reconfig_data_format<cb_qkt_im, cb_prev_out>();
+        PACK((llk_pack_reconfig_l1_acc(side)));
+        salad_correct_fused<Sq_chunk_t, vDHt, kDst>(
+            side == 0 ? cb_prev_out : cb_dense_in,
+            side == 0 ? cb_sum_in : cb_dense_in,
+            cb_exp_max_diff,
+            cb_prev_out,
+            cb_sum_in,
+            side == 0 ? i : 0,
+            side == 0 ? i : vDHt,
+            i);
+        PACK((llk_pack_reconfig_l1_acc(0)));
+        if (side == 0) {
+            sdpa_maybe_reconfig_data_format<cb_prev_out, cb_qkt_im, cb_exp_max_diff, cb_qkt_im>();
+        }
+        sdpa_maybe_pack_reconfig_data_format<cb_prev_out, cb_qkt_im>();
+        CircularBuffer(cb_exp_max_diff).pop_front(kStatsCap);
+    }
 
     // The slot's max becomes M.
     copy_init(cb_max_scratch);

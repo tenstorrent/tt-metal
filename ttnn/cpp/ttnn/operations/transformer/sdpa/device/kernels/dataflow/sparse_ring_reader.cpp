@@ -353,7 +353,10 @@ void kernel_main() {
     // One ring iteration over shard ring_id for the pass's Q blocks [pass_q_start, pass_q_end), or one dense batch
     // (dense != nullptr) over the local shard: every live block kept, own K/V reads, no pooled entries.
     const auto run_iteration =
-        [&](const uint32_t ring_id, const uint32_t pass_q_start, const uint32_t pass_q_end, const DenseBatch* dense) {
+        [&](const uint32_t ring_id,
+            const uint32_t pass_q_start,
+            const uint32_t pass_q_end,
+            const DenseBatch* dense) SPARSE_DENSE_ONE_COPY {
             const uint32_t do_pooled = (dense == nullptr && pooled_route && pooled_pending) ? 1u : 0u;
             // Per ring iteration:
             //   1. on the pass's first active iteration, the pass's Q chunks into cb_q_in;

@@ -137,7 +137,7 @@ void kernel_main() {
                                         const uint32_t units_per_head,
                                         uint32_t& initialized_slots,
                                         const bool is_last_ring_iter,
-                                        const bool is_first_active_iter) {
+                                        const bool is_first_active_iter) SPARSE_DENSE_ONE_COPY {
         // Global logical_n tail: the shard-relative K chunk holding the last real tile and the fully padded tiles
         // after it, on the shard where logical_n lands. Anchored on the last real tile, so a chunk-final sub-tile
         // partial column also counts as a masked chunk.
