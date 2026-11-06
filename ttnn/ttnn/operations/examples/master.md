@@ -242,7 +242,7 @@ move.
 **Situation:** a SUM/mean reduce of N tiles written with the reduce library (matmul-with-ones per tile); lever: pairwise `add_tiles` accumulate + one SFPU finalize.
 **How to recognize it:** library time grows ~linearly per tile; the fast path has a ~800–900 ns (WH B0) / ~450–600 ns (BH) floor plus a small slope.
 **Helps when:** WH B0 ≥ 8 tiles reduced per output; BH col / scalar ≥ 8, row ≥ 16. 32 tiles: row WH 3 652 → 1 865 ns = **1.96×** · BH 1 385 → 800 ns = **1.73×**; col WH 1.72× · BH **2.97×**; scalar WH 2.93× · BH 3.73×. BH 8 tiles: col 1.35×, scalar 1.48×; BH row 16 tiles 1.24×.
-**Does not help when:** WH B0 ≤ 4 tiles: row 1 tile 467 → 940 ns = **0.50×**, row 4 0.83×, col 4 0.81×, scalar 4 0.95×. BH: row ≤ 8 tiles (8: 514 → 578 ns = **0.89×**; 4: 0.69×), col / scalar 4 tiles 0.96× / 0.97×. The example's `dispatch` threshold row ≥ 4 is stale on both archs (WH 0.83×, BH 0.69× at 4).
+**Does not help when:** WH B0 ≤ 4 tiles: row 1 tile 467 → 940 ns = **0.50×**, row 4 0.83×, col 4 0.81×, scalar 4 0.95×. BH: row ≤ 8 tiles (8: 514 → 578 ns = **0.89×**; 4: 0.69×), col 4 tiles 0.96×; scalar 4 tiles is flat — 0.97× on the old reduce helper, 571 → 543 ns = 1.05× on the current one. The example's `dispatch` threshold row ≥ 4 is stale on both archs (WH 0.83×, BH 0.69× at 4).
 **Gist:** accumulate + SFPU finalize only when the reduce spans enough tiles per output (WH ~8; BH 8 for col / scalar, 16 for row); below that use the library reduce.
 **Code:** `examples/reduce_accumulate/program_descriptor_with_inline_kernels.py` — `_HELPER_KERNEL` vs `_FAST_KERNEL`, `_resolve()` + `_DISPATCH_MIN` for `dispatch` (separate compute kernel per variant).
 **See also:** `row_reduce_accumulate`, `reduce_block`.

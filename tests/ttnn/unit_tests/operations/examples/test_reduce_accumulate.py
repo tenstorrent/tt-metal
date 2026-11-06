@@ -326,7 +326,13 @@ _REGIMES = [
     ("not_row_1t", "row", 1, "does_not_help", 1.0),  # WH 0.50x, BH 0.47x
     ("not_row_4t", "row", 4, "does_not_help", 1.0),  # WH 0.83x, BH 0.69x
     ("not_col_4t", "col", 4, "does_not_help", 1.0),  # WH 0.81x, BH 0.96x
-    ("not_scalar_4t", "scalar", 4, "does_not_help", 1.05),  # WH 0.95x, BH 0.97x: flat on both, not a clear loss
+    (
+        "flat_scalar_4t",
+        "scalar",
+        4,
+        "measure",
+        None,
+    ),  # WH 0.95x; BH 0.97x on the old reduce helper, 1.05x on the current one: flat
 ]
 
 
