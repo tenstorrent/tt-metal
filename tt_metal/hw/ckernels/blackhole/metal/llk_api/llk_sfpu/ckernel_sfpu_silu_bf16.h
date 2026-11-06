@@ -3,20 +3,14 @@
 
 #pragma once
 #include <cstdint>
-#include <array>
-namespace ckernel::sfpu {
-struct SiluBf16Config {
-    static constexpr float kMultiplier = __builtin_bit_cast(float, 0xbfb8aa3bu);
-    static constexpr float kCoefficients[] = {
-        __builtin_bit_cast(float, 0x3f803884u),
-        __builtin_bit_cast(float, 0x3f285adeu),
-        __builtin_bit_cast(float, 0x3eaca410u)};
-    static constexpr uint32_t kBiasBf16 = 0x430fu;
-};
-}  // namespace ckernel::sfpu
-#include "ckernel_sfpu_silu_bf16_exponent_alu_product.h"
+
+#include "ckernel_sfpu_exp.h"
 
 namespace ckernel::sfpu {
+
+// The fitted exp coefficients the body reads from Prgm1 (LREG13) and Prgm2 (LREG14), pre-scaled.
+inline constexpr float kSiluBf16Prgm1 = __builtin_bit_cast(float, 0x3eaca410u) * 0x1p-46f;
+inline constexpr float kSiluBf16Prgm2 = __builtin_bit_cast(float, 0x3f285adeu) * 0x1p-23f;
 
 // The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format.
 inline bool bf16_dest_silu() {
@@ -26,12 +20,9 @@ inline bool bf16_dest_silu() {
     return false;
 #endif
 }
-// The Blackhole whole-tile call as the fitter's scheduler issues it (ttpoly/sfpu_schedule.py): the
-// compiled instructions of ckernel::sfpu::bf16::silu::calculate_exponent_alu_product<ckernel::sfpu::SiluBf16Config, 32>
-// in a stall-filling order, rows addressed by their immediates, constants held in LRegs. It stores the same word for
-// every BF16 input.
+
+// Generated BF16 silu over the whole tile, 8 passes of 4 rows; stores the same word for every BF16 input.
 inline void calculate_silu_bf16_scheduled() {
-// A loop, not unrolled: the body stays in the instruction cache.
 #pragma GCC unroll 1
     for (int pass = 0; pass < 8; ++pass) {
         TTI_SFPLOADI(3, 8, 0xbfb8);
@@ -175,18 +166,13 @@ inline void calculate_silu_bf16_scheduled() {
     }
 }
 
-template <int ITERATIONS = 32>
+// Programs its own Prgm1/Prgm2 per call and puts back silu_init's Prgm1 = 1/ln2 for the stock path, so it
+// depends on no init state beyond Prgm0 = 2.0f, which stock silu needs too.
 inline void calculate_silu_bf16() {
-    if constexpr (ITERATIONS == 32) {
-        calculate_silu_bf16_scheduled();
-    } else {
-        ckernel::sfpu::bf16::silu::calculate_exponent_alu_product<ckernel::sfpu::SiluBf16Config, ITERATIONS>();
-    }
-}
-inline void init_silu_bf16() {
-    if (bf16_dest_silu()) {
-        ckernel::sfpu::bf16::silu::init_exponent_alu_product<ckernel::sfpu::SiluBf16Config>();
-    }
+    sfpi::vConstFloatPrgm1 = kSiluBf16Prgm1;
+    sfpi::vConstFloatPrgm2 = kSiluBf16Prgm2;
+    calculate_silu_bf16_scheduled();
+    sfpi::vConstFloatPrgm1 = EXP_21F_ONE_LN2;
 }
 
 }  // namespace ckernel::sfpu

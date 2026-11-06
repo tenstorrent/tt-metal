@@ -215,7 +215,7 @@ ALWI void silu_tile_init() {
 #ifdef ARCH_QUASAR
     MATH(SFPU_UNARY_INIT(silu));
 #else
-    MATH(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX, DST_ACCUM_MODE)));
+    MATH(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX)));
 #endif
 }
 
