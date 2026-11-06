@@ -16,12 +16,17 @@ class TtBottleneck:
         blk_sharded=False,
         activation_dtype=ttnn.bfloat16,
         conv3_blk_sharded=False,
+        fp32_dest_acc=True,
     ):
         self.is_downsample = is_downsample
         self.activation_dtype = activation_dtype
 
         self.conv1 = TtConv2D(
-            conv_args.conv1, conv_pth.conv1, device=device, activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+            conv_args.conv1,
+            conv_pth.conv1,
+            device=device,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            fp32_dest_acc=fp32_dest_acc,
         )
         self.conv2 = TtConv2D(
             conv_args.conv2,
@@ -29,8 +34,16 @@ class TtBottleneck:
             device=device,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             act_block_h=32,
+            fp32_dest_acc=fp32_dest_acc,
         )
-        self.conv3 = TtConv2D(conv_args.conv3, conv_pth.conv3, device=device, activation=None, is_blk=conv3_blk_sharded)
+        self.conv3 = TtConv2D(
+            conv_args.conv3,
+            conv_pth.conv3,
+            device=device,
+            activation=None,
+            is_blk=conv3_blk_sharded,
+            fp32_dest_acc=fp32_dest_acc,
+        )
 
         if is_downsample:
             self.downsample = TtConv2D(
@@ -40,6 +53,7 @@ class TtBottleneck:
                 activation=None,
                 is_blk=blk_sharded,
                 activation_dtype=activation_dtype,
+                fp32_dest_acc=fp32_dest_acc,
             )
 
     def __call__(self, x_identity):

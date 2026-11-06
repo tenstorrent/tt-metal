@@ -18,6 +18,7 @@ class TtConv2D:
         is_blk=False,
         dealloc_act=False,
         act_block_h=None,
+        fp32_dest_acc=True,
     ):
         if is_blk:
             shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -32,8 +33,8 @@ class TtConv2D:
         self.activation_dtype = activation_dtype
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=False,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc_en=fp32_dest_acc,
             packer_l1_acc=False,
             math_approx_mode=True,
         )
