@@ -41,10 +41,37 @@ def test_durations_set_the_weights(tmp_path, monkeypatch):
 
 
 def test_a_test_without_a_duration_weighs_the_mean(tmp_path, monkeypatch):
+    # The mean of 1 s cuts in the middle; a weight of 0 would put only TESTS[0]
+    # in the first half.
     path = tmp_path / "blackhole.json"
-    path.write_text(json.dumps({TESTS[0]: 1.0, TESTS[1]: 1.0, TESTS[2]: 4.0}))
+    path.write_text(json.dumps({TESTS[0]: 1.0, TESTS[1]: 1.0, TESTS[3]: 1.0}))
     monkeypatch.setenv("LLK_SPLIT_DURATIONS", str(path))
+    assert _cut(_items(*TESTS), 2, 1) == TESTS[:2]
     assert _cut(_items(*TESTS), 2, 2) == TESTS[2:]
+
+
+def test_an_unreadable_durations_file_falls_back_to_the_table(tmp_path, monkeypatch):
+    path = tmp_path / "blackhole.json"
+    path.write_text("{truncated")
+    monkeypatch.setenv("LLK_SPLIT_DURATIONS", str(path))
+    monkeypatch.setattr(
+        TestConfig, "CHIP_ARCH", SimpleNamespace(value="blackhole"), raising=False
+    )
+    monkeypatch.setattr(TestConfig, "SPEED_OF_LIGHT", False, raising=False)
+    assert _cut(_items(*TESTS), 2, 1) == TESTS[:3]
+
+
+def test_a_durations_file_that_is_not_an_object_falls_back_to_the_table(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "blackhole.json"
+    path.write_text(json.dumps([1, 2, 3]))
+    monkeypatch.setenv("LLK_SPLIT_DURATIONS", str(path))
+    monkeypatch.setattr(
+        TestConfig, "CHIP_ARCH", SimpleNamespace(value="blackhole"), raising=False
+    )
+    monkeypatch.setattr(TestConfig, "SPEED_OF_LIGHT", False, raising=False)
+    assert _cut(_items(*TESTS), 2, 1) == TESTS[:3]
 
 
 @pytest.mark.parametrize("env", [None, "missing.json"])
@@ -86,8 +113,16 @@ def test_the_run_pass_adds_to_the_compile_pass(tmp_path, monkeypatch):
         _session(tmp_path, 15, [("a::t", 3.0), ("a::t", 1.5), ("b::t", 15.0)])
     )
     assert json.loads(Path(".test_durations").read_text()) == pytest.approx(
-        {"a::t": 1.3, "b::t": 1.0}
+        {"a::t": 10.0 / 10 + (3.0 + 1.5) / 15, "b::t": 15.0 / 15}
     )
+
+
+def test_no_terminal_reporter_stores_nothing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    session = _session(tmp_path, 1, [("a::t", 1.0)])
+    session.config.pluginmanager.get_plugin = lambda name: None
+    plugin._store_split_durations(session)
+    assert not Path(".test_durations").exists()
 
 
 def test_a_compile_pass_starts_a_new_file(tmp_path, monkeypatch):
