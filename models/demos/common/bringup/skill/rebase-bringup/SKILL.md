@@ -74,6 +74,8 @@ parity builder alike, with the same topology / semaphore ids where possible; the
   suite (perf files included), model cases and original-op tests. Fix tests that read old internals (wire layouts,
   removed fields). Done when it reports fork_suite_failed == 0; a failure is never accepted because step 1 had it
   too (owner, 2026-10-27), only fixed or owner-waived. Compare its skips with step 1's: a new skip is a finding.
+  F256: a test for another box's mesh is skipped ("box: needs mesh RxC (this box RxC)", fork_suite_skipped_box),
+  never run; those are the other boxes' to run.
 - Call signatures (`sig`) in `tests/cases.py` and the models' `results/fork_calls.json` change when a shared config
   type gains fields or the models' tensors change placement. Re-key them, and check the new signatures against a fresh
   capture of a model on this box, never only by recomputing.

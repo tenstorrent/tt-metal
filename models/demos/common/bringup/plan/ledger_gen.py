@@ -638,6 +638,7 @@ def integrate(spec, add, golden_task: dict, last_swaps: list[str], impl_paths: l
             "fork_cases_lint": "== 0",
             "fork_tests_passed": ">= 0",  # (F198: shown in the gate output, with the skips)
             "fork_tests_skipped": ">= 0",
+            "fork_tests_skipped_box": ">= 0",  # (F256: of the skips, the cases for another box, never run)
         },
         role="optests",
         paths=["ttnn/ttnn/bringup"],
@@ -668,6 +669,7 @@ def integrate(spec, add, golden_task: dict, last_swaps: list[str], impl_paths: l
             "fork_suite_failed": "== 0",
             "fork_suite_passed": ">= 0",
             "fork_suite_skipped": ">= 0",
+            "fork_suite_skipped_box": ">= 0",  # (F256: of the skips, the tests for another box, never run)
             "fork_suite_waived": ">= 0",
         },
         role="optests",

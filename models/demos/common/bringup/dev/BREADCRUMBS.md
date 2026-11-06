@@ -2606,6 +2606,30 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
   signature declares it.
 - Selftest: test_engine_wait.py::test_the_engine_driver_names_its_pipeline_arguments.
 
+## F256: fork tests for another box are skipped with the box as the reason, never run (rebase onto 107f838f379, 2026-11-06)
+- Problem: the fork suite on a Galaxy 8x4 (32 chips) ran every fork test whatever its mesh. 155 of its 219 failures
+  were 2x2 / 1x4 / 4x1 / 2x4 / 4x2 unit tests and 2x2 model cases opened with all 32 chips visible (Fabric Router
+  Sync: Timeout), 3 more were ernie45 1x4 cases run on TT_VISIBLE_DEVICES=0,1,2,3 (`requested_size <= system_size`);
+  other 2x2 tests skipped on the stock "requires exact match of requested num devices" message. Owner: "the box
+  cases should just check and run on a correct box".
+- Fix: the box is the spec's box.mesh (fork_tests.box_of; fork_suite / fork_cases --run-tests / fork_tests --spec,
+  default $BRINGUP_SPEC). A test's mesh is its case's `mesh` (model cases), else its `mesh_device` pytest param, read
+  off the collected item by a collect-only plugin (fork_tests.pytest_collection_finish, `collect_needs`: a (rows,
+  cols) tuple; an int N is a 1xN line matched by device count). A test whose mesh is not the box's (the transpose
+  counts as the box: open_mesh_device rotates) is skipped, never run: "box: needs mesh RxC (this box RxC)", counted
+  under skipped and skipped_box (fork_suite_skipped_box / fork_tests_skipped_box, in the F.1 / O.1 gate output). A
+  param that is neither is not guessed: the test runs as before and is listed ("box unknown"). No spec, no box: as
+  before. The source part (stock tests) is not filtered.
+- Subset runs: a case of a smaller mesh on a bigger box (1x4 / 4x2 on TT_VISIBLE_DEVICES subsets of the Galaxy, which
+  mostly passed) is a box skip too: a case is a capture of its own box, which runs it; a subset of a Galaxy is not
+  that box (the 1x4 subset failed requested_size, a 2x2 has no subset at all). A test that does run on a submesh of
+  a bigger box says so: `submesh_ok: True` in its case, or `BRINGUP_SUBMESH_OK = True` in a unit module; it then
+  runs as before (cases: on the cards cards.py finds for its mesh). On the Galaxy run this turns the 158 failures
+  into box skips, and about 143 case passes (94 4x2, 12 1x4, 37 2x2) and 192 exact-count skips become box skips.
+- Selftest: test_fork_box.py (a 2x2 case on an 8x4 spec is skipped with the reason and never run, an 8x4 case runs,
+  a submesh_ok case runs on its cards, the suite summary's skipped_box tally, unit meshes read from the
+  mesh_device param).
+
 ## F257: `dgen_engine find` ignored the spec (rebase onto 107f838f379, 2026-11-06)
 - Problem: the CLI called find_build() without a spec, so it looked at /localdev/$USER/tt-d-gen while the runner
   tests (with the spec's serving.server_repo) found the engine; "not found" for a working setup.

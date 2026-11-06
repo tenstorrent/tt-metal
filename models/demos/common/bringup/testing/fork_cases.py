@@ -15,10 +15,12 @@
 - ``--run-tests``: runs the tests of every fork the model uses through ``fork_tests.py`` (each case's mesh on the cards
   of this box that form it), every model's cases included (the top-level tests/test_*.py; a fork's own unit suite in
   tests/unit/ is not run). F198: a fork without a case file counts as failed and the others still run; every test is
-  counted (passed / failed / errors / skipped with its reason / not run) and listed per fork.
+  counted (passed / failed / errors / skipped with its reason / not run) and listed per fork. F256: a case whose mesh
+  is not the spec's box (box.mesh) is skipped, never run ("box: needs mesh RxC (this box RxC)"), unless it declares
+  ``submesh_ok: True``.
 Records forks_used, fork_calls, fork_calls_uncovered, fork_tests_failed (failed + errors + not run + collection errors +
-forks with no case file), fork_tests_passed, fork_tests_skipped and fork_tests_not_run (a gate wants 0 uncovered and 0
-failed) and prints what is missing.
+forks with no case file), fork_tests_passed, fork_tests_skipped (fork_tests_skipped_box of them for another box) and
+fork_tests_not_run (a gate wants 0 uncovered and 0 failed) and prints what is missing.
 
 F139 (owner rules, as F80 per step): a math case's limit is never a number read off the device's own error.
 ``noise_limit(fn_ref, inputs, dtypes)`` gives it: the torch reference at the op's real input formats (bf16 / bfp8 /
@@ -31,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import runpy
 import sys
@@ -169,15 +172,15 @@ def check(capture: Path | list[Path], model: str) -> tuple[dict, dict[str, list[
     }, missing
 
 
-def run_tests(forks: list[str], runner=None, grouper=None) -> dict[str, dict]:
+def run_tests(forks: list[str], runner=None, grouper=None, box=None) -> dict[str, dict]:
     """The model-case tests of each fork (the top-level tests/test_*.py; an op's own unit suite in tests/unit/ is not
     part of the pass), grouped by each case's mesh and run on the cards of this box that form it (fork_tests.py /
     cards.py). F198: a fork with no case file is a failure of its own, and every other fork still runs; the tally
-    counts each test (fork_tests.run)."""
+    counts each test (fork_tests.run). F256: ``box`` (rows, cols): a case for another mesh is a box skip."""
     from models.demos.common.bringup.testing import fork_tests as FT
 
     no_cases = [f for f in forks if not list((FORKS / f / "tests").glob("test_*.py"))]
-    tallies = FT.run([f for f in forks if f not in no_cases], runner=runner, grouper=grouper)
+    tallies = FT.run([f for f in forks if f not in no_cases], runner=runner, grouper=grouper, box=box)
     for f in no_cases:
         t = tallies[f] = FT.empty_tally()
         t["collect_errors"] = 1
@@ -193,6 +196,7 @@ def tally_stats(tallies: dict[str, dict]) -> dict:
         "fork_tests_passed": tot("passed"),
         "fork_tests_failed": sum(FT.bad(t) for t in tallies.values()),
         "fork_tests_skipped": tot("skipped"),
+        "fork_tests_skipped_box": sum(t.get("skipped_box", 0) for t in tallies.values()),
         "fork_tests_not_run": tot("not_run") + tot("collect_errors"),
     }
 
@@ -231,9 +235,11 @@ def main(argv=None) -> int:
             print(f"FAIL case lint: {e}")
         stats["fork_cases_lint"] = len(bad)
     if a.run_tests and res["forks"]:
-        from models.demos.common.bringup.testing.fork_tests import report
+        from models.demos.common.bringup.testing.fork_tests import box_of, report
 
-        tallies = run_tests(res["forks"])
+        box = box_of(spec if spec is not None else os.environ.get("BRINGUP_SPEC"))  # F256
+        print(f"box: {f'{box[0]}x{box[1]}' if box else 'none (no spec): every case runs as before'}")
+        tallies = run_tests(res["forks"], box=box)
         report(tallies)
         stats.update(tally_stats(tallies))
         failed = stats["fork_tests_failed"]
