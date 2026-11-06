@@ -195,6 +195,45 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
     return input_tensor
 
 
+@pytest.mark.requires_grid_size((8, 5))
+@pytest.mark.parametrize(
+    "use_welford",
+    [pytest.param(True, marks=pytest.mark.merge_gate), pytest.param(False)],
+    ids=statistics_backend_ids,
+)
+@pytest.mark.parametrize("n,w", [(10, 128), (20, 64)], ids=["four_cores", "sender_only_mid"])
+def test_group_norm_height_sharded_batch_ends_mid_column(device, use_welford, n, w):
+    torch.manual_seed(0)
+    c, h, groups = 64, 1, 2
+    grid = ttnn.CoreGrid(x=8, y=5)
+    x = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    ref = torch.nn.functional.group_norm(x, groups).permute(0, 2, 3, 1).reshape(n, 1, h * w, c)
+    xt = ttnn.from_torch(
+        x.permute(0, 2, 3, 1).reshape(n, 1, h * w, c),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4))})
+    spec = ttnn.ShardSpec(shard_grid, (32, c), ttnn.ShardOrientation.COL_MAJOR)
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec)
+    xt = ttnn.to_memory_config(xt, mem)
+    # Two or four cores per batch straddle columns of five in COL_MAJOR order.
+    out = ttnn.group_norm(
+        xt, num_groups=groups, memory_config=mem, core_grid=grid, inplace=False, use_welford=use_welford
+    )
+    out = ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)))
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=0.999,
+        rtol=0.01,
+        atol=0.06 if use_welford else 0.09,
+        frobenius_threshold=0.015 if use_welford else 0.035,
+    )
+
+
 @pytest.mark.parametrize("N, C, H, W, num_groups", HEIGHT_SHARDED_SHAPES)
 @pytest.mark.parametrize(
     "use_welford",

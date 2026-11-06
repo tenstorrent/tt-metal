@@ -29,6 +29,7 @@ from models.tt_dit.solvers import solver_for_scheduler
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.conv3d import conv3d_configs
 from models.tt_dit.utils.dbcache import DBCacheConfig
+from models.tt_dit.utils.hf_local_mirror import ensure_cached
 from models.tt_dit.utils.tensor import float32_tensor
 from models.tt_dit.utils.torch_threads import cap_torch_threads_to_half_the_cpus
 from models.tt_dit.utils.tracing import Tracer
@@ -269,7 +270,7 @@ class WanPipelineConfig:
             num_frames=num_frames,
             cfg_enabled=cfg_enabled,
             max_sequence_length=max_sequence_length,
-            checkpoint_name=checkpoint_name,
+            checkpoint_name=ensure_cached(checkpoint_name),
             cache_config=WanDBCacheConfig.coerce(cache_config) if cache_config is not None else None,
         )
 

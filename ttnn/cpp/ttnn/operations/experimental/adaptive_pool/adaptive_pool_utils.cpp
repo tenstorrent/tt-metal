@@ -202,6 +202,8 @@ bool validate_pooling_params_uniformity(
 
 // Validation function to check if adaptive pooling approach is feasible
 void validate_adaptive_pool_feasibility(uint32_t input_h, uint32_t input_w, uint32_t output_h, uint32_t output_w) {
+    TT_FATAL(
+        output_h > 0 && output_w > 0, "Adaptive pool output_size must be non-zero, got ({}, {})", output_h, output_w);
     auto [h_kernels, w_kernels] = calculate_actual_kernel_patterns(input_h, input_w, output_h, output_w);
 
     // Check kernel pattern correctability

@@ -59,7 +59,7 @@ from helpers.test_variant_parameters import (
     USE_RUNTIME,
 )
 from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES_C_DIM
-from helpers.tilize_untilize import tilize, untilize
+from helpers.tilize_untilize import tilize_block, untilize_block
 
 # Tiles are 32 columns wide: 32x32 (4 faces) or a 16x32 tiny tile (2 faces, one face-row).
 TILE_DIM = 32
@@ -181,19 +181,13 @@ def _run_reduce_block_max(
     )
 
     # Device operand is tilized per tile (the layout the C++ reads from L1).
-    src_A = torch.cat(
-        [
-            tilize(
-                src_A_rowmajor.reshape(tile_rows, block_ct_dim * TILE_DIM)[
-                    :, t * TILE_DIM : (t + 1) * TILE_DIM
-                ].reshape(-1),
-                formats.input_format,
-                num_faces=num_faces,
-                tile_dimensions=tile_dimensions,
-            )
-            for t in range(block_ct_dim)
-        ]
-    )
+    src_A = tilize_block(
+        src_A_rowmajor,
+        dimensions,
+        formats.input_format,
+        num_faces=num_faces,
+        tile_dimensions=tile_dimensions,
+    ).flatten()
     # Scaler B: a single tile of 1.0 (F0 holds the scaler; the op multiplies by it).
     src_B = torch.ones(elements_per_tile, dtype=torch.bfloat16)
 
@@ -256,11 +250,13 @@ def _run_reduce_block_max(
     golden_rowmajor = golden_flat.reshape(tile_rows, block_ct_dim * TILE_DIM)
 
     # Untilize the device output tile to row-major so both sides share layout.
-    res = untilize(
+    res = untilize_block(
         torch.tensor(res_from_L1, dtype=torch.float32),
         formats.output_format,
+        dimensions=tile_dimensions,
         tile_dimensions=tile_dimensions,
-    ).reshape(tile_rows, TILE_DIM)
+        num_faces=num_faces,
+    )
 
     # Only column [0] of each physical row is defined (the row-max); the packer's
     # REDUCE_ROW mask leaves every other lane unspecified. The stimulus is an integer

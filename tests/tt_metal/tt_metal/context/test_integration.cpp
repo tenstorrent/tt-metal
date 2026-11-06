@@ -400,14 +400,9 @@ void RunCoexistingMockAndSiliconDevice(bool expect_profiler) {
 // Shared body: open two mock meshes first, then the real silicon mesh last. When `expect_profiler`
 // is set, also check the profiler stays on for silicon but is skipped for mock.
 void RunCoexistingSiliconAndMockDevice(bool expect_profiler) {
-    // BuildEnvManager is a process-global singleton whose kernel/firmware build-state index tables
-    // are sized once from the HAL of whichever context first triggers add_build_env(). When the
-    // mock arch differs from the silicon arch (e.g. mock-BH on a WH runner), the second context
-    // ends up indexing a wrong-sized table and JIT'd kernels reference incorrect dispatch
-    // addresses, causing silicon dispatch to hang. Forge's real flow is same-arch coexistence
-    // (mock used as a compile-time stand-in for the live silicon), so probe the silicon arch and
-    // create the mock to match. Cross-arch coexistence is a separate `BuildEnvManager`-singleton
-    // limitation tracked outside #38445.
+    // Forge's real flow is same-arch coexistence (mock used as a compile-time stand-in for the live
+    // silicon), so probe the silicon arch and create the mock to match. Cross-arch coexistence
+    // (e.g. mock-BH on a WH runner) is not covered by this test.
     tt::ARCH silicon_arch;
     {
         MetalEnv probe;

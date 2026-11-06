@@ -1452,3 +1452,21 @@ def test_scale_mask_softmax_causal_mask_height_differs_from_width(device, op, ba
         atol=0.01,
         frobenius_threshold=0.05,
     )
+
+
+@pytest.mark.parametrize("scale", [0.1, 128**-0.5])
+def test_scale_mask_softmax_scale_not_exact_in_float32(device, scale):
+    torch.manual_seed(0)
+    torch_input = torch.randn((1, 1, 64, 128), dtype=torch.bfloat16)
+    mask = torch.where(torch.rand((1, 1, 1, 128)) > 0.5, 0.0, -10000.0)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.to_torch(ttnn.scale_mask_softmax(ttnn_input, scale, ttnn_mask)).float()
+    expected = ttnn.to_torch(
+        ttnn.scale_mask_softmax(ttnn_input, torch.tensor(scale, dtype=torch.float32).item(), ttnn_mask)
+    ).float()
+    torch_output = torch.softmax(torch_input.float() * scale + mask, dim=-1)
+
+    assert torch.equal(output, expected)
+    assert torch.allclose(output, torch_output, atol=1e-2)

@@ -64,7 +64,8 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const std::optional<GlobalSemaphore>& final_arrived_semaphore = std::nullopt,
     const std::optional<GlobalSemaphore>& expert_go_semaphore = std::nullopt,
     const std::optional<ttnn::Tensor>& forwarding_buffer = std::nullopt,
-    const std::vector<GlobalSemaphore>& channel_semaphores = {});
+    const std::vector<GlobalSemaphore>& channel_semaphores = {},
+    const std::optional<ttnn::Tensor>& weight_address_table = std::nullopt);
 
 // How many `channel_semaphores` the overlap needs on this mesh. Create that many once, before the first
 // overlapped forward, and pass the same ones every call -- combine's channel credits cross chips and

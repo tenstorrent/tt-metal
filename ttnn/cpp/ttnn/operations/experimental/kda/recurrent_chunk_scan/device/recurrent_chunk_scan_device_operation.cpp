@@ -72,6 +72,7 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         check_output_interleaved(attrs.output_mem_config, operation_name);
     }
     check_compute_config(attrs.compute_kernel_config, operation_name);
+    check_fp32_dest_acc(attrs.compute_kernel_config, operation_name);
     TT_FATAL(attrs.batch_heads > 0, "{}: batch_heads must be positive", operation_name);
     TT_FATAL(attrs.num_chunks > 0, "{}: num_chunks must be positive", operation_name);
     TT_FATAL(attrs.groups_per_head > 0, "{}: groups_per_head must be positive", operation_name);
@@ -117,7 +118,8 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         TT_FATAL(!in.group_entry_states.has_value(), "{}: group_entry_states is not accepted", operation_name);
         TT_FATAL(K == V, "{}: K must equal V", operation_name);
         check_summary_memory_layout(attrs.output_mem_config, operation_name, "memory_config");
-        // The summary publishes one tile row of a core's value block per destination-register packet.
+        // Per-core value blocks wider than DST are not validated on device, and nothing checks that their FP32
+        // state ring, carry and value buffers fit L1, so they stay rejected.
         const auto distribution = kda_factory_detail::distribute_value_blocks(
             in.v_beta.device()->compute_with_storage_grid_size(), BH, V / tt::constants::TILE_WIDTH);
         const uint32_t dest_tiles = ttnn::get_dest_reg_count(attrs.compute_kernel_config);
@@ -176,18 +178,17 @@ RecurrentChunkScanOperation::create_op_performance_model(
         work = {
             .fpu_matrix_flops = instances * (6.0 * chunk * key_dim * value_dim + 4.0 * chunk * chunk * value_dim),
             .fpu_multiply_ops = instances * key_dim * value_dim,
-            .fpu_add_ops = instances * (2.0 * chunk * value_dim + key_dim * value_dim),
+            // v_beta - kd S and the output add. The state update's matmul accumulates in DST and the packer adds the
+            // change onto the state in L1, so neither is an FPU add.
+            .fpu_add_ops = instances * 2.0 * chunk * value_dim,
         };
     } else {
-        // The runtime scalar is not read back by the host. Bound the extra
-        // head transform by one split group per head. Restart seeds are
-        // assignments; only extracting the additional A = (A + B) - B adds work.
-        const double possible_split_heads = batch_heads / attrs.groups_per_head;
+        // As in the recurrence, the state update adds no FPU work beyond its matmul and multiply; publishing
+        // A = (A + B) - B is an SFPU subtraction, which this FPU model does not count.
         work = {
             .fpu_matrix_flops = instances * (8.0 * chunk * key_dim * value_dim + 4.0 * chunk * chunk * value_dim),
             .fpu_multiply_ops = instances * 2.0 * key_dim * value_dim,
-            .fpu_add_ops = instances * (2.0 * chunk * value_dim + 2.0 * key_dim * value_dim) +
-                           batch_heads * key_dim * value_dim + possible_split_heads * key_dim * value_dim,
+            .fpu_add_ops = instances * 2.0 * chunk * value_dim,
         };
     }
     std::vector<const Tensor*> inputs = {

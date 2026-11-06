@@ -4,9 +4,13 @@
 
 #include "all_gather_unicast_factory.hpp"
 
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/descriptor_runtime_args.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::ccl {
@@ -24,56 +28,9 @@ using namespace ::ttnn::ccl;
 // cores. Two semaphores: barrier_sem (init handshake) and data_valid_sem (relay gate + completion).
 ////////////////////////////////////////////////////////////////
 
-AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_mesh_workload(
-    const AllGatherParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const AllGatherInputs& tensor_args,
-    Tensor& output_tensor) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+namespace {
 
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
-    if (operation_attributes.sub_core_grid.has_value()) {
-        available_cores = available_cores.intersection(operation_attributes.sub_core_grid.value());
-    }
-    ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
-
-    // Kernel needs to wait to receive all remote data before exiting, and in some cases needs to wait
-    // for all remote devices to be ready before beginning operation.
-    // Since Fabric doesn't provide such capability within kernels, we need to manually sync using global semaphores.
-    // Allocate the semaphore in L1_SMALL to avoid fragmenting the larger L1 memory pool.
-    // Two semaphores:
-    // - barrier_sem: one-shot init handshake ("I'm alive") to the neighbor.
-    // - data_valid_sem: chunks upstream has relayed into our output (relay gate + completion).
-    const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
-    ttnn::ccl::warn_if_semaphores_fall_back_to_l1(sem_buffer_type);
-    auto barrier_sem =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
-    auto data_valid_sem =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
-    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
-    log_debug(tt::LogOp, "All devices are ready, starting program execution");
-
-    for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(
-            operation_attributes,
-            coord,
-            tensor_args,
-            output_tensor,
-            barrier_sem,
-            data_valid_sem,
-            available_cores.num_cores());
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
-    }
-
-    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
-}
-
-AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
+tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     const AllGatherParams& operation_attributes,
     const ttnn::MeshCoordinate& sender_device_coord,
     const AllGatherInputs& tensor_args,
@@ -82,7 +39,9 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     const tt::tt_metal::GlobalSemaphore& data_valid_sem,
     uint32_t num_available_cores) {
     const auto& input_tensor = tensor_args.input_tensor;
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor desc;
+    TT_FATAL(input_tensor.is_allocated(), "all_gather unicast requires an allocated input buffer");
+    TT_FATAL(output_tensor.is_allocated(), "all_gather unicast requires an allocated output buffer");
     auto* mesh_device = input_tensor.device();
 
     ////////////////////////////////////////////////////////////////
@@ -240,8 +199,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
 
     // Reader/writer kernels + CB run on worker cores only; the mux kernel runs on its own cores (created only
     // for a direction that has a neighbor).
-    std::vector<CoreCoord> worker_cores;
-    worker_cores.reserve(num_links * num_directions * workers_per_dir);
     std::set<CoreRange> worker_core_set;
     std::set<CoreRange> mux_core_set;
     for (uint32_t link = 0; link < num_links; ++link) {
@@ -250,7 +207,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                 mux_core_set.emplace(mux_core(link, dir));
             }
             for (uint32_t w = 0; w < workers_per_dir; ++w) {
-                worker_cores.push_back(worker_core(link, dir, w));
                 worker_core_set.emplace(worker_core(link, dir, w));
             }
         }
@@ -269,18 +225,37 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         /*buffer_size_bytes_full_size_channel=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device),
         /*base_l1_address=*/0);
 
-    tt::tt_metal::KernelHandle mux_kernel_id = 0;
+    const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+
     if (use_mux && mux_core_range.num_cores() > 0) {
-        mux_config.place_in_program_local_l1(program, mux_core_range);
-        mux_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-            mux_core_range,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = mux_config.get_fabric_mux_compile_time_args(),
-                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+        mux_config.place_in_program_local_l1(desc, mux_core_range);
+        tt::tt_metal::KernelDescriptor mux_kernel_desc{
+            .kernel_source = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+            .core_ranges = mux_core_range,
+            .compile_time_args = mux_config.get_fabric_mux_compile_time_args(),
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3,
+            .config =
+                tt::tt_metal::DataMovementConfigDescriptor{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt::tt_metal::NOC::RISCV_0_default,
+                },
+        };
+        // Mux runtime args: one fabric connection per active direction per link, to that direction's neighbor. The
+        // direction's workers all feed this one connection.
+        for (uint32_t link = 0; link < num_links; ++link) {
+            for (uint32_t dir = 0; dir < num_directions; ++dir) {
+                if (!dir_active(dir)) {
+                    continue;
+                }
+                const CoreCoord mux_core_coord = mux_core(link, dir);
+                const auto dst_node = mesh_device->get_fabric_node_id(*dir_neighbor(dir));
+                mux_kernel_desc.runtime_args.emplace_back(
+                    mux_core_coord,
+                    mux_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
+                        sender_fabric_node_id, dst_node, link, desc, mux_core_coord));
+            }
+        }
+        desc.kernels.push_back(std::move(mux_kernel_desc));
     }
 
     ////////////////////////////////////////////////////////////////
@@ -404,9 +379,15 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Input and relay CB
     uint32_t cb0_id = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(cb_depth * cb_page_size, {{cb0_id, df}}).set_page_size(cb0_id, cb_page_size);
-    CreateCircularBuffer(program, worker_core_range, cb_src0_config);
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = cb_depth * cb_page_size,
+        .core_ranges = worker_core_range,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb0_id),
+            .data_format = df,
+            .page_size = cb_page_size,
+        }}},
+    });
 
     // data_valid_granularity:
     // data_valid is signalled once per this many CB pages so a downstream can start relaying before the whole
@@ -451,23 +432,29 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
 
     // When multiple workers share a fabric mux, the writer connects through it: append the mux geometry (after
     // the tensor-accessor args) and switch the kernel onto its USE_WORKER_MUX path.
-    std::map<std::string, std::string> writer_defines;
+    tt::tt_metal::KernelDescriptor::Defines writer_defines;
     if (use_mux) {
         ttnn::ccl::fabric_mux_connection_ct_args(
             workers_per_dir, tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL, mux_config, writer_compile_args);
-        writer_defines["USE_WORKER_MUX"] = "1";
+        writer_defines.emplace_back("USE_WORKER_MUX", "1");
     }
 
-    auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_reader.cpp",
-        worker_core_range,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
-    auto writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_writer.cpp",
-        worker_core_range,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_args, writer_defines));
+    const auto reader_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+    desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
+        .kernel_source = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_reader.cpp",
+        .core_ranges = worker_core_range,
+        .compile_time_args = std::move(reader_compile_args),
+        .config = tt::tt_metal::ReaderConfigDescriptor{},
+    });
+
+    auto writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+    desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
+        .kernel_source = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_writer.cpp",
+        .core_ranges = worker_core_range,
+        .compile_time_args = std::move(writer_compile_args),
+        .defines = std::move(writer_defines),
+        .config = tt::tt_metal::WriterConfigDescriptor{},
+    });
 
     ////////////////////////////////////////////////////////////////
     // Runtime args
@@ -478,26 +465,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // worker w on the neighbor.
     ////////////////////////////////////////////////////////////////
 
-    const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
-    const uint32_t input_addr = input_tensor.buffer()->address();
-    const uint32_t output_addr = output_tensor.buffer()->address();
-
-    // Mux runtime args: one fabric connection per active direction per link, to that direction's neighbor. The
-    // direction's workers all feed this one connection.
-    if (use_mux) {
-        for (uint32_t link = 0; link < num_links; ++link) {
-            for (uint32_t dir = 0; dir < num_directions; ++dir) {
-                if (!dir_active(dir)) {
-                    continue;
-                }
-                const CoreCoord mux_core_coord = mux_core(link, dir);
-                const auto dst_node = mesh_device->get_fabric_node_id(*dir_neighbor(dir));
-                auto mux_rt_args = mux_config.get_fabric_mux_run_time_args(
-                    sender_fabric_node_id, dst_node, link, program, mux_core_coord);
-                tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_core_coord}, mux_rt_args);
-            }
-        }
-    }
+    const uint32_t barrier_sem_addr = barrier_sem.address();
+    const uint32_t data_valid_sem_addr = data_valid_sem.address();
 
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t w = 0; w < workers_per_dir; ++w) {
@@ -554,9 +523,10 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                 const uint32_t total_chunks = num_recv * num_worker_output_chunks -
                                               (ring_even_split ? (num_worker_output_chunks - final_count) : 0);
 
+                // Slots 0 and 1 are tensor addresses; emplace replaces the placeholders with Buffer*.
                 std::vector<uint32_t> reader_rt_args = {
-                    input_addr,                // input tensor address
-                    output_addr,               // output tensor address
+                    0u,                        // input tensor address (Buffer* binding)
+                    0u,                        // output tensor address (Buffer* binding)
                     device_idx,                // this device's index (initial stripe)
                     stripe_step,               // stripe index step per iteration
                     num_iters,                 // iterations this direction runs
@@ -567,16 +537,22 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                     final_count,               // last-iteration slice length (even-ring split)
                     input_tile_id_start,       // local data: input page start
                     input_tile_id_end,         // local data: input page end
-                    barrier_sem.address(),     // barrier_sem L1 address
-                    data_valid_sem.address(),  // data_valid_sem L1 address
+                    barrier_sem_addr,          // smuggled-rta-ok: workload-scoped GlobalSemaphore
+                    data_valid_sem_addr,       // smuggled-rta-ok: workload-scoped GlobalSemaphore
                 };
-                tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
+                emplace_runtime_args_with_leading_buffers(
+                    desc.kernels[reader_kernel_id],
+                    core,
+                    {input_tensor.buffer(), output_tensor.buffer()},
+                    reader_rt_args);
 
                 // route for Fabric_2D
                 const auto route_node =
                     neighbor.has_value() ? mesh_device->get_fabric_node_id(*neighbor) : sender_fabric_node_id;
+                // Slot 0 is the output address; emplace replaces the placeholder with Buffer* after the fabric
+                // helpers append their words.
                 std::vector<uint32_t> writer_rt_args = {
-                    output_addr,                      // output tensor address
+                    0u,                               // output tensor address (Buffer* binding)
                     device_idx,                       // this device's index (initial stripe)
                     stripe_step,                      // stripe index step per iteration
                     num_iters,                        // iterations this direction runs
@@ -585,8 +561,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                     final_start,                      // last-iteration slice start (even-ring split)
                     final_count,                      // last-iteration slice length (even-ring split)
                     do_local_write ? 1u : 0u,         // write local data into local output on iteration 0
-                    barrier_sem.address(),            // barrier_sem L1 address
-                    data_valid_sem.address(),         // data_valid_sem L1 address
+                    barrier_sem_addr,                 // smuggled-rta-ok: workload-scoped GlobalSemaphore
+                    data_valid_sem_addr,              // smuggled-rta-ok: workload-scoped GlobalSemaphore
                     (uint32_t)partner_core.x,         // barrier_sem target (neighbor partner core x)
                     (uint32_t)partner_core.y,         // barrier_sem target (neighbor partner core y)
                     (uint32_t)mirror_core.x,          // data_valid_sem target (neighbor mirror core x)
@@ -610,67 +586,82 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                             /*worker_id=*/w,
                             core,
                             mux_config,
-                            program,
+                            desc,
                             term_master_vc,
                             writer_rt_args);
                     } else {
                         std::vector<tt::tt_fabric::FabricNodeId> dst = {mesh_device->get_fabric_node_id(*neighbor)};
-                        append_routing_plane_connection_manager_rt_args(
+                        tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                            *mesh_device,
                             sender_fabric_node_id,
                             dst,
                             {link},
-                            program,
+                            desc,
                             writer_kernel_id,
-                            {core},
+                            core,
                             writer_rt_args,
                             tt::tt_fabric::FabricApiType::Linear);
                     }
                 }
-                tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt_args);
+                emplace_runtime_args_with_leading_buffers(
+                    desc.kernels[writer_kernel_id], core, {output_tensor.buffer()}, writer_rt_args);
             }
         }
     }
 
-    shared_variables_t shared_variables{
-        .worker_cores = worker_cores,
-        .reader_kernel_id = reader_kernel_id,
-        .writer_kernel_id = writer_kernel_id,
-        .barrier_sem = barrier_sem,
-        .data_valid_sem = data_valid_sem,
-    };
-
-    return {std::move(program), std::move(shared_variables)};
+    return desc;
 }
 
-void AllGatherUnicastFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const AllGatherParams& /*operation_attributes*/,
+}  // namespace
+
+tt::tt_metal::WorkloadDescriptor AllGatherUnicastFactory::create_workload_descriptor(
+    const AllGatherParams& operation_attributes,
     const AllGatherInputs& tensor_args,
-    Tensor& output_tensor) {
-    const uint32_t input_addr = tensor_args.input_tensor.buffer()->address();
-    const uint32_t output_addr = output_tensor.buffer()->address();
+    Tensor& output_tensor,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
 
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-        const uint32_t barrier_addr = shared_vars.barrier_sem.address();
-        const uint32_t data_valid_addr = shared_vars.data_valid_sem.address();
-
-        auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
-        auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
-        for (const auto& core : shared_vars.worker_cores) {
-            // reader: [0]=input_addr, [1]=output_addr, [12]=barrier_sem, [13]=data_valid_sem
-            auto& reader_args = reader_args_by_core[core.x][core.y];
-            reader_args[0] = input_addr;
-            reader_args[1] = output_addr;
-            reader_args[12] = barrier_addr;
-            reader_args[13] = data_valid_addr;
-            // writer: [0]=output_addr, [9]=barrier_sem, [10]=data_valid_sem
-            auto& writer_args = writer_args_by_core[core.x][core.y];
-            writer_args[0] = output_addr;
-            writer_args[9] = barrier_addr;
-            writer_args[10] = data_valid_addr;
-        }
+    auto* mesh_device = tensor_args.input_tensor.device();
+    auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    if (operation_attributes.sub_core_grid.has_value()) {
+        available_cores = available_cores.intersection(operation_attributes.sub_core_grid.value());
     }
+    ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
+
+    // Kernel needs to wait to receive all remote data before exiting, and in some cases needs to wait
+    // for all remote devices to be ready before beginning operation.
+    // Since Fabric doesn't provide such capability within kernels, we need to manually sync using global semaphores.
+    // Allocate the semaphore in L1_SMALL to avoid fragmenting the larger L1 memory pool.
+    // Two semaphores:
+    // - barrier_sem: one-shot init handshake ("I'm alive") to the neighbor.
+    // - data_valid_sem: chunks upstream has relayed into our output (relay gate + completion).
+    const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
+    ttnn::ccl::warn_if_semaphores_fall_back_to_l1(sem_buffer_type);
+    workload_descriptor.semaphores.push_back(
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type));
+    workload_descriptor.semaphores.push_back(
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type));
+    const auto& barrier_sem = workload_descriptor.semaphores[0];
+    const auto& data_valid_sem = workload_descriptor.semaphores[1];
+    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
+    log_debug(tt::LogOp, "All devices are ready, starting program execution");
+
+    workload_descriptor.programs.reserve(tensor_coords.coords().size());
+    for (const auto& coord : tensor_coords.coords()) {
+        auto desc = build_unicast_descriptor_at(
+            operation_attributes,
+            coord,
+            tensor_args,
+            output_tensor,
+            barrier_sem,
+            data_valid_sem,
+            available_cores.num_cores());
+        workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+    }
+
+    return workload_descriptor;
 }
 
 }  // namespace ttnn::operations::ccl

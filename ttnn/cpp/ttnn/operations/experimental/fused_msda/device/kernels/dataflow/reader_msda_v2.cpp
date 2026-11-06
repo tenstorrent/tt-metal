@@ -36,6 +36,9 @@ constexpr auto value_args = TensorAccessorArgs<MSDA_TENSOR_ACCESSOR_ARG_BASE>();
 constexpr auto attn_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
 constexpr auto off_args = TensorAccessorArgs<attn_args.next_compile_time_args_offset()>();
 constexpr auto ref_args = TensorAccessorArgs<off_args.next_compile_time_args_offset()>();
+#ifdef MSDA_DEVICE_COUNTS
+constexpr auto counts_args = TensorAccessorArgs<ref_args.next_compile_time_args_offset()>();
+#endif
 
 static_assert(NUM_REFS > 0, "V2 reader requires R > 0");
 static_assert(FROM_OFFSETS, "V2 reader must be built with the from-offsets frontend");
@@ -172,11 +175,17 @@ void kernel_main() {
     ref_scratch_cb.reserve_back(TILE_MAX_ROWS * NUM_REFS);
 
     ReferencePlusOffset loc_src{
-        .off_acc = TensorAccessor(off_args, off_addr, loc_stick_nbytes),
+        .off_acc = TensorAccessor(off_args, off_addr, loc_page_nbytes),
         .ref_acc = TensorAccessor(ref_args, ref_addr, ref_stick_nbytes),
         .off_arena_l1 = off_arena_l1,
         .ref_arena_l1 = ref_scratch_cb.get_write_ptr(),
     };
 
+#ifdef MSDA_DEVICE_COUNTS
+    // Counts are uint32, so the page is B * 4 bytes.
+    const auto counts_acc = TensorAccessor(counts_args, get_arg_val<uint32_t>(4), MSDA_BATCH * sizeof(uint32_t));
+    fused_msda::reader_main(value_acc, attn_acc, loc_src, counts_acc);
+#else
     fused_msda::reader_main(value_acc, attn_acc, loc_src);
+#endif
 }

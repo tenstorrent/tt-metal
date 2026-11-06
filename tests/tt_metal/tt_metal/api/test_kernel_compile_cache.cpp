@@ -26,6 +26,7 @@
 // Access to internal API: ProgramImpl::get_kernels, MeshDeviceImpl
 #include "impl/program/program_impl.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_context.hpp"
 
 using namespace tt::tt_metal;
 
@@ -49,11 +50,11 @@ TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentPr
         const int riscv_0_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(config_riscv_0.processor);
         const int riscv_1_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(config_riscv_1.processor);
         const JitBuildState& build_state_riscv_0 =
-            BuildEnvManager::get_instance(mesh_device->impl().get_context_id())
-                .get_kernel_build_state(mesh_device->build_id(), tensix_core_type, dm_class_idx, riscv_0_id);
+            mesh_device->impl().metal_context().build_env_manager().get_kernel_build_state(
+                mesh_device->build_id(), tensix_core_type, dm_class_idx, riscv_0_id);
         const JitBuildState& build_state_riscv_1 =
-            BuildEnvManager::get_instance(mesh_device->impl().get_context_id())
-                .get_kernel_build_state(mesh_device->build_id(), tensix_core_type, dm_class_idx, riscv_1_id);
+            mesh_device->impl().metal_context().build_env_manager().get_kernel_build_state(
+                mesh_device->build_id(), tensix_core_type, dm_class_idx, riscv_1_id);
 
         const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
         const std::string full_kernel_name_riscv_0 = kernels.at(kernel_handle_riscv_0)->get_full_kernel_name();

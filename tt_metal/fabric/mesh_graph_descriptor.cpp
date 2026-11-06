@@ -22,13 +22,10 @@
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <enchantum/enchantum.hpp>
 
 #include <google/protobuf/text_format.h>
-#include <google/protobuf/io/zero_copy_stream_impl.h>
-#include <unistd.h>
 
 using namespace tt::tt_metal::distributed;
 
