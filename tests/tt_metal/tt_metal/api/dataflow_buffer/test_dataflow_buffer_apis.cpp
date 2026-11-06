@@ -597,4 +597,91 @@ TEST_F(UnitMeshFixture, DataflowBufferExtentApis_2Sx4A_ConsumerEachTC) {
         });
 }
 
+// SFPU-thread sanity: DM producer -> dfb_in -> SFPU-thread copy -> dfb_out -> DM consumer. The compute
+// kernel is built with DFB_SYNC_ON_SFPU_THREAD, so the SFPU thread does wait_front/pop_front on dfb_in and
+// reserve_back/push_back on dfb_out (and the drain in ~DataflowBuffer). More entries than ring
+// slots, so both rings wrap and stall; param = ring entries (3 does not divide the 8 entries).
+class DataflowBufferSfpuThreadCopy : public UnitMeshFixture, public ::testing::WithParamInterface<uint32_t> {};
+
+TEST_P(DataflowBufferSfpuThreadCopy, DmToSfpuThreadToDm) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "The SFPU thread is Quasar-only";
+    }
+    constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile
+    constexpr uint32_t num_entries = 8;
+    const uint32_t ring_entries = GetParam();
+    const m2::NodeCoord node{0, 0};
+
+    const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries);
+    auto in_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
+
+    const m2::DFBSpecName DFB_IN{"dfb_in"};
+    const m2::DFBSpecName DFB_OUT{"dfb_out"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::KernelSpecName COMPUTE{"compute"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
+
+    m2::DataflowBufferSpec dfb_in{
+        .unique_id = DFB_IN,
+        .entry_size = entry_size,
+        .num_entries = ring_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b};
+    m2::DataflowBufferSpec dfb_out = dfb_in;
+    dfb_out.unique_id = DFB_OUT;
+
+    auto producer = make_dm_dfb_producer(PRODUCER, DFB_IN, IN_TENSOR, num_entries, /*implicit_sync=*/false);
+    disable_implicit_sync_for(producer, DFB_IN);
+    auto consumer = make_dm_dfb_consumer(
+        CONSUMER, DFB_OUT, OUT_TENSOR, num_entries, /*blocked_consumer=*/false, /*implicit_sync=*/false);
+    disable_implicit_sync_for(consumer, DFB_OUT);
+
+    auto compute =
+        make_compute_kernel(COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_sfpu_thread_copy_2_0.cpp");
+    compute.dfb_bindings = {
+        {.dfb_spec_name = DFB_IN, .accessor_name = "in", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+        {.dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+    };
+    compute.compile_time_args = {{"num_entries", num_entries}};
+    compute.compiler_options.defines = {{"DFB_SYNC_ON_SFPU_THREAD", "1"}};
+
+    m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER, COMPUTE}, .target_nodes = node};
+    m2::ProgramSpec spec{
+        .name = "dfb_sfpu_thread_copy",
+        .kernels = {producer, consumer, compute},
+        .dataflow_buffers = {dfb_in, dfb_out},
+        .tensor_parameters =
+            {{.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+             {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()}},
+        .work_units = {wu},
+    };
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+
+    m2::ProgramRunArgs params;
+    const auto dm_args =
+        experimental::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}});
+    params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = PRODUCER, .runtime_arg_values = dm_args},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = CONSUMER, .runtime_arg_values = dm_args},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}, {OUT_TENSOR, std::cref(out_tensor)}};
+    m2::SetProgramRunArgs(program, params);
+
+    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
+        0, 1000000, entry_size * num_entries / sizeof(uint32_t));
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    m2_writeshard_barrier_uint32(this->device(), in_tensor, input);
+
+    LaunchProgram(this->device(), std::move(program));
+
+    std::vector<uint32_t> output;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+    EXPECT_EQ(input, output) << "SFPU-thread DFB copy mismatch, ring_entries=" << ring_entries;
+}
+
+INSTANTIATE_TEST_SUITE_P(RingEntries, DataflowBufferSfpuThreadCopy, ::testing::Values(2u, 3u));
+
 }  // namespace tt::tt_metal
