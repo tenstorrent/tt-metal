@@ -138,6 +138,8 @@ public:
 
     void push_processor(const std::shared_ptr<IGraphProcessor>& processor);
     void pop_processor();
+    // Removes the topmost capture processor, leaving any background processor pushed after it in place.
+    void pop_capture_processor();
 
     bool add_hook(const std::shared_ptr<IGraphHooks>& hook);
 

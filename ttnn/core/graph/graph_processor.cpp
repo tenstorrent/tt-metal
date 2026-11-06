@@ -1298,17 +1298,26 @@ void GraphProcessor::begin_graph_capture(RunMode mode = RunMode::NORMAL) {
     tt::tt_metal::GraphTracker::instance().push_processor(std::make_shared<GraphProcessor>(mode));
 }
 
+namespace {
+// The capture to end. Not simply the top of the stack: the first device opened in a process pushes a background
+// processor (shared-memory tracking) that stays above a capture begun before it.
+tt::tt_metal::IGraphProcessor* top_capture_processor() {
+    const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
+    auto it =
+        std::find_if(processors.rbegin(), processors.rend(), [](const auto& p) { return p->is_capture_processor(); });
+    TT_ASSERT(it != processors.rend(), "No active graph capture to end");
+    return it->get();
+}
+}  // namespace
+
 nlohmann::json GraphProcessor::end_graph_capture() {
-    auto res = tt::tt_metal::GraphTracker::instance().get_processors().back()->end_capture();
-    tt::tt_metal::GraphTracker::instance().pop_processor();
+    auto res = top_capture_processor()->end_capture();
+    tt::tt_metal::GraphTracker::instance().pop_capture_processor();
     return res;
 }
 
 nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::path& report_path) {
-    const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
-    TT_ASSERT(!processors.empty(), "No active graph capture to end");
-
-    auto* processor = dynamic_cast<GraphProcessor*>(processors.back().get());
+    auto* processor = dynamic_cast<GraphProcessor*>(top_capture_processor());
     TT_ASSERT(processor != nullptr, "Current processor is not a GraphProcessor");
 
     // Finalize the graph, then build the report via the shared get_report() path
@@ -1330,7 +1339,7 @@ nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::
     file.close();
     log_info(tt::LogAlways, "Graph report written to: {}", report_path.string());
 
-    tt::tt_metal::GraphTracker::instance().pop_processor();
+    tt::tt_metal::GraphTracker::instance().pop_capture_processor();
     return graph_json;
 }
 

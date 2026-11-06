@@ -43,6 +43,13 @@ void GraphTracker::pop_processor() {
     processors.pop_back();
 }
 
+void GraphTracker::pop_capture_processor() {
+    auto it =
+        std::find_if(processors.rbegin(), processors.rend(), [](const auto& p) { return p->is_capture_processor(); });
+    TT_ASSERT(it != processors.rend(), "No capture processor to pop");
+    processors.erase(std::next(it).base());
+}
+
 bool GraphTracker::add_hook(const std::shared_ptr<IGraphHooks>& new_hook) {
     if (hook) {
         return false;

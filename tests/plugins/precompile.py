@@ -424,6 +424,9 @@ def pytest_runtest_call(item):
             return (yield)
     finally:
         _SESSION.end_collect()
+        if ttnn.graph.is_graph_capture_active():
+            # Every later op would build and skip dispatch, so the real run would execute nothing.
+            pytest.exit(f"precompile dry run: graph capture still active after {item.nodeid}", returncode=3)
 
 
 @pytest.hookimpl(tryfirst=True, wrapper=True)
