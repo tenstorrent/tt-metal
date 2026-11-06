@@ -120,7 +120,7 @@ TINY_TILE_HIGH_THROTTLE = 5
 
 def tiny_tile_high_throttle_params():
     """Tiny tiles at throttle 4 and 5 with high fidelity: init falls back to the unthrottled MOP,
-    and the execute path must then not drive the fidelity phases itself (#63967)."""
+    and the execute path must then not drive the fidelity phases itself."""
     by_in0_r_dim = {}
     for config in TINY_TILES_MATMUL_COMBINATIONS:
         if (

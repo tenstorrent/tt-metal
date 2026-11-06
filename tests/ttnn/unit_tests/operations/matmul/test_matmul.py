@@ -201,7 +201,6 @@ def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, til
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi4])
 @pytest.mark.parametrize("throttle_level", [ttnn.ThrottleLevel.LEVEL_4, ttnn.ThrottleLevel.LEVEL_5])
 def test_matmul_tiny_tiles_throttled(device, tile_h, tile_w, math_fidelity, throttle_level, monkeypatch):
-    # Throttle 4/5 at high fidelity on tiles the throttled MOP cannot serve used to hang the math thread (#63967).
     monkeypatch.delenv("TT_MM_THROTTLE_PERF", raising=False)
     torch.manual_seed(0)
 
