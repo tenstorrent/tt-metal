@@ -106,8 +106,6 @@ std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
         norm_type,
         row_capacity);
 
-    // The stats-buffer geometry depends only on input shape (or row_capacity) / ring size / links /
-    // norm_type (all in params + input_tensor), so no tensor_args are needed here.
     const auto sizing = ttnn::experimental::prim::compute_sizing(params, input_tensor);
     if (!sizing.use_mux) {
         return std::nullopt;
