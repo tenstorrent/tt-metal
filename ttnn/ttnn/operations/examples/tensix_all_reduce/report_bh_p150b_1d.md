@@ -7,8 +7,8 @@ measured 1-D groups but no Blackhole; the Blackhole pass (2026-07-20, commit `c4
 scoped to validating `tree_reduce_mcast`, which is meaningless on a 1-D group, so it measured
 only `2x8`/`8x2`/`4x4`. Blackhole × 1-D was never covered.
 
-Motivation: rms_norm `BLOCK_SHARDED` makes one grid ROW of the shard rectangle one reduction group,
-so its combine groups are 1-D lines of 8 — exactly this topology.
+Motivation: a block-sharded op that combines per grid row has 1-D reduction groups (lines of 8 on an
+8-wide shard grid) — exactly this topology.
 
 ## Full variant comparison at 8 tiles/core
 
@@ -91,12 +91,12 @@ The 16-tile cell in the payload sweep above was left unmeasured in the first rev
 report, pending this mechanism being pinned down; see `5ac64b6d1e2` and `01d578082e8` for the
 history.
 
-## Consequence for rms_norm R5
+## Reading
 
 `reduce_scatter_mcast` is the only reducer that beats flat root on a 1-D group, and its **measured
 winning region on this box is 4–24 tiles/core** — it loses below 4, where there are too few tiles to
-spread, and by 32 the group is bandwidth-bound and all three reducers converge. rms_norm's
-`MAX_GATHER_TILES = 64` caps `R <= 64/G = 8` for the `BLOCK_SHARDED` `G=8` case. Raising that cap to
-reach `R=16` is worth doing: 16 tiles/core is where the pattern is fastest relative to root
-(**1.61x**, its best ratio at any size measured), and `R` does not need to divide `G` to get there.
-Past 24 tiles/core there is nothing left to win.
+spread, and by 32 the group is bandwidth-bound and all three reducers converge. 16 tiles/core is where
+the pattern is fastest relative to root (**1.61x**, its best ratio at any size measured), and the
+tile count does not need to divide the group size to get there. Past 24 tiles/core the **pull** form
+has nothing left to win on a line; the push form and 2-D groups keep winning at large payloads
+(README, "Large payloads").
