@@ -31,8 +31,8 @@ has already decided.
 **Build identity.** Every `build` value comes from the version header CMake refreshes on every build
 (`cmake/version.cmake`). With uncommitted changes, the SHA doesn't say exactly what code ran. `git_sha` is empty when
 the source tree is neither a git checkout nor a `git archive` export. The one file that reads the header,
-`fabric_manifest_build_identity.cpp`, is kept out of the unity build (`SKIP_UNITY_BUILD_INCLUSION` in
-`tt_metal/fabric/CMakeLists.txt`), so a new commit recompiles only that file.
+`common/fabric_visualizer_build_identity.cpp`, is its own library (`fabric_visualizer_build_identity`, which capture
+links too), so a new commit recompiles only that file.
 
 ## Fabric
 

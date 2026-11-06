@@ -6,7 +6,7 @@
 
 #include <string_view>
 
-namespace tt::tt_fabric::manifest {
+namespace tt::tt_fabric::visualizer {
 
 // The commit tt-metal was built from, as the version header CMake refreshes on every build records it.
 struct BuildIdentity {
@@ -23,4 +23,4 @@ struct BuildIdentity {
 
 BuildIdentity get_build_identity();
 
-}  // namespace tt::tt_fabric::manifest
+}  // namespace tt::tt_fabric::visualizer

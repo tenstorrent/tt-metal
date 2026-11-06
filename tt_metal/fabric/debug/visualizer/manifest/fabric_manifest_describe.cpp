@@ -27,7 +27,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/packet_header_types.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_build_identity.hpp"
+#include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_build_identity.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
@@ -191,7 +191,7 @@ RunInfo describe_run(const ControlPlane& control_plane, const std::string& run_i
         .subcontext = subcontext,
         .host_name = control_plane.get_physical_system_descriptor().my_host_name(),
         .written_at = get_utc_now_iso8601(),
-        .build = get_build_identity(),
+        .build = visualizer::get_build_identity(),
     };
 }
 

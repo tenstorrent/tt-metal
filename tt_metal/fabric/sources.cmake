@@ -55,7 +55,6 @@ set(FABRIC_SOURCES
     graph/graph_fabric_build_session.cpp
     graph/graph_fabric_builder.cpp
     debug/visualizer/manifest/fabric_manifest.cpp
-    debug/visualizer/manifest/fabric_manifest_build_identity.cpp
     debug/visualizer/manifest/fabric_manifest_describe.cpp
     debug/visualizer/manifest/fabric_manifest_kernel_inputs.cpp
     debug/visualizer/manifest/fabric_manifest_published_chips.cpp
