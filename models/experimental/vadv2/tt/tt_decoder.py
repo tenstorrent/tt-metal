@@ -8,7 +8,7 @@ from models.experimental.vadv2.tt.tt_utils import inverse_sigmoid
 
 
 class TtDetectionTransformerDecoder:
-    def __init__(self, num_layers, embed_dim, num_heads, params, params_branches, device):
+    def __init__(self, num_layers, embed_dim, num_heads, spatial_shapes_hw, params, params_branches, device):
         self.return_intermediate = True
         self.device = device
         self.params = params
@@ -27,6 +27,7 @@ class TtDetectionTransformerDecoder:
                         "type": "CustomMSDeformableAttention",
                         "embed_dims": embed_dim,
                         "num_levels": 1,
+                        "spatial_shapes_hw": spatial_shapes_hw,
                     },
                 ],
                 ffn_cfgs={
@@ -57,7 +58,6 @@ class TtDetectionTransformerDecoder:
         value=None,
         query_pos=None,
         reference_points=None,
-        spatial_shapes=None,
         reg_branches=None,
         cls_branches=None,
         **kwargs,
@@ -74,7 +74,6 @@ class TtDetectionTransformerDecoder:
                 value=value,
                 query_pos=query_pos,
                 reference_points=reference_points_input,
-                spatial_shapes=spatial_shapes,
             )
             output = ttnn.permute(output, (1, 0, 2))
             ttnn.ReadDeviceProfiler(self.device)
@@ -114,7 +113,7 @@ class TtDetectionTransformerDecoder:
 
 
 class TtMapDetectionTransformerDecoder:
-    def __init__(self, num_layers, embed_dim, num_heads, params, params_branches, device):
+    def __init__(self, num_layers, embed_dim, num_heads, spatial_shapes_hw, params, params_branches, device):
         self.return_intermediate = True
         self.device = device
         self.params = params
@@ -133,6 +132,7 @@ class TtMapDetectionTransformerDecoder:
                         "type": "CustomMSDeformableAttention",
                         "embed_dims": embed_dim,
                         "num_levels": 1,
+                        "spatial_shapes_hw": spatial_shapes_hw,
                     },
                 ],
                 ffn_cfgs={
@@ -163,7 +163,6 @@ class TtMapDetectionTransformerDecoder:
         value=None,
         query_pos=None,
         reference_points=None,
-        spatial_shapes=None,
         map_reg_branches=None,
         cls_branches=None,
         **kwargs,
@@ -180,7 +179,6 @@ class TtMapDetectionTransformerDecoder:
                 value=value,
                 query_pos=query_pos,
                 reference_points=reference_points_input,
-                spatial_shapes=spatial_shapes,
             )
             output = ttnn.permute(output, (1, 0, 2))
 

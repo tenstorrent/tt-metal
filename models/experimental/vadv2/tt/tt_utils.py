@@ -31,13 +31,13 @@ def fold_offset_normalizer_into_weight(weight, bias, W, H, device):
     return w2, b2
 
 
-def build_folded_sampling_offsets(sampling_offsets, spatial_shapes, device):
-    """Read [W, H] from spatial_shapes (a one-time host sync) and return the
-    sampling_offsets Linear (weight, bias) pre-scaled by 1/[W, H] via
-    fold_offset_normalizer_into_weight. Shared by the deformable-attention
-    modules, which cache the result on their first call."""
-    W = int(spatial_shapes[0, 1].item())
-    H = int(spatial_shapes[0, 0].item())
+def fold_sampling_offsets(sampling_offsets, spatial_shapes_hw, device):
+    """Return the sampling_offsets Linear (weight, bias) pre-scaled by 1/[W, H].
+
+    One [W, H] pair per output channel only works with a single feature level.
+    """
+    assert len(spatial_shapes_hw) == 1, f"folded offset normalizer needs one level, got {spatial_shapes_hw}"
+    H, W = spatial_shapes_hw[0]
     return fold_offset_normalizer_into_weight(sampling_offsets.weight, sampling_offsets.bias, W, H, device)
 
 
@@ -50,15 +50,12 @@ def build_folded_sampling_offsets(sampling_offsets, spatial_shapes, device):
 _MSDA_FUSED_MIN_NQ = 1024
 
 
-def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations, attention_weights, device, hw_py=None):
+def multi_scale_deformable_attn(value, spatial_shapes_hw, sampling_locations, attention_weights, device):
     """multi_scale_deformable_attn.
 
     Args:
-        hw_py: optional list of (H, W) Python ints per level. When provided,
-            the reshape on line below skips the `.item()` host syncs that would
-            otherwise be needed to read H/W out of the `value_spatial_shapes`
-            device tensor. Callers in this codebase populate this from a
-            one-time `_hw_cache` they own so warm calls become trace-friendly.
+        spatial_shapes_hw: list of (H, W) Python ints per level, fixed at
+            module construction so the forward never reads shapes back from device.
     """
     bs, _, num_heads, embed_dims = value.shape
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
@@ -72,10 +69,7 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
     # fused `multi_scale_deformable_attn` device op. The op packs grid_sample +
     # weighted sum in one kernel and matches mmcv (align_corners=False).
     if num_levels == 1 and (bs * num_heads) * num_queries >= _MSDA_FUSED_MIN_NQ:
-        if hw_py is not None:
-            H_int, W_int = hw_py[0]
-        else:
-            H_int, W_int = int(value_spatial_shapes[0, 0].item()), int(value_spatial_shapes[0, 1].item())
+        H_int, W_int = spatial_shapes_hw[0]
 
         # value (bs, num_value=H*W, num_heads, D) -> (bs*num_heads, H, W, D) ROW_MAJOR bf16.
         # A single permute moving num_heads next to bs, then (in ROW_MAJOR, where the
@@ -116,15 +110,10 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
 
     sampling_value_list = []
 
-    for level, (H_, W_) in enumerate(value_spatial_shapes):
+    for level, (H_int, W_int) in enumerate(spatial_shapes_hw):
         value_l_ = value_list[level]
         value_l_ = ttnn.reshape(value_l_, [value_l_.shape[0], value_l_.shape[1], value_l_.shape[2] * value_l_.shape[3]])
         value_l_ = ttnn.permute(value_l_, (0, 2, 1))
-
-        if hw_py is not None:
-            H_int, W_int = hw_py[level]
-        else:
-            H_int, W_int = int(H_.item()), int(W_.item())
         value_l_ = ttnn.reshape(value_l_, [bs * num_heads, embed_dims, H_int, W_int])
 
         sampling_grid_l_ = sampling_grids[:, :, :, level]

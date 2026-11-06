@@ -642,9 +642,12 @@ def test_vadv2(
     tensor = ttnn.from_torch(tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
     img = []
     img.append(tensor)
+    rig_meta = input_dict["img_metas"][0][0][0]
     tt_model = tt_vad.TtVAD(
         device,
         parameter,
+        lidar2img=rig_meta["lidar2img"],
+        img_shape=rig_meta["img_shape"][0][:2],
         use_grid_mask=False,  # set to tru for training only
         pts_voxel_layer=None,
         pts_voxel_encoder=None,

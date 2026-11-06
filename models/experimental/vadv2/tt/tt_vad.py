@@ -26,6 +26,9 @@ class TtVAD:
         self,
         device,
         params,
+        *,
+        lidar2img,
+        img_shape,
         use_grid_mask=False,
         pts_voxel_layer=None,
         pts_voxel_encoder=None,
@@ -45,7 +48,19 @@ class TtVAD:
         fut_ts=6,
         fut_mode=6,
     ):
+        """
+        lidar2img: (num_cams, 4, 4) lidar-to-image matrices of the camera rig.
+        img_shape: (H, W) of the network input.
+
+        The rig is fixed for the lifetime of the model: the camera projection of
+        the BEV grid and the per-camera query plan are built here, and the
+        lidar2img / img_shape carried by img_metas at inference are not read.
+        """
         super(TtVAD, self).__init__()
+        img_h, img_w = img_shape[:2]
+        # The ResNet-50 + FPN neck reduces the input by 32; the data pipeline pads to a multiple of it.
+        assert img_h % 32 == 0 and img_w % 32 == 0, f"input {img_h}x{img_w} must be a multiple of 32"
+        self.feat_hw = (img_h // 32, img_w // 32)
         self.use_grid_mask = use_grid_mask
         self.fp16_enabled = False
         self.fut_ts = fut_ts
@@ -68,6 +83,9 @@ class TtVAD:
         self.pts_bbox_head = TtVADHead(
             params=params,
             device=device,
+            feat_hw=self.feat_hw,
+            lidar2img=lidar2img,
+            img_shape=(img_h, img_w),
             with_box_refine=True,
             as_two_stage=False,
             transformer=True,
@@ -152,7 +170,7 @@ class TtVAD:
             img_feat = ttnn.unsqueeze(img_feat, 0)
             img_feat = ttnn.to_layout(img_feat, layout=ttnn.ROW_MAJOR_LAYOUT)
             img_feat = ttnn.sharded_to_interleaved(img_feat)
-            img_feat = ttnn.reshape(img_feat, (6, 12, 20, img_feat.shape[3]))
+            img_feat = ttnn.reshape(img_feat, (N, *self.feat_hw, img_feat.shape[3]))
             img_feat = ttnn.permute(img_feat, (0, 3, 1, 2))
             BN, C, H, W = img_feat.shape
             if len_queue is not None:
