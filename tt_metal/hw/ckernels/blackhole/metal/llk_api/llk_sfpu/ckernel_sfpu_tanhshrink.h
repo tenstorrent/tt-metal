@@ -32,8 +32,22 @@ constexpr float TANHSHRINK_BF16_P1 = 1.0561303143e+00f;
 constexpr float TANHSHRINK_BF16_P2 = -4.0859283753e-01f;
 constexpr float TANHSHRINK_BF16_P3 = 5.3348409333e-02f;
 
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_tanhshrink_bf16.h"
+
+namespace ckernel::sfpu {
+
+// Whether BF16 DEST runs the generated tanhshrink kernel as one call over the whole tile.
+inline constexpr bool tanhshrink_bf16_whole_tile = true;
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanhshrink() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_tanhshrink()) {
+            calculate_tanhshrink_bf16<ITERATIONS>();
+            return;
+        }
+    }
     // Loop-invariant constants loaded once and kept in LRegs (sfpi (through 7.89.0) never hoists a literal out of a
     // loop by itself, so each fp32 literal otherwise costs an SFPLOADI pair per row). bf16: Q0/Q1/P0 are in
     // Prgm0/1/2 from tanhshrink_init and q2, q3, p1 here. fp32: the row already fills all eight LRegs, so
