@@ -141,6 +141,18 @@ class TtVAD:
             valid_fut_ts=6,
         )
         self.valid_fut_ts = self.pts_bbox_head.valid_fut_ts
+        self._prepare_conv_weights(num_cams=len(lidar2img), img_h=img_h, img_w=img_w)
+
+    def _prepare_conv_weights(self, num_cams, img_h, img_w):
+        # conv2d lays its weights out for the input it sees and prepares them on
+        # the host on its first call. Running the backbone and neck once here, on
+        # zeros shaped like the camera input, moves that work out of the forward
+        # and lets every conv prepare for the sharded input it really receives.
+        warmup_img = ttnn.zeros(
+            (1, num_cams, 3, img_h, img_w), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+        )
+        for feat in self.extract_img_feat(warmup_img, None):
+            ttnn.deallocate(feat)
 
     def extract_img_feat(self, img, img_metas, len_queue=None):
         B = img.shape[0]
