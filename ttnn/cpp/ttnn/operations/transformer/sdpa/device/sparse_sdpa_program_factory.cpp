@@ -234,12 +234,13 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         }
         cb(cb_merge_ctrl, ::sparse_sdpa::control_message::PAGE_BYTES, 1, bf);
         // Keep the whole-token split when the merge CBs do not fit in L1 (e.g. large H with large k_chunk).
+        // ProgramImpl::allocate_circular_buffers places each CB at the DRAM alignment, not the L1 one.
         const uint64_t cb_align = device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
         uint64_t cb_bytes = 0;
         for (const auto& c : desc.cbs) {
             cb_bytes += (c.total_size + cb_align - 1) / cb_align * cb_align;
         }
-        const uint64_t l1_budget = ttnn::operations::data_movement::get_static_l1_space(t.q);
+        const uint64_t l1_budget = ttnn::operations::data_movement::get_max_l1_space(t.q);
         if (cb_bytes > l1_budget) {
             desc.cbs.erase(desc.cbs.begin() + whole_token_cbs, desc.cbs.end());
             split_k = false;
