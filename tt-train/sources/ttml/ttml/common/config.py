@@ -160,8 +160,7 @@ class SpeedrunSchedulerConfig:
             min_lr=float(sc.get("min_lr", 0.0)),
             warmup_steps=int(sc.get("warmup_steps", 100)),
             hold_steps=int(sc.get("hold_steps", 0)),
-            # Decay over the run length (max_steps); a total_steps key is still read if max_steps is absent.
-            total_steps=int(tc.get("max_steps", tc.get("total_steps", 1000))),
+            total_steps=int(tc.get("max_steps", 1000)),
             beta1_start=float(sc.get("beta1_start", 0.85)),
             beta1_end=float(sc.get("beta1_end", 0.95)),
             beta1_warmup_steps=int(sc.get("beta1_warmup_steps", 0)),
