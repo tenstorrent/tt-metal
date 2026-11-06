@@ -33,7 +33,7 @@ COMBINE_FANIN = 16  # fused regimes (deferred)
 COMBINE_DEPTH = 2  # fused regimes (deferred)
 COMBINE_LAG = 1  # fused regimes (deferred)
 IO_DEPTH = 2  # cb_f_tiles / cb_x_tiles depth, in blocks
-OUT_DEPTH = 1  # cb_out_tiles depth, in blocks
+OUT_DEPTH = 2  # cb_out_tiles depth, in blocks (design: 1; 2 measured -8..10% on DM-bound shapes)
 COEF_DEPTH = 1  # cb_coef_cols depth, in rows
 BLOCK_ROWS = 1  # rows per block (see op_design.md "Why block_rows = 1")
 
