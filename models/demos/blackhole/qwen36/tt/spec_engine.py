@@ -3522,6 +3522,14 @@ class MTPSpecEngine:
                 if run is not None:
                     bounds = [Tp]  # ONE segment: every save point is a replay end or an in-replay snapshot
                     seg_kw = dict(snap=run, mb_choice=mb_choice)
+                elif isinstance(points, CheckpointPoints):
+                    self.ckpt_split_prefills = getattr(self, "ckpt_split_prefills", 0) + 1
+                    if self.ckpt_split_prefills == 1:
+                        logger.warning(
+                            f"[spec_engine] prefill checkpoints {list(points)} of [{s0}, {Tp}) end segments: the "
+                            "in-replay snapshot path does not serve this call (QWEN36_MAMBA_CKPT_SNAP=0, a checkpoint in "
+                            "an eager replay, too many in one replay, or a cheaper split); counted in ckpt_split_prefills"
+                        )
             host, saved, a = None, [], s0
             for i, b in enumerate(bounds):
                 final = i == len(bounds) - 1

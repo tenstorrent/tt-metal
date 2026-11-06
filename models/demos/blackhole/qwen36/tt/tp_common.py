@@ -85,6 +85,16 @@ def mamba_prefill_checkpoints_enabled():
     return mamba_spec_enabled() and os.environ.get("QWEN36_MAMBA_PREFILL_CKPT", "1") == "1"
 
 
+def mamba_ckpt_snapshots_enabled():
+    """QWEN36_MAMBA_CKPT_SNAP (default "1" with QWEN36_MAMBA_PREFILL_CKPT, "0" turns it off): the prefill traces carry
+    the in-replay GDN snapshots (as QWEN36_PREFILL_INTRACE_SNAP=1 does, which the flag does not need), and a prefill
+    checkpoint strictly inside a replay is written from that replay's snapshot instead of ending a segment there. A
+    later 16k chunk holds four checkpoints (the previous chunk's three draft blocks and vLLM's checkpoint), so the split
+    cost about 0.5 s per chunk. Where the snapshot path cannot serve a call (the eager prefill, a checkpoint in an eager
+    replay, more than GDN_SNAP_SLOTS checkpoints in one replay) the checkpoints still end segments."""
+    return mamba_prefill_checkpoints_enabled() and os.environ.get("QWEN36_MAMBA_CKPT_SNAP", "1") == "1"
+
+
 def mamba_chain_moves_enabled():
     """QWEN36_MAMBA_CHAIN_MOVES (default "1" under QWEN36_MAMBA_SPEC=1, "0" turns it off; the fused chain): the spec
     class declares supports_mamba_chained_state_moves, so a chained verify in mode align runs its state moves on the
@@ -375,10 +385,13 @@ def prefill_intrace_snap_enabled():
     state re-packed by one more identity scan step), so
     such a saved snapshot differs in its low bits; the downstream prefill outputs were bit-identical in every device
     test (see the module docstring of prefill_plan.py). Needs the KDA conv (QWEN_GDN_CONV=kda) and the fused chunk op;
-    TP spec engine with B > 1 only. Read once (the traces capture whichever body is active at warm-up)."""
+    TP spec engine with B > 1 only. Read once (the traces capture whichever body is active at warm-up).
+    Also on with QWEN36_MAMBA_SPEC=1 and QWEN36_MAMBA_CKPT_SNAP (its default), for vLLM's prefill checkpoints."""
     global _PREFILL_INTRACE_SNAP
     if _PREFILL_INTRACE_SNAP is None:
-        _PREFILL_INTRACE_SNAP = os.environ.get("QWEN36_PREFILL_INTRACE_SNAP", "0") == "1"
+        _PREFILL_INTRACE_SNAP = (
+            os.environ.get("QWEN36_PREFILL_INTRACE_SNAP", "0") == "1" or mamba_ckpt_snapshots_enabled()
+        )
     return _PREFILL_INTRACE_SNAP
 
 

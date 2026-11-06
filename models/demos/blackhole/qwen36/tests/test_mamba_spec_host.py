@@ -871,6 +871,30 @@ def test_in_replay_checkpoints_come_from_the_snapshot_and_replay_ends_from_the_s
     assert run.saved == [1024, 2048, 3072, 3584] and run.n_inside == 3
 
 
+@pytest.mark.parametrize(
+    "env, on",
+    [
+        (dict(QWEN36_MAMBA_SPEC="1"), True),
+        (dict(QWEN36_MAMBA_SPEC="1", QWEN36_MAMBA_CKPT_SNAP="0"), False),
+        (dict(QWEN36_MAMBA_SPEC="1", QWEN36_MAMBA_PREFILL_CKPT="0"), False),
+        ({}, False),
+        (dict(QWEN36_PREFILL_INTRACE_SNAP="1"), False),
+    ],
+)
+def test_checkpoint_snapshots_are_on_by_default_with_the_flag(monkeypatch, env, on):
+    """QWEN36_MAMBA_CKPT_SNAP defaults on with QWEN36_MAMBA_SPEC=1 and its prefill checkpoints, and then turns on the
+    in-replay snapshot traces without QWEN36_PREFILL_INTRACE_SNAP; flag off keeps that variable's own meaning."""
+    from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+    for k in ("QWEN36_MAMBA_SPEC", "QWEN36_MAMBA_CKPT_SNAP", "QWEN36_MAMBA_PREFILL_CKPT", "QWEN36_PREFILL_INTRACE_SNAP"):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setattr(tpc, "_PREFILL_INTRACE_SNAP", None)
+    assert tpc.mamba_ckpt_snapshots_enabled() is on
+    assert tpc.prefill_intrace_snap_enabled() is (on or env.get("QWEN36_PREFILL_INTRACE_SNAP") == "1")
+
+
 def test_a_checkpoint_off_the_block_grid_or_outside_the_prefill_is_refused():
     book = _BookAsState(_layout(8, 1024, 8, "two_pool"), 3, B, T, "align", 1024)
     eng = _EngineStub(book, 1024)
