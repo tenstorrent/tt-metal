@@ -58,7 +58,8 @@ if [[ -n "$CHANGED_SINCE" && -z "$NODEIDS" ]]; then
         TESTS+=("$REPO_ROOT/$path")
     done < <(
         python3 "$TTNOP_DIR/tools/changed_tests.py" \
-            --repo "$REPO_ROOT" --base "$CHANGED_SINCE" --arch "$CHIP_ARCH" --paths
+            --repo "$REPO_ROOT" --base "$CHANGED_SINCE" --arch "$CHIP_ARCH" --paths \
+            --retry "${TTNOP_RETRY:-}"
     )
     if [[ ${#TESTS[@]} -eq 0 ]]; then
         echo ">> no changed LLK pytest files"

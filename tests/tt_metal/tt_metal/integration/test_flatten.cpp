@@ -93,7 +93,7 @@ bool flatten(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     CoreCoord core = {0, 0};
 
@@ -211,7 +211,7 @@ bool flatten_stress(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     CoreCoord core = mesh_device->worker_core_from_logical_core({0, 0});
 
