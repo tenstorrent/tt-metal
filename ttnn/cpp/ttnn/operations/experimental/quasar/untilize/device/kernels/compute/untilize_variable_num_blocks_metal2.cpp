@@ -4,8 +4,7 @@
 
 // Metal 2.0 fork of untilize_variable_num_blocks.cpp. Identical compute logic; the CB indices become
 // dfb:: bindings, the per-block tile count a named compile-time arg, and the variable per-core block
-// count a named runtime arg. The legacy copy is retained for the not-yet-ported sharded untilize
-// factories that still instantiate it.
+// count a named runtime arg.
 
 #include <cstdint>
 
@@ -25,11 +24,14 @@ void kernel_main() {
     constexpr uint32_t per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
+    DataflowBuffer in(dfb::in);
+    DataflowBuffer out(dfb::out);
     compute_kernel_lib::untilize<
         per_core_block_tile_cnt,
         dfb::in,
         dfb::out,
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_block_cnt);
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+        in, out, per_core_block_cnt);
 }

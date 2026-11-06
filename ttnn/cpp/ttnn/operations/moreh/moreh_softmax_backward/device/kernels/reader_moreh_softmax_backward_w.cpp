@@ -24,8 +24,10 @@ void kernel_main() {
     const auto y_in = TensorAccessor(tensor::y);
     const auto dy_in = TensorAccessor(tensor::dy);
 
+    DataflowBuffer dfb_scaler_obj(dfb::scaler);
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            dfb_scaler_obj);
     DataflowBuffer dfb_mask_obj(dfb::mask);
     generate_mask_w(dfb_mask_obj, mask_w);
 

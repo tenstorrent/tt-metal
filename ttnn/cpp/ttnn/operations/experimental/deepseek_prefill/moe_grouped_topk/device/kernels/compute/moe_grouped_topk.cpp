@@ -11,8 +11,6 @@ void kernel_main() {
     // Circular buffer indices
     constexpr uint32_t cb_in_scores = get_named_compile_time_arg_val("cb_in_scores");
     constexpr uint32_t cb_in_bias = get_named_compile_time_arg_val("cb_in_bias");
-    constexpr uint32_t cb_scores_fp32 = get_named_compile_time_arg_val("cb_scores_fp32");
-    constexpr uint32_t cb_bias_fp32 = get_named_compile_time_arg_val("cb_bias_fp32");
     constexpr uint32_t cb_biased_dump = get_named_compile_time_arg_val("cb_biased_dump");
     constexpr uint32_t dump_biased_scores = get_named_compile_time_arg_val("dump_biased_scores");
     constexpr uint32_t cb_sigmoid_scores = get_named_compile_time_arg_val("cb_sigmoid_scores");
@@ -53,28 +51,22 @@ void kernel_main() {
     constexpr uint32_t log_n_groups = get_named_compile_time_arg_val("log_n_groups");
     constexpr uint32_t log_width_tiles = get_named_compile_time_arg_val("log_width_tiles");
     constexpr bool stable_sort = get_named_compile_time_arg_val("stable_sort") != 0;
-    // Rank-tag stable engine only when the factory certifies TF32 sort keys (see GATE_TAG_BITS).
-    constexpr bool sort_keys_tf32 = get_named_compile_time_arg_val("sort_keys_tf32") != 0;
-    constexpr bool rank_tag = stable_sort && sort_keys_tf32;
     constexpr uint32_t score_func = get_named_compile_time_arg_val("score_func");
+    // The sort keys are full fp32 (the factory unpacks the score CBs straight to DEST); the rank-tag sorts
+    // compare them at 23 - GATE_TAG_BITS = 17 mantissa bits (exact ties keep the index order).
+    constexpr bool rank_tag = stable_sort;
 
     constexpr uint32_t end_phase = log_group_size - 1;
 
     const uint32_t start_height_tile = get_arg_val<uint32_t>(0);
     const uint32_t end_height_tile = get_arg_val<uint32_t>(1);
-    compute_kernel_hw_startup(cb_scores_fp32, cb_bias_fp32, cb_biased_scores);
+    compute_kernel_hw_startup(cb_in_scores, cb_in_bias, cb_biased_scores);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
-        // Upcast the raw (possibly bf16) logits and bias to fp32 so the rest of the gate runs entirely
-        // in fp32 (the two-operand ops below require a single operand format). Identity when fp32 in.
-        blocks::upcast_tiles(cb_in_scores, cb_scores_fp32, width_tiles);
-        blocks::upcast_tiles(cb_in_bias, cb_bias_fp32, width_tiles);
-
-        blocks::apply_score_func<score_func>(cb_scores_fp32, cb_sigmoid_scores, width_tiles);
-
-        // Perform add bias on activated scores
-        blocks::add_bias<dump_biased_scores != 0>(
-            cb_sigmoid_scores, cb_bias_fp32, cb_biased_scores, width_tiles, cb_biased_dump);
+        // Activation and bias add in one pass straight from the raw inputs (no fp32 upcast pass), with the
+        // bias added in full fp32 on the SFPU. The keys stay full fp32 through every sort.
+        blocks::apply_score_func_add_bias<score_func, dump_biased_scores != 0>(
+            cb_in_scores, cb_in_bias, cb_sigmoid_scores, cb_biased_scores, width_tiles, cb_biased_dump);
         // Note: cb_sigmoid_scores is NOT popped here - writer will pop it after gather
 
         if constexpr (n_groups == 1) {

@@ -3,14 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-// Included inside sfpi. Exact selected total root/log recurrence/reflection.
-//
-// Every call reads and writes only its own tile: the input stays in its DEST row
-// until the result replaces it, so it is reloaded where needed instead of being
-// held across the two polynomial chains, and coefficients are immediates. The
-// constants the two log evaluations share (ln 2 and the leading two mantissa
-// coefficients) live in the programmable constant registers, which the caller's
-// reciprocal leaves free. The op's init sets them: other ops' calls read those registers.
 
 namespace ckernel::sfpu::ttpoly::lgamma {
 using namespace ::sfpi;
@@ -25,15 +17,16 @@ inline void root_native_log_constants() {
 
 template <class Config, class Reciprocal>
 inline __attribute__((always_inline)) vFloat root_native_log_eval(uint32_t row, Reciprocal reciprocal) {
-    auto polynomial = [](vFloat coordinate, const float* coefficients, uint32_t leaf_degree) {
-        vFloat value = coefficients[leaf_degree];
+    auto polynomial = [](vFloat coordinate, const float* coefficients, uint32_t leaf_degree)
+                          __attribute__((always_inline)) {
+                              vFloat value = coefficients[leaf_degree];
 #pragma GCC unroll 16
-        for (int index = static_cast<int>(leaf_degree) - 1; index >= 0; --index) {
-            value = value * coordinate + coefficients[index];
-        }
-        return value;
-    };
-    auto normalized_log = [&](vFloat coordinate) {
+                              for (int index = static_cast<int>(leaf_degree) - 1; index >= 0; --index) {
+                                  value = value * coordinate + coefficients[index];
+                              }
+                              return value;
+                          };
+    auto normalized_log = [&](vFloat coordinate) __attribute__((always_inline)) {
         // The biased exponent is positive, so its conversion needs no sign handling;
         // removing the bias afterwards is exact.
         vInt exponent = exexp(coordinate, ExponentMode::Biased);
