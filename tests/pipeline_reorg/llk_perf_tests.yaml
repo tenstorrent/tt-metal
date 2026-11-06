@@ -9,8 +9,7 @@
 # what llk-perf-gate.yaml's nightly-measure job passes -- the non-speed-of-light
 # nightly (llk-perf.yaml's own schedule trigger always runs speed-of-light).
 # SPEED_OF_LIGHT stays false -- a speed-of-light leg is 2-4h per change and nothing
-# compares it. LLK_PERF_RUN_TYPES mirrors ALL_MODES, which nightly-measure uses to
-# skip L1_CONGESTION (ungated, a fifth of the build); blank would keep it. PIPELINE
+# compares it. LLK_PERF_RUN_TYPES mirrors ALL_MODES, which nightly-measure passes. PIPELINE
 # is "pr" since this runs on a pull_request, not the schedule.
 #
 # {split_group} is substituted with each row's split_group by prepare_test_matrix.py,
