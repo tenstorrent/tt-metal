@@ -113,14 +113,6 @@ void kernel_main() {
             c_hi = f < tok_count ? n_chunks : tail_c1;
             kind = f < tok_count ? sparse_sdpa::seg_kind::FULL : sparse_sdpa::seg_kind::TAIL;
         }
-        // Q: H head-rows -> cb_q_rm.  Q is [1,H,S,576] row-major: row (h,tok) = page h*S+tok.
-        q_cb.reserve_back(H);
-        for (uint32_t h = 0; h < H; ++h) {
-            noc.async_read(q, q_cb, q_row_bytes, {.page_id = h * S + tok}, {.offset_bytes = h * q_row_bytes});
-        }
-        noc.async_read_barrier();
-        q_cb.push_back(H);
-
         // indices row for this token (page = tok) -> idx_cb scratch
         noc.async_read(idx, idx_cb, idx_row_bytes, {.page_id = tok}, {.offset_bytes = 0});
         noc.async_read_barrier();
@@ -165,7 +157,15 @@ void kernel_main() {
                 request[sparse_sdpa::gather_request::EMPTY] = 1;
             }
             kreq_cb.push_back(1);
+            continue;
         }
+        // Q: H head-rows -> cb_q_rm.  Q is [1,H,S,576] row-major: row (h,tok) = page h*S+tok.
+        q_cb.reserve_back(H);
+        for (uint32_t h = 0; h < H; ++h) {
+            noc.async_read(q, q_cb, q_row_bytes, {.page_id = h * S + tok}, {.offset_bytes = h * q_row_bytes});
+        }
+        noc.async_read_barrier();
+        q_cb.push_back(H);
         for (uint32_t chunk = c_lo; chunk < seg_hi; ++chunk) {
             const uint32_t base = chunk * k_chunk;
             const uint32_t valid = (nv - base) < k_chunk ? (nv - base) : k_chunk;  // (0, k_chunk]

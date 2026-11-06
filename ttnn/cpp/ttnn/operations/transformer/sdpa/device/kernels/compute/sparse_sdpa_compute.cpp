@@ -192,9 +192,6 @@ void kernel_main() {
     scale_cb.wait_front(1);  // persistent reduce scaler; the streaming reduce assumes it is ready
 
     for (uint32_t seg = 0; seg < n_segs; ++seg) {
-        // tilize Q rows -> [Sqt, DHt]
-        compute_kernel_lib::tilize<DHt, cb_q_rm, cb_q_in>(/*num_blocks=*/Sqt, /*total_input_pages=*/H);
-
         // Per-segment control from the reader: num_active_chunks (all-sentinel chunks are skipped; 0 for an empty
         // split-K HEAD) and num_valid_keys (the token's mask boundary). read_tile_value mailbox-distributes the
         // UNPACK read so all three threads see the same loop bound / mask branches.
@@ -212,10 +209,11 @@ void kernel_main() {
         constexpr uint32_t k_chunk_keys = Skt * tt::constants::TILE_WIDTH;
         const uint32_t token_chunks = (num_valid_keys + k_chunk_keys - 1) / k_chunk_keys;
         if (num_active_chunks == 0) {  // empty split-K HEAD: nothing to compute or send
-            q_in_cb.wait_front(Sqt * DHt);
-            q_in_cb.pop_front(Sqt * DHt);
             continue;
         }
+
+        // tilize Q rows -> [Sqt, DHt]
+        compute_kernel_lib::tilize<DHt, cb_q_rm, cb_q_in>(/*num_blocks=*/Sqt, /*total_input_pages=*/H);
 
         // Flash running state, ping-pong. Reset every token; all buffers start empty.
         CircularBuffer max_prev(cb_max_a), max_cur(cb_max_b);
