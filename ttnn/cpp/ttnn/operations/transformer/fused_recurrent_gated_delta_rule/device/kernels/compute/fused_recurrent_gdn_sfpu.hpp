@@ -5,8 +5,8 @@
 // DEST-level SFPU helpers of the GDN decode compute kernel (fused_recurrent_gated_delta_rule, two-pass form).
 // Every helper is called from a compute kernel between tile_regs_acquire() and tile_regs_commit(), takes DEST slot
 // indices (0..3 with an fp32 DEST in half-sync), and is a no-op off the MATH thread. Each helper runs its own SFPU
-// init: the inits are a handful of instructions, and the column broadcast, the exact exp and the sfpi passes below
-// all overwrite the LREG / replay-buffer state the others rely on, so nothing may be hoisted.
+// init: the inits are a handful of instructions, and the column broadcast, the API's exp_tile_init and the sfpi
+// passes below all overwrite the LREG / replay-buffer state the others rely on, so nothing may be hoisted.
 //
 // DEST geometry (Blackhole, fp32 DEST, confirmed by the probe in tests/tt_metal/tt_metal/llk/test_gdn_decode_sfpu.cpp):
 //   - a DEST slot is 32 sfpi vectors (dst_reg[32 * slot + v]) whatever the tile shape; a 16x32 tile uses faces 0
@@ -35,7 +35,6 @@
 
 #include "api/compute/common_globals.h"
 #include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/sfpu_binary_bcast.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_sfpu_common.h"
@@ -51,8 +50,6 @@ inline constexpr uint32_t kSlotVecs = 32;  // sfpi DST vectors per DEST slot (th
 inline constexpr uint32_t kFaceVecs = 8;   // per 16x16 face
 // The four sfpi vectors that hold rows 0..3 of a 16x32 tile: band 0 of faces 0 and 1, both column parities.
 inline constexpr uint32_t kBand0Vecs[4] = {0, 1, 8, 9};
-// The eight vectors that hold column 0 of a 32x32 tile: the even (even-column) vectors of faces 0 and 2.
-inline constexpr uint32_t kCol0Vecs[8] = {0, 2, 4, 6, 16, 18, 20, 22};
 
 // Brackets an sfpi body the way the LLK's unary / binary SFPU params functions do: DST base at slot 0 (the bodies
 // address slots absolutely), then the address reset.
@@ -294,39 +291,12 @@ inline void mul_loaded_scalar_body(uint32_t dst) {
     }
 }
 
-// exp (the fp32-accurate body exp_tile<false> runs on an fp32 DEST, _sfpu_exp_fp32_accurate_) on the eight vectors
-// that hold column 0 of a 32x32 tile; the other columns are left as they are.
-inline void exp_col0_body(uint32_t dst) {
-    const uint32_t base = dst * kSlotVecs;
-#pragma GCC unroll 0
-    for (uint32_t i = 0; i < 8; i++) {
-        const sfpi::vFloat x = sfpi::dst_reg[base + kCol0Vecs[i]];
-        sfpi::dst_reg[base + kCol0Vecs[i]] = ckernel::sfpu::_sfpu_exp_fp32_accurate_(x);
-    }
-}
-
 }  // namespace detail
 #endif  // TRISC_MATH
 
 // ---- public helpers ------------------------------------------------------------------------------------------------
-
-// DEST[dst] <- exp(DEST[dst]) in exact mode (the fp32-accurate SFPU exp; math_approx_mode is irrelevant, the template
-// flag selects it). MODE: VectorMode::RC = the whole 32x32 slot; VectorMode::C = faces 0 and 2 only, enough for a
-// column tile whose other columns are never read (half the cost; faces 1 and 3 keep their old contents).
-// Reads and writes slot dst only.
-template <ckernel::VectorMode MODE = ckernel::VectorMode::RC>
-inline void exp_tile_exact(uint32_t dst) {
-    ckernel::exp_tile_init<false>();
-    ckernel::exp_tile<false>(dst, MODE);
-}
-
-// exp in exact mode on column 0 only of the 32x32 tile in slot dst: the eight vectors that hold it, which also carry
-// the other even columns of faces 0 and 2 (those get exp too); the odd columns and faces 1 and 3 keep their values.
-// The per-element body is the one exp_tile_exact runs on an fp32 DEST, so column 0 is bit-identical to it. For
-// gcol32 -> ecol32: the only consumer of ecol32 is mul_col_bcast, which reads column 0 alone. Needs no init.
-inline void exp_col0_exact(uint32_t dst) {
-    MATH((detail::run([&] { detail::exp_col0_body(dst); })));
-}
+// (The exact exp is the compute API's: exp_tile_init<false>() then exp_tile<false>(dst, VectorMode::C) for a column
+// tile, faces 0 and 2; column 0 is bit-identical to the whole-tile form.)
 
 // The vector pass's single constants tile ebc16, built in DEST[slot_out] as a 16x32 tile ready for pack_tile:
 //   column 0 rows 0..3  <- rows 0..3 of column 0 of DEST[slot_e]  (ecol32 after the exp: e)
@@ -347,9 +317,9 @@ inline void build_ebc16(uint32_t slot_e, uint32_t slot_b, uint32_t slot_c) {
 // Scalar-times-tile without a resident DEST slot (pass 2's decay, four S tiles per acquire). Two calls:
 //   load_scalar(scalar_slot): element [0, 0] of DEST[scalar_slot] (e.g. an ecol32 copy) is broadcast to all lanes and
 //     parked in the programmable constant register vConstFloatPrgm2 (LREG14). ~25 SFPU instructions. The register
-//     is not allocated by the sfpi compiler, so it survives every helper of this file except exp_tile_exact /
-//     exp_tile_init (and any other op's init that programs LREG12-14, e.g. sfpu_normalize_bcast_scalar): call
-//     load_scalar after those, within the acquire that uses it. The slot may be overwritten right after the call.
+//     is not allocated by the sfpi compiler, so it survives every helper of this file; the API's exp_tile_init (and
+//     any other op's init that programs LREG12-14, e.g. sfpu_normalize_bcast_scalar) clobbers it: call load_scalar
+//     after those, within the acquire that uses it. The slot may be overwritten right after the call.
 //   mul_loaded_scalar<ROWS>(dst): DEST[dst] <- DEST[dst] * that scalar; ROWS 32 = the whole 32x32 slot (32 x
 //     {SFPLOAD, SFPMUL, SFPSTORE}), 16 = faces 0 and 1, 4 = rows 0..3. Bit-identical to mul_col_bcast<ROWS>(dst, col)
 //     when column 0 of col is uniform and equal to the scalar (the same SFPMUL on the same operands).

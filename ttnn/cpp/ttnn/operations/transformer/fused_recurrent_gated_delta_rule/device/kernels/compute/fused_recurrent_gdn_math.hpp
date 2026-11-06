@@ -6,8 +6,9 @@
 // as compute-kernel functions over circular buffers whose ids the program factory assigns (every id is a parameter).
 // The caller owns the token loop and the ring of state CBs; decode_token does one token:
 //
-//   e      = exp(g)                        constants pass, SFPU exact exp of column 0 of gcol32 -> ecol32
-//   c      = q~ . k^                       constants pass, FPU: Kt products qk16 x qcol32 -> craw16[0,0], then the FPU
+//   e      = exp(g)                        constants pass, the API's exact exp_tile on faces 0 and 2 of gcol32 ->
+//   ecol32 c      = q~ . k^                       constants pass, FPU: Kt products qk16 x qcol32 -> craw16[0,0], then
+//   the FPU
 //                                          scalar broadcast; e, beta, c go to ebc16 (column 0 rows 0-3 / 4-7 / 8-11)
 //   r      = [k^; q~] . S_old              read pass, FPU: 16x32 qk16 x 32x32 S tiles -> r16 (row 0 = r_k, row 2 = r_q)
 //   u      = beta (v - e r_k)              vector pass, SFPU fp32 -> u16 (row 0 = u, rows 1-15 exactly 0)
@@ -42,6 +43,7 @@
 
 #include "api/compute/bcast.h"
 #include "api/compute/common.h"
+#include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
@@ -92,8 +94,9 @@ inline void check_state_views(StateCb s) {
         "state CB views diverged: the mm view needs a single-buffered CB produced and consumed whole"));
 }
 
-// Constants pass (three acquires): ecol32 <- exp(gcol32) on the column-0 vectors (column 0 of all 32 rows; the other
-// columns are never read); craw16 <- sum_ki qk16[ki] x qcol32[ki] (c at [0,0]); then one acquire with the FPU scalar
+// Constants pass (three acquires): ecol32 <- exp(gcol32) on faces 0 and 2 (exp_tile<false> in VectorMode::C, the
+// fp32-accurate body: column 0 of all 32 rows; the other columns are never read); craw16 <- sum_ki qk16[ki] x
+// qcol32[ki] (c at [0,0]); then one acquire with the FPU scalar
 // broadcast of craw16[0,0] onto ones32 (c in every element of slot 0), copies of ecol32 and bcol16, and build_ebc16
 // -> ebc16 (column 0 rows 0-3 = e, 4-7 = beta, 8-11 = c). Waits gcol32 (1), qk16 (Kt), qcol32 (Kt), ones32 (1),
 // bcol16 (1); pushes ecol32 (1) and ebc16 (1); craw16 is produced, consumed and popped here.
@@ -115,12 +118,14 @@ void constants_pass(
     ones.wait_front(1);
     bcol.wait_front(1);
 
-    // 1. e = exp(g), exact, on column 0.
+    // 1. e = exp(g), exact (the fp32-accurate exp, whatever math_approx_mode says), on faces 0 and 2: column 0 of
+    //    every row, which is all the consumers read.
     ecol.reserve_back(1);
     tile_regs_acquire();
     copy_init(cb_gcol32);
     copy_tile(cb_gcol32, 0, 0);
-    gdn_decode_sfpu::exp_col0_exact(0);
+    ckernel::exp_tile_init<false>();
+    ckernel::exp_tile<false>(0, ckernel::VectorMode::C);
     tile_regs_commit();
     tile_regs_wait();
     pack_init(cb_ecol32);
