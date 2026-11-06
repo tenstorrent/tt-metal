@@ -8,8 +8,13 @@ import torch
 import ttnn
 from models.common.tensor_utils import get_rot_transformation_mat
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import packed_rope_columns
-from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_cache_capacity, ring_sdpa_chunk_sizes
+from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
+    GlobalRingKVCache,
+    ring_cache_capacity,
+    ring_sdpa_chunk_sizes,
+)
 from models.demos.gemma4_d_p.tt.ccl import ccl_allgather, ccl_partition_rows
+from models.demos.gemma4_d_p.tt.dflash_config import DEFAULT_DFLASH_MODEL
 from models.demos.gemma4_d_p.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
@@ -94,6 +99,9 @@ class Gemma4Model:
         max_local_batch_size=1,
         num_layers=None,
         ring_kv_caches=None,
+        dflash_enabled=False,
+        dflash_checkpoint_path=DEFAULT_DFLASH_MODEL,
+        dflash_kv_cache=None,
     ):
         assert state_dict and any(
             key.startswith("model.language_model.") for key in state_dict
@@ -131,6 +139,36 @@ class Gemma4Model:
         self._prefill_trace_controller = None
         self.max_seq_len = max_seq_len
         n_layers = num_layers or hf_config.num_hidden_layers
+
+        self.dflash = None
+        if dflash_kv_cache is not None and not dflash_enabled:
+            raise ValueError("DFlash caches require dflash_enabled=True")
+        if dflash_enabled:
+            from models.demos.gemma4_d_p.tt.dflash import DFlashPrefill, allocate_dflash_kv_cache
+            from models.demos.gemma4_d_p.tt.dflash_config import load_dflash_weights
+
+            draft_config, draft_state = load_dflash_weights(dflash_checkpoint_path)
+            draft_config.validate(mesh_config, max_seq_len, hidden_size=self.hidden_size, num_layers=n_layers)
+            num_users = max_local_batch_size
+            if ring_kv_caches is not None:
+                first_cache = ring_kv_caches[0]
+                first_tensor = first_cache.kv if isinstance(first_cache, GlobalRingKVCache) else first_cache.k
+                num_users = first_tensor.shape[0]
+            if dflash_kv_cache is None:
+                dflash_kv_cache = allocate_dflash_kv_cache(
+                    mesh_config, draft_config, num_users=num_users, max_seq_len=self.ring_cache_max_seq_len
+                )
+            if dflash_kv_cache.num_users != num_users:
+                raise ValueError("Target and DFlash caches must have the same number of user slots")
+            self.dflash = DFlashPrefill(
+                mesh_config,
+                draft_config,
+                draft_state,
+                ccl_manager,
+                dflash_kv_cache,
+                max_seq_len=max_seq_len,
+                chunk_size=prefill_chunk_size,
+            )
 
         mlp_dtype = precision.get("shared_mlp", dtype)
         attention_dtype = precision.get("attention", dtype)
@@ -249,6 +287,18 @@ class Gemma4Model:
             layer_type: self.lookup_packed_rope(layer_type)
             for layer_type in set(self.hf_config.layer_types[: len(self.layers)])
         }
+        draft_accumulator = None
+
+        def acknowledge(layer_idx):
+            if d2h_service is not None:
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
+            elif on_layer_complete is not None:
+                if self._prefill_trace_controller is not None:
+                    self._prefill_trace_controller.layer_ack(layer_idx)
+                else:
+                    ttnn.synchronize_device(self.mesh_device)
+                    on_layer_complete(layer_idx)
+
         for i, layer in enumerate(self.layers):
             layer_type = self.hf_config.layer_types[i]
             packed_rope = packed_rope_by_type[layer_type]
@@ -259,14 +309,16 @@ class Gemma4Model:
                 packed_global_rope=packed_rope if layer_type == "full_attention" else None,
                 packed_sliding_rope=packed_rope if layer_type == "sliding_attention" else None,
             )
-            if d2h_service is not None:
-                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
-            elif on_layer_complete is not None:
-                if self._prefill_trace_controller is not None:
-                    self._prefill_trace_controller.layer_ack(i)
-                else:
-                    ttnn.synchronize_device(self.mesh_device)
-                    on_layer_complete(i)
+            if self.dflash is not None and i in self.dflash.fc:
+                draft_accumulator = self.dflash.tap(hidden_states, i, draft_accumulator, sequence_parallel=True)
+            acknowledge(i)
+        if self.dflash is not None:
+            self.dflash.write_kv(
+                draft_accumulator,
+                self.prefill_metadata,
+                positions=self._rope_prefill_positions,
+                on_layer_complete=lambda idx: acknowledge(len(self.layers) + idx),
+            )
         if hidden_states.is_sharded():
             # The layers keep the residual block-sharded between norms.
             sharded = hidden_states

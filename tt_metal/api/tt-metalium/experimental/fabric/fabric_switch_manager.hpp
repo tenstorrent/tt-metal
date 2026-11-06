@@ -9,7 +9,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt::tt_metal {
-class IDevice;
+class Device;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
@@ -69,7 +69,7 @@ private:
     ~FabricSwitchManager() = default;
 
     // Devices opened for switch chips; closed explicitly in teardown() for fabric handshake.
-    std::vector<tt::tt_metal::IDevice*> switch_devices_;
+    std::vector<tt::tt_metal::Device*> switch_devices_;
 };
 
 }  // namespace tt::tt_fabric

@@ -10,12 +10,21 @@
 
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 
+#include "ckernel_sfpu_polygamma_bf16.h"
+
 namespace ckernel::sfpu {
 
+// The n_packed the generated polygamma kernel is fitted for, as FP32 bits; any other n_packed runs the stock kernel.
+inline constexpr std::uint32_t polygamma_bf16_n_packed_bits = 0x3f800000u;
+// The scale_packed the generated polygamma kernel is fitted for, as FP32 bits; any other scale_packed runs the stock
+// kernel.
+inline constexpr std::uint32_t polygamma_bf16_scale_packed_bits = 0x3f800000u;
+// Whether BF16 DEST runs the generated polygamma kernel as one call over the whole tile.
+inline constexpr bool polygamma_bf16_whole_tile = true;
 /**
  * Fused SFPU kernel for polygamma function: ψ^(n)(x)
  *
@@ -37,17 +46,6 @@ namespace ckernel::sfpu {
  *   n_packed:     order n (as float bits)
  *   scale_packed: precomputed (-1)^(n+1) * n! (as float bits)
  */
-bool bf16_dest_polygamma();
-template <int ITERATIONS>
-void calculate_polygamma_bf16();
-// The n_packed the generated polygamma kernel is fitted for, as FP32 bits; any other n_packed runs the stock kernel.
-inline constexpr std::uint32_t polygamma_bf16_n_packed_bits = 0x3f800000u;
-// The scale_packed the generated polygamma kernel is fitted for, as FP32 bits; any other scale_packed runs the stock
-// kernel.
-inline constexpr std::uint32_t polygamma_bf16_scale_packed_bits = 0x3f800000u;
-// Whether BF16 DEST runs the generated polygamma kernel as one call over the whole tile.
-inline constexpr bool polygamma_bf16_whole_tile = true;
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_packed) {
     if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
@@ -152,17 +150,10 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
     }
 }
 
-void init_polygamma_bf16();
-
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
+template <bool APPROXIMATION_MODE>
 void polygamma_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     recip_init<APPROXIMATION_MODE, false>();
-    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
-        init_polygamma_bf16();
-    }
 }
 
 }  // namespace ckernel::sfpu
-
-#include "ckernel_sfpu_polygamma_bf16.h"

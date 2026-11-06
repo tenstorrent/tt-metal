@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-// Included inside namespace sfpi. Exact selected recurrence and same-row suffix.
+#include "ckernel_sfpu_polygamma_bf16_replay_window.h"
 namespace ckernel::sfpu::ttpoly::polygamma {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
@@ -21,8 +21,7 @@ __attribute__((always_inline)) inline vFloat inverse_square_scalar(
     vFloat negative_mask = 0.5f - 0.5f * signed_one;
     vFloat q = x - negative_mask * n;
     vFloat u = reciprocal(z);
-    // Same Bernoulli core, in Horner order: one fewer issued arithmetic op
-    // and one less live temporary than the expanded u/u^2 reconstruction.
+    // The Bernoulli core in Horner order.
     vFloat core = ((Config::kP0 * u + 0.5f) * u + one) * u;
     vFloat iq = reciprocal(q);
     // Mask before squaring: on the positive arm the regularizer is dead, but

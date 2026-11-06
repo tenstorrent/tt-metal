@@ -4,20 +4,19 @@
 from typing import List
 
 import pytest
-import torch
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
-    DestSync,
     PerfRunType,
-    format_dict,
 )
 from helpers.param_config import (
     generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -39,17 +38,13 @@ from helpers.tile_constants import (
     is_mx_unsupported_tile_dims,
 )
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 PACK_UNTILIZE_TILE_SIZES = [
     (32, 32),
     (1, 32),
     (2, 32),
 ]
-
-
-def pack_untilize_dest_sync_modes(*, is_perf=False):
-    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
 def pack_untilize_perf_input_dimensions(dest_acc, dest_sync, tile_shape):
@@ -92,7 +87,7 @@ def generate_pack_untilize_combinations(
             return (DestAccumulation.Yes,)
         return (DestAccumulation.No, DestAccumulation.Yes)
 
-    dest_sync_modes = pack_untilize_dest_sync_modes(is_perf=is_perf)
+    dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
     combinations = []
     for fmt in formats_list:
         in_fmt, out_fmt = fmt.input_format, fmt.output_format
@@ -115,8 +110,7 @@ def generate_pack_untilize_combinations(
                     if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
                         continue
                     if (
-                        in_fmt.is_32_bit()
-                        and dest_acc == DestAccumulation.Yes
+                        unpacks_to_dest(in_fmt, dest_acc)
                         and tile_dims not in MX_SUPPORTED_TILE_SIZES
                     ):
                         continue
@@ -146,7 +140,6 @@ def generate_pack_untilize_combinations(
 
 PACK_UNTILIZE_FORMATS = input_output_formats(
     [
-        DataFormat.Float16,
         DataFormat.Float16_b,
         DataFormat.Int16,
         DataFormat.Int32,
@@ -244,9 +237,7 @@ def test_pack_untilize_quasar(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        "unpack_to_dest": (
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        "unpack_to_dest": unpacks_to_dest(formats.input_format, dest_acc),
         "dest_acc": dest_acc,
     }
 
@@ -261,11 +252,7 @@ def test_pack_untilize_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,

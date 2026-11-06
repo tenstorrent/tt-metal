@@ -16,6 +16,8 @@ struct endpoint<PageView<Accessor>> : endpoint<Accessor> {};
 template <typename Accessor>
 struct endpoint<ShardView<Accessor>> : endpoint<Accessor> {};
 template <typename Accessor>
+struct endpoint<BankView<Accessor>> : endpoint<Accessor> {};
+template <typename Accessor>
 struct endpoint<tensor_accessor::AccessorPage<Accessor>> : endpoint<Accessor> {};
 template <typename Accessor>
 struct endpoint<tensor_accessor::ShardPage<Accessor>> : endpoint<Accessor> {};
@@ -256,6 +258,39 @@ struct noc_traits_t<ShardView<Accessor>> {
             return noc_address_backend::extract_local_address(noc_addr);
         }
         return noc_addr;
+    }
+};
+
+// BankView: the NoC address of offset_bytes into the tensor's region of bank bank_id. The bank's location (and, for
+// DRAM, its per-bank offset) comes from the bank tables; the tensor supplies its bank-relative base address.
+template <typename Accessor>
+struct noc_traits_t<BankView<Accessor>> {
+    struct src_args_type {
+        uint32_t bank_id{};
+        uint32_t offset_bytes = 0;
+    };
+    struct dst_args_type {
+        uint32_t bank_id{};
+        uint32_t offset_bytes = 0;
+    };
+    template <Noc::AddressType address_type>
+    static uint64_t src_addr(const BankView<Accessor>& src, const Noc& noc, const src_args_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC, "BankView can only be the NoC side of a transfer");
+        return bank_noc_addr(src, args.bank_id, args.offset_bytes, noc);
+    }
+    template <Noc::AddressType address_type>
+    static uint64_t dst_addr(const BankView<Accessor>& dst, const Noc& noc, const dst_args_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC, "BankView can only be the NoC side of a transfer");
+        return bank_noc_addr(dst, args.bank_id, args.offset_bytes, noc);
+    }
+
+private:
+    static uint64_t bank_noc_addr(
+        const BankView<Accessor>& view, uint32_t bank_id, uint32_t offset_bytes, const Noc& noc) {
+        return ::get_noc_addr_from_bank_id<Accessor::DSpec::is_dram>(
+            bank_id,
+            tensor_accessor::detail::TransferAccess::bank_base(view.accessor) + offset_bytes,
+            noc.get_noc_id());
     }
 };
 

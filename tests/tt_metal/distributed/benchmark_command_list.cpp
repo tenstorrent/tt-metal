@@ -76,7 +76,8 @@ m2::ProgramSpec make_spec(uint32_t index, bool tensor) {
 void kernel_main() {
     TensorAccessor accessor(tensor::io);
     volatile tt_l1_ptr uint32_t* destination = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg(args::address));
-    destination[0] = accessor.get_bank_base_address();
+    // The raw base address is what the patch updates.
+    destination[0] = tensor_accessor::detail::TransferAccess::bank_base(accessor);
 }
 )"};
         BindTensorParameterToKernel(kernel, "io", "io");

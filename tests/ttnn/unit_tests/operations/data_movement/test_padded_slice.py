@@ -146,6 +146,53 @@ def test_padded_slice_rm_last_dim_unaligned_start(device, begins, ends, shard_sh
     assert passed, message
 
 
+# Row-major block-sharded output: each column of cores reads from the slice's W-begin plus its own
+# width offset, so the misalignment to the source buffer differs per column (and can be zero on one
+# column while the other is unaligned). Columns past the sliced width are zero-padded.
+@pytest.mark.parametrize(
+    "begins, ends, shard_shape",
+    (
+        # 16 B begin: column 0 is unaligned, column 1 (16 B + 112 B) is 64 B aligned.
+        ([0, 0, 0, 8], [1, 1, 32, 120], (16, 56)),
+        # aligned begin; column 1's 96 B offset is misaligned on Blackhole (64 B) and aligned on Wormhole (32 B).
+        ([0, 0, 0, 0], [1, 1, 32, 96], (16, 48)),
+        # 2 B begin: neither column's skip is a 16 B multiple, so both go through the RISC memmove.
+        ([0, 0, 0, 1], [1, 1, 32, 113], (16, 56)),
+        # shard width past the sliced width: column 1 reads 96 B and pads the rest.
+        ([0, 0, 0, 8], [1, 1, 32, 120], (16, 64)),
+    ),
+)
+def test_padded_slice_rm_block_sharded_unaligned_start(device, begins, ends, shard_shape):
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    num_cores_h, num_cores_w = 2, 2
+    device_grid = device.compute_with_storage_grid_size()
+    if device_grid.x < num_cores_w or device_grid.y < num_cores_h:
+        pytest.skip(f"Need a {num_cores_w}x{num_cores_h} grid, device has {device_grid.x}x{device_grid.y}")
+
+    torch.manual_seed(0)
+    torch_input = torch.randn([1, 1, 32, 128], dtype=torch.bfloat16)
+    sliced = torch_input[..., begins[3] : ends[3]]
+    pad = shard_shape[1] * num_cores_w - sliced.shape[-1]
+    expected = torch.nn.functional.pad(sliced, (0, pad)) if pad > 0 else sliced
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    actual = ttnn.experimental.padded_slice(tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config)
+    actual_torch = ttnn.to_torch(actual)
+    passed, message = assert_equal(expected[..., : actual_torch.shape[-1]], actual_torch)
+    assert passed, message
+
+
 # Last-dim offset, shard width == sliced width: Quasar read bound without the pad writer.
 def test_quasar_padded_slice_rm_last_dim_no_pad(device):
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})

@@ -94,6 +94,7 @@ namespace {
 // cores across links where more than one plane exists. (Kept file-local because the natural shared
 // home, ccl/common, is outside this op's code ownership.)
 std::vector<uint32_t> compute_per_neighbor_forwarding_links(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
     uint32_t core_link,
@@ -101,7 +102,7 @@ std::vector<uint32_t> compute_per_neighbor_forwarding_links(
     std::vector<uint32_t> per_conn_links;
     per_conn_links.reserve(dst_nodes.size());
     for (const auto& dst_node : dst_nodes) {
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_node);
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(mesh_device, src_fabric_node_id, dst_node);
         TT_FATAL(
             !links.empty(), "No forwarding links from {} to {} neighbor {}", src_fabric_node_id, axis_label, dst_node);
         log_debug(
@@ -1332,8 +1333,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 // Portable RoutingPlaneConnectionManager path: one connection per physical first-hop
                 // direction used by the combine group, so traffic forwards across MULTIPLE hops. The
                 // writer reads num_connections first, then builds the manager from the appended args.
-                const std::vector<uint32_t> per_conn_links =
-                    compute_per_neighbor_forwarding_links(src_fabric_node_id, dst_nodes, core_link, "combine-axis");
+                const std::vector<uint32_t> per_conn_links = compute_per_neighbor_forwarding_links(
+                    *mesh_device, src_fabric_node_id, dst_nodes, core_link, "combine-axis");
                 writer_runtime_args_raw.push_back(static_cast<uint32_t>(dst_nodes.size()));
                 tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
                     src_fabric_node_id,

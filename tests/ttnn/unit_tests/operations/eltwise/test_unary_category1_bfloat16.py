@@ -138,12 +138,12 @@ def test_spl_value_check_ops(device, ttnn_op):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Logical NOT (-0.0) returns False while golden returns True
+# Logical NOT
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_logical_not_ops(device):
-    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
+    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16, include_spl_values=True)
     ttnn_op = ttnn.logical_not
     tt_in = to_tt_tensor(input_tensor, device)
 
