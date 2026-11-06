@@ -50,6 +50,7 @@ inline void llk_math_top32_rm_configure_mop(const std::uint32_t total_rows, cons
 
     if (((is_fp32_dest_acc_en || is_int_fpu_en) && !(dst_format == to_underlying(DataFormat::UInt16))) || (dst_format == to_underlying(DataFormat::UInt8)))
     {
+        math::_configure_elw_zero_flag_state_(); // ELW* need the Src zero flag clear
         ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0));
         // tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
         tmp.program();

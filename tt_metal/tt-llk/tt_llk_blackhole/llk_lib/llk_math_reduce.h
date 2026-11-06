@@ -36,11 +36,9 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape);
 template <bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
-    // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag).
-    // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
-    // corrupting the sum. Disable the flag (via the math state tracker) around the transpose+add, then
-    // return it to the operand driven baseline. WH does the same in its fp32 transpose.
-    math::_configure_preserve_zero_flag_state_();
+    // The ELWADD below needs the Src zero substitution flag clear. MOVD2B writes SrcB with a real
+    // exponent (int8 included), so the flag zeroes only true zeros there.
+    math::_configure_elw_zero_flag_state_();
 
     if constexpr (is_int_fpu_en)
     {
@@ -493,8 +491,8 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
-    // Establish the operand-driven DEFAULT zero-flag state before the reduce's GMPOOLs, mirroring
-    // _llk_math_matmul_init_ / _llk_math_eltwise_binary_init_. A preceding copy_init that left
+    // Establish the operand-driven DEFAULT zero-flag state before the reduce's GMPOOLs, as
+    // _llk_math_matmul_init_ does. A preceding copy_init that left
     // PRESERVE (keep denormals) would otherwise leak "keep" into the pool GMPOOL — harmless on HW
     // when fp32 DEST accumulation is enabled (the flag is ignored), but a real invariant violation.
     math::_configure_default_zero_flag_state_();
