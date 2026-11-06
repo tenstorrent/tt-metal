@@ -22,8 +22,7 @@
 
 #include "impl/jit_server/server_cache_pruner.hpp"
 
-namespace tt::tt_metal::jit_server {
-namespace cache_pruner_test {
+namespace tt::tt_metal::jit_server::cache_pruner_test {
 
 namespace fs = std::filesystem;
 
@@ -272,6 +271,7 @@ TEST_F(ServerCachePrunerTest, RemovesTrashOnlyFromExitedProcesses) {
 
 TEST_F(ServerCachePrunerTest, StopsAtTwiceTheShortfallWhenFreeSpaceDoesNotMove) {
     std::vector<fs::path> kernels;
+    kernels.reserve(4);
     for (int i = 0; i < 4; ++i) {
         kernels.push_back(make_kernel("1", "reader", std::to_string(10 + i), 50 - i));
     }
@@ -284,7 +284,7 @@ TEST_F(ServerCachePrunerTest, StopsAtTwiceTheShortfallWhenFreeSpaceDoesNotMove) 
 }
 
 TEST_F(ServerCachePrunerTest, ReachedTargetComesFromMeasuredFreeSpace) {
-    const fs::path kernel = make_kernel("1", "reader", "11", 50);
+    make_kernel("1", "reader", "11", 50);
     auto pruner = make_pruner(1.0);
     const CachePruneResult result = pruner.prune_once();
     EXPECT_EQ(result.deleted, 1u);
@@ -492,5 +492,4 @@ TEST(CachePruneConfigTest, ValidatesEveryVariableEvenWhenDisabled) {
     EXPECT_THROW(config_from({{kCacheMinFreePctEnv, "0"}, {kCacheCheckIntervalEnv, "0"}}), std::invalid_argument);
 }
 
-}  // namespace cache_pruner_test
-}  // namespace tt::tt_metal::jit_server
+}  // namespace tt::tt_metal::jit_server::cache_pruner_test

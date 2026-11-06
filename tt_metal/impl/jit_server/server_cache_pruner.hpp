@@ -158,7 +158,7 @@ public:
     };
 
     ServerCachePruner(
-        std::filesystem::path cache_root,
+        const std::filesystem::path& cache_root,
         CachePruneConfig config,
         LogFn log = {},
         DiskSpaceFn disk_space = statvfs_disk_space);

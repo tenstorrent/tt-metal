@@ -5,7 +5,6 @@
 #include "impl/jit_server/server_cache_pruner.hpp"
 
 #include <fcntl.h>
-#include <signal.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/types.h>
@@ -14,6 +13,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cmath>
+#include <csignal>
 #include <cstdlib>
 #include <ctime>
 #include <optional>
@@ -64,7 +64,7 @@ fs::path normalize(const fs::path& path) {
     return normal;
 }
 
-bool is_trash(const fs::path& path) { return path.filename().string().rfind(kTrashPrefix, 0) == 0; }
+bool is_trash(const fs::path& path) { return path.filename().string().starts_with(kTrashPrefix); }
 
 bool is_build_key(const fs::path& path) {
     const std::string name = path.filename().string();
@@ -157,7 +157,7 @@ Usage measure(const fs::path& path) {
 std::string megabytes(std::uint64_t bytes) { return std::to_string(bytes / (1024 * 1024)); }
 
 std::string percent(double value) {
-    const auto tenths = static_cast<long long>(value * 10.0 + 0.5);
+    const long long tenths = std::llround(value * 10.0);
     return std::to_string(tenths / 10) + "." + std::to_string(tenths % 10) + "%";
 }
 
@@ -259,8 +259,12 @@ DiskSpace statvfs_disk_space(const fs::path& path) {
     return disk_space_from_counts(stats.f_blocks, stats.f_bfree, stats.f_bavail, stats.f_frsize);
 }
 
-ServerCachePruner::ServerCachePruner(fs::path cache_root, CachePruneConfig config, LogFn log, DiskSpaceFn disk_space) :
-    root_(normalize(cache_root)), config_(config), log_(std::move(log)), disk_space_(std::move(disk_space)) {}
+ServerCachePruner::ServerCachePruner(
+    const fs::path& cache_root, CachePruneConfig config, LogFn log, DiskSpaceFn disk_space) :
+    root_(normalize(cache_root)),
+    config_(std::move(config)),
+    log_(std::move(log)),
+    disk_space_(std::move(disk_space)) {}
 
 ServerCachePruner::~ServerCachePruner() { stop(); }
 
@@ -317,7 +321,7 @@ bool ServerCachePruner::idle_enough(std::int64_t last_used_epoch_seconds, std::i
 bool ServerCachePruner::in_use_locked(const fs::path& path) const {
     // A lease on this directory or on one that contains it...
     for (fs::path dir = path; !dir.empty(); dir = dir.parent_path()) {
-        if (in_use_.count(dir.string()) > 0) {
+        if (in_use_.contains(dir.string())) {
             return true;
         }
         if (dir == dir.parent_path()) {
@@ -327,7 +331,7 @@ bool ServerCachePruner::in_use_locked(const fs::path& path) const {
     // ...or on anything inside it: those keys sort right after "<path>/".
     const std::string prefix = path.string() + "/";
     const auto inside = in_use_.lower_bound(prefix);
-    return inside != in_use_.end() && inside->first.compare(0, prefix.size(), prefix) == 0;
+    return inside != in_use_.end() && inside->first.starts_with(prefix);
 }
 
 ServerCachePruner::ScanResult ServerCachePruner::scan(std::int64_t now_epoch_seconds) const {
@@ -521,7 +525,7 @@ void ServerCachePruner::log(const std::string& message) const {
     }
     try {
         log_(message);
-    } catch (...) {
+    } catch (...) {  // NOLINT(bugprone-empty-catch)
         // A failed log write (e.g. a full disk under a redirected log) must not stop pruning.
     }
 }
