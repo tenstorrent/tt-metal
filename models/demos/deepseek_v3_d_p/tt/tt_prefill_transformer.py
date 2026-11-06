@@ -822,6 +822,7 @@ class TtPrefillTransformer(LightweightModule):
         zero_pad: bool = False,
         mtp_unions: Optional[list] = None,
         provided_levels: Optional[list] = None,
+        mtp_geometries: Optional[list] = None,
     ):
         """One packed forward of ``chunks`` (PrefillChunk, forward_chunks of them): every layer runs its
         attention half once per non-empty chunk against that chunk's slot and offset, then its FFN half once
@@ -840,10 +841,11 @@ class TtPrefillTransformer(LightweightModule):
         Traced form: ``metadata`` (one ChunkMetadata per chunk position, read on device) and
         ``padding_config`` (the persistent MoE padding config) replace ``chunks``, which is then None.
 
-        MTP (eager, last rank): ``mtp_unions`` holds one MTPUnionEmbedding per chunk position, gathered from that
-        chunk's own ids and lookahead block, and ``provided_levels`` one count per chunk. After the trunk, run_mtp_packed
-        runs the K levels over every chunk's rows at once (see there); on the first rank ``token_ids`` is then the
-        unions' trunks, already embedded (``input_is_embedded``).
+        MTP (last rank): ``mtp_unions`` holds one MTPUnionEmbedding per chunk position, gathered from that chunk's own
+        ids and lookahead block. After the trunk the K levels run over every chunk's rows at once; on the first rank
+        ``token_ids`` is then the unions' trunks, already embedded (``input_is_embedded``). Eager, ``provided_levels``
+        holds one count per chunk (run_mtp_packed). Traced, ``mtp_geometries`` holds one MTPTraceGeometry per chunk
+        position, refreshed by the caller before each replay (run_mtp_packed_traced).
         """
         assert self.is_chunked, "a packed forward is chunked prefill; build with is_chunked=True"
         n = len(metadata) if metadata is not None else len(chunks)
@@ -851,9 +853,10 @@ class TtPrefillTransformer(LightweightModule):
         assert (mtp_unions is not None) == (
             self.mtp_predictor is not None and self.is_last_rank
         ), "a last rank running MTP takes mtp_unions, one per chunk position; any other rank takes none"
-        assert mtp_unions is None or (
-            metadata is None and len(mtp_unions) == n
-        ), "packed MTP is eager only, with one union per chunk position"
+        assert mtp_unions is None or len(mtp_unions) == n, "packed MTP takes one union per chunk position"
+        assert mtp_unions is None or (mtp_geometries is not None) == (
+            metadata is not None
+        ), "traced packed MTP (metadata) takes mtp_geometries, one per chunk position; eager takes none"
         rope_tensors = self.indexed_rope
         intermediates = {} if return_intermediates else None
 
@@ -932,18 +935,31 @@ class TtPrefillTransformer(LightweightModule):
             if return_intermediates:
                 ttnn.synchronize_device(self.mesh_device)
                 intermediates["norm"] = self._to_host(h_normed)
-            self.run_mtp_packed(
-                h_normed,
-                kvpe_cache,
-                rope_tensors,
-                chunks,
-                unions=mtp_unions,
-                provided_levels=provided_levels,
-                padding_config=padding_config,
-                zero_pad=zero_pad,
-                index_kv_cache=index_kv_cache,
-                on_layer_complete=on_layer_complete,
-            )
+            if mtp_geometries is not None:
+                self.run_mtp_packed_traced(
+                    h_normed,
+                    kvpe_cache,
+                    rope_tensors,
+                    unions=mtp_unions,
+                    geometries=mtp_geometries,
+                    metadata=metadata,
+                    padding_config=padding_config,
+                    zero_pad=zero_pad,
+                    index_kv_cache=index_kv_cache,
+                )
+            else:
+                self.run_mtp_packed(
+                    h_normed,
+                    kvpe_cache,
+                    rope_tensors,
+                    chunks,
+                    unions=mtp_unions,
+                    provided_levels=provided_levels,
+                    padding_config=padding_config,
+                    zero_pad=zero_pad,
+                    index_kv_cache=index_kv_cache,
+                    on_layer_complete=on_layer_complete,
+                )
             ttnn.deallocate(h_normed)
         if owned_padding_config is not None:
             ttnn.deallocate(owned_padding_config)
@@ -1225,6 +1241,81 @@ class TtPrefillTransformer(LightweightModule):
                 union.set_split_chip_lookahead(None)
                 if split is not None:
                     split.deallocate()
+
+    def run_mtp_packed_traced(
+        self,
+        h_normed: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
+        rope_tensors: dict,
+        *,
+        unions: list,
+        geometries: list,
+        **fwd_kwargs,
+    ) -> None:
+        """:meth:`run_mtp_packed` with no per-chunk host branch, as :meth:`run_mtp_traced` is to :meth:`run_mtp`.
+
+        Chunk k's level input comes from its own union and ``geometries[k]`` (an MTPTraceEmbedSource each), and
+        the level runs packed over every chunk's rows, its block reading each position's ChunkMetadata on device.
+        Under a trace controller it is captured twice: "generate", where every chunk runs the generation chain and
+        its geometry zeroes the patches its provided levels would not take (the caller writes every chunk's
+        geometry in full, see MTPTraceGeometry.write), and "provided", for forwards in which no chunk generates.
+        An empty chunk position runs in the scratch slot with every level provided. The level outputs are freed
+        here."""
+        assert self.mtp_predictor is not None, "run_mtp_packed_traced on a transformer built without an mtp_predictor"
+        assert not self.is_balanced, "MTP device generation is block-cyclic only"
+        n = len(unions)
+        assert len(geometries) == n, f"{len(geometries)} geometries for {n} chunk positions"
+        rows = h_normed.shape[2] // n
+        assert rows * n == h_normed.shape[2], f"{h_normed.shape[2]} rows do not split into {n} chunks"
+        all_gather_sp = self._mtp_all_gather_sp if self.sp_factor > 1 else None
+
+        def run(generate: bool):
+            sources = [
+                MTPTraceEmbedSource(
+                    union,
+                    geometry,
+                    embed_fn=(lambda h, g=geometry: self.mtp_generate_embedding_selected(h, g.lm_rows))
+                    if generate
+                    else None,
+                    all_gather_sp=all_gather_sp,
+                )
+                for union, geometry in zip(unions, geometries)
+            ]
+
+            def get_embed(level, h):
+                s = list(h.shape)
+                parts = []
+                for k, source in enumerate(sources):
+                    h_k = ttnn.slice(h, [0, 0, k * rows, 0], [s[0], s[1], (k + 1) * rows, s[3]]) if generate else None
+                    parts.append(source(level, h_k))
+                    if h_k is not None:
+                        ttnn.deallocate(h_k)
+                embed = ttnn.concat(parts, dim=2)
+                for part in parts:
+                    ttnn.deallocate(part)
+                return embed
+
+            out = self.mtp_predictor.forward(
+                get_embed,
+                h_normed,
+                rope_tensors,
+                kvpe_cache,
+                chunks=None,
+                layer_ack_base=self.first_layer_idx + self.mtp_predictor.first_cache_slot,
+                **fwd_kwargs,
+            )
+            for t in {id(t): t for t in (*out.x, *out.out, *out.out_head_normed) if t is not None}.values():
+                if t.is_allocated():
+                    ttnn.deallocate(t)
+            # The next variant must start from the row blocks, not this one's temporaries.
+            for union in unions:
+                union.drop_derived()
+
+        if self._trace_controller is None:
+            run(generate=True)
+            return
+        assert not any(u.has_derived for u in unions), "the variants share the unions' row blocks only"
+        self._trace_controller.capture_variants({"generate": lambda: run(True), "provided": lambda: run(False)})
 
     def run_mtp_traced(
         self,

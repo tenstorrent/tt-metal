@@ -211,16 +211,10 @@ class TtPrefillRuntime:
         assert budget is None or (
             budget > 0 and budget % config.chunk_size == 0
         ), f"forward_tokens_budget ({budget}) must be a positive multiple of chunk_size ({config.chunk_size})"
-        if config.forward_chunks > 1:
-            # The packed path runs without DFlash, and MTP only eager; fail at construction, not on the first forward.
-            assert (
-                not config.dflash_enabled
-            ), "packed forwards (forward_tokens_budget > chunk_size) do not support DFlash"
-            if config.mtp_levels and config.use_trace:
-                raise NotImplementedError(
-                    "a traced packed forward (forward_tokens_budget > chunk_size, use_trace) does not run MTP; "
-                    "run packed MTP eager (PREFILL_USE_TRACE=0) or one chunk per forward"
-                )
+        # The packed path runs without DFlash; fail at construction, not on the first forward.
+        assert (
+            config.forward_chunks == 1 or not config.dflash_enabled
+        ), "packed forwards (forward_tokens_budget > chunk_size) do not support DFlash"
         assert (
             config.max_seq_len % config.chunk_size == 0
         ), f"max_seq_len ({config.max_seq_len}) must be a multiple of chunk_size ({config.chunk_size})"
@@ -259,6 +253,7 @@ class TtPrefillRuntime:
         self._trace_partial_in = None  # DFlash, non-first rank: persistent home of the imported drafter partial
         self._trace_mtp_tokens = None  # MTP, first rank: persistent home of the lookahead ids
         self._trace_mtp_geometry = None  # MTP, last rank: per-chunk level geometry the replay reads
+        self._packed_mtp_geometries = None  # the same for a traced packed forward, one per chunk position
         self._send_warmup_activation = None
         self._trace_indices_in = None
         self._trace_indices_out = None
@@ -451,7 +446,9 @@ class TtPrefillRuntime:
             first_layer_idx=self.config.first_layer_idx,
             is_chunked=True,
             max_seq_len=self.config.max_seq_len,
-            slot_num=self.config.num_users,
+            # The trunk's slots: a traced packed forward also runs the MTP layer of an empty chunk position, in the
+            # scratch slot.
+            slot_num=self.config.cache_num_users,
             is_balanced=False,
             layer_num=self.config.num_layers + k,
             # A packed forward runs the MTP block packed too: attention per chunk, one MoE over every chunk's rows.
@@ -635,7 +632,9 @@ class TtPrefillRuntime:
         ttnn.deallocate(ids_block)
         return union, hidden, None
 
-    def _mtp_prepare_packed_input(self, input_tensor: ttnn.Tensor, mtp_tokens: Optional[ttnn.Tensor]) -> tuple:
+    def _mtp_prepare_packed_input(
+        self, input_tensor: ttnn.Tensor, mtp_tokens: Optional[ttnn.Tensor], owned: bool = True
+    ) -> tuple:
         """:meth:`_mtp_prepare_input` for a packed forward: ``(unions or None, model input, id blocks or None)``, one
         union and one id block per chunk position.
 
@@ -643,7 +642,8 @@ class TtPrefillRuntime:
         lookahead block; chunk k's union is gathered from its own ids and block alone, so no window reaches into the
         next chunk, which belongs to another user. The model input is the unions' trunks stacked in chunk order.
         Downstream: the activation is the forward's hidden rows, then one id block per chunk; only the last rank
-        gathers the unions from them."""
+        gathers the unions from them. The inputs are freed unless ``owned`` is False (a traced forward's persistent
+        buffers)."""
         cfg = self.config
         n, rows, n_mtp = cfg.forward_chunks, cfg.chunk_size // cfg.sp_factor, self._num_mtp_tokens()
         unions, blocks = [], []
@@ -668,8 +668,9 @@ class TtPrefillRuntime:
                     blocks.append(self._mtp_ids_block(ids_k, mtp_k))
                 ttnn.deallocate(ids_k)
                 ttnn.deallocate(mtp_k)
-            ttnn.deallocate(input_tensor)
-            ttnn.deallocate(mtp_tokens)
+            if owned:
+                ttnn.deallocate(input_tensor)
+                ttnn.deallocate(mtp_tokens)
             model_input = ttnn.concat([u.trunk for u in unions], dim=2)
             if cfg.is_last_rank:
                 return unions, model_input, None
@@ -687,7 +688,8 @@ class TtPrefillRuntime:
         for k in range(n):
             first = n * rows + k * MTP_ID_ROWS
             blocks.append(ttnn.slice(input_tensor, [0, 0, first, 0], [s0, s1, first + MTP_ID_ROWS, s3]))
-        ttnn.deallocate(input_tensor)
+        if owned:
+            ttnn.deallocate(input_tensor)
         if not cfg.is_last_rank:
             return None, hidden, blocks
         for block in blocks:
@@ -1144,9 +1146,19 @@ class TtPrefillRuntime:
         persistent ChunkMetadata, and the MoE its padding config from a persistent tensor. On a pipeline rank
         the input is the persistent activation (the D2D drain fills it) and a rank starting on a GLM-5.3
         "shared" layer seeds from the persistent packed indices; a non-last rank returns its output
-        activation. Every chunk's KV pad window is zeroed in place (acks go out after the replay)."""
-        return self.model.forward_packed(
-            self._trace_input,
+        activation. Every chunk's KV pad window is zeroed in place (acks go out after the replay).
+
+        MTP: each chunk's union is rebuilt from the persistent inputs on every replay, as in _forward_traced; the last
+        rank runs the levels against the per-position geometries (_stage_packed writes them), and a non-last rank
+        returns every chunk's id block under its hidden rows."""
+        cfg = self.config
+        model_input, unions, blocks = self._trace_input, None, None
+        if cfg.mtp_levels:
+            unions, model_input, blocks = self._mtp_prepare_packed_input(
+                self._trace_input, self._trace_mtp_tokens, owned=False
+            )
+        out = self.model.forward_packed(
+            model_input,
             kv_caches.kvpe,
             None,
             index_kv_cache=kv_caches.index,
@@ -1154,7 +1166,18 @@ class TtPrefillRuntime:
             padding_config=self._packed_padding_config,
             seed_indexer_indices=self._trace_indices_in,
             zero_pad=True,
+            mtp_unions=unions if self.mtp_predictor is not None else None,
+            mtp_geometries=self._packed_mtp_geometries if self.mtp_predictor is not None else None,
+            input_is_embedded=bool(cfg.mtp_levels) and cfg.is_first_rank,
         )
+        if not cfg.mtp_levels:
+            return out
+        ttnn.deallocate(model_input)
+        for union in unions or ():
+            union.deallocate()
+        if cfg.is_last_rank:
+            return None
+        return self._mtp_pack_packed_activation(out, blocks)
 
     def _ack_record_words(self, chunk) -> torch.Tensor:
         return torch.tensor([chunk.slot_id, chunk.actual_start, chunk.actual_end], dtype=torch.int32).reshape(
@@ -1243,17 +1266,30 @@ class TtPrefillRuntime:
         chunks: list,
         metadata_msg: Optional[ttnn.Tensor] = None,
         indexer_indices: Optional[ttnn.Tensor] = None,
-    ) -> None:
+        mtp_tokens: Optional[ttnn.Tensor] = None,
+        provided_levels=None,
+    ) -> Optional[str]:
         """Copy one packed forward's input, per-chunk metadata and MoE padding config into the captured
         buffers. An empty chunk runs as a full chunk in the scratch slot; the padding config masks its rows.
 
-        The input is skipped when the caller fills the persistent buffer itself (claim_persistent_input).
-        ``metadata_msg`` (the forward's socket record) is kept at a fixed address for the D2D send that
-        forwards it (trace_metadata_msg), and ``indexer_indices`` (packed) land in the persistent seed."""
+        The input is skipped when the caller fills the persistent buffer itself (claim_persistent_input), and
+        likewise the first rank's MTP lookahead blocks (claim_persistent_overhang). ``metadata_msg`` (the forward's
+        socket record) is kept at a fixed address for the D2D send that forwards it (trace_metadata_msg), and
+        ``indexer_indices`` (packed) land in the persistent seed.
+
+        MTP, last rank: writes each position's level geometry from its chunk and ``provided_levels`` (an empty
+        chunk provides every level) and returns the replay variant, "generate" when any chunk generates a level,
+        else "provided". None without MTP."""
         cfg = self.config
         if not (self._input_is_caller_filled and _same_buffer(input_tensor, self._trace_input)):
             ttnn.copy(input_tensor, self._trace_input)
             ttnn.deallocate(input_tensor)
+        if self._trace_mtp_tokens is not None and not (
+            self._mtp_is_caller_filled and _same_buffer(mtp_tokens, self._trace_mtp_tokens)
+        ):
+            assert mtp_tokens is not None, "MTP is on but no lookahead blocks arrived with this forward"
+            ttnn.copy(mtp_tokens, self._trace_mtp_tokens)
+            ttnn.deallocate(mtp_tokens)
         if metadata_msg is not None and metadata_msg is not self._trace_metadata_msg:
             ttnn.copy(metadata_msg, self._trace_metadata_msg)
         if indexer_indices is not None:
@@ -1271,11 +1307,25 @@ class TtPrefillRuntime:
             )
         chunk_local = cfg.chunk_size // cfg.sp_factor
         self._write_packed_padding_config(packed_real_rows(chunks, cfg.sp_factor, chunk_local))
+        if self._packed_mtp_geometries is None:
+            return None
+        k = cfg.mtp_levels
+        levels = [0] * len(chunks) if provided_levels is None else [int(p) for p in provided_levels]
+        assert len(levels) == len(chunks), f"{len(levels)} provided-levels counts for {len(chunks)} chunks"
+        levels = [k if c.is_empty else p for c, p in zip(chunks, levels)]
+        generate = any(p < k for p in levels)
+        for geometry, c, p in zip(self._packed_mtp_geometries, chunks, levels):
+            start, end = (0, cfg.chunk_size) if c.is_empty else (c.actual_start, c.actual_end)
+            geometry.write(start, end, p, full=generate)
+        return "generate" if generate else "provided"
 
     def _prepare_trace_packed(self, kv_caches: MlaKvCaches) -> None:
         """Packed counterpart of _prepare_trace: persistent token input, one ChunkMetadata per chunk position,
         the persistent MoE padding config and the controller; then a warm pass with every position in the
-        scratch slot. capture_trace() records the capture later."""
+        scratch slot. capture_trace() records the capture later.
+
+        MTP: the first rank's persistent lookahead blocks, and on the last rank one MTPTraceGeometry per chunk
+        position."""
         cfg = self.config
         chunk, n = cfg.chunk_size, cfg.forward_chunks
         rope_setup = getattr(self.model, "rope_setup", None)
@@ -1286,8 +1336,29 @@ class TtPrefillRuntime:
         self._trace_input = self._packed_warm_input([empty] * n)
         self._trace_indices_in = self.make_placeholder_indices() if self.receives_indexer_indices else None
         self._input_is_caller_filled = False
-        # The forward's socket record (PrefillBatchMetadata), kept for the traced D2D send to forward.
-        self._trace_metadata_msg = self._meta_words_dev((0,) * (metadata_size_bytes(n) // 4))
+        self._mtp_is_caller_filled = False
+        warm_blocks = [torch.zeros(cfg.sp_factor, self._num_mtp_tokens(), dtype=torch.int64)] * n
+        mtp_first = bool(cfg.mtp_levels) and cfg.is_first_rank
+        if mtp_first:
+            self._trace_mtp_tokens = self.make_forward_mtp_tokens(warm_blocks)
+        if self.mtp_predictor is not None:
+            self._packed_mtp_geometries = [
+                MTPTraceGeometry(
+                    self.mesh_device,
+                    sp_factor=cfg.sp_factor,
+                    chunk_size=chunk,
+                    mesh_shape=cfg.mesh_shape,
+                    sp_axis=cfg.sp_axis,
+                    num_mtp_tokens=self._num_mtp_tokens(),
+                    num_levels=cfg.mtp_levels,
+                )
+                for _ in range(n)
+            ]
+        # The forward's socket record (PrefillBatchMetadata), kept for the traced D2D send to forward. A downstream
+        # MTP rank's record also carries one provided-levels word per chunk, which it forwards.
+        level_words = n if cfg.mtp_levels and not cfg.is_first_rank else 0
+        words = (0,) * (metadata_size_bytes(n) // 4 + level_words)
+        self._trace_metadata_msg = self._meta_words_dev(words)
         self._ensure_packed_ack_records()
         self._packed_metadata = [
             ChunkMetadata(self._meta1_dev(cfg.num_users), self._meta1_dev(0), self._meta1_dev(chunk)) for _ in range(n)
@@ -1306,12 +1377,13 @@ class TtPrefillRuntime:
         self.model.set_trace_controller(controller)
         self._controller = controller
         # Warm the staging copies too: a program compiled after the capture can land on trace memory.
-        warm_md = self._meta_words_dev((0,) * (metadata_size_bytes(n) // 4))
+        warm_md = self._meta_words_dev(words)
         self._stage_packed(
             self._packed_warm_input([empty] * n),
             [empty] * n,
             metadata_msg=warm_md,
             indexer_indices=self.make_placeholder_indices() if self.receives_indexer_indices else None,
+            mtp_tokens=self.make_forward_mtp_tokens(warm_blocks) if mtp_first else None,
         )
         ttnn.deallocate(warm_md)
         self._write_packed_ack_records([empty] * n)
@@ -1575,9 +1647,10 @@ class TtPrefillRuntime:
             provided_levels: with MTP, per chunk, how many leading levels have their lookahead token
                 (the runner's chunk_provided_levels); the rest generate one on device. None means 0 for every chunk.
 
-        MTP (eager only) runs on the last rank after the trunk: each chunk's levels read windows of that chunk's
-        own union, and the MTP layer runs packed like a trunk layer, writing each chunk's MTP KV slots. Each
-        chunk's D2H acks cover its MTP layers too (layer_ack_layers).
+        MTP runs on the last rank after the trunk: each chunk's levels read windows of that chunk's own union, and the
+        MTP layer runs packed like a trunk layer, writing each chunk's MTP KV slots. Each chunk's D2H acks cover its
+        MTP layers too (layer_ack_layers). Traced, the last rank refreshes one level geometry per chunk before the
+        replay and replays the "provided" capture when no chunk generates a level.
         """
         cfg = self.config
         assert self.model_built, "build the model before prefill_forward()"
@@ -1601,8 +1674,17 @@ class TtPrefillRuntime:
             if self._trace_d2h_service is not None:
                 # Refresh the records ahead of the replay so the copies are not queued behind it.
                 self._write_packed_ack_records(chunks)
-            self._stage_packed(input_tensor, chunks, metadata_msg=metadata_msg, indexer_indices=indexer_indices)
-            self._controller.replay()
+            if not cfg.mtp_levels:
+                assert mtp_tokens is None, "mtp_tokens passed but this runtime runs no MTP"
+            mtp_variant = self._stage_packed(
+                input_tensor,
+                chunks,
+                metadata_msg=metadata_msg,
+                indexer_indices=indexer_indices,
+                mtp_tokens=mtp_tokens if cfg.is_first_rank else None,
+                provided_levels=provided_levels,
+            )
+            self._controller.replay(variant=mtp_variant)
             if self._trace_d2h_service is not None:
                 self._send_packed_ack_records(self._trace_d2h_service, chunks)
             return None if cfg.is_last_rank else self._trace_output
@@ -1949,6 +2031,9 @@ class TtPrefillRuntime:
         if self._trace_mtp_geometry is not None:
             self._trace_mtp_geometry.deallocate()
             self._trace_mtp_geometry = None
+        for geometry in self._packed_mtp_geometries or ():
+            geometry.deallocate()
+        self._packed_mtp_geometries = None
         # Drop the overlap sub-device managers too: they are what the trace buffers hang off, and
         # leaving them registered at close has been observed to segfault teardown on its own.
         release = getattr(self.model, "release_sub_device_managers", None)

@@ -263,8 +263,8 @@ runner sends one index tensor per forward exactly as it does per chunk at F = 1.
 `prefill_forward` takes the upstream rank's packed activation (every chunk's rows back to back on each chip) and a
 non-last rank returns its own.
 
-MTP is refused at F > 1 too, unless `supports_packed_forward_mtp = True` (GLM-5.3), and then only eager
-(`PREFILL_USE_TRACE=0`). A packed forward then carries every chunk's MTP lookahead, chunk by chunk:
+MTP is refused at F > 1 too, unless `supports_packed_forward_mtp = True` (GLM-5.3), eager or traced. A packed
+forward then carries every chunk's MTP lookahead, chunk by chunk:
 
 - **H2D row, per SP chip**: every chunk's ids back to back (as above), then one `num_mtp_tokens(K)`-id lookahead
   block per chunk, in chunk order: `F * (chunk_size / sp + num_mtp_tokens(K))` ids
@@ -279,6 +279,10 @@ MTP is refused at F > 1 too, unless `supports_packed_forward_mtp = True` (GLM-5.
   F * num_mtp_tokens]`) and one provided-levels count per chunk. The last rank builds each chunk's MTP input from
   that chunk's ids and block alone, then runs the MTP layer packed like a trunk layer; each chunk's acks include
   its MTP layers (`layer_ack_layers`).
+- **Traced** (`PREFILL_USE_TRACE=1`): the first rank keeps the lookahead blocks in a persistent buffer
+  (`claim_persistent_overhang`), and the last rank refreshes one level geometry per chunk position before each replay
+  (an empty chunk provides every level). The MTP region is captured twice: "generate", replayed when any chunk
+  generates a level, and "provided", when none does.
 
 ---
 

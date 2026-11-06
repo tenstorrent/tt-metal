@@ -191,14 +191,12 @@ def packed_forward_refusals(
       boundary's indexer indices for every chunk of the forward, packed in one tensor of the runtime's
       indexer_indices_shape().
     - ``forward_mtp`` (supports_packed_forward_mtp): its prefill_forward takes one MTP lookahead block and one
-      provided-levels word per chunk (ADDING_A_PREFILL_MODEL.md), eager only."""
+      provided-levels word per chunk (ADDING_A_PREFILL_MODEL.md), eager or traced (with ``traced_forward``)."""
     if forward_chunks == 1:
         return []
     reasons = []
     if mtp_levels and not (supports_packed_forward and forward_mtp):
         reasons.append("PREFILL_MTP_LEVELS > 0 (MTP lookahead is per chunk)")
-    elif mtp_levels and use_trace:
-        reasons.append("PREFILL_USE_TRACE=1 with PREFILL_MTP_LEVELS > 0 (a traced packed forward does not run MTP)")
     if dflash:
         reasons.append("PREFILL_DFLASH=1")
     if use_trace and not (supports_packed_forward and traced_forward):
