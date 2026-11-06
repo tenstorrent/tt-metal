@@ -5,9 +5,9 @@
 combine -> tail with the shared arena, on zero / uninitialized weights. Checks that the four ops plan, build and launch
 together (the arena spec accepted by the head and the combine, the output's shape) and gates the block's host time a
 forward on program-cache hits: the median of op_checks.PERF_RUNS (5) runs, each the best of HOST_TRIES timings of
-HOST_CALLS forwards (few: the command queue never fills, so no forward waits on the device; the best of a few: a timing
-the host's other threads slowed - up to 2x on the Galaxy's host - is dropped), against smoke_perf_baselines.json (per machine; MOE_PERF_RECORD=1
-records it; not on the mock Galaxy). No numerics (the ops' own tests check those bit-exact).
+HOST_CALLS forwards (few: the command queue never fills, so no forward waits on the device), the timed thread pinned to
+a core no busy thread shares (_quiet_cpu), against smoke_perf_baselines.json (per machine; MOE_PERF_RECORD=1 records
+it; not on the mock Galaxy). No numerics (the ops' own tests check those bit-exact).
 
 Needs an 8x4 Galaxy, or the mock Galaxy (plan, build and launch only):
 
@@ -35,6 +35,55 @@ CHUNK = 5120
 ACCUMULATORS = 11  # (what the combine planner gives GLM-5.3 at 8x4, chunk 5120: the block derives it)
 HOST_CALLS = 4  # (forwards a timing)
 HOST_TRIES = 3  # (timings a run: its best)
+# A busy spin ahead of each timing: the Galaxy host's cores scale their clock with load (schedutil, 1.5 - 3.8 GHz), and
+# the timed thread idles at each sync - a timing that starts on a slow clock reads ~2x (700 vs 1500 us a forward).
+HOST_SPIN_S = 0.05
+
+
+def _quiet_cpu():
+    """A logical CPU whose core (both SMT siblings) no busy thread of the host runs on - the timed thread is pinned
+    there. On the Galaxy's host, other processes (wekanode: two cores at 100%) and the runtime's own spinning thread
+    halve the timed thread's speed when it shares a core with one of them, and the scheduler then keeps it there: a run
+    drifts from ~700 to ~1500 us a forward. MOE_HOST_CPU overrides; -1: no pinning."""
+    want = int(os.environ.get("MOE_HOST_CPU", "-2"))
+    if want != -2:
+        return None if want < 0 else want
+
+    def ticks():
+        out = {}
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            try:
+                for tid in os.listdir(f"/proc/{pid}/task"):
+                    f = open(f"/proc/{pid}/task/{tid}/stat").read().rsplit(")", 1)[1].split()
+                    out[(pid, tid)] = (int(f[11]) + int(f[12]), int(f[36]))
+            except OSError:
+                pass
+        return out
+
+    t0 = ticks()
+    time.sleep(0.5)
+    t1 = ticks()
+    hz = os.sysconf("SC_CLK_TCK")
+    busy = {t1[k][1] for k in t1 if k in t0 and (t1[k][0] - t0[k][0]) / hz > 0.25}  # (over 50% of the 0.5 s)
+
+    def core(c):
+        try:
+            sib = open(f"/sys/devices/system/cpu/cpu{c}/topology/thread_siblings_list").read().strip()
+        except OSError:
+            return {c}
+        out = set()
+        for part in sib.split(","):
+            a, _, b = part.partition("-")
+            out.update(range(int(a), int(b or a) + 1))
+        return out
+
+    allowed = sorted(os.sched_getaffinity(0))
+    for c in reversed(allowed):  # (from the top: away from the low cores system daemons favour)
+        if not core(c) & busy:
+            return c
+    return None
 HOST_MARGIN = 0.15  # (host time: noisier than device time)
 BASELINES = PerfBaselines(Path(__file__).with_name("smoke_perf_baselines.json"))
 REPO = Path(__file__).resolve().parents[4]
@@ -119,6 +168,9 @@ def test_moe_block_smoke(mesh):
 
         def timing():
             ttnn.synchronize_device(mesh)
+            spin = time.perf_counter() + HOST_SPIN_S  # (the core's clock up first: see HOST_SPIN_S)
+            while time.perf_counter() < spin:
+                pass
             t0 = time.perf_counter()
             for _ in range(HOST_CALLS):
                 ttnn.deallocate(block(x, weights))
@@ -129,10 +181,17 @@ def test_moe_block_smoke(mesh):
         def host_us():
             return min(timing() for _ in range(HOST_TRIES))
 
-        us, runs = median_of_runs(host_us)
+        cpu = _quiet_cpu()
+        saved = os.sched_getaffinity(0)
+        if cpu is not None:
+            os.sched_setaffinity(0, {cpu})  # (this thread only)
+        try:
+            us, runs = median_of_runs(host_us)
+        finally:
+            os.sched_setaffinity(0, saved)
         print(
             f"MoEBlock glm53 {R}x{C} chunk {CHUNK}: {us:.1f} us of host a forward (program-cache hits, untraced; "
-            f"median of {', '.join(f'{r:.0f}' for r in runs)})"
+            f"median of {', '.join(f'{r:.0f}' for r in runs)}; timed thread on cpu {cpu})"
         )
         if not MOCK:
             BASELINES.check(f"glm53 {R}x{C} {CHUNK} host a forward", us, HOST_MARGIN)
