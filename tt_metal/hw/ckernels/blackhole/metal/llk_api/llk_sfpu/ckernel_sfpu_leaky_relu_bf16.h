@@ -25,10 +25,5 @@ template <int ITERATIONS = 32>
 inline void calculate_leaky_relu_bf16() {
     ckernel::sfpu::bf16::leaky_relu::calculate_slope_max<ckernel::sfpu::LeakyReluBf16Config, ITERATIONS>();
 }
-inline void init_leaky_relu_bf16() {
-    if (bf16_dest_leaky_relu()) {
-        ckernel::sfpu::bf16::leaky_relu::init_slope_max<ckernel::sfpu::LeakyReluBf16Config>();
-    }
-}
 
 }  // namespace ckernel::sfpu

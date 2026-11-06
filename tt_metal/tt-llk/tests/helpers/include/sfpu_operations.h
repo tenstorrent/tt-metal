@@ -139,6 +139,12 @@ constexpr std::uint32_t EXP_WITH_BASE_SCALE_FP32 = EXP_WITH_BASE_SCALE_BF16 << 1
 // ignores ITERATIONS (tt-llk#1486), so its callers run it per face over all four faces.
 constexpr int EXP_APPROX_CLAMP_ITERATIONS = 8;
 
+// Lrelu's slope, 0.1f (LRELU_NEGATIVE_SLOPE in sfpu_dispatch_constants.py). A test's params.h may define
+// another; test_eltwise_unary_sfpu_bf16_leaky_relu.py sets 0.01f, the slope the BF16 kernel serves.
+#ifndef LRELU_SLOPE_BITS
+#define LRELU_SLOPE_BITS 0x3dcccccdu
+#endif
+
 template <bool APPROXIMATION_MODE, bool IS_FP32_DEST_ACC_EN, int ITERATIONS, bool CLAMP_NEGATIVE, std::uint32_t EXP_BASE_SCALE_FACTOR>
 inline __attribute__((always_inline)) void calculate_exponential_const_scale()
 {
@@ -696,7 +702,6 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
         //   - add1/identity/cast_fp32_to_fp16a/sqrt_custom/expm1_cw: the
         //     OPERATION-keyed bare init has no delegate branch.
         llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
-        ckernel::sfpu::leaky_relu_bf16_tile_init<OPERATION == SfpuType::lrelu && !is_fp32_dest_acc_en && ITERATIONS == 32>();
     }
     else if constexpr (
         OPERATION == SfpuType::equal_zero || OPERATION == SfpuType::not_equal_zero || OPERATION == SfpuType::less_than_zero ||
@@ -1244,7 +1249,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             (APPROX_MODE, ITERATIONS, DST_ACCUM_MODE),
             dst_index,
             vector_mode,
-            0x3c23d70au /* slope = 0.009999999776482582f */);
+            LRELU_SLOPE_BITS);
     }
     else if constexpr (OPERATION == SfpuType::add_int32)
     {

@@ -222,9 +222,6 @@ ALWI void leaky_relu_tile(uint32_t idst, uint32_t slope = 0) {
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lrelu, (APPROX, 8, DST_ACCUM_MODE), idst, VectorMode::RC, slope));
 }
 
-ALWI void leaky_relu_tile_init() {
-    MATH(SFPU_UNARY_INIT(lrelu));
-    MATH(ckernel::sfpu::leaky_relu_bf16_tile_init<!DST_ACCUM_MODE>());
-}
+ALWI void leaky_relu_tile_init() { MATH(SFPU_UNARY_INIT(lrelu)); }
 #endif
 }  // namespace ckernel

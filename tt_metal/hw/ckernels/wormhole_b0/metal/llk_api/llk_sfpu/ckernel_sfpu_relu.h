@@ -367,9 +367,6 @@ inline void lrelu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 inline constexpr std::uint32_t leaky_relu_bf16_slope_bits = 0x3c23d70au;
 // Whether BF16 DEST runs the generated leaky_relu kernel as one call over the whole tile.
 inline constexpr bool leaky_relu_bf16_whole_tile = false;
-// The stock leaky_relu kernel needs no BF16 setup.
-template <bool bf16_kernel>
-inline void leaky_relu_bf16_tile_init() {}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void calculate_lrelu(const uint slope) {
