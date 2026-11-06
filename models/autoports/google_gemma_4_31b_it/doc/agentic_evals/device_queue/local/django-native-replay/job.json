@@ -2,7 +2,7 @@
   "arm": "django-native-replay",
   "owner": "coordinator",
   "device": "local",
-  "status": "queued",
+  "status": "complete",
   "queued_at": "2026-11-06T10:29:10.523320+00:00",
   "planned_clients": 1,
   "batch": 8,
@@ -20,5 +20,15 @@
     "oldserveridleclosed",
     "ownergate",
     "remainingeffortbudget>=1920s"
-  ]
+  ],
+  "start": "2026-11-06T10:41:16.884858+00:00",
+  "device_hours_before": 0.1960901125,
+  "client_outer_bound_seconds": 1487,
+  "client_started_at": "2026-11-06T10:47:59.772496+00:00",
+  "projection_check": "Original1281.434sresponse plus10percentmargin fits; latestpostprefillanchorlast1024tokens30.32tps providesno worseforecast.",
+  "end": "2026-11-06T10:52:46.423469+00:00",
+  "exit_status": 1,
+  "actual_hours": 0.19153850305555553,
+  "client_exit_status": 0,
+  "exit_reason": "Owned API interrupted after client completed and metrics showed zero running/waiting; wrapper exited 1, devices released."
 }

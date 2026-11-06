@@ -1,0 +1,21 @@
+{
+  "arm": "django-native-seed1",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "running",
+  "queued_at": "2026-11-06T10:56:20.156922+00:00",
+  "start": "2026-11-06T10:56:20.156922+00:00",
+  "planned_clients": 1,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "batch_reason": "Match original B8 failure geometry; no fastest batch claim",
+  "predicted_hours": 0.48,
+  "timeout_seconds": 1920,
+  "request_timeout_seconds": 3600,
+  "max_output_tokens": 32768,
+  "seed": 1,
+  "regime": "Serial TT mesh1x4; concurrent HF CPU reference",
+  "device_hours_before": 0.3876286155555555,
+  "effort_box_hours": 1.0,
+  "owner_check": []
+}

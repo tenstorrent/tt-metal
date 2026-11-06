@@ -1,0 +1,137 @@
+{
+  "run_id": 42190891568,
+  "audited_at": "2026-11-06T10:54:31.113064+00:00",
+  "valid_smoke": true,
+  "nightly10_eligible": true,
+  "eligibility_reason": "Original two frozen tasks have complete audited trajectories and normal scored endings. Scores are reported, not gated. Advance to unchanged frozen nightly10 at C2/B8 subject to coordinator schedule/admission.",
+  "score": {
+    "successes": 0,
+    "completed_samples": 2,
+    "value": 0.0,
+    "unit": "fraction",
+    "wilson95": [
+      0.0,
+      0.6576197724933469
+    ],
+    "reference": null,
+    "reference_reason": "No verified same-suite/version reference supplied."
+  },
+  "functional_at": {
+    "tasks": 2,
+    "clients": 2,
+    "batch": 8
+  },
+  "timing": {
+    "evaluation_seconds": 2295.204564,
+    "evaluation_hours": 0.6375568233333334,
+    "device_job_hours": 0.8861111111111111,
+    "workflow_wall_hours": 1.9608333333333334,
+    "nightly10_linear_eval_projection_hours": 3.187784116666667,
+    "projection_basis": "Five times measured two-task makespan at unchanged C2; exploratory estimate, not representative per-task bound or release projection."
+  },
+  "pins": {
+    "tt_metal": "08ee8790bcbcd9e85cb799593b2bbaf40b785134",
+    "tt_inference_server": "2c4a2628b974acc7ebc7a4fa867db68f0b108019",
+    "vllm_plugin": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+    "harbor": {
+      "version": "0.25.0",
+      "git_commit_hash": "e76c762fca5267dfb36e1f900f0a7724ed72e735",
+      "is_editable": true
+    },
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "agent": "terminus-2",
+    "agent_version": "2.0.0",
+    "evidence": "manifest.json; collected report metadata confirms full TTI/TT SHAs; build/runtime artifacts confirm plugin abbreviation ca7a182; actual job lock records full Harbor SHA. Full plugin SHA is dispatch manifest provenance, not expanded in collected build metadata."
+  },
+  "serving": {
+    "planned_clients": 2,
+    "batch": 8,
+    "max_num_seqs": 8,
+    "context": 262144,
+    "native_reasoning_parser": "gemma4",
+    "adapter": "TTGemma4ForConditionalGeneration=models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM,TTGemma4ForCausalLM=models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM",
+    "default_top_k": 32
+  },
+  "limits": {
+    "agent_seconds": 21600,
+    "request_seconds": 3600,
+    "output_tokens": 32768,
+    "cpu_memory": "task definitions; null overrides",
+    "observed_limit_cost": false
+  },
+  "trajectory_audit": [
+    {
+      "task": "terminal-bench/llm-inference-batching-scheduler",
+      "task_digest": "sha256:a3bf47589118daec5124fe3689b4439802c805b2f4ed9d402a48ae73ca2fea67",
+      "task_checksum": "c19d5af0dc6e54b45f66e3d8f25bfa783c51df3e1844253aa60c20ca0a827046",
+      "valid": true,
+      "reward": 0,
+      "agent_episodes": 5,
+      "trajectory_steps": 6,
+      "tool_calls": 11,
+      "completion_steps": [
+        5,
+        6
+      ],
+      "parse_error_steps": [
+        4
+      ],
+      "max_completion_tokens": 4669,
+      "max_request_seconds": 140.17358326911926,
+      "agent_seconds": 436.56355,
+      "trial_seconds": 457.429368,
+      "verifier_seconds": 2.602471,
+      "external_retrieval_observed": false,
+      "fetched_fix_observed": false,
+      "limit_termination": false,
+      "failure": "bucket1 sequential_timecost273126882.8496 exceeds270000000",
+      "evidence": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/terminal_bench_2_1_20261106T101206/llm-inference-batching-scheduler__STnYvMm/agent/trajectory.json",
+      "trajectory_sha256": "bafad80926efcc6a1affeb7eed34caf7c5d64344f0a53ca92feadf48322cc8b0"
+    },
+    {
+      "task": "terminal-bench/mailman",
+      "task_digest": "sha256:831b3ed00807153963c05f91599443e4839099521d1d56db811c5547ab280dbe",
+      "task_checksum": "ab0557da8fe78e716eecfa52622c0c3f5ae8ab68aa22dc3b532b54520b279413",
+      "valid": true,
+      "reward": 0,
+      "agent_episodes": 42,
+      "trajectory_steps": 43,
+      "tool_calls": 120,
+      "completion_steps": [
+        42,
+        43
+      ],
+      "parse_error_steps": [
+        5,
+        18,
+        37
+      ],
+      "max_completion_tokens": 3447,
+      "max_request_seconds": 112.14284420013428,
+      "agent_seconds": 2182.950288,
+      "trial_seconds": 2295.080568,
+      "verifier_seconds": 92.659297,
+      "external_retrieval_observed": false,
+      "fetched_fix_observed": false,
+      "limit_termination": false,
+      "failure": "announcement delivery absent after successful join; verifier1failed2passed",
+      "evidence": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/terminal_bench_2_1_20261106T101206/mailman__d4RnsGx/agent/trajectory.json",
+      "trajectory_sha256": "0d7fb87ddf5134a1e08a9a49d61c39dd54bcbd0e2c9dbf1ea637227e7ebbed23"
+    }
+  ],
+  "network_audit": {
+    "agent_external_network_observed": false,
+    "task_local_network": "Mailman explicitly requires localhost SMTP/LMTP. These task-local communications are distinguished from external retrieval, not quarantined.",
+    "verifier_setup_downloads": "Official verifier installs packages/uv after agent completion; visible only in verifier/test-stdout.txt, not an agent fetched fix.",
+    "method": "Reviewed all49 structured steps (47 agent turns), all tool actions and observations, parser-error records and normal completion markers; inspected command/observation retrieval indicators and verifier failures."
+  },
+  "remaining_limits": [
+    "No packet-level network trace; finding is trajectory-based.",
+    "Saved records lack per-response finish_reason; all completion counts below cap and normal final actions support no limit cutoff.",
+    "Four invalid-JSON turns recovered through stock parser feedback; model protocol efficiency issue, not a failed harness.",
+    "Mailman repeats verification while awaiting commands then asserts completion incorrectly; valid model failure, not a limit-terminated loop.",
+    "No model phase autoexport in this older immutable run; nightly candidate retains later observability settings.",
+    "Nightly task timings remain unmeasured; do not use two-task projection as release admission evidence."
+  ]
+}

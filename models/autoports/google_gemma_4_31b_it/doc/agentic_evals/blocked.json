@@ -29,7 +29,7 @@
     "Stage gate pass"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-06T10:12:21.186963+00:00",
+  "updated_at": "2026-11-06T10:56:39.641216+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -37,12 +37,11 @@
   ],
   "live_wait": {
     "run_ids": [
-      42190891568,
       42196060694,
-      42200513517
+      42200513517,
+      42206258311
     ],
-    "status": "Terminaldevicejobrunning,GPQAserver-sizedbuilding,SWEactivationretryqueued",
-    "monitor": "bringup/artifacts/stage12-monitor-ci.py"
+    "status": "GPQA server-sized and SWE smoke repair in flight; Terminal valid smoke banked, nightly10 dispatched"
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",
@@ -83,9 +82,9 @@
     "permission_required": "Exception to stop-after-start/no-score dry run; no generic route alteration assumed"
   },
   "release_dependency_freeze": {
-    "status": "source_pin_published_live_confirmation_pending",
-    "reason": "Default-preserving generic pin support and exact observedHarborSHA modelmetadata published8a3c949; hosthooks pass. Future normalrung verifies resolved checkout. No transitivepackagefreeze claimed.",
-    "evidence": "runs/release-dependency-pins/RESULT.md"
+    "status": "Harbor_pin_live_confirmed",
+    "reason": "Actual job lock records expected Harbor e76c762f; no transitive package freeze claim.",
+    "evidence": "runs/smoke2-terminal-lifecycle-repair/audit.json"
   },
   "checker_zero_cost_decision_request": {
     "status": "pending",
@@ -100,10 +99,11 @@
   },
   "terminal_startup_lifecycle": {
     "run_id": 42182632490,
-    "status": "host_fix_passed_live_retry_queued",
+    "status": "solved_confirmed_valid_smoke",
     "reason": "30s Docker startup timeout followed by own-container port collision; no scored tasks",
     "retry_run_id": 42190891568,
-    "tti_sha": "2c4a2628b974acc7ebc7a4fa867db68f0b108019"
+    "tti_sha": "2c4a2628b974acc7ebc7a4fa867db68f0b108019",
+    "confirmation": "runs/smoke2-terminal-lifecycle-repair/audit.json"
   },
   "gpqa_corrected_startup_observation": {
     "run_id": 42182664252,

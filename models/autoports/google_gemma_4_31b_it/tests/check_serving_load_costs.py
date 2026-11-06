@@ -129,7 +129,7 @@ def main():
                 data=json.dumps(body).encode(),
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=min(60, args.request_timeout)) as response:
+            with urllib.request.urlopen(req, timeout=args.request_timeout) as response:
                 for raw in response:
                     if time.monotonic() - began > args.request_timeout:
                         raise TimeoutError("Request total deadline exceeded")

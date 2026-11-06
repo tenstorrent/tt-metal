@@ -47,11 +47,25 @@
         0.9821237869049271
       ],
       "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/nightly-gpqa-explicit-autoport/audit.json"
+    },
+    {
+      "name": "terminal_bench_2_1",
+      "value": 0,
+      "unit": "fraction",
+      "phase": "agentic-evals-smoke",
+      "completed_samples": 2,
+      "dataset_samples": 89,
+      "scope": "subset",
+      "confidence_interval_95": [
+        0,
+        0.6576197724933469
+      ],
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/smoke2-terminal-lifecycle-repair/audit.json"
     }
   ],
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
-    "stage12_accuracy": "GPQA nightly10/198 valid. SWE smoke quarantined for network downloads; same2 activation-repair retry42200513517 pending. Terminal lifecycle-repair and GPQA server-sized runs active; no release results."
+    "stage12_accuracy": "GPQA nightly10/198 and Terminal smoke2/89 valid. SWE smoke quarantined for network downloads; same2 activation repair42200513517 pending. Terminal nightly42206258311 and GPQA server-sized active; no release results."
   },
   "notes": [
     "Current stage12 serving measurement; not frozen release.",

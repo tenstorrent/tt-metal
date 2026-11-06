@@ -1,0 +1,9 @@
+{
+  "at": "2026-11-06T10:52:25.012591+00:00",
+  "pid": 96764,
+  "metrics": [
+    "vllm:num_requests_running{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0",
+    "vllm:num_requests_waiting{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0"
+  ],
+  "action": "SIGINT after completed request and idle"
+}

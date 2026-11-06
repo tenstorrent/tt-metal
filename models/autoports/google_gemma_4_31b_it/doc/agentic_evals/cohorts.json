@@ -89,6 +89,18 @@
         "terminal-bench/sparql-university",
         "terminal-bench/dna-insert",
         "terminal-bench/video-processing"
+      ],
+      "nightly-terminal-observable": [
+        "terminal-bench/llm-inference-batching-scheduler",
+        "terminal-bench/mailman",
+        "terminal-bench/db-wal-recovery",
+        "terminal-bench/winning-avg-corewars",
+        "terminal-bench/feal-linear-cryptanalysis",
+        "terminal-bench/fix-code-vulnerability",
+        "terminal-bench/constraints-scheduling",
+        "terminal-bench/sparql-university",
+        "terminal-bench/dna-insert",
+        "terminal-bench/video-processing"
       ]
     },
     "selected_before_scores_at": "2026-11-06T04:49:25.562738+00:00",

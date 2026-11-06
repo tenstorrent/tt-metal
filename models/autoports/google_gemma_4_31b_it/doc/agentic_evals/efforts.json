@@ -807,8 +807,11 @@
       "status": "done",
       "used_device_hours": 0,
       "change": "kept",
-      "problem_status": "open",
-      "confirmed": "58focusedtests andfullhooks passed; source-only dedicatedbranch publication8a3c949. Livepin verification remains fornextnormalrung.",
+      "problem_status": "solved",
+      "confirmed": {
+        "result": "Live Terminal smoke42190891568 completed both valid tasks with pinned Harbor and no startup leaks; score0/2 not gated.",
+        "evidence": "runs/smoke2-terminal-lifecycle-repair/audit.json"
+      },
       "evidence": "runs/harbor-model-pin/RESULT.md"
     },
     {
@@ -956,14 +959,10 @@
       "status": "done",
       "used_device_hours": 0,
       "change": "kept",
-      "problem_status": "open",
+      "problem_status": "solved",
       "confirmed": {
-        "baseline": "Mock45s launch fails original30s deadline",
-        "candidate_focused_tests": 51,
-        "combined_focused_tests": 83,
-        "full_hooks": "pass",
-        "live_confirmation_run_id": 42190891568,
-        "live_confirmation": "pending"
+        "result": "Live Terminal smoke42190891568 completed both valid tasks with pinned Harbor and no startup leaks; score0/2 not gated.",
+        "evidence": "runs/smoke2-terminal-lifecycle-repair/audit.json"
       },
       "evidence": "runs/ci-container-startup/AUTOFIX.md"
     },
@@ -1235,12 +1234,19 @@
         "method": "Actualtrajectorycap/repetitionaudit, then feasiblepinnedHF/TTlongprefixdiscriminator",
         "success": "Evidenceclassifiescause or explicitremaininguncertainty; neverhidecapfailurebyfinish_reason"
       },
-      "box_hours": 0.75,
+      "box_hours": 1.0,
       "status": "running",
       "box_revision": {
         "previous": 0.5,
         "new": 0.75,
         "reason": "Captureonefull-release-capnativechatreplay withrawtokenIDs forcausalonsetcomparison;TTnexttokenlogitsalonecannotdiagnoseobservedloop. Existingdiagnosticcostabout.2h, extraestimated.32h."
+      },
+      "device_hours_to_date": 0.3876286155555555,
+      "progress": "Native seed0 exact42823-token replay completed in30.9057s with200 generated tokens and coherent finite tool call, no cap or repetition. Original cause remains open; full-prefix HF reference in progress.",
+      "re_estimate": {
+        "additional_device_hours": 0.48,
+        "basis": "390s measured startup plus1281s original capped response; one seed1 only. Current used .387628616h.",
+        "reason": "A raw looping continuation is needed for exact onset comparison; original failure consumed21min and unknown malformed episodes77min. No release saving credited."
       }
     },
     {
@@ -1286,7 +1292,28 @@
         "success": "Allrequestscomplete, exactlengths, prefillrates and anchorstreamtimings reported with hostregime"
       },
       "box_hours": 0.3,
-      "status": "running"
+      "status": "done",
+      "used_device_hours": 0.27580331305555555,
+      "change": "kept",
+      "problem_status": "solved",
+      "confirmed": {
+        "requests_passed": 5,
+        "cold_lengths": [
+          4096,
+          31755,
+          107585
+        ],
+        "cold_ttft_seconds": [
+          2.2282864099834114,
+          16.951805428951047,
+          72.68344746797811
+        ],
+        "overlap_seconds": 78.910179,
+        "overlap_anchor_tokens": 28,
+        "host_regime": "concurrent16threadHFCPU; no idlecomparison",
+        "change_scope": "Diagnosticclienttimeoutonly; servingunchanged"
+      },
+      "evidence": "runs/measured-workload-prefill/RESULT.md"
     }
   ],
   "rankings": [
@@ -2696,6 +2723,112 @@
         }
       ],
       "reason": "Validityfirst; measured-workload calibration is informationgathering neededtopriceexistingprefillshortfall. No speedupsavings credited; independent localwork whileCI rungsrun."
+    },
+    {
+      "after": "measured-workload-prefill-confirmed",
+      "order": [
+        {
+          "problem": "swe-network-validity",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "measured-workload-prefill",
+          "saving_hours": 0,
+          "device_hours": 0.15
+        }
+      ],
+      "reason": "Validity repairs and loopdiagnosis remain before speed. Longprefillinterference confirmed underHFCPUcontention; release saving unknown withoutactualCI overlap. Diagnostictimeoutfixed, no unmeasuredspeedcredit."
+    },
+    {
+      "after": "terminal-smoke-valid-and-nightly-dispatched",
+      "order": [
+        {
+          "problem": "swe-network-validity",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "measured-workload-prefill",
+          "saving_hours": 0,
+          "device_hours": 0.15
+        }
+      ],
+      "reason": "Validity first: SWE network repair and release route/checker remain open; Django loop cause remains ahead of speed. Terminal lifecycle and Harbor pin confirmed. Existing C2 capacity retained: Terminal artifacts cannot faithfully reconstruct native conversations, so no invented C4 replay."
     }
   ],
   "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

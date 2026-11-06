@@ -1,5 +1,5 @@
 {
-  "status": "nightly_gpqa_valid_tools_smoke_running",
+  "status": "gpqa_nightly_terminal_smoke_valid_swe_retry_running",
   "evals": {
     "r1_gpqa_diamond": {
       "decision": "go",
@@ -28,12 +28,22 @@
       "confidence_interval_95": null
     },
     "terminal_bench_2_1": {
-      "decision": "stop",
-      "reason": "No valid smoke yet. Prior fabric, wrong-implementation and Docker launch lifecycle failures occurred before tasks. Generic launcher repair host-confirmed; identical2-task smoke42190891568 queued. Provisional release exclusion, not measured capacity stop.",
-      "functional_at": 0,
+      "decision": "go",
+      "reason": "Valid smoke2: no external retrieval or limit losses; zero score is model task failure. Frozen nightly10 dispatched42206258311 at C2/B8; 6.25h workflow forecast includes new-task margin. Release not frozen.",
+      "functional_at": 2,
       "projected_hours": null,
-      "score": null,
-      "confidence_interval_95": null
+      "score": 0,
+      "confidence_interval_95": [
+        0.0,
+        0.6576197724933469
+      ],
+      "next_rung": {
+        "tasks": 10,
+        "planned_clients": 2,
+        "batch": 8,
+        "run_id": 42206258311,
+        "projected_eval_hours": 4.781676175
+      }
     }
   }
 }

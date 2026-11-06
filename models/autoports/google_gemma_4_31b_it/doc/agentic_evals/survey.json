@@ -247,5 +247,18 @@
       "evidence": "runs/prefill-under-load/RESULT.md"
     }
   ],
-  "last_updated": "2026-11-06T10:02:30.826022+00:00"
+  "last_updated": "2026-11-06T10:02:30.826022+00:00",
+  "measured_workload_prefill": {
+    "evidence": "runs/measured-workload-prefill/RESULT.md",
+    "host_regime": "HFCPU16threadsconcurrent",
+    "cold_ttft_seconds": {
+      "4096": 2.2282864099834114,
+      "31755": 16.951805428951047,
+      "107585": 72.68344746797811
+    },
+    "overlap_seconds": 78.910179,
+    "anchor_tokens": 28,
+    "release_cost_hours": null,
+    "missing_reason": "ActualCIrequestoverlap and puregeneration shares pending; diagnosticwalltime not releasecost."
+  }
 }

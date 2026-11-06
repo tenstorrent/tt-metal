@@ -50,3 +50,15 @@ Coordinator-only client command (after fresh-server readiness and ownership sche
 Stock ChatCompletionRequest.return_token_ids is supported at protocol.py:416; chat serving returns choice token_ids at1121 and prompt_token_ids at1197. Neither field requires executing returned commands. Syntax validation only performed here.
 
 Coordinator scheduling correction: with approximately0.20deviceh already spent,0.75h box leaves approximately0.55h. Proposed fresh-server outer bound1920s fits that remaining box with about7min margin over measured response+startup, absent new host slowdown. This server allocation is separate from unchanged request timeout3600/max32768; any allocation cutoff must be recorded, never scored as a completed replay. Recheck actual remaining device budget before launch.
+
+## One final seed replay: coordinator budget revision
+
+The prior server's remaining allocation did not accommodate the measured1281.434s full-cap response plus margin. Coordinator closed it; seed1 was not dispatched. That queue cost0.191538503deviceh and cumulative diagnosis cost0.387628616h are retained.
+
+Coordinator now extends total device box0.75→1.0h for exactly one seed1 native replay, then stops stochastic probing regardless of result. Remaining allocation is approximately2204s. Forecast0.48h combines390s HF-contended startup and1281s original response; a1920s fresh-server bound fits. This is a forecast, not measured new speed. The original21min capped repetition and approximately77min malformed-call episodes justify validity priority; no speed credit or inherent-model verdict.
+
+Client now accepts only --seed0 or --seed1 (default0; use separate argument tokens). It writes the actual seed-adjusted payload privately and hashes those exact serialized bytes in summary.request_sha256. Prompt42823IDs, T1/top_p.95/top_k20/max32768/request3600 and raw token capture remain unchanged. Coordinator alone checks owner state, launches fresh server and dispatches one request. No launch by investigator.
+
+Exact seed1 client command:
+
+`python_env/bin/python bringup/artifacts/django-cap-loop/replay_client.py --base-url http://127.0.0.1:8000 --seed 1 --output bringup/artifacts/django-cap-loop/native-replay-seed1 > bringup/artifacts/django-cap-loop/native-replay-seed1.log 2>&1`

@@ -1,0 +1,246 @@
+{
+  "status": "all11_failed_query_episodes_bounded_not_exact_failure_timings",
+  "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/smoke2-swe-native-parser/collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T073358/django__django-11265__ohWF75G/agent/mini-swe-agent.trajectory.json",
+  "additional_device_hours": 0,
+  "clock_basis": "wall-clock timestamps on same runner; next server created is floored to integer second",
+  "error_messages_have_timestamps": false,
+  "rows": [
+    {
+      "error_message_index": 170,
+      "type": "FormatError_no_tool_calls",
+      "previous_observation_index": 169,
+      "next_valid_assistant_index": 171,
+      "previous_observation_timestamp": 1793952353.3175597,
+      "next_valid_response_created_integer": 1793953895,
+      "next_valid_response_processed_timestamp": 1793953926.0370903,
+      "episode_until_next_server_request_seconds_interval": [
+        1541.6824402809143,
+        1542.6824402809143
+      ],
+      "outer_envelope_until_next_valid_response_seconds": 1572.719530582428,
+      "failed_query_duration_seconds": null,
+      "failed_query_upper_bound_seconds": 1542.6824402809143,
+      "failed_response_token_count": null,
+      "failed_response_hit_cap": null
+    },
+    {
+      "error_message_index": 179,
+      "type": "FormatError_no_tool_calls",
+      "previous_observation_index": 178,
+      "next_valid_assistant_index": 180,
+      "previous_observation_timestamp": 1793953969.3301167,
+      "next_valid_response_created_integer": 1793953980,
+      "next_valid_response_processed_timestamp": 1793953992.6827981,
+      "episode_until_next_server_request_seconds_interval": [
+        10.669883251190186,
+        11.669883251190186
+      ],
+      "outer_envelope_until_next_valid_response_seconds": 23.352681398391724,
+      "failed_query_duration_seconds": null,
+      "failed_query_upper_bound_seconds": 11.669883251190186,
+      "failed_response_token_count": null,
+      "failed_response_hit_cap": null
+    },
+    {
+      "error_message_index": 188,
+      "type": "FormatError_no_tool_calls",
+      "previous_observation_index": 187,
+      "next_valid_assistant_index": 189,
+      "previous_observation_timestamp": 1793953998.982647,
+      "next_valid_response_created_integer": 1793955508,
+      "next_valid_response_processed_timestamp": 1793955514.1561775,
+      "episode_until_next_server_request_seconds_interval": [
+        1509.0173530578613,
+        1510.0173530578613
+      ],
+      "outer_envelope_until_next_valid_response_seconds": 1515.1735305786133,
+      "failed_query_duration_seconds": null,
+      "failed_query_upper_bound_seconds": 1510.0173530578613,
+      "failed_response_token_count": null,
+      "failed_response_hit_cap": null
+    },
+    {
+      "error_message_index": 209,
+      "type": "FormatError_no_tool_calls",
+      "previous_observation_index": 208,
+      "next_valid_assistant_index": 210,
+      "previous_observation_timestamp": 1793955797.8514,
+      "next_valid_response_created_integer": 1793957369,
+      "next_valid_response_processed_timestamp": 1793957411.1218357,
+      "episode_until_next_server_request_seconds_interval": [
+        1571.148600101471,
+        1572.148600101471
+      ],
+      "outer_envelope_until_next_valid_response_seconds": 1613.270435810089,
+      "failed_query_duration_seconds": null,
+      "failed_query_upper_bound_seconds": 1572.148600101471,
+      "failed_response_token_count": null,
+      "failed_response_hit_cap": null
+    },
+    {
+      "error_message_index": 212,
+      "type": "FormatError_no_tool_calls",
+      "previous_observation_index": 211,
+      "next_valid_assistant_index": 213,
+      "previous_observation_timestamp": 1793957411.3434064,
+      "next_valid_response_created_integer": 1793957428,
+      "next_valid_response_processed_timestamp": 1793957436.9716086,
+      "episode_until_next_server_request_seconds_interval": [
+        16.656593561172485,
+        17.656593561172485
+      ],
+      "outer_envelope_until_next_valid_response_seconds": 25.628202199935913,
+      "failed_query_duration_seconds": null,
+      "failed_query_upper_bound_seconds": 17.656593561172485,
+      "failed_response_token_count": null,
+      "failed_response_hit_cap": null
+    },
+    {
+      "error_message_index": 221,
+      "type": "FormatError_no_tool_calls",
+      "previous_observation_index": 220,
+      "next_valid_assistant_index": 222,
+      "previous_observation_timestamp": 1793957465.5465114,
+      "next_valid_response_created_integer": 1793957492,
+      "next_valid_response_processed_timestamp": 1793957519.663771,
+      "episode_until_next_server_request_seconds_interval": [
+        26.45348858833313,
+        27.45348858833313
+      ],
+      "outer_envelope_until_next_valid_response_seconds": 54.11725950241089,
+      "failed_query_duration_seconds": null,
+      "failed_query_upper_bound_seconds": 27.45348858833313,
+      "failed_response_token_count": null,
+      "failed_response_hit_cap": null
+    },
+    {
+      "error_message_index": 226,
+      "type": "FormatError_no_tool_calls",
+      "previous_observation_index": 225,
+      "next_valid_assistant_index": 227,
+      "previous_observation_timestamp": 1793957538.0142221,
+      "next_valid_response_created_integer": 1793957562,
+      "next_valid_response_processed_timestamp": 1793957590.5219553,
+      "episode_until_next_server_request_seconds_interval": [
+        23.985777854919434,
+        24.985777854919434
+      ],
+      "outer_envelope_until_next_valid_response_seconds": 52.50773310661316,
+      "failed_query_duration_seconds": null,
+      "failed_query_upper_bound_seconds": 24.985777854919434,
+      "failed_response_token_count": null,
+      "failed_response_hit_cap": null
+    },
+    {
+      "error_message_index": 231,
+      "type": "FormatError_no_tool_calls",
+      "previous_observation_index": 230,
+      "next_valid_assistant_index": 232,
+      "previous_observation_timestamp": 1793957611.8862152,
+      "next_valid_response_created_integer": 1793957628,
+      "next_valid_response_processed_timestamp": 1793957634.9450724,
+      "episode_until_next_server_request_seconds_interval": [
+        16.113784790039062,
+        17.113784790039062
+      ],
+      "outer_envelope_until_next_valid_response_seconds": 23.058857202529907,
+      "failed_query_duration_seconds": null,
+      "failed_query_upper_bound_seconds": 17.113784790039062,
+      "failed_response_token_count": null,
+      "failed_response_hit_cap": null
+    },
+    {
+      "error_message_index": 234,
+      "type": "FormatError_no_tool_calls",
+      "previous_observation_index": 233,
+      "next_valid_assistant_index": 235,
+      "previous_observation_timestamp": 1793957635.15082,
+      "next_valid_response_created_integer": 1793957653,
+      "next_valid_response_processed_timestamp": 1793957669.0147069,
+      "episode_until_next_server_request_seconds_interval": [
+        17.849179983139038,
+        18.849179983139038
+      ],
+      "outer_envelope_until_next_valid_response_seconds": 33.86388683319092,
+      "failed_query_duration_seconds": null,
+      "failed_query_upper_bound_seconds": 18.849179983139038,
+      "failed_response_token_count": null,
+      "failed_response_hit_cap": null
+    },
+    {
+      "error_message_index": 237,
+      "type": "FormatError_no_tool_calls",
+      "previous_observation_index": 236,
+      "next_valid_assistant_index": 238,
+      "previous_observation_timestamp": 1793957669.2177577,
+      "next_valid_response_created_integer": 1793957695,
+      "next_valid_response_processed_timestamp": 1793957707.1561177,
+      "episode_until_next_server_request_seconds_interval": [
+        25.78224229812622,
+        26.78224229812622
+      ],
+      "outer_envelope_until_next_valid_response_seconds": 37.93835997581482,
+      "failed_query_duration_seconds": null,
+      "failed_query_upper_bound_seconds": 26.78224229812622,
+      "failed_response_token_count": null,
+      "failed_response_hit_cap": null
+    },
+    {
+      "error_message_index": 240,
+      "type": "FormatError_no_tool_calls",
+      "previous_observation_index": 239,
+      "next_valid_assistant_index": 241,
+      "previous_observation_timestamp": 1793957707.3618257,
+      "next_valid_response_created_integer": 1793957725,
+      "next_valid_response_processed_timestamp": 1793957730.7496972,
+      "episode_until_next_server_request_seconds_interval": [
+        17.638174295425415,
+        18.638174295425415
+      ],
+      "outer_envelope_until_next_valid_response_seconds": 23.387871503829956,
+      "failed_query_duration_seconds": null,
+      "failed_query_upper_bound_seconds": 18.638174295425415,
+      "failed_response_token_count": null,
+      "failed_response_hit_cap": null
+    }
+  ],
+  "aggregate_episode_seconds_interval": [
+    4776.997518062592,
+    4787.997518062592
+  ],
+  "aggregate_outer_envelope_including_next_valid_response_seconds": 4975.018348693848,
+  "maximum_episode": {
+    "error_message_index": 209,
+    "seconds_interval": [
+      1571.148600101471,
+      1572.148600101471
+    ]
+  },
+  "three_longest_episode_indices": [
+    209,
+    170,
+    188
+  ],
+  "three_longest_total_episode_seconds_interval": [
+    4621.848393440247,
+    4624.848393440247
+  ],
+  "failed_queries_pure_time_seconds": null,
+  "failed_queries_pure_time_bounds_seconds": [
+    0,
+    4787.997518062592
+  ],
+  "interpretation": "Each episode begins after preceding tool observation is formatted and ends when next successful query enters server response generation. It contains the missing query/FormatError and intervening agent save/render/request preparation, client/network/server admission delays, and any internal HTTP retries. The valid next response generation is excluded except up to1s timestamp rounding. These measured envelopes explain where the unassigned wall time sits but are not pure failed-generation times.",
+  "source_semantics": {
+    "DefaultAgent": "agents/default.py:94-96 saves state in finally; query at109 increments call count before model.query and adds assistant only after it returns. InterruptAgentFlow at87-88 appends error message, then next loop calls query. execute_actions at120 completes environments before observation formatting.",
+    "LitellmModel": "models/litellm_model.py:80-92 retries _query, then parses actions before constructing saved response timestamp. A FormatError therefore discards response/created/usage and passes its user error to agent.",
+    "ToolObservation": "models/utils/actions_toolcall.py:90 timestamps observation after environment outputs.",
+    "vLLM": "chat_completion/serving.py:945 assigns integer created_time before awaiting valid next result_generator."
+  },
+  "limits": [
+    "No model token counts or cap hits inferred for missing11responses.",
+    "No zero-overhead assumption: pure failed-call duration has only conservative0-to-envelope upper bound.",
+    "Three long no-tool failures may be important to diagnose, but are not proven repetitions, cap events, network retries or timeouts.",
+    "Earlier timing-coverage.json retained unchanged. No model/HTTP/device launched; active HF outputs untouched."
+  ]
+}

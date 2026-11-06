@@ -146,6 +146,23 @@
       "valid": false,
       "reason": "Both tasks networkquarantined",
       "evidence": "runs/smoke2-swe-native-parser/audit.json"
+    },
+    {
+      "run": "smoke2-terminal-lifecycle-repair",
+      "run_id": 42190891568,
+      "eval": "terminal_bench_2_1",
+      "tasks": 2,
+      "agents": 2,
+      "batch": 8,
+      "wall_hours": 0.6375568233333334,
+      "agent_hours": 0.7276427327777777,
+      "timeouts": 0,
+      "score": 0,
+      "confidence_interval_95": [
+        0.0,
+        0.6576197724933469
+      ],
+      "evidence": "runs/smoke2-terminal-lifecycle-repair/audit.json"
     }
   ],
   "generic_fixes": [
@@ -180,6 +197,12 @@
       "fix": "StockDockerSWE mini-agent launched via noninteractivebash misses testbedactivation. DefaultBASH_ENV=/root/.bashrc for standardSWEmini path preservesexplicitoverride.",
       "evidence": "runs/swe-network-validity/AUTOFIX.md",
       "live_confirmation": "pending42200513517"
+    },
+    {
+      "branch": "fix/diagnostic-request-timeout",
+      "sha": "536febd8",
+      "fix": "Local servingdiagnostic client nowhonorsconfiguredsockettimeout instead ofhidden60s clamp; totalelapsedguardunchanged.",
+      "evidence": "runs/measured-workload-prefill/AUTOFIX.md"
     }
   ]
 }

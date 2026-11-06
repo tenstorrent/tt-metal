@@ -114,6 +114,13 @@
       "planned_clients": 2,
       "max_num_seqs": 8,
       "reason": "Smallest validated batch at or above2; original task resources unchanged."
+    },
+    "nightly-terminal-observable": {
+      "eval": "terminal_bench_2_1",
+      "batch": 8,
+      "planned_clients": 2,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest validated batch >=2 planned clients; actual smoke C2 and local real-history replay validated."
     }
   },
   "release_limits": {
