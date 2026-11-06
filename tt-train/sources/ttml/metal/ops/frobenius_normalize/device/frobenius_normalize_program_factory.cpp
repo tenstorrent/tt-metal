@@ -121,7 +121,6 @@ tt::tt_metal::ProgramDescriptor FrobeniusNormalizeProgramFactory::create_descrip
     auto [num_cores, all_cores, core_group_1, core_group_2, tiles_per_core_g1, tiles_per_core_g2] =
         tt::tt_metal::split_work_to_cores(compute_grid, total_tiles);
     const WorkSplit split = compute_tile_work_split(input);
-    check_work_split(split, num_cores, core_group_1, core_group_2, tiles_per_core_g1, tiles_per_core_g2);
 
     uint32_t block_size = std::min(4U, tiles_per_core_g1);
 

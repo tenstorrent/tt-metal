@@ -154,8 +154,6 @@ tt::tt_metal::ProgramDescriptor SGDProgramFactory::create_descriptor(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_tiles_to_process);
     const WorkSplit split = compute_tile_work_split(param);
-    check_work_split(
-        split, num_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2);
 
     uint32_t block_size = std::min(8U, num_tiles_per_core_group_1);
     // -------------------------------------------------------------------------

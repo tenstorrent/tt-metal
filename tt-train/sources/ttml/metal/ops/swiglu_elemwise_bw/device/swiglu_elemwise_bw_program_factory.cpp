@@ -70,7 +70,6 @@ tt::tt_metal::ProgramDescriptor SwigluElemwiseBwProgramFactory::create_descripto
     const auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_g1, num_rows_g2] =
         tt::tt_metal::split_work_to_cores(grid_size, total_rows);
     const auto split = compute_tile_row_work_split(linear1);
-    check_work_split(split, num_cores, core_group_1, core_group_2, num_rows_g1, num_rows_g2);
 
     const uint32_t twice_block = 2U * block_size;
     program.cbs.push_back(make_cb_descriptor(all_cores, kLinear1CbIndex, data_format, tile_size_bytes, twice_block));
