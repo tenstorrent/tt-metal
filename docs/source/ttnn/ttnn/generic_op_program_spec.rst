@@ -117,9 +117,9 @@ Running on a mesh
 *****************
 
 With a ``ProgramSpec``, ``generic_op`` runs the program on the devices of the tensor in ``io_tensors`` that is on the
-fewest devices, and every other tensor must be on those devices too; usually all the tensors are on the same devices.
-To run different programs on different devices, give a program for each mesh coordinate range. On a 1x2 mesh, for
-example:
+fewest devices, and every other tensor must be on those devices too; usually all the tensors are on the same devices. If
+the output is on more devices than that, its parts on the other devices are not written. To run different programs on
+different devices, give a program for each mesh coordinate range. On a 1x2 mesh, for example:
 
 .. code-block:: python
 
@@ -142,7 +142,8 @@ The lines that fetch a kernel's inputs change, as TT-NN's unary kernels in both 
 reader_unary_interleaved_start_id_metal2.cpp_).
 
 - Arguments by position become arguments by name: ``get_arg_val<uint32_t>(0)`` becomes ``get_arg(args::num_tiles)``,
-  with ``num_tiles`` declared in the kernel's ``RuntimeArgSchema``.
+  with ``num_tiles`` declared in the kernel's ``RuntimeArgSchema``. A read by position that is left in still compiles,
+  and reads whatever value is at that position, so change every one.
 - Circular buffers by index become dataflow buffers by name: ``tt::CBIndex::c_0`` becomes ``dfb::in``, with ``in`` the
   accessor name of the kernel's binding to a ``DataflowBufferSpec``. Compute calls take it directly, as in
   ``copy_tile(dfb::in, 0, 0)``; a data-movement kernel wraps it as ``DataflowBuffer(dfb::in)``, and reads its page size
@@ -150,9 +151,13 @@ reader_unary_interleaved_start_id_metal2.cpp_).
 - Tensor addresses passed as arguments become bound tensors: ``TensorAccessor`` built from an address and
   ``TensorAccessorArgs`` becomes ``TensorAccessor(tensor::src)``.
 
-On Wormhole and Blackhole the loops that move and compute data can stay as they are. On Quasar the circular-buffer calls
+On Wormhole and Blackhole the loops that move and compute data can stay as they are (eltwise_sfpu_metal2.cpp_ also
+splits its loop with ``dram_read::for_each_chunk``, which is not part of the move). On Quasar the circular-buffer calls
 do not work, so the data-movement loops use the ``DataflowBuffer`` calls instead (``reserve_back``, ``push_back``,
-``wait_front``, ``pop_front``), as both unary readers above already do.
+``wait_front``, ``pop_front``), as both unary readers above already do. A Quasar data-movement kernel that makes many
+transfers smaller than a tile, such as row-major sticks, also passes ``disable_dfb_implicit_sync_for_all=True`` to
+``create_reader_datamovement_config`` or ``create_writer_datamovement_config``: such transfers stall Quasar's implicit
+counting of buffer entries, and the flag leaves the counting to the kernel's own calls.
 
 .. _eltwise_sfpu.cpp: https://github.com/tenstorrent/tt-metal/blob/6d8a1032acc18f6808db4e3712764afa93281d2c/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp
 .. _eltwise_sfpu_metal2.cpp: https://github.com/tenstorrent/tt-metal/blob/6d8a1032acc18f6808db4e3712764afa93281d2c/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu_metal2.cpp
@@ -160,8 +165,8 @@ do not work, so the data-movement loops use the ``DataflowBuffer`` calls instead
 .. _reader_unary_interleaved_start_id_metal2.cpp: https://github.com/tenstorrent/tt-metal/blob/6d8a1032acc18f6808db4e3712764afa93281d2c/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id_metal2.cpp
 
 Some features of the ``ProgramDescriptor`` form are not available in the ``ProgramSpec`` form yet, such as global
-circular buffers, global semaphores, fabric connections and per-core allocated tensors. Programs that use them stay on
-``ttnn.generic_op``.
+circular buffers, global semaphores, fabric connections and per-core allocated tensors, and from Python a semaphore
+always starts at 0. Programs that need any of these stay on ``ttnn.generic_op``.
 
 More examples
 *************
