@@ -277,6 +277,7 @@ class SpecBlockBook:
         # chained state moves of the staged verify: {engine row: ([G] start blocks [T], [G] windows [T, T])}, indexed by
         # the pending verify's accepted count - 1; the rows' window maps follow once that count is known (resolve_moves)
         self.moves = {}
+        self._moves_dropped = False  # forget_row dropped a row's unresolved moves: its device window rows are unknown
         self.pending_blocks = []  # (row, column, group, block) conv writes that name their block (chained rows)
 
     def set_step(self, blocks, start_col, live_rows, boundary=()):
@@ -289,7 +290,8 @@ class SpecBlockBook:
         if len(blocks) != self.G:
             raise ValueError(f"{len(blocks)} window groups, the model binds {self.G}")
         # chained rows of the previous verify whose count never reached the host: the device window rows are unknown
-        stale = bool(self.moves)
+        stale = bool(self.moves) or self._moves_dropped
+        self._moves_dropped = False
         self._map_dirty = self._map_dirty or stale
         changed = []
         for g in range(self.G):
@@ -490,7 +492,12 @@ class SpecBlockBook:
         return ops
 
     def forget_row(self, u):
+        """Unmap engine row u's window blocks; its unresolved chained moves go too (the row's request ended or prefills
+        again). Resolving them later would map the old request's window to the row again, and a block copy from one of
+        those ids, by then another request's state block, would take its conv rows from the old verify window."""
         self._map_dirty = True
+        if self.moves.pop(int(u), None) is not None:
+            self._moves_dropped = True
         for b in self.row_blocks.pop(int(u), ()):
             if self.window_map.get(b, (None,))[0] == int(u):
                 del self.window_map[b]

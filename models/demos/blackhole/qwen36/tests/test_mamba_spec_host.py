@@ -1181,6 +1181,22 @@ def test_an_unresolved_chained_row_forces_the_next_upload():
     assert changed == [0, 1] and not book.moves
 
 
+def test_a_released_row_drops_its_unresolved_moves():
+    """A request ends (or prefills again) on a row whose last chained step's count never reached the host. Its moves go
+    with its window map: resolving them afterwards must not map the old window to the row, so a copy from one of those
+    block ids (vLLM reuses them, e.g. as the next request's prefill state block) copies the block's own conv history
+    instead of the old verify window's rows, and the next step uploads every group's window rows again."""
+    lay, book, blocks, starts, wins = _moves_case()
+    book.set_moves(starts, wins, [1])
+    book.forget_row(1)
+    book.resolve_moves(torch.tensor([T, 3, T, T]))
+    reused = int(wins[0][1, 2, 1])
+    assert reused not in book.window_map
+    ops = book.copy_plan([(reused, 199)])
+    assert [op[0] for op in ops] in (["copy"], ["relayout"]) and ops[0][1:] == (reused, 199)
+    assert book.set_step(blocks, torch.zeros(B, dtype=torch.int64), range(B)) == [0, 1]
+
+
 def test_a_chained_row_the_host_stages_starts_from_its_start_block():
     """A chain that falls back to the host (count known): set_start adopts that count's window and start block, and in
     mode align a start at a block's last position leaves the conv write of window column 0 due."""
