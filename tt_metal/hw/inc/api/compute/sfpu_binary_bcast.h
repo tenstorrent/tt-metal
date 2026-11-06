@@ -13,6 +13,18 @@
 
 namespace ckernel {
 
+#ifdef TRISC_MATH
+// Range checks of the partial-tile column-broadcast forms, statements under LLK_ASSERT (a no-op in release builds).
+inline void _sfpu_bcast_col_mode_check_(VectorMode vector_mode) {
+    LLK_ASSERT(
+        vector_mode == VectorMode::RC || vector_mode == VectorMode::R,
+        "sfpu_*_bcast_col: VectorMode::RC (the whole tile) or VectorMode::R (rows 0..15) only");
+}
+inline void _sfpu_bcast_col_band_check_(uint32_t data_band, uint32_t bcast_band) {
+    LLK_ASSERT(data_band < 4 && bcast_band < 4, "sfpu_*_bcast_col_band: bands are 0..3 (rows 4 * band .. +3)");
+}
+#endif
+
 // ============================================================================
 // BCAST_COL: broadcast column 0 of the bcast tile across all 32 tile columns
 // ============================================================================
@@ -64,56 +76,189 @@ ALWI void sfpu_mul_bcast_col_init() { sfpu_bcast_col_init(); }
  * Requires a prior call to the matching `sfpu_*_bcast_col_init` (or the
  * shared `sfpu_bcast_col_init`).
  *
+ * `vector_mode` selects the rows: `VectorMode::RC` (the default) is the whole
+ * tile, `VectorMode::R` is rows 0..15 only (faces 0 and 1), after which rows
+ * 16..31 of the data tile are untouched and rows 16..31 of the column tile are
+ * never read. Other modes are rejected (LLK_ASSERT). `VectorMode::R` is not
+ * supported on Quasar: a kernel that uses it fails to build.
+ *
+ * Return value: None
+ *
+ * | Argument         | Description                                                         | Type       | Valid Range                                           | Required |
+ * |------------------|---------------------------------------------------------------------|------------|-------------------------------------------------------|----------|
+ * | dst_data_idx     | The index of the data tile in DST (result is written back in-place) | uint32_t   | Must be less than the size of the DST register buffer | True     |
+ * | dst_col_vec_idx  | The index of the col-vector tile in DST (column 0 is broadcast)     | uint32_t   | Must be less than the size of the DST register buffer | True     |
+ * | vector_mode      | The rows: VectorMode::RC (all) or VectorMode::R (rows 0..15)        | VectorMode | RC, R                                                 | False    |
+ */
+// clang-format on
+// `VectorMode::None` makes `_llk_math_eltwise_sfpu_apply_vector_mode_` bypass the
+// per-face loop and invoke the full-tile (or rows-0..15) bcast helper exactly once,
+// with the same `_llk_math_eltwise_sfpu_start_(0)` / `_llk_math_eltwise_sfpu_done_()`
+// brackets the standalone helper used to set up by hand, plus the dst-bound
+// LLK_ASSERTs in `_sfpu_binary_check_`.
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void sfpu_sub_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx, VectorMode vector_mode = VectorMode::RC) {
+    MATH((_sfpu_bcast_col_mode_check_(vector_mode)));
+    if (vector_mode == VectorMode::R) {
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            _calculate_sfpu_binary_bcast_col_rows_0_15_,
+            (ckernel::BinaryOp::SUB),
+            dst_data_idx,
+            dst_col_vec_idx,
+            dst_data_idx,
+            VectorMode::None)));
+    } else {
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            _calculate_sfpu_binary_bcast_full_tile_,
+            (ckernel::BinaryOp::SUB, ckernel::BroadcastType::COL),
+            dst_data_idx,
+            dst_col_vec_idx,
+            dst_data_idx,
+            VectorMode::None)));
+    }
+}
+
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void sfpu_add_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx, VectorMode vector_mode = VectorMode::RC) {
+    MATH((_sfpu_bcast_col_mode_check_(vector_mode)));
+    if (vector_mode == VectorMode::R) {
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            _calculate_sfpu_binary_bcast_col_rows_0_15_,
+            (ckernel::BinaryOp::ADD),
+            dst_data_idx,
+            dst_col_vec_idx,
+            dst_data_idx,
+            VectorMode::None)));
+    } else {
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            _calculate_sfpu_binary_bcast_full_tile_,
+            (ckernel::BinaryOp::ADD, ckernel::BroadcastType::COL),
+            dst_data_idx,
+            dst_col_vec_idx,
+            dst_data_idx,
+            VectorMode::None)));
+    }
+}
+
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx, VectorMode vector_mode = VectorMode::RC) {
+    MATH((_sfpu_bcast_col_mode_check_(vector_mode)));
+    if (vector_mode == VectorMode::R) {
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            _calculate_sfpu_binary_bcast_col_rows_0_15_,
+            (ckernel::BinaryOp::MUL),
+            dst_data_idx,
+            dst_col_vec_idx,
+            dst_data_idx,
+            VectorMode::None)));
+    } else {
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            _calculate_sfpu_binary_bcast_full_tile_,
+            (ckernel::BinaryOp::MUL, ckernel::BroadcastType::COL),
+            dst_data_idx,
+            dst_col_vec_idx,
+            dst_data_idx,
+            VectorMode::None)));
+    }
+}
+
+// clang-format off
+/**
+ * One 4-row band of the column broadcast: rows `4 * data_band .. +3` of
+ * `dst_data_idx` (all 32 columns) get the binop with column 0 rows
+ * `4 * bcast_band .. +3` of `dst_col_vec_idx`, in place:
+ *
+ *     sub:  DST[dst_data_idx][4*data_band + i][c] -= DST[dst_col_vec_idx][4*bcast_band + i][0]
+ *     add:  DST[dst_data_idx][4*data_band + i][c] += DST[dst_col_vec_idx][4*bcast_band + i][0]
+ *     mul:  DST[dst_data_idx][4*data_band + i][c] *= DST[dst_col_vec_idx][4*bcast_band + i][0]
+ *
+ * for i in [0..3], c in [0..31]. Nothing else of either tile is read or
+ * written, so one column tile can hold several 4-row scalars for the same data
+ * band (a band per scalar), and a 4x32 tiny tile (rows 0..3 of faces 0 and 1)
+ * is scaled with `data_band = 0`. The rows it writes are bit-identical to
+ * `sfpu_*_bcast_col` on those rows when the bands match. Both tiles are FP32;
+ * the column tile's other columns and rows are never read, and column 0 of the
+ * band is masked bitwise before the broadcast, so Inf or NaN elsewhere in the
+ * column tile cannot leak in.
+ *
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * Requires a prior call to `sfpu_bcast_col_init` (or the op-specific init).
+ * Not supported on Quasar: a kernel that calls it fails to build.
+ *
  * Return value: None
  *
  * | Argument         | Description                                                         | Type     | Valid Range                                           | Required |
  * |------------------|---------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | dst_data_idx     | The index of the data tile in DST (result is written back in-place) | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | dst_col_vec_idx  | The index of the col-vector tile in DST (column 0 is broadcast)     | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | data_band        | The 4-row band of the data tile: rows 4 * data_band .. +3           | uint32_t | 0 to 3                                                | True     |
+ * | bcast_band       | The 4-row band of the column tile: column 0 rows 4 * bcast_band ..  | uint32_t | 0 to 3                                                | True     |
  */
 // clang-format on
-// `VectorMode::None` makes `_llk_math_eltwise_sfpu_apply_vector_mode_` bypass the
-// per-face loop and invoke the full-tile bcast helper exactly once, with the same
-// `_llk_math_eltwise_sfpu_start_(0)` / `_llk_math_eltwise_sfpu_done_()` brackets
-// the standalone helper used to set up by hand, plus the dst-bound LLK_ASSERTs in
-// `_sfpu_binary_check_`.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void sfpu_sub_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        _calculate_sfpu_binary_bcast_full_tile_,
-        (ckernel::BinaryOp::SUB, ckernel::BroadcastType::COL),
-        dst_data_idx,
-        dst_col_vec_idx,
-        dst_data_idx,
-        VectorMode::None)));
+ALWI void sfpu_sub_bcast_col_band(
+    uint32_t dst_data_idx, uint32_t dst_col_vec_idx, uint32_t data_band, uint32_t bcast_band) {
+    MATH(
+        (_sfpu_bcast_col_band_check_(data_band, bcast_band),
+         SFPU_BINARY_CALL(
+             DST_SYNC_MODE,
+             is_fp32_dest_acc_en,
+             _calculate_sfpu_binary_bcast_col_band_,
+             (ckernel::BinaryOp::SUB),
+             dst_data_idx,
+             dst_col_vec_idx,
+             dst_data_idx,
+             VectorMode::None,
+             data_band,
+             bcast_band)));
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void sfpu_add_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        _calculate_sfpu_binary_bcast_full_tile_,
-        (ckernel::BinaryOp::ADD, ckernel::BroadcastType::COL),
-        dst_data_idx,
-        dst_col_vec_idx,
-        dst_data_idx,
-        VectorMode::None)));
+ALWI void sfpu_add_bcast_col_band(
+    uint32_t dst_data_idx, uint32_t dst_col_vec_idx, uint32_t data_band, uint32_t bcast_band) {
+    MATH(
+        (_sfpu_bcast_col_band_check_(data_band, bcast_band),
+         SFPU_BINARY_CALL(
+             DST_SYNC_MODE,
+             is_fp32_dest_acc_en,
+             _calculate_sfpu_binary_bcast_col_band_,
+             (ckernel::BinaryOp::ADD),
+             dst_data_idx,
+             dst_col_vec_idx,
+             dst_data_idx,
+             VectorMode::None,
+             data_band,
+             bcast_band)));
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        _calculate_sfpu_binary_bcast_full_tile_,
-        (ckernel::BinaryOp::MUL, ckernel::BroadcastType::COL),
-        dst_data_idx,
-        dst_col_vec_idx,
-        dst_data_idx,
-        VectorMode::None)));
+ALWI void sfpu_mul_bcast_col_band(
+    uint32_t dst_data_idx, uint32_t dst_col_vec_idx, uint32_t data_band, uint32_t bcast_band) {
+    MATH(
+        (_sfpu_bcast_col_band_check_(data_band, bcast_band),
+         SFPU_BINARY_CALL(
+             DST_SYNC_MODE,
+             is_fp32_dest_acc_en,
+             _calculate_sfpu_binary_bcast_col_band_,
+             (ckernel::BinaryOp::MUL),
+             dst_data_idx,
+             dst_col_vec_idx,
+             dst_data_idx,
+             VectorMode::None,
+             data_band,
+             bcast_band)));
 }
 
 // clang-format off
@@ -411,7 +556,7 @@ ALWI void sfpu_bcast_init() {
  */
 // clang-format on
 template <BroadcastType Dim, EltwiseBinaryType Op, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void sfpu_bcast(uint32_t dst_data_idx, uint32_t dst_bcast_idx) {
+ALWI void sfpu_bcast(uint32_t dst_data_idx, uint32_t dst_bcast_idx, VectorMode vector_mode = VectorMode::RC) {
     static_assert(
         Dim == BroadcastType::COL || Dim == BroadcastType::ROW,
         "sfpu_bcast: only BroadcastType::COL / BroadcastType::ROW are supported");
@@ -420,13 +565,15 @@ ALWI void sfpu_bcast(uint32_t dst_data_idx, uint32_t dst_bcast_idx) {
         "sfpu_bcast: only EltwiseBinaryType::ELW{ADD,SUB,MUL} are supported");
     if constexpr (Dim == BroadcastType::COL) {
         if constexpr (Op == EltwiseBinaryType::ELWADD) {
-            sfpu_add_bcast_col<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
+            sfpu_add_bcast_col<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx, vector_mode);
         } else if constexpr (Op == EltwiseBinaryType::ELWSUB) {
-            sfpu_sub_bcast_col<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
+            sfpu_sub_bcast_col<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx, vector_mode);
         } else {
-            sfpu_mul_bcast_col<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
+            sfpu_mul_bcast_col<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx, vector_mode);
         }
     } else {
+        // The row broadcast has no partial form.
+        MATH(LLK_ASSERT(vector_mode == VectorMode::RC, "sfpu_bcast<ROW>: VectorMode::RC only"));
         if constexpr (Op == EltwiseBinaryType::ELWADD) {
             sfpu_add_bcast_row<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         } else if constexpr (Op == EltwiseBinaryType::ELWSUB) {
@@ -434,6 +581,27 @@ ALWI void sfpu_bcast(uint32_t dst_data_idx, uint32_t dst_bcast_idx) {
         } else {
             sfpu_mul_bcast_row<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         }
+    }
+}
+
+// clang-format off
+/**
+ * Compile-time-dispatched 4-row band of the column broadcast. Equivalent to the
+ * matching `sfpu_{add,sub,mul}_bcast_col_band` selected by the `Op` template
+ * parameter. See those functions for semantics and preconditions.
+ */
+// clang-format on
+template <EltwiseBinaryType Op, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void sfpu_bcast_col_band(uint32_t dst_data_idx, uint32_t dst_bcast_idx, uint32_t data_band, uint32_t bcast_band) {
+    static_assert(
+        Op == EltwiseBinaryType::ELWADD || Op == EltwiseBinaryType::ELWSUB || Op == EltwiseBinaryType::ELWMUL,
+        "sfpu_bcast_col_band: only EltwiseBinaryType::ELW{ADD,SUB,MUL} are supported");
+    if constexpr (Op == EltwiseBinaryType::ELWADD) {
+        sfpu_add_bcast_col_band<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx, data_band, bcast_band);
+    } else if constexpr (Op == EltwiseBinaryType::ELWSUB) {
+        sfpu_sub_bcast_col_band<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx, data_band, bcast_band);
+    } else {
+        sfpu_mul_bcast_col_band<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx, data_band, bcast_band);
     }
 }
 

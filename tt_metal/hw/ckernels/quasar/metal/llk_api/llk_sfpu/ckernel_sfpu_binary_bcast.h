@@ -323,5 +323,28 @@ inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
     sfpu_normalize_bcast_is_not_supported_on_quasar();
 }
 
+// The partial-tile column-broadcast entries (VectorMode::R and the 4-row band of sfpu_*_bcast_col_band) are not
+// ported to Quasar either; the Compute API keeps their entry points, a kernel that calls one fails to build.
+[[gnu::error("sfpu_*_bcast_col with VectorMode::R and sfpu_*_bcast_col_band are not supported on Quasar")]] void
+sfpu_bcast_col_partial_is_not_supported_on_quasar();
+
+template <BinaryOp BINOP>
+inline void _calculate_sfpu_binary_bcast_col_rows_0_15_(
+    [[maybe_unused]] const std::uint32_t dst_index_data,
+    [[maybe_unused]] const std::uint32_t dst_index_bcast,
+    [[maybe_unused]] const std::uint32_t dst_index_out) {
+    sfpu_bcast_col_partial_is_not_supported_on_quasar();
+}
+
+template <BinaryOp BINOP>
+inline void _calculate_sfpu_binary_bcast_col_band_(
+    [[maybe_unused]] const std::uint32_t dst_index_data,
+    [[maybe_unused]] const std::uint32_t dst_index_bcast,
+    [[maybe_unused]] const std::uint32_t dst_index_out,
+    [[maybe_unused]] const std::uint32_t data_band,
+    [[maybe_unused]] const std::uint32_t bcast_band) {
+    sfpu_bcast_col_partial_is_not_supported_on_quasar();
+}
+
 }  // namespace sfpu
 }  // namespace ckernel
