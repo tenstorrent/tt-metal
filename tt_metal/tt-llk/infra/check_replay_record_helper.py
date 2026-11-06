@@ -53,6 +53,21 @@ TOKEN = re.compile(
 PLAYBACK_MODE = re.compile(r"^\(?\s*(0|0u|0U|false)\s*\)?$")
 
 
+def _is_digit_separator(text: str, i: int) -> bool:
+    """True if the apostrophe at ``i`` is a C++14 digit separator (``1'024``, ``0xFFFF'FFFFu``).
+
+    It is one when it sits inside a numeric literal: the token it ends starts with a digit and the
+    next character continues the literal. A character literal's prefix (``L'a'``, ``u8'a'``) starts
+    with a letter, so it still opens a character literal.
+    """
+    if i + 1 >= len(text) or not text[i + 1].isalnum():
+        return False
+    k = i
+    while k > 0 and (text[k - 1].isalnum() or text[k - 1] in "_'."):
+        k -= 1
+    return k < i and text[k].isdigit()
+
+
 def strip_comments_and_strings(text: str) -> str:
     """Blank out comments and string/char literals, keeping offsets and newlines."""
     out = []
@@ -69,6 +84,9 @@ def strip_comments_and_strings(text: str) -> str:
             j = n if j < 0 else j + 2
             out.append(re.sub(r"[^\n]", " ", text[i:j]))
             i = j
+        elif c == "'" and _is_digit_separator(text, i):
+            out.append(c)
+            i += 1
         elif c in "\"'":
             j = i + 1
             while j < n and text[j] != c:
