@@ -1,0 +1,70 @@
+{
+  "status": "unique_query_did_not_improve_freshness",
+  "job_id": 128021896449,
+  "device_hours": 0,
+  "host_elapsed_seconds": 30.617453,
+  "prior_no_cache_test": "runs/ci-live-log-observability/probe.json; no-cache/Range already returned unchanged snapshot, not repeated",
+  "observations": [
+    {
+      "kind": "standard",
+      "start": "2026-11-06T19:03:58.637454+00:00",
+      "fetched_at": "2026-11-06T19:04:27.870284+00:00",
+      "exit_status": 0,
+      "bytes_including_headers": 37901388,
+      "latest_event_timestamp": "2026-11-06T18:57:14.1167228Z",
+      "event_age_seconds": 433.753562,
+      "http_status": "HTTP/1.1 200 OK",
+      "allowlisted_headers": {
+        "last-modified": [
+          "Fri, 06 Nov 2026 18:57:15 GMT"
+        ],
+        "etag": [
+          "\"0x8DF3C37C617BB7A\""
+        ],
+        "content-length": [
+          "37900541"
+        ],
+        "date": [
+          "Fri, 06 Nov 2026 19:03:58 GMT"
+        ]
+      }
+    },
+    {
+      "kind": "unique_query",
+      "start": "2026-11-06T19:04:27.981291+00:00",
+      "fetched_at": "2026-11-06T19:04:29.254907+00:00",
+      "exit_status": 0,
+      "bytes_including_headers": 37901388,
+      "latest_event_timestamp": "2026-11-06T18:57:14.1167228Z",
+      "event_age_seconds": 435.138185,
+      "http_status": "HTTP/1.1 200 OK",
+      "allowlisted_headers": {
+        "last-modified": [
+          "Fri, 06 Nov 2026 18:57:15 GMT"
+        ],
+        "etag": [
+          "\"0x8DF3C37C617BB7A\""
+        ],
+        "content-length": [
+          "37900541"
+        ],
+        "date": [
+          "Fri, 06 Nov 2026 19:04:27 GMT"
+        ]
+      }
+    }
+  ],
+  "inference": "Fresh response Date changed while Last-Modified, ETag, content length and newest event stayed identical. Unique query did not expose newer archived data. Consistent with upstream archive publication delay; cannot distinguish every intermediary cache or prove internal origin state from two reads. No Age/X-Cache headers were supplied.",
+  "dry_route_consequence": "No exact pre-grade observation mechanism established. Observed435s lag exceeds prior151.802s short SWE agent duration; query cache busting does not solve it. No future latency guarantee.",
+  "source_basis": [
+    "Existing pinned official runner JobServerQueue.cs:968-976 queues job-log file upload separately from live console feed",
+    "Existing ResultsServer.cs:112-117 delegates UploadResultsJobLogAsync",
+    "Prior ci-live-log-observability/RESULT.md distinguishes live-console publisher from archived REST download"
+  ],
+  "limits": [
+    "Two sequential fetches, not simultaneous.",
+    "Unique query added to GitHub REST endpoint, not signed redirect target; no signed URL obtained/stored.",
+    "No direct observer of origin archive or runner local file; cause attribution is an inference, not proof.",
+    "No new credentials/channel/runner actions and no further polling."
+  ]
+}

@@ -1,0 +1,3 @@
+# REST log freshness cache follow-up
+
+Host-only device0, host box0.1h; at most5min. Prior ci-live-log-observability already tested no-cache/Range and found unchanged snapshot, so do not repeat. Unique benign query was not tested: compare one standard job128021896449 REST log fetch with one fresh query-string fetch using existing personal gh authorization. Keep responses in process memory only, output allowlisted timestamp/size/status/cache metadata; never store signed URLs, headers wholesale, credentials or raw logs. Evaluate measured event age rather than header intent. Source inspection can identify archive publication path, but a pair of samples cannot prove a future bound or an exact dry observation mechanism. No workflow/runner/auth changes or dispatch.

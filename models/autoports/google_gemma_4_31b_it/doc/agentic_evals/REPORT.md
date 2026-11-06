@@ -114,6 +114,7 @@ Device costs include the device job, not build/queue. Release savings are foreca
 | gpqa-c8-capacity | 0.15000 (guess) / 0.00000 | 0.40000 | none/solved: decision: no_run_capacity_lower_bound_fails; b8 pool ids: 10248; minimum global ids: 16384; savings guess retired: True |
 | phase-archive-idle-race | 0.12000 (guess) / 0.05905 | 0.00000 | kept/open: native pairs exact: 3; matched decode ids: 583; idle seconds stable: 3.2; tar exit: 0 |
 | phase-archive-runtime-benchmark | 0.09668 / 0.07605 | 0.00000 | none/solved: matrix completed: 8; headline completed: 8; ttft ms: 753.7608764978359; decode tps: 35.32100514361217 |
+| ci-log-cache-discriminator | 0.00000 / 0.00000 | 0.00000 | none/open: standard and unique query latest event identical: True; cache bypass solution: False; limitations: One pair; cannot prove precise upstream mechanism or future bound |
 
 Evidence is written once by each effort; this table summarizes the current coordinator disposition. Unmeasured savings remain unknown or receive zero planning credit.
 

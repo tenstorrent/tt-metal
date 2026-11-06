@@ -2320,6 +2320,22 @@
             "max_observed_active_rows": 2,
             "evidence": "bringup/artifacts/stage12-swe-decode-current.log",
             "qualification": "Harbor launch timestamp; subsequent decode proves serving active. Replaces premature cold-compilation-only description. Runtime clocks unmeasured; startup800MHz warning retained separately."
+          },
+          "latest_progress_projection": {
+            "observed_at": "2026-11-06T19:00:27.064915+00:00",
+            "log_through": "2026-11-06T18:57:14.1167228Z",
+            "reported_completed": 4,
+            "tasks": 5,
+            "progress_elapsed_seconds": 6360,
+            "eval_projection_hours": 2.208333333333333,
+            "full_agent_tail_hours": 6,
+            "cold_setup_hours": 0.39043180605555555,
+            "observed_image_build_hours": 0.8863888888888889,
+            "queue_margin_guess_hours": 0.5,
+            "decision": "continue",
+            "qualification": "Completion-rate extrapolation with one active censored tail. Add full6h agent tail; score/limit classification awaits actual artifacts.",
+            "evidence": "bringup/artifacts/stage12-swe-decode-current.log",
+            "projected_workflow_hours": 9.985154028277776
           }
         },
         {

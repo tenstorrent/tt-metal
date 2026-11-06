@@ -102,7 +102,16 @@
         "evidence": "runs/ci-live-log-observability/RESULT.md",
         "status": "No bounded-latency authorized channel established",
         "rest_age_seconds": 159.806,
-        "shortest_prior_task_seconds": 151.801647
+        "shortest_prior_task_seconds": 151.801647,
+        "cache_followup": {
+          "evidence": "runs/ci-log-cache-followup/RESULT.json",
+          "standard_and_unique_query_same_archive": true,
+          "age_seconds": [
+            433.754,
+            435.138
+          ],
+          "conclusion": "No supported low-latency route established"
+        }
       }
     }
   },
