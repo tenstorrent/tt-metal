@@ -270,7 +270,17 @@ class DistributedRMSNorm(Module):
                 # per_head_norm changes the stats geometry (per-head reduces locally -> no
                 # all-gather scratch), so it MUST be part of the key and forwarded to
                 # create_stats_buffer (which returns None for the per-head/local path).
-                ("rms", tuple(x.shape), num_heads_per_device, per_head_norm, rope_cos is not None, weight_key),
+                # mesh_axis (ring size) and dtype also change the gather geometry.
+                (
+                    "rms",
+                    tuple(x.shape),
+                    x.dtype,
+                    self.mesh_axis,
+                    num_heads_per_device,
+                    per_head_norm,
+                    rope_cos is not None,
+                    weight_key,
+                ),
                 lambda: ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
@@ -419,7 +429,7 @@ class DistributedLayerNorm(Module):
             self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
             topology=self.ccl_manager.topology,
             persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
-                ("ln", tuple(x.shape)),
+                ("ln", tuple(x.shape), x.dtype, self.mesh_axis),
                 lambda: ttnn.experimental.dit_fused_distributed_layernorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
