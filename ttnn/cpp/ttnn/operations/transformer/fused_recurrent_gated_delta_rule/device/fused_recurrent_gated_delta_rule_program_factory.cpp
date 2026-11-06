@@ -9,7 +9,8 @@
 //
 // The circular-buffer plan (ids, tile dims, which CBs unpack straight into fp32 DEST) is the shared
 // header kernels/fused_recurrent_gdn_cb.hpp; the reader builds the tiny 16x32 / 32x16 token tiles
-// from the host-prepared [1, D] tiles, the writer writes the 2 KB o tiles into 4 KB output pages.
+// from the layer's own tensors (face-row gathers, GQA, bf16 widened), the writer writes the 2 KB o tiles into 4 KB
+// output pages.
 
 #include "fused_recurrent_gated_delta_rule_program_factory.hpp"
 
@@ -50,6 +51,11 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     const uint32_t blk_page_bytes = ring ? blk_buf->aligned_page_size() : 0u;
 
     const uint32_t kv = Kt * Vt;
+    const uint32_t has_state = in.initial_state.has_value() ? 1u : 0u;  // else the reader builds a zero state
+    const uint32_t in_bf16 = in.q.dtype() == tt::tt_metal::DataType::BFLOAT16 ? 1u : 0u;
+    const uint32_t g_bf16 = in.g.dtype() == tt::tt_metal::DataType::BFLOAT16 ? 1u : 0u;
+    const uint32_t b_bf16 = in.beta.dtype() == tt::tt_metal::DataType::BFLOAT16 ? 1u : 0u;
+    const bool any_bf16 = in_bf16 || g_bf16 || b_bf16;
 
     auto* device = in.q.device();
     const CoreCoord grid = device->compute_with_storage_grid_size();
@@ -114,6 +120,16 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     // compute -> writer
     add_cb(cb::out16, Vt, 2);
     add_cb(cb::state_out, kv, 2);
+    // raw64: the reader's landing zone for the 64-byte chunks of bf16 rows, (2Kt + Vt) rows x 2 faces + g + beta,
+    // reader-private (reserved once, never pushed).
+    if (any_bf16) {
+        const uint32_t raw_bytes = ((2 * Kt + Vt) * 2 + 2) * 64u;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = raw_bytes,
+            .core_ranges = cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb::raw64), .data_format = fmt, .page_size = raw_bytes}}}});
+    }
     if (ring) {
         const tt::DataFormat idx_fmt = datatype_to_dataformat_converter(in.initial_state_block_idx->dtype());
         desc.cbs.push_back(CBDescriptor{
@@ -128,7 +144,8 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/fused_recurrent_gated_delta_rule/device/kernels/";
     const std::vector<uint32_t> compute_ct = {Kt, Vt, per_token};
 
-    std::vector<uint32_t> reader_ct = {Kt, Vt, use_blk_idx};
+    std::vector<uint32_t> reader_ct = {
+        Kt, Vt, use_blk_idx, has_state, in_bf16, g_bf16, b_bf16, attrs.H, attrs.HV, attrs.HV / attrs.H};
     TensorAccessorArgs(*in.q.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.k.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.v.buffer()).append_to(reader_ct);

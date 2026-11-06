@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Host side of fused_recurrent_gated_delta_rule: the contract (shape rules, then combination rules, in a fixed order
-// so a given bad call always fails on the same message) in front of the program. The program still takes the
-// per-token tile layout of step 1a, so this file also performs the relayout chain around it; the following commits
-// of step 1b move each piece of that chain into the kernels and delete it here.
+// so a given bad call always fails on the same message) in front of the program. The program reads the layer's
+// tensors itself; what remains here is the optional norm and the scale (until the compute commit folds them into the
+// kernel) and the output relayout (until the writer commit).
 
 #include "fused_recurrent_gated_delta_rule.hpp"
 
@@ -17,11 +17,9 @@
 #include "device/fused_recurrent_gated_delta_rule_device_operation.hpp"
 
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
-#include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -39,27 +37,6 @@ constexpr const char* kOp = "fused_recurrent_gated_delta_rule";
 
 ttnn::Tensor as_f32(const ttnn::Tensor& x) {
     return x.dtype() != DataType::FLOAT32 ? ttnn::typecast(x, DataType::FLOAT32) : x;
-}
-
-// [B,T,H,D] -> [B*H, T, D], fp32 TILE (head-major; permute on TILE via transpose engine).
-ttnn::Tensor head_split(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint32_t H, uint32_t D) {
-    ttnn::Tensor t = as_f32(x);
-    t = ttnn::permute(t, ttsl::SmallVector<int64_t>{0, 2, 1, 3});  // [B,H,T,D]
-    return ttnn::reshape(t, ttnn::Shape({B * H, T, D}));
-}
-
-// [B,T,H] -> [B*H, T], fp32 TILE.
-ttnn::Tensor headvec_split(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint32_t H) {
-    ttnn::Tensor t = as_f32(x);
-    t = ttnn::permute(t, ttsl::SmallVector<int64_t>{0, 2, 1});  // [B,H,T]
-    return ttnn::reshape(t, ttnn::Shape({B * H, T}));
-}
-
-// Reshape through ROW_MAJOR (moves data across the tile boundary), then re-tilize.
-ttnn::Tensor reshape_rm(const ttnn::Tensor& x, const ttnn::Shape& shape) {
-    ttnn::Tensor t = ttnn::to_layout(x, Layout::ROW_MAJOR);
-    t = ttnn::reshape(t, shape);
-    return ttnn::to_layout(t, Layout::TILE);
 }
 
 // use_qk_l2norm_in_kernel: x / sqrt(sum_K x^2 + eps) in fp32 with eps inside the root (the golden's l2_norm), as
@@ -257,7 +234,6 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const uint32_t K = d.K;
     const uint32_t HV = d.HV;
     const uint32_t V = d.V;
-    const uint32_t G = HV / H;
     const uint32_t BH = B * HV;
     const float scale = scale_opt.has_value() ? *scale_opt : (1.0f / std::sqrt(static_cast<float>(K)));
     const auto kernel_cfg = init_device_compute_kernel_config(
@@ -268,39 +244,15 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
 
-    // The optional norm, then the scale (in that order), then head-split + GQA-expand q,k from H to HV heads.
-    ttnn::Tensor q = use_qk_l2norm_in_kernel ? l2_norm_rows(q_in, kernel_cfg) : as_f32(q_in);
+    // The optional norm and the scale, as host ops until the compute commit folds them into the kernel; everything
+    // else reaches the program as the layer holds it (the reader gathers the rows and does the GQA mapping). The host
+    // norm is fp32, so v follows q's dtype in that case.
+    ttnn::Tensor q = use_qk_l2norm_in_kernel ? l2_norm_rows(q_in, kernel_cfg) : q_in;
     q = ttnn::multiply(q, scale);
-    ttnn::Tensor k = use_qk_l2norm_in_kernel ? l2_norm_rows(k_in, kernel_cfg) : as_f32(k_in);
-    q = head_split(q, B, T, H, K);  // [B*H, T, K]
-    k = head_split(k, B, T, H, K);
-    if (G > 1) {
-        q = ttnn::repeat_interleave(q, G, 0);  // [BH, T, K]
-        k = ttnn::repeat_interleave(k, G, 0);
-    }
-    ttnn::Tensor v = head_split(v_in, B, T, HV, V);  // [BH, T, V]
+    const ttnn::Tensor k = use_qk_l2norm_in_kernel ? l2_norm_rows(k_in, kernel_cfg) : k_in;
+    const ttnn::Tensor v = v_in.dtype() == q.dtype() ? v_in : as_f32(v_in);
 
-    // g (log decay) as-is: the kernel computes exp(g) on the SFPU; beta as-is (already sigmoid'd).
-    ttnn::Tensor g = headvec_split(g_in, B, T, HV);        // [BH, T]
-    ttnn::Tensor beta = headvec_split(beta_in, B, T, HV);  // [BH, T]
-
-    // Per-token layout: each (head, token) its own zero-padded tile-block.
-    //   q/k [BH*T,1,K], v [BH*T,1,V], g/beta [BH*T,1,1].
-    // T==1 fast path: head_split already yields [BH,1,D] == [BH*T,1,D], so the q/k/v relayout is a
-    // no-op — skip the RM round-trip (it is ~5x the cost of the permute; see test_headsplit_bench).
-    if (T > 1) {
-        q = reshape_rm(q, ttnn::Shape({BH * T, 1, K}));
-        k = reshape_rm(k, ttnn::Shape({BH * T, 1, K}));
-        v = reshape_rm(v, ttnn::Shape({BH * T, 1, V}));
-    }
-    // g/beta come from headvec_split as [BH,T] (BH packed in tile-rows); they always need the
-    // relayout to per-scalar tiles [BH*T,1,1] so the reader finds the value at element [0,0]. They are tiny.
-    g = reshape_rm(g, ttnn::Shape({BH * T, 1, 1}));
-    beta = reshape_rm(beta, ttnn::Shape({BH * T, 1, 1}));
-
-    // Initial state: rows [0:B] of [Bs,HV,K,V] -> [BH,K,V] fp32 TILE. Always provide (zeros if absent) so the reader
-    // always reads S (the unconditional path; there is no in-kernel zeroing yet). Traced callers pass a persistent
-    // state buffer (never absent); the zeros() fallback here is eager-only (device-side fill, uncached).
+    // Initial state: rows [0:B] of [Bs,HV,K,V] -> [BH,K,V] fp32 TILE; absent, the reader builds a zero state.
     //
     // Ring mode: initial_state is the [T*BH,K,V] ring and also the state output; pass it through untouched, since a
     // reshape or typecast would break the in-place aliasing. The device op validates it.
@@ -319,9 +271,6 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
                     ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
             }
             s0 = ttnn::reshape(rows, ttnn::Shape({BH, K, V}));
-        } else {
-            s0 = ttnn::zeros(
-                ttnn::Shape({BH, K, V}), DataType::FLOAT32, Layout::TILE, std::ref(*dev), ttnn::DRAM_MEMORY_CONFIG);
         }
     }
 
@@ -331,10 +280,13 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         q,
         k,
         v,
-        g,
-        beta,
+        g_in,
+        beta_in,
         s0,
         initial_state_block_idx,
+        B,
+        H,
+        HV,
         T,
         want_state && !output_per_token_state,
         output_per_token_state,

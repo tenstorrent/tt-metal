@@ -26,7 +26,7 @@
 //   c_9   ecol32     32x32  1         exp(gcol32): column 0 = e, elsewhere 1          compute -> vector pass, pass 2 (utd)
 //   c_10  (freed)    -      -         was r16; the fused read+vector pass keeps r in DEST, so no CB is allocated
 //   c_11  craw16     16x32  1         [0, 0] = c = q_tilde . k_hat                    compute -> constants pass
-//   c_12  (freed)    -      -         was ccol32; c goes from DEST straight into ebc16, so no CB is allocated
+//   c_12  raw64      n/a    1 page    the 64-byte DRAM-aligned chunks of bf16 rows      reader scratch (bf16 inputs only)
 //   c_13  u16        16x32  Vt        row 0 = u, rows 1-15 exactly zero               compute -> pass 2 in1
 //   c_14  s2         32x32  kv        state ring (ping)                               compute -> compute (utd); c_21 is its matmul view
 //   c_15  s3         32x32  kv        state ring (pong)                               compute -> compute (utd); c_22 is its matmul view
@@ -72,7 +72,8 @@ constexpr uint32_t zero32 = 8;
 constexpr uint32_t ecol32 = 9;
 constexpr uint32_t freed_r16 = 10;  // not allocated; the math header's TokenCbs still names the field
 constexpr uint32_t craw16 = 11;
-constexpr uint32_t freed_ccol32 = 12;  // not allocated; the math header's TokenCbs still names the field
+constexpr uint32_t raw64 = 12;  // the reader's bf16 landing zone (64 B chunks), allocated only with bf16 inputs
+constexpr uint32_t freed_ccol32 = raw64;  // the name the math header's TokenCbs still uses; never read by the compute
 constexpr uint32_t u16 = 13;
 constexpr uint32_t s2 = 14;
 constexpr uint32_t s3 = 15;
@@ -124,7 +125,7 @@ constexpr std::array<std::array<uint32_t, 2>, num_cbs> tile_dims = {{
     tile_32x32,  // c_9  ecol32
     tile_16x32,  // c_10 (freed, was r16)
     tile_16x32,  // c_11 craw16
-    tile_32x32,  // c_12 (freed, was ccol32)
+    tile_32x32,  // c_12 raw64 (placeholder: 64 B pages, reader-private)
     tile_16x32,  // c_13 u16
     tile_32x32,  // c_14 s2
     tile_32x32,  // c_15 s3
@@ -151,7 +152,7 @@ constexpr std::array<bool, num_cbs> unpack_to_dest_fp32 = {{
     true,   // c_9  ecol32
     false,  // c_10 (freed, was r16)
     false,  // c_11 craw16    (bcast-scalar in1)
-    false,  // c_12 (freed, was ccol32)
+    false,  // c_12 raw64     (reader-private)
     false,  // c_13 u16       (matmul in1)
     true,   // c_14 s2
     true,   // c_15 s3
