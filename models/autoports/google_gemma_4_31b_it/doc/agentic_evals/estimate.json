@@ -1,9 +1,9 @@
 {
-  "status": "preflight_incomplete",
+  "status": "awaiting_ci_smoke",
   "evals": {
     "r1_gpqa_diamond": {
       "decision": "stop",
-      "reason": "No valid smoke or timing projection; local Docker runtime unavailable after AutoFix. Infrastructure stop, not a measured capacity stop. Local gated dataset credential unavailable by operator decision.",
+      "reason": "No valid scored smoke or measured release projection yet. Decision8 authorizesCI; existing smoke source build is in progress. Stop is provisional release exclusion, not a capacity or accuracy stop.",
       "functional_at": 0,
       "projected_hours": null,
       "score": null,
@@ -11,7 +11,7 @@
     },
     "swe_bench_verified": {
       "decision": "stop",
-      "reason": "No valid smoke or timing projection; local Docker runtime unavailable after AutoFix. Infrastructure stop, not a measured capacity stop.",
+      "reason": "No valid scored smoke or measured release projection yet. Decision8 authorizesCI; existing smoke source build is in progress. Stop is provisional release exclusion, not a capacity or accuracy stop.",
       "functional_at": 0,
       "projected_hours": null,
       "score": null,
@@ -19,7 +19,7 @@
     },
     "terminal_bench_2_1": {
       "decision": "stop",
-      "reason": "No valid smoke or timing projection; local Docker runtime unavailable after AutoFix. Infrastructure stop, not a measured capacity stop.",
+      "reason": "No valid scored smoke or measured release projection yet. Decision8 authorizesCI; existing smoke source build is in progress. Stop is provisional release exclusion, not a capacity or accuracy stop.",
       "functional_at": 0,
       "projected_hours": null,
       "score": null,

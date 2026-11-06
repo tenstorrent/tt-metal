@@ -6,38 +6,38 @@
   "deadline": "2026-11-08T04:28:49.408645+00:00",
   "schedule": [
     {
-      "phase": "survey_preflight",
+      "phase": "survey_preflight_and_smoke",
       "start_hour": 0,
-      "end_hour": 2
-    },
-    {
-      "phase": "smoke",
-      "start_hour": 2,
-      "end_hour": 4
+      "end_hour": 8
     },
     {
       "phase": "nightly",
-      "start_hour": 4,
-      "end_hour": 12
+      "start_hour": 8,
+      "end_hour": 18
     },
     {
-      "phase": "server-sized",
-      "start_hour": 12,
-      "end_hour": 22
+      "phase": "server_sized_and_larger",
+      "start_hour": 18,
+      "end_hour": 30
     },
     {
-      "phase": "efforts_and_larger",
-      "start_hour": 22,
+      "phase": "freeze_and_early_dry_run",
+      "start_hour": 30,
+      "end_hour": 36
+    },
+    {
+      "phase": "fix_and_recheck_reserve",
+      "start_hour": 36,
       "end_hour": 40
     },
     {
-      "phase": "dry_run_fix_retry",
+      "phase": "release_dispatch_with_queue_margin",
       "start_hour": 40,
-      "end_hour": 46
+      "end_hour": 42
     },
     {
-      "phase": "release_start",
-      "start_hour": 46,
+      "phase": "queue_reserve_before_stage_deadline",
+      "start_hour": 42,
       "end_hour": 48
     }
   ],
@@ -75,7 +75,7 @@
       "arm": "smoke2-r1_gpqa_diamond",
       "device": "qb2-ci",
       "owner": "coordinator",
-      "status": "queued",
+      "status": "in_progress",
       "run_id": 42166117505,
       "workflow": "evals",
       "planned_clients": 2,
@@ -95,13 +95,18 @@
       "exit_status": null,
       "created_at": "2026-11-06T04:57:29.302524+00:00",
       "submitted_at": "2026-11-06T05:03:52.538961+00:00",
-      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42166117505"
+      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42166117505",
+      "last_observed_at": "2026-11-06T05:32:56.961016+00:00",
+      "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-hmpdl",
+      "build_started_at": "2026-11-06T05:13:39Z",
+      "submission_to_build_start_seconds": 605.0,
+      "queue_measurement_note": "Includes preliminary resolver jobs plus build-runner queue; not device/suite time."
     },
     {
       "arm": "smoke2-swe_bench_verified",
       "device": "qb2-ci",
       "owner": "coordinator",
-      "status": "queued",
+      "status": "in_progress",
       "run_id": 42166151590,
       "workflow": "agentic",
       "planned_clients": 2,
@@ -121,13 +126,18 @@
       "exit_status": null,
       "created_at": "2026-11-06T04:57:29.302524+00:00",
       "submitted_at": "2026-11-06T05:04:06.619874+00:00",
-      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42166151590"
+      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42166151590",
+      "last_observed_at": "2026-11-06T05:32:56.918587+00:00",
+      "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-jhxps",
+      "build_started_at": "2026-11-06T05:14:04Z",
+      "submission_to_build_start_seconds": 610.0,
+      "queue_measurement_note": "Includes preliminary resolver jobs plus build-runner queue; not device/suite time."
     },
     {
       "arm": "smoke2-terminal_bench_2_1",
       "device": "qb2-ci",
       "owner": "coordinator",
-      "status": "queued",
+      "status": "in_progress",
       "run_id": 42166175324,
       "workflow": "agentic",
       "planned_clients": 2,
@@ -147,12 +157,17 @@
       "exit_status": null,
       "created_at": "2026-11-06T04:57:29.302524+00:00",
       "submitted_at": "2026-11-06T05:04:23.720597+00:00",
-      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42166175324"
+      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42166175324",
+      "last_observed_at": "2026-11-06T05:32:56.997040+00:00",
+      "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-z44pz",
+      "build_started_at": "2026-11-06T05:14:15Z",
+      "submission_to_build_start_seconds": 607.0,
+      "queue_measurement_note": "Includes preliminary resolver jobs plus build-runner queue; not device/suite time."
     }
   ],
-  "status": "blocked_on_local_release_prerequisite_secondary_smokes_live",
-  "last_updated": "2026-11-06T05:14:15.787610+00:00",
-  "stop_reason": "AutoFix failed to provide mandatory local Docker backend; operator route decision pending. Independent CI smoke jobs remain live.",
+  "status": "resumed_ci_release_authorized",
+  "last_updated": "2026-11-06T05:30:03.360006+00:00",
+  "stop_reason": null,
   "actual_runs": [],
   "continuations": [
     {
@@ -166,8 +181,53 @@
   "secondary_plan": {
     "purpose": "independent2-task smoke suites; no substitute for local dry/release",
     "parallel_jobs": 3,
-    "fallback": "local sequential smoke remains planned after operator provides Docker backend; local GPQA credential unavailable by operator decision",
+    "fallback": "Operator decision8 explicitly routes Docker tasks and GPQA toCI; no local Docker fallback.",
     "predictions": "initial upper-bound guesses5/7/7h, replace after each run",
-    "critical_path_risk": "local release cannot start without external runtime/route resolution"
-  }
+    "critical_path_risk": "Shared pool build/device queueing; include observed queue time and margin before release dispatch."
+  },
+  "release_route": {
+    "device": "qb2-ci",
+    "authority": "AGENTS.md decision8",
+    "local_use": "non-Docker serving measurements",
+    "freeze": "same immutable model and TTI SHAs for dry/release",
+    "queue_time_in_projection": true,
+    "max_parallel": 6,
+    "job_limit_hours": 18,
+    "run_limit_hours": 12
+  },
+  "schedule_basis": "Initial conservative schedule; replace durations after observed smoke/rung runs. Release dispatch target6-8h before deadline; measured queue and slow-tail projections must still fit.",
+  "ci_queue_observations": [
+    {
+      "run_id": 42166117505,
+      "submission_to_build_start_seconds": 605.0,
+      "basis": "Includes preliminary resolver jobs plus build-runner queue; not device/suite time."
+    },
+    {
+      "run_id": 42166151590,
+      "submission_to_build_start_seconds": 610.0,
+      "basis": "Includes preliminary resolver jobs plus build-runner queue; not device/suite time."
+    },
+    {
+      "run_id": 42166175324,
+      "submission_to_build_start_seconds": 607.0,
+      "basis": "Includes preliminary resolver jobs plus build-runner queue; not device/suite time."
+    }
+  ],
+  "measured_runs": [
+    {
+      "arm": "local-serving-check",
+      "device_hold_hours": 0.0921329325,
+      "client_seconds": 76.469,
+      "predicted_device_hours": 0.2,
+      "result": "passed synthetic checks; real agent capacity pending"
+    },
+    {
+      "arm": "local-tti-benchmark-preflight",
+      "predicted_device_hours": 0.1,
+      "device_hold_hours": 0.09529428888888888,
+      "benchmark_seconds": 27.078000201960094,
+      "completed": 8,
+      "result": "pass; direct stock launcher required; preflight only"
+    }
+  ]
 }

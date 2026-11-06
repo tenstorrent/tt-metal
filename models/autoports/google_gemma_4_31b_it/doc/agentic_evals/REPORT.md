@@ -1,3 +1,5 @@
+Current resume status (2026-11-06 05:41 UTC): functional_at remains 0 for every suite; scores and intervals unavailable. Operator decision8 authorizes CI Docker tasks and resolves the earlier local-route blocker. Three smoke jobs are building. Local full60 B8 synthetic growing-context confirmation passed (76.469 s client process time; see runs/local-serving-check/RESULT.md). The B1 stock TTI client preflight found a downstream custom-model parser rejection before requests; AutoFix is investigating. Historical blocked findings below are preserved, not the current stage status.
+
 # Stage 12 — blocked before smoke
 
 Functional_at: 0 valid tasks for GPQA Diamond, SWE-bench Verified and Terminal-Bench 2.1. Hours per suite run, scores and 95% intervals are unknown: no scored run launched. This is an infrastructure-blocked attempt, not a measured stop at a completed rung and not stage completion. GPQA’s pinned references are 84.3% published and 83.33% GPU; comparisons are unavailable. References for the requested tool suites remain unresolved.

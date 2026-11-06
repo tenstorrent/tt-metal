@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "run_id": "fd5fbe5a-7c1a-4995-aa51-fd89114fe560",
+  "stage": "12-agentic-evals",
+  "attempt_id": "7ef7a2c1-3dce-40e4-b6d3-0c83a631ac7e",
+  "kind": "vllm",
+  "workload": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "batch": 1,
+    "concurrency": 1
+  },
+  "selected_mesh": {
+    "shape": [
+      1,
+      4
+    ],
+    "devices": [
+      0,
+      1,
+      2,
+      3
+    ]
+  },
+  "layer_types": {},
+  "performance": {
+    "source": "vllm",
+    "prefill_device_us": null,
+    "decode_device_us": null,
+    "prefill_flops_pct": null,
+    "decode_dram_pct": null,
+    "ttft_ms": 754.9548402457731,
+    "decode_tps": 35.3096386576596,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/perf-b1.json; prior stage11 full60,8 serial requests4096/128/B1/C1"
+  },
+  "accuracy": [],
+  "missing_reasons": {
+    "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
+    "stage12_accuracy": "CI smoke builds in progress; no scored trajectories yet.",
+    "stage12_performance": "Stage12 TTI128/128 and syntheticB8 checks do not match headline. Headline reuses exact4096/128/B1/C1 full60 stage11 evidence."
+  },
+  "notes": [
+    "Resumed same stage with operator decision8 authorizingCI Docker tasks,GPQA,dry/release.",
+    "Prior-stage headline measured eight serial requests; not a new stage12 benchmark.",
+    "No release or rung completion claimed."
+  ]
+}

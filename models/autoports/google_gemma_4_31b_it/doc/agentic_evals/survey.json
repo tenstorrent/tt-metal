@@ -70,11 +70,11 @@
         16,
         32
       ],
-      "rule": "Smallest validated batch at or above planned_clients unless measured reason; no eval run scheduled."
+      "rule": "Smoke planned_clients2 uses smallest validated batch8; stage11 measured rates, synthetic local check underway."
     },
     "agents": {
-      "value": null,
-      "reason": "Local sandbox admission0, real workload unknown."
+      "value": 2,
+      "reason": "Smoke only; max_num_seqs8, prior synthetic pool supports greater occupancy, operator runner nominal31network ceiling; actual task resources/working sets audited fromCI."
     },
     "run_hours": {
       "value": null,
@@ -82,15 +82,19 @@
     },
     "task_lists": {
       "source": "cohorts.json",
-      "frozen": false
+      "frozen": true
     },
     "agent_timeout": {
-      "value": null,
-      "reason": "GPQA request floor14400s; tool suite definitions pending."
+      "tool_suites_seconds": 21600,
+      "request_seconds": {
+        "r1_gpqa_diamond": 14400,
+        "tool_suites": 3600
+      },
+      "source": "preflight release_values; conservative newly registered tool defaults"
     },
     "output_cap": {
       "gpqa": 126976,
-      "tool_suites": null
+      "tool_suites": 32768
     },
     "bytes": {
       "evidence": "../agentic_serving.json ledger and optimized_vllm_ledger"
@@ -100,8 +104,8 @@
       "reason": "Real agent working sets not measured."
     },
     "block_cost": {
-      "value": null,
-      "reason": "No returning real-agent requests."
+      "expected_recomputed_tokens_per_returning_turn": 16,
+      "basis": "block32 /2 uniform alignment estimate; real request alignment unmeasured"
     },
     "prefill_padding": {
       "value": null,

@@ -1,0 +1,9 @@
+{
+  "api_pid": 1219,
+  "client_status": "pass",
+  "idle_metrics": [
+    "vllm:num_requests_running{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0",
+    "vllm:num_requests_waiting{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0"
+  ],
+  "action": "SIGTERM owned API server only after all clients completed and zero running/waiting requests"
+}

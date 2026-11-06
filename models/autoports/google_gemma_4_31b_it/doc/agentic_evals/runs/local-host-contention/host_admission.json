@@ -1,0 +1,26 @@
+{
+  "observed_at": "2026-11-06T05:41:36.369050+00:00",
+  "affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+  ],
+  "os_cpu_count": 16,
+  "cpu_max": "max 100000",
+  "cpuset_cpus_effective": "0-15",
+  "planned_stress_processes": 16,
+  "interpretation": "16 available CPUs, no cgroup CPU quota. Existing client creates one unpinned busy process per available CPU; no extra workers beyond cpuset."
+}

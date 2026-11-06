@@ -1,0 +1,10 @@
+{
+  "at": "2026-11-06T05:42:22.458059+00:00",
+  "client_exit": 0,
+  "gauges": [
+    "vllm:num_requests_running{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0",
+    "vllm:num_requests_waiting{engine=\"0\",model_name=\"google/gemma-4-31B-it\"} 0.0"
+  ],
+  "api_pid": 2555,
+  "action": "SIGTERM owned idle API only"
+}

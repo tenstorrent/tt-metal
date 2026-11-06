@@ -37,6 +37,13 @@
       "max_num_seqs": 8,
       "pool_basis": "stage10 validated batch8 growing contexts; actual smoke occupancy will be audited",
       "host_limit_basis": "operator stock runner approx31 networks; planned2; no added admission wrapper"
+    },
+    "local-serving-check": {
+      "batch": 8,
+      "planned_clients": 2,
+      "max_num_seqs": 8,
+      "reason": "smallest validated batch at or above smoke clients; synthetic startup/calibration only",
+      "additional_phase": "overlap check uses8clients:7decodes+1prefill, sameB8; separate fromC2 growing phase"
     }
   },
   "release_limits": "preflight.json release_values; incomplete for requested tool suites",
@@ -49,5 +56,20 @@
   },
   "temperature": 1.0,
   "top_p": 0.95,
-  "runtime_plugin": "stock pinned plugin, operator decisions1\u20134 preserved"
+  "runtime_plugin": "stock pinned plugin, operator decisions1\u20134 preserved",
+  "local_confirmation_runs": [
+    {
+      "run": "local-tti-benchmark-preflight",
+      "planned_clients": 1,
+      "batch": 1,
+      "max_num_seqs": 1
+    },
+    {
+      "run": "local-host-contention",
+      "planned_clients": 32,
+      "batch": 32,
+      "max_num_seqs": 32,
+      "task_containers": 0
+    }
+  ]
 }

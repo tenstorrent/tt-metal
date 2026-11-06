@@ -39,6 +39,10 @@
     {
       "fact": "Installed gh run list lacks displayTitle; use supported fields plus REST display_title to identify dispatch by immutable SHAs.",
       "evidence": "gh run list field validation; operator stock workflow run-name"
+    },
+    {
+      "fact": "Top-level custom-weights benchmark command emits an absolute model name rejected by downstream parser. Stock direct launcher with canonical model and generated runtime spec preserves pinned snapshot and exact matrix. No generic patch needed.",
+      "evidence": "runs/ci-release-route/tokenizer-AUTOFIX.md; runs/local-tti-benchmark-preflight/result.json"
     }
   ],
   "suite_timings": [],

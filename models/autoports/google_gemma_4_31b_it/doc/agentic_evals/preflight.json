@@ -47,7 +47,9 @@
   "release_route": {
     "ok": false,
     "harness_main_commit": "7a51c2f20f51e7508d8ea365d09092d00bbd5fcb",
-    "reason": "Local stock Harbor Docker route unavailable."
+    "reason": "Operator decision8 authorizes stock QB2CI route. Three smoke source builds active; runtime/trajectory validity pending.",
+    "authorized": true,
+    "device": "qb2-ci"
   },
   "smoke": {
     "ok": false,

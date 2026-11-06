@@ -1,5 +1,5 @@
 {
-  "status": "blocked_on_local_release_prerequisite",
+  "status": "resolved_by_operator_decision_8",
   "blockers": [
     {
       "id": "local-sandbox-runtime",
@@ -25,7 +25,6 @@
     "Collect and audit smoke trajectories before accepting scores",
     "Nightly/server-sized/larger rungs",
     "Measured workload, limits and capacity; ranked efforts",
-    "Restore local release route or receive explicit operator route instruction",
     "Clean dry run and immutable release",
     "Stage gate pass"
   ],
@@ -42,14 +41,14 @@
       42166151590,
       42166175324
     ],
-    "status": "image-build runner queue",
+    "status": "image builds in progress",
     "monitor": "bringup/artifacts/stage12-monitor-ci.py",
-    "tool_session_id": 20102,
+    "tool_session_id": 76721,
     "note": "Queueing is not a failed run; do not cancel or redispatch solely for queue time."
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",
-    "status": "pending_operator_response",
+    "status": "answered_decision8",
     "choices": [
       "provide local Docker prerequisites",
       "authorize secondary dry/release on same machine"
@@ -70,5 +69,19 @@
     "independent_work_completed": "source packaging, publication, registry, cohorts, smoke dispatch and collector setup",
     "ci_status": "three live queued smoke builds, not failed and not cancelled",
     "resume": "Revalidate existing job IDs and collect their outcomes; do not redispatch queued jobs. Provision local runtime or apply explicit operator route instruction before dry/release."
+  },
+  "resolution": {
+    "at": "2026-11-06T05:30:03.360006+00:00",
+    "source": "AGENTS.md operator decision8,2026-11-06 05:40UTC",
+    "route": "qb2-ci for Docker tasks, GPQA, dry run and release; local for serving-only measurements",
+    "keep_frozen_shas": true
+  },
+  "dry_run_route_question": {
+    "at": "2026-11-06T05:43:27.157486+00:00",
+    "status": "pending",
+    "proposal": "Complete frozen task lists and benchmark rehearsal, ignore scores, then separate identical-SHA/settings release",
+    "reason": "Stock workflow lacks readiness-stop; cancellation skips complete task evidence upload",
+    "source": "runs/ci-release-route/RESULT.md",
+    "permission_required": "Exception to stop-after-start/no-score dry run; no generic route alteration assumed"
   }
 }

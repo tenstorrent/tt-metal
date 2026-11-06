@@ -1,0 +1,35 @@
+{
+  "completed": 8,
+  "duration": 27.078000201960094,
+  "mean_ttft_ms": 111.96710637887008,
+  "mean_tpot_ms": 25.767231839603568,
+  "input_lens": [
+    128,
+    128,
+    128,
+    128,
+    128,
+    128,
+    128,
+    128
+  ],
+  "output_lens": [
+    128,
+    128,
+    128,
+    128,
+    128,
+    128,
+    128,
+    128
+  ],
+  "max_concurrency": 1,
+  "source": "tti",
+  "evidence": "bringup/artifacts/stage12-local-tti-preflight/stock-launcher-output/__home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_p300x2_benchmarks/llm/benchmark___home__bringup__.cache__huggingface__hub__models--google--gemma-4-31B-it__snapshots__842da3794eaa0b77d5f08bae87a17459d91ff475_2026-11-06_05-41-31-276366_isl-128_osl-128_maxcon-1_n-8.json",
+  "device_time_measured": false,
+  "full_layers": 60,
+  "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "device_hold_hours": 0.09529428888888888,
+  "client_exit_status": 0,
+  "headline_4096_128": false
+}

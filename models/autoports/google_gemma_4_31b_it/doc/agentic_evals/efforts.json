@@ -21,10 +21,11 @@
       "box_hours": 0.1,
       "status": "done",
       "change": "none",
-      "problem_status": "open",
+      "problem_status": "solved",
       "confirmed": {
         "success": false,
-        "result": "Backend unavailable; host-side provisioning required."
+        "result": "Backend unavailable; host-side provisioning required.",
+        "resolution": "Operator decision8 removes local Docker requirement by authorizingCI; environment remains unchanged, no runtime repair claimed."
       },
       "used_device_hours": 0,
       "evidence": "runs/local-runtime-repair/result.json; setup/AUTOFIX.md",
@@ -43,7 +44,7 @@
         "r1_gpqa_diamond"
       ],
       "status": "not_run",
-      "reason": "Operator forbids adding local credential; secondary registration pending; local release prerequisite unresolved."
+      "reason": "Operator decision8 authorizes gated dataset on qb2-ci; smoke job42166117505 building. No local credential requested."
     },
     {
       "problem": "agent-capacity-and-contention",
@@ -160,6 +161,92 @@
         "live_validation": false
       },
       "evidence": "runs/suite-registration/RESULT.md"
+    },
+    {
+      "problem": "ci-release-route",
+      "owner": "ci_release_route",
+      "goal": "Resolve exact stock CI dry/release commands with frozen SHAs and benchmark/eval-only contents",
+      "plan": "runs/ci-release-route/plan.md",
+      "unblocks": [
+        "r1_gpqa_diamond",
+        "swe_bench_verified",
+        "terminal_bench_2_1"
+      ],
+      "predicted": {
+        "saving_hours": {},
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "confirm": {
+        "method": "Source-backed route and host command resolution; identify limitations without generic changes",
+        "success": "Resolve exact stock CI dry/release commands with frozen SHAs and benchmark/eval-only contents"
+      },
+      "box_hours": 0.1,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "open",
+      "confirmed": {
+        "benchmarks": "Stock local existing-server path resolves exact stage11 matrix; no Docker required",
+        "eval_route": "Stock per-suite CI workflows omit spec tests",
+        "remaining": "CI exact early-stop dry-run control/artifact retention not exposed; no route change made"
+      },
+      "evidence": "runs/ci-release-route/RESULT.md"
+    },
+    {
+      "problem": "local-serving-check",
+      "owner": "local_serving_check",
+      "goal": "Live full60 packaged autoport B8 startup and C2 growing-context/prefill checks",
+      "plan": "runs/local-serving-check/plan.md",
+      "unblocks": [
+        "r1_gpqa_diamond",
+        "swe_bench_verified",
+        "terminal_bench_2_1"
+      ],
+      "predicted": {
+        "saving_hours": {},
+        "device_hours": 0.2,
+        "basis": "guess"
+      },
+      "confirm": {
+        "method": "Exact autoport registration/full60, successful requests, cache and capture metrics; no real-agent capacity claim",
+        "success": "Live full60 packaged autoport B8 startup and C2 growing-context/prefill checks"
+      },
+      "box_hours": 0.5,
+      "status": "done",
+      "used_device_hours": 0.0921329325,
+      "change": "none",
+      "problem_status": "solved",
+      "confirmed": {
+        "success": true,
+        "registration": "full60 autoport;14 published hashes match",
+        "synthetic_growing_clients": 2,
+        "final_context_tokens": 32768,
+        "late_hit_fraction": 0.9965343876604676,
+        "client_wall_seconds": 76.469,
+        "real_agent_capacity": "not yet measured"
+      },
+      "evidence": "runs/local-serving-check/RESULT.md"
+    },
+    {
+      "problem": "local-host-contention",
+      "owner": "local_serving_check",
+      "goal": "Confirm published full60 runtime at B32 and quantify CPU contention in current16CPU environment; synthetic only",
+      "plan": "runs/local-host-contention/plan.md",
+      "predicted": {
+        "saving_hours": {},
+        "device_hours": 0.1,
+        "basis": "guess"
+      },
+      "confirm": {
+        "method": "Two32-client waves, idle and16busyprocesses; complete outputs and valid active_rows32 CPUwindow",
+        "success": "Published full60 B32 serving works and contention measured"
+      },
+      "box_hours": 0.25,
+      "status": "running",
+      "unblocks": [
+        "release_serving_capacity"
+      ]
     }
   ],
   "rankings": [
@@ -373,6 +460,86 @@
         }
       ],
       "reason": "Host registration confirmed; live CI smoke validity next. Local backend requires host intervention. No measured speed ranking yet."
+    },
+    {
+      "after": "operator_decision8_resume",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "device_hours": 0,
+          "saving_hours": null,
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ]
+        },
+        {
+          "problem": "local-serving-check",
+          "device_hours": 0.2,
+          "saving_hours": null,
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ]
+        },
+        {
+          "problem": "harness-registration",
+          "device_hours": null,
+          "saving_hours": null,
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ]
+        },
+        {
+          "problem": "suite-registration",
+          "device_hours": null,
+          "saving_hours": null,
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ]
+        }
+      ],
+      "reason": "Validity work while existing CI smokes build; no speed changes before smoke."
+    },
+    {
+      "after": "local-serving-check",
+      "order": [
+        {
+          "problem": "local-tti-client-tokenizer",
+          "unblocks": [
+            "release_benchmarks"
+          ],
+          "device_hours": 0.15,
+          "saving_hours": null
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": 0,
+          "saving_hours": null
+        },
+        {
+          "problem": "harness-registration",
+          "unblocks": [
+            "r1_gpqa_diamond",
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ],
+          "device_hours": null,
+          "saving_hours": null
+        }
+      ],
+      "reason": "Validity first; client custom-weight path rejected downstream before requests. Existing CI jobs continue, no speed improvement claimed."
     }
   ]
 }
