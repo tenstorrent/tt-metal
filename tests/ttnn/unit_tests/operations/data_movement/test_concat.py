@@ -12,12 +12,12 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
-    assert_exact,
+    check_readable,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
-    torch_input,
 )
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 from tt_py_test_utils_common.utility_functions import is_watcher_enabled, is_n300
 
 torch.manual_seed(0)
@@ -1394,10 +1394,11 @@ def test_concat_dtype_uint8_sharded_s2s_tiled(device):
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.concat))
 def test_concat_docstring_supported_inputs(dtype, layout, buffer_type, device):
     """Runs every dtype, layout and interleaved buffer type the ttnn.concat docstring lists."""
+    check_readable(dtype, layout, buffer_type)
     memory_config = interleaved_memory_config(buffer_type)
     inputs = [
         ttnn.from_torch(
-            torch_input((1, 1, 32, 64), dtype, seed=seed),
+            full_range_input((1, 1, 32, 64), dtype, seed=seed),
             dtype=dtype,
             layout=layout,
             device=device,

@@ -11,12 +11,12 @@ from ttnn.tools import trace_allocation_tracker
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
-    assert_exact,
+    check_readable,
     docstring_dtype_layout_params,
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
-    torch_input,
 )
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 
 
 def test_view_preserves_root_buffer_unique_id(device):
@@ -1099,6 +1099,7 @@ def test_reshape_rejects_overflowing_volume(device, expect_error):
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.reshape))
 def test_reshape_docstring_supported_inputs(dtype, layout, buffer_type, device):
     """Runs every dtype, layout and interleaved buffer type the ttnn.reshape docstring lists."""
+    check_readable(dtype, layout, buffer_type)
     # The TILE reshape below moves data, which the docstring supports for UINT16 on Wormhole B0 and Blackhole.
     if (
         dtype == ttnn.uint16
@@ -1108,7 +1109,7 @@ def test_reshape_docstring_supported_inputs(dtype, layout, buffer_type, device):
         pytest.skip(f"UINT16 reshapes that move data need Wormhole B0 or Blackhole, not {device.arch()}")
     memory_config = interleaved_memory_config(buffer_type)
     input_tensor = ttnn.from_torch(
-        torch_input((1, 2, 50, 64), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
+        full_range_input((1, 2, 50, 64), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
     )
     # The last dim stays the same, so block-float values come back unchanged; for TILE the data still moves.
     output = ttnn.reshape(input_tensor, (1, 1, 100, 64), memory_config=memory_config)
