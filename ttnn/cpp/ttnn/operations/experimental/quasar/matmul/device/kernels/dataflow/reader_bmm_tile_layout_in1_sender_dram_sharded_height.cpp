@@ -54,6 +54,9 @@ void kernel_main() {
     constexpr uint32_t in3_block_tiles = get_compile_time_arg_val(12);  // K tiles for bias
     constexpr uint32_t cb_id_in3 = get_named_compile_time_arg_val("cb_bias");
     constexpr auto bias_args = TensorAccessorArgs<13>();
+    constexpr auto in1_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+#else
+    constexpr auto in1_args = TensorAccessorArgs<10>();
 #endif
 
     constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
@@ -66,8 +69,9 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cb_in1(cb_id_in1);
     CircularBuffer cb_out(cb_id_out);
-    // DRAM read setup
-    AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+    // DRAM read setup: in1 is DRAM height-sharded, read by bank (this reader's dram_bank_id) at offsets into it.
+    const auto in1_accessor = TensorAccessor(in1_args, in1_tensor_addr);
+    const BankView dram_bank(in1_accessor);
     // Output reshard setup - build NOC address for remote output storage core
     UnicastEndpoint remote;
 #ifdef FUSE_BIAS
@@ -105,7 +109,7 @@ void kernel_main() {
                     dram_bank,
                     cb_in1,
                     read_size,
-                    {.bank_id = dram_bank_id, .addr = in1_tensor_addr + in1_batch_offset + curr_dram_offset},
+                    {.bank_id = dram_bank_id, .offset_bytes = in1_batch_offset + curr_dram_offset},
                     {.offset_bytes = cb_write_offset});
                 cb_write_offset += read_size;
                 curr_dram_offset += read_size;

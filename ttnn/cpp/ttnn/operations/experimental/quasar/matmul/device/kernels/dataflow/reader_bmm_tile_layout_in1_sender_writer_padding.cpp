@@ -242,7 +242,7 @@ void kernel_main() {
         // Compute DRAM bank and offset for this batch
         uint32_t in1_dram_bank_id = b / in1_batches_per_bank;
         uint32_t in1_batch_in_shard = b % in1_batches_per_bank;
-        AllocatorBank<AllocatorBankType::DRAM> dram_src;
+        const BankView dram_src(s1);
         uint32_t in1_dram_batch_offset = in1_batch_in_shard * in1_batch_stride_bytes;
 #endif  // IN1_DRAM_HEIGHT_SHARDED
 
@@ -292,17 +292,17 @@ void kernel_main() {
                         uint32_t l1_write_addr_in1_offset = 0;
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
-                        AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+                        const BankView dram_bank(s1);
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
                             uint32_t shard_bank_id = current_dram_bank_id[next_bank_id_and_dram_stride_index];
-                            uint32_t shard_base_addr = in1_tensor_addr;
+                            uint32_t shard_base_offset = 0;
                             if (i == 0) {
-                                shard_base_addr += dram_tensor_start_offset;
+                                shard_base_offset += dram_tensor_start_offset;
                             }
                             noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                 dram_bank,
                                 in1_single_tile_size_bytes,
-                                {.bank_id = shard_bank_id, .addr = shard_base_addr},
+                                {.bank_id = shard_bank_id, .offset_bytes = shard_base_offset},
                                 NocOptVals{.vc = vc});
 
                             uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
@@ -319,7 +319,8 @@ void kernel_main() {
                                         dram_bank,
                                         CoreLocalMem<uint32_t>(l1_write_addr_in1_temp),
                                         in1_single_tile_size_bytes,
-                                        {.bank_id = shard_bank_id, .addr = shard_base_addr + l1_read_addr_in1_temp},
+                                        {.bank_id = shard_bank_id,
+                                         .offset_bytes = shard_base_offset + l1_read_addr_in1_temp},
                                         {},
                                         NocOptVals{.vc = vc});
                                     l1_read_addr_in1_temp += in1_single_tile_size_bytes;
@@ -357,7 +358,7 @@ void kernel_main() {
                                         dram_src,
                                         CoreLocalMem<uint32_t>(l1_write_addr_in1),
                                         in1_single_tile_size_bytes,
-                                        {.bank_id = in1_dram_bank_id, .addr = in1_tensor_addr + tile_byte_offset},
+                                        {.bank_id = in1_dram_bank_id, .offset_bytes = tile_byte_offset},
                                         {});
                                 }
                                 l1_write_addr_in1 += in1_single_tile_size_bytes;
@@ -464,21 +465,22 @@ void kernel_main() {
                         uint32_t l1_write_addr_in3_offset = 0;
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
-                        AllocatorBank<AllocatorBankType::DRAM> bias_dram_bank;
+                        // Bias is read by bank, like in1.
+                        const BankView bias_dram_bank(s3);
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
                             uint32_t bias_shard_bank_id = current_dram_bank_id[next_bank_id_and_dram_stride_index];
-                            uint32_t bias_shard_base_addr = in3_tensor_addr;
+                            uint32_t bias_shard_base_offset = 0;
                             if (i == 0) {
                                 // dram_tensor_start_offset is in in1 tile bytes; convert to
                                 // bias tile bytes since bias_dtype may differ from in1_dtype.
-                                bias_shard_base_addr += (dram_tensor_start_offset / in1_single_tile_size_bytes) *
-                                                        bias_single_tile_size_bytes;
+                                bias_shard_base_offset += (dram_tensor_start_offset / in1_single_tile_size_bytes) *
+                                                          bias_single_tile_size_bytes;
                             }
 
                             noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                 bias_dram_bank,
                                 bias_single_tile_size_bytes,
-                                {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr},
+                                {.bank_id = bias_shard_bank_id, .offset_bytes = bias_shard_base_offset},
                                 NocOptVals{.vc = vc});
 
                             uint32_t l1_read_addr_in3 = 0;
@@ -494,7 +496,8 @@ void kernel_main() {
                                     bias_dram_bank,
                                     CoreLocalMem<uint32_t>(l1_write_addr_in3),
                                     bias_single_tile_size_bytes,
-                                    {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr + l1_read_addr_in3},
+                                    {.bank_id = bias_shard_bank_id,
+                                     .offset_bytes = bias_shard_base_offset + l1_read_addr_in3},
                                     {},
                                     NocOptVals{.vc = vc});
                                 l1_read_addr_in3 += bias_single_tile_size_bytes;

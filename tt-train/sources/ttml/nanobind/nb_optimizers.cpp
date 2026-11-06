@@ -8,6 +8,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 #include <nanobind/trampoline.h>
 
 #include "serialization/serializable.hpp"
@@ -32,8 +33,35 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "optimizers/remote_optimizer.hpp"
 #include "optimizers/sgd.hpp"
 
+namespace {
+
+// Python dict -> StateDict, picking each value's alternative explicitly. nanobind's own variant caster tries the
+// alternatives in order, and with nanobind/stl/vector.h in this file ValueType's std::vector<...> alternatives accept
+// any sequence: an empty NamedParameters (e.g. momentum with no params) would become an empty std::vector<char>.
+ttml::serialization::StateDict state_dict_from_py(const nb::dict& py_dict) {
+    ttml::serialization::StateDict dict;
+    for (auto [py_key, py_value] : py_dict) {
+        auto key = nb::cast<std::string>(py_key);
+        ttml::serialization::NamedParameters named_parameters;
+        ttml::autograd::TensorPtr tensor_ptr;
+        ttnn::Tensor tensor;
+        if (nb::try_cast(py_value, named_parameters, /*convert=*/false)) {
+            dict[key] = std::move(named_parameters);
+        } else if (nb::try_cast(py_value, tensor_ptr, /*convert=*/false)) {
+            dict[key] = std::move(tensor_ptr);
+        } else if (nb::try_cast(py_value, tensor, /*convert=*/false)) {
+            dict[key] = std::move(tensor);
+        } else {
+            dict[key] = nb::cast<ttml::serialization::ValueType>(py_value);
+        }
+    }
+    return dict;
+}
+
+}  // namespace
+
 class OptimizerBaseTrampoline : public ttml::optimizers::OptimizerBase {
-    NB_TRAMPOLINE(OptimizerBase, 10);
+    NB_TRAMPOLINE(OptimizerBase, 13);
 
 public:
     std::string get_name() const override {
@@ -46,7 +74,9 @@ public:
         NB_OVERRIDE_PURE(step);
     }
     ttml::serialization::StateDict get_state_dict() const override {
-        NB_OVERRIDE_PURE(get_state_dict);
+        // NB_OVERRIDE_PURE without its result cast, which would go through the ambiguous variant caster.
+        nb::detail::ticket nb_ticket(nb_trampoline, "get_state_dict", /*pure=*/true);
+        return state_dict_from_py(nb::cast<nb::dict>(nb_trampoline.base().attr(nb_ticket.key)()));
     }
     void set_state_dict(const ttml::serialization::StateDict& dict) override {
         NB_OVERRIDE_PURE(set_state_dict, dict);
@@ -57,11 +87,40 @@ public:
     void set_steps(size_t steps) override {
         NB_OVERRIDE_PURE(set_steps, steps);
     }
-    void set_lr(float lr) override {
-        NB_OVERRIDE_PURE(set_lr, lr);
+    std::vector<float> get_group_lrs() const override {
+        // Fallback for Python optimizers that only implement the deprecated get_lr; goes away with the shims.
+        {
+            nb::detail::ticket nb_ticket(nb_trampoline, "get_group_lrs", /*pure=*/false);
+            if (!nb_ticket.key.is_valid()) {
+                nb::detail::ticket legacy(nb_trampoline, "get_lr", /*pure=*/false);
+                if (legacy.key.is_valid()) {
+                    return {nb::cast<float>(nb_trampoline.base().attr(legacy.key)())};
+                }
+            }
+        }
+        NB_OVERRIDE_PURE(get_group_lrs);
     }
-    float get_lr() const override {
-        NB_OVERRIDE_PURE(get_lr);
+    void set_group_lrs(const std::vector<float>& lrs) override {
+        // Fallback for Python optimizers that only implement the deprecated set_lr; goes away with the shims.
+        {
+            nb::detail::ticket nb_ticket(nb_trampoline, "set_group_lrs", /*pure=*/false);
+            if (!nb_ticket.key.is_valid()) {
+                nb::detail::ticket legacy(nb_trampoline, "set_lr", /*pure=*/false);
+                if (legacy.key.is_valid()) {
+                    if (lrs.size() != 1) {
+                        throw std::invalid_argument(
+                            "this optimizer only implements the single-LR set_lr, but got " +
+                            std::to_string(lrs.size()) + " LRs");
+                    }
+                    nb_trampoline.base().attr(legacy.key)(lrs.front());
+                    return;
+                }
+            }
+        }
+        NB_OVERRIDE_PURE(set_group_lrs, lrs);
+    }
+    std::vector<float> get_initial_group_lrs() override {
+        NB_OVERRIDE(get_initial_group_lrs);
     }
     void print_stats() const override {
         NB_OVERRIDE(print_stats);
@@ -117,6 +176,52 @@ YAML::Node obj_to_yaml(nb::object obj) {
     return YAML::Node();
 }
 
+std::vector<ParamGroup> param_groups_from_py(const nb::list& groups) {
+    std::vector<ParamGroup> result;
+    for (auto group_obj : groups) {
+        auto group_dict = nb::cast<nb::dict>(group_obj);
+        if (!group_dict.contains("params")) {
+            throw std::invalid_argument("Every param group dict needs a \"params\" entry");
+        }
+        ParamGroup group;
+        for (auto [key, value] : group_dict) {
+            const auto key_str = nb::cast<std::string>(key);
+            if (key_str == "params") {
+                group.params = nb::cast<std::vector<std::string>>(value);
+            } else {
+                group.options[key_str] = nb::cast<float>(value);
+            }
+        }
+        result.push_back(std::move(group));
+    }
+    return result;
+}
+
+nb::list param_groups_to_py(const std::vector<ParamGroup>& groups) {
+    nb::list result;
+    for (const auto& group : groups) {
+        nb::dict group_dict;
+        group_dict["params"] = nb::cast(group.params);
+        for (const auto& [key, value] : group.options) {
+            group_dict[key.c_str()] = value;
+        }
+        result.append(group_dict);
+    }
+    return result;
+}
+
+template <typename Optimizer, typename Config>
+void def_init_with_param_groups(nb::class_<Optimizer, OptimizerBase>& py_optimizer) {
+    py_optimizer.def(
+        "__init__",
+        [](Optimizer* self, serialization::NamedParameters parameters, const Config& config, nb::list param_groups) {
+            new (self) Optimizer(std::move(parameters), config, param_groups_from_py(param_groups));
+        },
+        nb::arg("parameters"),
+        nb::arg("config"),
+        nb::arg("param_groups") = nb::list());
+}
+
 }  // namespace
 
 void py_module(nb::module_& m) {
@@ -132,11 +237,15 @@ void py_module(nb::module_& m) {
             auto type = nb::cast<std::string>(config.attr("get")("type", "AdamW"));
             if (py_registry.contains(type.c_str())) {
                 // Python-registered optimizers bypass OptimizerRegistry::create, so repeat its
-                // weight_decay_skip_1d guard or the key silently does nothing.
-                auto skip_1d = config.attr("get")("weight_decay_skip_1d", false);
-                if (!skip_1d.is_none() && nb::cast<bool>(skip_1d)) {
+                // weight_decay_skip_1d guard or the removed key silently does nothing.
+                if (config.contains("weight_decay_skip_1d")) {
                     throw std::runtime_error(
-                        "weight_decay_skip_1d is only supported by AdamW, got optimizer type: " + type);
+                        "weight_decay_skip_1d was removed, use a param group with weight_decay: 0.0 instead "
+                        "(see tt-train/configs/README.md)");
+                }
+                // They also have no param groups, so reject the key or it silently does nothing.
+                if (config.contains("param_groups")) {
+                    throw std::runtime_error("param_groups is not supported by optimizer type: " + type);
                 }
                 return py_registry[type.c_str()](config, std::move(params));
             }
@@ -162,14 +271,56 @@ void py_module(nb::module_& m) {
         py_optimizer_base.def("step", &OptimizerBase::step, "Step function");
         py_optimizer_base.def("get_state_dict", &OptimizerBase::get_state_dict, "Get state dictionary");
         py_optimizer_base.def(
-            "set_state_dict", &OptimizerBase::set_state_dict, nb::arg("dict"), "Set state dictionary");
-        py_optimizer_base.def("get_lr", &OptimizerBase::get_lr, "Get learning rate");
-        py_optimizer_base.def("set_lr", &OptimizerBase::set_lr, nb::arg("lr"), "Set learning rate");
+            "set_state_dict",
+            [](OptimizerBase& self, const nb::dict& dict) { self.set_state_dict(state_dict_from_py(dict)); },
+            nb::arg("dict"),
+            "Set state dictionary");
+        py_optimizer_base.def("print_stats", &OptimizerBase::print_stats, "Print statistics");
+        py_optimizer_base.def(
+            "get_group_lrs", &OptimizerBase::get_group_lrs, "LR of every param group, indexed like get_param_groups");
+        py_optimizer_base.def(
+            "set_group_lrs",
+            &OptimizerBase::set_group_lrs,
+            nb::arg("lrs"),
+            "Set the LR of every param group (indexed like get_group_lrs). This is what LR schedulers call");
+        py_optimizer_base.def(
+            "get_group_options",
+            &OptimizerBase::get_group_options,
+            nb::arg("key"),
+            "Value of a param group option ('lr', 'weight_decay', ...) in every param group");
+        py_optimizer_base.def(
+            "set_group_options",
+            &OptimizerBase::set_group_options,
+            nb::arg("key"),
+            nb::arg("values"),
+            "Set a param group option in every param group, one value per group (indexed like get_param_groups)");
+        py_optimizer_base.def(
+            "get_initial_group_lrs",
+            &OptimizerBase::get_initial_group_lrs,
+            "Per-group LRs recorded the first time this is called (PyTorch's param_group['initial_lr'])");
+        py_optimizer_base.def(
+            "get_lr", &OptimizerBase::get_lr, "Deprecated: the first param group's LR; use get_group_lrs");
+        py_optimizer_base.def(
+            "set_lr",
+            &OptimizerBase::set_lr,
+            nb::arg("lr"),
+            "Deprecated: scale every param group's LR so the first one is lr, keeping their ratios; use set_group_lrs");
         py_optimizer_base.def(
             "get_initial_lr",
             &OptimizerBase::get_initial_lr,
-            "Get the LR recorded when the first scheduler attached (mirrors PyTorch's param_group['initial_lr'])");
-        py_optimizer_base.def("print_stats", &OptimizerBase::print_stats, "Print statistics");
+            "Deprecated: the first param group's initial LR; use get_initial_group_lrs");
+        py_optimizer_base.def(
+            "get_param_groups",
+            [](const OptimizerBase& self) { return param_groups_to_py(self.get_param_groups()); },
+            "Param groups as PyTorch-style dicts: {'params': [names], <option>: value, ...}");
+        py_optimizer_base.def("get_defaults", &OptimizerBase::get_defaults, "Default param group options");
+        py_optimizer_base.def(
+            "set_param_group_option",
+            &OptimizerBase::set_param_group_option,
+            nb::arg("group_idx"),
+            nb::arg("key"),
+            nb::arg("value"),
+            "Set one option of one param group");
     }
 
     {
@@ -195,8 +346,7 @@ void py_module(nb::module_& m) {
 
     {
         auto py_sgd = static_cast<nb::class_<SGD, OptimizerBase>>(m.attr("SGD"));
-        py_sgd.def(
-            nb::init<serialization::NamedParameters, const SGDConfig&>(), nb::arg("parameters"), nb::arg("config"));
+        def_init_with_param_groups<SGD, SGDConfig>(py_sgd);
     }
 
     {
@@ -210,8 +360,7 @@ void py_module(nb::module_& m) {
                float epsilon,
                float weight_decay,
                bool amsgrad,
-               bool stochastic_rounding,
-               bool weight_decay_skip_1d) {
+               bool stochastic_rounding) {
                 return AdamWConfig{
                     .lr = lr,
                     .beta1 = beta1,
@@ -219,8 +368,7 @@ void py_module(nb::module_& m) {
                     .epsilon = epsilon,
                     .weight_decay = weight_decay,
                     .amsgrad = amsgrad,
-                    .stochastic_rounding = stochastic_rounding,
-                    .weight_decay_skip_1d = weight_decay_skip_1d};
+                    .stochastic_rounding = stochastic_rounding};
             },
             nb::arg("lr"),
             nb::arg("beta1"),
@@ -229,7 +377,6 @@ void py_module(nb::module_& m) {
             nb::arg("weight_decay"),
             nb::arg("amsgrad") = false,
             nb::arg("stochastic_rounding") = false,
-            nb::arg("weight_decay_skip_1d") = false,
             "Make an AdamWConfig object");
     }
 
@@ -259,17 +406,13 @@ void py_module(nb::module_& m) {
 
     {
         auto py_adamw = static_cast<nb::class_<AdamW, OptimizerBase>>(m.attr("AdamW"));
-        py_adamw.def(
-            nb::init<serialization::NamedParameters, const AdamWConfig&>(), nb::arg("parameters"), nb::arg("config"));
+        def_init_with_param_groups<AdamW, AdamWConfig>(py_adamw);
     }
 
     {
         auto py_adamw_full_precision =
             static_cast<nb::class_<AdamWFullPrecision, OptimizerBase>>(m.attr("AdamWFullPrecision"));
-        py_adamw_full_precision.def(
-            nb::init<serialization::NamedParameters, const AdamWFullPrecisionConfig&>(),
-            nb::arg("parameters"),
-            nb::arg("config"));
+        def_init_with_param_groups<AdamWFullPrecision, AdamWFullPrecisionConfig>(py_adamw_full_precision);
     }
 
     {
@@ -288,8 +431,7 @@ void py_module(nb::module_& m) {
 
     {
         auto py_muon = static_cast<nb::class_<MuonComposite, OptimizerBase>>(m.attr("MuonComposite"));
-        py_muon.def(
-            nb::init<serialization::NamedParameters, const MuonConfig&>(), nb::arg("parameters"), nb::arg("config"));
+        def_init_with_param_groups<MuonComposite, MuonConfig>(py_muon);
     }
 
     {

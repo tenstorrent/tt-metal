@@ -34,7 +34,7 @@
 #include <gtest/gtest.h>
 #include <mesh_device.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <umd/device/types/noc_id.hpp>
+#include <tt-umd/types/noc_id.hpp>
 
 #include <algorithm>
 #include <cstdint>

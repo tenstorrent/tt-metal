@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import struct
 
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import ScalarBinopGolden, get_golden_generator
 from helpers.llk_params import (
@@ -29,12 +29,8 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     SFPU_BINOP_MODE,
     SFPU_UNARY_SCALAR,
+    fp32_bits,
 )
-
-
-def _bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
-
 
 # The scalar is a swept axis: zero, unity, a sign flip, a large multiplier, and a value
 # small enough to matter against the tolerance. Kept deliberately small -- inputs are
@@ -64,8 +60,8 @@ _ZERO_DIVISOR_UNREACHABLE = (
 def _scalar_bits_for(mathop, scalar):
     """The 32-bit pattern the kernel is given for *mathop* at *scalar*."""
     if mathop == MathOperation.ScalarDiv:
-        return _bits(1.0 / scalar)
-    return _bits(scalar)
+        return fp32_bits(1.0 / scalar)
+    return fp32_bits(scalar)
 
 
 # Keep inputs small and bounded so the bf16 result stays accurate across all five scalar
@@ -171,8 +167,7 @@ _SCALAR_OPS = [
 
 
 def _skip_unsupported(formats, dest_acc, mathop, scalar):
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
     if (
         formats.input_format == DataFormat.Float16_b
         and dest_acc == DestAccumulation.Yes
@@ -221,7 +216,7 @@ def test_sfpu_binop_scalar_values(formats, dest_acc, mathop, scalar):
 #
 # Still out of scope, and both need a per-op tolerance first -- the default bf16 tolerance is
 # only meaningful while the result stays in range: |scalar| > 8, and +/-tiny / +/-large on the
-# tensor operand. That is the pattern sfpu_accuracy_budget.yaml uses for pow and xlogy.
+# tensor operand. That is the pattern sfpu_accuracy_budget_*.yaml uses for pow and xlogy.
 @pytest.mark.nightly
 @parametrize(
     formats=_SCALAR_FORMATS,

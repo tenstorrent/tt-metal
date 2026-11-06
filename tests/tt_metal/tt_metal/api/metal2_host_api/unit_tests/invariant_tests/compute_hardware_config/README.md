@@ -25,7 +25,14 @@ struct ComputeHardwareConfig {
     };
     std::optional<Compute1XXConfig> config_1xx = std::nullopt;
 
-    struct Compute2XXConfig {};
+    struct Compute12XConfig {
+        bool enable_pack_rvv = false;
+    };
+    std::optional<Compute12XConfig> config_12x = std::nullopt;
+
+    struct Compute2XXConfig {
+        bool enable_unpack_rvv = false;
+    };
     std::optional<Compute2XXConfig> config_2xx = std::nullopt;
 };
 ```

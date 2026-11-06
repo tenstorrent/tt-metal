@@ -40,7 +40,7 @@ void kernel_main() {
         }
 
         for (uint32_t i = 0; i < dim_size; ++i) {
-            constexpr auto dfb_exp_id = dfb::ydy;  // the y * dy buffer, reused to hold exp(y)
+            static constexpr auto dfb_exp_id = dfb::ydy;  // the y * dy buffer, reused to hold exp(y)
             exp_tile_to_dfb<dfb::y, dfb_exp_id>(dfb_y_obj, dfb_ydy_obj);
 
             mul_tiles_to_dfb<dfb::sum, dfb_exp_id, dfb::dy_m_sum>(
