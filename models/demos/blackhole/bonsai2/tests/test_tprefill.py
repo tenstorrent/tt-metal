@@ -234,6 +234,8 @@ def test_tprefill2_time(device, K, N):
     print(
         f"T2TIME K={K} N={N}: 2D {_time(device, lambda: lin2(xt)):.3f} ms, 1D {_time(device, lambda: lin1(xt)):.3f} ms"
     )
+    if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
+        ttnn.ReadDeviceProfiler(device)
 
 
 def test_tprefill2_model_shapes_time(device):

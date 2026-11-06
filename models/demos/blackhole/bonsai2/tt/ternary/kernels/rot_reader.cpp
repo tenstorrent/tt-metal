@@ -56,8 +56,7 @@ void kernel_main() {
     noc_async_read(hs.get_noc_addr(1), get_write_ptr(cb_h) + 2048, 2048);
     cb_reserve_back(cb_m, 1);
     noc_async_read(ms.get_noc_addr(b), get_write_ptr(cb_m), 2048);
-    noc_async_read_barrier();
-    cb_push_back(cb_m, 1);
+    // (no barrier: the constants land with the activation gather's first barrier, one round trip for both)
     // 64-B reads (face row 0 and row 1) into scratch: DRAM reads must be 64-B aligned and sized on Blackhole, and a
     // 32-B read of a DRAM-resident activation returned other data. Row 1 is dropped by the local copies.
     constexpr uint32_t cb_scratch = ROT_CB_SCR;
@@ -78,6 +77,7 @@ void kernel_main() {
     };
     cb_reserve_back(cb_x, 1);
     gather(xs, get_write_ptr(cb_x));
+    cb_push_back(cb_m, 1);
 #ifdef ROT_GLU
     constexpr uint32_t cb_u = ROT_CB_U;
     cb_reserve_back(cb_u, 1);
