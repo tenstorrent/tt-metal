@@ -86,8 +86,8 @@ ttnn::Tensor fused_msda(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     bool align_corners = false,
     bool locations_in_grid_space = false,
-    MSDAValueLayout value_layout = MSDAValueLayout::Auto,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    MSDAValueLayout value_layout = MSDAValueLayout::Auto);
 
 // V2: the same operator with sampling-location generation fused into the op.
 // No (B, Q, H, L, P, 2) location tensor is materialized.
@@ -133,10 +133,10 @@ ttnn::Tensor fused_msda_from_offsets(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     MSDAReferenceMode reference_mode = MSDAReferenceMode::Level,
     bool align_corners = false,
-    MSDAValueLayout value_layout = MSDAValueLayout::Auto,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<std::vector<uint32_t>>& num_valid_queries = std::nullopt,
-    const std::optional<ttnn::Tensor>& num_valid_queries_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& num_valid_queries_tensor = std::nullopt,
+    MSDAValueLayout value_layout = MSDAValueLayout::Auto);
 
 // Whether fused_msda_from_offsets can stage value (ROW_MAJOR, interleaved L1)
 // and its bf16 output in L1 alongside its circular buffers. Set

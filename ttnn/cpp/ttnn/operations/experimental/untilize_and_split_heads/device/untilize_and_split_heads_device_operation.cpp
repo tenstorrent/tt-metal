@@ -19,13 +19,17 @@ void UntilizeAndSplitHeadsDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(in.storage_type() == StorageType::DEVICE, "untilize_and_split_heads: input must be on device");
     TT_FATAL(in.dtype() == DataType::BFLOAT16, "untilize_and_split_heads: input must be BFLOAT16, got {}", in.dtype());
     TT_FATAL(in.layout() == Layout::TILE, "untilize_and_split_heads: input must be TILE, got {}", in.layout());
-    // The kernels read whole 2048 B tiles and untilize them as 32x32.
-    const auto tile_shape = in.tensor_spec().tile().get_tile_shape();
+    // The kernels read whole 2048 B tiles and untilize them as plain 32x32
+    // tiles; nothing configures the unpacker for a transposed datum order.
+    const auto tile = in.tensor_spec().tile();
+    const auto tile_shape = tile.get_tile_shape();
     TT_FATAL(
-        tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
-        "untilize_and_split_heads: input must use 32x32 tiles, got {}x{}",
+        tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH &&
+            !tile.get_transpose_within_face() && !tile.get_transpose_of_faces(),
+        "untilize_and_split_heads: input must use non-transposed 32x32 tiles, got {}x{}{}",
         tile_shape[0],
-        tile_shape[1]);
+        tile_shape[1],
+        tile.get_transpose_within_face() || tile.get_transpose_of_faces() ? " transposed" : "");
     TT_FATAL(
         in.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "untilize_and_split_heads: input must be INTERLEAVED");
@@ -34,10 +38,11 @@ void UntilizeAndSplitHeadsDeviceOperation::validate_on_program_cache_miss(
         "untilize_and_split_heads: output memory_config must be INTERLEAVED");
     const auto& s = in.logical_shape();
     TT_FATAL(s.rank() == 3, "untilize_and_split_heads: input must be (B, S, H*D), got shape {}", s);
-    TT_FATAL(s[0] > 0 && s[1] > 0, "untilize_and_split_heads: B and S must be > 0, got shape {}", s);
+    TT_FATAL(s[0] > 0 && s[1] > 0 && s[2] > 0, "untilize_and_split_heads: B, S and H*D must be > 0, got shape {}", s);
     TT_FATAL(attrs.num_heads > 0, "untilize_and_split_heads: num_heads must be > 0");
+    // Divide rather than multiply: num_heads * TILE_WIDTH can wrap a uint32 to 0.
     TT_FATAL(
-        s[2] % (attrs.num_heads * tt::constants::TILE_WIDTH) == 0,
+        s[2] % attrs.num_heads == 0 && (s[2] / attrs.num_heads) % tt::constants::TILE_WIDTH == 0,
         "untilize_and_split_heads: H*D ({}) must split into {} heads of a whole number of tile widths; a head "
         "has to own its tiles",
         s[2],

@@ -2063,6 +2063,35 @@ def test_fused_msda_rejects_head_major_value_with_wrong_page_count(device, expec
         ttnn.experimental.fused_msda(bad, loc_t, attn_t, shapes, value_layout="head_major")
 
 
+def test_fused_msda_rejects_padded_head_major_value(device, expect_error):
+    """Page ids come from value's logical shape, so padding in its buffer misplaces every page after it."""
+    _, loc_t, attn_t, shapes = _valid_inputs(device, H=2, D=32)
+    # S = 36: two pages per head, viewed over a buffer that holds three.
+    backing = _to_device(torch.randn(1, 2, 3, 32 * 32), device)
+    padded = ttnn.reshape(backing, ttnn.Shape([1, 2, 2, 32 * 32]), ttnn.Shape([1, 2, 3, 32 * 32]))
+    assert list(padded.shape) == [1, 2, 2, 1024] and list(padded.padded_shape) == [1, 2, 3, 1024]
+    with expect_error(RuntimeError, "must equal its logical shape"):
+        ttnn.experimental.fused_msda(padded, loc_t, attn_t, shapes, value_layout="head_major")
+
+
+def test_fused_msda_l1_check_takes_tiled_head_major_value(device):
+    """The fit check sees value before the op lays it out row-major, so tile padding must not reject it."""
+    spatial_shapes = [(6, 5), (3, 2)]  # S = 36: two pages per head, tile-padded to 32
+    value, ref_pts, offsets, attn = _v2_case(1, 8, 2, 2, 4, 32, 4, spatial_shapes)
+    head_major = ttnn.from_torch(_head_major_value(value).to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT)
+    assert list(head_major.padded_shape) != list(head_major.shape)
+    fits = ttnn.experimental.can_use_fused_msda_from_offsets_l1_value(
+        head_major,
+        _to_device(ref_pts, device),
+        _to_device(_pack_locations(offsets), device),
+        _to_device(_pack_weights(attn), device),
+        spatial_shapes,
+        reference_mode="pillar",
+        value_layout="head_major",
+    )
+    assert isinstance(fits, bool)
+
+
 def test_fused_msda_head_major_value_needs_value_layout(device, expect_error):
     """Without value_layout="head_major" the op reads rank-4 value as canonical (B, S, H, D) and rejects the key count."""
     _, loc_t, attn_t, shapes = _valid_inputs(device, H=2, D=32)
