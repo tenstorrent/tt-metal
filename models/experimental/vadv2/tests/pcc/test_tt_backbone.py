@@ -118,5 +118,5 @@ def test_vadv2_backbone(
     ).to(torch.float32)
     ttnn_output = ttnn_output.permute(0, 3, 1, 2)
 
-    pcc_passed, pcc_message = assert_with_pcc(ttnn_output, torch_output, 0.96)
+    pcc_passed, pcc_message = assert_with_pcc(ttnn_output, torch_output, 0.99)
     logger.info(pcc_message)
