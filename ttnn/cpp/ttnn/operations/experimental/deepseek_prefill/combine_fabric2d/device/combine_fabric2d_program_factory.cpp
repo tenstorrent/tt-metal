@@ -195,34 +195,34 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
 // chip's sender bumps as it fills this stream's forwarding region, and one the downstream chip bumps when it
 // starts a launch.
 //
-// That launch credit crosses direction: our stream s sender grants it to the downstream chip's reverse stream
+// Every counter that only cores of this chip touch is a PROGRAM semaphore: `filled` / `freed` between a stream
+// core's reader and sender, `untilized[j]` on a reader's core bumped by its group's j-th untilizer, and
+// `unt_freed[c]` on an untilizer's core bumped by the reader on link c. Every launch re-initialises them, so no
+// kernel has to hand the next launch a zeroed count. The ids are the same on every combine core of a chip,
+// which is what lets a core address its peer's copy by id.
+//
+// `unt_freed` is per consumer rather than one counter they share: a group's senders take alternating halves
+// of each run and so run far apart, and a shared count would let the leading one's credit release a slot the
+// trailing one is still reading.
+//
+// The launch credit crosses direction: our stream s sender grants it to the downstream chip's reverse stream
 // core, and our own `launch_credit` is granted by that core's sender. Our sender takes one before its first
 // send, so nothing it writes reaches the downstream chip before that chip is in the same launch.
 //
-// GlobalSemaphores rather than the op's own L1 region so they sit at an address uniform across the mesh:
-// `fwd_arrived` and `launch_credit` are bumped by a neighbouring chip, which has to know where they live.
+// The counters a neighbouring chip bumps are GlobalSemaphores, so they sit at an address uniform across the
+// mesh and the neighbour knows where they live. A program semaphore would not do: it is re-initialised when
+// THIS chip loads the program, which would erase a bump from a neighbour that started first.
 //
 // `final_arrived` is the receive count for the tokens the upstream chip writes straight into this chip's
 // output. Nothing else on this chip sees those land, so without it this chip's program can finish -- and the
 // next op on it read the output -- while a neighbour is still delivering. The reader waits for the count it
 // expects before exiting.
 //
-// Nothing zeroes them between launches — they outlive the cached workload — so the kernels undo each launch's
-// count. `filled` and `freed` are zeroed at end of stream, which is safe because only the reader and sender
-// on the same core bump them. `fwd_arrived` and `final_arrived` are bumped by the upstream chip, so the reader
-// subtracts what this launch accounted for instead, which stays right without relying on the launch credit.
-// Skipping that leaves the next launch reading this one's totals, and a stale `freed` underflows the reader's
-// free-slot arithmetic into a silent buffer overwrite rather than a clean failure. The sender takes
-// `launch_credit` by subtracting one at the start of its stream, because the downstream chip can grant the
-// next launch's credit before this launch ends.
-// The untilizer handshake needs the same treatment as the ring counters. `untilized[j]` lives on a reader's
-// core and is bumped by its group's j-th untilizer; `unt_freed[c]` lives on an untilizer's core and is
-// bumped by the reader on link c. One semaphore per INDEX serves the whole mesh, because a core only ever
-// sees the copies it owns and the per-core copy at a uniform offset already separates them.
-//
-// `unt_freed` is per consumer rather than one counter they share: a group's senders take alternating halves
-// of each run and so run far apart, and a shared count would let the leading one's credit release a slot the
-// trailing one is still reading.
+// Nothing zeroes the GlobalSemaphores between launches — they outlive the cached workload — so the kernels
+// undo each launch's count. The ones the upstream chip bumps are drained by subtraction rather than zeroed,
+// which stays right without relying on the launch credit. The sender takes `launch_credit` by subtracting one
+// at the start of its stream, because the downstream chip can grant the next launch's credit before this
+// launch ends.
 // Per channel there are three counters, and the direction each travels is what the channel scheme needs:
 //
 //   `vc_arrived[v]`  the upstream chip saying it put pages in our channel v. Travels with the data.
@@ -235,25 +235,26 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
 // boundary are drained by subtraction at end of stream; the two that stay on one chip are simply zeroed,
 // because a chip's whole program finishes before its next launch starts.
 struct RingSemaphores {
-    tt::tt_metal::GlobalSemaphore filled;
-    tt::tt_metal::GlobalSemaphore freed;
     tt::tt_metal::GlobalSemaphore final_arrived;
     tt::tt_metal::GlobalSemaphore launch_credit;
     tt::tt_metal::GlobalSemaphore credit_done;
     std::vector<tt::tt_metal::GlobalSemaphore> vc_arrived;
     std::vector<tt::tt_metal::GlobalSemaphore> vc_freed;
     std::vector<tt::tt_metal::GlobalSemaphore> vc_outbox;
-    std::vector<tt::tt_metal::GlobalSemaphore> untilized;
-    std::vector<tt::tt_metal::GlobalSemaphore> unt_freed;
+    uint32_t untilizers_per_group = 0;
+    uint32_t num_links = 0;
+
+    static constexpr uint32_t FILLED = 0;
+    static constexpr uint32_t FREED = 1;
+    uint32_t untilized(uint32_t j) const { return 2 + j; }
+    uint32_t unt_freed(uint32_t c) const { return 2 + untilizers_per_group + c; }
+    bool has_untilizers() const { return untilizers_per_group != 0; }
+    uint32_t num_program_semaphores() const { return has_untilizers() ? unt_freed(num_links) : 2; }
 
     uint32_t lowest_address() const {
-        uint32_t lowest = static_cast<uint32_t>(
-            std::min({filled.address(),
-                      freed.address(),
-                      final_arrived.address(),
-                      launch_credit.address(),
-                      credit_done.address()}));
-        for (const auto* group : {&vc_arrived, &vc_freed, &vc_outbox, &untilized, &unt_freed}) {
+        uint32_t lowest =
+            static_cast<uint32_t>(std::min({final_arrived.address(), launch_credit.address(), credit_done.address()}));
+        for (const auto* group : {&vc_arrived, &vc_freed, &vc_outbox}) {
             for (const auto& sem : *group) {
                 lowest = std::min(lowest, static_cast<uint32_t>(sem.address()));
             }
@@ -262,31 +263,33 @@ struct RingSemaphores {
     }
 };
 
+// tt::tt_metal::NUM_SEMAPHORES, which no public header exposes to a ttnn op.
+constexpr uint32_t kSemaphoresPerCore = 16;
+
 RingSemaphores allocate_ring_semaphores(
     ttnn::MeshDevice* mesh, uint32_t num_links, uint32_t untilizers_per_group, uint32_t vcs) {
-    // Allocated on the full worker grid so the addresses are uniform across the mesh. One fwd_arrived
-    // semaphore serves every stream: each stream is drained by a different worker core, so the per-core copy
-    // at this uniform L1 offset already separates them, and the sender simply targets the right core.
+    // Allocated on the full worker grid so the addresses are uniform across the mesh. One semaphore of each
+    // kind serves every stream: each stream is drained by a different worker core, so the per-core copy at
+    // this uniform L1 offset already separates them, and the sender simply targets the right core.
     const auto grid = mesh->compute_with_storage_grid_size();
     const CoreRangeSet all_workers(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
     auto make = [&] {
         return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
     };
-    // filled, freed, final_arrived, launch_credit, credit_done; the five vectors fill in below.
-    RingSemaphores sems{make(), make(), make(), make(), make(), {}, {}, {}, {}, {}};
+    RingSemaphores sems{make(), make(), make(), {}, {}, {}, untilizers_per_group, num_links};
     for (uint32_t v = 0; v < vcs; v++) {
         sems.vc_arrived.push_back(make());
         sems.vc_freed.push_back(make());
         sems.vc_outbox.push_back(make());
     }
-    if (untilizers_per_group != 0) {
-        for (uint32_t j = 0; j < untilizers_per_group; j++) {
-            sems.untilized.push_back(make());
-        }
-        for (uint32_t c = 0; c < num_links; c++) {
-            sems.unt_freed.push_back(make());
-        }
-    }
+    TT_FATAL(
+        sems.num_program_semaphores() <= kSemaphoresPerCore,
+        "combine_fabric2d: {} program semaphores per combine core exceed the {} a core has ({} untilizers per "
+        "group, {} links)",
+        sems.num_program_semaphores(),
+        kSemaphoresPerCore,
+        untilizers_per_group,
+        num_links);
     tt::tt_metal::distributed::Synchronize(*mesh, std::nullopt, {});
     return sems;
 }
@@ -339,8 +342,8 @@ KernelPlan make_kernel_plan(
     uint32_t pages_per_stream) {
     KernelPlan plan;
     plan.pages_per_stream = pages_per_stream;
-    plan.ring_filled_slot = static_cast<uint32_t>(sems.filled.address());
-    plan.ring_freed_slot = static_cast<uint32_t>(sems.freed.address());
+    plan.ring_filled_slot = RingSemaphores::FILLED;
+    plan.ring_freed_slot = RingSemaphores::FREED;
     plan.final_arrived_addr = static_cast<uint32_t>(sems.final_arrived.address());
     plan.launch_credit_addr = static_cast<uint32_t>(sems.launch_credit.address());
     plan.credit_done_addr = static_cast<uint32_t>(sems.credit_done.address());
@@ -362,13 +365,15 @@ KernelPlan make_kernel_plan(
 }
 
 // The reader's L1 copy of the control tensors: the expert_offsets slice (one row per origin chip) plus the
-// counts and region offsets. A few kB, read once at startup and indexed from L1 thereafter. Plus the
-// metadata prefetch pads at the front, 64-byte aligned each: a DRAM read needs a 64-byte-aligned L1
-// destination on Blackhole, which no offset inside a ring slot's tail can give (the tail starts at
-// token_size, and its free half is only 32-byte aligned).
+// counts and region offsets, then the ring's expert ids, each row 64-byte aligned. A few kB, read once at
+// startup and indexed from L1 thereafter. Plus the metadata prefetch pads at the front, 64-byte aligned each:
+// a DRAM read needs a 64-byte-aligned L1 destination on Blackhole, which no offset inside a ring slot's tail
+// can give (the tail starts at token_size, and its free half is only 32-byte aligned).
 uint32_t control_region_bytes(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
-    return cmbf2d::META_PREFETCH * cmbf2d::META_PAD_STRIDE +
-           static_cast<uint32_t>(sizeof(uint32_t)) * num_routed_experts(tensor_args) * (ring_extent(args) + 2);
+    const uint32_t tables_bytes =
+        static_cast<uint32_t>(sizeof(uint32_t)) * num_routed_experts(tensor_args) * (ring_extent(args) + 2);
+    return cmbf2d::META_PREFETCH * cmbf2d::META_PAD_STRIDE + cmbf2d::align_control(tables_bytes) +
+           ring_extent(args) * cmbf2d::expert_table_row_stride(args.experts_per_chip);
 }
 
 // cb_out FIRST: the framework lays these out from the L1 allocator base in declaration order, which is what
@@ -404,14 +409,12 @@ void add_untilizer_cbs(
 
 ReaderUntilizers untilizers_for_stream(
     const UntilizerGroups& groups, StreamId stream, const RingSemaphores& sems, const L1Layout& l1) {
-    if (sems.unt_freed.empty()) {
+    if (!sems.has_untilizers()) {
         return {};
     }
-    ReaderUntilizers r{l1.unt_ring, static_cast<uint32_t>(sems.unt_freed.at(stream / 2).address()), {}};
+    ReaderUntilizers r{l1.unt_ring, sems.unt_freed(stream / 2), {}};
     for (uint32_t j = 0; j < groups[untilizer_group_of(stream)].size(); j++) {
-        r.peers.push_back(HandshakePeer{
-            groups[untilizer_group_of(stream)][j].worker_virtual,
-            static_cast<uint32_t>(sems.untilized.at(j).address())});
+        r.peers.push_back(HandshakePeer{groups[untilizer_group_of(stream)][j].worker_virtual, sems.untilized(j)});
     }
     return r;
 }
@@ -429,6 +432,26 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const auto work_by_stream =
         generate_assignments(ring_chip_ids(args.device, coord, args.axis), my_dg_index(args, coord), args.num_links);
     const auto& groups = placement.at(coord).untilizers;
+
+    // Every id on every combine core of this chip, stream and untilizer cores alike: a peer's copy is addressed
+    // by the id it has on the sender's own core. Declared before the fabric connections, which take the lowest
+    // ids still free on a sender core and would otherwise claim these.
+    std::set<CoreRange> combine_cores;
+    for (const auto& [stream, self] : placement.at(coord).streams) {
+        combine_cores.insert(CoreRange(self.worker_logical));
+    }
+    for (const auto& group : groups) {
+        for (const auto& untilizer : group) {
+            combine_cores.insert(CoreRange(untilizer.logical));
+        }
+    }
+    for (uint32_t id = 0; id < sems.num_program_semaphores(); id++) {
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = CoreRangeSet(combine_cores),
+            .initial_value = 0});
+    }
 
     for (const auto& [stream, self] : placement.at(coord).streams) {
         KernelPlan plan = chip_plan;
@@ -508,45 +531,22 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         desc.kernels[snd_id].emplace_runtime_args(self.worker_logical, rt);
     }
 
-    // One kernel per untilizer core rather than one over a core range: they differ by their index in the
-    // group, which is what deals the group's batches out between them.
+    // One untilizer dataflow kernel per group, over the group's cores: they differ only by their position in the
+    // group, which deals the group's batches out between them, and by their produced-count semaphore, and those
+    // are runtime arguments.
     for (uint32_t g = 0; g < UNTILIZER_GROUPS; g++) {
+        if (groups[g].empty()) {
+            continue;
+        }
+        std::set<CoreRange> group_ranges;
+        std::vector<tt::tt_metal::CoreCoord> group_cores;
+        std::vector<uint32_t> produced_slots;
         for (uint32_t j = 0; j < groups[g].size(); j++) {
             const CoreRangeSet core(CoreRange(groups[g][j].logical));
+            group_ranges.insert(CoreRange(groups[g][j].logical));
+            group_cores.push_back(groups[g][j].logical);
+            produced_slots.push_back(sems.untilized(j));
             add_untilizer_cbs(desc, tensor_args, core);
-
-            UntilizerPlan plan;
-            plan.my_expert_base = chip_plan.my_expert_base;
-            plan.my_index = j;
-            plan.num_peers = static_cast<uint32_t>(groups[g].size());
-            plan.control_addr = l1.unt_control;
-            plan.produced_slot = static_cast<uint32_t>(sems.untilized.at(j).address());
-            // A group serves one ring direction: group 0 is clockwise, matching untilizer_group_of.
-            const StreamId first = make_stream_id(0, g == 0);
-            plan.walks_down = stream_is_cw(first);
-            for (uint32_t link = 0; link < args.num_links; link++) {
-                plan.consumers.push_back(HandshakePeer{
-                    placement.at(coord).streams.at(make_stream_id(link, g == 0)).worker_virtual,
-                    static_cast<uint32_t>(sems.unt_freed.at(link).address())});
-            }
-
-            tt::tt_metal::KernelDescriptor kernel;
-            kernel.kernel_source =
-                "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/"
-                "untilizer_combine_fabric2d.cpp";
-            kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-            kernel.core_ranges = core;
-            kernel.compile_time_args =
-                cmbf2d::UntilizerCtArgs(args, tensor_args, coord, work_by_stream.at(first), plan).to_ct_word_arr();
-            for (auto* buf : {dram.in, dram.counts, dram.region, dram.expert_offsets}) {
-                tt::tt_metal::TensorAccessorArgs(buf).append_to(kernel.compile_time_args);
-            }
-            kernel.config = tt::tt_metal::DataMovementConfigDescriptor{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = tt::tt_metal::NOC::NOC_0,
-            };
-            cmbf2d::UntilizerRtArgManager(dram).setup_rt_args(kernel, groups[g][j].logical);
-            desc.kernels.push_back(std::move(kernel));
 
             tt::tt_metal::KernelDescriptor untilize;
             untilize.kernel_source =
@@ -564,6 +564,36 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             untilize.config = tt::tt_metal::ComputeConfigDescriptor{};
             desc.kernels.push_back(std::move(untilize));
         }
+
+        UntilizerPlan plan;
+        plan.my_expert_base = chip_plan.my_expert_base;
+        plan.num_peers = static_cast<uint32_t>(groups[g].size());
+        plan.control_addr = l1.unt_control;
+        // A group serves one ring direction: group 0 is clockwise, matching untilizer_group_of.
+        const StreamId first = make_stream_id(0, g == 0);
+        plan.walks_down = stream_is_cw(first);
+        for (uint32_t link = 0; link < args.num_links; link++) {
+            plan.consumers.push_back(HandshakePeer{
+                placement.at(coord).streams.at(make_stream_id(link, g == 0)).worker_virtual, sems.unt_freed(link)});
+        }
+
+        tt::tt_metal::KernelDescriptor kernel;
+        kernel.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/"
+            "untilizer_combine_fabric2d.cpp";
+        kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        kernel.core_ranges = CoreRangeSet(group_ranges);
+        kernel.compile_time_args =
+            cmbf2d::UntilizerCtArgs(args, tensor_args, coord, work_by_stream.at(first), plan).to_ct_word_arr();
+        for (auto* buf : {dram.in, dram.counts, dram.region, dram.expert_offsets}) {
+            tt::tt_metal::TensorAccessorArgs(buf).append_to(kernel.compile_time_args);
+        }
+        kernel.config = tt::tt_metal::DataMovementConfigDescriptor{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::NOC_0,
+        };
+        cmbf2d::UntilizerRtArgManager(dram).setup_rt_args(kernel, group_cores, produced_slots);
+        desc.kernels.push_back(std::move(kernel));
     }
 
     return desc;
@@ -605,12 +635,10 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
         tensor_args.expert_offsets.buffer()};
 
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
-    workload_descriptor.semaphores.push_back(sems.filled);
-    workload_descriptor.semaphores.push_back(sems.freed);
     workload_descriptor.semaphores.push_back(sems.final_arrived);
     workload_descriptor.semaphores.push_back(sems.launch_credit);
     workload_descriptor.semaphores.push_back(sems.credit_done);
-    for (const auto* group : {&sems.vc_arrived, &sems.vc_freed, &sems.vc_outbox, &sems.untilized, &sems.unt_freed}) {
+    for (const auto* group : {&sems.vc_arrived, &sems.vc_freed, &sems.vc_outbox}) {
         for (const auto& sem : *group) {
             workload_descriptor.semaphores.push_back(sem);
         }

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 
 import pytest
 from conftest import skip_for_blackhole
@@ -145,8 +146,16 @@ assert not _UNSWEPT_FULL_MATRIX_OPS, (
 )
 
 
+# Local opt-in: LLK_PERF_FULL_FORMAT_OPS="Softplus,..." gives the named ops the full matrix too.
+_EXTRA_FULL_FORMAT_OPS = frozenset(
+    MathOperation[name.strip()]
+    for name in os.environ.get("LLK_PERF_FULL_FORMAT_OPS", "").split(",")
+    if name.strip()
+)
+
+
 def _get_formats(mathop):
-    if mathop in _FULL_FORMAT_MATRIX_OPS:
+    if mathop in _FULL_FORMAT_MATRIX_OPS or mathop in _EXTRA_FULL_FORMAT_OPS:
         return _FULL_FORMAT_PAIRS
     return _REPRESENTATIVE_FORMAT_PAIRS
 

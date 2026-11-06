@@ -78,8 +78,7 @@ _K2_7 = _MoEPerfCase(
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    # K3 does not opt into the routed expert / combine overlap. CI run 41411540803 / job 125169241093.
-    expected_ns=6_102_000,
+    expected_ns=6_030_000,
     margin=0.03,
     shape_note="896 experts / top-16, 3584 latent",
     extra=dict(

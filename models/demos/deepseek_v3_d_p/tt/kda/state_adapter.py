@@ -407,10 +407,18 @@ def export_convolution(
 
 
 def import_recurrent(
-    slab: ttnn.Tensor, recurrent: ttnn.Tensor, slot: ttnn.Tensor, num_layers: int, position: int
+    slab: ttnn.Tensor,
+    recurrent: ttnn.Tensor,
+    slot: ttnn.Tensor,
+    num_layers: int,
+    position: int,
+    zero_fill_at_zero: ttnn.Tensor | None,
 ) -> None:
-    """Read slab batch ``slot * num_layers + position`` into a native recurrent carry (captured)."""
-    ttnn.experimental.kda.indexed_entry_copy(slab, recurrent, slot, index_scale=num_layers, index_offset=position)
+    """Read slab batch ``slot * num_layers + position`` into a native recurrent carry, or zeros when
+    ``zero_fill_at_zero`` reads 0 on device (captured)."""
+    ttnn.experimental.kda.indexed_entry_copy(
+        slab, recurrent, slot, index_scale=num_layers, index_offset=position, zero_fill_at_zero=zero_fill_at_zero
+    )
 
 
 def import_convolution(
@@ -420,8 +428,10 @@ def import_convolution(
     num_layers: int,
     position: int,
     geometry: KdaContractGeometry,
+    zero_fill_at_zero: ttnn.Tensor | None,
 ) -> None:
-    """Read slab batch ``slot * num_layers + position`` into a native convolution tail (captured)."""
+    """Read slab batch ``slot * num_layers + position`` into a native convolution tail, or zeros when
+    ``zero_fill_at_zero`` reads 0 on device (captured)."""
     rows = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, *tuple(slab.shape)[1:]]),
         KDA_CONVOLUTION_DTYPE,
@@ -429,18 +439,13 @@ def import_convolution(
         slab.device(),
         ttnn.DRAM_MEMORY_CONFIG,
     )
-    ttnn.experimental.kda.indexed_entry_copy(slab, rows, slot, index_scale=num_layers, index_offset=position)
+    ttnn.experimental.kda.indexed_entry_copy(
+        slab, rows, slot, index_scale=num_layers, index_offset=position, zero_fill_at_zero=zero_fill_at_zero
+    )
     native = slab_rows_to_convolution(rows, geometry)
     ttnn.copy(native, convolution)
     _free_unless_shared(native, rows)
     ttnn.deallocate(rows)
-
-
-def _zero_fill(tensor: ttnn.Tensor) -> None:
-    """Zero a DRAM tensor on device, without a host upload."""
-    from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
-
-    DRAMZeroFill.op(tensor)
 
 
 @dataclass
@@ -450,7 +455,8 @@ class KdaStates:
     ``recurrent`` and ``convolution`` are the two slabs described in the module docstring; both are
     single allocations so a ``KvCacheStage`` can name each by one base address. ``layer_ids`` are
     this rank's GLOBAL KDA layer indices in ascending order and fix the layer axis of both slabs.
-    ``zeros`` is one native zero carry kept for ``zero_slot``.
+
+    The slabs are never cleared; ``import_layer``'s ``zero_fill_at_zero`` loads zeros instead of a slot.
     """
 
     recurrent: ttnn.Tensor
@@ -458,7 +464,6 @@ class KdaStates:
     geometry: KdaContractGeometry
     layer_ids: tuple[int, ...]
     num_slots: int
-    zeros: KdaState
 
     def __post_init__(self) -> None:
         if not self.layer_ids or list(self.layer_ids) != sorted(set(self.layer_ids)):
@@ -503,7 +508,7 @@ class KdaStates:
         layer_ids: tuple[int, ...],
         num_slots: int,
     ) -> "KdaStates":
-        """Allocate both slabs zeroed. The recurrent slab keeps the ND contract form; the convolution
+        """Allocate both slabs, uninitialized. The recurrent slab keeps the ND contract form; the convolution
         slab is the interleaved row form (see the module docstring). Neither is ever reallocated:
         a trace capture bakes their addresses in."""
         batches = num_slots * len(layer_ids)
@@ -514,24 +519,19 @@ class KdaStates:
             mesh_device,
             nd_dram_memory_config(mesh_device, [1, 1, geometry.head_dim, KDA_RECURRENT_BAND_WIDTH]),
         )
-        _zero_fill(recurrent)
-        convolution = ttnn.zeros(
-            (batches, geometry.convolution_shards_per_layer, geometry.convolution_slab_row_width),
-            dtype=KDA_CONVOLUTION_DTYPE,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        convolution = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([batches, geometry.convolution_shards_per_layer, geometry.convolution_slab_row_width]),
+            KDA_CONVOLUTION_DTYPE,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
         )
-        zeros = allocate_native_state(mesh_device, geometry)
-        _zero_fill(zeros.recurrent)
-        _zero_fill(zeros.convolution)
         states = cls(
             recurrent=recurrent,
             convolution=convolution,
             geometry=geometry,
             layer_ids=tuple(layer_ids),
             num_slots=num_slots,
-            zeros=zeros,
         )
         states.validate_physical_layout()
         return states
@@ -556,28 +556,27 @@ class KdaStates:
         export_recurrent(self.recurrent, state.recurrent, slot, self.num_layers, position)
         export_convolution(self.convolution, state.convolution, slot, self.num_layers, position, self.geometry)
 
-    def import_layer(self, destination: KdaState, slot: ttnn.Tensor, layer_idx: int) -> None:
-        """Read one layer's state at ``slot`` into a native carry; ``slot`` is read on device (see ``device_scalar``)."""
-        position = self.layer_position(layer_idx)
-        import_recurrent(self.recurrent, destination.recurrent, slot, self.num_layers, position)
-        import_convolution(self.convolution, destination.convolution, slot, self.num_layers, position, self.geometry)
+    def import_layer(
+        self,
+        destination: KdaState,
+        slot: ttnn.Tensor,
+        layer_idx: int,
+        *,
+        zero_fill_at_zero: ttnn.Tensor | None = None,
+    ) -> None:
+        """Read one layer's state at ``slot`` into a native carry; ``slot`` is read on device (see ``device_scalar``).
 
-    def zero_slot(self, slot: int) -> None:
-        """Zero every layer's state at a host ``slot``, ending whatever stream was in flight there.
-
-        A carry summarizes the whole prefix behind it, so a new request must not continue from the
-        previous one's. Outside any capture: a trace replays every chunk and would re-zero each time.
+        ``zero_fill_at_zero``: device scalar; 0 loads zeros instead of the slot (K3 passes the chunk start).
         """
-        self._check_slot(slot)
-        index = device_scalar(self.recurrent.device(), slot)
-        for layer_idx in self.layer_ids:
-            self.export_layer(self.zeros, index, layer_idx)
-        ttnn.deallocate(index)
+        position = self.layer_position(layer_idx)
+        import_recurrent(self.recurrent, destination.recurrent, slot, self.num_layers, position, zero_fill_at_zero)
+        import_convolution(
+            self.convolution, destination.convolution, slot, self.num_layers, position, self.geometry, zero_fill_at_zero
+        )
 
     def deallocate(self) -> None:
         ttnn.deallocate(self.recurrent)
         ttnn.deallocate(self.convolution)
-        deallocate_state(self.zeros)
 
 
 # --- host-side decoding of raw segments (read-back through the address table) ---
