@@ -15,8 +15,8 @@
 
 namespace ttnn::experimental::prim {
 
-// Interleaved input and output with `runtime_rows` set: the full grid, every core deriving its (row, head)
-// block range on device from a common row count, so one program serves every row count.
+// Interleaved input and output with `runtime_rows` set: the program owns the full grid and each core
+// derives its (row, head) block range on device from a common row count.
 struct NLPConcatHeadsRuntimeRowsProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const NlpConcatHeadsParams& operation_attributes, const Tensor& input, Tensor& output);

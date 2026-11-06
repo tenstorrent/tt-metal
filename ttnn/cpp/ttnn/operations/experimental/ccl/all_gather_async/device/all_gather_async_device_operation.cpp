@@ -42,10 +42,10 @@ bool via_broadcast_has_contiguous_output_slice(const Tensor& input_tensor, int32
         page_extents.begin(), page_extents.begin() + gather_dim, [](const auto& extent) { return extent == 1; });
 }
 
-// The invariants the MINIMAL_DEFAULT row-free hash does not pin, checked on a miss and on every hit: the
-// buffers' storage and liveness (a tensor can be freed between calls) and the row-dependent shape rules.
-// Everything else the miss validator checks is fixed by the hashed specs and attributes.
-void validate_unhashed_invariants(const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
+// Checked on a miss and on every MINIMAL_DEFAULT hit: the buffers' storage and liveness (a tensor can be
+// freed between calls) and the row-dependent shape rules. The rest of the miss validation is fixed by the
+// specs and attributes.
+void validate_row_dependent_invariants(const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(input_tensor.is_allocated(), "Operands to all_gather need to be allocated in buffers on device!");
@@ -128,7 +128,7 @@ AllGatherAsyncDeviceOperation::program_factory_t AllGatherAsyncDeviceOperation::
 
 void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
-    validate_unhashed_invariants(args, tensor_args);
+    validate_row_dependent_invariants(args, tensor_args);
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& layout = input_tensor.layout();
     const auto& dtype = input_tensor.dtype();
@@ -184,7 +184,7 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
             "Unsupported output tensor memory layout {}.",
             output_tensor.memory_config().memory_layout());
 
-        // The output tensor size is checked in validate_unhashed_invariants (on hits too).
+        // The output tensor size is checked in validate_row_dependent_invariants (on hits too).
 
         if (version == AllGatherAsyncVersion::MINIMAL_DEFAULT) {
             // Checks specific to the MINIMAL_DEFAULT case
@@ -229,15 +229,15 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-// MINIMAL_DEFAULT hashes without the row count, so a hit re-checks what that hash does not pin; the other
-// versions hash the full specs and keep the full miss validation on hits, as before the custom hash.
+// MINIMAL_DEFAULT re-checks the row-dependent invariants on a hit; the other versions keep the full miss
+// validation on hits, as before.
 void AllGatherAsyncDeviceOperation::validate_on_program_cache_hit(
     const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
     if (select_version(args) != AllGatherAsyncVersion::MINIMAL_DEFAULT) {
         validate_on_program_cache_miss(args, tensor_args);
         return;
     }
-    validate_unhashed_invariants(args, tensor_args);
+    validate_row_dependent_invariants(args, tensor_args);
 }
 
 ttsl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
