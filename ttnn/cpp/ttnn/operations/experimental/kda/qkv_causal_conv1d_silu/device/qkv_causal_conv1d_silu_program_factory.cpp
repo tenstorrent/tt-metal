@@ -9,6 +9,7 @@
 
 #include <internal/fabric.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
@@ -246,7 +247,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     const bool exchange = in.exchange_buffer.has_value();
     const auto& predecessor = exchange ? in.exchange_buffer->mesh_tensor() : in.predecessor_carry->mesh_tensor();
 
-    const uint32_t Mt = attrs.sequence / tt::constants::TILE_HEIGHT;
+    const uint32_t Mt = tt::div_up(attrs.sequence, tt::constants::TILE_HEIGHT);
     const uint32_t Qt = attrs.q_width / tt::constants::TILE_WIDTH;
     const uint32_t Kt = attrs.k_width / tt::constants::TILE_WIDTH;
     const uint32_t Vt = attrs.v_width / tt::constants::TILE_WIDTH;
@@ -349,7 +350,9 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
              {"group", group},
              {"input_wt", input_wt},
              {"input_ct_offset", input_ct_offset},
-             {"exchange", uint32_t(exchange)}},
+             {"exchange", uint32_t(exchange)},
+             {"per_row_history", uint32_t(attrs.per_row_history)},
+             {"streams", attrs.sequence}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };

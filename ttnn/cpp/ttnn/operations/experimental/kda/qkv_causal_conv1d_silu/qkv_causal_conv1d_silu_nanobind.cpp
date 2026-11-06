@@ -42,6 +42,14 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 Shape ``[1,3,Q+K+V]``. SP calls supply the predecessor's three-row
                 history separately. The kernel derives when each history is needed
                 from actual_start and its mesh coordinate.
+
+                Shape ``[T,3,Q+K+V]`` instead makes every input row an independent
+                one-token stream whose three preceding tokens are ``history[t]``,
+                as in batched decode. T then need not be tile aligned; pass
+                ``history`` as ``predecessor_carry``. Not supported with a
+                sequence-parallel axis or the fabric exchange. Its work spreads
+                over channel blocks, so a narrow ``channel_chunk_size`` (32 or
+                64) keeps the grid busy.
             tap0, tap1, tap2, tap3 (ttnn.Tensor): Per-channel convolution taps.
                 Each must have logical volume ``Q+K+V`` and be an interleaved
                 TILE-layout BFLOAT16 device tensor.

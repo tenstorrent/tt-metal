@@ -8,6 +8,7 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
@@ -91,7 +92,8 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     const auto* mesh = in.input.device();
     // With the exchange, every convolution core, all of the grid but the exchange core, stages its share of the rows.
     const auto grid = mesh->compute_with_storage_grid_size();
-    const uint32_t work_items = (attrs.sequence / tt::constants::TILE_HEIGHT) * (channels / attrs.channel_chunk_size);
+    const uint32_t work_items =
+        tt::div_up(attrs.sequence, tt::constants::TILE_HEIGHT) * (channels / attrs.channel_chunk_size);
     const uint32_t max_staged_ct = in.exchange_buffer.has_value()
                                        ? qkv_causal_conv1d_silu_staged_ct(
                                              channels / tt::constants::TILE_WIDTH,
@@ -141,13 +143,22 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
             std::ranges::none_of(attrs.exchange_semaphore_addresses, [](uint32_t address) { return address == 0; }),
             "qkv_causal_conv1d_silu: exchange_buffer needs its exchange semaphores");
     }
+    const uint32_t history_streams = attrs.per_row_history ? attrs.sequence : 1;
     TT_FATAL(
-        history_shape.rank() == 3 && history_shape[0] == 1 && history_shape[1] == qkv_conv::history_rows &&
-            history_shape[2] == channels,
-        "qkv_causal_conv1d_silu: history must be [1,{},Q+K+V]",
+        history_shape.rank() == 3 && history_shape[0] == history_streams &&
+            history_shape[1] == qkv_conv::history_rows && history_shape[2] == channels,
+        "qkv_causal_conv1d_silu: history must be [1,{0},Q+K+V], or [T,{0},Q+K+V] with one history per input row",
         qkv_conv::history_rows);
+    if (attrs.per_row_history) {
+        TT_FATAL(
+            !in.exchange_buffer.has_value(),
+            "qkv_causal_conv1d_silu: per-row histories have no sequence to exchange; use predecessor_carry");
+        TT_FATAL(
+            mesh->shape()[attrs.sequence_parallel_axis] == 1,
+            "qkv_causal_conv1d_silu: per-row histories do not support a sequence-parallel axis");
+    }
     TT_FATAL(
-        attrs.sequence > 0 && attrs.sequence % tt::constants::TILE_HEIGHT == 0,
+        attrs.sequence > 0 && (attrs.per_row_history || attrs.sequence % tt::constants::TILE_HEIGHT == 0),
         "qkv_causal_conv1d_silu: sequence must be positive and tile aligned");
     for (const auto& [tensor, name] : std::array{
              std::pair{&in.tap0, "tap0"},

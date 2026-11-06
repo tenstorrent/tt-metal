@@ -77,6 +77,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
         compute_kernel_config,
         sequence_parallel_axis,
         input_column_offset);
+    // One history per input row, [T, 3, Q+K+V], makes every row an independent stream.
+    params.per_row_history = history.logical_shape().rank() == 3 && history.logical_shape()[0] == params.sequence;
     auto outputs = ttnn::device_operation::launch<prim::QkvCausalConv1dSiluOperation>(
         params,
         prim::QkvCausalConv1dSiluInputs{

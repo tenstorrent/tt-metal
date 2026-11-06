@@ -8,6 +8,9 @@
 // tokens preceding the tile and rows [3, 35) the tile's own 32 tokens, so the tile's faces land in them with four
 // contiguous face reads. Tap t reads tokens r - 3 + t, i.e. strip rows [t, t + 16) and [t + 16, t + 32): every tap's
 // shifted tile is four contiguous face copies out of the two strips.
+//
+// With per_row_history every input row is an independent stream with its own three-row history (decode, one token
+// per user): tap 3 is the input tile itself and tap t < 3 takes row r from history page r * 3 + t.
 
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/qkv_conv_dataflow.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/hostdevcommon/qkv_causal_conv1d_silu_layout.hpp"
@@ -36,6 +39,8 @@ template <
     uint32_t input_wt,
     uint32_t input_ct_offset,
     uint32_t exchange,
+    uint32_t per_row_history,
+    uint32_t streams,
     uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows>
@@ -71,7 +76,11 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     };
     const auto offset_of = [&](uint32_t address) { return address - scratch_base; };
 
-    const auto topology = read_chronology<false, sp_rank, sp_size, local_rows>(noc, rows);
+    // Per-row histories have no chronology: every row starts from its own history.
+    kda_chronology::Topology topology{};
+    if constexpr (!per_row_history) {
+        topology = read_chronology<false, sp_rank, sp_size, local_rows>(noc, rows);
+    }
     const uint32_t local_split_row = topology.local_split ? topology.head_rows : 0;
     const bool initial_from_predecessor = topology.rank != topology.first_rank;
 
@@ -134,6 +143,65 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             noc.async_read_barrier();
             taps.push_back(tap_count * block_ct);
             loaded_block = block;
+        }
+
+        if constexpr (per_row_history) {
+            // Per group: tap 3 is the input tile; for each earlier tap, stage the group's columns of that history row
+            // for every stream of the tile, then copy each row's left and right halves into the tap tile's face rows.
+            // Rows past the last stream read zeros. Both use the strip area, which this mode does not otherwise use.
+            constexpr uint32_t group_row_bytes = group * tile_row_bytes;
+            const uint32_t zero_row = base + tt::constants::TILE_HEIGHT * group_row_bytes;
+            auto* zeros = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_row);
+            for (uint32_t word = 0; word < face_row_bytes / sizeof(uint32_t); ++word) {
+                zeros[word] = 0;
+            }
+            for (uint32_t ct0 = 0; ct0 < block_ct; ct0 += group) {
+                activation.reserve_back(group * tap_count);
+                for (uint32_t i = 0; i < group; ++i) {
+                    noc.async_read(
+                        input,
+                        activation,
+                        tile_bytes,
+                        {.page_id = mt * input_wt + input_ct_offset + ct_start + ct0 + i},
+                        {.offset_bytes = (i * tap_count + history_rows) * tile_bytes});
+                }
+                for (uint32_t tap = 0; tap < history_rows; ++tap) {
+                    for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
+                        const uint32_t stream = mt * tt::constants::TILE_HEIGHT + r;
+                        if (stream < streams) {
+                            noc.async_read(
+                                history,
+                                scratch,
+                                group_row_bytes,
+                                {.page_id = stream * history_rows + tap,
+                                 .offset_bytes = (ct_start + ct0) * tile_row_bytes},
+                                {.offset_bytes = offset_of(base) + r * group_row_bytes});
+                        }
+                    }
+                    noc.async_read_barrier();
+                    for (uint32_t i = 0; i < group; ++i) {
+                        for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
+                            const bool live = mt * tt::constants::TILE_HEIGHT + r < streams;
+#pragma GCC unroll 2
+                            for (uint32_t side = 0; side < 2; ++side) {
+                                const uint32_t src =
+                                    live ? base + r * group_row_bytes + (i * 2 + side) * face_row_bytes : zero_row;
+                                noc.async_read(
+                                    self,
+                                    activation,
+                                    face_row_bytes,
+                                    local(src),
+                                    {.offset_bytes = (i * tap_count + tap) * tile_bytes +
+                                                     ((r / face_rows) * 2 + side) * face_bytes +
+                                                     (r % face_rows) * face_row_bytes});
+                            }
+                        }
+                    }
+                    noc.async_read_barrier();
+                }
+                activation.push_back(group * tap_count);
+            }
+            return;
         }
 
         // The three tokens preceding this tile: the chronological carry at a segment start (the logical start reads
