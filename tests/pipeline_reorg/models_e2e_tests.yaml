@@ -1171,8 +1171,6 @@
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     export NO_PROMPT=1
-    # The gated fp8 checkpoint and the Qwen3-VL config come from the shared HF cache; the
-    # pipeline resolves the repo id there and never contacts the hub.
     export HF_HOME=/mnt/models/huggingface HF_HUB_OFFLINE=1
     export IDEOGRAM4_WEIGHTS=ideogram-ai/ideogram-4-fp8
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"

@@ -2669,7 +2669,6 @@ targets:
     skus:
       bh_sc1:
         entries:
-          # The tests assert their own latency ceilings and serving invariants.
           - status: active
             perf: {}
             accuracy: {}
