@@ -1,0 +1,22 @@
+{
+  "harness_facts": [
+    {
+      "fact": "Local Harbor Docker route requires Docker CLI/Compose and daemon access. Host-network alone does not expose Docker.",
+      "evidence": "setup/AUTODEBUG.md; startup.json"
+    },
+    {
+      "fact": "sudo does not overcome namespace restrictions in this container.",
+      "evidence": "startup.json"
+    },
+    {
+      "fact": "Pinned model eval configuration contains GPQA and Terminal-Bench2.0, not requested SWE/Terminal2.1.",
+      "evidence": "reference_config/evals/eval_config.py@411057222c2dc5a4268e693b0bd57bc0e2571f38:11933"
+    },
+    {
+      "fact": "Keep available hardware mesh separate from measured selected mesh and host-phase rooflines separate from device-time telemetry.",
+      "evidence": "startup.json; stage11 benchmark/run/telemetry_packet.json"
+    }
+  ],
+  "suite_timings": [],
+  "generic_fixes": []
+}

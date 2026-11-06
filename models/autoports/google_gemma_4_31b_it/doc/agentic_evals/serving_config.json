@@ -1,0 +1,25 @@
+{
+  "status": "not_release_ready",
+  "max_concurrency": null,
+  "max_num_seqs": null,
+  "prefix_caching": true,
+  "validated_batches": [
+    1,
+    8,
+    16,
+    32
+  ],
+  "evidence": "../agentic_serving.json stage10; no fresh stage12 configuration measurement",
+  "batch_by_eval": {},
+  "release_limits": "preflight.json release_values; incomplete for requested tool suites",
+  "agent_time_limit": null,
+  "request_time_limit": null,
+  "output_cap": null,
+  "context_tokens": 262144,
+  "served_generation_override": {
+    "top_k": 32
+  },
+  "temperature": 1.0,
+  "top_p": 0.95,
+  "runtime_plugin": "stock pinned plugin, operator decisions1\u20134 preserved"
+}

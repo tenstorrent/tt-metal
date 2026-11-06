@@ -1,0 +1,33 @@
+{
+  "status": "blocked",
+  "blockers": [
+    {
+      "id": "local-sandbox-runtime",
+      "reason": "AutoDebug and namespace probes establish host-provisioned Docker access is required; AutoFix cannot repair current mounts/capabilities. See setup/AUTOFIX.md.",
+      "unblocks": [
+        "swe_bench_verified",
+        "terminal_bench_2_1"
+      ]
+    },
+    {
+      "id": "gpqa-local-credential",
+      "reason": "Operator decision5: no local gated dataset credential, none to be added; use authorized secondary if possible.",
+      "unblocks": [
+        "r1_gpqa_diamond"
+      ]
+    }
+  ],
+  "permissions": {
+    "release_route_repairs": null,
+    "account_fallback": null
+  },
+  "stopped_at": "2026-11-06T04:33:36.867416+00:00",
+  "remaining_work": [
+    "Fresh autoport harness entry and requested suite entries",
+    "Freeze stratified task lists before scoring",
+    "All smoke/nightly/server-sized/larger rungs",
+    "Measured workload, limits and capacity; ranked efforts",
+    "Clean dry run and immutable release",
+    "Stage gate pass"
+  ]
+}

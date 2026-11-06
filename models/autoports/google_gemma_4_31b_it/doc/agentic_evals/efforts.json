@@ -1,0 +1,119 @@
+{
+  "efforts": [
+    {
+      "problem": "local-sandbox-runtime",
+      "owner": "local_runtime_repair",
+      "goal": "Restore stock local Harbor runtime prerequisites",
+      "plan": "runs/local-runtime-repair/plan.md",
+      "predicted": {
+        "saving_hours": {},
+        "device_hours": 0,
+        "basis": "calculated"
+      },
+      "unblocks": [
+        "swe_bench_verified",
+        "terminal_bench_2_1"
+      ],
+      "confirm": {
+        "method": "Docker/Compose daemon access and stock environment prerequisite checks",
+        "success": "Local task runtime available without harness/network changes"
+      },
+      "box_hours": 0.1,
+      "status": "done",
+      "change": "none",
+      "problem_status": "open",
+      "confirmed": {
+        "success": false,
+        "result": "Backend unavailable; host-side provisioning required."
+      },
+      "used_device_hours": 0,
+      "evidence": "runs/local-runtime-repair/result.json; setup/AUTOFIX.md",
+      "confirmation_result": "unavailable backend / problem open; not a model failure"
+    },
+    {
+      "problem": "gpqa-local-credential",
+      "owner": "coordinator",
+      "goal": "Valid official gated dataset access on authorized secondary route",
+      "predicted": {
+        "saving_hours": {},
+        "device_hours": null,
+        "basis": "guess"
+      },
+      "unblocks": [
+        "r1_gpqa_diamond"
+      ],
+      "status": "not_run",
+      "reason": "Operator forbids adding local credential; secondary registration pending; local release prerequisite unresolved."
+    },
+    {
+      "problem": "agent-capacity-and-contention",
+      "owner": "coordinator",
+      "goal": "Choose agents/batch that finishes release fastest",
+      "predicted": {
+        "saving_hours": {},
+        "device_hours": null,
+        "basis": "guess"
+      },
+      "status": "not_run",
+      "reason": "Validity first; no real task timings for ranking speed."
+    }
+  ],
+  "rankings": [
+    {
+      "after": "initial_environment_preflight",
+      "order": [
+        {
+          "problem": "local-sandbox-runtime",
+          "saving_hours": null,
+          "device_hours": 0,
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ]
+        },
+        {
+          "problem": "gpqa-local-credential",
+          "saving_hours": null,
+          "device_hours": null,
+          "unblocks": [
+            "r1_gpqa_diamond"
+          ]
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": null,
+          "device_hours": null
+        }
+      ],
+      "reason": "Validity precedes speed. Unknown effort/savings remain unknown; no release timing claims."
+    },
+    {
+      "after": "local-runtime-repair",
+      "order": [
+        {
+          "problem": "local-sandbox-runtime",
+          "saving_hours": null,
+          "device_hours": 0,
+          "unblocks": [
+            "swe_bench_verified",
+            "terminal_bench_2_1"
+          ]
+        },
+        {
+          "problem": "gpqa-local-credential",
+          "saving_hours": null,
+          "device_hours": null,
+          "unblocks": [
+            "r1_gpqa_diamond"
+          ]
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": null,
+          "device_hours": null
+        }
+      ],
+      "reason": "Runtime still unavailable; no speed effort can unblock local release. Stop after AutoFix unable to repair environment."
+    }
+  ]
+}

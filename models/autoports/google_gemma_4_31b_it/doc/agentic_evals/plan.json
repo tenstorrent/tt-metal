@@ -1,0 +1,78 @@
+{
+  "mode": "extended",
+  "started_at": "2026-11-06T04:28:49.408645+00:00",
+  "stage_budget_hours": 48,
+  "run_timeout_hours": 12,
+  "deadline": "2026-11-08T04:28:49.408645+00:00",
+  "schedule": [
+    {
+      "phase": "survey_preflight",
+      "start_hour": 0,
+      "end_hour": 2
+    },
+    {
+      "phase": "smoke",
+      "start_hour": 2,
+      "end_hour": 4
+    },
+    {
+      "phase": "nightly",
+      "start_hour": 4,
+      "end_hour": 12
+    },
+    {
+      "phase": "server-sized",
+      "start_hour": 12,
+      "end_hour": 22
+    },
+    {
+      "phase": "efforts_and_larger",
+      "start_hour": 22,
+      "end_hour": 40
+    },
+    {
+      "phase": "dry_run_fix_retry",
+      "start_hour": 40,
+      "end_hour": 46
+    },
+    {
+      "phase": "release_start",
+      "start_hour": 46,
+      "end_hour": 48
+    }
+  ],
+  "release": {
+    "benchmarks": {
+      "source_models": [
+        "Qwen/Qwen3-32B"
+      ],
+      "source": "https://github.com/tenstorrent/tt-inference-server/blob/411057222c2dc5a4268e693b0bd57bc0e2571f38/release_model_spec.json",
+      "selection_reason": "Dense32B same P300X2 hardware; preserve supported source rows only; no settings from old Gemma implementation reused.",
+      "rows": [
+        {
+          "input_tokens": 128,
+          "output_tokens": 128,
+          "concurrency": 1,
+          "num_prompts": 8,
+          "estimated_seconds": 28.947387445423374,
+          "actual_seconds": 26.931246740045026,
+          "estimate_basis": "8 serial requests: measured B1 TPOT*127 plus TTFT scaled128/4096; linear prefill approximation omits fixed startup/client overhead and is not a latency claim.",
+          "measurement": "run/release-matrix/128-128-c1.json",
+          "completed_requests": 8
+        }
+      ]
+    },
+    "projected_hours": null,
+    "dry_run": null,
+    "frozen_configuration": null,
+    "started_at": null,
+    "benchmark_source": [
+      "Qwen/Qwen3-32B"
+    ]
+  },
+  "runs": [],
+  "status": "blocked_before_smoke",
+  "last_updated": "2026-11-06T04:33:36.867416+00:00",
+  "stop_reason": "AutoFix cannot provide missing host Docker backend from current container; local release route unavailable.",
+  "actual_runs": []
+}

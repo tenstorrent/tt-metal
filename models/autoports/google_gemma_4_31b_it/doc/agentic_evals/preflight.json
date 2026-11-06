@@ -1,0 +1,45 @@
+{
+  "status": "incomplete",
+  "release_values": {
+    "ok": false,
+    "source": "tt-inference-server@411057222c2dc5a4268e693b0bd57bc0e2571f38 reference_config/evals/eval_config.py:11933",
+    "r1_gpqa_diamond": {
+      "request_timeout_sec": 14400,
+      "max_output_tokens": 126976,
+      "thinking": true,
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "published_reference_percent": 84.3,
+      "gpu_reference_percent": 83.33
+    },
+    "swe_bench_verified": null,
+    "terminal_bench_2_1": null,
+    "reason": "Requested tool suite entries absent for this model; not borrowing limits or scores from another suite/version."
+  },
+  "registry": {
+    "ok": false,
+    "reason": "Existing model entry resolves stock implementations; fresh autoport registration not installed/verified. No stock server launched."
+  },
+  "disk": {
+    "ok": false,
+    "free_gib": 546,
+    "reason": "Task storage definitions not yet inventoried; free space alone is not admission proof."
+  },
+  "admission": {
+    "ok": false,
+    "local_task_sandboxes_available": 0,
+    "reason": "No usable Docker endpoint and user namespaces denied."
+  },
+  "release_route": {
+    "ok": false,
+    "harness_main_commit": "7a51c2f20f51e7508d8ea365d09092d00bbd5fcb",
+    "reason": "Local stock Harbor Docker route unavailable."
+  },
+  "smoke": {
+    "ok": false,
+    "runs": [],
+    "trajectory_audit": null,
+    "reason": "Not launched; prerequisite failure, not failed model tasks."
+  }
+}

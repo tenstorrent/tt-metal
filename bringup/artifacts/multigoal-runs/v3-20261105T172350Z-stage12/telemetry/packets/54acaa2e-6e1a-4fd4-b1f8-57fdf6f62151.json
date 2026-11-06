@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "run_id": "fd5fbe5a-7c1a-4995-aa51-fd89114fe560",
+  "stage": "12-agentic-evals",
+  "attempt_id": "54acaa2e-6e1a-4fd4-b1f8-57fdf6f62151",
+  "kind": "vllm",
+  "workload": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "batch": 1,
+    "concurrency": 1
+  },
+  "selected_mesh": {
+    "shape": [
+      1,
+      4
+    ],
+    "devices": [
+      0,
+      1,
+      2,
+      3
+    ]
+  },
+  "layer_types": {},
+  "performance": {
+    "source": "vllm",
+    "prefill_device_us": null,
+    "decode_device_us": null,
+    "prefill_flops_pct": null,
+    "decode_dram_pct": null,
+    "ttft_ms": 754.9548402457731,
+    "decode_tps": 35.3096386576596,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/perf-b1.json"
+  },
+  "accuracy": [],
+  "missing_reasons": {
+    "device_metrics": "Live vLLM profiling prohibited. Host-wall rooflines are not device-time measurements.",
+    "stage12_accuracy": "No scored runs. AutoFix could not restore missing local Docker backend under current mounts/namespace policy; GPQA local credential unavailable by operator decision.",
+    "stage12_performance": "No stage12 eval timings or release measurement. Headline performance reuses exact-target stage11 evidence."
+  },
+  "notes": [
+    "Stage11 accepted complete by operator decision7.",
+    "Reused stage11 headline: eight serial requests, full60-layer model, pinned HF revision842da3794eaa0b77d5f08bae87a17459d91ff475.",
+    "No new benchmark or profiler run for telemetry.",
+    "Stage12 blocked before smoke; functional_at0 all suites; no CI dispatch or release."
+  ]
+}

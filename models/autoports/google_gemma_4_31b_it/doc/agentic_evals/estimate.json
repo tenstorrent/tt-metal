@@ -1,0 +1,29 @@
+{
+  "status": "preflight_incomplete",
+  "evals": {
+    "r1_gpqa_diamond": {
+      "decision": "stop",
+      "reason": "No valid smoke or timing projection; local Docker runtime unavailable after AutoFix. Infrastructure stop, not a measured capacity stop. Local gated dataset credential unavailable by operator decision.",
+      "functional_at": 0,
+      "projected_hours": null,
+      "score": null,
+      "confidence_interval_95": null
+    },
+    "swe_bench_verified": {
+      "decision": "stop",
+      "reason": "No valid smoke or timing projection; local Docker runtime unavailable after AutoFix. Infrastructure stop, not a measured capacity stop.",
+      "functional_at": 0,
+      "projected_hours": null,
+      "score": null,
+      "confidence_interval_95": null
+    },
+    "terminal_bench_2_1": {
+      "decision": "stop",
+      "reason": "No valid smoke or timing projection; local Docker runtime unavailable after AutoFix. Infrastructure stop, not a measured capacity stop.",
+      "functional_at": 0,
+      "projected_hours": null,
+      "score": null,
+      "confidence_interval_95": null
+    }
+  }
+}

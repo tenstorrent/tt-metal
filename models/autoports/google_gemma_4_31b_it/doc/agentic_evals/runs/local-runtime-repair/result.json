@@ -1,0 +1,66 @@
+{
+  "updated_at": "2026-11-06T04:33:16.058910+00:00",
+  "goal": "Stock local Harbor task runtime available",
+  "status": "done",
+  "change": "none",
+  "problem_status": "open",
+  "confirmed": false,
+  "used_device_hours": 0,
+  "box_hours": 0.1,
+  "diagnosis": "setup/AUTODEBUG.md",
+  "checks": [
+    {
+      "command": "command -v docker podman dockerd rootlesskit slirp4netns fuse-overlayfs newuidmap newgidmap",
+      "result": "No listed executable on PATH; unshare and sudo exist."
+    },
+    {
+      "command": "ls -l /var/run/docker.sock /run/docker.sock /run/user/6002/docker.sock /run/podman/podman.sock",
+      "result": "All four paths absent."
+    },
+    {
+      "command": "ps -eo pid,comm,args | rg daemon names",
+      "result": "No dockerd, containerd, rootlesskit or podman service found; only probe processes matched."
+    },
+    {
+      "command": "Python: bool(os.environ.get(\"DOCKER_HOST\"))",
+      "result": false
+    },
+    {
+      "command": "Python socket.connect_ex on 127.0.0.1 ports 2375 and 2376, timeout 1s",
+      "result": "Both errno111 (connection refused)."
+    },
+    {
+      "command": "unshare -Ur true",
+      "exit_code": 1,
+      "result": "Operation not permitted"
+    },
+    {
+      "command": "sudo -n unshare -m true",
+      "exit_code": 1,
+      "result": "Operation not permitted"
+    },
+    {
+      "command": "sudo -n unshare -n true",
+      "exit_code": 1,
+      "result": "Operation not permitted"
+    },
+    {
+      "command": "cat /proc/sys/kernel/unprivileged_userns_clone",
+      "result": "0"
+    },
+    {
+      "command": "findmnt -no TARGET,OPTIONS /proc/sys /sys/fs/cgroup",
+      "exit_code": 1,
+      "result": "No output; not used to infer mount state."
+    }
+  ],
+  "conclusion": "AutoFix unable in current execution environment: host-provided Docker backend and client tools required; no viable existing local daemon or rootless bootstrap found.",
+  "uncertainty": "Physical host daemon availability and task execution after provisioning remain untested.",
+  "confirmation_result": "unavailable backend / problem open; not a model failure",
+  "pinned_source_clarification": {
+    "source": "setup/pinned_eval_config.py",
+    "verified_by": "coordinator via GitHub API at pinned release revision",
+    "gpqa_timeout_seconds": 14400,
+    "gpqa_output_tokens": 126976
+  }
+}

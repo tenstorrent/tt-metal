@@ -1,0 +1,17 @@
+{
+  "r1_gpqa_diamond": {
+    "source": "harness",
+    "rule": "Freeze named tasks before any score; inputs has no task_lists. No task list selected in this blocked preflight.",
+    "rungs": {}
+  },
+  "swe_bench_verified": {
+    "source": "default_rule",
+    "rule": "Freeze named tasks before any score; inputs has no task_lists. No task list selected in this blocked preflight.",
+    "rungs": {}
+  },
+  "terminal_bench_2_1": {
+    "source": "default_rule",
+    "rule": "Freeze named tasks before any score; inputs has no task_lists. No task list selected in this blocked preflight.",
+    "rungs": {}
+  }
+}

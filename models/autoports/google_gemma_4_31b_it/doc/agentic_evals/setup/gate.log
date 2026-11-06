@@ -1,0 +1,25 @@
+Context contract OK for models/autoports/google_gemma_4_31b_it: target=262144, supported=262144 (full HF context).
+ADVISORY: weight family 'tied embedding and vocabulary projection' is held more than once: BF16 row-major hidden-sharded lookup and BFP4 tiled transposed vocabulary-sharded head cannot alias. Two construction-time representations avoid runtime repacking; selected token-out performance and allocator inventory are measured.
+ADVISORY: KV pool is a fixed budget, not sized from free DRAM: Pinned worker requests a synthetic token budget before weights load. Adapter converts target global64/sliding32 geometry into normalized IDs; actual allocator fit is measured afterward. See vllm_integration/pool_plan.json.
+CRITICAL: 2 shortfall(s) carried from earlier stages, 0 priced in hours
+CRITICAL: preflight 'release_values' did not pass; the release depends on it
+CRITICAL: preflight 'registry' did not pass; the release depends on it
+CRITICAL: preflight 'disk' did not pass; the release depends on it
+CRITICAL: preflight 'admission' did not pass; the release depends on it
+CRITICAL: preflight 'release_route' did not pass; the release depends on it
+CRITICAL: preflight 'smoke' did not pass; the release depends on it
+CRITICAL: effort 'local-sandbox-runtime' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated
+CRITICAL: effort 'gpqa-local-credential' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated
+CRITICAL: effort 'gpqa-local-credential' needs confirm.method and confirm.success: how it shows it worked
+CRITICAL: effort 'agent-capacity-and-contention' needs predicted saving_hours per eval, device_hours and basis (measured, calculated, guess); guess when it cannot be calculated
+CRITICAL: effort 'agent-capacity-and-contention' needs confirm.method and confirm.success: how it shows it worked
+CRITICAL: ranking 0 needs order rows with saving_hours and device_hours
+CRITICAL: ranking 1 needs order rows with saving_hours and device_hours
+CRITICAL: serving_config.release_limits needs agent_timeout_s, request_timeout_s, output_cap_tokens from the release values
+CRITICAL: serving_config needs validated_batches and batch_by_eval
+CRITICAL: cohorts.json 'r1_gpqa_diamond' needs source (inputs, harness, default_rule), the selection rule and the tasks of each rung
+CRITICAL: cohorts.json 'swe_bench_verified' needs source (inputs, harness, default_rule), the selection rule and the tasks of each rung
+CRITICAL: cohorts.json 'terminal_bench_2_1' needs source (inputs, harness, default_rule), the selection rule and the tasks of each rung
+ADVISORY: r1_gpqa_diamond: stopped with no cohort completed: No valid smoke or timing projection; local Docker runtime unavailable after AutoFix. Infrastructure stop, not a measured capacity stop. Local gated dataset credential unavailable by operator decision.
+ADVISORY: swe_bench_verified: stopped with no cohort completed: No valid smoke or timing projection; local Docker runtime unavailable after AutoFix. Infrastructure stop, not a measured capacity stop.
+ADVISORY: terminal_bench_2_1: stopped with no cohort completed: No valid smoke or timing projection; local Docker runtime unavailable after AutoFix. Infrastructure stop, not a measured capacity stop.

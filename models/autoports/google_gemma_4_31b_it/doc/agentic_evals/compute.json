@@ -1,0 +1,25 @@
+{
+  "devices": [
+    {
+      "name": "local",
+      "device_type": "p300x2",
+      "primary": true,
+      "jobs": []
+    },
+    {
+      "name": "qb2-ci",
+      "device_type": "p300x2",
+      "max_parallel": 6,
+      "jobs": [],
+      "reason_not_used": "Local route prerequisite under repair. CI cannot replace mandatory local dry/release route without operator instruction; no model registration or cohorts frozen yet."
+    }
+  ],
+  "hardware_checks": [
+    {
+      "device": "local",
+      "command": "timeout60 tt-smi -ls --local",
+      "exit_status": 0,
+      "result": "four p300c ASICs visible; no resets or model jobs"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+# Stage 12 — blocked before smoke
+
+Functional_at: 0 valid tasks for GPQA Diamond, SWE-bench Verified and Terminal-Bench 2.1. Hours per suite run, scores and 95% intervals are unknown: no scored run launched. This is an infrastructure-blocked attempt, not a measured stop at a completed rung and not stage completion. GPQA’s pinned references are 84.3% published and 83.33% GPU; comparisons are unavailable. References for the requested tool suites remain unresolved.
+
+The local container has no Docker CLI/Compose or daemon socket/endpoint. Rootless user namespace creation fails; mount/network namespaces also fail under sudo. AutoDebug traced the stock Harbor route to this prerequisite, and AutoFix could not repair it inside the current container. See setup/AUTODEBUG.md and setup/AUTOFIX.md. Four p300c ASICs are visible; no model job or reset was launched. Device ownership visibility is limited to the container PID namespace.
+
+The repair effort predicted zero device hours and used zero. Its goal was an accessible stock Docker/Compose backend; confirmation failed because provisioning is outside this container. No serving change was accepted. Validity remains above speed work. Agent capacity, host contention and mixed-prefill host sampling still need pricing from real traffic. No release duration or savings have been invented.
+
+The 48-hour extended-mode plan is preserved with its original start/deadline. No cohorts were frozen or scored, no rung was banked, and no dry/release run started. Secondary CI was not dispatched: the required local release route remains unavailable, and the fresh adapter/eval registration has not been prepared. CI cannot silently replace the local final route. No remote was added to the execution checkout and no branch was pushed.
+
+The pinned release source and main harness differ. The pinned Gemma31B entry provides GPQA (14400-second request timeout, 126976 output tokens, thinking enabled), Terminal-Bench 2.0 and other suites. It does not provide the requested SWE/Terminal 2.1 entries. Those entries, their actual task definitions and cohorts must be completed before preflight; a 2.0 score must never be labeled 2.1. No old Gemma implementation source or serving settings were reused.
+
+Serving remains the accepted prior-stage autoport: full 60 layers, context 262144, stock plugin runtime, prefix caching, chunked prefill, device decode/all-final sampling, accepted mixed-prefill host sampling and operator top_k 32 defaults. Validated batches are 1, 8, 16, 32. No release configuration is claimed, and the prior estimated agent workload remains an estimate because real histories were not collected.
+
+Telemetry reuses the existing stage11 full-model vLLM 4096/128/B1/C1 measurement: mean TTFT 754.954840ms and decode 35.309639 tokens/s/user, from 8 serial requests. This is performance evidence only, not a stage12 score or agentic timing. Device-time and roofline values remain null; host-wall phase rooflines were not copied into device fields. The required packet retains its supplied run/stage/attempt identifiers.
+
+To resume, provide Docker CLI/Compose and authorized host daemon access to the worker (or run the client on the provisioned local host), matching daemon-visible task/result paths and a reachable inference endpoint. Then prove stock task setup/verifier operation and admission, register this run’s adapter and suite entries, freeze cohorts, and begin at the 2-task smoke. Preserve this attempt and deadline; do not claim gates passed.
+
+GPQA remains separately blocked locally by the operator’s no-credential decision. Use the authorized secondary route for gated access and resolve how that evidence satisfies the local final-route requirement before release; Docker provisioning alone does not resolve it.
+
+Validation: context contract passed; installed stage gate exited 2 with expected unmet survey, preflight, cohort, ranking and release-configuration requirements (setup/gate.log). The blocked records intentionally leave unmeasured quantities unknown.

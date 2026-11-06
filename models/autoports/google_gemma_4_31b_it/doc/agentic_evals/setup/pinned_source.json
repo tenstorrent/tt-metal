@@ -1,0 +1,8 @@
+{
+  "repository": "tenstorrent/tt-inference-server",
+  "commit": "411057222c2dc5a4268e693b0bd57bc0e2571f38",
+  "path": "reference_config/evals/eval_config.py",
+  "sha256": "9fb330107e6eca6a2c6b3c5a91f38416de9e3b3b1cb6c05314e33a03f9e773e6",
+  "retrieval": "gh api repos/tenstorrent/tt-inference-server/contents/reference_config/evals/eval_config.py?ref=411057222c2dc5a4268e693b0bd57bc0e2571f38; base64 decode",
+  "local_snapshot": "setup/pinned_eval_config.py (untracked reference, not publication source)"
+}

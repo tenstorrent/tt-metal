@@ -1,0 +1,36 @@
+{
+  "at": "2026-11-06T04:30:59.575298+00:00",
+  "execution_commit": "432ebc0eaca3d0065f3810cf995fa0c6aed373af",
+  "harness_main_commit": "7a51c2f20f51e7508d8ea365d09092d00bbd5fcb",
+  "pinned_release_commit": "411057222c2dc5a4268e693b0bd57bc0e2571f38",
+  "available_mesh": {
+    "shape": [
+      1,
+      4
+    ],
+    "chips": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "type": "P300X2",
+    "evidence": "timeout60 tt-smi -ls --local exit0; four p300c ASICs"
+  },
+  "owners": {
+    "observed": [],
+    "method": "/proc/*/fd symlinks to /dev/tenstorrent; fuser absent",
+    "limitation": "Container PID namespace may hide host owners; no model/reset launched."
+  },
+  "environment": {
+    "docker_cli": false,
+    "docker_socket": false,
+    "docker_host_configured": false,
+    "rootless_namespace_probe": "unshare -Ur true: EPERM",
+    "root_mount_namespace_probe": "sudo -n unshare --mount true: EPERM",
+    "root_network_namespace_probe": "sudo -n unshare --net true: EPERM",
+    "loopback_daemon_ports": "2375 and2376 connection refused",
+    "disk_free_gib": 546
+  },
+  "plugins": "Selected enabled skills inventory contains tt-autodebug0.1.9, model-bringup0.1.23, telemetry0.1.1; runner supplied explicit package paths."
+}

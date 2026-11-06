@@ -1,0 +1,124 @@
+{
+  "status": "incomplete",
+  "checks": {
+    "time_split": {
+      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+    },
+    "busy_rows": {
+      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+    },
+    "live_prefill_rows": {
+      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+    },
+    "trace_captures": {
+      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+    },
+    "served_step": {
+      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+    },
+    "prefix_hits": {
+      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+    },
+    "cache_pressure": {
+      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+    },
+    "cache_bytes": {
+      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+    },
+    "memory_headroom": {
+      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+    },
+    "cutoffs": {
+      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+    },
+    "eval_validity": {
+      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+    },
+    "accuracy_drift": {
+      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+    },
+    "generation_share": {
+      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+    },
+    "prefill_under_load": {
+      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+    },
+    "host_contention": {
+      "not_measured": "No stage12 smoke yet; prior synthetic serving evidence cannot replace real agent traffic.",
+      "test": "Stock2-task smoke with trajectory audit and adapter metrics"
+    }
+  },
+  "calculations": {
+    "batch": {
+      "validated": [
+        1,
+        8,
+        16,
+        32
+      ],
+      "rule": "Smallest validated batch at or above planned_clients unless measured reason; no eval run scheduled."
+    },
+    "agents": {
+      "value": null,
+      "reason": "Local sandbox admission0, real workload unknown."
+    },
+    "run_hours": {
+      "value": null,
+      "reason": "No smoke timings; cannot project release."
+    },
+    "task_lists": {
+      "source": "cohorts.json",
+      "frozen": false
+    },
+    "agent_timeout": {
+      "value": null,
+      "reason": "GPQA request floor14400s; tool suite definitions pending."
+    },
+    "output_cap": {
+      "gpqa": 126976,
+      "tool_suites": null
+    },
+    "bytes": {
+      "evidence": "../agentic_serving.json ledger and optimized_vllm_ledger"
+    },
+    "cache_agents": {
+      "value": null,
+      "reason": "Real agent working sets not measured."
+    },
+    "block_cost": {
+      "value": null,
+      "reason": "No returning real-agent requests."
+    },
+    "prefill_padding": {
+      "value": null,
+      "reason": "No agent run."
+    }
+  },
+  "shortfalls": [
+    {
+      "problem": "Host contention lowers synthetic decode delivery from983.0 to650.4 tokens/s",
+      "hours": null,
+      "reason": "Release agent generation share unmeasured; cannot price hours yet.",
+      "evidence": "../agentic_serving.json serving.host_contention"
+    },
+    {
+      "problem": "Mixed intermediate prefill uses accepted stock host sampler",
+      "hours": null,
+      "reason": "No agent traffic sampled; prior synthetic counts not release counts."
+    }
+  ]
+}
