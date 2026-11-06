@@ -35,6 +35,10 @@ inline std::string get_generic_reduction_doc(
                 * - UINT32
                   - TILE)doc"
                                             : "";
+    const char* int_scalar_note =
+        int32_supported
+            ? R"doc(For INT32 and UINT32 the scalar multiplies the reduced value in float32. The result is `trunc(float32(value) * scalar)`. It is not exact above 2^24 and is truncated toward zero. INT32 results clamp to the INT32 range and UINT32 results clamp to [0, 2^32 - 1]. The default `scalar=1.0` skips the multiply and is exact.)doc"
+            : "";
     // All four generic reductions (sum/mean/max/min) expose fast_and_approximate_mode. std/var do
     // not: Welford already reduces on the SFPU at full fp32, so there is no FPU path to select.
     // ttnn.sum and ttnn.mean both expose output_layout.
@@ -59,7 +63,7 @@ inline std::string get_generic_reduction_doc(
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             compute_kernel_config (ttnn.ComputeKernelConfig, optional): Compute kernel configuration for the operation. Defaults to `None`.
-            scalar (float, optional): A scaling factor to be applied to the input tensor. Defaults to `1.0`.
+            scalar (float, optional): A scaling factor to be applied to the input tensor. Defaults to `1.0`.{5}
             sub_core_grids (ttnn.CoreRangeSet, optional): Subcore grids to use for the operation. Defaults to `None`, which will use all cores.{3}{4}
 
         Returns:
@@ -96,7 +100,8 @@ inline std::string get_generic_reduction_doc(
         qualified_name,
         int32_row,
         fast_approx_kwarg,
-        output_layout_kwarg);
+        output_layout_kwarg,
+        int_scalar_note);
 }
 
 inline void bind_generic_reductions(nb::module_& mod) {
