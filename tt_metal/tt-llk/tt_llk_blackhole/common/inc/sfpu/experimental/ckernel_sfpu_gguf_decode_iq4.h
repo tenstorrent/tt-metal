@@ -176,7 +176,7 @@ sfpi_inline void qslot_issue()
     constexpr mslot s = qplan_iq4.s[I];
     if constexpr (s.kind == QS_WORD)
     {
-        TTI_SFPLOADMACRO(s.x, sfpi::SFPLOAD_MOD0_FMT_INT32, ADDR_MOD_7, 2 * s.y);
+        TTI_SFPLOADMACRO(s.x, InstrModLoadStore::INT32, ADDR_MOD_7, 2 * s.y);
     }
     else if constexpr (s.kind == QS_SHIFT)
     {

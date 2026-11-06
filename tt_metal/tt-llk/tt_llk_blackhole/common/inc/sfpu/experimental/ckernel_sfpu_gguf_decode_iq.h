@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "sfpu/experimental/ckernel_sfpu_gguf_decode_common.h"
 
 namespace ckernel::sfpu
