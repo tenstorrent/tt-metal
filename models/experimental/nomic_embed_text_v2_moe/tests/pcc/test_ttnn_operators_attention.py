@@ -340,6 +340,76 @@ def test_sdpa_unmasked(device, tt_config, config, batch, seqlen):
     assert_with_pcc(ref, out, OPERATOR_PCC)
 
 
+# The generated nomic_sdpa (nomic-opt c08; tt/attention.py: _generated_sdpa) on unmasked calls of whole tiles.
+
+
+def model_attention_inputs(batch, heads, seqlen, head_dim, seed=0):
+    """q, k, v with the model's score spread: q pre-scaled by 1 / 8 as the fused QKV op leaves it (the model calls
+    attention at scale 1), so q . k has a std of about 2."""
+    generator = torch.Generator().manual_seed(seed)
+    query = torch.randn(batch, heads, seqlen, head_dim, generator=generator) * (2.0 / 8.0)
+    key = torch.randn(batch, heads, seqlen, head_dim, generator=generator)
+    value = torch.randn(batch, heads, seqlen, head_dim, generator=generator)
+    return query, key, value
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize(
+    "batch, seqlen, buffer",
+    [(1, 128, "l1"), (2, 512, "l1"), (4, 512, "l1"), (8, 512, "l1"), (4, 288, "l1"), (2, 512, "dram")],
+)
+def test_generated_sdpa_is_no_less_accurate_than_stock(device, tt_config, config, batch, seqlen, buffer):
+    """nomic_sdpa against the float64 reference, next to the stock SDPA call it replaces (the model's program and
+    compute configs): PCC at least OPERATOR_PCC and a relative RMS error no worse than stock's (5% slack)."""
+    from ttnn.operations.nomic_sdpa import nomic_sdpa
+
+    heads, head_dim = config.num_attention_heads, config.head_dim
+    memory_config = ttnn.L1_MEMORY_CONFIG if buffer == "l1" else ttnn.DRAM_MEMORY_CONFIG
+    query, key, value = model_attention_inputs(batch, heads, seqlen, head_dim)
+    tensors = [to_device(t, device, memory_config=memory_config) for t in (query, key, value)]
+
+    generated = nomic_sdpa(*tensors, scale=1.0, memory_config=memory_config)
+    stock = ttnn.transformer.scaled_dot_product_attention(
+        *tensors,
+        is_causal=False,
+        scale=1.0,
+        memory_config=memory_config,
+        output_concat_heads=True,
+        **sdpa_kwargs(tt_config, config, batch, seqlen, masked=False),
+    )
+
+    ref = torch.softmax(query.double() @ key.double().transpose(-1, -2), dim=-1) @ value.double()
+    ref = ref.permute(0, 2, 1, 3).reshape(batch, 1, seqlen, heads * head_dim)
+
+    def relative_rms(out):
+        got = ttnn.to_torch(out).double().reshape(ref.shape)
+        return float((got - ref).pow(2).mean().sqrt() / ref.pow(2).mean().sqrt())
+
+    assert tuple(generated.shape) == (batch, 1, seqlen, heads * head_dim)
+    assert generated.memory_config() == memory_config
+    assert_with_pcc(ref.float(), ttnn.to_torch(generated).float(), OPERATOR_PCC)
+    generated_error, stock_error = relative_rms(generated), relative_rms(stock)
+    assert generated_error <= 1.05 * stock_error, f"relative RMS {generated_error:.5f} > stock's {stock_error:.5f}"
+    for tensor in (*tensors, generated, stock):
+        ttnn.deallocate(tensor)
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("batch, seqlen", [(2, 37), (3, 400), (1, 1024)])
+def test_generated_sdpa_refuses_what_stock_sdpa_must_run(device, config, batch, seqlen, expect_error):
+    """Sequences off the tile grid and longer than 512 are refused (SupportRefusal), so the model falls back to
+    stock SDPA there instead of failing."""
+    from ttnn.operations._op_contract import SupportRefusal
+    from ttnn.operations.nomic_sdpa import nomic_sdpa
+
+    heads, head_dim = config.num_attention_heads, config.head_dim
+    tensors = [to_device(t, device) for t in model_attention_inputs(batch, heads, seqlen, head_dim)]
+    with expect_error(SupportRefusal, "nomic_sdpa"):
+        nomic_sdpa(*tensors, scale=1.0, memory_config=tensors[0].memory_config())
+    for tensor in tensors:
+        ttnn.deallocate(tensor)
+
+
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
 def test_sdpa_with_ragged_padding(device, tt_config, config, batch, seqlen):
     """The same call with a 25%-padded additive mask, compared on kept positions.

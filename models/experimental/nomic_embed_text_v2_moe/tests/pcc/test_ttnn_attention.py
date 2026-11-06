@@ -11,6 +11,8 @@ Two conventions are checked by negative control instead of by PCC, because both 
 plausible output: the rotary table widening, and the is_causal default the module has to override.
 """
 
+from dataclasses import replace
+
 import pytest
 import torch
 
@@ -114,7 +116,7 @@ def test_attention_with_ragged_padding(device, config, tt_config, reference, tt_
 
 
 @pytest.mark.parametrize("seqlen", [37, 128])
-def test_an_all_ones_mask_is_a_no_op(device, config, tt_config, tt_attention, seqlen):
+def test_an_all_ones_mask_is_a_no_op(device, config, tt_config, state_dict, seqlen):
     """Masking nothing must change nothing, which is what pins the mask's tile padding.
 
     The mask is (B, 1, S, S) in TILE layout, so S rounds up to a multiple of 32 and the pad
@@ -123,7 +125,11 @@ def test_an_all_ones_mask_is_a_no_op(device, config, tt_config, tt_attention, se
     output norm to 0.69x. Gated on equality rather than PCC, which barely moves. The model skips
     an all-ones mask, but a padded batch's mask has the same padding, so this runs the model's
     mask dtype.
+
+    Both calls run stock SDPA (generated_sdpa off): the generated nomic_sdpa takes unmasked calls only, so with it on
+    the two sides would run different kernels and differ by their rounding, not by the mask.
     """
+    tt_attention = TtNomicBertAttention(device, config, replace(tt_config, generated_sdpa=False), state_dict, PREFIX)
     batch = 2
     x = to_device(to_block_layout(hidden_states(batch, seqlen, config.hidden_size)), device)
     rot_mats = rotary_tables(device, config, seqlen)

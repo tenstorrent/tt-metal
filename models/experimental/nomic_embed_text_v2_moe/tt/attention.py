@@ -630,38 +630,22 @@ class TtNomicBertAttention(LightweightModule):
         rotated_query, rotated_key, value, program_config, heads_memory, floor, qkv_bank = heads
         head_bank = l1_head_bank_bytes(batch, seqlen, self.num_heads, self.head_dim, self.tt_config.l1_banks)
 
-        if heads_memory.buffer_type == ttnn.BufferType.L1:
-            # SDPA's output goes in the highest gap it fits: at worst right below the deepest tensor now
-            # live, and no lower than attention_placement's span. The first is the tighter when v took a
-            # gap above the residual, as from the second block on.
-            deepest = l1_floor((x, rotated_query, rotated_key, value, *live), self.tt_config)
-            output_bottom = min(deepest + head_bank, floor + head_tensor_span(qkv_bank, head_bank) * head_bank)
-            program_config = (
-                sdpa_chunks_in_l1(
-                    batch,
-                    seqlen,
-                    self.num_heads,
-                    self.head_dim,
-                    self.tt_config.core_grid,
-                    compute_kernel_config.fp32_dest_acc_en,
-                    None if attn_mask is None else attn_mask.dtype,
-                    self.tt_config.l1_cb_bytes - output_bottom,
-                )
-                or program_config
+        context = self._generated_sdpa(rotated_query, rotated_key, value, attn_mask, heads_memory)
+        if context is None:
+            context = self._stock_sdpa(
+                x,
+                live,
+                rotated_query,
+                rotated_key,
+                value,
+                attn_mask,
+                program_config,
+                heads_memory,
+                floor,
+                qkv_bank,
+                head_bank,
+                compute_kernel_config,
             )
-
-        context = ttnn.transformer.scaled_dot_product_attention(
-            rotated_query,
-            rotated_key,
-            value,
-            attn_mask=attn_mask,
-            is_causal=False,
-            scale=1.0,
-            program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
-            memory_config=heads_memory,
-            output_concat_heads=True,
-        )
         for tensor in (rotated_query, rotated_key, value):
             ttnn.deallocate(tensor)
 
@@ -683,3 +667,67 @@ class TtNomicBertAttention(LightweightModule):
         )
         ttnn.deallocate(context)
         return out
+
+    def _generated_sdpa(self, query, key, value, attn_mask, heads_memory) -> ttnn.Tensor | None:
+        """Attention on the generated nomic_sdpa (ttnn.operations) for an unmasked call: q, k, v and the (B, 1, S, 768)
+        output interleaved in heads_memory, at the op's own precision (HiFi2, fp32 DEST, its exp). None where the
+        flag is off, a mask is given (the op takes no additive mask) or the op refuses the call (SupportRefusal: S
+        not whole tiles, S > 512, its circular buffers not fitting below the live L1); stock SDPA runs then."""
+        if not self.tt_config.generated_sdpa or attn_mask is not None:
+            return None
+        from ttnn.operations._op_contract import SupportRefusal
+        from ttnn.operations.nomic_sdpa import nomic_sdpa
+
+        try:
+            return nomic_sdpa(query, key, value, scale=1.0, memory_config=heads_memory)
+        except SupportRefusal:
+            return None
+
+    def _stock_sdpa(
+        self,
+        x,
+        live,
+        rotated_query,
+        rotated_key,
+        value,
+        attn_mask,
+        program_config,
+        heads_memory,
+        floor,
+        qkv_bank,
+        head_bank,
+        compute_kernel_config,
+    ) -> ttnn.Tensor:
+        """ttnn.transformer.scaled_dot_product_attention with the heads concatenated: (B, 1, S, 768) in heads_memory."""
+        batch, seqlen = rotated_query.shape[0], rotated_query.shape[-2]
+        if heads_memory.buffer_type == ttnn.BufferType.L1:
+            # SDPA's output goes in the highest gap it fits: at worst right below the deepest tensor now
+            # live, and no lower than attention_placement's span. The first is the tighter when v took a
+            # gap above the residual, as from the second block on.
+            deepest = l1_floor((x, rotated_query, rotated_key, value, *live), self.tt_config)
+            output_bottom = min(deepest + head_bank, floor + head_tensor_span(qkv_bank, head_bank) * head_bank)
+            program_config = (
+                sdpa_chunks_in_l1(
+                    batch,
+                    seqlen,
+                    self.num_heads,
+                    self.head_dim,
+                    self.tt_config.core_grid,
+                    compute_kernel_config.fp32_dest_acc_en,
+                    None if attn_mask is None else attn_mask.dtype,
+                    self.tt_config.l1_cb_bytes - output_bottom,
+                )
+                or program_config
+            )
+        return ttnn.transformer.scaled_dot_product_attention(
+            rotated_query,
+            rotated_key,
+            value,
+            attn_mask=attn_mask,
+            is_causal=False,
+            scale=1.0,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=heads_memory,
+            output_concat_heads=True,
+        )

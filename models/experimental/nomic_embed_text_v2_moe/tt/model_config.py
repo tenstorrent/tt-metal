@@ -299,6 +299,10 @@ class TtModelConfig:
     # the residual's ND layout, for a one-pass layer of a window the generated glue takes (tt/experts.py:
     # route_dispatch). Off, or where the op refuses a call: router_front_end, routing_metadata and the dispatch.
     generated_route_dispatch: bool = True
+    # Attention without a mask on the generated nomic_sdpa (ttnn.operations): sequences of whole tiles up to 512, q, k,
+    # v and the concatenated output interleaved in L1 or DRAM (tt/attention.py: _generated_sdpa). Off, with a mask
+    # (padded batches) or where the op refuses a call: ttnn.transformer.scaled_dot_product_attention.
+    generated_sdpa: bool = True
     max_chunk_tokens: int = MAX_CHUNK_TOKENS  # the largest chunk a forward runs at once, tt/chunking.py
     min_chunk_tokens: int = MIN_CHUNK_TOKENS  # a smaller last chunk is merged with the one before and split
     layout: ttnn.Layout = LAYOUT
