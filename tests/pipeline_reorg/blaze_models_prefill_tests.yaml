@@ -2040,6 +2040,8 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
+    # (the shared K3 cache's layers 25+ have only v2 KDA tensorbins: load them read-only - tt/kda/weights.py)
+    export KDA_CACHE_V2_FALLBACK=1
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3 sc4 --variant dspark
   test_type: k3_dspark_runner
   test_tags: [kimi_k3, runner, kv_cache, dflash, dspark]
@@ -2178,6 +2180,8 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
+    # (the shared K3 cache's layers 25+ have only v2 KDA tensorbins: load them read-only - tt/kda/weights.py)
+    export KDA_CACHE_V2_FALLBACK=1
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3
   test_type: k3_prefill_runner_93l
   test_tags: [kimi_k3, runner, kv_cache]
