@@ -349,7 +349,9 @@ TABLE = {
         "layout's hash), with a completion marker that also keeps bfp4_stats. A hit skips the host dequant, checks "
         "and packing. One on-disk layout (owner 2026-11-06): the fork's bank-major files (<stem>.bm.bin, "
         "bank_major.py; a hit = the layer's .bm.bin files, a miss writes only those); an old .tensorbin-only cache is "
-        "never read: convert it (tools/convert_expert_cache.py, host only). off = build from the checkpoint every time (the miss path, no files). 8x4 layer 0, bfp4: see "
+        "never read: convert it (tools/convert_expert_cache.py, host only). The run's tt_cache is the node-local "
+        "mirror of the shared master paths.tt_cache_shared (F261, core/weight_cache.py: pulled at run start, pushed "
+        "after a build). off = build from the checkpoint every time (the miss path, no files). 8x4 layer 0, bfp4: see "
         "BREADCRUMBS FIX.4 for miss / hit times; 7.6 GB of disk per layer (bfp4), 13.6 GB (bfp8)",
     ),
     "EXPERTS_PREFETCH": Setting(

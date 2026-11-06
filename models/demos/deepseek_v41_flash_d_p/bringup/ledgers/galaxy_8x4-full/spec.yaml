@@ -365,5 +365,6 @@ paths:
   art: /scratch/$USER/bringup                       # node-local: weight cache, runs, checkpoint
   hf: hf_full                                       # under art (HF rev 5254448, re-downloaded per host)
   golden: /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4   # shared NFS master (owner 2026-11-06: fixed path, readable by others; each box reads a local mirror, F260)
+  tt_cache_shared: /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/tt_cache   # shared NFS master of the weight cache (owner 2026-11-06, F261: readable by others; art/tt_cache is its local mirror: pull at run start, push after a build)
 reference:
   shipped_dtype: bfloat16

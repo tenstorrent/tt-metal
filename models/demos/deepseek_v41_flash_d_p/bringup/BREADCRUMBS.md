@@ -3227,10 +3227,13 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
 - Detail: known_issues_detail.md "P.26 WINDOW_KV_BF16" (file at the 500 KB limit, DS41-194).
 ## FIX.20-22/P.27-33: known_issues_detail.md
 ## P.34 perf (8x4, 2026-11-06): POST_COLLAPSE (mhc_post collapse_pre) - known_issues_detail.md "P.34 POST_COLLAPSE"
-## Weight cache: one layout (owner 2026-11-06; fork CHANGELOG "One weight cache layout")
+## Weight cache: one layout, shared master (owner 2026-11-06; fork CHANGELOG "One weight cache layout", framework F261)
 - Routed-expert cache = the fork's bank-major `.bm.bin` only (hit = the layer's .bm.bin; a miss writes only those);
   `.tensorbin` is never read (old caches: tools/convert_expert_cache.py). FLAT_CACHE_BANK_MAJOR is gone.
 - TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: tt/settings.py export_pinned_limit sets 16 GiB (32 with bfp8 weights)
   when unset, from bringup/hooks.py device_params (tests, before the mesh opens) and tt/runners/adapter.py (runner, at
   import). An explicit value is kept (test_runner_contract.py passes 0 by default: the KMD 2.9 workaround): the
   stager then logs one FLAT_CACHE line and takes the slower copy.
+- galaxy spec paths.tt_cache_shared = /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/tt_cache: the master; the
+  orchestrator pulls it into art/tt_cache at run start and pushes new layers in the background
+  (`python -m models.demos.common.bringup.core.weight_cache status|pull|push --spec <galaxy spec>`).

@@ -39,7 +39,6 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -49,6 +48,7 @@ from pathlib import Path
 import torch
 from safetensors.torch import load_file
 
+from models.demos.common.bringup.core import mirror as MR
 from models.demos.common.bringup.core.freeze import sha256_file
 from models.demos.common.bringup.core.spec import GOLDEN_MIRROR_FILE, Spec
 
@@ -92,18 +92,9 @@ _warned: set[str] = set()
 
 
 def listing(d: Path) -> dict[str, list[int]]:
-    """{relative path: [size, mtime_ns]} of every file under d but mirror.json (a stat walk: ~0.05 s for a rung on NFS)."""
-    d = Path(d)
-    out = {}
-    for root, dirs, files in os.walk(d):
-        dirs.sort()
-        for f in sorted(files):
-            p = Path(root) / f
-            rel = str(p.relative_to(d))
-            if rel != MIRROR:
-                st = p.stat()
-                out[rel] = [st.st_size, st.st_mtime_ns]
-    return out
+    """{relative path: [size, mtime_ns]} of every file under d but mirror.json (a stat walk: ~0.05 s for a rung on NFS;
+    core/mirror.py, shared with the weight cache's mirror, F261)."""
+    return MR.listing(d)
 
 
 def manifest_of(d: Path) -> dict:
@@ -119,22 +110,12 @@ def write_manifest(d: Path) -> dict:
     """mirror.json beside a shared golden dir (generate_golden, sync). Rewritten only when the files changed, so an
     in-sync mirror stays in sync. A read-only shared copy (another user's) keeps no manifest: sync writes the mirror's.
     """
-    d = Path(d)
     m = manifest_of(d)
-    old = _read(d / MIRROR)
-    if old is None or old.get("files") != m["files"] or old.get("sha256") != m["sha256"]:
-        try:
-            (d / MIRROR).write_text(json.dumps(m, indent=0, sort_keys=True))
-        except OSError:
-            pass
+    MR.write_manifest(d, m)
     return m
 
 
-def _read(p: Path) -> dict | None:
-    try:
-        return json.loads(Path(p).read_text())
-    except (OSError, ValueError):
-        return None
+_read = MR.read_json
 
 
 def golden_units(spec: Spec, rungs: list[str] | None = None) -> list[str]:
@@ -152,28 +133,7 @@ def golden_units(spec: Spec, rungs: list[str] | None = None) -> list[str]:
 def mirror_problem(shared: Path, mirror: Path) -> str | None:
     """Why the mirror of one shared golden dir cannot be read in its place (None: it is complete). The shared copy
     as it is now is the reference (a drift file rewritten there after the sync makes the mirror stale)."""
-    man = _read(Path(mirror) / MIRROR)
-    if man is None:
-        return "not synced" if not Path(mirror).exists() else "no mirror.json (not synced)"
-    try:
-        live = listing(shared)
-    except OSError as e:
-        live = None
-        if Path(shared).exists():
-            return f"shared copy unreadable ({e})"
-    if live is not None and man.get("files") != live:
-        diff = sorted(set(live) ^ set(man.get("files") or {})) or sorted(
-            k for k in live if live[k] != man["files"].get(k)
-        )
-        return f"stale: the shared copy changed since the last sync ({len(diff)} files, e.g. {diff[0]})"
-    for rel, (size, mtime) in (man.get("files") or {}).items():
-        try:
-            st = (Path(mirror) / rel).stat()
-        except OSError:
-            return f"incomplete: {rel} missing"
-        if st.st_size != size or st.st_mtime_ns != mtime:
-            return f"incomplete: {rel} differs from its mirror.json line"
-    return None
+    return MR.mirror_problem(shared, mirror)
 
 
 def unit_problem(spec: Spec, name: str) -> str | None:
@@ -214,11 +174,7 @@ def read_dir(spec: Spec, rung: dict) -> Path:
 
 
 def _rsync(src: Path, dst: Path) -> None:
-    dst.mkdir(parents=True, exist_ok=True)
-    cmd = ["rsync", "-a", f"{src}/", f"{dst}/"]
-    if shutil.which("ionice"):
-        cmd = ["ionice", "-c", "3", *cmd]  # idle I/O class: a running test's reads come first
-    subprocess.run(["nice", "-n", "10", *cmd], check=True)
+    MR.rsync(src, dst)
 
 
 def sync(spec: Spec, rungs: list[str] | None = None, *, echo=print) -> dict[str, str]:

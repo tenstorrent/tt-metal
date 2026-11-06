@@ -128,7 +128,7 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
    "Always be watching"). Goldens on shared storage (paths.golden on NFS) are read from a node-local mirror (F260):
    on a new box, run `python -m models.demos.common.bringup.reference.golden sync --spec <spec>` once before the launch
    (tens of GB at idle I/O priority; the orchestrator also syncs at run / resume start and after each golden task,
-   fast when in sync). A `WARNING (F260)` line in a test log means it read the shared copy (slow): sync. The first task, R.1, builds the canonical prompt and runs the HF sanity gate (revision,
+   fast when in sync). A `WARNING (F260)` line in a test log means it read the shared copy (slow): sync. A weight cache with a shared master (paths.tt_cache_shared, F261) is pulled into the local cache at run start the same way (`python -m models.demos.common.bringup.core.weight_cache pull --spec <spec>` by hand on a new box) and new layers are pushed back in the background. The first task, R.1, builds the canonical prompt and runs the HF sanity gate (revision,
    usage-example smoke, next-token accuracy floor).
 6. The serving contract comes first. Task SC.1 runs the `serving-contract` agent (`agents/serving-contract.md`): it
    reads how tt-d-gen drives a prefill model at its latest commit and writes `serving_contract.md` (a how-to for

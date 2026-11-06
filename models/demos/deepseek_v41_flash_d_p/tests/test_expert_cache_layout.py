@@ -9,6 +9,7 @@
     tt-metal's mock cluster: a host tensor needs a tt-metal context, never the real cards)
   - _CacheMarker lists the .bm.bin files, never deletes a cache file, and keeps an old marker's stats
   - export_pinned_limit sets TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES when unset, keeps an explicit value
+  - the shared master's file filter (bringup/hooks.py weight_cache_patterns): the run impl's .bm.bin and markers only
 """
 
 import json
@@ -86,3 +87,16 @@ def test_export_pinned_limit_sets_it_when_unset_and_keeps_an_explicit_value(monk
     assert S.export_pinned_limit(env) is None and env[S.PINNED_LIMIT_ENV] == "0"
     monkeypatch.setenv("DS41_EXPERTS_IMPL", "bfp8")
     assert S.pinned_limit_bytes() == 32 << 30
+
+
+def test_the_shared_masters_files_are_the_run_impls_bm_files_and_markers(monkeypatch):
+    from models.demos.common.bringup.core import mirror as MR
+    from models.demos.deepseek_v41_flash_d_p.bringup import hooks
+
+    monkeypatch.delenv("DS41_EXPERTS_IMPL", raising=False)
+    keep = MR.matcher(hooks.weight_cache_patterns(None))
+    base = "experts-5254448103b6/8x4/L05.bfp4_mse.165ee174f992"
+    assert keep(f"{base}.flat.bf4.lay9c3da689dd35.w_gu.bm.bin") and keep(f"{base}.done.json")
+    assert not keep(f"{base}.flat.bf4.lay9c3da689dd35.w_gu.tensorbin")  # the old layout: never pushed or pulled
+    assert not keep(f"{base}.flat.bf4.lay9c3da689dd35.w_gu.bm.bin.tmp123")  # being written
+    assert not keep("experts-5254448103b6/8x4/L05.bfp4.165ee174f992.flat.bf4.layk.w_gu.bm.bin")  # another impl
