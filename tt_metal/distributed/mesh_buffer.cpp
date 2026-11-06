@@ -390,7 +390,8 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     device_local_size_(other.device_local_size_),
     buffers_(std::move(other.buffers_)),
     unique_id_(std::exchange(other.unique_id_, std::nullopt)),
-    state_(std::move(other.state_)) {
+    state_(std::move(other.state_)),
+    built_device_buffers_(std::move(other.built_device_buffers_)) {
     other.state_ = DeallocatedState{};
     other.address_ = 0;
     other.device_local_size_ = 0;
@@ -409,6 +410,7 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         buffers_ = std::move(other.buffers_);
         unique_id_ = std::exchange(other.unique_id_, std::nullopt);
         state_ = std::move(other.state_);
+        built_device_buffers_ = std::move(other.built_device_buffers_);
 
         other.state_ = DeallocatedState{};
         other.address_ = 0;
@@ -435,6 +437,11 @@ void MeshBuffer::deallocate() {
         decltype(state_) old_state = DeallocatedState{};
         {
             std::lock_guard<std::mutex> lock(lazy_device_buffer_mutex(this));
+            if (built_device_buffers_) {
+                for (size_t i = 0; i < buffers_.shape().mesh_size(); i++) {
+                    built_device_buffers_[i].store(nullptr, std::memory_order_relaxed);
+                }
+            }
             state_.swap(old_state);
         }
     };
@@ -490,6 +497,14 @@ MeshDevice* MeshBuffer::device() const {
 }
 
 Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
+    // A built entry needs neither the lock nor the MeshDevice: fan-outs fetch every device's entry at once.
+    const size_t index = device_coord.to_linear_index(buffers_.shape());
+    if (built_device_buffers_) {
+        Buffer* built = built_device_buffers_[index].load(std::memory_order_acquire);
+        if (built != nullptr && built->device()->is_initialized()) {
+            return built;
+        }
+    }
     // Builds the entry on first use; see initialize_device_buffers(). The entries live in the container's heap storage,
     // not in the MeshBuffer object, so filling one in from this const method is well defined.
     auto& device_buffer = const_cast<std::shared_ptr<Buffer>&>(buffers_.at(device_coord).value());
@@ -510,6 +525,9 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
         // Keep lazily built buffers out of a light-metal capture that started after this allocation.
         LIGHT_METAL_TRACE_FUNCTION_ENTRY();
         device_buffer = create_device_buffer_at_lockstep_address(*this, device);
+    }
+    if (built_device_buffers_) {
+        built_device_buffers_[index].store(device_buffer.get(), std::memory_order_release);
     }
     return device_buffer.get();
 }
