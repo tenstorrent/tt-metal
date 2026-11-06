@@ -110,12 +110,19 @@ def _bounded_group_norm_blocks(module) -> None:
         _bounded_group_norm_blocks(child)
 
 
+# a decoder conv whose height-sharded config finds no valid DRAM slice (per-device input at 4096)
+UNSHARDABLE_DECODER_CONVS = frozenset({(258, 2048, 512, 512)})
+
+
 def _decoder_conv_blocking(module) -> None:
-    """64 activation rows per core, double-buffered activations and weights, the full inner dimension."""
+    """64 activation rows per core, double-buffered activations and weights, the full inner dimension; height-sharded
+    activations, falling back per conv where the sharded program does not fit next to the resident DiT."""
     if isinstance(module, Conv2d):
         module.act_block_h_override = 64
         module.double_buffer = True
         module.full_inner_dim = True
+        module.shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        module.no_shard = UNSHARDABLE_DECODER_CONVS
     for _, child in module.named_children():
         _decoder_conv_blocking(child)
 
