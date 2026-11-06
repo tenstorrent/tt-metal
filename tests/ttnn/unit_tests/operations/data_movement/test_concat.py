@@ -1169,6 +1169,18 @@ def test_sharded_concat_height_leading_dims_block_sharded(
     _run_height_concat(device, layout, dtype, shapes, ttnn.ShardStrategy.BLOCK, grid_cols, grid_rows, orientation)
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("widths", [(32, 32), (32, 64), (96, 32), (32, 32, 32)])
+def test_concat_last_dim_block_float_32_wide_is_exact(device, dtype, widths):
+    torch.manual_seed(0)
+    inputs = [
+        ttnn.from_torch(torch.randn(1, 1, 64, w), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device) for w in widths
+    ]
+    expected = torch.cat([ttnn.to_torch(t) for t in inputs], dim=-1)
+    output = ttnn.to_torch(ttnn.concat(inputs, dim=-1))
+    assert torch.equal(output, expected)
+
+
 # The issue's repro, spelled out. Distinct arange fills so a failure names which block moved where
 # instead of just reporting a mismatch; uint32 so the values are exact at any size. Checks the full
 # tensor, and separately the first column of each flattened row, which is the view in the issue:
