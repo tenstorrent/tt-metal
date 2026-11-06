@@ -101,7 +101,6 @@
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
-#include <fmt/ranges.h>
 #include "distributed/mesh_device_impl.hpp"
 
 namespace tt {
@@ -194,7 +193,11 @@ SummaryRows program_config_breakdown(
         }
     }
     rows.emplace_back("  text-sizing group, cores", sizing_group.core_ranges.str());
-    rows.emplace_back("  text-sizing group, kernels", fmt::format("{}", fmt::join(names, ", ")));
+    std::string joined_names;
+    for (size_t i = 0; i < names.size(); ++i) {
+        joined_names += (i == 0 ? "" : ", ") + names[i];
+    }
+    rows.emplace_back("  text-sizing group, kernels", joined_names);
     return rows;
 }
 

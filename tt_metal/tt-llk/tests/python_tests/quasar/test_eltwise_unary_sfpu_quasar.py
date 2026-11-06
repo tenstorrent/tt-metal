@@ -28,10 +28,12 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     QuasarSfpuVariant,
+    generate_dest_depth_input_dimensions,
     generate_quasar_sfpu_format_variants,
     input_output_formats,
     parametrize,
     quasar_sfpu_dest_acc_modes,
+    quasar_sfpu_fpu_route_variants,
     resolve_quasar_sfpu_variant,
     runtime,
     unique_quasar_sfpu_formats,
@@ -1347,6 +1349,49 @@ def run_eltwise_unary_sfpu_quasar(
         assert torch.all(
             res_tensor.to(torch.float32)[tail][kept] > 0
         ), "softplus flushed the negative tail to 0"
+
+
+def _dest_depth_variants(mathop) -> List[QuasarSfpuVariant]:
+    """Same-format routes of *mathop*: the resolved Unpack-to-Dest ones plus the FPU datacopy ones."""
+    same_formats = [
+        fmt
+        for fmt in _float_formats_for_mathop(mathop)
+        if fmt.input_format == fmt.output_format
+    ]
+    return [
+        resolve_quasar_sfpu_variant(mathop, fmt, dest_acc)
+        for fmt in same_formats
+        for dest_acc in _dest_acc_for_mathop_formats(mathop, fmt)
+    ] + quasar_sfpu_fpu_route_variants(same_formats)
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=[MathOperation.Abs, MathOperation.Square],
+    format_variant=_dest_depth_variants,
+    dest_sync=list(DEST_SYNC_MODES),
+    input_dimensions=runtime(
+        lambda format_variant, dest_sync: generate_dest_depth_input_dimensions(
+            format_variant.dest_acc, dest_sync
+        )
+    ),
+)
+def test_eltwise_unary_sfpu_dest_depth_quasar(
+    mathop,
+    format_variant,
+    dest_sync,
+    input_dimensions,
+):
+    """4 and 8 full Dest sections per run through the FPU and unpack-to-Dest paths."""
+    run_eltwise_unary_sfpu_quasar(
+        format_variant.formats,
+        format_variant.dest_acc,
+        mathop,
+        ApproximationMode.No,
+        input_dimensions,
+        dest_sync,
+        format_variant=format_variant,
+    )
 
 
 @pytest.mark.quasar

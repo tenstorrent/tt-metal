@@ -44,10 +44,17 @@ struct RingJointSDPAProgramFactory {
 struct RingJointSDPAMeshWorkloadFactory {
     using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
         detail::RingJointSDPADescriptorAdapterOperation>::DescriptorMeshWorkloadAdapter<RingJointSDPAProgramFactory>;
+    // A full-mesh gather's route, proved on the cache miss and reapplied to each hit's attributes.
+    struct FullMeshRoute {
+        ttnn::ccl::Topology topology;
+        ttnn::ccl::snake_ring::Orientation orientation;
+        uint64_t route_plan_hash;
+    };
     // The adapter's state plus the semaphore slots recorded at create time (see apply_semaphore_arg_patch).
     struct shared_variables_t {
         typename descriptor_adapter_t::shared_variables_t descriptor;
         ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::SemaphoreArgPatch semaphore_patch;
+        std::optional<FullMeshRoute> full_mesh_route;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

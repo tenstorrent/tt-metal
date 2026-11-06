@@ -155,11 +155,13 @@ def get_functional_tensix_locations(device_id: int = 0) -> tuple:
 
 
 def tensix_location_for_worker(worker_index: int, device_id: int = 0) -> str:
-    """The Tensix an xdist worker owns.
+    """The Tensix a worker owns on one shared device.
 
     Two workers sharing a core would silently corrupt each other's results, so
-    running wider than the card is fatal rather than wrapped. Call after Exalens
-    has a context; an enumeration failure is not a reason to invent cores.
+    running wider than the card is fatal rather than wrapped. ttsim is outside
+    that map: each xdist process hosts its own chip, and
+    ``resolve_worker_tensix_location`` asks for core 0. Call after Exalens has a
+    context; an enumeration failure is not a reason to invent cores.
     """
     locations = get_functional_tensix_locations(device_id)
     if worker_index >= len(locations):
