@@ -893,7 +893,8 @@ def _dense_row_masks(geo, S, ranges):
 
 # The dense rows split across devices (H) round each partial to bf16 once per ring hop it is merged on (at most
 # S / 2); the explicit-mask run rounds only the output. Their error vs the fp64 reference may grow to twice the
-# explicit run's plus 1e-3 (rel-L2); PCC and the fitted scale may move from the explicit run's by at most these.
+# explicit run's plus 1e-3 (rel-L2); PCC may drop below the explicit run's, and the fitted scale move further from 1
+# than the explicit run's, by at most these.
 DENSE_SPLIT_PCC_DROP = 2e-4
 DENSE_SPLIT_SCALE_TOL = 2e-3
 
@@ -901,18 +902,21 @@ DENSE_SPLIT_SCALE_TOL = 2e-3
 def _check_dense_split(tag, case, ranges, explicit, ref, out, *, dense_rows_out=None):
     """out (dense_blocks, H) vs explicit (the explicit mask's output, same inputs) and ref (its fp64 reference):
     rows on shards owning no dense block bit-equal; the owners' other rows as the explicit run's to 1e-5 PCC (same
-    math, another work split); the dense rows (dense_rows_out, default out's) within the DENSE_SPLIT bounds."""
+    math, another work split); the dense rows (dense_rows_out, default out's) within the DENSE_SPLIT bounds. Builds
+    with dense units never use pair steps (kernel config buffer), which the explicit run may use with pieces of at
+    most 256 keys: then the non-owner rows are compared like the owners' other rows."""
     n = case.geo.logical_n
     dense, owners = (m[:n] for m in _dense_row_masks(case.geo, case.S, ranges))
     others = ~owners
-    if others.any():
+    pair_steps_differ = case.geo.k_chunk <= 256
+    if others.any() and not pair_steps_differ:
         diff = (out[0][:, others] - explicit[0][:, others]).abs().max().item()
         assert torch.equal(out[0][:, others], explicit[0][:, others]), f"{tag}: non-owner rows differ by {diff:.3e}"
-    owner_rest = owners & ~dense
-    if owner_rest.any():
-        p = _pcc(explicit[0][:, owner_rest], out[0][:, owner_rest])
-        logger.info(f"[{tag}] owners' other rows vs the explicit run: pcc {p:.6f}")
-        assert p > 0.99999, f"{tag}: owners' other rows pcc {p:.6f} vs the explicit run"
+    rest, what = (~dense, "non-dense rows") if pair_steps_differ else (owners & ~dense, "owners' other rows")
+    if rest.any():
+        p = _pcc(explicit[0][:, rest], out[0][:, rest])
+        logger.info(f"[{tag}] {what} vs the explicit run: pcc {p:.6f}")
+        assert p > 0.99999, f"{tag}: {what} pcc {p:.6f} vs the explicit run"
     d_out = (out if dense_rows_out is None else dense_rows_out)[0][:, dense]
     d_ref, d_exp = ref[0][:, dense], explicit[0][:, dense]
     p, e, scale = _pcc(d_ref, d_out), _rel_l2(d_ref, d_out), _fit_scale(d_ref, d_out)
@@ -924,7 +928,9 @@ def _check_dense_split(tag, case, ranges, explicit, ref, out, *, dense_rows_out=
     assert torch.isfinite(d_out).all(), f"{tag}: non-finite dense rows"
     assert p > p_exp - DENSE_SPLIT_PCC_DROP, f"{tag}: dense rows pcc {p:.6f} vs explicit {p_exp:.6f}"
     assert e <= 2 * e_exp + 1e-3, f"{tag}: dense rows rel-L2 {e:.5f} vs explicit {e_exp:.5f}"
-    assert abs(scale - scale_exp) < DENSE_SPLIT_SCALE_TOL, f"{tag}: dense rows scale {scale:.5f} vs {scale_exp:.5f}"
+    assert (
+        abs(scale - 1) < abs(scale_exp - 1) + DENSE_SPLIT_SCALE_TOL
+    ), f"{tag}: dense rows scale {scale:.5f} vs explicit {scale_exp:.5f}"
 
 
 def dense_q_slabs(geo, S, ranges):

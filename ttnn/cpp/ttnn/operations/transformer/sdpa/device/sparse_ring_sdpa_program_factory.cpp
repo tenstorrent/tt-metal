@@ -579,8 +579,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t v_piece_tiles = Sk_chunk_t * vDHt;
     // Pair steps (one step over two consecutive pieces of a head, halving the per-step fixed cost) apply to small
     // pieces (<= 256 keys). They need a 4-deep K/V CB, so a pair and the next piece's delivery fit together, and twice
-    // the score scratch; the pass split below turns them on only when that costs no extra pass.
-    const bool pair_steps_eligible = Sk_chunk_t <= 8;
+    // the score scratch; the pass split below turns them on only when that costs no extra pass. Off with dense units:
+    // their code would not fit the kernel config buffer next to the dense units'.
+    const bool pair_steps_eligible = Sk_chunk_t <= 8 && !dense_h;
     bool pair_steps = false;                       // decided with the pass split
     uint32_t kv_cb_pages = group_mcast ? 3u : 2u;  // decided with the pass split
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -965,8 +966,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     if (math_fidelity == MathFidelity::LoFi) {
         defines["SDPA_COMPUTE_LOFI"] = "1";
     }
-    // Dense units: one copy of the per-iteration bodies (sparse_dense_units.hpp); the kernel config buffer holds all
-    // kernel text.
+    // Dense units: one copy of the bodies reached from the ring loop and the dense batches (sparse_dense_units.hpp);
+    // the kernel config buffer holds all kernel text.
     if (dense_h) {
         defines["SPARSE_DENSE_UNITS"] = "1";
     }
@@ -1406,6 +1407,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     writer_kernel.compile_time_args = writer_compile_time_args;
     writer_kernel.defines = kernel_defines;
     writer_kernel.config = WriterConfigDescriptor{};
+    // Dense units: the reader and writer built for size to fit the kernel config buffer (their time is NoC-bound).
+    if (dense_h) {
+        reader_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::Os;
+        writer_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::Os;
+    }
 
     KernelDescriptor compute_kernel{};
     compute_kernel.kernel_source =
@@ -1575,6 +1581,14 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                 producer,
                 n_receivers,
                 rects.size());
+        }
+        // Dense builds compile the head chain's transfers out of the reader (v_chain_moves): no member may be left
+        // outside a group.
+        for (uint32_t i = 0; dense_h && i < num_cores; ++i) {
+            TT_FATAL(
+                !head_chain_configs[i].participates || group_args[i][0] != 0,
+                "SparseRingSDPA: head chain member core {} has no delivery group",
+                i);
         }
     }
 
