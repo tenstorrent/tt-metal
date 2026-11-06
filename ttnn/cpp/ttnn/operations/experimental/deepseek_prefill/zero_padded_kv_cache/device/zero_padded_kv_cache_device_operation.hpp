@@ -39,6 +39,9 @@ struct ZeroPaddedKvCacheDeviceOperation {
         uint32_t layer_idx;          // hashed (structural)
         uint32_t num_layers;         // hashed (structural)
         uint32_t cluster_axis;       // hashed (structural): which mesh dim is sequence-parallel
+        // hashed (structural): set when the cache is TP-deduped (dim 2 sharded over sp*tp). The block-cyclic
+        // order is then the row-major sp*tp linearization, matching update_padded_kv_cache's writes.
+        std::optional<uint32_t> tp_axis;
     };
 
     struct tensor_args_t {
@@ -57,6 +60,7 @@ struct ZeroPaddedKvCacheDeviceOperation {
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
+    using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
 
     struct ProgramFactory {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
@@ -101,6 +105,7 @@ struct ZeroPaddedKvCacheDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
@@ -122,6 +127,7 @@ ttnn::Tensor zero_padded_kv_cache(
     uint32_t valid_global,
     uint32_t chunk_size_global,
     uint32_t cluster_axis,
-    uint32_t pad_align);
+    uint32_t pad_align,
+    std::optional<uint32_t> tp_axis = std::nullopt);
 
 }  // namespace ttnn::prim
