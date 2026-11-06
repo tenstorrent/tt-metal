@@ -1217,6 +1217,10 @@
     export TT_METAL_WATCHER=30
     unset HF_HUB_OFFLINE  # umt5 fetches the Wan2.2 tokenizer from the hub
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    # The first test per mesh shape writes the weight cache and later tests load it. Some writes come
+    # out corrupted (Qwen2.5-VL loaders then return NaN), so only a cache that reads back exactly is
+    # marked complete, and a mismatch is logged per tensor and shard.
+    export TT_DIT_CACHE_VERIFY=1
     # Read at collection time by t5/test_t5_full, umt5/test_umt5, clip/test_clip_full_projection and the
     # qwen25vl tests, which leave out their slowest cases (~13 min of the new Qwen2.5-VL tests' ~19).
     export DIT_UNIT_TEST=1
