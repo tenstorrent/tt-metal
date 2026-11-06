@@ -177,7 +177,6 @@ struct dfb_global_header_t {
 // stride code), [39:16] producer txn-id mask >> DFB_TXN_ID_BASE, [63:40] consumer txn-id mask >>
 // DFB_TXN_ID_BASE. DFB txn ids are confined to [DFB_TXN_ID_BASE, HW_TXN_ID_MAX] = [8, 31], so each
 // mask fits in 24 bits; the host TT_FATALs on any bit below DFB_TXN_ID_BASE.
-static_assert(HW_TXN_ID_MAX - DFB_TXN_ID_BASE + 1 <= 24, "DFB txn-id masks no longer fit dm0_packed");
 constexpr uint32_t DFB_DM0_PACKED_MASK_BITS = 24u;
 static_assert(
     HW_TXN_ID_MAX - DFB_TXN_ID_BASE + 1 <= DFB_DM0_PACKED_MASK_BITS, "DFB txn-id masks no longer fit dm0_packed");
