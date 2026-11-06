@@ -8,7 +8,12 @@ from models.experimental.vadv2.tt.tt_decoder import TtCustomTransformerDecoder
 from models.experimental.vadv2.tt.tt_transformer import TtVADPerceptionTransformer
 from models.experimental.vadv2.reference.base_box3d import LiDARInstance3DBoxes
 from models.experimental.vadv2.tt.tt_utils import inverse_sigmoid, bbox_xyxy_to_cxcywh
-from models.experimental.vadv2.reference.nms_free_coder import MapNMSFreeCoder, CustomNMSFreeCoder
+from models.experimental.vadv2.tt.tt_nms_free_coder import (
+    TtVADDetectionCoder,
+    TtVADMapCoder,
+    compact_detections,
+    compact_map,
+)
 
 
 class TtLearnedPositionalEncoding:
@@ -156,6 +161,18 @@ class TtVADHead:
         self.real_h = self.pc_range[4] - self.pc_range[1]
 
         self.map_bbox_coder = map_bbox_coder
+        self.det_coder = TtVADDetectionCoder(
+            bbox_coder["pc_range"],
+            bbox_coder["post_center_range"],
+            max_num=bbox_coder["max_num"],
+            num_classes=bbox_coder["num_classes"],
+        )
+        self.map_coder = TtVADMapCoder(
+            map_bbox_coder["pc_range"],
+            map_bbox_coder["post_center_range"],
+            max_num=map_bbox_coder["max_num"],
+            num_classes=map_bbox_coder["num_classes"],
+        )
         self.map_query_embed_type = map_query_embed_type
         self.map_transform_method = map_transform_method
         self.map_num_vec = map_num_vec
@@ -279,22 +296,6 @@ class TtVADHead:
         bs, num_cam, _, _, _ = mlvl_feats[0].shape
         if not self.as_two_stage:
             object_query_embeds = self.query_embedding.weight
-        if isinstance(self.bbox_coder, dict):
-            self.bbox_coder = CustomNMSFreeCoder(
-                self.bbox_coder["pc_range"],
-                voxel_size=self.bbox_coder["voxel_size"],
-                post_center_range=self.bbox_coder["post_center_range"],
-                max_num=self.bbox_coder["max_num"],
-                num_classes=self.bbox_coder["num_classes"],
-            )
-        if isinstance(self.map_bbox_coder, dict):
-            self.map_bbox_coder = MapNMSFreeCoder(
-                self.map_bbox_coder["pc_range"],
-                voxel_size=self.map_bbox_coder["voxel_size"],
-                post_center_range=self.map_bbox_coder["post_center_range"],
-                max_num=self.map_bbox_coder["max_num"],
-                num_classes=self.map_bbox_coder["num_classes"],
-            )
 
         if self.map_query_embed_type == "all_pts":
             map_query_embeds = self.map_query_embedding.weight
@@ -841,33 +842,33 @@ class TtVADHead:
         return bbox, pts_reshape
 
     def get_bboxes(self, preds_dicts, img_metas, rescale=False):
-        det_preds_dicts = self.bbox_coder.decode(preds_dicts)
-        # map_bboxes: xmin, ymin, xmax, ymax
-        map_preds_dicts = self.map_bbox_coder.decode(preds_dicts)
+        """The head's device outputs to each sample's detections and map elements on the host.
 
-        num_samples = len(det_preds_dicts)
-        assert len(det_preds_dicts) == len(map_preds_dicts), "len(preds_dict) should be equal to len(map_preds_dicts)"
-        ret_list = []
-        box_type_3d = LiDARInstance3DBoxes
-        for i in range(num_samples):
-            preds = det_preds_dicts[i]
-            bboxes = preds["bboxes"]
-            bboxes[:, 2] = bboxes[:, 2] - bboxes[:, 5] * 0.5
-            code_size = bboxes.shape[-1]
-            bboxes = box_type_3d(bboxes, code_size)
-            scores = preds["scores"]
-            labels = preds["labels"]
-            trajs = preds["trajs"]
-
-            map_preds = map_preds_dicts[i]
-            map_bboxes = map_preds["map_bboxes"]
-            map_scores = map_preds["map_scores"]
-            map_labels = map_preds["map_labels"]
-            map_pts = map_preds["map_pts"]
-
-            ret_list.append([bboxes, scores, labels, trajs, map_bboxes, map_scores, map_labels, map_pts])
-
-        return ret_list
+        Selection and decoding run on device; only the valid entries are read back.
+        """
+        det = self.det_coder(
+            preds_dicts["all_cls_scores"], preds_dicts["all_bbox_preds"], preds_dicts["all_traj_preds"]
+        )
+        map_det = self.map_coder(
+            preds_dicts["map_all_cls_scores"], preds_dicts["map_all_bbox_preds"], preds_dicts["map_all_pts_preds"]
+        )
+        scores, labels, _, boxes, trajs, valid = det
+        preds = compact_detections(scores, labels, boxes, trajs, valid, self.fut_mode)
+        map_scores, map_labels, _, map_boxes, map_pts, map_valid = map_det
+        map_preds = compact_map(map_scores, map_labels, map_boxes, map_pts, map_valid)
+        bboxes = LiDARInstance3DBoxes(preds["bboxes"], preds["bboxes"].shape[-1])
+        return [
+            [
+                bboxes,
+                preds["scores"],
+                preds["labels"],
+                preds["trajs"],
+                map_preds["map_bboxes"],
+                map_preds["map_scores"],
+                map_preds["map_labels"],
+                map_preds["map_pts"],
+            ]
+        ]
 
     def select_and_pad_pred_map(
         self,
