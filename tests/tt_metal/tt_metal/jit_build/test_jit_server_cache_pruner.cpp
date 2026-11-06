@@ -27,6 +27,7 @@ namespace cache_pruner_test {
 
 namespace fs = std::filesystem;
 
+// Size of the simulated disk the tests prune: 1 TB (2^40 bytes, strictly 1 TiB).
 constexpr std::uint64_t kCapacity = 1ull << 40;
 constexpr std::time_t kHour = 3600;
 
