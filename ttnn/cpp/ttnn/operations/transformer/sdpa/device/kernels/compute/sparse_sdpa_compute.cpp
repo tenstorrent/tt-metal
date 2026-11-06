@@ -24,7 +24,7 @@ constexpr bool EXP_APPROX_MODE = get_compile_time_arg_val(sparse_sdpa::compute_c
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/dataflow/circular_buffer.h"  // CircularBuffer: COMPILE_FOR_TRISC-aware CB lifecycle
-#include <tt-metalium/constants.hpp>       // tt::constants::TILE_HEIGHT
+#include "api/tile_constants.h"            // tt::constants::TILE_HEIGHT
 
 // In-place scores[tile] += row-broadcast of mask row 0. cb_qk_im is held (hold_wr_ptr), so re-pack at the
 // absolute position. Caller has init'd the bcast-rows op + single-tile pack.

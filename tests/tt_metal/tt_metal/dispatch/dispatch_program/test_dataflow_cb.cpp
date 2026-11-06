@@ -26,7 +26,7 @@ TEST_F(UnitMeshAnyDispatchFixture, DataflowCb) {
     if (this->device().arch() == ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar does not support CBs, skipping test";
     }
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     CoreCoord core = {0, 0};
 
@@ -114,7 +114,7 @@ TEST_F(UnitMeshAnyDispatchFixture, DataflowCb) {
 }
 
 TEST_F(UnitMeshAnyDispatchFixture, DataflowDfb) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     CoreCoord core = {0, 0};
 

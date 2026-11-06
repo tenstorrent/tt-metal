@@ -210,4 +210,15 @@ constexpr bool validate_tensor_shape_sub_bcast_col_custom_(const TensorShape& te
            (tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM || tensor_shape.num_faces_r_dim == 1);
 }
 
+/**
+ * @brief Whether a tile has a 2x1 face grid (two face rows, one face column), e.g. a 32x16 tile.
+ *
+ * Shared by the row broadcast datacopy checks (WH/BH math datacopy init and unpack A init) that do not
+ * support this grid, so they stay in sync.
+ **/
+constexpr bool is_tensor_shape_2x1_face_grid(const TensorShape& tensor_shape)
+{
+    return tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && tensor_shape.total_num_faces() == MAX_NUM_FACES_R_DIM;
+}
+
 } // namespace ckernel

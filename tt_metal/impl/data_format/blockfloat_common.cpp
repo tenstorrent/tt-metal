@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <bit>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
@@ -13,6 +14,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "blockfloat_common.hpp"
+#include "bfp_tile_encode.hpp"
 #include "common/executor.hpp"
 #include "constants.hpp"
 #include "hal_types.hpp"
@@ -372,6 +374,32 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     TT_ASSERT(input_data.size() % num_float_in_tile == 0);
     uint32_t num_tiles = input_data.size() / num_float_in_tile;
 
+    // Encode directly into the final allocation. The old converter allocates
+    // vectors per face row and tile, then concatenates every worker's result.
+    // Restrict the SIMD loads to FP32/BF16 and 16-value face rows. Other input
+    // types, exponent-A formats and geometries retain their existing converter.
+    if constexpr (
+        (std::is_same_v<T, float> || std::is_same_v<T, bfloat16>) &&
+        (BfpFormat == tt::DataFormat::Bfp2_b || BfpFormat == tt::DataFormat::Bfp4_b ||
+         BfpFormat == tt::DataFormat::Bfp8_b)) {
+        if (!is_exp_a && face_W == 16 && std::endian::native == std::endian::little) {
+            constexpr int bits = [] {
+                if constexpr (BfpFormat == tt::DataFormat::Bfp8_b) {
+                    return 7;
+                } else if constexpr (BfpFormat == tt::DataFormat::Bfp4_b) {
+                    return 3;
+                } else {
+                    return 1;
+                }
+            }();
+            const tt::tt_metal::detail::BfpTileGeometry geometry(tile.value_or(tt::tt_metal::Tile{}));
+            std::vector<uint32_t> result(static_cast<size_t>(num_tiles) * geometry.packed_bytes<bits>() / 4);
+            tt::tt_metal::detail::encode_bfp_tiles<bits>(
+                input_data.data(), reinterpret_cast<uint8_t*>(result.data()), num_tiles, geometry, row_major_input);
+            return result;
+        }
+    }
+
     int num_exponents_in_dword = 4;
     int num_mantissas_in_dword;
     if constexpr (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b) {
@@ -486,8 +514,8 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     uint32_t num_chunks = std::min(max_chunks, num_tiles / MIN_TILES_PER_CHUNK);
     num_chunks = std::max(1u, num_chunks);
 
-    if (num_chunks == 1) {
-        // Single-threaded execution
+    if (num_chunks == 1 || tt::tt_metal::detail::GetExecutor().this_worker_id() != -1) {
+        // A nested legacy conversion must not wait on its own executor.
         return process_tile_range(0, num_tiles);
     }
 
@@ -499,29 +527,14 @@ std::vector<uint32_t> pack_as_bfp_tiles(
         num_tiles / num_chunks);
 
     std::vector<std::vector<uint32_t>> chunk_results(num_chunks);
-    std::vector<std::shared_future<void>> futures;
-    futures.reserve(num_chunks);
-
-    uint32_t tiles_per_chunk = num_tiles / num_chunks;
-    uint32_t remainder = num_tiles % num_chunks;
-
-    uint32_t start_tile = 0;
-    for (uint32_t t = 0; t < num_chunks; ++t) {
-        uint32_t tiles_for_this_chunk = tiles_per_chunk + (t < remainder ? 1 : 0);
-        uint32_t end_tile = start_tile + tiles_for_this_chunk;
-
-        futures.emplace_back(
-            tt::tt_metal::detail::async([&chunk_results, &process_tile_range, t, start_tile, end_tile]() {
-                chunk_results[t] = process_tile_range(start_tile, end_tile);
-            }));
-
-        start_tile = end_tile;
-    }
-
-    // Wait for all chunks to complete. get() also rethrows the first exception raised in any chunk.
-    for (auto& future : futures) {
-        future.get();
-    }
+    const uint32_t tiles_per_chunk = num_tiles / num_chunks;
+    const uint32_t remainder = num_tiles % num_chunks;
+    ttsl::run_joined_tasks(num_chunks, [&](size_t chunk) {
+        const uint32_t start_tile = chunk * tiles_per_chunk + std::min<size_t>(chunk, remainder);
+        const uint32_t end_tile = start_tile + tiles_per_chunk + (chunk < remainder ? 1 : 0);
+        return tt::tt_metal::detail::async(
+            [&, chunk, start_tile, end_tile] { chunk_results[chunk] = process_tile_range(start_tile, end_tile); });
+    });
 
     // Concatenate results from all chunks
     std::vector<uint32_t> packed_result;
