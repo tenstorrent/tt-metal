@@ -251,7 +251,7 @@ class TtIndexerBase:
         # on-chip — no TP logit all-reduce. (Was col-parallel/TP-head-sharded; replicating trades a small
         # matmul/score compute bump for dropping the ~end_pos-wide 2-CCL logit all-reduce.) Cache name
         # "wq_b_repl" (not "wq_b") so a stale col-sharded tensorbin can never alias this layout. wk /
-        # weights_proj contract over hidden (TP-sharded) → upload transposed+sharded, reduced by _tp_rs_ag.
+        # weights_proj contract over hidden (TP-sharded) → upload transposed+sharded, reduced by the fused matmul + RS.
         # wq_b/wk (Q/K projections) load as bf8, halving their DRAM read. wk tolerates it because the k_norm
         # LayerNorm applied right after it (write_k) cancels the bf8 magnitude error. wq_b has NO downstream
         # normalizer (RoPE only rotates), but the indexer score drives top-k SELECTION, not a value: the
@@ -349,6 +349,11 @@ class TtIndexerBase:
             index_topk=config.index_topk,
             index_rope_interleave=config.index_rope_interleave,
         )
+        # Indexer rope width: absent -> 64 (DS-V3.2 / GLM); 0 -> NoPE indexer (Kimi-K3.1), no rope tables read.
+        self._index_rope_dim = getattr(config, "index_rope_dim", None)
+        if self._index_rope_dim is None:
+            self._index_rope_dim = 64
+        assert self._index_rope_dim in (0, 64), f"indexer rope width must be 0 (NoPE) or 64; got {self._index_rope_dim}"
         self.seq_len = seq_len
         # Keep the index tensor width fixed at the configured maximum, except on small-cache test /
         # deployment configurations where the cache itself cannot contain that many entries.  This
@@ -426,7 +431,7 @@ class TtIndexerBase:
         # is natively interleaved -> no permute. NOTE: the stored key is then in interleaved layout —
         # reindex by rope.interleaved_to_halfsplit_perm to compare it against a half-split reference.
         self._rope_perm = None
-        if not self.index_args.index_rope_interleave:
+        if self._index_rope_dim and not self.index_args.index_rope_interleave:
             # rope.interleaved_perm_matrix owns the half-split -> interleaved convention (single source).
             self._rope_perm = ttnn.from_torch(
                 interleaved_perm_matrix(64).to(torch.bfloat16),
@@ -474,23 +479,8 @@ class TtIndexerBase:
             self.tt_ccl.mla_high_bw_all_gather_buffers[key] = output
         return output
 
-    def _tp_rs_ag(self, t, rs_only=False):
-        """All-reduce over TP = reduce-scatter (dim 3) then all-gather; rs_only stops after the RS."""
-        if self.tp_factor == 1:
-            return t
-        t = ttnn.experimental.reduce_scatter_minimal_async(
-            t,
-            persistent_output_buffers=None,
-            dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.tp_ccl_topology,
-            cluster_axis=self.tp_axis,
-        )
-        if rs_only:
-            return t
+    def _tp_all_gather_k(self, t):
+        """All-gather the k columns that the fused wk + TP reduce-scatter left scattered on dim 3."""
         assert tuple(t.shape) == (1, 1, self.active_seq_len_local, self.index_args.index_head_dim // self.tp_factor)
         self._k_all_gather_output = self._get_high_bw_all_gather_buffer(
             name="indexer_k_all_reduce",
@@ -587,7 +577,10 @@ class TtIndexerBase:
         block-cyclic global position on-device from kv_actual_global, exactly as MLA's _apply_rope_padded,
         so keys land at the same positions update_padded_kv_cache writes them to. For DS (half-split
         weights) self._rope_perm first reorders the rope half into the interleaved arrangement so this
-        interleaved op matches the DS reference (the permutation cancels in q·k, applied to both q and k)."""
+        interleaved op matches the DS reference (the permutation cancels in q·k, applied to both q and k).
+        A NoPE indexer returns x itself."""
+        if self._index_rope_dim == 0:
+            return x
         if self._rope_perm is None:
             assert x.shape[-1] == self.index_args.index_head_dim, "Indexer input width must match index_head_dim"
             return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
@@ -686,15 +679,25 @@ class TtIndexerBase:
         ``actual_end`` (end of the chunk's real tokens) clamps the write to them, so a chunk padding past
         the cache end needs only its real tokens to fit. forward() reads back the same prefix
         (``valid_pos``)."""
-        wk_cfg = self._resolve_mm_cfg("indexer.wk", seq_len)
-        k = ttnn.linear(
-            hidden_states,
-            self._idx_wk,
-            compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=wk_cfg["out_mem_config"] if wk_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
-            **({"program_config": wk_cfg["program_config"]} if wk_cfg is not None else {}),
-        )  # per-chip partial [1, 1, S/sp, D_idx]
-        k = self._tp_rs_ag(k)  # all-reduce over TP
+        if self.tp_factor > 1:
+            k = ttnn.experimental.matmul_reduce_scatter_prefill(
+                hidden_states,
+                self._idx_wk,
+                cluster_axis=self.tp_axis,
+                scatter_dim=-1,
+                topology=self.tp_ccl_topology,
+                num_links=self.ccl_num_links,
+            )
+            k = self._tp_all_gather_k(k)
+        else:
+            wk_cfg = self._resolve_mm_cfg("indexer.wk", seq_len)
+            k = ttnn.linear(
+                hidden_states,
+                self._idx_wk,
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=wk_cfg["out_mem_config"] if wk_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+                **({"program_config": wk_cfg["program_config"]} if wk_cfg is not None else {}),
+            )  # [1, 1, S/sp, D_idx]
         k = ttnn.layer_norm(
             k,
             weight=self._idx_knorm_w,
@@ -859,16 +862,25 @@ class TtIndexerBase:
 
         # weights_proj: device stem -> reduce TP partials and scatter query rows. The static scale is
         # already folded into the persistent projection weight in _upload_weights().
-        wproj_cfg = self._resolve_mm_cfg("indexer.weights_proj", seq_len)
-        weights = ttnn.linear(
-            hidden_states,
-            self._idx_wproj,
-            compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=wproj_cfg["out_mem_config"] if wproj_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
-            **({"program_config": wproj_cfg["program_config"]} if wproj_cfg is not None else {}),
-        )
-        # Sum TP partials and scatter the sequence rows consumed by local scoring.
-        weights = self._tp_reduce_scatter_sequence(weights)
+        if self.tp_factor > 1:
+            # Sum TP partials and scatter the sequence rows consumed by local scoring.
+            weights = ttnn.experimental.matmul_reduce_scatter_prefill(
+                hidden_states,
+                self._idx_wproj,
+                cluster_axis=self.tp_axis,
+                scatter_dim=-2,
+                topology=self.tp_ccl_topology,
+                num_links=self.ccl_num_links,
+            )
+        else:
+            wproj_cfg = self._resolve_mm_cfg("indexer.weights_proj", seq_len)
+            weights = ttnn.linear(
+                hidden_states,
+                self._idx_wproj,
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=wproj_cfg["out_mem_config"] if wproj_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+                **({"program_config": wproj_cfg["program_config"]} if wproj_cfg is not None else {}),
+            )
         # Q and gate weights now have the same TP×SP query ownership. Scoring still uses the original
         # full-SP cache geometry below; only the input query count and its TP sub-offset are smaller.
         qc = (64 if sq_local % 64 == 0 else 32) if tpsp else 64
@@ -1373,13 +1385,27 @@ class TtCsaIndexer(TtIndexerBase):
         self._idx_position_bias = weights["position_bias"]
         self._idx_knorm = weights["kv_norm"]
 
-    def reset_overlap_state(self) -> None:
-        """Start over from no predecessor window, independently for every cache-user slot. The inner
-        compressor owns the layout, since it is the one that consumes and emits these. TtCSA.alloc_state
-        resets this alongside the block compressor so both states begin at the same token position.
+    def reset_overlap_state(self, cache_user_id: int | None = None) -> None:
+        """Start over from no predecessor window, for slot ``cache_user_id`` or, when None, for every
+        cache-user slot. The inner compressor owns the layout, since it is the one that consumes and emits
+        these. TtCSA.new_state resets a slot alongside the block compressor so both states begin at the
+        same token position.
 
         One pair per slot: two users sharing this instance must not share the overlap state, or the
-        second user's first chunk would consume the first user's terminal state (see __init__)."""
+        second user's first chunk would consume the first user's terminal state (see __init__). Resetting
+        one slot leaves the others where they are, since their users may be mid-prefill."""
+        if cache_user_id is not None:
+            assert (
+                0 <= cache_user_id < self._slot_num
+            ), f"cache_user_id {cache_user_id} is outside [0, {self._slot_num})"
+            # Allocated before the old pair is freed, so a failed allocation leaves the slot as it was.
+            kv_state, score_state = self._compressor.alloc_overlap_state()
+            old = (self._overlap_kv_state[cache_user_id], self._overlap_score_state[cache_user_id])
+            self._overlap_kv_state[cache_user_id] = kv_state
+            self._overlap_score_state[cache_user_id] = score_state
+            for state in old:
+                ttnn.deallocate(state)
+            return
         if hasattr(self, "_overlap_kv_state"):
             for state in (*self._overlap_kv_state, *self._overlap_score_state):
                 ttnn.deallocate(state)

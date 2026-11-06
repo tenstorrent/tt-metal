@@ -8,7 +8,6 @@
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
-#include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 
 #include <vector>
 #include <ostream>

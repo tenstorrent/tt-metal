@@ -57,7 +57,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
             "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_multicore_slice_nd.cpp";
     }
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat dfb_data_format =
+        ttnn::operations::data_movement::get_slice_dfb_data_format(input_tensor.dtype(), device->arch());
     uint32_t actual_input_w = input_shape[-1];
     uint32_t input_bytes_per_row = actual_input_w * element_size;
     uint32_t dfb_entry_size = input_bytes_per_row;
