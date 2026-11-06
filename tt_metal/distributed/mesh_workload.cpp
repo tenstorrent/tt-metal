@@ -30,8 +30,8 @@
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
-#include "core_coord.hpp"
-#include "hal.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal.hpp>
 #include "kernel_types.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_device.hpp"

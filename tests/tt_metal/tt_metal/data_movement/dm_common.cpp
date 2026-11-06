@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dm_common.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tuple>
 #include "impl/context/metal_context.hpp"

@@ -18,9 +18,9 @@
 #include <string>
 
 #include <tt_stl/assert.hpp>
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "dispatch_settings.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "memcpy.hpp"
 #include "allocator/allocator.hpp"
 #include "command_queue_common.hpp"

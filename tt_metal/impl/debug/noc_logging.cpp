@@ -12,7 +12,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "debug_helpers.hpp"
 #include "llrt.hpp"
 #include "impl/context/metal_env_impl.hpp"

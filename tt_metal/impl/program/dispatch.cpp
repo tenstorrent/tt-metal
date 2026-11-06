@@ -38,7 +38,7 @@
 #include "circular_buffer_constants.h"
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "device.hpp"
 #include "impl/device/device_impl.hpp"
 #include "dispatch/device_command.hpp"
@@ -47,7 +47,7 @@
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "math.hpp"
 #include "mesh_device.hpp"
 #include "distributed/mesh_device_impl.hpp"

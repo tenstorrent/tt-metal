@@ -47,11 +47,11 @@
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "circular_buffer_constants.h"
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "impl/context/metal_context.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "impl/context/context_types.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "impl/device/device_impl.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
 #include "tt-metalium/mesh_buffer.hpp"

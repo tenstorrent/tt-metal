@@ -16,7 +16,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder_impl.hpp"
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_metal {
 class Device;

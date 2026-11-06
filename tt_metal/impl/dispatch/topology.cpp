@@ -20,9 +20,9 @@
 
 #include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "device.hpp"
-#include "dispatch_core_common.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "kernel_config/fd_kernel.hpp"
 #include "program/program_impl.hpp"
 #include "program.hpp"

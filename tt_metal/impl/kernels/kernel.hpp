@@ -20,8 +20,8 @@
 #include "api/tt-metalium/experimental/offline_kernel_compile.hpp"
 #include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
 #include "impl/context/metal_context.hpp"
-#include "core_coord.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "jit_build/jit_build_settings.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel_source.hpp"

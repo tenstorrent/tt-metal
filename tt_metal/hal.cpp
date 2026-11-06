@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <hal.hpp>
+#include <tt-metalium/hal.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <tt-umd/types/arch.hpp>
 #include <cstdint>
 #include <string>
 
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
 
 // NOLINTBEGIN(misc-unused-using-decls)
