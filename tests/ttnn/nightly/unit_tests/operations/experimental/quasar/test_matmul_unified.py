@@ -1616,37 +1616,23 @@ def test_auto_config_batched_a_unbatched_b(device, sharded_out):
 
 
 @pytest.mark.parametrize(
-    "a_shape, b_shape, expected_shard_shape, fp32_dest_acc_en",
+    "a_shape, b_shape, expected_shard_shape",
     [
-        ((1, 400, 32), (1, 32, 400), (416, 416), False),
-        ((1, 400, 32), (1, 32, 128), (416, 128), False),
-        ((1, 512, 32), (1, 32, 512), (512, 512), False),
+        ((1, 400, 32), (1, 32, 400), (416, 416)),
+        ((1, 400, 32), (1, 32, 128), (416, 128)),
+        ((1, 512, 32), (1, 32, 512), (512, 512)),
         # Fused M = 4 * 13 = 52 tiles keeps the per-batch cap (4 block rows) and fits every Quasar grid (<= 4 rows).
-        ((4, 400, 32), (32, 400), (416, 416), False),
+        ((4, 400, 32), (32, 400), (416, 416)),
         # Fused M = 5 * 13 = 65 tiles needs five block rows to get the 416-row shard (skipped on 4-row grids).
         pytest.param(
             (5, 400, 32),
             (32, 400),
             (416, 416),
-            False,
             marks=pytest.mark.requires_grid_size((1, 5)),
         ),
-        ((1, 320, 32), (1, 32, 64), (320, 64), False),
-        ((1, 128, 32), (1, 32, 128), (128, 128), False),
-        ((16, 32, 32), (32, 512), (512, 512), False),
-        # fp32 accumulation exercises the fp32 branch of the subblock search (h * w <= 4). It cannot run until the
-        # Quasar 2D factory sets unpack_modes for the fp32 partials DFB (#61018); strict so it flags when fixed.
-        pytest.param(
-            (1, 128, 32),
-            (1, 32, 128),
-            (128, 128),
-            True,
-            marks=pytest.mark.xfail(
-                reason="#61018: fp32_dest_acc_en fails in the 2D factory (partials DFB has no unpack_modes entry)",
-                raises=RuntimeError,
-                strict=True,
-            ),
-        ),
+        ((1, 320, 32), (1, 32, 64), (320, 64)),
+        ((1, 128, 32), (1, 32, 128), (128, 128)),
+        ((16, 32, 32), (32, 512), (512, 512)),
     ],
     ids=[
         "400x400",
@@ -1657,12 +1643,9 @@ def test_auto_config_batched_a_unbatched_b(device, sharded_out):
         "320x64_10x2tiles",
         "128x128_4x4tiles",
         "batch16_small_m_exceeds_grid_rows",
-        "128x128_4x4tiles_fp32",
     ],
 )
-def test_auto_config_block_sharded_caps_per_core_to_output(
-    device, a_shape, b_shape, expected_shard_shape, fp32_dest_acc_en
-):
+def test_auto_config_block_sharded_caps_per_core_to_output(device, a_shape, b_shape, expected_shard_shape):
     """BLOCK_SHARDED output, no program_config: the shard shape must follow the output size, not the L1 ladder.
 
     The auto-config used to start per_core_M/N at 16 tiles and never cap them to the output, so a 13x13 tile output
@@ -1681,14 +1664,35 @@ def test_auto_config_block_sharded_caps_per_core_to_output(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-    out = ttnn.experimental.quasar.matmul(
-        a_t, b_t, memory_config=out_mem, compute_kernel_config=_hifi4(device, fp32_dest_acc_en=fp32_dest_acc_en)
-    )
+    out = ttnn.experimental.quasar.matmul(a_t, b_t, memory_config=out_mem, compute_kernel_config=_hifi4(device))
 
     mem = out.memory_config()
     assert mem.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
     assert tuple(mem.shard_spec.shape) == expected_shard_shape
     _check(ttnn.to_torch(out), _golden(a, b), rtol=0.05, pcc=0.999)
+
+
+def test_auto_config_block_sharded_fp32_dest_acc_needs_partials_unpack_mode(device, expect_error):
+    """fp32 accumulation takes the fp32 branch of the subblock search (h * w <= 4), but the Quasar 2D factory gives the
+    fp32 partials DFB no unpack_modes entry, so the kernel config is rejected (#61018). Once this stops raising, fold
+    the case back into test_auto_config_block_sharded_caps_per_core_to_output."""
+    torch.manual_seed(0)
+    a, b = _randn(1, 128, 32), _randn(1, 32, 128)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    out_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            (128, 128),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    with expect_error(RuntimeError, "provides no unpack_modes entry for this DFB"):
+        ttnn.experimental.quasar.matmul(
+            a_t, b_t, memory_config=out_mem, compute_kernel_config=_hifi4(device, fp32_dest_acc_en=True)
+        )
 
 
 def test_auto_config_block_sharded_keeps_l1_sharded_b_width(device):

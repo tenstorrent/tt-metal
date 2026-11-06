@@ -7,6 +7,9 @@
 # --- FD shards (full LLK gtest suite) ---
 - name: LLK FD wormhole
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -20,6 +23,9 @@
 
 - name: LLK FD wormhole
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -33,6 +39,9 @@
 
 - name: LLK FD wormhole
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -46,6 +55,9 @@
 
 - name: LLK FD wormhole
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -59,6 +71,9 @@
 
 - name: LLK FD blackhole
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
@@ -72,6 +87,9 @@
 
 - name: LLK FD blackhole
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
@@ -86,6 +104,9 @@
 # --- SD-only / Quasar slice ---
 - name: LLK SD wormhole (Quasar slice)
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*LLKMeshDeviceFixtureSlowDispatchOnly*:LLKQuasarMeshDeviceSingleCardFixture.*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -97,6 +118,9 @@
 
 - name: LLK SD blackhole (Quasar slice)
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*LLKMeshDeviceFixtureSlowDispatchOnly*:LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*:LLKQuasarMeshDeviceSingleCardFixture.*-LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     bh_p150b_civ2_viommu:
       timeout: 10

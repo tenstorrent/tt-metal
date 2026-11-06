@@ -1205,6 +1205,11 @@
     wh_n150:
       timeout: 75
       tier: 1
+      # test_cache_verify feeds corrupt tensorbins to verify_saved_model, which catches the TT_FATAL. Not set on
+      # bh_quietbox_2: there depthwise_tap_filter probes formulations for shapes missing from tap_filter_configs,
+      # and the summary must keep reporting those TT_FATALs.
+      ai_summary:
+        authoritative_job_status: true
     bh_quietbox_2:
       timeout: 115
       tier: 1

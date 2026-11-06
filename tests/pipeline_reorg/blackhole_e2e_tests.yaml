@@ -327,6 +327,9 @@
   # helpers those tests reach their verdicts through, and the weight cache path, which is
   # only taken when a checkpoint is staged and CI stages none.
   cmd: pytest models/demos/deepseek_v3_d_p/tests/attn_res/ -vvv --tb=short
+  # test_l1_small_footprint exhausts L1_SMALL on purpose and catches the resulting TT_FATAL itself.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     bh_loudbox:
       timeout: 10

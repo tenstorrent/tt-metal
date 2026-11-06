@@ -234,7 +234,8 @@ jobs:
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "/work",
               "input_dirs": ["generated/test_logs"],
-              "output_dir": "generated/ai_summaries"
+              "output_dir": "generated/ai_summaries",
+              "authoritative_job_status": ${{ matrix.test-group.authoritative_job_status }}
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}

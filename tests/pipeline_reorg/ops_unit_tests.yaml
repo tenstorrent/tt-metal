@@ -196,6 +196,10 @@
     --ignore=tests/ttnn/unit_tests/kernel_lib/test_chain_skip_compute_perf.py
     --ignore=tests/ttnn/unit_tests/kernel_lib/test_mcast_transport_perf.py
     --timeout=600
+  # The Mcast* gtest negative tests log unmarked TT_FATALs, and a JIT compile-contract failure logs its TT_THROW
+  # as '<risc> build failed' with the static_assert text on later lines, out of reach of an expect_error message.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 20
@@ -633,6 +637,9 @@
     # must still get different fabric routers.
     ./build/test/ttnn/unit_tests_ttnn_tensor --gtest_filter='D2DStreamServiceTest.*:StreamPipelineTest.*' || exit_code=$?
     exit $exit_code
+  # The D2DStreamServiceTest gtest negative tests log the TT_FATALs they provoke, unmarked.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     bh_loudbox:
       timeout: 30

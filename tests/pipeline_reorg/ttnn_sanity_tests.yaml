@@ -313,6 +313,10 @@
   cmd: >-
     pytest --timeout 300 tests/ttnn/unit_tests/kernel_lib -xv
     -m "not disable_fast_runtime_mode and not models_device_performance_bare_metal"
+  # A JIT compile-contract failure logs its TT_THROW as '<risc> build failed' with the static_assert text on later
+  # lines, so no expect_error message can match the line carrying the token.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n300_civ2:
       timeout: 20
