@@ -25,6 +25,7 @@
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 #include <tt_stl/reflection.hpp>
 
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::bringup::prepared_program {
