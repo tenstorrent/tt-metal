@@ -1433,13 +1433,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
     // Ring-joint streaming supports single-Q-subblock shapes; only fp32 dest acc stays on the legacy path.
-    const bool use_streaming_compute = !fp32_dest_acc_en;
+    const bool streaming_fp32_dest = args.program_config.has_value() && args.program_config->streaming_fp32_dest;
+    const bool use_streaming_compute = !fp32_dest_acc_en || streaming_fp32_dest;
+    TT_FATAL(
+        !streaming_fp32_dest || (args.program_config->k_splits == 1 && !args.program_config->segmented_accumulation),
+        "streaming_fp32_dest is not supported with k_splits > 1 or segmented_accumulation");
     // Validated in validate_on_program_cache_miss.
     TT_ASSERT(args.kv_stripe_split == 1 || use_streaming_compute);
     TT_FATAL(
         !kv_pad_rotation_enabled || use_streaming_compute,
-        "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
-        "fp32_dest_acc_en=true is not supported.");
+        "kv_actual_isl requires the ring-joint streaming compute path (set fp32_dest_acc_en=false or "
+        "streaming_fp32_dest=true)");
 
     // Sharded joint with a padded tail (logical_l < padded L) needs the reader to skip joint K chunks
     // beyond the real tail. That skip is mirrored only in the streaming compute path (sdpa_ring_v2);
@@ -1448,12 +1452,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     TT_FATAL(
         !(joint_is_sharded && logical_l < L) || use_streaming_compute,
         "Sharded joint with a padded joint tail (logical_l {} < padded L {}) requires the streaming compute "
-        "path (set fp32_dest_acc_en=false)",
+        "path (set fp32_dest_acc_en=false or streaming_fp32_dest=true)",
         logical_l,
         L);
     TT_FATAL(
         use_streaming_compute || !v_shares_k_buffer,
-        "Latent-V ring attention is implemented only for streaming compute (fp32_dest_acc_en must be false)");
+        "Latent-V ring attention is implemented only for streaming compute (set fp32_dest_acc_en=false or "
+        "streaming_fp32_dest=true)");
     log_debug(
         tt::LogOp,
         "use_streaming_compute: {} (is_causal={}, Sq_chunk_t={}, Sk_chunk_t={}, sbh={}, sbw={})",
@@ -2013,7 +2018,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
-        TT_FATAL(use_streaming_compute, "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
+        TT_FATAL(
+            use_streaming_compute,
+            "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false, or "
+            "SDPAProgramConfig.streaming_fp32_dest=true)");
         defines["SDPA_MATMUL_FIDELITY"] =
             std::to_string(static_cast<uint32_t>(*args.program_config->matmul_math_fidelity));
     }
@@ -2057,7 +2065,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // the running softmax denominator doesn't lose precision with K-iter rounding.
     tt::DataFormat sum_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     // Use fp32 precision for cb_qk_im when fp32 accumulation is enabled so operations on QK retain precision.
-    tt::DataFormat qk_im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    // the streaming kernel's reconfigs assume a bf16 score block
+    tt::DataFormat qk_im_df =
+        (fp32_dest_acc_en && !use_streaming_compute) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
@@ -3279,8 +3289,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
     compute_kernel.defines = kernel_defines;
-    // dst_size above comes from get_dest_reg_count(compute_kernel_config), which doubles with dst_full_sync_en, so the
-    // kernel must be built in the same sync mode (joint_sdpa / ring_distributed_sdpa already pass it).
+    // dst_size comes from get_dest_reg_count, which doubles with dst_full_sync_en: build the kernel in the same mode
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

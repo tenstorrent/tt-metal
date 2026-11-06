@@ -29,6 +29,9 @@ struct SDPAProgramConfig {
     // so no bf16 running sum spans the whole prefix. Refused with a K split, a sliding window, or several Q chunks
     // per core (raise q_chunk_size).
     bool segmented_accumulation = false;
+    // Ring joint only: with fp32_dest_acc_en, take the streaming compute path (fp32 dest and running sums, bf16 score
+    // block) instead of compute_common.hpp. Not bit-identical to it; no effect without fp32_dest_acc_en.
+    bool streaming_fp32_dest = false;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and
