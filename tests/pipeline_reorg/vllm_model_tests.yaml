@@ -406,7 +406,7 @@
 # same Galaxy so the A/B difference can be read against each setting's own repeat.
 # A: GDN prefix snapshots owned by the model, block 64. B: GDN state in vLLM MambaSpec blocks, block 1024.
 # The model writes its weight cache under /work because the shared cache mount is read-only.
-- name: "Qwen3.8-27B MTP DP=4 GDN state A/B, same machine (BH Galaxy)"
+- name: "Qwen3.8-27B MTP DP=4 GDN state A-B, same machine (BH Galaxy)"
   model: Qwen/Qwen3.8-27B
   ab-driver: true
   hf-snapshot-revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
@@ -421,7 +421,7 @@
   ab-args-a: "--block_size 64"
   ab-args-b: "--block_size 1024 --prefix-cache-retention-interval 1024"
   ab-env-a: "QWEN36_PREFIX_CACHE_SLOTS=256 QWEN36_PREFIX_END_AT_CAP=1 QWEN36_PREFIX_CACHE_FAST_ALLOC=1 QWEN36_PREFILL_INTRACE_SNAP=1"
-  ab-env-b: "QWEN36_MAMBA_SPEC=1 QWEN36_MAMBA_SPEC_LAYOUT=two_pool QWEN36_KV_BLOCK_SIZE=1024"
+  ab-env-b: "QWEN36_MAMBA_SPEC=1"
   default-chat-template-kwargs: '{"enable_thinking": false}'
   extra-env: >-
     TT_QWEN35_TEXT_VER=qwen36_blackhole
