@@ -9,10 +9,14 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/work_split.hpp>
 #include <tt-metalium/work_split.hpp>
 
 namespace tt::tt_metal {
 namespace {
+
+using experimental::split_work_to_cores_counts;
+using experimental::WorkSplitCounts;
 
 using SplitWorkToCoresResult = std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t>;
 

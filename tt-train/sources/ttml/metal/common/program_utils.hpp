@@ -10,8 +10,8 @@
 #include <map>
 #include <string>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/work_split.hpp>
 #include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/work_split.hpp>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -349,7 +349,7 @@ inline uint64_t available_l1_bytes(const ttnn::distributed::MeshDevice& device) 
  * override_runtime_arguments() of descriptor factories, which keep no shared variables and must not rerun
  * split_work_to_cores on every cache hit (it builds CoreRangeSets: about +3 us per hit on 64 cores). The first
  * `units % num_cores` cores of the walk get one extra unit (group 1); with no remainder every core is in group 1.
- * Its counts come from tt::tt_metal::split_work_to_cores_counts(), as split_work_to_cores' own do.
+ * Its counts come from tt::tt_metal::experimental::split_work_to_cores_counts(), as split_work_to_cores' own do.
  */
 struct WorkSplit {
     uint32_t num_cores = 0U;          // cores with work: min(units, grid.x * grid.y)
@@ -364,8 +364,8 @@ struct WorkSplit {
 };
 
 inline WorkSplit compute_work_split(const tt::tt_metal::CoreCoord& grid, uint32_t units) {
-    const tt::tt_metal::WorkSplitCounts counts =
-        tt::tt_metal::split_work_to_cores_counts(static_cast<uint32_t>(grid.x * grid.y), units);
+    const tt::tt_metal::experimental::WorkSplitCounts counts =
+        tt::tt_metal::experimental::split_work_to_cores_counts(static_cast<uint32_t>(grid.x * grid.y), units);
     return WorkSplit{
         .num_cores = counts.num_cores,
         .num_cores_y = static_cast<uint32_t>(grid.y),

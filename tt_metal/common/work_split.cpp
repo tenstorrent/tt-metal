@@ -7,6 +7,7 @@
 //
 
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/experimental/work_split.hpp>
 #include <tt_stl/assert.hpp>
 #include <core_coord.hpp>
 #include "common/work_split_internal.hpp"
@@ -338,6 +339,8 @@ std::tuple<std::vector<uint32_t>, CoreRangeSet> split_work_to_cores_even_multipl
     return std::make_tuple(increments, utilized_cores);
 }
 
+namespace experimental {
+
 WorkSplitCounts split_work_to_cores_counts(const uint32_t max_num_cores, const uint32_t units_to_divide) {
     WorkSplitCounts counts;
     if (units_to_divide == 0) {
@@ -360,6 +363,8 @@ WorkSplitCounts split_work_to_cores_counts(const uint32_t max_num_cores, const u
     return counts;
 }
 
+}  // namespace experimental
+
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
     const CoreCoord grid_size, const uint32_t units_to_divide, const bool row_wise) {
     TTZoneScopedD(MISC);
@@ -367,7 +372,8 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         return std::make_tuple(0, CoreRangeSet(), CoreRangeSet(), CoreRangeSet(), 0, 0);
     }
     uint32_t num_cores_x = grid_size.x, num_cores_y = grid_size.y, max_num_cores = num_cores_x * num_cores_y;
-    const WorkSplitCounts counts = split_work_to_cores_counts(max_num_cores, units_to_divide);
+    const experimental::WorkSplitCounts counts =
+        experimental::split_work_to_cores_counts(max_num_cores, units_to_divide);
     CoreRangeSet all_cores;
     if (counts.num_cores == max_num_cores) {
         all_cores = CoreRangeSet(CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1}));
@@ -431,7 +437,8 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     }
     uint32_t max_num_cores = core_grid.num_cores();
     TT_FATAL(max_num_cores > 0, "Core grid must contain at least one core");
-    const WorkSplitCounts counts = split_work_to_cores_counts(max_num_cores, units_to_divide);
+    const experimental::WorkSplitCounts counts =
+        experimental::split_work_to_cores_counts(max_num_cores, units_to_divide);
     auto start_core = core_grid.ranges().begin()->start_coord;
     CoreRangeSet all_cores;
     if (counts.num_cores == max_num_cores) {
