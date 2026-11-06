@@ -49,9 +49,22 @@ def variant(T):
     return dict(NP=10, Q=2, TILEB=1024, TG=6)
 
 
+def _rebase(t, base_tok, pages_per_tok):
+    """Buffer address of DRAM interleaved tile tensor t moved by base_tok tokens (pages_per_tok tiles of 4096 B each): valid when the page shift is a multiple of the 8 banks (a page p + s lives in bank p % 8
+    at slot (p + s) // 8: shifting the base address by s / 8 slots of 4096 B)."""
+    s = base_tok * pages_per_tok
+    assert s % 8 == 0, (base_tok, pages_per_tok)
+    return t.buffer_address() + s // 8 * 4096
+
+
 def supported_T():
     """Verify row counts the fused tail runs at: 8 (k=3, B=8), 12 (k=5, B=8) and, with DSV41_FUSE_TAIL_T16=1, 16 (k=3 at B=16: the mHC post covers its 3 token groups of 6 in two passes of the 80 expand cores)."""
-    return (8, 12, 16) if os.environ.get("DSV41_FUSE_TAIL_T16", "0") == "1" else (8, 12)
+    ts = (
+        (8, 12)
+        + ((16,) if os.environ.get("DSV41_FUSE_TAIL_T16", "0") == "1" else ())
+        + ((24,) if os.environ.get("DSV41_FUSE_TAIL_T24", "0") == "1" else ())
+    )
+    return ts
 
 
 def _cores(lst):
@@ -171,7 +184,7 @@ class FuseTailAR:
         gsem_addr = ttnn.get_global_semaphore_address(self.gsem)
         recv_addr = self.recv.buffer_address()
         land_addr = self.out.buffer_address()
-        in_addr = part.buffer_address()
+        in_addr = part.buffer_address() + (post_args.get("part_off", 0) if post_args is not None else 0)
         red_xy = [self._phys(*c) for c in red]
         land_xy = [self._phys(*c) for c in self.land]
         comm_xy = {k: self._phys(*v) for k, v in self.comm.items()}
@@ -423,7 +436,7 @@ class FuseTailAR:
             core_ranges=mset,
             compile_time_args=[CB_B, CB_S, T, nt, GC, gpc, sem_partner, TG, V["TILEB"], V["NP"] // NPL, P] + acc(x),
             runtime_args=rt_rd,
-            common_runtime_args=[x.buffer_address(), gsem_addr, land_addr],
+            common_runtime_args=[_rebase(x, px.get("base", 0), nt), gsem_addr, land_addr],
             config=ttnn.ReaderConfigDescriptor(),
         )
         writer = ttnn.KernelDescriptor(
@@ -432,7 +445,11 @@ class FuseTailAR:
             core_ranges=mset,
             compile_time_args=[CB_O, CB_A, CB_SA, T, nt, gpc, 0, TG, GC, P] + acc(out) + acc(comb) + acc(post),
             runtime_args=rt_wr,
-            common_runtime_args=[out.buffer_address(), comb.buffer_address(), post.buffer_address()],
+            common_runtime_args=[
+                _rebase(out, px.get("base", 0), nt),
+                _rebase(comb, px.get("base", 0), 1),
+                _rebase(post, px.get("base", 0), 1),
+            ],
             config=ttnn.WriterConfigDescriptor(),
         )
         compute = ttnn.KernelDescriptor(
@@ -452,10 +469,15 @@ class FuseTailAR:
         return self.out
 
     def call_post(self, part, x, comb, post, out):
-        """All-reduce + mHC post: out = post * allreduce(part) + comb^T x (the mhc_expand3 result, valid rows), x / comb / post / out as for mhc_expand3 (fp32 TILE, T in 5..8)."""
+        """All-reduce + mHC post: out = post * allreduce(part) + comb^T x (the mhc_expand3 result, valid rows), x / comb / post / out as for mhc_expand3 (fp32 TILE, T in 5..16; T = 24 (k=5 at B=16) as two programs:
+        tokens 0..15 (16-row compact tile) and tokens 16..23 (the 8-row variant reading the tile rows 16..23 = faces 2 / 3 of the partial: base address + 1024 B; x / out / comb / post
+        base addresses moved by 16 tokens, see _rebase))."""
         T = int(x.shape[0])
-        mpd = self._build(part, dict(x=x, comb=comb, post=post, out=out, T=T))
-        ttnn.generic_op([part, x, comb, post, out, self.recv, self.out], mpd)
+        parts = [(0, T, 0)] if T <= 16 else [(0, 16, 0), (16, T - 16, 1024)]
+        assert T <= 16 or T == 24, T
+        for base, n, off in parts:
+            mpd = self._build(part, dict(x=x, comb=comb, post=post, out=out, T=n, base=base, part_off=off))
+            ttnn.generic_op([part, x, comb, post, out, self.recv, self.out], mpd)
         return out
 
     # ------------------------------------------------------------------------------------------------
