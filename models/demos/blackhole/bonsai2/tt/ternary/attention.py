@@ -107,6 +107,7 @@ class TernaryAttention:
             local = getattr(self, "_xr_local", False)
             k, v = self.kv(self._xr, lead=lead, split=self.kv_split, shapes=(shape, shape), x_local=local)
             self._v = _HMDec(v)
+            self.v_raw = v  # the k norm + RoPE op may copy it into the cache update's input (TernaryAttentionTtnn)
             k = _HMDec(k)
             if local:  # the shared hub buffer: not ours to free
                 self._xr, self._xr_local = None, False
@@ -277,6 +278,14 @@ class _QGDec:
         self.q, self.gate = q, gate
 
 
+class _KVSh:
+    """A token-major K / V decode shard (qk_rope.kv_shards) already in the layout paged_update_cache takes: the
+    reshape and to_memory_config before the cache update pass it through."""
+
+    def __init__(self, t):
+        self.t = t
+
+
 class _GatedOut:
     """Decode attn * sigmoid(gate), not computed yet (TernaryAttention.project_o rotates it in one op)."""
 
@@ -339,8 +348,13 @@ class TernaryAttentionTtnn:
         return ttnn.rms_norm(t, *args, **kwargs)
 
     def reshape(self, t, shape, *args, **kwargs):
-        if isinstance(t, (_HMDec, _QGDec)):
+        if isinstance(t, (_HMDec, _QGDec, _KVSh)):
             return t
+        vmap = getattr(self, "_vmap", None)
+        if vmap is not None and t is vmap[0]:
+            self._vmap = None
+            ttnn.deallocate(t)
+            return _KVSh(vmap[1])
         if not args and not kwargs and list(t.shape) == list(shape):
             return t
         return ttnn.reshape(t, shape, *args, **kwargs)
@@ -366,8 +380,8 @@ class TernaryAttentionTtnn:
             return None  # its q and gate live on as the chunk outputs
         if isinstance(t, (_NormRope, _HMDec)):
             return ttnn.deallocate(t.t)
-        if isinstance(t, (SigGate, _GatedOut)):
-            return None  # consumed (and freed) by project_o's gated rotation
+        if isinstance(t, (SigGate, _GatedOut, _KVSh)):
+            return None  # consumed (and freed) by project_o's gated rotation / persistent K / V shards
         return ttnn.deallocate(t, *args, **kwargs)
 
     # sigmoid(gate) * attn -> o_proj: the rotation before o computes the gated product (rotate.py sig=)
@@ -384,12 +398,29 @@ class TernaryAttentionTtnn:
     def apply_rope(self, q, k, cos, sin, orig):
         """Stands in for the shared apply_rotary_pos_emb_ttnn (attention/decode.py swaps it in)."""
         if isinstance(q, _NormRope) and q.head_major and isinstance(k, _NormRope) and k.head_major:
-            out = []
-            for t in (q, k):
-                out.append(t.op(t.t, cos, sin))
-                ttnn.deallocate(t.t)
-            return tuple(out)
+            qo = q.op(q.t, cos, sin)
+            ttnn.deallocate(q.t)
+            v = getattr(self._t, "v_raw", None)
+            if v is not None and os.environ.get("BONSAI_KV_DIRECT", "1") == "1":
+                # K and V straight into the paged cache update's token-major input (no reshape / shard ops)
+                from models.demos.blackhole.bonsai2.tt.tprefill.qk_rope import kv_shards
+
+                _, H, _, D = list(k.t.shape)
+                k_sh, v_sh = kv_shards(k.t.device(), H, D)
+                k.op(k.t, cos, sin, kv_out=(k_sh, v, v_sh))
+                ttnn.deallocate(k.t)
+                self._t.v_raw = None
+                self._vmap = (v, v_sh)
+                return qo, _KVSh(k_sh)
+            ko = k.op(k.t, cos, sin)
+            ttnn.deallocate(k.t)
+            return qo, ko
         return orig(q, k, cos, sin)
+
+    def to_memory_config(self, t, *args, **kwargs):
+        if isinstance(t, _KVSh):
+            return t.t
+        return ttnn.to_memory_config(t, *args, **kwargs)
 
     def linear(self, a, b, *args, **kwargs):
         w, t = self._w, self._t

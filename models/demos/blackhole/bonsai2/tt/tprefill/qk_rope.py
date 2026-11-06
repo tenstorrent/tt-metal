@@ -27,16 +27,23 @@ class QKNormRope:
         self.consts = ttnn.from_torch(torch.cat(tiles, 0), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
         self.D, self.eps, self.device = D, eps, device
 
-    def __call__(self, x, cos, sin):
+    def __call__(self, x, cos, sin, kv_out=None):
         """x [1, H, T, D] bf16 TILE (head-major); cos, sin [..., T, 64] bf16 TILE -> rope(rms_norm(x) * w), same shape.
-        T need not fill a tile (decode: T = 1, cos / sin [1, 1, 64])."""
+        T need not fill a tile (decode: T = 1, cos / sin [1, 1, 64]).
+        kv_out = (k_sh, v, v_sh) (decode): write the result token-major into k_sh and copy v (head-major [1, H, 1, D])
+        token-major into v_sh, both [1, 1, 32, D] L1 shards on one core (the paged cache update's inputs); returns k_sh.
+        """
         device, D = self.device, self.D
         _, H, T, Dx = list(x.shape)
         assert Dx == D, (x.shape, D)
         assert list(cos.shape)[-1] == 64 and list(sin.shape)[-1] == 64, (cos.shape, sin.shape)
         # T < 32 (decode: one token): the padded tile rows go through too, only the logical rows are read later
         Mt, Dt, Rt = -(-T // 32), D // 32, 2
-        out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, H, T, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+        if kv_out is not None:
+            assert T == 1, T
+            out, v, v_sh = kv_out
+        else:
+            out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, H, T, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         grid = device.compute_with_storage_grid_size()
         items = H * Mt
         ncores = min(grid.x * grid.y, items)
@@ -55,6 +62,22 @@ class QKNormRope:
         rd_ct = []
         for t in (x, self.consts, cos, sin):
             rd_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        wr_ct = ttnn.TensorAccessorArgs(out).get_compile_time_args()
+        wr_c = [out.buffer_address()] + span + [H, Mt, Dt]
+        wr_def = []
+        if kv_out is not None:
+            sh = device.worker_core_from_logical_core(out.memory_config().shard_spec.grid.ranges()[0].start)
+            wr_ct += ttnn.TensorAccessorArgs(v).get_compile_time_args()
+            wr_c += [sh.x, sh.y, out.buffer_address(), v_sh.buffer_address(), v.buffer_address()]
+            wr_def = [("TOKEN_MAJOR", "1")]
+        wr_kernel = ttnn.KernelDescriptor(
+            kernel_source=KERNELS + "qkr_writer.cpp",
+            core_ranges=crs,
+            compile_time_args=wr_ct,
+            common_runtime_args=wr_c,
+            defines=wr_def,
+            config=ttnn.WriterConfigDescriptor(),
+        )
         program = ttnn.ProgramDescriptor(
             kernels=[
                 ttnn.KernelDescriptor(
@@ -71,13 +94,7 @@ class QKNormRope:
                     + [H, Mt, Dt, Rt],  # fmt: skip
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
-                ttnn.KernelDescriptor(
-                    kernel_source=KERNELS + "qkr_writer.cpp",
-                    core_ranges=crs,
-                    compile_time_args=ttnn.TensorAccessorArgs(out).get_compile_time_args(),
-                    common_runtime_args=[out.buffer_address()] + span + [H, Mt, Dt],
-                    config=ttnn.WriterConfigDescriptor(),
-                ),
+                wr_kernel,
                 ttnn.KernelDescriptor(
                     kernel_source=KERNELS + "qkr_compute.cpp",
                     core_ranges=crs,
@@ -91,7 +108,33 @@ class QKNormRope:
                 ),
             ],
             semaphores=[],
-            cbs=[cb(0, bf, 2 * Dt), cb(1, f32, 1 + Dt), cb(2, bf, 8), cb(3, f32, Dt), cb(4, f32, 1), cb(16, bf, 8)],
+            cbs=[cb(0, bf, 2 * Dt), cb(1, f32, 1 + Dt), cb(2, bf, 8), cb(3, f32, Dt), cb(4, f32, 1), cb(16, bf, 8)]
+            + ([cb(17, bf, 1)] if kv_out is not None else []),
         )
-        ttnn.generic_op([x, self.consts, cos, sin, out], program)
+        ttnn.generic_op([x, self.consts, cos, sin] + ([v, v_sh] if kv_out is not None else []) + [out], program)
         return out
+
+
+_KV_SH = {}
+
+
+def kv_shards(device, H, D):
+    """Persistent token-major K and V decode buffers ([1, 1, H, D] bf16, one tile row, height-sharded on core (0, 0), as the paged
+    cache update takes them), zero once: the norm + RoPE op writes only the head rows, the padding rows stay zero."""
+    if (H, D) not in _KV_SH:
+        mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+                [32, D],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        _KV_SH[(H, D)] = tuple(
+            ttnn.from_torch(
+                torch.zeros(1, 1, H, D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc
+            )
+            for _ in range(2)
+        )
+    return _KV_SH[(H, D)]
