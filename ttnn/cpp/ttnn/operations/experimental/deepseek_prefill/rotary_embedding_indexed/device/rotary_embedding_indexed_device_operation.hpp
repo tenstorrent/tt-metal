@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <variant>
+#include <vector>
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -57,11 +58,13 @@ struct RotaryEmbeddingIndexedDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    // Per-device sharding means each mesh coordinate gets its own program (my_sp_coord is a per-device
-    // compile-time arg), so the op builds the mesh workload itself rather than stamping one coord-blind
-    // ProgramSpec. No per-coordinate state is needed on cache hits (override re-derives everything from
-    // attributes/tensor_args), but the mesh-workload adapter requires a shared-variables type.
-    struct SharedVariables {};
+    // The op builds the mesh workload itself: one program per range with a whole-mesh chip table (fabric up),
+    // else one per chip.
+    struct SharedVariables {
+        // Tensor addresses and (scalar path) kv_actual_global last applied to every program; kept on the first
+        // program only (see override_runtime_arguments).
+        std::vector<uint64_t> applied_run_args;
+    };
 
     struct MeshWorkloadFactory {
         using shared_variables_t = SharedVariables;
@@ -82,13 +85,14 @@ struct RotaryEmbeddingIndexedDeviceOperation {
     private:
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-        // Build this device's named-arg ProgramSpec (my_sp_coord baked from `coord`), compile it via
-        // MakeProgramFromSpec, and set its initial run args.
+        // Build and compile the program, and set its initial run args. `chip_table`: whole-mesh table, or nullopt
+        // for `coord`'s own program.
         static cached_program_t create_at(
             const operation_attributes_t& args,
             const ttnn::MeshCoordinate& coord,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+            tensor_return_value_t& output,
+            const std::optional<std::vector<uint32_t>>& chip_table);
     };
 
     using program_factory_t = std::variant<MeshWorkloadFactory>;

@@ -20,7 +20,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import rotate_half
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.mla.utils import block_cyclic_reorder
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -31,8 +31,38 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 ROPE_HEAD_DIM = 64
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4), (2, 2)], indirect=True)
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 2 * 1024 * 1024}], indirect=True)
+# With fabric up the op runs one program for the mesh, else one per chip; both must match.
+_TRACE_REGION = {"trace_region_size": 2 * 1024 * 1024}
+
+
+def _fabric_params(mesh, **overrides):
+    """Full-box fabric for this mesh shape (Blackhole brings fabric up on the whole box only)."""
+    rows, cols = mesh
+    params = torus_xy_device_params(**overrides) if mesh == (8, 4) else fabric2d_device_params(**overrides)
+    kind = "torus-xy" if mesh == (8, 4) else "fabric2d"
+    return pytest.param(
+        mesh,
+        params,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=f"mesh-{rows}x{cols}"),
+        id=f"{kind}-{rows}x{cols}",
+    )
+
+
+def _mesh_variants(mesh, **overrides):
+    """The mesh without fabric and with it."""
+    rows, cols = mesh
+    return [pytest.param(mesh, dict(overrides), id=f"{rows}x{cols}"), _fabric_params(mesh, **overrides)]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param((1, 4), _TRACE_REGION, id="1x4"),
+        *_mesh_variants((2, 2), **_TRACE_REGION),
+        _fabric_params((8, 4), **_TRACE_REGION),
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize("sp_axis", [0, 1])
 def test_rotary_embedding_indexed_sequence_subshards(mesh_device, sp_axis, expect_error):
     """Early TP partition must commute with RoPE, including rotated starts and metadata replay.
@@ -111,6 +141,18 @@ def test_rotary_embedding_indexed_sequence_subshards(mesh_device, sp_axis, expec
         ttnn.deallocate(traced_out)
 
 
+@pytest.mark.parametrize("mesh_device, device_params", [_fabric_params((2, 4)), _fabric_params((8, 4))], indirect=True)
+@pytest.mark.parametrize("tensor_kind", ["Q", "KV"])
+@pytest.mark.timeout(0)
+def test_rotary_embedding_indexed_on_offset_submesh(mesh_device, tensor_kind):
+    """Bottom half of the box: fabric chip ids are not the submesh's row-major order. Checked against torch."""
+    rows, cols = mesh_device.shape
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(rows // 2, cols), offset=ttnn.MeshCoordinate(rows // 2, 0))
+    test_rotary_embedding_indexed_multi_iteration_prefill(
+        submesh, "small", 2, 4, 512, tensor_kind, "padded_partial", ttnn.bfloat16, False, False
+    )
+
+
 def _make_cos_sin(max_seq, head_dim):
     """Meta-style cos/sin [1, 1, max_seq, head_dim] = [c0,c0,c1,c1,...] -- same layout as
     get_cos_sin_matrix, so rotate_half(meta_style=True) is the matching reference."""
@@ -149,30 +191,33 @@ _MESHES = [(2, 2), (2, 4), (8, 4)]
 _CONFIGS = [("small", 2, 4, 512), ("repr", 8, 20, 6400)]
 _CASES = [
     pytest.param(
-        mesh,
+        variant.values[0],
+        variant.values[1],
         *config,
         tensor_kind,
         scenario,
         ttnn.bfloat16,
-        id=f"{mesh[0]}x{mesh[1]}-{config[0]}-{tensor_kind}-{scenario}-bf16",
+        marks=variant.marks,
+        id=f"{variant.id}-{config[0]}-{tensor_kind}-{scenario}-bf16",
     )
     for mesh in _MESHES
+    for variant in _mesh_variants(mesh)
     for config in _CONFIGS
     for tensor_kind in ("Q", "KV")
     for scenario in ("non_padded", "padded_partial")
 ]
 _CASES.append(
     pytest.param(
-        (2, 4), "small", 2, 4, 512, "Q", "padded_partial", ttnn.bfloat8_b, id="2x4-small-Q-padded_partial-bfp8"
+        (2, 4), {}, "small", 2, 4, 512, "Q", "padded_partial", ttnn.bfloat8_b, id="2x4-small-Q-padded_partial-bfp8"
     )
 )
 
 
 @pytest.mark.parametrize(
-    "mesh_device, config_name, num_heads_local, new_isl_tiles_per_dev, cache_tokens_per_dev, "
+    "mesh_device, device_params, config_name, num_heads_local, new_isl_tiles_per_dev, cache_tokens_per_dev, "
     "tensor_kind, scenario, input_dtype",
     _CASES,
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(0)
 def test_rotary_embedding_indexed_multi_iteration_prefill(
@@ -636,6 +681,7 @@ def test_indexer_deepseek_rope_fallback(mesh_device, subshard):
     indexer = SimpleNamespace(
         sp_axis=0,
         index_args=SimpleNamespace(index_head_dim=width),
+        _index_rope_dim=64,
         _rope_perm=upload(perm, ttnn.ReplicateTensorToMesh(mesh_device)),
         hifi4_fp32_compute_kernel_config=ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
