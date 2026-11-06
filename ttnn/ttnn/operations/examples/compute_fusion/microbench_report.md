@@ -20,3 +20,18 @@ Each phase is one `eltwise_chain` / `reduce` call. A compute zone records on all
 | reduce_recip | unfused | CF_REDUCE | 4581 | 4285 | 6784 | 6784 |
 | reduce_recip | unfused | CF_RECIP | 722 | 2775 | 291 | 2775 |
 | reduce_recip | unfused | **Σ wall** | | | | **9559** |
+
+## Blackhole p150b — bh-50-special-adamjanovic-for-reservation-143315 (2026-10-26), `fpu_chain` only
+
+arch=Blackhole p150b  AICLK=1350 MHz  cores=1  placement=single-core sharded-L1  num-tiles=32  block=1  kernel-iters=16  metric=median ns per phase (per launch)
+
+| Scenario | Variant | Phase | unpack ns | math ns | pack ns | wall ns |
+|---|---|---|---:|---:|---:|---:|
+| fpu_chain | dstreuse | CF_FUSED | 4865 | 5053 | 5056 | 5056 |
+| fpu_chain | unfused | CF_ADD | 1134 | 1369 | 1367 | 1369 |
+| fpu_chain | unfused | CF_MUL | 2200 | 2293 | 2295 | 2295 |
+| fpu_chain | unfused | **Σ wall** | | | | **3664** |
+
+The fused FPU → FPU chain costs 158 ns per tile against 43 + 72 = 115 ns per tile for the two passes: the
+DEST→SrcA move and DEST face clear the dest-reuse multiply runs on each face outweigh the scratch-CB unpack it
+replaces once a call covers more than ~2–3 tiles (see README "Work per call").

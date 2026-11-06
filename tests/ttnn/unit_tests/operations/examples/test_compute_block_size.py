@@ -320,3 +320,70 @@ def _format_report(samples, pccs, m_tiles, k_tiles, n_tiles, *, box, arch, trial
             f"{std / median * 100:.1f}% | {speedup} | {pccs.get(variant, float('nan')):.5f} |"
         )
     return "\n".join(lines) + "\n"
+
+
+# =============================================================================
+# Regimes: where a bigger block per helper call helps, and where it stops paying (Wormhole B0 n150)
+# =============================================================================
+_REGIME_TRIALS = 11
+_REGIME_ITERS = 20
+
+
+def _measure_pair(device, run_base, run_lever, trials, kernel_iters):
+    """Interleaved A,B,A,B... per-evaluation device-kernel ns; returns (base_samples, lever_samples)."""
+    samples = _measure(device, {"base": run_base, "lever": run_lever}, trials, kernel_iters)
+    return samples["base"], samples["lever"]
+
+
+def _spread(values):
+    return f"[{min(values):.0f}..{max(values):.0f}]"
+
+
+# (id, (M_tiles, K_tiles, N_tiles), baseline variant, lever variant, expected verdict, measured speedup)
+#   helps:          M8 K4 N4 -- 5 phases x 8 passes of fixed cost vs ~17 us of payload
+#   small:          M2 K16 N16 -- per-pass fixed cost (~1.5 us) is ~4-7% of a ~37 us pass: at most a small gain
+# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
+# -- numbers per board in README.md.
+_REGIMES = [
+    pytest.param(
+        (8, 4, 4), "per_tile_row", "one_block", "helps", 1.68, id="helps_M8K4N4_8passes_to_1"
+    ),  # WH 1.68x, BH 2.05x
+    pytest.param(
+        (2, 16, 16), "per_tile_row", "one_block", "small", 1.07, id="small_M2K16N16_2passes_to_1"
+    ),  # WH 1.04x, BH 1.07x
+]
+
+
+@pytest.mark.parametrize("shape,base_variant,lever_variant,verdict,measured", _REGIMES)
+def test_compute_block_size_regimes(device, shape, base_variant, lever_variant, verdict, measured):
+    m_tiles, k_tiles, n_tiles = shape
+    inputs, expected = _make_case(device, m_tiles, k_tiles, n_tiles)
+    base_rows = block_rows_for(base_variant, m_tiles)
+    lever_rows = block_rows_for(lever_variant, m_tiles)
+    for rows in (base_rows, lever_rows):  # correctness gate
+        out = run_op(inputs, block_rows=rows, kernel_iters=1)
+        _check(out, expected, f"block_rows={rows}")
+
+    base, lever = _measure_pair(
+        device,
+        lambda: run_op(inputs, block_rows=base_rows, kernel_iters=_REGIME_ITERS),
+        lambda: run_op(inputs, block_rows=lever_rows, kernel_iters=_REGIME_ITERS),
+        _REGIME_TRIALS,
+        _REGIME_ITERS,
+    )
+    b, l = statistics.median(base), statistics.median(lever)
+    speedup = b / l
+    logger.info(
+        f"[{_arch_label(device)}] {verdict} M{m_tiles}K{k_tiles}N{n_tiles} tiles: {base_variant} (block_rows={base_rows}, "
+        f"{m_tiles // base_rows} passes) {b:.0f} ns {_spread(base)} -> {lever_variant} (block_rows={lever_rows}, "
+        f"{m_tiles // lever_rows} passes) {l:.0f} ns {_spread(lever)} = {speedup:.2f}x "
+        f"(trials={len(base)}, ns per (A+B)@C evaluation)"
+    )
+    if verdict == "helps":
+        t_help = max(1.05, 1 + 0.5 * (measured - 1))
+        assert speedup >= t_help, f"expected >= {t_help:.2f}x, got {speedup:.2f}x"
+    elif verdict == "small":
+        # gain shrinks but stays above the flat band
+        assert speedup <= 1.15, f"expected a small gain (<= 1.15x), got {speedup:.2f}x"
+    else:
+        assert speedup <= 1.05, f"expected no meaningful gain (<= 1.05x), got {speedup:.2f}x"

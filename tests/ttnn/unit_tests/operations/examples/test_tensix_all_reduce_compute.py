@@ -13,6 +13,7 @@ import socket
 import statistics
 from pathlib import Path
 
+import pytest
 import torch
 import ttnn
 from loguru import logger
@@ -159,3 +160,61 @@ def test_tensix_all_reduce_compute_device_perf(device):
     logger.info("\n" + report)
     if report_path := os.environ.get("ARC_COMPUTE_REPORT"):
         Path(report_path).write_text(report)
+
+
+# (id, baseline variant, lever variant, num_blocks, num_tiles, kernel_iters, kind, threshold)
+# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only
+# log -- numbers per board in README.md.
+_REGIMES = [
+    # WH 5.89x, BH 9.37x
+    ("helps_8blocks_6tiles_steady", "sfpu_serial_bf16", "fpu_dest_reuse_fp32", 8, 6, 100, "helps", 3.9),
+    # WH 1.38x, BH 1.30x
+    ("helps_weakly_2blocks_1tile_single_call", "sfpu_serial_bf16", "fpu_dest_reuse_fp32", 2, 1, 1, "helps", 1.14),
+    # WH 1.03x, BH 0.94x
+    (
+        "does_not_help_dst_precision_16blocks",
+        "fpu_dest_reuse_bf16",
+        "fpu_dest_reuse_fp32",
+        16,
+        6,
+        100,
+        "does_not_help",
+        1.05,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "baseline, lever, num_blocks, num_tiles, kernel_iters, kind, threshold",
+    [r[1:] for r in _REGIMES],
+    ids=[r[0] for r in _REGIMES],
+)
+def test_tensix_all_reduce_compute_regimes(
+    device, baseline, lever, num_blocks, num_tiles, kernel_iters, kind, threshold
+):
+    """Interleaved A/B (baseline, lever, baseline, ...) of one lever; median of 11 retained trials."""
+    trials = 11
+    tt_input, expected = _make_input(device, num_blocks, num_tiles)
+    for variant in (baseline, lever):
+        _run_checked(tt_input, expected, variant, num_blocks, num_tiles, 1)
+    runners = {
+        variant: lambda variant=variant: reduce_blocks(
+            tt_input, variant=variant, num_blocks=num_blocks, num_tiles=num_tiles, kernel_iters=kernel_iters
+        )
+        for variant in (baseline, lever)
+    }
+    samples = _measure(device, runners, trials, kernel_iters)
+    base_ns = statistics.median(samples[baseline])
+    lever_ns = statistics.median(samples[lever])
+    speedup = base_ns / lever_ns
+    logger.info(
+        f"REGIME {kind} blocks={num_blocks} tiles/block={num_tiles} kernel_iters={kernel_iters} "
+        f"{baseline}={base_ns:.1f}ns [{min(samples[baseline]):.1f}-{max(samples[baseline]):.1f}] "
+        f"{lever}={lever_ns:.1f}ns [{min(samples[lever]):.1f}-{max(samples[lever]):.1f}] "
+        f"speedup={speedup:.3f}x trials={trials} arch={device.arch()}"
+    )
+    if kind == "helps":
+        assert speedup >= threshold, f"expected >= {threshold}x, got {speedup:.3f}x"
+    elif kind == "does_not_help":
+        assert speedup <= threshold, f"expected <= {threshold}x, got {speedup:.3f}x"
+    # kind == "measure": correctness is checked above, the speedup is only logged
