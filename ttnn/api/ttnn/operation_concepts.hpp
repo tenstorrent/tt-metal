@@ -73,7 +73,7 @@ template <typename T>
 concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } || WorkloadDescriptorConcept<T>) &&
                                           !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
 
-// Metal 2.0 op-porting stepping-stone factory concept: factories that return
+// Metal 2.0 factory concept: factories that return
 // ProgramArtifacts (a ProgramSpec + ProgramRunArgs + any op-owned tensors) from
 // create_program_artifacts. The framework adapter maps that same ProgramSpec onto
 // tensor_coords via tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs on cache miss, and
@@ -86,9 +86,8 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 // matches by pointer identity. Referencing a copy or any other MeshTensor will TT_FATAL
 // at runtime.
 //
-// NOTE: This is a stepping-stone concept for incremental migration of operations to
-// Metal 2.0. It is not designed for production use — the cache-hit fast path re-patches
-// op-owned tensors redundantly rather than skipping them.
+// NOTE: On cache hit, the adapter also re-patches op-owned tensors, although their
+// addresses do not change.
 //
 namespace detail {
 template <typename F>
