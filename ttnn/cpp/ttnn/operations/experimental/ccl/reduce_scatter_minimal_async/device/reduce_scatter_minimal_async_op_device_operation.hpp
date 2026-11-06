@@ -16,7 +16,7 @@ struct ReduceScatterMinimalAsyncDeviceOperation {
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using tensor_return_value_t = std::vector<Tensor>;
-    using program_factory_t = std::variant<RingReduceScatterMeshWorkloadFactory, LineReduceScatterMeshWorkloadFactory>;
+    using program_factory_t = std::variant<RingReduceScatterProgramFactory, LineReduceScatterProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

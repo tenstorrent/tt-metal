@@ -258,7 +258,9 @@ bool test_socket_send_recv(
             // Run receiver workload using the created socket
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), recv_mesh_workload, false);
             const auto& core_to_core_id =
-                recv_data_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
+                recv_data_buffer->get_device_buffer(mesh_device_->get_view().get_local_mesh_coord_range().start_coord())
+                    ->get_buffer_page_mapping()
+                    ->core_to_core_id;
             for (const auto& connection : socket.get_config().socket_connection_config) {
                 std::vector<uint32_t> recv_data_readback;
                 if (mesh_device_->is_local(connection.receiver_core.device_coord)) {

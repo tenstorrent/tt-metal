@@ -750,8 +750,42 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
             sender_stream_core_ranges[stream].merge(CoreRangeSet(CoreRange(core, core)));
     }
 
-    const uint32_t all_fabric_direction_mask =
-        ttnn::operations::ccl::common::fabric_directions_to_mask(fabric_directions);
+    // Fabric2D: the compact schedule's single stream must open exactly the egresses the fabric routes this chip's
+    // destinations through, because the writer selects a connection by the fabric's next hop
+    // (get_next_hop_router_direction). get_neighbors() derives directions from the LOGICAL axis (axis 1 -> E/W,
+    // axis 0 -> N/S), which differs from the physical first hop when the mesh view is folded relative to the fabric
+    // mesh -- e.g. a LoudBox opened as 4x2, whose 2-wide axis is not the fabric's E/W -- and the writer then traps in
+    // fail_stop_invalid_fabric_route(). Ask the fabric instead, as the direction-owned schedule above already does.
+    uint32_t all_fabric_direction_mask = ttnn::operations::ccl::common::fabric_directions_to_mask(fabric_directions);
+    if (is_fabric_2d) {
+        all_fabric_direction_mask = 0;
+        const auto self_node = device->get_fabric_node_id(mesh_coordinate);
+        for (uint32_t target_device = 0; target_device < operation_attributes.num_devices; ++target_device) {
+            int32_t device_offset = static_cast<int32_t>(target_device) - static_cast<int32_t>(device_index);
+            if (is_ring) {
+                const int32_t half_ring = static_cast<int32_t>(operation_attributes.num_devices / 2);
+                if (device_offset < -half_ring) {
+                    device_offset += operation_attributes.num_devices;
+                } else if (device_offset > half_ring) {
+                    device_offset -= operation_attributes.num_devices;
+                }
+            }
+            if (device_offset == 0) {
+                continue;
+            }
+            const auto target_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+                tensor_args.input_tensor, mesh_coordinate, device_offset, effective_topology, cluster_axis);
+            TT_FATAL(target_coord.has_value(), "No all-to-all target at device offset {}", device_offset);
+            const auto direction =
+                tt::tt_fabric::get_eth_forwarding_direction(self_node, device->get_fabric_node_id(*target_coord));
+            TT_FATAL(
+                direction.has_value() && static_cast<uint32_t>(*direction) < num_cardinal_fabric_directions,
+                "No Fabric2D cardinal forwarding direction from all-to-all source {} to target {}",
+                self_node,
+                device->get_fabric_node_id(*target_coord));
+            all_fabric_direction_mask |= 1U << static_cast<uint32_t>(*direction);
+        }
+    }
     std::vector<uint32_t> sender_stream_direction_masks(num_senders_per_link, 0);
     if (use_direction_owned_schedule) {
         // Direction indices follow {East, West, North, South}. Axis 1 is horizontal and axis 0 is vertical.
@@ -944,6 +978,39 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
         return operation_attributes.drain_virtual_cores[target_index];
     };
     bool use_multicast_initialization = is_fabric_2d && routing.axis_is_straight;
+    // Physical fabric slots the multicast initialization uses toward the +1 / -1 ends of the axis. On a straight axis
+    // the first hop to the adjacent chip is the whole line's direction, whatever the mesh view's orientation (a LoudBox
+    // opened as 4x2 runs its 2-wide axis North/South). Only a side with chips to reach is resolved, so a Ring's wrap
+    // neighbour never picks the direction. The logical defaults are what Fabric1D and unused sides carry.
+    uint32_t mcast_positive_direction =
+        cluster_axis == 1 ? tt::tt_fabric::eth_chan_directions::EAST : tt::tt_fabric::eth_chan_directions::SOUTH;
+    uint32_t mcast_negative_direction =
+        cluster_axis == 1 ? tt::tt_fabric::eth_chan_directions::WEST : tt::tt_fabric::eth_chan_directions::NORTH;
+    if (use_multicast_initialization) {
+        const auto self_node = device->get_fabric_node_id(mesh_coordinate);
+        // Returns false (fall back to per-destination unicast initialization) when the fabric gives no cardinal
+        // first hop toward the adjacent chip.
+        auto resolve_line_direction = [&](int32_t offset, uint32_t& slot) {
+            const auto neighbor = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+                tensor_args.input_tensor, mesh_coordinate, offset, ttnn::ccl::Topology::Linear, cluster_axis);
+            if (!neighbor.has_value()) {
+                return false;
+            }
+            const auto direction =
+                tt::tt_fabric::get_eth_forwarding_direction(self_node, device->get_fabric_node_id(*neighbor));
+            if (!direction.has_value() || static_cast<uint32_t>(*direction) >= num_cardinal_fabric_directions) {
+                return false;
+            }
+            slot = static_cast<uint32_t>(*direction);
+            return true;
+        };
+        if (device_index + 1 < operation_attributes.num_devices) {
+            use_multicast_initialization = resolve_line_direction(1, mcast_positive_direction);
+        }
+        if (use_multicast_initialization && device_index > 0) {
+            use_multicast_initialization = resolve_line_direction(-1, mcast_negative_direction);
+        }
+    }
     if (use_multicast_initialization) {
         // Multicast is valid only on a physically straight axis and when every destination maps the drain semaphore
         // to the same harvested worker. Bent axes and heterogeneous harvesting use destination-specific unicasts.
@@ -978,7 +1045,9 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
             is_fabric_2d,                                // is_fabric_2d
             sender_stream_direction_masks[stream],       // fabric_direction_mask
             number_pages_per_packet,                     // max_pages_per_packet
-            use_multicast_initialization                 // use_multicast_initialization
+            use_multicast_initialization,                // use_multicast_initialization
+            mcast_positive_direction,                    // mcast_positive_direction (physical slot)
+            mcast_negative_direction,                    // mcast_negative_direction (physical slot)
         };
 
         tt::tt_metal::TensorAccessorArgs(tensor_return_value.buffer()).append_to(sender_writer_compile_args);
