@@ -100,11 +100,9 @@ program only writes the new values: argument values and tensors can change from 
 running it.
 
 The cache key is a hash of everything in the ``ProgramSpec`` that changes the compiled program, combined with the
-devices it runs on. ``generic_op`` computes that hash on every call. To skip it, compute it once with
-``ttnn.experimental.compute_program_spec_hash(spec)`` and pass it as ``custom_program_hash``. A custom key replaces
-the spec hash, so give each different program its own; the key still includes each kernel's runtime argument names,
-array lengths and cores, and the names of the spec's tensor parameters and buffers. A ``MeshProgramSpec`` takes it as
-a field, and its one value replaces the hash of every range's spec, so it must stand for all of them.
+devices it runs on. ``generic_op`` computes that hash on every call. Unlike the ``ProgramDescriptor`` form, the
+``ProgramSpec`` form takes no ``custom_program_hash``, because a key the caller picks could give two different programs
+the same cache entry.
 
 Every call checks its run args against the spec before Metal sees them: each kernel gets exactly the runtime arguments
 and arrays it declares, each array with its declared length, each tensor parameter gets a tensor from ``io_tensors``
