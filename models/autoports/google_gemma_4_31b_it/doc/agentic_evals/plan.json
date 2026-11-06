@@ -2206,7 +2206,7 @@
       "capacity_evidence": "runs/retention-c4-lifecycle/RESULT.json",
       "retention_enabled": true,
       "arm": "larger-gpqa20-c4-retention-retry",
-      "status": "device_job_in_progress",
+      "status": "completed_valid_twenty",
       "queued_at": "2026-11-06T18:46:01.548044+00:00",
       "tt_metal_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
       "predicted_hours": 3.049166666666667,
@@ -2222,9 +2222,9 @@
       "run_id": 42273660905,
       "submitted_at": "2026-11-06T18:46:03Z",
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42273660905",
-      "workflow_status": "in_progress",
-      "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T21:14:41.394334+00:00",
+      "workflow_status": "completed",
+      "workflow_conclusion": "success",
+      "last_observed_at": "2026-11-06T21:23:49.143416+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-frkdx",
       "build_started_at": "2026-11-06T18:46:22Z",
       "build_completed_at": "2026-11-06T19:42:24Z",
@@ -2242,8 +2242,29 @@
       "runner": "120-qb2-p04t05",
       "device_job_id": 128113001232,
       "device_job_started_at": "2026-11-06T19:42:26Z",
-      "device_job_completed_at": null,
-      "start": "2026-11-06T19:42:26Z"
+      "device_job_completed_at": "2026-11-06T21:22:50Z",
+      "start": "2026-11-06T19:42:26Z",
+      "end": "2026-11-06T21:22:50Z",
+      "exit_status": 0,
+      "actual_hours": 1.6733333333333333,
+      "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+      "workflow_wall_hours": 2.6133333333333333,
+      "audit": "runs/larger-gpqa20-c4-retention-retry/audit.json",
+      "functional_at": 20,
+      "score": {
+        "name": "r1_gpqa_diamond exact_match",
+        "value": 0.8,
+        "correct": 16,
+        "completed_samples": 20,
+        "dataset_samples": 198,
+        "scope": "subset",
+        "wilson95": [
+          0.5839825677481064,
+          0.919342337420202
+        ],
+        "accepted": true
+      },
+      "eval_hours": 1.5557604843284936
     },
     {
       "arm": "phase-archive-idle-race",
@@ -2498,14 +2519,122 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42293808766",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T21:14:47.733247+00:00",
+      "last_observed_at": "2026-11-06T21:37:05.160384+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-wlxtq",
       "build_started_at": "2026-11-06T21:05:42Z",
       "build_completed_at": null
+    },
+    {
+      "arm": "larger-gpqa40-c4-response-logging",
+      "eval": "r1_gpqa_diamond",
+      "workflow": "evals",
+      "device": "qb2-ci",
+      "owner": "coordinator",
+      "status": "device_job_in_progress",
+      "planned_clients": 4,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest validated batch>=4; current acceptedC4/B8",
+      "task_count": 40,
+      "tasks": [
+        152,
+        189,
+        46,
+        87,
+        52,
+        181,
+        31,
+        185,
+        50,
+        187,
+        153,
+        135,
+        81,
+        93,
+        7,
+        42,
+        24,
+        168,
+        20,
+        28,
+        13,
+        94,
+        61,
+        15,
+        123,
+        160,
+        27,
+        29,
+        90,
+        127,
+        121,
+        188,
+        136,
+        174,
+        184,
+        9,
+        80,
+        102,
+        182,
+        173
+      ],
+      "tt_metal_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
+      "tti_sha": "af1ef17abfecb059da13d0a1287c00eace0f210e",
+      "vllm_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+      "implementation": "gemma4-31b-autoport-v3",
+      "docker_image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:0696f29a1d233f318ce3003ca80bdef304e03b91111f110b8eba694af62c767d",
+      "request_timeout_seconds": 14400,
+      "max_output_tokens": 126976,
+      "run_timeout_hours": 12,
+      "job_timeout_hours": 18,
+      "predicted_hours": 3.7790938176618267,
+      "response_logging": {
+        "VLLM_DEBUG_LOG_API_SERVER_RESPONSE": "true",
+        "enable_log_requests": true,
+        "max_log_len": 0,
+        "stream": false
+      },
+      "configuration_acceptance": "runs/first-agent-reply-observability/confirmation.json",
+      "source_publication": "af1ef17 published fromseparate authorizedcheckout, sourceonly",
+      "prerequisite_run_id": 42273660905,
+      "no_dispatch": false,
+      "prepared_at": "2026-11-06T20:11:03.298327+00:00",
+      "projection": {
+        "at": "2026-11-06T21:25:01.668759+00:00",
+        "basis_run_id": 42273660905,
+        "baseline_eval_hours": 1.5557604843284936,
+        "baseline_device_hours": 1.6733333333333333,
+        "baseline_non_eval_device_hours": 0.11757284900483977,
+        "prior_same20_eval_hours": 1.511982668724894,
+        "eval_correction_ratio": 1.0289539136321706,
+        "workload_multiplier": 2,
+        "queue_hours_guess": 0.5,
+        "response_logging_overhead_hours_guess": 0.05,
+        "predicted_workflow_hours": 3.7790938176618267,
+        "slow_tail_hours_reserve": 4,
+        "release_sensitivity_hours": 7.779093817661827,
+        "run_timeout_hours": 12,
+        "first_dry_deadline": "2026-11-07T12:28:49.408645+00:00",
+        "admission": "Accepted: valid20 banked and measured projection fits12h and pre-dry slot",
+        "limitations": "Aggregate doubledwork guess; newquestion tails unknown. Full4h requesttail reserve is additive planning margin, not bound. Sameimage reused; no new build."
+      },
+      "queued_at": "2026-11-06T21:27:56.707029+00:00",
+      "prerequisite_audit": "runs/larger-gpqa20-c4-retention-retry/audit.json",
+      "run_id": 42296943044,
+      "submitted_at": "2026-11-06T21:27:59Z",
+      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42296943044",
+      "workflow_status": "in_progress",
+      "workflow_conclusion": null,
+      "last_observed_at": "2026-11-06T21:37:24.184463+00:00",
+      "runner": "qb2-120-p05t02",
+      "device_job_id": 128164656843,
+      "device_job_started_at": "2026-11-06T21:28:17Z",
+      "device_job_completed_at": null,
+      "start": "2026-11-06T21:28:17Z"
     }
   ],
   "status": "SWE5_completed_validity_audit_GPQA20_repair_building",
-  "last_updated": "2026-11-06T21:14:53.402962+00:00",
+  "last_updated": "2026-11-06T21:37:24.691247+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -3217,6 +3346,18 @@
       "device_job_hours": 0.1420230511111111,
       "predicted_hours": 0.2,
       "status": "completed_awaiting_timing_analysis"
+    },
+    {
+      "arm": "larger-gpqa20-c4-retention-retry",
+      "run_id": 42273660905,
+      "planned_clients": 4,
+      "batch": 8,
+      "device_job_hours": 1.6733333333333333,
+      "workflow_wall_hours": 2.6133333333333333,
+      "predicted_workflow_hours": 3.049166666666667,
+      "workflow_conclusion": "success",
+      "eval_hours": 1.5557604843284936,
+      "audit": "pending"
     }
   ],
   "local_idle_intervals": [
@@ -3863,5 +4004,102 @@
       "accepted C8 same20 comparison",
       "measured time projection and schedule admission"
     ]
+  },
+  "dry_initial_order_preparation": {
+    "source": "Pinned harness iterates configured document IDs ascending; frozen list membership unchanged",
+    "initial_ids_by_prepared_cohort": {
+      "prepared-larger40-c4-retained": {
+        "first4": [
+          7,
+          9,
+          13,
+          15
+        ],
+        "first8": [
+          7,
+          9,
+          13,
+          15,
+          20,
+          24,
+          27,
+          28
+        ]
+      },
+      "prepared-larger80-c4-retained": {
+        "first4": [
+          2,
+          7,
+          9,
+          12
+        ],
+        "first8": [
+          2,
+          7,
+          9,
+          12,
+          13,
+          15,
+          16,
+          17
+        ]
+      },
+      "prepared-larger160": {
+        "first4": [
+          1,
+          2,
+          5,
+          7
+        ],
+        "first8": [
+          1,
+          2,
+          5,
+          7,
+          8,
+          9,
+          12,
+          13
+        ]
+      },
+      "prepared-larger198": {
+        "first4": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "first8": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ]
+      }
+    },
+    "limitation": "Request logger arrival order and actual ID/reply matching must be observed. Known prior capped inputs do not prove future duration or clean pre-score window. No list selection/change based on this analysis."
+  },
+  "prepared_next_rung_projection": {
+    "at": "2026-11-06T21:25:01.668759+00:00",
+    "basis_run_id": 42273660905,
+    "baseline_eval_hours": 1.5557604843284936,
+    "baseline_device_hours": 1.6733333333333333,
+    "baseline_non_eval_device_hours": 0.11757284900483977,
+    "prior_same20_eval_hours": 1.511982668724894,
+    "eval_correction_ratio": 1.0289539136321706,
+    "workload_multiplier": 2,
+    "queue_hours_guess": 0.5,
+    "response_logging_overhead_hours_guess": 0.05,
+    "predicted_workflow_hours": 3.7790938176618267,
+    "slow_tail_hours_reserve": 4,
+    "release_sensitivity_hours": 7.779093817661827,
+    "run_timeout_hours": 12,
+    "first_dry_deadline": "2026-11-07T12:28:49.408645+00:00",
+    "admission": "Projection fits run limit and pre-dry slot; dispatch held until final20validity audit",
+    "limitations": "Aggregate doubledwork guess; newquestion tails unknown. Full4h requesttail reserve is additive planning margin, not bound. Sameimage reused; no new build."
   }
 }

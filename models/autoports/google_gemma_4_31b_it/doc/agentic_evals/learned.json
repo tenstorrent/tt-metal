@@ -194,6 +194,14 @@
     {
       "fact": "VLLM_DEBUG_LOG_API_SERVER_RESPONSE buffers entire streaming response beforedelivery. Measured exact4096/128B1C1 yieldsTTFT4386.855ms/TPOT.03755ms; do not call bufferedemission a modeldecoderate. Keepdebugonlynonstreamingeval andfalse onstreamingbenchmark. Per-armsettings mustfreezeunchangedthroughdry/release.",
       "evidence": "runs/response-logging-runtime-benchmark/AUTOFIX.md"
+    },
+    {
+      "fact": "Retained phase file size must be projected with aggregate work before larger cohorts. CI recorder default4GiB differs from local512MiB diagnostics. RawJSONL, compressedarchive, consolelogduplication and availableDockerfilesystem space are distinct; no compression/free-space guarantee follows from raw size.",
+      "evidence": "runs/gpqa-b8-expanded-pool/storage-note.md"
+    },
+    {
+      "fact": "A configured unsorted GPQA doc_ids list can be logged as labels while pinned lm_eval iterates semantic documents ascending. Bind saved official prompt/document hashes and unique pinned-template lengths to complete remap-aware retained chains; never assign physical row order as request identity. Repaired20 matched20chains withzeroambiguousedges.",
+      "evidence": "runs/larger-gpqa20-c4-retention-retry/audit.json"
     }
   ],
   "suite_timings": [
@@ -465,6 +473,34 @@
       "functional_at": 2,
       "decision": "stop",
       "evidence": "runs/nightly-swe-decode-retention/audit.json"
+    },
+    {
+      "eval": "r1_gpqa_diamond",
+      "run_id": 42273660905,
+      "tasks": 20,
+      "agents": 4,
+      "batch": 8,
+      "wall_hours": 1.5557604843284936,
+      "device_job_hours": 1.6733333333333333,
+      "workflow_wall_hours": 2.6133333333333333,
+      "agent_hours": null,
+      "timeouts": 0,
+      "capped_loop_failures": 2,
+      "score": {
+        "name": "r1_gpqa_diamond exact_match",
+        "value": 0.8,
+        "correct": 16,
+        "completed_samples": 20,
+        "dataset_samples": 198,
+        "scope": "subset",
+        "wilson95": [
+          0.5839825677481064,
+          0.919342337420202
+        ],
+        "accepted": true
+      },
+      "functional_at": 20,
+      "evidence": "runs/larger-gpqa20-c4-retention-retry/audit.json"
     }
   ],
   "generic_fixes": [
@@ -530,6 +566,18 @@
       "limitations": {
         "device_times_and_rooflines": "No vLLM profiling; host TTFT/phase boundary timings cannot substitute for device time."
       }
+    },
+    {
+      "name": "B8 concurrency and context cadence",
+      "runtime_candidate": "4b7d9a3b4142dff5e8dd804438d6c42d9626bdcc",
+      "selected": false,
+      "observation": "C4 default10248pool and C8 optional20480pool short-window host completion cadence rises with context. C8 aggregate/C4 ratios1.87 at4K to1.68 at131K, not a causal eval speedup. Samephysicalbatch does not imply fixed per-user attention cost. Async submission latency overlaps and must not substitute for completion cadence.",
+      "actual_local_device_hours": 0.47222091055555554,
+      "evidence": [
+        "runs/gpqa-b8-expanded-pool/local-confirmation.json",
+        "runs/gpqa-b8-expanded-pool/benchmark-confirmation.json",
+        "runs/gpqa-b8-expanded-pool/timing-baseline.json"
+      ]
     }
   ],
   "diagnostic_confirmations": [

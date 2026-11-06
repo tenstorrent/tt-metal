@@ -479,14 +479,29 @@
   },
   "measured_suites": {
     "r1_gpqa_diamond": {
-      "functional_at": 10,
-      "observed_max_active_rows": 4,
-      "batch": 8,
-      "evidence": "runs/gpqa-c4-capacity/RESULT.json; runs/gpqa-c4-scored10/RESULT.json",
-      "max_capacity": null,
-      "reason": "Paired current-runtime same10, samehost, equal executed work; C4 finishes31.5118%sooner. Larger-cohort tail remains separately measured.",
+      "functional_at": 20,
       "planned_clients": 4,
-      "chosen_concurrency": 4
+      "batch": 8,
+      "score": {
+        "name": "r1_gpqa_diamond exact_match",
+        "value": 0.8,
+        "correct": 16,
+        "completed_samples": 20,
+        "dataset_samples": 198,
+        "scope": "subset",
+        "wilson95": [
+          0.5839825677481064,
+          0.919342337420202
+        ],
+        "accepted": true
+      },
+      "eval_hours": 1.5557604843284936,
+      "request_timeout_seconds": 14400,
+      "max_output_tokens": 126976,
+      "observed_processed_cache_tokens_max": 127456,
+      "native_prompt_tokens_median": 241,
+      "total_physical_decode_samples": 367509,
+      "evidence": "runs/larger-gpqa20-c4-retention-retry/audit.json"
     },
     "swe_bench_verified": {
       "functional_at": 2,

@@ -1,35 +1,37 @@
 {
-  "status": "GPQA20 artifactrepair required; SWE5 running; Terminal measuredstop",
+  "status": "GPQA20 valid;40 admitted; SWE and Terminal measuredstops",
   "evals": {
     "r1_gpqa_diamond": {
       "decision": "go",
-      "reason": "Same20 completedraw16/20 in1.512h but stocktar discarded privatephaseexport during idleappend; actualcapendings unclassified. Valid10retained. AutoFix repairs collection evidence path before any repeat;40held.",
-      "functional_at": 10,
-      "projected_hours": null,
-      "score": 0.9,
+      "reason": "All20 official samples complete; repaired retained archive is intact and uniquely matched long-prefix chains show both capped empty answers are repetitive failures, not unresolved productive progress. Scores reported, not gated.",
+      "functional_at": 20,
+      "projected_hours": 7.779093817661827,
+      "score": 0.8,
       "confidence_interval_95": [
-        0.5958499732047615,
-        0.9821237869049271
+        0.5839825677481064,
+        0.919342337420202
       ],
       "next_rung": {
-        "tasks": 20,
+        "tasks": 40,
         "planned_clients": 4,
         "batch": 8,
-        "status": "completed_unbanked_artifact_loss",
-        "run_id": 42256121890,
-        "projected_workflow_hours": 6.75,
-        "source": "runs/larger-gpqa20-c4-retained/manifest.json",
-        "latest_censored_projection_hours": 5.242063492063492,
-        "progress_evidence": "runs/larger-gpqa20-c4-retained/progress-14.json",
-        "raw_score": 0.8,
-        "eval_hours": 1.511982668724894
+        "status": "submitted",
+        "projected_workflow_hours": 3.7790938176618267,
+        "source": "runs/larger-gpqa40-c4-response-logging/manifest.json",
+        "run_id": 42296943044,
+        "submitted_at": "2026-11-06T21:27:59Z",
+        "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42296943044"
       },
-      "full_suite_decision": "stop",
-      "full_suite_stop_evidence": "runs/full-gpqa-observable/stop.json"
+      "full_suite_decision": "pending_current_configuration_larger_rungs",
+      "full_suite_stop_evidence": "runs/full-gpqa-observable/stop.json",
+      "evidence": [
+        "runs/larger-gpqa20-c4-retention-retry/audit.json"
+      ],
+      "full_suite_prior_stop_scope": "Earlier C2 partial run; not a currentC4/C8 full-suite impossibility claim"
     },
     "swe_bench_verified": {
       "decision": "stop",
-      "reason": "Current frozen5 repeats Xarray external data retrieval. Confirmed same model-selected reproduction as prior exhausted AutoFix; no admissible generic repair. Raw success quarantined; no retry-until-clean or larger10. Missing response evidence also remains, full audit pending.",
+      "reason": "Final frozen5 audit confirms external retrieval in sole rawpass; exhausted admissibleAutoFix. Measuredstop at5, functional2. Missingdiscardedresponses and failedphasearchive are additional limits, not reason to retry.",
       "functional_at": 2,
       "projected_hours": null,
       "score": 0,
@@ -42,7 +44,7 @@
         "planned_clients": 2,
         "batch": 8,
         "run_id": 42247098210,
-        "status": "running_retention_repair",
+        "status": "completed_invalid_external_retrieval",
         "projected_workflow_hours": 8.544166666666667,
         "source": "runs/nightly-swe-decode-retention/manifest.json",
         "latest_projection_hours": 8.89957597861111,
@@ -50,7 +52,8 @@
       },
       "evidence": [
         "runs/swe-retained-network-confirmation/RESULT.json",
-        "runs/nightly-swe-network-reach/AUTOFIX.md"
+        "runs/nightly-swe-network-reach/AUTOFIX.md",
+        "runs/nightly-swe-decode-retention/audit.json"
       ]
     },
     "terminal_bench_2_1": {

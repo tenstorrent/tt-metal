@@ -3030,7 +3030,7 @@
 "box_hours": 0.25,
 "status": "done",
 "change": "kept",
-"problem_status": "open",
+"problem_status": "solved",
 "used_device_hours": 0.05904627083333333,
 "confirmed": {
 "native_pairs_exact": 3,
@@ -3038,11 +3038,20 @@
 "idle_seconds_stable": 3.2,
 "tar_exit": 0,
 "loss": false,
-"remaining": "Actual CI artifact collection pending on retry42273660905"
+"remaining": "Actual CI artifact collection pending on retry42273660905",
+"ci_confirmation": {
+"run_id": 42273660905,
+"archive_frames": 5589,
+"paired_steps": 126993,
+"loss": false,
+"functional_at": 20,
+"evidence": "runs/larger-gpqa20-c4-retention-retry/audit.json"
+}
 },
 "evidence": [
 "runs/phase-archive-idle-race/RESULT.json",
-"runs/phase-archive-idle-race/AUTOFIX.md"
+"runs/phase-archive-idle-race/AUTOFIX.md",
+"runs/larger-gpqa20-c4-retention-retry/audit.json"
 ]
 },
 {
@@ -3365,7 +3374,7 @@
 "candidate20_device_hours_guess": 1.66,
 "local_capacity_hours_guess": 0.3,
 "b1_regression_device_hours_guess": 0.07605465913249645,
-"total_device_hours_guess": 2.0360546591324966,
+"total_device_hours_guess": 2.2274497595603955,
 "release80_saving_hours_sensitivity": [
 0,
 2.193
@@ -3376,7 +3385,7 @@
 "local_actual_device_hours": 0.33019785944444446,
 "high_context_c8_tail_hours_sensitivity": 2.251949,
 "setup_hours_historical": 0.137184,
-"total_device_hours_high_context_sensitivity": 2.7193308594444443,
+"total_device_hours_high_context_sensitivity": 2.8417427595603955,
 "timing_evidence": "runs/gpqa-b8-expanded-pool/timing-note.md",
 "matching_c4_cadence": {
 "predicted_device_hours": 0.2,
@@ -3389,7 +3398,9 @@
 },
 "candidate20_workflow_hours_guess": 3.2087288868306616,
 "local_c4_wrapper_hours": 0.14283737602168306,
-"actual_local_hours_so_far": 0.47222091055555554
+"actual_local_hours_so_far": 0.47222091055555554,
+"baseline20_actual_eval_hours": 1.5557604843284936,
+"setup_hours_latest": 0.11757284900483977
 }
 },
 {
@@ -3427,6 +3438,29 @@
 "evidence": [
 "runs/gpqa80-preparation/c8-RESULT.json"
 ]
+},
+{
+"problem": "gpqa80-current-best-publication",
+"owner": "source_packaging",
+"goal": "Make acceptedC4 frozen80 immediately publishable from current remotehead7ad, so next rung cannot wait for optionalC8 comparison",
+"plan": "runs/gpqa80-preparation/c4-fastforward-plan.md",
+"predicted": {
+"saving_hours": {
+"r1_gpqa_diamond": 0
+},
+"device_hours": 0,
+"basis": "calculated",
+"reason": "Host-only model-config publication preparation"
+},
+"confirm": {
+"method": "Production equality to prepared1eca C4/80 config, unrelatedsourceunchanged, hosttests/hooks",
+"success": "Source-only descendant of7ad, exactcohort/limits/runtime, readytofastforward whenvalid40fits"
+},
+"unblocks": [],
+"box_hours": 0,
+"host_box_hours": 0.3,
+"status": "running",
+"admission": "Prepareonly; no publication ordevice dispatch"
 }
 ],
 "rankings": [
@@ -3435,7 +3469,7 @@
 "order": [
 {
 "problem": "local-sandbox-runtime",
-"saving_hours": null,
+"saving_hours": 0,
 "device_hours": 0,
 "unblocks": [
 "swe_bench_verified",
@@ -3444,16 +3478,16 @@
 },
 {
 "problem": "gpqa-local-credential",
-"saving_hours": null,
-"device_hours": null,
+"saving_hours": 0,
+"device_hours": 0,
 "unblocks": [
 "r1_gpqa_diamond"
 ]
 },
 {
 "problem": "agent-capacity-and-contention",
-"saving_hours": null,
-"device_hours": null
+"saving_hours": 0,
+"device_hours": 0.25
 }
 ],
 "reason": "Validity precedes speed. Unknown effort/savings remain unknown; no release timing claims."
@@ -3463,7 +3497,7 @@
 "order": [
 {
 "problem": "local-sandbox-runtime",
-"saving_hours": null,
+"saving_hours": 0,
 "device_hours": 0,
 "unblocks": [
 "swe_bench_verified",
@@ -3472,16 +3506,16 @@
 },
 {
 "problem": "gpqa-local-credential",
-"saving_hours": null,
-"device_hours": null,
+"saving_hours": 0,
+"device_hours": 0,
 "unblocks": [
 "r1_gpqa_diamond"
 ]
 },
 {
 "problem": "agent-capacity-and-contention",
-"saving_hours": null,
-"device_hours": null
+"saving_hours": 0,
+"device_hours": 0.25
 }
 ],
 "reason": "Runtime still unavailable; no speed effort can unblock local release. Stop after AutoFix unable to repair environment."
@@ -3513,13 +3547,13 @@
 "unblocks": [
 "r1_gpqa_diamond"
 ],
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0,
+"saving_hours": 0
 },
 {
 "problem": "agent-capacity-and-contention",
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0.25,
+"saving_hours": 0
 }
 ],
 "reason": "Runtime repair cannot proceed internally; source-only preparation can proceed without devices or permissions."
@@ -3541,13 +3575,13 @@
 "unblocks": [
 "r1_gpqa_diamond"
 ],
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0,
+"saving_hours": 0
 },
 {
 "problem": "agent-capacity-and-contention",
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0.25,
+"saving_hours": 0
 }
 ],
 "reason": "Packaging confirmed host-only; remaining local runtime issue needs external provisioning. Source-only tree preparation proceeds, live checks remain blocked."
@@ -3579,13 +3613,13 @@
 "unblocks": [
 "r1_gpqa_diamond"
 ],
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0,
+"saving_hours": 0
 },
 {
 "problem": "agent-capacity-and-contention",
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0.25,
+"saving_hours": 0
 }
 ],
 "reason": "Continue source/harness preparation despite externally blocked local route; validity precedes speed."
@@ -3595,8 +3629,8 @@
 "order": [
 {
 "problem": "local-sandbox-runtime",
-"saving_hours": null,
-"device_hours": null,
+"saving_hours": 0,
+"device_hours": 0,
 "unblocks": [
 "r1_gpqa_diamond",
 "swe_bench_verified",
@@ -3605,8 +3639,8 @@
 },
 {
 "problem": "harness-registration",
-"saving_hours": null,
-"device_hours": null,
+"saving_hours": 0,
+"device_hours": 0,
 "unblocks": [
 "r1_gpqa_diamond",
 "swe_bench_verified",
@@ -3615,8 +3649,8 @@
 },
 {
 "problem": "suite-registration",
-"saving_hours": null,
-"device_hours": null,
+"saving_hours": 0,
+"device_hours": 0,
 "unblocks": [
 "r1_gpqa_diamond",
 "swe_bench_verified",
@@ -3625,8 +3659,8 @@
 },
 {
 "problem": "gpqa-local-credential",
-"saving_hours": null,
-"device_hours": null,
+"saving_hours": 0,
+"device_hours": 0,
 "unblocks": [
 "r1_gpqa_diamond",
 "swe_bench_verified",
@@ -3635,8 +3669,8 @@
 },
 {
 "problem": "agent-capacity-and-contention",
-"saving_hours": null,
-"device_hours": null
+"saving_hours": 0,
+"device_hours": 0.25
 }
 ],
 "reason": "Host registration confirmed; live CI smoke validity next. Local backend requires host intervention. No measured speed ranking yet."
@@ -3647,7 +3681,7 @@
 {
 "problem": "ci-release-route",
 "device_hours": 0,
-"saving_hours": null,
+"saving_hours": 0,
 "unblocks": [
 "r1_gpqa_diamond",
 "swe_bench_verified",
@@ -3657,7 +3691,7 @@
 {
 "problem": "local-serving-check",
 "device_hours": 0.2,
-"saving_hours": null,
+"saving_hours": 0,
 "unblocks": [
 "r1_gpqa_diamond",
 "swe_bench_verified",
@@ -3666,8 +3700,8 @@
 },
 {
 "problem": "harness-registration",
-"device_hours": null,
-"saving_hours": null,
+"device_hours": 0,
+"saving_hours": 0,
 "unblocks": [
 "r1_gpqa_diamond",
 "swe_bench_verified",
@@ -3676,8 +3710,8 @@
 },
 {
 "problem": "suite-registration",
-"device_hours": null,
-"saving_hours": null,
+"device_hours": 0,
+"saving_hours": 0,
 "unblocks": [
 "r1_gpqa_diamond",
 "swe_bench_verified",
@@ -3696,7 +3730,7 @@
 "release_benchmarks"
 ],
 "device_hours": 0.15,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "ci-release-route",
@@ -3706,7 +3740,7 @@
 "terminal_bench_2_1"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "harness-registration",
@@ -3715,8 +3749,8 @@
 "swe_bench_verified",
 "terminal_bench_2_1"
 ],
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0,
+"saving_hours": 0
 }
 ],
 "reason": "Validity first; client custom-weight path rejected downstream before requests. Existing CI jobs continue, no speed improvement claimed."
@@ -3731,8 +3765,8 @@
 "swe_bench_verified",
 "terminal_bench_2_1"
 ],
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0,
+"saving_hours": 0
 },
 {
 "problem": "ci-release-route",
@@ -3740,7 +3774,7 @@
 "release"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "local-long-context",
@@ -3748,7 +3782,7 @@
 "r1_gpqa_diamond"
 ],
 "device_hours": 0.15,
-"saving_hours": null
+"saving_hours": 0
 }
 ],
 "reason": "CI smoke builds and operator dry-run decision pending; primarydevice tests unmeasured long-history envelope, no speed tuning before validsmoke."
@@ -3762,7 +3796,7 @@
 "swe_bench_verified"
 ],
 "device_hours": 0.1,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "ci-release-route",
@@ -3770,7 +3804,7 @@
 "release"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "harness-registration",
@@ -3778,8 +3812,8 @@
 "r1_gpqa_diamond",
 "terminal_bench_2_1"
 ],
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0,
+"saving_hours": 0
 }
 ],
 "reason": "Proven SWE HTTP400 is a validity blocker and ranks aboveall speed work; GPQA/TB existingbuilds continue."
@@ -3794,8 +3828,8 @@
 "swe_bench_verified",
 "terminal_bench_2_1"
 ],
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0,
+"saving_hours": 0
 },
 {
 "problem": "ci-release-route",
@@ -3803,7 +3837,7 @@
 "release"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 }
 ],
 "reason": "Native-tool validity issue solved locally and replacementCIqueued; score/trajectory validity and dryrunroute decision remain. No speed tuning before validsmoke."
@@ -3816,7 +3850,7 @@
 "unblocks": [
 "terminal_bench_2_1"
 ],
-"saving_hours": null,
+"saving_hours": 0,
 "device_hours": 0.2167
 },
 {
@@ -3826,15 +3860,15 @@
 "swe_bench_verified",
 "terminal_bench_2_1"
 ],
-"saving_hours": null,
-"device_hours": null
+"saving_hours": 0,
+"device_hours": 0
 },
 {
 "problem": "ci-release-route",
 "unblocks": [
 "release"
 ],
-"saving_hours": null,
+"saving_hours": 0,
 "device_hours": 0
 }
 ],
@@ -3849,7 +3883,7 @@
 "terminal_bench_2_1"
 ],
 "device_hours": 0.2167,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "harness-registration",
@@ -3857,8 +3891,8 @@
 "swe_bench_verified",
 "terminal_bench_2_1"
 ],
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0,
+"saving_hours": 0
 },
 {
 "problem": "ci-release-route",
@@ -3866,13 +3900,13 @@
 "release"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "agent-capacity-and-contention",
 "unblocks": [],
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0.25,
+"saving_hours": 0
 }
 ],
 "reason": "GPQA valid and advances immediately; tool-suite validity remains above speed. Real multi-turn histories still unavailable, so capacity savings cannot be priced yet."
@@ -3886,7 +3920,7 @@
 "terminal_bench_2_1"
 ],
 "device_hours": 0.2167,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "harness-registration",
@@ -3894,8 +3928,8 @@
 "swe_bench_verified",
 "terminal_bench_2_1"
 ],
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0,
+"saving_hours": 0
 },
 {
 "problem": "ci-release-route",
@@ -3903,13 +3937,13 @@
 "release"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "ci-cache-routing",
 "unblocks": [],
 "device_hours": 0.08333333333333333,
-"saving_hours": null
+"saving_hours": 0
 }
 ],
 "reason": "Toolvalidity CIjobs alreadyrunning; sparelocaldevice validates exact cache routing while no usefultoolhistories exist. Doesnotdelayanyrung; saving remainsunknown untilCI confirms."
@@ -3923,7 +3957,7 @@
 "terminal_bench_2_1"
 ],
 "device_hours": 0.2167,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "harness-registration",
@@ -3931,8 +3965,8 @@
 "swe_bench_verified",
 "terminal_bench_2_1"
 ],
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0,
+"saving_hours": 0
 },
 {
 "problem": "ci-release-route",
@@ -3940,13 +3974,13 @@
 "release"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "ci-cache-routing",
 "unblocks": [],
 "device_hours": 0.05277675944444444,
-"saving_hours": null
+"saving_hours": 0
 }
 ],
 "reason": "Exact cache-routing change accepted; speedproblem remainsopen pendingCImeasurement. Toolrungs proceedonimmutablealreadydispatchedSHAs."
@@ -3962,7 +3996,7 @@
 "release"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "ci-release-route",
@@ -3970,7 +4004,7 @@
 "release"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "ci-fabric-topology",
@@ -3978,7 +4012,7 @@
 "terminal_bench_2_1"
 ],
 "device_hours": 0.2167,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "harness-registration",
@@ -3986,14 +4020,14 @@
 "swe_bench_verified",
 "terminal_bench_2_1"
 ],
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0,
+"saving_hours": 0
 },
 {
 "problem": "ci-cache-routing",
 "unblocks": [],
 "device_hours": 0.05277675944444444,
-"saving_hours": null
+"saving_hours": 0
 }
 ],
 "reason": "Host-only frozen-source validity defect ranks ahead of speed; liveCIrungs unchanged."
@@ -4009,7 +4043,7 @@
 "release"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "ci-release-route",
@@ -4017,7 +4051,7 @@
 "release"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "ci-fabric-topology",
@@ -4025,7 +4059,7 @@
 "terminal_bench_2_1"
 ],
 "device_hours": 0.2167,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "harness-registration",
@@ -4033,20 +4067,20 @@
 "swe_bench_verified",
 "terminal_bench_2_1"
 ],
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0,
+"saving_hours": 0
 },
 {
 "problem": "ci-cache-routing",
 "unblocks": [],
 "device_hours": 0.05277675944444444,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "agent-capacity-and-contention",
 "unblocks": [],
-"saving_hours": null,
-"device_hours": null,
+"saving_hours": 0,
+"device_hours": 0.25,
 "basis": "unknown until actual tool histories and generation share"
 }
 ],
@@ -4071,7 +4105,7 @@
 "release"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "ci-release-route",
@@ -4079,7 +4113,7 @@
 "release"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "ci-fabric-topology",
@@ -4087,7 +4121,7 @@
 "terminal_bench_2_1"
 ],
 "device_hours": 0.2167,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "harness-registration",
@@ -4095,20 +4129,20 @@
 "swe_bench_verified",
 "terminal_bench_2_1"
 ],
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0,
+"saving_hours": 0
 },
 {
 "problem": "ci-cache-routing",
 "unblocks": [],
 "device_hours": 0.05277675944444444,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "agent-capacity-and-contention",
 "unblocks": [],
-"saving_hours": null,
-"device_hours": null,
+"saving_hours": 0,
+"device_hours": 0.25,
 "basis": "unknown until actual tool histories and generation share"
 }
 ],
@@ -4142,7 +4176,7 @@
 "release"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "ci-release-route",
@@ -4150,7 +4184,7 @@
 "release"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "ci-fabric-topology",
@@ -4158,7 +4192,7 @@
 "terminal_bench_2_1"
 ],
 "device_hours": 0.2167,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "harness-registration",
@@ -4166,20 +4200,20 @@
 "swe_bench_verified",
 "terminal_bench_2_1"
 ],
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0,
+"saving_hours": 0
 },
 {
 "problem": "ci-cache-routing",
 "unblocks": [],
 "device_hours": 0.05277675944444444,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "agent-capacity-and-contention",
 "unblocks": [],
-"saving_hours": null,
-"device_hours": null,
+"saving_hours": 0,
+"device_hours": 0.25,
 "basis": "unknown until actual tool histories and generation share"
 }
 ],
@@ -4213,7 +4247,7 @@
 "release"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "ci-release-route",
@@ -4221,7 +4255,7 @@
 "release"
 ],
 "device_hours": 0,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "ci-fabric-topology",
@@ -4229,7 +4263,7 @@
 "terminal_bench_2_1"
 ],
 "device_hours": 0.2167,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "harness-registration",
@@ -4237,20 +4271,20 @@
 "swe_bench_verified",
 "terminal_bench_2_1"
 ],
-"device_hours": null,
-"saving_hours": null
+"device_hours": 0,
+"saving_hours": 0
 },
 {
 "problem": "ci-cache-routing",
 "unblocks": [],
 "device_hours": 0.05277675944444444,
-"saving_hours": null
+"saving_hours": 0
 },
 {
 "problem": "agent-capacity-and-contention",
 "unblocks": [],
-"saving_hours": null,
-"device_hours": null,
+"saving_hours": 0,
+"device_hours": 0.25,
 "basis": "unknown until actual tool histories and generation share"
 }
 ],
@@ -20133,7 +20167,7 @@
 "valid larger20 and next40 rung"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 1.6491666666666667
 },
 {
 "problem": "GPQA frozen dry route",
@@ -20141,7 +20175,7 @@
 "release"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 4.9
 },
 {
 "problem": "GPQA normal40 then80",
@@ -20149,15 +20183,15 @@
 "largest fitting release list"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 9.67
 },
 {
 "problem": "Astropy and GPQA loop cause",
 "unblocks": [
 "representative score"
 ],
-"saving_hours": null,
-"device_hours": null
+"saving_hours": 0,
+"device_hours": 0.25
 }
 ],
 "reason": "Validity before speed. SWE network AutoFix exhausted, measured stop retained; loop causes remain open with no accepted fix. Normal admitted GPQA rungs take precedence over speculative optimization; prepared80 has no admission or timing claim."
@@ -20180,7 +20214,7 @@
 "next rung"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 1.6491666666666667
 }
 ],
 "reason": "New validity gap ranks above speed; host preparation concurrent with scored20 and cannot delay next admitted rung."
@@ -20211,7 +20245,7 @@
 "next rung"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 1.6491666666666667
 }
 ],
 "reason": "Validity and required configuration measurements first; independent CI20 continues and next rung never waits for optional speed work."
@@ -20226,7 +20260,7 @@
 "next rung"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 1.6491666666666667
 },
 {
 "problem": "response-logging-runtime-benchmark",
@@ -20242,7 +20276,7 @@
 "release"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 4.9
 }
 ],
 "reason": "Observability mechanism confirmed; actual CI log availability and pre-score cancellation remain validity work. Normalrungs continue; speed work remains secondary."
@@ -20257,7 +20291,7 @@
 "next rung"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 1.6491666666666667
 },
 {
 "problem": "frozen CI initial-agent no-score dry",
@@ -20265,7 +20299,7 @@
 "release"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 4.9
 }
 ],
 "reason": "Required headline alreadymeasured on selectedunbufferedB1; streaminglogger experimentdropped. NormalCIrungcontinues; no speculative speed effort delays progression."
@@ -20280,7 +20314,7 @@
 "next rung"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 1.6491666666666667
 },
 {
 "problem": "frozen CI initial-agent no-score dry",
@@ -20288,7 +20322,7 @@
 "release"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 4.9
 },
 {
 "problem": "larger-gpqa-concurrency-reprice",
@@ -20310,7 +20344,7 @@
 "valid20 and40rung"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 1.6491666666666667
 },
 {
 "problem": "frozen CI initial-agent no-score dry",
@@ -20318,7 +20352,7 @@
 "release"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 4.9
 },
 {
 "problem": "gpqa-b8-expanded-pool",
@@ -20339,7 +20373,7 @@
 "valid20 andnext40"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 1.6491666666666667
 },
 {
 "problem": "frozen initial-agent no-score dry",
@@ -20347,7 +20381,7 @@
 "release"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 4.9
 },
 {
 "problem": "gpqa-b8-expanded-pool",
@@ -20369,7 +20403,7 @@
 "valid20 and next40"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 1.6491666666666667
 },
 {
 "problem": "frozen initial-agent no-score dry",
@@ -20377,7 +20411,7 @@
 "release"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 4.9
 },
 {
 "problem": "gpqa-b8-expanded-pool",
@@ -20399,7 +20433,7 @@
 "valid20 then40"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 1.6491666666666667
 },
 {
 "problem": "frozen initial-agent no-score dry",
@@ -20407,7 +20441,7 @@
 "release"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 4.9
 },
 {
 "problem": "gpqa-b8-expanded-pool",
@@ -20429,7 +20463,7 @@
 "valid20 then40"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 1.6491666666666667
 },
 {
 "problem": "frozen initial-agent no-score dry",
@@ -20437,7 +20471,7 @@
 "release"
 ],
 "saving_hours": 0,
-"device_hours": null
+"device_hours": 4.9
 },
 {
 "problem": "gpqa-b8-expanded-pool",
@@ -20448,7 +20482,1137 @@
 }
 ],
 "reason": "Zero-device host preparation complete; validity gate and optional scored20 comparison ranking unchanged; normal40 remains independent."
+},
+{
+"after": "valid repaired20 banked and40 dispatched",
+"at": "2026-11-06T21:29:55.187429+00:00",
+"order": [
+{
+"problem": "frozen initial-agent no-score dry",
+"unblocks": [
+"release"
+],
+"saving_hours": 0,
+"device_hours": 4.9
+},
+{
+"problem": "gpqa-b8-expanded-pool",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 2.247060908497328,
+"basis": "actuallocal plus context-interpolatedcandidate guess; speed uncredited"
+},
+{
+"problem": "gpqa-loop-logits-discriminator",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 0.08,
+"basis": "Actual two cappedloops consume criticaltail; six conditional checks found no concrete TT mismatch. No new discriminating repair hypothesis, not rerun."
 }
 ],
-"forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."
+"reason": "Archive validity solved by final20audit; normal40 proceeds now. Frozen dry remains validity priority; optionalC8 scoredcomparison running and no loop-fix speed saving assumed."
+},
+{
+"after": "valid20 full open-problem reconciliation",
+"at": "2026-11-06T21:36:21.042224+00:00",
+"order": [
+{
+"problem": "frozen initial-agent no-score dry",
+"unblocks": [
+"release"
+],
+"saving_hours": 0,
+"device_hours": 4.9,
+"basis": "guess:5.4h reservation less.5h queue; separate parallelbenchmark reserve.1h"
+},
+{
+"problem": "astropy-prefix-discriminator",
+"unblocks": [
+"capped-call cause and representative SWE score"
+],
+"saving_hours": 0,
+"device_hours": 0.12,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "ci-disk-admission-basis",
+"unblocks": [
+"release_preflight"
+],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "ci-live-log-observability",
+"unblocks": [
+"release"
+],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "ci-log-cache-discriminator",
+"unblocks": [
+"exact dry-run observation"
+],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "ci-release-route",
+"unblocks": [
+"r1_gpqa_diamond",
+"swe_bench_verified",
+"terminal_bench_2_1"
+],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "django-cap-loop-diagnosis",
+"unblocks": [
+"representative_agent_score"
+],
+"saving_hours": 0,
+"device_hours": 0.25,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "gpqa-nightly-runtime-analysis",
+"unblocks": [
+"r1_gpqa_diamond"
+],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "gpqa-only-release-schedule",
+"unblocks": [
+"release dry route and schedule"
+],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "gpqa-terminal-state-capacity",
+"unblocks": [
+"r1_gpqa_diamond"
+],
+"saving_hours": 0,
+"device_hours": 0.1,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "malformed-response-retention",
+"unblocks": [
+"representative capped-call diagnosis"
+],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "model-token-retention",
+"unblocks": [
+"swe_bench_verified"
+],
+"saving_hours": 0,
+"device_hours": 0.12,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "native-token-retention",
+"unblocks": [
+"exact recurring-loop onset evidence"
+],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "nightly-swe-network-reach",
+"unblocks": [
+"swe_bench_verified"
+],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "partial-tool-dry-route",
+"unblocks": [
+"release"
+],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "serving-shortfall-pricing",
+"unblocks": [
+"representative release projection"
+],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "stage12-zero-cost-checker",
+"unblocks": [
+"stage_check"
+],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "swe-recurrent-network-confirmation",
+"unblocks": [
+"swe_bench_verified disposition"
+],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "task-boundary-dry-route",
+"unblocks": [
+"release"
+],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "terminal-c4-revisit",
+"unblocks": [
+"terminal_bench_2_1"
+],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "terminal-nightly-tail-diagnosis",
+"unblocks": [
+"representative Terminal score"
+],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "gpqa-b8-expanded-pool",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 2.2274497595603955,
+"basis": "Measured localcost and latestbaseline setup, candidate context-interpolated eval guess; original launch forecast preserved",
+"status": "running",
+"historical_gpqa_opportunity_hours": 3.024
+},
+{
+"problem": "agent-capacity-and-contention",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 0.25,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "ci-cache-routing",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 0.08333333333333333,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "ci-image-reuse",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0.8333333333333334
+},
+{
+"problem": "gpqa-c4-capacity",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 0.18,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0.065764804125
+},
+{
+"problem": "gpqa-c4-scored10",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 0.5088888888888888,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0.065764804125
+},
+{
+"problem": "gpqa-decode-state-discriminator",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 0.12,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 1.3
+},
+{
+"problem": "gpqa-loop-logits-discriminator",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 0.08,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 1.3
+},
+{
+"problem": "larger-gpqa-concurrency-reprice",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 1.5,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 2
+},
+{
+"problem": "long-prefill-decode-interference",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 0.25,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "real-history-capacity-preparation",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 0,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+},
+{
+"problem": "singleton-batch-comparison",
+"unblocks": [],
+"saving_hours": 0,
+"device_hours": 0.1,
+"basis": "Recorded prior effort estimate as continuation-cost proxy; no new continuation admitted",
+"status": "done",
+"historical_gpqa_opportunity_hours": 0
+}
+],
+"reason": "Includes every unsolved/not-run/running problem, including stopped suites and past-budget work. Validity first. No new numerical speed credit asserted: prior opportunity estimates are retained separately, shared causes not summed. Exhausted toolsuite repairs and conditional loop diagnostics have no admitted new fix; running C8 comparison continues while normal40 proceeds. This ordering authorizes no additional device experiment."
+}
+],
+"forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes.",
+"ranking_price_reconciliations": [
+{
+"at": "2026-11-06T21:35:40.646779+00:00",
+"original_null_fields": [
+[
+0,
+"local-sandbox-runtime",
+[
+"saving_hours"
+]
+],
+[
+0,
+"gpqa-local-credential",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+0,
+"agent-capacity-and-contention",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+1,
+"local-sandbox-runtime",
+[
+"saving_hours"
+]
+],
+[
+1,
+"gpqa-local-credential",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+1,
+"agent-capacity-and-contention",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+2,
+"gpqa-local-credential",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+2,
+"agent-capacity-and-contention",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+3,
+"gpqa-local-credential",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+3,
+"agent-capacity-and-contention",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+4,
+"gpqa-local-credential",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+4,
+"agent-capacity-and-contention",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+5,
+"local-sandbox-runtime",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+5,
+"harness-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+5,
+"suite-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+5,
+"gpqa-local-credential",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+5,
+"agent-capacity-and-contention",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+6,
+"ci-release-route",
+[
+"saving_hours"
+]
+],
+[
+6,
+"local-serving-check",
+[
+"saving_hours"
+]
+],
+[
+6,
+"harness-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+6,
+"suite-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+7,
+"local-tti-client-tokenizer",
+[
+"saving_hours"
+]
+],
+[
+7,
+"ci-release-route",
+[
+"saving_hours"
+]
+],
+[
+7,
+"harness-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+8,
+"harness-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+8,
+"ci-release-route",
+[
+"saving_hours"
+]
+],
+[
+8,
+"local-long-context",
+[
+"saving_hours"
+]
+],
+[
+9,
+"parser-protocol",
+[
+"saving_hours"
+]
+],
+[
+9,
+"ci-release-route",
+[
+"saving_hours"
+]
+],
+[
+9,
+"harness-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+10,
+"harness-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+10,
+"ci-release-route",
+[
+"saving_hours"
+]
+],
+[
+11,
+"ci-fabric-topology",
+[
+"saving_hours"
+]
+],
+[
+11,
+"harness-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+11,
+"ci-release-route",
+[
+"saving_hours"
+]
+],
+[
+12,
+"ci-fabric-topology",
+[
+"saving_hours"
+]
+],
+[
+12,
+"harness-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+12,
+"ci-release-route",
+[
+"saving_hours"
+]
+],
+[
+12,
+"agent-capacity-and-contention",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+13,
+"ci-fabric-topology",
+[
+"saving_hours"
+]
+],
+[
+13,
+"harness-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+13,
+"ci-release-route",
+[
+"saving_hours"
+]
+],
+[
+13,
+"ci-cache-routing",
+[
+"saving_hours"
+]
+],
+[
+14,
+"ci-fabric-topology",
+[
+"saving_hours"
+]
+],
+[
+14,
+"harness-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+14,
+"ci-release-route",
+[
+"saving_hours"
+]
+],
+[
+14,
+"ci-cache-routing",
+[
+"saving_hours"
+]
+],
+[
+15,
+"immutable-harbor-release-source",
+[
+"saving_hours"
+]
+],
+[
+15,
+"ci-release-route",
+[
+"saving_hours"
+]
+],
+[
+15,
+"ci-fabric-topology",
+[
+"saving_hours"
+]
+],
+[
+15,
+"harness-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+15,
+"ci-cache-routing",
+[
+"saving_hours"
+]
+],
+[
+16,
+"immutable-harbor-release-source",
+[
+"saving_hours"
+]
+],
+[
+16,
+"ci-release-route",
+[
+"saving_hours"
+]
+],
+[
+16,
+"ci-fabric-topology",
+[
+"saving_hours"
+]
+],
+[
+16,
+"harness-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+16,
+"ci-cache-routing",
+[
+"saving_hours"
+]
+],
+[
+16,
+"agent-capacity-and-contention",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+17,
+"immutable-harbor-release-source",
+[
+"saving_hours"
+]
+],
+[
+17,
+"ci-release-route",
+[
+"saving_hours"
+]
+],
+[
+17,
+"ci-fabric-topology",
+[
+"saving_hours"
+]
+],
+[
+17,
+"harness-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+17,
+"ci-cache-routing",
+[
+"saving_hours"
+]
+],
+[
+17,
+"agent-capacity-and-contention",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+18,
+"immutable-harbor-release-source",
+[
+"saving_hours"
+]
+],
+[
+18,
+"ci-release-route",
+[
+"saving_hours"
+]
+],
+[
+18,
+"ci-fabric-topology",
+[
+"saving_hours"
+]
+],
+[
+18,
+"harness-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+18,
+"ci-cache-routing",
+[
+"saving_hours"
+]
+],
+[
+18,
+"agent-capacity-and-contention",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+19,
+"immutable-harbor-release-source",
+[
+"saving_hours"
+]
+],
+[
+19,
+"ci-release-route",
+[
+"saving_hours"
+]
+],
+[
+19,
+"ci-fabric-topology",
+[
+"saving_hours"
+]
+],
+[
+19,
+"harness-registration",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+19,
+"ci-cache-routing",
+[
+"saving_hours"
+]
+],
+[
+19,
+"agent-capacity-and-contention",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+115,
+"GPQA20 archive-validity retry",
+[
+"device_hours"
+]
+],
+[
+115,
+"GPQA frozen dry route",
+[
+"device_hours"
+]
+],
+[
+115,
+"GPQA normal40 then80",
+[
+"device_hours"
+]
+],
+[
+115,
+"Astropy and GPQA loop cause",
+[
+"saving_hours",
+"device_hours"
+]
+],
+[
+116,
+"GPQA20 archive-validity retry",
+[
+"device_hours"
+]
+],
+[
+117,
+"GPQA20 archive-validity retry",
+[
+"device_hours"
+]
+],
+[
+118,
+"GPQA20 archive-validity retry",
+[
+"device_hours"
+]
+],
+[
+118,
+"frozen CI initial-agent no-score dry",
+[
+"device_hours"
+]
+],
+[
+119,
+"GPQA20 archive-validity retry",
+[
+"device_hours"
+]
+],
+[
+119,
+"frozen CI initial-agent no-score dry",
+[
+"device_hours"
+]
+],
+[
+120,
+"GPQA20 archive-validity retry",
+[
+"device_hours"
+]
+],
+[
+120,
+"frozen CI initial-agent no-score dry",
+[
+"device_hours"
+]
+],
+[
+121,
+"GPQA20 archive-validity retry",
+[
+"device_hours"
+]
+],
+[
+121,
+"frozen CI initial-agent no-score dry",
+[
+"device_hours"
+]
+],
+[
+122,
+"GPQA20 archive-validity retry",
+[
+"device_hours"
+]
+],
+[
+122,
+"frozen initial-agent no-score dry",
+[
+"device_hours"
+]
+],
+[
+123,
+"GPQA20 archive-validity retry",
+[
+"device_hours"
+]
+],
+[
+123,
+"frozen initial-agent no-score dry",
+[
+"device_hours"
+]
+],
+[
+124,
+"GPQA20 archive-validity retry",
+[
+"device_hours"
+]
+],
+[
+124,
+"frozen initial-agent no-score dry",
+[
+"device_hours"
+]
+],
+[
+125,
+"GPQA20 archive-validity retry",
+[
+"device_hours"
+]
+],
+[
+125,
+"frozen initial-agent no-score dry",
+[
+"device_hours"
+]
+],
+[
+126,
+"frozen initial-agent no-score dry",
+[
+"device_hours"
+]
+],
+[
+126,
+"gpqa-loop-logits-discriminator",
+[
+"saving_hours",
+"device_hours"
+]
+]
+],
+"basis": "Current planning reconciliation, not a claim these prices existed at historical dispatch. Proper effort names use their recorded predicted.device_hours and basis; uncredited saving is0 planning credit, not measured absence of effect. Host-only0cost remains true and is not inflated for knowncheckerdefect.",
+"extra_device_hours": {
+"GPQA20 archive-validity retry": 1.6491666666666667,
+"GPQA frozen dry route": 4.9,
+"frozen CI initial-agent no-score dry": 4.9,
+"frozen initial-agent no-score dry": 4.9,
+"GPQA normal40 then80": 9.67,
+"Astropy and GPQA loop cause": 0.25
+},
+"extra_basis": "Archive retry uses previous same20 measured devicehold. Dry4.9h is5.4h schedule minus.5h queue. Rungs9.67h is current40/80 workload guess excludingqueue/build, not admission. Loopcause.25h is shortdiagnostic guess; no new hypothesis admitted.",
+"future_rule": "Every future ranking must carry numeric measured/calculated/marked-guess prices, preserving realzero devicehours."
+}
+]
 }

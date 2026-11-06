@@ -1,22 +1,26 @@
 {
   "workload": {
-    "target_concurrency": 2,
-    "working_set_tokens": 107585,
-    "typical_context_tokens": 31755,
-    "source": "Conservative observed stress target107585/typical31755 retained from prior quarantined real SWE workload; valid smoke per-suite measurements recorded separately below. No unsupported capacity claim.",
+    "target_concurrency": 4,
+    "working_set_tokens": 131072,
+    "typical_context_tokens": 241,
+    "source": "Current release-go GPQA valid20: C4 observed, median native input241tokens, max observed processed-cache extent127456tokens; working-set stress rounded to separately measured131072-history capacity. Tool-suite stops and prior stress retained separately; no exact hidden API-emission count asserted.",
     "measured_by_eval": {
       "r1_gpqa_diamond": {
         "target_concurrency": 4,
         "observed_peak_running": 4,
-        "initial_prompt_tokens": [
-          485,
-          298
+        "working_set_tokens": 131072,
+        "observed_processed_cache_tokens_max": 127456,
+        "typical_context_tokens": 241,
+        "native_prompt_tokens_min": 156,
+        "native_prompt_tokens_max": 642,
+        "native_prompt_tokens_total": 5659,
+        "completed_tasks": 20,
+        "total_physical_decode_samples": 367509,
+        "source": [
+          "doc/agentic_evals/runs/larger-gpqa20-c4-retention-retry/audit.json",
+          "doc/agentic_evals/runs/gpqa-c4-capacity/RESULT.json"
         ],
-        "working_set_tokens": null,
-        "source": "doc/agentic_evals/runs/gpqa-c4-scored10/RESULT.json; doc/agentic_evals/runs/gpqa-c4-capacity/RESULT.json",
-        "missing_reason": "Raw completion usage/finalcontext not retained; asynchronous decode submissions are not emittedtoken counts. Toolsuite histories pending.",
-        "capacity_stress_tokens_per_client": 131072,
-        "scope": "GPQA only; top-level multi-turn tool workload remains C2; no hidden completion usage fabricated"
+        "scope": "Current go suite single-turn GPQA; processing/cache positions are not emitted APIusage. C8 candidate unselected."
       },
       "swe_bench_verified": {
         "target_concurrency": 2,
@@ -60,6 +64,12 @@
       "prompt_p95": 94242,
       "source": "doc/agentic_evals/runs/real-history-capacity/workload-result.json",
       "limits": "No continuous simultaneouspeakoccupancy; quarantinedscore; notrepresentativepopulation; missing11calls."
+    },
+    "prior_tool_workload_top_level": {
+      "target_concurrency": 2,
+      "working_set_tokens": 107585,
+      "typical_context_tokens": 31755,
+      "source": "Conservative observed stress target107585/typical31755 retained from prior quarantined real SWE workload; valid smoke per-suite measurements recorded separately below. No unsupported capacity claim."
     }
   },
   "batch_sizes": [

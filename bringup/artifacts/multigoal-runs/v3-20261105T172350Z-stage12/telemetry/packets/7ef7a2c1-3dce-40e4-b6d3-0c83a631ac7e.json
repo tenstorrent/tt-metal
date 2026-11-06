@@ -36,17 +36,17 @@
   "accuracy": [
     {
       "name": "r1_gpqa_diamond",
-      "value": 0.9,
+      "value": 0.8,
       "unit": "fraction",
-      "phase": "agentic-evals-server-sized",
-      "completed_samples": 10,
+      "phase": "agentic-evals-larger",
+      "completed_samples": 20,
       "dataset_samples": 198,
       "scope": "subset",
       "confidence_interval_95": [
-        0.5958499732047615,
-        0.9821237869049271
+        0.5839825677481064,
+        0.919342337420202
       ],
-      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/server-sized-gpqa-c2/audit.json"
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/larger-gpqa20-c4-retention-retry/audit.json"
     },
     {
       "name": "terminal_bench_2_1",
@@ -79,7 +79,7 @@
   ],
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
-    "stage12_accuracy": "Banked GPQA10/198, SWE2/500, Terminal2/89. Earlier GPQA20 raw16/20 unbanked after archive failure; repaired retry42273660905 is running. SWE5 completed but invalid external retrieval; measured stop5/functional2. No dry/release.",
+    "stage12_accuracy": "Banked GPQA20/198, SWE2/500, Terminal2/89. SWE5 invalid external retrieval; measured stop5/functional2. Terminal10 measured nonfit/functional2. GPQA40 running; no dry/release.",
     "release": "No frozen dry/release yet. Stock response logging locally confirmed for initial-request IDs including empty-visible replies; actual CI no-score dry remains."
   },
   "notes": [
@@ -87,10 +87,10 @@
     "C4 same-ten scored pair9/10 each; C4 642.445722s versus C2 938.039050s. Repeated tasks are not additional independent accuracy samples.",
     "Default-off model-owned token retention accepted by exact native paired outputs and583matched decode IDs; no client-emission identity claim.",
     "Local execution checkout remains without remotes; source-only publication uses separate authorized checkouts.",
-    "Local saved-input GPQA replay confirms two repetitive tails; original unretained20 remains unbanked. Local archive repair passed exact native outputs and idle tar; CI confirmation pending.",
+    "Repaired GPQA20 run42273660905 valid16/20 in1.5557604843eval hours. Complete retained20chains classify both capped empty answers as periodic failures. Earlier unretained attempts remain unbanked. Evidence: runs/larger-gpqa20-c4-retention-retry/audit.json.",
     "Six full60 conditional HF/TT prefill and forced incremental-decode checkpoints support captured loop continuations; no originalservedstate or autonomousHF claim. Evidence: runs/gpqa-loop-logits-discriminator/RESULT.json and runs/gpqa-decode-state-discriminator/RESULT.json.",
     "SWE retained5: raw1/5 (Wilson95%3.62\u201362.45%), invalid Xarray external retrieval; functional2 retained, no retry/advance. Eval8190.434942s; native Astropy cap32768 with18047-token periodic suffix. Nine discarded outputs and failed phase archive limit attribution. Evidence: runs/nightly-swe-decode-retention/audit.json.",
     "Selected headline remains unbuffered B1. Stock response debug buffers SSE (measured experiment excluded from decoderateclaims); enabled only for nonstreamingGPQA. Evidence: runs/response-logging-runtime-benchmark/AUTOFIX.md.",
-    "Optional B8 expanded pool passed eight131K-history capacity, three native exact pairs and B1 regression. Same20 C8 comparison42293808766 building; baseline42273660905 still running. Not selected, zero speed saving credited. Evidence: runs/gpqa-b8-expanded-pool/{local-confirmation,benchmark-confirmation,timing-baseline}.json."
+    "Optional expandedB8 capacity and native/B1 exactness passed. Same20 C8 comparison42293808766 building, unselected with zero speed saving credited. Normal40 run42296943044 uses accepted C4 and proven image. Evidence: runs/gpqa-b8-expanded-pool/{local-confirmation,benchmark-confirmation,timing-baseline}.json."
   ]
 }

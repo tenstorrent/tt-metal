@@ -1,5 +1,5 @@
 {
-  "status": "stage_active_final_route_decisions_pending",
+  "status": "stage_active_gpqa40_and_c8_comparison",
   "blockers": [
     {
       "id": "local-sandbox-runtime",
@@ -7,14 +7,16 @@
       "unblocks": [
         "swe_bench_verified",
         "terminal_bench_2_1"
-      ]
+      ],
+      "status": "local_limitation_mitigated_by_operator8_ci_route"
     },
     {
       "id": "gpqa-local-credential",
       "reason": "Operator decision5: no local gated dataset credential, none to be added; use authorized secondary if possible.",
       "unblocks": [
         "r1_gpqa_diamond"
-      ]
+      ],
+      "status": "local_limitation_mitigated_by_operator8_ci_route"
     },
     {
       "id": "phase-archive-idle-race",
@@ -22,7 +24,8 @@
         "r1_gpqa_diamond",
         "swe_bench_verified"
       ],
-      "reason": "Local AutoFix passes exact native pair and stable idle tar; accepted ab2730c2 published. Actual CI collection confirmation pending retry42273660905."
+      "reason": "Repaired CI20 completed with complete retainedarchive, no loss,20unambiguouschains and valid16/20; evidence runs/larger-gpqa20-c4-retention-retry/audit.json",
+      "status": "resolved"
     }
   ],
   "permissions": {
@@ -30,14 +33,13 @@
     "account_fallback": null
   },
   "remaining_work": [
-    "Classify capped GPQA/SWE responses and bank valid rungs",
-    "Larger fitting rungs with measured projections",
-    "Resolve exact dry-route and admission evidence",
-    "Frozen clean dry run and immutable release",
-    "Closure review and stage gate"
+    "Complete40 and larger fitting GPQA rungs with measured projections",
+    "Accept or reject optional C8 from same20 scoredpair",
+    "Frozen configuration, actual clean dry and immutable release including benchmark matrix",
+    "One closure review and stage gate"
   ],
   "initial_stop_at": "2026-11-06T04:33:36.867416+00:00",
-  "updated_at": "2026-11-06T18:47:15.457318+00:00",
+  "updated_at": "2026-11-06T21:31:43.734999+00:00",
   "completed_preparation": [
     "Fresh autoport registry and suite entries published; full host suite3737 passed15 skipped",
     "Stratified task cohorts frozen before scores",
@@ -45,10 +47,10 @@
   ],
   "live_wait": {
     "run_ids": [
-      42247098210,
-      42273660905
+      42296943044,
+      42293808766
     ],
-    "status": "SWE5 running, GPQA20 same-cohort retry building accepted archive repair"
+    "status": "Normal40 devicejob active; optionalC8same20 newimage building"
   },
   "release_route_decision_request": {
     "at": "2026-11-06T05:12:13.370191+00:00",
@@ -82,7 +84,7 @@
   },
   "dry_run_route_question": {
     "at": "2026-11-06T05:43:27.157486+00:00",
-    "status": "pending",
+    "status": "resolved_for_current_go_scope_procedure_still_requires_execution",
     "proposal": "Complete frozen task lists and benchmark rehearsal, ignore scores, then separate identical-SHA/settings release",
     "reason": "Stock workflow lacks readiness-stop; cancellation skips complete task evidence upload",
     "source": "runs/ci-release-route/RESULT.md",
@@ -113,7 +115,8 @@
           "conclusion": "No supported low-latency route established"
         }
       }
-    }
+    },
+    "resolution": "SWE and Terminal measuredstops leave HTTP-onlyGPQA pluslocalbenchmark. Exact early-stop dry is feasible inprinciple with initialrequestID/reply logs; no exception to no-score rule assumed. Actual frozen dry pending."
   },
   "release_dependency_freeze": {
     "status": "Harbor_pin_live_confirmed",

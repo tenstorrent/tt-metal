@@ -41,7 +41,7 @@
   "capacity_evidence": "runs/retention-c4-lifecycle/RESULT.json",
   "retention_enabled": true,
   "arm": "larger-gpqa20-c4-retention-retry",
-  "status": "device_job_in_progress",
+  "status": "completed_valid_twenty",
   "queued_at": "2026-11-06T18:46:01.548044+00:00",
   "tt_metal_sha": "ab2730c27e557b09b2eafe3494e47790adc210aa",
   "predicted_hours": 3.049166666666667,
@@ -57,9 +57,9 @@
   "run_id": 42273660905,
   "submitted_at": "2026-11-06T18:46:03Z",
   "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42273660905",
-  "workflow_status": "in_progress",
-  "workflow_conclusion": null,
-  "last_observed_at": "2026-11-06T21:14:41.394334+00:00",
+  "workflow_status": "completed",
+  "workflow_conclusion": "success",
+  "last_observed_at": "2026-11-06T21:23:49.143416+00:00",
   "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-frkdx",
   "build_started_at": "2026-11-06T18:46:22Z",
   "build_completed_at": "2026-11-06T19:42:24Z",
@@ -77,6 +77,27 @@
   "runner": "120-qb2-p04t05",
   "device_job_id": 128113001232,
   "device_job_started_at": "2026-11-06T19:42:26Z",
-  "device_job_completed_at": null,
-  "start": "2026-11-06T19:42:26Z"
+  "device_job_completed_at": "2026-11-06T21:22:50Z",
+  "start": "2026-11-06T19:42:26Z",
+  "end": "2026-11-06T21:22:50Z",
+  "exit_status": 0,
+  "actual_hours": 1.6733333333333333,
+  "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+  "workflow_wall_hours": 2.6133333333333333,
+  "audit": "runs/larger-gpqa20-c4-retention-retry/audit.json",
+  "functional_at": 20,
+  "score": {
+    "name": "r1_gpqa_diamond exact_match",
+    "value": 0.8,
+    "correct": 16,
+    "completed_samples": 20,
+    "dataset_samples": 198,
+    "scope": "subset",
+    "wilson95": [
+      0.5839825677481064,
+      0.919342337420202
+    ],
+    "accepted": true
+  },
+  "eval_hours": 1.5557604843284936
 }
