@@ -15,7 +15,7 @@ import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.reference.kda.ops import sigmoid_gated_rms_norm_reference
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -375,8 +375,10 @@ def test_sigmoid_gated_rms_norm_production_is_accurate_and_deterministic(
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_sigmoid_gated_rms_norm_production_performance(device: ttnn.Device, case: _ProductionCase) -> None:
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail("Real-time profiler must be active for sigmoid-gated RMSNorm performance checks")
+    if not is_perf_profiler_active():
+        pytest.fail(
+            "Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for sigmoid-gated RMSNorm performance checks"
+        )
 
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(
         device,

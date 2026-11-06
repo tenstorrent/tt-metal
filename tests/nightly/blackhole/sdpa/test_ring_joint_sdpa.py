@@ -55,7 +55,7 @@ from tests.nightly.sdpa_perf_utils import MeshConfig
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import is_perf_profiler_active, profile_realtime_program
 
 MESH_CONFIG = MeshConfig.detect()
 
@@ -781,8 +781,8 @@ def create_global_semaphores(mesh_device, cores, initial_value, *, count=2):
 
 
 def profile_ring_joint_runtime_duration_ns(mesh_device, run_fn):
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail("Real-time profiler must be active for SDPA perf checks")
+    if not is_perf_profiler_active():
+        pytest.fail("Streaming profiler (TT_METAL_STREAMING_PROFILER=1) must be active for SDPA perf checks")
 
     _, records = profile_realtime_program(
         mesh_device,
