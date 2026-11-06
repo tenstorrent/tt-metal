@@ -65,6 +65,15 @@ namespace streaming_profiler = tt::tt_metal::experimental::streaming_profiler;
 
 namespace {
 
+// Devices of every coordinate in the mesh, in row-major order. This test runs on a single host, so all are local.
+std::vector<IDevice*> mesh_devices(const distributed::MeshDevice& mesh) {
+    std::vector<IDevice*> devices;
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh.shape())) {
+        devices.push_back(internal::get_device(mesh, coord));
+    }
+    return devices;
+}
+
 constexpr std::string_view kKernelDir = "tests/ttnn/tracy/cpp/streaming_profiler_sync/kernels/";
 
 // One region of every worker's L1, taken from the allocator, that holds the kernels' flag (FlagWord) and the
@@ -182,7 +191,7 @@ int run() {
     const WorkerL1 worker_l1 = reserve_worker_l1(*mesh_device);
     const CoreCoord core(0, 0);
     std::vector<FlagCore> cores;
-    for (IDevice* device : mesh_device->get_devices()) {
+    for (IDevice* device : mesh_devices(*mesh_device)) {
         cores.push_back({device, core});
     }
     clear_flags(worker_l1, cores);
@@ -431,7 +440,7 @@ void run(distributed::MeshDevice& mesh, uint32_t runtime_id) {
     const CoreRange cores = worker_grid(mesh);
     const WorkerL1 worker_l1 = reserve_worker_l1(mesh);
     std::vector<FlagCore> flag_cores;
-    for (IDevice* device : mesh.get_devices()) {
+    for (IDevice* device : mesh_devices(mesh)) {
         for (const CoreCoord& core : cores) {
             flag_cores.push_back({device, core});
         }
@@ -445,7 +454,7 @@ void run(distributed::MeshDevice& mesh, uint32_t runtime_id) {
         cores.grid_size().y,
         kRounds,
         kRounds / 2,
-        mesh.get_devices().size());
+        mesh_devices(mesh).size());
 }
 
 // Returns whether every core on all `num_chips` chips received every round, and whether on each chip the cores' mean
@@ -820,7 +829,7 @@ public:
     void run(distributed::MeshDevice& mesh, std::string_view name) {
         const auto runtime_id = static_cast<uint32_t>(phases_.size() + 1);
         cores_ = worker_grid(mesh);
-        num_chips_ = mesh.get_devices().size();
+        num_chips_ = mesh_devices(mesh).size();
         multicast::run(mesh, runtime_id);
         phases_.push_back({std::string(name), pingpong::run(mesh, runtime_id)});
         std::fflush(stdout);

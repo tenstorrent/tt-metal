@@ -31,6 +31,7 @@
 #include "eth_test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_ptp_stamps.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -118,8 +119,8 @@ void run_link(
     const std::shared_ptr<distributed::MeshDevice>& receiver_mesh,
     const CoreCoord& transmitter_core,
     const CoreCoord& receiver_core) {
-    IDevice* transmitter_device = transmitter_mesh->get_devices()[0];
-    IDevice* receiver_device = receiver_mesh->get_devices()[0];
+    IDevice* transmitter_device = transmitter_mesh->impl().get_devices()[0];
+    IDevice* receiver_device = receiver_mesh->impl().get_devices()[0];
     const uint32_t base =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     const uint32_t result_addr = base + eth_ptp_stamps::kResultOffset;

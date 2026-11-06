@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <internal/mesh_device.hpp>
 
 #include <array>
 #include <memory>
@@ -67,7 +68,7 @@ TEST_F(X280Coordinates, ExistingCoreTypesRetainMetalSemantics) {
 // The resolver agrees with Metal's type-specific calls.
 TEST_F(X280Coordinates, TypedResolutionMatchesTypeSpecificCalls) {
     auto unit = mesh_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
-    const auto* device = unit->get_devices().front();
+    const auto* device = tt::tt_metal::internal::get_device(*unit, MeshCoordinate(0, 0));
     const auto eth_cores = device->get_active_ethernet_cores(true);
     ASSERT_FALSE(eth_cores.empty()) << "the mock descriptor must link its chips by Ethernet";
     for (const auto& eth : eth_cores) {

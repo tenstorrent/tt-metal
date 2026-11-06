@@ -816,7 +816,7 @@ TEST_F(PrefetcherPipeDramSenderFixture, DriscKernelReadsDramAndWorkerL1OverNoc) 
     constexpr uint32_t kOwnBank = 0;
     constexpr uint32_t kOtherBank = 1;
     const CoreCoord kWorker{0, 0};
-    IDevice* device = mesh_device_->get_devices().at(0);
+    IDevice* device = mesh_device_->impl().get_devices().at(0);
     const auto& allocator = device->allocator();
     const uint32_t num_banks = allocator->get_num_banks(BufferType::DRAM);
     ASSERT_GT(num_banks, kOtherBank);
