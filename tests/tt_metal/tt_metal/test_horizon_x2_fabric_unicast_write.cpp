@@ -62,6 +62,9 @@ protected:
     void create_devices() override { AnyDispatchMeshDeviceSingleCardFixture::create_devices({0, 1}); }
 
     void SetUp() override {
+        if (!fabric_unicast_2dev_available()) {
+            GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
+        }
         auto mgd_path = (std::filesystem::path(MetalContext::instance().rtoptions().get_root_dir()) /
                          "tt_metal/fabric/mesh_graph_descriptors/horizon_x2_mesh_graph_descriptor.textproto")
                             .string();

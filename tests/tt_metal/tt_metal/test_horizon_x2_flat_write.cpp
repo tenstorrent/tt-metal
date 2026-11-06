@@ -41,6 +41,7 @@ std::shared_ptr<distributed::MeshBuffer> flat_write_l1_buffer(distributed::MeshD
         .page_size = FLAT_WRITE_BYTES,
         .buffer_type = BufferType::L1,
         .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = true,
     };
     return distributed::MeshBuffer::create(distributed::ReplicatedBufferConfig{.size = FLAT_WRITE_BYTES}, local_cfg, &device);
 }
@@ -140,6 +141,13 @@ bool flat_write_two_chips() {
 class HorizonX2Chip1Fixture : public QuasarMeshDeviceSingleCardFixture {
 protected:
     void create_devices() override { AnyDispatchMeshDeviceSingleCardFixture::create_devices({1}); }
+
+    void SetUp() override {
+        if (MetalContext::instance().get_cluster().number_of_devices() < 2) {
+            GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
+        }
+        QuasarMeshDeviceSingleCardFixture::SetUp();
+    }
 };
 
 }  // namespace

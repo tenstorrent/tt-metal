@@ -38,6 +38,7 @@ std::shared_ptr<distributed::MeshBuffer> flat_write_2dev_l1_buffer(distributed::
         .page_size = FLAT_WRITE_2DEV_BYTES,
         .buffer_type = BufferType::L1,
         .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = true,
     };
     return distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = FLAT_WRITE_2DEV_BYTES}, local_cfg, &device);
@@ -53,6 +54,13 @@ bool flat_write_2dev_two_chips() {
 class FlatWrite2DevBothChipsFixture : public QuasarMeshDeviceSingleCardFixture {
 protected:
     void create_devices() override { AnyDispatchMeshDeviceSingleCardFixture::create_devices({0, 1}); }
+
+    void SetUp() override {
+        if (MetalContext::instance().get_cluster().number_of_devices() < 2) {
+            GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
+        }
+        QuasarMeshDeviceSingleCardFixture::SetUp();
+    }
 };
 
 // Sends FLAT_WRITE_2DEV_WORDS words from src_device (chip @p source) to tgt_device (chip @p target)

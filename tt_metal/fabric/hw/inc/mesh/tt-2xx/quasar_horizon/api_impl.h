@@ -51,14 +51,14 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     const uint32_t tile_x = selector % HORIZON_ATT_WORKER_GRID_X;
     const uint32_t tile_y = selector / HORIZON_ATT_WORKER_GRID_X;
 
-#ifdef TT_METAL_TTSIM
-    const uint64_t remote_addr = noc_addr;  // ttsim: routing table not populated
-#else
+    ASSERT(dst_mesh_id < tt::tt_fabric::MAX_HORIZON_MESHES);
+    ASSERT(dst_dev_id < tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH);
+    ASSERT(tile_x < HORIZON_ATT_WORKER_GRID_X);
+    ASSERT(tile_y < tt::tt_fabric::MAX_HORIZON_NOC_Y);
     const auto* routing_table =
         reinterpret_cast<const tt_l1_ptr tt::tt_fabric::fabric_over_noc_routing_l1_info_t*>(ROUTING_TABLE_BASE);
     // flat_addr[mesh][dev_id][noc_x_within_dev][noc_y_within_dev]
     const uint64_t remote_addr = routing_table->flat_addr[dst_mesh_id][dst_dev_id][tile_x][tile_y] + local_offset;
-#endif
 
     // Horizon NoC communication can currently only reach the lower 1 MB of each
     // Tensix core's L1; the NOC2AXI crossbar window is 1 MB per tile slot.
