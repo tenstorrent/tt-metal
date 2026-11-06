@@ -62,6 +62,7 @@ struct KernelAdvancedOptions {
     // by index. They are intended for arguments that the kernel reads only as elements of an
     // indexed collection, e.g. N runtime arguments holding the shape of an N-dimensional tensor.
     //
+    // (Array arguments serve the same purpose, and are named; prefer them. See KernelSpec.)
     // (For a variable number of tensor bindings, use a TensorBindingSequence instead; see below.)
 
     //--------------------------------
@@ -176,9 +177,9 @@ struct KernelAdvancedOptions {
     // node; the host resolves which), so one compiled kernel serves them all. The group's pipes
     // must agree on ring_size / entry_size.
     //
-    // The kernel's role (sender or receiver) is derived from its WorkUnitSpec node coverage
-    // against the group's receiver sets; see prefetcher_pipe_parameter.hpp. Compute kernels
-    // cannot bind a pipe; they consume through a relay DFB (DFBAdvancedOptions::prefetcher_pipe_relays).
+    // The kernel's role (sender or receiver) is derived by comparing its WorkUnitSpec nodes,
+    // minus extra_nodes, with the group's receiver sets; see prefetcher_pipe_parameter.hpp. Compute
+    // kernels cannot bind a pipe; they consume through a relay DFB (DFBAdvancedOptions::prefetcher_pipe_relays).
     //
     // CAUTION: PrefetcherPipe is experimental and its protocol is user-managed (a pipe outlives
     //          the Programs that use it; peers must agree on entry sizes and lane counts).
@@ -187,6 +188,28 @@ struct KernelAdvancedOptions {
         // Non-empty. Typically one; several when they tile the kernel's nodes (see above).
         Group<PrefetcherPipeParamName> pipe_parameter_names;
         std::string accessor_name;  // pipe accessor name (used in the kernel source code)
+
+        // Nodes the kernel runs on that are not a sender or receiver of any pipe in the group,
+        // e.g. to fill out a rectangle around the receivers. The kernel's role is derived from
+        // its other nodes.
+        //
+        // Each extra node must be one of the kernel's nodes and must not be a receiver of any
+        // pipe in the group (MakeProgramFromSpec checks this) or a pipe's sender
+        // (SetProgramRunArgs checks this, when the pipe objects are supplied).
+        //
+        // An extra node owns no part of any pipe. Its slot entry is copied from
+        // pipe_parameter_names[0], so its config-page address can hold another pipe's page.
+        // On an extra node:
+        //  - this kernel must not construct the PrefetcherPipe;
+        //  - no kernel may construct the group's relay DataflowBuffer. The relay's consumer
+        //    kernels run here too, because a DFB's producers and consumers cover the same nodes.
+        // Nothing on the device catches either mistake. Tell extra nodes apart with your own
+        // runtime arguments.
+        //
+        // When all pipes in the group have the same config_address() (one pipe, or pipes carved
+        // from one PrefetcherPipeSpace), every node of the kernel has the same slot entry, and
+        // one multicast per rectangle configures them all.
+        NodeRangeSet extra_nodes;
     };
     Group<PrefetcherPipeBinding> prefetcher_pipe_bindings;
 };
@@ -258,8 +281,10 @@ struct DFBAdvancedOptions {
     //  - mutually exclusive with borrowed_from
     //  - entry_size == pipe entry_size and entry_size * num_entries == pipe ring_size, for every
     //    named pipe (all named pipes share ring_size and entry_size)
-    //  - the DFB's node set (union of its bound kernels' nodes) equals the union of the named
-    //    pipes' receiver nodes, and those receiver sets are pairwise disjoint
+    //  - the DFB's node set (union of its bound kernels' nodes) is the receiver kernel's node set:
+    //    the union of the named pipes' receiver nodes, which must be pairwise disjoint, plus that
+    //    kernel's extra_nodes (KernelAdvancedOptions::PrefetcherPipeBinding::extra_nodes). The
+    //    consumer kernels therefore run on the extra nodes too and must not construct the DFB there
     //  - every PRODUCER kernel binds exactly this pipe set under one accessor
     //    (KernelAdvancedOptions::prefetcher_pipe_bindings); it is the pipes' receiver kernel, and
     //    its num_threads is the pipes' receiver-side credit lane count
@@ -273,6 +298,30 @@ struct DFBAdvancedOptions {
     // CAUTION: The relay's storage is the pipe's ring, owned outside the Program. The DFB cannot
     //          be resized by DFBRunOverrides, and its address is only known once the pipe is bound.
     Group<PrefetcherPipeParamName> prefetcher_pipe_relays;
+};
+
+struct ScratchpadAdvancedOptions {
+    ////////////////////////////////////////////////////////////////////////////////
+    // Scratchpad multi-bindings
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // By default, a scratchpad instance (i.e., a scratchpad on a particular node) is
+    // bound by exactly one kernel instance. A *ScratchpadSpec* may still be bound by
+    // more than one KernelSpec, as long as their node sets are disjoint.
+    //
+    // "Multi-binding" refers to a scratchpad instance bound by more than one kernel
+    // instance. All binding kernel instances on a node access the same backing memory.
+    //
+    // CAUTION:
+    // Multi-binding a scratchpad instance is UNSAFE in most circumstances.
+    // Scratchpad provides no synchronization; kernel logic must explicitly ensure
+    // access safety and synchronization.
+    //
+    // Note:
+    // On Gen2 (Quasar), only DM kernel instances may share a node's scratchpad.
+    // DM cores and Compute cores have cache coherency misalignment that currently
+    // lacks ways to synchronize. See: #62551
+    bool allow_instance_multi_binding = false;
 };
 
 struct ProgramAdvancedOptions {

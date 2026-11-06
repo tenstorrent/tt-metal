@@ -6,6 +6,12 @@ benchmark JSON. A separate CI step then enforces the targets in
 [`models/model_targets.yaml`](../../model_targets.yaml) via
 `.github/scripts/utils/validate_perf_targets.py`.
 
+Known measurements are printed even when the matching entry is missing or
+`status: TODO` (table status `no-target`). An entry may set `enforce_perf: false`
+(the default is `true`) so perf is compared and printed as `report-only` without
+failing the job. Tier 3 e2e uses that flag. Accuracy on an active entry still
+fails the job.
+
 You can run that **same** enforcement locally as an opt-in pytest gate.
 
 ## How to enable
