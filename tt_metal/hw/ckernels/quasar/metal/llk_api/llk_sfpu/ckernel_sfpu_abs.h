@@ -15,7 +15,10 @@ namespace sfpu {
 
 inline void abs_init() { math::_reset_counters_<p_setrwc::SET_ABD_F>(); }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+// Whether BF16 DEST runs the generated abs kernel as one call over the whole tile.
+inline constexpr bool abs_bf16_whole_tile = false;
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void calculate_abs() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
