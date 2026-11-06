@@ -699,8 +699,11 @@ def dense_linear(
 
     nd_layout, the generated norm's ND-sharded layout (tt.common.nd_norm_layout), has a bare projection above
     SMALL_M_TILES written in that layout first, wherever it fits L1: pirotski_matmul and minimal_matmul write it
-    tile by tile through TensorAccessor (pirotski's direct pack needs the split layout), about 0.35 us more a call
-    for out_proj and 0.7 for fc2 at 128 tile rows than direct-packed (docs/PIROTSKI_MATMUL.md section 3.4).
+    through TensorAccessor after the K loop (pirotski's direct pack needs the split layout). With
+    tt_config.pirotski_drain_plan pirotski computes each core column's rows near the grid columns they land in and
+    plans which RISC writes each piece (drain_plan, strided_rows): out_proj / fc2 34.97 / 83.29 us against 36.17 /
+    86.17 at 128 tile rows, 21.27 / 50.16 against 22.79 / 51.28 at 64, 13.13 / 29.63 against 14.91 / 31.89 at 32,
+    bit for bit the same output (nomic-opt c13).
     """
     # Indexed: unpacking a ttnn.Shape iterates it, 1.06 us of host time against 0.09 for four
     # index reads, and the model reads one about 110 times a forward.
@@ -763,6 +766,9 @@ def dense_linear(
     placements = []
     if nd_layout is not None and gelu is None:
         placements.append((nd_layout, nd_layout_bank_bytes(nd_layout, output_dtype), None))
+    # pirotski_matmul's drain into the ND layout: rows computed by the core column their output lands near, and the
+    # drain's pieces spread over both NoCs (tt_config.pirotski_drain_plan).
+    nd_drain = nd_layout is not None and gelu is None and tt_config.pirotski_drain_plan
     if norm_layout is not None and gelu is None:
         layout, core_columns, block_h, core_rows = norm_layout
         bank = block_h * (n_tiles // core_rows) * ttnn.tile_size(output_dtype)
@@ -805,6 +811,8 @@ def dense_linear(
                 strip_m_tiles=plan.strip_m_tiles,
                 strip_read_ahead=plan.strip_read_ahead,
                 read_ahead=plan.read_ahead,
+                drain_plan=nd_drain and memory_config is nd_layout,
+                strided_rows=nd_drain and memory_config is nd_layout,
             )
         # DRAM's plan always fits: its M splits until it does.
         if not bank or bank + minimal_matmul_footprint(config, *dtypes) <= budget:

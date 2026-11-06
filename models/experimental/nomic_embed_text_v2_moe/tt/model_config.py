@@ -289,6 +289,11 @@ class TtModelConfig:
     # sequence whole tiles (tt/common.py: nd_norm_layout): the norms run nomic_residual_layer_norm, out_proj and fc2
     # write that layout, the MoE reads and writes it unflattened. Off: the split layout and ttnn.layer_norm.
     nd_residual: bool = True
+    # out_proj and fc2 writing that ND layout on pirotski_matmul: core column x computes the output rows that land
+    # around grid column x (strided_rows) and the host splits the end-of-op drain over both NoCs by link load
+    # (drain_plan), so the drain is mostly a short vertical move instead of a mesh-wide transpose. Bit-identical
+    # output. Off: contiguous M shares, even rows on NOC1 and odd rows on NOC0.
+    pirotski_drain_plan: bool = True
     # The MoE dispatch (the gather of each slot's token row) and combine (each token's two expert rows weighted, summed
     # and the shared bias added) on the generated nomic_moe_dispatch and nomic_moe_combine (ttnn.operations) wherever
     # they take the window: 1000 to 4096 tokens, the combine's output in a layout it writes (tt/experts.py). Off:
