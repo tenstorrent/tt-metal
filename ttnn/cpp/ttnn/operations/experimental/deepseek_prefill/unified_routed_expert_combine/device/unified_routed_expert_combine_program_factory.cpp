@@ -11,7 +11,7 @@
 
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/routed_expert_combine_overlap/device/routed_expert_handoff.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_combine/device/wave_routed_expert_program_factory.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine {
 
@@ -84,7 +84,7 @@ tt::tt_metal::WorkloadDescriptor UnifiedRoutedExpertCombineProgramFactory::creat
 
     // The routed expert sizes its circular buffers from the free L1, and combine predicts its finish order from the
     // plan that gives; both were fixed when the op was called.
-    const auto plan = ure::UnifiedRoutedExpertFfnProgramFactory::select_l1_plan(re_args, re_inputs);
+    const auto plan = WaveRoutedExpertProgramFactory::select_l1_plan(re_args, re_inputs);
     TT_FATAL(
         plan.first == op.wave_per_core_M && plan.second == op.wave_in0_block_w,
         "unified_routed_expert_moe_combine was called with L1 plan ({}, {}) but would now build ({}, {}); the free L1 "
@@ -94,11 +94,11 @@ tt::tt_metal::WorkloadDescriptor UnifiedRoutedExpertCombineProgramFactory::creat
         plan.first,
         plan.second);
     ttnn::Tensor re_output = t.output;
-    const auto re_descriptor = ure::UnifiedRoutedExpertFfnProgramFactory::create_embedded_descriptor(
+    const auto re_descriptor = WaveRoutedExpertProgramFactory::create_embedded_descriptor(
         re_args,
         re_inputs,
         re_output,
-        ure::UnifiedRoutedExpertFfnProgramFactory::EmbeddedOptions{
+        WaveRoutedExpertProgramFactory::EmbeddedOptions{
             .origin_y = overlap::kRoutedExpertOriginY,
             .big_first_threshold = op.big_first_threshold,
             .report_predicted_order = true,
@@ -108,7 +108,7 @@ tt::tt_metal::WorkloadDescriptor UnifiedRoutedExpertCombineProgramFactory::creat
     auto combine_args = combine_attributes(op, t);
     // The writers report each expert at its place in the predicted finish order; combine predicts the same order for
     // every ring chip, from the same planner configuration and threshold.
-    const auto planner = ure::UnifiedRoutedExpertFfnProgramFactory::wave_planner_config(re_args, re_inputs);
+    const auto planner = WaveRoutedExpertProgramFactory::wave_planner_config(re_args, re_inputs);
     combine_args.predicted_walk = true;
     combine_args.walk_per_core_M_max = planner.per_core_M_max;
     combine_args.walk_partial_eighth = planner.partial_eighth;

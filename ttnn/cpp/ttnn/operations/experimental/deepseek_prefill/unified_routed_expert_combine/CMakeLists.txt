@@ -16,7 +16,16 @@ set_target_properties(
             api
 )
 
-# No kernels of its own: the routed expert's are unified_routed_expert_ffn's and combine's are combine_fabric2d's.
+# The routed expert's kernels; combine's are combine_fabric2d's. GLOB_RECURSE: they sit in compute/ and dataflow/,
+# and the headers beside them are included BY those kernels (and by combine's) at JIT compile time, so they are
+# install artifacts too.
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.hpp
+    device/kernels/*.h
+)
+
 target_sources(
     ttnn_op_experimental_deepseek_prefill_unified_routed_expert_combine
     PUBLIC
@@ -24,6 +33,10 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_UNIFIED_ROUTED_EXPERT_COMBINE_API_HEADERS}
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_UNIFIED_ROUTED_EXPERT_COMBINE_SRCS}
 )
@@ -36,6 +49,16 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::UnifiedRoutedExpertFfn
     PUBLIC
         TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_experimental_deepseek_prefill_unified_routed_expert_combine
+    FILE_SET
+    kernels
+        DESTINATION
+            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_combine
+        COMPONENT ttnn-runtime
 )
 
 install(

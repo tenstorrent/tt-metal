@@ -79,7 +79,9 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         nb::arg("channel_semaphores") = std::vector<GlobalSemaphore>{},
         nb::arg("weight_address_table") = nb::none());
 
-    ttnn::bind_function<"hybrid_routed_expert_moe_channel_semaphore_count", "ttnn.experimental.deepseek_prefill.">(
+    ttnn::bind_function<
+        "hybrid_routed_expert_moe_channel_semaphore_count",
+        "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
         How many channel_semaphores hybrid_routed_expert_moe needs when overlapped with combine.

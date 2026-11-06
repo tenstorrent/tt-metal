@@ -22,8 +22,7 @@ namespace cf = ::ttnn::operations::experimental::deepseek_prefill::combine_fabri
 template <typename Descriptor>
 auto find_writer(Descriptor& desc) {
     const auto is_writer = [](const tt::tt_metal::KernelDescriptor& k) {
-        return k.kernel_source.ends_with("hybrid_writer.cpp") ||
-               k.kernel_source.ends_with("unified_routed_expert_ffn_writer.cpp");
+        return k.kernel_source.ends_with("wave_routed_expert_writer.cpp");
     };
     auto writer = desc.kernels.end();
     for (auto it = desc.kernels.begin(); it != desc.kernels.end(); ++it) {
@@ -38,12 +37,9 @@ auto find_writer(Descriptor& desc) {
 
 // The unified reader's view of where combine's walks open: expert_offsets' row for the ring chip diametrically
 // opposite this one, which both of combine's walk directions take first. Appended past every other argument.
-// The reader is the hybrid op's merged one when its fused pass runs and the unified one otherwise; both consume
-// these arguments.
 void append_far_run(tt::tt_metal::ProgramDescriptor& desc, tt::tt_metal::Buffer* expert_offsets, uint32_t dg_far) {
     auto* reader = std::find_if(desc.kernels.begin(), desc.kernels.end(), [](const auto& k) {
-        return k.kernel_source.ends_with("hybrid_reader.cpp") ||
-               k.kernel_source.ends_with("unified_routed_expert_ffn_reader.cpp");
+        return k.kernel_source.ends_with("wave_routed_expert_reader.cpp");
     });
     TT_FATAL(reader != desc.kernels.end(), "routed expert: the program carries no reader kernel");
     uint32_t base = 0;
@@ -77,7 +73,7 @@ void append_l1_homes(
                     "routed expert: an L1 slot for the routed expert's output sits on its own core");
             }
         }
-        if (kernel.kernel_source.ends_with("unified_routed_expert_ffn_writer.cpp")) {
+        if (kernel.kernel_source.ends_with("wave_routed_expert_writer.cpp")) {
             kernel.defines.emplace_back("URE_L1H_CT_BASE", std::to_string(kernel.compile_time_args.size()));
             kernel.defines.emplace_back("URE_L1H_SLOTS", std::to_string(l1_homes.size() / 2));
             kernel.compile_time_args.insert(kernel.compile_time_args.end(), l1_homes.begin(), l1_homes.end());

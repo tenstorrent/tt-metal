@@ -26,7 +26,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "combine_fabric2d_kernel_interface.hpp"
 #ifdef CMBF2D_PREDICTED_ORDER
-#include "../../../../unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp"
+#include "../../../../unified_routed_expert_combine/device/kernels/adaptive_chunk.hpp"
 #endif
 
 namespace cmbf2d {

@@ -35,15 +35,12 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "../adaptive_chunk.hpp"
 #include "../weight_runs.hpp"
-// Combine-overlap report hooks (URE_PREDICTED_ORDER): unified_routed_expert_moe_combine defines
-// HYB_EXPERT_DONE_RT_BASE on this writer when it embeds this program next to combine.
-#include "../../../../routed_expert_combine_overlap/device/kernels/expert_done.hpp"
 
 constexpr uint32_t TILE_HEIGHT = 32;
 
@@ -57,7 +54,7 @@ void kernel_main() {
     // UP_SPLIT up-weight read args. The per-expert `up` addresses live in the
     // runtime-arg array starting at COMMON_UP.
     const uint32_t my_nt_gu = get_arg_val<uint32_t>(2);
-    const bool full_is_up_sender = get_arg_val<uint32_t>(3) != 0;
+    const bool is_up_sender = get_arg_val<uint32_t>(3) != 0;
     // UP_SPLIT local handshake sems (see reader): up_go = slot reserved,
     // up_done = up landed.
     const uint32_t up_go_sem_id = get_arg_val<uint32_t>(4);
@@ -119,10 +116,10 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
 
-    DataflowBuffer cb_out_buf(cb_out);
-    DataflowBuffer cb_counts_scratch_buf(cb_counts_scratch);
-    DataflowBuffer cb_idx_scratch_buf(cb_idx_scratch);
-    DataflowBuffer cb_start_scratch_buf(cb_start_scratch);
+    CircularBuffer cb_out_buf(cb_out);
+    CircularBuffer cb_counts_scratch_buf(cb_counts_scratch);
+    CircularBuffer cb_idx_scratch_buf(cb_idx_scratch);
+    CircularBuffer cb_start_scratch_buf(cb_start_scratch);
 
     // Accessor compile-arg stream order (host appends in this exact order):
     // out, then start, then up (UP_SPLIT). The accessors are constructed
@@ -165,7 +162,7 @@ void kernel_main() {
 
     constexpr uint32_t start_accessor_offset = out_args.next_compile_time_args_offset();
     constexpr auto start_args = TensorAccessorArgs<start_accessor_offset>();
-    const auto start_acc = TensorAccessor(start_args, start_addr);
+    [[maybe_unused]] const auto start_acc = TensorAccessor(start_args, start_addr);
 
     constexpr uint32_t up_accessor_offset = start_args.next_compile_time_args_offset();
     constexpr auto up_args = TensorAccessorArgs<up_accessor_offset>();
@@ -195,14 +192,11 @@ void kernel_main() {
     const uint32_t idx_l1 = cb_idx_scratch_buf.get_read_ptr();
     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1);
 
-    // Read the `start` (= expert_region_offsets) page ONCE into resident L1;
-    // each expert's output slice begins at start[global_id] (token row).
+    // The `start` (= expert_region_offsets) page is resident in cb_start_scratch, which
+    // the host maps to the READER's start CB: the reader's counts broadcast delivered it
+    // with counts/idx, before the counts push the wait above observed. Each expert's output slice begins at
+    // start[global_id] (token row).
     const uint32_t start_l1 = cb_start_scratch_buf.get_write_ptr();
-    {
-        const uint32_t start_page_size = start_acc.get_aligned_page_size();
-        noc.async_read(start_acc, CoreLocalMem<uint32_t>(start_l1), start_page_size, {.page_id = 0}, {});
-        noc.async_read_barrier();
-    }
     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(start_l1);
 
     // ---- UP_SPLIT up-weight read setup (see header) ----
@@ -228,13 +222,13 @@ void kernel_main() {
     // corners come in the OPPOSITE order from a NoC-0 multicast: pass them unswapped and
     // the NoC reads start > end as a torus wraparound, covers no receiver, and the run
     // deadlocks with no assert.
-    const uint32_t full_in1_mc_nx_start = get_arg_val<uint32_t>(IN1_WM_RT + 2);  // NoC-0 frame's END x
-    const uint32_t full_in1_mc_ny_start = get_arg_val<uint32_t>(IN1_WM_RT + 3);  // NoC-0 frame's END y
-    const uint32_t full_in1_mc_nx_end = get_arg_val<uint32_t>(IN1_WM_RT + 0);    // NoC-0 frame's START x
-    const uint32_t full_in1_mc_ny_end = get_arg_val<uint32_t>(IN1_WM_RT + 1);    // NoC-0 frame's START y
-    const uint32_t full_in1_num_receivers = get_arg_val<uint32_t>(IN1_WM_RT + 4);
-    const uint32_t full_in1_ready_sem_id = get_arg_val<uint32_t>(IN1_WM_RT + 5);
-    const uint32_t full_in1_valid_sem_id = get_arg_val<uint32_t>(IN1_WM_RT + 6);
+    const uint32_t in1_mc_nx_start = get_arg_val<uint32_t>(IN1_WM_RT + 2);  // NoC-0 frame's END x
+    const uint32_t in1_mc_ny_start = get_arg_val<uint32_t>(IN1_WM_RT + 3);  // NoC-0 frame's END y
+    const uint32_t in1_mc_nx_end = get_arg_val<uint32_t>(IN1_WM_RT + 0);    // NoC-0 frame's START x
+    const uint32_t in1_mc_ny_end = get_arg_val<uint32_t>(IN1_WM_RT + 1);    // NoC-0 frame's START y
+    const uint32_t in1_num_receivers = get_arg_val<uint32_t>(IN1_WM_RT + 4);
+    Semaphore<> in1_ready_sem(get_arg_val<uint32_t>(IN1_WM_RT + 5));
+    Semaphore<> in1_valid_sem(get_arg_val<uint32_t>(IN1_WM_RT + 6));
     Semaphore<> mcast_go_sem(get_arg_val<uint32_t>(IN1_WM_RT + 7));
     Semaphore<> mcast_done_sem(get_arg_val<uint32_t>(IN1_WM_RT + 8));
     // Gate/up blocks only, for the same cross-chunk reason down_seq exists.
@@ -245,151 +239,14 @@ void kernel_main() {
     // cores, feed its `up` weights) into the shared output buffer at the
     // expert's region offset. The chunk-loop body below is unchanged from the
     // single-expert kernel — only the per-expert bindings differ.
-    // WAVE layouts (adaptive_chunk::WavePlanner). The half-grid set (sender role, NoC-0
-    // rectangle, receivers, own ready/valid sems), after the IN1_WRITER_MCAST block. Same corner swap for NoC 1 as
-    // above.
-    constexpr uint32_t HALF_RT = IN1_WM_RT + 9;
-    const bool half_is_up_sender = get_arg_val<uint32_t>(HALF_RT + 0) != 0;
-    const uint32_t half_in1_mc_nx_start = get_arg_val<uint32_t>(HALF_RT + 3);
-    const uint32_t half_in1_mc_ny_start = get_arg_val<uint32_t>(HALF_RT + 4);
-    const uint32_t half_in1_mc_nx_end = get_arg_val<uint32_t>(HALF_RT + 1);
-    const uint32_t half_in1_mc_ny_end = get_arg_val<uint32_t>(HALF_RT + 2);
-    const uint32_t half_in1_num_receivers = get_arg_val<uint32_t>(HALF_RT + 5);
-    const uint32_t half_in1_ready_sem_id = get_arg_val<uint32_t>(HALF_RT + 6);
-    const uint32_t half_in1_valid_sem_id = get_arg_val<uint32_t>(HALF_RT + 7);
-    // QUARTER (2-row groups) set, same layout as the half set minus the valid sem, which is the
-    // halves' (see the reader).
-    constexpr uint32_t QUARTER_RT = HALF_RT + 8;
-    const bool quarter_is_up_sender = get_arg_val<uint32_t>(QUARTER_RT + 0) != 0;
-    const uint32_t quarter_in1_mc_nx_start = get_arg_val<uint32_t>(QUARTER_RT + 3);
-    const uint32_t quarter_in1_mc_ny_start = get_arg_val<uint32_t>(QUARTER_RT + 4);
-    const uint32_t quarter_in1_mc_nx_end = get_arg_val<uint32_t>(QUARTER_RT + 1);
-    const uint32_t quarter_in1_mc_ny_end = get_arg_val<uint32_t>(QUARTER_RT + 2);
-    const uint32_t quarter_in1_num_receivers = get_arg_val<uint32_t>(QUARTER_RT + 5);
-    const uint32_t quarter_in1_ready_sem_id = get_arg_val<uint32_t>(QUARTER_RT + 6);
-
-#ifdef URE_BIG_FIRST_T
-    // Two walks over the local experts: those above URE_BIG_FIRST_T tokens, then the rest, so the
-    // big experts are written first. All three kernels walk alike.
-    constexpr uint32_t num_passes = 2;
-#else
-    constexpr uint32_t num_passes = 1;
-#endif
-    uint32_t band_min = min_active_tokens;
-    uint32_t band_max = max_active_tokens;
-    // Same clamped per-expert tile count the reader and compute plan with.
-    auto expert_tiles = [&](uint32_t e) -> uint32_t {
-        const uint32_t cv = adaptive_chunk::count_in_band(counts_ptr[idx_ptr[e]], band_min, band_max);
-        return adaptive_chunk::clamp_count_tiles(
-            (cv + TILE_HEIGHT - 1) / TILE_HEIGHT, chunk_M_max, num_chunks_max, M_tiles_full);
-    };
-    adaptive_chunk::WavePlanner planner;
-    static_assert(experts_per_chip <= 256, "walk positions are uint8_t");
-    uint8_t walk_perm[experts_per_chip];
-    auto expert_tiles_at = [&](uint32_t k) -> uint32_t { return expert_tiles(walk_perm[k]); };
-
-#ifdef URE_PREDICTED_ORDER
-    // Each expert is reported to combine as soon as this writer is done with it, at its place in the order combine
-    // walks (adaptive_chunk::predicted_order) -- at once for the experts this core's rows do not run.
-    static_assert(experts_per_chip <= adaptive_chunk::kMaxPredictedExperts);
-#ifdef URE_BIG_FIRST_T
-    constexpr uint32_t predicted_big_first_t = URE_BIG_FIRST_T;
-#else
-    constexpr uint32_t predicted_big_first_t = 0;
-#endif
-    uint32_t local_counts[adaptive_chunk::kMaxPredictedExperts];
-    for (uint32_t e = 0; e < experts_per_chip; ++e) {
-        local_counts[e] = counts_ptr[idx_ptr[e]];
-    }
-    uint8_t walk_order[adaptive_chunk::kMaxPredictedExperts];
-    adaptive_chunk::predicted_order(local_counts, experts_per_chip, per_core_M_max, predicted_big_first_t, walk_order);
-    uint8_t walk_pos[adaptive_chunk::kMaxPredictedExperts];
-    for (uint32_t k = 0; k < experts_per_chip; ++k) {
-        walk_pos[walk_order[k]] = static_cast<uint8_t>(k);
-    }
-#ifdef URE_L1H_SLOTS
-    // Combine's L1 slots for this chip's last tile-rows (adaptive_chunk::l1_home_plan), two compile-time words
-    // each from URE_L1H_CT_BASE: the core's NOC x | y << 16, then the slot's address.
-    uint16_t l1h_first[adaptive_chunk::kMaxPredictedExperts];
-    uint16_t l1h_rows[adaptive_chunk::kMaxPredictedExperts];
-    adaptive_chunk::l1_home_plan(local_counts, walk_order, experts_per_chip, URE_L1H_SLOTS, l1h_first, l1h_rows);
-#endif
-    // The experts this core runs, from the same planner replay as the loop below.
-    uint32_t runs_mask = 0;
-    for (uint32_t pass = 0; pass < num_passes; ++pass) {
-#ifdef URE_BIG_FIRST_T
-        band_min = pass == 0 ? URE_BIG_FIRST_T + 1 : min_active_tokens;
-        band_max = pass == 0 ? max_active_tokens : URE_BIG_FIRST_T;
-#endif
-        adaptive_chunk::WavePlanner replay;
-        adaptive_chunk::walk_perm(walk_perm, experts_per_chip, expert_tiles);
-        for (uint32_t k = 0; k < experts_per_chip; ++k) {
-            const uint32_t e = walk_perm[k];
-            const uint32_t role = replay.role(k, experts_per_chip, per_core_M_max, expert_tiles_at);
-            if (adaptive_chunk::role_runs_here(role, my_mt) && expert_tiles(e) != 0) {
-                runs_mask |= 1u << e;
-            }
-        }
-    }
-    band_min = min_active_tokens;
-    band_max = max_active_tokens;
-    for (uint32_t e = 0; e < experts_per_chip; ++e) {
-        if ((runs_mask & (1u << e)) == 0) {
-            hyb_expert_done_at(walk_pos[e]);
-        }
-    }
-#endif
-
-    for (uint32_t walk_step = 0; walk_step < num_passes * experts_per_chip; ++walk_step) {
-        const uint32_t walk_k = walk_step % experts_per_chip;
-#ifdef URE_BIG_FIRST_T
-        if (walk_k == 0) {
-            const bool big_pass = walk_step == 0;
-            band_min = big_pass ? URE_BIG_FIRST_T + 1 : min_active_tokens;
-            band_max = big_pass ? max_active_tokens : URE_BIG_FIRST_T;
-            planner = adaptive_chunk::WavePlanner{};
-        }
-#endif
-        if (walk_k == 0) {
-            adaptive_chunk::walk_perm(walk_perm, experts_per_chip, expert_tiles);
-        }
-        const uint32_t local_expert_id = walk_perm[walk_k];
-        const uint32_t role = planner.role(walk_k, experts_per_chip, per_core_M_max, expert_tiles_at);
-        const bool runs_here = adaptive_chunk::role_runs_here(role, my_mt);
-        const uint32_t grp_rows = adaptive_chunk::role_rows(role);
-        const bool half = (grp_rows == adaptive_chunk::kHalfRows);
-        const bool quarter = (grp_rows == adaptive_chunk::kQuarterRows);
-        // EIGHTH: one grid row per expert -- every core reads its own `up` and multicasts nothing.
-        const bool eighth = (grp_rows == adaptive_chunk::kEighthRows);
-        const uint32_t grp_row = adaptive_chunk::role_row(role, my_mt);
-        const uint32_t grp_chunk_M = per_core_M_max * grp_rows;
-        const bool is_up_sender = eighth || (quarter ? quarter_is_up_sender
-                                             : half  ? half_is_up_sender
-                                                     : full_is_up_sender);
-        const uint32_t in1_mc_nx_start = quarter ? quarter_in1_mc_nx_start
-                                         : half  ? half_in1_mc_nx_start
-                                                 : full_in1_mc_nx_start;
-        const uint32_t in1_mc_ny_start = quarter ? quarter_in1_mc_ny_start
-                                         : half  ? half_in1_mc_ny_start
-                                                 : full_in1_mc_ny_start;
-        const uint32_t in1_mc_nx_end = quarter ? quarter_in1_mc_nx_end : half ? half_in1_mc_nx_end : full_in1_mc_nx_end;
-        const uint32_t in1_mc_ny_end = quarter ? quarter_in1_mc_ny_end : half ? half_in1_mc_ny_end : full_in1_mc_ny_end;
-        const uint32_t in1_num_receivers = eighth    ? 0u
-                                           : quarter ? quarter_in1_num_receivers
-                                           : half    ? half_in1_num_receivers
-                                                     : full_in1_num_receivers;
-        Semaphore<> in1_ready_sem(
-            quarter ? quarter_in1_ready_sem_id
-            : half  ? half_in1_ready_sem_id
-                    : full_in1_ready_sem_id);
-        Semaphore<> in1_valid_sem((quarter || half) ? half_in1_valid_sem_id : full_in1_valid_sem_id);
-
+    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
         const auto up_acc =
             TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_UP + local_expert_id), up_tile_bytes);
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
         // op and are dropped here exactly like a zero count.
-        const uint32_t count_value = adaptive_chunk::count_in_band(counts_ptr[global_expert_id], band_min, band_max);
+        const uint32_t count_value =
+            adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
         // Same capacity clamp the reader and compute apply to the device-produced
         // count (see adaptive_chunk::clamp_count_tiles): arithmetic, so it bounds
         // the chunk loop in Release too, where ASSERT is a no-op.
@@ -400,18 +257,10 @@ void kernel_main() {
         // Runtime chunk layout from THIS expert's count — the same math the reader
         // and compute kernels run, so all three agree on the row mapping (a
         // mismatch would emit this expert's rows at the wrong token offsets).
-        const uint32_t effective_chunks = runs_here ? adaptive_chunk::num_chunks(count_tiles, grp_chunk_M) : 0;
+        const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
         const uint32_t row_offset_tiles = start_ptr[global_expert_id] / TILE_HEIGHT;
-        // Same start chunk as the reader and compute (adaptive_chunk::chunk_at).
-#ifdef URE_FAR_EXT_OFF
-        const uint32_t first_chunk =
-            adaptive_chunk::first_chunk(counts_ptr[URE_FAR_EXT_OFF / 4 + global_expert_id], grp_rows, grp_chunk_M);
-#else
-        constexpr uint32_t first_chunk = 0;
-#endif
 
-        for (uint32_t chunk_i = 0; chunk_i < effective_chunks; ++chunk_i) {
-            const uint32_t chunk = adaptive_chunk::chunk_at(chunk_i, effective_chunks, first_chunk);
+        for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
             // ---- Phase 1/2 weight feed: writer reads `up` on NoC 1 (UP_SPLIT) ----
             // Streams `up` from DRAM concurrent with the reader's NoC-0 `gate` read.
             // Runs before the cb_out drain.
@@ -427,7 +276,7 @@ void kernel_main() {
                     // reader's cadence: cb_in1_up is double-buffered, one push per
                     // K-block, so the live slot is base + (up_seq-1)%2 * slot.
                     constexpr uint32_t kUpNumSlots = 2;
-                    DataflowBuffer cb_in1_up_buf(cb_in1_up);
+                    CircularBuffer cb_in1_up_buf(cb_in1_up);
                     const uint32_t up_cb_base = cb_in1_up_buf.get_write_ptr();
                     const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
                     for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
@@ -462,14 +311,9 @@ void kernel_main() {
                         if constexpr (writer_mcasts_in1) {
                             ++mc_seq;
                             mcast_go_sem.wait_min(mc_seq);
-                            // EIGHTH: no receivers -- no acks, no multicast, just hand the slot back.
-                            if (in1_num_receivers == 0) {
-                                mcast_done_sem.set(mc_seq);
-                                continue;
-                            }
                             in1_ready_sem.wait(in1_num_receivers);
                             in1_ready_sem.set(0);
-                            DataflowBuffer cb_in1_gate_buf(cb_in1_gate);
+                            CircularBuffer cb_in1_gate_buf(cb_in1_gate);
                             const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
                             const uint32_t gate_slot_bytes = g_in1_block_num_tiles * gate_tile_bytes;
                             const uint32_t gate_block_start =
@@ -513,16 +357,6 @@ void kernel_main() {
                             mcast_done_sem.set(mc_seq);
                         }
                     }
-                } else {
-                    // Wave layouts: this core is not the sender for this expert, but the counters
-                    // must still count its blocks (the slot index and the reader's sequence
-                    // depend on it), and done must keep up for when it is a sender again.
-                    up_seq += num_blocks_gu;
-                    up_done_sem.set(up_seq);
-                    if constexpr (writer_mcasts_in1) {
-                        mc_seq += num_blocks_gu;
-                        mcast_done_sem.set(mc_seq);
-                    }
                 }
             }
 
@@ -546,7 +380,7 @@ void kernel_main() {
                     // RISC never pushes, so its write pointer is static: index the live slot
                     // off the block counter, exactly as the UP_SPLIT block does.
                     constexpr uint32_t kDownNumSlots = 2;
-                    DataflowBuffer cb_in1_down_buf(cb_in1_down);
+                    CircularBuffer cb_in1_down_buf(cb_in1_down);
                     const uint32_t down_cb_base = cb_in1_down_buf.get_write_ptr();
                     const uint32_t down_slot_bytes = d_in1_block_num_tiles * down_tile_bytes;
                     for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
@@ -576,10 +410,6 @@ void kernel_main() {
                         noc_up.async_read_barrier();
                         down_done_sem.set(down_seq);
                     }
-                } else {
-                    down_seq += num_blocks_d;
-                    down_blk += num_blocks_d;
-                    down_done_sem.set(down_seq);
                 }
             }
 
@@ -587,8 +417,8 @@ void kernel_main() {
             // Per-chunk per_core_M (per_core_M_max for full chunks, a smaller
             // divisor for the tail); chunk starts are uniform at chunk*chunk_M_max.
             // Contiguous row map: this core owns rows [row0, row0 + per_core_M).
-            const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, grp_chunk_M, grp_rows);
-            const uint32_t row0 = chunk * grp_chunk_M + grp_row * per_core_M;
+            const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
+            const uint32_t row0 = chunk * chunk_M_max + my_mt * per_core_M;
             const uint32_t col0 = my_nt_d * per_core_N_d;
             // The DOWN matmul packs and pushes the FULL compile-time-MAX ring (its
             // L1_ACC needs full-ring cycling), so DRAIN all d_in1_num_subblocks_M
@@ -641,25 +471,7 @@ void kernel_main() {
                                 // write rather than corrupt DRAM, since ASSERT is a
                                 // no-op there).
                                 ASSERT(dst_row < dst_M_tiles);
-#ifdef URE_L1H_SLOTS
-                                // A row kept in L1 goes to its slot instead; the expert-done report's write
-                                // barrier covers it as it does the DRAM writes.
-                                const bool in_l1 = row < l1h_rows[local_expert_id];
-                                if (in_l1) {
-                                    const uint32_t w = URE_L1H_CT_BASE + 2 * (l1h_first[local_expert_id] + row);
-                                    const uint32_t xy = kernel_compile_time_args[w];
-                                    noc_async_write(
-                                        cb_out_buf.get_read_ptr() + subblock_tile_offset,
-                                        get_noc_addr(
-                                            xy & 0xFFFF,
-                                            xy >> 16,
-                                            kernel_compile_time_args[w + 1] + col * out_tile_bytes),
-                                        out_tile_bytes);
-                                }
-#else
-                                constexpr bool in_l1 = false;
-#endif
-                                if (!in_l1 && dst_row < dst_M_tiles) {
+                                if (dst_row < dst_M_tiles) {
                                     const uint32_t tile_idx = dst_row * N_down_tiles_full + col;
                                     noc.async_write(
                                         cb_out_buf,
@@ -680,20 +492,7 @@ void kernel_main() {
                     cb_out_buf.pop_front(this_tiles);
                 }
             }
-#ifdef URE_PREDICTED_ORDER
-            // Per-chunk release only on the whole grid: every writer runs every chunk of a full-grid
-            // expert, so the collector's per-(step, chunk) count reaches all writers. A wave expert's
-            // chunk runs on its rows only and is released with the whole expert below.
-            if (role == adaptive_chunk::kRoleFull) {
-                hyb_chunk_done_at(walk_pos[local_expert_id], chunk, grp_chunk_M);
-            }
-#endif
         }  // end chunk loop
-#ifdef URE_PREDICTED_ORDER
-        if (effective_chunks > 0) {
-            hyb_expert_done_at(walk_pos[local_expert_id]);
-        }
-#endif
     }  // end per-local-expert loop
     // Ensure all outstanding writes complete at the destination before the
     // kernel returns (the next dispatched op may read this output).

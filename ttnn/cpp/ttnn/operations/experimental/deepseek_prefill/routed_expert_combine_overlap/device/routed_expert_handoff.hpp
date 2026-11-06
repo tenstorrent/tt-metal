@@ -19,8 +19,7 @@
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap {
 
 // The routed expert's side of a program it shares with combine_fabric2d: what its writers report to combine's
-// collector, and how its descriptor is folded into each chip's combine program. Used by every op that overlaps a
-// routed expert with combine (hybrid_routed_expert_moe, unified_routed_expert_moe_combine).
+// collector, and how its descriptor is folded into each chip's combine program (unified_routed_expert_moe_combine).
 
 // Combine takes grid rows 0-1; the routed expert runs on the rows below.
 inline constexpr uint32_t kRoutedExpertOriginY = 2;
@@ -34,9 +33,8 @@ struct ExpertDoneSignal {
     uint32_t go_addr = 0;
 };
 
-// Turns the hook on in a routed-expert descriptor, whichever writer it carries: the hybrid op's merged union writer
-// or the unified writer alone. The signal's block goes after every other runtime argument, on every writer core, so
-// no argument layout moves.
+// Turns the hook on in the routed expert's descriptor. The signal's block goes after every other runtime argument, on
+// every writer core, so no argument layout moves.
 void append_expert_done_signal(tt::tt_metal::ProgramDescriptor& desc, const ExpertDoneSignal& signal);
 
 // How many writer cores report through that hook, each once per expert index it walks.

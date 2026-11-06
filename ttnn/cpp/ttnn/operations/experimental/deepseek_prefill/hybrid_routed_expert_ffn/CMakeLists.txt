@@ -46,8 +46,6 @@ target_link_libraries(
         TT::Metalium
         # The fused half's blocking geometry is used as it ships rather than copied.
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeFusedSwiGlu
-        # combine_fabric2d as it runs inside the routed expert's program, and the routed expert's hand-off to it.
-        TTNN::Ops::Experimental::DeepSeekPrefill::RoutedExpertCombineOverlap
     PUBLIC
         TTNN::Core
 )

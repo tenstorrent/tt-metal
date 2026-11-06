@@ -10,7 +10,7 @@
 #include "device/unified_routed_expert_combine_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_combine/device/wave_routed_expert_program_factory.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_combine {
 
@@ -126,9 +126,8 @@ ttnn::Tensor unified_routed_expert_moe_combine(
         .forwarding_buffer = forwarding_buffer};
     // The routed expert sizes its circular buffers from the free L1, so the plan it picks now is part of the
     // program-cache key.
-    std::tie(attributes.wave_per_core_M, attributes.wave_in0_block_w) =
-        unified_routed_expert_ffn::UnifiedRoutedExpertFfnProgramFactory::select_l1_plan(
-            routed_expert_attributes(attributes), routed_expert_inputs(tensor_args));
+    std::tie(attributes.wave_per_core_M, attributes.wave_in0_block_w) = WaveRoutedExpertProgramFactory::select_l1_plan(
+        routed_expert_attributes(attributes), routed_expert_inputs(tensor_args));
     return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
 }
 

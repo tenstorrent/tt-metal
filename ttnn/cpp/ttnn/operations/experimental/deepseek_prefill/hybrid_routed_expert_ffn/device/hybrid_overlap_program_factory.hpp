@@ -7,14 +7,11 @@
 #include <tt-metalium/workload_descriptor.hpp>
 
 #include "hybrid_routed_expert_ffn_types.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/routed_expert_combine_overlap/device/combine_overlap_program_factory.hpp"
+#include "combine/combine_fabric2d_program_factory.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
-
-// combine_fabric2d as it runs inside a routed expert's program, shared with unified_routed_expert_moe_combine.
-namespace combine = ::ttnn::operations::experimental::deepseek_prefill::routed_expert_combine_overlap;
 
 // The routed expert alone: one program, the same on every chip.
 struct HybridSoloProgramFactory {

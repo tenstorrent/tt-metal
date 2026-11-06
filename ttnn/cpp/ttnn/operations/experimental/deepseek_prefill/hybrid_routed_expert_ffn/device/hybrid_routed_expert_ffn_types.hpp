@@ -317,13 +317,6 @@ struct HybridRoutedExpertFfnParams {
     // so the merged binaries are the same shape either way.
     uint32_t hybrid_token_threshold = 0;
 
-    // Overlapped without an arena: the lowest occupied L1 address when the op is called. Combine lays its rings,
-    // control tables and the routed expert's L1 slots out below it, by hand, so they must stay under every buffer
-    // that holds data across launches -- including persistent state another op allocates after this one's first
-    // call. Hashed, so such an allocation rebuilds the program over the smaller region instead of a cached program
-    // writing over it.
-    uint32_t combine_l1_floor = 0;
-
     // Overlapped with combine in the same program: combine runs on rows 0-1 and takes each expert as soon
     // as this op has written it, and the op returns combine's output. The fields below are combine's and
     // are read only in this mode.
@@ -359,7 +352,6 @@ struct HybridRoutedExpertFfnParams {
         "fuse_bias",
         "compute_kernel_config",
         "hybrid_token_threshold",
-        "combine_l1_floor",
         "overlap_combine",
         "combine_axis",
         "combine_num_links",
@@ -380,7 +372,6 @@ struct HybridRoutedExpertFfnParams {
             fuse_bias,
             compute_kernel_config,
             hybrid_token_threshold,
-            combine_l1_floor,
             overlap_combine,
             combine_axis,
             combine_num_links,
