@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -53,7 +52,6 @@ using tt::tt_metal::experimental::ProgramSpec;
 // Fixed: a ProgramSpec per mesh coordinate range.
 struct MeshProgramSpec {
     std::vector<std::pair<ttnn::MeshCoordinateRange, ProgramSpec>> programs;
-    std::optional<uint64_t> custom_program_hash;
 };
 
 // Per call: the run args for each range of the MeshProgramSpec.
@@ -64,14 +62,8 @@ struct MeshProgramRunArgs {
 // Runs the same program on the devices of the tensor in io_tensors that is on the fewest devices; every other tensor
 // must be on those devices too. It keys and runs as the MeshProgramSpec form would with those devices' ranges, so the
 // two forms share cache entries. The output is the last tensor in io_tensors, which the caller preallocates, and each
-// tensor parameter binds its own io_tensors entry. The program cache keys on a hash of the spec, or on
-// custom_program_hash combined with the names the run args refer to, and each kernel's cores, array lengths and vararg
-// counts.
-Tensor generic_op(
-    const std::vector<Tensor>& io_tensors,
-    const ProgramSpec& spec,
-    const ProgramRunArgs& run_args,
-    std::optional<uint64_t> custom_program_hash = std::nullopt);
+// tensor parameter binds its own io_tensors entry. The program cache keys on a hash of the spec.
+Tensor generic_op(const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args);
 
 // Runs each range's program on the devices in that range.
 Tensor generic_op(
@@ -79,19 +71,15 @@ Tensor generic_op(
     const MeshProgramSpec& mesh_program_spec,
     const MeshProgramRunArgs& mesh_run_args);
 
-void prepare_generic_op(
-    const std::vector<Tensor>& io_tensors,
-    const ProgramSpec& spec,
-    const ProgramRunArgs& run_args,
-    std::optional<uint64_t> custom_program_hash = std::nullopt);
+void prepare_generic_op(const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args);
 
 void prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
     const MeshProgramSpec& mesh_program_spec,
     const MeshProgramRunArgs& mesh_run_args);
 
-// The hash generic_op keys its program cache on when no custom_program_hash is given (combined with each program's
-// mesh range). Runtime argument values, ProgramSpec::name and WorkUnitSpec::name are not part of it.
+// The hash generic_op keys its program cache on, combined with each program's mesh range. Runtime argument values,
+// ProgramSpec::name and WorkUnitSpec::name are not part of it.
 uint64_t compute_program_spec_hash(const ProgramSpec& spec);
 
 }  // namespace experimental

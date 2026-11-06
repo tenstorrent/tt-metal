@@ -62,7 +62,7 @@ ProgramSpecAttributes make_program_spec_attributes(
         "generic_op: the MeshProgramSpec has {} programs, but the MeshProgramRunArgs has run args for {}",
         programs.size(),
         mesh_run_args.programs.size());
-    ProgramSpecAttributes attributes{.custom_program_hash = mesh_program_spec.custom_program_hash};
+    ProgramSpecAttributes attributes;
     attributes.programs.reserve(programs.size());
     for (const auto& [range, spec] : programs) {
         const auto run_args =
@@ -78,12 +78,8 @@ ProgramSpecAttributes make_program_spec_attributes(
 
 }  // namespace
 
-Tensor generic_op(
-    const std::vector<Tensor>& io_tensors,
-    const ProgramSpec& spec,
-    const ProgramRunArgs& run_args,
-    std::optional<uint64_t> custom_program_hash) {
-    return ttnn::prim::generic_op(io_tensors, spec, run_args, custom_program_hash);
+Tensor generic_op(const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args) {
+    return ttnn::prim::generic_op(io_tensors, spec, run_args);
 }
 
 Tensor generic_op(
@@ -94,11 +90,8 @@ Tensor generic_op(
 }
 
 void prepare_generic_op(
-    const std::vector<Tensor>& io_tensors,
-    const ProgramSpec& spec,
-    const ProgramRunArgs& run_args,
-    std::optional<uint64_t> custom_program_hash) {
-    ttnn::prim::prepare_generic_op(io_tensors, spec, run_args, custom_program_hash);
+    const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args) {
+    ttnn::prim::prepare_generic_op(io_tensors, spec, run_args);
 }
 
 void prepare_generic_op(

@@ -5,14 +5,11 @@
 #include "generic_op_nanobind.hpp"
 
 #include <cstddef>
-#include <cstdint>
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <nanobind/nanobind.h>
-#include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -104,7 +101,6 @@ void bind_generic_operation_preparation(nb::module_& mod) {
                 ``ttnn.experimental.generic_op``.
             run_args (ttnn.experimental.ProgramRunArgs or ttnn.experimental.MeshProgramRunArgs): Its run args, with
                 real tensors.
-            custom_program_hash (int, optional): As for ``ttnn.experimental.generic_op``. Defaults to None.
 
         Raises:
             RuntimeError: If a kernel does not compile, if the program configuration does not fit the
@@ -132,12 +128,10 @@ void bind_generic_operation_preparation(nb::module_& mod) {
         static_cast<void (*)(
             const std::vector<Tensor>&,
             const ttnn::experimental::ProgramSpec&,
-            const ttnn::experimental::ProgramRunArgs&,
-            std::optional<uint64_t>)>(&ttnn::experimental::prepare_generic_op),
+            const ttnn::experimental::ProgramRunArgs&)>(&ttnn::experimental::prepare_generic_op),
         nb::arg("io_tensors"),
         nb::arg("spec"),
-        nb::arg("run_args"),
-        nb::arg("custom_program_hash") = nb::none());
+        nb::arg("run_args"));
 
     auto mesh_program_spec_overload = ttnn::overload_t(
         static_cast<void (*)(
@@ -163,24 +157,17 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         mod,
         "MeshProgramSpec",
         R"doc(
-        Everything fixed about a mesh program: a ttnn.experimental.ProgramSpec for each mesh coordinate range, and
-        an optional custom_program_hash that replaces the hash of the specs in the program cache key (which still
-        includes the names the run args refer to, and each kernel's cores and array lengths). One value replaces the
-        hash of every range's spec, so it must stand for all of them. The ranges must not overlap.
-        Lists are copied in and out.
+        Everything fixed about a mesh program: a ttnn.experimental.ProgramSpec for each mesh coordinate range. The
+        ranges must not overlap. Lists are copied in and out.
         )doc")
         .def(
             "__init__",
-            [](MeshProgramSpec* self,
-               std::vector<std::pair<MeshCoordinateRange, ProgramSpec>> programs,
-               std::optional<uint64_t> custom_program_hash) {
-                new (self) MeshProgramSpec{.programs = std::move(programs), .custom_program_hash = custom_program_hash};
+            [](MeshProgramSpec* self, std::vector<std::pair<MeshCoordinateRange, ProgramSpec>> programs) {
+                new (self) MeshProgramSpec{.programs = std::move(programs)};
             },
             nb::kw_only(),
-            nb::arg("programs") = std::vector<std::pair<MeshCoordinateRange, ProgramSpec>>{},
-            nb::arg("custom_program_hash") = nb::none())
-        .def_rw("programs", &MeshProgramSpec::programs, nb::rv_policy::copy)
-        .def_rw("custom_program_hash", &MeshProgramSpec::custom_program_hash, nb::for_setter(nb::arg("value").none()));
+            nb::arg("programs") = std::vector<std::pair<MeshCoordinateRange, ProgramSpec>>{})
+        .def_rw("programs", &MeshProgramSpec::programs, nb::rv_policy::copy);
 
     // A Python ProgramRunArgs keeps its tensors alive in an attribute. A MeshProgramRunArgs holds C++ copies of its
     // run args, so it keeps a copy of each of those attributes, in the order of its programs.
@@ -257,10 +244,6 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
                 too), or a program for each mesh coordinate range.
             run_args (ttnn.experimental.ProgramRunArgs or ttnn.experimental.MeshProgramRunArgs): The values of this
                 call, or of each range's program.
-            custom_program_hash (int, optional): With a ProgramSpec only (a MeshProgramSpec has its own field):
-                replaces the hash of the spec in the program cache key, which still includes the names the run args
-                refer to, and each kernel's cores and array lengths. A non-negative int below 2**64; keeping keys
-                unique is then the caller's job. Defaults to None.
 
         Returns:
             ttnn.Tensor: The output tensor, the last entry of io_tensors.
@@ -270,13 +253,11 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         )doc";
 
     auto program_spec_overload = ttnn::overload_t(
-        static_cast<Tensor (*)(
-            const std::vector<Tensor>&, const ProgramSpec&, const ProgramRunArgs&, std::optional<uint64_t>)>(
+        static_cast<Tensor (*)(const std::vector<Tensor>&, const ProgramSpec&, const ProgramRunArgs&)>(
             &ttnn::experimental::generic_op),
         nb::arg("io_tensors"),
         nb::arg("spec"),
-        nb::arg("run_args"),
-        nb::arg("custom_program_hash") = nb::none());
+        nb::arg("run_args"));
 
     auto mesh_program_spec_overload = ttnn::overload_t(
         static_cast<Tensor (*)(const std::vector<Tensor>&, const MeshProgramSpec&, const MeshProgramRunArgs&)>(
@@ -293,10 +274,9 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         &ttnn::experimental::compute_program_spec_hash,
         nb::arg("spec"),
         R"doc(
-        The hash of a ttnn.experimental.ProgramSpec that ttnn.experimental.generic_op keys its program cache on when
-        no custom_program_hash is given. Runtime argument values, ProgramSpec.name and WorkUnitSpec.name are not part
-        of it, and tensor parameter specs are hashed under their relaxations. generic_op computes it on every call, so
-        a caller that runs one spec many times can compute it once and pass it as custom_program_hash.
+        The hash of a ttnn.experimental.ProgramSpec that ttnn.experimental.generic_op keys its program cache on,
+        combined with each program's mesh range. Runtime argument values, ProgramSpec.name and WorkUnitSpec.name are
+        not part of it, and tensor parameter specs are hashed under their relaxations.
         )doc");
 }
 

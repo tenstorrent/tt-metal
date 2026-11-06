@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
-#include <optional>
 #include <tuple>
 #include <variant>
 #include <vector>
@@ -34,7 +32,6 @@ struct GenericProgramSpecDeviceOperation {
             const tt::tt_metal::experimental::ProgramRunArgs* run_args = nullptr;
         };
         std::vector<Program> programs;
-        std::optional<uint64_t> custom_program_hash;
         // The run args' PrefetcherPipes, which ttnn's framework rebinds on a cache hit. The ttnn::prim overloads fill
         // it. It points at the caller's pipes without owning them.
         ttnn::PrefetcherPipeList prefetcher_pipes;
@@ -71,7 +68,7 @@ struct GenericProgramSpecDeviceOperation {
 };
 
 // Hash of everything in a ProgramSpec that changes the compiled program. generic_op keys its program cache on it,
-// combined with each program's mesh range, unless the caller gives a custom_program_hash.
+// combined with each program's mesh range.
 ttsl::hash::hash_t compute_program_spec_hash(const tt::tt_metal::experimental::ProgramSpec& spec);
 
 }  // namespace ttnn::operations::generic
@@ -83,14 +80,12 @@ namespace ttnn::prim {
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::ProgramSpec& spec,
-    const tt::tt_metal::experimental::ProgramRunArgs& run_args,
-    std::optional<uint64_t> custom_program_hash);
+    const tt::tt_metal::experimental::ProgramRunArgs& run_args);
 
 void prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::ProgramSpec& spec,
-    const tt::tt_metal::experimental::ProgramRunArgs& run_args,
-    std::optional<uint64_t> custom_program_hash);
+    const tt::tt_metal::experimental::ProgramRunArgs& run_args);
 
 // The MeshProgramSpec form: a program for each range.
 Tensor generic_op(
