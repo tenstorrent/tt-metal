@@ -179,6 +179,17 @@ tt::tt_metal::ProgramDescriptor AdamWProgramFactory::create_descriptor(
         padded_tensor_volume % tt::constants::TILE_HW == 0, "Padded param tensor volume must be divisible by TILE_HW");
     TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
 
+    // The compute kernels count 32x32 tiles (total_tiles_to_process), the reader and writer the param's own
+    // (compute_tile_work_split): they agree only on 32x32 tiles.
+    const auto& param_tile = param.tensor_spec().tile();
+    TT_FATAL(
+        param_tile.get_height() == tt::constants::TILE_HEIGHT && param_tile.get_width() == tt::constants::TILE_WIDTH,
+        "Param tiles must be {}x{}, got {}x{}",
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH,
+        param_tile.get_height(),
+        param_tile.get_width());
+
     uint32_t total_tiles_to_process = padded_tensor_volume / tt::constants::TILE_HW;
 
     // get number of free cores

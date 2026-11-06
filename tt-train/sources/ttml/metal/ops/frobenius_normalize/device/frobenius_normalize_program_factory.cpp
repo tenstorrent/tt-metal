@@ -114,6 +114,17 @@ tt::tt_metal::ProgramDescriptor FrobeniusNormalizeProgramFactory::create_descrip
     uint32_t bf16_tile_size = tt::tile_size(bf16_format);
     uint32_t fp32_tile_size = tt::tile_size(fp32_format);
 
+    // The compute kernels count 32x32 tiles (total_tiles), the reader and writer the input's own
+    // (compute_tile_work_split): they agree only on 32x32 tiles.
+    const auto& input_tile = input.tensor_spec().tile();
+    TT_FATAL(
+        input_tile.get_height() == tt::constants::TILE_HEIGHT && input_tile.get_width() == tt::constants::TILE_WIDTH,
+        "Input tiles must be {}x{}, got {}x{}",
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH,
+        input_tile.get_height(),
+        input_tile.get_width());
+
     uint32_t total_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
     auto compute_grid = device->compute_with_storage_grid_size();
