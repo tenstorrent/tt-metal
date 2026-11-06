@@ -1199,6 +1199,14 @@ def test_hash_tells_an_unset_data_format_from_float32():
     assert E.compute_program_spec_hash(unset) != E.compute_program_spec_hash(float32)
 
 
+@pytest.mark.parametrize("first, second", [([4, 32], [9, 14]), ([1, 63], [2, 0]), ([3, 12, 0], [8, 0, 0])])
+def test_hash_tells_apart_compile_time_arrays_that_metal_hashes_alike(first, second):
+    # Metal's std::hash for an array value gives each pair one hash; the values are compiled into the kernel.
+    first_spec = hash_spec(compile_time_array_args={"sizes": first, "steps": [4]})
+    second_spec = hash_spec(compile_time_array_args={"sizes": second, "steps": [4]})
+    assert E.compute_program_spec_hash(first_spec) != E.compute_program_spec_hash(second_spec)
+
+
 def test_hash_keeps_adjacent_lists_apart():
     split = E.KernelSpec.RuntimeArgSchema(runtime_arg_names=["x"], common_runtime_arg_names=["y"])
     together = E.KernelSpec.RuntimeArgSchema(runtime_arg_names=["x", "y"])
