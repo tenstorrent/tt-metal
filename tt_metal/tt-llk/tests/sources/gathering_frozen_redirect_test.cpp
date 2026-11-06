@@ -84,10 +84,13 @@ static bool is_cfg0_csr(std::uint32_t insn, std::uint32_t funct3)
     return (insn & 0xfff07fffu) == ((0x7c0u << 20) | (funct3 << 12) | 0x73u);
 }
 
+// disable_gathering() calls this shared routine (ckernel.h).
+extern "C" void ckernel_gathering_off();
+
 // The PC right after gathering goes off: the last csrrs 0x7c0 before the first csrrc 0x7c0 is the bit-18 write.
 static std::uint32_t after_gathering_off()
 {
-    const volatile std::uint32_t *code = reinterpret_cast<const volatile std::uint32_t *>(&gfr_bracket);
+    const volatile std::uint32_t *code = reinterpret_cast<const volatile std::uint32_t *>(&ckernel_gathering_off);
     std::uint32_t last_set             = 0;
     for (std::uint32_t i = 0; i < 256; i++)
     {
@@ -111,7 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS)
     const std::uint32_t x   = after_gathering_off();
     const std::uint32_t hot = reinterpret_cast<std::uint32_t>(&gfr_hot);
     gfr_debug[0]            = x;
-    LLK_ASSERT(x != 0, "gathering-off write not found in gfr_bracket");
+    LLK_ASSERT(x != 0, "gathering-off write not found in ckernel_gathering_off");
 
     // TRISC branch predictor: 64 sets x 4 ways, index pc[7:2], tag pc[15:8] ^ pc[23:16] ^ pc[31:24].
     // Alias of x in spare L1 at 0x100000..0x10ffff: pc[23:16] = 0x10, pc[15:8] = tag(x) ^ 0x10, pc[7:2] = x's.
