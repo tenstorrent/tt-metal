@@ -1,0 +1,27 @@
+{
+  "argv": [
+    "python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/tests/check_serving_load_costs.py",
+    "--engine-pid",
+    "94148",
+    "--server-log",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/measured-workload-prefill/server/server.log",
+    "--output",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/measured-workload-prefill/result.json",
+    "--workload",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/measured-workload-prefill/workload.json",
+    "--batch",
+    "2",
+    "--stages",
+    "prefill,overlap",
+    "--overlap-decode-tokens",
+    "2048",
+    "--request-timeout",
+    "600"
+  ],
+  "engine_pid": 94148,
+  "hf_cpu_pid": 93575,
+  "host_regime": "HFfullreferenceCPU16threadsoverlap",
+  "outer_client_bound": 600,
+  "first_readiness_wait": "300s expired during live modelstartup; no request dispatched"
+}

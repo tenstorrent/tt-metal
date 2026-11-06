@@ -1,0 +1,24 @@
+{
+  "arm": "django-native-replay",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "queued",
+  "queued_at": "2026-11-06T10:29:10.523320+00:00",
+  "planned_clients": 1,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "batch_reason": "Preserve originalsmokeB8 numeric/samplergeometry for failurediagnostic; no fastestbatchclaim",
+  "predicted_hours": 0.48,
+  "prediction_basis": "Originalresponseenvelope1281.434s plus observedHF-contendedB8startupabout390s =>1671s, .48hforecast;1920sbound gives~15percentmargin. Same release32768cap; no score.",
+  "timeout_seconds": 1920,
+  "request_timeout_seconds": 3600,
+  "max_output_tokens": 32768,
+  "effort_total_box_hours": 0.75,
+  "regime": "serialTTmesh1x4, concurrentHFCPU; rawtokenreplaynot taskscore",
+  "prerequisites": [
+    "measuredprefillclientdone",
+    "oldserveridleclosed",
+    "ownergate",
+    "remainingeffortbudget>=1920s"
+  ]
+}

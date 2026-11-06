@@ -1,0 +1,25 @@
+{
+  "status": "planned_projection_stop_not_numerical_failure",
+  "source": "bringup/artifacts/django-cap-loop/hf512/result.json",
+  "completed_prefix_tokens": 3072,
+  "elapsed_seconds": 154.19182337506209,
+  "peak_rss_mib": 62486.14453125,
+  "remaining_seconds_projection_with_2x_allowance": 3612.6370842306433,
+  "short_cache_control": {
+    "kl_hf_tt": 0.0,
+    "js": -4.122294090007072e-17,
+    "centered_max_abs_logit_error": 0.0,
+    "top1_equal": true,
+    "release_top20_top_p95_kl_hf_tt": 0.0,
+    "release_kl_infinite_due_to_zero_support": false
+  },
+  "approved_followup": {
+    "chunk_size": 512,
+    "same_case_sha256": "4474ca423162476efeb212b722e4aaa78724074b1d0760f27ea3fba7c23aabf2",
+    "internal_budget_seconds": 7100,
+    "outer_timeout_seconds": 7200,
+    "output": "bringup/artifacts/django-cap-loop/hf512-extended",
+    "reason": "Measured approximately1.05hour total projection plus margin; coordinator authorizes2h CPU, separate from0.5h device box"
+  },
+  "quality_verdict": null
+}

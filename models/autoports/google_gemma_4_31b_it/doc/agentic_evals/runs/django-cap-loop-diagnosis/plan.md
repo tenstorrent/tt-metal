@@ -30,3 +30,23 @@ A same-prompt sampled HF control remains necessary for a quality verdict: use re
 4. If TT puts materially more mass on repetition than HF, queue precision/cache/feedback investigation with identical full prefix. If both prefer repetition, report shared conditional tendency, not global model-inherent proof. If HF sampled control reproduces same loop, then attribute that demonstrated case to model/control behavior. If native parser only changes finish labeling, fix validity reporting independently; do not raise cap.
 
 No quality verdict yet. Existing exact168-token generic pairs do not control this42K task prefix. No copied old Gemma implementations; only this autoport, pinned HF modules and generic harness sources used.
+
+## Measured CPU budget revision
+
+First512-token-chunk HF pilot intentionally projection-stopped after3072tokens/154.191823s with62486.145MiB peakRSS; remaining heuristic2x projection3612.637s exceeded original3500s budget. Short cache parity passed exactly; this is not a numerical failure. Coordinator authorizes extended same-case512-chunk attempt with7100s internal budget and7200s outer timeout, output hf512-extended, preserving hf512 pilot. CPU allowance is separate from unchanged0.5device-hour box. No final quality conclusion until full-prefix HF/TT evidence completes.
+
+## Native replay preparation and box revision
+
+Coordinator extends total device box0.5→0.75h for one full-cap fresh replay, estimated additional0.42h based on original message148 measured response envelope1281.434s (21.36min) plus approximately3min startup; no B1 token-rate extrapolation. Fresh full60 B8 stock server required after prior bounded server expires; no reuse beyond its timeout. Client planned_clients1, B8 deliberately matches original smoke route for diagnosis rather than claiming measured fastest batch. Request T1/top_p.95/top_k20/max32768/timeout3600 unchanged, diagnostic seed0 and return_token_ids enabled by stock protocol. Only natural EOS or existing release cap ends generation; no task commands execute and no score assigned.
+
+Prepared private native-replay-request.json and replay_client.py. Client first compares stock /tokenize IDs to verified42823case and refuses generation on mismatch, then makes one chat call. It persists private raw response and generated IDs, compact prompt parity/usage/finish/cap/tool argument repetition counts, and earliest/longest contiguous token repetition of widths1–16 with at least8 repeats. Detection is diagnostic and not exhaustive for nonperiodic loops. Token IDs identify exact fresh onset for later matched HF conditional control; no inherent-model verdict. The response's native tool_calls finish may mask reaching max_tokens, so usage is checked independently.
+
+Rank recommendation: original mechanical cap loop remains a quality/validity effort before speed. Eleven separately evidenced no-tool FormatErrors are an additional validity cause and must remain tracked; their missing raw responses preclude assigning all eleven to the same cap loop. Instrumentation/stock reporting coverage for those failures ranks above speed work. A valid score still reports task failure; fixing a score is not the gate. No source/runtime/publication change or process launch by investigator for this preparation.
+
+Coordinator-only client command (after fresh-server readiness and ownership scheduling):
+
+`python_env/bin/python bringup/artifacts/django-cap-loop/replay_client.py --base-url http://127.0.0.1:8000 --output bringup/artifacts/django-cap-loop/native-replay-seed0 > bringup/artifacts/django-cap-loop/native-replay-seed0.log 2>&1`
+
+Stock ChatCompletionRequest.return_token_ids is supported at protocol.py:416; chat serving returns choice token_ids at1121 and prompt_token_ids at1197. Neither field requires executing returned commands. Syntax validation only performed here.
+
+Coordinator scheduling correction: with approximately0.20deviceh already spent,0.75h box leaves approximately0.55h. Proposed fresh-server outer bound1920s fits that remaining box with about7min margin over measured response+startup, absent new host slowdown. This server allocation is separate from unchanged request timeout3600/max32768; any allocation cutoff must be recorded, never scored as a completed replay. Recheck actual remaining device budget before launch.

@@ -1,0 +1,3 @@
+# CPU launch handoff correction
+
+Coordinator reported duplicate HF launches: coordinator session73216/PID93362 at10:20:30 and investigator session59654/PID93435 at10:20:43 targeted the same output directory. The instruction was interpreted as a launch handoff although coordinator had already launched. A process-name check did not establish exclusive ownership. Coordinator stopped both CPU children, invalidated shared outputs, and owns the single restart at hf512-extended-single. No TT process was signalled. This is an orchestration failure, not model-quality evidence. Investigator will perform preparation only and launch no further model/HTTP/device processes. Active run outputs will not be edited.

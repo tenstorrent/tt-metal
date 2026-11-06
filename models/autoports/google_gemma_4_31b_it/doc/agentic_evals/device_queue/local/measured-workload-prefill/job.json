@@ -1,0 +1,22 @@
+{
+  "arm": "measured-workload-prefill",
+  "owner": "coordinator",
+  "device": "local",
+  "status": "running",
+  "queued_at": "2026-11-06T10:21:50.502610+00:00",
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "predicted_hours": 0.15,
+  "predicted_client_seconds": 300,
+  "prediction_basis": "Observed84Kiunderload35.4s;107585perhaps60s plus2048decodeanchor andstartup; guessedhostcontendedregime",
+  "box_hours": 0.3,
+  "timeout_seconds": 1080,
+  "regime": "serialTTmesh1x4,possibleHFCPU16threadsoverlap; noidleperformancecomparison",
+  "prerequisites": [
+    "TTlogitsfinishedandclosed",
+    "deviceownerempty"
+  ],
+  "start": "2026-11-06T10:24:43.992931+00:00",
+  "hf_cpu_pid": 93575
+}

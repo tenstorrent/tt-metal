@@ -1,0 +1,143 @@
+{
+  "status": "partial_timing_envelopes_missing_response_causes_identified",
+  "additional_device_hours": 0,
+  "tasks": [
+    {
+      "task": "django__django-11265__ohWF75G",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/smoke2-swe-native-parser/collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T073358/django__django-11265__ohWF75G/agent/mini-swe-agent.trajectory.json",
+      "agent_execution_wall_seconds": 7271.530568,
+      "agent_query_counter": 126,
+      "saved_responses": 115,
+      "missing_response_records": 11,
+      "missing_response_causes": {
+        "FormatError_no_tool_calls": 11,
+        "message_indices": [
+          170,
+          179,
+          188,
+          209,
+          212,
+          221,
+          226,
+          231,
+          234,
+          237,
+          240
+        ],
+        "all_messages_match_no_tool_calls": true,
+        "coverage": "Count exactly reconciles missing query invocations. Not proof there were no additional internal HTTP retries. Raw failed responses/usage/finish/timestamps were not persisted."
+      },
+      "known_output_cap_hits": [
+        {
+          "message_index": 148,
+          "prompt_tokens": 42823,
+          "completion_tokens": 32768,
+          "finish_reason": "tool_calls",
+          "response_envelope_seconds": 1281.434238910675
+        }
+      ],
+      "all_attempt_output_cap_hit_count": null,
+      "known_tool_timeout_count": 0,
+      "tool_exceptions_other_than_synthetic_submission": [],
+      "synthetic_unexecuted_observations": [
+        242
+      ],
+      "server_created_to_client_processed_response_envelopes": {
+        "count": 115,
+        "sum_seconds": 2522.8167157173157,
+        "minimum_seconds": 1.572831392288208,
+        "maximum_seconds": 1281.434238910675,
+        "median_seconds": 5.030048370361328,
+        "sum_interval_due_to_integer_server_timestamp_seconds": [
+          2407.8167157173157,
+          2522.8167157173157
+        ],
+        "fraction_of_agent_wall_interval": [
+          0.3311292847084289,
+          0.3469443870344898
+        ],
+        "scope": "Includes engine wait/prefill/decode/network/response parsing; upper rounding error<1s per response if same runner clock. Not pure generation time; excludes11 failed responses where applicable."
+      },
+      "assistant_processed_to_tool_observation_envelopes": {
+        "count": 114,
+        "sum_seconds": 15.884180068969727,
+        "maximum_seconds": 4.113648176193237,
+        "fraction_of_agent_wall": 0.002184434201359425,
+        "scope": "Measured timestamp delta includes action dispatch/environment execution/result rendering/agent overhead; not exact command runtime. Excludes synthetic final unexecuted observation."
+      },
+      "adjacent_tool_to_next_valid_response": {
+        "count": 103,
+        "sum_seconds": 2269.2783720493317,
+        "scope": "Client wall envelope; excludes intervals containing FormatError messages and first call; not pure generation time."
+      },
+      "pure_generation_seconds": null,
+      "pure_tool_execution_seconds": null,
+      "generation_vs_tool_share": null
+    },
+    {
+      "task": "pylint-dev__pylint-7080__CJczXtL",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/smoke2-swe-native-parser/collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T073358/pylint-dev__pylint-7080__CJczXtL/agent/mini-swe-agent.trajectory.json",
+      "agent_execution_wall_seconds": 487.653862,
+      "agent_query_counter": 35,
+      "saved_responses": 35,
+      "missing_response_records": 0,
+      "missing_response_causes": {
+        "FormatError_no_tool_calls": 0,
+        "message_indices": [],
+        "all_messages_match_no_tool_calls": true,
+        "coverage": "Count exactly reconciles missing query invocations. Not proof there were no additional internal HTTP retries. Raw failed responses/usage/finish/timestamps were not persisted."
+      },
+      "known_output_cap_hits": [],
+      "all_attempt_output_cap_hit_count": 0,
+      "known_tool_timeout_count": 0,
+      "tool_exceptions_other_than_synthetic_submission": [],
+      "synthetic_unexecuted_observations": [
+        71
+      ],
+      "server_created_to_client_processed_response_envelopes": {
+        "count": 35,
+        "sum_seconds": 492.66607689857483,
+        "minimum_seconds": 1.691174030303955,
+        "maximum_seconds": 96.05813431739807,
+        "median_seconds": 3.6984474658966064,
+        "sum_interval_due_to_integer_server_timestamp_seconds": [
+          457.66607689857483,
+          492.66607689857483
+        ],
+        "fraction_of_agent_wall_interval": [
+          0.9385060030521707,
+          1.0102782225040081
+        ],
+        "scope": "Includes engine wait/prefill/decode/network/response parsing; upper rounding error<1s per response if same runner clock. Not pure generation time; excludes11 failed responses where applicable."
+      },
+      "assistant_processed_to_tool_observation_envelopes": {
+        "count": 34,
+        "sum_seconds": 3.931502103805542,
+        "maximum_seconds": 2.814094305038452,
+        "fraction_of_agent_wall": 0.008062075193419758,
+        "scope": "Measured timestamp delta includes action dispatch/environment execution/result rendering/agent overhead; not exact command runtime. Excludes synthetic final unexecuted observation."
+      },
+      "adjacent_tool_to_next_valid_response": {
+        "count": 34,
+        "sum_seconds": 472.18231225013733,
+        "scope": "Client wall envelope; excludes intervals containing FormatError messages and first call; not pure generation time."
+      },
+      "pure_generation_seconds": null,
+      "pure_tool_execution_seconds": null,
+      "generation_vs_tool_share": null
+    }
+  ],
+  "source_semantics": {
+    "mini_litellm": "models/litellm_model.py:80-92 parses actions before adding successful response timestamp; FormatError aborts message construction, losing raw response record.",
+    "mini_agent": "agents/default.py:109 increments n_calls before model query; InterruptAgentFlow retained as messages at84-88; execute_actions at120 runs environments before observation formatting.",
+    "mini_tool": "models/utils/actions_toolcall.py:30 no-tool FormatError; timestamp at90 is observation formatting time.",
+    "vllm": "installed vllm/entrypoints/openai/chat_completion/serving.py:945 sets integer created_time before awaiting result generator."
+  },
+  "limitations": [
+    "No request-submit timestamps or per-command start/end durations are saved. Existing timestamps support wall envelopes only.",
+    "No phase recorder on original smoke; decode/prefill/kernel/host breakdown cannot be recovered from tokens divided by rate.",
+    "Django11 failures are missing native responses due no-tool FormatError, not unexplained missing tasks or inferred transport errors. Their cutoff counts and per-call latency remain unknown.",
+    "Harbor aggregate native totals omit these unsuccessful parsed responses; preserve actual115saved/126queries distinction.",
+    "No model, HTTP or device process launched; no active HF outputs touched."
+  ]
+}

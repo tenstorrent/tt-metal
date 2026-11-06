@@ -1,0 +1,78 @@
+{
+  "status": "running",
+  "workload": {
+    "target_concurrency": 2,
+    "typical_context_tokens": 31755,
+    "working_set_tokens": 107585,
+    "source": "runs/real-history-capacity/workload-result.json: pooled median prompt and maximum prompt+completion across150 saved SWE usage rows;11 missing attempts; scores quarantined. Diagnostic sizing, not universal capacity bounds."
+  },
+  "stages": [
+    "prefill",
+    "overlap"
+  ],
+  "requests": [
+    {
+      "label": "prefill_4096",
+      "input_tokens": 4096,
+      "requested_output_tokens": 1,
+      "prompt_sha256": "3a1323ac5ac1f0a542ccaedc8a8496e36a95d5289950d1e04257dac6589b253e",
+      "start_seconds": 0.004243731033056974,
+      "token_events": [
+        [
+          1.5020733340643346,
+          1
+        ]
+      ],
+      "output_tokens": 1,
+      "status": "pass",
+      "ttft_ms": 1497.8296030312777,
+      "first_token_seconds": 1.5020733340643346,
+      "end_seconds": 1.5021559910383075
+    },
+    {
+      "label": "prefill_31755",
+      "input_tokens": 31755,
+      "requested_output_tokens": 1,
+      "prompt_sha256": "09f6a835b5bb1be563e5c6d9b20cef4d66b739a3610afea8fccaaf4d79156669",
+      "start_seconds": 1.5193283900152892,
+      "token_events": [
+        [
+          18.529113566037267,
+          1
+        ]
+      ],
+      "output_tokens": 1,
+      "status": "pass",
+      "ttft_ms": 17009.78517602198,
+      "first_token_seconds": 18.529113566037267,
+      "end_seconds": 18.53071331209503
+    }
+  ],
+  "engine_pid": 94148,
+  "server_log": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/measured-workload-prefill/server/server.log",
+  "prefill_by_length": [
+    {
+      "input_tokens": 4096,
+      "ttft_ms": 1497.8296030312777,
+      "input_tokens_per_second": 2734.623479006288,
+      "status": "pass",
+      "prefix_cache_bypass": "reset while idle plus unique initial prefix"
+    },
+    {
+      "input_tokens": 31755,
+      "ttft_ms": 17009.78517602198,
+      "input_tokens_per_second": 1866.8666106826422,
+      "status": "pass",
+      "prefix_cache_bypass": "reset while idle plus unique initial prefix"
+    }
+  ],
+  "host_contention": {},
+  "missing_reasons": [],
+  "limitations": [
+    "Synthetic exact-token raw continuation prompts measure load, not chat quality.",
+    "Streaming arrival counts measure HTTP delivery; not device timing.",
+    "Engine CPU/step is process CPU from /proc, including all engine threads; not exclusive Python overhead.",
+    "Decode window starts after all first tokens and ends at first completion; boundary events may straddle snapshots.",
+    "Requires no other server clients; stress workers inherit CPU affinity and are not individually pinned."
+  ]
+}

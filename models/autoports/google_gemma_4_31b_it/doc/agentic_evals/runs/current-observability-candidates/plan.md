@@ -1,0 +1,3 @@
+# Refreshed next-rung candidates
+
+Rebase existing GPQA-full and tool-nightly preparation efforts onto TTI2d738ec3910f7f13d1614e6196d9ff5f646b6fe1. Produce three independent model-only patches: GPQA198/C2, SWE5/C2, Terminal10/C2, each B8 and peers disabled. GPQA all198 fixed indices0..197; tools use unchanged frozen cohorts.json nightly lists. Preserve generic activation repair, unique periodic phase export, all immutable pins, cache settings, caps and resource inheritance. Verify stock commands/config exact IDs and focused model tests plus full hooks. Isolated worktrees, no publication/dispatch/cohort mutation. Predicted/actual device0, no speed credit. Live rung eligibility remains coordinator decision.

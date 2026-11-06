@@ -30,19 +30,41 @@
     "reason": "Pinned GPQA limits; newly registered conservative tool defaults, no prior requested tool protocol exists."
   },
   "registry": {
-    "ok": false,
-    "reason": "Host resolver and route builders validated; native build and observed autoport module path still pending.",
-    "host_tests_passed": 117
+    "ok": true,
+    "reason": "Observedfull60autoportmodule in localserver and correct-implementationCI GPQA/SWE/Terminal logs; source-onlypublication439c matches14executionfiles.",
+    "host_tests_passed": 117,
+    "evidence": [
+      "runs/local-serving-check/client_manifest.json",
+      "runs/nightly-gpqa-explicit-autoport/audit.json",
+      "runs/ci-phase-autoexport/publication-parity.json"
+    ]
   },
   "disk": {
     "ok": false,
     "free_gib": 546,
-    "reason": "Selected task resources inventoried in setup/task_resources.json; local Docker unavailable. CI uses stock setup/admission without added wrapper."
+    "reason": "Selected task resources inventoried in setup/task_resources.json; local Docker unavailable. CI uses stock setup/admission without added wrapper.",
+    "ci_observation": {
+      "run_id": 42190891568,
+      "runner": "qb2-120-p05t02",
+      "at": "2026-11-06T09:58:34Z",
+      "free_space_reported_GB": 980,
+      "usage_percent": 72,
+      "evidence": "bringup/artifacts/stage12-terminal-lifecycle-live.log:580",
+      "limitation": "Stockcleanupfilesystem free; no separateDockerfilesystem reserve measured. Notfuture-run guarantee."
+    }
   },
   "admission": {
     "ok": false,
     "local_task_sandboxes_available": 0,
-    "reason": "No usable Docker endpoint and user namespaces denied."
+    "reason": "No usable Docker endpoint and user namespaces denied.",
+    "ci_observation": {
+      "run_id": 42190891568,
+      "planned_clients": 2,
+      "concurrent_trials_observed": 2,
+      "at": "2026-11-06T10:13:06Z",
+      "evidence": "StockHarborprogress0/2done,2running; servingactive_rows2",
+      "limit": "ObservedC2 only; hostmaximum and occupiedDockerbridge count unknown; no customadmission checks introduced."
+    }
   },
   "release_route": {
     "ok": false,
@@ -65,13 +87,14 @@
         "eval": "swe_bench_verified",
         "run_id": 42173587147,
         "ok": false,
-        "reason": "Running; no trajectory collected"
+        "reason": "Completedbutbothnetworkquarantined; activationrepairretry42200513517pending",
+        "trajectory_audit": "runs/smoke2-swe-native-parser/audit.json"
       },
       {
         "eval": "terminal_bench_2_1",
-        "run_id": 42175367781,
+        "run_id": 42190891568,
         "ok": false,
-        "reason": "Infrastructure retry after premodel topology failure; no task score yet"
+        "reason": "Correctautoportlifecycle-repair attemptreached2runningtasksonstockHarbor; trajectoryauditpending"
       }
     ],
     "trajectory_audit": "runs/smoke2-r1_gpqa_diamond/audit.json",

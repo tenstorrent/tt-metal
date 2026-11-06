@@ -92,6 +92,14 @@
     {
       "fact": "Gemma native tool_calls finish_reason can coexist with completion_tokens32768 and visibly truncated repetition; inspect usage andcontent, not finish_reasonalone.",
       "evidence": "SWE Django native trajectory message148; prompt42823,command57451chars,8140 repeated a fragments."
+    },
+    {
+      "fact": "Offline chat reconstruction must use stock automaticcontentformat: pinnedtemplate choosesstructuredopenai, whichaddsone systemtextspace relativeforcedstring. Live/offline42823 IDs nowexact. PreserveJSON-stringtoolarguments before parse mutates them.",
+      "evidence": "runs/django-cap-loop-diagnosis/TOKENIZATION.md"
+    },
+    {
+      "fact": "Mini2.2.8 parses nativeactions before saving response; No toolcalls FormatError loses rawusage/finish. Django11missingqueryresponses exactlymatch11FormatErrors; capcountacrossthoseunknown.",
+      "evidence": "runs/django-cap-loop-diagnosis/timing-coverage.json"
     }
   ],
   "suite_timings": [

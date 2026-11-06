@@ -1,6 +1,6 @@
 {
   "status": "not_release_ready",
-  "max_concurrency": null,
+  "max_concurrency": 2,
   "max_num_seqs": 8,
   "prefix_caching": true,
   "validated_batches": [
@@ -258,6 +258,19 @@
       "evidence": "runs/nightly-gpqa-explicit-autoport/audit.json; runs/gpqa-nightly-runtime-analysis/RESULT.json",
       "max_capacity": null,
       "reason": "Measured C2; C8 reconstruction unavailable"
+    },
+    "swe_bench_verified": {
+      "functional_at": 0,
+      "planned_clients": 2,
+      "observed_working_set_tokens": 107585,
+      "typical_context_tokens": 31755,
+      "recorded_usage_rows": 150,
+      "missing_calls": 11,
+      "score_quarantined": true,
+      "replay_completed": 6,
+      "replay_preemptions": 0,
+      "evidence": "runs/real-history-capacity/workload-result.json; runs/real-history-capacity/REPLAY_RESULT.json",
+      "limitation": "No continuouslysimultaneouspeakresidency orhighercapacityclaim"
     }
   },
   "cache_routing": {
@@ -275,5 +288,14 @@
     "source_evidence": "SWE CI checkout e76c762f, matched official fullSHA",
     "live_pin_hook_confirmed": false,
     "note": "Does not change running immutable jobs; next normalrung confirms pin hook"
+  },
+  "max_concurrency_basis": "Largest actuallyrun realagentconcurrency C2; selectedvalidatedlimit, not physicalmaximum. GPQA10valid and diagnosticSWEreplay6/6. Higheragentsnotadmitted.",
+  "phase_export": {
+    "runtime_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
+    "period_seconds": 1,
+    "path": "/home/container_app_user/cache_root/logs/gemma4-phase-{pid}-{time_ns}.jsonl",
+    "file_cap_bytes": 4294967296,
+    "local_exactness": "runs/ci-phase-autoexport/paired-audit.json",
+    "live_ci_artifact_confirmation": null
   }
 }

@@ -1,0 +1,9 @@
+{
+  "at": "2026-11-06T10:21:16.824740+00:00",
+  "cpu_pids_stopped": [
+    93362,
+    93435
+  ],
+  "reason": "Coordinator and subagent simultaneously launched same CPU-only followup due ambiguous handoff; same output path collided. Invalidate bothattempts and restart onecoordinator-owned distinctoutput. NoTTprocesssignalled.",
+  "valid_measurement": false
+}

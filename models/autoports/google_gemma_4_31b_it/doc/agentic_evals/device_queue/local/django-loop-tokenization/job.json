@@ -2,7 +2,7 @@
   "arm": "django-loop-tokenization",
   "owner": "coordinator",
   "device": "local",
-  "status": "running",
+  "status": "completed",
   "start": "2026-11-06T10:12:58.068526+00:00",
   "planned_clients": 1,
   "batch": 8,
@@ -13,5 +13,11 @@
   "timeout_seconds": 1260,
   "box_device_hours": 0.5,
   "regime": "serial full60 mesh1x4",
-  "device_owners": []
+  "device_owners": [],
+  "end": "2026-11-06T10:17:34.649696+00:00",
+  "exit_status": 0,
+  "wrapper_exit_status": 1,
+  "wrapper_exit_reason": "IntentionalidleSIGINT; ownercheckempty",
+  "actual_hours": 0.07682810277777777,
+  "result": "Stock/tokenize42823 IDs; count matchesoriginal; no generation"
 }

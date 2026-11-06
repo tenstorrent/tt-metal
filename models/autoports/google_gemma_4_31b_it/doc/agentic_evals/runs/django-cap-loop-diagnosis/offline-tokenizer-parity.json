@@ -1,12 +1,12 @@
 {
-  "status": "stock_offline_reconstruction_confirmed_original_count_mismatch_unresolved",
+  "status": "resolved_exact_stock_offline_live_parity",
   "scope": "Tokenizer-only process; no engine/model weights/device opened",
-  "prompt_tokens": 42822,
+  "prompt_tokens": 42823,
   "original_usage_prompt_tokens": 42823,
-  "exact_array_equality_with_prior_reconstruction": true,
   "source_functions": [
     "ChatCompletionRequest.model_validate",
-    "parse_chat_messages",
+    "resolve_chat_template_content_format(given_format=auto)",
+    "parse_chat_messages(content_format=openai)",
     "safe_apply_chat_template"
   ],
   "source_hashes": {
@@ -14,11 +14,17 @@
     "python_env/lib/python3.10/site-packages/vllm/entrypoints/chat_utils.py": "4d442ec6bc7783f2ed37e7400390631a5f39c27e3a48add89991d1669fef13bd",
     "python_env/lib/python3.10/site-packages/vllm/renderers/hf.py": "ed79926358b7c6b6df08cc2c9dbee44b6508e5281ce860c750111d0864c3bb0d"
   },
-  "normalization": "Stock ChatCompletionRequest._normalize_messages_before maps reasoning_content to reasoning; stock chat parser restores both fields in rendered conversation. Tokenize request lacks that chat-completion prevalidator, so payload now contains protocol-normalized messages.",
-  "special_tokens": "Chat protocol defaults add_special_tokens=False; both tokenizer encode settings produce42822. No extra BOS inserted.",
-  "missing_reason": "Saved original runtime contains no prompt IDs. Actual stock offline path reproduces prepared IDs but not original reported count; no evidence identifies missing token.",
+  "normalization": "Protocol reasoning_content\u2192reasoning normalization plus automatic openai content format required. Actual stock high-level methods run offline without model/engine.",
+  "special_tokens": "Not a BOS or usage accounting defect. No arbitrary token added.",
+  "missing_reason": "Original raw runtime IDs unavailable, but whole42823-ID offline stock rendering exactly matches live /tokenize and original recorded count.",
   "private_script": "bringup/artifacts/django-cap-loop/stock_tokenize_full.py",
   "private_payload": "bringup/artifacts/django-cap-loop/tokenize-request.json",
   "private_parity": "bringup/artifacts/django-cap-loop/stock-full-parity.json",
-  "fallback": "Coordinator can launch existing run_serving.sh with --stages serve --max-num-seqs8 and request /tokenize using normalized payload. No server launch by investigator."
+  "fallback": "Coordinator can launch existing run_serving.sh with --stages serve --max-num-seqs8 and request /tokenize using normalized payload. No server launch by investigator.",
+  "exact_array_equality_with_live_tokenize": true,
+  "cause": "Initial diagnostic forced string format. Stock auto detection selects openai structured content. Pinned HF chat_template.jinja:202 appends a space after each system content item, absent in string branch:199. Exactly token236743 at index18 is inserted before tool declaration; all later IDs equal after offset1.",
+  "private_payload_failure": "Earlier private /tokenize payload captured parser-mutated argument dicts instead of JSON strings and returned400. Corrected with preserved raw/protocol-normalized messages and deepcopied parser input; no runtime source changes.",
+  "hf_template_source": "/home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/chat_template.jinja",
+  "hf_template_sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+  "private_array_evidence": "bringup/artifacts/django-cap-loop/stock-full-parity.json"
 }

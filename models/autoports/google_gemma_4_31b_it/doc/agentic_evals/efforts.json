@@ -1235,8 +1235,13 @@
         "method": "Actualtrajectorycap/repetitionaudit, then feasiblepinnedHF/TTlongprefixdiscriminator",
         "success": "Evidenceclassifiescause or explicitremaininguncertainty; neverhidecapfailurebyfinish_reason"
       },
-      "box_hours": 0.5,
-      "status": "running"
+      "box_hours": 0.75,
+      "status": "running",
+      "box_revision": {
+        "previous": 0.5,
+        "new": 0.75,
+        "reason": "Captureonefull-release-capnativechatreplay withrawtokenIDs forcausalonsetcomparison;TTnexttokenlogitsalonecannotdiagnoseobservedloop. Existingdiagnosticcostabout.2h, extraestimated.32h."
+      }
     },
     {
       "problem": "real-history-capacity-replay",
@@ -1265,6 +1270,23 @@
         "higher_capacity": "unproven"
       },
       "evidence": "runs/real-history-capacity/REPLAY_RESULT.json"
+    },
+    {
+      "problem": "measured-workload-prefill",
+      "owner": "local_serving_check",
+      "goal": "Measure coldprefill at observedmedian31755 and observedworking107585 plus actualC2decodeinterference.",
+      "plan": "runs/measured-workload-prefill/plan.md",
+      "predicted": {
+        "saving_hours": {},
+        "device_hours": 0.15,
+        "basis": "guess"
+      },
+      "confirm": {
+        "method": "Existingmeasurementclient on full60B8, cold distinctprefixes, oneanchor pluslongrequest; no taskscore",
+        "success": "Allrequestscomplete, exactlengths, prefillrates and anchorstreamtimings reported with hostregime"
+      },
+      "box_hours": 0.3,
+      "status": "running"
     }
   ],
   "rankings": [
@@ -2621,6 +2643,59 @@
         }
       ],
       "reason": "Validity remains first. Same SWE2 retry proceeds immediately; no rung waits for loop diagnosis. CI phase export accepted from local exactness; artifact confirmation on next run. Zero speed savings credited without evidence."
+    },
+    {
+      "after": "real-workload-values-and-tokenization-parity",
+      "order": [
+        {
+          "problem": "swe-network-validity",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "measured-workload-prefill",
+          "saving_hours": 0,
+          "device_hours": 0.15
+        }
+      ],
+      "reason": "Validityfirst; measured-workload calibration is informationgathering neededtopriceexistingprefillshortfall. No speedupsavings credited; independent localwork whileCI rungsrun."
     }
   ],
   "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."
