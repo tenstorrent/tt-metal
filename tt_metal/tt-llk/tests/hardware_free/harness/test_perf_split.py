@@ -50,40 +50,39 @@ def test_a_test_without_a_duration_weighs_the_mean(tmp_path, monkeypatch):
     assert _cut(_items(*TESTS), 2, 2) == TESTS[2:]
 
 
-def test_an_unreadable_durations_file_falls_back_to_the_table(tmp_path, monkeypatch):
-    path = tmp_path / "blackhole.json"
-    path.write_text("{truncated")
-    monkeypatch.setenv("LLK_SPLIT_DURATIONS", str(path))
+@pytest.fixture
+def table(monkeypatch):
+    """Weigh both modules at 3 s, whatever the committed table says.
+
+    perf_a spreads its 3 s over three tests, perf_b has one, so the cut is 3:1.
+    """
     monkeypatch.setattr(
-        TestConfig, "CHIP_ARCH", SimpleNamespace(value="blackhole"), raising=False
+        plugin,
+        "_module_costs",
+        lambda: ("perf_split_costs.json", {"perf_a": 3.0, "perf_b": 3.0}),
     )
-    monkeypatch.setattr(TestConfig, "SPEED_OF_LIGHT", False, raising=False)
-    assert _cut(_items(*TESTS), 2, 1) == TESTS[:3]
 
 
-def test_a_durations_file_that_is_not_an_object_falls_back_to_the_table(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    "contents",
+    ["{truncated", json.dumps([1, 2, 3])],
+    ids=["truncated", "not-an-object"],
+)
+def test_a_bad_durations_file_falls_back_to_the_table(
+    contents, tmp_path, monkeypatch, table
 ):
     path = tmp_path / "blackhole.json"
-    path.write_text(json.dumps([1, 2, 3]))
+    path.write_text(contents)
     monkeypatch.setenv("LLK_SPLIT_DURATIONS", str(path))
-    monkeypatch.setattr(
-        TestConfig, "CHIP_ARCH", SimpleNamespace(value="blackhole"), raising=False
-    )
-    monkeypatch.setattr(TestConfig, "SPEED_OF_LIGHT", False, raising=False)
     assert _cut(_items(*TESTS), 2, 1) == TESTS[:3]
 
 
 @pytest.mark.parametrize("env", [None, "missing.json"])
-def test_without_durations_the_module_table_is_used(env, monkeypatch):
+def test_without_durations_the_module_table_is_used(env, monkeypatch, table):
     if env:
         monkeypatch.setenv("LLK_SPLIT_DURATIONS", env)
     else:
         monkeypatch.delenv("LLK_SPLIT_DURATIONS", raising=False)
-    monkeypatch.setattr(
-        TestConfig, "CHIP_ARCH", SimpleNamespace(value="blackhole"), raising=False
-    )
-    monkeypatch.setattr(TestConfig, "SPEED_OF_LIGHT", False, raising=False)
     assert _cut(_items(*TESTS), 2, 1) == TESTS[:3]
     assert _cut(_items(*TESTS), 2, 2) == TESTS[3:]
 
@@ -112,7 +111,7 @@ def test_the_run_pass_adds_to_the_compile_pass(tmp_path, monkeypatch):
     plugin._store_split_durations(
         _session(tmp_path, 15, [("a::t", 3.0), ("a::t", 1.5), ("b::t", 15.0)])
     )
-    assert json.loads(Path(".test_durations").read_text()) == pytest.approx(
+    assert json.loads(Path(".perf_split_durations").read_text()) == pytest.approx(
         {"a::t": 10.0 / 10 + (3.0 + 1.5) / 15, "b::t": 15.0 / 15}
     )
 
@@ -122,12 +121,12 @@ def test_no_terminal_reporter_stores_nothing(tmp_path, monkeypatch):
     session = _session(tmp_path, 1, [("a::t", 1.0)])
     session.config.pluginmanager.get_plugin = lambda name: None
     plugin._store_split_durations(session)
-    assert not Path(".test_durations").exists()
+    assert not Path(".perf_split_durations").exists()
 
 
 def test_a_compile_pass_starts_a_new_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    Path(".test_durations").write_text(json.dumps({"old::t": 5.0}))
+    Path(".perf_split_durations").write_text(json.dumps({"old::t": 5.0}))
     monkeypatch.setattr(TestConfig, "BUILD_MODE", BuildMode.PRODUCE, raising=False)
     plugin._store_split_durations(_session(tmp_path, 1, [("a::t", 2.0)]))
-    assert json.loads(Path(".test_durations").read_text()) == {"a::t": 2.0}
+    assert json.loads(Path(".perf_split_durations").read_text()) == {"a::t": 2.0}

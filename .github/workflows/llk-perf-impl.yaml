@@ -117,6 +117,7 @@ jobs:
           sparse-checkout: |
             .github
             tests/pipeline_reorg
+            tt_metal/tt-llk/perf
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
@@ -165,8 +166,8 @@ jobs:
           sku-config: ./.github/sku_config.yaml
           event: ${{ github.event_name == 'merge_group' && 'merge_group' || '' }}
 
-      # Durations do not scale between run types, so both gates, which measure
-      # L1_TO_L1, read the merge gate's runs rather than an ALL_MODES nightly.
+      # Durations do not scale between run types or to speed of light, so the
+      # source is the run that measures the same way, not the same pipeline.
       - name: Fetch test durations
         id: durations
         continue-on-error: true
@@ -174,13 +175,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          PIPELINE: ${{ inputs.pipeline }}
+          RUN_TYPES: ${{ inputs.perf-run-types }}
           SOL: ${{ inputs.speed-of-light }}
         run: |
-          case "$PIPELINE" in
-            merge_baseline|pr) set -- merge-gate.yaml "" merge_group ;;
-            *) set -- "$([ "$SOL" = true ] && echo llk-perf.yaml || echo llk-perf-gate.yaml)" main schedule ;;
-          esac
+          if [ "$SOL" = true ]; then
+            set -- llk-perf.yaml main schedule
+          elif [ "$RUN_TYPES" = L1_TO_L1 ]; then
+            set -- merge-gate.yaml "" merge_group
+          else
+            set -- llk-perf-gate.yaml main schedule
+          fi
           .github/scripts/llk-fetch-test-durations.sh "$1" "$2" "$3" split-durations
       # The legs read the outcome of this upload, so an artifact fault here
       # falls back to the tables instead of skipping every leg.
@@ -294,15 +298,6 @@ jobs:
           archive: false
           retention-days: 1
           if-no-files-found: error
-      - name: Upload test durations
-        if: ${{ inputs.offload-compile }}
-        continue-on-error: true
-        timeout-minutes: 2
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: test-durations-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}-compile${{ inputs.artifact-suffix }}
-          path: ${{ env.LLK_PATH }}/tests/python_tests/.test_durations
-          include-hidden-files: true
 
   stage2-baseline:
     name: "Stage 2: read the merge baseline"
@@ -497,14 +492,14 @@ jobs:
           overwrite: true
 
       # Behind the perf data and bounded: this only feeds the next run's split.
-      # Before stage 2 and shadow, which rewrite .test_durations.
+      # Before stage 2 and shadow, which rewrite the file.
       - name: Upload test durations
         continue-on-error: true
         timeout-minutes: 2
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: test-durations-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
-          path: ${{ env.LLK_PATH }}/tests/python_tests/.test_durations
+          path: ${{ env.LLK_PATH }}/tests/python_tests/.perf_split_durations
           include-hidden-files: true
 
       - name: Upload test logs on failure

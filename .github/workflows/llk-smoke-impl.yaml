@@ -66,6 +66,7 @@ jobs:
           sparse-checkout: |
             .github
             tests/pipeline_reorg
+            tt_metal/tt-llk/perf
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML

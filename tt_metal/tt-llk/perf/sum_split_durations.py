@@ -4,7 +4,7 @@
 
 """Sum the per-leg test durations of one run into one table per architecture.
 
-A test appears once per leg that ran it, compile pass included, and adds up.
+A test that ran in more than one leg adds up, so the table holds its whole cost.
 """
 
 from __future__ import annotations
@@ -15,13 +15,16 @@ import sys
 from pathlib import Path
 
 ARCHES = ("wormhole", "blackhole")
+# The smoke legs store pytest-split's own file; the perf legs store leg seconds.
+DURATION_FILES = (".test_durations", ".perf_split_durations")
 
 
 def sum_durations(download: Path, arch: str) -> dict:
     summed: dict = {}
-    for leg in sorted(download.glob(f"test-durations-{arch}-*/.test_durations")):
-        for test, seconds in json.loads(leg.read_text()).items():
-            summed[test] = summed.get(test, 0.0) + seconds
+    for name in DURATION_FILES:
+        for leg in sorted(download.glob(f"test-durations-{arch}-*/{name}")):
+            for test, seconds in json.loads(leg.read_text()).items():
+                summed[test] = summed.get(test, 0.0) + seconds
     return summed
 
 
