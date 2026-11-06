@@ -148,6 +148,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 (void)mailbox_read(ThreadId::MathThreadId);
                 wait_for_dest_available();
                 t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
+#ifdef ARCH_BLACKHOLE
+                if constexpr (BROADCAST_TYPE != BroadcastType::NONE)
+                {
+                    if (ckernel::unpacker::is_32bit_input(formats.unpack_A_src, formats.unpack_A_dst))
+                    {
+                        // Blackhole's _llk_unpack_A_ also hands math one SrcB bank per such tile; the datacopy waits for it.
+                        TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    }
+                }
+#endif
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -188,7 +198,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces          = params.num_faces;
     const int NUM_BLOCKS                   = params.NUM_BLOCKS;
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t TEST_FACE_R_DIM    = params.TEST_FACE_R_DIM;
+    const std::uint32_t TEST_FACE_C_DIM    = params.TEST_FACE_C_DIM;
+    const int num_faces_r_dim_A            = params.num_faces_r_dim_A;
+    const int num_faces_c_dim_A            = params.num_faces_c_dim_A;
 #endif
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape(TEST_FACE_R_DIM, TEST_FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
     // Broadcasts arrive in SrcB and copy B2D; the NONE datacopy (and unpack-to-dest) copies A2D.
     constexpr DataCopyType copy_type = (BROADCAST_TYPE == BroadcastType::NONE || unpack_to_dest) ? DataCopyType::A2D : DataCopyType::B2D;
 
@@ -197,7 +212,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, false /*is_int_fpu_en*/, PackMode::Default>(
-            num_faces, formats.math);
+            tensor_shape, formats.math);
         PROFILER_SYNC();
     }
     {
@@ -218,6 +233,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         math::math_unpack_to_dest_math_ready();
                         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(tile_in_block);
                         math::math_unpack_to_dest_tile_ready();
+#ifdef ARCH_BLACKHOLE
+                        if constexpr (BROADCAST_TYPE != BroadcastType::NONE)
+                        {
+                            if (math::is_32bit_input(formats.unpack_A_src, formats.unpack_A_dst))
+                            {
+                                // Blackhole's _llk_unpack_A_ hands math one SrcB bank per such tile; release it.
+                                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(1 /*iterations*/);
+                            }
+                        }
+#endif
                     }
                 }
             }
@@ -244,7 +269,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             (tile_in_block < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
                         _llk_math_eltwise_unary_datacopy_wrapper_<copy_type, dest_sync, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
-                            tile_in_block, formats.math, formats.math, num_faces);
+                            tile_in_block, formats.math, formats.math, tensor_shape);
                     }
                     if constexpr (dest_sync_en)
                     {

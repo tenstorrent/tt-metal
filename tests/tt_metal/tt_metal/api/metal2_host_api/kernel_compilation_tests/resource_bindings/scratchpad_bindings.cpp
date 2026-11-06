@@ -20,6 +20,7 @@
 namespace tt::tt_metal::experimental {
 namespace {
 
+using test_helpers::MakeMinimalGen1ComputeKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
@@ -89,6 +90,34 @@ static_assert(scratch::get_token_if_present<"not_a_scratch">() == nullptr);
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
     spec.kernels[1].scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadBindingJITSmokeDMAndComputeKernels) {
+    ProgramSpec spec;
+    spec.name = "shared_scratchpad_dm_compute";
+    spec.kernels = {MakeMinimalGen1DMKernel("dm_kernel"), MakeMinimalGen1ComputeKernel("compute_kernel")};
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"shared"},
+        .size_per_node = 64,
+        .advanced_options = {.allow_instance_multi_binding = true},
+    }};
+    spec.work_units = {MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"dm_kernel", "compute_kernel"})};
+
+    // Both kernels compile the accessor for the same scratchpad on the same node.
+    for (auto& kernel : spec.kernels) {
+        kernel.scratchpad_bindings = {
+            {.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "shared"}};
+        kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    Scratchpad<uint32_t> pad(scratch::shared);
+    volatile bool has_base = static_cast<bool>(pad.local_mem());
+    (void)has_base;
+}
+)"};
+    }
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));

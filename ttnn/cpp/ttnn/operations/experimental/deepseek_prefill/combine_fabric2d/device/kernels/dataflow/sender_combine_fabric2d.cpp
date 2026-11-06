@@ -75,17 +75,102 @@ void prebuild_routes() {
         reinterpret_cast<volatile tt::tt_fabric::HybridMeshPacketHeader*>(ct.pkt_hdr_drain_addr),
         ct.peer_chip_id,
         ct.peer_mesh_id);
+    // Credits go to a different CORE on the same chip this sender already talks to, so the route is the
+    // same one and is built once here too.
+    fabric_set_unicast_route(
+        reinterpret_cast<volatile tt::tt_fabric::HybridMeshPacketHeader*>(ct.pkt_hdr_credit_addr),
+        ct.peer_chip_id,
+        ct.peer_mesh_id);
 }
 
+// Defined below, next to the other counter bumps; the wait needs it to announce what it has already sent
+// before it goes idle.
+template <typename FabricSender>
+void bump_downstream(FabricSender& fabric, uint32_t sem_addr, uint32_t count);
+
+// Courier for the OPPOSITE direction's reader on this chip, one queue per channel. That reader frees
+// pages of regions the chip across our cable wrote, so the credit is owed to exactly the chip we already
+// point at -- it just lands on the other direction's worker there rather than ours.
+//
+// Its own header and its own running totals, so it never disturbs this stream's tokens: a credit can be
+// posted from wherever we happen to be, including from inside the wait below.
+struct Courier {
+    uint32_t posted[cmbf2d::MAX_VCS] = {};
+
+    // Post whatever the opposite reader has queued for each channel since the last call. Monotonic
+    // counters minus our own totals, so there is no read-modify-write racing that reader.
+    template <typename FabricSender>
+    void service(FabricSender& fabric) {
+        for (uint32_t v = 0; v < ct.num_vcs; v++) {
+            volatile tt_l1_ptr uint32_t* outbox = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.vc_outbox_addr(v));
+            invalidate_l1_cache();
+            const uint32_t n = *outbox - posted[v];
+            if (n == 0) {
+                continue;
+            }
+            volatile PACKET_HEADER_TYPE* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_credit_addr);
+            hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                get_noc_addr(ct.credit_noc_x, ct.credit_noc_y, ct.vc_freed_addr(v)), /*val=*/n, /*flush=*/true});
+            fabric.wait_for_empty_write_slot();
+            fabric.send_payload_flush_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
+            posted[v] += n;
+        }
+    }
+
+    // Keep couriering until the opposite reader says it will queue nothing more. It raises `credit_done`
+    // only after its last credit is in an outbox, so one more pass after seeing the flag drains them.
+    //
+    // This runs after our own stream has ended, which is the point of it: the chip we credit may still be
+    // waiting on those pages, and a kernel that exited at its own CMD_END would strand them.
+    template <typename FabricSender>
+    void finish(FabricSender& fabric) {
+        volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.credit_done_addr);
+        while (true) {
+            service(fabric);
+            invalidate_l1_cache();
+            if (*done != 0) {
+                break;
+            }
+        }
+        service(fabric);
+    }
+};
+
+Courier courier;
+
 // Blocks until the reader has announced at least one slot beyond `sent`, then reports how many.
-uint32_t wait_for_filled(uint32_t sent) {
+//
+// Credits are serviced inside the spin, not only between batches. That is what keeps the two directions
+// independent: a clockwise sender idle on its own reader would otherwise stop carrying the anticlockwise
+// reader's credits, that ring would stall for want of them, and the two would hold each other up.
+template <typename FabricSender>
+uint32_t wait_for_filled(FabricSender& fabric, uint32_t sent, uint32_t* fwd_since_bump) {
     volatile tt_l1_ptr uint32_t* filled = ct.filled_ptr();
+    bool announced = false;
     while (true) {
         invalidate_l1_cache();
         const uint32_t avail = *filled - sent;
         if (avail > 0) {
             return avail;
         }
+        // Nothing of ours to send, so announce what we already sent. A channel is only vc_pages deep while
+        // the bump batch is FWD_BUMP_EVERY, so a producer that fills a channel without completing a batch
+        // would never tell the consumer those pages are there -- and that consumer is the only source of
+        // the credits the producer is now waiting on. Deadlock, and exactly the one a chunk-ending forward
+        // used to rule out by forcing a bump on a chunk's last page. Channels have no chunk ends, so this
+        // announce is what rules it out instead.
+        //
+        // Once per idle spell rather than per spin, or announcing becomes the busy-wait.
+        if (!announced) {
+            for (uint32_t v = 0; v < ct.num_vcs; v++) {
+                if (fwd_since_bump[v] > 0) {
+                    bump_downstream(fabric, ct.vc_arrived_addr(v), fwd_since_bump[v]);
+                    fwd_since_bump[v] = 0;
+                }
+            }
+            announced = true;
+        }
+        courier.service(fabric);
     }
 }
 
@@ -130,14 +215,13 @@ void bump_downstream(FabricSender& fabric, uint32_t sem_addr, uint32_t count) {
 
 // Put one slot's token on the cable. Returns its command word so the caller can spot the end of the stream.
 template <typename FabricSender>
-uint64_t send_slot(
-    FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump, uint32_t& final_since_bump) {
+uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t* fwd_since_bump, uint32_t& final_since_bump) {
     volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata = slot_metadata(slot);
     const uint64_t cmd = metadata->cmd;
     if (cmd == ::cmbf2d::CMD_END) {
         return cmd;
     }
-    const bool forwarding = (cmd == ::cmbf2d::CMD_FORWARD || cmd == ::cmbf2d::CMD_FORWARD_END);
+    const bool forwarding = (cmd == ::cmbf2d::CMD_FORWARD);
     const uint32_t payload_bytes = forwarding ? (ct.token_size_bytes + ::cmbf2d::FWD_EXTRA_BYTES) : ct.token_size_bytes;
 
     const uint32_t src = ct.ring_addr + slot * ct.slot_stride();
@@ -163,10 +247,15 @@ uint64_t send_slot(
     }
 
     if (forwarding) {
-        fwd_since_bump++;
-        if (cmd == ::cmbf2d::CMD_FORWARD_END || fwd_since_bump >= FWD_BUMP_EVERY) {
-            bump_downstream(fabric, ct.fwd_sem_addr, fwd_since_bump);
-            fwd_since_bump = 0;
+        // Per channel, because the downstream reader waits on each channel separately -- that is what
+        // lets it serve a channel it can drain while another is blocked. No chunk-end term: with the region
+        // split by movement class a channel has no chunk boundaries to close, so the only reason to bump
+        // early is the batch count.
+        const uint32_t vc = (uint32_t)metadata->vc;
+        fwd_since_bump[vc]++;
+        if (fwd_since_bump[vc] >= FWD_BUMP_EVERY) {
+            bump_downstream(fabric, ct.vc_arrived_addr(vc), fwd_since_bump[vc]);
+            fwd_since_bump[vc] = 0;
         }
     } else {
         final_since_bump++;
@@ -187,10 +276,10 @@ uint32_t pump_stream(FabricSender& fabric) {
     // re-forwards for other chips, which depends on chunk sizes decided upstream. The reader terminates the
     // stream with a CMD_END slot instead, and we batch over whatever it has already published.
     bool end_of_stream = false;
-    uint32_t fwd_since_bump = 0;
+    uint32_t fwd_since_bump[cmbf2d::MAX_VCS] = {};
     uint32_t final_since_bump = 0;
     while (!end_of_stream) {
-        const uint32_t avail = wait_for_filled(sent);
+        const uint32_t avail = wait_for_filled(fabric, sent, fwd_since_bump);
         const uint32_t n = avail < ct.batch ? avail : ct.batch;
 
         uint32_t processed = 0;
@@ -206,6 +295,14 @@ uint32_t pump_stream(FabricSender& fabric) {
         noc_async_writes_flushed();
         sent += processed;
         noc_semaphore_inc(my_freed_noc, processed);
+        courier.service(fabric);
+    }
+    // Residual arrival counts. A reader blocks until its channel's count passes what it has consumed, so a
+    // tail left inside a partial bump batch would strand it with the stream already over.
+    for (uint32_t v = 0; v < ct.num_vcs; v++) {
+        if (fwd_since_bump[v] > 0) {
+            bump_downstream(fabric, ct.vc_arrived_addr(v), fwd_since_bump[v]);
+        }
     }
     // The receive count the downstream reader waits on before it exits; it needs every final write counted.
     if (final_since_bump > 0) {
@@ -257,10 +354,17 @@ void kernel_main() {
         // Once per launch, so the credits stay in step with the launches: every stream has at least its CMD_END
         // slot. The reader publishes its first slot only after building its tables, so the credit has usually
         // arrived by the time this wait starts.
-        wait_for_filled(0);
+        // Nothing of ours has been sent yet, so there are no arrival bumps outstanding to announce -- but the
+        // wait still services the courier, which is what keeps the opposite direction's credits moving while
+        // this stream sits here.
+        uint32_t no_bumps[cmbf2d::MAX_VCS] = {};
+        wait_for_filled(fabric, 0, no_bumps);
         take_launch_credit();
     }
     const uint32_t sent = pump_stream(fabric);
+    // Before the drain, which fills every free write slot the channel has and would leave no room to post
+    // a credit until it is done.
+    courier.finish(fabric);
     // Even on a stream that sent no token, the launch credit is on the cable.
     if (LAUNCH_CREDIT || sent > 0) {
         drain_fabric(fabric);
@@ -273,6 +377,12 @@ void kernel_main() {
     // by noc_async_writes_flushed above. It must land before the kernel exits, and so must the launch credit
     // taken above.
     noc_async_atomic_barrier();
-    // Whether the counters need zeroing depends on where they live, which is the owning op's choice.
+    // Whether the ring counters need zeroing depends on where they live, which is the owning op's choice.
     ct.reset_ring_counters();
+    // The courier's counters are this op's either way: they never leave this chip, and the opposite reader
+    // that writes them has already raised credit_done, which is the last thing it does to any of them.
+    for (uint32_t v = 0; v < ct.num_vcs; v++) {
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.vc_outbox_addr(v)), 0);
+    }
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.credit_done_addr), 0);
 }

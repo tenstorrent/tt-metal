@@ -407,6 +407,35 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     }
 }
 
+#if defined(DEBUG_SANITIZE_SHARED_NOC_CMD_BUF)
+// This kernel shares its dedicated NOC with the other data movement kernel on the core
+// (DataMovement1XXConfig::dedicated_noc_sharing), which holds up only while the two program disjoint command
+// buffers: a command buffer carries the state of stateful (set_state / with_state) transactions, so a second
+// user redirects them. Called on every command issue. Records this RISC's use of cmd_buf on noc and reports
+// the other RISC having used it since the launch began (watcher_msg_t::noc_cmd_buf_usage, which BRISC
+// firmware clears per launch). Two first uses that cross in flight can each miss the other's record; the next
+// issue on either RISC then catches it.
+void __attribute__((noinline)) debug_sanitize_shared_noc_cmd_buf(uint32_t noc, uint32_t cmd_buf) {
+    const uint32_t my_risc = internal_::get_hw_thread_idx();
+    auto* usage = GET_MAILBOX_ADDRESS_DEV(watcher.noc_cmd_buf_usage[noc]);
+    const uint8_t cmd_buf_bit = 1u << cmd_buf;
+    usage->by_risc[my_risc] |= cmd_buf_bit;
+    const uint8_t other_cmd_bufs = usage->by_risc[1 - my_risc];
+    if (other_cmd_bufs & cmd_buf_bit) {
+        // Reported with the command buffer as l1_addr and the other RISC's command buffers as len.
+        debug_sanitize_post_addr_and_hang(
+            noc,
+            0,
+            cmd_buf,
+            other_cmd_bufs,
+            DEBUG_SANITIZE_NOC_UNICAST,
+            DEBUG_SANITIZE_NOC_WRITE,
+            DEBUG_SANITIZE_NOC_TARGET,
+            DebugSanitizeNocSharedCmdBuf);
+    }
+}
+#endif
+
 inline void debug_sanitize_check_linked_transactions(
     uint8_t noc_id,
     uint64_t noc_addr,
@@ -679,6 +708,22 @@ void debug_sanitize_noc_and_worker_addr(
     bool check_linked) {
     // Check noc addr, get any extra alignment req for worker.
     uint32_t alignment_mask = debug_sanitize_noc_addr(noc_id, noc_addr, worker_addr, len, multicast, dir, check_linked);
+
+#if defined(ARCH_QUASAR)
+    // Quasar-only: a NOC read whose destination is a local register can strand the response and stall L1
+    // writes; reads must land in L1. Every register map sits at or above TT_LOCAL_TENSIX_REG_MAP_BASE_ADDR.
+    if (dir == DEBUG_SANITIZE_NOC_READ && worker_addr + len > TT_LOCAL_TENSIX_REG_MAP_BASE_ADDR) {
+        debug_sanitize_post_addr_and_hang(
+            noc_id,
+            noc_addr,
+            worker_addr,
+            len,
+            multicast,
+            dir,
+            DEBUG_SANITIZE_NOC_LOCAL,
+            DebugSanitizeNocReadToRegAddr);
+    }
+#endif
 
     // Check worker addr and alignment, but these don't apply to regs.
     if (!debug_valid_reg_addr(worker_addr, len)) {

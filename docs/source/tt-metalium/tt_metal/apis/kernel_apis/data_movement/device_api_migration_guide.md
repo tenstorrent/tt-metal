@@ -14,6 +14,7 @@ This guide helps developers migrate from legacy data movement APIs to the new De
    - [Semaphore Operations](#semaphore-operations)
    - [Memory Access](#memory-access)
      - [Local-to-Local Copies (NoC Loopback)](#local-to-local-copies-noc-loopback)
+     - [Addressing a Tensor by Bank](#addressing-a-tensor-by-bank)
    - [Zeroing Memory](#zeroing-memory)
 5. [Complete Migration Examples](#complete-migration-examples)
 6. [Troubleshooting](#troubleshooting)
@@ -97,7 +98,9 @@ Endpoints are used as sources or destinations for the `Noc` interface. Depending
 
 - `UnicastEndpoint` - For unicast NoC addresses
 - `MulticastEndpoint` - For multicast NoC addresses
-- `AllocatorBank<AllocatorBankType>` - For DRAM/L1 bank addressing
+- `PageView(accessor)` / `ShardView(accessor)` - For a tensor by page id / shard id
+- `BankView(accessor)` - For a tensor by allocator bank: `{.bank_id, .offset_bytes}`; see [Addressing a Tensor by Bank](#addressing-a-tensor-by-bank)
+- `AllocatorBank<AllocatorBankType>` - Legacy raw bank addressing (`{.bank_id, .addr}` with an absolute bank address), for buffers not bound as a tensor. Prefer `BankView`.
 
 ---
 
@@ -546,6 +549,35 @@ Scratchpad<uint32_t> pad(scratch::my_pad);
 noc.async_read(pad, dfb, size_bytes, {.offset_bytes = off}, {});          // pad -> DFB entry
 noc.async_write(dfb, pad, size_bytes, {}, {.offset_bytes = off});         // DFB entry -> pad
 noc.async_read(pad, CoreLocalMem<uint32_t>(dst_addr), size_bytes, {}, {}); // pad -> any local region
+```
+
+#### Addressing a Tensor by Bank
+
+When a kernel already works in allocator banks (for example the host hands it a bank id and an offset per transfer, as
+DRAM-sharded matmul and reshard do), address the tensor with `BankView`. Pass the bank id and the byte offset **into the
+tensor** in that bank. The bank's location (an L1 bank's worker core, or a DRAM bank and its per-bank offset) comes from
+the bank tables, and the tensor's memory type selects L1 vs DRAM. The kernel never handles the tensor's base address
+or DRAM coordinates. `BankView` can only be the NoC side of a transfer, and it works with the stateful
+`set_async_read_state` / `async_read_with_state` calls.
+
+**Legacy API:**
+```cpp
+uint32_t base = ...;  // tensor base address
+uint64_t src = get_noc_addr_from_bank_id<true>(bank_id, base + offset);
+noc_async_read(src, l1_dst_addr, size_bytes);
+```
+
+**Avoid** (Device 2.0 API, but a raw bank address):
+```cpp
+AllocatorBank<AllocatorBankType::DRAM> bank;
+noc.async_read(bank, dst, size_bytes, {.bank_id = bank_id, .addr = base + offset}, {});
+```
+
+**New API:**
+```cpp
+const auto in1 = TensorAccessor(tensor::in1);
+const BankView in1_bank(in1);
+noc.async_read(in1_bank, dst, size_bytes, {.bank_id = bank_id, .offset_bytes = offset}, {});
 ```
 
 ---

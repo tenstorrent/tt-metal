@@ -7,9 +7,9 @@ import pytest
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     DestAccumulation,
     DestSync,
-    MathFidelity,
     PerfRunType,
     Transpose,
 )
@@ -21,8 +21,8 @@ from helpers.matmul_sweep import (
     unpack_matmul_fits_perf_ring,
 )
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
     input_output_formats,
+    max_dest_tiles,
     parametrize,
 )
 from helpers.perf.core import PerfConfig
@@ -73,16 +73,13 @@ def matmul_combos(
     def _acc_modes(fmt: FormatConfig) -> List[DestAccumulation]:
         return dest_acc(fmt) if callable(dest_acc) else dest_acc
 
-    def _dest_bank_max_tiles(
-        format: FormatConfig, dest_acc: DestAccumulation, dest_sync: DestSync
-    ):
-        capacity_divisor = (
-            2 if is_dest_acc_needed(format) or dest_acc == DestAccumulation.Yes else 1
+    def _max_tiles(fmt: FormatConfig, acc: DestAccumulation, sync: DestSync) -> int:
+        return max_dest_tiles(
+            is_dest_acc_needed(fmt) or acc == DestAccumulation.Yes, sync
         )
-        return DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
 
     unique_max_tiles = set(
-        _dest_bank_max_tiles(fmt, acc, sync)
+        _max_tiles(fmt, acc, sync)
         for fmt in formats
         for acc in _acc_modes(fmt)
         for sync in DEST_SYNC_MODES
@@ -97,7 +94,7 @@ def matmul_combos(
         for format in formats
         for accumulation in _acc_modes(format)
         for dest_sync in DEST_SYNC_MODES
-        for dims in dimensions[_dest_bank_max_tiles(format, accumulation, dest_sync)]
+        for dims in dimensions[_max_tiles(format, accumulation, dest_sync)]
     ]
 
 
@@ -117,12 +114,7 @@ def matmul_combos(
             else [DestAccumulation.No, DestAccumulation.Yes]
         ),
     ),
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
 )
 def test_perf_matmul(
     perf_report,

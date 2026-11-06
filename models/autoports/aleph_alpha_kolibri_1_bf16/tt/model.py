@@ -5,10 +5,10 @@
 import gc
 
 import torch
+from tt_transformers.modules.lazy_weight import LazyWeight
+from tt_transformers.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig, _create_dram_sharded_mem_config
 
 import ttnn
-from models.common.modules.lazy_weight import LazyWeight
-from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig, _create_dram_sharded_mem_config
 
 from .checkpoint import CONTEXT, config, load_weights
 from .multichip_decoder import CollectiveWorkspace, MultichipDecoder
