@@ -13,7 +13,7 @@
 //            the loser of level p moves to level p + 1, the loser of the last level is dropped.
 //   k-th   : the sorted tiles go to the writer (cb_fin), which copies position k - 1 of every Q block into a
 //            row-broadcast threshold tile (cb_thr_raw); compute adds the per-row bias (0 for a scored Q block,
-//            UNSCORED otherwise).
+//            -DENSE for a dense Q block, +DENSE for a pad Q block).
 //   mask   : block01[c] = (S[c] + colbias[c] >= thr): candidates compete, exempt columns are INCLUDED, other
 //            columns EXCLUDED; typecast to uint32 and packed untilized into row-major pages of MC tiles.
 //   coarse : (COARSE) m = row max of S + pad over all columns (elementwise max over the column tiles, then the same
@@ -190,7 +190,7 @@ void kernel_main() {
             }
         }
 
-        // ---- k-th value per Q block (row-broadcast by the writer), plus the unscored-row bias
+        // ---- k-th value per Q block (row-broadcast by the writer), plus the per-row bias
         for (uint32_t p = 0; p < KT; ++p) {
             tile_regs_acquire();
             cacc.wait_front(1);

@@ -38,12 +38,9 @@ import ttnn
 
 from ....layers.block_topk_routing import BlockTopKRouting, RoutingRequest
 from ....pipelines.minimax_h3.vsa_geometry import VSA_TILE_TOKENS, MiniMaxH3VSAGeometry
-from ....utils.tensor import from_torch
 from ....utils.torch_threads import cap_torch_threads_to_half_the_cpus
-from ....utils.tracing import StateTensor
 
 TILE = 32
-PREFIX_EXTRA = 32
 
 
 @dataclass(frozen=True)
@@ -86,8 +83,8 @@ def _round_up(value: int, multiple: int) -> int:
 
 def vsa_routing_request(geometry: MiniMaxH3VSAGeometry, nb_pad: int, k: int) -> RoutingRequest:
     """The geometry's routing rules in the padded per-shard numbering: prefix tiles are exempt, video tiles are
-    candidates, and only the video query tiles are scored (prefix query rows are recomputed densely after the sparse
-    op and pad rows are dropped at unpacking)."""
+    candidates, and only the video query tiles are scored. ``scored = False`` on a prefix query tile makes it a dense
+    row of the fine op (every key block kept); pad query blocks keep nothing and are dropped at unpacking."""
     sp, tiles = geometry.sp_factor, geometry.blocks_per_shard
 
     def per_shard(per_block: torch.Tensor) -> torch.Tensor:
@@ -137,10 +134,6 @@ class VSAPrepass:
         # The widest top-k any geometry in the rung can need: every block a candidate.
         self.k_max = compute_topk(sparsity, sp_factor * self.blocks_per_shard)
 
-        # The prefix query rows get their exact attention from the attention's prefix-row recompute, not from the
-        # sparse op: these are its row count and its pad-row marker for this geometry.
-        self.prefix_rows = 0
-        self.prefix_marker = StateTensor()
         self.routing = BlockTopKRouting(
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
@@ -162,23 +155,8 @@ class VSAPrepass:
 
         with _timed(timings, "host masks"):
             k = compute_topk(self.sparsity, int(geometry.is_candidate.sum()))
-            self.prefix_rows = geometry.n_prefix_tiles * VSA_TILE_TOKENS
-            block = geometry.block_of_row
-            real_row = torch.arange(self.rung) - geometry.block_starts[block] < geometry.valid_counts[block]
-            # -1 in the marker channel of every key row the prefix recompute must not attend: the pad rows of each
-            # shard (inside partial blocks and whole pad blocks) and the recompute's extra rows, except its probe key.
-            extra_rows = self.rows + PREFIX_EXTRA
-            prefix_marker = torch.zeros(sp, 1, extra_rows, self.head_dim + PREFIX_EXTRA)
-            prefix_marker[:, 0, : self.rows, self.head_dim] = -(~real_row).float().reshape(sp, self.rows)
-            prefix_marker[:, 0, self.rows : extra_rows - 1, self.head_dim] = -1.0
 
-        device = self.mesh_device
-        sharded = [self.sp_axis, None, None, None]
-        with _timed(timings, "upload prefix_marker", sync=device):
-            self.prefix_marker.update(
-                from_torch(prefix_marker, device=device, dtype=ttnn.bfloat16, mesh_axes=sharded), traced=traced
-            )
-        with _timed(timings, "upload routing constants", sync=device):
+        with _timed(timings, "upload routing constants", sync=self.mesh_device):
             self.routing.update(vsa_routing_request(geometry, self.nb_pad, k), traced=traced)
 
     def __call__(

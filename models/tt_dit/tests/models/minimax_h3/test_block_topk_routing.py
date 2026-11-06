@@ -123,15 +123,18 @@ def _routed_mask(case: _Case, routing: BlockTopKRouting) -> torch.Tensor:
 
 
 def _check_mask(mask: torch.Tensor, scores: torch.Tensor, request: RoutingRequest, label: str) -> None:
-    """Exact rules outside the candidate columns of scored rows; tie-robust top-k bounds inside them."""
+    """Unscored rows: all ones if real, all zeros if pad. Scored rows: exact rules outside the candidate columns,
+    tie-robust top-k bounds inside them."""
     assert set(mask.unique().tolist()) <= {0, 1}, mask.unique()
     kept = mask != 0
     cand = request.candidate.reshape(-1)
     exempt = request.exempt.reshape(-1)
-    scored = request.scored[:, None, :, None]
-    expected_rest = (exempt & ~cand) & scored
-    assert torch.equal(kept[..., ~cand], expected_rest.expand_as(kept)[..., ~cand]), f"{label}: non-candidate columns"
-    assert not kept[..., cand][~scored.expand_as(kept)[..., cand]].any(), f"{label}: an unscored row keeps a candidate"
+    scored = request.scored[:, None, :].expand(kept.shape[:3])
+    real = (request.counts > 0)[:, None, :].expand(kept.shape[:3])
+    assert bool(kept[~scored & real].all()), f"{label}: an unscored real row is not dense"
+    assert not kept[~scored & ~real].any(), f"{label}: a pad row keeps a block"
+    expected_rest = (exempt & ~cand).expand(int(scored.sum()), -1)
+    assert torch.equal(kept[scored][:, ~cand], expected_rest[:, ~cand]), f"{label}: non-candidate columns"
 
     k = request.k
     rows = request.scored[:, None, :].expand(scores.shape[:3])

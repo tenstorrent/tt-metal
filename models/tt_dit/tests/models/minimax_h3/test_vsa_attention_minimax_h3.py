@@ -85,15 +85,18 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 def mask_to_kept(mask: torch.Tensor, geometry, nb_pad: int) -> torch.Tensor:
     """[H, S * nb_pad, S * nb_pad] 0/1 (local Q block rows per shard, padded global columns) -> [H, n_blocks,
-    n_blocks] bool in global block ids."""
+    n_blocks] bool in global block ids: the blocks the op attends, i.e. a dense row's real blocks only."""
     slot = torch.arange(geometry.sp_factor * nb_pad)
     real_slot = (slot % nb_pad) < geometry.blocks_per_shard
-    assert bool((mask[:, :, ~real_slot] == 0).all()), "the mask selects a padding column"
-    kept = mask[:, real_slot][:, :, real_slot] != 0
+    rows = mask[:, real_slot] != 0
+    dense = geometry.is_exempt
     pad = geometry.valid_counts == 0
-    assert not bool(kept[:, :, pad].any()), "the mask selects a pad block"
+    assert bool(rows[:, dense].all()), "a prefix query row is not dense"
+    assert not bool(rows[:, ~dense][:, :, ~real_slot].any()), "a sparse row selects a padding column"
+    kept = rows[:, :, real_slot]
+    assert not bool(kept[:, ~dense][:, :, pad].any()), "a sparse row selects a pad block"
     assert not bool(kept[:, pad].any()), "a pad block's query row keeps a block"
-    return kept
+    return kept & ~pad
 
 
 def kept_to_indices(kept: torch.Tensor) -> torch.Tensor:
@@ -287,7 +290,7 @@ def test_vsa_fine_attention(
 
     real_rows = geometry.gather_index >= 0
     if ab:
-        _logical_n_ab(mesh_device, op, run, geometry, real_rows & (torch.arange(rung) >= prepass.prefix_rows))
+        _logical_n_ab(mesh_device, op, run, geometry, real_rows)
         return
 
     # The TP replicas of the mask are identical; keep the first.
@@ -300,8 +303,15 @@ def test_vsa_fine_attention(
     pcc = _pcc(out[:, :, real_rows], reference[:, :, real_rows])
     density = (indices[0] != VSA_INDEX_SENTINEL).sum().item() / (heads * geometry.n_blocks**2)
     k = compute_topk(SPARSITY, int(geometry.is_candidate.sum()))
-    logger.info(f"kept density {density:.3f}, k={k} of top-k width {prepass.k_max}: PCC with block counts {pcc:.6f}")
+    # The prefix rows are dense rows of the op and a few percent of all rows, so they get their own PCC.
+    prefix_rows = real_rows & geometry.is_exempt[geometry.block_of_row]
+    pcc_prefix = _pcc(out[:, :, prefix_rows], reference[:, :, prefix_rows])
+    logger.info(
+        f"kept density {density:.3f}, k={k} of top-k width {prepass.k_max}: PCC with block counts {pcc:.6f}, "
+        f"prefix rows only {pcc_prefix:.6f} ({int(prefix_rows.sum())} rows)"
+    )
     assert pcc >= FINE_MIN_PCC, pcc
+    assert pcc_prefix >= FINE_MIN_PCC, pcc_prefix
 
     if ragged:
         pcc_without = _pcc(run(with_counts=False)[:, :, real_rows], reference[:, :, real_rows])

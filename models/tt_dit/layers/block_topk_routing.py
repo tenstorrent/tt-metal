@@ -17,7 +17,8 @@ and the coarse branch:
 
 Global padded block ``s * nb_pad + b`` is block ``b`` of shard ``s``. A scored Q block keeps every candidate block
 whose fp32 score reaches its k-th largest candidate score (ties at the k-th value are all kept) plus every exempt
-block; an unscored Q block keeps nothing.
+block; an unscored Q block keeps every block (a dense row) when it holds a real token, and nothing when it is a
+pad block.
 
 ``update`` writes a request's geometry and ``k`` into buffers whose shapes depend only on the constructor
 arguments, in place when traced, so one capture replays for every request; the sort always runs ``k_max`` wide.
@@ -47,7 +48,8 @@ TILE_BYTES_FP32 = 4096
 # Powers of two, so they are exact in bf16, tf32 and fp32 and swamp any score they are added to.
 EXCLUDED = -(2.0**100)
 INCLUDED = 2.0**100
-UNSCORED = 2.0**102
+# Row bias: ``thr - DENSE`` is below every column, ``thr + DENSE`` above every column.
+DENSE = 2.0**102
 SENTINEL = -(2.0**126)
 MASK_PAGE_TILES = 8
 KTH_INDEX_WORDS = 16
@@ -65,7 +67,10 @@ def _round_up(value: int, multiple: int) -> int:
 
 @dataclass(frozen=True)
 class RoutingRequest:
-    """One request's routing geometry, per shard ``[S, nb_pad]`` in the padded block numbering."""
+    """One request's routing geometry, per shard ``[S, nb_pad]`` in the padded block numbering.
+
+    ``scored = False`` on a block holding a real token is a dense query block (every key block kept).
+    """
 
     counts: torch.Tensor
     candidate: torch.Tensor
@@ -112,7 +117,8 @@ def torch_reference(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, request: 
     kept = torch.zeros_like(scores, dtype=torch.bool)
     kept[..., cand] = cand_scores >= kth
     kept |= exempt
-    kept &= request.scored[:, None, :, None]
+    unscored = ~request.scored[:, None, :].expand(kept.shape[:3])
+    kept[unscored] = (request.counts > 0)[:, None, :, None].expand_as(kept)[unscored]
 
     probs = torch.softmax(scores.masked_fill(~real, -float("inf")) / math.sqrt(D), dim=-1)
     coarse = torch.einsum("shbc,hcd->shbd", probs, v_glob)
@@ -197,7 +203,7 @@ class BlockTopKRouting:
         cand_bias = torch.where(cand, 0.0, EXCLUDED)
         col_bias = torch.where(exempt, INCLUDED, cand_bias)
         pad_bias = torch.where(real, 0.0, EXCLUDED)
-        row_bias = torch.where(request.scored, 0.0, UNSCORED)
+        row_bias = torch.where(request.scored, 0.0, torch.where(request.counts > 0, -DENSE, DENSE))
         kth_index = torch.zeros(1, 1, 1, KTH_INDEX_WORDS, dtype=torch.int32)
         kth_index[..., 0] = request.k - 1
 
