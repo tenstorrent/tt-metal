@@ -152,6 +152,11 @@ bool SDMeshCommandQueue::write_shard_to_device(
     }
 
     auto payload = ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
+    // Timed per shard, after wait_for_cores_idle(), so the time is the transfer alone.
+    ScopedHostTransfer transfer_stats(
+        host_transfer_stats_,
+        HostTransferCategory::BufferWriteSlowDispatch,
+        host_transfer_stats_->enabled() ? host_bytes_written(*shard_view, region_value.size, logical_core_filter) : 0);
     if (logical_core_filter != nullptr) {
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
     } else {
@@ -186,6 +191,8 @@ void SDMeshCommandQueue::read_shard_from_device(
         return;
     }
 
+    ScopedHostTransfer transfer_stats(
+        host_transfer_stats_, HostTransferCategory::BufferReadSlowDispatch, shard_view->size());
     tt::tt_metal::slow_dispatch::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
 }
 
@@ -439,7 +446,7 @@ void SDMeshCommandQueue::enqueue_write_dram_core_counter(
         return;
     }
     // No lock_api_function_() here: the caller (TensorPrefetcherManager) already holds
-    // the MeshDevice api lock across the counter bump + WAIT_CQ enqueue, and that lock is
+    // the MeshDevice api lock across this write and the sequence it is part of, and that lock is
     // non-recursive, so re-locking would self-deadlock. See the declaration's contract.
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
 

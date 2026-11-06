@@ -51,6 +51,7 @@ size_t get_tt_fabric_max_payload_size_bytes();
 // it adds SemaphoreDescriptors instead of creating semaphores.
 //
 // Inputs:
+// mesh_device: the mesh device whose fabric (context) the connection is resolved in
 // src_chip_id: physical chip id/device id of the sender chip
 // dst_chip_id: physical chip id/device id of the receiver chip
 // link_idx: the link (0..n) to use b/w the src_chip_id and dst_chip_id. On WH for
@@ -68,6 +69,7 @@ size_t get_tt_fabric_max_payload_size_bytes();
 // connection is indeed a 1D connection b/w all the workers.
 template <typename ProgramOrDescriptor = tt::tt_metal::Program>
 void append_fabric_connection_rt_args(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,
@@ -97,6 +99,7 @@ std::vector<eth_chan_directions> get_neighbor_eth_directions(
 // api_type: set envvar for the kernel to indicate which fabric API type being used. Linear or Mesh.
 template <typename ProgramOrDescriptor>
 void append_routing_plane_connection_manager_rt_args(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
@@ -111,6 +114,7 @@ void append_routing_plane_connection_manager_rt_args(
 // convenience function using RoutingDirection's
 template <typename ProgramOrDescriptor>
 uint32_t append_routing_plane_connection_manager_rt_args(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const FabricNodeId& src_fabric_node_id,
     const std::vector<eth_chan_directions>& attempted_directions,
     const std::vector<uint32_t>& connection_link_indices,
@@ -444,6 +448,7 @@ private:
         const std::vector<uint32_t>& downstream_sender_rt_args,
         tt::tt_metal::NOC forwarder_noc);
     friend void add_fabric_mux_v2_to_program(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
         tt::tt_metal::Program& program,
         const FabricMuxV2Config& config,
         const tt::tt_metal::CoreCoord& mux_logical_core,
@@ -458,6 +463,7 @@ private:
         const std::vector<uint32_t>& downstream_sender_rt_args,
         tt::tt_metal::NOC forwarder_noc);
     friend void add_fabric_mux_v2_to_program(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
         tt::tt_metal::ProgramDescriptor& desc,
         const FabricMuxV2Config& config,
         const tt::tt_metal::CoreCoord& mux_logical_core,
@@ -515,6 +521,7 @@ void add_fabric_mux_v2_to_program(
     tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
 
 void add_fabric_mux_v2_to_program(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     tt::tt_metal::Program& program,
     const FabricMuxV2Config& config,
     const tt::tt_metal::CoreCoord& mux_logical_core,
@@ -534,6 +541,7 @@ void add_fabric_mux_v2_to_program(
     tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
 
 void add_fabric_mux_v2_to_program(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     tt::tt_metal::ProgramDescriptor& desc,
     const FabricMuxV2Config& config,
     const tt::tt_metal::CoreCoord& mux_logical_core,

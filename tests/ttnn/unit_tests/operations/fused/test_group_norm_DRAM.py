@@ -342,6 +342,28 @@ def test_group_norm_DRAM(
     )
 
 
+@pytest.mark.requires_grid_size((6, 8))
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("statistics_mode", STATISTICS_MODES)
+def test_group_norm_DRAM_batch_ends_mid_column(device, statistics_mode):
+    # Each 12-core reduction group has a four-core partial column.
+    run_group_norm_DRAM(device, 2, 320, 16, 24, 32, 1, 8, 6, statistics_mode, use_input_mask=True)
+
+
+@pytest.mark.requires_grid_size((2, 3))
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("statistics_mode", STATISTICS_MODES)
+@pytest.mark.parametrize(
+    "n,c,h,w,groups,grid_y,grid_x",
+    [
+        pytest.param(3, 64, 1, 64, 1, 3, 2, id="sender_only_mid"),
+        pytest.param(8, 320, 1, 160, 32, 8, 10, id="sender_only_first", marks=pytest.mark.requires_grid_size((10, 8))),
+    ],
+)
+def test_group_norm_DRAM_sender_only_rectangle(device, statistics_mode, n, c, h, w, groups, grid_y, grid_x):
+    run_group_norm_DRAM(device, n, c, h, w, groups, 1, grid_y, grid_x, statistics_mode, use_input_mask=True)
+
+
 # Post-commit smoke coverage for the ROW_MAJOR path; the full sweep over GROUP_NORM_ROW_MAJOR_SHAPES
 # lives in nightly. Tests across all three layout combinations that involve ROW_MAJOR.
 @skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")

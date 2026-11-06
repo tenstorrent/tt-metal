@@ -38,6 +38,10 @@ def _make_optimizer(name: str, params: "ttml.NamedParameters") -> "ttml.optimize
     if name == "AdamW":
         cfg = ttml.optimizers.AdamWConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0)
         return ttml.optimizers.AdamW(params, cfg)
+    if name == "AdamW+fp32":
+        # fp32 master weights: the trainable parameters are stored in fp32, and fused AdamW keeps fp32 moments.
+        ttml.core.store_trainable_parameters_as(params, ttnn.DataType.FLOAT32)
+        return _make_optimizer("AdamW", params)
     if name == "MuonComposite":
         cfg = ttml.optimizers.MuonConfig.make(lr=1e-3, momentum=0.95, ns_steps=5)
         return ttml.optimizers.MuonComposite(params, cfg)
@@ -110,7 +114,7 @@ def _scalars(opt) -> dict:
 
 
 @pytest.mark.requires_device
-@pytest.mark.parametrize("optimizer_name", ["AdamW", "MuonComposite", "MuonWithAdamW"])
+@pytest.mark.parametrize("optimizer_name", ["AdamW", "AdamW+fp32", "MuonComposite", "MuonWithAdamW"])
 def test_save_load_roundtrip(tmp_path, optimizer_name):
     """Save a trained model+optimizer to disk, restore into a fresh pair, and verify exact recovery."""
     ctx = ttml.autograd.AutoContext.get_instance()
@@ -205,17 +209,6 @@ def test_partial_load_skips_absent_groups(tmp_path):
     ctx.reset_graph()
 
 
-def _store_as(model: TwoLayer, dtype) -> None:
-    """Store every parameter as ``dtype``, as a run that trains in that precision does. New parameters are bf16."""
-    precision = (
-        ttml.autograd.PreferredPrecision.FULL
-        if dtype == ttnn.DataType.FLOAT32
-        else ttml.autograd.PreferredPrecision.HALF
-    )
-    for t in model.parameters().values():
-        t.set_value(t.get_value(precision))
-
-
 @pytest.mark.requires_device
 @pytest.mark.parametrize(
     "saved_dtype, resumed_dtype",
@@ -229,7 +222,7 @@ def test_resume_keeps_the_models_dtype(tmp_path, saved_dtype, resumed_dtype):
 
     ttml.init.manual_seed(0)
     orig = TwoLayer()
-    _store_as(orig, saved_dtype)
+    ttml.core.store_trainable_parameters_as(orig.parameters(), saved_dtype)
     opt = _make_optimizer("AdamW", orig.parameters())
     _train_steps(orig, opt, n=1, x_np=x_np)
     path = str(tmp_path / "ckpt.pkl")
@@ -237,7 +230,7 @@ def test_resume_keeps_the_models_dtype(tmp_path, saved_dtype, resumed_dtype):
     ctx.reset_graph()
 
     restored = TwoLayer()
-    _store_as(restored, resumed_dtype)
+    ttml.core.store_trainable_parameters_as(restored.parameters(), resumed_dtype)
     restored_opt = _make_optimizer("AdamW", restored.parameters())
     checkpointing.load_checkpoint(path, model_params=restored.parameters(), optimizer=restored_opt)
 

@@ -51,6 +51,9 @@ def run(tmp_path, body, capsys, baseline=None, name="f.cpp"):
         "bool x = c ? a : b, y = a / b;",
         "bool x = f(a, b), y = a % b;",
         "const bool x, y, z = a * b;",
+        "bool x = n * 1e-3;",  # an exponent sign is part of the number, not a top-level `-`
+        "bool x = n / 2.5E+1;",
+        "bool x = 0x1p-4 * n;",
     ],
 )
 def test_flagged(tmp_path, capsys, decl):
@@ -94,6 +97,7 @@ def test_flagged(tmp_path, capsys, decl):
         "bool x(a / b);",  # direct-initialization: documented gap, reads as a function declaration
         "bool f(int* p, int n);",
         "bool const& x = a / b;",
+        "bool x = a * b - 1e-3;",
     ],
 )
 def test_clean(tmp_path, capsys, decl):
