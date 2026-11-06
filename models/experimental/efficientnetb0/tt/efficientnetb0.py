@@ -50,7 +50,10 @@ class EfficientNetb0Conv2D:
             shard_layout=self.shard_layout,
             deallocate_activation=self.deallocate_activation,
             enable_act_double_buffer=True,
-            enable_weights_double_buffer=True if self.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED else False,
+            enable_weights_double_buffer=(
+                self.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                or self.device.arch() == ttnn.device.Arch.WORMHOLE_B0
+            ),
             reshard_if_not_optimal=True,
         )
 

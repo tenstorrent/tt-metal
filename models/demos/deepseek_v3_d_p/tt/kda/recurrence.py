@@ -153,6 +153,9 @@ def _reshape_chunks_for_groups(
     group_heads: int,
     summary_group_chunks: int,
 ) -> _PreparedChunks:
+    # One group per head is the layout chunk preparation already writes; a reshape onto it would only cost a dispatch.
+    if group_heads == geometry.batch_heads and summary_group_chunks == geometry.num_chunks:
+        return prepared
     return _PreparedChunks(
         v_beta=ttnn.reshape(
             prepared.v_beta, (group_heads, summary_group_chunks, geometry.chunk_size, geometry.value_dim)
@@ -271,7 +274,8 @@ def distributed_prefix(
     carry on each independent TP line.
     """
     device = packed.device()
-    _, batch_heads, key_dim, row_width = tuple(packed.shape)
+    packed_shape = packed.shape
+    batch_heads, key_dim, row_width = packed_shape[1], packed_shape[2], packed_shape[3]
     # The chain's entry state and final carry share initial_state's FP32 [B*H, K, V] shape.
     chain_output_bytes = 2 * batch_heads * key_dim * (row_width - key_dim) * initial_state.element_size()
     if gather_buffer is not None:
@@ -521,8 +525,12 @@ def _scan_sp_grouped_chunks(
         sequence_parallel_axis=sequence_parallel_axis,
         compute_config=compute_config.scan,
     )
-    output = ttnn.reshape(
-        scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
+    output = (
+        scan.output
+        if groups == 1
+        else ttnn.reshape(
+            scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
+        )
     )
     # The device chooses the completed tail when split, or the prefix's final state when unsplit, at runtime: only
     # the owner of a separated tail sends its last group's state over the fabric.
@@ -587,6 +595,14 @@ class KDARecurrence:
         self._geometry = _RecurrenceGeometry(
             batch, local_rows, heads, key_dim, value_dim, KDA_CHUNK_SIZE, local_rows // KDA_CHUNK_SIZE
         )
+        # Shapes are compared whole: iterating a ttnn.Shape ends in a C++ exception inside nanobind.
+        key_shape = ttnn.Shape([batch, local_rows, heads * key_dim])
+        self._input_shapes = {
+            "q": key_shape,
+            "k": key_shape,
+            "v": ttnn.Shape([batch, local_rows, heads * value_dim]),
+            "gate": key_shape,
+        }
         # Both scans read the chunk terms chunk by chunk; keeping them in L1 when they fit spares those DRAM reads
         # and chunk preparation's DRAM writes.
         preparation_size = preparation_bytes(batch * heads, local_rows // KDA_CHUNK_SIZE, key_dim, value_dim)
@@ -659,18 +675,15 @@ class KDARecurrence:
     ) -> tuple[_PreparedChunks, ttnn.Tensor, _RecurrenceGeometry]:
         geometry = self._geometry
         # Beta's logits are a column window of a wider projection.
+        beta_shape = beta.shape
         if (
-            tuple(beta.shape)[:2] != (geometry.batch, geometry.local_rows)
-            or beta.shape[-1] < beta_logits_column_offset + geometry.heads
+            beta_shape[0] != geometry.batch
+            or beta_shape[1] != geometry.local_rows
+            or beta_shape[-1] < beta_logits_column_offset + geometry.heads
         ):
             raise ValueError("recurrence beta shape does not match constructed geometry")
-        for name, tensor, width in (
-            ("q", q, geometry.heads * geometry.key_dim),
-            ("k", k, geometry.heads * geometry.key_dim),
-            ("v", v, geometry.heads * geometry.value_dim),
-            ("gate", gate, geometry.heads * geometry.key_dim),
-        ):
-            if tuple(tensor.shape) != (geometry.batch, geometry.local_rows, width):
+        for name, tensor in (("q", q), ("k", k), ("v", v), ("gate", gate)):
+            if tensor.shape != self._input_shapes[name]:
                 raise ValueError(f"recurrence {name} shape does not match constructed geometry")
 
         state = ttnn.reshape(

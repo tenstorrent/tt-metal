@@ -3,13 +3,9 @@
 
 #include "tt_metal/distributed/host_rdma_window.hpp"
 
-#include <vector>
-
 #include <mpi.h>
 
 #include <fmt/format.h>
-
-#include "hostdevcommon/uva_layout.h"
 
 namespace tt::tt_metal::experimental {
 

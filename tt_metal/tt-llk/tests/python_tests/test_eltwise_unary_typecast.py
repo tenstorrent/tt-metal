@@ -22,34 +22,39 @@ from helpers.format_config import (
     DataFormat,
     InputOutputFormat,
 )
-from helpers.golden_generators import (
-    TILE_DIMENSIONS,
-    TypecastGolden,
-    get_golden_generator,
-)
+from helpers.golden_generators import TypecastGolden, get_golden_generator
 from helpers.llk_params import (
     ApproximationMode,
-    BlocksCalculationAlgorithm,
     DestAccumulation,
+    FastMode,
     MathOperation,
+    PerfRunType,
+    StableSort,
+    Transpose,
 )
-from helpers.param_config import (
-    get_num_blocks_and_num_tiles_in_block,
-    parametrize,
-)
+from helpers.param_config import parametrize
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import (
+    StimuliSpec,
+    calculate_tile_and_face_counts,
+    generate_stimuli,
+)
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    FAST_MODE,
+    ITERATIONS,
+    LOOP_FACTOR,
     MATH_OP,
-    NUM_BLOCKS,
-    NUM_TILES_IN_BLOCK,
+    NUM_FACES,
+    STABLE_SORT,
     TILE_COUNT,
     TYPECAST_FORMATS,
-    DestSync,
-    generate_input_dim,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
 )
+from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 from helpers.utils import passed_test, result_tensor
 
 # The full ttnn typecast dtype set (analysis doc section 5).
@@ -164,6 +169,10 @@ def test_eltwise_unary_typecast(
     #  * float / block-float input: whole numbers so int conversions are exact and
     #    bf16 is lossless; small range when a block-float is involved so the
     #    shared-exponent quantization is (near-)exact per 16-elem block.
+    #
+    # Non-negative Int32 has the same bits in sign-magnitude and two's complement,
+    # so this sweep cannot catch a wrong Int32 encoding. Negatives are covered by
+    # test_eltwise_unary_typecast_int32_negative, which packs two's complement.
     bfp_involved = (
         formats.input_format.is_block_float() or formats.output_format.is_block_float()
     )
@@ -174,7 +183,14 @@ def test_eltwise_unary_typecast(
     else:
         spec_A = _whole_number_float_spec(16 if bfp_involved else 201)
 
-    _run_typecast(formats, dest_acc, approx_mode, input_dimensions, spec_A)
+    _run_typecast(
+        formats,
+        dest_acc,
+        approx_mode,
+        input_dimensions,
+        spec_A,
+        twos_complement=formats.input_format == DataFormat.Int32,
+    )
 
 
 @parametrize(
@@ -186,7 +202,8 @@ def test_eltwise_unary_typecast(
     ],
     dest_acc=_production_dest_acc,
     approx_mode=[ApproximationMode.No],
-    input_dimensions=[[32, 32], [32, 256]],
+    # Six tiles exercises the final partial Dest block when fp32 Dest holds four.
+    input_dimensions=[[32, 32], [32, 192], [32, 256]],
 )
 def test_eltwise_unary_typecast_uint32_to_fp32_rounding(
     formats: InputOutputFormat,
@@ -301,10 +318,10 @@ def test_eltwise_unary_typecast_uint_to_uint16_saturation(
         dest_acc,
         ApproximationMode.No,
         input_dimensions,
-        src_A,
         tile_cnt_A,
-        src_B,
         tile_cnt_B,
+        src_A=src_A,
+        src_B=src_B,
     )
     result = [int(v) & _UINT16_MAX for v in configuration.run().result]
     assert len(result) == len(
@@ -466,10 +483,10 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
         dest_acc,
         ApproximationMode.No,
         input_dimensions,
-        src_A,
         tile_cnt_A,
-        src_B,
         tile_cnt_B,
+        src_A=src_A,
+        src_B=src_B,
     )
     result = [int(v) & 0xFF for v in configuration.run().result]
     assert len(result) == len(
@@ -495,22 +512,31 @@ def _uint_to_uint8_wide_range_values(input_format: DataFormat, chunk: int) -> li
 
     UInt16 is swept exhaustively (``chunk`` selects the half). Int32/UInt32 get
     every 2^k - 1, 2^k, 2^k + 1, the 256-wrap points, the top of the range and a
-    random fill. Int32 stays non-negative: Wormhole Dest holds Int32 as
-    sign-magnitude, so a negative input reads back as |x| & 0xFF there.
+    random fill. Int32 also takes negatives, including -2**31, packed as two's
+    complement: the kernel keeps the low byte of that word. Quasar still consumes
+    sign-magnitude, so there the Int32 sweep stays non-negative.
     """
     if input_format == DataFormat.UInt16:
         start = chunk * _UINT_TO_UINT8_CHUNK
         return list(range(start, start + _UINT_TO_UINT8_CHUNK))
 
+    signed = (
+        input_format == DataFormat.Int32
+        and get_chip_architecture() != ChipArchitecture.QUASAR
+    )
     top = 2**32 if input_format == DataFormat.UInt32 else 2**31
+    low = -(2**31) if signed else 0
     values = [0, 1, 254, 255, 256, 257, 511, 512, 0xFF00, 0xFFFF, 0x10000, 0x100FF]
     for k in range(1, 32):
-        values += [v for v in ((1 << k) - 1, 1 << k, (1 << k) + 1) if v < top]
+        values += [v for v in ((1 << k) - 1, 1 << k, (1 << k) + 1) if 0 <= v < top]
     values += list(range(top - 256, top))
+    if signed:
+        values += [-v for v in values if v != 0]
+        values.append(-(2**31))
     generator = torch.Generator().manual_seed(62765)
     fill = _UINT_TO_UINT8_CHUNK - len(values)
     values += torch.randint(
-        0, top, (fill,), dtype=torch.int64, generator=generator
+        low, top, (fill,), dtype=torch.int64, generator=generator
     ).tolist()
     return values
 
@@ -549,10 +575,11 @@ def test_eltwise_unary_typecast_uint_to_uint8_wide_range(
         dest_acc,
         ApproximationMode.No,
         input_dimensions,
-        src_A,
         tile_cnt_A,
-        src_B,
         tile_cnt_B,
+        src_A=src_A,
+        src_B=src_B,
+        twos_complement=formats.input_format == DataFormat.Int32,
     )
     result = [int(v) & 0xFF for v in configuration.run().result]
     assert len(result) == len(
@@ -571,12 +598,21 @@ def _build_typecast_config(
     dest_acc: DestAccumulation,
     approx_mode: ApproximationMode,
     input_dimensions: list[int],
-    src_A: torch.Tensor,
     tile_cnt_A: int,
-    src_B: torch.Tensor,
     tile_cnt_B: int,
+    *,
+    src_A: torch.Tensor | None = None,
+    src_B: torch.Tensor | None = None,
     twos_complement: bool = False,
+    is_perf: bool = False,
+    run_types: list[PerfRunType] | None = None,
+    loop_factor: int = 1,
+    iterations: int = 8,
 ) -> TestConfig:
+    """Build the shared config; run_types applies only when is_perf is true."""
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+
     # Unpack straight into Dest when either:
     #  * the input is 32-bit -- the unpacker has no SrcA/SrcB path for
     #    Int32/UInt32/Float32, so is_unpacker_format_conversion_supported_dest
@@ -589,33 +625,38 @@ def _build_typecast_config(
         formats
     )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
+    _, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
+        input_dimensions,
+        face_r_dim=MAX_FACE_R_DIM,
+        num_faces=MAX_NUM_FACES,
     )
 
-    configuration = TestConfig(
-        "sources/eltwise_unary_typecast_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(approx_mode),
-            # Emits SFPU_UNARY_OPERATION = SfpuType::typecast so the kernel goes
-            # through the shared unary-SFPU dispatch; TYPECAST_FORMATS supplies the
-            # (input, output) pair that selects the concrete typecast kernel.
-            MATH_OP(mathop=MathOperation.Typecast),
-            TYPECAST_FORMATS(formats.input_format, formats.output_format),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
+    templates = [
+        APPROX_MODE(approx_mode),
+        # Emits SFPU_UNARY_OPERATION = SfpuType::typecast so the kernel goes
+        # through the shared unary-SFPU dispatch; TYPECAST_FORMATS supplies the
+        # (input, output) pair that selects the concrete typecast kernel.
+        MATH_OP(mathop=MathOperation.Typecast),
+        TYPECAST_FORMATS(formats.input_format, formats.output_format),
+        ITERATIONS(iterations),
+        FAST_MODE(FastMode.No),
+        STABLE_SORT(StableSort.No),
+    ]
+    runtimes = [
+        TILE_COUNT(tile_cnt_A),
+        LOOP_FACTOR(loop_factor),
+        NUM_FACES(num_faces=faces_to_generate),
+        UNPACK_TRANS_FACES(Transpose.No),
+        UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+    ]
+
+    test_config_kwargs = {
+        "test_name": "sources/eltwise_unary_typecast_test.cpp",
+        "formats": formats,
+        "templates": templates,
+        "runtimes": runtimes,
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -626,8 +667,14 @@ def _build_typecast_config(
             tile_count_res=tile_cnt_A,
             twos_complement=twos_complement,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=unpack_to_dest,
+        "dest_acc": dest_acc,
+        "unpack_to_dest": unpack_to_dest,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
 
     # pack_src fix for the SFPU typecast.
@@ -687,11 +734,11 @@ def _run_typecast(
         dest_acc,
         approx_mode,
         input_dimensions,
-        src_A,
         tile_cnt_A,
-        src_B,
         tile_cnt_B,
-        twos_complement,
+        src_A=src_A,
+        src_B=src_B,
+        twos_complement=twos_complement,
     )
 
     res_from_L1 = configuration.run().result
@@ -701,3 +748,119 @@ def _run_typecast(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format, max_ulp=max_ulp
     ), "Assert against golden failed"
+
+
+# Int32 extremes. -2**31 is representable in two's complement and not in sign-magnitude.
+_INT32_MIN = -(2**31)
+_INT32_MAX = 2**31 - 1
+
+
+def _int32_negative_spec(formats: InputOutputFormat) -> StimuliSpec:
+    """Int32 stimuli with negatives and signed boundaries.
+
+    Block-float outputs stay inside [-15, 15], matching the positive sweep: a wider
+    range is not exact after the packer's shared-exponent quantization. UInt16 clamps.
+    A 65535 result packs as 0xFFFF, and a 32-bit readback word of ones is what
+    Blackhole NOC returns on a timeout, so each saturating lane sits next to a lane
+    under 128. Every other output takes the full signed range, including the values
+    where sign-magnitude and two's complement differ.
+    """
+    if formats.output_format.is_block_float():
+        return StimuliSpec.uniform(-15, 15)
+
+    if formats.output_format == DataFormat.UInt16:
+        # 65535 is the clamp ceiling; 65536 and INT32_MAX are the first and last
+        # inputs that saturate to it. Odd neighbors stay in 0..127, same as
+        # test_eltwise_unary_typecast_int_edges.
+        boundaries = [_INT32_MIN, -65536, -256, -1, 0, 1, 255, 256, 65534]
+        saturating = [65535, 65536, _INT32_MAX]
+
+        def distribution(size, dtype, generator):
+            values = torch.randint(
+                -255, 256, (size,), dtype=torch.int64, generator=generator
+            )
+            values[: len(boundaries)] = torch.tensor(boundaries, dtype=torch.int64)
+            index = (len(boundaries) + 1) & ~1
+            for saturated in saturating:
+                values[index] = saturated
+                values[index + 1] &= 0x7F
+                index += 2
+            return values.to(dtype)
+
+        return StimuliSpec(distribution=distribution, seed=56808)
+
+    random_low, random_high = -512, 512
+    boundaries = [
+        _INT32_MIN,
+        -_INT32_MAX,
+        -65536,
+        -256,
+        -255,
+        -128,
+        -1,
+        0,
+        1,
+        127,
+        128,
+        255,
+        256,
+        65535,
+        65536,
+        _INT32_MAX,
+    ]
+
+    def distribution(size, dtype, generator):
+        values = torch.randint(
+            random_low,
+            random_high + 1,
+            (size,),
+            dtype=torch.int64,
+            generator=generator,
+        )
+        values[: len(boundaries)] = torch.tensor(boundaries, dtype=torch.int64)
+        return values.to(dtype)
+
+    return StimuliSpec(distribution=distribution, seed=56808)
+
+
+@parametrize(
+    # Quasar still consumes sign-magnitude for most integer typecasts; its own
+    # suite selects the encoding per pair.
+    formats=[
+        pair
+        for pair in TYPECAST_PAIRS
+        if pair.input_format == DataFormat.Int32
+        and get_chip_architecture() != ChipArchitecture.QUASAR
+    ],
+    dest_acc=_production_dest_acc,
+    approx_mode=[ApproximationMode.No],
+    input_dimensions=[[32, 32]],
+)
+def test_eltwise_unary_typecast_int32_negative(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    approx_mode: ApproximationMode,
+    input_dimensions: list[int],
+):
+    """Negative Int32 typecast stimuli, packed as two's complement.
+
+    pack_int32 defaults to sign-magnitude. The Int32 typecast kernels load Dest with a
+    bit-preserving INT32 load and consume two's complement (SFPABS in its integer mode,
+    and a low-byte wrap for UInt8). Non-negative stimuli hide that, because both
+    encodings agree there. See #56808.
+
+    Float16_b uses max_ulp=1. SFP_STOCH_RND nearest rounds ties away from zero and
+    torch rounds ties to even, so with seed 56808 some lanes (257, -449) are one
+    bfloat16 step off golden.
+    """
+    # One bfloat16 step covers the tie-rounding gap; every other output stays exact.
+    max_ulp = 1 if formats.output_format == DataFormat.Float16_b else None
+    _run_typecast(
+        formats,
+        dest_acc,
+        approx_mode,
+        input_dimensions,
+        _int32_negative_spec(formats),
+        max_ulp=max_ulp,
+        twos_complement=True,
+    )
