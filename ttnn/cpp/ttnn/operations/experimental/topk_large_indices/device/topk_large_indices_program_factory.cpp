@@ -13,6 +13,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
+#include <array>
 #include <optional>
 #include <tuple>
 
@@ -84,17 +85,19 @@ constexpr tt::tt_metal::KernelHandle writer_kernel_index = 2;
 
 // Single source of the per-core argument layout (topk_core_args), shared by create_descriptor and the cache-hit
 // refresh so the two cannot drift. fn receives (core, reader args, compute args, writer args) for every core in
-// the grid, including cores with no rows.
+// the grid, including cores with no rows. The args are spans over stack storage, so the cache-hit refresh writes
+// them straight into the program without allocating; the spans are only valid during the call.
 template <typename Fn>
 void for_each_core_args(
     const Tensor& input, const std::vector<CoreRowAssignment>& assignments, bool row_split, Fn&& fn) {
+    using Args = ttsl::Span<const uint32_t>;
     const auto* device = input.device();
     for (const auto& assignment : assignments) {
         if (!row_split) {
-            fn(assignment.core,
-               std::vector<uint32_t>{assignment.start_row, assignment.num_rows},
-               std::vector<uint32_t>{assignment.num_rows},
-               std::vector<uint32_t>{assignment.start_row, assignment.num_rows});
+            const std::array<uint32_t, 2> reader{assignment.start_row, assignment.num_rows};
+            const std::array<uint32_t, 1> compute{assignment.num_rows};
+            const std::array<uint32_t, 2> writer{assignment.start_row, assignment.num_rows};
+            fn(assignment.core, Args(reader), Args(compute), Args(writer));
             continue;
         }
         const uint32_t has_split = assignment.has_split ? 1u : 0u;
@@ -102,18 +105,18 @@ void for_each_core_args(
         const auto partner = assignment.has_split
                                  ? device->worker_core_from_logical_core(assignments[assignment.partner_index].core)
                                  : CoreCoord{0, 0};
-        fn(assignment.core,
-           std::vector<uint32_t>{
-               assignment.start_row, assignment.num_rows, assignment.split_row, has_split, second_half},
-           std::vector<uint32_t>{assignment.num_rows, has_split, second_half},
-           std::vector<uint32_t>{
-               assignment.start_row,
-               assignment.num_rows,
-               has_split,
-               second_half,
-               static_cast<uint32_t>(partner.x),
-               static_cast<uint32_t>(partner.y),
-               assignment.split_row});
+        const std::array<uint32_t, 5> reader{
+            assignment.start_row, assignment.num_rows, assignment.split_row, has_split, second_half};
+        const std::array<uint32_t, 3> compute{assignment.num_rows, has_split, second_half};
+        const std::array<uint32_t, 7> writer{
+            assignment.start_row,
+            assignment.num_rows,
+            has_split,
+            second_half,
+            static_cast<uint32_t>(partner.x),
+            static_cast<uint32_t>(partner.y),
+            assignment.split_row};
+        fn(assignment.core, Args(reader), Args(compute), Args(writer));
     }
 }
 
@@ -142,9 +145,9 @@ void rewrite_core_args(
         assignments,
         row_split_on,
         [&](const CoreCoord& core,
-            std::vector<uint32_t>&& core_reader_args,
-            std::vector<uint32_t>&& core_compute_args,
-            std::vector<uint32_t>&& core_writer_args) {
+            ttsl::Span<const uint32_t> core_reader_args,
+            ttsl::Span<const uint32_t> core_compute_args,
+            ttsl::Span<const uint32_t> core_writer_args) {
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel_index, core, core_reader_args);
             tt::tt_metal::SetRuntimeArgs(program, compute_kernel_index, core, core_compute_args);
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel_index, core, core_writer_args);
@@ -496,12 +499,13 @@ tt::tt_metal::ProgramDescriptor TopkLargeIndicesProgramFactory::create_descripto
         assignments,
         row_split_on,
         [&](const CoreCoord& core,
-            std::vector<uint32_t>&& reader_args,
-            std::vector<uint32_t>&& compute_args,
-            std::vector<uint32_t>&& writer_args) {
-            reader_desc.runtime_args.emplace_back(core, std::move(reader_args));
-            compute_desc.runtime_args.emplace_back(core, std::move(compute_args));
-            writer_desc.runtime_args.emplace_back(core, std::move(writer_args));
+            ttsl::Span<const uint32_t> reader_args,
+            ttsl::Span<const uint32_t> compute_args,
+            ttsl::Span<const uint32_t> writer_args) {
+            reader_desc.runtime_args.emplace_back(core, std::vector<uint32_t>(reader_args.begin(), reader_args.end()));
+            compute_desc.runtime_args.emplace_back(
+                core, std::vector<uint32_t>(compute_args.begin(), compute_args.end()));
+            writer_desc.runtime_args.emplace_back(core, std::vector<uint32_t>(writer_args.begin(), writer_args.end()));
         });
 
     // Order fixes the kernel handles the override relies on (reader_kernel_index, compute_kernel_index, ...).
