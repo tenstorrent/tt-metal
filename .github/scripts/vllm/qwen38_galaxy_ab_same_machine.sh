@@ -16,6 +16,7 @@
 #   AB_TT_CONFIG       JSON for --additional-config '{"tt": ...}'
 #   AB_CHAT_KWARGS     JSON for --default-chat-template-kwargs
 #   AB_SERVER_TIMEOUT  minutes to wait for /health
+#   AB_MESH            MESH_DEVICE of the server (default BH-Galaxy)
 set -u
 OUT=output
 mkdir -p "$OUT"
@@ -65,7 +66,7 @@ run_arm() {
   echo "$tag" >> "$OUT/ab_arms.txt"
   echo "=== $tag: start $(date -u +%H:%M:%S) env [$envs] args [$args]"
   # shellcheck disable=SC2086
-  env $AB_COMMON_ENV $envs MESH_DEVICE=BH-Galaxy HF_MODEL="$HF_MODEL_LOCAL" VLLM_RPC_TIMEOUT=300000 \
+  env $AB_COMMON_ENV $envs MESH_DEVICE="${AB_MESH:-BH-Galaxy}" HF_MODEL="$HF_MODEL_LOCAL" VLLM_RPC_TIMEOUT=300000 \
     setsid python3 "$PLUGIN_DIR/examples/server_example_tt.py" \
       --model "$HF_MODEL_LOCAL" --served-model-name "$AB_MODEL" \
       $AB_COMMON_ARGS $args \
