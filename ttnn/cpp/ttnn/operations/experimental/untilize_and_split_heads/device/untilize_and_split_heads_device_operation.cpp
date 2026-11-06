@@ -17,6 +17,7 @@ void UntilizeAndSplitHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     const auto& in = args.input;
     TT_FATAL(in.storage_type() == StorageType::DEVICE, "untilize_and_split_heads: input must be on device");
+    TT_FATAL(in.device()->arch() != tt::ARCH::QUASAR, "untilize_and_split_heads is not supported on Quasar");
     TT_FATAL(in.dtype() == DataType::BFLOAT16, "untilize_and_split_heads: input must be BFLOAT16, got {}", in.dtype());
     TT_FATAL(in.layout() == Layout::TILE, "untilize_and_split_heads: input must be TILE, got {}", in.layout());
     // The kernels read whole 2048 B tiles and untilize them as plain 32x32
