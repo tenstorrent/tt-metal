@@ -18,10 +18,11 @@ from models.experimental.vadv2.common import load_torch_model
 
 
 def create_vadv2_model_parameters(model: ResNet, input_tensor, device=None):
+    # Every parameter is a convolution's, which conv2d prepares from the host on its first call.
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
-        device=device,
+        device=None,
     )
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
