@@ -1467,7 +1467,9 @@ def test_eltwise_binary_sfpu_situ_glu(formats, dest_acc, mathop, **run_kwargs):
         dest_acc,
         mathop,
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-80.0, high=40.0),
-        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0),
+        spec_B=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
         **run_kwargs,
     )
 
