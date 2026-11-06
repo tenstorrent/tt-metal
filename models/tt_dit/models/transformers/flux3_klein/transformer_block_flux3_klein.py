@@ -43,17 +43,20 @@ def _agmm(grid: tuple[int, int], blocks: tuple[int, int, int], subblock: tuple[i
 
 
 # Swept on a BH Galaxy 4x8 (SP8 on axis 1 x TP4 on axis 0, Ring, 2 links) with the production op calls; device
-# kernel duration, median over the 32 devices, us. Rows per device: 576 = 1024x1024 with 512 text rows,
-# 1024 = 1024x1024 with 4096 text rows, 1536 = the same plus a 1024x1024 reference. Applied only on the 12x10
-# Blackhole device grid they were measured on; every other shape keeps the shared resolution.
+# kernel duration, median over the 32 devices, us. Rows per device: 512 = the early (per-mode) blocks at 1024x1024,
+# 576 = 1024x1024 with 512 text rows, 1024 = 1024x1024 with 4096 text rows, 1536 = the same plus a 1024x1024
+# reference. Applied only on the 12x10 Blackhole device grid they were measured on; every other shape keeps the
+# shared resolution.
 # QKV (M, K, N/dev) all-gather-matmul, 3 output chunks.
 QKV_AGMM_CONFIGS = {
+    (512, HIDDEN, 2304): _agmm((11, 8), (2, 6, 7), (2, 1), transpose=False),  # 125.6 -> 74.2
     (576, HIDDEN, 2304): _agmm((11, 9), (2, 8, 7), (2, 1), transpose=False),  # 125.6 -> 77.7
     (1024, HIDDEN, 2304): _agmm((12, 9), (3, 6, 8), (1, 4), transpose=True),  # 137.9 -> 129.2
     (1536, HIDDEN, 2304): _agmm((12, 8), (4, 8, 9), (4, 1), transpose=True),  # 173.9 -> 168.6
 }
 # proj_mlp (M, K, N/dev) all-gather-matmul with fused SwiGLU (N is the packed [up | gate] width).
 MLP_AGMM_CONFIGS = {
+    (512, HIDDEN, 4608): _agmm((11, 9), (2, 4, 14), (2, 2), transpose=False),  # 288.9 -> 144.1
     (576, HIDDEN, 4608): _agmm((11, 9), (2, 8, 8), (1, 4), transpose=False),  # 288.7 -> 149.7
     (1024, HIDDEN, 4608): _agmm((11, 8), (4, 4, 14), (2, 2), transpose=False),  # 328.5 -> 203.1
     (1536, HIDDEN, 4608): _agmm((12, 9), (4, 4, 16), (1, 4), transpose=True),  # 308.2 -> 268.0
@@ -63,6 +66,8 @@ MLP_AGMM_CONFIGS = {
 register_fused_mmrs_configs(
     {
         ttnn.CoreCoord(12, 10): {
+            # 147.1 -> 134.1
+            (512, HIDDEN, HIDDEN): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 2, 4, 8, 1, 4, None, 1, None, None),
             # 215.9 -> 145.9
             (576, HIDDEN, HIDDEN): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 3, 4, 8, 1, 4, None, 1, None, None),
             # 236.7 -> 190.7; the reduce-scatter runs on the 3 rows above the 7-row matmul grid
