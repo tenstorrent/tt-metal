@@ -661,6 +661,11 @@ static void print_summary(std::span<struct LinkError> errors) {
 /* In Gbps */
 [[maybe_unused]]
 static double get_eth_bw() {
+    char* p = getenv("ETH_TEST_EXPECTED_BW");
+    if (p) {
+        return std::stod(p);
+    }
+
     // TODO More comprehensive hardware support
     switch (tt::tt_metal::GetClusterType()) {
         case tt::tt_metal::ClusterType::BLACKHOLE_GALAXY: return 200.0;
