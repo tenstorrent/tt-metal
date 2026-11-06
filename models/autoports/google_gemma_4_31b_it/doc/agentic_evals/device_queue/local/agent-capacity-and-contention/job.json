@@ -1,0 +1,32 @@
+{
+  "arm": "agent-capacity-and-contention",
+  "device": "local",
+  "owner": "coordinator",
+  "start": "2026-11-06T13:44:57.174678+00:00",
+  "status": "completed",
+  "planned_clients": 4,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "arms": [
+    {
+      "planned_clients": 2,
+      "batch": 8
+    },
+    {
+      "planned_clients": 4,
+      "batch": 8
+    }
+  ],
+  "batch_reason": "Smallest supported B8 at orabove C2/C4; capacity-only one-token replay",
+  "predicted_hours": 0.15,
+  "box_hours": 0.25,
+  "owners_before": [],
+  "scope": "Four genuine histories; Xarray quarantined network trajectory included aspredeclared observedload only. No valid population or scoring claim.",
+  "command": "bash bringup/artifacts/stage12-capacity/launch-local.sh",
+  "end": "2026-11-06T13:49:36.657891+00:00",
+  "actual_hours": 0.07763422583333333,
+  "exit_status": 0,
+  "wrapper_exit_status": 1,
+  "exit_reason": "Pairedclients0; idle API SIGINT; owners empty",
+  "owners_after": []
+}

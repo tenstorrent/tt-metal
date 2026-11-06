@@ -1,0 +1,15 @@
+{
+  "run_id": 42210467509,
+  "selection_unchanged": true,
+  "quarantined_tasks": [
+    "pydata__xarray-4966"
+  ],
+  "basis": "Coordinator audit: original message2 external curl-I; toolmessage3 return0 HTTP400 headers",
+  "replay_scope": "Four genuine observed histories, mixed-validity/quarantined-load capacity diagnostic; no task commands executed",
+  "not_claimed": [
+    "Fully valid representative SWE population",
+    "Valid nightly completion",
+    "Scores or output equivalence"
+  ],
+  "raw_history_mutations": false
+}

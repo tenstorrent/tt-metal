@@ -1,0 +1,35 @@
+{
+  "status": "prepared_not_published",
+  "base": "f12b2682cb03e84555ba122dd647262ae399815f",
+  "candidate_commit": "b4662344c0119e2c1fe7840e9ca954324a2f0afe",
+  "branch": "prep/terminal-retention-f12",
+  "worktree": "/home/mvasiljevic/gemma4-31b-pipeline-v3/tti-terminal-retention-f12",
+  "selection": {
+    "terminal": 10,
+    "gpqa": 0,
+    "swe": 0,
+    "planned_clients": 2,
+    "batch": 8
+  },
+  "retention": true,
+  "swe_return_token_ids_preserved": true,
+  "validation": {
+    "whole_config_ast_equivalence": "pass after reversing only authorized cohort/retention/peer changes; limits, pins, parsers unchanged",
+    "stock_retention_request_equality": "pass, same requests/history with retention off/on",
+    "focused_tests": "61 passed in 3.40s",
+    "changed_file_full_hooks": "all four passed; pytest hook always runs full suite",
+    "all_files_hooks": "ruff, format, full pytest passed; copyright hook added missing final newline to inherited unrelated helpers.hpp; restored hook-generated edit and checked all hooks on changed files",
+    "hook_environment": "TT_METAL_HOME, tt_metal_home, vllm_dir unset; PRE_COMMIT_HOME=/tmp/tti-retention-precommit"
+  },
+  "device_hours": 0,
+  "predicted_device_hours": 0,
+  "speed_credit": null,
+  "evidence": [
+    "check_candidate.py",
+    "candidate.patch",
+    "../native-history-retention/check_export.py",
+    "bringup/artifacts/stage12-terminal-retention-f12-hooks.log",
+    "bringup/artifacts/stage12-terminal-retention-f12-changed-hooks.log"
+  ],
+  "pending": "Coordinator Terminal nightly validity and admission; no hardware, publication checkout changes, push or dispatch."
+}

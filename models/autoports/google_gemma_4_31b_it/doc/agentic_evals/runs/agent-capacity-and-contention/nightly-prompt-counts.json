@@ -1,0 +1,96 @@
+{
+  "kind": "reconstructed_template_not_exact_wire_usage",
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "normalizer": "bringup/artifacts/vllm-benchmark-client-src/vllm/entrypoints/chat_utils.py:_postprocess_messages",
+  "rows": [
+    {
+      "task": "pylint-dev__pylint-7080",
+      "recorded_call_index": 34,
+      "template_tokens": 32102,
+      "recorded_api_tokens": 32103,
+      "difference": -1
+    },
+    {
+      "task": "pylint-dev__pylint-7080",
+      "recorded_call_index": 35,
+      "template_tokens": 32268,
+      "recorded_api_tokens": 32269,
+      "difference": -1
+    },
+    {
+      "task": "pylint-dev__pylint-7080",
+      "recorded_call_index": 36,
+      "template_tokens": 32967,
+      "recorded_api_tokens": 32968,
+      "difference": -1
+    },
+    {
+      "task": "django__django-11265",
+      "recorded_call_index": 82,
+      "template_tokens": 44169,
+      "recorded_api_tokens": 44170,
+      "difference": -1
+    },
+    {
+      "task": "django__django-11265",
+      "recorded_call_index": 83,
+      "template_tokens": 44785,
+      "recorded_api_tokens": 44786,
+      "difference": -1
+    },
+    {
+      "task": "django__django-11265",
+      "recorded_call_index": 84,
+      "template_tokens": 44879,
+      "recorded_api_tokens": 44880,
+      "difference": -1
+    },
+    {
+      "task": "psf__requests-1766",
+      "recorded_call_index": 20,
+      "template_tokens": 14128,
+      "recorded_api_tokens": 14129,
+      "difference": -1
+    },
+    {
+      "task": "psf__requests-1766",
+      "recorded_call_index": 21,
+      "template_tokens": 14476,
+      "recorded_api_tokens": 14477,
+      "difference": -1
+    },
+    {
+      "task": "psf__requests-1766",
+      "recorded_call_index": 22,
+      "template_tokens": 14675,
+      "recorded_api_tokens": 14676,
+      "difference": -1
+    },
+    {
+      "task": "pydata__xarray-4966",
+      "recorded_call_index": 29,
+      "template_tokens": 20697,
+      "recorded_api_tokens": 20698,
+      "difference": -1
+    },
+    {
+      "task": "pydata__xarray-4966",
+      "recorded_call_index": 30,
+      "template_tokens": 21492,
+      "recorded_api_tokens": 21493,
+      "difference": -1
+    },
+    {
+      "task": "pydata__xarray-4966",
+      "recorded_call_index": 31,
+      "template_tokens": 22221,
+      "recorded_api_tokens": 22222,
+      "difference": -1
+    }
+  ],
+  "all_differences": [
+    -1
+  ],
+  "raw_messages_unchanged": true,
+  "limitation": "Historical same-path check differed by one token and live API matched recorded counts; new live parity remains pending."
+}

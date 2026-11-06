@@ -21,7 +21,7 @@
     "terminal-bench/video-processing"
   ],
   "tt_metal_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
-  "tti_candidate_sha": "296fdd5f9eb066ab1404ec082002930ffce0eb18",
+  "tti_candidate_sha": "b4662344c0119e2c1fe7840e9ca954324a2f0afe",
   "plugin_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
   "implementation": "gemma4-31b-autoport-v3",
   "predicted_hours": null,
@@ -29,6 +29,7 @@
   "run_timeout_hours": 12,
   "not_dispatched": true,
   "batch_reason": "Smallest supported measured batch>=2",
-  "publication_pending": true,
-  "scope": "Conditional next normal rung; no dispatch before valid nightly, measured projection and source publication verification"
+  "publication_pending": false,
+  "scope": "Conditional next normal rung; no dispatch before valid nightly, measured projection and source publication verification",
+  "source_validation": "runs/terminal-retention-f12-preparation/RESULT.json"
 }

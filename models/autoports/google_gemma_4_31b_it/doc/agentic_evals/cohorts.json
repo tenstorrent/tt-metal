@@ -285,6 +285,13 @@
         "psf__requests-1766",
         "pydata__xarray-4966",
         "astropy__astropy-14598"
+      ],
+      "nightly-swe-retained-repeat": [
+        "pylint-dev__pylint-7080",
+        "django__django-11265",
+        "psf__requests-1766",
+        "pydata__xarray-4966",
+        "astropy__astropy-14598"
       ]
     },
     "selected_before_scores_at": "2026-11-06T04:49:25.562736+00:00",
@@ -299,6 +306,11 @@
         ],
         "source_run": "smoke2-swe-native-parser",
         "reason": "Same frozen smoke; validity retry before larger rung."
+      },
+      "nightly-swe-retained-repeat": {
+        "source": "same frozen nightly list",
+        "reason": "Repeat same frozen nightly5 after1networkquarantine and1unresolvedcap; metadata-onlyretention accepted. No score/seed/prompt/policychange, notserver-sizedadvance.",
+        "selected_at": "2026-11-06T13:48:13.783611+00:00"
       }
     },
     "server_sized_selection": {

@@ -2,7 +2,7 @@
   "arm": "server-sized-swe-c2",
   "owner": "coordinator",
   "device": "qb2-ci",
-  "status": "prepared_awaiting_valid_prerequisite",
+  "status": "held_prerequisite_invalid_nightly",
   "prepared_at": "2026-11-06T13:17:20.041677+00:00",
   "prerequisite_run_id": 42210467509,
   "planned_clients": 2,
@@ -26,5 +26,6 @@
   "batch_reason": "Smallest supported measured batch>=2",
   "publication_pending": false,
   "scope": "Conditional next normal rung; no dispatch before valid nightly, measured projection and source publication verification",
-  "accepted_metadata_change": "runs/native-token-retention-confirmation/result.json"
+  "accepted_metadata_change": "runs/native-token-retention-confirmation/result.json",
+  "reason": "42210467509 has1networkquarantine and1unresolvedcap; cannotadvance"
 }

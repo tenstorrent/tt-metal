@@ -864,7 +864,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42206258311",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T13:34:57.243256+00:00",
+      "last_observed_at": "2026-11-06T13:54:14.166457+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-x6kzj",
       "build_started_at": "2026-11-06T10:55:05Z",
       "build_completed_at": "2026-11-06T11:47:58Z",
@@ -911,7 +911,7 @@
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42208934357",
       "workflow_status": "in_progress",
       "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T13:35:31.443019+00:00",
+      "last_observed_at": "2026-11-06T13:54:48.194318+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-l229t",
       "build_started_at": "2026-11-06T11:16:03Z",
       "build_completed_at": "2026-11-06T12:06:53Z",
@@ -926,7 +926,7 @@
       "eval": "swe_bench_verified",
       "device": "qb2-ci",
       "owner": "coordinator",
-      "status": "device_job_in_progress",
+      "status": "completed_awaiting_audit",
       "queued_at": "2026-11-06T11:27:53.112555+00:00",
       "planned_clients": 2,
       "batch": 8,
@@ -962,17 +962,22 @@
       "run_id": 42210467509,
       "submitted_at": "2026-11-06T11:28:08Z",
       "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42210467509",
-      "workflow_status": "in_progress",
-      "workflow_conclusion": null,
-      "last_observed_at": "2026-11-06T13:34:53.073584+00:00",
+      "workflow_status": "completed",
+      "workflow_conclusion": "success",
+      "last_observed_at": "2026-11-06T13:37:55.690197+00:00",
       "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-kd74g",
       "build_started_at": "2026-11-06T11:28:23Z",
       "build_completed_at": "2026-11-06T12:19:28Z",
       "runner": "120-qb2-p04t07",
       "device_job_id": 127888688175,
       "device_job_started_at": "2026-11-06T12:19:30Z",
-      "device_job_completed_at": null,
-      "start": "2026-11-06T12:19:30Z"
+      "device_job_completed_at": "2026-11-06T13:37:03Z",
+      "start": "2026-11-06T12:19:30Z",
+      "end": "2026-11-06T13:37:03Z",
+      "exit_status": 0,
+      "actual_hours": 1.2925,
+      "actual_hours_basis": "CI device job including setup/server/client; evaluation time separate",
+      "workflow_wall_hours": 2.148888888888889
     },
     {
       "arm": "measured-workload-idle-regime",
@@ -996,10 +1001,61 @@
       "wrapper_exit_reason": "Intentional idle API SIGINT; device owners empty",
       "actual_hours": 0.10904988249999999,
       "owner_check_after": []
+    },
+    {
+      "arm": "nightly-swe-retained-repeat",
+      "eval": "swe_bench_verified",
+      "device": "qb2-ci",
+      "owner": "coordinator",
+      "status": "device_job_in_progress",
+      "queued_at": "2026-11-06T13:48:13.783611+00:00",
+      "planned_clients": 2,
+      "batch": 8,
+      "max_num_seqs": 8,
+      "tt_metal_sha": "439c22b0e991e5af626efafa7224edf28f84795b",
+      "tti_sha": "f12b2682cb03e84555ba122dd647262ae399815f",
+      "vllm_sha": "ca7a18246e4111629ed6cb4a7d1192002749fccf",
+      "implementation": "gemma4-31b-autoport-v3",
+      "task_count": 5,
+      "tasks": [
+        "pylint-dev__pylint-7080",
+        "django__django-11265",
+        "psf__requests-1766",
+        "pydata__xarray-4966",
+        "astropy__astropy-14598"
+      ],
+      "predicted_hours": 7.7925,
+      "projection_components_hours": {
+        "observed_same5_eval": 0.9045598686111112,
+        "observed_device_setup": 0.38794013138888883,
+        "configured_agent_tail_allowance": 6,
+        "additional_queue_margin": 0.5
+      },
+      "prediction_basis": "Same5 measured0.90456h plus measured deviceoverhead0.38794h; conservative full6hagenttail allowance and0.5queue. Existingimmutableimage skipsbuild, no measuredreusegainclaimed.",
+      "run_timeout_hours": 12,
+      "job_timeout_hours": 18,
+      "agent_timeout_seconds": 21600,
+      "request_timeout_seconds": 3600,
+      "max_output_tokens": 32768,
+      "batch_reason": "Smallest validated batch at orabove2",
+      "docker_image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:61962ce48cd4561ed02080d50b7403eea5cb1b2122a160e212ee4ced875c9005",
+      "scope": "Repeat same frozen nightly5 after1networkquarantine and1unresolvedcap; metadata-onlyretention accepted. No score/seed/prompt/policychange, notserver-sizedadvance.",
+      "prerequisite": "All5finished butnightlyvaliditynotbanked; repeatability andretention measurement with unchangedofficialtasks",
+      "run_id": 42228448171,
+      "submitted_at": "2026-11-06T13:48:15Z",
+      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42228448171",
+      "workflow_status": "in_progress",
+      "workflow_conclusion": null,
+      "last_observed_at": "2026-11-06T13:54:46.778151+00:00",
+      "runner": "qb2-120-p05t02",
+      "device_job_id": 127927949769,
+      "device_job_started_at": "2026-11-06T13:48:32Z",
+      "device_job_completed_at": null,
+      "start": "2026-11-06T13:48:32Z"
     }
   ],
   "status": "all_smokes_valid_three_larger_runs_executing",
-  "last_updated": "2026-11-06T13:35:52.898195+00:00",
+  "last_updated": "2026-11-06T13:55:02.815119+00:00",
   "stop_reason": null,
   "actual_runs": [],
   "continuations": [
@@ -1397,6 +1453,34 @@
       "device_job_hours": 0.06232050805555555,
       "client_seconds": 6.016756773926318,
       "scope": "Paired exactness/metadata retention, no score or speed claim"
+    },
+    {
+      "arm": "nightly-swe-observable",
+      "run_id": 42210467509,
+      "planned_clients": 2,
+      "batch": 8,
+      "device_job_hours": 1.2925,
+      "workflow_wall_hours": 2.148888888888889,
+      "predicted_workflow_hours": 7.821522817361111,
+      "workflow_conclusion": "success",
+      "evaluation_hours": 0.9045598686111112,
+      "validity": "partial3valid/1networkquarantine/1unresolvedcap; notbankednightly",
+      "functional_at": 2
+    },
+    {
+      "arm": "agent-capacity-and-contention",
+      "planned_clients": [
+        2,
+        4
+      ],
+      "batch": 8,
+      "predicted_hours": 0.15,
+      "device_job_hours": 0.07763422583333333,
+      "client_seconds": [
+        31.9,
+        31.9
+      ],
+      "evidence": "runs/agent-capacity-and-contention/REPLAY_RESULT.json"
     }
   ],
   "local_idle_intervals": [
@@ -1437,8 +1521,14 @@
     },
     {
       "start": "2026-11-06T13:33:31.825214+00:00",
+      "end": "2026-11-06T13:44:57.174678+00:00",
+      "reason": "Bounded retention check complete; awaiting real nightly histories for C4. Three CI evals remain active.",
+      "resolution": "Four native histories available; pairedobserved-load capacityreplay"
+    },
+    {
+      "start": "2026-11-06T13:49:36.657891+00:00",
       "end": null,
-      "reason": "Bounded retention check complete; awaiting real nightly histories for C4. Three CI evals remain active."
+      "reason": "Replaycompleted; nextGPQAcapacity planbeingprepared, CIcontinues"
     }
   ],
   "schedule_history": [
@@ -1500,7 +1590,8 @@
     "condition": "TT439c/plugin ca7 unchanged; only model TTI cohort/concurrency/retention config changes with unchanged dependencies; still dispatch explicit implementation and refs",
     "evidence": "runs/ci-image-reuse/result.json",
     "live_confirmation": "pending normal next rung",
-    "forecast": "Do not claim measured speedup until run completes; recalculate build component with explicit estimated removal"
+    "forecast": "Do not claim measured speedup until run completes; recalculate build component with explicit estimated removal",
+    "live_confirmation_run_id": 42228448171
   },
   "active_runs": [
     {

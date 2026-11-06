@@ -1,0 +1,31 @@
+{
+  "status": "autofix_exhausted_no_supported_generic_repair",
+  "run_id": 42210467509,
+  "suite": "swe_bench_verified",
+  "attempted_rung_size": 5,
+  "functional_at": 2,
+  "decision": "stop",
+  "reason": "Xarray first agent action reached external issue dataset HTTP endpoint; generic activation and command propagation are intact; no admissible stock-route repair identified.",
+  "quarantined_task": "pydata__xarray-4966",
+  "raw_task_reward": 1,
+  "valid_suite_score": null,
+  "cause": "agent-selected issue reproduction probe before any environment failure",
+  "confirmation": "check_evidence.py passed; fresh AUTODEBUG.md source/API/action/observation/template checks verified",
+  "changed_source_files": [],
+  "device_hours": 0,
+  "predicted_device_hours": 0,
+  "device_hour_box": 0.1,
+  "speed_credit": null,
+  "evidence": [
+    "AUTODEBUG.md",
+    "AUTOFIX.md",
+    "check_evidence.py",
+    "../nightly-swe-observable/collected",
+    "../smoke2-swe-activation-repair/audit.json"
+  ],
+  "limitations": [
+    "No claim about full interpreter identity, HF parity, or successful dataset/fix retrieval.",
+    "Other four tasks not re-audited by this effort.",
+    "No config change, retry, publication, dispatch or device operation."
+  ]
+}

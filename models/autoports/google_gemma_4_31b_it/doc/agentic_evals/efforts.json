@@ -93,7 +93,7 @@
         "saving_reason": "No numerical release speed credit assigned to prerequisite or unconfirmed measurement. Zero is conservative planning credit, not measured zero impact.",
         "device_cost_reason": "Current planning estimate only; .25h short replay box, or0 for operator-excluded local credential provisioning."
       },
-      "status": "running",
+      "status": "done",
       "reason": "Host-only C4 source preparation while awaiting4distinct native histories; no device launch or C4 admission yet. Normal C2 rungs advance immediately.",
       "prediction_reconciliation": {
         "at": "2026-11-06T08:19:21.396893+00:00",
@@ -146,7 +146,15 @@
         "scores_seen": false,
         "excluded_history_reasons_required": true,
         "actual_scored_cohort_changed": false
-      }
+      },
+      "used_device_hours": 0.07763422583333333,
+      "change": "none",
+      "problem_status": "open",
+      "confirmed": "Both12/12 successful, exactAPIpromptparity, no preemptions; returningreuse.998871. Both31.9s, no speedup. C4sampledmaxrunning2/waiting3, so4residentrequests notproven; C2 retained.",
+      "evidence": [
+        "runs/agent-capacity-and-contention/REPLAY_RESULT.json"
+      ],
+      "remaining_limit": "One-tokenprefill-only mixed-validity load; four-residency, hostadmission andscoredpair stillneeded."
     },
     {
       "problem": "source-only-packaging",
@@ -1950,8 +1958,67 @@
         "success": "Identical request sequence, feedback, actions and scoring-facing data; raw response plus IDs retained. No stage-owned wrapper or monkeypatch."
       },
       "box_hours": 0.1,
-      "status": "running",
-      "started_at": "2026-11-06T13:37:34.040095+00:00"
+      "status": "done",
+      "started_at": "2026-11-06T13:37:34.040095+00:00",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "open",
+      "confirmed": "AutoDebug verifies upstreammini2.2.8 response loss; AutoFix cannot deploy supported TTI-only repair. Published repairedmini or authorizedgenericHarbor sourcecapability required; no wrapperintroduced.",
+      "evidence": [
+        "runs/malformed-response-retention/result.json",
+        "runs/malformed-response-retention/AUTOFIX.md"
+      ]
+    },
+    {
+      "problem": "nightly-swe-network-reach",
+      "owner": "suite_registration",
+      "goal": "Determine generic repair or concrete measuredstop for first-action externalnetwork",
+      "plan": "runs/nightly-swe-network-reach/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "swe_bench_verified": 0
+        },
+        "device_hours": 0,
+        "basis": "calculated",
+        "reason": "Hostsource andtrajectory diagnosis"
+      },
+      "unblocks": [
+        "swe_bench_verified"
+      ],
+      "confirm": {
+        "method": "Source+trajectory AutoDebug/AutoFix; no custompolicy orprompt",
+        "success": "Supportedgenericrepair confirmed or specific no-repairfinding; coordinatornormalnightlyrepeat independent"
+      },
+      "box_hours": 0.1,
+      "status": "done",
+      "used_device_hours": 0,
+      "change": "none",
+      "problem_status": "open",
+      "confirmed": "AutoDebug/AutoFix: firstmodelaction intentionallyprobesissueURL, beforeenvironmentfailure; localreproductionworks. No genericharnessdefect oradmissiblerepair. Quarantine persists. Independentlydispatchedsame5repeat testsrepeatability withacceptedmetadata; no promise ofvalidity.",
+      "evidence": [
+        "runs/nightly-swe-network-reach/result.json",
+        "runs/nightly-swe-network-reach/AUTOFIX.md"
+      ]
+    },
+    {
+      "problem": "gpqa-c4-capacity",
+      "owner": "local_serving_check",
+      "goal": "Prove four worst-case GPQA contexts resident safely before same10 scoredC4pair",
+      "plan": "runs/gpqa-c4-capacity/plan.md",
+      "predicted": {
+        "saving_hours": {
+          "r1_gpqa_diamond": 0.065764804125
+        },
+        "device_hours": 0.18,
+        "basis": "guess",
+        "reason": "25% of measured banked10 eval.2630592165h; no full198benefit credited. Synthetic131Kupperbound capacity+startup forecastrequiresplanverification."
+      },
+      "box_hours": 0.3,
+      "confirm": {
+        "method": "Actual simultaneous4fullcontextresidency/no preemptions/recaptures onstockB8, then separatelybudgetedsame10C2/C4 scoredpair",
+        "success": "Capacity evidence andscoredroutepair; scoresreportednotgated; noacceptancefromthreadsorhosttests"
+      },
+      "status": "running"
     }
   ],
   "rankings": [
@@ -4685,6 +4752,176 @@
         }
       ],
       "reason": "Known FormatError evidence loss prevents exact original capped-call diagnosis; host-only generic source investigation precedes speed. No claim current long call is a loop before saved response audit."
+    },
+    {
+      "after": "nightly-swe-observable-partial-validity",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "nightly-swe-network-reach",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "malformed-response-retention",
+          "unblocks": [
+            "representative capped-call diagnosis"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "serving-shortfall-pricing",
+          "unblocks": [
+            "representative_release_projection"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0,
+          "reason": "Host-only analysis complete; causal gaps explicit, updated normal rung evidence needed"
+        },
+        {
+          "problem": "ci-image-reuse",
+          "saving_hours": 2.5,
+          "device_hours": 0,
+          "basis": "guess",
+          "reason": "Three release eval builds at50min each; no added device job, confirm on next normal rung. No evaluated serving speedup."
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 2.164191250900405,
+          "device_hours": 0.15,
+          "basis": "guess",
+          "reason": "Current planning198/5/10;25% wall reduction guess; no measured benefit or frozen release claim."
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        }
+      ],
+      "reason": "Xarrayreachednetwork, Astropycap evidenceincomplete: validityfirst. Samefrozen5normalnightlyrepeat proceeds withprovenmetadataretention, noeligible rung waits."
+    },
+    {
+      "after": "capacity-replay-and-generic-validity-autofix-results",
+      "order": [
+        {
+          "problem": "ci-release-route",
+          "unblocks": [
+            "release"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "stage12-zero-cost-checker",
+          "unblocks": [
+            "stage_check"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "ci-disk-admission-basis",
+          "unblocks": [
+            "release_preflight"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "nightly-swe-network-reach",
+          "unblocks": [
+            "swe_bench_verified"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "malformed-response-retention",
+          "unblocks": [
+            "representative capped-call diagnosis"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0
+        },
+        {
+          "problem": "django-cap-loop-diagnosis",
+          "unblocks": [
+            "representative_agent_score"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "serving-shortfall-pricing",
+          "unblocks": [
+            "representative_release_projection"
+          ],
+          "saving_hours": 0,
+          "device_hours": 0,
+          "reason": "Host-only analysis complete; causal gaps explicit, updated normal rung evidence needed"
+        },
+        {
+          "problem": "ci-image-reuse",
+          "saving_hours": 2.5,
+          "device_hours": 0,
+          "basis": "guess",
+          "reason": "Three release eval builds at50min each; no added device job, confirm on next normal rung. No evaluated serving speedup."
+        },
+        {
+          "problem": "agent-capacity-and-contention",
+          "saving_hours": 2.164191250900405,
+          "device_hours": 0.15,
+          "basis": "guess",
+          "reason": "Current planning198/5/10;25% wall reduction guess; no measured benefit or frozen release claim."
+        },
+        {
+          "problem": "long-prefill-decode-interference",
+          "saving_hours": 0,
+          "device_hours": 0.25
+        },
+        {
+          "problem": "gpqa-c4-capacity",
+          "saving_hours": 0.065764804125,
+          "device_hours": 0.18,
+          "basis": "guess"
+        }
+      ],
+      "reason": "Validitydiagnoses foundnoadmissibleTTI-onlyrepair; samefrozenSWEnightlyrepeat isindependent. C4one-tokenreplay didnotprove4residency orspeed. GPQAhasvalid10baseline andfull198longtail threatensfit, so pursueboundedGPQAcapacitybeforeblockedSWEscoredpair; speedestimatepricedonlyonbanked10."
     }
   ],
   "forecast_accounting_note": "Original missing forecasts are retained in prediction_reconciliation, not silently reconstructed. Zero saving means no credited release speed benefit. Current planning guesses are explicitly separated from measured outcomes."

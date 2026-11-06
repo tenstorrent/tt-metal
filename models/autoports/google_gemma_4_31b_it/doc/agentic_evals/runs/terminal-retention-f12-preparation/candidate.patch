@@ -1,0 +1,97 @@
+diff --git a/reference_config/evals/eval_config.py b/reference_config/evals/eval_config.py
+index d392b92..6cf7588 100644
+--- a/reference_config/evals/eval_config.py
++++ b/reference_config/evals/eval_config.py
+@@ -12029,7 +12029,7 @@ _eval_config_list = [
+                 ),
+                 limit_samples_map={
+                     EvalLimitMode.SMOKE_TEST: 2,
+-                    EvalLimitMode.CI_NIGHTLY: 5,
++                    EvalLimitMode.CI_NIGHTLY: 0,
+                 },
+             ),
+             EvalTask(
+@@ -12051,6 +12051,7 @@ _eval_config_list = [
+                     agent_timeout_sec=21600,
+                     agent_kwargs={
+                         "parser_name": "json",
++                        "store_all_messages": True,
+                         "temperature": 1.0,
+                         "model_info": {
+                             "max_input_tokens": 262144,
+@@ -12067,16 +12068,27 @@ _eval_config_list = [
+                         },
+                     },
+                     task_names_map={
+-                        mode: [
++                        EvalLimitMode.SMOKE_TEST: [
+                             "terminal-bench/llm-inference-batching-scheduler",
+                             "terminal-bench/mailman",
+-                        ]
+-                        for mode in (EvalLimitMode.SMOKE_TEST, EvalLimitMode.CI_NIGHTLY)
++                        ],
++                        EvalLimitMode.CI_NIGHTLY: [
++                            "terminal-bench/llm-inference-batching-scheduler",
++                            "terminal-bench/mailman",
++                            "terminal-bench/db-wal-recovery",
++                            "terminal-bench/winning-avg-corewars",
++                            "terminal-bench/feal-linear-cryptanalysis",
++                            "terminal-bench/fix-code-vulnerability",
++                            "terminal-bench/constraints-scheduling",
++                            "terminal-bench/sparql-university",
++                            "terminal-bench/dna-insert",
++                            "terminal-bench/video-processing",
++                        ],
+                     },
+                 ),
+                 limit_samples_map={
+                     EvalLimitMode.SMOKE_TEST: 2,
+-                    EvalLimitMode.CI_NIGHTLY: 0,
++                    EvalLimitMode.CI_NIGHTLY: 10,
+                 },
+             ),
+         ],
+diff --git a/tests/workflows/test_gemma4_autoport_smoke_suites.py b/tests/workflows/test_gemma4_autoport_smoke_suites.py
+index cccad82..e3ba225 100644
+--- a/tests/workflows/test_gemma4_autoport_smoke_suites.py
++++ b/tests/workflows/test_gemma4_autoport_smoke_suites.py
+@@ -103,8 +103,19 @@ def test_stock_harbor_route_preserves_smoke_limits_and_task_resources(
+             "pydata__xarray-4966",
+             "astropy__astropy-14598",
+         ]
+-    if mode == "ci-nightly" and task.task_name == "r1_gpqa_diamond":
+-        names = [152, 189, 46, 87, 52, 181, 31, 185, 50, 187]
++    if mode == "ci-nightly" and task.task_name == "terminal_bench_2_1":
++        names = [
++            "terminal-bench/llm-inference-batching-scheduler",
++            "terminal-bench/mailman",
++            "terminal-bench/db-wal-recovery",
++            "terminal-bench/winning-avg-corewars",
++            "terminal-bench/feal-linear-cryptanalysis",
++            "terminal-bench/fix-code-vulnerability",
++            "terminal-bench/constraints-scheduling",
++            "terminal-bench/sparql-university",
++            "terminal-bench/dna-insert",
++            "terminal-bench/video-processing",
++        ]
+     config = build_harbor_config(
+         task,
+         ServerConnection(base_url="http://localhost", service_port=8000, model=MODEL),
+@@ -128,6 +139,7 @@ def test_stock_harbor_route_preserves_smoke_limits_and_task_resources(
+         model = kwargs["config"]["model"]["model_kwargs"]
+         assert model["temperature"] == 1.0
+     else:
++        assert kwargs["store_all_messages"] is True
+         assert kwargs["temperature"] == 1.0
+         model = kwargs["llm_kwargs"]
+         assert model["max_tokens"] == 32768
+@@ -145,8 +157,8 @@ def test_only_prepared_candidate_enabled():
+ 
+     assert [task.limit_samples_map[EvalLimitMode.CI_NIGHTLY] for task in TASKS] == [
+         0,
+-        5,
+         0,
++        10,
+     ]
+     assert TASKS[1].agentic_eval_config.task_names_map[EvalLimitMode.CI_NIGHTLY] == [
+         "pylint-dev__pylint-7080",

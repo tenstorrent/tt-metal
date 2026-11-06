@@ -132,6 +132,10 @@
     {
       "fact": "Stock return_token_ids request flag preserves full generated IDs through LiteLLM1.108.1 provider_specific_fields and mini2.2.8 saved response; FormatError paths still discard response.",
       "evidence": "runs/native-token-retention-confirmation/result.json"
+    },
+    {
+      "fact": "Harbor aggregate tokenusage counts retained native responseusage only; missingFormatError responses can exclude substantialgeneration. Astropy84calls/81retained,3feedbackerrors; missingAPIoutputcannotbe reconstructed or declaredloop.",
+      "evidence": "runs/nightly-swe-observable/audit.json; runs/malformed-response-retention/AUTODEBUG.md"
     }
   ],
   "suite_timings": [
@@ -229,6 +233,30 @@
         0.6576197724933469
       ],
       "evidence": "runs/smoke2-swe-activation-repair/audit.json"
+    },
+    {
+      "run_id": 42210467509,
+      "eval": "swe_bench_verified",
+      "tasks": 5,
+      "agents": 2,
+      "batch": 8,
+      "wall_hours": 0.9045598686111112,
+      "agent_hours": 1.1210823886111112,
+      "timeouts": null,
+      "score": null,
+      "raw_score": 0.2,
+      "valid": false,
+      "partial_audited_score": {
+        "value": 0,
+        "correct": 0,
+        "completed_samples": 3,
+        "wilson95": [
+          5.551115123125783e-17,
+          0.5614970317550454
+        ],
+        "scope": "three fullyaudited tasks, not completed frozen5 rung"
+      },
+      "evidence": "runs/nightly-swe-observable/audit.json"
     }
   ],
   "generic_fixes": [

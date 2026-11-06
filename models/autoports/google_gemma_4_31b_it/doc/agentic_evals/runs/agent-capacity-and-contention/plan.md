@@ -63,3 +63,29 @@ This metadata-only preparation change allows deterministic missing-retention fal
 ## Accepted metadata-base refresh
 
 C4 candidate6454fd22fce8d73030d59f7b72176bf49de76368 rebased onto accepted TTI f12b2682cb03e84555ba122dd647262ae399815f. Accepted SWE extra_body.return_token_ids=true retained. Entire eval_config source differs only in SWE n_concurrent_trials2→4;34 focused tests and all hooks pass. Preparation evidence candidate-validation-token-retention.json; prior candidate evidence retained. No C4 capacity/output acceptance, publication or dispatch; waiting for four complete real histories.
+
+## Nightly artifact handoff (42210467509)
+
+Extraction completed before score inspection: first four frozen tasks all have complete native coverage (37/85/23/32 calls), no exclusions; Astropy unneeded. Private manifest under bringup/artifacts/stage12-real-histories/swe-nightly42210467509-distinct4. Selected final-three prompt counts: Pylint32103/32269/32968, Django44170/44786/44880, Requests14129/14477/14676, Xarray20698/21493/22222. First selected prompts sum111100; largest selected prompt sum114746. These are heterogeneous observed histories, not uniform maximum-context or concurrent physical occupancy proofs.
+
+Pinned CPU template count check: all12 reconstructed counts are recorded API count minus1, same systematic offset as earlier replay where live API matched. Normalizer uses stock vLLM _postprocess_messages on copies only; raw histories unchanged. Actual API parity awaits permitted replay; do not claim exact tokenization from template alone. First checker attempt accidentally counted two BatchEncoding mapping keys; retained nightly-prompt-counts-invalid-container-length.json is explicitly invalid. Fixed by requesting return_dict=False, then all12 lengths are plausible and consistently minus1; valid evidence nightly-prompt-counts.json. This host measurement-helper correction changes no request, model or serving source.
+
+Projection revised for these actual lengths:90s each C2 and C4 client (guess),180s paired; allow300s startup and60s cleanup=540s forecast, within existing900s box. Basis earlier heavier six-request SWE C2 replay58s, current12requests with smaller111100 total first-prefix tokens but more independent scheduling overhead; idle32K cold8.284s and107585 cold48.065s bound shape expectations without linear speed claims. Reassess remaining budget after startup; do not launch an arm whose configured bound cannot fit. Each arm bounded240s, paired480s; startup300+cleanup60 leaves60s margin. C2 must also replay all four files, so directory remains identical; --agents2 merely schedules two workers. Record running/waiting0 before prefix-cache reset between arms so C4 does not inherit a warm advantage. Use same full60 B8 server, no runtime/config changes.
+
+Coordinator commands, only after queue ownership/health and idle metrics:
+
+```bash
+curl --fail --silent --show-error --max-time 30 -X POST http://localhost:8000/reset_prefix_cache
+timeout 240 python_env/bin/python /home/mvasiljevic/.codex-gemma4-v3/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.23/scripts/agent_replay.py --base-url http://localhost:8000/v1 --histories bringup/artifacts/stage12-real-histories/swe-nightly42210467509-distinct4/http-peak3 --agents 2 --model google/gemma-4-31B-it --time-cap-s 180 --request-timeout-s 210 --out bringup/artifacts/stage12-real-histories/swe-nightly42210467509-distinct4/c2-result.json
+```
+
+After successful completion and running/waiting0, reset APC again; then:
+
+```bash
+curl --fail --silent --show-error --max-time 30 -X POST http://localhost:8000/reset_prefix_cache
+timeout 240 python_env/bin/python /home/mvasiljevic/.codex-gemma4-v3/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.23/scripts/agent_replay.py --base-url http://localhost:8000/v1 --histories bringup/artifacts/stage12-real-histories/swe-nightly42210467509-distinct4/http-peak3 --agents 4 --model google/gemma-4-31B-it --time-cap-s 180 --request-timeout-s 210 --out bringup/artifacts/stage12-real-histories/swe-nightly42210467509-distinct4/c4-result.json
+```
+
+These diagnostic time bounds do not modify release limits; any incomplete arm invalidates its capacity confirmation. Require12calls each, usage parity, no preemptions/post-warmup captures, defensible returning-prefix fraction versus ceiling, actual simultaneous residency evidence. Threads4 alone is insufficient. Retain phase-boundary arm timestamps/step IDs and metrics for interpretation. No tool execution, capacity/score equivalence or host sandbox claim from replay. Coordinator owns launch and graceful idle shutdown; none performed by this preparation.
+
+Coordinator provenance update after extraction: Xarray's original task reached an external endpoint (message2 curl-I; observation message3 returned0 and HTTP400 headers). Its task score is quarantined. Keep predeclared four-task retention-based selection unchanged; do not replace Xarray based on this score/validity outcome. Four native histories remain genuine observed load, but replay is now explicitly mixed-validity/quarantined-load capacity diagnostic, not a fully valid representative SWE population or valid nightly completion. It executes no recorded task commands. Coordinator's normal-rung validity decision is separate from this local load preparation. Retained raw histories and usage are unchanged.

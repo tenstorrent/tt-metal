@@ -1,0 +1,21 @@
+{
+  "arm": "gpqa-c4-capacity",
+  "device": "local",
+  "owner": "coordinator",
+  "start": "2026-11-06T13:55:57.747519+00:00",
+  "status": "running",
+  "planned_clients": 4,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "predicted_hours": 0.18,
+  "box_hours": 0.3,
+  "batch_reason": "Smallest supported batch>=4",
+  "context_schedule": [
+    130816,
+    131072
+  ],
+  "output_tokens_per_turn": 128,
+  "scope": "Synthetic upper-envelope four-context capacity only; full198 inputmax unknown, no quality/score claim.",
+  "owners_before": [],
+  "command": "bash bringup/artifacts/stage12-gpqa-c4/launch-local.sh"
+}

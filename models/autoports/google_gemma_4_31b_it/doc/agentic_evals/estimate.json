@@ -21,8 +21,8 @@
       }
     },
     "swe_bench_verified": {
-      "decision": "go",
-      "reason": "Original frozen2 valid after generic environment activation repair; both submitted normally without external retrieval or limits. Nightly5 dispatched42210467509; release not frozen.",
+      "decision": "stop",
+      "reason": "Nightly5 incompletevalidity:1networkquarantine and1unresolvedcapped/malformedepisode. Threefullyauditedtasks0/3; priorcompletevalidsmoke2 retained. Same5repeat pending, notrelease stopfinal.",
       "functional_at": 2,
       "projected_hours": null,
       "score": 0,

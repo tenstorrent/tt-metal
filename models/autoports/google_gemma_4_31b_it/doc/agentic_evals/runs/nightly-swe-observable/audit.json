@@ -1,0 +1,146 @@
+{
+  "status": "nightly_incomplete_validity",
+  "run_id": 42210467509,
+  "functional_at": 2,
+  "complete_nightly_banked": false,
+  "planned_clients": 2,
+  "batch": 8,
+  "max_num_seqs": 8,
+  "raw_score": {
+    "value": 0.2,
+    "correct": 1,
+    "completed_samples": 5,
+    "wilson95": [
+      0.03622410863243014,
+      0.6244653702374747
+    ],
+    "eligible": false
+  },
+  "audited_partial_score": {
+    "value": 0,
+    "correct": 0,
+    "completed_samples": 3,
+    "wilson95": [
+      5.551115123125783e-17,
+      0.5614970317550454
+    ],
+    "scope": "three fullyaudited tasks, not completed frozen5 rung"
+  },
+  "tasks": [
+    {
+      "task": "astropy__astropy-14598",
+      "status": "held_limit_evidence_incomplete",
+      "reason": "84APIcalls but81savedresponses;3No-tool-calls recovery messages102/139/142. Server has32767decode steps for one call then recovery. Raw missingresponse prevents distinguishing progress from loop atcap; do not declare limit-free or loop.",
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "exception": null,
+      "messages": 168,
+      "api_calls": 84,
+      "saved_responses": 81,
+      "finish_reason_counts": {
+        "tool_calls": 81
+      },
+      "max_saved_output_tokens": 2333,
+      "saved_output_tokens": 25997,
+      "agent_seconds": 2285.472353,
+      "source": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T124213/astropy__astropy-14598__gi3wepj/agent/mini-swe-agent.trajectory.json",
+      "trajectory_sha256": "710cb09d493c3060ad5abda5e6ec30a9984286517792b9488083d490139bb5e3"
+    },
+    {
+      "task": "django__django-11265",
+      "status": "valid",
+      "reason": "Submitted, complete native call coverage, no external retrieval observed or limits hit",
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "exception": null,
+      "messages": 173,
+      "api_calls": 85,
+      "saved_responses": 85,
+      "finish_reason_counts": {
+        "tool_calls": 85
+      },
+      "max_saved_output_tokens": 1173,
+      "saved_output_tokens": 17579,
+      "agent_seconds": 670.194218,
+      "source": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T124213/django__django-11265__SPmcSgA/agent/mini-swe-agent.trajectory.json",
+      "trajectory_sha256": "90e2c43ab97f867dd8ec90d26d582e6ba1d3522cb819fe0c45d1ec5e45b076b3"
+    },
+    {
+      "task": "psf__requests-1766",
+      "status": "valid",
+      "reason": "Submitted, complete native call coverage, no external retrieval observed or limits hit",
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "exception": null,
+      "messages": 49,
+      "api_calls": 23,
+      "saved_responses": 23,
+      "finish_reason_counts": {
+        "tool_calls": 23
+      },
+      "max_saved_output_tokens": 2047,
+      "saved_output_tokens": 5876,
+      "agent_seconds": 224.650033,
+      "source": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T124213/psf__requests-1766__hyNuqwb/agent/mini-swe-agent.trajectory.json",
+      "trajectory_sha256": "172605c36dd0c33e2f315127fb90cf8ad33d3ba688fe0dff972bc56499d689ba"
+    },
+    {
+      "task": "pydata__xarray-4966",
+      "status": "quarantined_network",
+      "reason": "message2 curl-I to issue dataset URL; message3 return0 with remote HTTP400headers. No fetched fix observed, but network rule applies.",
+      "reward": 1.0,
+      "exit_status": "Submitted",
+      "exception": null,
+      "messages": 67,
+      "api_calls": 32,
+      "saved_responses": 32,
+      "finish_reason_counts": {
+        "tool_calls": 32
+      },
+      "max_saved_output_tokens": 1914,
+      "saved_output_tokens": 11957,
+      "agent_seconds": 441.899018,
+      "source": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T124213/pydata__xarray-4966__58JAeKK/agent/mini-swe-agent.trajectory.json",
+      "trajectory_sha256": "51a490c6b5b1c694b0aee64771ffde3d189cd28fa601c1fc80a66e7d5a5517e6"
+    },
+    {
+      "task": "pylint-dev__pylint-7080",
+      "status": "valid",
+      "reason": "Submitted, complete native call coverage, no external retrieval observed or limits hit",
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "exception": null,
+      "messages": 77,
+      "api_calls": 37,
+      "saved_responses": 37,
+      "finish_reason_counts": {
+        "tool_calls": 37
+      },
+      "max_saved_output_tokens": 1671,
+      "saved_output_tokens": 10151,
+      "agent_seconds": 413.680977,
+      "source": "collected/workflow_logs_agentic_gemma-4-31B-it_bh-qb-ge_gemma4-31b-autoport-v3/reports_output/agentic/google__gemma-4-31B-it_p300x2_agentic/eval_google__gemma-4-31B-it/agentic/swe_bench_verified_20261106T124213/pylint-dev__pylint-7080__CP88ryF/agent/mini-swe-agent.trajectory.json",
+      "trajectory_sha256": "9b56f0166177a110f626e7f81b1bc0b224652999d8cbfec349778c55977c0703"
+    }
+  ],
+  "timing": {
+    "evaluation_seconds": 3256.415527,
+    "evaluation_hours": 0.9045598686111112,
+    "device_job_hours": 1.2925,
+    "workflow_hours": 2.148888888888889,
+    "predicted_workflow_hours": 7.821522817361111
+  },
+  "limits": {
+    "agent_seconds": 21600,
+    "request_seconds": 3600,
+    "output_tokens": 32768,
+    "resources": "task definitions, no CPU/memory overrides"
+  },
+  "pins": {
+    "tt_metal": "439c22b0e991e5af626efafa7224edf28f84795b",
+    "tti": "4b94cf3ba86d30a6816149872e59cc34438748ae",
+    "plugin": "ca7a18246e4111629ed6cb4a7d1192002749fccf"
+  },
+  "audit_scope": "Native command histories and observations; networkURLs in source comments or digest headerconstruction are not retrieval. XarrayHTTPresponse is positive networkevidence. All5Submitted; Astropyresponse-level capclassification unresolved. No packetcapture.",
+  "decision": "Keep priorfunctional2; retry identical frozen5 with accepted metadata-only retention, same limits, no policy/task/seed changes. No server-sized advancement yet."
+}

@@ -1,0 +1,129 @@
+{
+  "status": "local_paired_capacity_measurement_finished_overall_goal_open",
+  "device_hours": 0.07763422583333333,
+  "predicted_device_hours": 0.15,
+  "box_device_hours": 0.25,
+  "actual_seconds": 279.483213,
+  "actual_over_prediction": 0.5175615055555556,
+  "prediction_reconciliation": "90s/arm forecast versus31.9s each observed; startup/cleanup included in queueactual. Short local capacity box is now spent/closed; no scored pair authorized by this result.",
+  "selection": {
+    "tasks": [
+      "pylint-dev__pylint-7080",
+      "django__django-11265",
+      "psf__requests-1766",
+      "pydata__xarray-4966"
+    ],
+    "excluded": [],
+    "fallback_used": false,
+    "quarantined": [
+      "pydata__xarray-4966"
+    ],
+    "scope": "Four genuine observed histories including external-network-quarantined Xarray; not fully valid representative scored population."
+  },
+  "arms": {
+    "2": {
+      "planned_clients": 2,
+      "batch": 8,
+      "calls_done": 12,
+      "errors": 0,
+      "client_wall_seconds_rounded": 31.9,
+      "prompt_tokens": 338871,
+      "cached_tokens": 224000,
+      "actual_hit_fraction": 0.6610184996650643,
+      "prefilled_tokens": 114871,
+      "final_context_tokens": 114746,
+      "prefilled_per_final_context_exact": 1.00108936259216,
+      "prompt_usage_matches_recorded_all_calls": true,
+      "returning_cached": 223872,
+      "returning_prior_prompt_length_ceiling": 224125,
+      "returning_fraction_of_length_ceiling": 0.9988711656441718,
+      "final_call_cached": 112896,
+      "final_call_prior_prompt_length_ceiling": 113025,
+      "final_call_fraction_of_length_ceiling": 0.9988586595885866,
+      "preemptions": 0.0,
+      "median_call_seconds": 4.14,
+      "p95_call_seconds": 13.27,
+      "max_call_seconds": 16.4,
+      "metrics_samples": 31,
+      "observed_max_running": 1.0,
+      "observed_max_waiting": 1.0,
+      "max_sampled_kv_usage_fraction": 0.14384697960378645,
+      "running_sample_histogram": {
+        "1.0": 30,
+        "0.0": 1
+      }
+    },
+    "4": {
+      "planned_clients": 4,
+      "batch": 8,
+      "calls_done": 12,
+      "errors": 0,
+      "client_wall_seconds_rounded": 31.9,
+      "prompt_tokens": 338871,
+      "cached_tokens": 224000,
+      "actual_hit_fraction": 0.6610184996650643,
+      "prefilled_tokens": 114871,
+      "final_context_tokens": 114746,
+      "prefilled_per_final_context_exact": 1.00108936259216,
+      "prompt_usage_matches_recorded_all_calls": true,
+      "returning_cached": 223872,
+      "returning_prior_prompt_length_ceiling": 224125,
+      "returning_fraction_of_length_ceiling": 0.9988711656441718,
+      "final_call_cached": 112896,
+      "final_call_prior_prompt_length_ceiling": 113025,
+      "final_call_fraction_of_length_ceiling": 0.9988586595885866,
+      "preemptions": 0.0,
+      "median_call_seconds": 11.16,
+      "p95_call_seconds": 21.38,
+      "max_call_seconds": 30.47,
+      "metrics_samples": 32,
+      "observed_max_running": 2.0,
+      "observed_max_waiting": 3.0,
+      "max_sampled_kv_usage_fraction": 0.14365180052698345,
+      "running_sample_histogram": {
+        "0.0": 2,
+        "1.0": 26,
+        "2.0": 4
+      }
+    }
+  },
+  "reuse_basis": "Stock per-call API cached_tokens keyed by genuine history filename and selected call index. Returning calls1/2 grouped perhistory; ceiling is previous recorded prompt length, a conservative upper length ceiling rather than exact token-common-prefix/block ceiling. Finalcall2 perhistory is a late-turn proxy, not continuous final-quarter statistic. Cold cross-history shared prefixes contribute128cachedtokens excluded from returning sum.",
+  "sampling_and_trace": {
+    "startup_captures": 3,
+    "observed_capture_counter_values": [
+      3
+    ],
+    "counter_samples": 243,
+    "postwarmup_recaptures_observed": 0,
+    "decode_model_replays_in_last_counter": 0,
+    "scope": "One-token deterministic replay prefill/sampling, not sustained decode concurrency. Single trace_prepare event; no observed later capture."
+  },
+  "confirmation": {
+    "all_requests_complete": true,
+    "usage_parity": true,
+    "reuse_above_point9_of_conservative_ceiling": true,
+    "no_preemptions": true,
+    "four_simultaneously_resident_requests": false,
+    "residency_reason": "At1Hz C4 maxrunning2, maxwaiting3. Four queued client histories is not four admitted resident sequences; short peaks could be missed and no exact per-request residency timestamps exist.",
+    "speedup": null,
+    "speedup_reason": "Both rounded wall times31.9s; no measured speedup. C4 median/p95 call latency increased; one sample each, unrandomized order.",
+    "scored_output_equivalence": false,
+    "host_sandbox_admission": false,
+    "C4_accepted": false
+  },
+  "configuration": "Same full60 run autoport, B8 smallest supported >=planned clients, mesh1x4, pinnedrevision842da3794eaa0b77d5f08bae87a17459d91ff475, top_k32 serverdefaults; stockreplay overrides temperature0/max_tokens1, retains nativeprefixes/tools but never executes tools. Same server; idle prefix cache reset beforeeacharm in run-clients.py.",
+  "candidate": {
+    "sha": "6454fd22fce8d73030d59f7b72176bf49de76368",
+    "published": false
+  },
+  "next": "Retain C2. Re-rank future scored same-valid-cohort C2/C4 pair only after valid nightly and host admission/representativeness are established; forecast and authorize a separate scored device box from measured nightly, not this short replay. No credit to prior25% saving guess from this measurement.",
+  "closure": "Both clients0, idle running/waiting0, deliberate API SIGINT wrapper1, queue0 and emptydeviceowners; no hardware launched by analysis.",
+  "evidence": [
+    "bringup/artifacts/stage12-real-histories/swe-nightly42210467509-distinct4/{manifest,c2-result,c4-result}.json",
+    "bringup/artifacts/stage12-capacity/{arms.json,metrics.jsonl,idle-shutdown.json,run-clients.py}",
+    "local-server/server.log",
+    "../../device_queue/local/agent-capacity-and-contention/job.json",
+    "nightly-replay-provenance.json",
+    "nightly-prompt-counts.json"
+  ]
+}

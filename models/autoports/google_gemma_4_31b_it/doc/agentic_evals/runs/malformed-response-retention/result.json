@@ -1,0 +1,34 @@
+{
+  "status": "diagnosis_confirmed_external_dependency_repair_required",
+  "device_hours": 0,
+  "predicted_device_hours": 0,
+  "device_hour_box": 0.1,
+  "accepted_change": null,
+  "problem_status": "open",
+  "diagnosis": "mini2.2.8 FormatError occurs before raw response becomes durable; existing agent loop saves only feedback.",
+  "source_versions": {
+    "mini": "58ad92fc1385be3f8f2326b7a42320bb3655e169 (v2.2.8)",
+    "harbor": "e76c762fca5267dfb36e1f900f0a7724ed72e735"
+  },
+  "proposed_upstream_change": "Catch only FormatError around actions parsing, attach whole response dump under existing feedback extra.failed_response, re-raise same exception. Preserve diagnostic failure explicitly without replacing original feedback.",
+  "why_dedicated_key": "Harbor reads extra.response.usage; reusing it can change accounting. extra.failed_response remains native artifact metadata and is stripped before API preparation.",
+  "supported_route": "Published repaired mini version through current agent_kwargs.version; no existing unreleased-mini-SHA selector. Alternative requires separately reviewed generic Harbor source-selection change plus immutable Harbor/mini pins.",
+  "validation": "Fresh bundled AutoDebug inspect-only report plus direct parent source verification of query, exception, save, request-preparation and Harbor installer/usage. No runtime fixture or fix claimed.",
+  "acceptance_pending": [
+    "Actual upstream patch",
+    "Paired malformed/valid tests preserve requests/APIkwargs, feedback, actions, errors, counters, scoring and limits",
+    "Exact actual LiteLLM response dump/tokenIDs survive native JSON serialization",
+    "Diagnostic-export error preserves original feedback",
+    "Supported released dependency or reviewed immutable-source route"
+  ],
+  "limitations": [
+    "Native feedback diagnostics do not automatically enter Harbor ATIF; native trajectory is retained artifact.",
+    "Original11 missing responses cannot be reconstructed. Long current CI decode is not proof of loop, cap or malformed response.",
+    "No device/model/HTTP launch, source mutation, publication or stage-owned wrapper."
+  ],
+  "evidence": [
+    "AUTODEBUG.md",
+    "AUTOFIX.md"
+  ],
+  "launcher_note": "Initial sandbox preflight failed because bwrap unavailable before model launch. Authorized inspect-only retry used AUTODEBUG_SKIP_CHILD_SANDBOX=1 and personal CODEX_HOME."
+}

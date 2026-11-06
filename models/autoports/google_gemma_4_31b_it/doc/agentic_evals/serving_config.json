@@ -150,6 +150,12 @@
       "max_num_seqs": 8,
       "batch_reason": "Confirm metadata on actual SWE B8 route; no performance selection claim.",
       "evidence": "runs/native-token-retention-confirmation/result.json"
+    },
+    "nightly-swe-retained-repeat": {
+      "batch": 8,
+      "planned_clients": 2,
+      "max_num_seqs": 8,
+      "batch_reason": "Smallest validated batch at orabove2"
     }
   },
   "release_limits": {

@@ -41,7 +41,7 @@
   "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/42206258311",
   "workflow_status": "in_progress",
   "workflow_conclusion": null,
-  "last_observed_at": "2026-11-06T13:34:57.243256+00:00",
+  "last_observed_at": "2026-11-06T13:54:14.166457+00:00",
   "build_runner": "tt-ubuntu-2204-large-stable-44qvs-runner-x6kzj",
   "build_started_at": "2026-11-06T10:55:05Z",
   "build_completed_at": "2026-11-06T11:47:58Z",
