@@ -8,8 +8,9 @@
 // credit.
 //
 // Compile-time define (the host passes it):
-//   KERAUNOS_CREDIT_SEND_DWORD  1: the credit is cce_eth::send_dword() (compat's inline update) called directly;
-//                               unset: internal_::eth_write_remote_reg(), which wraps the same 8-byte write.
+//   KERAUNOS_CREDIT_SEND_DWORD  1: the credit is cce_eth::send_dword() with snoop (compat's inline update, as the
+//                               router's fabric_send_credit_word) called directly;
+//                               unset: internal_::eth_write_remote_reg(), which wraps the same 8-byte write unsnooped.
 //
 // Runtime args: 0 base, 1 iterations, 2 payload bytes (multiple of 16), 3 TX queue, 4 poll bound per wait. The
 // Ethernet-link slot must hold the peer's HSIO tile and the valid word before launch.
@@ -36,7 +37,7 @@ void send_credit(uint32_t q, uint32_t credit_addr, uint32_t value) {
 #if defined(KERAUNOS_CREDIT_SEND_DWORD)
     while (internal_::eth_txq_is_busy(q)) {
     }
-    cce_eth::send_dword(q, credit_addr, value);
+    cce_eth::send_dword(q, credit_addr, value, /*snoop=*/true);
 #else
     internal_::eth_write_remote_reg(q, credit_addr, value);
 #endif
