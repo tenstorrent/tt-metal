@@ -23,7 +23,65 @@ void kernel_main() {
     constexpr uint32_t cb_out = 16;
     const uint32_t TB = get_tile_size(cb_out);
     const auto os = TensorAccessor(o_args, o_addr, TB);
-#ifdef TOKEN_MAJOR
+#if defined(KV_CACHE)
+    // Decode (T = 1) straight into the bf8 paged K / V caches [blocks, H, bs, D] (qk_rope.py cache=): per item (head h)
+    // the compute's Dt K tiles (order 2 .. Dt - 1, 0, 1) then Dt V tiles, packed bfp8. Only their row 0 is the token:
+    // its 2 shared exponents (bytes 0, 16) and 2 x 16 mantissa bytes (64, 320) are written into row r of the cache
+    // tile at position pos (page_table[pos / bs]), byte-granular, in place (no read-modify-write of the tile).
+    const uint32_t vc = get_common_arg_val<uint32_t>(8);  // (7: the K cache, o_addr)
+    const uint32_t pos_addr = get_common_arg_val<uint32_t>(9), pt_addr = get_common_arg_val<uint32_t>(10);
+    const uint32_t bs = get_common_arg_val<uint32_t>(11);
+    constexpr auto vc_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
+    constexpr auto pos_args = TensorAccessorArgs<vc_args.next_compile_time_args_offset()>();
+    constexpr auto pt_args = TensorAccessorArgs<pos_args.next_compile_time_args_offset()>();
+    const auto& kcs = os;
+    const auto vcs = TensorAccessor(vc_args, vc, TB);
+    const auto poss = TensorAccessor(pos_args, pos_addr, 4);
+    const auto pts = TensorAccessor(pt_args, pt_addr, 4);
+    constexpr uint32_t cb_v = 17;
+    cb_reserve_back(cb_v, 1);
+    const uint32_t scratch = (get_write_ptr(cb_v) + 63) & ~63u;  // 64-B aligned, as the 64-B DRAM reads below
+    noc_async_read(poss.get_noc_addr(0), scratch, 64);
+    noc_async_read_barrier();
+    const uint32_t pos = *(volatile tt_l1_ptr uint32_t*)scratch;
+    const uint32_t bi = (pos / bs) * 4;
+    noc_async_read(pts.get_noc_addr(0) + (bi & ~63u), scratch, 64);
+    noc_async_read_barrier();
+    const uint32_t blk = *(volatile tt_l1_ptr uint32_t*)(scratch + (bi & 63));
+    const uint32_t row = pos % bs, rt = row / 32, rr = row % 32;
+    const uint32_t fa = rr < 16 ? 0 : 2, fr = rr % 16;
+    const uint32_t e0 = fa * 16 + fr, e1 = e0 + 16, m0 = 64 + fa * 256 + fr * 16, m1 = m0 + 256;
+    for (uint32_t it = first; it < first + n_items; ++it) {
+        const uint32_t h = it % H;
+        const uint32_t base = ((blk * H + h) * (bs / 32) + rt) * Dt;
+        for (uint32_t k = 0; k < 2 * Dt; ++k) {
+            const uint32_t j = k >= Dt ? k - Dt : (k < Dt - 2 ? k + 2 : k - (Dt - 2));
+            cb_wait_front(cb_out, 1);
+            const uint32_t t = get_read_ptr(cb_out);
+            volatile tt_l1_ptr uint32_t* w = (volatile tt_l1_ptr uint32_t*)t;  // (word access only)
+            uint32_t mv[8];
+            for (uint32_t i = 0; i < 4; ++i) {
+                mv[i] = w[16 + i];      // face 0 (or 2) row 0 mantissas, bytes 64 ..
+                mv[4 + i] = w[80 + i];  // face 1 row 0, bytes 320 ..
+            }
+            const uint32_t x0 = w[0] & 0xff, x1 = w[4] & 0xff;
+            w[e0 / 4] = (w[e0 / 4] & ~(0xffu << (8 * (e0 % 4)))) | (x0 << (8 * (e0 % 4)));
+            w[e1 / 4] = (w[e1 / 4] & ~(0xffu << (8 * (e1 % 4)))) | (x1 << (8 * (e1 % 4)));
+            for (uint32_t i = 0; i < 4; ++i) {
+                w[m0 / 4 + i] = mv[i];
+                w[m1 / 4 + i] = mv[4 + i];
+            }
+            const uint64_t d = k < Dt ? kcs.get_noc_addr(base + j) : vcs.get_noc_addr(base + j);
+            noc_async_write(t + e0, d + e0, 1);
+            noc_async_write(t + e1, d + e1, 1);
+            noc_async_write(t + m0, d + m0, 16);
+            noc_async_write(t + m1, d + m1, 16);
+            noc_async_writes_flushed();
+            cb_pop_front(cb_out, 1);
+        }
+    }
+    (void)Mt;
+#elif defined(TOKEN_MAJOR)
     // Decode (T = 1): row 0 of head h's tiles goes to row h of a token-major [32, Dt * 32] L1 shard on one core (the
     // paged cache update's input, qk_rope.py kv_out), and head h of V (head-major, row 0 of its tiles) likewise into
     // a second one. Rows are 32 + 32 B (face 0 / face 1, or faces 2 / 3 for h >= 16).

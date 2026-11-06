@@ -288,6 +288,40 @@ class _KVSh:
         self.t = t
 
 
+class _KVCache:
+    """Decode K (before its norm + RoPE) and V for the fused cache write (qk_rope.QKNormRope cache=): the reshapes and
+    to_memory_configs before the cache update pass it through; the two paged_update_cache calls (K's, then V's) run it
+    once, with both caches (_Experimental)."""
+
+    def __init__(self, k, cos, sin, v):
+        self.k, self.cos, self.sin, self.v, self.kc = k, cos, sin, v, None
+
+
+class _Experimental:
+    """ttnn.experimental whose paged_update_cache takes _KVCache (K's call keeps the K cache, V's call runs the op)."""
+
+    def __getattr__(self, name):
+        return getattr(ttnn.experimental, name)
+
+    def paged_update_cache(self, cache, x, *args, update_idxs_tensor=None, page_table=None, **kwargs):
+        if not isinstance(x, _KVCache):
+            return ttnn.experimental.paged_update_cache(
+                cache, x, *args, update_idxs_tensor=update_idxs_tensor, page_table=page_table, **kwargs
+            )
+        assert not args and not kwargs and cache.dtype == ttnn.bfloat8_b, (args, kwargs, cache.dtype)
+        if x.kc is None:
+            x.kc = cache
+            return None
+        x.k.op(x.k.t, x.cos, x.sin, cache=(x.kc, cache, x.v, update_idxs_tensor, page_table))
+        ttnn.deallocate(x.k.t)
+        ttnn.deallocate(x.v)
+        return None
+
+
+def _KV_CACHE_ON():
+    return os.environ.get("BONSAI_KV_BF8") == "1" and os.environ.get("BONSAI_KV_CACHE_DIRECT", "1") == "1"
+
+
 class _TM:
     """The decode SDPA's output, token-major [1, 1, heads, D]: the o projection's fused rotation reads it as is
     (rotate.py ROT_U_TM), so the transpose and concatenate_heads after the SDPA pass it through."""
@@ -336,7 +370,7 @@ class _DecodeTransformer:
                 compute_with_storage_grid_size=(len(rx) // 8, 8),
                 sub_core_grids=core_ranges.rects(rx),
                 q_chunk_size=pc.q_chunk_size,
-                k_chunk_size=pc.k_chunk_size,
+                k_chunk_size=int(os.environ.get("BONSAI_STREAM_SDPA_KCHUNK") or pc.k_chunk_size),
                 exp_approx_mode=pc.exp_approx_mode,
             )
         elif pc is not None and os.environ.get("BONSAI_DECODE_SDPA_GRID", "1") == "1":
@@ -377,11 +411,13 @@ class TernaryAttentionTtnn:
         return ttnn.rms_norm(t, *args, **kwargs)
 
     def reshape(self, t, shape, *args, **kwargs):
-        if isinstance(t, (_HMDec, _QGDec, _KVSh)):
+        if isinstance(t, (_HMDec, _QGDec, _KVSh, _KVCache)):
             return t
         vmap = getattr(self, "_vmap", None)
         if vmap is not None and t is vmap[0]:
             self._vmap = None
+            if isinstance(vmap[1], _KVCache):
+                return vmap[1]  # V is read (and freed) by the cache write
             ttnn.deallocate(t)
             return _KVSh(vmap[1])
         if not args and not kwargs and list(t.shape) == list(shape):
@@ -411,7 +447,7 @@ class TernaryAttentionTtnn:
             return None  # its q and gate live on as the chunk outputs
         if isinstance(t, (_NormRope, _HMDec)):
             return ttnn.deallocate(t.t)
-        if isinstance(t, (SigGate, _GatedOut, _KVSh)):
+        if isinstance(t, (SigGate, _GatedOut, _KVSh, _KVCache)):
             return None  # consumed (and freed) by project_o's gated rotation / persistent K / V shards
         return ttnn.deallocate(t, *args, **kwargs)
 
@@ -444,6 +480,12 @@ class TernaryAttentionTtnn:
                 qo = q.op(q.t, cos, sin)
             ttnn.deallocate(q.t)
             v = getattr(self._t, "v_raw", None)
+            if v is not None and _KV_CACHE_ON():
+                # K's norm + RoPE writes K and V straight into the bf8 caches, at the paged_update_cache calls
+                self._t.v_raw = None
+                kv = _KVCache(k, cos, sin, v)
+                self._vmap = (v, kv)
+                return qo, kv
             if v is not None and os.environ.get("BONSAI_KV_DIRECT", "1") == "1":
                 # K and V straight into the paged cache update's token-major input (no reshape / shard ops)
                 from models.demos.blackhole.bonsai2.tt.tprefill.qk_rope import kv_shards
@@ -460,7 +502,13 @@ class TernaryAttentionTtnn:
             return qo, ko
         return orig(q, k, cos, sin)
 
+    @property
+    def experimental(self):
+        return _Experimental()
+
     def to_memory_config(self, t, *args, **kwargs):
+        if isinstance(t, _KVCache):
+            return t
         if isinstance(t, _KVSh):
             return t.t
         return ttnn.to_memory_config(t, *args, **kwargs)

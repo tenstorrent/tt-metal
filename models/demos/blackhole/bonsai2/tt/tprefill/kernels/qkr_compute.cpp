@@ -137,6 +137,18 @@ void kernel_main() {
         cb_pop_front(cb_cs, 4);
         cb_pop_front(cb_inv, 1);
         cb_pop_front(cb_x, Dt);
+#ifdef KV_CACHE
+        // V's tiles, repacked (bfp8, cb_out's format) for the writer's cache write
+        cb_wait_front(5, Dt);
+        tile_regs_acquire();
+        fmt(5, 5);
+        copy_init(5);
+        for (uint32_t j = 0; j < Dt; ++j) {
+            copy_tile(5, j, j);
+        }
+        put(cb_out, Dt, false);
+        cb_pop_front(5, Dt);
+#endif
     }
     cb_pop_front(cb_c, 1 + Dt);
 }

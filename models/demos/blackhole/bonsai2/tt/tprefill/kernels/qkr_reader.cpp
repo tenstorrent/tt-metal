@@ -27,6 +27,11 @@ void kernel_main() {
     constexpr auto cos_args = TensorAccessorArgs<c_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
     constexpr uint32_t cb_x = 0, cb_c = 1, cb_cs = 2;
+#ifdef KV_CACHE
+    constexpr auto v_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
+    const auto vs = TensorAccessor(v_args, get_common_arg_val<uint32_t>(11), get_tile_size(cb_x));
+    constexpr uint32_t cb_v = 5;
+#endif
     if (n_items == 0) {
         return;
     }
@@ -57,5 +62,14 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_x, Dt);
         cb_push_back(cb_cs, 4);
+#ifdef KV_CACHE
+        // head h's V tiles (head-major [1, H, 1, D]): the compute packs them bf8 for the cache write
+        cb_reserve_back(cb_v, Dt);
+        for (uint32_t j = 0; j < Dt; ++j) {
+            noc_async_read(vs.get_noc_addr(h * Dt + j), get_write_ptr(cb_v) + j * TB, TB);
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_v, Dt);
+#endif
     }
 }
