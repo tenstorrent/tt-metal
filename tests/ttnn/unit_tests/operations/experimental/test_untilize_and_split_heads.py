@@ -128,6 +128,12 @@ def test_untilize_and_split_heads_rejects_non_32x32_tiles(device, expect_error):
         ttnn.experimental.untilize_and_split_heads(x, 2)
 
 
+def test_untilize_and_split_heads_rejects_transposed_tiles(device, expect_error):
+    x = _tiled(torch.randn(1, 64, 64), device, tile=ttnn.Tile((32, 32), transpose_tile=True))
+    with expect_error(RuntimeError, "got 32x32 transposed"):
+        ttnn.experimental.untilize_and_split_heads(x, 2)
+
+
 def test_untilize_and_split_heads_rejects_rank4_input(device, expect_error):
     x = _tiled(torch.randn(1, 2, 64, 64), device)
     with expect_error(RuntimeError, r"must be \(B, S, H\*D\)"):
@@ -148,6 +154,13 @@ def test_untilize_and_split_heads_rejects_extra_tile_padding(device, expect_erro
     assert list(padded.shape) == [2, 40, 64] and list(padded.padded_shape) == padded_shape
     with expect_error(RuntimeError, "only padding S up to a whole tile"):
         ttnn.experimental.untilize_and_split_heads(padded, 2)
+
+
+def test_untilize_and_split_heads_rejects_head_count_that_overflows_uint32(device, expect_error):
+    # 2**27 heads * 32 wraps a uint32 to 0; the check must still reject, not divide by zero.
+    x = _tiled(torch.randn(1, 64, 64), device)
+    with expect_error(RuntimeError, "whole number of tile widths"):
+        ttnn.experimental.untilize_and_split_heads(x, 2**27)
 
 
 def test_untilize_and_split_heads_rejects_heads_narrower_than_a_tile(device, expect_error):

@@ -28,9 +28,9 @@ void bind_untilize_and_split_heads(nb::module_& mod) {
         value_layout="head_major".
 
         Args:
-            * :attr:`input`: (B, S, H*D) TILE bfloat16, INTERLEAVED; D a multiple of
-              32; 32x32 tiles padded only up to a whole tile of S, as ttnn.linear and
-              ttnn.to_layout produce
+            * :attr:`input`: (B, S, H*D) TILE bfloat16, INTERLEAVED; D a positive
+              multiple of 32; non-transposed 32x32 tiles padded only up to a whole tile
+              of S, as ttnn.linear and ttnn.to_layout produce
             * :attr:`num_heads`: H
             * :attr:`memory_config`: output memory config, INTERLEAVED; None keeps
               input's

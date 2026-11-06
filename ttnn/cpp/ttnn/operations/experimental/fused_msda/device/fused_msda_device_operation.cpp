@@ -79,6 +79,18 @@ MSDAShapes derive_shapes(
     TT_FATAL(value.storage_type() == StorageType::DEVICE, "fused_msda: value must be on device");
     TT_FATAL(value.device()->arch() != tt::ARCH::QUASAR, "fused_msda is not supported on Quasar");
     check_common_tensor(value, "value", value, /*allow_float32=*/false, require_value_row_major);
+    if (require_value_row_major) {
+        // Page ids are computed from value's logical shape, so any padding in its
+        // buffer (e.g. a ttnn.reshape view with a padded_shape) misplaces every
+        // page after it. The L1 fit check skips this: it sees value before the
+        // op lays it out row-major, possibly still tile-padded.
+        TT_FATAL(
+            value.padded_shape() == value.logical_shape(),
+            "fused_msda: value's padded shape {} must equal its logical shape {}; pass an unpadded tensor, not a "
+            "padded view",
+            value.padded_shape(),
+            value.logical_shape());
+    }
     check_common_tensor(attn, "attention_weights", value);
 
     // ---- spatial_shapes ----
@@ -111,8 +123,8 @@ MSDAShapes derive_shapes(
     // Packed is the layout a Linear over embed_dims emits; D is recovered from
     // attention_weights' head dim after that tensor is parsed below. Head-major
     // holds 32 consecutive keys of one head per page, so the row-major gather
-    // (D % 32 == 0) fetches a horizontal corner pair in one read; the last page
-    // of a head is padded. The caller declares head-major: its rank-4 shape can
+    // (D % 32 == 0) fetches a horizontal corner pair in one read; rows past S in
+    // a head's last page are unused. The caller declares head-major: its rank-4 shape can
     // coincide with a canonical one, so it is never inferred.
     using namespace fused_msda_value_layout;
     const auto& vs = value.logical_shape();
@@ -461,8 +473,8 @@ ttnn::Tensor fused_msda(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     bool align_corners,
     bool locations_in_grid_space,
-    ttnn::experimental::MSDAValueLayout value_layout,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    ttnn::experimental::MSDAValueLayout value_layout) {
     auto attrs = OperationType::operation_attributes_t{
         .output_memory_config = memory_config.value_or(value.memory_config()),
         .spatial_shapes_hw = flatten_spatial_shapes(spatial_shapes),
@@ -490,10 +502,10 @@ ttnn::Tensor fused_msda_from_offsets(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     ttnn::experimental::MSDAReferenceMode reference_mode,
     bool align_corners,
-    ttnn::experimental::MSDAValueLayout value_layout,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::vector<uint32_t>>& num_valid_queries,
-    const std::optional<Tensor>& num_valid_queries_tensor) {
+    const std::optional<Tensor>& num_valid_queries_tensor,
+    ttnn::experimental::MSDAValueLayout value_layout) {
     auto attrs = OperationType::operation_attributes_t{
         .output_memory_config = memory_config.value_or(value.memory_config()),
         .spatial_shapes_hw = flatten_spatial_shapes(spatial_shapes),

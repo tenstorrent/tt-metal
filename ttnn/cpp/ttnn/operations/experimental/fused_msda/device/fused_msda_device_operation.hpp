@@ -172,8 +172,8 @@ ttnn::Tensor fused_msda(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     bool align_corners,
     bool locations_in_grid_space,
-    ttnn::experimental::MSDAValueLayout value_layout,
-    const std::optional<MemoryConfig>& memory_config);
+    const std::optional<MemoryConfig>& memory_config,
+    ttnn::experimental::MSDAValueLayout value_layout);
 
 ttnn::Tensor fused_msda_from_offsets(
     const Tensor& value,
@@ -183,10 +183,10 @@ ttnn::Tensor fused_msda_from_offsets(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     ttnn::experimental::MSDAReferenceMode reference_mode,
     bool align_corners,
-    ttnn::experimental::MSDAValueLayout value_layout,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<std::vector<uint32_t>>& num_valid_queries = std::nullopt,
-    const std::optional<Tensor>& num_valid_queries_tensor = std::nullopt);
+    const std::optional<std::vector<uint32_t>>& num_valid_queries,
+    const std::optional<Tensor>& num_valid_queries_tensor,
+    ttnn::experimental::MSDAValueLayout value_layout);
 
 bool can_use_fused_msda_from_offsets_l1_value(
     const Tensor& value,

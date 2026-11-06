@@ -19,10 +19,10 @@ namespace ttnn::experimental {
 //   output[b, h, t, r*D + d] = input[b, 32*t + r, h*D + d]
 //
 // Shapes:
-//   input   (B, S, H*D)                  TILE bfloat16, INTERLEAVED, 32x32 tiles
-//                                        padded only up to a whole tile of S, as
-//                                        ttnn.linear and ttnn.to_layout produce;
-//                                        D a multiple of 32
+//   input   (B, S, H*D)                  TILE bfloat16, INTERLEAVED, non-transposed
+//                                        32x32 tiles padded only up to a whole tile
+//                                        of S, as ttnn.linear and ttnn.to_layout
+//                                        produce; D a positive multiple of 32
 //   output  (B, H, ceil(S/32), 32*D)     ROW_MAJOR bfloat16, INTERLEAVED
 //
 // The output holds the bytes of a row-major (B, H, ceil(S/32)*32, D) tensor,

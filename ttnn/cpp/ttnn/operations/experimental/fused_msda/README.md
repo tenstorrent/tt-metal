@@ -68,8 +68,8 @@ out = ttnn.experimental.fused_msda(
     *,
     align_corners=False,
     locations_in_grid_space=False,
-    value_layout="auto",        # "auto" | "head_major"
     memory_config=None,
+    value_layout="auto",        # "auto" | "head_major"
 )
 # -> (B, Q, H*D) ROW_MAJOR bf16
 ```
@@ -90,8 +90,9 @@ runtime args — callers never pass it.
 `value_layout="head_major"` declares the head-major layout: one page holds 32
 consecutive keys of one head, so keys `x` and `x + 1` of a head are adjacent.
 It is declared, never inferred, because `(B, H, ceil(S/32), 32*D)` can coincide
-with a canonical `(B, S, H, D)` shape. Its last page per head is padded and never
-read. Keys sit back to back, so `D * 2` must be a multiple of `value`'s buffer
+with a canonical `(B, S, H, D)` shape. Rows past `S` in a head's last page are
+never read. Pages are addressed from the logical shape, so the tensor itself must
+be unpadded (`padded_shape == shape`), as for every `value` the op reads. Keys sit back to back, so `D * 2` must be a multiple of `value`'s buffer
 alignment at any `H` (§9).
 
 ### 2.2 V2 — `fused_msda_from_offsets`
@@ -108,10 +109,10 @@ out = ttnn.experimental.fused_msda_from_offsets(
     *,
     reference_mode="level",     # "level" | "pillar"
     align_corners=False,
-    value_layout="auto",        # as V1
     memory_config=None,
     num_valid_queries=None,     # optional per-batch row count, see below
     num_valid_queries_tensor=None,  # the same counts on device, see below
+    value_layout="auto",        # as V1
 )
 # -> (B, Q, H*D) ROW_MAJOR bf16
 ```
@@ -197,7 +198,7 @@ op and do not cache it.
 
 ```python
 hm = ttnn.experimental.untilize_and_split_heads(
-    input,                      # (B, S, H*D) TILE bf16, INTERLEAVED, 32x32 tiles
+    input,                      # (B, S, H*D) TILE bf16, INTERLEAVED, non-transposed 32x32 tiles
     num_heads,                  # H
     *,
     memory_config=None,         # None keeps input's
@@ -206,9 +207,10 @@ hm = ttnn.experimental.untilize_and_split_heads(
 ```
 
 The op lives in `operations/experimental/untilize_and_split_heads/`. Each output
-page is one tile row of one head, untilized: 32 consecutive keys. It needs
-`D % 32 == 0` (a head owns whole tiles) and tile padding only up to a whole tile
-of `S`, as `ttnn.linear` and `ttnn.to_layout` produce. Rows past `S` in a head's
+page is one tile row of one head, untilized: 32 consecutive keys. It needs `D` a
+positive multiple of 32 (a head owns whole tiles), non-transposed 32x32 tiles, and
+tile padding only up to a whole tile of `S`, as `ttnn.linear` and `ttnn.to_layout`
+produce. Rows past `S` in a head's
 last page hold the input's tile padding; `fused_msda` never reads them. Pass the
 result with `value_layout="head_major"`.
 

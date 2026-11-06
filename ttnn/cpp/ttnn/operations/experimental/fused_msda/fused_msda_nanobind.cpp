@@ -58,8 +58,8 @@ ttnn::Tensor fused_msda_py(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     bool align_corners,
     bool locations_in_grid_space,
-    const std::string& value_layout,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::string& value_layout) {
     return ttnn::experimental::fused_msda(
         value,
         sampling_locations,
@@ -67,8 +67,8 @@ ttnn::Tensor fused_msda_py(
         spatial_shapes,
         align_corners,
         locations_in_grid_space,
-        parse_value_layout(value_layout),
-        memory_config);
+        memory_config,
+        parse_value_layout(value_layout));
 }
 
 ttnn::Tensor fused_msda_from_offsets_py(
@@ -79,10 +79,10 @@ ttnn::Tensor fused_msda_from_offsets_py(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     const std::string& reference_mode,
     bool align_corners,
-    const std::string& value_layout,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::vector<uint32_t>>& num_valid_queries,
-    const std::optional<ttnn::Tensor>& num_valid_queries_tensor) {
+    const std::optional<ttnn::Tensor>& num_valid_queries_tensor,
+    const std::string& value_layout) {
     return ttnn::experimental::fused_msda_from_offsets(
         value,
         reference_points,
@@ -91,10 +91,10 @@ ttnn::Tensor fused_msda_from_offsets_py(
         spatial_shapes,
         parse_reference_mode(reference_mode),
         align_corners,
-        parse_value_layout(value_layout),
         memory_config,
         num_valid_queries,
-        num_valid_queries_tensor);
+        num_valid_queries_tensor,
+        parse_value_layout(value_layout));
 }
 
 bool can_use_fused_msda_from_offsets_l1_value_py(
@@ -156,10 +156,10 @@ void bind_fused_msda(nb::module_& mod) {
             * :attr:`align_corners`: pixel mapping within the chosen coordinate space
             * :attr:`locations_in_grid_space`: False (default) treats locations as normalized
               [0, 1] coordinates; True treats them as normalized [-1, 1] coordinates
+            * :attr:`memory_config`: output memory config
             * :attr:`value_layout`: "auto" (default) tells (B, S, H, D) and packed
               (B, S, H*D) apart by rank; "head_major" declares (B, H, ceil(S/32), 32*D).
               Declared rather than inferred: that shape can coincide with a canonical one.
-            * :attr:`memory_config`: output memory config
 
         Returns:
             (B, Q, H*D) ROW_MAJOR bfloat16.
@@ -167,8 +167,8 @@ void bind_fused_msda(nb::module_& mod) {
         Out-of-bounds sampling corners contribute zero (padding_mode="zeros").
         Constraints: all tensors bfloat16 / ROW_MAJOR / INTERLEAVED, D a positive
         multiple of 16, 1 <= L <= 8, and each level's H_l and W_l <= 256. Q need
-        not be a multiple of 32. Head-major value also needs D * 2 to be a
-        multiple of its buffer's alignment.
+        not be a multiple of 32. value must be unpadded (padded_shape == shape).
+        Head-major value also needs D * 2 to be a multiple of its buffer's alignment.
         )doc";
 
     ttnn::bind_function<"fused_msda", "ttnn.experimental.">(
@@ -182,8 +182,8 @@ void bind_fused_msda(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("align_corners") = false,
         nb::arg("locations_in_grid_space") = false,
-        nb::arg("value_layout") = "auto",
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("value_layout") = "auto");
 
     const auto* v2_doc =
         R"doc(
@@ -216,7 +216,6 @@ void bind_fused_msda(nb::module_& mod) {
                   as (P // R, R). BEVFormer spatial attention, and temporal attention
                   without a shift (R == 1).
             * :attr:`align_corners`: pixel mapping
-            * :attr:`value_layout`: as in fused_msda
             * :attr:`memory_config`: output memory config
             * :attr:`num_valid_queries`: optional list of B counts, each in [0, Q] and at
               least one nonzero. Only queries [0, num_valid_queries[b]) of batch b are
@@ -232,6 +231,7 @@ void bind_fused_msda(nb::module_& mod) {
               above Q is treated as Q and all-zero counts compute nothing. It compiles
               a program separate from the list form's. Pass at most one of
               num_valid_queries and num_valid_queries_tensor.
+            * :attr:`value_layout`: as in fused_msda
 
         Returns:
             (B, Q, H*D) ROW_MAJOR bfloat16, equivalent to calling fused_msda on the
@@ -255,10 +255,10 @@ void bind_fused_msda(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("reference_mode") = "level",
         nb::arg("align_corners") = false,
-        nb::arg("value_layout") = "auto",
         nb::arg("memory_config") = nb::none(),
         nb::arg("num_valid_queries") = nb::none(),
-        nb::arg("num_valid_queries_tensor") = nb::none());
+        nb::arg("num_valid_queries_tensor") = nb::none(),
+        nb::arg("value_layout") = "auto");
 
     const auto* l1_value_fit_doc =
         R"doc(
