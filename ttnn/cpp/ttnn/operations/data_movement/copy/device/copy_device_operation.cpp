@@ -35,7 +35,7 @@ bool can_use_specialized_factory(const CopyParams& operation_attributes, const C
         input_unit_size = input_tensor.memory_config().shard_spec()->shape[1] * input_tensor.element_size();
     }
 
-    const uint32_t input_alignment = input_tensor.buffer()->alignment();
+    const uint32_t input_alignment = input_tensor.mesh_buffer().alignment();
     const uint32_t aligned_input_unit_size = tt::align(input_unit_size, input_alignment);
     constexpr uint32_t num_input_units = 2;
     uint32_t total_cb_size = num_input_units * aligned_input_unit_size;
