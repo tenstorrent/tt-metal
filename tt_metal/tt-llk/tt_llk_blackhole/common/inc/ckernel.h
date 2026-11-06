@@ -640,25 +640,50 @@ inline void set_ttsync_enables()
 // Turning gathering off while fetch is on a path into code the TRISC has already gathered can hang the
 // TRISC for good. No instruction flushes fetch, and fetch runs up to 16 instructions ahead of execute, so
 // both edges of the bracket keep that distance in straight-line RISC nops:
-//  - disable: branch prediction goes off, then GATHERING_PREDICTION_DRAIN nops, then gathering goes off.
-//    Any prediction made before branch prediction was off resolves before gathering goes off.
-//  - enable: GATHERING_ENABLE_DISTANCE nops before gathering goes back on, so fetch cannot reach the
-//    gathered code after the bracket before gathering is off, however short the bracketed body is.
-#define GATHERING_PREDICTION_DRAIN ".rept 20\n nop\n .endr\n"
-#define GATHERING_ENABLE_DISTANCE  ".rept 16\n nop\n .endr\n"
+//  - disable: branch prediction goes off, then 20 nops, then gathering goes off. Any prediction made
+//    before branch prediction was off resolves before gathering goes off.
+//  - enable: 16 nops before gathering goes back on, so fetch cannot reach the gathered code after the
+//    bracket before gathering is off, however short the bracketed body is.
+// The nops live once per ELF, in two shared routines that every bracket calls, so the code size does not
+// grow with the number of records. The calls are direct jumps, so their targets never depend on the
+// branch predictor. Each routine uses only t0 and returns through ra. Gathering is already off when the
+// gathering-off routine's ret resolves, so a wrong prediction of that ret is harmless.
+#if defined(COMPILE_FOR_TRISC)
+asm(".pushsection .text.ckernel_gathering_off,\"axG\",@progbits,ckernel_gathering_off,comdat\n"
+    ".globl ckernel_gathering_off\n"
+    ".type ckernel_gathering_off, @function\n"
+    "ckernel_gathering_off:\n"
+    " li t0, 1 << 1\n"
+    " csrrs zero, 0x7c0, t0\n" // branch prediction off
+    " .rept 20\n nop\n .endr\n"
+    " fence\n"
+    " lui t0, 1 << (18 - 12)\n"
+    " csrrs zero, 0x7c0, t0\n" // gathering off
+    " li t0, 1 << 1\n"
+    " csrrc zero, 0x7c0, t0\n" // branch prediction back on
+    " fence\n"
+    " ret\n"
+    // Never executed: with branch prediction off, fetch runs past the ret in a straight line until the
+    // ret resolves, and must not reach other code (possibly gathered) before gathering is off.
+    " .rept 20\n nop\n .endr\n"
+    ".size ckernel_gathering_off, . - ckernel_gathering_off\n"
+    ".popsection\n"
+    ".pushsection .text.ckernel_gathering_on,\"axG\",@progbits,ckernel_gathering_on,comdat\n"
+    ".globl ckernel_gathering_on\n"
+    ".type ckernel_gathering_on, @function\n"
+    "ckernel_gathering_on:\n"
+    " .rept 16\n nop\n .endr\n"
+    " lui t0, 1 << (18 - 12)\n"
+    " csrrc zero, 0x7c0, t0\n" // gathering on
+    " ret\n"
+    ".size ckernel_gathering_on, . - ckernel_gathering_on\n"
+    ".popsection\n");
+#endif
 
 template <bool add_nops = true>
 inline void disable_gathering()
 {
-    // Branch prediction off (bit 1), drain, gathering off (bit 18), branch prediction back on.
-    asm volatile("csrrs zero, 0x7c0, %0\n" GATHERING_PREDICTION_DRAIN
-                 "fence\n"
-                 "csrrs zero, 0x7c0, %1\n"
-                 "csrrc zero, 0x7c0, %0\n"
-                 "fence\n"
-                 :
-                 : "r"(1 << 1), "r"(1 << 18)
-                 : "memory");
+    asm volatile("jal ra, ckernel_gathering_off\n" : : : "ra", "t0", "memory");
 
     // Gathering is done early in the pipeline, so we need to make sure
     // the above csrrw gets processed before the load-replay instructions
@@ -672,8 +697,7 @@ inline void disable_gathering()
 
 inline void enable_gathering()
 {
-    // Gathering on: clear bit 18
-    asm volatile(GATHERING_ENABLE_DISTANCE "csrrc zero, 0x7c0, %0\n" : : "r"(1 << 18) : "memory");
+    asm volatile("jal ra, ckernel_gathering_on\n" : : : "ra", "t0", "memory");
 }
 
 #if defined(COMPILE_FOR_TRISC)

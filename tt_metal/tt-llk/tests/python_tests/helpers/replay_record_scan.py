@@ -46,8 +46,12 @@ def _executable_words(elf_path):
 # register the compiler picked for the bit mask.
 CFG0_CSR = 0x7C0
 FUNCT3_CSRRS, FUNCT3_CSRRC = 0b010, 0b011
-# disable_gathering() is csrrs, 20 nops, fence, csrrs, csrrc, fence, three TTNOPs, plus scheduling slack.
-DISABLE_WINDOW_WORDS = 48
+# disable_gathering() is a call to the shared ckernel_gathering_off routine, then three TTNOPs, plus
+# scheduling slack. enable_gathering() is a call to ckernel_gathering_on. The scan follows those calls.
+DISABLE_WINDOW_WORDS = 24
+# Longest shared bracket routine the scan reads through a call (up to its ret).
+CALLEE_WORDS = 48
+RISCV_RET = 0x00008067  # jalr zero, 0(ra)
 # Walk from a record to its enable_gathering() csrrc: counts Tensix words (RISC-V code is
 # scheduled among them) and follows unconditional jumps (GCC cross-jumps common body tails).
 BODY_WALK_LIMIT_WORDS = 512
@@ -153,6 +157,11 @@ def _jal_zero_target(words, index, addresses):
     word = words[index]
     if word & 0x7F != RISCV_OPCODE_JAL or (word >> 7) & 0x1F != 0:
         return None
+    return _jal_target(word, index, addresses)
+
+
+def _jal_target(word, index, addresses):
+    """Word index of the target of the jal ``word`` at ``index``, or None if outside the code."""
     imm = (
         ((word >> 31) & 0x1) << 20
         | ((word >> 12) & 0xFF) << 12
@@ -163,6 +172,41 @@ def _jal_zero_target(words, index, addresses):
         imm -= 1 << 21
     word_addresses, index_of_address = addresses
     return index_of_address.get(word_addresses[index] + imm)
+
+
+def _jal_ra_target(words, index, addresses):
+    """Word index of the target of ``jal ra, imm`` (a direct call) at ``index``, or None."""
+    word = words[index]
+    if word & 0x7F != RISCV_OPCODE_JAL or (word >> 7) & 0x1F != 1:
+        return None
+    return _jal_target(word, index, addresses)
+
+
+def _callee_cfg0_ops(words, index, addresses):
+    """cfg0 CSR ops of the routine a ``jal ra`` at ``index`` calls, up to its ret; [] if not a call."""
+    target = _jal_ra_target(words, index, addresses)
+    if target is None:
+        return []
+    ops = []
+    for w in words[target : target + CALLEE_WORDS]:
+        if w == RISCV_RET:
+            break
+        op = _cfg0_csr_op(w)
+        if op:
+            ops.append(op)
+    return ops
+
+
+def _cfg0_ops_in(words, start, end, addresses):
+    """cfg0 CSR ops in words[start:end], with each direct call replaced by its callee's ops."""
+    ops = []
+    for i in range(start, end):
+        op = _cfg0_csr_op(words[i])
+        if op:
+            ops.append(op)
+        else:
+            ops.extend(_callee_cfg0_ops(words, i, addresses))
+    return ops
 
 
 def _first_cfg0_op_after(words, index, addresses):
@@ -178,6 +222,9 @@ def _first_cfg0_op_after(words, index, addresses):
             position = target
             continue
         op = _cfg0_csr_op(words[position])
+        if not op:
+            callee = _callee_cfg0_ops(words, position, addresses)
+            op = callee[0] if callee else None
         if op:
             return op, tensix
         if _is_tensix_word(words[position]):
@@ -197,10 +244,9 @@ def _unbracketed_records(
     """
     unbracketed = []
     for index, length in records:
-        before = [
-            _cfg0_csr_op(w) for w in words[max(0, index - disable_window_words) : index]
-        ]
-        before = [op for op in before if op]
+        before = _cfg0_ops_in(
+            words, max(0, index - disable_window_words), index, addresses
+        )
         disabled = before[-3:] == ["s", "s", "c"]
         after, tensix = _first_cfg0_op_after(words, index, addresses)
         enabled = after == "c"
