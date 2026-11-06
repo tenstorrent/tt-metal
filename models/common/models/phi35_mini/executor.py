@@ -113,7 +113,7 @@ class Phi35MiniExecutor:
                 can_enable_trace=runtime_config.can_enable_trace,
                 supports_batched_prefill=bool(runtime_config.supports_batched_prefill),
                 disable_batched_prefill=bool(runtime_config.disable_batched_prefill),
-                max_prefill_batch_size=int(runtime_config.max_prefill_batch_size),
+                max_prefill_batch_size=int(__import__("os").environ.get("TT_PHI35_MAX_PREFILL_BATCH") or runtime_config.max_prefill_batch_size),
                 batched_prefill_batched_extract=bool(runtime_config.batched_prefill_batched_extract),
             )
         )
