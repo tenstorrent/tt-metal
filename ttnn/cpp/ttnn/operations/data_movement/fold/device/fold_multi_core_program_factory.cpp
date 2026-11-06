@@ -57,9 +57,10 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
     uint32_t num_dst_rows = num_pixels / (width * stride_h);
     uint32_t pixels_per_dst_row = stride_h * width;
 
+    // validate_fold keeps a row-major output in the input's dtype, so one element size covers both sides.
     const uint32_t aligned_pixel_size = tt::align(shard_shape[1] * input.element_size(), hal::get_l1_alignment());
     const uint32_t aligned_dst_pixel_size =
-        tt::align(output.shard_spec()->shape[1] * output.element_size(), hal::get_l1_alignment());
+        tt::align(output.shard_spec()->shape[1] * input.element_size(), hal::get_l1_alignment());
     TT_FATAL(
         stride_h * stride_w * pixel_size <= aligned_dst_pixel_size,
         "Fold (fast path): an output pixel ({} B) cannot hold {} input pixels of {} B.",
