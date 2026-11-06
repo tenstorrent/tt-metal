@@ -464,6 +464,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecCompilationFailureLeavesTh
     auto program = make_exp_program(input, output);
     program.spec.kernels[2].source = m2::KernelSpec::SourceCode{.code = "this does not compile"};
     const auto entries = this->device_->num_program_cache_entries();
+    EXPECT_ANY_THROW(ttnn::experimental::prepare_generic_op({input, output}, program.spec, program.run_args));
+    EXPECT_EQ(this->device_->num_program_cache_entries(), entries);
     EXPECT_ANY_THROW(ttnn::experimental::generic_op({input, output}, program.spec, program.run_args));
     EXPECT_EQ(this->device_->num_program_cache_entries(), entries);
 }
