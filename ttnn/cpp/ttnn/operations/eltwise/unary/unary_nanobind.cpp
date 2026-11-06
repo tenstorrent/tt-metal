@@ -93,8 +93,8 @@ void bind_unary_clip(nb::module_& mod) {
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            min (float or ttnn.Tensor): Minimum value. Defaults to `None`.
-            max (float or ttnn.Tensor): Maximum value. Defaults to `None`.
+            min (float, int, or ttnn.Tensor): Minimum value. Defaults to `None`.
+            max (float, int, or ttnn.Tensor): Maximum value. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Returns:
@@ -130,8 +130,8 @@ void bind_unary_clip(nb::module_& mod) {
         ttnn::overload_t{
             nb::overload_cast<
                 const Tensor&,
-                std::optional<float>,
-                std::optional<float>,
+                std::optional<std::variant<float, std::int32_t>>,
+                std::optional<std::variant<float, std::int32_t>>,
                 const std::optional<MemoryConfig>&>(&ttnn::clip),
             nb::arg("input_tensor"),
             nb::arg("min") = nb::none(),
