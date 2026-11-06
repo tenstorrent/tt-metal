@@ -429,3 +429,50 @@ def test_unary_backward_program_cache_keys_each_tensor(device):
         torch.testing.assert_close(ttnn.to_torch(output_tensor).float(), expected, rtol=8e-3, atol=1e-4)
     added = device.num_program_cache_entries() - start
     assert added == 2, f"expected 2 cache entries when only the output's memory config changes, got {added}"
+
+
+@pytest.mark.parametrize("program_cache", ["miss", "hit", "disabled"])
+@pytest.mark.parametrize("view_slot", ["grad_output", "input", "preallocated_output"])
+def test_unary_backward_sharded_view_different_buffer_geometry(device, program_cache, view_slot, expect_error):
+    """A sharded operand or preallocated output whose buffer distribution differs from its TensorSpec is
+    rejected on a cache miss, hit and with the program cache disabled."""
+    grid = device.compute_with_storage_grid_size()
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            [32, 64],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    shape = (1, 1, 32, 128)
+
+    torch.manual_seed(0)
+    torch_grad = torch.randn(shape, dtype=torch.bfloat16)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    valid = {
+        "grad_output": ttnn.from_torch(torch_grad, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config),
+        "input": ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config),
+        "preallocated_output": ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=memory_config,
+        ),
+    }
+    parent = ttnn.from_torch(
+        torch.randn(1, 1, 64, 64, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    view = ttnn.experimental.view(parent, list(shape))
+    with_view = dict(valid, **{view_slot: view})
+
+    if program_cache == "disabled":
+        device.disable_and_clear_program_cache()
+    if program_cache == "hit":
+        ttnn.tanh_bw(valid["grad_output"], valid["input"], input_grad=valid["preallocated_output"])
+    with expect_error(RuntimeError, "differs from its TensorSpec distribution"):
+        ttnn.tanh_bw(with_view["grad_output"], with_view["input"], input_grad=with_view["preallocated_output"])
