@@ -8,6 +8,7 @@ import re
 from typing import TYPE_CHECKING
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -39,10 +40,13 @@ class Conv2d(Module):
     # with every cached program, so a model that runs many input sizes fills L1_SMALL without it.
     config_tensors_in_dram: bool = False
 
-    # Rows of activation blocks per core, and double-buffered activations and weights.
     act_block_h_override: int = 32
     double_buffer: bool = False
     full_inner_dim: bool = False
+    # Sharded activations (None: ttnn picks). A shape that does not fit sharded falls back, per (h, w, in, out), to
+    # single buffering and then to the unsharded path; `no_shard` pins shapes to the unsharded path.
+    shard_layout: ttnn.TensorMemoryLayout | None = None
+    no_shard: frozenset = frozenset()
 
     # Mesh shape -> (input height, input width, in channels, out channels) -> number of DRAM width
     # slices; 1 runs the conv on the whole input in L1. A shape missing here gets no slice config,
@@ -447,6 +451,7 @@ class Conv2d(Module):
 
         # (batch, height, width, num_slices) -> device (weight, bias) prepared for that input.
         self._prepared: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor | None]] = {}
+        self._fallback_level: dict[tuple[int, int, int, int], int] = {}
 
     @classmethod
     def from_torch(
@@ -498,6 +503,83 @@ class Conv2d(Module):
         self._release_prepared()
         super().deallocate_weights()
 
+    def _conv_at_level(self, x, b, h, w, in_channels, out_channels, slice_config, num_slices, level):
+        """One conv2d at a fallback level: 0 = shard layout + double buffering (as configured), 1 = shard layout
+        without double buffering, 2 = no shard layout (today's behaviour)."""
+        double_buffer = self.double_buffer and level != 1
+        shard = self.shard_layout if level < 2 else None
+        conv_config = ttnn.Conv2dConfig(
+            act_block_h_override=self.act_block_h_override,
+            weights_dtype=self.weight.dtype,
+            config_tensors_in_dram=self.config_tensors_in_dram,
+            enable_act_double_buffer=double_buffer,
+            enable_weights_double_buffer=double_buffer,
+            full_inner_dim=self.full_inner_dim,
+            **({"shard_layout": shard} if shard is not None else {}),
+        )
+
+        # The prepared layout depends on the input size, the slice config and the fallback level. The input memory
+        # config, layout and dtype also reach prepare_conv_weights but are not in the key: this assumes each Conv2d
+        # instance always gets inputs with the same memory config, layout and dtype.
+        prepared_key = (b, h, w, num_slices) if self.shard_layout is None else (b, h, w, num_slices, level)
+        prepared_weight, prepared_bias = self._prepared.get(prepared_key, (None, None))
+        if prepared_weight is None:
+            base_kwargs = {
+                "in_channels": in_channels,
+                "out_channels": out_channels,
+                "batch_size": b,
+                "input_height": h,
+                "input_width": w,
+                "kernel_size": self.kernel_size,
+                "stride": self.stride,
+                "padding": self.padding,
+                "dilation": self.dilation,
+                "groups": 1,
+                "device": self.mesh_device,
+                "conv_config": conv_config,
+            }
+            prepared_weight = ttnn.prepare_conv_weights(
+                weight_tensor=self.weight.data,
+                weights_format="OIHW",
+                input_memory_config=x.memory_config(),
+                input_layout=x.get_layout(),
+                has_bias=self.bias is not None,
+                input_dtype=x.dtype,
+                slice_config=slice_config,
+                **base_kwargs,
+            )
+            prepared_weight = ttnn.to_device(prepared_weight, self.mesh_device)
+            if self.bias is not None:
+                prepared_bias = ttnn.prepare_conv_bias(
+                    bias_tensor=self.bias.data,
+                    input_memory_config=x.memory_config(),
+                    input_layout=x.get_layout(),
+                    input_dtype=x.dtype,
+                    **base_kwargs,
+                )
+                prepared_bias = ttnn.to_device(prepared_bias, self.mesh_device)
+
+        out, (out_height, out_width), (prepared_weight, prepared_bias) = ttnn.conv2d(
+            input_tensor=x,
+            weight_tensor=prepared_weight,
+            bias_tensor=prepared_bias,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            device=self.mesh_device,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.padding,
+            batch_size=b,
+            input_height=h,
+            input_width=w,
+            conv_config=conv_config,
+            compute_config=self.compute_config,
+            slice_config=slice_config,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+        )
+        return out, out_height, out_width, prepared_key, prepared_weight, prepared_bias
+
     def forward(self, x: ttnn.Tensor, /, *, use_persistent_buffer: bool = True) -> ttnn.Tensor:
         """Forward pass of the Conv2d layer with support for tensor parallelism.
 
@@ -548,87 +630,32 @@ class Conv2d(Module):
 
         in_channels = self.in_channels // self.in_mesh_axis_size
         out_channels = self.weight.data.shape[0]
-        conv_config = ttnn.Conv2dConfig(
-            act_block_h_override=self.act_block_h_override,
-            weights_dtype=self.weight.dtype,
-            config_tensors_in_dram=self.config_tensors_in_dram,
-            enable_act_double_buffer=self.double_buffer,
-            enable_weights_double_buffer=self.double_buffer,
-            full_inner_dim=self.full_inner_dim,
-        )
-
-        # The prepared layout depends on the input size and the slice config. The input memory config,
-        # layout and dtype also reach prepare_conv_weights but are not in the key: this assumes each
-        # Conv2d instance always gets inputs with the same memory config, layout and dtype.
-        prepared_key = (b, h, w, num_slices)
-        prepared_weight, prepared_bias = self._prepared.get(prepared_key, (None, None))
-        if prepared_weight is None:
-            base_kwargs = {
-                "in_channels": in_channels,
-                "out_channels": out_channels,
-                "batch_size": b,
-                "input_height": h,
-                "input_width": w,
-                "kernel_size": self.kernel_size,
-                "stride": self.stride,
-                "padding": self.padding,
-                "dilation": self.dilation,
-                "groups": 1,
-                "device": self.mesh_device,
-                "conv_config": conv_config,
-            }
-            prepared_weight = ttnn.prepare_conv_weights(
-                weight_tensor=self.weight.data,
-                weights_format="OIHW",
-                input_memory_config=x.memory_config(),
-                input_layout=x.get_layout(),
-                has_bias=self.bias is not None,
-                input_dtype=x.dtype,
-                slice_config=slice_config,
-                **base_kwargs,
-            )
-            prepared_weight = ttnn.to_device(prepared_weight, self.mesh_device)
-            if self.bias is not None:
-                prepared_bias = ttnn.prepare_conv_bias(
-                    bias_tensor=self.bias.data,
-                    input_memory_config=x.memory_config(),
-                    input_layout=x.get_layout(),
-                    input_dtype=x.dtype,
-                    **base_kwargs,
+        shape_key = (h, w, self.in_channels, self.out_channels)
+        sharded = self.shard_layout is not None and shape_key not in self.no_shard
+        level = self._fallback_level.get(shape_key, 0) if sharded else 2
+        while True:
+            try:
+                x_out, out_height, out_width, prepared_key, prepared_weight, prepared_bias = self._conv_at_level(
+                    x, b, h, w, in_channels, out_channels, slice_config, num_slices, level
                 )
-                prepared_bias = ttnn.to_device(prepared_bias, self.mesh_device)
-
-        try:
-            x, (out_height, out_width), (prepared_weight, prepared_bias) = ttnn.conv2d(
-                input_tensor=x,
-                weight_tensor=prepared_weight,
-                bias_tensor=prepared_bias,
-                in_channels=in_channels,
-                out_channels=out_channels,
-                device=self.mesh_device,
-                kernel_size=self.kernel_size,
-                stride=self.stride,
-                padding=self.padding,
-                batch_size=b,
-                input_height=h,
-                input_width=w,
-                conv_config=conv_config,
-                compute_config=self.compute_config,
-                slice_config=slice_config,
-                return_output_dim=True,
-                return_weights_and_bias=True,
-            )
-        except RuntimeError as e:
-            m = re.search(r"Out of Memory: (.*)", str(e))
-            if m is None:
-                raise
-
-            msg = (
-                f"conv2d out of memory with (height, width, in_channels, out_channels) = "
-                f"{(h, w, self.in_channels, self.out_channels)} and mesh_shape = "
-                f"{tuple(self.mesh_device.shape)}: {m.group(1)}"
-            )
-            raise RuntimeError(msg) from e
+                break
+            except RuntimeError as e:
+                text = str(e)
+                lowered = text.lower()
+                fits = any(k in lowered for k in ("clash with l1 buffers", "no valid", "out of memory"))
+                if level >= 2 or not fits:
+                    m = re.search(r"Out of Memory: (.*)", text)
+                    if m is None:
+                        raise
+                    msg = (
+                        f"conv2d out of memory with (height, width, in_channels, out_channels) = "
+                        f"{shape_key} and mesh_shape = {tuple(self.mesh_device.shape)}: {m.group(1)}"
+                    )
+                    raise RuntimeError(msg) from e
+                level += 1 if self.double_buffer or level >= 1 else 2
+                self._fallback_level[shape_key] = level
+                logger.debug(f"conv2d {shape_key}: fallback to level {level}: {text.splitlines()[0][:160]}")
+        x = x_out
         self._prepared[prepared_key] = (prepared_weight, prepared_bias)
 
         x = ttnn.reshape(x, (b, out_height, out_width, -1))
