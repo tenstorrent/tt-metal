@@ -60,6 +60,12 @@ from models.experimental.nomic_embed_text_v2_moe.reference.preprocessing import 
 )
 from models.experimental.nomic_embed_text_v2_moe.tt import pooling
 from models.experimental.nomic_embed_text_v2_moe.tt.chunking import _padded, plan_chunks, plan_sorted_chunks
+from models.experimental.nomic_embed_text_v2_moe.tt.packing import (
+    PackedPass,
+    best_packing,
+    packed_inputs,
+    pooling_rows,
+)
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     FUSED_ATTENTION_MAX_TILES,
     FUSED_ATTENTION_MIN_TILES,
@@ -73,6 +79,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     nd_norm_layout,
     pooling_mask,
     prepare_token_ids,
+    segment_attention_mask,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.embeddings import TtNomicBertEmbeddings
 from models.experimental.nomic_embed_text_v2_moe.tt.encoder import TtNomicBertEncoder
@@ -175,8 +182,13 @@ class TtNomicBertModel(LightweightModule):
         input_ids: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         output_memory_config: Optional[ttnn.MemoryConfig] = None,
+        segment_ids: Optional[torch.Tensor] = None,
     ) -> ttnn.Tensor:
-        """One pass of the backbone over the whole of input_ids, (B, S) -> (B, 1, S, H) in DRAM; see forward."""
+        """One pass of the backbone over the whole of input_ids, (B, S) -> (B, 1, S, H) in DRAM; see forward.
+
+        segment_ids: (B, S) for packed rows (tt.packing): the text each slot holds, -1 where none; attention is then
+        masked to each text's own slots (tt.common.segment_attention_mask) and attention_mask is not used.
+        """
         seqlen = input_ids.shape[-1]
         # The mask and the rotary tables live through the whole pass, so they are made first: L1 tensors
         # are allocated from the top down, and made after the embeddings they would sit below the residual
@@ -185,7 +197,14 @@ class TtNomicBertModel(LightweightModule):
         # tt_config.activation_dtype moves the mask's fill value with it.
         mask = None
         key_lengths = None
-        if attention_mask is not None and not bool(attention_mask.all()):
+        if segment_ids is not None:
+            mask = segment_attention_mask(
+                segment_ids,
+                self.device,
+                dtype=self.tt_config.activation_dtype,
+                mask_dtype=self.tt_config.attention_mask_dtype,
+            )
+        elif attention_mask is not None and not bool(attention_mask.all()):
             key_lengths = right_padded_lengths(attention_mask)
 
             def build_mask():
@@ -315,6 +334,11 @@ def embed(
     chunks = plan_sorted_chunks(
         lengths[order].tolist(), model.tt_config.max_chunk_tokens, model.tt_config.min_chunk_tokens
     )
+    # A padded batch whose padding costs it a pass: pack whole texts side by side instead (tt.packing).
+    if model.tt_config.packed_sequences and len(chunks) > 1:
+        packed = best_packing(lengths.tolist(), model.tt_config.max_chunk_tokens)
+        if len(packed) < len(chunks):
+            return _embed_packed(model, input_ids, packed, matryoshka_dim, kernel_config)
     pieces = []
     for chunk in chunks:
         rows = order[chunk.start : chunk.start + chunk.count]
@@ -372,6 +396,44 @@ def _fill_padding(ids: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     source = positions[None, :] % lengths.clamp(min=1)[:, None]
     filled = torch.where(mask.bool(), ids, torch.gather(ids, 1, source))
     return torch.where(lengths[:, None] > 0, filled, ids)
+
+
+def _embed_packed(
+    model: TtNomicBertModel, input_ids: torch.Tensor, passes: list[PackedPass], matryoshka_dim, kernel_config
+) -> torch.Tensor:
+    """embed() over packed passes (tt.packing): each pass holds whole texts side by side in rows, attention masked
+    to each text's own slots, pooled by summing each text's slots (packed_sum_pool with 0/1 weights over the
+    flattened rows) and L2-normalized; the rows come back in input order."""
+    pieces = []
+    for packed in passes:
+        ids, segments = packed_inputs(input_ids, packed, model.config.pad_token_id)
+        hidden = model.backbone(ids, None, ttnn.L1_MEMORY_CONFIG, segment_ids=segments)
+        texts = pooling_rows(packed)
+        rows = -(-texts.shape[0] // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        weights = torch.zeros(rows, texts.shape[1], dtype=torch.bfloat16)
+        weights[: texts.shape[0]] = texts.to(torch.bfloat16)
+        weights = ttnn.from_torch(
+            weights.reshape(1, 1, rows, texts.shape[1]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=model.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        pooled = pooling.packed_sum_pool(hidden, weights, kernel_config)
+        ttnn.deallocate(hidden)
+        ttnn.deallocate(weights)
+        pieces.append(
+            pooling.l2_normalize(
+                pooling.matryoshka_truncate(pooled, matryoshka_dim), compute_kernel_config=kernel_config
+            )
+        )
+        ttnn.deallocate(pooled)
+    out = torch.empty((input_ids.shape[0], pieces[0].shape[-1]), dtype=torch.float32)
+    for packed, piece in zip(passes, pieces):
+        rows_out = ttnn.to_torch(piece).float().reshape(-1, piece.shape[-1])[: len(packed.segments)]
+        out[[seg.index for seg in packed.segments]] = rows_out
+        ttnn.deallocate(piece)
+    return out
 
 
 # packed_pooling_weights per mask, so a repeated batch shape does not upload its weights again (up to 256 KB at

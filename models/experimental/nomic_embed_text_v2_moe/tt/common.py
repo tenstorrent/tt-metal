@@ -209,6 +209,29 @@ class LazyAttentionMask:
             self.tensor = None
 
 
+def segment_attention_mask(
+    segment_ids: torch.Tensor,
+    device,
+    dtype: ttnn.DataType = ACTIVATION_DTYPE,
+    mask_dtype: ttnn.DataType | None = None,
+) -> ttnn.Tensor:
+    """The (R, 1, W, W) additive mask of packed rows (tt.packing): 0 where query and key belong to the same text,
+    dtype-min elsewhere, so attention never crosses a text. segment_ids is (R, W) int: the text a slot holds, or -1
+    for a slot no text fills; those slots attend among themselves, which keeps their rows finite, and pooling drops
+    them. W is a whole number of tiles, so the mask has no tile padding. dtype and mask_dtype as for
+    additive_attention_mask.
+    """
+    torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}[dtype]
+    same = segment_ids[:, None, :, None] == segment_ids[:, None, None, :]
+    mask = torch.zeros(same.shape, dtype=torch_dtype).masked_fill(~same, torch.finfo(torch_dtype).min)
+    tiled = ttnn.from_torch(mask, dtype=dtype, layout=LAYOUT, device=device)
+    if mask_dtype is None or mask_dtype == dtype:
+        return tiled
+    cast = ttnn.typecast(tiled, mask_dtype)
+    ttnn.deallocate(tiled)
+    return cast
+
+
 def rotary_pair_permutation(head_dim: int) -> torch.Tensor:
     """The head-dim order rotary_embedding_llama rotates in: new 2i holds old i, new 2i + 1 old i + D/2.
 
