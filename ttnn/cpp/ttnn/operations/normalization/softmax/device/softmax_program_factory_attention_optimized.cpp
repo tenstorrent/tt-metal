@@ -124,7 +124,7 @@ SoftmaxInterleavedPlan SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOpt
             const std::uint32_t last_len = Wt - (nchunk - 1) * L;
             const std::uint32_t grid_n = grid.x * grid.y;
             const std::uint32_t req = grid_n / std::max<std::uint32_t>(1u, std::min<std::uint32_t>(NC * Ht, grid.y));
-            for (std::uint32_t active = std::min<std::uint32_t>(std::min<std::uint32_t>(req, nchunk), grid_n);
+            for (std::uint32_t active = std::min<std::uint32_t>({req, nchunk, grid_n});
                  active <= std::min<std::uint32_t>(nchunk, grid_n);
                  ++active) {
                 std::uint32_t t_max = 0, nck_max = 0;
