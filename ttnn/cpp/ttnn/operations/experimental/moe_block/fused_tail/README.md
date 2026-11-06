@@ -45,6 +45,11 @@ Ethernet core):
 - persistent (resources): `fused_tail/a2a_arrival`, `fused_tail/a2a_ready` (port cores),
   `fused_tail/a2a_z` (DRAM staging).
 - ring ties (a destination half the ring away) follow the fabric (`get_eth_forwarding_direction`).
+- a padded forward (`actual_start` / `actual_end` or `metadata`, as fused_head's, and the call's `loop`): every worker
+  and port reads the span once (`tail_rows.hpp`, fused_head's `rt_rows.hpp`) and skips the owner row tiles holding no
+  real row - not read, tilized, written or sent (their output rows are undefined). A port counts a skipped tile's runs
+  and sends the arrival increments due on them alone, so every arrival count stays the plan's. The latent engine
+  computes every row.
 
 ## Caching and host cost
 

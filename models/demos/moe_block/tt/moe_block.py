@@ -232,8 +232,9 @@ class MoEBlock:
         device every call (a trace replays with their values of the moment), or ints (host-written words, eager only);
         or metadata = main's (slot_id, actual_start, actual_end) tensors as they are. The chunk is in main's KV-pad-aware
         rotated layout over the SP rows (moe_padding_config; chunk-aligned start: the natural order, the first
-        end - start tokens real). Padding tokens are not routed, dispatched, computed by the routed experts or combined;
-        their rows of the output are the shared expert's only (the dense parts still compute them; discard them).
+        end - start tokens real). Padding tokens are not routed, dispatched, computed by the routed experts or combined,
+        and the head's shared expert and the tail skip the row tiles holding none: the padding rows of the output are
+        undefined (discard them).
         None: every row is real.
 
         A packed forward (MoEBlockConfig.forward_chunks F, common/prefill/prefill_chunk.py): x holds F chunks, each SP
@@ -382,15 +383,17 @@ class MoEBlock:
             **self.expert_kw,
         )
         ttnn.deallocate(arena)
+        # (the tail skips a padded forward's padding row tiles: the span and the call's loop, as the head's)
+        tail_loop = lambda i: {"loop": split * k + i} if span else {}  # noqa: E731
         if k == 1:
-            return mb.fused_tail(y_own, head.se, resources=self.resources, w_up=weights.w_up)
+            return mb.fused_tail(y_own, head.se, resources=self.resources, w_up=weights.w_up, **span, **tail_loop(0))
         # (the tail a loop: the owner rows i S .. (i + 1) S of the combine's output - loop i's tokens)
         S, hr = int(y_own.shape[-2]) // k, int(y_own.shape[-1])
         outs = []
         for i in range(k):
             yi = ttnn.slice(y_own, [0, 0, i * S, 0], [1, 1, (i + 1) * S, hr], [1, 1, 1, 1],
                             memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
-            outs.append(mb.fused_tail(yi, ses[i], resources=self.resources, w_up=weights.w_up))
+            outs.append(mb.fused_tail(yi, ses[i], resources=self.resources, w_up=weights.w_up, **span, **tail_loop(i)))
             ttnn.deallocate(yi)
         y = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         for t in outs:
@@ -440,7 +443,10 @@ class MoEBlock:
         )
         ttnn.deallocate(arena)
         # (the tail once over every loop's owner rows - the combine's and the shared expert's, loop after loop)
-        return mb.fused_tail(y_own, head.se, resources=self.resources, w_up=weights.w_up, all_loops=True)
+        return mb.fused_tail(
+            y_own, head.se, resources=self.resources, w_up=weights.w_up, all_loops=True, **span,
+            **({"loop": split * k} if span else {}),
+        )  # fmt: skip
 
 
 INVALID_SLOT = 0xFFFFFFFF

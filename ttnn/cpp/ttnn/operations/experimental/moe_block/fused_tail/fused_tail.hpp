@@ -37,7 +37,11 @@ Tensor fused_tail(
     const std::optional<Tensor>& w_up = std::nullopt,
     tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi2,
     const std::optional<Tensor>& output = std::nullopt,
-    bool all_loops = false);
+    bool all_loops = false,
+    const std::optional<Tensor>& actual_start = std::nullopt,
+    const std::optional<Tensor>& actual_end = std::nullopt,
+    const std::optional<Tensor>& metadata = std::nullopt,
+    uint32_t loop = 0);
 
 // A latent model's up projection in the engine's layout: latent_up [H, Hr] (host, float32 or bfloat16) column-split
 // over TP (chip (r, c) takes output columns [c H/TP, (c + 1) H/TP)), the rmsnorm weight latent_norm [Hr] folded in

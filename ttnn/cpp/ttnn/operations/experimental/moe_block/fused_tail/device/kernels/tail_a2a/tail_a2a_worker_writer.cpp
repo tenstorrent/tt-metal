@@ -8,6 +8,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_tail/device/kernels/tail_a2a/tail_rows.hpp"
 
 // (fused_tail_program_factory's A2ACb: the z-ready words' CB - the same address on the ports; the zero gate's semaphore)
 constexpr uint32_t CB_ZR = 5, SZR = 0;
@@ -31,7 +32,15 @@ MB_LOOP_BODY {
         noc_semaphore_inc(get_noc_addr(get_semaphore(SZR)), 0u - np);
         noc_async_atomic_barrier();
     }
+#ifdef TL_SKIP
+    const uint64_t live = tl_live(p0 + np, get_write_ptr(CB_LIVE) + LIVE_BRISC, RT);  // (after the ports' list)
+#else
+    constexpr uint64_t live = 0;
+#endif
     for (uint32_t r = 0; r < RT; ++r) {
+        if (!tl_is_live(live, r)) {
+            continue;  // (nor counted in: the ports skip it too)
+        }
         cb_wait_front(3, W);
         const uint32_t l1 = get_read_ptr(3);
         for (uint32_t t = 0; t < W; ++t) {

@@ -68,7 +68,15 @@ enum EngineCb : uint8_t {
     CB_WD = 16,  // the engine's step words, this call's (zeroed each call): after the landing CB, one address everywhere
 };
 // TailA2A's.
-enum A2ACb : uint8_t { CB_A2A_RM = 0, CB_A2A_T = 1, CB_A2A_SE = 2, CB_A2A_OUT = 3, CB_A2A_CH = 4, CB_A2A_ZR = 5 };
+enum A2ACb : uint8_t {
+    CB_A2A_RM = 0,
+    CB_A2A_T = 1,
+    CB_A2A_SE = 2,
+    CB_A2A_OUT = 3,
+    CB_A2A_CH = 4,
+    CB_A2A_ZR = 5,
+    CB_A2A_LIVE = 6,  // a padded forward: the span's words read here, the workers' live row tiles (tail_rows.hpp)
+};
 
 KernelDescriptor kernel(const std::string& file, const CoreRangeSet& cores, KernelDescriptor::ConfigDescriptor config) {
     KernelDescriptor k;
@@ -134,7 +142,7 @@ uint32_t index_of(const std::vector<uint32_t>& v, uint32_t x) {
 }
 
 // The buffers the runtime args address, by source (address_patches.hpp; nullptr: absent).
-std::array<Buffer*, 7> sources_of(const FusedTailInputs& a, const Tensor& output) {
+std::array<Buffer*, 9> sources_of(const FusedTailInputs& a, const Tensor& output) {
     const auto opt = [](const std::optional<Tensor>& t) { return t.has_value() ? t->buffer() : nullptr; };
     return {
         a.y_own.buffer(),
@@ -143,7 +151,9 @@ std::array<Buffer*, 7> sources_of(const FusedTailInputs& a, const Tensor& output
         output.buffer(),
         a.ready.buffer(),
         opt(a.arrival),
-        opt(a.staging)};
+        opt(a.staging),
+        a.metadata.has_value() ? a.metadata->buffer() : opt(a.actual_start),
+        opt(a.actual_end)};
 }
 
 // The cached workload of one chip's program descriptors, with each program's address patches.
@@ -608,6 +618,39 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
     }
     TT_FATAL(worker_xy.size() == g.NW, "fused_tail (a2a): {} workers, NW {}", worker_xy.size(), g.NW);
     const uint32_t W = g.W, has_se = se != nullptr ? 1u : 0u;
+    // a padded forward: the padding row tiles skipped (tail_rows.hpp) - the span's buffers and each chip's live args
+    Buffer* span0 = args.metadata.has_value()       ? args.metadata->buffer()
+                    : args.actual_start.has_value() ? args.actual_start->buffer()
+                                                    : nullptr;
+    Buffer* span1 = args.metadata.has_value() || !args.actual_end.has_value() ? nullptr : args.actual_end->buffer();
+    const bool skip = span0 != nullptr;
+    TT_FATAL(!skip || g.RT <= 64, "fused_tail (a2a): a padded forward's {} row tiles a chip (at most 64)", g.RT);
+    auto live_args = [&](KernelDescriptor::RTArgList& l, uint32_t sp_row, uint32_t p) {
+        l.push_back(span0);
+        if (span1 != nullptr) {
+            l.push_back(span1);
+        } else {
+            l.push_back(0u);
+        }
+        const uint32_t call = 32 * g.RT * g.G;  // (a loop's rows of my SP row)
+        for (uint32_t x :
+             {sp_row,
+              static_cast<uint32_t>(mesh->num_rows()),
+              attrs.row_tokens,
+              attrs.loop * call + p * 32 * g.RT,
+              call}) {
+            l.push_back(x);
+        }
+    };
+    auto skip_defines = [&](KernelDescriptor& k) {
+        if (skip) {
+            k.defines.emplace_back("TL_SKIP", "1");
+            k.defines.emplace_back("RT_FWD", std::to_string(attrs.fwd_chunks));
+            if (args.metadata.has_value()) {
+                k.defines.emplace_back("RT_META", "1");
+            }
+        }
+    };
 
     tt::tt_metal::WorkloadDescriptor workload;
     for (const auto& coord : coords_of(tensor_coords)) {
@@ -634,6 +677,9 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
         desc.cbs.push_back(cb(CB_A2A_SE, work, ring_pages(2 * W, {W}) * kPage, bf16, kPage));
         desc.cbs.push_back(cb(CB_A2A_OUT, work, ring_pages(2 * W, {W}) * kPage, bf16, kPage));
         desc.cbs.push_back(cb(CB_A2A_CH, pcrs, ring_pages(2 * g.group * g.RP, {g.group * g.RP}) * kPage, bf16, kPage));
+        if (skip) {
+            desc.cbs.push_back(cb(CB_A2A_LIVE, work.merge(pcrs), 3 * 128, tt::DataFormat::UInt32, 128));
+        }
 
         auto wreader =
             kernel("tail_a2a/tail_a2a_worker_reader.cpp", work, dm(DataMovementProcessor::RISCV_1, NOC::NOC_0));
@@ -662,6 +708,9 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
             kernel("tail_a2a/tail_a2a_port_writer.cpp", pcrs, dm(DataMovementProcessor::RISCV_0, NOC::NOC_1));
         psender.compile_time_args = pct;
         append_accessor(psender, out);
+        for (auto* k : {&wreader, &wcompute, &wwriter, &preader, &psender}) {
+            skip_defines(*k);
+        }
 
         for (const auto& [port, core] : my_ports) {
             const auto [pp, d, l] = port;
@@ -676,6 +725,9 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
                 pr.push_back(u.pos | u.part << 8);
             }
             pr.append(worker_xy);  // (the workers it releases once its z-ready words are zeroed)
+            if (skip) {
+                live_args(pr, r, p);
+            }
             preader.emplace_runtime_args(core, pr);
 
             const auto rs = sc.readies(port);
@@ -709,6 +761,9 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
                 ps.push_back(sc.hops(p, u.pos, d));
                 ps.push_back(g.RT * sc.runs(u.part, l));
                 ps.push_back(xy(virt(plan.ports.at({ChipCoord{r, u.pos}, opposite(d), l}))));
+            }
+            if (skip) {
+                live_args(ps, r, p);
             }
             if (!ds.empty() || !rs.empty()) {
                 const auto peer = row_neighbor(p, g.G, plan.ring, d);
@@ -748,6 +803,9 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
             for (uint32_t x : {c0, g.RT, g.NTH}) {
                 rd.push_back(x);
             }
+            if (skip) {
+                live_args(rd, r, p);
+            }
             wreader.emplace_runtime_args(core, rd);
             wcompute.runtime_args.emplace_back(core, std::vector<uint32_t>{g.RT});
             KernelDescriptor::RTArgList wr;
@@ -758,6 +816,9 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
             }
             wr.push_back(static_cast<uint32_t>(pxy.size()));
             wr.append(pxy);
+            if (skip) {
+                live_args(wr, r, p);
+            }
             wwriter.emplace_runtime_args(core, wr);
         }
 

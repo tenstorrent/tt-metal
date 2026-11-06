@@ -39,6 +39,10 @@ void bind_fused_tail(nb::module_& mod) {
             output: a preallocated output of the result's spec.
             all_loops: every token loop (MoEBlockConfig.token_loops k) in this one call: y_own, shared_expert and the
                 output hold k loops' rows, one loop's after the other's; one program a chip whose kernels loop.
+            actual_start, actual_end, metadata: a padded forward's span, as fused_head's (one chunk's scalars, or the
+                forward's metadata words). Without a latent the padding row tiles are skipped: their output rows are
+                undefined. The latent engine computes every row.
+            loop: the call's first loop of the forward (split x token loops + loop), as fused_head's; with a span only.
 
         Returns:
             [1, 1, S/SP, H/TP] bfloat16 TILE, DRAM interleaved.
@@ -55,7 +59,11 @@ void bind_fused_tail(nb::module_& mod) {
         nb::arg("w_up") = nb::none(),
         nb::arg("math_fidelity") = tt::tt_metal::MathFidelity::HiFi2,
         nb::arg("output") = nb::none(),
-        nb::arg("all_loops") = false);
+        nb::arg("all_loops") = false,
+        nb::arg("actual_start") = nb::none(),
+        nb::arg("actual_end") = nb::none(),
+        nb::arg("metadata") = nb::none(),
+        nb::arg("loop") = 0);
 
     mod.def(
         "plan_fused_tail",

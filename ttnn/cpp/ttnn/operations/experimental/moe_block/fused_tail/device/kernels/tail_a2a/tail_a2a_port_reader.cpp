@@ -9,6 +9,7 @@
 
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "tail_a2a_port_common.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_tail/device/kernels/tail_a2a/tail_rows.hpp"
 
 MB_LOOP_BODY {
     constexpr auto z_args = TensorAccessorArgs<6>();
@@ -30,8 +31,16 @@ MB_LOOP_BODY {
         const uint32_t xy = get_arg_val<uint32_t>(w0 + w);
         noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, get_semaphore(SZR)), 1);
     }
+#ifdef TL_SKIP
+    const uint64_t live = tl_live(w0 + NW, get_write_ptr(CB_LIVE), RT);  // (after the workers' list)
+#else
+    constexpr uint64_t live = 0;
+#endif
     uint32_t batch = 0, wptr = 0;
     for (uint32_t r = 0; r < RT; ++r) {
+        if (!tl_is_live(live, r)) {
+            continue;  // (its workers neither wrote nor counted it)
+        }
         noc_semaphore_wait_min(zr + 4 * r, NW);  // (every worker wrote row tile r: its word, 16 B apart)
         for (uint32_t k = 0; k < nd; ++k) {
             const uint32_t e = get_arg_val<uint32_t>(d0 + k), q = e & 0xFF, part = (e >> 8) & 3;

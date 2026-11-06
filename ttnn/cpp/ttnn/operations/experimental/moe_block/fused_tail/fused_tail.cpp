@@ -84,7 +84,11 @@ Tensor fused_tail(
     const std::optional<Tensor>& w_up,
     tt::tt_metal::MathFidelity math_fidelity,
     const std::optional<Tensor>& output,
-    bool all_loops) {
+    bool all_loops,
+    const std::optional<Tensor>& actual_start,
+    const std::optional<Tensor>& actual_end,
+    const std::optional<Tensor>& metadata,
+    uint32_t loop) {
     const auto& dims = resources.dims();
     const uint32_t loops = all_loops ? std::max<uint32_t>(1, resources.config().loops()) : 1;
     TT_FATAL(y_own.logical_shape()[-2] % loops == 0, "fused_tail: y_own's rows over {} token loops", loops);
@@ -96,6 +100,30 @@ Tensor fused_tail(
         .output_memory_config = output.has_value() ? output->memory_config() : ttnn::DRAM_MEMORY_CONFIG,
     };
     FusedTailInputs inputs{.y_own = y_own, .shared_expert = shared_expert, .w_up = w_up, .output = output};
+    // (a padded forward - fused_head's span: TailA2A skips its padding row tiles; the engine computes every row)
+    TT_FATAL(
+        !metadata.has_value() || (!actual_start.has_value() && !actual_end.has_value()),
+        "fused_tail: metadata or actual_start / actual_end");
+    TT_FATAL(actual_start.has_value() == actual_end.has_value(), "fused_tail: actual_start and actual_end together");
+    const auto& cfg = resources.config();
+    TT_FATAL(
+        loop < cfg.loops() * cfg.splits() && (loops == 1 || loop % loops == 0),
+        "fused_tail: loop {} of {} splits x {} token loops",
+        loop,
+        cfg.splits(),
+        cfg.loops());
+    if (!dims.latent_dim.has_value() && (actual_start.has_value() || metadata.has_value())) {
+        TT_FATAL(
+            std::max<uint32_t>(1, cfg.forward_chunks) == 1 || metadata.has_value(),
+            "fused_tail: a forward of {} chunks takes metadata",
+            cfg.forward_chunks);
+        inputs.actual_start = actual_start;
+        inputs.actual_end = actual_end;
+        inputs.metadata = metadata;
+        params.loop = loop;
+        params.fwd_chunks = std::max<uint32_t>(1, cfg.forward_chunks);
+        params.row_tokens = cfg.chunk_tokens / static_cast<uint32_t>(y_own.device()->num_rows());
+    }
     if (dims.latent_dim.has_value()) {
         TT_FATAL(w_up.has_value(), "fused_tail: a latent model's tail needs w_up (prepare_fused_tail_weights)");
         TT_FATAL(math_fidelity != tt::tt_metal::MathFidelity::LoFi, "fused_tail: the up projection is never LoFi");

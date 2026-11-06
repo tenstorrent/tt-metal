@@ -7,6 +7,7 @@
 
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_loop.hpp"
 #include "tail_a2a_port_common.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/fused_tail/device/kernels/tail_a2a/tail_rows.hpp"
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -44,11 +45,17 @@ MB_LOOP_BODY {
         get_arg_val<uint32_t>(a++);  // (destinations: q | part << 8, chip, mesh, hops, runs, x | y << 16)
     const uint32_t d0 = a;
     a += 6 * nd;
+#ifdef TL_SKIP
+    const uint64_t live = tl_live(a, get_write_ptr(CB_LIVE) + LIVE_BRISC, RT);  // (before the fabric connection's)
+    a += 7;
+#else
+    constexpr uint64_t live = 0;
+#endif
     const auto out = TensorAccessor(out_args, out_addr, PB);
     if (nd > 0 || nrs > 0) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);  // (appended last)
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[GROUP];
-        for (uint32_t h = 0; h < GROUP; ++h) {
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[GROUP + 1];  // (the last: a padding row tile's bare increments)
+        for (uint32_t h = 0; h < GROUP + 1; ++h) {
             hdrs[h] = PacketHeaderPool::allocate_header();
         }
         conn.open();
@@ -83,6 +90,19 @@ MB_LOOP_BODY {
                 const uint32_t pxy = get_arg_val<uint32_t>(d0 + 6 * k + 5);
                 const uint64_t arr = get_noc_addr(pxy & 0xFFFF, pxy >> 16, arr_addr);
                 const uint32_t base = (me * RT + r) * NTB;  // (my rows' row tile r in the destination's output)
+                if (!tl_is_live(live, r)) {  // (a padding row tile: nothing sent, its runs counted - an increment due
+                                             // goes alone, so the destination's arrival count stays the plan's)
+                    for_each_run(NTB, l, L, part, [&](uint32_t, uint32_t) {
+                        if (++sent[k] % INC == 0 || sent[k] == runs) {
+                            route_to(hdrs[GROUP], chip, mesh, hops);
+                            hdrs[GROUP]->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{arr, 1, true});
+                            conn.wait_for_empty_write_slot();
+                            conn.send_payload_flush_blocking_from_address(
+                                reinterpret_cast<uint32_t>(hdrs[GROUP]), sizeof(PACKET_HEADER_TYPE));
+                        }
+                    });
+                    continue;
+                }
                 for_each_run(NTB, l, L, part, [&](uint32_t m, uint32_t n) {
                     cb_wait_front(CB, RP * (unflushed + 1));
                     const uint32_t src = get_read_ptr(CB) + unflushed * RP * PB;
