@@ -192,6 +192,16 @@ SAMPLER_CHECK = os.environ.get("MIMO_SAMPLER_CHECK") == "1"
 PREFILL_BATCH = os.environ.get("MIMO_PREFILL_BATCH", "1") == "1" and os.environ.get("MIMO_SPEC_DECODE") != "dflash"
 # MIMO_PREFILL_TRACE=0: run prefill batches eagerly instead of replaying their traces.
 PREFILL_TRACE = os.environ.get("MIMO_PREFILL_TRACE", "1") == "1"
+# MIMO_DEFER_TRACES=1: the engine reports ready once its decode, verify and draft traces exist. The traced prefill
+# batches (and their eager warm passes) and the later-chunk traces are captured afterwards, one per
+# ``background_warmup_step`` (the plugin calls it while the engine has no request); until a trace exists, the prefill
+# it would replay runs eagerly (the same programs, compiled in warmup). Persistent buffers are still all allocated, and
+# every program compiled, before the decode capture. MIMO_READY_PREFILL_USERS (e.g. "1"): the user counts whose prefill
+# batch traces are still captured before ready.
+DEFER_TRACES = os.environ.get("MIMO_DEFER_TRACES", "0") == "1"
+READY_PREFILL_USERS = {int(u) for u in os.environ.get("MIMO_READY_PREFILL_USERS", "").split(",") if u.strip()}
+# MIMO_DEFER_CHUNK_TRACES=1: the later-chunk traces are deferred too (default: captured before ready, 1.4 s).
+DEFER_CHUNK_TRACES = os.environ.get("MIMO_DEFER_CHUNK_TRACES", "0") == "1"
 # MIMO_PREFILL_CHUNK_TRACE (model.PREFILL_CHUNK_TRACE; default 1, 0 opts out): a lane's later prefill chunks of the
 # step's full token budget (padded) replay a trace of the whole chunk (TtMiMoModel.setup_prefill_chunk_traces) instead
 # of dispatching its ops, so one host thread keeps every lane busy. A setup or capture that fails (a trace region too
@@ -2452,11 +2462,17 @@ class MiMoV2ForCausalLM:
         # layer (compiling whatever the capture will record); warmup_model_decode captures them after the decode trace.
         if PREFILL_TRACE and PREFILL_BATCH:
             for model in self.models:
+                warmed = set()  # user counts with one warm pass already (its programs key on the count, not the length)
                 for users, n in batches:
                     padded = prefill_padded_len(n)
                     if (users, padded) not in model.prefill_traces:
                         with st.stage(f"prefill_trace.setup users={users} padded={padded}", model.mesh_device):
                             model.setup_prefill_batch_trace(users, padded)
+                        if DEFER_TRACES and users in warmed and users not in READY_PREFILL_USERS:
+                            # Warmed and captured by background_warmup_step; checked there for new programs.
+                            model.prefill_traces[(users, padded)]["warm_pending"] = True
+                            continue
+                        warmed.add(users)
                         with st.stage(f"prefill_trace.warm users={users} padded={padded}", model.mesh_device):
                             model.warm_prefill_batch_trace(users, padded)
                         st.rerun(
@@ -2517,6 +2533,11 @@ class MiMoV2ForCausalLM:
                         model.capture_decode_trace()
                     logger.info(f"MiMo vLLM: replica {lane} decode trace captured")
                 pending = [key for key, t in model.prefill_traces.items() if t["id"] is None]
+                if DEFER_TRACES:
+                    later = sorted(key for key in pending if key[0] not in READY_PREFILL_USERS)
+                    pending = [key for key in pending if key[0] in READY_PREFILL_USERS]
+                    self._deferred_captures = getattr(self, "_deferred_captures", [])
+                    self._deferred_captures += [("batch", lane, key) for key in later]
                 for k, (users, padded) in enumerate(pending):
                     logger.debug(f"MiMo vLLM: replica {lane} capturing prefill trace {k + 1}/{len(pending)}")
                     with st.stage(f"prefill_trace.capture users={users} padded={padded}", model.mesh_device):
@@ -2529,7 +2550,9 @@ class MiMoV2ForCausalLM:
                     logger.info(f"MiMo vLLM: replica {lane} verify and draft traces captured")
                 # Last: they are optional, so every trace the replica needs is in the region before them; one that
                 # does not fit drops them all (capture_prefill_chunk_traces warns) and later chunks run eagerly.
-                if any(t["id"] is None for t in model.chunk_traces.values()):
+                if DEFER_TRACES and DEFER_CHUNK_TRACES and any(t["id"] is None for t in model.chunk_traces.values()):
+                    self._deferred_captures.append(("chunk", lane, None))  # last, as below: they are optional
+                elif any(t["id"] is None for t in model.chunk_traces.values()):
                     with st.stage("chunk_trace.capture", model.mesh_device):
                         captured = model.capture_prefill_chunk_traces()
                     if captured:
@@ -2546,6 +2569,42 @@ class MiMoV2ForCausalLM:
                 idle = torch.full((model.max_batch,), -1, dtype=torch.int32)
                 with st.stage("decode_warmup.eager_step", model.mesh_device):
                     model.decode_read(model.decode_enqueue(torch.zeros(model.max_batch, dtype=torch.int32), idle))
+
+    def background_warmup_step(self):
+        """One deferred capture (MIMO_DEFER_TRACES): the next prefill batch trace (its eager warm pass first, when it
+        had none), or the later-chunk traces. Call only while the engine runs nothing (no step in flight). A warm pass
+        that compiles a program (none should: warmup compiled every program the passes run) makes the replica's decode
+        traces be captured again around it (``_recapture_after_new_programs``). Returns whether more remain."""
+        queue = getattr(self, "_deferred_captures", [])
+        if not queue:
+            return False
+        kind, lane, key = queue.pop(0)
+        model = self.models[lane]
+        t0 = time.time()
+        programs = [m.mesh_device.num_program_cache_entries() for m in self.models]
+        if kind == "batch":
+            trace = model.prefill_traces.get(key)
+            if trace is not None and trace["id"] is None:
+                if trace.pop("warm_pending", False):
+                    model.warm_prefill_batch_trace(*key)
+                    ttnn.synchronize_device(model.mesh_device)
+                    if model.mesh_device.num_program_cache_entries() != programs[lane]:
+                        logger.warning(f"MiMo vLLM: replica {lane} prefill trace {key} warm pass compiled programs")
+                        self._recapture_after_new_programs(programs)
+                model.capture_prefill_batch_trace(*key)
+        elif any(t["id"] is None for t in model.chunk_traces.values()):
+            model.capture_prefill_chunk_traces()
+        st.mark(f"background {kind} {key} {time.time() - t0:.3f} s, {len(queue)} left")
+        if not queue:
+            trace = ttnn.get_memory_view(model.mesh_device, ttnn.BufferType.TRACE)
+            logger.info(
+                f"MiMo vLLM: deferred trace captures done; trace region "
+                f"{trace.total_bytes_allocated_per_bank * trace.num_banks / 1e6:.0f} MB used"
+            )
+        return bool(queue)
+
+    def background_warmup_pending(self):
+        return len(getattr(self, "_deferred_captures", []))
 
     def release_persistent_capture(self):
         self._flush_draws()
