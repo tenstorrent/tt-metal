@@ -567,6 +567,31 @@ class TestHscRecord(unittest.TestCase):
         self.assertEqual([checks[t].status for t in (1, 2, 3, 4)], [PASS] * 4)
         self.assertIsNone(checks[1].data["hsc"]["0x40"]["iout_peak_a"])
 
+    def test_failed_record_reads_log_not_read_never_zero(self):
+        clean = FakeBmc()
+        codes = [(c,) for c in (0xFA, 0xFB, 0x7B, 0x8B, 0xA6, 0xAF, 0x46)]
+
+        def runner(argv):
+            if txn_of(argv)[3] in codes:
+                clean.calls.append(list(argv))
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="Unable to send RAW command\n")
+            return clean(argv)
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            checks = by_tray(run_phase(runner))
+        line = next(ln for ln in err.getvalue().splitlines() if "tray_power: tray 1 HSC 0x40:" in ln)
+        self.assertIn(
+            "FAULT_RECORD not read, FAULT_RECORD_LAST not read, STATUS_IOUT not read, VOUT not read, "
+            "IOUT peak not read, TEMP peak not read, IOUT OC fault/warn limit not read/",
+            line,
+        )
+        self.assertNotIn("0x0000", line)
+        self.assertNotIn(" 0.0", line)
+        for key in ("fault_record", "fault_record_last", "status_iout", "read_vout", "iout_peak", "temp_peak"):
+            self.assertIsNone(checks[1].data["hsc"]["0x40"][key], key)
+        self.assertIsNone(checks[1].data["hsc"]["0x40"]["vout_v"])
+
 
 class TestPlumbing(unittest.TestCase):
     def test_bdf_ranges(self):

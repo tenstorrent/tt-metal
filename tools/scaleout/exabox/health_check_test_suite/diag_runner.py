@@ -2744,21 +2744,27 @@ def decode_hsc_record(st: dict) -> dict:
 
 
 def hsc_record_text(st: dict) -> str:
-    """One line of one HSC's record words, for the log."""
+    """One line of one HSC's record words, for the log.
+
+    A read that failed or that the HSC does not support says 'not read', never 0.
+    """
     d = decode_hsc_record(st)
 
     def h(key: str, w: int) -> str:
         v = st.get(key)
-        return "-" if v is None else f"0x{v:0{w}x}"
+        return "not read" if v is None else f"0x{v:0{w}x}"
 
-    def f(v, fmt: str) -> str:
-        return "-" if v is None else format(v, fmt)
+    def f(v, fmt: str, unit: str = "") -> str:
+        return "not read" if v is None else format(v, fmt) + (f" {unit}" if unit else "")
+
+    fl, wl = d["iout_oc_fault_limit_a"], d["iout_oc_warn_limit_a"]
+    lims = f"{fl:.1f}/{wl:.1f} A" if fl is not None and wl is not None else f"{f(fl, '.1f', 'A')}/{f(wl, '.1f', 'A')}"
 
     return (
         f"FAULT_RECORD {h('fault_record', 4)}, FAULT_RECORD_LAST {h('fault_record_last', 4)}, "
-        f"STATUS_IOUT {h('status_iout', 2)}, VOUT {f(d['vout_v'], '.2f')} V, "
-        f"IOUT peak {f(d['iout_peak_a'], '.1f')} A, TEMP peak {f(d['temp_peak_c'], 'd')} C, "
-        f"IOUT OC fault/warn limit {f(d['iout_oc_fault_limit_a'], '.1f')}/{f(d['iout_oc_warn_limit_a'], '.1f')} A"
+        f"STATUS_IOUT {h('status_iout', 2)}, VOUT {f(d['vout_v'], '.2f', 'V')}, "
+        f"IOUT peak {f(d['iout_peak_a'], '.1f', 'A')}, TEMP peak {f(d['temp_peak_c'], 'd', 'C')}, "
+        f"IOUT OC fault/warn limit {lims}"
     )
 
 

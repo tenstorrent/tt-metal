@@ -386,6 +386,8 @@ Per tray, in-band with `ipmitool raw 0x06 0x52` on the tray's bus (tray 1
 | HSC IOUT_OC_FAULT_LIMIT (46h), IOUT_OC_WARN_LIMIT (4Ah) | the HSC's own over-current limits, 62.5 mA/LSB |
 | CPLD reg 0x1E, debug 0x5F and 0x58 | 12 V-A / 12 V-B hot-swap power-good, power enable, over-current warning |
 
+Each HSC gets one log line with these record words. A read that got no reply or that the HSC does not support shows as "not read" there and as null in the check data, never as 0.
+
 | Status | Meaning |
 |---|---|
 | **PASS** | Both HSCs clean (CML alone is not a fault) and the CPLD shows both 12 V rails good. |
