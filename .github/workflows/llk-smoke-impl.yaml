@@ -121,8 +121,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: .github/scripts/llk-fetch-test-durations.sh pr-gate.yaml main push split-durations
-      # An artifact fault here must not skip every leg, so the legs read the
-      # outcome of the upload, not of the fetch.
+      # The legs read the outcome of this upload, so an artifact fault here
+      # falls back to cutting by count instead of skipping every leg.
       - name: Upload test durations for the legs
         id: upload-durations
         if: steps.durations.outputs.found == 'true'
@@ -194,8 +194,7 @@ jobs:
         run: |
           ${{ matrix.test-group.cmd }}
 
-      # Only push runs on main are ever read back, and a fault here must not
-      # turn a passing leg red.
+      # Only push runs on main are read back, and a fault must not fail a leg.
       - name: Upload test durations
         if: github.event_name == 'push'
         continue-on-error: true
